@@ -340,6 +340,10 @@ Saved Collect() {
          .fullscreen = widget && widget->IsFullscreen() && !window->FullScreenForPage()});
   }
   saved.archive = Archived();
+  for (ArchivedTab& tab : saved.archive) {
+    auto space = spaces.find(tab.space);
+    tab.saved_space = space == spaces.end() ? -1 : static_cast<int>(space->second);
+  }
   return saved;
 }
 
@@ -480,11 +484,16 @@ std::optional<std::string> ToJson(const Saved& saved) {
   root.Set("windows", std::move(windows));
   base::ListValue archive;
   for (const ArchivedTab& tab : saved.archive) {
-    archive.Append(base::DictValue()
-                       .Set("url", tab.url.spec())
-                       .Set("title", tab.title)
-                       .Set("archived", tab.archived.InMillisecondsFSinceUnixEpochIgnoringNull())
-                       .Set("little", tab.little));
+    base::DictValue dict =
+        base::DictValue()
+            .Set("url", tab.url.spec())
+            .Set("title", tab.title)
+            .Set("archived", tab.archived.InMillisecondsFSinceUnixEpochIgnoringNull())
+            .Set("little", tab.little);
+    if (tab.saved_space >= 0) {
+      dict.Set("space", tab.saved_space);
+    }
+    archive.Append(std::move(dict));
   }
   root.Set("archive", std::move(archive));
   root.Set("settings", base::DictValue()
@@ -726,7 +735,8 @@ std::optional<Saved> Read(const base::FilePath& path) {
             {.url = GURL(*url),
              .title = *title,
              .archived = base::Time::FromMillisecondsSinceUnixEpoch(*archived),
-             .little = tab->FindBool("little").value_or(false)});
+             .little = tab->FindBool("little").value_or(false),
+             .saved_space = std::clamp(tab->FindInt("space").value_or(-1), -1, last_space)});
       }
     }
   }
@@ -1291,7 +1301,7 @@ Space* RestoreSpace(Window& window,
       if (saved_tab.current >= 0 &&
           static_cast<size_t>(saved_tab.current) < saved_tab.history.size()) {
         const sessions::SerializedNavigationEntry& entry = saved_tab.history[saved_tab.current];
-        Archive(/*tab=*/0, entry.virtual_url(), base::UTF16ToUTF8(entry.title()));
+        Archive(/*tab=*/0, entry.virtual_url(), base::UTF16ToUTF8(entry.title()), space->id());
       }
       continue;
     }
@@ -1359,6 +1369,7 @@ bool RestoreSession(Window& window) {
       window.SetSelectedIn(space->id(), favorites[saved_space.shown_favorite]);
     }
   }
+  PlaceArchived(RestoredSpaces());
   // Under Every Space, a profile that came up short of a site gets its tab for it.
   Favorites::Complete();
   // A session saved with no regular window open shows the first Space.

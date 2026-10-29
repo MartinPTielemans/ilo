@@ -416,7 +416,7 @@ struct Preview {
     page: Bounds<Pixels>,
     radius: f32,
     tab: u64,
-    /// The tab whose link it opened from.
+    /// The tab whose link it opened from, or 0 for an archived tab's, which the archive keeps.
     over: u64,
     url: SharedString,
     /// Its page's favicon, once the core has one.
@@ -745,7 +745,7 @@ impl LinkPreview {
             leaving => {
                 self.host.hide();
                 self.host.close(shown.tab);
-                if leaving.is_some() {
+                if leaving.is_some() && shown.over != 0 {
                     let Preview { window, over, url, link, undone, .. } = shown;
                     self.host.closed(window, Closed { over, url, link }, undone, cx);
                 }

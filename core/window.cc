@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <iterator>
+#include <map>
 #include <numeric>
 #include <optional>
 #include <set>
@@ -207,7 +208,8 @@ void KeepClosed(bc_id id) {
   if (saved.history.empty()) {
     return;
   }
-  Archive(id, saved.history[saved.current].virtual_url(), tab->Title(), space->little());
+  Archive(id, saved.history[saved.current].virtual_url(), tab->Title(), space->id(),
+          space->little());
   const size_t index = std::ranges::find(space->today(), id) - space->today().begin();
   const std::vector<bc_id> panes = space->Panes(id);
   const size_t split_index = std::ranges::find(panes, id) - panes.begin();
@@ -235,6 +237,19 @@ std::optional<ClosedTab> TakeClosed(bc_id id) {
   ClosedTabs().erase(closed);
   Unarchive(id);
   return tab;
+}
+
+// The archived tabs open in a link preview (Window::PreviewArchived), each by its preview's tab.
+std::map<bc_id, bc_id>& ArchivedPreviews() {
+  static base::NoDestructor<std::map<bc_id, bc_id>> previews;
+  return *previews;
+}
+
+// The Space |archived| goes back to: the one it closed in while it's there, else |shown|. A
+// window's own Space, a private or Little ilo window's, takes none back: it's that window's alone.
+Space* ArchivedSpace(const ArchivedTab& archived, bc_id shown) {
+  Space* from = Space::FromId(archived.space);
+  return from && !from->own() ? from : Space::FromId(shown);
 }
 
 // A new tab in |dir|'s profile with |tab|'s history, name and mute, in no Space and without its
@@ -2134,9 +2149,64 @@ bc_id Window::RestoreArchived(bc_id id) {
     page.set_original_request_url(archived->url);
     page.set_title(base::UTF8ToUTF16(archived->title));
   }
-  const bc_id tab = Reopen(space_, 0, saved);
+  // To the Space it closed in, as Arc's does.
+  const Space* to = ArchivedSpace(*archived, space_);
+  const bc_id tab = Reopen(to ? to->id() : space_, 0, saved);
   Select(tab);
   return tab;
+}
+
+bc_id Window::PreviewArchived(bc_id id) {
+  // The archive is the regular windows', as RestoreArchived's.
+  if (own_space_ || closing_) {
+    return 0;
+  }
+  auto archived = std::ranges::find(Archived(), id, &ArchivedTab::id);
+  if (archived == Archived().end()) {
+    return 0;
+  }
+  const Space* space = ArchivedSpace(*archived, space_);
+  Profile* profile = space ? ProfileFor(space->profile()) : nullptr;
+  BrowserWindowInterface* browser = profile ? BrowserFor(profile) : nullptr;
+  if (!browser) {
+    return 0;
+  }
+  // As Chrome opens a page from its own lists, such as its bookmarks.
+  NavigateParams params(browser, archived->url, ui::PAGE_TRANSITION_AUTO_BOOKMARK);
+  params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
+  // No Space takes it until the app keeps it, so the app isn't told of it as a tab opened.
+  base::AutoReset<bool> opening(&opening_tab_, true);
+  Navigate(&params);
+  const bc_id tab = params.navigated_or_inserted_contents
+                        ? Tab::IdOf(params.navigated_or_inserted_contents)
+                        : 0;
+  // Forgets the previews closed since, whose tabs are gone.
+  std::erase_if(ArchivedPreviews(), [](const auto& entry) { return !Tab::Get(entry.first); });
+  if (tab) {
+    ArchivedPreviews()[tab] = id;
+  }
+  return tab;
+}
+
+void Window::KeepPreview(bc_id tab) {
+  const Tab* kept = Tab::Get(tab);
+  Space* space = Space::FromId(space_);
+  if (!kept || !space || Space::Holding(tab) || Favorites::Has(tab)) {
+    return;
+  }
+  // An archived tab kept from its preview is restored, as it is, to the Space it would go back to
+  // if that's its profile's, and the archive and ⇧⌘T forget it.
+  if (auto previewed = ArchivedPreviews().extract(tab)) {
+    if (std::optional<ArchivedTab> archived = TakeArchived(previewed.mapped())) {
+      TakeClosed(archived->tab);
+      Space* to = ArchivedSpace(*archived, space_);
+      if (to && kept->profile() && DirOf(kept->profile()) == to->profile()) {
+        space = to;
+      }
+    }
+  }
+  space->Add(tab, /*opener=*/0, /*foreground=*/true);
+  Select(tab);
 }
 
 bc_id Window::Duplicate(bc_id tab) {

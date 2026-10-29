@@ -930,7 +930,22 @@ impl Shell {
         cx.notify();
     }
 
-    /// Opens the archived tab `id` at the top of the Space's Today tabs and closes the Library.
+    /// Opens the archived tab `id` in a link preview over the page, as Arc's archive does, from
+    /// `at`, where it was clicked. It stays archived: closing the preview leaves it there, and
+    /// keeping it restores it. Without a page to show it over, it's restored at once.
+    fn preview_archived(&mut self, id: u64, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let (Some(page), Some(url)) = (
+            self.page_laid(),
+            self.archive.iter().find(|tab| tab.id == id).map(|tab| tab.url.clone()),
+        ) else {
+            return self.restore_archived(id, cx);
+        };
+        // check.sh waits for this line.
+        log!("browser: preview archived {id}");
+        self.browser.preview_archived(id, url.into(), page, at, cx);
+    }
+
+    /// Opens the archived tab `id` at the top of its Space's Today tabs and closes the Library.
     fn restore_archived(&mut self, id: u64, cx: &mut Context<Self>) {
         // check.sh waits for this line.
         log!("browser: restore archived {id}");
@@ -1791,7 +1806,9 @@ impl Shell {
                     .block_mouse_except_scroll()
                     .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
                     .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
-                    .on_click(cx.listener(move |shell, _, _, cx| shell.restore_archived(id, cx)))
+                    .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
+                        shell.preview_archived(id, event.position(), cx)
+                    }))
                     .on_mouse_down(
                         MouseButton::Right,
                         cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
@@ -2869,6 +2886,31 @@ mod tests {
         cx.update(|_, cx| host.choose("All", cx));
         cx.run_until_parked();
         assert_eq!(tabs(cx), [1, 2, 3]);
+    }
+
+    /// A click on an archived tab opens it in a preview over the page, as Arc's archive does,
+    /// leaving it archived and the Library open.
+    #[gpui::test]
+    fn a_click_on_an_archived_tab_previews_it(cx: &mut TestAppContext) {
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        let url = "https://example.org/".into();
+        let tab = Archived { id: 7, url, title: "".into(), archived: 0., little: false };
+        shell.update(cx, |shell, cx| {
+            shell.set_archive(vec![tab], cx);
+            shell.set_library(true, cx);
+            shell.library_motion = None;
+            shell.sidebar_fade = None;
+        });
+        cx.run_until_parked();
+        host.take();
+        // The top archived tab's row, where check.sh clicks it.
+        let row = point(px(300.), px(111.));
+        cx.simulate_click(row, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(host.take(), ["preview archived 7 https://example.org/"]);
+        assert!(shell.read_with(cx, |shell, _| shell.library_open), "the Library closed");
     }
 
     /// Media tiles the captures and the downloaded images and videos together, newest first, three

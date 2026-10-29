@@ -1227,6 +1227,11 @@ void bc_window_answer_downloads(bc_id window_id, bool cancel) {
   }
 }
 
+bc_id bc_window_preview_archived(bc_id window_id, bc_id archived) {
+  browser_core::Window* window = browser_core::Window::FromId(window_id);
+  return window ? window->PreviewArchived(archived) : 0;
+}
+
 void bc_extension_answer(bc_id question, bool accept) {
   browser_core::InstallQuestion::Answer(question, accept);
 }
@@ -1519,14 +1524,9 @@ void bc_tab_show_in(bc_id id, void* view, bc_rect frame, double corner_radius) {
 }
 
 void bc_window_keep_preview(bc_id window_id, bc_id id) {
-  browser_core::Window* window = browser_core::Window::FromId(window_id);
-  browser_core::Space* space = window ? browser_core::Space::FromId(window->space()) : nullptr;
-  if (!space || !browser_core::Tab::FromId(id) || browser_core::Space::Holding(id) ||
-      browser_core::Favorites::Has(id)) {
-    return;
+  if (browser_core::Window* window = browser_core::Window::FromId(window_id)) {
+    window->KeepPreview(id);
   }
-  space->Add(id, /*opener=*/0, /*foreground=*/true);
-  window->Select(id);
 }
 
 void bc_tab_show(bc_id id, bc_rect frame) {

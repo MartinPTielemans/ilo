@@ -2572,6 +2572,27 @@ impl Browser for Engine {
         unsafe { bc::bc_window_restore_archived(self.window, archived) };
     }
 
+    fn preview_archived(
+        &self,
+        archived: u64,
+        url: SharedString,
+        page: (Bounds<Pixels>, f32),
+        at: Point<Pixels>,
+        _: &mut App,
+    ) {
+        let window = self.window;
+        // Outside the shell's update, as the preview's window updates the shell.
+        update_app_later(move |cx| {
+            let preview = unsafe { bc::bc_window_preview_archived(window, archived) };
+            if preview == 0 {
+                log!("browser: archived {archived} not previewed");
+                return;
+            }
+            // Over no tab: the archive keeps it, so ⌘Z doesn't reopen the preview.
+            link_preview::show(window, preview, 0, url, page, at, cx);
+        });
+    }
+
     fn act_on_download(&self, download: u64, action: DownloadAction, _: &mut App) {
         let action = match action {
             DownloadAction::Open => bc::BC_DOWNLOAD_OPEN,

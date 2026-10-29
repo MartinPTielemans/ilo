@@ -539,6 +539,17 @@ impl Browser for Recorder {
 
     fn restore_archived(&self, _: u64, _: &mut App) {}
 
+    fn preview_archived(
+        &self,
+        archived: u64,
+        url: SharedString,
+        _: (Bounds<Pixels>, f32),
+        _: Point<Pixels>,
+        _: &mut App,
+    ) {
+        self.record(format!("preview archived {archived} {url}"));
+    }
+
     fn remove_archived(&self, archived: u64, _: &mut App) -> u64 {
         let id = self.core.removed(1);
         self.edit(format!("archive remove {archived} as {id}"));

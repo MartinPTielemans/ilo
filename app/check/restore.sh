@@ -347,13 +347,16 @@ expect "^browser: menu shown $menu\$" "a right-click on the tab's row didn't off
 send choose "$(cased 'Remove Icon')"
 expect "^browser: page $c icon none\$" "Remove Icon didn't give the tab back its favicon"
 send click $page_point
-# The tab closed before the quit reopens from the Library at the top of Today, at its page. ⌘W
-# archives it again.
+# The tab closed before the quit reopens from the Library's Restore Tab at the top of its Space's
+# Today, at its page. ⌘W archives it again.
 send key l cmd shift
 expect '^browser: command view-library via page$' "⇧⌘L with the page focused didn't reach the UI"
 expect '^browser: library shown$' "⇧⌘L didn't open the Library"
-send click 300 111
-expect '^browser: restore archived [0-9][0-9]*$' "a click on the archived tab didn't restore it"
+post rightclick 300 111
+expect "^browser: menu shown $(cased 'Restore Tab, Copy URL, Delete from Archive')\$" \
+  "a right-click on the archived tab didn't show its menu"
+send choose "$(cased 'Restore Tab')"
+expect '^browser: restore archived [0-9][0-9]*$' "Restore Tab didn't restore the archived tab"
 expect "^browser: today [0-9][0-9]* $c $a\$" \
   "the archived tab didn't come back at the top of Today: Today is \"$(today)\""
 r=$(today | cut -d' ' -f1)

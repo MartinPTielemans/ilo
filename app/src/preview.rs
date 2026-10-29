@@ -610,6 +610,17 @@ impl Browser for Fake {
         self.report_archive(cx);
     }
 
+    // The preview has no pages to show.
+    fn preview_archived(
+        &self,
+        _: u64,
+        _: SharedString,
+        _: (Bounds<Pixels>, f32),
+        _: Point<Pixels>,
+        _: &mut App,
+    ) {
+    }
+
     // The preview has nothing to undo, so no removal has an id.
     fn remove_archived(&self, archived: u64, cx: &mut App) -> u64 {
         self.archive.borrow_mut().retain(|&(id, ..)| id != archived);

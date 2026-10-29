@@ -263,10 +263,16 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // and shown only if |show|: otherwise the tab shown stays. Returns the new tab's id, or 0 if it
   // isn't among the closed tabs any more.
   bc_id ReopenClosed(bc_id id, bool show);
-  // Reopens the archived tab |id| at the top of the Today tabs of the Space the window shows, and
-  // shows it: with its history if it closed since the browser started, else at its page. It leaves
-  // the archive. Returns its id, or 0.
+  // Reopens the archived tab |id| at the top of the Today tabs of the Space it closed in, else the
+  // Space the window shows, and shows it: with its history if it closed since the browser started,
+  // else at its page. It leaves the archive. Returns its id, or 0.
   bc_id RestoreArchived(bc_id id);
+  // Opens the archived tab |id|'s page in a link preview, as OpenPreview does, in the profile of
+  // the Space it would go back to, leaving it in the archive. Returns the preview's tab, or 0.
+  bc_id PreviewArchived(bc_id id);
+  // Puts |tab|, a link preview, at the top of the Today tabs of the Space the window shows, as it
+  // is, and shows it. One PreviewArchived opened goes to its Space instead, and leaves the archive.
+  void KeepPreview(bc_id tab);
   // Runs extension |id|'s action on the tab the window shows, its popup hanging from |anchor|. See
   // bc_window_run_extension.
   bool RunExtension(const std::string& id, const gfx::Rect& anchor);

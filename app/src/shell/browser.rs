@@ -141,9 +141,19 @@ pub trait Browser {
     /// Puts back what the archive removal `removal` took out, and returns how many tabs, 0 if it
     /// is gone. The removals are the core's, shared by its windows, so each asks for its own.
     fn undo_archive_remove(&self, removal: u64, cx: &mut App) -> usize;
-    /// Reopens the archived tab `archived` at the top of the Today tabs of the Space shown, and
-    /// shows it.
+    /// Reopens the archived tab `archived` at the top of the Today tabs of the Space it closed in,
+    /// else the Space shown, and shows it.
     fn restore_archived(&self, archived: u64, cx: &mut App);
+    /// Opens the archived tab `archived`, at `url`, in a link preview over the page at `page`,
+    /// growing from `at`, leaving it in the archive until the preview is kept.
+    fn preview_archived(
+        &self,
+        archived: u64,
+        url: SharedString,
+        page: (Bounds<Pixels>, f32),
+        at: Point<Pixels>,
+        cx: &mut App,
+    );
     /// Takes the archived tab `archived` out of the archive, and returns the removal's id, or 0.
     fn remove_archived(&self, archived: u64, cx: &mut App) -> u64;
     /// Empties the archive, and returns the removal's id, or 0 if it was empty.

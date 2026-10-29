@@ -1761,11 +1761,20 @@ BC_EXPORT bc_id bc_window_reopen_closed_tab(bc_id window);
 // isn't among those that reopen: it came back already, or 25 others closed since.
 BC_EXPORT bc_id bc_window_reopen_tab(bc_id window, bc_id closed);
 
-// Reopens the archived tab at the top of the Today tabs of the Space the window shows, unloaded,
-// and shows it: with its history if it closed since the browser started, else at its page. It
-// leaves the archive. Returns the tab, or 0 if the archive has no such tab. Then space_changed,
-// archive_changed and window_selected.
+// Reopens the archived tab at the top of the Today tabs of the Space it closed in, or of the Space
+// the window shows if that one is gone, unloaded, and shows it there, with its Space: with its
+// history if it closed since the browser started, else at its page. It leaves the archive. Returns
+// the tab, or 0 if the archive has no such tab. Then space_changed, archive_changed and
+// window_selected, and window_space_shown if its Space wasn't shown.
 BC_EXPORT bc_id bc_window_restore_archived(bc_id window, bc_id archived);
+
+// Opens the archived tab's page in a link preview over the window, as bc_tab_open_preview does, in
+// the profile of the Space it would be restored to, for the app to show with bc_tab_show_in. It
+// stays in the archive: bc_tab_close closes the preview, and bc_window_keep_preview restores it as
+// the preview is, to its Space as bc_window_restore_archived would, taking it out of the archive.
+// Returns 0 if the archive has no such tab, or the window is closing or a private or Little ilo
+// window.
+BC_EXPORT bc_id bc_window_preview_archived(bc_id window, bc_id archived);
 
 // Runs the extension's action on the tab the window shows, as a click on its button in Chrome's
 // toolbar does: the extension is granted the tab, and its popup opens, hanging from |anchor| in the
@@ -2009,7 +2018,9 @@ BC_EXPORT bc_id bc_tab_open_preview(bc_id opener, const char* url);
 BC_EXPORT void bc_tab_show_in(bc_id tab, void* view, bc_rect frame, double corner_radius);
 
 // Puts |tab|, a link preview, at the top of the Today tabs of the Space the window shows, and shows
-// it there, as it is: its page doesn't load again. Then space_changed and window_selected.
+// it there, as it is: its page doesn't load again. One from bc_window_preview_archived goes to its
+// archived tab's Space instead, and that leaves the archive. Then space_changed and
+// window_selected, and for an archived tab archive_changed.
 BC_EXPORT void bc_window_keep_preview(bc_id window, bc_id tab);
 
 // Shows the tab's page at |frame| in its window, in place of the page the window showed. It keeps
