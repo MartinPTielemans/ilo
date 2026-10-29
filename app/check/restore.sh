@@ -20,10 +20,11 @@
 # Trash. A SIGTERM, which macOS sends at logout and restart, keeps a tab opened just before it.
 # Reports how long putting them back takes.
 # With the auto-archive's 12 hours made 8 s, a Today tab no window has shown for that long goes in
-# the archive, counting the time across a quit, and the tab shown stays. The first tabs it takes
-# bring a note, until View Archive answers it, which opens the Library there, and never again. A
-# tab put back unshown has no page until it's first shown, when its page loads scrolled where it
-# was. A quit with a page full screen saves its window windowed.
+# the archive, counting the time across a quit, and the tab shown stays, and a download that ended
+# that long ago leaves the list, keeping its file. The first tabs it takes bring a note, until
+# View Archive answers it, which opens the Library there, and never again. A tab put back
+# unshown has no page until it's first shown, when its page loads scrolled where it was. A quit
+# with a page full screen saves its window windowed.
 # With Restore windows from last session off, a launch opens one window with no page, the Spaces
 # and pinned tabs back and the Today tabs in the archive.
 
@@ -595,6 +596,14 @@ c=$(sed -n "s|^browser: loaded \([0-9]*\) ${site}?c\$|\1|p" "$log" | head -1)
 await '^browser: archive 2 tabs$' || fail "tab b, unseen for 8 s after c showed, wasn't archived"
 [ $(($(date +%s) - start)) -ge 8 ] || fail "tab b was archived before it was unseen for 8 s"
 await "^browser: today $c\$" || fail "Today is \"$(today)\" after the auto-archive, not tab c alone"
+# The video downloaded before, which ended more than 8 s ago, has left the list by then, as Arc
+# archives downloads with its tabs, and its file stays. It may go before the app is first told
+# of it.
+if grep -q '^browser: download [0-9]* done clip.mp4$' "$log"; then
+  grep -q '^browser: downloads 0$' "$log" ||
+    fail "the video downloaded before the interval stayed on the list"
+fi
+[ -f "$out/downloads/clip.mp4" ] || fail "the download leaving the list took its file"
 # The first tabs auto-archive takes bring a note, once, which stays until it's answered: the
 # toast at the top right, the interval in its words being the user's, not the run's 8 s. View
 # Archive, the chip before its ×, opens the Library on Archived Tabs, and the note never comes
@@ -624,6 +633,10 @@ expect '^browser: toast button view archive$' "View Archive wasn't pressed at $v
 expect '^browser: command view-archive via archive note$' "View Archive didn't run"
 expect '^browser: library shown$' "View Archive didn't open the Library"
 expect '^browser: toast hidden$' "the note stayed after View Archive"
+# Downloads, second of the Library's four sections, has none left.
+send click 56 $((${content#*x} / 2 - 55))
+expect '^browser: library section downloads$' "a click on Downloads didn't show the downloads"
+../tools/window-screenshot.sh "$pid" "$out/downloads-archived.png" || fail "no window to capture"
 exec 3>&-
 quit
 grep -q '"archive_noted": *true' "$saved" || fail "the Spaces didn't keep that the note was answered"
@@ -792,6 +805,7 @@ grep -q '^browser: loaded ' "$log" && fail "a page loaded at a launch with Resto
 [ "$(grep -c '^browser: window opened ' "$log")" = 1 ] ||
   fail "the second window came back with Restore windows off"
 quit
-echo "ok: after ⌘Q and after closing the window, the Spaces come back with their names, themes, icons, tabs, history and the tab each showed, in the Space shown last, with the sidebar's width; only tabs shown load, the others show their titles and favicons, a tab renamed with a double-click keeps its name over its page's title until Rename… takes it out, Change Icon… hangs the icon picker under its favicon, and the emoji picked there keeps the favicon's place until Remove Icon, and a closed tab stays closed, in the archive, from which it reopens at its page. Back and Forward on a restored tab walk its saved history, and a window that quit full screen comes back so, unless a page took it there. A page's downloads are listed in the Library's Downloads, which ⇧⌘J opens, and a new one's icon flies into the Library button, though none of those a relaunch reads does. With one running, ⌘Q asks first, Continue Downloading shows Downloads and Quit cancels it, and after the relaunch Remove from List and Clear List take them off and keep their files. Resting on the Library button shows the newest finished downloads, until the pointer leaves them, and its right-click menu picks the kinds it lists, and Media plays a video downloaded in its tile while the Library shows it, and a row's menu is the Library row's. A SIGTERM keeps a tab opened just before it. Today tabs no window shows go in the archive after the interval, counted across a quit, and the tab shown stays; the first ones bring a note, until View Archive answers it, opening Archived Tabs, and none after that ($out/archive-note.png). A tab put back unshown has no page until it's shown, when it loads scrolled where it was. With Restore windows from last session off, a launch opens one window with no page, the pinned tab back and the Today tab in the archive. Help › Restore Earlier Sidebar asks, then brings back a backup's sidebar, and the sidebar it replaced is the newest backup, which undoes it. Windows: $out/sidebar-restored.png, $out/fresh-window.png"
+echo "ok: after ⌘Q and after closing the window, the Spaces come back with their names, themes, icons, tabs, history and the tab each showed, in the Space shown last, with the sidebar's width; only tabs shown load, the others show their titles and favicons, a tab renamed with a double-click keeps its name over its page's title until Rename… takes it out, Change Icon… hangs the icon picker under its favicon, and the emoji picked there keeps the favicon's place until Remove Icon, and a closed tab stays closed, in the archive, from which it reopens at its page. Back and Forward on a restored tab walk its saved history, and a window that quit full screen comes back so, unless a page took it there. A page's downloads are listed in the Library's Downloads, which ⇧⌘J opens, and a new one's icon flies into the Library button, though none of those a relaunch reads does. With one running, ⌘Q asks first, Continue Downloading shows Downloads and Quit cancels it, and after the relaunch Remove from List and Clear List take them off and keep their files. Resting on the Library button shows the newest finished downloads, until the pointer leaves them, and its right-click menu picks the kinds it lists, and Media plays a video downloaded in its tile while the Library shows it, and a row's menu is the Library row's. A SIGTERM keeps a tab opened just before it. Today tabs no window shows go in the archive after the interval, counted across a quit, and the tab shown stays, and a download that ended that long ago leaves the list, keeping its file; the first ones bring a note, until View Archive answers it, opening Archived Tabs, and none after that ($out/archive-note.png). A tab put back unshown has no page until it's shown, when it loads scrolled where it was. With Restore windows from last session off, a launch opens one window with no page, the pinned tab back and the Today tab in the archive. Help › Restore Earlier Sidebar asks, then brings back a backup's sidebar, and the sidebar it replaced is the newest backup, which undoes it. Windows: $out/sidebar-restored.png, $out/fresh-window.png"
 echo "  Restore, 3 tabs in 2 Spaces: ${restore_ms}ms. Windows: $out/restored.png, $out/tab-icon-picker.png, $out/unloaded-scrolled.png,"
-echo "  $out/recent-downloads.png, $out/library-button-menu.png, $out/media-video.png"
+echo "  $out/recent-downloads.png, $out/library-button-menu.png, $out/media-video.png,"
+echo "  $out/downloads-archived.png"

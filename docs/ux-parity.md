@@ -415,6 +415,7 @@ Dia's New Tab page isn't ours (decision 6). ⌘T opens the command bar over the 
 | [x] | Fly-in | MVP | ours: 32 → 16 pt icon from under the URL field to the button on a slight arc, 0.45 s on cubic-bezier(0.55, 0, 0.85, 0.4), fading over the last 30 %; Arc's: measure (Dia constants 0.1 s / 1.3 undecoded) | Dia bin |
 | [ ] | Quarantine | MVP | `com.apple.quarantine` on a finished file, naming the browser; to tick, the Mac's check | Chrome |
 | [x] | Per profile, persisted | MVP | Chrome's history; private never written once private windows land | Dia P§14 |
+| [ ] | Old downloads leave the list | MVP | a download that ended its profile's auto-archive interval ago leaves the Library's list, its file staying; a running or paused one stays. Built (#696): `RemoveOldDownloads` on auto-archive's timer. To tick: `./check.sh restore` on the Mac, whose 8 s launch takes the video downloaded before off the list and keeps `clip.mp4`, with `downloads-archived.png`, its Downloads empty | Arc release notes |
 | [x] | Quit guard | MVP | asks while downloads run, in Chrome's alert on the Mac and the app's dialog in its words on Linux and Windows; Continue Downloading shows the Library's Downloads; Arc's wording: measure | Dia P§1, Chrome |
 
 ## Find in page
