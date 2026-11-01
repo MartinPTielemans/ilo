@@ -274,13 +274,23 @@ jobs:
           echo "- InstallerUrl is $TAG's: $url" >> "$GITHUB_STEP_SUMMARY"
           echo "- InstallerSha256 $sha is $TAG's SHA256SUMS'" >> "$GITHUB_STEP_SUMMARY"
 
-      # Windows Server 2022 has no winget; Microsoft's WinGet.Client module puts it on.
+      # Windows Server 2022 has no winget; Microsoft's WinGet.Client module puts it on. Its alias may
+      # not reach this session's user, so the package's own winget.exe goes on the PATH.
       - shell: pwsh
         run: |
           if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-            Install-PackageProvider -Name NuGet -Force | Out-Null
-            Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery
-            Repair-WinGetPackageManager -AllUsers -Latest -Force
+            Set-PSRepository PSGallery -InstallationPolicy Trusted
+            Install-Module Microsoft.WinGet.Client -Force -Scope AllUsers
+            Repair-WinGetPackageManager -AllUsers -Latest -Force -Verbose
+            $package = Get-AppxPackage -AllUsers Microsoft.DesktopAppInstaller | Sort-Object Version | Select-Object -Last 1
+            $package | Format-List Name, Version, InstallLocation
+            foreach ($dir in "$env:LOCALAPPDATA\Microsoft\WindowsApps", $package.InstallLocation) {
+              if ($dir -and (Test-Path "$dir\winget.exe")) {
+                $dir >> $env:GITHUB_PATH
+                $env:PATH = "$dir;$env:PATH"
+                break
+              }
+            }
           }
           winget --version
 
