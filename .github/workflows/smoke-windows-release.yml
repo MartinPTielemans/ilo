@@ -303,7 +303,7 @@ jobs:
           "winget validate exit code: $code"
           # Warnings exit non-zero too, and say so.
           if ($said -notmatch 'Manifest validation succeeded') {
-            "- FAIL: winget validate, exit code $code: $said" >> $env:GITHUB_STEP_SUMMARY
+            "- FAIL: winget validate, exit code ${code}: $said" >> $env:GITHUB_STEP_SUMMARY
             exit 1
           }
           $verdict = [regex]::Match($said, 'Manifest validation succeeded[^\r\n]*').Value
