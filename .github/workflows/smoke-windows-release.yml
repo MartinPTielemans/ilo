@@ -3,10 +3,12 @@
 # the user, launches the installed ilo with its driver (BROWSER_DRIVE=1) and a new profile, goes
 # through the first run's onboarding with Esc at each step, and loads a page typed in the command
 # bar the onboarding ends with. It captures the window at each step and uploads the captures, the
-# app's log and the installer's.
+# app's log and the installer's. At the opt-ins step it turns on the agents' switch and sees their
+# server start. It checks the MSIX's identity against the Store's, branding/windows-store.ini at the
+# tag.
 # The installer is a release's, TAG below or the dispatch's tag, or a release.yml run's before its
-# draft exists, from the run's windows artifact: RELEASE_RUN below or the dispatch's release_run. A
-# push smokes RELEASE_RUN. A draft's assets need a token with push access, which is why it writes
+# draft exists, from the run's windows artifact: RELEASE_RUN below or the dispatch's release_run,
+# checked against TAG's SHA256SUMS once its draft has them. A push smokes RELEASE_RUN. A draft's assets need a token with push access, which is why it writes
 # contents: drafts aren't listed to read-only tokens.
 name: Smoke test of the Windows release
 
@@ -26,8 +28,8 @@ permissions:
   contents: write
 
 env:
-  TAG: ${{ inputs.tag || 'v0.0.1' }}
-  RELEASE_RUN: ${{ github.event_name == 'push' && '41325652292' || inputs.release_run }}
+  TAG: ${{ github.event_name == 'push' && 'v0.1.0' || inputs.tag }}
+  RELEASE_RUN: ${{ github.event_name == 'push' && '41335149554' || inputs.release_run }}
 
 jobs:
   smoke:
@@ -45,14 +47,55 @@ jobs:
         run: |
           out=$RUNNER_TEMP/smoke
           mkdir -p "$out"
+          [ -n "$RELEASE_RUN$TAG" ] || { echo "::error::Neither a tag nor a release run"; exit 1; }
           if [ -n "$RELEASE_RUN" ]; then
             gh run download "$RELEASE_RUN" -R "$GITHUB_REPOSITORY" -n windows -D "$out"
-            sha256sum "$out/ilo-windows-x64-setup.exe"
           else
             gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$out" \
-              -p ilo-windows-x64-setup.exe -p SHA256SUMS
-            (cd "$out" && grep 'ilo-windows-x64-setup.exe$' SHA256SUMS | sha256sum -c -)
+              -p ilo-windows-x64-setup.exe -p ilo-windows-x64.msix
           fi
+          if [ -n "$TAG" ]; then
+            gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$out" -p SHA256SUMS
+            (cd "$out" && grep -E ' \*?ilo-windows-x64(-setup\.exe|\.msix)$' SHA256SUMS | tee sums | sha256sum -c -)
+            [ "$(wc -l < "$out/sums")" = 2 ] || { echo "::error::$TAG's SHA256SUMS lacks the setup or the MSIX"; exit 1; }
+            echo "- The setup and the MSIX match $TAG's SHA256SUMS" >> "$GITHUB_STEP_SUMMARY"
+          else
+            sha256sum "$out"/ilo-windows-x64*
+            echo "- No tag, so no SHA256SUMS to check against" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          gh api -H 'Accept: application/vnd.github.raw' \
+            "repos/$GITHUB_REPOSITORY/contents/app/branding/windows-store.ini?ref=${TAG:-main}" > "$out/windows-store.ini"
+
+      # The Store's identity, as Partner Center gives it, in the MSIX's manifest.
+      - shell: pwsh
+        run: |
+          $out = "$env:RUNNER_TEMP\smoke"
+          $want = @{}
+          foreach ($line in Get-Content "$out\windows-store.ini") {
+            if ($line -match '^\s*([a-z-]+)\s*=\s*(.*?)\s*$') { $want[$Matches[1]] = $Matches[2] }
+          }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [IO.Compression.ZipFile]::OpenRead("$out\ilo-windows-x64.msix")
+          $reader = New-Object IO.StreamReader($zip.GetEntry('AppxManifest.xml').Open())
+          [xml]$manifest = $reader.ReadToEnd()
+          $reader.Close(); $zip.Dispose()
+          $got = @{
+            'identity-name' = $manifest.Package.Identity.Name
+            'publisher' = $manifest.Package.Identity.Publisher
+            'publisher-display-name' = $manifest.Package.Properties.PublisherDisplayName
+          }
+          $bad = $false
+          foreach ($key in 'identity-name', 'publisher', 'publisher-display-name') {
+            "$key`: $($got[$key]) (the Store's: $($want[$key]))"
+            if ($got[$key] -cne $want[$key]) { $bad = $true }
+          }
+          "Version: $($manifest.Package.Identity.Version)"
+          if ($bad -or $got['identity-name'] -cne 'ilobrowser.ilo' -or $got['publisher-display-name'] -cne 'ilo browser') {
+            "- FAIL: the MSIX's identity isn't the Store's" >> $env:GITHUB_STEP_SUMMARY
+            Write-Error "The MSIX's identity isn't the Store's"
+            exit 1
+          }
+          "- The MSIX's identity is the Store's: $($got['identity-name']), $($got['publisher']), `"$($got['publisher-display-name'])`", version $($manifest.Package.Identity.Version)" >> $env:GITHUB_STEP_SUMMARY
 
       # The size the check runs use; the runner's own is 1024x768.
       - shell: pwsh
@@ -107,6 +150,26 @@ jobs:
           # As check/git-bash.sh runs the app: a native program can't read Git Bash's fifo, so cat
           # passes the driver's commands on, and exec keeps $! the app's. With no arguments, as its
           # Start menu shortcut starts it, so the profile is the release's own new one.
+          # The opt-ins step's agents' switch, a click along its row, as check/onboarding.sh clicks
+          # it: alone, its row's middle is 18 under the window's. With the crash reports' row over
+          # it, it's half a row and a gap lower, 28 more, and the first click falls between them.
+          agents_on() {
+            send layout
+            content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content ' |
+              sed 's/^browser: layout content \([0-9]*x[0-9]*\).*/\1/')
+            width=${content%x*}
+            height=${content#*x}
+            [ -n "$height" ] || fail "the window didn't log its size"
+            send click $((width / 2)) $((height / 2 + 18))
+            if ! await '^browser: onboarding agents on$' 20; then
+              grep -q '^browser: onboarding crash-reports' "$log" && fail "a click meant for the agents' row turned the crash reports' switch"
+              send click $((width / 2)) $((height / 2 + 18 + 28))
+              await '^browser: onboarding agents on$' 20 || fail "a click on the agents' row didn't turn them on"
+            fi
+            await '^browser: agents server on ' || fail "the agents' switch didn't start their server"
+            summary "- The opt-ins step's \"Let agents use the browser\" turned on, and their server started: $(grep -m1 '^browser: agents server on ' "$log" | cut -d' ' -f5-)"
+            capture onboarding-agents-on
+          }
           mkfifo "$out/drive"
           run_ilo() { exec "$app/chrome.exe" < <(cat); }
           BROWSER_DRIVE=1 run_ilo < "$out/drive" > "$log" 2>&1 &
@@ -124,6 +187,7 @@ jobs:
             [ "$each" = intro ] && continue
             await "^browser: onboarding step $each settled\$" || fail "the onboarding's $each step didn't come"
             capture "onboarding-$each"
+            [ "$each" = opt-ins ] && agents_on
             send key escape
             await "^browser: onboarding left $each via escape\$" || fail "Esc didn't leave the onboarding's $each step"
           done
@@ -142,20 +206,30 @@ jobs:
           esac
           capture page
 
-          # Quits as the user does: Ctrl+Q asks first (Settings' warn before quitting, on in a new
-          # profile), and Return confirms, as check/lib.sh's quit_by_key does. Without waiting for
-          # the driver after Return, as it goes with the app.
-          send key q cmd
-          await '^browser: dialog shown Quit ilo?$' || fail "Ctrl+Q didn't ask before quitting"
-          await '^browser: dialog settled$' || fail "the quit dialog didn't settle"
-          capture quit-dialog
-          echo "key return" >&3
+          # Quits as the user does: Ctrl+Q, which asks first while Settings' warn before quitting
+          # is on, and Return confirms, as check/lib.sh's quit_by_key does. Without waiting for the
+          # driver after the last key, as it goes with the app.
+          echo "key q cmd" >&3
+          asked=
+          for _ in $(seq 50); do
+            kill -0 "$pid" 2>/dev/null || break
+            grep -q '^browser: dialog shown Quit ilo?$' "$log" && asked=1 && break
+            sleep 0.1
+          done
+          if [ -n "$asked" ]; then
+            await '^browser: dialog settled$' || fail "the quit dialog didn't settle"
+            capture quit-dialog
+            echo "key return" >&3
+            quit="Ctrl+Q asked \"Quit ilo?\", and Return quit it"
+          else
+            quit="Ctrl+Q quit it without asking"
+          fi
           for _ in $(seq 200); do
             kill -0 "$pid" 2>/dev/null || break
             sleep 0.1
           done
-          kill -0 "$pid" 2>/dev/null && fail "ilo didn't quit 20 s after Return confirmed; its log's end: $(tail -5 "$log" | tr '\n' ' ')"
-          summary "- Ctrl+Q asked before quitting, and Return quit it. Captures and logs: the smoke-windows artifact."
+          kill -0 "$pid" 2>/dev/null && fail "ilo didn't quit in 20 s after Ctrl+Q${asked:+ and Return on \"Quit ilo?\"}; its log's end: $(tail -5 "$log" | tr '\n' ' ')"
+          summary "- $quit. Captures and logs: the smoke-windows artifact."
 
       - if: ${{ always() }}
         uses: actions/upload-artifact@v4
