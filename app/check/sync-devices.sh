@@ -2,7 +2,8 @@
 # run's own (ilo-server.sh). A signs in first and copies its recovery words, which the clipboard
 # holds marked for clipboard managers to skip (#641). B signs in and asks the account's devices
 # to add it, and A, once its window is active, asks the user, who adds it with a click: B syncs.
-# C signs in and recovers with the words instead, and syncs too. 90 s after A's copy the
+# A Space A made reaches B, in place of B's own untouched first one, and one B makes reaches A. C
+# signs in and recovers with the words instead, with the account's Spaces. 90 s after A's copy the
 # clipboard holds the words no longer. B and C sign out without asking, as the account has other
 # devices, and the server forgets them. Linux's alone so far: the Mac's and Windows' clipboards
 # and two copies of the app at once there are unrun.
@@ -60,6 +61,29 @@ open_sign_in() {
   await 'browser: sync sign-in loaded /authorize$' ||
     fail "the sign-in window didn't load the server's page on $on"
 }
+# The Spaces the device's window has, by the last list it logged.
+spaces() {
+  grep '^browser: spaces ' "$log" | tail -1 | awk '{ print NF - 2 }'
+}
+# Waits up to 30 s for the device to have $1 Spaces, and fails with $2.
+await_spaces() {
+  for _ in $(seq 300); do
+    [ "$(spaces)" = "$1" ] && return 0
+    kill -0 "$pid" 2>/dev/null || gone
+    sleep 0.1
+  done
+  fail "$2: $(spaces) Spaces"
+}
+# Makes a Space named $1 in the device's window, from the Spaces menu, as spaces.sh does.
+new_space() {
+  had=$(spaces)
+  send window 1
+  send menu New Space…
+  expect '^browser: command new-space via ui$' "New Space in the menu didn't run new-space on $on"
+  await_spaces $((had + 1)) "New Space didn't make a Space on $on"
+  send type "$1"
+  send key return
+}
 # What the X server's clipboard holds, as target $1 (text if none).
 clipboard() {
   timeout 5 xclip -selection clipboard -o ${1:+-t "$1"} 2>/dev/null || true
@@ -87,6 +111,8 @@ clipboard TARGETS | grep -qx 'x-kde-passwordManagerHint' ||
 at=$(drawn "sync done") || fail "Settings › Sync didn't draw Done with the words"
 send clickkey $at
 await 'browser: sync service active$' || fail "A's sync didn't become active"
+# A Space A makes reaches the devices it adds, and theirs reach it.
+new_space "from A"
 
 start b "$PWD/$out/sync-devices-b" 6
 open_sign_in
@@ -108,6 +134,11 @@ expect '^browser: dialog confirmed$' "a click on Add didn't add B"
 device b
 await '^browser: account On None$' || fail "B, added by A, didn't turn sync on"
 await 'browser: sync service active$' || fail "B's sync didn't become active"
+# B's own first Space, untouched, gives way to the account's, as Arc's does on a new device.
+await_spaces 2 "B, synced, doesn't have A's two Spaces"
+new_space "from B"
+device a
+await_spaces 3 "A doesn't have the Space B made"
 
 start c "$PWD/$out/sync-devices-c" 7
 open_sign_in
@@ -120,6 +151,7 @@ send type $words
 send key return
 await '^browser: account On None$' || fail "C didn't turn sync on with the recovery words"
 await 'browser: sync service active$' || fail "C's sync didn't become active"
+await_spaces 3 "C, recovered, doesn't have the account's three Spaces"
 [ "$(stored "SELECT count(*) FROM devices")" = 3 ] ||
   fail "the server doesn't know the account's three devices: $(stored "SELECT group_concat(name, '|') FROM devices")"
 
