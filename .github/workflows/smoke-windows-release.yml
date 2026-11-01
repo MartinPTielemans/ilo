@@ -1,0 +1,147 @@
+# Smoke test of a release's Windows installer, as a new user meets it: downloads the release's
+# ilo-windows-x64-setup.exe, checks it against the release's SHA256SUMS, installs it silently for
+# the user, launches the installed ilo with its driver (BROWSER_DRIVE=1) and a new profile, goes
+# through the first run's onboarding with Esc at each step, and loads a page typed in the command
+# bar the onboarding ends with. It captures the window at each step and uploads the captures, the
+# app's log and the installer's.
+# The release is TAG below, or the dispatch's tag. A draft's assets need a token with push access,
+# which is why it writes contents: drafts aren't listed to read-only tokens.
+name: Smoke test of the Windows release
+
+on:
+  push:
+    branches: [smoke/windows-release]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release's tag, a draft's too
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ inputs.tag || 'v0.0.1' }}
+
+jobs:
+  smoke:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      # The capture code alone; the app is the release's.
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools
+
+      - shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          out=$RUNNER_TEMP/smoke
+          mkdir -p "$out"
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$out" \
+            -p ilo-windows-x64-setup.exe -p SHA256SUMS
+          (cd "$out" && grep 'ilo-windows-x64-setup.exe$' SHA256SUMS | sha256sum -c -)
+
+      # The size the check runs use; the runner's own is 1024x768.
+      - shell: pwsh
+        run: Set-DisplayResolution -Width 1920 -Height 1080 -Force
+
+      # Inno Setup's silent install, for the user alone (PrivilegesRequired=lowest), which starts
+      # nothing after (skipifsilent).
+      - shell: pwsh
+        run: |
+          $out = "$env:RUNNER_TEMP\smoke"
+          $setup = Start-Process -Wait -PassThru -FilePath "$out\ilo-windows-x64-setup.exe" `
+            -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/LOG=$out\install.log"
+          "Installer exit code: $($setup.ExitCode)"
+          $app = "$env:LOCALAPPDATA\Programs\ilo\chrome.exe"
+          if ($setup.ExitCode -ne 0 -or -not (Test-Path $app)) {
+            Write-Error "The installer didn't install $app"
+            exit 1
+          }
+          (Get-Item $app).VersionInfo | Format-List FileVersion, ProductVersion
+
+      - shell: bash
+        run: |
+          out=$RUNNER_TEMP/smoke
+          app="$(cygpath -u "$LOCALAPPDATA")/Programs/ilo"
+          log=$out/ilo.log
+          summary() { echo "$1" | tee -a "$GITHUB_STEP_SUMMARY"; }
+          capture() {
+            tools/window-screenshot.sh "$pid" "$out/$1.png" all || summary "- no window to capture for $1"
+          }
+          fail() {
+            summary "FAIL ($TAG): $1"
+            capture failed
+            exit 1
+          }
+          # Waits up to $2 tenths of a second, 30 s by default, for a line matching $1 in the log.
+          await() {
+            for _ in $(seq "${2:-300}"); do
+              grep -q -- "$1" "$log" && return 0
+              kill -0 "$pid" 2>/dev/null || fail "ilo quit; its log's end: $(tail -3 "$log" | tr '\n' ' ')"
+              sleep 0.1
+            done
+            return 1
+          }
+          step=0
+          send() {
+            step=$((step + 1))
+            echo "$*" >&3
+            await "^browser: drive $step done" || fail "the driver didn't finish \"$*\""
+          }
+          # As check/git-bash.sh runs the app: a native program can't read Git Bash's fifo, so cat
+          # passes the driver's commands on, and exec keeps $! the app's. With no arguments, as its
+          # Start menu shortcut starts it, so the profile is the release's own new one.
+          mkfifo "$out/drive"
+          run_ilo() { exec "$app/chrome.exe" < <(cat); }
+          BROWSER_DRIVE=1 run_ilo < "$out/drive" > "$log" 2>&1 &
+          pid=$!
+          exec 3> "$out/drive"
+          trap 'taskkill //PID "$(cat /proc/$pid/winpid 2>/dev/null)" //T //F > /dev/null 2>&1 || true' EXIT
+
+          echo "## $TAG" >> "$GITHUB_STEP_SUMMARY"
+          await '^browser: onboarding started$' 900 || fail "a new profile's first launch didn't start the onboarding"
+          steps=$(grep -m1 '^browser: onboarding steps ' "$log" | cut -d' ' -f4-)
+          summary "- The first launch started the onboarding: $steps"
+          await '^browser: onboarding step intro settled$' || fail "the onboarding's intro didn't draw"
+          capture onboarding-intro
+          for each in $steps; do
+            [ "$each" = intro ] && continue
+            await "^browser: onboarding step $each settled\$" || fail "the onboarding's $each step didn't come"
+            capture "onboarding-$each"
+            send key escape
+            await "^browser: onboarding left $each via escape\$" || fail "Esc didn't leave the onboarding's $each step"
+          done
+          await '^browser: onboarding done$' || fail "the onboarding didn't end after its last step"
+          await '^browser: command new-tab via onboarding$' || fail "the onboarding didn't end with the command bar"
+          summary "- Esc went through each step, and the onboarding ended with the command bar"
+          capture command-bar
+
+          send type example.com
+          send key return
+          await '^browser: loaded [0-9]* https\?://' 600 || fail "example.com typed in the command bar loaded no page"
+          loaded=$(grep -m1 '^browser: loaded [0-9]* https\?://' "$log" | cut -d' ' -f4)
+          case "$loaded" in
+            *example.com*) summary "- example.com, typed in the command bar, loaded: $loaded" ;;
+            *) fail "example.com typed in the command bar loaded $loaded" ;;
+          esac
+          capture page
+
+          # Quits as the user does, and it goes: without waiting for the driver, which goes with it.
+          echo "key q cmd" >&3
+          for _ in $(seq 200); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.1
+          done
+          kill -0 "$pid" 2>/dev/null && fail "Ctrl+Q didn't quit ilo"
+          summary "- Ctrl+Q quit it. Captures and logs: the smoke-windows artifact."
+
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-windows
+          path: |
+            ${{ runner.temp }}/smoke/*.png
+            ${{ runner.temp }}/smoke/*.log
