@@ -4,8 +4,10 @@
 # through the first run's onboarding with Esc at each step, and loads a page typed in the command
 # bar the onboarding ends with. It captures the window at each step and uploads the captures, the
 # app's log and the installer's.
-# The release is TAG below, or the dispatch's tag. A draft's assets need a token with push access,
-# which is why it writes contents: drafts aren't listed to read-only tokens.
+# The installer is a release's, TAG below or the dispatch's tag, or a release.yml run's before its
+# draft exists, from the run's windows artifact: RELEASE_RUN below or the dispatch's release_run. A
+# push smokes RELEASE_RUN. A draft's assets need a token with push access, which is why it writes
+# contents: drafts aren't listed to read-only tokens.
 name: Smoke test of the Windows release
 
 on:
@@ -15,13 +17,17 @@ on:
     inputs:
       tag:
         description: The release's tag, a draft's too
-        required: true
+        required: false
+      release_run:
+        description: Or a release.yml run's id, whose windows artifact holds the installer
+        required: false
 
 permissions:
   contents: write
 
 env:
   TAG: ${{ inputs.tag || 'v0.0.1' }}
+  RELEASE_RUN: ${{ github.event_name == 'push' && '41325652292' || inputs.release_run }}
 
 jobs:
   smoke:
@@ -39,9 +45,14 @@ jobs:
         run: |
           out=$RUNNER_TEMP/smoke
           mkdir -p "$out"
-          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$out" \
-            -p ilo-windows-x64-setup.exe -p SHA256SUMS
-          (cd "$out" && grep 'ilo-windows-x64-setup.exe$' SHA256SUMS | sha256sum -c -)
+          if [ -n "$RELEASE_RUN" ]; then
+            gh run download "$RELEASE_RUN" -R "$GITHUB_REPOSITORY" -n windows -D "$out"
+            sha256sum "$out/ilo-windows-x64-setup.exe"
+          else
+            gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$out" \
+              -p ilo-windows-x64-setup.exe -p SHA256SUMS
+            (cd "$out" && grep 'ilo-windows-x64-setup.exe$' SHA256SUMS | sha256sum -c -)
+          fi
 
       # The size the check runs use; the runner's own is 1024x768.
       - shell: pwsh
@@ -65,6 +76,8 @@ jobs:
       - shell: bash
         run: |
           out=$RUNNER_TEMP/smoke
+          what=${RELEASE_RUN:+release run $RELEASE_RUN}
+          what=${what:-$TAG}
           app="$(cygpath -u "$LOCALAPPDATA")/Programs/ilo"
           log=$out/ilo.log
           summary() { echo "$1" | tee -a "$GITHUB_STEP_SUMMARY"; }
@@ -72,7 +85,7 @@ jobs:
             tools/window-screenshot.sh "$pid" "$out/$1.png" all || summary "- no window to capture for $1"
           }
           fail() {
-            summary "FAIL ($TAG): $1"
+            summary "FAIL ($what): $1"
             capture failed
             exit 1
           }
@@ -101,7 +114,7 @@ jobs:
           exec 3> "$out/drive"
           trap 'taskkill //PID "$(cat /proc/$pid/winpid 2>/dev/null)" //T //F > /dev/null 2>&1 || true' EXIT
 
-          echo "## $TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "## $what" >> "$GITHUB_STEP_SUMMARY"
           await '^browser: onboarding started$' 900 || fail "a new profile's first launch didn't start the onboarding"
           steps=$(grep -m1 '^browser: onboarding steps ' "$log" | cut -d' ' -f4-)
           summary "- The first launch started the onboarding: $steps"
@@ -129,14 +142,20 @@ jobs:
           esac
           capture page
 
-          # Quits as the user does, and it goes: without waiting for the driver, which goes with it.
-          echo "key q cmd" >&3
+          # Quits as the user does: Ctrl+Q asks first (Settings' warn before quitting, on in a new
+          # profile), and Return confirms, as check/lib.sh's quit_by_key does. Without waiting for
+          # the driver after Return, as it goes with the app.
+          send key q cmd
+          await '^browser: dialog shown Quit ilo?$' || fail "Ctrl+Q didn't ask before quitting"
+          await '^browser: dialog settled$' || fail "the quit dialog didn't settle"
+          capture quit-dialog
+          echo "key return" >&3
           for _ in $(seq 200); do
             kill -0 "$pid" 2>/dev/null || break
             sleep 0.1
           done
-          kill -0 "$pid" 2>/dev/null && fail "Ctrl+Q didn't quit ilo"
-          summary "- Ctrl+Q quit it. Captures and logs: the smoke-windows artifact."
+          kill -0 "$pid" 2>/dev/null && fail "ilo didn't quit 20 s after Return confirmed; its log's end: $(tail -5 "$log" | tr '\n' ' ')"
+          summary "- Ctrl+Q asked before quitting, and Return quit it. Captures and logs: the smoke-windows artifact."
 
       - if: ${{ always() }}
         uses: actions/upload-artifact@v4
