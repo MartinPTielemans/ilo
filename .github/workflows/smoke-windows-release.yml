@@ -8,8 +8,11 @@
 # tag.
 # The installer is a release's, TAG below or the dispatch's tag, or a release.yml run's before its
 # draft exists, from the run's windows artifact: RELEASE_RUN below or the dispatch's release_run,
-# checked against TAG's SHA256SUMS once its draft has them. A push smokes RELEASE_RUN. A draft's assets need a token with push access, which is why it writes
-# contents: drafts aren't listed to read-only tokens.
+# checked against TAG's SHA256SUMS once its draft has them. A draft's assets need a token with push
+# access, which is why it writes contents: drafts aren't listed to read-only tokens.
+# Its winget job checks RELEASE_RUN's winget manifests instead: the installer's URL is TAG's, its
+# hash is in TAG's SHA256SUMS, winget validates them and installs from them. A dispatch runs the job
+# it names; a push runs the job named below.
 name: Smoke test of the Windows release
 
 on:
@@ -23,6 +26,11 @@ on:
       release_run:
         description: Or a release.yml run's id, whose windows artifact holds the installer
         required: false
+      job:
+        description: What to check
+        type: choice
+        options: [smoke, winget]
+        default: smoke
 
 permissions:
   contents: write
@@ -33,6 +41,7 @@ env:
 
 jobs:
   smoke:
+    if: ${{ (github.event_name == 'push' && 'winget' || inputs.job) == 'smoke' }}
     runs-on: windows-2022
     timeout-minutes: 30
     steps:
@@ -238,3 +247,80 @@ jobs:
           path: |
             ${{ runner.temp }}/smoke/*.png
             ${{ runner.temp }}/smoke/*.log
+
+  winget:
+    if: ${{ (github.event_name == 'push' && 'winget' || inputs.job) == 'winget' }}
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -n "$RELEASE_RUN" ] && [ -n "$TAG" ] || { echo "::error::The winget check needs a release run and its tag"; exit 1; }
+          out=$RUNNER_TEMP/winget
+          gh run download "$RELEASE_RUN" -R "$GITHUB_REPOSITORY" -n winget -D "$out"
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$out" -p SHA256SUMS
+          dir=$(dirname "$(find "$out/manifests" -name '*.installer.yaml')")
+          echo "WINGET_MANIFESTS=$(cygpath -w "$dir")" >> "$GITHUB_ENV"
+          installer=$dir/$(basename "$dir/"*.installer.yaml)
+          cat "$dir"/*.yaml
+          url=$(sed -n 's/^ *InstallerUrl: *//p' "$installer")
+          sha=$(sed -n 's/^ *InstallerSha256: *//p' "$installer" | tr A-F a-f)
+          want=https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/ilo-windows-x64-setup.exe
+          sum=$(grep ' \*\?ilo-windows-x64-setup.exe$' "$out/SHA256SUMS" | cut -d' ' -f1)
+          [ "$url" = "$want" ] || { echo "- FAIL: InstallerUrl $url, not $want" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          [ -n "$sum" ] && [ "$sha" = "$sum" ] || { echo "- FAIL: InstallerSha256 $sha, $TAG's SHA256SUMS $sum" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          echo "- InstallerUrl is $TAG's: $url" >> "$GITHUB_STEP_SUMMARY"
+          echo "- InstallerSha256 $sha is $TAG's SHA256SUMS'" >> "$GITHUB_STEP_SUMMARY"
+
+      # Windows Server 2022 has no winget; Microsoft's WinGet.Client module puts it on.
+      - shell: pwsh
+        run: |
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+            Install-PackageProvider -Name NuGet -Force | Out-Null
+            Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery
+            Repair-WinGetPackageManager -AllUsers -Latest -Force
+          }
+          winget --version
+
+      - shell: pwsh
+        run: |
+          $dir = $env:WINGET_MANIFESTS
+          $said = winget validate --manifest $dir --disable-interactivity | Out-String
+          $code = $LASTEXITCODE
+          $said
+          "winget validate exit code: $code"
+          # Warnings exit non-zero too, and say so.
+          if ($said -notmatch 'Manifest validation succeeded') {
+            "- FAIL: winget validate, exit code $code: $said" >> $env:GITHUB_STEP_SUMMARY
+            exit 1
+          }
+          $verdict = [regex]::Match($said, 'Manifest validation succeeded[^\r\n]*').Value
+          "- winget validate: $verdict (exit code $code)" >> $env:GITHUB_STEP_SUMMARY
+          winget settings --enable LocalManifestFiles
+          winget install --manifest $dir --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+          $code = $LASTEXITCODE
+          "winget install exit code: $code"
+          $app = "$env:LOCALAPPDATA\Programs\ilo\chrome.exe"
+          if ($code -ne 0 -or -not (Test-Path $app)) {
+            "- FAIL: winget install --manifest, exit code $code, $app there: $(Test-Path $app)" >> $env:GITHUB_STEP_SUMMARY
+            exit 1
+          }
+          $version = (Get-Item $app).VersionInfo.ProductVersion
+          "- winget install --manifest downloaded the setup, checked its hash and installed $app, version $version" >> $env:GITHUB_STEP_SUMMARY
+          winget list --name ilo --disable-interactivity
+          # The step's exit code is the last command's otherwise, and a list's is informational.
+          exit 0
+
+      - if: ${{ always() }}
+        shell: pwsh
+        run: |
+          $logs = "$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir"
+          if (Test-Path $logs) { Copy-Item -Recurse $logs "$env:RUNNER_TEMP\winget\logs" }
+
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: winget-checked
+          path: ${{ runner.temp }}/winget
