@@ -187,7 +187,8 @@ if [ "$(uname)" = Linux ]; then
     # check.sh's Xvfb (BROWSER_XVFB), whose root window is its whole screen.
     [ -n "${3:-}" ] || area=$(
       best=0
-      for window in $(xdotool search --onlyvisible --pid "$1" 2> /dev/null); do
+      # Its windows carry the number it has in its own namespace, a Flatpak's sandbox's.
+      for window in $(xdotool search --onlyvisible --pid "$(awk '/^NSpid:/ { print $NF }' "/proc/$1/status")" 2> /dev/null); do
         # WINDOW, X, Y, WIDTH, HEIGHT and SCREEN, X and Y from the root's corner.
         eval "$(xdotool getwindowgeometry --shell "$window")"
         [ $((WIDTH * HEIGHT)) -gt "$best" ] || continue

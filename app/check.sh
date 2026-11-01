@@ -112,6 +112,23 @@ if windows; then
   browser=windows_browser
   procs="$(cygpath -m "$app/chrome.exe")"
   profile_dir="$(cygpath -u "$LOCALAPPDATA")/browser-app"
+elif [ -n "${BROWSER_FLATPAK:-}" ]; then
+  # The Flatpak flatpak.yml installed, app.ilo.browser: the prod build in its sandbox, given the
+  # run's BROWSER_ settings, this folder and the profile's. Only sync-account runs in it so far.
+  app=/app/ilo
+  flatpak_browser() {
+    set -- app.ilo.browser "$@"
+    for name in $(env | sed -n 's/^\(BROWSER_[A-Z0-9_]*\)=.*/\1/p'); do
+      eval "set -- \"--env=$name=\${$name}\" \"\$@\""
+    done
+    # A run's own profile, as sync-devices gives each device, or the check's.
+    dir=${BROWSER_PROFILE_DIR:-$profile_dir}
+    exec flatpak run --cwd="$PWD" --filesystem="$PWD" --filesystem="$dir:create" \
+      --env=BROWSER_PROFILE_DIR="$dir" "$@"
+  }
+  browser=flatpak_browser
+  procs="$app/chrome"
+  profile_dir="$HOME/.cache/browser-app"
 elif [ "$(uname)" = Linux ]; then
   app="$PWD/build/Browser"
   browser="$app/chrome"
