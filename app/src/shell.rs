@@ -1145,6 +1145,9 @@ pub struct Shell {
     undo_offered: bool,
     /// The link preview the user closed last, for ⇧⌘T while no tab has closed since.
     closed_preview: Option<crate::link_preview::Closed>,
+    /// The step that puts the pinned tab whose split pane the user closed last back in its split,
+    /// for ⇧⌘T while no tab has closed since: closing it only took it out, unloaded.
+    closed_pane: Option<undo::Edit>,
     /// What the Edit menu was last told Undo and Redo do.
     edit_titles: (Option<&'static str>, Option<&'static str>),
     /// Whether the pointer is over the docked sidebar, which shows Clear and the URL field's button
@@ -1515,6 +1518,7 @@ impl Shell {
             history: undo::History::default(),
             undo_offered: false,
             closed_preview: None,
+            closed_pane: None,
             edit_titles: (None, None),
             sidebar_hovered: false,
             hover_changed: false,

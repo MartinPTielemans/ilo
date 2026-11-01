@@ -287,15 +287,16 @@ impl Edit {
         }
     }
 
-    /// Where a part of a `Many` step goes among the others: a folder made again first, the
-    /// moves down each list, and a folder deleted last.
+    /// Where a part of a `Many` step goes among the others: a folder made again and a tab taken
+    /// out of its split first, the moves down each list, and a folder deleted and a tab joining a
+    /// split last, so it joins the row where the moves put it.
     fn order(&self) -> (u8, usize) {
         match self {
-            Edit::Restore(_) => (0, 0),
+            Edit::Restore(_) | Edit::Unsplit { .. } => (0, 0),
             Edit::Put { spot, .. } => match spot.at {
                 At::Favorite(index) | At::Pinned { index, .. } | At::Today(index) => (1, index),
             },
-            Edit::Delete(_) => (2, 0),
+            Edit::Delete(_) | Edit::Split { .. } => (2, 0),
             _ => (1, 0),
         }
     }
@@ -493,6 +494,7 @@ impl Shell {
         // ⇧⌘T reopens what closed last: a tab closed since comes before the preview.
         if matches!(edit, Edit::Reopen { .. } | Edit::UndoClear { .. }) {
             self.closed_preview = None;
+            self.closed_pane = None;
         }
         self.history.redo.clear();
         self.history.undo.push(Entry { what, edit });
@@ -584,6 +586,7 @@ impl Shell {
             return;
         }
         self.closed_preview = Some(closed.clone());
+        self.closed_pane = None;
         if !undone {
             self.keep(What::CLOSE_PREVIEW, Some(Edit::ReopenPreview(closed)), cx);
         }
@@ -620,6 +623,15 @@ impl Shell {
             return;
         }
         self.closed_preview = None;
+        // Unless ⌘Z has put it back already, which takes its step off the history.
+        if let Some(join) = self.closed_pane.take() {
+            let kept = self.history.undo.len();
+            self.history.undo.retain(|entry| entry.edit != join);
+            if self.history.undo.len() < kept && join.apply(self, cx).is_some() {
+                self.send_edit_titles(false, cx);
+                return;
+            }
+        }
         self.browser.reopen_closed_tab(cx);
     }
 
@@ -627,11 +639,21 @@ impl Shell {
     // the ones the user's gestures made before, so there's no second path to keep in step.
 
     /// Closes `tab` (and its split's rest, if `split`), a Today tab as ⌘Z reopens at its place.
-    /// A pinned tab or a favorite keeps its row, and only its page goes.
+    /// A pinned tab or a favorite keeps its row, and only its page goes: a pinned tab's pane leaves
+    /// its split, which ⌘Z and ⇧⌘T put it back in, as they would a Today tab's.
     pub(super) fn close_tab(&mut self, tab: u64, split: bool, cx: &mut Context<Self>) {
         let closing = self
             .spot_of(tab)
             .filter(|spot| matches!(spot.at, At::Today(_)));
+        if closing.is_none()
+            && !split
+            && let Some(join) = self.join_of(tab)
+        {
+            self.browser.close(tab, false, cx);
+            self.closed_preview = None;
+            self.closed_pane = (!self.private).then(|| join.clone());
+            return self.keep(What::CLOSE_TAB, Some(join), cx);
+        }
         let tabs = match (closing, split) {
             (None, _) => Vec::new(),
             (Some(_), true) => self.panes(tab),
@@ -779,10 +801,37 @@ impl Shell {
         }
     }
 
-    /// `tab` is joining `with` in a split view, which ⌘Z takes it back out of.
+    /// `tab` is joining `with` in a split view, which ⌘Z takes it back out of. A pinned tab
+    /// joining a Today tab's split takes the split into its place in the pinned tabs first, as the
+    /// core moves a tab into its partner's list, so the pin is never lost to a split; the one step
+    /// undoes both.
     pub(super) fn keep_split(&mut self, tab: u64, with: u64, cx: &mut Context<Self>) {
         let undo = self.unsplit_of(tab, with);
+        let pinned = match undo {
+            Some(_) => self.pin_beside(tab, with, cx),
+            None => None,
+        };
+        let undo = match (undo, pinned) {
+            (Some(undo), Some(unpin)) => Some(Edit::Many(vec![undo, unpin])),
+            (undo, _) => undo,
+        };
         self.keep(What::SPLIT, undo, cx);
+    }
+
+    /// Pins `with`'s row, a Today tab or split, at its page in pinned `tab`'s place, for `tab` to
+    /// join it there. The step that puts it back, or None where `tab` isn't pinned or `with` isn't
+    /// a Today tab of its Space.
+    fn pin_beside(&mut self, tab: u64, with: u64, cx: &mut Context<Self>) -> Option<Edit> {
+        let (at, from) = (self.spot_of(tab)?, self.spot_of(with)?);
+        let (At::Pinned { folder, index }, At::Today(_)) = (at.at, from.at) else {
+            return None;
+        };
+        if at.space != from.space {
+            return None;
+        }
+        let back = self.put_back(with)?;
+        self.browser.move_tab(with, true, folder, index, cx);
+        Some(back)
     }
 
     /// `tab`, opened to join a split view, joined it: ⌘Z closes it.
