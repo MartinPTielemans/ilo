@@ -1045,3 +1045,130 @@ fn a_folders_icon_goes_back_to_what_it_was(cx: &mut TestAppContext) {
     undo(&shell, cx);
     assert_eq!(host.take_edits(), ["folder icon 5 📚"]);
 }
+
+/// The core reports the first Space's lists with one split view.
+fn report_lists(
+    shell: &Entity<Shell>,
+    cx: &mut TestAppContext,
+    pinned: Vec<u64>,
+    today: Vec<u64>,
+    split: Vec<u64>,
+) {
+    let splits = vec![Split {
+        tabs: split,
+        ..Default::default()
+    }];
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(1, pinned, today, splits, Folders::default(), cx)
+    });
+}
+
+/// ⌃⇧- on a pinned tab's pane asks the core to close it, which only takes it out of the split
+/// unloaded, as ⌘W keeps a pinned tab's row; ⇧⌘T then puts it back in its pane, pinned, and
+/// doesn't reopen an archived tab instead (#1289).
+#[gpui::test]
+fn closing_a_pinned_tabs_pane_keeps_it_pinned_and_reopening_puts_it_back(
+    cx: &mut TestAppContext,
+) {
+    let split = Split {
+        tabs: vec![20, 21],
+        ..Default::default()
+    };
+    let (shell, host) = window(cx, vec![20, 21], vec![10], Folders::default(), vec![split]);
+    shell.update(cx, |shell, cx| shell.set_selected(20, cx));
+    host.take();
+    shell.update(cx, |shell, cx| shell.run(Command::CloseSplitPane, "ui", cx));
+    assert_eq!(host.take_edits(), ["close 20"]);
+    assert_eq!(titles(&shell, cx).0, Some("Close Tab"));
+    // The core separated it after the split's last tab, unloaded, and showed the one beside it.
+    report(&shell, cx, vec![21, 20], vec![10]);
+    shell.update(cx, |shell, cx| shell.set_selected(21, cx));
+    host.take();
+
+    shell.update(cx, |shell, cx| shell.run(Command::ReopenClosedTab, "ui", cx));
+    assert_eq!(host.take_edits(), ["split 20 21 true"]);
+    assert!(!host.take().contains(&"reopen closed tab".to_string()));
+    // Reopened, it's no longer a close for ⌘Z to undo, and the next ⇧⌘T is the core's.
+    assert_eq!(titles(&shell, cx).0, None);
+    report_lists(&shell, cx, vec![20, 21], vec![10], vec![20, 21]);
+    shell.update(cx, |shell, cx| shell.run(Command::ReopenClosedTab, "ui", cx));
+    assert!(host.take_edits().is_empty());
+    assert!(host.take().contains(&"reopen closed tab".to_string()));
+}
+
+/// ⌘Z after closing a pinned tab's pane puts it back in its pane too, and then ⇧⌘T has no pane
+/// left to put back, so it asks the core for the tab closed last.
+#[gpui::test]
+fn undoing_a_pinned_panes_close_rejoins_it_once(cx: &mut TestAppContext) {
+    let split = Split {
+        tabs: vec![20, 21],
+        ..Default::default()
+    };
+    let (shell, host) = window(cx, vec![20, 21], vec![10], Folders::default(), vec![split]);
+    shell.update(cx, |shell, cx| shell.set_selected(21, cx));
+    shell.update(cx, |shell, cx| shell.run(Command::CloseSplitPane, "ui", cx));
+    assert_eq!(host.take_edits(), ["close 21"]);
+    report(&shell, cx, vec![20, 21], vec![10]);
+    assert!(undo(&shell, cx));
+    assert_eq!(host.take_edits(), ["split 21 20 false"]);
+    report_lists(&shell, cx, vec![20, 21], vec![10], vec![20, 21]);
+    host.take();
+    shell.update(cx, |shell, cx| shell.run(Command::ReopenClosedTab, "ui", cx));
+    assert!(host.take_edits().is_empty());
+    assert!(host.take().contains(&"reopen closed tab".to_string()));
+}
+
+/// ⌃⇧- on a Today tab's pane closes the tab, into the archive, which ⌘Z reopens at its place, and
+/// ⇧⌘T asks the core for, which puts it back in its split.
+#[gpui::test]
+fn closing_a_today_tabs_pane_closes_the_tab(cx: &mut TestAppContext) {
+    let split = Split {
+        tabs: vec![10, 11],
+        ..Default::default()
+    };
+    let (shell, host) = window(cx, Vec::new(), vec![10, 11, 12], Folders::default(), vec![split]);
+    shell.update(cx, |shell, cx| shell.set_selected(11, cx));
+    host.take();
+    shell.update(cx, |shell, cx| shell.run(Command::CloseSplitPane, "ui", cx));
+    assert_eq!(host.take_edits(), ["close 11"]);
+    report(&shell, cx, Vec::new(), vec![10, 12]);
+    host.take();
+    shell.update(cx, |shell, cx| shell.run(Command::ReopenClosedTab, "ui", cx));
+    assert!(host.take().contains(&"reopen closed tab".to_string()));
+    assert!(host.take_edits().is_empty());
+}
+
+/// A pinned tab ⌥-clicked onto a Today page takes that page into its place in the pinned tabs,
+/// pinned, before joining it, so the split is pinned and the tab keeps its pin and place, where
+/// the core alone would move it into Today. One ⌘Z puts both back, and ⇧⌘Z does both again.
+#[gpui::test]
+fn a_pinned_tab_joining_a_today_tab_keeps_its_pin(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![20, 21], vec![10], Folders::default(), Vec::new());
+    shell.update(cx, |shell, cx| shell.set_selected(10, cx));
+    host.take();
+    assert!(shell.update(cx, |shell, cx| shell.alt_press_row(21, cx)));
+    assert_eq!(host.take_edits(), ["move 10 true 0 1", "split 21 10 false"]);
+    assert_eq!(titles(&shell, cx).0, Some("Split View"));
+    report_lists(&shell, cx, vec![20, 10, 21], Vec::new(), vec![10, 21]);
+
+    assert!(undo(&shell, cx));
+    assert_eq!(
+        host.take_edits(),
+        ["separate 21", "move 21 true 0 1", "move 10 false 0 0"]
+    );
+    report(&shell, cx, vec![20, 21], vec![10]);
+    assert!(redo(&shell, cx));
+    assert_eq!(host.take_edits(), ["move 10 true 0 1", "split 21 10 false"]);
+}
+
+/// A Today tab joining a pinned tab's split is the core's to pin, and a Today tab joining another
+/// moves nothing first.
+#[gpui::test]
+fn only_a_pinned_tab_joining_today_moves_a_row_first(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![20], vec![10, 11], Folders::default(), Vec::new());
+    shell.update(cx, |shell, cx| shell.join_split(10, 20, false, false, cx));
+    assert_eq!(host.take_edits(), ["split 10 20 false"]);
+    report_lists(&shell, cx, vec![20, 10], vec![11], vec![20, 10]);
+    shell.update(cx, |shell, cx| shell.join_split(11, 10, false, false, cx));
+    assert_eq!(host.take_edits(), ["split 11 10 false"]);
+}

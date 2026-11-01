@@ -176,6 +176,29 @@ mod tests {
         assert_eq!(item, ("Expand Pinned Tabs", Command::ExpandPinned));
     }
 
+    /// Tabs › Pin Tab pins the tab shown while its page loads, as the menu sends it to the shell
+    /// whatever the page is doing (#1289).
+    #[gpui::test]
+    fn the_menu_bar_pins_a_loading_page(cx: &mut TestAppContext) {
+        let (shell, host) = shell_with(cx, &[1], &[10], Folders::default());
+        cx.update(crate::shell::bind_keys);
+        let loading = Page { url: "https://example.com/".into(), loading: true, ..Page::default() };
+        shell.update(cx, |shell, cx| {
+            shell.set_selected(10, cx);
+            shell.set_page(10, loading, cx);
+        });
+        assert_eq!(host.menu_bar.borrow().pin_title(), "Pin Tab");
+        host.take_edits();
+        cx.update(|cx| cx.dispatch_action(&crate::shell::Run(Command::TogglePin)));
+        assert_eq!(host.take_edits(), ["pinned 10 true"]);
+        shell.update(cx, |shell, cx| {
+            shell.set_tabs(1, vec![1, 10], Vec::new(), Vec::new(), Folders::default(), cx)
+        });
+        assert_eq!(host.menu_bar.borrow().pin_title(), "Unpin Tab");
+        cx.update(|cx| cx.dispatch_action(&crate::shell::Run(Command::TogglePin)));
+        assert_eq!(host.take_edits(), ["pinned 10 false"]);
+    }
+
     /// View › Developer turns the page's Developer Mode the other way, named by what it would do,
     /// and is left out for a page that has none, as Arc's shows only with a page.
     #[gpui::test]
