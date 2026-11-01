@@ -433,8 +433,8 @@ jobs:
 
       # AppKit gives an app the look of the SDK it linked on macOS 26 and later: the window
       # buttons' size, the corners, the title bar. The checks run builds with the current SDK, so a
-      # release on an older one would ship a window nobody verified (#1319). minos is the
-      # deployment target, which the runner's Xcode doesn't change.
+      # release on an older one would ship a window nobody verified (#1319). minos is rustc's default
+      # for the target, which the runner's Xcode doesn't change.
       - name: SDK
         run: |
           built=$(vtool -show-build build/Browser.app/Contents/MacOS/Browser)
@@ -442,7 +442,7 @@ jobs:
           sdk=$(echo "$built" | awk '$1 == "sdk" { print $2; exit }')
           minos=$(echo "$built" | awk '$1 == "minos" { print $2; exit }')
           xcode=$(xcodebuild -version | tr '\n' ' ')
-          echo "The app links the macOS $sdk SDK (${xcode}), for macOS $minos and later." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "The app links the macOS $sdk SDK (${xcode}); its binary's minimum is macOS $minos, and Info.plist's 15.0." | tee -a "$GITHUB_STEP_SUMMARY"
           if [ "${sdk%%.*}" -lt 26 ]; then
             echo "::error::The app links the macOS $sdk SDK, so on macOS 26 and later it keeps the old look the checks don't verify. Build with Xcode 26 or later."
             exit 1
