@@ -2221,12 +2221,7 @@ impl Settings {
                 .filter(|client| !listed.contains(client))
                 .map(Client::name)
                 .collect();
-            match missing.as_slice() {
-                [] => "Any MCP client".into(),
-                [one] => format!("Any MCP client. {one} isn't on this computer.").into(),
-                _ => format!("Any MCP client. {} aren't on this computer.", missing.join(" and "))
-                    .into(),
-            }
+            model.other_client_detail(&missing).into()
         } else {
             format!("Not connected. Connect adds the browser to {}", client.config()).into()
         };

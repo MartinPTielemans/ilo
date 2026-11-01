@@ -455,6 +455,33 @@ fn a_flatpaks_setup_runs_the_bridge_in_its_sandbox(cx: &mut TestAppContext) {
     assert!(command.starts_with(r#""flatpak" "run" "--command=/app/ilo/mcp-bridge" "app.ilo.browser" ""#), "{command}");
 }
 
+/// The "Any MCP client" row says which clients it didn't find, except in a Flatpak, where the
+/// sandbox can't see the host's, so it says that and points to Copy Setup.
+#[gpui::test]
+fn the_other_clients_row_says_a_flatpak_cant_see_the_hosts_clients(cx: &mut TestAppContext) {
+    let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+    let plain = agents(&browser, &configs, None, cx);
+    let detail = |agents: &Entity<Agents>, missing: &[&str], cx: &TestAppContext| {
+        agents.read_with(cx, |agents, _| agents.other_client_detail(missing))
+    };
+    assert_eq!(detail(&plain, &[], cx), "Any MCP client");
+    assert_eq!(
+        detail(&plain, &["Codex"], cx),
+        "Any MCP client. Codex isn't on this computer."
+    );
+    assert_eq!(
+        detail(&plain, &["Claude Code", "Codex"], cx),
+        "Any MCP client. Claude Code and Codex aren't on this computer."
+    );
+
+    let bridge = bridge::launch(std::path::Path::new("/app/ilo/mcp-bridge"), Some("app.ilo.browser"));
+    let flatpak = agents_running(bridge, &browser, &configs, None, cx);
+    let said = detail(&flatpak, &["Claude Code", "Codex"], cx);
+    assert!(said.contains("sandbox can't see Claude Code or Codex"), "{said}");
+    assert!(said.contains("Copy Setup"), "{said}");
+    assert!(!said.contains("aren't on this computer"), "{said}");
+}
+
 /// list_tabs makes the agent's Space the first time, named as the agent, and lists only its tabs,
 /// never the user's.
 #[gpui::test]
