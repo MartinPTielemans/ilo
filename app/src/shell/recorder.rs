@@ -966,7 +966,7 @@ impl Browser for Recorder {
         self.page_events.borrow_mut().push(if moving { "moving" } else { "still" });
     }
 
-    fn set_pane_corner(&self, _: f32, _: f32, _: &mut App) {}
+    fn set_pane_corner(&self, _: f32, _: f32, _: f32, _: &mut App) {}
 
     fn show_window_buttons(&self, _: bool, _: &mut App) {}
 

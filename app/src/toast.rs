@@ -38,9 +38,8 @@ use crate::tokens::toast::CHIP_FILL;
 use crate::tokens::toast::CHIP_GLYPH;
 use crate::tokens::toast::KEY_GAP;
 use crate::tokens::toast::KEY_COLOR;
-use crate::elevation::Level;
+use crate::elevation::{Level, WINDOW_MARGIN};
 use crate::tokens::toast::SHADE;
-pub use crate::tokens::toast::WINDOW_WIDTH;
 pub use crate::tokens::toast::WINDOW_HEIGHT;
 /// Arc's motion: it grows from 0.7 of its size about the middle of its top edge on a spring of
 /// 0.32 s and ζ 0.52, fading in over the first 0.1 s, and leaves the way it came over 0.07 s,
@@ -187,7 +186,8 @@ struct ToastWindow(WindowHandle<Toast>);
 impl Global for ToastWindow {}
 
 /// Opens the toast's window, hidden, for `host` to show over the browser window, ahead of time as
-/// the find bar's is. The toast takes `look`'s colour and palette.
+/// the find bar's is. The toast takes `look`'s colour and palette. The host makes the window as
+/// wide as the page it shows over, and a toast too long for that shortens its words.
 pub fn open(
     host: Rc<dyn Host>,
     look: impl Fn(&App) -> (Hsla, Palette) + 'static,
@@ -196,7 +196,7 @@ pub fn open(
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
             point(px(0.), px(0.)),
-            size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)),
+            size(px(WINDOW_HEIGHT), px(WINDOW_HEIGHT)),
         ))),
         titlebar: Some(TitlebarOptions {
             title: None,
@@ -509,6 +509,10 @@ impl Render for Toast {
             false => (HEIGHT, TOP, RIGHT),
         };
         let root = root.pt(px(top)).pr(px(right)).font_family(crate::face::UI);
+        // Its window is the page's width, and it keeps the margin its shadow falls in from the
+        // window's left edge too: words that would make it wider shorten, where the window's edge
+        // cut them (#1462).
+        let widest = (window.viewport_size().width - px(right + WINDOW_MARGIN)).max(px(0.));
         // AppKit puts the window on screen some frames after it's asked to, and only then does
         // GPUI draw it, so the motion starts there rather than skip its start.
         if shown.shown.is_none() && window.is_visible() {
@@ -594,6 +598,8 @@ impl Render for Toast {
             })
             .on_hover(cx.listener(|toast, hovered: &bool, _, cx| toast.hover(*hovered, cx)))
             .h(px(height))
+            .flex_none()
+            .max_w(widest)
             .pl(px(TEXT_LEFT))
             .pr(px(TEXT_RIGHT))
             .flex()
@@ -608,7 +614,8 @@ impl Render for Toast {
             .text_size(px(TEXT_SIZE))
             .font_weight(FontWeight::MEDIUM)
             .text_color(palette.ink)
-            .child(shown.text.clone())
+            // Only the words give way; the buttons after them keep their size.
+            .child(div().min_w_0().truncate().child(shown.text.clone()))
             .children(shown.key.clone().map(|(key, rest)| {
                 div()
                     .flex()

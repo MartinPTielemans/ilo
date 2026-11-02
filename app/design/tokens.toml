@@ -1620,10 +1620,8 @@ key-color = 0.6
 # It darkens from the window's colour at its top to this much of it at its bottom (Arc's goes
 # from (40,22,80) to (31,17,62) in a purple Space).
 shade = 0.78
-# Its window, wide enough for the longest toast and tall enough for its shadow, at the browser
-# window's top right.
-window-width = 420.0
-# Tall enough for the popover level's shadow under the toast (`Level::reach`).
+# Its window, at the browser window's top right, is as wide as the page under it, so no toast runs
+# past it (#1462), and tall enough for the popover level's shadow under the toast (`Level::reach`).
 window-height = 114.0
 note-height = 41.0
 note-top = 4.0

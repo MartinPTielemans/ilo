@@ -260,7 +260,7 @@ mod platform {
         pub fn host_show_offer(ui_view: *mut c_void);
         pub fn host_hide_offer(ui_view: *mut c_void);
         pub fn host_add_hud(hud_view: *mut c_void, right: f64, top: f64, margin: f64);
-        pub fn host_set_pane_corner(ui_view: *mut c_void, right: f64, top: f64);
+        pub fn host_set_pane_corner(ui_view: *mut c_void, left: f64, right: f64, top: f64);
         pub fn host_show_hud(ui_view: *mut c_void);
         pub fn host_hide_hud();
         pub fn host_add_drop_targets(view: *mut c_void);
@@ -3003,8 +3003,9 @@ impl Browser for Engine {
         unsafe { bc::bc_window_page_moving(self.window, moving) };
     }
 
-    fn set_pane_corner(&self, right: f32, top: f32, _: &mut App) {
-        unsafe { platform::host_set_pane_corner(self.ui_view, right as f64, top as f64) };
+    fn set_pane_corner(&self, left: f32, right: f32, top: f32, _: &mut App) {
+        let (left, right, top) = (f64::from(left), f64::from(right), f64::from(top));
+        unsafe { platform::host_set_pane_corner(self.ui_view, left, right, top) };
     }
 
     fn show_window_buttons(&self, shown: bool, _: &mut App) {

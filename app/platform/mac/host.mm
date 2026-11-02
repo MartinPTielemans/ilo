@@ -234,9 +234,11 @@ struct Browser {
   bool offer_keyboard = false;
 
   // How far the focused page's top right corner is inside the card's, in a split view, which the
-  // find bar, the offer and the HUD keep to.
+  // find bar, the offer, the HUD and the toast keep to, and where that page's left edge is in the
+  // window, which the toast's window starts at.
   double page_right = 0;
   double page_top = 0;
+  double page_left = 0;
 
   // The sidebar reveal's window and view, the shell's handler for the pointer, the window's width,
   // and while it shows, the monitor that hands the handler the pointer.
@@ -796,12 +798,15 @@ void SetCaptureCursor() {
 }
 
 // At the browser window's top right corner, where the toast draws itself, or in a split view at the
-// focused pane's (host_set_pane_corner).
+// focused pane's (host_set_pane_corner), and as wide as that page, so no toast runs past it.
 void PlaceToast() {
   NSRect frame = g_toast_over->window.frame;
-  NSSize size = g_toast.frame.size;
-  [g_toast setFrameOrigin:NSMakePoint(NSMaxX(frame) - g_toast_over->page_right - size.width,
-                                      NSMaxY(frame) - g_toast_over->page_top - size.height)];
+  const double height = NSHeight(g_toast.frame);
+  const double left = NSMinX(frame) + g_toast_over->page_left;
+  const double right = NSMaxX(frame) - g_toast_over->page_right;
+  [g_toast setFrame:NSMakeRect(left, NSMaxY(frame) - g_toast_over->page_top - height,
+                               std::max(right - left, 0.0), height)
+            display:NO];
 }
 
 // Where the UI asked, which it has kept inside the browser window: its window is wider than the
@@ -2625,11 +2630,12 @@ void host_hide_offer(void* ui_view) {
   fprintf(stderr, "browser: offer hidden\n");
 }
 
-void host_set_pane_corner(void* ui_view, double right, double top) {
+void host_set_pane_corner(void* ui_view, double left, double right, double top) {
   Browser* browser = BrowserWithView(ui_view);
   if (!browser) {
     return;
   }
+  browser->page_left = left;
   browser->page_right = right;
   browser->page_top = top;
   if (browser->find_bar_shown) {

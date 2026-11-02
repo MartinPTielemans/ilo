@@ -113,7 +113,7 @@ fn find<R>(kind: Kind, f: impl FnOnce(&mut Float) -> R) -> Option<R> {
 }
 
 /// Where the float `kind` goes over `ui_view`'s window, at its own size but for the drop targets,
-/// which cover the window's content.
+/// which cover the window's content, and the toast, as wide as the page.
 fn bounds(kind: Kind, ui_view: *mut c_void) -> Option<Bounds<Pixels>> {
     let (view, left, top) = find(kind, |float| (float.view, float.left, float.top))?;
     let content = gpui_linux::embedder_size(ui_view)?;
@@ -121,10 +121,16 @@ fn bounds(kind: Kind, ui_view: *mut c_void) -> Option<Bounds<Pixels>> {
     let width = f64::from(content.width);
     let (x, y) = match kind {
         Kind::DropTargets => return Some(Bounds::new(point(px(0.), px(0.)), content)),
-        // At the focused page's corner, which in a split view is its pane's.
+        // At the focused page's corner, which in a split view is its pane's, and as wide as that
+        // page from its left edge, so no toast runs past its window (#1462).
         Kind::Toast => {
             let (page_right, page_top) = crate::panels::page_corner(ui_view);
-            (width - page_right - f64::from(own.width), page_top)
+            let left = crate::panels::page_left(ui_view);
+            let across = (width - page_right - left).max(0.);
+            return Some(Bounds::new(
+                point(px(left as f32), px(page_top as f32)),
+                size(px(across as f32), own.height),
+            ));
         }
         Kind::Hud => {
             let (page_right, page_top) = crate::panels::page_corner(ui_view);

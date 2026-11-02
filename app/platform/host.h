@@ -300,8 +300,9 @@ void host_hide_offer(void* ui_view);
 
 // Moves |ui_view|'s find bar, its offer, and the HUD and the toast over it |right| points further
 // in from the window's right edge and |top| points further down, to the focused page's top right
-// corner when a split view's focused page isn't the top right one.
-void host_set_pane_corner(void* ui_view, double right, double top);
+// corner when a split view's focused page isn't the top right one. The focused page's left edge
+// is |left| points from the window's, where the toast's window starts.
+void host_set_pane_corner(void* ui_view, double left, double right, double top);
 
 // Makes the window of |hud_view| float over a browser window when shown, |right| and |top| points
 // from the top right corner of the window's content, for the zoom HUD, which draws its pill
@@ -432,7 +433,9 @@ void host_share_png(const uint8_t* png,
                     bool messages);
 
 // Makes the window of |toast_view| the toast's, which floats over a browser window's top right
-// corner when shown, as its child, and lets the mouse through. It starts hidden.
+// corner when shown, as its child, and lets the mouse through. It starts hidden. Shown, it's as
+// wide as the focused page, from that page's left edge to its corner (host_set_pane_corner), and
+// keeps its own height.
 void host_add_toast(void* toast_view);
 
 // The toast takes clicks, while it has buttons, or lets the mouse through to the page. Even then
