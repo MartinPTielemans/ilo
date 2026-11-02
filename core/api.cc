@@ -1269,6 +1269,19 @@ void bc_set_archive_after(double seconds) {
   browser_core::SessionChanged();
 }
 
+double bc_little_archive_after(void) {
+  return browser_core::UserSettings().little_archive_after.InSecondsF();
+}
+
+void bc_set_little_archive_after(double seconds) {
+  if (!(seconds > 0)) {
+    return;
+  }
+  browser_core::UserSettings().little_archive_after = base::Seconds(seconds);
+  browser_core::ScheduleAutoArchive();
+  browser_core::SessionChanged();
+}
+
 bool bc_haptics(void) {
   return browser_core::UserSettings().haptics;
 }

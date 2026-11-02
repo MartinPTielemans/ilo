@@ -1149,8 +1149,9 @@ plus-after = 37.0
 # Ours: a tab dragged over another Space's card rings it in that card's accent, this wide, inside
 # its edge (Arc's isn't recorded).
 card-drop-ring = 2.0
-# The search field, on the window buttons' row. Arc's Filter button is left out, and the field
-# takes its place.
+# The search field, on the window buttons' row. It runs to 409 but while the archive holds a
+# Little ilo tab, when Arc's Filter button, 73 wide at x 336, takes its end and the field stops 8
+# before it (ours).
 search-x = 120.0
 search-top = 10.0
 search-width = 289.0
@@ -1160,6 +1161,9 @@ search-glyph = 15.0
 search-glyph-x = 14.5
 search-text-x = 44.0
 search-placeholder = 0.56
+filter-x = 336.0
+filter-width = 73.0
+filter-gap = 8.0
 # The archive's list, beside the column.
 archive-top = 56.0
 archive-width = 304.0

@@ -177,6 +177,9 @@ typedef struct bc_archived_tab {
   const char* title;
   // When it closed, in milliseconds since the Unix epoch.
   double archived;
+  // Whether it closed in a Little ilo window, by its window closing or auto-archive, as the
+  // Library's filter picks them out (Arc's Little Arc filter).
+  bool little;
 } bc_archived_tab;
 
 // One of an extension's keyboard commands that has a key, as Chrome's Keyboard Shortcuts page
@@ -790,6 +793,11 @@ typedef struct bc_host {
   // Little Arc does. A private window's link opens beside its page instead, as ⌥-click's does. The
   // user's alone: agents' clicks hold no keys.
   void (*window_open_little)(void* context, bc_id window, const char* url, bc_id profile);
+  // bc_window_reopen_closed_tab in |window| found the tab closed last was a Little ilo window's:
+  // open a new Little ilo window for |profile| (bc_window_open_little) and reopen |closed| there
+  // with bc_window_reopen_tab, as Arc's ⇧⌘T reopens one in Little Arc with its history. The
+  // user's alone: agents get no Little ilo window.
+  void (*window_reopen_little)(void* context, bc_id window, bc_id closed, bc_id profile);
   // The page of |tab|, the tab |window| has selected, went to another window, which shows it live,
   // and |window| shows no page; or |tab| is 0, and |window| shows a page again, or has selected
   // another tab. Once for each change. window_selected doesn't say it: the tab stays selected.
@@ -1696,12 +1704,17 @@ BC_EXPORT bc_id bc_window_undo_delete_space(bc_id window, bc_id space);
 // Today tabs, else at the top of the Space the window shows. One closed from a split view goes back
 // to its place in it, if a tab of the split is open and it has room. The window shows it, and its
 // Space, and it leaves the archive.
-// Tabs that close with their window or as the browser quits come back at the next launch instead.
+// Tabs that close with their window or as the browser quits come back at the next launch instead,
+// but a Little ilo window's, which closes into the archive with its window. When the tab closed
+// last was a Little ilo window's, it comes back in a new one: this returns 0, and
+// window_reopen_little follows. A private window reopens none.
 // Returns the tab, or 0 if none is closed.
 BC_EXPORT bc_id bc_window_reopen_closed_tab(bc_id window);
 
 // As bc_window_reopen_closed_tab for the Today tab that had the id |closed| when it closed, rather
-// than the one closed last, so a tab closed before another can come back first. It doesn't show
+// than the one closed last, so a tab closed before another can come back first. A Little ilo
+// window's tab comes back only in a Little ilo window with no tab yet (window_reopen_little), and
+// the window shows it; a regular window's only in a regular window. It doesn't show
 // the tab: the one shown stays, so several can come back behind it, and the caller shows the one
 // that was shown when it closed. Returns the new tab's id, which is not |closed|, or 0 if that tab
 // isn't among those that reopen: it came back already, or 25 others closed since.
@@ -1774,6 +1787,14 @@ BC_EXPORT size_t bc_archive_undo_remove(bc_id removal);
 // then keeps its own (bc_profile_archive_after), as Arc's do. The core keeps it with the Spaces.
 BC_EXPORT double bc_archive_after(void);
 BC_EXPORT void bc_set_archive_after(double seconds);
+
+// How long, in seconds, a Little ilo window that isn't the active window stays open before it
+// closes into the archive, with its tab, as Arc's Little Arc windows do: 6 hours, else the time
+// the user chose in Settings › General. Counted on the wall clock from when it stopped being the
+// active window, through sleep. One whose page plays sound waits another interval. The core keeps
+// it with the Spaces. The user's alone: agents get no Little ilo window.
+BC_EXPORT double bc_little_archive_after(void);
+BC_EXPORT void bc_set_little_archive_after(double seconds);
 
 // Whether to show the note that auto-archive took Today tabs: from the first time it takes some
 // until the user dismisses it with bc_dismiss_archive_note, after which it never shows again, as

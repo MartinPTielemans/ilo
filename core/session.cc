@@ -475,11 +475,14 @@ std::optional<std::string> ToJson(const Saved& saved) {
     archive.Append(base::DictValue()
                        .Set("url", tab.url.spec())
                        .Set("title", tab.title)
-                       .Set("archived", tab.archived.InMillisecondsFSinceUnixEpochIgnoringNull()));
+                       .Set("archived", tab.archived.InMillisecondsFSinceUnixEpochIgnoringNull())
+                       .Set("little", tab.little));
   }
   root.Set("archive", std::move(archive));
   root.Set("settings", base::DictValue()
                            .Set("archive_after", saved.settings.archive_after.InSecondsF())
+                           .Set("little_archive_after",
+                                saved.settings.little_archive_after.InSecondsF())
                            .Set("haptics", saved.settings.haptics)
                            .Set("warn_before_quitting", saved.settings.warn_before_quitting)
                            .Set("archive_noted", saved.settings.archive_noted)
@@ -714,7 +717,8 @@ std::optional<Saved> Read(const base::FilePath& path) {
         saved.archive.push_back(
             {.url = GURL(*url),
              .title = *title,
-             .archived = base::Time::FromMillisecondsSinceUnixEpoch(*archived)});
+             .archived = base::Time::FromMillisecondsSinceUnixEpoch(*archived),
+             .little = tab->FindBool("little").value_or(false)});
       }
     }
   }
@@ -722,6 +726,10 @@ std::optional<Saved> Read(const base::FilePath& path) {
     const double archive_after = settings->FindDouble("archive_after").value_or(0);
     if (archive_after > 0) {
       saved.settings.archive_after = base::Seconds(archive_after);
+    }
+    const double little_archive_after = settings->FindDouble("little_archive_after").value_or(0);
+    if (little_archive_after > 0) {
+      saved.settings.little_archive_after = base::Seconds(little_archive_after);
     }
     saved.settings.haptics = settings->FindBool("haptics").value_or(true);
     saved.settings.warn_before_quitting =

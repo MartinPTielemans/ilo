@@ -3,7 +3,7 @@
 # that Space in the main window and closes it. ⌥⌘-click on a link opens the link in one, not
 # beside the page as ⌥-click does, and ⌘W closes that window, its page with it. An escape the page
 # doesn't use closes one. A tab its page opens goes behind, to the top of its Space's Today, and
-# outlives it. The first opens 900 × 640, and each after at the size the last one closed at. On the
+# outlives it. Closing one archives its tab, and ⇧⌘T reopens it in a new one. The first opens 900 × 640, and each after at the size the last one closed at. On the
 # Mac one opens over a full-screen window, and the Dock's menu opens one after its New Window, and
 # hides and shows them all.
 
@@ -241,7 +241,36 @@ expect "^browser: window $little shows $taken\$" "the Little ilo window doesn't 
 none_since "^browser: loaded $taken " || fail "the tab's page loaded again instead of moving live"
 none_since "^browser: splits [0-9]" || fail "⌥⌘-click on a Today tab's row opened a split view too"
 
+# ⌘W closes it into the archive, as Arc's Little Arc does, and ⇧⌘T in the main window reopens it
+# in a new Little ilo window for its Space.
+# New, so it logs no "key window"; ⌘W closing it shows it's key.
+send key w cmd
+expect "^browser: window closed $little\$" "the Little ilo window holding the tab didn't come to the front: ⌘W didn't close it"
+expect '^browser: archive [1-9][0-9]* tabs$' "closing the Little ilo window didn't archive its tab"
+send window 1
+send key t cmd shift
+expect "^browser: little window opened [0-9]* profile [0-9]* home $home\$" \
+  "⇧⌘T didn't open a Little ilo window for Space $home"
+little=$(opened)
+expect "^browser: little window $little reopened [0-9]* as [0-9]*\$" \
+  "⇧⌘T didn't reopen the Little ilo window's tab in it: $(grep "^browser: little window $little " "$log" | tail -1)"
+send key w cmd
+expect "^browser: window closed $little\$" "the reopened Little ilo window didn't come to the front: ⌘W didn't close it"
+send window 1
+
+# The Library's Archived Tabs then has a Filter button, whose Little ilo lists only its tabs.
+send key l cmd shift
+expect '^browser: library shown$' "⇧⌘L didn't open the Library"
+post click 372 28
+expect "^browser: menu shown $(cased 'All Tabs (checked), Little ilo')\$" \
+  "a click on the archive's Filter didn't show its menu"
+send choose "$(cased 'Little ilo')"
+expect '^browser: archive filter little$' "choosing Little ilo didn't filter the archive"
+../tools/window-screenshot.sh "$pid" "$out/little-archive.png" || fail "no window to capture"
+send key l cmd shift
+expect '^browser: library hidden$' "⇧⌘L didn't close the Library"
+
 exec 3>&-
 quit
 kill "$server"
-echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L loads a URL in it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Windows: $out/little.png $out/little-moved.png $out/little-link.png, and on the Mac $out/little-full-screen.png $out/little-dock.png"
+echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L loads a URL in it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Closing one archives its tab, ⇧⌘T reopens it in a new one, and the Library's Filter lists Little ilo's alone. Windows: $out/little.png $out/little-moved.png $out/little-link.png $out/little-archive.png, and on the Mac $out/little-full-screen.png $out/little-dock.png"

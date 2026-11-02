@@ -133,6 +133,10 @@ struct ClosedTab {
   bc_id split_with = 0;
   size_t split_index = 0;
   bool stacked = false;
+  // Whether it closed in a Little ilo window, which ⇧⌘T reopens it in a new one of, in the profile
+  // in the directory |profile| (window_reopen_little).
+  bool little = false;
+  std::string profile;
 };
 
 // As many as Chrome keeps.
@@ -194,15 +198,16 @@ void KeepClosed(bc_id id) {
   Tab* tab = Tab::Get(id);
   Space* space = Space::Holding(id);
   // One not in a Space never showed, a pinned tab closes only when its page closes itself, and a
-  // window's own Space's leaves nothing behind.
-  if (!tab || !space || space->IsPinned(id) || space->own()) {
+  // private window's leaves nothing behind. A Little ilo window's goes in the archive, as Arc's
+  // Little Arc's do, and ⇧⌘T reopens it in another.
+  if (!tab || !space || space->IsPinned(id) || space->off_the_record()) {
     return;
   }
   SavedTab saved = tab->Save();
   if (saved.history.empty()) {
     return;
   }
-  Archive(id, saved.history[saved.current].virtual_url(), tab->Title());
+  Archive(id, saved.history[saved.current].virtual_url(), tab->Title(), space->little());
   const size_t index = std::ranges::find(space->today(), id) - space->today().begin();
   const std::vector<bc_id> panes = space->Panes(id);
   const size_t split_index = std::ranges::find(panes, id) - panes.begin();
@@ -212,7 +217,9 @@ void KeepClosed(bc_id id) {
                           .saved = std::move(saved),
                           .split_with = panes.size() < 2 ? 0 : panes[split_index == 0 ? 1 : 0],
                           .split_index = split_index,
-                          .stacked = space->Stacked(id)});
+                          .stacked = space->Stacked(id),
+                          .little = space->little(),
+                          .profile = space->profile()});
   if (ClosedTabs().size() > kMaxClosedTabs) {
     ClosedTabs().erase(ClosedTabs().begin());
   }
@@ -1804,20 +1811,49 @@ bc_id Window::UndoDeleteSpace(bc_id id) {
 }
 
 bc_id Window::ReopenClosedTab() {
-  // The closed tabs are the regular windows', as a window of its own keeps none.
-  if (ClosedTabs().empty() || own_space_) {
+  // A private window keeps none of its own and reopens none of the others'.
+  if (ClosedTabs().empty() || off_the_record_) {
     return 0;
   }
-  return ReopenClosed(ClosedTabs().back().id, /*show=*/true);
+  const ClosedTab& last = ClosedTabs().back();
+  // A Little ilo window's comes back in a new one, which the app opens, as Arc's ⇧⌘T reopens it in
+  // Little Arc. Posted, so the app hears of it once its own call has returned.
+  if (last.little) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(
+                       [](base::WeakPtr<Window> window, bc_id closed, bc_id profile) {
+                         if (window && profile && Host().window_reopen_little) {
+                           Host().window_reopen_little(Host().context, window->id(), closed,
+                                                       profile);
+                         }
+                       },
+                       weak_factory_.GetWeakPtr(), last.id, ProfileId(last.profile)));
+    return 0;
+  }
+  // The rest are the regular windows', which a window of its own never shows.
+  if (own_space_) {
+    return 0;
+  }
+  return ReopenClosed(last.id, /*show=*/true);
 }
 
 bc_id Window::ReopenClosed(bc_id id, bool show) {
-  std::optional<ClosedTab> taken = own_space_ ? std::nullopt : TakeClosed(id);
+  // A Little ilo window's tab comes back only in a Little ilo window with no tab yet, and a regular
+  // window's only in a regular one.
+  auto found = std::ranges::find(ClosedTabs(), id, &ClosedTab::id);
+  const Space* own = own_space_ ? Space::FromId(space_) : nullptr;
+  const bool fits =
+      found != ClosedTabs().end() &&
+      (own_space_ ? own && own->little() && found->little && own->today().empty()
+                  : !found->little);
+  std::optional<ClosedTab> taken = fits ? TakeClosed(id) : std::nullopt;
   if (!taken) {
     return 0;
   }
   const ClosedTab closed = std::move(*taken);
-  const bc_id tab = Reopen(closed.space, closed.index, closed.saved);
+  // In this Little ilo window's Space, not the one it closed in, which may still be open.
+  const bc_id tab = own_space_ ? Reopen(space_, 0, closed.saved)
+                               : Reopen(closed.space, closed.index, closed.saved);
   if (!tab) {
     return 0;
   }
@@ -1840,7 +1876,8 @@ bc_id Window::ReopenClosed(bc_id id, bool show) {
     }
     PanesChanged();
   }
-  if (show) {
+  // A Little ilo window shows its one tab, as it has nothing else to show.
+  if (show || own_space_) {
     Select(tab);
   }
   return tab;
@@ -2291,6 +2328,10 @@ void Window::Destroy() {
       const bool its = own_space_ ? space && space->id() == space_
                                   : !(space && space->own()) && !OffTheRecord(tab);
       if (!tab->web_contents() && its) {
+        // A Little ilo window's goes in the archive, as one with its page does.
+        if (space && space->little()) {
+          KeepClosed(tab->id());
+        }
         tab->Close();
       }
     }
@@ -2361,7 +2402,10 @@ void Window::OnTabStripModelChanged(TabStripModel* tab_strip_model,
                                     const TabStripSelectionChange& selection) {
   if (change.type() == TabStripModelChange::kRemoved) {
     // Tabs closing with the window, or as the browser quits, come back at the next launch instead.
-    if (closing_ || browser_shutdown::IsTryingToQuit()) {
+    // A Little ilo window's, which never comes back with a launch, goes in the archive as it
+    // closes with its window (KeepClosed).
+    const Space* own = own_space_ ? Space::FromId(space_) : nullptr;
+    if ((closing_ && !(own && own->little())) || browser_shutdown::IsTryingToQuit()) {
       return;
     }
     for (const TabStripModelChange::RemovedTab& removed : change.GetRemove()->contents) {
@@ -2403,8 +2447,23 @@ void Window::OnWidgetActivationChanged(views::Widget* widget, bool active) {
       Host().window_activated(Host().context, id_);
     }
     sync::WindowActivated();
+  } else {
+    // A Little ilo window's auto-archive counts from here.
+    inactive_since_ = base::Time::Now();
+    if (little()) {
+      ScheduleAutoArchive();
+    }
   }
   ReportActiveBrowser();
+}
+
+bool Window::little() const {
+  const Space* own = own_space_ ? Space::FromId(space_) : nullptr;
+  return own && own->little();
+}
+
+bool Window::active() const {
+  return widget_ && widget_->IsActive();
 }
 
 void Window::ReportActiveBrowser() {

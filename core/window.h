@@ -14,6 +14,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/scoped_observation.h"
+#include "base/time/time.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/session.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
@@ -182,6 +183,16 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Whether it shows a Space of its own alone, which no other window shows and is never saved: a
   // private window's or a Little ilo window's.
   bool own_space() const { return own_space_; }
+  // Whether it's a Little ilo window.
+  bool little() const;
+  // Whether it's the active window, which has the keyboard.
+  bool active() const;
+  // Whether it's closing, its pages asked to leave.
+  bool closing() const { return closing_; }
+  // When it last stopped being the active window, or opened, which a Little ilo window's
+  // auto-archive counts from. Auto-archive sets it again for one whose page plays sound.
+  base::Time inactive_since() const { return inactive_since_; }
+  void set_inactive_since(base::Time since) { inactive_since_ = since; }
   // Whether its Browsers stay with no tabs left: a private window's does while the window is
   // open, as it holds the private session, which ends once the profile's last Browser has gone.
   bool KeepsBrowsers() const;
@@ -464,6 +475,7 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Made when the command bar first asks for suggestions.
   std::unique_ptr<Suggestions> suggestions_;
   bool closing_ = false;
+  base::Time inactive_since_ = base::Time::Now();
   // While closing, for a page's Stay or the downloads question, which keeps the window open.
   base::CallbackListSubscription close_stopped_;
   bool off_the_record_ = false;

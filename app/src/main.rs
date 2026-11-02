@@ -5531,6 +5531,38 @@ unsafe extern "C" fn window_open_little(
     });
 }
 
+/// ⇧⌘T in `window` found a Little ilo window's tab closed last: it comes back in a new one for a
+/// Space of `profile`, the one `window` is for if it's in it, as Arc's reopens it in Little Arc.
+unsafe extern "C" fn window_reopen_little(
+    _: *mut c_void,
+    window: bc::bc_id,
+    closed: bc::bc_id,
+    profile: bc::bc_id,
+) {
+    update_app(move |cx| {
+        let from = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == window).cloned());
+        let Some(from) = from else {
+            return;
+        };
+        let users = |space: bc::bc_id| name(bc::bc_space_agent, space).is_empty();
+        let in_profile = |space: bc::bc_id| unsafe { bc::bc_space_profile(space) } == profile;
+        let own = from.little.unwrap_or_else(|| users_space_of(window));
+        let home = match in_profile(own) {
+            true => Some(own),
+            false => ids(bc::bc_spaces).into_iter().find(|&space| in_profile(space) && users(space)),
+        };
+        let Some(opened) = home.and_then(|home| open_little(from, home, cx)) else {
+            return;
+        };
+        let tab = unsafe { bc::bc_window_reopen_tab(opened, closed) };
+        // check.sh reads this line.
+        log!("browser: little window {opened} reopened {closed} as {tab}");
+        if tab == 0 {
+            unsafe { bc::bc_window_close(opened) };
+        }
+    });
+}
+
 unsafe extern "C" fn launching(_: *mut c_void) {
     unsafe { platform::host_watch_finished_launching(finished_launching) };
     let Ok(profile) = CString::new(profile_dir()) else {
@@ -6014,6 +6046,7 @@ unsafe extern "C" fn archive_changed(
             url: text(tab.url),
             title: text(tab.title),
             archived: tab.archived,
+            little: tab.little,
         })
         .collect();
     // check.sh waits for this line.
@@ -7054,6 +7087,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         private_session_ended: Some(private_session_ended),
         window_open_link: Some(window_open_link),
         window_open_little: Some(window_open_little),
+        window_reopen_little: Some(window_reopen_little),
         space_changed: Some(space_changed),
         spaces_changed: Some(spaces_changed),
         favorites_changed: Some(favorites_changed),

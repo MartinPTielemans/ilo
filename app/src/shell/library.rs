@@ -127,6 +127,7 @@ use crate::tokens::shell::library::SEARCH_GLYPH;
 use crate::tokens::shell::library::SEARCH_GLYPH_X;
 use crate::tokens::shell::library::SEARCH_TEXT_X;
 use crate::tokens::shell::library::SEARCH_PLACEHOLDER;
+use crate::tokens::shell::library::{FILTER_GAP, FILTER_WIDTH, FILTER_X};
 
 use crate::tokens::shell::library::ARCHIVE_TOP;
 use crate::tokens::shell::library::ARCHIVE_WIDTH;
@@ -176,6 +177,8 @@ pub struct Archived {
     pub title: SharedString,
     /// When it was archived, in milliseconds since the Unix epoch.
     pub archived: f64,
+    /// Whether it closed in a Little ilo window, which the archive's filter picks out (Arc).
+    pub little: bool,
 }
 
 /// A video a Media tile plays: its file's name, for the log, and the frame it shows, none before
@@ -382,6 +385,8 @@ pub(super) struct Library {
     query: String,
     items: Vec<Item>,
     list: ListState,
+    /// Whether Archived Tabs lists only Little ilo's, the Filter button's choice.
+    little_only: bool,
     _search: Subscription,
 }
 
@@ -705,6 +710,7 @@ impl Shell {
             query: String::new(),
             items: Vec::new(),
             list: ListState::new(0, ListAlignment::Top, px(ARCHIVE_OVERDRAW)),
+            little_only: false,
             _search: observe,
         });
         // check.sh waits for these lines.
@@ -785,10 +791,12 @@ impl Shell {
             return;
         }
         let found = |text: &SharedString| text.to_lowercase().contains(&query);
+        let little_only = library.little_only && self.archive.iter().any(|tab| tab.little);
         // Each with the time it's listed by, newest first.
         let found: Vec<(Item, f64)> = match self.section {
             Section::Spaces => Vec::new(),
             Section::Archive => (self.archive.iter().enumerate())
+                .filter(|(_, tab)| !little_only || tab.little)
                 .filter(|(_, tab)| query.is_empty() || found(&tab.title) || found(&tab.url))
                 .map(|(index, tab)| (Item::Tab(index), tab.archived))
                 .collect(),
@@ -848,6 +856,50 @@ impl Shell {
         log!("browser: restore archived {id}");
         self.browser.restore_archived(id, cx);
         self.set_library(false, cx);
+    }
+
+    /// Whether Archived Tabs has the Filter button: while the archive holds a Little ilo tab, as
+    /// it's the one filter there is.
+    fn archive_filtered(&self) -> bool {
+        self.section == Section::Archive && self.archive.iter().any(|tab| tab.little)
+    }
+
+    /// Whether the list shows only Little ilo's tabs.
+    fn little_only(&self) -> bool {
+        self.archive_filtered() && self.library.as_ref().is_some_and(|library| library.little_only)
+    }
+
+    /// The Filter button's menu: All Tabs, or Little ilo's alone, the one shown checked.
+    fn archive_filter_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let little = self.little_only();
+        let entries = vec![
+            MenuEntry::new("All Tabs", true).checked(!little),
+            MenuEntry::new("Little ilo", true).checked(little),
+        ];
+        let shell = cx.weak_entity();
+        self.browser.context_menu(
+            entries,
+            position,
+            false,
+            self.menu_look(),
+            Box::new(move |chosen, cx| {
+                if let Some(chosen) = chosen {
+                    shell.update(cx, |shell, cx| shell.filter_little(chosen == 1, cx)).ok();
+                }
+            }),
+            cx,
+        );
+    }
+
+    /// Lists only Little ilo's archived tabs, or all of them again.
+    fn filter_little(&mut self, little: bool, cx: &mut Context<Self>) {
+        let Some(library) = &mut self.library else {
+            return;
+        };
+        library.little_only = little;
+        // check.sh waits for this line.
+        log!("browser: archive filter {}", if little { "little" } else { "all" });
+        self.filter(true, cx);
     }
 
     /// The menu a right-click on an archived tab's row shows: reopen it, copy its URL, or take it
@@ -1002,12 +1054,15 @@ impl Shell {
             .w(px(1.))
             .bg(self.palette.faint(COLUMN_EDGE));
         let search = library.search.clone();
+        // The Filter button takes the field's end, while there's something to filter.
+        let filtered = self.archive_filtered();
+        let field_width = if filtered { FILTER_X - FILTER_GAP - SEARCH_X } else { SEARCH_WIDTH };
         let field = div()
             .id("library-search")
             .absolute()
             .left(px(SEARCH_X))
             .top(px(SEARCH_TOP))
-            .w(px(SEARCH_WIDTH))
+            .w(px(field_width))
             .h(px(SEARCH_HEIGHT))
             .flex()
             .items_center()
@@ -1036,6 +1091,30 @@ impl Shell {
                     .text_color(self.palette.text(SEARCH_PLACEHOLDER)),
             )
             .child(library.search.clone());
+        let filter = filtered.then(|| {
+            let label = if self.little_only() { "Little ilo" } else { "Filter" };
+            div()
+                .id("library-filter")
+                .absolute()
+                .left(px(FILTER_X))
+                .top(px(SEARCH_TOP))
+                .w(px(FILTER_WIDTH))
+                .h(px(SEARCH_HEIGHT))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(SEARCH_RADIUS))
+                .bg(self.palette.plate(LIBRARY_PLATE))
+                .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+                .block_mouse_except_scroll()
+                .text_size(px(text::BODY))
+                .text_color(self.palette.text(FORM_TEXT))
+                .on_click(cx.listener(|shell, event: &ClickEvent, _, cx| {
+                    shell.archive_filter_menu(event.position(), cx)
+                }))
+                .child(label)
+        });
         let spaces = self.section == Section::Spaces;
         let archive = if library.items.is_empty() {
             let empty = match (self.section, library.query.is_empty()) {
@@ -1100,6 +1179,7 @@ impl Shell {
         }
         panel
             .child(field)
+            .children(filter)
             .child(
                 div()
                     .absolute()
@@ -2319,7 +2399,8 @@ mod rename_tests;
 mod tests {
     use super::{
         ARCHIVE_TOP, ARCHIVE_WIDTH, ARCHIVED_LEFT, Archived, CARD_WIDTH, COLUMN_WIDTH, Captured,
-        Download, DownloadAction, DownloadChoice, DownloadState, HEADING_BOTTOM, HEADING_HEIGHT,
+        Download, DownloadAction, DownloadChoice, DownloadState, FILTER_WIDTH, FILTER_X,
+        SEARCH_HEIGHT, SEARCH_TOP, HEADING_BOTTOM, HEADING_HEIGHT,
         HEADING_TOP, HEADING_X, Item, LIBRARY_BAND, Line, MEDIA_GAP, MEDIA_TILE, Medium, SECTION_WIDTH, SECTION_X, Space,
         bar_drawn, card_x, download_menu_items, downloads_progress, library_band, panel_at_rest, past_end,
         plus_x, receded_opacity, spaces_width,
@@ -2477,10 +2558,76 @@ mod tests {
             host.menus.borrow().last().cloned().unwrap_or_default()
         };
         assert_eq!(menu(cx), [("Clear Archive".into(), false)]);
-        let tab = Archived { id: 7, url: "https://example.org/".into(), title: "".into(), archived: 0. };
+        let tab = Archived {
+            id: 7,
+            url: "https://example.org/".into(),
+            title: "".into(),
+            archived: 0.,
+            little: false,
+        };
         shell.update(cx, |shell, cx| shell.set_archive(vec![tab], cx));
         assert_eq!(menu(cx), [("Clear Archive".into(), true)]);
         assert!(shell.read_with(cx, |shell, _| shell.library_open), "the Library closed");
+    }
+
+    /// Archived Tabs grows a Filter button once a Little ilo window's tab is archived, and its
+    /// menu lists Little ilo's alone, then all again.
+    #[gpui::test]
+    fn the_archive_filters_to_little_ilos_tabs(cx: &mut TestAppContext) {
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        let tab = |id, little| Archived {
+            id,
+            url: format!("https://{id}.example/").into(),
+            title: "".into(),
+            archived: 0.,
+            little,
+        };
+        shell.update(cx, |shell, cx| {
+            shell.section = Section::Archive;
+            shell.set_library(true, cx);
+            shell.library_motion = None;
+            shell.sidebar_fade = None;
+            shell.set_archive(vec![tab(1, false), tab(2, false)], cx);
+        });
+        cx.run_until_parked();
+        let filter = point(px(FILTER_X + FILTER_WIDTH / 2.), px(SEARCH_TOP + SEARCH_HEIGHT / 2.));
+        let click = |cx: &mut gpui::VisualTestContext| {
+            cx.simulate_click(filter, Modifiers::none());
+            cx.run_until_parked();
+        };
+        let tabs = |cx: &mut gpui::VisualTestContext| {
+            shell.read_with(cx, |shell, _| {
+                let items = &shell.library.as_ref().unwrap().items;
+                let ids = items.iter().filter_map(|item| match item {
+                    Item::Tab(index) => Some(shell.archive[*index].id),
+                    _ => None,
+                });
+                ids.collect::<Vec<_>>()
+            })
+        };
+        // No Little ilo tab, no button: the click lands on the field.
+        click(cx);
+        assert!(host.menus.borrow().is_empty(), "a menu with nothing to filter");
+
+        shell.update(cx, |shell, cx| {
+            shell.set_archive(vec![tab(1, false), tab(2, true), tab(3, false)], cx)
+        });
+        cx.run_until_parked();
+        click(cx);
+        let menu = host.menus.borrow().last().cloned().unwrap_or_default();
+        assert_eq!(menu, [("All Tabs".into(), true), ("Little ilo".into(), true)]);
+        assert_eq!(host.entries.borrow().iter().map(|e| e.checked).collect::<Vec<_>>(), [true, false]);
+        cx.update(|_, cx| host.choose("Little ilo", cx));
+        cx.run_until_parked();
+        assert_eq!(tabs(cx), [2]);
+
+        click(cx);
+        assert_eq!(host.entries.borrow().iter().map(|e| e.checked).collect::<Vec<_>>(), [false, true]);
+        cx.update(|_, cx| host.choose("All Tabs", cx));
+        cx.run_until_parked();
+        assert_eq!(tabs(cx), [1, 2, 3]);
     }
 
     /// Media tiles the captures and the downloaded images and videos together, newest first, three
