@@ -246,12 +246,19 @@ pub fn start(cx: &mut App) {
         return;
     }
     let socket = agents::address(std::path::Path::new(&crate::profile_dir()));
-    // Beside the browser's executable: in the app bundle, or beside Chromium's on Linux.
-    let exe = std::env::current_exe().unwrap_or_default();
-    let bridge = agents::bridge::launch(
-        &exe.with_file_name(agents::bridge::NAME),
-        agents::bridge::flatpak_id().as_deref(),
-    );
+    // Beside the browser's executable: in the app bundle, or beside Chromium's on Linux and
+    // Windows, but in a copy the Store updates, whose folder moves with each update, its alias.
+    #[allow(unused_mut)]
+    let mut path = std::env::current_exe()
+        .unwrap_or_default()
+        .with_file_name(agents::bridge::NAME);
+    #[cfg(target_os = "windows")]
+    if crate::updated_by_store()
+        && let Ok(local) = std::env::var("LOCALAPPDATA")
+    {
+        path = agents::bridge::store_alias(&local);
+    }
+    let bridge = agents::bridge::launch(&path, agents::bridge::flatpak_id().as_deref());
     let made = Agents::new(
         Rc::new(Core),
         Arc::new(agents::System),

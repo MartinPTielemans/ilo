@@ -56,8 +56,8 @@ fi
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 # What both install: the engine but the import library the app links, and Browser.dll, the bridge
-# an agent's MCP client runs, which Connect names beside chrome.exe, uBlock Origin and the licences
-# beside it.
+# an agent's MCP client runs, which Connect names beside chrome.exe, or in the MSIX by the alias its
+# manifest declares (#1442), uBlock Origin and the licences beside it.
 mkdir "$stage/app"
 if [ -z "$alone" ]; then
   cp -r "$engine/." "$stage/app/"
