@@ -295,6 +295,9 @@ pub trait Browser {
     fn set_icon(&self, tab: u64, icon: &str, cx: &mut App);
     /// Deletes a Space, closing its tabs, and returns whether it will, as the last can't go.
     fn delete_space(&self, space: u64, cx: &mut App) -> bool;
+    /// Brings back the sidebar of the profile of the Space the window shows from its backup taken
+    /// at `time`, in milliseconds since 1970, keeping the one it has as a backup.
+    fn restore_sidebar(&self, time: u64, cx: &mut App);
     /// Gives a Space a colour, 0xRRGGBB, or none, for the system's accent colour.
     fn set_space_color(&self, space: u64, color: Option<u32>, cx: &mut App);
     /// Gives a Space `icon`, an emoji or a glyph's `glyph:` name (`space_icon`), to show in place

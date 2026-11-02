@@ -92,6 +92,8 @@ pub(super) struct Recorder {
     pub(super) menus_in_reveal: RefCell<Vec<bool>>,
     /// What the menu bar was last asked to show, and the window's title.
     pub(super) menu_bar: RefCell<MenuBar>,
+    /// What `confirm` asked last, with what it does if the test confirms it.
+    pub(super) confirming: RefCell<Option<(String, String, Box<dyn FnOnce(&mut App)>)>>,
     pub(super) window_title: RefCell<String>,
     /// Whether it was last asked to draw the window's material light.
     pub(super) window_light: Cell<Option<bool>>,
@@ -811,6 +813,10 @@ impl Browser for Recorder {
         self.edit(format!("icon {tab} {icon}"));
     }
 
+    fn restore_sidebar(&self, time: u64, _: &mut App) {
+        self.record(format!("restore sidebar {time}"));
+    }
+
     fn delete_space(&self, space: u64, _: &mut App) -> bool {
         self.edit(format!("delete space {space}"));
         let mut deleted = self.core.deleted.borrow_mut();
@@ -884,12 +890,13 @@ impl Browser for Recorder {
 
     fn confirm(
         &self,
-        _: String,
-        _: String,
+        message: String,
+        detail: String,
         _: &'static str,
-        _: Box<dyn FnOnce(&mut App)>,
+        confirmed: Box<dyn FnOnce(&mut App)>,
         _: &mut App,
     ) {
+        *self.confirming.borrow_mut() = Some((message, detail, confirmed));
     }
 
     fn tell(

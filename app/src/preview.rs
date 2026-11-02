@@ -1008,6 +1008,8 @@ impl Browser for Fake {
         }
     }
 
+    fn restore_sidebar(&self, _: u64, _: &mut App) {}
+
     fn delete_space(&self, space: u64, cx: &mut App) -> bool {
         self.spaces.borrow_mut().retain(|(id, ..)| *id != space);
         self.report_spaces(cx);

@@ -2816,6 +2816,10 @@ impl Browser for Engine {
         unsafe { bc::bc_space_delete(space) }
     }
 
+    fn restore_sidebar(&self, time: u64, _: &mut App) {
+        unsafe { bc::bc_window_restore_sidebar(self.window, time as f64) };
+    }
+
     fn set_space_color(&self, space: u64, color: Option<u32>, _: &mut App) {
         unsafe { bc::bc_space_set_color(space, color.is_some(), color.unwrap_or(0)) };
     }
@@ -5329,6 +5333,7 @@ fn menus(bar: &shell::MenuBar, undo: Option<&str>, redo: Option<&str>) -> Vec<Me
                 item("Essential Keyboard Shortcuts", Command::KeyboardShortcuts),
                 MenuItem::separator(),
                 item("Report a Problem…", Command::ReportProblem),
+                restore_sidebar(&bar.sidebar_backups),
                 MenuItem::submenu(menu(
                     "Troubleshooting",
                     vec![
@@ -5362,6 +5367,16 @@ fn give_host_appearance(appearance: Appearance) {
     // The Mac's pages follow NSApp's appearance, which the host sets.
     #[cfg(not(target_os = "macos"))]
     unsafe { bc::bc_set_appearance(code) };
+}
+
+/// Help › Restore Earlier Sidebar: the shown Space's profile's sidebar backups, newest first, each
+/// by when it was taken. Dimmed until the profile has one.
+fn restore_sidebar(backups: &[shell::SidebarBackup]) -> MenuItem {
+    let items = (backups.iter())
+        .map(|backup| shell::menu_item(backup.label.clone(), Command::RestoreSidebar(backup.time)))
+        .collect();
+    let disabled = backups.is_empty();
+    MenuItem::submenu(Menu { name: "Restore Earlier Sidebar".into(), items, disabled })
 }
 
 /// Spaces › Change Profile: the profiles the Space shown can be in, as its menu's Profile items
@@ -6152,6 +6167,25 @@ unsafe extern "C" fn download_icon(
         Arc::new(Image::from_bytes(ImageFormat::Png, png))
     });
     update_shells(|shell, cx| shell.set_download_icon(download, icon.clone(), cx));
+}
+
+unsafe extern "C" fn sidebar_backups_changed(
+    _: *mut c_void,
+    profile: bc::bc_id,
+    backups: *const bc::bc_sidebar_backup,
+    count: usize,
+) {
+    let backups = match backups.is_null() {
+        true => &[][..],
+        false => unsafe { std::slice::from_raw_parts(backups, count) },
+    };
+    let backups: Vec<_> = (backups.iter())
+        .map(|backup| shell::SidebarBackup {
+            time: backup.time as u64,
+            label: unsafe { CStr::from_ptr(backup.label) }.to_string_lossy().into_owned().into(),
+        })
+        .collect();
+    update_shells(|shell, cx| shell.set_sidebar_backups(profile, backups.clone(), cx));
 }
 
 unsafe extern "C" fn extensions_changed(
@@ -7160,6 +7194,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         download_icon: Some(download_icon),
         window_show_downloads: Some(window_show_downloads),
         extensions_changed: Some(extensions_changed),
+        sidebar_backups_changed: Some(sidebar_backups_changed),
         window_extension_popup: Some(window_extension_popup),
         window_extension_actions: Some(window_extension_actions),
         window_extension_question: Some(window_extension_question),

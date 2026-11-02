@@ -411,7 +411,7 @@ expect "^browser: menu bar Window: .*, Open Library…$maybe, View Downloads…"
 # copies this copy's version, the system's and the chip, read from the computer.
 if [ "$(uname)" = Darwin ]; then
   send menubar Help
-  expect "^browser: menu bar Help: Welcome to [^,]*, Help Center$maybe, What's New$maybe, Essential Keyboard Shortcuts$maybe, Report a Problem…$maybe, Troubleshooting › Copy Build Info$maybe, Troubleshooting › Open Task Manager" \
+  expect "^browser: menu bar Help: Welcome to [^,]*, Help Center$maybe, What's New$maybe, Essential Keyboard Shortcuts$maybe, Report a Problem…$maybe, \(Restore Earlier Sidebar.*, \)\?Troubleshooting › Copy Build Info$maybe, Troubleshooting › Open Task Manager" \
     "Help lacks Help Center, What's New, the shortcuts, Report a Problem… or Troubleshooting"
   post openmenu Help
   expect '^browser: menu tracked Welcome to ' "the Help menu didn't open"

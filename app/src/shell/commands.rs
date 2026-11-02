@@ -155,6 +155,12 @@ pub enum Command {
     ExportSpace,
     /// Puts the Space shown in this profile, or with none in a new one.
     ChangeProfile(Option<u64>),
+    /// Brings back the shown Space's profile's sidebar from its backup taken at this time, in
+    /// milliseconds since 1970, once the user confirms.
+    RestoreSidebar(u64),
+    /// Lists the shown profile's sidebar backups in ilo's menu, to restore one as Help's does:
+    /// the way in where there's no menu bar.
+    RestoreEarlierSidebar,
     /// The Space at this index in the switcher.
     SelectSpace(usize),
     /// Moves the tab shown to this Space, as the tab menu's Move to does.
@@ -465,6 +471,7 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
     ("Help Center", Command::HelpCenter, &["help", "support"]),
     ("What's New", Command::WhatsNew, &["release notes", "changelog"]),
     ("Report a Problem…", Command::ReportProblem, &["bug", "feedback", "issue"]),
+    ("Restore Earlier Sidebar…", Command::RestoreEarlierSidebar, &["backup", "restore data"]),
     ("Copy Build Info", Command::CopyBuildInfo, &["version"]),
     (concat!("Quit ", env!("APP_NAME")), Command::Quit, &[]),
 ];
@@ -816,6 +823,8 @@ impl Command {
             Command::EditTheme => "edit-theme",
             Command::ExportSpace => "export-space",
             Command::ChangeProfile(_) => "change-profile",
+            Command::RestoreSidebar(_) => "restore-sidebar",
+            Command::RestoreEarlierSidebar => "restore-earlier-sidebar",
             Command::SelectSpace(_) => "select-space",
             Command::MoveToSpace(_) => "move-to-space",
             Command::PinToSpace(_) => "pin-to-space",
@@ -1219,6 +1228,8 @@ impl Shell {
             Command::EditTheme => return self.edit_space_theme(self.space, cx),
             Command::ExportSpace => return self.export_space(self.space, cx),
             Command::ChangeProfile(profile) => return self.change_profile(profile, cx),
+            Command::RestoreSidebar(time) => return self.restore_sidebar(time, cx),
+            Command::RestoreEarlierSidebar => return self.list_sidebar_backups(cx),
             Command::SelectSpace(index) => return self.show_space_at(Some(index), cx),
             Command::MoveToSpace(space) | Command::PinToSpace(space) => {
                 let pin = matches!(command, Command::PinToSpace(_));
@@ -1571,6 +1582,7 @@ impl Shell {
             }
             Command::NextSpace => space.is_some_and(|index| index + 1 < self.spaces.len()),
             Command::CheckForUpdates => self.browser.updates(),
+            Command::RestoreEarlierSidebar => !self.shown_backups().is_empty(),
             Command::PreviousSpace => space.is_some_and(|index| index > 0),
             Command::NextTab | Command::PreviousTab => self.sidebar_rows().len() > 1,
             Command::OpenInMainWindow => self.little.is_some() && self.selected != 0,
@@ -1714,6 +1726,8 @@ pub(super) fn private_runs(command: Command) -> bool {
             | Command::EditTheme
             | Command::ExportSpace
             | Command::ChangeProfile(_)
+            | Command::RestoreSidebar(_)
+            | Command::RestoreEarlierSidebar
             | Command::SelectSpace(_)
             | Command::MoveToSpace(_)
             | Command::PinToSpace(_)
