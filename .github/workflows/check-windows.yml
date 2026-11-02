@@ -151,17 +151,21 @@ jobs:
           Add-Type -AssemblyName System.Windows.Forms
           "Screen: " + [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 
-      # The Store's MSIX of this build, for the links run's link sent to it (#1427), packed as a
-      # release's is (platform/windows/package/msix.sh), when the links run is among the runs.
+      # The Store's MSIX of this build, for the runs that send something to it, as the links run
+      # sends a link (#1427), packed as a release's is (platform/windows/package/msix.sh), when one
+      # of the runs reads CHECK_MSIX.
       - name: MSIX
         id: msix
         env:
           RUNS: ${{ inputs.runs }}
         run: |
-          case " ${RUNS:-$WINDOWS_RUNS} " in
-          *" links "* | " all ") ;;
-          *) echo "No links run, so no MSIX." && exit 0 ;;
-          esac
+          runs=" ${RUNS:-$WINDOWS_RUNS} "
+          need=
+          [ "$runs" != " all " ] || need=1
+          for run in $(grep -l CHECK_MSIX check/*.sh | sed 's|^check/\(.*\)\.sh$|\1|'); do
+            case $runs in *" $run "*) need=1 ;; esac
+          done
+          [ -n "$need" ] || { echo "No run sends anything to the MSIX, so none is installed."; exit 0; }
           platform/windows/package/msix.sh build/Browser "$RUNNER_TEMP/check.msix"
           {
             echo "path=$(cygpath -w "$RUNNER_TEMP/check.msix")"
