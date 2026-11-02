@@ -143,6 +143,11 @@ fn codexs_thread_has_the_browser_alone() {
     assert_eq!(config["project_doc_max_bytes"], json!(0));
     assert_eq!(config["mcp_servers.ilo"]["command"], json!("/app/mcp-bridge"));
     assert_eq!(config["mcp_servers.ilo"]["env"]["BROWSER_AGENT_TOKEN"], json!("secret"));
+    assert_eq!(config["mcp_servers.ilo"]["enabled_tools"], json!(["open_tab", "finish"]));
+    assert_eq!(config["mcp_servers.ilo"]["tools"]["finish"]["approval_mode"], json!("approve"));
+    assert_eq!(config["mcp_servers.ilo"]["omit_tools_from"], json!(["code_mode"]));
+    assert_eq!(config["agents.max_depth"], json!(0));
+    assert_eq!(config["skills.include_instructions"], json!(false));
     assert_eq!(params["approvalPolicy"], json!("never"));
     assert_eq!(params["sandbox"], json!("read-only"));
     assert_eq!(params["ephemeral"], json!(true));
@@ -265,6 +270,48 @@ fn claude_runs_locked_down() {
     assert!(calls.contains("\"probe_echo\""), "the stub's tool was called");
     assert!(outs.iter().any(|out| matches!(out, Out::Said(text) if text.contains("echo"))));
     assert_eq!(outs.iter().filter(|out| matches!(out, Out::Ended(None))).count(), 2);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The real `codex` on this computer, as the runner starts it, against the stub: the tools the
+/// model says it has, and that the stub's tool is all it calls. One turn on the model named by
+/// ILO_CODEX_MODEL, else Codex's default, from the user's plan, so it runs only when asked:
+/// `cargo test --release --lib -- --ignored codex_runs_locked_down --nocapture`.
+#[cfg(unix)]
+#[test]
+#[ignore]
+fn codex_runs_locked_down() {
+    let found = crate::agents::ready::look(Cli::Codex);
+    let program = found.program.expect("codex installed");
+    let dir = std::env::temp_dir().join(format!("ilo-codex-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let stub = dir.join("stub.py");
+    std::fs::write(&stub, STUB).unwrap();
+    let mut launch = launch(Cli::Codex);
+    (launch.program, launch.path) = (program, found.path);
+    launch.dir = dir.join("task");
+    launch.config = dir.join("task.json");
+    launch.model = std::env::var("ILO_CODEX_MODEL").ok();
+    launch.server = Server { command: "/usr/bin/python3".into(), args: vec!["-I".into(), stub.display().to_string()], token: "t".into() };
+    launch.tools = vec!["probe_echo".into()];
+    let (events, mut said) = futures::channel::mpsc::unbounded();
+    let first = "First list the exact names of every tool or function you can call, comma separated. \
+                 Then call probe_echo with the text hi, and say what it answered.";
+    let process = Process::start(&launch, "task-1", first, events).unwrap();
+    let mut outs = Vec::new();
+    while let Some(event) = futures::executor::block_on(futures::StreamExt::next(&mut said)) {
+        let ended = matches!(event.out, Out::Ended(_) | Out::Gone(_));
+        outs.push(event.out);
+        if ended {
+            break;
+        }
+    }
+    drop(process);
+    let calls = std::fs::read_to_string(dir.join("calls.log")).unwrap_or_default();
+    eprintln!("{outs:#?}\n{calls}");
+    assert!(calls.contains("\"probe_echo\""), "the stub's tool was called");
+    assert!(outs.iter().any(|out| matches!(out, Out::Said(text) if text.contains("echo"))));
+    assert!(matches!(outs.last(), Some(Out::Ended(None))), "{:?}", outs.last());
     std::fs::remove_dir_all(dir).unwrap();
 }
 

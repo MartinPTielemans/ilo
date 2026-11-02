@@ -235,8 +235,11 @@ fn decline(method: &str) -> Value {
     }
 }
 
-/// The thread's settings: the browser's server as its only tools, every feature of Codex's own
-/// off, and none of the user's MCP servers, each turned off by name as config.toml lists them.
+/// The thread's settings: the browser's server as its tools, every feature of Codex's own off,
+/// and none of the user's MCP servers, each turned off by name as config.toml lists them. A model
+/// whose catalog entry asks for code mode keeps `exec` and `wait`, a JavaScript isolate with no
+/// files, network or shell, from which only a patch tool the read-only sandbox refuses and the
+/// browser server's resources are reachable; Codex has no setting that removes it.
 pub fn thread_params(launch: &Launch) -> Value {
     let mut config = Map::new();
     for feature in FEATURES_OFF {
@@ -246,6 +249,11 @@ pub fn thread_params(launch: &Launch) -> Value {
     config.insert("notify".into(), json!([]));
     config.insert("project_doc_max_bytes".into(), json!(0));
     config.insert("tools.update_plan.enabled".into(), json!(false));
+    // The model catalog gives some models sub-agents whatever the multi_agent feature says; a
+    // depth of 0 drops their tools.
+    config.insert("agents.max_depth".into(), json!(0));
+    // Otherwise the prompt lists the skills in the user's Codex home.
+    config.insert("skills.include_instructions".into(), json!(false));
     for server in user_servers() {
         let bare = server.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
         let key = if bare { server } else { format!("\"{server}\"") };
@@ -253,12 +261,23 @@ pub fn thread_params(launch: &Launch) -> Value {
     }
     let mut env = Map::new();
     env.insert(super::bridge::TOKEN.into(), json!(launch.server.token));
+    // Under approvalPolicy never Codex refuses an MCP call it would ask about; the browser asks
+    // the user itself, so each tool is approved by name (the server-wide default doesn't reach it).
+    let tools: Map<String, Value> =
+        launch.tools.iter().map(|tool| (tool.clone(), json!({ "approval_mode": "approve" }))).collect();
     config.insert(
         format!("mcp_servers.{SERVER}"),
         json!({
             "command": launch.server.command,
             "args": launch.server.args,
             "env": env,
+            "enabled_tools": launch.tools,
+            "tools": tools,
+            // A model in code mode would find them only by searching from inside its JavaScript
+            // tool; left out of it they're the model's own tools, described in full.
+            "omit_tools_from": ["code_mode"],
+            // Without the browser's tools a task can't do anything, so the thread fails to start.
+            "required": true,
             // ask waits for the user, who may take a while.
             "tool_timeout_sec": 86_400,
         }),
