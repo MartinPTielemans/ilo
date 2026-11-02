@@ -343,6 +343,28 @@ pub extern "C" fn host_hide_drop_targets() {
 #[unsafe(no_mangle)]
 pub extern "C" fn host_add_toast(toast_view: *mut c_void) {
     add(Kind::Toast, toast_view);
+    toast_outline();
+}
+
+/// Where its window can't blend with the page under it (X11 with no compositor), the toast is cut
+/// to its plate, as the hover card is, since its margin, as wide as the page, would draw opaque
+/// over it. None of it shows there until the UI says where the plate is, once it's at rest.
+fn toast_outline() {
+    if gpui_linux::overlays_blend() {
+        return;
+    }
+    let Some((view, over)) = find(Kind::Toast, |float| (float.view, float.over)) else { return };
+    let corners = TOAST.with_borrow(|toast| toast.plate).map_or(Vec::new(), |plate| {
+        let (left, top) = (f32::from(plate.left()), f32::from(plate.top()));
+        let (right, bottom) = (f32::from(plate.right()), f32::from(plate.bottom()));
+        let radius = browser::tokens::toast::RADIUS;
+        let corners = [(left, top), (right, top), (right, bottom), (left, bottom)];
+        corners.map(|(x, y)| (x, y, radius)).to_vec()
+    });
+    gpui_linux::set_overlay_outline(view, &corners);
+    if let Some(bounds) = (!over.is_null()).then(|| bounds(Kind::Toast, over)).flatten() {
+        gpui_linux::move_overlay(view, bounds, px(0.));
+    }
 }
 
 /// The toast takes the pointer on its plate while it has buttons, and lets it through elsewhere.
@@ -374,6 +396,7 @@ pub extern "C" fn host_set_toast_plate(x: f64, y: f64, width: f64, height: f64) 
     );
     TOAST.with_borrow_mut(|toast| toast.plate = Some(plate));
     toast_pointer();
+    toast_outline();
 }
 
 #[unsafe(no_mangle)]
@@ -392,6 +415,7 @@ pub extern "C" fn host_hide_toast() {
     if hide(Kind::Toast) {
         TOAST.with_borrow_mut(|toast| toast.plate = None);
         toast_pointer();
+        toast_outline();
     }
 }
 
