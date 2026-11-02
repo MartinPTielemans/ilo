@@ -91,7 +91,7 @@ Agents drive the user's real browser through ilo's built-in MCP server, as a fir
 - **From outside.** Any MCP client (Claude Code, Codex, others) connects to the server.
 - **From ilo.** The user asks from ⌘T, and ilo runs the `claude` or `codex` CLI the user installed and signed into, with ilo's MCP server added for that task. The user's own subscription pays. ilo never handles their login, token or key, and when the CLI is missing or signed out it says how to fix that.
 
-ilo has no assistant of its own, as Dia and Comet do: no model, agent loop or AI account. What answers is the user's agent, and it can do in a page only what the MCP server lets any agent do.
+ilo has no assistant of its own: no model, agent loop or AI account. What answers is the user's agent, and it can do in a page only what the MCP server lets any agent do.
 
 - **Built-in MCP server.** Local-only at first, on a socket only this user's processes can reach. Cloud agents come later, through explicit pairing.
 - **Where the work shows.** An outside agent works in its own Agent Space, visible in the sidebar. A task asked from ilo shows among the user's tabs without becoming tabs: its pages and its conversation live in the task. An agent never takes the user's focus or cursor. The user can watch, take over and hand back at any time.
