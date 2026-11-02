@@ -898,6 +898,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("enter", KeepName, Some("Naming")),
         KeyBinding::new("escape", CancelName, Some("Naming")),
     ]);
+    super::bind_conversation_keys(cx);
     cx.on_action(|run: &Run, cx| {
         // The menu's keys reach it from the dialog's window too, and the dialog has to be
         // answered first, as an alert's does.
@@ -974,6 +975,9 @@ impl Shell {
         // Escape puts back a dragged row, or lets chosen rows go, before it stops the page
         // (docs/ux-spec.md › Tab list).
         if matches!(command, Command::Stop) && (self.cancel_drag(cx) || self.unchoose(cx)) {
+            return;
+        }
+        if self.run_in_task_area(command, from, cx) {
             return;
         }
         // An Esc with nothing to stop closes a Little ilo window (Arc), as no menu's Stop does.
@@ -1311,10 +1315,19 @@ impl Shell {
     /// Clears the Space shown, but the tab shown, unless that's all there is to clear. Its rows go
     /// in one frame, with no toast (Arc).
     fn clear(&mut self, cx: &mut Context<Self>) {
+        let space = self.space;
+        // The Space's done tasks go with its tabs, and come back with them (Agent task).
+        let tasks = self.clear_done_tasks(cx);
+        let mut edits: Vec<Edit> = tasks.into_iter().map(Edit::RestoreTask).collect();
         if let Some(clear) = self.clear_now(cx) {
-            let space = self.space;
-            self.keep(What::CLEAR, Some(Edit::UndoClear { space, clear }), cx);
+            edits.push(Edit::UndoClear { space, clear });
         }
+        let edit = match edits.len() {
+            0 => return,
+            1 => edits.pop(),
+            _ => Some(Edit::Many(edits)),
+        };
+        self.keep(What::CLEAR, edit, cx);
     }
 
     /// Clears, and returns the core's id for the Clear if it closed any.

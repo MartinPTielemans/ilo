@@ -84,6 +84,7 @@ impl Shell {
             splits: Vec::new(),
             folders: Default::default(),
             shown: 0,
+            tasks: Vec::new(),
         }];
         if let Some(look) = look {
             shell.take_look(look.name, look.color, look.theme, look.icon);

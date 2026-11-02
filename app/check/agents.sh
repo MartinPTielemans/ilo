@@ -5,6 +5,8 @@
 # agent's, and the user's tab's Move to lists it after the user's own Space, checked: choosing it
 # gives the agent the tab, which moving it back takes away. The agent's mark on its tab goes as its
 # session there ends: it releases the tab, its client disconnects, or the user takes the tab back.
+# A task's Space, an agent's whose id starts with task-, is never listed as a Space: not in the
+# switcher, the Spaces menu or ⌃1 to ⌃9, nor after the relaunch.
 
 log="$out/agents.log"
 step=0
@@ -42,6 +44,16 @@ if [ -n "$mac" ]; then
 fi
 send menubar Spaces
 expect '^browser: menu bar Spaces: .*Claude Code' "the Spaces menu didn't list the Space made while it was open"
+send agentspace task-1 Find a flight
+expect '^browser: made space [1-9][0-9]* for agent task-1$' "the driver didn't make the task's Space"
+task=$(grep '^browser: made space .* for agent task-1$' "$log" | tail -1 | cut -d' ' -f4)
+expect "^browser: task space $task Find a flight\$" "the window didn't keep the task's Space apart"
+grep -q "^browser: added space $task " "$log" && fail "the task's Space reached the switcher"
+grep '^browser: spaces ' "$log" | tail -1 | grep -qw "$task" && fail "the window lists the task's Space"
+send menubar Spaces
+expect '^browser: menu bar Spaces: .*Claude Code' "the Spaces menu didn't come again"
+grep '^browser: menu bar Spaces: ' "$log" | tail -1 | grep -q 'Find a flight' &&
+  fail "the Spaces menu lists the task's Space"
 grep -q "^browser: agent space $first " "$log" && fail "the user's Space is an agent's"
 send agentmayact claude-code "$user_tab"
 expect "^browser: agent claude-code may act on $user_tab: 0\$" "the agent may act on the user's tab"
@@ -52,6 +64,8 @@ driven=$active
 if [ "$driven" = 1 ]; then
   send key 2 ctrl
   expect "^browser: space $agent\( in .*\)\{0,1\}\$" "⌃2 didn't show the agent's Space"
+  send key 3 ctrl
+  none_since "^browser: \(task \)\{0,1\}space $task" || fail "⌃3 showed the task's Space"
   open_from_bar example.com
   agent_tab=$tab
   # Even in its own Space, the core refuses an agent ad blocking, passwords, DevTools and a
@@ -151,6 +165,8 @@ grep -q "^browser: added space $agent Claude Code\$" "$log" ||
 grep -q "^browser: agent space $agent Claude Code\$" "$log" ||
   fail "the agent's Space came back the user's"
 grep -q "^browser: agent space $first " "$log" && fail "the user's Space came back an agent's"
+grep -q '^browser: task space [1-9][0-9]* Find a flight$' "$log" ||
+  fail "the task's Space didn't come back apart from the Spaces"
 if [ "$driven" = 1 ]; then
   await_load
   send click $page_point
@@ -164,7 +180,7 @@ if [ "$driven" = 1 ]; then
 fi
 quit
 if [ "$driven" = 1 ]; then
-  echo "ok: $made; an agent's Space shows and switches as the user's, keeps the user's tabs out, refuses an agent ad blocking, passwords, DevTools, a profile's settings and any action agents lack, with why in the activity log, gets a tab the user gives it until they move it back, clears its mark as each session ends, and comes back the agent's"
+  echo "ok: $made; an agent's Space shows and switches as the user's, keeps the user's tabs out, refuses an agent ad blocking, passwords, DevTools, a profile's settings and any action agents lack, with why in the activity log, gets a tab the user gives it until they move it back, clears its mark as each session ends, and comes back the agent's; a task's Space is in no list of Spaces"
 else
-  echo "ok: $made; an agent's Space comes back the agent's. skip: switching to it and its tab. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: $made; an agent's Space comes back the agent's; a task's Space is in no list of Spaces. skip: switching to it and its tab. Browser wasn't the active app, so the page ignored the click."
 fi

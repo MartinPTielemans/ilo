@@ -61,7 +61,7 @@ impl Shell {
         element: Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        if !self.shows(tab) || !self.agents_space_shown() {
+        if !self.agent_page_shows(tab) {
             return;
         }
         // From where it is if it's still over the page, else from up and left of the element.
@@ -100,8 +100,7 @@ impl Shell {
     /// Whether the agent's pointer is over the page the window shows.
     pub(super) fn agent_pointer_shown(&self) -> bool {
         self.agent_pointer.as_ref().is_some_and(|pointer| {
-            self.shows(pointer.tab)
-                && self.agents_space_shown()
+            self.agent_page_shows(pointer.tab)
                 && pointer.since.elapsed().as_secs_f32() < GLIDE + HOLD + FADE
         })
     }
@@ -119,6 +118,9 @@ impl Shell {
 
     /// The pane `tab`'s page is in, in the window.
     fn pane_of(&self, tab: u64) -> Option<Bounds<Pixels>> {
+        if let Some((watched, place)) = self.task_page_place() {
+            return (watched == tab).then_some(place);
+        }
         let (frame, _) = self.page_frame(self.viewport);
         let panes = self.panes(self.selected);
         let index = panes.iter().position(|&pane| pane == tab)?;
@@ -132,7 +134,7 @@ impl Shell {
         }
         let pointer = self.agent_pointer.as_ref()?;
         let pane = self.pane_of(pointer.tab)?;
-        let name = self.shown_space().map(|space| space.agent.clone()).unwrap_or_default();
+        let name = self.agent_page().map(|(space, _)| space.agent.clone()).unwrap_or_default();
         let t = pointer.since.elapsed().as_secs_f32();
         let still = cx.reduce_motion();
         // Frames only while it moves: the glide, the ring coming in and the fade.

@@ -40,6 +40,7 @@ impl What {
     pub const CLOSE_TABS: What = What::said("Close Tabs", "Tabs Closed");
     pub const CLOSE_PREVIEW: What = What::quiet("Close Link Preview");
     pub const REMOVE_TAB: What = What::quiet(super::rows::REMOVE_TIP);
+    pub const DISMISS_TASK: What = What::quiet("Dismiss Task");
     pub const PIN: What = What::quiet("Pin Tab");
     pub const UNPIN: What = What::quiet("Unpin Tab");
     pub const PIN_TABS: What = What::quiet("Pin Tabs");
@@ -199,6 +200,9 @@ pub(super) enum Edit {
     ReopenPreview(Closed),
     /// Closes the link preview over the tab, which Redo does.
     ClosePreview(Closed),
+    /// Brings back the agent task ✕ dismissed, by its agent's id (Agent task).
+    RestoreTask(SharedString),
+    DismissTask(SharedString),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -282,6 +286,7 @@ impl Edit {
                 back.rekey(from, to);
             }
             Edit::ReopenPreview(closed) | Edit::ClosePreview(closed) => id(&mut closed.over),
+            Edit::RestoreTask(_) | Edit::DismissTask(_) => {}
             Edit::Set(prop, _) => match prop {
                 Prop::TabName(each)
                 | Prop::TabIcon(each)
@@ -317,6 +322,14 @@ impl Edit {
     /// Does the step, and returns the one that undoes it.
     fn apply(self, shell: &mut Shell, cx: &mut Context<Shell>) -> Option<Edit> {
         match self {
+            Edit::RestoreTask(agent) => {
+                shell.browser.task(agent.clone(), crate::agents::task::TaskAction::Restore, cx);
+                Some(Edit::DismissTask(agent))
+            }
+            Edit::DismissTask(agent) => {
+                shell.browser.task(agent.clone(), crate::agents::task::TaskAction::Dismiss, cx);
+                Some(Edit::RestoreTask(agent))
+            }
             Edit::Reopen { tabs: closed, show } => {
                 let mut tabs = Vec::new();
                 let mut shown = None;
@@ -536,6 +549,7 @@ impl Shell {
         if matches!(edit, Edit::Reopen { .. } | Edit::Repin { .. } | Edit::UndoClear { .. }) {
             self.closed_preview = None;
             self.closed_pinned = None;
+            self.closed_task = None;
         }
         self.history.redo.clear();
         self.history.undo.push(Entry { what, edit });
@@ -655,6 +669,14 @@ impl Shell {
     /// ⇧⌘T: the link preview the user closed, if no tab has closed since, else the tab closed
     /// last. ⌘Z then has nothing of the preview's to reopen.
     pub(super) fn reopen_closed(&mut self, cx: &mut Context<Self>) {
+        // The task dismissed last, unless a tab has closed since (Agent task).
+        if let Some((agent, _)) = self.closed_task.take() {
+            let restore = Edit::RestoreTask(agent.clone());
+            self.history.undo.retain(|entry| entry.edit != restore);
+            self.browser.task(agent, crate::agents::task::TaskAction::Restore, cx);
+            self.send_edit_titles(false, cx);
+            return;
+        }
         if let Some(closed) = self.closed_preview.clone()
             && self.reopen_preview(&closed, "reopen-closed-tab", cx)
         {

@@ -283,6 +283,11 @@ pub trait Browser {
     fn show_space(&self, space: u64, cx: &mut App);
     /// The tab the window shows when it shows `space`, or the one it shows, else 0.
     fn space_tab(&self, space: u64) -> u64;
+    /// The id of the agent `space` belongs to, which says whether it's a task's
+    /// (`agents::is_task`), else empty.
+    fn space_agent(&self, _space: u64) -> SharedString {
+        SharedString::default()
+    }
     /// Makes an empty Space named `name` right after `after`, else after the others, in `profile`
     /// if it isn't 0, and returns it.
     fn create_space(&self, name: &str, profile: u64, after: u64, cx: &mut App) -> u64;
@@ -629,6 +634,14 @@ pub trait Browser {
     fn hand_back(&self, tab: u64, cx: &mut App);
     /// The user gives the agent whose Space is `space` their `tab`, which moves there.
     fn give_to_agent(&self, tab: u64, space: u64, cx: &mut App);
+    /// The user does `action` to the task whose agent is `agent` (Agent task).
+    fn task(&self, agent: SharedString, action: crate::agents::task::TaskAction, cx: &mut App);
+    /// The page area shows the conversation of `agent`'s task: the Agents send it now, and as it
+    /// changes.
+    fn show_task(&self, agent: SharedString, cx: &mut App);
+    /// Asks for a picture of a task's page for its conversation, which the browser answers with
+    /// `Shell::page_pictured` and `request`.
+    fn task_picture(&self, tab: u64, request: u64, cx: &mut App);
     /// The user stops the agent with the id `agent`: what it's doing and asking ends.
     fn stop_agent(&self, agent: SharedString, cx: &mut App);
     /// Selects the tab's next match, or the one before, opening its find bar if it's closed.

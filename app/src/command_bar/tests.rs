@@ -26,6 +26,9 @@ struct Recorder {
     heights: RefCell<Vec<f32>>,
     commands: bool,
     elsewhere: RefCell<HashMap<u64, u64>>,
+    /// The agents ⇥ asks, None while tasks are off, and the page the user is on.
+    agents: RefCell<Option<TaskAgents>>,
+    page: Option<(SharedString, SharedString)>,
 }
 
 impl Recorder {
@@ -134,6 +137,45 @@ impl Host for Recorder {
         }
         shell::find_commands(text, &shell::UserKeys::default(), |name, _| Some(name))
     }
+
+    fn task_agents(&self, _: &App) -> Option<TaskAgents> {
+        self.agents.borrow().clone()
+    }
+
+    fn asking(&self, shown: bool, _: &mut App) {
+        self.record(format!("asking {shown}"));
+    }
+
+    fn task_page(&self, _: &App) -> Option<(SharedString, SharedString)> {
+        self.page.clone()
+    }
+
+    fn run_task(
+        &self,
+        agent: &str,
+        asked: &str,
+        page: Option<(SharedString, SharedString)>,
+        _: &mut App,
+    ) {
+        let page = page.map_or(String::new(), |(url, _)| format!(" on {url}"));
+        self.record(format!("task {agent} {asked}{page}"));
+    }
+
+    fn set_up_agents(&self, _: &mut App) {
+        self.record("set up agents".into());
+    }
+}
+
+/// The agents the host offers: each ready, at its limit if it has a reset time.
+fn agents(listed: &[(&str, Option<&str>)]) -> Option<TaskAgents> {
+    let agents = (listed.iter())
+        .map(|&(id, resets)| TaskAgent {
+            id: id.to_string().into(),
+            name: id.to_string().into(),
+            resets: resets.map(|at| at.to_string().into()),
+        })
+        .collect();
+    Some(TaskAgents { agents, known: true })
 }
 
 /// The bar, opened for a new tab.
@@ -1951,4 +1993,152 @@ fn the_bar_keeps_the_focus_in_its_field(cx: &mut TestAppContext) {
     assert!(bar.field_focused());
     bar.type_text("dogs");
     assert_eq!(bar.input(), ("dogs".into(), 4..4));
+}
+
+impl Bar {
+    /// The bar, opened for a new tab, with tasks on and `listed` agents ready, on `page`.
+    fn with_agents(
+        cx: &mut TestAppContext,
+        listed: &[(&str, Option<&str>)],
+        page: Option<(&str, &str)>,
+    ) -> Self {
+        let page = page.map(|(url, title)| (url.to_string().into(), title.to_string().into()));
+        let host = Recorder { agents: RefCell::new(agents(listed)), page, ..Recorder::default() };
+        Bar::open(cx, Vec::new(), host)
+    }
+
+    /// The rows' names, an agent at its limit with its reset time after it.
+    fn agent_rows(&mut self) -> Vec<String> {
+        self.window
+            .read_with(&self.cx.cx, |bar, _| {
+                (bar.rows.iter())
+                    .map(|row| match row.task.as_ref().and_then(TaskRow::resets) {
+                        Some(at) => format!("{} until {at}", row.text),
+                        None => row.text.to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap()
+    }
+
+    /// The chip before the input, and the hint at its end.
+    fn chip_and_hint(&mut self) -> (Option<String>, bool, bool) {
+        self.window
+            .update(&mut self.cx.cx, |bar, _, cx| {
+                let chip = bar.mode_name().map(String::from);
+                (chip, bar.ask.is_some(), bar.offers_ask(cx))
+            })
+            .unwrap()
+    }
+}
+
+/// ⇥ after typing makes it a task: the page the user is on goes with it as a chip, the agents
+/// ready are the rows, the default first, and ↩ closes the bar, then runs the task on the one
+/// selected. Nothing about tasks runs as the bar opens or takes keys: the host is asked only
+/// what it last learned.
+#[gpui::test]
+fn tab_makes_what_is_typed_a_task(cx: &mut TestAppContext) {
+    let page = Some(("https://lisbon.example/guide", "Lisbon guide"));
+    let mut bar = Bar::with_agents(cx, &[("claude", None), ("codex", None)], page);
+    bar.type_text("flight here next friday");
+    assert_eq!(bar.chip_and_hint(), (None, false, true), "⇥ isn't offered");
+    let asked = bar.host.asked.borrow().len();
+    bar.keys("tab");
+    assert_eq!(bar.chip_and_hint(), (Some("Lisbon guide".into()), true, false));
+    assert_eq!(bar.agent_rows(), ["claude", "codex"]);
+    assert_eq!(bar.calls(), ["asking true"]);
+    // What's typed now is the task's, which the core isn't asked to suggest for.
+    bar.type_text(" under 150");
+    assert_eq!(bar.host.asked.borrow().len(), asked);
+    assert_eq!(bar.input().0, "flight here next friday under 150");
+    bar.keys("down enter");
+    assert_eq!(
+        bar.calls(),
+        ["hide", "task codex flight here next friday under 150 on https://lisbon.example/guide"]
+    );
+    assert!(!bar.is_open());
+}
+
+/// Esc and ⇧⇥ leave the ask with what was typed, closing Today's slot, and ⌫ at the start takes
+/// the page's chip off before it leaves.
+#[gpui::test]
+fn the_ask_is_left_as_site_search_is(cx: &mut TestAppContext) {
+    let page = Some(("https://lisbon.example/guide", ""));
+    let mut bar = Bar::with_agents(cx, &[("claude", None)], page);
+    bar.type_text("book it");
+    bar.keys("tab");
+    // A page without a title is named by its site.
+    assert_eq!(bar.chip_and_hint().0.as_deref(), Some("lisbon.example"));
+    bar.calls();
+    bar.keys("escape");
+    assert_eq!(bar.chip_and_hint(), (None, false, true));
+    assert_eq!(bar.calls(), ["asking false"]);
+    assert_eq!(bar.input().0, "book it");
+    assert!(bar.is_open(), "Esc closed the bar rather than leaving the ask");
+
+    bar.keys("tab");
+    bar.keys("shift-tab");
+    assert_eq!(bar.chip_and_hint().1, false);
+    assert!(bar.calls().contains(&"asking false".to_string()));
+
+    bar.keys("tab");
+    bar.keys("home backspace");
+    assert_eq!(bar.chip_and_hint(), (None, true, false), "⌫ didn't take the chip off first");
+    bar.keys("backspace");
+    assert_eq!(bar.chip_and_hint().1, false);
+    assert_eq!(bar.input().0, "book it");
+    // Run without the page: nothing goes with the task.
+    bar.keys("tab");
+    bar.keys("home backspace enter");
+    assert!(bar.calls().contains(&"task claude book it".to_string()));
+}
+
+/// An agent at its plan's limit is dimmed with its reset time, and not selected; with none ready
+/// once the browser knows, ⇥ offers to set one up, and with tasks off ⇥ selects the next row as
+/// it did.
+#[gpui::test]
+fn agents_at_their_limit_or_none_ready(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_agents(cx, &[("claude", Some("18:00")), ("codex", None)], None);
+    bar.type_text("summarise this");
+    bar.keys("tab");
+    assert_eq!(bar.agent_rows(), ["claude until 18:00", "codex"]);
+    bar.keys("up enter");
+    // ↩ on the agent at its limit runs nothing.
+    assert!(!bar.calls().iter().any(|call| call.starts_with("task")));
+    assert!(bar.is_open());
+
+    let mut bar = Bar::with_agents(cx, &[], None);
+    bar.type_text("summarise this");
+    // ⇥ doesn't say Ask, as no agent is ready, but leads to setting one up.
+    assert_eq!(bar.chip_and_hint(), (None, false, false));
+    bar.keys("tab");
+    assert_eq!(bar.agent_rows(), [SET_UP]);
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["asking true", "hide", "set up agents"]);
+
+    let mut bar = Bar::new(cx);
+    bar.type_text("summarise this");
+    bar.suggest("summarise this", vec![searching("summarise this"), page("https://a.test/")]);
+    bar.keys("tab");
+    assert_eq!(bar.chip_and_hint(), (None, false, false));
+    assert_eq!(bar.plates().0, 1);
+}
+
+/// While the browser hasn't learned which agents are ready, the ask lists none, then lists them
+/// as it learns.
+#[gpui::test]
+fn the_ask_lists_the_agents_as_the_browser_learns(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_agents(cx, &[], None);
+    *bar.host.agents.borrow_mut() = Some(TaskAgents::default());
+    bar.edit("", None);
+    bar.type_text("book a table");
+    assert_eq!(bar.chip_and_hint(), (None, false, true), "Ask ⇥ isn't offered while unknown");
+    bar.keys("tab");
+    assert!(bar.agent_rows().is_empty());
+    *bar.host.agents.borrow_mut() = agents(&[("codex", None)]);
+    bar.cx.cx.update(task_agents_changed);
+    bar.cx.run_until_parked();
+    assert_eq!(bar.agent_rows(), ["codex"]);
+    bar.keys("enter");
+    assert!(bar.calls().contains(&"task codex book a table".to_string()));
 }

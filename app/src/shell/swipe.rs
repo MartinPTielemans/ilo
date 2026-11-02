@@ -465,6 +465,7 @@ mod tests {
             splits: Vec::new(),
             folders: Folders::default(),
             shown: 0,
+            tasks: Vec::new(),
         };
         ids.iter().map(space).collect()
     }
