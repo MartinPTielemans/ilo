@@ -240,6 +240,8 @@ mod platform {
         pub fn host_hide_overlay(overlay: c_int);
         pub fn host_can_draw_emoji(emoji: *const c_char) -> bool;
         pub fn host_dismiss_overlay(overlay: c_int);
+        #[cfg(target_os = "macos")]
+        pub fn host_take_overlay_keyboard(overlay: c_int);
         pub fn host_hold_keys();
         pub fn host_release_held_keys();
         pub fn host_add_find_bar(
@@ -263,6 +265,13 @@ mod platform {
         pub fn host_focus(view: *mut c_void);
         pub fn host_show_window_buttons(ui_view: *mut c_void, shown: bool);
         pub fn host_press_window_button(ui_view: *mut c_void, button: i32);
+        #[cfg(target_os = "macos")]
+        pub fn host_window_buttons(
+            ui_view: *mut c_void,
+            centres: *mut f64,
+            y: *mut f64,
+            diameter: *mut f64,
+        ) -> bool;
         #[cfg(target_os = "windows")]
         pub fn host_start_window_move(ui_view: *mut c_void);
         #[cfg(target_os = "windows")]
@@ -1733,8 +1742,9 @@ impl command_bar::Host for Bar {
         shell::copy_from_bar(text, cx);
     }
 
-    fn show(&self, centered: bool, left: f32, top: f32, width: f32, radius: f32) {
+    fn show(&self, centered: bool, left: f32, top: f32, width: f32, radius: f32, level: Level) {
         let (left, top, width) = (f64::from(left), f64::from(top), f64::from(width));
+        elevate(COMMAND_BAR, level);
         unsafe {
             platform::host_set_overlay_radius(COMMAND_BAR, radius.into());
             platform::host_show_overlay(COMMAND_BAR, front().1, centered, left, top, width)
@@ -1751,6 +1761,14 @@ impl command_bar::Host for Bar {
 
     fn dismiss(&self) {
         unsafe { platform::host_dismiss_overlay(COMMAND_BAR) };
+    }
+
+    fn take_keyboard(&self) {
+        // Linux's and Windows' hosts close the bar once its keyboard goes elsewhere.
+        #[cfg(target_os = "macos")]
+        unsafe {
+            platform::host_take_overlay_keyboard(COMMAND_BAR)
+        };
     }
 
     fn commands(&self, text: &str, cx: &App) -> Vec<shell::BarCommand> {
@@ -2925,6 +2943,19 @@ impl Browser for Engine {
 
     fn show_window_buttons(&self, shown: bool, _: &mut App) {
         unsafe { platform::host_show_window_buttons(self.ui_view, shown) };
+    }
+
+    #[cfg(target_os = "macos")]
+    fn window_button_geometry(&self, _: &mut App) -> Option<browser::shell::WindowButtonGeometry> {
+        let (mut centres, mut y, mut diameter) = ([0f64; 3], 0f64, 0f64);
+        let read = unsafe {
+            platform::host_window_buttons(self.ui_view, centres.as_mut_ptr(), &mut y, &mut diameter)
+        };
+        read.then(|| browser::shell::WindowButtonGeometry {
+            centres: centres.map(|x| x as f32),
+            y: y as f32,
+            diameter: diameter as f32,
+        })
     }
 
     fn press_window_button(&self, button: WindowButton, _: &mut App) {

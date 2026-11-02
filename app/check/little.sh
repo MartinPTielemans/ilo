@@ -10,7 +10,7 @@
 serve
 log="$out/little.log"
 step=0
-rm -f "$saved" "$launch_frame" "$(dirname "$saved")/little-size"
+rm -f "$saved" "$launch_frame" "$(dirname "$saved")/little-size" "$(dirname "$saved")/little-in-menu-bar"
 BROWSER_DRIVE=1 BROWSER_URL="$site" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
@@ -203,9 +203,9 @@ if [ "$(uname)" = Darwin ]; then
   little=$(opened)
   expect "^browser: little window opened $little profile [0-9]* home $home\$" \
     "the menu bar's Little ilo window isn't for Space $home"
-  expect "^browser: key window $little\$" "the menu bar's Little ilo window didn't come to the front"
+  # A new window goes in front of the others, so it logs no "key window"; ⌘W closing it shows it's key.
   send key w cmd
-  expect "^browser: window closed $little\$" "⌘W didn't close the menu bar's Little ilo window"
+  expect "^browser: window closed $little\$" "the menu bar's Little ilo window didn't come to the front: ⌘W didn't close it"
   send menu Settings…
   expect '^browser: settings shown General$' "Settings… didn't show General again"
   settings_drew General

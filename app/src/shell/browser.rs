@@ -4,9 +4,10 @@
 
 use std::{collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 
-use gpui::{App, Bounds, Pixels, Point, RenderImage, SharedString, Size};
+use gpui::{App, Bounds, Pixels, Point, RenderImage, SharedString, Size, point, px, size};
 
 use crate::theme::Appearance;
+use crate::tokens::shell::{WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y};
 
 use super::{Answer, BarTab, DownloadAction, MenuBar, MenuEntry, PageReply, ShownPageDialog};
 
@@ -385,6 +386,12 @@ pub trait Browser {
     fn show_window_buttons(&self, shown: bool, cx: &mut App);
     /// Does what a click on the window's close, minimize or zoom button does.
     fn press_window_button(&self, button: WindowButton, cx: &mut App);
+    /// The window's own buttons as the system draws them, for the copies the UI draws in their
+    /// place, once it can say: the Mac's. Elsewhere the UI draws the only ones, at
+    /// `WindowButtonGeometry::default`.
+    fn window_button_geometry(&self, _cx: &mut App) -> Option<WindowButtonGeometry> {
+        None
+    }
     /// On Linux, has the browser window follow the pointer, on a drag's first move over the
     /// window's background, as GPUI's own move can't: its window is inside the browser window.
     fn start_window_move(&self, cx: &mut App);
@@ -676,6 +683,36 @@ pub enum WindowButton {
     Close,
     Minimize,
     Zoom,
+}
+
+/// Where the window's close, minimize and zoom buttons are and how big: each one's centre across
+/// from the window's left edge, their row's centre down from its top, and their diameter. macOS 26
+/// draws the Mac's larger in an app built with its SDK than in one built with an older SDK, 14 on
+/// a pitch of 23 against 12 on 20 (#1310), so a copy takes them from AppKit.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct WindowButtonGeometry {
+    pub centres: [f32; 3],
+    pub y: f32,
+    pub diameter: f32,
+}
+
+impl Default for WindowButtonGeometry {
+    /// Arc's, which the core's frame gives AppKit's in an app built with macOS 26's SDK, and the
+    /// UI's own on Linux and Windows.
+    fn default() -> Self {
+        let centres = super::WINDOW_BUTTONS.map(|(x, _)| x);
+        Self { centres, y: WINDOW_BUTTON_Y, diameter: WINDOW_BUTTON_SIZE }
+    }
+}
+
+impl WindowButtonGeometry {
+    /// Each button's frame in the window.
+    pub fn frames(&self) -> [Bounds<Pixels>; 3] {
+        let (radius, side) = (self.diameter / 2., px(self.diameter));
+        let top = px(self.y - radius);
+        let frame = |x: f32| Bounds::new(point(px(x - radius), top), size(side, side));
+        self.centres.map(frame)
+    }
 }
 
 /// Where a tab's page is, as the browser reports it.
