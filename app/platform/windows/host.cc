@@ -348,9 +348,7 @@ void SystemFrame(HWND hwnd) {
 }
 
 void WatchOwner(HWND root);
-// Puts |hwnd| at |x|, |y|, |width| by |height| over its browser window and on screen. It's shown
-// with ShowWindow rather than SWP_SHOWWINDOW, which doesn't send WM_SHOWWINDOW, the message GPUI
-// learns its window is on screen from (window.is_visible()), where an overlay's motion starts.
+// Puts |hwnd| at |x|, |y|, |width| by |height| over its browser window and on screen.
 // The UI sizes its overlays from inside its update, where GPUI can't take the new size: its
 // renderer grows, but the UI goes on laying out at the old one, so what it adds, as the command
 // bar's suggestions, is drawn cut off. The size again after the update reaches it.
@@ -391,8 +389,20 @@ HWND InsertAfter(HWND hwnd) {
 }
 
 void PlaceAndShow(HWND hwnd, int x, int y, int width, int height, bool activate) {
-  SetWindowPos(hwnd, InsertAfter(hwnd), x, y, width, height, SWP_NOACTIVATE);
-  ShowWindow(hwnd, activate ? SW_SHOW : SW_SHOWNA);
+  const HWND after = InsertAfter(hwnd);
+  SetWindowPos(hwnd, after, x, y, width, height, SWP_NOACTIVATE);
+  if (activate) {
+    ShowWindow(hwnd, SW_SHOW);
+  } else if (!IsWindowVisible(hwnd)) {
+    // Shown where it was put. ShowWindow shows a window at the top, and the browser window that
+    // owns it with it, over another app's window in front of ilo while ilo has the foreground
+    // (#1419). It also sends WM_SHOWWINDOW, which SWP_SHOWWINDOW doesn't, and GPUI draws the
+    // window and learns it's on screen from it (window.is_visible()), where an overlay's motion
+    // starts, so that's sent first, as ShowWindow does.
+    SendMessageW(hwnd, WM_SHOWWINDOW, TRUE, 0);
+    SetWindowPos(hwnd, after, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+  }
   SizeAgainLater(hwnd);
 }
 
