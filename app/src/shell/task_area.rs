@@ -424,6 +424,8 @@ impl Shell {
         // check.sh reads this line.
         log!("browser: task page {tab} back");
         self.browser.focus_ui(cx);
+        // The reply field has the keyboard again, as when the conversation opened.
+        self.focus_talk = true;
         cx.notify();
     }
 

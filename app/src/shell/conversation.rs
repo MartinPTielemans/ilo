@@ -16,7 +16,7 @@ use gpui::{
     Bounds, Context, Corners, ElementId, Entity, Focusable, FontWeight, HighlightStyle, Image,
     IntoElement, MouseButton, ObjectFit, Pixels, Radians, Render, RenderImage, ScrollHandle,
     SharedString, StyledText, Transformation, WeakEntity, Window, actions, canvas, div, img,
-    linear_color_stop, linear_gradient, prelude::*, px, rgb, svg,
+    prelude::*, px, rgb, svg,
 };
 
 use super::{
@@ -35,8 +35,8 @@ use crate::tokens::shell::FORM_PLACEHOLDER;
 use crate::tokens::shell::agent_pointer::{COLOR as SIGNAL, RING};
 use crate::tokens::shell::conversation::{
     BLOCK_GAP, BUBBLE_BOTTOM, BUBBLE_FILL, BUBBLE_TOP, BUBBLE_WIDTH, BUBBLE_X, CHIPS_BELOW,
-    CHIPS_TOP, COLUMN, FADE, HEADER_BOTTOM, INSET, META_GAP, META_LINE, OPEN_BELOW, OPEN_TOP,
-    PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON, PAGE_CHIP_FILL, PAGE_CHIP_GAP, PAGE_CHIP_HANG,
+    CHIPS_TOP, COLUMN, HEADER_BOTTOM, INSET, LINES_BELOW, META_GAP, META_LINE, OPEN_BELOW,
+    OPEN_TOP, PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON, PAGE_CHIP_FILL, PAGE_CHIP_GAP, PAGE_CHIP_HANG,
     PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PICTURE_GAP, PICTURE_HEIGHT, PICTURE_RADIUS, PICTURE_WIDTH,
     PICTURES_BOTTOM, RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP, REPLY_HEIGHT, REPLY_INSET,
     SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD, SITE, SITE_GAP, TEXT_LINE, TITLE_LINE, TOP, TRACE_BELOW,
@@ -178,7 +178,11 @@ impl Shell {
         }
         let (space, name) = (card.space, card.cli.name());
         let view = match self.talk.take() {
-            Some(talk) if talk.agent == agent => talk.view,
+            // Opened again, it shows its newest line, as the task went on while it was away.
+            Some(talk) if talk.agent == agent => {
+                talk.view.update(cx, |view, _| view.scroll.scroll_to_bottom());
+                talk.view
+            }
             old => {
                 if let Some(old) = old {
                     let stale = old.view.update(cx, |view, _| view.let_go());
@@ -291,13 +295,18 @@ impl Shell {
         true
     }
 
-    /// Gives the reply field the keyboard once the card's click has shown the conversation.
+    /// Gives the reply field the keyboard once the card's click has shown the conversation, and
+    /// takes it back while a page watched covers the field: GPUI sends the keys of a field that
+    /// isn't drawn to no binding of ours, so Esc stepped back from nothing.
     pub(super) fn focus_talk(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if std::mem::take(&mut self.focus_talk)
-            && let Some(talk) = &self.talk
-        {
-            let reply = talk.view.read(cx).reply.clone();
-            window.focus(&reply.focus_handle(cx), cx);
+        let Some(talk) = &self.talk else { return };
+        let reply = talk.view.read(cx).reply.focus_handle(cx);
+        if self.watched_task_page().is_some() {
+            if reply.is_focused(window) {
+                window.focus(&self.focus_handle, cx);
+            }
+        } else if std::mem::take(&mut self.focus_talk) {
+            window.focus(&reply, cx);
         }
     }
 }
@@ -934,17 +943,6 @@ impl Render for TalkView {
             window.request_animation_frame();
         }
         let palette = look.palette;
-        let fade = div()
-            .absolute()
-            .left_0()
-            .right_0()
-            .bottom_0()
-            .h(px(FADE))
-            .bg(linear_gradient(
-                180.,
-                linear_color_stop(palette.page.alpha(0.), 0.),
-                linear_color_stop(palette.page, 1.),
-            ));
         let lines = div()
             .id("conversation-lines")
             .size_full()
@@ -952,7 +950,10 @@ impl Render for TalkView {
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .pb(px(FADE))
+            // A scroll clips at its sides too, so it's wider than the column by the plates that
+            // hang out of it, and its text stays on the column.
+            .px(px(TRACE_HANG))
+            .pb(px(LINES_BELOW))
             .children(self.lines(&look, cx));
         let column = div()
             .size_full()
@@ -964,7 +965,7 @@ impl Render for TalkView {
             .text_color(palette.text(TITLE))
             .child(self.header(&look, cx))
             .children(self.pictures(&look, cx))
-            .child(div().relative().flex_1().min_h_0().mb(px(REPLY_GAP)).child(lines).child(fade))
+            .child(div().flex_1().min_h_0().mx(px(-TRACE_HANG)).mb(px(REPLY_GAP)).child(lines))
             .child(self.reply(&look, cx));
         div()
             .id("conversation")

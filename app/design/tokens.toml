@@ -1497,7 +1497,9 @@ reply-inset = 12.0
 reply-fill = 0.07
 reply-bottom = 16.0
 reply-gap = 16.0
-fade = 16.0
+# Room under the newest line at the end, over the reply gap. The lines meet a clean edge there:
+# the window's material under them is the system's, so no fade's colour can match it.
+lines-below = 16.0
 
 [shell.tile-theme]
 # A pixel counts towards the icon's colour from this alpha.

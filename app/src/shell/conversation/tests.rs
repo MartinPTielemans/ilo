@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext, point, px};
+use gpui::{Entity, Focusable, Modifiers, TestAppContext, VisualTestContext, point, px};
 
 use super::Fold;
 
@@ -198,11 +198,14 @@ fn a_picture_shows_its_page(cx: &mut TestAppContext) {
 
     shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation(2)), cx));
     assert!(!host.take().contains(&"task picture 30".to_string()), "pictured under the page");
-    shell.update(cx, |shell, cx| shell.run(Command::Stop, "ui", cx));
+    // Esc steps back, though the reply field the conversation focused isn't drawn under the page.
+    cx.simulate_keystrokes("escape");
     shell.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
     shell.read_with(cx, |shell, _| assert_eq!(shell.task_shown(), Some((3, None))));
     assert!(host.take().contains(&"task picture 30".to_string()), "pictured once back");
+    let reply = view.read_with(cx, |view, cx| view.reply.focus_handle(cx));
+    assert!(cx.update(|window, _| reply.is_focused(window)), "the reply field has the keys back");
 }
 
 /// A trace shows open while its stretch is under way and folds once it's over, unless the user
@@ -259,4 +262,13 @@ fn the_newest_line_stays_in_view_at_the_end(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| shell.set_conversation(Some(talk(82)), cx));
     draw(cx);
     assert_eq!(scrolled(cx).0, px(0.), "it pulled the user away from what they read");
+
+    // Left and opened again, after the task went on meanwhile, it opens at its newest line.
+    cx.simulate_keystrokes("escape");
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk(84)), cx));
+    shell.update(cx, |shell, cx| shell.show_task("task-1".into(), cx));
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk(84)), cx));
+    draw(cx);
+    let (offset, max) = scrolled(cx);
+    assert_eq!(offset, -max, "it opened again where the user had left it");
 }
