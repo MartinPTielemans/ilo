@@ -25,6 +25,8 @@ struct Recorder {
     levels: RefCell<Vec<(Level, Option<f32>)>>,
     heights: RefCell<Vec<f32>>,
     commands: bool,
+    /// Commands that do nothing now, so the bar isn't offered them, such as a split's outside one.
+    idle: Vec<shell::Command>,
     elsewhere: RefCell<HashMap<u64, u64>>,
     /// The agents ⇥ asks, None while tasks are off, and the page the user is on.
     agents: RefCell<Option<TaskAgents>>,
@@ -137,7 +139,10 @@ impl Host for Recorder {
         if !self.commands {
             return Vec::new();
         }
-        shell::find_commands(text, &shell::UserKeys::default(), |name, _| Some(name))
+        let keys = shell::UserKeys::default();
+        shell::find_commands(text, &keys, |name, command| {
+            (!self.idle.contains(&command)).then_some(name)
+        })
     }
 
     fn task_agents(&self, _: &App) -> Option<TaskAgents> {
@@ -202,6 +207,12 @@ impl Bar {
     /// The bar, opened for a new tab, finding the browser's commands.
     fn with_commands(cx: &mut TestAppContext) -> Self {
         Bar::open(cx, Vec::new(), Recorder { commands: true, ..Recorder::default() })
+    }
+
+    /// The bar, opened for a new tab, finding the browser's commands but `idle`.
+    fn with_commands_but(cx: &mut TestAppContext, idle: &[shell::Command]) -> Self {
+        let host = Recorder { commands: true, idle: idle.to_vec(), ..Recorder::default() };
+        Bar::open(cx, Vec::new(), host)
     }
 
     /// The bar, opened for a new tab in a Space with `tabs`.
@@ -1737,6 +1748,27 @@ fn a_hidden_word_finds_its_command(cx: &mut TestAppContext) {
         "Toggle Sidebar ⌘S".into(),
     ];
     assert_eq!(bar.listed(), expected);
+}
+
+/// "close" archives the tab, as Arc lists Archive Tab above Close Window for it, and so does
+/// "clos": the window's close comes first only once what's typed goes past its first word.
+#[gpui::test]
+fn close_archives_the_tab_until_the_window_is_named(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_commands_but(cx, &[shell::Command::CloseSplitPane]);
+    for typed in ["close", "clos"] {
+        type_and_suggest(&mut bar, typed, suggestions(typed, &[]));
+        let listed = bar.listed();
+        assert_eq!(listed[..2], ["Archive Tab ⌘W".to_string(), search(typed)], "{typed}");
+        assert!(listed[2..].contains(&"Close Window ⇧⌘W".to_string()), "{typed}: {listed:?}");
+        bar.keys("cmd-a");
+    }
+    type_and_suggest(&mut bar, "close", suggestions("close", &[]));
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["hide"]);
+
+    let mut bar = Bar::with_commands_but(cx, &[shell::Command::CloseSplitPane]);
+    type_and_suggest(&mut bar, "close w", suggestions("close w", &[]));
+    assert_eq!(bar.listed(), ["Close Window ⇧⌘W".to_string(), search("close w")]);
 }
 
 /// Arc's "tab", where a site completes what's typed: the site first, then the core's rows, then
