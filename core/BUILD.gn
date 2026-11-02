@@ -113,6 +113,16 @@ source_set("space_default") {
   ]
 }
 
+# Which sidebar backups Arc's schedule keeps, apart so browser_core_unittests tests the rule
+# alone.
+source_set("sidebar_backups") {
+  sources = [
+    "sidebar_backups.cc",
+    "sidebar_backups.h",
+  ]
+  deps = [ "//base" ]
+}
+
 source_set("browser_core") {
   configs += [ ":app_calls" ]
   sources = [
@@ -242,10 +252,12 @@ source_set("browser_core") {
   deps = [
     ":drm_request",
     ":search_default",
+    ":sidebar_backups",
     ":space_default",
     ":sync_guard",
     ":sync_keys",
     "//base",
+    "//base:i18n",
     "//chrome/app:command_ids",
     "//chrome/app:generated_resources",
     "//chrome/browser",
@@ -500,12 +512,14 @@ source_set("browser_core") {
 test("browser_core_unittests") {
   sources = [
     "search_default_unittest.cc",
+    "sidebar_backups_unittest.cc",
     "space_default_unittest.cc",
     "sync_guard_unittest.cc",
     "sync_pairing_unittest.cc",
   ]
   deps = [
     ":search_default",
+    ":sidebar_backups",
     ":space_default",
     ":sync_guard",
     ":sync_keys",

@@ -1,10 +1,10 @@
 #!/bin/bash
 # Prepares Chromium for Linux in <work>/src, the way ungoogled-chromium-portablelinux's x64
 # releases are built, at the tag pins.ini names: its source tarball, ungoogled-chromium's patches
-# and domain substitution, its GN args and toolchain. Then links the core in as //browser_core and
-# applies our series. Prints the tree's path. check-linux.sh and build.sh build from it, and
-# .github/workflows/engine-linux.yml keeps one on its runner. Needs about 40 GB, and as much again
-# while a new version comes in.
+# and domain substitution, its GN args and toolchain. Then links the core in as //browser_core,
+# applies our series and puts ilo's icon in Chromium's place (tree.sh). Prints the tree's path.
+# check-linux.sh and build.sh build from it, and .github/workflows/engine-linux.yml keeps one on its
+# runner. Needs about 40 GB, and as much again while a new version comes in.
 #
 # A new tag is prepared whole in <work>/next, then copied over the tree by content (#299), so a
 # point release leaves every file it doesn't change as it was and the next build recompiles only
@@ -57,6 +57,7 @@ if [ "$(cat "$src/.portablelinux-tag" 2>/dev/null)" != "$tag" ]; then
   setup_toolchain
   remove_agent_instructions "$_src_dir"
   apply_series "$_src_dir"
+  linux_icons "$_src_dir"
   echo "$tag" >"$_src_dir/.portablelinux-tag"
   if [ -d "$src" ]; then
     # Without the scratch tree's dates: a changed file gets the time it's written, so ninja sees
@@ -73,6 +74,7 @@ _src_dir=$src
 _out_dir=$src/out/Default
 remove_agent_instructions "$src"
 apply_series "$src"
+linux_icons "$src"
 # Rewritten only when they change, as a newer args.gn makes ninja run gn again.
 args=$(mktemp -d)
 trap 'rm -rf "$args"' EXIT

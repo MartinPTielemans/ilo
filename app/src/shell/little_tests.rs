@@ -222,3 +222,126 @@ fn option_command_click_is_the_users_spaces_alone(cx: &mut TestAppContext) {
     assert!(!press_row(&main, 7, alt_cmd, cx));
     assert!(host.take().is_empty());
 }
+
+/// With more than one profile, the bar has a profile picker before Copy Link, whose menu lists
+/// them, the page's checked, and one picked goes to the app to open the page in. With one profile
+/// there's nothing to pick, and no button.
+#[gpui::test]
+fn its_bar_picks_the_pages_profile_once_there_are_two(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, point, px};
+
+    use super::little::little_button_middle;
+
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) =
+        cx.add_window_view(|_, cx| Shell::little_window(browser, 9, 1, 1, None, cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(9, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+        shell.set_selected(10, cx);
+        let url = "https://example.com/".into();
+        shell.set_page(10, Page { url, ..Page::default() }, cx);
+        shell.set_profiles(vec![(1, "Default".into())], cx);
+    });
+    cx.run_until_parked();
+    let width = cx.update(|window, _| window.viewport_size().width);
+    // The third plate from the bar's end, before Copy Link.
+    let picker = little_button_middle(width, 2);
+    let click = |cx: &mut gpui::VisualTestContext| {
+        cx.simulate_click(picker, Modifiers::none());
+        cx.run_until_parked();
+    };
+    click(cx);
+    assert!(host.menus.borrow().is_empty(), "a profile menu with one profile");
+
+    shell.update(cx, |shell, cx| {
+        shell.set_profiles(vec![(1, "Default".into()), (5, "Work".into())], cx)
+    });
+    cx.run_until_parked();
+    host.take();
+    click(cx);
+    let menu = host.menus.borrow().last().cloned().unwrap_or_default();
+    assert_eq!(menu, [("Default".into(), true), ("Work".into(), true)]);
+    // It hangs from its plate's left edge, 4 under the header's 32 pt plate.
+    assert_eq!(host.menu_at.get(), Some(point(picker.x - px(16.), px(7.5 + 32. + 4.))));
+    let checked: Vec<bool> = host.entries.borrow().iter().map(|entry| entry.checked).collect();
+    assert_eq!(checked, [true, false]);
+    cx.update(|_, cx| host.choose("Work", cx));
+    assert_eq!(host.take().last().map(String::as_str), Some("little profile 5 https://example.com/"));
+}
+
+/// A Little ilo window knows the profiles the window it opened from does, so its bar has the
+/// picker from its first frame, not only once the core next reports them.
+#[gpui::test]
+fn its_bar_has_the_picker_from_the_start(cx: &mut TestAppContext) {
+    use gpui::Modifiers;
+
+    use super::little::little_button_middle;
+
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| {
+        let from = cx.new(|cx| {
+            let mut from = Shell::new(browser.clone(), cx);
+            from.profiles = vec![(1, "Default".into()), (5, "Work".into())];
+            from
+        });
+        Shell::little_window(browser, 9, 1, 1, Some(&from), cx)
+    });
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(9, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+        shell.set_selected(10, cx);
+        let url = "https://example.com/".into();
+        shell.set_page(10, Page { url, ..Page::default() }, cx);
+    });
+    cx.run_until_parked();
+    let width = cx.update(|window, _| window.viewport_size().width);
+    cx.simulate_click(little_button_middle(width, 2), Modifiers::none());
+    cx.run_until_parked();
+    let menu = host.menus.borrow().last().cloned().unwrap_or_default();
+    assert_eq!(menu, [("Default".into(), true), ("Work".into(), true)]);
+}
+
+/// The bar is the header's row. Open in Main Window's glyph is as far in from the window's right
+/// edge as the close button's is from its left, 20, and Copy Link's the header's pitch, 34, before
+/// it; each names itself and its key as the header's buttons do. The title, from where the
+/// header's first button is, opens the command bar over itself.
+#[gpui::test]
+fn its_bar_is_the_headers_row(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, VisualTestContext, point, px};
+
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) =
+        cx.add_window_view(|_, cx| Shell::little_window(browser, 9, 1, 1, None, cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(9, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+        shell.set_selected(10, cx);
+        let url = "https://example.com/".into();
+        shell.set_page(10, Page { url, ..Page::default() }, cx);
+    });
+    cx.run_until_parked();
+    let width = cx.update(|window, _| f32::from(window.viewport_size().width));
+    // The header's row: its plates 7.5 from the top, 32 tall.
+    let row = 7.5 + 16.;
+    let rest = |cx: &mut VisualTestContext, x: f32| {
+        host.take();
+        cx.simulate_mouse_move(point(px(x), px(row)), None, Modifiers::none());
+        cx.run_until_parked();
+        host.take().into_iter().filter(|call| call.starts_with("tooltip")).collect::<Vec<_>>()
+    };
+    let click = |cx: &mut VisualTestContext, x: f32| {
+        host.take();
+        cx.simulate_click(point(px(x), px(row)), Modifiers::none());
+        cx.run_until_parked();
+        host.take()
+    };
+    assert_eq!(rest(cx, width - 20.), ["tooltip Open in Main Window ⌘O"]);
+    assert_eq!(rest(cx, width - 54.), ["tooltip none", "tooltip Copy URL ⇧⌘C"]);
+    assert!(click(cx, width - 54.).contains(&"copy https://example.com/".to_string()));
+    assert!(click(cx, width - 20.).contains(&"open in main window 10 1".to_string()));
+    click(cx, 77. + 16.);
+    let field = host.command_bars.borrow().last().copied().flatten().expect("no field");
+    assert_eq!((f32::from(field.origin.x), f32::from(field.origin.y)), (77., 7.5));
+    assert!(f32::from(field.right()) < width - 54. - 16.);
+}
