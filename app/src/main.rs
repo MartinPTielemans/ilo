@@ -491,6 +491,8 @@ mod platform {
         pub fn host_finish_update();
         #[cfg(target_os = "macos")]
         pub fn host_take_update_notes(notes: extern "C" fn(url: *const c_char));
+        #[cfg(target_os = "windows")]
+        pub fn host_take_install(installed: extern "C" fn(build: u64, own: u64) -> bool);
     }
 
     /// Where host_start_updater's `changed` says the update stands (host.h's HOST_UPDATE_*).
@@ -5416,6 +5418,18 @@ fn start_updates(cx: &mut App) {
         // no asking.
         extern "C" fn quit() {
             quit_because("the updater's install");
+        }
+        // An installer that failed after the last quit left this launch the old build (#1459).
+        #[cfg(target_os = "windows")]
+        {
+            extern "C" fn installed(build: u64, own: u64) -> bool {
+                let went_in = updates::went_in(build, own);
+                if !went_in {
+                    update_app_later(updates::didnt_install);
+                }
+                went_in
+            }
+            unsafe { platform::host_take_install(installed) };
         }
         unsafe { platform::host_start_updater(quit, update_changed) };
     }
