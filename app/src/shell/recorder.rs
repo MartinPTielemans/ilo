@@ -115,6 +115,8 @@ pub(super) struct Recorder {
     pub(super) told_action: RefCell<Option<Box<dyn FnOnce(Vec<String>, &mut App)>>>,
     /// The dialog asks something else, so `tell` doesn't ask.
     pub(super) dialog_busy: Cell<bool>,
+    /// It warns before a move to another profile's Space, as `warn_moving_profiles` answers.
+    pub(super) warn_profiles: Cell<bool>,
     /// Each time the shell opened the Site Controls: the tab, and where they hang from.
     pub(super) site_controls: RefCell<Vec<(u64, crate::site_controls::Place)>>,
     /// The ids of the extensions the Site Controls were given to list, each time.
@@ -292,8 +294,12 @@ impl Browser for Recorder {
         self.edit(format!("space {tab} {space}"));
     }
 
+    fn move_folder_to_space(&self, folder: u64, space: u64, _: &mut App) {
+        self.edit(format!("space folder {folder} {space}"));
+    }
+
     fn warn_moving_profiles(&self, _: &mut App) -> bool {
-        Default::default()
+        self.warn_profiles.get()
     }
 
     fn set_warn_moving_profiles(&self, _: bool, _: &mut App) {}

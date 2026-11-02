@@ -506,8 +506,9 @@ impl Shell {
     }
 
     pub(super) fn folder_name(&self, folder: u64) -> SharedString {
-        let space = self.shown_space();
-        let folder = space.and_then(|space| space.folders.folders.get(&folder));
+        // Its own Space's, which isn't the one shown while it's dragged to another.
+        let mut folders = self.spaces.iter().map(|space| &space.folders.folders);
+        let folder = folders.find_map(|folders| folders.get(&folder));
         folder.map(|(name, _)| name.clone()).unwrap_or_default()
     }
 

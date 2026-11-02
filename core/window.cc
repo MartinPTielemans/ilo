@@ -1029,6 +1029,57 @@ void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent) {
     to->AddAt(moved, 0);
   }
   from->Remove(tab);
+  FollowMove(tab, moved, from->id(), space, next);
+  // Out of its Space, it isn't kept for ReopenClosedTab or archived.
+  if (moved != tab) {
+    CloseTab(tab);
+  }
+  PanesChanged();
+}
+
+// static
+void Window::MoveFolderToSpace(bc_id folder, bc_id space) {
+  Space* from = Space::HoldingFolder(folder);
+  Space* to = Space::FromId(space);
+  // Where MoveToSpace takes a pinned tab the user doesn't give to an agent.
+  if (!from || !to || from == to || to->agent() || to->own() || DeletingSpaces().contains(space)) {
+    return;
+  }
+  std::vector<bc_id> tabs;
+  for (bc_id row : from->pinned_rows()) {
+    if (!from->IsFolder(row) && from->Within(row, folder)) {
+      tabs.push_back(row);
+    }
+  }
+  std::map<bc_id, bc_id> copies;
+  if (from->profile() != to->profile()) {
+    for (bc_id tab : tabs) {
+      const bc_id copy = CopyToProfile(tab, to->profile());
+      if (!copy) {
+        // The folder goes whole or not at all.
+        for (const auto& [tab_copied, made] : copies) {
+          CloseTab(made);
+        }
+        return;
+      }
+      copies[tab] = copy;
+    }
+  }
+  to->TakeFolder(*from, folder, copies);
+  // What the old Space shows next is none of the folder's.
+  const bc_id next = from->NextAfterLeaving(folder, &Tab::Loaded);
+  for (bc_id tab : tabs) {
+    auto copy = copies.find(tab);
+    FollowMove(tab, copy == copies.end() ? tab : copy->second, from->id(), space, next);
+  }
+  for (const auto& [tab, made] : copies) {
+    CloseTab(tab);
+  }
+  PanesChanged();
+}
+
+// static
+void Window::FollowMove(bc_id tab, bc_id moved, bc_id from, bc_id space, bc_id next) {
   for (auto& [id, window] : Windows()) {
     if (window->selected_ == tab && window->let_go_) {
       // Its page went to another window, which takes it along.
@@ -1047,15 +1098,10 @@ void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent) {
       window->selected_ = next;
       window->SetSelectedIn(space, moved);
       window->ShowSpace(space);
-    } else if (window->SelectedIn(from->id()) == tab) {
-      window->SetSelectedIn(from->id(), next);
+    } else if (window->SelectedIn(from) == tab) {
+      window->SetSelectedIn(from, next);
     }
   }
-  // Out of its Space, it isn't kept for ReopenClosedTab or archived.
-  if (moved != tab) {
-    CloseTab(tab);
-  }
-  PanesChanged();
 }
 
 // static
