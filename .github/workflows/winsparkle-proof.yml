@@ -1,0 +1,44 @@
+# A proof for 0.1.2's cut, on test branches only and never in a pull request: a Windows copy still on
+# WinSparkle (0.1.1 and before) takes the next release from the appcast tools/appcast.py now writes,
+# the way a user's does, through WinSparkle's window and the installer's. The appcast and installer
+# are a release's or a release.yml dry run's, signed with the real update key; github.com resolves
+# to a server on 127.0.0.1 for the run, so nothing reads or touches the real feed.
+name: WinSparkle update proof
+
+on:
+  push:
+    branches: ['test/winsparkle-0112-*']
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  proof:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+
+      - shell: pwsh
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+
+      - name: Proof
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/winsparkle-proof/proof.sh "$RUNNER_TEMP/proof" $(cat .github/winsparkle-proof/from-to)
+
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: winsparkle-proof
+          path: |
+            ${{ runner.temp }}/proof/*.log
+            ${{ runner.temp }}/proof/*.txt
+            ${{ runner.temp }}/proof/shots
+          if-no-files-found: warn
