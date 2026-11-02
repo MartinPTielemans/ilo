@@ -14,7 +14,7 @@ on:
   # before the Windows engine's night at 02:00 on the same runners.
   schedule:
     - cron: '30 0 * * *'
-  # These paths are the night's inputs too (.github/scripts/engine-changed.sh).
+  # These paths are the night's inputs too (tools/engine-changed.sh).
   push:
     branches: ['engine-build/**']
     paths:
@@ -58,7 +58,7 @@ jobs:
         run: |
           status=0
           if [ "$GITHUB_EVENT_NAME" = schedule ]; then
-            .github/scripts/engine-changed.sh linux > "$RUNNER_TEMP/changed" || status=$?
+            tools/engine-changed.sh linux > "$RUNNER_TEMP/changed" || status=$?
             tee -a "$GITHUB_STEP_SUMMARY" < "$RUNNER_TEMP/changed"
           fi
           if [ "$status" = 3 ]; then echo build=false; else echo build=true; fi >> "$GITHUB_OUTPUT"
