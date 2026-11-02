@@ -11,7 +11,9 @@
 // clickkey, doubleclickkey, rightclickkey, drag, dragkey, press, dragto, release, rightpress,
 // rightdragto, rightrelease, move, key, keydown, keyup, flags, type, insert, scroll, swipe, wheel,
 // resize, place, minimize, window, order, layout, state, title, pasteboard, front, menu, menubar,
-// choose, dismiss, agentspace, agentmayact, agentrelease, agentdisconnect, takeback and age. The Mac's modifiers are
+// choose, dismiss, agentspace, agentmayact, agentrelease, agentdisconnect, takeback and age, and
+// Windows' own overlays, which lists the windows on screen over the app's browser windows, and
+// reshow, which shows those of the UI's that are hidden again, as Windows does. The Mac's modifiers are
 // pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl with Alt, but Ctrl for
 // ⌃Tab, and alt with both. A trackpad's scrolls and swipes are wheel messages with the pixels in
 // their deltas, as a precision touchpad sends them. choose and dismiss work on ilo's menu and the
@@ -1055,6 +1057,40 @@ bool Run(const std::string& line) {
       return false;
     }
     ShowWindow(root, IsIconic(root) ? SW_SHOWNOACTIVATE : SW_SHOWMINNOACTIVE);
+    return true;
+  }
+  // The windows the app has over its browser windows that are on screen, by their own visibility:
+  // its overlays, its menu and Chromium's bubbles, each owned by its browser window.
+  if (action == "overlays") {
+    std::string shown;
+    for (HWND top = GetTopWindow(nullptr); top; top = GetWindow(top, GW_HWNDNEXT)) {
+      if (Ours(top) && GetWindow(top, GW_OWNER) && IsWindowVisible(top)) {
+        RECT rect;
+        GetWindowRect(top, &rect);
+        const double scale = Scale(top);
+        char text[160];
+        snprintf(text, sizeof text, "%s%s %.0fx%.0f at %.0f,%.0f", shown.empty() ? "" : ", ",
+                 Utf8(ClassOf(top)).c_str(), (rect.right - rect.left) / scale,
+                 (rect.bottom - rect.top) / scale, rect.left / scale, rect.top / scale);
+        shown += text;
+      }
+    }
+    fprintf(stderr, "browser: overlays shown %s\n", shown.empty() ? "none" : shown.c_str());
+    return true;
+  }
+  // Shows each of the UI's windows over a browser window that's hidden, as Windows shows those a
+  // window owns as it comes back from minimized: none the UI has closed may come back (#1346).
+  if (action == "reshow") {
+    std::vector<HWND> hidden;
+    for (HWND top = GetTopWindow(nullptr); top; top = GetWindow(top, GW_HWNDNEXT)) {
+      if (Ours(top) && IsGpui(top) && GetWindow(top, GW_OWNER) && !IsWindowVisible(top)) {
+        hidden.push_back(top);
+      }
+    }
+    for (HWND hwnd : hidden) {
+      ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    }
+    fprintf(stderr, "browser: reshown %zu\n", hidden.size());
     return true;
   }
   if (!Driven()) {
