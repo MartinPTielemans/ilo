@@ -1297,6 +1297,10 @@ impl Browser for Recorder {
     fn open_tab_in_little(&self, tab: u64, _: &mut App) {
         self.record(format!("open tab in little {tab}"))
     }
+
+    fn little_profile(&self, profile: u64, url: &str, _: &mut App) {
+        self.record(format!("little profile {profile} {url}"))
+    }
 }
 
 /// The account's core, recording what the account step asks of it.

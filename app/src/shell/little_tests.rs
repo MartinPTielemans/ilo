@@ -222,3 +222,84 @@ fn option_command_click_is_the_users_spaces_alone(cx: &mut TestAppContext) {
     assert!(!press_row(&main, 7, alt_cmd, cx));
     assert!(host.take().is_empty());
 }
+
+/// With more than one profile, the bar has a profile picker before Copy Link, whose menu lists
+/// them, the page's checked, and one picked goes to the app to open the page in. With one profile
+/// there's nothing to pick, and no button.
+#[gpui::test]
+fn its_bar_picks_the_pages_profile_once_there_are_two(cx: &mut TestAppContext) {
+    use crate::tokens::shell::{CARD_INSET, WINDOW_BUTTON_Y};
+    use gpui::{Modifiers, point, px};
+
+    use super::little::GAP;
+    use crate::tokens::shell::URL_BUTTON_SIZE;
+
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) =
+        cx.add_window_view(|_, cx| Shell::little_window(browser, 9, 1, 1, None, cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(9, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+        shell.set_selected(10, cx);
+        let url = "https://example.com/".into();
+        shell.set_page(10, Page { url, ..Page::default() }, cx);
+        shell.set_profiles(vec![(1, "Default".into())], cx);
+    });
+    cx.run_until_parked();
+    let width = cx.update(|window, _| f32::from(window.viewport_size().width));
+    let picker = width - CARD_INSET - 3. * URL_BUTTON_SIZE - 2. * GAP + URL_BUTTON_SIZE / 2.;
+    let picker = point(px(picker), px(WINDOW_BUTTON_Y));
+    let click = |cx: &mut gpui::VisualTestContext| {
+        cx.simulate_click(picker, Modifiers::none());
+        cx.run_until_parked();
+    };
+    click(cx);
+    assert!(host.menus.borrow().is_empty(), "a profile menu with one profile");
+
+    shell.update(cx, |shell, cx| {
+        shell.set_profiles(vec![(1, "Default".into()), (5, "Work".into())], cx)
+    });
+    cx.run_until_parked();
+    host.take();
+    click(cx);
+    let menu = host.menus.borrow().last().cloned().unwrap_or_default();
+    assert_eq!(menu, [("Default".into(), true), ("Work".into(), true)]);
+    let checked: Vec<bool> = host.entries.borrow().iter().map(|entry| entry.checked).collect();
+    assert_eq!(checked, [true, false]);
+    cx.update(|_, cx| host.choose("Work", cx));
+    assert_eq!(host.take().last().map(String::as_str), Some("little profile 5 https://example.com/"));
+}
+
+/// A Little ilo window knows the profiles the window it opened from does, so its bar has the
+/// picker from its first frame, not only once the core next reports them.
+#[gpui::test]
+fn its_bar_has_the_picker_from_the_start(cx: &mut TestAppContext) {
+    use crate::tokens::shell::{CARD_INSET, URL_BUTTON_SIZE, WINDOW_BUTTON_Y};
+    use gpui::{Modifiers, point, px};
+
+    use super::little::GAP;
+
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| {
+        let from = cx.new(|cx| {
+            let mut from = Shell::new(browser.clone(), cx);
+            from.profiles = vec![(1, "Default".into()), (5, "Work".into())];
+            from
+        });
+        Shell::little_window(browser, 9, 1, 1, Some(&from), cx)
+    });
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(9, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+        shell.set_selected(10, cx);
+        let url = "https://example.com/".into();
+        shell.set_page(10, Page { url, ..Page::default() }, cx);
+    });
+    cx.run_until_parked();
+    let width = cx.update(|window, _| f32::from(window.viewport_size().width));
+    let picker = width - CARD_INSET - 3. * URL_BUTTON_SIZE - 2. * GAP + URL_BUTTON_SIZE / 2.;
+    cx.simulate_click(point(px(picker), px(WINDOW_BUTTON_Y)), Modifiers::none());
+    cx.run_until_parked();
+    let menu = host.menus.borrow().last().cloned().unwrap_or_default();
+    assert_eq!(menu, [("Default".into(), true), ("Work".into(), true)]);
+}
