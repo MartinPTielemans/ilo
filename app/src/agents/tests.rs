@@ -1605,7 +1605,7 @@ mod tasks {
         assert!(text.starts_with("Find a flight to Lisbon"));
         assert!(text.contains("“Arc (web browser)”, https://en.wikipedia.org/wiki/Arc_(web_browser)"));
         let card = card_of(&agents, cx);
-        assert_eq!((card.title.as_ref(), card.status.as_ref(), card.dot), ("Find a flight to Lisbon", "Starting", Dot::Working));
+        assert_eq!((card.title.as_ref(), card.status.as_ref(), card.dot), ("Find a flight to Lisbon", "Thinking", Dot::Working));
         // Dropped, its CLI ends and its Space goes.
         agents.update(cx, |agents, cx| agents.end_tasks(cx));
         assert_eq!(*browser.deleted.borrow(), vec![100]);
@@ -1787,6 +1787,87 @@ mod tasks {
         let shown = format!("{:?}", conversation.lines);
         assert_eq!(shown.matches("MAAT opens at 11:00 on Saturday.").count(), 1, "{shown}");
         assert_eq!(card_of(&agents, cx).status.as_ref(), summary);
+    }
+
+    /// A turn the user sends says Thinking at once, under their message and on the card, before
+    /// the CLI says anything; the agent's first step or message takes its place, and its result
+    /// folds it. Nothing waits on the CLI once it has answered.
+    #[cfg(unix)]
+    #[gpui::test]
+    fn a_sent_turn_thinks_until_the_agent_answers(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, NO_ANSWER};
+        let (agents, _) = ready(Some(fake_cli("thinking")), cx);
+        let agent = start(&agents, "What is my name?", cx);
+        let lines = |cx: &mut TestAppContext| agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap().lines);
+        let waiting = |cx: &mut TestAppContext| agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().waiting.is_some());
+        assert_eq!(lines(cx), [Line::Thinking { key: 0, failed: None }], "Run ↩ shows nothing");
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.dot), ("Thinking", Dot::Working));
+        assert!(waiting(cx), "nothing ends a CLI that never answers");
+
+        // Its first step takes the line's place, as a trace under way.
+        said(&agents, &agent, Out::Thought { text: "The user asks their name.".into(), took: Duration::from_secs(2) }, cx);
+        assert!(matches!(&lines(cx)[..], [Line::Trace(trace)] if trace.running && trace.steps() == 1), "{:?}", lines(cx));
+        assert!(!waiting(cx), "a timer is out once it answered");
+        said(&agents, &agent, Out::Said("I don't know your name.".into()), cx);
+        said(&agents, &agent, Out::Ended(None), cx);
+        assert_eq!(card_of(&agents, cx).dot, Dot::Done);
+
+        // A reply: Thinking again at once, under it, and the card's glyph goes back to working.
+        agents.update(cx, |agents, cx| agents.reply(&agent, "It's Ada.", cx));
+        let shown = lines(cx);
+        assert_eq!(shown[shown.len() - 2..], [Line::You("It's Ada.".into()), Line::Thinking { key: 1, failed: None }]);
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.dot), ("Thinking", Dot::Working));
+        // Its result folds it: the answer shows in its place.
+        said(&agents, &agent, Out::Said("Nice to meet you, Ada.".into()), cx);
+        said(&agents, &agent, Out::Ended(None), cx);
+        assert_eq!(lines(cx).last(), Some(&Line::Said("Nice to meet you, Ada.".into())));
+        assert!(!waiting(cx));
+        cx.executor().advance_clock(NO_ANSWER * 2);
+        cx.run_until_parked();
+        assert_eq!(card_of(&agents, cx).dot, Dot::Done, "a timer ended a task that had answered");
+        agents.update(cx, |agents, cx| agents.end_tasks(cx));
+    }
+
+    /// A CLI that never answers, or goes before it does, never leaves Thinking going: the line
+    /// says why the agent couldn't start, and the card why it stopped. A CLI that ends is a
+    /// thread's news, which a test's clock can't wait for, so the task here has none.
+    #[gpui::test]
+    fn a_turn_the_cli_never_answers_says_why(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, NO_ANSWER};
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "What is my name?", cx);
+        // As though its CLI started, and says nothing.
+        agents.update(cx, |agents, cx| {
+            agents.task_mut(&agent).unwrap().state = State::Working;
+            agents.wait_for_answer(&agent, cx);
+        });
+        let last = |cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap().lines.pop().unwrap())
+        };
+        cx.executor().advance_clock(NO_ANSWER - Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(last(cx), Line::Thinking { key: 0, failed: None }, "it gave up early");
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(last(cx), Line::Thinking { key: 0, failed: Some("Claude didn't answer".into()) });
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.dot), ("Claude didn't answer.", Dot::Ended));
+        assert!(agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().waiting.is_none()));
+
+        // A reply that can't start its CLI says why under it.
+        agents.update(cx, |agents, cx| agents.reply(&agent, "Are you there?", cx));
+        assert_eq!(last(cx), Line::Thinking { key: 0, failed: Some("Claude isn't installed".into()) });
+        // A CLI that goes before it answers says so.
+        agents.update(cx, |agents, cx| {
+            agents.task_mut(&agent).unwrap().state = State::Working;
+            agents.wait_for_answer(&agent, cx);
+        });
+        assert_eq!(last(cx), Line::Thinking { key: 0, failed: None });
+        said(&agents, &agent, Out::Gone(String::new()), cx);
+        assert_eq!(last(cx), Line::Thinking { key: 0, failed: Some("Claude stopped working".into()) });
+        assert!(agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().waiting.is_none()));
     }
 
     #[gpui::test]

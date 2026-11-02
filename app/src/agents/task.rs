@@ -28,6 +28,9 @@ pub const SUMMARY_LENGTH: usize = 28;
 pub const PAGES: usize = 10;
 /// The dismissed tasks ⇧⌘T and ⌘Z can bring back. An older one is dropped, its Space with it.
 const KEPT: usize = 10;
+/// How long a turn's Thinking waits for the CLI's first step or message before it says the CLI
+/// didn't answer: past the longest a model thinks before it does anything.
+pub const NO_ANSWER: Duration = Duration::from_secs(180);
 
 /// A task's state, as its card shows it.
 #[derive(Clone, Debug, PartialEq)]
@@ -104,6 +107,10 @@ pub enum Line {
     Said(SharedString),
     /// A stretch of work between two messages.
     Trace(Trace),
+    /// The turn the user sent, from the moment they sent it until the agent's first step or
+    /// message takes its place: Thinking, or why the agent couldn't start on it. Its key is the
+    /// one the turn's trace takes.
+    Thinking { key: usize, failed: Option<SharedString> },
 }
 
 /// A stretch of the agent's work between two messages: a summary line, "Working · 5 steps" or
@@ -221,11 +228,29 @@ pub struct Task {
     /// The ask's call, which waits for the user's answer, with the number it takes among the
     /// agent's prompts, which show in the order they came.
     asking: Option<(u64, mpsc::Sender<ToolResult>)>,
+    /// While it's thinking, what ends the turn if its CLI never answers (NO_ANSWER). It goes as
+    /// the CLI answers, so nothing waits once the agent is under way.
+    pub(super) waiting: Option<gpui::Task<()>>,
 }
 
 impl Task {
     pub(super) fn token(&self) -> &str {
         &self.token
+    }
+
+    /// Where the turn under way starts among its messages: after the user's last.
+    fn turn(&self) -> usize {
+        self.messages.iter().rposition(|message| message.who == Who::User).map_or(0, |at| at + 1)
+    }
+
+    /// Whether the turn is sent and its CLI hasn't answered yet: no step and no message since.
+    fn heard_nothing(&self) -> bool {
+        let turn = self.turn();
+        self.messages.len() == turn && self.trace.last().is_none_or(|step| step.after < turn)
+    }
+
+    fn thinking(&self) -> bool {
+        self.state == State::Working && self.heard_nothing()
     }
 }
 
@@ -374,7 +399,22 @@ impl Agents {
     pub fn conversation(&self, agent: &str, cx: &App) -> Option<Conversation> {
         let task = self.task(agent)?;
         let ended = !matches!(task.state, State::Working | State::Asking { .. });
-        let lines = fold(&task.messages, &task.trace, ended, task.state == State::Working);
+        let mut lines = fold(&task.messages, &task.trace, ended, task.state == State::Working);
+        // A turn the CLI hasn't answered says it's thinking from the moment it's sent, and if the
+        // CLI goes or never answers, why, so nothing is left running.
+        if task.heard_nothing() {
+            let failed = match &task.state {
+                State::Working => Some(None),
+                State::Failed { why, .. } => Some(Some(why.trim_end_matches('.').to_string())),
+                State::Limit { resets: Some(at) } => Some(Some(format!("Limit resets at {at}"))),
+                State::Limit { resets: None } => Some(Some("At its plan's limit".to_string())),
+                _ => None,
+            };
+            if let Some(failed) = failed {
+                let failed = failed.map(|why| page::clip(&why, 60).into());
+                lines.push(Line::Thinking { key: task.trace.len(), failed });
+            }
+        }
         let tabs = (self.browser.space_tabs(task.space, cx).into_iter())
             .map(|tab| (tab.id, site(&tab.url).to_string().into()))
             .collect();
@@ -478,7 +518,7 @@ impl Agents {
                 Some(_) => ("Waiting for you".into(), Dot::Waiting),
                 None => ("Waiting for your OK".into(), Dot::Waiting),
             },
-            (State::Working, None) => (working(&task.trace), Dot::Working),
+            (State::Working, None) => (working(task), Dot::Working),
             (State::Asking { question, .. }, None) if asks => (question.clone(), Dot::Waiting),
             (State::Asking { .. }, None) => ("Waiting for you".into(), Dot::Waiting),
             (State::Done { summary, .. }, _) => {
@@ -667,13 +707,43 @@ impl Agents {
             token: super::random_token(),
             process: None,
             asking: None,
+            waiting: None,
         };
         self.tasks.tasks.push(task);
         self.tokens_changed();
         let first = first_message(asked, self.task(&agent).and_then(|task| task.page.as_ref()));
         self.launch(&agent, &first, cx);
+        self.wait_for_answer(&agent, cx);
         cx.notify();
         Some(agent)
+    }
+
+    /// While the task thinks, its CLI has NO_ANSWER to take its first step or say something,
+    /// or the task ends, saying so: a CLI that hangs never leaves a Thinking going.
+    pub(super) fn wait_for_answer(&mut self, agent: &str, cx: &mut Context<Self>) {
+        let Some(task) = self.task_mut(agent).filter(|task| task.thinking()) else { return };
+        let agent = agent.to_string();
+        task.waiting = Some(cx.spawn(async move |agents, cx| {
+            cx.background_executor().timer(NO_ANSWER).await;
+            _ = agents.update(cx, |agents, cx| agents.no_answer(&agent, cx));
+        }));
+    }
+
+    fn no_answer(&mut self, agent: &str, cx: &mut Context<Self>) {
+        let Some(task) = self.task_mut(agent) else { return };
+        // It's this timer that runs: it goes once it's done.
+        if let Some(timer) = task.waiting.take() {
+            timer.detach();
+        }
+        if !task.thinking() {
+            return;
+        }
+        // check.sh reads this line.
+        log!("browser: task {agent} had no answer in {} s", NO_ANSWER.as_secs());
+        // Its CLI ends, so what it might say late isn't taken for the task's; a reply starts it again.
+        task.process = None;
+        let why = format!("{} didn't answer.", task.cli.name());
+        self.fail(agent, Failure::Other(why), cx);
     }
 
     /// Starts the task's CLI with its first message.
@@ -734,6 +804,10 @@ impl Agents {
     /// What a task's CLI said.
     pub fn task_said(&mut self, event: runner::Event, cx: &mut Context<Self>) {
         let runner::Event { agent, out } = event;
+        // Whatever it said, it answered.
+        if let Some(task) = self.task_mut(&agent) {
+            task.waiting = None;
+        }
         match out {
             Out::Said(text) => {
                 let Some(task) = self.task_mut(&agent) else { return };
@@ -806,6 +880,7 @@ impl Agents {
         }
         if let Some(task) = self.task_mut(agent) {
             task.state = state;
+            task.waiting = None;
         }
         self.forget_waiting(agent, cx);
         // What's ready may have changed.
@@ -832,6 +907,7 @@ impl Agents {
             let first = conversation(task);
             self.launch(agent, &first, cx);
         }
+        self.wait_for_answer(agent, cx);
         cx.notify();
     }
 
@@ -843,6 +919,7 @@ impl Agents {
         task.state = State::Working;
         _ = reply.send(ToolResult::text(format!("The user answered: {answer}")));
         self.note(agent, "answered", "", "");
+        self.wait_for_answer(agent, cx);
         // The agent's next prompt, if one waited its turn.
         self.asked(cx);
     }
@@ -855,6 +932,7 @@ impl Agents {
         }
         task.state = State::Stopped;
         task.asking = None;
+        task.waiting = None;
         if let Some(process) = task.process.as_mut() {
             process.interrupt();
         }
@@ -876,6 +954,7 @@ impl Agents {
             let first = conversation(self.task(agent).expect("found"));
             self.launch(agent, &first, cx);
         }
+        self.wait_for_answer(agent, cx);
         cx.notify();
     }
 
@@ -1011,6 +1090,8 @@ impl Agents {
         let ended = (did.tool == "ask").then_some(at);
         let after = task.messages.len();
         task.trace.push(Traced { call, did, after, started: at, ended, error: None, picture: None });
+        // Its first step: it's under way.
+        task.waiting = None;
     }
 
     /// `agent`'s call was answered `at`: its step ends, with why it failed or what it saw.
@@ -1291,13 +1372,16 @@ fn seconds(at: SystemTime) -> u64 {
     at.duration_since(SystemTime::UNIX_EPOCH).map_or(0, |since| since.as_secs())
 }
 
-/// A task's status while it works: the step it's on, else the last it took.
-fn working(trace: &[Traced]) -> SharedString {
-    let last = trace.iter().rev().find(|step| step.did.tool != "thought");
+/// A task's status while it works: the step of the turn it's on, else the last it took, and
+/// Thinking until it takes one.
+fn working(task: &Task) -> SharedString {
+    let turn = task.turn();
+    let last = (task.trace.iter().rev())
+        .take_while(|step| step.after >= turn)
+        .find(|step| step.did.tool != "thought");
     match last {
         Some(step) => tools::step_title(&step.did, tense(step)).into(),
-        None if !trace.is_empty() => "Thinking".into(),
-        None => "Starting".into(),
+        None => "Thinking".into(),
     }
 }
 

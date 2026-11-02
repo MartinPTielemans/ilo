@@ -279,6 +279,54 @@ fn a_step_on_many_tabs_opens_to_each_tabs_line(cx: &mut TestAppContext) {
     assert!(opened > 10. * TRACE_LINE, "why it failed shows under its tab: {opened}");
 }
 
+/// A reply the user sends shows Thinking under it, in view though they'd scrolled up to read,
+/// shimmering on frames while it shows, and still under Reduce Motion; the agent's first step
+/// takes its place, and with nothing under way, nothing asks for a frame.
+#[gpui::test]
+fn a_sent_reply_thinks_until_the_first_step(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    let mut talk = conversation(1);
+    if let Line::Trace(trace) = &mut talk.lines[0] {
+        (trace.running, trace.took, trace.items) = (false, Some(3), vec![TraceItem::Step(step(0, "Read the page", false))]);
+    }
+    talk.lines.extend((0..80).map(|n| Line::Said(format!("Line {n}").into())));
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk.clone()), cx));
+    let draw = |cx: &mut VisualTestContext| {
+        shell.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    };
+    draw(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let moving = |still, cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.moving(still));
+    assert!(!moving(false, cx), "a frame is asked with nothing under way");
+    view.update(cx, |view, _| view.scroll.set_offset(point(px(0.), px(0.))));
+
+    cx.simulate_input("What is my name?");
+    cx.simulate_keystrokes("enter");
+    assert!(host.take().contains(&r#"task task-1 Reply("What is my name?")"#.to_string()));
+    // The Agents' conversation on the reply, before the CLI says anything.
+    talk.lines.extend([Line::You("What is my name?".into()), Line::Thinking { key: 1, failed: None }]);
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk.clone()), cx));
+    draw(cx);
+    let (offset, max) = view.read_with(cx, |view, _| (view.scroll.offset().y, view.scroll.max_offset().y));
+    assert_eq!(offset, -max, "the Thinking is out of view");
+    assert!(moving(false, cx), "Thinking doesn't shimmer");
+    assert!(!moving(true, cx), "Thinking moves under Reduce Motion");
+
+    talk.lines.pop();
+    let first = Trace { key: 1, running: true, took: None, items: vec![TraceItem::Step(step(1, "Reading the page", true))] };
+    talk.lines.push(Line::Trace(first));
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk.clone()), cx));
+    draw(cx);
+    assert!(moving(false, cx), "the step under way doesn't shimmer");
+    if let Some(Line::Trace(trace)) = talk.lines.last_mut() {
+        (trace.running, trace.took, trace.items) = (false, Some(1), vec![TraceItem::Step(step(1, "Read the page", false))]);
+    }
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    draw(cx);
+    assert!(!moving(false, cx), "a frame is asked once the turn is over");
+}
+
 /// The newest line stays in view as lines come while the user reads at the end; scrolled up to
 /// read, they stay where they are.
 #[gpui::test]

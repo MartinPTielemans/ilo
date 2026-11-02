@@ -412,6 +412,8 @@ impl TalkView {
             return;
         }
         self.reply.update(cx, |input, cx| input.reset(SharedString::default(), window, cx));
+        // What the user sent, and the Thinking under it, show even if they'd scrolled up.
+        self.scroll.scroll_to_bottom();
         self.act(TaskAction::Reply(text.into()), cx);
     }
 
@@ -757,6 +759,34 @@ impl TalkView {
             .into_any_element()
     }
 
+    /// The turn the user sent, until its trace or the agent's message takes its place: Thinking,
+    /// shimmering as the step under way does, or why the agent couldn't start on it, in red.
+    fn thinking(&self, key: usize, failed: Option<SharedString>, look: &Look) -> gpui::AnyElement {
+        let fold = Fold::Trace(key);
+        let line = match failed {
+            None => trace_line(look, fold, None, false, "Thinking".into(), "".into(), None, Some(look.shimmer(self.made))),
+            Some(why) => trace_line(look, fold, None, true, "Couldn't start".into(), why, None, None),
+        };
+        div().flex().flex_col().items_start().mb(px(TRACE_BELOW)).child(line).into_any_element()
+    }
+
+    /// Whether something it shows moves: the step under way's shimmer while its trace is open, or
+    /// a turn's Thinking, unless motion is reduced, and what opens or folds.
+    fn moving(&self, still: bool) -> bool {
+        let shimmers = self.shown.as_ref().is_some_and(|shown| {
+            shown.lines.iter().any(|line| match line {
+                Line::Trace(trace) => {
+                    trace.running
+                        && self.is_open(Fold::Trace(trace.key), true)
+                        && trace.items.iter().any(|item| matches!(item, TraceItem::Step(step) if step.running))
+                }
+                Line::Thinking { failed, .. } => failed.is_none(),
+                _ => false,
+            })
+        });
+        (shimmers && !still) || !self.folding.is_empty()
+    }
+
     /// A step's line, and what it opens to while it's open. A turn's same step on several tabs
     /// opens to each tab's line, by its address under the step's title and with no glyph, so the
     /// addresses read as one column.
@@ -835,6 +865,7 @@ impl TalkView {
                     .child(self.said("said", index, text, look))
                     .into_any_element(),
                 Line::Trace(trace) => self.trace(trace, look, cx),
+                Line::Thinking { key, failed } => self.thinking(*key, failed.clone(), look),
             });
         }
         let answers = shown.answers.iter().enumerate().map(|(index, answer)| {
@@ -1047,13 +1078,8 @@ impl Render for TalkView {
         if std::mem::replace(&mut self.viewport, viewport) != viewport && self.at_end() {
             self.scroll.scroll_to_bottom();
         }
-        // The step under way shimmers, and what opens moves, on frames only while they show.
-        let running = self.shown.as_ref().is_some_and(|shown| {
-            shown.lines.iter().any(|line| matches!(line, Line::Trace(trace) if trace.running
-                && self.is_open(Fold::Trace(trace.key), true)
-                && trace.items.iter().any(|item| matches!(item, TraceItem::Step(step) if step.running))))
-        });
-        if (running && !still) || !self.folding.is_empty() {
+        // What moves does on frames only while it shows.
+        if self.moving(still) {
             window.request_animation_frame();
         }
         let palette = look.palette;
