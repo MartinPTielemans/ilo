@@ -284,7 +284,8 @@ send clickkey 76 173
 expect '^browser: link rule 0 field has the keyboard$' "+ didn't give the new rule's field the keyboard"
 send type preview-target
 post clickkey 500 129
-expect '^browser: menu shown [^,]* (checked), work$' "the rule's Space pop-up didn't list the user's Spaces"
+expect '^browser: menu shown [^,]* (checked), work, Little ilo$' \
+  "the rule's Space pop-up didn't list the user's Spaces and Little ilo"
 send choose work
 expect '^browser: link rules drawn URL contains "preview-target" → work; ' \
   "the rule's pop-up didn't set its Space"

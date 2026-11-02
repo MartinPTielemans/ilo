@@ -2297,16 +2297,23 @@ impl Settings {
             })
         });
         let agents = agents.clone();
-        let action = match connected {
-            true => button(&RowLook::settings(), ("disconnect-agent", index), "Disconnect").on_click(move |_, _, cx| {
-                agents.update(cx, |agents, cx| agents.disconnect(client, cx))
-            }),
-            false => button(&RowLook::settings(), ("connect-agent", index), "Connect").on_click(move |_, _, cx| {
-                // check.sh reads this line.
-                log!("browser: connect agent {}", client.id());
-                agents.update(cx, |agents, cx| agents.connect(client, cx))
-            }),
+        let (action, at) = match connected {
+            true => (
+                button(&RowLook::settings(), ("disconnect-agent", index), "Disconnect").on_click(move |_, _, cx| {
+                    agents.update(cx, |agents, cx| agents.disconnect(client, cx))
+                }),
+                "disconnect",
+            ),
+            false => (
+                button(&RowLook::settings(), ("connect-agent", index), "Connect").on_click(move |_, _, cx| {
+                    // check.sh reads this line.
+                    log!("browser: connect agent {}", client.id());
+                    agents.update(cx, |agents, cx| agents.connect(client, cx))
+                }),
+                "connect",
+            ),
         };
+        let action = action.relative().child(self.drawn(format!("{at} {}", client.id())));
         let icon = match client {
             Client::ClaudeCode => "icons/terminal.svg",
             Client::Codex => "icons/square-terminal.svg",

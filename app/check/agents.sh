@@ -5,6 +5,11 @@
 # agent's, and the user's tab's Move to lists it after the user's own Space, checked: choosing it
 # gives the agent the tab, which moving it back takes away. The agent's mark on its tab goes as its
 # session there ends: it releases the tab, its client disconnects, or the user takes the tab back.
+# On Windows, Settings › Agents' Connect finds Claude Code's claude where its own installer, winget
+# or npm put it, though none of those is on the PATH (#1420), and gives it the browser's server
+# whole, which runs and reaches the browser as Claude Code. Disconnect takes it out again. With
+# claude gone, the row says so in words. Each claude is a stand-in that records its arguments, in a
+# home folder of the run's own, never the user's.
 
 log="$out/agents.log"
 step=0
@@ -163,8 +168,175 @@ if [ "$driven" = 1 ]; then
     "the agent may not act on its tab after the relaunch"
 fi
 quit
+
+connected=
+if windows; then
+  log="$out/agents-connect.log"
+  step=0
+  rm -f "$saved" "$launch_frame"
+  # The home the app reads Claude Code's folders from, with ~/.claude, which lists its row.
+  home="$PWD/$out/claude-home"
+  rm -rf "$home"
+  mkdir -p "$home/.claude"
+  native="$home/.local/bin"
+  winget="$home/AppData/Local/Microsoft/WinGet/Links"
+  npm="$home/AppData/Roaming/npm"
+  # The stand-in for Claude Code's claude.exe: it writes each call's arguments, as Windows hands a
+  # program them, in claude-calls beside it, a JSON array a line without spaces.
+  cat > "$out/claude-stand-in.rs" << 'EOF'
+use std::io::Write;
+fn main() {
+    let quoted: Vec<String> = std::env::args().skip(1).map(|arg| {
+        let mut quoted = String::from("\"");
+        for c in arg.chars() {
+            match c {
+                '"' | '\\' => { quoted.push('\\'); quoted.push(c); }
+                c if (c as u32) < 0x20 => quoted += &format!("\\u{:04x}", c as u32),
+                c => quoted.push(c),
+            }
+        }
+        quoted + "\""
+    }).collect();
+    let calls = std::env::current_exe().unwrap().with_file_name("claude-calls");
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(calls).unwrap();
+    writeln!(file, "[{}]", quoted.join(",")).unwrap();
+}
+EOF
+  rustc -O -o "$out/claude.exe" "$out/claude-stand-in.rs" ||
+    fail "rustc couldn't build the stand-in for claude.exe"
+  # npm's claude.cmd, as npm writes it for a global install, which runs Python with a script that
+  # records the arguments where it runs node with Claude Code's cli.js: both read them alike.
+  python=$(python3 -I -c 'import sys; print(sys.executable)')
+  printf '%s\n' '@ECHO off' 'GOTO start' ':find_dp0' 'SET dp0=%~dp0' 'EXIT /b' ':start' 'SETLOCAL' \
+    'CALL :find_dp0' "SET \"_prog=$python\"" \
+    'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\claude-calls.py" %*' |
+    sed 's/$/\r/' > "$out/claude.cmd"
+  printf '%s\n' 'import json, os, sys' \
+    'with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "claude-calls"), "a", encoding="utf-8") as calls:' \
+    '    calls.write(json.dumps(sys.argv[1:], separators=(",", ":")) + "\n")' > "$out/claude-calls.py"
+  agents_file="$(dirname "$saved")/Agents"
+  printf '{"on":true,"agents":[]}' > "$agents_file"
+  # The PATH stays the run's, which has none of the three folders.
+  USERPROFILE=$(cygpath -w "$home") LOCALAPPDATA=$(cygpath -w "$home/AppData/Local") \
+    APPDATA=$(cygpath -w "$home/AppData/Roaming") \
+    BROWSER_PROFILE_DIR=$(cygpath -w "${BROWSER_PROFILE_DIR:-$profile_dir}") BROWSER_DRIVE=1 \
+    "$browser" < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await '^browser: agents server on \\\\\.\\pipe\\' || fail "the saved switch didn't start the server"
+  socket=$(grep '^browser: agents server on' "$log" | tail -1 | sed 's/^browser: agents server on //')
+  name="$(echo "$app_name" | tr '[:upper:]' '[:lower:]')-dev"
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings"
+  settings_drew
+  # Shows Settings' tab $1, drawn, which a click needs: a row that changed draws at the next frame,
+  # and a click before it would land on what the row showed before.
+  settings_tab() {
+    send clickkey $(drawn "toolbar $1")
+    expect "^browser: settings tab $1\$" "a click on $1 didn't show its tab"
+    settings_drew "$1"
+  }
+  settings_tab Agents
+  # Waits up to 30 s for the calls file $1 to have $2 lines.
+  calls_reach() {
+    for _ in $(seq 300); do
+      [ "$(cat "$1" 2>/dev/null | wc -l)" -ge "$2" ] && return 0
+      sleep 0.1
+    done
+    return 1
+  }
+  # Connect with claude at $1, the program it records its calls beside. Claude Code gets a remove,
+  # then the server whole, with the bridge beside the browser's executable, its socket and a token
+  # the browser takes as Claude Code's. Then Disconnect removes it.
+  connect_with() {
+    calls="$(dirname "$1")/claude-calls"
+    rm -f "$calls"
+    send clickkey $(drawn "connect claude-code")
+    expect '^browser: connect agent claude-code$' "a click on Connect didn't connect Claude Code"
+    expect_late '^browser: agent claude-code \(connected\|couldn.t connect: .*\)$' \
+      "Connect with $(basename "$1") didn't finish"
+    logged '^browser: agent claude-code connected$' ||
+      fail "Connect with $1 failed: $(sed -n 's/^browser: agent claude-code couldn.t connect: //p' "$log" | tail -1)"
+    hellos=$(grep -c '^browser: agent claude-code hello from check$' "$log" || true)
+    python3 -I - "$calls" "$name" "$(cygpath -w "$app/mcp-bridge.exe")" "$socket" << 'PY' || fail "Claude Code didn't get the server whole from $1"
+import json, os, subprocess, sys, threading
+path, name, bridge, socket = sys.argv[1:]
+with open(path, encoding="utf-8") as file:
+    calls = [json.loads(line) for line in file]
+added = ["mcp", "add-json", "--scope", "user", name]
+if len(calls) != 2 or calls[0] != ["mcp", "remove", "--scope", "user", name] or calls[1][:5] != added or len(calls[1]) != 6:
+    sys.exit(f"claude was called with {calls}")
+server = json.loads(calls[1][5])
+token = server.get("env", {}).get("BROWSER_AGENT_TOKEN", "")
+if (sorted(server) != ["args", "command", "env", "type"] or server["type"] != "stdio"
+        or os.path.normcase(server["command"]) != os.path.normcase(bridge)
+        or server["args"] != [socket] or len(token) != 64):
+    sys.exit(f"claude add-json got {calls[1][5]}")
+# Runs the server as Claude Code does, and asks it to start a session.
+bridge = subprocess.Popen([server["command"], *server["args"]], stdin=subprocess.PIPE,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          env=dict(os.environ, **server["env"]))
+threading.Timer(30, bridge.kill).start()
+bridge.stdin.write(b'{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}\n')
+bridge.stdin.flush()
+answer = bridge.stdout.readline()
+bridge.stdin.close()
+bridge.wait()
+if b'"protocolVersion":"2025-06-18"' not in answer:
+    sys.exit(f"the server Claude Code got answered {answer!r}: {bridge.stderr.read()!r}")
+PY
+    [ "$(grep -c '^browser: agent claude-code hello from check$' "$log")" -gt "$hellos" ] ||
+      fail "the server Claude Code got didn't take its token as Claude Code's"
+    settings_tab General
+    settings_tab Agents
+    ../tools/window-screenshot.sh "$pid" "$out/connected-$2.png" || fail "no window to capture"
+    send clickkey $(drawn "disconnect claude-code")
+    expect '^browser: agent claude-code disconnected$' "a click on Disconnect didn't disconnect Claude Code"
+    calls_reach "$calls" 3 || fail "Disconnect didn't run claude"
+    [ "$(tail -1 "$calls")" = "[\"mcp\",\"remove\",\"--scope\",\"user\",\"$name\"]" ] ||
+      fail "Disconnect ran claude with $(tail -1 "$calls")"
+    settings_tab General
+    settings_tab Agents
+  }
+  for install in "$native/claude.exe" "$winget/claude.exe" "$npm/claude.cmd"; do
+    mkdir -p "$(dirname "$install")"
+    cp "$out/$(basename "$install")" "$install"
+    [ "${install%.cmd}" = "$install" ] || cp "$out/claude-calls.py" "$(dirname "$install")/"
+    case $install in
+      "$native"/*) connect_with "$install" native ;;
+      "$winget"/*) connect_with "$install" winget ;;
+      *) connect_with "$install" npm ;;
+    esac
+    rm -rf "$(dirname "$install")"
+  done
+  # Claude Code uninstalled while connected: Disconnect ends its token, and says it couldn't reach
+  # claude to take the server out, and Connect says it isn't installed.
+  mkdir -p "$native"
+  cp "$out/claude.exe" "$native/"
+  send clickkey $(drawn "connect claude-code")
+  expect_late '^browser: agent claude-code connected$' "Connect with claude.exe didn't connect"
+  rm -rf "$native"
+  settings_tab General
+  settings_tab Agents
+  send clickkey $(drawn "disconnect claude-code")
+  expect '^browser: agent claude-code disconnected$' "a click on Disconnect didn't disconnect Claude Code"
+  expect_late "^browser: agent claude-code config kept: Claude Code's claude command isn't installed\.\$" \
+    "Disconnect with claude gone didn't say it isn't installed"
+  settings_tab General
+  settings_tab Agents
+  send clickkey $(drawn "connect claude-code")
+  expect_late "^browser: agent claude-code couldn't connect: Claude Code's claude command isn't installed\.\$" \
+    "Connect with no claude didn't say it isn't installed"
+  settings_tab General
+  settings_tab Agents
+  ../tools/window-screenshot.sh "$pid" "$out/not-installed.png" || fail "no window to capture"
+  quit
+  rm -f "$agents_file"
+  rm -rf "$home"
+  connected="; on Windows, Connect finds Claude Code's claude off the PATH where its installer, winget or npm put it, gives it the server whole, which runs as Claude Code's, Disconnect takes it out, and with claude gone the row says it isn't installed"
+fi
 if [ "$driven" = 1 ]; then
-  echo "ok: $made; an agent's Space shows and switches as the user's, keeps the user's tabs out, refuses an agent ad blocking, passwords, DevTools, a profile's settings and any action agents lack, with why in the activity log, gets a tab the user gives it until they move it back, clears its mark as each session ends, and comes back the agent's"
+  echo "ok: $made; an agent's Space shows and switches as the user's, keeps the user's tabs out, refuses an agent ad blocking, passwords, DevTools, a profile's settings and any action agents lack, with why in the activity log, gets a tab the user gives it until they move it back, clears its mark as each session ends, and comes back the agent's$connected"
 else
-  echo "ok: $made; an agent's Space comes back the agent's. skip: switching to it and its tab. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: $made; an agent's Space comes back the agent's$connected. skip: switching to it and its tab. Browser wasn't the active app, so the page ignored the click."
 fi
