@@ -363,9 +363,9 @@ pub struct CommandBar {
     /// The Space's tabs it lists before anything is typed.
     tabs: Vec<shell::BarTab>,
     scroll: ScrollHandle,
-    /// Whether it shows, until it hides or the host reports a click outside it. The host closes
-    /// the window at that click's press, before the click reaches the shell, so this stays set
-    /// until the report, which comes after.
+    /// Whether it shows: until it hides or asks the host to go, which on Windows reports it gone
+    /// only a message later, or the host reports the user left it. The host closes the window at a
+    /// click outside it, before the click reaches the shell, so this stays set until that report.
     open: Cell<bool>,
 }
 
@@ -623,6 +623,7 @@ pub fn space_shown(tabs: Vec<shell::BarTab>, open_tabs: Vec<shell::BarTab>, cx: 
             }
             if let Target::Beside(_) = bar.target {
                 // The shell is in an update, which its dismissal would update again.
+                bar.open.set(false);
                 let host = bar.host.clone();
                 cx.defer(move |_| host.dismiss());
                 return false;
@@ -1635,12 +1636,14 @@ impl CommandBar {
         }
         // check.sh reads this line.
         log!("browser: command bar closes again on {}", run.0.name());
+        self.open.set(false);
         self.host.dismiss();
     }
 
     /// Esc leaves the site search or the commands-only list first, then the bar.
     fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
         if !self.leave_site(window, cx) && !self.leave_commands(window, cx) {
+            self.open.set(false);
             self.host.dismiss();
         }
     }

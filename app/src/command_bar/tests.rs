@@ -296,6 +296,11 @@ impl Bar {
         self.cx.run_until_parked();
     }
 
+    /// Whether the bar is open, as the shell asks.
+    fn is_open(&mut self) -> bool {
+        self.cx.cx.update(|cx| is_open(cx))
+    }
+
     fn over_field(&mut self) -> bool {
         self.window.read_with(&self.cx.cx, |bar, _| bar.over_field).unwrap()
     }
@@ -1358,6 +1363,26 @@ fn cmd_t_or_cmd_l_closes_the_open_bar(cx: &mut TestAppContext) {
     bar.run(shell::Command::CopyUrl);
     assert_eq!(bar.calls(), Vec::<String>::new());
     assert_eq!(*browser.borrow(), [shell::Command::CopyUrl]);
+}
+
+/// The bar is closed once it asks the host to close it, on Esc or ⌘T again, not only once the
+/// host says it went, which on Windows comes a message later or, before #1346, not at all: a Space
+/// shown since found it open and put the new tab's plate back in the sidebar, with no bar.
+#[gpui::test]
+fn the_bar_is_closed_as_it_asks_to_go(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    bar.keys("escape");
+    assert_eq!(bar.calls(), ["dismiss"]);
+    assert!(!bar.is_open());
+    assert!(!bar.follow(Vec::new()), "a Space shown since opens no new tab");
+
+    let mut bar = Bar::new(cx);
+    assert!(bar.follow(Vec::new()), "the open bar opens a new tab in the Space shown");
+    bar.calls();
+    bar.run(shell::Command::NewTab);
+    assert_eq!(bar.calls(), ["dismiss"]);
+    assert!(!bar.is_open());
+    assert!(!bar.follow(Vec::new()), "a Space shown since opens no new tab");
 }
 
 /// ↩ on the URL ⌘L opened the bar on loads the page again, as Arc's does; typed over, it goes
