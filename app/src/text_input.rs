@@ -52,12 +52,12 @@ actions!(
 
 /// Shows a field's context menu: `items`' titles, dimmed where they aren't enabled and a line for
 /// an empty one, at `position` in `window`, with its first item highlighted where it opened from
-/// the keyboard, and calls `chosen` with the index of the one chosen once it closes. The app's,
-/// `menu::field_menu`, shows it in ilo's own menu.
+/// the keyboard, and calls `chosen` once it closes, with the index of the one chosen, if one was.
+/// The app's, `menu::field_menu`, shows it in ilo's own menu.
 pub struct FieldMenu(pub Rc<ShowMenu>);
 
 pub type ShowMenu = dyn Fn(Vec<(SharedString, bool)>, Point<Pixels>, bool, &Window, Chosen, &mut App);
-pub type Chosen = Box<dyn FnOnce(usize, &mut Window, &mut App)>;
+pub type Chosen = Box<dyn FnOnce(Option<usize>, &mut Window, &mut App)>;
 
 impl Global for FieldMenu {}
 
@@ -166,6 +166,8 @@ pub struct TextInput {
     is_selecting: bool,
     paste_and_go: bool,
     secure: bool,
+    /// The field's own menu shows, with the keyboard its window had.
+    menu_shown: bool,
 }
 
 impl TextInput {
@@ -186,6 +188,7 @@ impl TextInput {
             is_selecting: false,
             paste_and_go: false,
             secure: false,
+            menu_shown: false,
         }
     }
 
@@ -267,6 +270,12 @@ impl TextInput {
     /// An input method is composing in the field, so its text isn't what the user means yet.
     pub fn composing(&self) -> bool {
         self.marked_range.is_some()
+    }
+
+    /// The field's own menu shows, which has its window's keyboard until it closes, so the field
+    /// hasn't been left.
+    pub fn menu_shown(&self) -> bool {
+        self.menu_shown
     }
 
     pub fn selection(&self) -> Range<usize> {
@@ -446,11 +455,14 @@ impl TextInput {
             .collect();
         let mut actions: Vec<Option<Box<dyn Action>>> =
             items.into_iter().map(|(_, _, action)| action).collect();
+        let field = cx.weak_entity();
         let chosen: Chosen = Box::new(move |index, window, cx| {
-            if let Some(action) = actions.get_mut(index).and_then(Option::take) {
+            field.update(cx, |field, _| field.menu_shown = false).ok();
+            if let Some(action) = index.and_then(|index| actions.get_mut(index)?.take()) {
                 window.dispatch_action(action, cx);
             }
         });
+        self.menu_shown = true;
         menu(titles, position, from_keys, window, chosen, cx);
     }
 

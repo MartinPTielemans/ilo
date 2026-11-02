@@ -370,8 +370,8 @@ impl OfferPrompt {
         let items = offer.usernames.iter().map(|username| (username.clone(), true)).collect();
         let input = self.input.clone();
         let usernames = offer.usernames;
-        let chosen = Box::new(move |index: usize, window: &mut Window, cx: &mut App| {
-            if let Some(username) = usernames.get(index) {
+        let chosen = Box::new(move |index: Option<usize>, window: &mut Window, cx: &mut App| {
+            if let Some(username) = index.and_then(|index| usernames.get(index)) {
                 input.update(cx, |input, cx| input.reset(username.clone(), window, cx));
             }
         });

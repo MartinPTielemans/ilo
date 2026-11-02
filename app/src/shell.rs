@@ -693,8 +693,8 @@ struct Renaming {
     name: Entity<TextInput>,
     /// Whether the field is in the Space's card in the Library rather than in the sidebar.
     in_library: bool,
-    /// Keeps the name once the field loses GPUI's focus, as Finder does.
-    _blur: Option<Subscription>,
+    /// End the field once it loses the keyboard, to elsewhere in the window or to another window.
+    _watches: Vec<Subscription>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -3147,10 +3147,17 @@ impl Render for Shell {
                 Naming::Profile(profile) => log!("browser: rename profile {profile}"),
                 _ => {}
             }
-            renaming._blur =
-                Some(text_input::on_leave(&field, window, cx, |shell, window, cx| {
-                    shell.keep_name(window, cx)
-                }));
+            // The window loses the keyboard to an overlay, another window or another app; its
+            // page taking it is the host's to say (`keyboard_left`).
+            let left_window = cx.observe_window_activation(window, |shell, window, cx| {
+                if !window.is_window_active() {
+                    shell.keyboard_left(window, cx)
+                }
+            });
+            renaming._watches = vec![
+                text_input::on_leave(&field, window, cx, Self::name_left),
+                left_window,
+            ];
         }
         if self.picker_pending.is_some() {
             self.open_picker_when_settled(window, cx);

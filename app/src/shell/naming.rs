@@ -54,7 +54,7 @@ impl Shell {
             naming: Naming::Space(space),
             name,
             in_library: false,
-            _blur: None,
+            _watches: Vec::new(),
         });
         // As for the form.
         self.dock(cx);
@@ -96,7 +96,7 @@ impl Shell {
             naming: Naming::Space(space),
             name,
             in_library: true,
-            _blur: None,
+            _watches: Vec::new(),
         });
         self.browser.focus_ui(cx);
         self.focus_renaming = true;
@@ -116,7 +116,7 @@ impl Shell {
             naming: Naming::Tab(tab),
             name,
             in_library: false,
-            _blur: None,
+            _watches: Vec::new(),
         });
         // As for a Space's name.
         self.dock(cx);
@@ -139,7 +139,7 @@ impl Shell {
             naming: Naming::PinnedUrl(tab),
             name: field,
             in_library: false,
-            _blur: None,
+            _watches: Vec::new(),
         });
         self.dock(cx);
         self.browser.focus_ui(cx);
@@ -455,7 +455,7 @@ impl Shell {
             naming: Naming::Folder(folder),
             name,
             in_library: false,
-            _blur: None,
+            _watches: Vec::new(),
         });
         // As for a Space's name.
         self.dock(cx);
@@ -491,7 +491,7 @@ impl Shell {
             naming: Naming::Profile(profile),
             name,
             in_library: false,
-            _blur: None,
+            _watches: Vec::new(),
         });
         self.browser.focus_ui(cx);
         self.focus_renaming = true;
@@ -550,6 +550,33 @@ impl Shell {
         self.leave_name(&renaming, window, cx);
     }
 
+    /// The field lost the keyboard, to a press outside it, its page, an overlay, another window or
+    /// another app: what's typed is kept, as ↩ keeps it, but an empty field changes nothing, even a
+    /// tab's, whose ↩ gives the page's title back, and a pinned URL is undone, as both are only
+    /// meant on purpose (owner, 2026-11-02, #1414).
+    pub(super) fn name_left(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(renaming) = &self.renaming else {
+            return;
+        };
+        let empty = renaming.name.read(cx).text().trim().is_empty();
+        // check.sh waits for this line.
+        log!("browser: name field left");
+        match renaming.naming {
+            Naming::PinnedUrl(_) => self.cancel_name(window, cx),
+            _ if empty => self.cancel_name(window, cx),
+            _ => self.keep_name(window, cx),
+        }
+    }
+
+    /// The window's keyboard went from its UI, to its page or elsewhere, which GPUI's focus doesn't
+    /// see. The field's own menu takes it only for a moment, and gives it back to the field.
+    pub fn keyboard_left(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let renaming = self.renaming.as_ref();
+        if !renaming.is_some_and(|renaming| renaming.name.read(cx).menu_shown()) {
+            self.name_left(window, cx)
+        }
+    }
+
     pub(super) fn cancel_name(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(renaming) = self.renaming.take() {
             log!("browser: rename cancelled");
@@ -583,11 +610,15 @@ impl Shell {
             .on_action(
                 cx.listener(|shell, _: &CancelName, window, cx| shell.cancel_name(window, cx)),
             )
+            .on_mouse_down_out(cx.listener(|shell, _, window, cx| shell.name_left(window, cx)))
             .text_size(px(text::BODY))
             .text_color(self.palette.text(FORM_TEXT))
             .child(renaming.name.clone())
     }
 }
+
+#[cfg(test)]
+mod leave_tests;
 
 #[cfg(test)]
 mod tests {
@@ -614,23 +645,6 @@ mod tests {
         });
         cx.run_until_parked();
         (shell, cx, host)
-    }
-
-    /// Another window taking the keyboard a moment, as ilo's menu does for the field's own menu,
-    /// leaves the name a field with the keyboard, so escape still cancels once it's back.
-    #[gpui::test]
-    fn the_name_stays_a_field_while_another_window_has_the_keyboard(cx: &mut TestAppContext) {
-        let (shell, cx, host) = renaming(cx);
-        cx.simulate_input("gone");
-        cx.deactivate_window();
-        cx.update(|window, _| window.refresh());
-        cx.run_until_parked();
-        assert!(shell.read_with(cx, |shell, _| shell.renaming.is_some()), "the field closed");
-        cx.update(|window, _| window.activate_window());
-        cx.run_until_parked();
-        cx.simulate_keystrokes("escape");
-        assert!(shell.read_with(cx, |shell, _| shell.renaming.is_none()), "escape didn't cancel");
-        assert!(host.take_edits().is_empty(), "the Space was renamed");
     }
 
     /// Leaving the field for something else in its window keeps the name typed.

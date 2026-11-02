@@ -200,6 +200,8 @@ mod platform {
         pub fn host_watch_full_screen(changed: extern "C" fn(*mut c_void, bool));
         pub fn host_watch_swipes(swiped: extern "C" fn(*mut c_void, f64, f64, bool) -> bool);
         pub fn host_watch_option_taps(tapped: extern "C" fn(*mut c_void));
+        #[cfg(not(target_os = "linux"))]
+        pub fn host_watch_ui_keyboard(left: extern "C" fn(*mut c_void));
         pub fn host_after_menus(apply: extern "C" fn()) -> bool;
         pub fn host_watch_resigning_active(resigning: extern "C" fn());
         pub fn host_watch_active(became_active: extern "C" fn());
@@ -642,6 +644,31 @@ extern "C" fn key_window_changed(ui_view: *mut c_void) {
             update_window_in(id, cx, |shell, cx| shell.became_key(cx));
         });
     }
+}
+
+/// The UI of the window drawn in `ui_view` lost the keyboard to its page, or an overlay took it,
+/// which GPUI's focus doesn't see: a field in its sidebar ends, as for a click elsewhere (#1414).
+extern "C" fn ui_keyboard_left(ui_view: *mut c_void) {
+    ui_keyboard_left_in(window_with_view(ui_view));
+}
+
+/// As `ui_keyboard_left`, for the window `id`. After the event: the host can tell in a call the UI
+/// made, such as one giving the page the keyboard.
+pub(crate) fn ui_keyboard_left_in(id: bc::bc_id) {
+    let Some((handle, shell)) = WINDOWS.with(|windows| {
+        let windows = windows.try_borrow().ok()?;
+        let window = windows.iter().find(|window| window.id == id)?;
+        Some((window.handle, window.shell.clone()))
+    }) else {
+        return;
+    };
+    update_app_later(move |cx| {
+        handle
+            .update(cx, |_, window, cx| {
+                shell.update(cx, |shell, cx| shell.keyboard_left(window, cx)).ok()
+            })
+            .ok();
+    });
 }
 
 /// Changes every window's shell, from a core callback about what they all show, such as the
@@ -4664,6 +4691,8 @@ fn finish_opening(
         platform::host_watch_full_screen(full_screen_changed);
         platform::host_watch_swipes(swiped);
         platform::host_watch_option_taps(option_tapped);
+        #[cfg(not(target_os = "linux"))]
+        platform::host_watch_ui_keyboard(ui_keyboard_left);
         platform::host_watch_resigning_active(launch_picture_on_resigning);
         platform::host_watch_active(became_active);
     }
@@ -4831,6 +4860,13 @@ unsafe extern "C" fn started(_: *mut c_void) {
             pressed: |surface| {
                 if let Some(window) = window_in(surface) {
                     unsafe { bc::bc_window_ui_takes_keyboard(window) };
+                }
+            },
+            // The page is in the window's own surface, so GPUI's focus doesn't see it take the
+            // keyboard.
+            page_pressed: |surface| {
+                if let Some(window) = window_in(surface) {
+                    ui_keyboard_left_in(window);
                 }
             },
             is_ui: |surface| {
