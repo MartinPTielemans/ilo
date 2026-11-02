@@ -28,7 +28,7 @@ updates_check() {
     return 0
   fi
   if [ "$(uname)" != Darwin ]; then
-    echo "skip: updates. Only the Mac's build carries Sparkle so far."
+    echo "skip: updates. Windows' updater is only in a release build, which check.sh doesn't make."
     return 0
   fi
   serve
@@ -361,8 +361,9 @@ flatpak_updates_check() {
     fail "the new build didn't install: $(grep '^browser: update' "$log" | tail -1)"
   [ "$(flatpak info --user "$id" | sed -n 's/^ *Commit: //p')" = "$next" ] ||
     fail "Flatpak didn't install build $next beside $installed"
-  expect '^browser: update stage ready$' "the build installed didn't make the update ready"
-  expect '^browser: update sign 0 at ' "Restart to Update didn't show at the sidebar's foot"
+  # Before any command of the driver's, which expect looks after.
+  await '^browser: update stage ready$' || fail "the build installed didn't make the update ready"
+  await '^browser: update sign 0 at ' || fail "Restart to Update didn't show at the sidebar's foot"
   local sx sy sw sh
   read -r sx sy sw sh <<EOF
 $(grep '^browser: update sign 0 at ' "$log" | tail -1 | cut -d' ' -f6-)
