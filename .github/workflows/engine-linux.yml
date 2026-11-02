@@ -1,17 +1,22 @@
 # The engine on Linux: ungoogled-chromium-portablelinux's build with the core and our series
 # (engine/linux/), published as a release fetch.sh downloads. It runs on the owner's machine, which
 # keeps the tree and its build in $ILO_ENGINE_ROOT between runs, so a run recompiles only what
-# changed. Run by hand; on main when the pin, the series, the core, the Linux engine's scripts or
-# ilo's icon change, so the download keeps up with the core; and on engine-build/ branches, which
-# only those who can push here make, to try an engine change before it merges. Never on other
-# branches or pull requests, as the repository is public. core-linux.yml compiles the core alone on
-# every push.
+# changed. Run by hand; each night on main when its core or engine changed since the newest Linux
+# engine (#871), so the download keeps up with the core without a build for each merge holding the
+# runner; and on engine-build/ branches, which only those who can push here make, to try an engine
+# change before it merges. Never on other branches or pull requests, as the repository is public.
+# core-linux.yml compiles the core alone on every push.
 name: Engine on Linux
 
 on:
   workflow_dispatch:
+  # Main's core, at 00:30 UTC, before Check on Linux takes the engine at 03:23 (check-linux.yml) and
+  # before the Windows engine's night at 02:00 on the same runners.
+  schedule:
+    - cron: '30 0 * * *'
+  # These paths are the night's inputs too (.github/scripts/engine-changed.sh).
   push:
-    branches: [main, 'engine-build/**']
+    branches: ['engine-build/**']
     paths:
       - core/**
       - engine/pins.ini
@@ -23,17 +28,44 @@ on:
       - app/platform/windows/package/Assets/ilo.ico
       - .github/workflows/engine-linux.yml
 
-# One build per branch waits, the newest, so a burst of merges to main builds once, and one that
-# started finishes. Branches don't share it, or each dispatch would cancel another branch's waiting
-# build. The runner takes one job at a time, which keeps builds of the one tree in
-# $ILO_ENGINE_ROOT/linux, and its disk, to one at a time, as it does beside the Windows engine.
+# One build per branch waits, the newest, and one that started finishes. Branches don't share it,
+# or each dispatch would cancel another branch's waiting build, and the night has a group of its
+# own, so it never replaces a build dispatched on main that's waiting, nor one of those it. The
+# runner takes one job at a time, which keeps builds of the one tree in $ILO_ENGINE_ROOT/linux, and
+# its disk, to one at a time, as it does beside the Windows engine.
 concurrency:
-  group: engine-linux-${{ github.ref }}
+  group: engine-linux-${{ github.event_name == 'schedule' && 'night' || github.ref }}
   cancel-in-progress: false
 
 jobs:
-  build:
+  # On GitHub's runners, so a night with nothing to build never takes the engine's runner. A push or
+  # a dispatch always builds.
+  changes:
+    name: Changes
     if: github.repository == 'MartinPTielemans/ilo'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+    steps:
+      - if: github.event_name == 'schedule'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: decide
+        run: |
+          status=0
+          if [ "$GITHUB_EVENT_NAME" = schedule ]; then
+            .github/scripts/engine-changed.sh linux > "$RUNNER_TEMP/changed" || status=$?
+            tee -a "$GITHUB_STEP_SUMMARY" < "$RUNNER_TEMP/changed"
+          fi
+          if [ "$status" = 3 ]; then echo build=false; else echo build=true; fi >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: [self-hosted, linux, x64, ilo-engine]
     # The first build takes 6 to 10 hours on its 8 cores; a point release or a change to the core,
     # much less.

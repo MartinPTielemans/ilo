@@ -5,7 +5,7 @@
 ## Cutting a release
 
 1. Set the version in `app/Cargo.toml` and merge it to main.
-2. Make sure the Windows engine exists for that commit. It builds nightly, so run Engine on Windows (cross-compiled) on it, `gh workflow run engine-windows-cross.yml --ref main` with main at that commit, and wait for its release `engine-windows-<commit>`. The Mac and Linux engines must exist for the commit too; each OS's job stops without one.
+2. Make sure the Linux and Windows engines exist for that commit. They build nightly, so run Engine on Linux and Engine on Windows (cross-compiled) on it, `gh workflow run engine-linux.yml --ref main` and `gh workflow run engine-windows-cross.yml --ref main` with main at that commit, and wait for their releases `engine-linux-<commit>` and `engine-windows-<commit>`. The Mac engine must exist for the commit too; each OS's job stops without one, or packs an older core.
 3. Write the release's entry in [ilo-site](https://github.com/MartinPTielemans/ilo-site)'s `src/changelog.ts` from the notes, and merge it before tagging: each update's notes and its first launch open `/changelog#<version>` on the site (`tools/appcast.sh`).
 4. Tag the commit with the release notes as the tag's message, and push the tag:
 
