@@ -14,6 +14,7 @@
 #include "base/auto_reset.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -21,6 +22,7 @@
 #include "base/numerics/safe_conversions.h"
 #include "base/scoped_multi_source_observation.h"
 #include "base/scoped_observation.h"
+#include "base/task/single_thread_task_runner.h"
 #include "browser_core/platform/focus_ring_aura.h"
 #include "chrome/installer/util/install_util.h"
 #include "chrome/installer/util/shell_util.h"
@@ -160,9 +162,26 @@ class PaneKeyboard : public aura::client::FocusChangeObserver,
         gained_focus && GetFocus() != hwnd_ && GetActiveWindow() == GetAncestor(hwnd_, GA_ROOT);
     VLOG(1) << "pane " << hwnd_ << " focuses " << Describe(gained_focus)
             << (take ? ", taking the keyboard" : "");
-    if (take) {
+    if (!take) {
+      return;
+    }
+    {
       base::AutoReset<bool> taking(&taking_, true);
       SetFocus(hwnd_);
+    }
+    // Windows gives a minimized window's keyboard to the window itself, not a child, so a page
+    // focused while its window is minimized and still the active one has aura's focus without the
+    // keyboard. Focused again, aura changes nothing, so once the window was back neither a click in
+    // the page nor the core gave its HWND the keyboard, and the keys went to the window, where no
+    // shortcut is heard (#1464). The page lets go of aura's focus too, as it does losing the
+    // keyboard, so the next focus takes it. Posted, as aura ignores a focus change made while it
+    // tells of one.
+    if (!HasKeyboard()) {
+      VLOG(1) << "pane " << hwnd_ << " couldn't take the keyboard, which " << GetFocus() << " "
+              << ClassOf(GetFocus()) << " has";
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(&PaneKeyboard::LetGoWithoutKeyboard, weak_factory_.GetWeakPtr()));
     }
   }
 
@@ -223,12 +242,25 @@ class PaneKeyboard : public aura::client::FocusChangeObserver,
     observation_.Reset();
   }
 
+  bool HasKeyboard() const {
+    HWND focus = GetFocus();
+    return focus && (focus == hwnd_ || IsChild(hwnd_, focus));
+  }
+
+  void LetGoWithoutKeyboard() {
+    if (client_ && !HasKeyboard()) {
+      VLOG(1) << "pane " << hwnd_ << " blurs its page, without the keyboard";
+      client_->FocusWindow(nullptr);
+    }
+  }
+
   raw_ptr<views::Widget> widget_;
   HWND hwnd_;
   raw_ptr<aura::client::FocusClient> client_;
   base::RepeatingClosure took_keyboard_;
   bool taking_ = false;
   base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
+  base::WeakPtrFactory<PaneKeyboard> weak_factory_{this};
 };
 
 // A child widget, one HWND, holding one pane's page and its docked DevTools, or the side panel.
