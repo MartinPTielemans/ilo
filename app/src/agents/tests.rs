@@ -2376,6 +2376,47 @@ mod tasks {
         assert_eq!(*browser.deleted.borrow(), vec![102]);
     }
 
+    /// The Archive lists the dismissed tasks, the last to leave the foot first, each with how it
+    /// ended and when. Delete from Archive takes one out of the list and out of ⇧⌘T's reach, and
+    /// ⌘Z's Undelete puts it back.
+    #[gpui::test]
+    fn the_archive_lists_dismissed_tasks_until_one_is_deleted(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let first = start(&agents, "One", cx);
+        let second = start(&agents, "Two", cx);
+        let ended = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        agents.update(cx, |agents, _| {
+            let task = agents.task_mut(&first).unwrap();
+            task.state = State::Done { result: "Did one.".into(), summary: None, tabs: Vec::new() };
+            task.ended = Some(ended);
+            agents.task_mut(&second).unwrap().state = State::Working;
+        });
+        agents.update(cx, |agents, cx| agents.dismiss_task(&first, cx));
+        agents.update(cx, |agents, cx| agents.dismiss_task(&second, cx));
+        let listed = |agents: &Entity<Agents>, cx: &mut TestAppContext| -> Vec<(String, String, Dot)> {
+            agents.read_with(cx, |agents, cx| {
+                let tasks = agents.archived_tasks(cx).into_iter();
+                tasks.map(|task| (task.agent.to_string(), task.about.to_string(), task.dot)).collect()
+            })
+        };
+        let now = listed(&agents, cx);
+        assert_eq!(now.iter().map(|(agent, ..)| agent.clone()).collect::<Vec<_>>(), [second.clone(), first.clone()]);
+        let at = crate::agents::local_time(1_700_000_000);
+        assert_eq!(now[1], (first.clone(), format!("Claude · Done {at}"), Dot::Done));
+        // Dismissed while it worked, it stopped then.
+        assert!(now[0].1.starts_with("Claude · Stopped "), "{}", now[0].1);
+        assert_eq!(now[0].2, Dot::Ended);
+
+        agents.update(cx, |agents, cx| agents.task_action(&second, TaskAction::Delete, cx));
+        assert_eq!(listed(&agents, cx).len(), 1);
+        assert_eq!(agents.update(cx, |agents, cx| agents.restore_task(None, cx)), Some(first.clone()));
+        assert_eq!(agents.update(cx, |agents, cx| agents.restore_task(None, cx)), None, "⇧⌘T brought back a deleted task");
+        agents.update(cx, |agents, cx| agents.task_action(&second, TaskAction::Undelete, cx));
+        assert_eq!(listed(&agents, cx).len(), 1);
+        assert_eq!(agents.update(cx, |agents, cx| agents.restore_task(None, cx)), Some(second.clone()));
+        assert!(listed(&agents, cx).is_empty());
+    }
+
     #[gpui::test]
     fn the_spaces_a_run_before_left_go_at_launch(cx: &mut TestAppContext) {
         let (agents, browser) = ready(None, cx);

@@ -204,6 +204,9 @@ pub(super) enum Edit {
     /// Brings back the agent task ✕ dismissed, by its agent's id (Agent task).
     RestoreTask(SharedString),
     DismissTask(SharedString),
+    /// Puts back in the Archive the task Delete from Archive took out, which Redo deletes again.
+    UndeleteTask(SharedString),
+    DeleteTask(SharedString),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -287,7 +290,7 @@ impl Edit {
                 back.rekey(from, to);
             }
             Edit::ReopenPreview(closed) | Edit::ClosePreview(closed) => id(&mut closed.over),
-            Edit::RestoreTask(_) | Edit::DismissTask(_) => {}
+            Edit::RestoreTask(_) | Edit::DismissTask(_) | Edit::UndeleteTask(_) | Edit::DeleteTask(_) => {}
             Edit::Set(prop, _) => match prop {
                 Prop::TabName(each)
                 | Prop::TabIcon(each)
@@ -330,6 +333,14 @@ impl Edit {
             Edit::DismissTask(agent) => {
                 shell.browser.task(agent.clone(), crate::agents::task::TaskAction::Dismiss, cx);
                 Some(Edit::RestoreTask(agent))
+            }
+            Edit::UndeleteTask(agent) => {
+                shell.browser.task(agent.clone(), crate::agents::task::TaskAction::Undelete, cx);
+                Some(Edit::DeleteTask(agent))
+            }
+            Edit::DeleteTask(agent) => {
+                shell.browser.task(agent.clone(), crate::agents::task::TaskAction::Delete, cx);
+                Some(Edit::UndeleteTask(agent))
             }
             Edit::Reopen { tabs: closed, show } => {
                 let mut tabs = Vec::new();
@@ -672,11 +683,7 @@ impl Shell {
     pub(super) fn reopen_closed(&mut self, cx: &mut Context<Self>) {
         // The task dismissed last, unless a tab has closed since (Agent task).
         if let Some((agent, _)) = self.closed_task.take() {
-            let restore = Edit::RestoreTask(agent.clone());
-            self.history.undo.retain(|entry| entry.edit != restore);
-            self.browser.task(agent, crate::agents::task::TaskAction::Restore, cx);
-            self.send_edit_titles(false, cx);
-            return;
+            return self.bring_back_task(agent, cx);
         }
         if let Some(closed) = self.closed_preview.clone()
             && self.reopen_preview(&closed, "reopen-closed-tab", cx)
@@ -697,6 +704,18 @@ impl Shell {
             }
         }
         self.browser.reopen_closed_tab(cx);
+    }
+
+    /// Brings the dismissed task `agent` back, by ⇧⌘T or from the Archive, which takes its
+    /// dismissal off the history, as it has nothing left to undo.
+    pub(super) fn bring_back_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+        if self.closed_task.as_ref().is_some_and(|(closed, _)| *closed == agent) {
+            self.closed_task = None;
+        }
+        let restore = Edit::RestoreTask(agent.clone());
+        self.history.undo.retain(|entry| entry.edit != restore);
+        self.browser.task(agent, crate::agents::task::TaskAction::Restore, cx);
+        self.send_edit_titles(false, cx);
     }
 
     // What the user did, each remembered with how to take it back. The calls to the browser are

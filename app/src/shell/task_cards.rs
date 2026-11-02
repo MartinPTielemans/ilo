@@ -606,6 +606,12 @@ impl Shell {
             self.close_task(cx);
         }
         self.sync_foot(took, cx);
+        // The task the Archive brought back shows its conversation as its card comes back.
+        if let Some(agent) = self.show_restored.take()
+            && self.task_cards.iter().any(|card| card.agent == agent)
+        {
+            self.show_task(agent, cx);
+        }
         cx.notify();
     }
 
@@ -631,6 +637,17 @@ impl Shell {
     /// private window only its own Spaces' tasks, as with its players.
     fn shows_card(&self, card: &Card) -> bool {
         self.spaces.iter().any(|space| space.id == card.home) || !self.private
+    }
+
+    /// A finished task's mark at rest, as its card shows it: Done's tick, or the grey ring of one
+    /// stopped or failed, in the glyph's box.
+    pub(super) fn status_mark(&self, dot: Dot) -> impl IntoElement + use<> {
+        let now = Instant::now();
+        let drawn = Glyph::new(State::from(dot), now, true).drawn(now);
+        let signal: Hsla = rgb(STATUS_AGENT).into();
+        let stopped = self.palette.text(STOPPED);
+        canvas(|_, _, _| {}, move |bounds, _, window, _| glyph::paint(&drawn, bounds, signal, stopped, window))
+            .size(px(GLYPH))
     }
 
     /// Brings the plates to the cards and the slot: those no longer wanted fold away, new ones

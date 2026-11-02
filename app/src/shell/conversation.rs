@@ -29,7 +29,9 @@ use super::{
     row_spring,
 };
 use crate::agents::Status;
-use crate::agents::task::{Card, Conversation, Dot, Line, Opens, TaskAction, Trace, TraceItem, TraceStep};
+use crate::agents::task::{
+    ArchivedTask, Card, Conversation, Dot, Line, Opens, TaskAction, Trace, TraceItem, TraceStep,
+};
 use crate::palette::{STATE_HOVERED, STATE_PRESSED};
 use crate::text_input::TextInput;
 use crate::tokens::find_bar::NOT_FOUND;
@@ -88,13 +90,14 @@ pub(super) fn page_chip(
         .children(key.map(|key| div().text_color(palette.text(KEY_COLOR)).child(key)))
 }
 
-/// Sends the windows' `shells` what the Agents show as they change: their status, the task cards
-/// and, to a window showing a task's conversation, that conversation, as `conversation` makes it
-/// for the task's agent. Each is made before any shell changes, since making one reads its pages
+/// Sends the windows' `shells` what the Agents show as they change: their status, the task cards,
+/// the tasks in the Archive and, to a window showing a task's conversation, that conversation, as
+/// `conversation` makes it for the task's agent. Each is made before any shell changes, since making one reads its pages
 /// from a shell (the core's `Browser::tab`), which can't be read while it's being changed.
 pub fn send_agents(
     status: Vec<Status>,
     cards: Vec<Card>,
+    archived: Vec<ArchivedTask>,
     conversation: impl Fn(&str, &gpui::App) -> Option<Conversation>,
     shells: &[WeakEntity<Shell>],
     cx: &mut gpui::App,
@@ -110,6 +113,7 @@ pub fn send_agents(
     for (shell, talk) in shells.into_iter().zip(talks) {
         shell.update(cx, |shell, cx| {
             shell.set_agent_status(status.clone(), cx);
+            shell.set_archived_tasks(archived.clone(), cx);
             shell.set_task_cards(cards.clone(), cx);
             // Only a window that still shows the task's conversation is sent it.
             if let Some((agent, made)) = talk

@@ -219,12 +219,17 @@ pub struct Task {
     /// The model it runs on, by name, or empty for its CLI's own default.
     pub model: SharedString,
     pub state: State,
-    /// When it finished, for its conversation.
+    /// When it finished, done, stopped or failed, for its conversation and the Archive.
     pub ended: Option<SystemTime>,
     pub messages: Vec<Message>,
     /// Its steps, oldest first.
     pub trace: Vec<Traced>,
     pub dismissed: bool,
+    /// When it last left the foot for the Archive, which lists it by then. Kept in memory only.
+    pub left: Option<SystemTime>,
+    /// Deleted from the Archive: listed nowhere and out of ⇧⌘T's reach, until ⌘Z brings it back
+    /// or it goes for good with the dismissed tasks past the last few.
+    pub deleted: bool,
     token: String,
     process: Option<Process>,
     /// The ask's call, which waits for the user's answer, with the number it takes among the
@@ -331,6 +336,23 @@ pub enum TaskAction {
     Open,
     /// A page's own Open <site>, from the strip under it.
     OpenTab(u64),
+    /// The Archive's Delete from Archive, and ⌘Z's undoing of it.
+    Delete,
+    Undelete,
+}
+
+/// A task the user dismissed, as the Library's Archived Tabs lists it among the tabs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ArchivedTask {
+    pub agent: SharedString,
+    pub title: SharedString,
+    pub asked: SharedString,
+    /// Done's tick, or Stopped's and Failed's grey dot, as its card had.
+    pub dot: Dot,
+    /// Its CLI, how it ended and when, and the pages it still holds: "Claude · Done 13:31 · 1 page".
+    pub about: SharedString,
+    /// When it left the foot, in milliseconds since the Unix epoch, as the archive dates its tabs.
+    pub left: f64,
 }
 
 /// Open's words, for the tabs a task left the user: its site for one, and how many for several.
@@ -393,6 +415,39 @@ impl Agents {
             .collect()
     }
 
+    /// The tasks in the Archive, the last to leave the foot first, as `dismissed` keeps them.
+    pub fn archived_tasks(&self, cx: &App) -> Vec<ArchivedTask> {
+        (self.tasks.dismissed.iter().rev())
+            .filter_map(|agent| self.task(agent))
+            .filter(|task| task.dismissed && !task.deleted)
+            .map(|task| {
+                let (words, dot) = match task.state {
+                    State::Done { .. } => ("Done", Dot::Done),
+                    State::Failed { .. } => ("Failed", Dot::Ended),
+                    _ => ("Stopped", Dot::Ended),
+                };
+                let mut about = format!("{} · {words}", task.cli.name());
+                if let Some(at) = task.ended.or(task.left) {
+                    about = format!("{about} {}", super::local_time(seconds(at)));
+                }
+                match self.open_tabs(task, cx).len() {
+                    0 => {}
+                    1 => about.push_str(" · 1 page"),
+                    pages => about.push_str(&format!(" · {pages} pages")),
+                }
+                let left = task.left.and_then(|at| at.duration_since(SystemTime::UNIX_EPOCH).ok());
+                ArchivedTask {
+                    agent: task.agent.clone().into(),
+                    title: task.title.clone(),
+                    asked: task.asked.clone(),
+                    dot,
+                    about: about.into(),
+                    left: left.map_or(0., |since| since.as_secs_f64() * 1000.),
+                }
+            })
+            .collect()
+    }
+
     /// Does what the user did to `agent`'s task. Returns the tab Open moved into the user's
     /// Space, for the window to show, and the task Restore brought back.
     pub fn task_action(
@@ -413,6 +468,8 @@ impl Agents {
             TaskAction::Stop => self.stop_task(agent, cx),
             TaskAction::Open => return (self.open_result(agent, None, cx), None),
             TaskAction::OpenTab(tab) => return (self.open_result(agent, Some(tab), cx), None),
+            TaskAction::Delete => self.delete_task(agent, true, cx),
+            TaskAction::Undelete => self.delete_task(agent, false, cx),
         }
         (None, None)
     }
@@ -728,6 +785,8 @@ impl Agents {
             messages: Vec::new(),
             trace: Vec::new(),
             dismissed: false,
+            left: None,
+            deleted: false,
             token: super::random_token(),
             process: None,
             asking: None,
@@ -922,6 +981,7 @@ impl Agents {
         }
         if let Some(task) = self.task_mut(agent) {
             task.state = state;
+            task.ended = Some(SystemTime::now());
             task.waiting = None;
             task.writing = None;
         }
@@ -976,6 +1036,7 @@ impl Agents {
             return;
         }
         task.state = State::Stopped;
+        task.ended = Some(SystemTime::now());
         task.asking = None;
         task.writing = None;
         task.waiting = None;
@@ -1011,24 +1072,43 @@ impl Agents {
         self.stop_task(agent, cx);
         let Some(task) = self.task_mut(agent) else { return };
         task.dismissed = true;
+        task.deleted = false;
+        task.left = Some(SystemTime::now());
         // check.sh reads this line.
         log!("browser: task {agent} dismissed");
         self.tasks.dismissed.retain(|each| each != agent);
         self.tasks.dismissed.push_back(agent.to_string());
+        // Those deleted from the Archive go first, then the oldest.
         while self.tasks.dismissed.len() > KEPT {
-            if let Some(old) = self.tasks.dismissed.pop_front() {
+            let deleted = (self.tasks.dismissed.iter())
+                .position(|each| self.task(each).is_some_and(|task| task.deleted));
+            if let Some(old) = self.tasks.dismissed.remove(deleted.unwrap_or(0)) {
                 self.drop_task(&old, cx);
             }
         }
         cx.notify();
     }
 
+    /// Delete from Archive: the dismissed task leaves the Archive and ⇧⌘T's reach, or with
+    /// `deleted` false, ⌘Z brings it back there.
+    fn delete_task(&mut self, agent: &str, deleted: bool, cx: &mut Context<Self>) {
+        let Some(task) = self.task_mut(agent).filter(|task| task.dismissed) else { return };
+        task.deleted = deleted;
+        // check.sh reads this line.
+        log!("browser: task {agent} {}", if deleted { "deleted" } else { "undeleted" });
+        cx.notify();
+    }
+
     /// Brings a dismissed task back to its card: the one named, or the last dismissed.
     pub fn restore_task(&mut self, agent: Option<&str>, cx: &mut Context<Self>) -> Option<String> {
+        let deleted = |each: &String| self.task(each).is_none_or(|task| task.deleted);
         let agent = match agent {
             Some(agent) => agent.to_string(),
-            None => self.tasks.dismissed.back()?.clone(),
+            None => self.tasks.dismissed.iter().rev().find(|each| !deleted(each))?.clone(),
         };
+        if deleted(&agent) {
+            return None;
+        }
         self.tasks.dismissed.retain(|each| *each != agent);
         let task = self.task_mut(&agent)?;
         task.dismissed = false;

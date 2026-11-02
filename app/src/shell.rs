@@ -1363,6 +1363,11 @@ pub struct Shell {
     /// The task ✕ dismissed last, which ⇧⌘T brings back unless a tab has closed since, and when,
     /// in milliseconds since the Unix epoch, as the archive dates what closed.
     closed_task: Option<(SharedString, f64)>,
+    /// The tasks in the Archive, the last to leave the foot first, which Archived Tabs lists among
+    /// the tabs.
+    archived_tasks: Vec<crate::agents::task::ArchivedTask>,
+    /// The task the Archive brought back, whose conversation opens once its card is back.
+    show_restored: Option<SharedString>,
     /// The task's conversation shown in the page's place, and whether its field takes the keyboard
     /// once drawn (Agent task).
     talk: Option<conversation::Talk>,
@@ -1659,6 +1664,8 @@ impl Shell {
             task_cards: Vec::new(),
             foot: task_cards::Foot::default(),
             closed_task: None,
+            archived_tasks: Vec::new(),
+            show_restored: None,
             talk: None,
             focus_talk: false,
             agent_status: Vec::new(),

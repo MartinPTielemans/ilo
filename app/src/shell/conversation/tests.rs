@@ -120,7 +120,7 @@ fn the_agents_send_a_shown_conversation_made_before_its_shell_changes(cx: &mut T
             reads.upgrade()?.read(cx).talk_agent()?;
             (agent == "task-1").then(|| conversation(1))
         };
-        super::super::send_agents(Vec::new(), vec![card()], made, &[weak.clone()], cx);
+        super::super::send_agents(Vec::new(), vec![card()], Vec::new(), made, &[weak.clone()], cx);
     });
     assert!(host.take().contains(&"task picture 30".to_string()), "the conversation wasn't sent");
 }
