@@ -150,6 +150,7 @@ fn codexs_thread_has_the_browser_alone() {
     assert_eq!(config["mcp_servers.ilo"]["enabled_tools"], json!(["open_tab", "finish"]));
     assert_eq!(config["mcp_servers.ilo"]["tools"]["finish"]["approval_mode"], json!("approve"));
     assert_eq!(config["mcp_servers.ilo"]["omit_tools_from"], json!(["code_mode"]));
+    assert_eq!(config["mcp_servers.ilo"]["supports_parallel_tool_calls"], json!(true));
     assert_eq!(config["agents.max_depth"], json!(0));
     assert_eq!(config["skills.include_instructions"], json!(false));
     assert_eq!(params["approvalPolicy"], json!("never"));

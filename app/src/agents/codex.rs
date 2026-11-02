@@ -303,6 +303,9 @@ pub fn thread_params(launch: &Launch) -> Value {
             "required": true,
             // ask waits for the user, who may take a while.
             "tool_timeout_sec": 86_400,
+            // Otherwise Codex sends a turn's calls one after another; the server runs calls on
+            // different tabs at once and keeps each tab's in order.
+            "supports_parallel_tool_calls": true,
         }),
     );
     let mut params = json!({
