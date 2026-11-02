@@ -11,8 +11,8 @@ use super::*;
 struct Recorder(RefCell<Vec<String>>);
 
 impl Host for Recorder {
-    fn show(&self, left: f32, top: f32) {
-        self.0.borrow_mut().push(format!("show {left} {top}"));
+    fn show(&self, window: u64, left: f32, top: f32) {
+        self.0.borrow_mut().push(format!("show {left} {top} over {window}"));
     }
 
     fn hide(&self) {
@@ -30,8 +30,13 @@ fn tip(text: &str) -> Tip {
     Tip::named(text.to_string().into())
 }
 
+/// The pointer comes onto what says `text` in the first browser window.
 fn hover_on(cx: &mut TestAppContext, text: &str, anchor: Anchor) {
-    cx.update(|cx| hover(tip(text), anchor, cx));
+    hover_in(cx, 1, text, anchor);
+}
+
+fn hover_in(cx: &mut TestAppContext, window: u64, text: &str, anchor: Anchor) {
+    cx.update(|cx| hover(window, tip(text), anchor, cx));
     cx.run_until_parked();
 }
 
@@ -44,11 +49,16 @@ fn width(cx: &mut TestAppContext, text: &str) -> f32 {
     measured(cx, &tip(text)).width
 }
 
-/// Where a tooltip saying `text` goes for `anchor`, as the host is told.
+/// Where a tooltip saying `text` goes for `anchor` in the first browser window, as the host is
+/// told.
 fn placed(cx: &mut TestAppContext, text: &str, anchor: Anchor) -> String {
+    placed_in(cx, 1, text, anchor)
+}
+
+fn placed_in(cx: &mut TestAppContext, window: u64, text: &str, anchor: Anchor) -> String {
     let width = width(cx, text);
     let (left, top) = place(anchor, (width, HEIGHT));
-    format!("show {left} {top}")
+    format!("show {left} {top} over {window}")
 }
 
 fn after(cx: &mut TestAppContext, host: &Recorder, time: Duration) -> Vec<String> {
@@ -165,8 +175,32 @@ fn each_tooltip_is_placed_from_its_own_width_whichever_was_before_it(cx: &mut Te
         let mut shown = host.0.take();
         shown.extend(after(cx, &host, DELAY));
         let want = anchor.x.max(EDGE_INSET);
-        assert_eq!(shown.last().unwrap(), &format!("show {want} {}", 131. + GAP), "{text}");
+        let over = format!("show {want} {} over 1", 131. + GAP);
+        assert_eq!(shown.last().unwrap(), &over, "{text}");
     }
+}
+
+/// With two browser windows, the tooltip shows over the one the pointer is in, whichever is in
+/// front: its tile's tooltip waits there, and one showing goes over to the next window's at once
+/// (#1432).
+#[gpui::test]
+fn it_shows_over_the_window_the_pointer_is_in(cx: &mut TestAppContext) {
+    let host = open_tooltip(cx);
+    hover_in(cx, 2, "Docs", tile_a());
+    assert_eq!(after(cx, &host, DELAY), [placed_in(cx, 2, "Docs", tile_a())]);
+    cx.update(dismiss);
+    host.0.take();
+    hover_in(cx, 1, "Mail", tile_b());
+    assert_eq!(host.0.take(), [placed_in(cx, 1, "Mail", tile_b())]);
+    hover_in(cx, 2, "Docs", tile_a());
+    assert_eq!(host.0.take(), [placed_in(cx, 2, "Docs", tile_a())]);
+    // One waiting for its delay in one window shows in the window the pointer went to.
+    cx.update(dismiss);
+    after(cx, &host, GRACE * 2);
+    hover_in(cx, 1, "Mail", tile_b());
+    after(cx, &host, DELAY / 2);
+    hover_in(cx, 2, "Docs", tile_a());
+    assert_eq!(after(cx, &host, DELAY), [placed_in(cx, 2, "Docs", tile_a())]);
 }
 
 #[gpui::test]

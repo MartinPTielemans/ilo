@@ -169,9 +169,9 @@ enum Answer {
 
 /// What the dialog asks of its window.
 pub trait Host {
-    /// Shows the dialog's window over all of the browser window, or over `over` in it, a tab's
-    /// card, with the keyboard.
-    fn show(&self, over: Option<Bounds<Pixels>>);
+    /// Shows the dialog's window over all of browser window `window`, the one whose question it
+    /// is, else the one in front, or over `over` in it, a tab's card, with the keyboard.
+    fn show(&self, window: Option<u64>, over: Option<Bounds<Pixels>>);
     /// Hides it, and the browser window gets the keyboard back.
     fn hide(&self);
 }
@@ -235,6 +235,9 @@ impl Source {
 struct Request {
     question: Question,
     source: Source,
+    /// The browser window whose question it is, as one behind another can ask from its context
+    /// menu (#1432), else None for the app's, which go over the one in front.
+    window: Option<u64>,
     /// The tab's card a page's question goes over, and the radius of its corners.
     over: Option<(Bounds<Pixels>, f32)>,
     /// A page's question's tab and id, by which it's asked again as its card moves.
@@ -378,7 +381,7 @@ pub fn ask_in(
 ) {
     let question = Question { on_return, ..destructive(message, detail, action) };
     let confirmed = Box::new(move |_, cx: &mut App| confirmed(cx));
-    dialog.update(cx, |dialog, cx| dialog.pose(question, confirmed, window, cx));
+    dialog.update(cx, |dialog, cx| dialog.pose(None, question, confirmed, window, cx));
 }
 
 /// Whether a window's own `dialog` is asking, or leaving after the answer.
@@ -414,21 +417,23 @@ pub fn can_pose(cx: &App) -> bool {
     cx.try_global::<DialogWindow>().is_some() && !asking(cx)
 }
 
-/// Asks `message`, with `detail` under it, and calls `confirmed` if the user chooses `action`
-/// over Cancel, once the dialog has gone. The action is red, as what it does is hard to take
-/// back. Nothing while another dialog shows.
+/// Asks `message`, with `detail` under it, over browser `window` or the one in front, and calls
+/// `confirmed` if the user chooses `action` over Cancel, once the dialog has gone. The action is
+/// red, as what it does is hard to take back. Nothing while another dialog shows.
 pub fn ask(
+    window: Option<u64>,
     message: String,
     detail: String,
     action: &'static str,
     confirmed: Box<dyn FnOnce(&mut App)>,
     cx: &mut App,
 ) {
-    ask_returning(message, detail, action, Return::Action, confirmed, cx);
+    ask_returning(window, message, detail, action, Return::Action, confirmed, cx);
 }
 
 /// `ask`, with ↩ answering `on_return`, as `ask_in` has it.
 pub fn ask_returning(
+    window: Option<u64>,
     message: String,
     detail: String,
     action: &'static str,
@@ -437,7 +442,7 @@ pub fn ask_returning(
     cx: &mut App,
 ) {
     let question = Question { on_return, ..destructive(message, detail, action) };
-    pose(question, Box::new(move |_, cx| confirmed(cx)), cx);
+    pose(window, question, Box::new(move |_, cx| confirmed(cx)), cx);
 }
 
 /// Whether to do `action`, in red, or cancel.
@@ -457,13 +462,19 @@ fn destructive(message: String, detail: String, action: &'static str) -> Questio
     }
 }
 
-/// Asks `question`, and calls `confirmed` with what its fields hold if the user chooses its action,
-/// once the dialog has gone. Nothing while another dialog shows.
-pub fn pose(question: Question, confirmed: Box<dyn FnOnce(Vec<String>, &mut App)>, cx: &mut App) {
+/// Asks `question` over browser `over` or the one in front, and calls `confirmed` with what its
+/// fields hold if the user chooses its action, once the dialog has gone. Nothing while another
+/// dialog shows.
+pub fn pose(
+    over: Option<u64>,
+    question: Question,
+    confirmed: Box<dyn FnOnce(Vec<String>, &mut App)>,
+    cx: &mut App,
+) {
     let Some(window) = cx.try_global::<DialogWindow>().map(|dialog| dialog.0) else {
         return;
     };
-    window.update(cx, |dialog, window, cx| dialog.pose(question, confirmed, window, cx)).ok();
+    window.update(cx, |dialog, window, cx| dialog.pose(over, question, confirmed, window, cx)).ok();
 }
 
 /// Asks Chrome's `question` once the dialog that shows has gone, in place of any of Chrome's
@@ -504,7 +515,8 @@ fn ask_granting(
         return;
     };
     let answered = Box::new(move |reply: Reply, cx: &mut App| answered(reply.accept, cx));
-    let mut request = Some(Request { question, source, over: None, page: None, answered });
+    let mut request =
+        Some(Request { question, source, window: None, over: None, page: None, answered });
     window
         .update(cx, |dialog, window, cx| {
             dialog.withdraw(source, cx);
@@ -552,7 +564,9 @@ pub fn ask_page(
         return;
     };
     let page = Some((tab, id));
-    let request = Request { question, source: Source::Page, over: Some(over), page, answered };
+    // Over the window in front, which the page's is before it asks (main.rs).
+    let source = Source::Page;
+    let request = Request { question, source, window: None, over: Some(over), page, answered };
     window
         .update(cx, |dialog, window, cx| {
             if let Some(asked) = &mut dialog.asked
@@ -560,7 +574,7 @@ pub fn ask_page(
                 && asked.answered_at.is_none()
             {
                 asked.over = Some(over);
-                dialog.host.show(Some(over.0));
+                dialog.host.show(None, Some(over.0));
                 cx.notify();
                 return;
             }
@@ -602,6 +616,7 @@ impl Dialog {
 
     fn pose(
         &mut self,
+        over: Option<u64>,
         question: Question,
         confirmed: Box<dyn FnOnce(Vec<String>, &mut App)>,
         window: &mut Window,
@@ -615,12 +630,13 @@ impl Dialog {
                 confirmed(reply.texts, cx);
             }
         });
-        let request = Request { question, source: Source::User, over: None, page: None, answered };
+        let source = Source::User;
+        let request = Request { question, source, window: over, over: None, page: None, answered };
         self.show(request, window, cx);
     }
 
     fn show(&mut self, request: Request, window: &mut Window, cx: &mut Context<Self>) {
-        let Request { mut question, source, over, page, answered } = request;
+        let Request { mut question, source, window: asker, over, page, answered } = request;
         // check.sh reads this line.
         log!("browser: dialog shown {}", question.message);
         let (also, also_chosen) = question.also.take().unzip();
@@ -664,7 +680,7 @@ impl Dialog {
             drawn_press: None,
             buttons_drawn: Rc::default(),
         });
-        self.host.show(over.map(|(over, _)| over));
+        self.host.show(asker, over.map(|(over, _)| over));
         cx.notify();
     }
 

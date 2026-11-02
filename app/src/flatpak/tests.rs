@@ -269,7 +269,7 @@ fn the_wait_for_the_profile_runs_the_build_with_its_arguments() {
 struct DialogWindow;
 
 impl crate::dialog::Host for DialogWindow {
-    fn show(&self, _: Option<gpui::Bounds<gpui::Pixels>>) {}
+    fn show(&self, _: Option<u64>, _: Option<gpui::Bounds<gpui::Pixels>>) {}
     fn hide(&self) {}
 }
 

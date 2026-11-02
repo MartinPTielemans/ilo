@@ -1,5 +1,10 @@
 # Links from other apps, as `open` sends them on the Mac, the way a link clicked in Mail does, and
-# off it as a second launch with the link does, which `xdg-open` makes on Linux. With the app
+# off it as a second launch with the link does, which `xdg-open` makes on Linux and the command the
+# installer registers for links on Windows. Each opens once: Chrome opens no tab of its own for it
+# beside the one the app places (#1413). A launch with no link, from the Start menu, the taskbar,
+# a shortcut or the Dock, brings the minimized window back and to the front, as the system says:
+# Windows' IsIconic and GetForegroundWindow, the X server's mapped and active windows under Xvfb,
+# and AppKit's ordered and key windows on the Mac. With the app
 # running, one opens in a Little ilo window of its own for the Space the window in front shows, and
 # loads there, as Settings › Links sends everything else there until the user picks another, and
 # the same link again brings that window back to the front. Sent
@@ -21,6 +26,43 @@
 serve
 log="$out/links.log"
 step=0
+# On Windows another app's link, Teams' or `start https://…`'s, runs the command ilo.iss registers
+# for http and https: chrome.exe with these switches, then the link. Chromium reads none as a
+# switch, so chrome.exe hands the link straight to the browser running on the engine's own profile
+# folder, %LOCALAPPDATA%\ilo\User Data, the prod build's, before the core has added the
+# --no-startup-window that keeps Chrome from opening it too (#1413). Where that folder isn't the
+# user's ilo's, as on CI, the run takes it, so its links go that way, and gives it back after.
+# Elsewhere the run keeps its own and names it in each link's command, which only Chrome's slower
+# way takes, as an ilo of the user's could be the one running on the engine's.
+fast=
+if windows; then
+  switches=$(sed -n 's/^Root: HKCU; Subkey: "Software\\Classes\\IloHTML\\shell\\open\\command";.* ValueData: """{app}\\chrome\.exe"" \(.*\) %1"$/\1/p' \
+    platform/windows/package/ilo.iss)
+  [ -n "$switches" ] || fail "ilo.iss registers no command for links"
+  # A launch with no link runs chrome.exe alone, as the Start menu's shortcut does and the command
+  # ilo.iss registers to start the browser itself.
+  grep -q '^Root: HKCU; Subkey: "Software\\Clients\\StartMenuInternet\\{#AppName}\\shell\\open\\command"; ValueType: string; ValueData: """{app}\\chrome\.exe"""$' \
+    platform/windows/package/ilo.iss || fail "ilo.iss no longer starts the browser by chrome.exe alone"
+  engines="$(cygpath -u "$LOCALAPPDATA")/ilo"
+  if [ -n "${BROWSER_PROFILE_DIR:-}" ] || [ -e "$engines/User Data" ]; then
+    echo "skip: links by chrome.exe's fast way, as Windows hands them over: the run keeps its" \
+      "profile, as BROWSER_PROFILE_DIR names one or $engines/User Data is an ilo's of the user's here."
+  else
+    fast=1
+    made="$engines/User Data"
+    [ -e "$engines" ] || made=$engines
+    trap 'cleanup; rm -rf "$made" 2> /dev/null || true' EXIT
+    check_saved=$saved
+    check_launch_frame=$launch_frame
+    profile_dir="$engines/User Data"
+    # The app keeps its own files, the link rules and the launch frame among them, where this says.
+    BROWSER_PROFILE_DIR="$(cygpath -w "$profile_dir")"
+    export BROWSER_PROFILE_DIR
+    saved="$profile_dir/Spaces.json"
+    launch_frame="$profile_dir/launch-frame"
+    mkdir -p "$profile_dir"
+  fi
+fi
 rules_file="$(dirname "$saved")/Link rules"
 rm -f "$saved" "$launch_frame" "$rules_file"
 BROWSER_DRIVE=1 BROWSER_URL="$site" "$browser" < "$out/drive" > "$log" 2>&1 &
@@ -33,14 +75,57 @@ window=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
 link_line() {
   echo "^browser: link from another app ${site}$1: tab [1-9][0-9]* in space $2 of window $3\$"
 }
-# Sends $1 to the browser as another app does: off the Mac a second launch on the run's profile,
-# which hands it to the running browser and exits.
-send_link() {
-  if [ "$(uname)" = Darwin ]; then
-    open -a "$app" "$1"
+# Runs the command Windows runs for the link $1 from another app, or with none, chrome.exe alone. It
+# names no profile, so it's the engine's, and on any other the run names it, which sends the launch
+# Chrome's slower way. `registered exec $1` runs it in place of the shell, so in the background its
+# $! is the app's.
+registered() {
+  run=
+  [ "$1" = exec ] && { run=exec; shift; }
+  [ $# = 0 ] || set -- $switches "$1"
+  if [ -n "$fast" ]; then
+    $run "$app/chrome.exe" "$@"
   else
-    "$browser" "$1" >> "$out/links-sent.log" 2>&1 || fail "the second launch with $1 failed"
+    $run "$app/chrome.exe" "--user-data-dir=$(cygpath -w "$profile_dir")" "$@"
   fi
+}
+# Sends $1 to the browser as another app does, or with none launches it again as the user does:
+# off the Mac a second launch on the run's profile, which hands its command line to the running
+# browser and exits, and on the Mac `open`, which with no link reopens the app. On Windows
+# chrome.exe's fast way says nothing, where Chrome's slower one prints that it's opening in the
+# browser already running.
+send_link() {
+  sent=$(wc -l < "$log")
+  what="the link ${1:-}"
+  [ $# = 1 ] || what="the launch with no link"
+  if [ "$(uname)" = Darwin ]; then
+    open -a "$app" "$@"
+  elif windows; then
+    status=0
+    registered "$@" < /dev/null > "$out/links-sent-now.log" 2>&1 || status=$?
+    cat "$out/links-sent-now.log" >> "$out/links-sent.log"
+    if [ -n "$fast" ]; then
+      [ "$status" = 0 ] && [ ! -s "$out/links-sent-now.log" ] ||
+        fail "$what didn't go chrome.exe's fast way to the running browser ($status):" \
+          "$(tr '\n' ' ' < "$out/links-sent-now.log")"
+    fi
+  else
+    "$browser" "$@" >> "$out/links-sent.log" 2>&1 || fail "the second launch with $what failed"
+  fi
+}
+# How many tabs loaded the link $1 after line $2 of the log. Chrome opened a tab of its own for a
+# link from another app on Windows, beside the one the app placed (#1413), in the task that hands
+# the app the link, so once the app's tab has loaded, or the driver has done a command since, its
+# own would show.
+tabs_loading() {
+  tail -n "+$(($2 + 1))" "$log" | awk -v url="$1" '
+    $1 == "browser:" && $2 == "page" && $(NF - 2) == "loading" && $NF == url && !seen[$3]++ { n++ }
+    END { print n + 0 }'
+}
+# Fails unless the link $1 send_link sent loaded in one tab.
+opened_once() {
+  tabs=$(tabs_loading "$1" "$sent")
+  [ "$tabs" = 1 ] || fail "the link $1 loaded in $tabs tabs, not one: Chrome opened one of its own too"
 }
 # The line the app logs for a link from another app in a Little ilo window for Space $2.
 little_line() {
@@ -55,6 +140,7 @@ open_little_link() {
   tab=$(grep "$(little_line "$1" "$2")" "$log" | tail -1 | sed 's/.*: tab \([0-9]*\) .*/\1/')
   little=$(grep "$(little_line "$1" "$2")" "$log" | tail -1 | sed 's/.* little window \([0-9]*\) .*/\1/')
   await "^browser: loaded $tab ${site}$1\$" || fail "the link ${site}$1 didn't load in tab $tab"
+  opened_once "${site}$1"
 }
 # Sends https://…/$1 as another app does, and waits for its tab in Space $2 of window $3 to load it.
 open_link() {
@@ -63,6 +149,7 @@ open_link() {
     fail "the link ${site}$1 didn't open in Space $2 of window $3: $(grep '^browser: link' "$log" | tail -1)"
   tab=$(grep "$(link_line "$1" "$2" "$3")" "$log" | tail -1 | sed 's/.*: tab \([0-9]*\) .*/\1/')
   await "^browser: loaded $tab ${site}$1\$" || fail "the link ${site}$1 didn't load in tab $tab"
+  opened_once "${site}$1"
 }
 # With no rules, everything else goes to Little ilo. The driver numbers windows in the order they
 # were made, the closed ones too.
@@ -82,12 +169,97 @@ expect "^browser: key window $little\$" "the link's Little ilo window didn't com
 [ "$(grep -c "$(little_line "?ext" "[0-9]*")" "$log")" = 1 ] ||
   fail "the same link again opened a second Little ilo window"
 send window 2
+[ "$(tabs_loading "${site}?ext" "$sent")" = 0 ] ||
+  fail "the same link again loaded in a tab of Chrome's own beside its Little ilo window"
 send key w cmd
 await "^browser: window closed $little\$" || fail "⌘W didn't close the link's Little ilo window"
 send window 1
 send click $page_point
 driven=$active
+again=
 if [ "$driven" = 1 ]; then
+  # A launch with no link while the window is minimized, from the Start menu, the taskbar or a
+  # shortcut, brings it back and to the front, which the core asks of the app as it keeps Chrome
+  # from opening a window of its own, and on the Mac a Dock click or `open`, which Chrome answers.
+  if windows; then
+    # The browser window's states, as Windows has them: minimized is IsIconic, and foreground is
+    # GetForegroundWindow's.
+    window_states() {
+      echo " $(python3 -I check/app-windows.py list "$(cat "/proc/$pid/winpid")" |
+        sed -n 's/.*" browser visible\(.*\)$/\1/p' | tr '\n' ' ') "
+    }
+    send minimize
+    case $(window_states) in
+    *" minimized "*) ;;
+    *) fail "the driver didn't minimize the window:$(window_states)" ;;
+    esac
+    send_link
+    for _ in $(seq 50); do
+      states=$(window_states)
+      case $states in *" minimized "*) ;; *" foreground "*) break ;; esac
+      sleep 0.1
+    done
+    case $states in
+    *" minimized "*) fail "the launch with no link left the window minimized:$states" ;;
+    *" foreground "*) again=1 ;;
+    *) fail "the launch with no link didn't bring the window to the front:$states" ;;
+    esac
+  elif [ "$(uname)" = Linux ] && [ "${BROWSER_HEADLESS:-xvfb}" = xvfb ]; then
+    # The X server's: the window mapped, as openbox unmaps a minimized one, and the active one,
+    # which openbox names.
+    xid=$(xdotool getactivewindow) || fail "openbox names no active window"
+    mapped() {
+      xdotool search --onlyvisible --pid "$pid" 2> /dev/null | grep -qx "$xid"
+    }
+    timeout 5 xdotool windowminimize --sync "$xid" || fail "openbox didn't minimize the window"
+    ! mapped || fail "the minimized window is still mapped"
+    send_link
+    for _ in $(seq 50); do
+      mapped && [ "$(xdotool getactivewindow 2> /dev/null)" = "$xid" ] && break
+      sleep 0.1
+    done
+    mapped || fail "the launch with no link left the window minimized"
+    [ "$(xdotool getactivewindow 2> /dev/null)" = "$xid" ] ||
+      fail "the launch with no link didn't bring the window to the front"
+    again=1
+  elif [ "$(uname)" = Darwin ]; then
+    # AppKit's: whether the window is on screen, as the driver does nothing while it's out of sight
+    # but bring it back, saying it can't to the rest, and then the browser windows front to back
+    # with the key one.
+    out_of_sight() {
+      post order
+      await "^browser: drive $step done" || fail "the driver didn't finish \"order\""
+      grep -q "^browser: drive $step: can't do that" "$log"
+    }
+    last_order() {
+      grep '^browser: order' "$log" | tail -1
+    }
+    send minimize
+    for _ in $(seq 50); do
+      out_of_sight && break
+      sleep 0.1
+    done
+    out_of_sight || fail "the driver didn't minimize the window: $(last_order)"
+    send_link
+    for _ in $(seq 50); do
+      out_of_sight || break
+      sleep 0.1
+    done
+    ! out_of_sight || fail "the launch with no link left the window minimized"
+    for _ in $(seq 50); do
+      send order
+      case $(last_order) in "browser: order window 1"*", key window 1") break ;; esac
+      sleep 0.1
+    done
+    case $(last_order) in
+    "browser: order window 1"*", key window 1") again=1 ;;
+    *) fail "the launch with no link didn't bring the window to the front: $(last_order)" ;;
+    esac
+  else
+    echo "skip: the launch with no link while the window is minimized. It reads the window's" \
+      "state from Windows, Xvfb's X server or AppKit."
+  fi
+  send click $page_point
   # Settings says the browser isn't the default and offers to make it so.
   send key , cmd
   expect '^browser: settings shown General$' "⌘, didn't show Settings on its General tab"
@@ -235,8 +407,9 @@ exited
 [ -z "$mac" ] || ls "$(dirname "$saved")"/launch-picture-*.png > /dev/null 2>&1 ||
   fail "the sidebar's picture ⌘Q took wasn't on disk once the app quit"
 
-# Launched as the system launches the default browser, by `open` on the Mac, the app logs to $1 and
-# is $pid once it runs. Then $2, if given, is the link that launched it.
+# Launched as the system launches the default browser, by `open` on the Mac and by the command
+# registered for links on Windows, the app logs to $1 and is $pid once it runs. Then $2, if given, is
+# the link that launched it.
 launch() {
   log=$1
   rm -f "$log"
@@ -248,6 +421,9 @@ launch() {
       [ -n "$pid" ] && break
       sleep 0.1
     done
+  elif windows && [ -n "${2:-}" ]; then
+    registered exec "$2" < /dev/null > "$log" 2>&1 &
+    pid=$!
   else
     "$browser" ${2:+"$2"} > "$log" 2>&1 &
     pid=$!
@@ -295,6 +471,8 @@ await '^browser: restored in ' || fail "the Spaces didn't come back under the li
 await "$(link_line "?cold" "[0-9]*" "[0-9]*")" || fail "the link that launched the browser didn't open"
 tab=$(grep "$(link_line "?cold" "[0-9]*" "[0-9]*")" "$log" | sed 's/.*: tab \([0-9]*\) .*/\1/')
 await "^browser: loaded $tab ${site}?cold\$" || fail "the link that launched the browser didn't load"
+sent=0
+opened_once "${site}?cold"
 opened=$(grep -n -m1 '^browser: link from another app ' "$log" | cut -d: -f1)
 await '^browser: UI shown at ' || fail "the UI didn't come out from under the launch picture"
 shown=$(grep -n -m1 '^browser: UI shown at ' "$log" | cut -d: -f1)
@@ -312,16 +490,28 @@ await "$(little_line "?little" "[0-9]*")" ||
   fail "the link that launched the browser didn't open in Little ilo: $(grep '^browser: link' "$log" | tail -1)"
 tab=$(grep "$(little_line "?little" "[0-9]*")" "$log" | sed 's/.*: tab \([0-9]*\) .*/\1/')
 await "^browser: loaded $tab ${site}?little\$" || fail "the link that launched the browser didn't load in Little ilo"
+sent=0
+opened_once "${site}?little"
 grep -q '^browser: link from another app .* of window ' "$log" &&
   fail "the link that launched the browser opened as a tab too"
 ../tools/window-screenshot.sh "$pid" "$out/links-little-launch.png" all || fail "no window to capture"
 quit_launched
+# The engine's profile folder goes back to how the run found it, with the check's profile.
+if [ -n "$fast" ]; then
+  rm -rf "$made"
+  trap cleanup EXIT
+  unset BROWSER_PROFILE_DIR
+  saved=$check_saved
+  launch_frame=$check_launch_frame
+fi
 
 if [ "$driven" = 1 ]; then
-  echo "ok: links from another app open in Little ilo by default, the same link again bringing its window back, and sent to the Space in front as new tabs in the front window's Space and load there, in the user's Space when an agent's is shown, and in the regular window, brought to the front, over a private one; Settings says the browser isn't the default. Settings › Links' rules send a link whose URL holds a rule's text, or is it exactly, to the rule's Space or Little ilo, the first that matches winning, a drag reorders them, everything else goes to the Space picked, − takes a rule away, and the rules come back with the launch. Windows: $out/links-little.png, $out/links-settings.png, $out/links-rules-empty.png, $out/links-rules.png"
+  [ -z "$again" ] ||
+    echo "ok: a launch with no link while the window is minimized brings it back and to the front."
+  echo "ok: links from another app open once, in Little ilo by default, the same link again bringing its window back, and sent to the Space in front as new tabs in the front window's Space and load there, in the user's Space when an agent's is shown, and in the regular window, brought to the front, over a private one; Settings says the browser isn't the default. Settings › Links' rules send a link whose URL holds a rule's text, or is it exactly, to the rule's Space or Little ilo, the first that matches winning, a drag reorders them, everything else goes to the Space picked, − takes a rule away, and the rules come back with the launch. Windows: $out/links-little.png, $out/links-settings.png, $out/links-rules-empty.png, $out/links-rules.png"
 else
-  echo "ok: a link from another app opens in Little ilo by default and loads there."
-  echo "skip: the agent's Space, the private window, Settings and the link rules. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: a link from another app opens once, in Little ilo by default, and loads there."
+  echo "skip: the launch with no link while the window is minimized, the agent's Space, the private window, Settings and the link rules. Browser wasn't the active app, so the page ignored the click."
 fi
-echo "ok: a link that launches the browser opens over the Spaces it brings back, before the UI comes out from under the launch picture, and loads, and both launches show the sidebar's picture; with no rules, it opens in Little ilo. Windows: $out/links-cold.png $out/links-little-launch.png"
+echo "ok: a link that launches the browser opens once, over the Spaces it brings back, before the UI comes out from under the launch picture, and loads, and both launches show the sidebar's picture; with no rules, it opens in Little ilo. Windows: $out/links-cold.png $out/links-little-launch.png"
 echo "  Launch without a link: $plain; with one: $cold"

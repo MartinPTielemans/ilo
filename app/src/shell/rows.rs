@@ -1638,7 +1638,7 @@ mod tests {
     struct NoWhere;
 
     impl icon_picker::Host for NoWhere {
-        fn show(&self, _: f32, _: f32) {}
+        fn show(&self, _: u64, _: f32, _: f32) {}
 
         fn hide(&self) {}
 
@@ -1668,7 +1668,7 @@ mod tests {
         let show = |cx: &mut VisualTestContext| {
             shell.update(cx, |shell, cx| {
                 let picked: Picked = Rc::new(|_, _| {});
-                icon_picker::show(Subject::Space(1), "".into(), point(0., 0.), picked, cx);
+                icon_picker::show(1, Subject::Space(1), "".into(), point(0., 0.), picked, cx);
                 shell.hold_icon_place(1, cx);
             });
             cx.run_until_parked();

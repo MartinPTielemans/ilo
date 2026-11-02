@@ -1260,8 +1260,9 @@ pub struct Shell {
     agent_pointer: Option<agent_pointer::AgentPointer>,
     /// A link dragged over the page, and its targets.
     link_over: Option<split_targets::LinkOver>,
-    /// How far in from the page frame's top right corner the focused page's is, as last given.
-    pane_corner: (f32, f32),
+    /// Where the focused page's left edge is in the window, and how far in from the page frame's
+    /// top right corner its own is, as last given.
+    pane_corner: (f32, f32, f32),
     /// Every Space's archived tabs, newest first, and the favicons asked for their URLs.
     archive: Vec<Archived>,
     page_favicons: HashMap<SharedString, Option<Arc<Image>>>,
@@ -1583,7 +1584,7 @@ impl Shell {
             drop_targets_shown: false,
             agent_pointer: None,
             link_over: None,
-            pane_corner: (0., 0.),
+            pane_corner: (0., 0., 0.),
             archive: Vec::new(),
             page_favicons: HashMap::new(),
             downloads: Vec::new(),
@@ -2429,8 +2430,10 @@ impl Shell {
     /// and the menu bar lists its Space's extensions.
     pub fn became_key(&mut self, cx: &mut Context<Self>) {
         cx.set_global(ShellHandle(cx.weak_entity()));
-        // Its tab's dialog goes over its card again, as another window's may have shown since.
+        // Its tab's dialog goes over its card again, as another window's may have shown since, and
+        // its hung page's note shows, which waited while it was behind.
         self.page_dialog_shown = None;
+        self.note_hang(cx);
         cx.notify();
         self.refresh_menus(cx);
         self.refresh_picture(cx);
@@ -3284,17 +3287,22 @@ impl Render for Shell {
             self.page_color = Some(page_color);
             self.browser.set_page_color(page_color, cx);
         }
-        // The find bar and the zoom HUD sit at the focused page's corner.
+        // The find bar, the zoom HUD and the toast sit at the focused page's corner, and the
+        // toast's window spans that page.
         let (frame, _) = self.page_frame(self.viewport);
         let panes = self.panes(self.selected);
         let focused = panes.iter().position(|&pane| pane == self.selected).unwrap_or(0);
         let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
         let pane = pane_frames(frame, panes.len(), stacked, &shares)[focused];
-        let pane_corner =
-            (f32::from(frame.right() - pane.right()), f32::from(pane.top() - frame.top()));
+        let pane_corner = (
+            f32::from(pane.left()),
+            f32::from(frame.right() - pane.right()),
+            f32::from(pane.top() - frame.top()),
+        );
         if self.pane_corner != pane_corner {
             self.pane_corner = pane_corner;
-            self.browser.set_pane_corner(pane_corner.0, pane_corner.1, cx);
+            let (left, right, top) = pane_corner;
+            self.browser.set_pane_corner(left, right, top, cx);
         }
         let window_buttons = self.window_buttons_shown();
         if window_buttons != self.window_buttons {

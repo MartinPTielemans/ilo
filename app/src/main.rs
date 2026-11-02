@@ -260,7 +260,7 @@ mod platform {
         pub fn host_show_offer(ui_view: *mut c_void);
         pub fn host_hide_offer(ui_view: *mut c_void);
         pub fn host_add_hud(hud_view: *mut c_void, right: f64, top: f64, margin: f64);
-        pub fn host_set_pane_corner(ui_view: *mut c_void, right: f64, top: f64);
+        pub fn host_set_pane_corner(ui_view: *mut c_void, left: f64, right: f64, top: f64);
         pub fn host_show_hud(ui_view: *mut c_void);
         pub fn host_hide_hud();
         pub fn host_add_drop_targets(view: *mut c_void);
@@ -621,6 +621,12 @@ fn front() -> (bc::bc_id, *mut c_void) {
     })
 }
 
+/// The UI's view of browser window `window`, such as the one a hover-driven overlay is for, which
+/// it shows over whether or not it's in front (#1432). None once it has closed.
+fn ui_view_of(window: bc::bc_id) -> Option<*mut c_void> {
+    WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == window).map(|w| w.ui_view))
+}
+
 /// A browser window has gone full screen or left it, once macOS's transition is over. Later, as
 /// AppKit can say so from inside an update of ours, such as one that closes the window.
 extern "C" fn full_screen_changed(ui_view: *mut c_void, entered: bool) {
@@ -969,11 +975,11 @@ fn url_for(text: &str, get: impl Fn(*const c_char, *mut c_char, usize) -> usize)
 struct DialogHost;
 
 impl dialog::Host for DialogHost {
-    fn show(&self, over: Option<Bounds<Pixels>>) {
+    fn show(&self, window: Option<u64>, over: Option<Bounds<Pixels>>) {
+        // A window's own question goes over it, else over the one in front, as the app's do.
+        let view = window.and_then(ui_view_of).unwrap_or(front().1);
         let over = rect(over.unwrap_or_default());
-        unsafe {
-            platform::host_show_dialog(front().1, over.x, over.y, over.width, over.height)
-        };
+        unsafe { platform::host_show_dialog(view, over.x, over.y, over.width, over.height) };
     }
 
     fn hide(&self) {
@@ -1107,7 +1113,7 @@ impl site_controls::Host for SiteControlsHost {
                 let profile = unsafe { bc::bc_tab_profile(tab) };
                 let (message, detail) = passwords::question(&login);
                 let confirmed = Box::new(move |_: &mut App| remove_login(profile, &login));
-                dialog::ask(message, detail, "Remove", confirmed, cx);
+                dialog::ask(None, message, detail, "Remove", confirmed, cx);
             }
             site_controls::Run::Passwords => {
                 let profile = unsafe { bc::bc_tab_profile(tab) };
@@ -1133,7 +1139,10 @@ impl site_controls::Host for SiteControlsHost {
 
     fn tooltip(&self, tip: Option<(SharedString, tooltip::Anchor)>, cx: &mut App) {
         match tip {
-            Some((text, anchor)) => tooltip::hover(tooltip::Tip::named(text), anchor, cx),
+            // The panel shows over the window in front, and its tooltips with it.
+            Some((text, anchor)) => {
+                tooltip::hover(front().0, tooltip::Tip::named(text), anchor, cx)
+            }
             None => tooltip::dismiss(cx),
         }
     }
@@ -1274,7 +1283,8 @@ impl link_preview::Host for LinkPreviewHost {
 
     fn tooltip(&self, tip: Option<(tooltip::Tip, tooltip::Anchor)>, cx: &mut App) {
         match tip {
-            Some((tip, anchor)) => tooltip::hover(tip, anchor, cx),
+            // The preview opens from a click in the window in front, and its tooltips go over it.
+            Some((tip, anchor)) => tooltip::hover(front().0, tip, anchor, cx),
             None => tooltip::dismiss(cx),
         }
     }
@@ -1444,8 +1454,6 @@ impl toast::Host for ToastHost {
     fn plate(&self, bounds: Bounds<Pixels>) {
         let (x, y) = (bounds.origin.x.into(), bounds.origin.y.into());
         let (width, height) = (bounds.size.width.into(), bounds.size.height.into());
-        // check.sh reads this line, to click just outside the plate.
-        log!("browser: toast plate {x:.0} {y:.0} {width:.0} {height:.0}");
         unsafe { platform::host_set_toast_plate(x, y, width, height) };
     }
 }
@@ -1864,13 +1872,16 @@ extern "C" fn command_bar_dismissed() {
     update_window(front().0, |shell, cx| shell.command_bar_dismissed(cx));
 }
 
-/// The icon picker's requests, to the host's overlay window, over the window in front.
+/// The icon picker's requests, to the host's overlay window, over the window that asked.
 struct PickerHost;
 
 impl icon_picker::Host for PickerHost {
-    fn show(&self, left: f32, top: f32) {
+    fn show(&self, window: u64, left: f32, top: f32) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
         let (left, top, width) = (left.into(), top.into(), icon_picker::WIDTH.into());
-        unsafe { platform::host_show_overlay(ICON_PICKER, front().1, false, left, top, width) };
+        unsafe { platform::host_show_overlay(ICON_PICKER, view, false, left, top, width) };
     }
 
     fn hide(&self) {
@@ -1908,10 +1919,13 @@ extern "C" fn icon_picker_dismissed() {
 struct FolderPreviewHost;
 
 impl folder_preview::Host for FolderPreviewHost {
-    fn show(&self, left: f32, top: f32, height: f32) {
+    fn show(&self, window: u64, left: f32, top: f32, height: f32) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
         let (left, top, width) = (left.into(), top.into(), folder_preview::WIDTH.into());
         unsafe {
-            platform::host_show_overlay(FOLDER_PREVIEW, front().1, false, left, top, width);
+            platform::host_show_overlay(FOLDER_PREVIEW, view, false, left, top, width);
             platform::host_set_overlay_height(FOLDER_PREVIEW, height.into());
         }
     }
@@ -1925,11 +1939,14 @@ extern "C" fn folder_preview_dismissed() {
     update_app(folder_preview::dismissed);
 }
 
-/// The theme picker's requests, to the host's overlay window, over the window in front.
+/// The theme picker's requests, to the host's overlay window, over the window that asked.
 struct ThemeHost;
 
 impl theme_picker::Host for ThemeHost {
-    fn show(&self, left: f32, top: f32, corners: &[(f32, f32, f32)]) {
+    fn show(&self, window: u64, left: f32, top: f32, corners: &[(f32, f32, f32)]) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
         let shape: Vec<f64> =
             corners.iter().flat_map(|&(x, y, radius)| [x, y, radius].map(f64::from)).collect();
         // The arrow, which it grows in from, moves along its side to point at what opened it.
@@ -1938,7 +1955,7 @@ impl theme_picker::Host for ThemeHost {
         unsafe {
             platform::host_set_overlay_shape(THEME_PICKER, shape.as_ptr(), shape.len() / 3);
             platform::host_set_overlay_growth(THEME_PICKER, x.into(), y.into());
-            platform::host_show_overlay(THEME_PICKER, front().1, false, left, top, width);
+            platform::host_show_overlay(THEME_PICKER, view, false, left, top, width);
         }
     }
 
@@ -1958,13 +1975,16 @@ extern "C" fn theme_picker_dismissed() {
     update_app(theme_picker::dismissed);
 }
 
-/// The tooltip's requests, to the host's tooltip window.
+/// The tooltip's requests, to the host's tooltip window, over the window the pointer is in.
 struct TooltipHost;
 
 impl tooltip::Host for TooltipHost {
-    fn show(&self, left: f32, top: f32) {
+    fn show(&self, window: u64, left: f32, top: f32) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
         let fade = tooltip::FADE_IN.as_secs_f64();
-        unsafe { platform::host_show_tooltip(front().1, left.into(), top.into(), fade) };
+        unsafe { platform::host_show_tooltip(view, left.into(), top.into(), fade) };
     }
 
     fn hide(&self) {
@@ -1978,13 +1998,17 @@ extern "C" fn tooltip_away() {
     update_app_later(tooltip::dismiss);
 }
 
-/// The hover card's requests, to the host's card window, over the browser window in front.
+/// The hover card's requests, to the host's card window, over the browser window whose row it's
+/// for.
 struct CardHost;
 
 impl hover_card::Host for CardHost {
-    fn show(&self, left: f32, top: f32, width: f32, height: f32) {
+    fn show(&self, window: u64, left: f32, top: f32, width: f32, height: f32) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
         let (left, top, width, height) = (left.into(), top.into(), width.into(), height.into());
-        unsafe { platform::host_show_hover_card(front().1, left, top, width, height) };
+        unsafe { platform::host_show_hover_card(view, left, top, width, height) };
     }
 
     fn hide(&self) {
@@ -2004,13 +2028,17 @@ extern "C" fn memory_pressed() {
     update_app(hover_card::forget_all);
 }
 
-/// The link target's requests, to the host's link target window.
+/// The link target's requests, to the host's link target window, over the window whose page has
+/// the link.
 struct LinkTargetHost;
 
 impl link_target::Host for LinkTargetHost {
-    fn show(&self, left: f32, top: f32) {
+    fn show(&self, window: u64, left: f32, top: f32) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
         let fade = link_target::FADE_IN.as_secs_f64();
-        unsafe { platform::host_show_link_target(front().1, left.into(), top.into(), fade) };
+        unsafe { platform::host_show_link_target(view, left.into(), top.into(), fade) };
     }
 
     fn hide(&self) {
@@ -2018,9 +2046,13 @@ impl link_target::Host for LinkTargetHost {
     }
 }
 
-/// The pointer moved, at (`x`, `y`) in the window in front, while the link target shows.
+/// The pointer moved, at (`x`, `y`) in the window the link target shows over, while it shows.
 extern "C" fn link_pointer(x: f64, y: f64) {
-    update_window(front().0, |shell, cx| shell.link_pointer(x as f32, y as f32, cx));
+    update_app(|cx| {
+        if let Some(window) = link_target::over(cx) {
+            update_window_in(window, cx, |shell, cx| shell.link_pointer(x as f32, y as f32, cx));
+        }
+    });
 }
 
 /// The pointer is on a link in `tab`'s page, or has left it and `url` is "".
@@ -2973,7 +3005,8 @@ impl Browser for Engine {
         confirmed: Box<dyn FnOnce(&mut App)>,
         cx: &mut App,
     ) {
-        with_overlays(move |cx| dialog::ask(message, detail, action, confirmed, cx), cx);
+        let window = Some(self.window);
+        with_overlays(move |cx| dialog::ask(window, message, detail, action, confirmed, cx), cx);
     }
 
     fn tell(
@@ -2985,7 +3018,8 @@ impl Browser for Engine {
         if !dialog::can_pose(cx) {
             return false;
         }
-        with_overlays(move |cx| dialog::pose(question, confirmed, cx), cx);
+        let window = Some(self.window);
+        with_overlays(move |cx| dialog::pose(window, question, confirmed, cx), cx);
         true
     }
 
@@ -3033,8 +3067,9 @@ impl Browser for Engine {
         unsafe { bc::bc_window_page_moving(self.window, moving) };
     }
 
-    fn set_pane_corner(&self, right: f32, top: f32, _: &mut App) {
-        unsafe { platform::host_set_pane_corner(self.ui_view, right as f64, top as f64) };
+    fn set_pane_corner(&self, left: f32, right: f32, top: f32, _: &mut App) {
+        let (left, right, top) = (f64::from(left), f64::from(right), f64::from(top));
+        unsafe { platform::host_set_pane_corner(self.ui_view, left, right, top) };
     }
 
     fn show_window_buttons(&self, shown: bool, _: &mut App) {
@@ -3284,7 +3319,7 @@ impl Browser for Engine {
 
     fn tooltip(&self, tip: Option<(tooltip::Tip, tooltip::Anchor)>, cx: &mut App) {
         match tip {
-            Some((tip, anchor)) => tooltip::hover(tip, anchor, cx),
+            Some((tip, anchor)) => tooltip::hover(self.window, tip, anchor, cx),
             None => tooltip::dismiss(cx),
         }
     }
@@ -3297,7 +3332,7 @@ impl Browser for Engine {
         match plate {
             Some((plate, frame, _)) => {
                 let (left, top) = (frame.origin.x.into(), frame.origin.y.into());
-                link_target::show(plate, left, top, cx)
+                link_target::show(self.window, plate, left, top, cx)
             }
             None => link_target::hide(cx),
         }
@@ -3656,7 +3691,7 @@ impl Browser for Engine {
         // A Quit as the window comes on screen, before its overlays are made, asks too (#905):
         // with no dialog to ask in, pose would drop it and the app would never quit.
         let quit = Box::new(|_: Vec<String>, _: &mut App| quit_because("the user's Quit, answered"));
-        with_overlays(move |cx| dialog::pose(question, quit, cx), cx);
+        with_overlays(move |cx| dialog::pose(None, question, quit, cx), cx);
     }
 }
 
@@ -4128,6 +4163,24 @@ unsafe extern "C" fn open_links(_: *mut c_void, urls: *const *const c_char, coun
     // AppKit hands over the links that launched the browser all at once, so the first window
     // needn't wait for it to finish.
     finished_launching();
+}
+
+/// The user launched the browser again with no link, from the Start menu, the taskbar or a
+/// shortcut on Windows, or the desktop's launcher on Linux: the regular window in front comes
+/// forward, restored if minimized, as the Mac's Dock brings its windows. One is always open, as the
+/// browser quits with the last (window_closed), but while it launches, whose first window comes to
+/// the front anyway.
+unsafe extern "C" fn launched_again(_: *mut c_void) {
+    if LAUNCH_LINKS.with_borrow(Option::is_some) {
+        return;
+    }
+    let Some(window) = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.regular()).cloned())
+    else {
+        return;
+    };
+    // check.sh reads this line.
+    log!("browser: launched again: window {} to the front", window.id);
+    unsafe { platform::host_activate(window.ui_view) };
 }
 
 /// Opens a tab loading `url` in the front window and shows it: in the Space the window shows if
@@ -7438,6 +7491,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         profile_autofill_changed: Some(profile_autofill_changed),
         passwords_imported: Some(passwords_imported),
         open_links: Some(open_links),
+        launched_again: Some(launched_again),
         agent_activity: Some(agent_activity),
         #[cfg(target_os = "linux")]
         window_resized: Some(window_resized),
@@ -7559,11 +7613,6 @@ unsafe extern "C" fn ui_committed(_: *mut c_void, window: bc::bc_id, text: *cons
     if let Some(ui_view) = ui_view_of(window) {
         gpui_linux::commit_embedded(ui_view, &text);
     }
-}
-
-#[cfg(target_os = "linux")]
-fn ui_view_of(window: bc::bc_id) -> Option<*mut c_void> {
-    WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == window).map(|w| w.ui_view))
 }
 
 /// On Linux this program only says where the browser is: chrome runs it from libBrowser.so.

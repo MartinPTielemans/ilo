@@ -102,12 +102,17 @@ namespace {
 
 bc_host g_host;
 
-// The links another app sent, to the app. Only pages and files: Chrome strips its own
+// Whether the app opens |url| from another app. Only pages and files: Chrome strips its own
 // direct-launch scheme first, and any other scheme an app sends is no page to show.
+bool Opens(const GURL& url) {
+  return url.is_valid() && (url.SchemeIsHTTPOrHTTPS() || url.SchemeIsFile());
+}
+
+// The links another app sent, to the app.
 void OpenLinks(const std::vector<GURL>& urls) {
   std::vector<std::string> specs;
   for (const GURL& url : urls) {
-    if (url.is_valid() && (url.SchemeIsHTTPOrHTTPS() || url.SchemeIsFile())) {
+    if (Opens(url)) {
       specs.push_back(url.spec());
     }
   }
@@ -123,22 +128,28 @@ void OpenLinks(const std::vector<GURL>& urls) {
 
 #if !BUILDFLAG(IS_MAC)
 // The links in a launch's command line, read as Chrome reads them: paths relative to |cur_dir|,
-// and "? words" searched with the profile's engine, which needs a profile.
+// and "? words" searched with the profile's engine, which needs a profile. A later launch with none
+// the app opens, as from the Start menu, brings a window forward, as Chrome's would open one: the
+// launch can't go unanswered.
 void OpenCommandLine(const base::CommandLine& command_line,
                      const base::FilePath& cur_dir,
-                     Profile* profile) {
+                     Profile* profile,
+                     bool process_startup) {
   if (!profile) {
     profile = ProfileManager::GetLastUsedProfileIfLoaded();
   }
-  if (!profile) {
-    return;
-  }
   std::vector<GURL> urls;
-  for (const StartupTab& tab :
-       StartupTabProviderImpl().GetCommandLineTabs(command_line, cur_dir, profile)) {
-    urls.push_back(tab.url);
+  if (profile) {
+    for (const StartupTab& tab :
+         StartupTabProviderImpl().GetCommandLineTabs(command_line, cur_dir, profile)) {
+      urls.push_back(tab.url);
+    }
   }
-  OpenLinks(urls);
+  if (std::ranges::any_of(urls, &Opens)) {
+    OpenLinks(urls);
+  } else if (!process_startup && g_host.launched_again) {
+    g_host.launched_again(g_host.context);
+  }
 }
 #endif
 

@@ -1089,7 +1089,7 @@ impl Browser for Fake {
 
     fn page_moving(&self, _: bool, _: &mut App) {}
 
-    fn set_pane_corner(&self, _: f32, _: f32, _: &mut App) {}
+    fn set_pane_corner(&self, _: f32, _: f32, _: f32, _: &mut App) {}
 
     // No command bar here, as for a new tab, and no split views but the made-up one.
     fn command_bar_open(&self, _: &App) -> bool {
@@ -1296,7 +1296,7 @@ impl Browser for Fake {
             let bounds = Bounds::new(PREVIEW_ORIGIN.get(), PREVIEW_AREA.get());
             dialog::open_at(Rc::new(PreviewDialog), bounds, true, cx);
         }
-        dialog::ask(message, detail, action, confirmed, cx);
+        dialog::ask(None, message, detail, action, confirmed, cx);
     }
 
     fn quit(&self, cx: &mut App) {
@@ -1836,7 +1836,7 @@ fn main() {
             {
                 let picked: icon_picker::Picked = Rc::new(|_, _| {});
                 let subject = icon_picker::Subject::Space(1);
-                icon_picker::show(subject, icon.into(), point(0., 0.), picked, cx);
+                icon_picker::show(0, subject, icon.into(), point(0., 0.), picked, cx);
             }
         }
         // PREVIEW_THEME_PICKER=1 shows the theme picker for the first Space, with PREVIEW_THEME's
@@ -1849,7 +1849,7 @@ fn main() {
             if theme_picker::open_at(Rc::new(PreviewPicker), bounds, true, cx).is_some() {
                 let changed: theme_picker::Changed = Rc::new(|_, _, _| {});
                 let anchor = point(0., theme_picker::HEIGHT / 2. + 8.);
-                theme_picker::show(1, preview_theme(), anchor, f32::MAX, changed, cx);
+                theme_picker::show(0, 1, preview_theme(), anchor, f32::MAX, changed, cx);
             }
         }
         // PREVIEW_SITE_CONTROLS=1 opens the Site Controls of the tab shown, once the shell has
@@ -1981,7 +1981,7 @@ impl menu::Host for PreviewMenu {
 struct PreviewPicker;
 
 impl icon_picker::Host for PreviewPicker {
-    fn show(&self, _: f32, _: f32) {}
+    fn show(&self, _: u64, _: f32, _: f32) {}
 
     fn hide(&self) {}
 
@@ -1989,7 +1989,7 @@ impl icon_picker::Host for PreviewPicker {
 }
 
 impl theme_picker::Host for PreviewPicker {
-    fn show(&self, _: f32, _: f32, _: &[(f32, f32, f32)]) {}
+    fn show(&self, _: u64, _: f32, _: f32, _: &[(f32, f32, f32)]) {}
 
     fn hide(&self) {}
 
@@ -2029,7 +2029,7 @@ impl link_preview::Host for PreviewPeek {
 struct PreviewDialog;
 
 impl dialog::Host for PreviewDialog {
-    fn show(&self, _: Option<Bounds<Pixels>>) {}
+    fn show(&self, _: Option<u64>, _: Option<Bounds<Pixels>>) {}
 
     fn hide(&self) {}
 }

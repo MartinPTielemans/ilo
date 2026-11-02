@@ -142,7 +142,15 @@ launch "$reports"
 await '^browser: crash report offered$' || fail "the launch after the crash didn't offer its report"
 await "^browser: toast shown $app_name quit unexpectedly\. \[send, don't send\]\$" ||
   fail "the offer's toast didn't show"
+await '^browser: toast settled$' || fail "the offer's toast didn't settle"
 ../tools/window-screenshot.sh "$pid" "$out/crash-offer.png" || fail "no window to capture"
+# Whole, its plate inside the toast's window, as the archive's note is in the restore run (#1462).
+await '^browser: toast plate .* in [0-9]* [0-9]*$' ||
+  fail "the offer's toast didn't say where its plate is"
+plate=$(grep '^browser: toast plate' "$log" | tail -1)
+set -- $(echo "${plate#browser: toast plate }" | sed 's/ in / /')
+[ "$1" -ge 0 ] && [ "$2" -ge 0 ] && [ $(($1 + $3)) -le "$5" ] && [ $(($2 + $4)) -le "$6" ] ||
+  fail "the offer's toast runs past its window, which cuts it: $plate"
 exec 3>&-
 quit
 [ -s "$out/collector.log" ] && fail "a report was sent while Send Crash Reports was off"
