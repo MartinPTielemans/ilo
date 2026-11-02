@@ -112,6 +112,15 @@ const ARCHIVE_AFTER: [(&str, f64); 4] = [
     ("30 days", 30. * 24. * 3600.),
 ];
 
+/// What's offered for how long a Little ilo window that isn't in use stays open before it closes
+/// into the archive, in seconds. Arc's default is 6 hours; the rest are ours.
+const LITTLE_ARCHIVE_AFTER: [(&str, f64); 4] = [
+    ("1 hour", 3600.),
+    ("6 hours (default)", 6. * 3600.),
+    ("12 hours", 12. * 3600.),
+    ("24 hours", 24. * 3600.),
+];
+
 /// How long a Today tab waits unseen before it's archived, in words: "12 hours".
 pub(crate) fn archive_after_words() -> String {
     let after = unsafe { bc::bc_archive_after() };
@@ -226,6 +235,8 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
         &[
             ("New Tab", Keys::Of(Command::NewTab)),
             ("New Window", Keys::Of(Command::NewWindow)),
+            ("New Little ilo Window", Keys::Of(Command::NewLittleWindow)),
+            ("Open in Main Window", Keys::Of(Command::OpenInMainWindow)),
             ("New Incognito Window", Keys::Of(Command::NewPrivateWindow)),
             ("New Note", Keys::Of(Command::NewNote)),
             ("Open Command Bar", Keys::Of(Command::EditUrl)),
@@ -381,6 +392,7 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
 #[derive(Clone, Copy, PartialEq)]
 enum Popup {
     ArchiveAfter,
+    LittleArchiveAfter,
     Favorites,
     PasswordsProfile,
     /// A profile's, in the Profiles tab.
@@ -703,9 +715,14 @@ fn profiles() -> Vec<Profile> {
 
 /// The archive pop-up's text for `seconds`, and which of ARCHIVE_AFTER it is.
 fn archive_after(seconds: f64) -> (SharedString, Option<usize>) {
-    let chosen = ARCHIVE_AFTER.iter().position(|&(_, each)| each == seconds);
+    chosen_time(&ARCHIVE_AFTER, seconds)
+}
+
+/// A time pop-up's text for `seconds`, and which of `times` it is.
+fn chosen_time(times: &[(&'static str, f64)], seconds: f64) -> (SharedString, Option<usize>) {
+    let chosen = times.iter().position(|&(_, each)| each == seconds);
     let label = match chosen {
-        Some(index) => ARCHIVE_AFTER[index].0.into(),
+        Some(index) => times[index].0.into(),
         None => format!("{:.0} hours", seconds / 3600.).into(),
     };
     (label, chosen)
@@ -1209,6 +1226,16 @@ impl Settings {
                 settings.choose_archive_after(None, chosen, window, cx)
             }),
         );
+        let (label, chosen) =
+            chosen_time(&LITTLE_ARCHIVE_AFTER, unsafe { bc::bc_little_archive_after() });
+        let little_archive = self.popup(
+            Popup::LittleArchiveAfter,
+            label,
+            POPUP_WIDTH,
+            cx.listener(move |settings, _, window, cx| {
+                settings.choose_little_archive_after(chosen, window, cx)
+            }),
+        );
         let scope = favorites_scope();
         let favorites = self.popup(
             Popup::Favorites,
@@ -1224,6 +1251,12 @@ impl Settings {
         let unload = self.toggle("unload idle tabs", unload, set_unload_idle_tabs, accent, cx);
         let ad_blocking = unsafe { bc::bc_ad_blocking() };
         let ad_blocking = self.toggle("ad blocking", ad_blocking, set_ad_blocking, accent, cx);
+        // The Mac's alone, the one with a host for the button so far.
+        let menu_bar = cfg!(target_os = "macos").then(|| {
+            let on = crate::little_in_menu_bar();
+            let switch = self.toggle("little in the menu bar", on, set_little_in_menu_bar, accent, cx);
+            row(None, "Show Little ilo in the menu bar", switch)
+        });
         div()
             .flex()
             .flex_col()
@@ -1237,7 +1270,9 @@ impl Settings {
                 row(None, "Favorites", favorites.into_any_element()),
                 // Last, so the checks find the pop-ups where they were.
                 row(None, "Block ads and trackers", ad_blocking),
-            ]))
+            ].into_iter().chain(menu_bar).chain([
+                row(None, "Little ilo windows archive after", little_archive.into_any_element()),
+            ])))
             .children(self.off_sites(off_sites, cx))
             .child(group(&RowLook::settings(), [self.default_browser_row(cx)]))
             .into_any_element()
@@ -1410,6 +1445,32 @@ impl Settings {
         });
         let which = profile.map_or(Popup::ArchiveAfter, Popup::ProfileArchiveAfter);
         self.pop_up(which, items, picked, window, cx);
+    }
+
+    /// Opens the Little ilo windows' archive pop-up menu over its button, as the archive's, and
+    /// sets how long one not in use stays open.
+    fn choose_little_archive_after(
+        &mut self,
+        chosen: Option<usize>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let items: Vec<MenuEntry> = (LITTLE_ARCHIVE_AFTER.iter().enumerate())
+            .map(|(index, &(title, _))| {
+                let on = Some(index) == chosen;
+                MenuEntry { checked: on, over: on, ..MenuEntry::new(title, true) }
+            })
+            .collect();
+        let settings = cx.weak_entity();
+        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
+            if let Some((title, seconds)) = picked.map(|index| LITTLE_ARCHIVE_AFTER[index]) {
+                // check.sh waits for this line.
+                log!("browser: little windows archive after {title}");
+                unsafe { bc::bc_set_little_archive_after(seconds) };
+            }
+            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
+        });
+        self.pop_up(Popup::LittleArchiveAfter, items, picked, window, cx);
     }
 
     /// Opens a profile's search engine pop-up menu over its button, as the archive's, and makes
@@ -2222,12 +2283,7 @@ impl Settings {
                 .filter(|client| !listed.contains(client))
                 .map(Client::name)
                 .collect();
-            match missing.as_slice() {
-                [] => "Any MCP client".into(),
-                [one] => format!("Any MCP client. {one} isn't on this computer.").into(),
-                _ => format!("Any MCP client. {} aren't on this computer.", missing.join(" and "))
-                    .into(),
-            }
+            model.other_client_detail(&missing).into()
         } else {
             format!("Not connected. Connect adds the browser to {}", client.config()).into()
         };
@@ -2623,6 +2679,10 @@ const _: () = {
 
 fn set_warn_before_quitting(warn: bool, _: &mut App) {
     unsafe { bc::bc_set_warn_before_quitting(warn) };
+}
+
+fn set_little_in_menu_bar(on: bool, _: &mut App) {
+    crate::set_little_in_menu_bar(on);
 }
 
 fn set_unload_idle_tabs(unload: bool, _: &mut App) {

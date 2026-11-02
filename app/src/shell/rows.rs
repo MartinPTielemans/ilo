@@ -625,6 +625,7 @@ impl Shell {
                 self.rename_folder(tab, cx)
             }
             MouseButton::Left if event.click_count == 2 => self.rename_tab(tab, cx),
+            MouseButton::Left if self.little_press_row(tab, event, cx) => {}
             MouseButton::Left if event.modifiers.alt && !self.is_folder(tab) => {
                 self.alt_press_list_row(tab, event.position, cx)
             }
@@ -936,6 +937,9 @@ impl Shell {
                     // The first press selected the tab (Dia).
                     if event.click_count == 2 {
                         return shell.rename_tab(tab, cx);
+                    }
+                    if shell.little_press_row(tab, event, cx) {
+                        return;
                     }
                     if event.modifiers.alt {
                         return shell.alt_press_list_row(tab, event.position, cx);

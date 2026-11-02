@@ -14,7 +14,8 @@
 # ⌘W otherwise shows the tab below, or above at the bottom. Tabs opened behind close to their
 # sibling, then their opener; after a switch to an unrelated tab, a tab opened in front closes to
 # the tab below; and a pinned tab's newest tab opened in front closes back to it, past an older one.
-# Closing the last tab leaves the Space empty, where ⌘T still works. Mute/Unmute Tab mutes a tab,
+# Closing the last tab leaves the Space empty, with no pane, its window resizing, and on Windows
+# maximizing and restoring, with no page, and ⌘T still works there. Mute/Unmute Tab mutes a tab,
 # its row shows a speaker while it plays, crossed out while it's muted, and a click on it unmutes
 # the tab. There ⇧⌦ takes a page out of history, as a click on the ✕ the pointer draws on its row
 # does, and ⌥⌘⌫ a search typed before, ⇧⌘↩ searches for what was typed, ⌘↩ opens it in a tab behind
@@ -550,6 +551,32 @@ expect_tabs "$b" "$b" "after closing the bottom tab"
 send key w cmd
 expect_tabs " *" 0 "after closing the last tab"
 ../tools/window-screenshot.sh "$pid" "$out/empty.png" || fail "no window to capture"
+# The capture shows no pane, as in an empty Space: on Windows a pane is a window of its own, and the
+# closed tab's went on drawing black over the Space (#1343).
+send layout
+none_since '^browser: layout content.*WebContentsViewCocoa' ||
+  fail "a pane stayed over the empty Space: $(grep '^browser: layout content' "$log" | tail -1)"
+# The window resized, maximized and restored with no page after the last tab closed, as after a
+# close with only unloaded tabs left, goes on: on Windows the pane went on laying out the closed
+# tab's freed page at each resize, and the browser crashed (#1340). Maximized by the system command,
+# as by the title bar's button or Win+↑, as in the crash.
+size=$(grep '^browser: layout content' "$log" | tail -1 |
+  sed 's/^browser: layout content \([0-9]*\)x\([0-9]*\),.*/\1 \2/')
+smaller="$((${size% *} - 100)) $((${size#* } - 100))"
+send resize $smaller
+expect "^browser: drawn at ${smaller% *}x${smaller#* }\$" "the window with no page didn't draw at its new size"
+if windows; then
+  send maximize
+  send layout
+  maximized=$(grep '^browser: layout content' "$log" | tail -1 |
+    sed 's/^browser: layout content \([0-9]*\)x\([0-9]*\),.*/\1 \2/')
+  [ "${maximized% *}" -gt "${smaller% *}" ] ||
+    fail "the system command didn't maximize the window with no page: $maximized"
+  send maximize
+  expect "^browser: drawn at ${smaller% *}x${smaller#* }\$" "the window with no page didn't restore"
+fi
+send resize $size
+expect "^browser: drawn at ${size% *}x${size#* }\$" "the window with no page didn't draw back at its size"
 # ⇧⌦ takes a page from history out of the rows.
 send key t cmd
 expect '^browser: command new-tab via ui$' "⌘T in an empty Space didn't reach the UI"
@@ -1065,6 +1092,6 @@ chrome_ms=$(echo "$spans" | grep -v incomplete | summary)
 [ -n "$chrome_ms" ] || fail "the trace has no finished tab switches"
 # grep -c finds none in a run where no switch was cut off, and exits 1 then.
 chrome_ms="$chrome_ms, $(echo "$spans" | grep -c incomplete || true) incomplete, not counted"
-echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's ✕ take a page out of history and ⌥⌘⌫ a search typed before, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row and a space after an engine's keyword search with it alone until ⌫ leaves, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, ⌘W shows the tab below or above, an empty Space still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one. ⌘-click and ⇧-click choose three rows, whose menu and ⇧⌘C copy their links in order, and ⌘D pins them, New Folder folders them and ⌘W closes them, each undone by ⌘Z."
+echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's ✕ take a page out of history and ⌥⌘⌫ a search typed before, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row and a space after an engine's keyword search with it alone until ⌫ leaves, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, ⌘W shows the tab below or above, an empty Space shows no pane, its window resizes, and on Windows maximizes and restores, and it still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one. ⌘-click and ⇧-click choose three rows, whose menu and ⇧⌘C copy their links in order, and ⌘D pins them, New Folder folders them and ⌘W closes them, each undone by ⌘Z."
 echo "  Switch to a loaded tab, tab strip to frame shown (Chrome's measure; gate 16 ms): $chrome_ms."
 echo "  Switch, key to the core's report: $app_ms. Windows: $out/muted.png, $out/tabs.png, $out/suggestions.png, $out/completion.png, $out/search-tabs.png, $out/url-field-bar.png, $out/commands-only.png, $out/listed.png, $out/popular.png, $out/site-hint.png, $out/site-search.png, $out/field-menu.png, $out/empty.png, $out/remove-suggestion.png, $out/site-search-settings.png, $out/idle-unloaded.png, $out/back-held.png, $out/back-menu.png, $out/back-behind.png, $out/chosen.png, $out/chosen-menu.png"

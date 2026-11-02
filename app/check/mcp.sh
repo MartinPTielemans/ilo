@@ -7,7 +7,8 @@
 # text and in its outline, and the agent can't type into the password field. It types into another.
 # A page's frames, of its own site and of another, are in its outline, where the agent clicks and
 # types, and not into a frame's password field. Its text leaves out a frame an extension puts in
-# the page, which isn't the page's. Where it acts in the page shown, its pointer and a
+# the page, which isn't the page's. Its keys, typed or pressed, go to the page alone, and Escape
+# the page doesn't keep runs no Stop of ilo's. Where it acts in the page shown, its pointer and a
 # ring with the element's ref show it. It opens a page, clicks its link, scrolls, takes a screenshot
 # and closes a tab, and a bank's site asks first, in a card whose Allow Once opens it. Always Allow
 # opens it from then on, until Revoke Permission in the Space's menu takes that back. A login the
@@ -335,6 +336,76 @@ painted(() => document.title = "fields");
     *) fail "reading the frames page answered: $read" ;;
   esac
 
+  # Its keys go to the page alone: type with submit and press_key's Enter submit the form, Tab
+  # moves the keyboard to the next field, and Escape reaches the page. Escape the page doesn't keep
+  # is ilo's Stop while a page loads, and the agent's runs no shortcut of ilo's: the page goes on
+  # loading, and the tabs and the app stay as they were.
+  printf '%s' '<script src="painted.js"></script>
+<form id=form><input id=first aria-label="First field"><input id=second aria-label="Second field">
+<button>Send</button></form>
+<script>
+let sent = 0;
+form.onsubmit = event => {
+  event.preventDefault();
+  document.title = "submitted " + ++sent + " " + first.value;
+};
+// Tab brings the keyboard here, and a moment later the page that loads until its tab closes.
+second.onfocus = () => {
+  document.title = "second focused";
+  setTimeout(() => location = "keys-loading.html", 2000);
+};
+painted(() => document.title = "keys");
+</script>' > "$out/site/keys.html"
+  # Its picture never comes, so the page loads until its tab closes, with its field focused.
+  printf '%s' '<title>still loading</title><input id=field aria-label="Loading field">
+<script>
+field.focus();
+// Heard, and not kept.
+addEventListener("keydown", event => event.key == "Escape" && (document.title = "escape heard"));
+</script><img src="wait">' > "$out/site/keys-loading.html"
+  tabs() { call list_tabs '{}' | grep -c '^. [0-9]*  '; }
+  outline=$(call open_tab "{\"url\":\"localhost:$port/keys.html\"}")
+  keys_tab=$(printf '%s\n' "$outline" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$keys_tab" ] || fail "open_tab of the keys page answered: $outline"
+  await_log "^browser: title $keys_tab keys\$" "the keys page didn't paint"
+  outline=$(call snapshot "{\"tab\":$keys_tab}")
+  first=$(ref_of textbox "First field")
+  [ -n "$first" ] || fail "the keys page's outline had no ref for its first field: $outline"
+  typed=$(call type "{\"tab\":$keys_tab,\"ref\":\"$first\",\"text\":\"by-the-agent\",\"submit\":true}")
+  case "$typed" in
+    "Typed into “First field” and pressed Enter."*) ;;
+    *) fail "type with submit answered: $typed" ;;
+  esac
+  await_log "^browser: title $keys_tab submitted 1 by-the-agent\$" "type with submit didn't submit the form"
+  pressed=$(call press_key "{\"tab\":$keys_tab,\"key\":\"Enter\"}")
+  case "$pressed" in "Pressed Enter."*) ;; *) fail "press_key Enter answered: $pressed" ;; esac
+  await_log "^browser: title $keys_tab submitted 2 by-the-agent\$" "press_key Enter didn't submit the form"
+  await_log "^browser: agent activity mcp-client $keys_tab press_key\$" \
+    "press_key didn't reach the activity log"
+  pressed=$(call press_key "{\"tab\":$keys_tab,\"key\":\"Tab\"}")
+  case "$pressed" in "Pressed Tab."*) ;; *) fail "press_key Tab answered: $pressed" ;; esac
+  await_log "^browser: title $keys_tab second focused\$" "press_key Tab didn't move the keyboard on"
+  await_log "^browser: title $keys_tab still loading\$" "the page that keeps loading didn't come"
+  await_log "^browser: page $keys_tab back 1 forward 0 loading 1 http://localhost:$port/keys-loading\\.html\$" \
+    "the page that keeps loading didn't show as loading"
+  stopped="^browser: page $keys_tab back [01] forward [01] loading 0 "
+  stops=$(grep -c "$stopped" "$log" || true)
+  before=$(tabs)
+  # The agent waits out the load before it presses and again after, 15 s each (kLoadTimeout in
+  # agent_page.cc), so the answer comes after the 30 s next_answer waits.
+  request press_key "{\"tab\":$keys_tab,\"key\":\"Escape\"}" >&4
+  await_log "^browser: title $keys_tab escape heard\$" "press_key Escape didn't reach the page"
+  pressed=$(perl -e 'alarm 60; exec @ARGV' sh -c 'read -r line && printf "%s\n" "$line"' <&5) ||
+    fail "the browser didn't answer press_key Escape"
+  pressed=$(printf '%s\n' "$pressed" | answered)
+  case "$pressed" in "Pressed Escape."*) ;; *) fail "press_key Escape answered: $pressed" ;; esac
+  kill -0 "$pid" 2>/dev/null || fail "the app exited as the agent pressed Escape"
+  [ "$(grep -c "$stopped" "$log" || true)" = "$stops" ] ||
+    fail "the agent's Escape, which the page didn't keep, ran ilo's Stop"
+  [ "$(tabs)" = "$before" ] || fail "the agent's Escape changed the tabs in its Space"
+  closed=$(call close_tab "{\"tab\":$keys_tab}")
+  case "$closed" in "Closed tab $keys_tab."*) ;; *) fail "closing the keys page answered: $closed" ;; esac
+
   # It opens a page in its Space, clicks its link, scrolls and takes a screenshot.
   opened=$(call open_tab '{"url":"example.com"}')
   case "$opened" in
@@ -643,7 +714,7 @@ forget_login
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, without its fields' values, acts by ref but never in a password field, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, is refused a tab the user took over until they hand it back and Keep answers its ask, its bar's Stop naming ⌘. in its tooltip, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow and again once that's revoked, and off takes the socket away"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, is refused a tab the user took over until they hand it back and Keep answers its ask, its bar's Stop naming ⌘. in its tooltip, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow and again once that's revoked, and off takes the socket away"
 else
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi

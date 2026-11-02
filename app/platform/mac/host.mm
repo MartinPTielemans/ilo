@@ -245,6 +245,9 @@ struct Browser {
   void (*reveal_pointer)(void* ui_view, double x);
   double reveal_width = 0;
   id reveal_monitor;
+
+  // A Little ilo window's (host_set_window_little).
+  bool little = false;
 };
 
 // In the order their views were made. Each is allocated alone, so the pointers stay put.
@@ -353,6 +356,22 @@ Overlay* OverlayAt(int index) {
   return index >= 0 && index < int(std::size(g_overlays)) && g_overlays[index].window
              ? &g_overlays[index]
              : nullptr;
+}
+
+// What a log line calls |object|, by its class.
+const char* ClassName(id object) {
+  return object ? NSStringFromClass([object class]).UTF8String : "nothing";
+}
+
+// The overlay's view takes the keys only as its window's first responder. GPUI makes it that and
+// nothing here changes it, but an assistive app can, which would leave the overlay key and deaf.
+void KeepFirstResponder(Overlay& overlay) {
+  NSResponder* responder = overlay.window.firstResponder;
+  if (responder != overlay.view) {
+    fprintf(stderr, "browser: %s takes its window's keys back from %s\n", overlay.name,
+            ClassName(responder));
+    [overlay.window makeFirstResponder:overlay.view];
+  }
 }
 
 // The dialog's window and view, and the browser it shows over.
@@ -1362,6 +1381,23 @@ void* host_ui_view(void) {
   return (__bridge void*)g_browsers.back()->ui_view;
 }
 
+void host_set_window_little(void* ui_view) {
+  if (Browser* browser = BrowserWithView(ui_view)) {
+    browser->little = true;
+  }
+}
+
+// Brings Little ilo's |window| to the desktop shown on its way on screen, as Arc's Little Arc
+// comes. macOS moves a window there only while it has MoveToActiveSpace, but counts a window with it
+// as on no desktop, so it has it only until then, as Settings does (OrderSettingsFront).
+static void ToActiveSpace(NSWindow* window) {
+  window.collectionBehavior |= NSWindowCollectionBehaviorMoveToActiveSpace;
+  __weak NSWindow* weak = window;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    weak.collectionBehavior &= ~NSWindowCollectionBehaviorMoveToActiveSpace;
+  });
+}
+
 void host_show_window(void* ui_view) {
   host_show_window_behind(ui_view, nullptr);
 }
@@ -1375,6 +1411,24 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   NSView* view = browser->ui_view;
   NSWindow* window = view.window;
   browser->window = window;
+  if (browser->little) {
+    // Over a full-screen browser window on the desktop shown, as Arc's opens over a full-screen Arc
+    // window. A window joins another's full-screen desktop only as its auxiliary, as Chromium's
+    // SetCanAppearInExistingFullscreenSpaces makes one, which can't go full screen itself.
+    for (auto& each : g_browsers) {
+      if (each.get() != browser && each->window.onActiveSpace &&
+          (each->window.styleMask & NSWindowStyleMaskFullScreen)) {
+        window.collectionBehavior =
+            (window.collectionBehavior & ~(NSWindowCollectionBehaviorPrimary |
+                                           NSWindowCollectionBehaviorFullScreenPrimary)) |
+            NSWindowCollectionBehaviorFullScreenAuxiliary;
+        // check.sh reads this line.
+        fprintf(stderr, "browser: little window over full screen\n");
+        break;
+      }
+    }
+    ToActiveSpace(window);
+  }
   // Never drawn, but Mission Control and the Window menu name the window by it.
   window.title = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleName"];
   // Under the UI's view, since the core keeps only the UI's and the page's views in its own.
@@ -1523,6 +1577,14 @@ size_t host_screens(double* frames, size_t count) {
   return screens.count;
 }
 
+bool host_pointer(double* x, double* y) {
+  const NSPoint point = NSEvent.mouseLocation;
+  *x = point.x;
+  // AppKit's y runs up from the bottom of the main display, the core's down from its top.
+  *y = NSHeight(NSScreen.screens.firstObject.frame) - point.y;
+  return true;
+}
+
 bool host_window_frame(void* ui_view, double* x, double* y, double* width, double* height) {
   Browser* browser = BrowserWithView(ui_view);
   NSWindow* window = browser ? browser->window : nil;
@@ -1587,6 +1649,9 @@ void host_activate(void* ui_view) {
   if (!window) {
     return;
   }
+  if (browser->little) {
+    ToActiveSpace(window);
+  }
   if (window.miniaturized) {
     [window deminiaturize:nil];
   }
@@ -1595,6 +1660,149 @@ void host_activate(void* ui_view) {
   if (NSWindow* over = KeyWindowOver(browser); over != window) {
     [over makeKeyWindow];
   }
+}
+
+void host_set_window_shown(void* ui_view, bool shown) {
+  Browser* browser = BrowserWithView(ui_view);
+  NSWindow* window = browser ? browser->window : nil;
+  if (shown && browser->little) {
+    ToActiveSpace(window);
+  }
+  if (!shown) {
+    [window orderOut:nil];
+  } else if (window.miniaturized) {
+    [window deminiaturize:nil];
+  } else {
+    [window orderFront:nil];
+  }
+}
+
+bool host_window_shown(void* ui_view) {
+  Browser* browser = BrowserWithView(ui_view);
+  return browser && browser->window.visible;
+}
+
+static int (*g_dock_little)(void);
+static void (*g_dock_chosen)(int);
+// The engine's applicationDockMenu:, which ours calls first.
+static IMP g_engine_dock_menu;
+
+@interface DockItems : NSObject
+- (void)chose:(NSMenuItem*)item;
+@end
+
+@implementation DockItems
+- (void)chose:(NSMenuItem*)item {
+  g_dock_chosen((int)item.tag);
+}
+@end
+
+static DockItems* g_dock_items;
+
+// The engine's Dock menu with Little ilo's items after its first command, New Window.
+static NSMenu* DockMenu(id delegate, SEL selector, NSApplication* app) {
+  NSMenu* menu = g_engine_dock_menu
+                     ? ((NSMenu * (*)(id, SEL, NSApplication*)) g_engine_dock_menu)(delegate,
+                                                                                    selector, app)
+                     : nil;
+  if (!menu) {
+    menu = [[NSMenu alloc] initWithTitle:@""];
+  }
+  // After New Window, the first item that isn't a profile's, which the engine puts first.
+  NSInteger at = menu.numberOfItems;
+  for (NSInteger index = 0; index < menu.numberOfItems; index++) {
+    if ([menu itemAtIndex:index].action == NSSelectorFromString(@"commandFromDock:")) {
+      at = index + 1;
+      break;
+    }
+  }
+  auto add = [&](NSString* title, NSInteger tag) {
+    NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:title
+                                                  action:@selector(chose:)
+                                           keyEquivalent:@""];
+    item.target = g_dock_items;
+    item.tag = tag;
+    [menu insertItem:item atIndex:at++];
+  };
+  add(@"New Little ilo Window", 0);
+  switch (g_dock_little()) {
+    case 1:
+      add(@"Hide All Little ilo Windows", 2);
+      break;
+    case 2:
+      add(@"Show All Little ilo Windows", 1);
+      break;
+  }
+  return menu;
+}
+
+void host_add_dock_items(int (*little)(void), void (*chosen)(int item)) {
+  Class kind = object_getClass(NSApp.delegate);
+  if (!kind || g_dock_items) {
+    return;
+  }
+  g_dock_little = little;
+  g_dock_chosen = chosen;
+  g_dock_items = [[DockItems alloc] init];
+  const SEL selector = @selector(applicationDockMenu:);
+  if (Method method = class_getInstanceMethod(kind, selector)) {
+    g_engine_dock_menu = method_setImplementation(method, (IMP)DockMenu);
+  } else {
+    class_addMethod(kind, selector, (IMP)DockMenu, "@@:@");
+  }
+}
+
+static void (*g_little_clicked)(void);
+static NSStatusItem* g_little_status_item;
+
+@interface LittleStatusTarget : NSObject
+- (void)clicked:(id)sender;
+@end
+
+@implementation LittleStatusTarget
+- (void)clicked:(id)sender {
+  if (g_little_clicked) {
+    g_little_clicked();
+  }
+}
+@end
+
+static LittleStatusTarget* g_little_status_target;
+
+// The menu bar's Little ilo button, for drive.mm's statusitem; nil while it's off.
+NSStatusBarButton* HostLittleStatusButton() {
+  return g_little_status_item.button;
+}
+
+void host_set_little_status_item(void (*clicked)(void)) {
+  g_little_clicked = clicked;
+  if (!clicked) {
+    if (g_little_status_item) {
+      [NSStatusBar.systemStatusBar removeStatusItem:g_little_status_item];
+      g_little_status_item = nil;
+    }
+    return;
+  }
+  if (g_little_status_item) {
+    return;
+  }
+  if (!g_little_status_target) {
+    g_little_status_target = [[LittleStatusTarget alloc] init];
+  }
+  NSStatusItem* item =
+      [NSStatusBar.systemStatusBar statusItemWithLength:NSSquareStatusItemLength];
+  // A symbol is a template image, so the menu bar tints it as it does its own.
+  NSImage* image = [NSImage imageWithSystemSymbolName:@"macwindow.badge.plus"
+                             accessibilityDescription:@"New Little ilo Window"];
+  if (image) {
+    item.button.image = image;
+  } else {
+    item.button.title = @"ilo";
+  }
+  item.button.toolTip = @"New Little ilo Window";
+  item.button.target = g_little_status_target;
+  item.button.action = @selector(clicked:);
+  g_little_status_item = item;
 }
 
 void host_watch_key_window(void (*changed)(void* ui_view)) {
@@ -1864,7 +2072,10 @@ void host_set_overlay_elevation(int index,
   Overlay* overlay = index == HOST_SITE_CONTROLS ? &g_site_controls_overlay
                      : index >= 0 && index < int(std::size(g_overlays)) ? &g_overlays[index]
                                                                           : nullptr;
-  if (!overlay) {
+  if (!overlay || (overlay->outline_opacity == outline_opacity &&
+                   overlay->outline_radius == outline_radius &&
+                   overlay->shadow_opacity == shadow_opacity &&
+                   overlay->shadow_radius == shadow_radius && overlay->shadow_drop == shadow_drop)) {
     return;
   }
   overlay->outline_opacity = outline_opacity;
@@ -1872,6 +2083,20 @@ void host_set_overlay_elevation(int index,
   overlay->shadow_opacity = shadow_opacity;
   overlay->shadow_radius = shadow_radius;
   overlay->shadow_drop = shadow_drop;
+  if (!overlay->shadow_layer) {
+    return;
+  }
+  // Already added, as the command bar is, whose level changes with where it shows.
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
+  overlay->shadow_layer.shadowOpacity = shadow_opacity;
+  overlay->shadow_layer.shadowRadius = shadow_radius;
+  overlay->shadow_layer.shadowOffset = CGSizeMake(0, -shadow_drop);
+  overlay->outline_layer.shadowOpacity = outline_opacity;
+  overlay->outline_layer.shadowRadius = outline_radius;
+  [CATransaction commit];
+  // Drawn again at its next show, as its reach changed.
+  [overlay->shadow setFrame:NSZeroRect display:NO];
 }
 
 void host_add_overlay(int index, void* overlay_view, double radius, void (*dismissed)(void)) {
@@ -1910,10 +2135,19 @@ void host_add_overlay(int index, void* overlay_view, double radius, void (*dismi
                       return;
                     }
                     Browser* browser = BrowserOf(window);
-                    if (each->shown && window != each->window) {
+                    if (each->shown && window == each->window) {
+                      KeepFirstResponder(*each);
+                    } else if (each->shown) {
+                      // What took the keyboard, for the next time an overlay is shown and deaf
+                      // (#1314): the release build's log is stderr alone.
                       if (browser == each->over) {
+                        fprintf(stderr,
+                                "browser: %s takes the keyboard back from its window's %s\n",
+                                each->name, ClassName(window.firstResponder));
                         [each->window makeKeyWindow];
                       } else {
+                        fprintf(stderr, "browser: %s closes as %s takes the keyboard\n",
+                                each->name, ClassName(window));
                         host_dismiss_overlay(index);
                       }
                     } else if (index == 0 && !g_dialog_shown && browser &&
@@ -2191,6 +2425,27 @@ void host_dismiss_overlay(int index) {
       dismissed();
     });
   }
+}
+
+void host_take_overlay_keyboard(int index) {
+  Overlay* overlay = OverlayAt(index);
+  // Not yet on screen, it takes the keyboard as it goes there.
+  if (!overlay || !overlay->shown || !overlay->window.visible || !NSApp.active) {
+    return;
+  }
+  if (overlay->window.keyWindow) {
+    KeepFirstResponder(*overlay);
+    return;
+  }
+  // ilo's menu over it has the keyboard, or another window took it, which closed the overlay.
+  NSWindow* key = NSApp.keyWindow;
+  if (key && (HostIsMenuWindow(key) || BrowserOf(key) != overlay->over)) {
+    return;
+  }
+  fprintf(stderr, "browser: %s takes the keyboard back from %s\n", overlay->name,
+          key ? ClassName(key.firstResponder) : "no window");
+  [overlay->window makeKeyWindow];
+  KeepFirstResponder(*overlay);
 }
 
 void host_hold_keys(void) {
@@ -3547,6 +3802,66 @@ void host_show_window_buttons(void* ui_view, bool shown) {
        {NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton}) {
     [browser->window standardWindowButton:button].hidden = !shown;
   }
+}
+
+// The diameter of the circle |button| draws, from the middle row of a picture of it: macOS 26
+// draws a larger one for an app built with its SDK than for one built with an older SDK, in a
+// frame of the same width (#1310). A pixel counts once it's half as covered as the most covered.
+static CGFloat DrawnDiameter(NSButton* button) {
+  NSBitmapImageRep* picture = [button bitmapImageRepForCachingDisplayInRect:button.bounds];
+  [button cacheDisplayInRect:button.bounds toBitmapImageRep:picture];
+  const NSInteger row = picture.pixelsHigh / 2;
+  CGFloat most = 0;
+  for (NSInteger x = 0; x < picture.pixelsWide; x++) {
+    most = MAX(most, [picture colorAtX:x y:row].alphaComponent);
+  }
+  NSInteger drawn = 0;
+  for (NSInteger x = 0; most > 0 && x < picture.pixelsWide; x++) {
+    drawn += [picture colorAtX:x y:row].alphaComponent >= most / 2;
+  }
+  return drawn * NSWidth(button.bounds) / MAX(picture.pixelsWide, 1);
+}
+
+bool host_window_buttons(void* ui_view, double centres[3], double* y, double* diameter) {
+  // Read once: they're the same in every browser window, by the SDK the app was built with and
+  // the system it runs on. Hidden, AppKit lays the others out again, so all three must show.
+  static double g_centres[3], g_y, g_diameter;
+  if (g_diameter == 0) {
+    Browser* browser = BrowserWithView(ui_view);
+    if (!browser || (browser->window.styleMask & NSWindowStyleMaskFullScreen)) {
+      return false;
+    }
+    NSWindow* window = browser->window;
+    const NSWindowButton types[] = {NSWindowCloseButton, NSWindowMiniaturizeButton,
+                                    NSWindowZoomButton};
+    double read[3];
+    double row = 0;
+    for (int i = 0; i < 3; i++) {
+      NSButton* button = [window standardWindowButton:types[i]];
+      if (!button || button.hidden) {
+        return false;
+      }
+      // As drive.mm's layout line gives them: points from the window's top-left corner.
+      NSRect frame = [button convertRect:button.bounds toView:nil];
+      read[i] = NSMidX(frame);
+      row = NSHeight(window.frame) - NSMidY(frame);
+    }
+    const CGFloat drawn = DrawnDiameter([window standardWindowButton:NSWindowCloseButton]);
+    if (drawn <= 0) {
+      return false;
+    }
+    for (int i = 0; i < 3; i++) {
+      g_centres[i] = read[i];
+    }
+    g_y = row;
+    g_diameter = drawn;
+  }
+  for (int i = 0; i < 3; i++) {
+    centres[i] = g_centres[i];
+  }
+  *y = g_y;
+  *diameter = g_diameter;
+  return true;
 }
 
 // Level change: AppKit's alignment haptic was too faint to feel (#1075).

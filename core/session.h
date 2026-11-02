@@ -153,6 +153,9 @@ bool RestoreSavedWindow(Window& window, size_t index);
 struct Settings {
   // How long a Today tab no window shows waits before it goes in the archive.
   base::TimeDelta archive_after = base::Hours(12);
+  // How long a Little ilo window that isn't active waits before it closes into the archive (Arc's
+  // default).
+  base::TimeDelta little_archive_after = base::Hours(6);
   // Whether the app taps the trackpad at its detents.
   bool haptics = true;
   // Whether the app asks before the user's Quit quits.

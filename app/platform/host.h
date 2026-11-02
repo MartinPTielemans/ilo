@@ -31,6 +31,10 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
 // the Mac's own alone. Copies up to |count| screens into |frames| and returns how many there are.
 size_t host_screens(double* frames, size_t count);
 
+// Where the pointer is, in host_centered's terms, for Little ilo to open on its screen. False where
+// the host doesn't say, as on Linux, whose window manager places windows.
+bool host_pointer(double* x, double* y);
+
 // The frame of the browser window of |ui_view|, in host_centered's terms. False, leaving them be,
 // while it's full screen.
 bool host_window_frame(void* ui_view, double* x, double* y, double* width, double* height);
@@ -73,6 +77,12 @@ void host_window_active(void* ui_view, bool active, bool whole_window);
 // "Capture 2026-10-29 at 18.04.12.png".
 void host_capture_name(char* name, size_t capacity);
 
+// The browser window of |ui_view| is Little ilo's, as Arc's Little Arc: each time it comes on
+// screen it comes to the desktop shown rather than taking the user to the one it was on, and opened
+// while a full-screen browser window has that desktop, it opens over it there. Before
+// host_show_window. Off the Mac, where the window manager places windows, nothing.
+void host_set_window_little(void* ui_view);
+
 // Shows the window holding |ui_view| in front, with its title bar over the UI, and makes the
 // app the active one.
 void host_show_window(void* ui_view);
@@ -102,6 +112,26 @@ void host_set_app_appearance(int appearance);
 // minimized, as a Switch to Tab row for a page it shows does. The user's: agents get none, as it
 // takes the user's focus (decision 8).
 void host_activate(void* ui_view);
+
+// Hides the browser window of |ui_view| without closing it, or with |shown| puts it back in front,
+// out of the Dock if it's minimized, as the Dock's Hide All and Show All Little ilo Windows do.
+// Whether it's on screen now: host_window_shown. The user's: agents get none.
+void host_set_window_shown(void* ui_view, bool shown);
+bool host_window_shown(void* ui_view);
+
+// Adds Little ilo's items to the Dock icon's menu, the engine's, after its New Window, as Arc's:
+// New Little ilo Window, then, while one is open, Hide All Little ilo Windows, or Show All Little
+// ilo Windows once they're all hidden. |little| is asked as the menu opens: 0 with no Little ilo
+// window open, 1 with one on screen and 2 with all hidden. |chosen| gets the item picked: 0 New, 1
+// Show All, 2 Hide All. Once the app has finished launching, as the engine's delegate is set then.
+// Off the Mac, which has no Dock menu, nothing.
+void host_add_dock_items(int (*little)(void), void (*chosen)(int item));
+
+// Puts a button in the menu bar whose click calls |clicked|, which opens a Little ilo window, as
+// Arc's optional one does, or with NULL takes it out again. Off until the user turns it on in
+// Settings › General. It draws once and then waits for a click, so an idle browser stays asleep.
+// Off the Mac, nothing, and Settings offers no switch there.
+void host_set_little_status_item(void (*clicked)(void));
 
 // Calls |changed| with the view of each browser window that becomes the key window.
 void host_watch_key_window(void (*changed)(void* ui_view));
@@ -165,7 +195,8 @@ void host_forget_window(void* ui_view);
 // Gives the |overlay| (or the Site Controls) the shadow its elevation level draws, in Core
 // Animation's terms: a black line round its shape and a black drop shadow, each with an opacity
 // and a blur |radius|, which is half CSS's blur, and the drop shadow falling |shadow_drop| points.
-// The shadow reaches three radii and the drop past the window. Call it before the overlay is added.
+// The shadow reaches three radii and the drop past the window. Call it before the overlay is added,
+// and again before a show that takes another level, as the command bar's over the URL field does.
 void host_set_overlay_elevation(int overlay,
                                 float outline_opacity,
                                 double outline_radius,
@@ -221,6 +252,11 @@ void host_hide_overlay(int overlay);
 
 // Hides the overlay as the user leaving it, as escape does.
 void host_dismiss_overlay(int overlay);
+
+// Gives the overlay the keyboard back if it shows, the user hasn't left it, and the browser window
+// it shows over or no window has it: for the UI, once it finds the overlay's window isn't key.
+// The Mac's alone: Linux's and Windows' hosts close an overlay whose keyboard goes elsewhere.
+void host_take_overlay_keyboard(int overlay);
 
 // Holds the keys typed from now until the command bar or the find bar takes the keyboard, and then
 // gives them to it: for a shortcut that opens one but reaches the page first, which may keep it.
@@ -469,6 +505,12 @@ int host_ask(const char* message, const char* detail, const char* const* buttons
 // Shows the close, minimize and zoom buttons of |ui_view|'s window, or hides them, as Arc does
 // while its sidebar is hidden.
 void host_show_window_buttons(void* ui_view, bool shown);
+
+// The Mac's close, minimize and zoom buttons as AppKit draws them in |ui_view|'s window, for the
+// copies the UI draws in their place: each one's centre across from the window's left edge, their
+// row's centre down from its top, and their circles' diameter. False until a window shows all
+// three out of full screen.
+bool host_window_buttons(void* ui_view, double centres[3], double* y, double* diameter);
 
 // Does what a click on the close (0), minimize (1) or zoom (2) button of |ui_view|'s window does.
 void host_press_window_button(void* ui_view, int button);

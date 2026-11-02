@@ -11,7 +11,8 @@
 // clickkey, doubleclickkey, rightclickkey, drag, dragkey, press, dragto, release, rightpress,
 // rightdragto, rightrelease, move, key, keydown, keyup, flags, type, insert, scroll, swipe, wheel,
 // resize, place, minimize, window, order, layout, state, title, pasteboard, front, menu, menubar,
-// choose, dismiss, agentspace, agentmayact, agentrelease, agentdisconnect, takeback and age. The Mac's modifiers are
+// choose, dismiss, agentspace, agentmayact, agentrelease, agentdisconnect, takeback and age, and
+// maximize, Windows' own, which the Mac's has no command for. The Mac's modifiers are
 // pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl with Alt, but Ctrl for
 // ⌃Tab, and alt with both. A trackpad's scrolls and swipes are wheel messages with the pixels in
 // their deltas, as a precision touchpad sends them. choose and dismiss work on ilo's menu and the
@@ -1059,6 +1060,15 @@ bool Run(const std::string& line) {
   }
   if (!Driven()) {
     return false;
+  }
+  // Windows' system command, as the title bar's button and Win+↑ send it: it maximizes the window,
+  // or restores it once maximized, through DefWindowProc, as the resize that crashed did (#1340).
+  if (action == "maximize") {
+    HWND root = Driven();
+    g_steps.push_back({[root] {
+      PostMessageW(root, WM_SYSCOMMAND, IsZoomed(root) ? SC_RESTORE : SC_MAXIMIZE, 0);
+    }});
+    return true;
   }
   if (action == "click" || action == "rightclick" || action == "middleclick" ||
       action == "doubleclick" || action == "clickkey" || action == "rightclickkey" ||

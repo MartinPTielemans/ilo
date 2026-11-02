@@ -2103,6 +2103,17 @@ size_t host_screens(double* frames, size_t count) {
   return works.size();
 }
 
+bool host_pointer(double* x, double* y) {
+  POINT point{};
+  if (!GetCursorPos(&point)) {
+    return false;
+  }
+  const double scale = GetDpiForSystem() / 96.0;
+  *x = point.x / scale;
+  *y = point.y / scale;
+  return true;
+}
+
 // The browser window's frame, in host_centered's terms, so it comes back where it was. Left be
 // while it's maximized or minimized, as the Mac leaves a full-screen window's frame be: Windows
 // brings those back to the size they had on its own.
@@ -2244,6 +2255,19 @@ void host_activate(void* ui_view) {
   }
   SetForegroundWindow(root);
 }
+
+// Windows opens a window on the virtual desktop shown, and has no full-screen desktops.
+void host_set_window_little(void* ui_view) {}
+
+// Little ilo's Dock items alone hide windows, and Windows has no Dock menu: its taskbar's jump list
+// isn't ours yet.
+void host_set_window_shown(void* ui_view, bool shown) {}
+bool host_window_shown(void* ui_view) {
+  return true;
+}
+void host_add_dock_items(int (*little)(void), void (*chosen)(int item)) {}
+
+void host_set_little_status_item(void (*clicked)(void)) {}
 
 void host_watch_key_window(void (*changed)(void* ui_view)) {
   g_key_window_changed = changed;

@@ -323,7 +323,7 @@ Promise.all([document.fonts.ready, ...[...document.images].map(image => image.de
 # The server logs each GET as "GET <engine> <host><path> cookie <cookies sorted, or none>", the
 # engine named by the user agent as the engine page does.
 python3 -I -u -c '
-import base64, functools, http.server, sys, time, urllib.parse
+import base64, functools, http.server, socketserver, sys, time, urllib.parse
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     sent = 0
@@ -402,8 +402,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+# HTTPServer.server_bind names the server by a reverse lookup of 127.0.0.1, which takes 35 s on
+# the macos-26 runners, so the server binds as TCPServer does and takes its name as given.
+class Server(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "127.0.0.1"
+        self.server_port = self.server_address[1]
+
 handler = functools.partial(Handler, directory=sys.argv[1])
-server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+server = Server(("127.0.0.1", 0), handler)
 print("Serving HTTP on 127.0.0.1 port", server.server_address[1], "...")
 server.serve_forever()
 ' "$out/site" > "$out/site.log" 2>&1 3>&- 4>&- 5>&- &

@@ -19,6 +19,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/scoped_multi_source_observation.h"
 #include "base/scoped_observation.h"
 #include "browser_core/platform/focus_ring_aura.h"
 #include "chrome/installer/util/install_util.h"
@@ -264,12 +265,7 @@ class WindowViews : public views::WidgetObserver,
     ui::HWNDSubclass::AddFilterToTarget(window(), this);
   }
 
-  ~WindowViews() override {
-    if (preview_.page) {
-      preview_.page->RemoveObserver(this);
-    }
-    ui::HWNDSubclass::RemoveFilterFromAllTargets(this);
-  }
+  ~WindowViews() override { ui::HWNDSubclass::RemoveFilterFromAllTargets(this); }
 
   HWND window() const { return views::HWNDForWidget(widget_); }
   HWND ui() const { return ui_; }
@@ -327,10 +323,20 @@ class WindowViews : public views::WidgetObserver,
     }
   }
 
-  void Empty(Slot& slot, const Staying& staying = {}) {
-    if (&slot == &preview_ && slot.page) {
-      slot.page->RemoveObserver(this);
+  // Holds |page| and |devtools| in |slot|. A slot forgets one destroyed before ShowPages replaces
+  // it, as a closed tab's page is when no other page shows after it, or the next resize would lay
+  // out the freed page (#1340).
+  void Keep(Slot& slot, aura::Window* page, aura::Window* devtools) {
+    for (aura::Window* view : {page, devtools}) {
+      if (view && !kept_.IsObservingSource(view)) {
+        kept_.AddObservation(view);
+      }
     }
+    slot.page = page;
+    slot.devtools = devtools;
+  }
+
+  void Empty(Slot& slot, const Staying& staying = {}) {
     aura::Window* holder = slot.widget ? slot.widget->GetNativeView() : nullptr;
     Detach(holder, slot.page, staying);
     Detach(holder, slot.devtools, staying);
@@ -451,8 +457,7 @@ class WindowViews : public views::WidgetObserver,
         page->parent()->RemoveChild(page);
       }
       parent->AddChild(page);
-      page->AddObserver(this);
-      preview_.page = page;
+      Keep(preview_, page, nullptr);
     }
     page->Show();
     preview_.corner_radius = corner_radius;
@@ -461,14 +466,24 @@ class WindowViews : public views::WidgetObserver,
     LayOut();
   }
 
-  // aura::WindowObserver: a link preview's page goes as its tab closes, and its slot with it.
+  // aura::WindowObserver: a page or DevTools a slot holds is going.
   void OnWindowDestroying(aura::Window* window) override {
-    window->RemoveObserver(this);
-    if (preview_.page == window) {
-      preview_.page = nullptr;
-      if (preview_.widget) {
-        preview_.widget->Hide();
+    kept_.RemoveObservation(window);
+    const bool preview_went = preview_.page == window;
+    auto forget = [window](Slot& slot) {
+      if (slot.page == window) {
+        slot.page = nullptr;
       }
+      if (slot.devtools == window) {
+        slot.devtools = nullptr;
+      }
+    };
+    std::ranges::for_each(panes_, forget);
+    forget(side_panel_);
+    forget(preview_);
+    // A link preview's page goes as its tab closes, and its slot with it.
+    if (preview_went && preview_.widget) {
+      preview_.widget->Hide();
     }
   }
 
@@ -495,6 +510,7 @@ class WindowViews : public views::WidgetObserver,
     panes_.clear();
     side_panel_ = Slot();
     preview_ = Slot();
+    kept_.RemoveAllObservations();
     observation_.Reset();
     ui::HWNDSubclass::RemoveFilterFromAllTargets(this);
   }
@@ -535,6 +551,8 @@ class WindowViews : public views::WidgetObserver,
   HWND had_keyboard_ = nullptr;
   // The pages DrawUnseen holds.
   aura::WindowTracker unseen_;
+  // The pages and DevTools the slots have held, which Keep watches for their going.
+  base::ScopedMultiSourceObservation<aura::Window, aura::WindowObserver> kept_{this};
   base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
   base::WeakPtrFactory<WindowViews> weak_factory_{this};
 };
@@ -673,8 +691,7 @@ void ShowPages(views::Widget* widget,
         parent->StackChildAbove(pane.page, devtools);
       }
     }
-    slot.page = pane.page;
-    slot.devtools = devtools;
+    views->Keep(slot, pane.page, devtools);
     slot.insets = InsetsOf(pane.frame, size);
     hidden ? holder->Hide() : ShowInactive(holder);
   }
@@ -695,7 +712,7 @@ void ShowPages(views::Widget* widget,
       }
     }
     Hold(parent, side_panel->page, hidden);
-    panel.page = side_panel->page;
+    views->Keep(panel, side_panel->page, nullptr);
     panel.insets = InsetsOf(side_panel->frame, size);
     panel.bottom_corners_only = true;
     hidden ? holder->Hide() : ShowInactive(holder);

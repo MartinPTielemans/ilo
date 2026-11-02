@@ -1,11 +1,13 @@
 # The browser on the Mac, run and checked by app/check.sh (AGENTS.md, Verifying), on the Mac engine
 # built from this commit's core, on GitHub's hosted Apple silicon runners, which are free for a
-# public repository. Main's pushes and runs by hand only: never a pull request. It never builds an
-# engine: it takes the newest engine-mac release in this commit's history (engine/fetch.sh), which
-# the owner's Mac publishes each night main's core or engine changed (tools/mac-nightly.sh), and a
-# commit whose core/public/browser_core.h no published engine has is skipped, as nothing can run
-# it. Every run in app/check/ shows in the summary: passed, failed, or skipped and why, with the
-# lines a run that passed skipped. Failures fail the job, which nothing waits on yet.
+# public repository. It runs on main each night and by hand, which the integrator does on main
+# after each merge train (#871): never a pull request. It never builds an engine: it takes the
+# newest engine-mac release in this commit's history (engine/fetch.sh), which the owner's Mac
+# publishes each night main's core or engine changed (tools/mac-nightly.sh), and a commit whose
+# core/public/browser_core.h no published engine has is skipped, as nothing can run it, and checked
+# the night after one is. Every run in app/check/ shows in the summary: passed, failed, or skipped
+# and why, with the lines a run that passed skipped. A failure on main opens an issue, which the
+# next run that passes closes (.github/scripts/main-check.sh).
 # The 2026-10-28 trial (branch ci/mac-check) found the runner a VM of 3 cores and 7.5 GB with a
 # 1024 by 768 screen, where Metal, windows, making an app active, window captures, IME, keys and
 # focus work, but scrolling drew 35-41 frames a second: it checks behaviour, never the performance
@@ -13,17 +15,17 @@
 name: Check on macOS
 
 on:
-  push:
-    branches: [main]
-    paths-ignore: ['**/*.md', docs/**]
+  # 05:23 UTC, after the owner's Mac builds the night's engine at 03:00 in Europe (tools/mac-nightly.sh).
+  schedule:
+    - cron: '23 5 * * *'
   workflow_dispatch:
     inputs:
       runs:
         description: The runs to do, such as "load tabs", or "all"; empty for the ones the Mac runner passes
         default: ''
 
-# Main's running check finishes, with only the newest push waiting behind it, so a train of merges
-# still gets a Mac result; a branch's dispatch replaces the one before it.
+# Main's running check finishes, with only the newest dispatch or night waiting behind it; a branch's
+# dispatch replaces the one before it.
 concurrency:
   group: check-mac-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -32,9 +34,35 @@ permissions:
   contents: read
 
 jobs:
+  # Whether to check this commit: a scheduled run, in ilo itself and not a fork, checks only a commit
+  # no run has checked yet; a dispatched one always does.
+  gate:
+    if: github.event_name != 'schedule' || github.repository == 'MartinPTielemans/ilo'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      check: ${{ github.event_name != 'schedule' || steps.seen.outputs.seen != 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+      - id: seen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/main-check.sh seen
+
   check:
-    runs-on: macos-15
+    needs: gate
+    if: needs.gate.outputs.check == 'true'
+    # Named apart when it does other runs than the default ones, so it's no verdict on the commit.
+    name: ${{ inputs.runs != '' && 'check (runs asked for)' || 'check' }}
+    runs-on: macos-26
     timeout-minutes: 120
+    outputs:
+      found: ${{ steps.engine.outputs.found }}
     defaults:
       run:
         working-directory: app
@@ -80,7 +108,8 @@ jobs:
         run: ./setup.sh prebuilt && ./build.sh
 
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
-      - if: ${{ steps.engine.outputs.found == 'true' }}
+      - name: Runs
+        if: ${{ steps.engine.outputs.found == 'true' }}
         env:
           RUNS: ${{ inputs.runs }}
         run: |
@@ -131,3 +160,25 @@ jobs:
           name: check-mac
           path: ${{ runner.temp }}/check
           if-no-files-found: ignore
+
+  # The default runs' verdict on main, the night's or a train's, keeps the workflow's issue: a
+  # dispatched run reports too, as its pass is the only one the night won't repeat on that commit.
+  report:
+    needs: [gate, check]
+    if: ${{ always() && needs.gate.outputs.check == 'true' && github.ref == 'refs/heads/main' && github.repository == 'MartinPTielemans/ilo' && inputs.runs == '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.check.result }}
+          FOUND: ${{ needs.check.outputs.found }}
+        run: .github/scripts/main-check.sh report "$RESULT" "$FOUND"

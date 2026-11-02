@@ -526,6 +526,21 @@ impl Agents {
         }
     }
 
+    /// What the "Any MCP client" row says before it's connected. `missing` are the clients it
+    /// looked for and didn't find. A Flatpak's sandbox can't see the host's, so there it says so
+    /// instead of claiming they're absent, and points to Copy Setup, since reaching the host's
+    /// commands would defeat the sandbox.
+    pub fn other_client_detail(&self, missing: &[&str]) -> String {
+        if self.bridge.first().map(String::as_str) == Some("flatpak") {
+            return "Any MCP client. ilo's sandbox can't see Claude Code or Codex on this computer, so Copy Setup gives their setup to paste in.".into();
+        }
+        match missing {
+            [] => "Any MCP client".into(),
+            [one] => format!("Any MCP client. {one} isn't on this computer."),
+            _ => format!("Any MCP client. {} aren't on this computer.", missing.join(" and ")),
+        }
+    }
+
     /// What a client runs to reach the server: the bridge, with the socket.
     pub fn command(&self) -> String {
         let entry = self.entry("");
