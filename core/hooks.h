@@ -273,6 +273,11 @@ extern bool (*g_browser_core_no_autofill)(content::WebContents* contents);
 // knows how it would show. Not asked of one that shows only in autofill's suggestions.
 extern bool (*g_browser_core_refuse_passkey)(content::WebContents* contents, bool asks);
 
+// chrome/browser/webauthn/chrome_authenticator_request_delegate.cc: whether Chrome's passkey dialog
+// for |contents|'s page, whose profile is off the record, reads as a normal window's, without its
+// Incognito wording. For a profile the core keeps off the record for a page of its own.
+extern bool (*g_browser_core_passkey_normal_wording)(content::WebContents* contents);
+
 // chrome/browser/ui/views/overlay/video_overlay_window_views.cc: a mouse, scroll or gesture event
 // on a video's Picture in Picture window, the Mini Player, before Chrome handles it. Returns true
 // once the core has handled it. While it's set, the window's background isn't a draggable caption,

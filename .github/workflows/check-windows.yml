@@ -1,15 +1,17 @@
 # The browser on Windows, run and checked by app/check.sh (AGENTS.md, Verifying) under Git Bash, on
-# the Windows engine built from this commit's core. Main's pushes and runs by hand only, on GitHub's
-# hosted runners: never a pull request, and never the self-hosted runner, which builds the engine
-# and holds Microsoft's toolchain. A commit whose core/public/browser_core.h no published engine
-# has is skipped, as nothing can run it: its check job shows as skipped, with a warning saying why.
-# Every run in app/check/ shows in the summary: passed, failed, or skipped and why.
+# the Windows engine built from this commit's core. It runs on main each night and by hand, which
+# the integrator does on main after each merge train (#871), on GitHub's hosted runners: never a
+# pull request, and never the self-hosted runner, which builds the engine and holds Microsoft's
+# toolchain. A commit whose core/public/browser_core.h no published engine has is skipped, as
+# nothing can run it: its check job shows as skipped, with a warning saying why. Every run in
+# app/check/ shows in the summary: passed, failed, or skipped and why. A failure on main opens an
+# issue, which the next run that passes closes (.github/scripts/main-check.sh).
 name: Check on Windows
 
 on:
-  push:
-    branches: [main]
-    paths-ignore: ['**/*.md', docs/**]
+  # 04:23 UTC, after the Windows engine's nightly build at 02:00 (engine-windows-cross.yml).
+  schedule:
+    - cron: '23 4 * * *'
   workflow_dispatch:
     inputs:
       runs:
@@ -18,15 +20,39 @@ on:
 
 concurrency:
   group: check-windows-${{ github.ref }}
-  cancel-in-progress: true
+  # Main's run in progress finishes, and while it runs a newer dispatch's or the night's pending run
+  # replaces the older pending one; a branch's newer dispatch cancels its older run.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
 
 jobs:
+  # Whether to check this commit: a scheduled run, in ilo itself and not a fork, checks only a commit
+  # no run has checked yet; a dispatched one always does.
+  gate:
+    if: github.event_name != 'schedule' || github.repository == 'MartinPTielemans/ilo'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      check: ${{ github.event_name != 'schedule' || steps.seen.outputs.seen != 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+      - id: seen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/main-check.sh seen
+
   # Whether an engine fits, alone, so that a commit none fits shows its check as skipped, not as
   # passed with nothing run.
   engine:
+    needs: gate
+    if: needs.gate.outputs.check == 'true'
     runs-on: windows-2022
     defaults:
       run:
@@ -58,6 +84,8 @@ jobs:
   check:
     needs: engine
     if: ${{ needs.engine.outputs.found == 'true' }}
+    # Named apart when it does other runs than the default ones, so it's no verdict on the commit.
+    name: ${{ inputs.runs != '' && 'check (runs asked for)' || 'check' }}
     runs-on: windows-2022
     timeout-minutes: 120
     defaults:
@@ -121,7 +149,8 @@ jobs:
           "Screen: " + [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
-      - env:
+      - name: Runs
+        env:
           RUNS: ${{ inputs.runs }}
         run: |
           out=$RUNNER_TEMP/check
@@ -192,3 +221,26 @@ jobs:
           name: check-windows
           path: ${{ runner.temp }}/check
           if-no-files-found: ignore
+
+  # The default runs' verdict on main, the night's or a train's, keeps the workflow's issue: a
+  # dispatched run reports too, as its pass is the only one the night won't repeat on that commit.
+  # An engine that fails to fetch fails the run too.
+  report:
+    needs: [gate, engine, check]
+    if: ${{ always() && needs.gate.outputs.check == 'true' && github.ref == 'refs/heads/main' && github.repository == 'MartinPTielemans/ilo' && inputs.runs == '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.engine.result == 'failure' && 'failure' || needs.check.result }}
+          FOUND: ${{ needs.engine.outputs.found }}
+        run: .github/scripts/main-check.sh report "$RESULT" "$FOUND"

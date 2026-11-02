@@ -479,11 +479,12 @@ void AgentPage::PressKey(const std::string& name, base::OnceClosure then) {
     return;
   }
   HideSuggestions();
+  // No nativeVirtualKeyCode, as select-all has none: DevTools then marks the key skip_if_unhandled,
+  // so it goes to the page alone and never to the app's key hooks, ilo's shortcuts or the menus.
   base::DictValue event = base::DictValue()
                               .Set("key", key->name == "Space" ? " " : std::string(key->name))
                               .Set("code", std::string(key->name))
-                              .Set("windowsVirtualKeyCode", key->code)
-                              .Set("nativeVirtualKeyCode", key->code);
+                              .Set("windowsVirtualKeyCode", key->code);
   base::DictValue down = event.Clone().Set("type", key->text.empty() ? "rawKeyDown" : "keyDown");
   if (!key->text.empty()) {
     down.Set("text", std::string(key->text));

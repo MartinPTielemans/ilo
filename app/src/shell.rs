@@ -68,6 +68,9 @@ mod library;
 mod link;
 #[cfg(test)]
 mod link_target;
+mod little;
+#[cfg(test)]
+mod little_tests;
 mod menu_bar;
 mod media_player;
 mod menus;
@@ -104,7 +107,10 @@ mod undo;
 
 pub use assets::Assets;
 pub use favorites::FavoritesScope;
-pub use browser::{AgentGrants, Browser, Folders, MediaAction, Page, Split, Trouble, WindowButton};
+pub use browser::{
+    AgentGrants, Browser, Folders, MediaAction, Page, Split, Trouble, WindowButton,
+    WindowButtonGeometry,
+};
 pub use commands::{
     BAR_ROWS, BAR_TABS_SHOWN, BarCommand, BarTab, CancelName, Command, CreateSpace, KEY_CONTEXT,
     KeepName, Match, bar_commands, bind_keys, copy_from_bar, copy_url_of_preview, find_commands,
@@ -461,7 +467,6 @@ const ZOOM_GLYPH: &str = match cfg!(any(target_os = "linux", target_os = "window
     false => "icons/window-full-screen.svg",
 };
 use crate::tokens::shell::WINDOW_BUTTON_Y;
-use crate::tokens::shell::WINDOW_BUTTON_SIZE;
 use crate::tokens::shell::WINDOW_BUTTON_GLYPH;
 use crate::tokens::shell::WINDOW_BUTTON_CLOSE;
 use crate::tokens::shell::WINDOW_BUTTON_MINIMIZE;
@@ -936,6 +941,14 @@ impl Settle {
     }
 }
 
+/// What the user asked to show, timed until the core shows it: a Space's switch ends only at the
+/// Space's report and a tab's only at a tab's, whatever the core reports between.
+#[derive(Clone, Copy)]
+enum Switch {
+    Space(u64),
+    Tab(u64),
+}
+
 pub struct Shell {
     browser: Rc<dyn Browser>,
     /// Holds GPUI's focus while nothing in the shell takes it, so the shortcuts have their context.
@@ -1159,6 +1172,9 @@ pub struct Shell {
     sidebar_hidden: bool,
     /// Whether the window's own buttons show (`window_buttons_shown`).
     window_buttons: bool,
+    /// The window's own buttons as the system draws them, once it has said, which the copies
+    /// drawn in their place match.
+    window_button_geometry: Option<WindowButtonGeometry>,
     /// The docked sidebar's width, at rest.
     sidebar_width: f32,
     /// While the sidebar's edge is dragged: how far right of the edge the pointer pressed it, and
@@ -1352,7 +1368,7 @@ pub struct Shell {
     /// The page dialog asked over the card last, by its tab and id, and where.
     page_dialog_shown: Option<(u64, u64, (Bounds<Pixels>, f32))>,
     /// The tab or Space the user asked for and when, until it's shown.
-    switching: Option<(u64, Instant)>,
+    switching: Option<(Switch, Instant)>,
     /// A press on the window's background, until the pointer moves and it moves the window.
     background_pressed: bool,
     /// What the chrome draws with, for the Space shown (palette.rs), and each theme's, worked
@@ -1396,6 +1412,8 @@ pub struct Shell {
     card_move: Option<Subscription>,
     /// A private window's: its one Space is its own, unsaved, in an off-the-record session.
     private: bool,
+    /// A Little ilo window's (Arc's Little Arc): its one Space is its own, holding its page.
+    little: Option<little::Little>,
 }
 
 impl Shell {
@@ -1510,6 +1528,7 @@ impl Shell {
             full_screen_timing: None,
             sidebar_hidden: false,
             window_buttons: true,
+            window_button_geometry: None,
             sidebar_width,
             resize: None,
             pane_resize: None,
@@ -1627,6 +1646,7 @@ impl Shell {
             window_light: None,
             capture_look: None,
             private: false,
+            little: None,
         }
     }
 
@@ -1903,6 +1923,9 @@ impl Shell {
         if self.private {
             return;
         }
+        if self.little.is_some() {
+            return self.set_little_spaces(spaces, cx);
+        }
         // check.sh reads these lines.
         let ids: Vec<String> = spaces.iter().map(|(id, ..)| id.to_string()).collect();
         log!("browser: spaces {}", ids.join(" "));
@@ -2032,7 +2055,7 @@ impl Shell {
     pub fn set_space(&mut self, space: u64, cx: &mut Context<Self>) {
         // check.sh reads these lines.
         match self.switching {
-            Some((asked, start)) if asked == space => {
+            Some((Switch::Space(asked), start)) if asked == space => {
                 self.switching = None;
                 log!(
                     "browser: space {space} in {:.1} ms",
@@ -2195,7 +2218,7 @@ impl Shell {
     /// Every favorite, left to right, each with its holder: the Space it belongs to under Each
     /// Space (the core's `bc_favorite_space`), else its profile.
     pub fn set_favorites(&mut self, favorites: Vec<(u64, u64)>, cx: &mut Context<Self>) {
-        if self.private {
+        if self.private || self.little.is_some() {
             return;
         }
         let tiles = self.drawn();
@@ -2292,11 +2315,20 @@ impl Shell {
     }
 
     pub fn set_selected(&mut self, tab: u64, cx: &mut Context<Self>) {
-        match self.switching.take() {
-            Some((asked, start)) if asked == tab => log!(
-                "browser: selected {tab} in {:.1} ms",
-                start.elapsed().as_secs_f64() * 1000.
-            ),
+        // A Space's switch can report a tab, even none, before the Space itself (#1332), so only a
+        // tab's switch ends here.
+        match self.switching {
+            Some((Switch::Tab(asked), start)) => {
+                self.switching = None;
+                if asked == tab {
+                    log!(
+                        "browser: selected {tab} in {:.1} ms",
+                        start.elapsed().as_secs_f64() * 1000.
+                    );
+                } else {
+                    log!("browser: selected {tab}");
+                }
+            }
             _ => log!("browser: selected {tab}"),
         }
         let before = self.selected_row();
@@ -2759,7 +2791,7 @@ impl Shell {
         if space == self.space {
             return;
         }
-        self.switching = Some((space, Instant::now()));
+        self.switching = Some((Switch::Space(space), Instant::now()));
         self.browser.show_space(space, cx);
     }
 
@@ -2768,7 +2800,7 @@ impl Shell {
         if tab == self.selected && !self.pictured(tab) {
             return;
         }
-        self.switching = Some((tab, Instant::now()));
+        self.switching = Some((Switch::Tab(tab), Instant::now()));
         self.browser.select(tab, cx);
     }
 
@@ -3211,6 +3243,10 @@ impl Render for Shell {
             self.window_buttons = window_buttons;
             self.browser.show_window_buttons(window_buttons, cx);
         }
+        // AppKit's say how they're drawn once they show, out of full screen, as at rest.
+        if self.window_button_geometry.is_none() && window_buttons {
+            self.window_button_geometry = self.browser.window_button_geometry(cx);
+        }
         // The Library slides in from the left with the card's edge, over the sidebar receding.
         let library = self.library.is_some() && !self.page_fullscreen;
         // Full screen has no window buttons, so the panel draws none.
@@ -3298,6 +3334,7 @@ impl Render for Shell {
             .child(self.window_background())
             // The page views go over the cards, as native views.
             .children(self.cards())
+            .children(self.little_bar(cx))
             .children(self.picture_element(cx))
             .children(self.empty_card(cx))
             .children(self.crash_cards(cx))
@@ -3744,6 +3781,12 @@ impl Shell {
         DRAWS_WINDOW_BUTTONS && self.window_buttons && !self.full_screen
     }
 
+    /// Where the copies of the window's buttons go, in the window or in a panel at its corner: on
+    /// the window's own, at their size (#1310).
+    pub(super) fn window_button_frames(&self) -> [Bounds<Pixels>; 3] {
+        self.window_button_geometry.unwrap_or_default().frames()
+    }
+
     /// The window's close, minimize and zoom buttons, drawn in the reveal's panel.
     fn window_buttons(&self, cx: &mut Context<Self>) -> AnyElement {
         if cfg!(target_os = "windows") {
@@ -3755,39 +3798,44 @@ impl Shell {
             (WindowButton::Minimize, "icons/window-minimize.svg"),
             (WindowButton::Zoom, zoom),
         ];
-        let (first, _) = WINDOW_BUTTONS[0];
-        let (second, _) = WINDOW_BUTTONS[1];
+        let frames = self.window_button_frames();
+        let row = Bounds::from_corners(frames[0].origin, frames[2].bottom_right());
         div()
             .absolute()
-            .left(px(first - WINDOW_BUTTON_SIZE / 2.))
-            .top(px(WINDOW_BUTTON_Y - WINDOW_BUTTON_SIZE / 2.))
-            .flex()
-            .gap(px(second - first - WINDOW_BUTTON_SIZE))
+            .left(row.left())
+            .top(row.top())
+            .w(row.size.width)
+            .h(row.size.height)
             .group("window-buttons")
             // The row, not each button: a button that blocked the mouse would hide the row behind
             // it from the hover test, and the glyphs would show only between the buttons.
             .block_mouse_except_scroll()
-            .children(buttons.into_iter().zip(WINDOW_BUTTONS).map(|((button, glyph), (_, colour))| {
-                div()
-                    .id(glyph)
-                    .size(px(WINDOW_BUTTON_SIZE))
-                    .rounded_full()
-                    .bg(rgb(colour))
-                    .on_click(cx.listener(move |shell, _, _, cx| {
-                        // check.sh waits for this line.
-                        log!("browser: window button {button:?}");
-                        shell.browser.press_window_button(button, cx);
-                    }))
-                    .child(
-                        svg()
-                            .path(glyph)
-                            .size(px(WINDOW_BUTTON_SIZE))
-                            .text_color(gpui::transparent_black())
-                            .group_hover("window-buttons", |style| {
-                                style.text_color(rgba(WINDOW_BUTTON_GLYPH))
-                            }),
-                    )
-            }))
+            .children(buttons.into_iter().zip(WINDOW_BUTTONS).zip(frames).map(
+                |(((button, glyph), (_, colour)), frame)| {
+                    div()
+                        .id(glyph)
+                        .absolute()
+                        .left(frame.left() - row.left())
+                        .top(frame.top() - row.top())
+                        .size(frame.size.width)
+                        .rounded_full()
+                        .bg(rgb(colour))
+                        .on_click(cx.listener(move |shell, _, _, cx| {
+                            // check.sh waits for this line.
+                            log!("browser: window button {button:?}");
+                            shell.browser.press_window_button(button, cx);
+                        }))
+                        .child(
+                            svg()
+                                .path(glyph)
+                                .size(frame.size.width)
+                                .text_color(gpui::transparent_black())
+                                .group_hover("window-buttons", |style| {
+                                    style.text_color(rgba(WINDOW_BUTTON_GLYPH))
+                                }),
+                        )
+                },
+            ))
             .into_any_element()
     }
 

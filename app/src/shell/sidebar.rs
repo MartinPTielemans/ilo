@@ -350,6 +350,10 @@ impl Shell {
     }
 
     fn window_buttons_drawn(&self) -> WindowButtons {
+        // A Little ilo window's are over its bar, where the window's own go.
+        if self.little.is_some() {
+            return WindowButtons { window: true, library: false, sidebar: false };
+        }
         window_buttons_at(
             self.library_open,
             self.library_moving(),
@@ -555,7 +559,8 @@ impl Shell {
 
     /// Starts the reveal's panel moving out over the page, or away, from wherever it is.
     pub(super) fn set_revealed(&mut self, revealed: bool, cx: &mut Context<Self>) {
-        if revealed == self.revealed {
+        // A Little ilo window has no sidebar to reveal.
+        if revealed == self.revealed || (revealed && self.little.is_some()) {
             return;
         }
         self.reveal_motion = Some((self.reveal_out(), Instant::now()));

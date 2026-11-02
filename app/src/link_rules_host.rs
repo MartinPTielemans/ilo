@@ -3,7 +3,7 @@
 
 use std::cell::{Cell, RefCell};
 
-use browser::link_rules::{Host, Rules};
+use browser::link_rules::{Host, LITTLE, Rules};
 use browser::log;
 use browser::menu::Look;
 use browser::shell::MenuEntry;
@@ -60,12 +60,16 @@ pub fn save() {
 }
 
 /// The user's Space a link to `url` from another app opens in, by the first rule it meets, else
-/// everything else's, 0 being the Space in front.
+/// everything else's, 0 being the Space in front and `LITTLE` Little ilo.
 pub fn route(url: &str) -> u64 {
     let (space, rule) = RULES.with_borrow(|rules| rules.route(url, &users_spaces()));
     if let Some(rule) = rule {
+        let place = match space {
+            LITTLE => "little ilo".to_string(),
+            space => format!("space {space}"),
+        };
         // check.sh reads this line.
-        log!("browser: link rule {rule} sends {url} to space {space}");
+        log!("browser: link rule {rule} sends {url} to {place}");
     }
     space
 }

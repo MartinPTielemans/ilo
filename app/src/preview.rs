@@ -1315,6 +1315,12 @@ impl Browser for Fake {
 
     fn new_private_window(&self, _: &mut App) {}
 
+    fn new_little_window(&self, _: u64, _: &mut App) {}
+
+    fn open_tab_in_little(&self, _: u64, _: &mut App) {}
+
+    fn open_in_main_window(&self, _: u64, _: u64, _: &mut App) {}
+
     fn close_window(&self, cx: &mut App) {
         cx.quit();
     }
@@ -1345,10 +1351,11 @@ impl command_bar::Host for PreviewBar {
     fn split(&self, _: u64, _: u64, _: &mut App) {}
     fn open_split(&self, _: &str, _: u64, _: &mut App) {}
     fn copy(&self, _: &str, _: &mut App) {}
-    fn show(&self, _: bool, _: f32, _: f32, _: f32, _: f32) {}
+    fn show(&self, _: bool, _: f32, _: f32, _: f32, _: f32, _: browser::elevation::Level) {}
     fn set_height(&self, _: f32) {}
     fn hide(&self) {}
     fn dismiss(&self) {}
+    fn take_keyboard(&self) {}
     fn commands(&self, text: &str, cx: &App) -> Vec<shell::BarCommand> {
         shell::bar_commands(text, cx)
     }

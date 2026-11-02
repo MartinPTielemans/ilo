@@ -218,6 +218,9 @@ class Tab : public content::WebContentsObserver,
   // Where the user last pressed the mouse in the page, in points from the top-left of its view:
   // where a link it opens was clicked.
   gfx::PointF last_click() const { return last_click_; }
+  // The page's last press, of the pointer or a key, held ⌘ (Ctrl off the Mac), which tells
+  // ⌥⌘-click on a link from ⌥-click, as both ask the browser for a split view.
+  bool last_press_held_command() const { return last_press_held_command_; }
 
   // When a window last stopped showing the tab, else when it opened, for the auto-archive and for
   // unloading tabs unseen a while.
@@ -350,6 +353,7 @@ class Tab : public content::WebContentsObserver,
   std::optional<SkColor> page_color_;
   bool state_report_posted_ = false;
   gfx::PointF last_click_;
+  bool last_press_held_command_ = false;
   // Whether the app was last told the page is full screen.
   bool fullscreen_ = false;
   // Whether the app was last told the pointer is on a link.
