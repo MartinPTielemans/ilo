@@ -8,7 +8,7 @@ use std::sync::LazyLock;
 pub const NEW_ISSUE: &str = env!("APP_ISSUES");
 /// The site's help and release notes, at a default service URL (branding/site).
 pub const HELP_CENTER: &str = concat!(env!("APP_SITE"), "/help");
-pub const WHATS_NEW: &str = concat!(env!("APP_SITE"), "/whats-new");
+pub const WHATS_NEW: &str = concat!(env!("APP_SITE"), "/changelog");
 /// What ilo sends and keeps, and where, on the same site.
 pub const PRIVACY_POLICY: &str = concat!(env!("APP_SITE"), "/privacy");
 

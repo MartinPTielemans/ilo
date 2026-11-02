@@ -1,6 +1,8 @@
 ; ilo's installer for winget and direct downloads, unsigned for 0.1.0: per user and without admin,
-; into %LOCALAPPDATA%\Programs\ilo, with its uninstaller in the user's Apps list. WinSparkle runs a
-; newer one over it. package.sh compiles it with ISCC, giving each value below.
+; into %LOCALAPPDATA%\Programs\ilo, with its uninstaller in the user's Apps list. ilo's updater
+; (app/platform/windows/updates.cc) runs a newer one over it, silently, once ilo has quit:
+; /waitpid=<ilo's process> waits for it to go, and /relaunch=1 starts ilo again after. package.sh
+; compiles it with ISCC, giving each value below.
 #ifndef AppVersion
   #error ISCC /DAppName=ilo /DAppPublisher=ilo /DAppVersion=0.1.0 /DSource=<staged app> /DOutput=<dir> ilo.iss
 #endif
@@ -41,6 +43,15 @@ OutputBaseFilename={#AppName}-{#AppVersion}-x64-setup{#Suffix}
 [Files]
 Source: "{#Source}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[InstallDelete]
+; WinSparkle, the updater before ilo's own, and its licence.
+Type: files; Name: "{app}\WinSparkle.dll"
+Type: files; Name: "{app}\WinSparkle-COPYING.txt"
+
+[UninstallDelete]
+; What the updater downloaded.
+Type: filesandordirs; Name: "{localappdata}\ilo\Updates"
+
 [Icons]
 ; With the AppUserModelID Chromium gives ilo's notifications and the core its windows, so Windows
 ; shows the notifications, groups the windows with the shortcut pinned, and starts the CLSID's
@@ -72,6 +83,9 @@ Root: HKCU; Subkey: "Software\Classes\IloPDF\Application"; ValueType: string; Va
 ; ilo your default browser" takes only an app registered there. 0.1.0's capabilities under
 ; Software\ilo go, as that key is the engine's own.
 Root: HKCU; Subkey: "Software\ilo\Capabilities"; Flags: deletekey
+; WinSparkle's settings, which nothing reads now, and the updater's last check, which goes with ilo.
+Root: HKCU; Subkey: "Software\ilo\WinSparkle"; Flags: deletekey
+Root: HKCU; Subkey: "Software\ilo\Updates"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\{#AppName}"; ValueType: string; ValueData: "{#AppName}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\{#AppName}\DefaultIcon"; ValueType: string; ValueData: "{app}\ilo.ico,0"
 Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\{#AppName}\shell\open\command"; ValueType: string; ValueData: """{app}\chrome.exe"""
@@ -96,10 +110,41 @@ Root: HKCU; Subkey: "Software\Classes\CLSID\{{{#ToastActivator}}\LocalServer32";
 
 [Run]
 Filename: "{app}\chrome.exe"; Description: "Open {#AppName}"; Flags: nowait postinstall skipifsilent
+; Restart to Update's silent install, which the line above skips.
+Filename: "{app}\chrome.exe"; Flags: nowait; Check: Relaunching
 
 [Code]
 var
   ModelId: String;
+
+function OpenProcess(Access: Cardinal; Inherit: Integer; ProcessId: Cardinal): THandle;
+  external 'OpenProcess@kernel32.dll stdcall';
+function WaitForSingleObject(Handle: THandle; Milliseconds: Cardinal): Cardinal;
+  external 'WaitForSingleObject@kernel32.dll stdcall';
+function CloseHandle(Handle: THandle): Integer;
+  external 'CloseHandle@kernel32.dll stdcall';
+
+// An update ilo started as it quit waits for ilo's process to end, up to a minute, so ilo goes
+// as it would on any quit and keeps its windows and tabs for the next launch. What's left of it
+// after, such as a page's process, CloseApplications closes.
+function InitializeSetup: Boolean;
+var
+  Process: THandle;
+begin
+  Process := OpenProcess($00100000 { SYNCHRONIZE }, 0,
+    StrToIntDef(ExpandConstant('{param:waitpid|0}'), 0));
+  if Process <> 0 then begin
+    WaitForSingleObject(Process, 60000);
+    CloseHandle(Process);
+  end;
+  Result := True;
+end;
+
+// Whether ilo asked to be started again once it's updated: Restart to Update.
+function Relaunching: Boolean;
+begin
+  Result := ExpandConstant('{param:relaunch|0}') = '1';
+end;
 
 // ilo's AppUserModelID as Chromium makes it for a per-user install (ShellUtil::GetBrowserModelId):
 // the base app ID, then a dot and the base32 of the MD5 of the user's SID. Without the SID the

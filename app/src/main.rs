@@ -26,7 +26,7 @@ use browser::widevine::Widevine;
 use browser::{
     account, capture, command_bar, dialog, dock_dot, elevation::Level, folder_preview, hover_card,
     icon_picker, launch, link_preview, link_target, log, menu, offer, passwords, site_controls,
-    theme_picker, toast, tooltip, zoom_hud,
+    theme_picker, toast, tooltip, updates, zoom_hud,
 };
 use browser::shell::{
     self, Archived, BarTab, Browser, Command, Download, DownloadAction, DownloadState, Extension,
@@ -462,12 +462,31 @@ mod platform {
         #[cfg(not(target_os = "linux"))]
         pub fn host_updates_available() -> bool;
         #[cfg(not(target_os = "linux"))]
-        pub fn host_start_updater(quit: extern "C" fn());
+        pub fn host_updated_by_store() -> bool;
+        #[cfg(not(target_os = "linux"))]
+        pub fn host_start_updater(
+            quit: extern "C" fn(),
+            changed: extern "C" fn(stage: c_int, version: *const c_char),
+        );
         #[cfg(not(target_os = "linux"))]
         pub fn host_check_for_updates();
+        #[cfg(not(target_os = "linux"))]
+        pub fn host_check_for_updates_quietly();
+        #[cfg(not(target_os = "linux"))]
+        pub fn host_install_update();
+        #[cfg(not(target_os = "linux"))]
+        pub fn host_finish_update();
         #[cfg(target_os = "macos")]
         pub fn host_take_update_notes(notes: extern "C" fn(url: *const c_char));
     }
+
+    /// Where host_start_updater's `changed` says the update stands (host.h's HOST_UPDATE_*).
+    pub const UPDATE_CHECKING: c_int = 1;
+    pub const UPDATE_CURRENT: c_int = 2;
+    pub const UPDATE_FOUND: c_int = 3;
+    pub const UPDATE_DOWNLOADING: c_int = 4;
+    pub const UPDATE_READY: c_int = 5;
+    pub const UPDATE_FAILED: c_int = 6;
 
     /// What host_take_drops hears of a drag.
     pub const DRAG_OVER: c_int = 0;
@@ -554,11 +573,13 @@ struct Menus {
     bar: shell::MenuBar,
     undo: Option<String>,
     redo: Option<String>,
+    /// Check for Updates… reads Restart to Update once an update is ready.
+    update_ready: bool,
 }
 
 impl Menus {
     fn build(&self) -> Vec<Menu> {
-        menus(&self.bar, self.undo.as_deref(), self.redo.as_deref())
+        menus(&self.bar, self.undo.as_deref(), self.redo.as_deref(), self.update_ready)
     }
 }
 
@@ -598,6 +619,12 @@ fn front() -> (bc::bc_id, *mut c_void) {
     WINDOWS.with_borrow(|windows| {
         windows.first().map_or((0, std::ptr::null_mut()), |window| (window.id, window.ui_view))
     })
+}
+
+/// The UI's view of browser window `window`, such as the one a hover-driven overlay is for, which
+/// it shows over whether or not it's in front (#1432). None once it has closed.
+fn ui_view_of(window: bc::bc_id) -> Option<*mut c_void> {
+    WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == window).map(|w| w.ui_view))
 }
 
 /// A browser window has gone full screen or left it, once macOS's transition is over. Later, as
@@ -948,11 +975,11 @@ fn url_for(text: &str, get: impl Fn(*const c_char, *mut c_char, usize) -> usize)
 struct DialogHost;
 
 impl dialog::Host for DialogHost {
-    fn show(&self, over: Option<Bounds<Pixels>>) {
+    fn show(&self, window: Option<u64>, over: Option<Bounds<Pixels>>) {
+        // A window's own question goes over it, else over the one in front, as the app's do.
+        let view = window.and_then(ui_view_of).unwrap_or(front().1);
         let over = rect(over.unwrap_or_default());
-        unsafe {
-            platform::host_show_dialog(front().1, over.x, over.y, over.width, over.height)
-        };
+        unsafe { platform::host_show_dialog(view, over.x, over.y, over.width, over.height) };
     }
 
     fn hide(&self) {
@@ -1086,7 +1113,7 @@ impl site_controls::Host for SiteControlsHost {
                 let profile = unsafe { bc::bc_tab_profile(tab) };
                 let (message, detail) = passwords::question(&login);
                 let confirmed = Box::new(move |_: &mut App| remove_login(profile, &login));
-                dialog::ask(message, detail, "Remove", confirmed, cx);
+                dialog::ask(None, message, detail, "Remove", confirmed, cx);
             }
             site_controls::Run::Passwords => {
                 let profile = unsafe { bc::bc_tab_profile(tab) };
@@ -1112,7 +1139,10 @@ impl site_controls::Host for SiteControlsHost {
 
     fn tooltip(&self, tip: Option<(SharedString, tooltip::Anchor)>, cx: &mut App) {
         match tip {
-            Some((text, anchor)) => tooltip::hover(tooltip::Tip::named(text), anchor, cx),
+            // The panel shows over the window in front, and its tooltips with it.
+            Some((text, anchor)) => {
+                tooltip::hover(front().0, tooltip::Tip::named(text), anchor, cx)
+            }
             None => tooltip::dismiss(cx),
         }
     }
@@ -1248,6 +1278,14 @@ impl link_preview::Host for LinkPreviewHost {
         });
         if let Some(shell) = shell {
             shell.update(cx, |shell, cx| shell.preview_closed(closed, undone, cx)).ok();
+        }
+    }
+
+    fn tooltip(&self, tip: Option<(tooltip::Tip, tooltip::Anchor)>, cx: &mut App) {
+        match tip {
+            // The preview opens from a click in the window in front, and its tooltips go over it.
+            Some((tip, anchor)) => tooltip::hover(front().0, tip, anchor, cx),
+            None => tooltip::dismiss(cx),
         }
     }
 }
@@ -1834,13 +1872,16 @@ extern "C" fn command_bar_dismissed() {
     update_window(front().0, |shell, cx| shell.command_bar_dismissed(cx));
 }
 
-/// The icon picker's requests, to the host's overlay window, over the window in front.
+/// The icon picker's requests, to the host's overlay window, over the window that asked.
 struct PickerHost;
 
 impl icon_picker::Host for PickerHost {
-    fn show(&self, left: f32, top: f32) {
+    fn show(&self, window: u64, left: f32, top: f32) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
         let (left, top, width) = (left.into(), top.into(), icon_picker::WIDTH.into());
-        unsafe { platform::host_show_overlay(ICON_PICKER, front().1, false, left, top, width) };
+        unsafe { platform::host_show_overlay(ICON_PICKER, view, false, left, top, width) };
     }
 
     fn hide(&self) {
@@ -1878,10 +1919,13 @@ extern "C" fn icon_picker_dismissed() {
 struct FolderPreviewHost;
 
 impl folder_preview::Host for FolderPreviewHost {
-    fn show(&self, left: f32, top: f32, height: f32) {
+    fn show(&self, window: u64, left: f32, top: f32, height: f32) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
         let (left, top, width) = (left.into(), top.into(), folder_preview::WIDTH.into());
         unsafe {
-            platform::host_show_overlay(FOLDER_PREVIEW, front().1, false, left, top, width);
+            platform::host_show_overlay(FOLDER_PREVIEW, view, false, left, top, width);
             platform::host_set_overlay_height(FOLDER_PREVIEW, height.into());
         }
     }
@@ -1895,11 +1939,14 @@ extern "C" fn folder_preview_dismissed() {
     update_app(folder_preview::dismissed);
 }
 
-/// The theme picker's requests, to the host's overlay window, over the window in front.
+/// The theme picker's requests, to the host's overlay window, over the window that asked.
 struct ThemeHost;
 
 impl theme_picker::Host for ThemeHost {
-    fn show(&self, left: f32, top: f32, corners: &[(f32, f32, f32)]) {
+    fn show(&self, window: u64, left: f32, top: f32, corners: &[(f32, f32, f32)]) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
         let shape: Vec<f64> =
             corners.iter().flat_map(|&(x, y, radius)| [x, y, radius].map(f64::from)).collect();
         // The arrow, which it grows in from, moves along its side to point at what opened it.
@@ -1908,7 +1955,7 @@ impl theme_picker::Host for ThemeHost {
         unsafe {
             platform::host_set_overlay_shape(THEME_PICKER, shape.as_ptr(), shape.len() / 3);
             platform::host_set_overlay_growth(THEME_PICKER, x.into(), y.into());
-            platform::host_show_overlay(THEME_PICKER, front().1, false, left, top, width);
+            platform::host_show_overlay(THEME_PICKER, view, false, left, top, width);
         }
     }
 
@@ -1928,13 +1975,16 @@ extern "C" fn theme_picker_dismissed() {
     update_app(theme_picker::dismissed);
 }
 
-/// The tooltip's requests, to the host's tooltip window.
+/// The tooltip's requests, to the host's tooltip window, over the window the pointer is in.
 struct TooltipHost;
 
 impl tooltip::Host for TooltipHost {
-    fn show(&self, left: f32, top: f32) {
+    fn show(&self, window: u64, left: f32, top: f32) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
         let fade = tooltip::FADE_IN.as_secs_f64();
-        unsafe { platform::host_show_tooltip(front().1, left.into(), top.into(), fade) };
+        unsafe { platform::host_show_tooltip(view, left.into(), top.into(), fade) };
     }
 
     fn hide(&self) {
@@ -1948,13 +1998,17 @@ extern "C" fn tooltip_away() {
     update_app_later(tooltip::dismiss);
 }
 
-/// The hover card's requests, to the host's card window, over the browser window in front.
+/// The hover card's requests, to the host's card window, over the browser window whose row it's
+/// for.
 struct CardHost;
 
 impl hover_card::Host for CardHost {
-    fn show(&self, left: f32, top: f32, width: f32, height: f32) {
+    fn show(&self, window: u64, left: f32, top: f32, width: f32, height: f32) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
         let (left, top, width, height) = (left.into(), top.into(), width.into(), height.into());
-        unsafe { platform::host_show_hover_card(front().1, left, top, width, height) };
+        unsafe { platform::host_show_hover_card(view, left, top, width, height) };
     }
 
     fn hide(&self) {
@@ -1974,13 +2028,17 @@ extern "C" fn memory_pressed() {
     update_app(hover_card::forget_all);
 }
 
-/// The link target's requests, to the host's link target window.
+/// The link target's requests, to the host's link target window, over the window whose page has
+/// the link.
 struct LinkTargetHost;
 
 impl link_target::Host for LinkTargetHost {
-    fn show(&self, left: f32, top: f32) {
+    fn show(&self, window: u64, left: f32, top: f32) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
         let fade = link_target::FADE_IN.as_secs_f64();
-        unsafe { platform::host_show_link_target(front().1, left.into(), top.into(), fade) };
+        unsafe { platform::host_show_link_target(view, left.into(), top.into(), fade) };
     }
 
     fn hide(&self) {
@@ -1988,9 +2046,13 @@ impl link_target::Host for LinkTargetHost {
     }
 }
 
-/// The pointer moved, at (`x`, `y`) in the window in front, while the link target shows.
+/// The pointer moved, at (`x`, `y`) in the window the link target shows over, while it shows.
 extern "C" fn link_pointer(x: f64, y: f64) {
-    update_window(front().0, |shell, cx| shell.link_pointer(x as f32, y as f32, cx));
+    update_app(|cx| {
+        if let Some(window) = link_target::over(cx) {
+            update_window_in(window, cx, |shell, cx| shell.link_pointer(x as f32, y as f32, cx));
+        }
+    });
 }
 
 /// The pointer is on a link in `tab`'s page, or has left it and `url` is "".
@@ -2943,7 +3005,8 @@ impl Browser for Engine {
         confirmed: Box<dyn FnOnce(&mut App)>,
         cx: &mut App,
     ) {
-        with_overlays(move |cx| dialog::ask(message, detail, action, confirmed, cx), cx);
+        let window = Some(self.window);
+        with_overlays(move |cx| dialog::ask(window, message, detail, action, confirmed, cx), cx);
     }
 
     fn tell(
@@ -2955,7 +3018,8 @@ impl Browser for Engine {
         if !dialog::can_pose(cx) {
             return false;
         }
-        with_overlays(move |cx| dialog::pose(question, confirmed, cx), cx);
+        let window = Some(self.window);
+        with_overlays(move |cx| dialog::pose(window, question, confirmed, cx), cx);
         true
     }
 
@@ -3255,7 +3319,7 @@ impl Browser for Engine {
 
     fn tooltip(&self, tip: Option<(tooltip::Tip, tooltip::Anchor)>, cx: &mut App) {
         match tip {
-            Some((tip, anchor)) => tooltip::hover(tip, anchor, cx),
+            Some((tip, anchor)) => tooltip::hover(self.window, tip, anchor, cx),
             None => tooltip::dismiss(cx),
         }
     }
@@ -3268,7 +3332,7 @@ impl Browser for Engine {
         match plate {
             Some((plate, frame, _)) => {
                 let (left, top) = (frame.origin.x.into(), frame.origin.y.into());
-                link_target::show(plate, left, top, cx)
+                link_target::show(self.window, plate, left, top, cx)
             }
             None => link_target::hide(cx),
         }
@@ -3627,7 +3691,7 @@ impl Browser for Engine {
         // A Quit as the window comes on screen, before its overlays are made, asks too (#905):
         // with no dialog to ask in, pose would drop it and the app would never quit.
         let quit = Box::new(|_: Vec<String>, _: &mut App| quit_because("the user's Quit, answered"));
-        with_overlays(move |cx| dialog::pose(question, quit, cx), cx);
+        with_overlays(move |cx| dialog::pose(None, question, quit, cx), cx);
     }
 }
 
@@ -4099,6 +4163,24 @@ unsafe extern "C" fn open_links(_: *mut c_void, urls: *const *const c_char, coun
     // AppKit hands over the links that launched the browser all at once, so the first window
     // needn't wait for it to finish.
     finished_launching();
+}
+
+/// The user launched the browser again with no link, from the Start menu, the taskbar or a
+/// shortcut on Windows, or the desktop's launcher on Linux: the regular window in front comes
+/// forward, restored if minimized, as the Mac's Dock brings its windows. One is always open, as the
+/// browser quits with the last (window_closed), but while it launches, whose first window comes to
+/// the front anyway.
+unsafe extern "C" fn launched_again(_: *mut c_void) {
+    if LAUNCH_LINKS.with_borrow(Option::is_some) {
+        return;
+    }
+    let Some(window) = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.regular()).cloned())
+    else {
+        return;
+    };
+    // check.sh reads this line.
+    log!("browser: launched again: window {} to the front", window.id);
+    unsafe { platform::host_activate(window.ui_view) };
 }
 
 /// Opens a tab loading `url` in the front window and shows it: in the Space the window shows if
@@ -5002,7 +5084,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
             KeyBinding::new("alt-cmd-h", HideOthers, Some(shell::KEY_CONTEXT)),
             KeyBinding::new("cmd-m", Minimize, Some(shell::KEY_CONTEXT)),
         ]);
-        cx.set_menus(menus(&shell::MenuBar::default(), None, None));
+        cx.set_menus(menus(&shell::MenuBar::default(), None, None, false));
         // check.sh reads this line, as launches are timed from it.
         log!("browser: started at {:.1} ms", unsafe { platform::host_since_launch() });
         dock_dot::open(Rc::new(DockDot), cx);
@@ -5135,16 +5217,34 @@ fn updates_available() -> bool {
     *AVAILABLE.get_or_init(available)
 }
 
-/// Starts checking for updates: Sparkle or WinSparkle, or on Linux Flatpak's portal.
+/// Starts checking for updates: Sparkle on the Mac, ilo's own on Windows, Flatpak's portal on
+/// Linux. Settings › About's row, Restart to Update at the sidebar's foot and Check for Updates…'s
+/// title follow what it says.
 fn start_updates(cx: &mut App) {
+    let updater = if updates_available() {
+        updates::Updater::Own
+    } else if updated_by_store() {
+        updates::Updater::Store
+    } else {
+        updates::Updater::None
+    };
+    updates::start(updater, Rc::new(SystemUpdater), cx);
+    updates::observe(cx, |cx| {
+        let ready = updates::ready(cx);
+        if MENUS.with_borrow(|menus| menus.update_ready) != ready {
+            MENUS.with_borrow_mut(|menus| menus.update_ready = ready);
+            show_menus(cx);
+        }
+    })
+    .detach();
     #[cfg(not(target_os = "linux"))]
     {
-        _ = cx;
-        // The installer WinSparkle started waits for the browser to quit, which needs no asking.
+        // Restart to Update on Windows, whose installer runs once the browser has gone, which needs
+        // no asking.
         extern "C" fn quit() {
             quit_because("the updater's install");
         }
-        unsafe { platform::host_start_updater(quit) };
+        unsafe { platform::host_start_updater(quit, update_changed) };
     }
     #[cfg(target_os = "linux")]
     if updates_available() {
@@ -5174,16 +5274,81 @@ fn start_updates(cx: &mut App) {
     }
 }
 
-/// The app menu's and the command bar's Check for Updates…: Sparkle's or WinSparkle's, or on Linux
-/// where the Flatpak's update stands.
+/// The app menu's and the command bar's Check for Updates…: Sparkle's on the Mac; on Windows, whose
+/// updater has no window, the check, with Settings › About saying where it stands; on Linux, where
+/// the Flatpak's update stands. Once an update is ready, it's Restart to Update.
 fn check_for_updates(cx: &mut App) {
-    #[cfg(not(target_os = "linux"))]
-    {
-        _ = cx;
-        unsafe { platform::host_check_for_updates() };
+    if updates::ready(cx) {
+        return updates::act(updates::Action::Restart, cx);
     }
+    #[cfg(target_os = "windows")]
+    settings::show_about(cx);
+    #[cfg(not(target_os = "linux"))]
+    unsafe {
+        platform::host_check_for_updates()
+    };
     #[cfg(target_os = "linux")]
     flatpak::check(cx);
+}
+
+/// Whether the Microsoft Store updates this copy, an MSIX from it.
+fn updated_by_store() -> bool {
+    #[cfg(not(target_os = "linux"))]
+    return unsafe { platform::host_updated_by_store() };
+    #[cfg(target_os = "linux")]
+    false
+}
+
+/// The system's updater, as Settings › About's row asks it.
+struct SystemUpdater;
+
+impl updates::Host for SystemUpdater {
+    /// On the Mac, Sparkle's check in the background, whose download the row follows and which
+    /// shows no window of its own; on Windows, the updater's, which has none; on Linux, where the
+    /// Flatpak's update stands, or after a failed install, another try.
+    fn check(&self, cx: &mut App) {
+        #[cfg(not(target_os = "linux"))]
+        {
+            _ = cx;
+            unsafe { platform::host_check_for_updates_quietly() };
+        }
+        #[cfg(target_os = "linux")]
+        if !flatpak::retry(cx) {
+            flatpak::check(cx);
+        }
+    }
+
+    fn restart(&self, cx: &mut App) {
+        #[cfg(not(target_os = "linux"))]
+        {
+            _ = cx;
+            unsafe { platform::host_install_update() };
+        }
+        #[cfg(target_os = "linux")]
+        flatpak::restart(cx);
+    }
+}
+
+/// Sparkle or Windows's updater says where the update stands, and the version it's of, if it says.
+#[cfg(not(target_os = "linux"))]
+extern "C" fn update_changed(stage: c_int, version: *const c_char) {
+    use updates::Stage;
+    let version = (!version.is_null())
+        .then(|| unsafe { CStr::from_ptr(version) }.to_string_lossy().into_owned())
+        .filter(|version| !version.is_empty())
+        .map(SharedString::from);
+    let stage = match stage {
+        platform::UPDATE_CHECKING => Stage::Checking,
+        platform::UPDATE_CURRENT => Stage::Current,
+        platform::UPDATE_FOUND => Stage::Found(version),
+        platform::UPDATE_DOWNLOADING => Stage::Downloading(version),
+        platform::UPDATE_READY => Stage::Ready(version),
+        platform::UPDATE_FAILED => Stage::Failed { found: false },
+        // HOST_UPDATE_IDLE.
+        _ => Stage::Idle,
+    };
+    // Sparkle can say it from inside the call that asked it to check.
+    update_app_later(move |cx| updates::changed(stage, cx));
 }
 
 /// Starts the build Flatpak installed, once this one has let go of the profile, and quits.
@@ -5202,7 +5367,7 @@ fn restart_into_newest(portal: flatpak::Portal, cx: &mut App) {
 /// the titles Undo and Redo have for what it would undo and redo (docs/ux-spec.md › Menus). The
 /// Edit menu's standard items go to the first responder, so a focused page cuts, copies, pastes,
 /// selects and undoes for itself.
-fn menus(bar: &shell::MenuBar, undo: Option<&str>, redo: Option<&str>) -> Vec<Menu> {
+fn menus(bar: &shell::MenuBar, undo: Option<&str>, redo: Option<&str>, update_ready: bool) -> Vec<Menu> {
     let menu = |name: &str, items| Menu { name: name.to_string().into(), items, disabled: false };
     let item = shell::menu_item;
     let (spaces, extensions) = (&bar.spaces, &bar.extensions);
@@ -5210,7 +5375,8 @@ fn menus(bar: &shell::MenuBar, undo: Option<&str>, redo: Option<&str>) -> Vec<Me
     let mut app = vec![about, MenuItem::separator()];
     // Only a release build that carries Sparkle has updates to check for.
     if updates_available() {
-        app.extend([MenuItem::action("Check for Updates…", CheckForUpdates), MenuItem::separator()]);
+        let title = updates::title(update_ready);
+        app.extend([MenuItem::action(title, CheckForUpdates), MenuItem::separator()]);
     }
     app.extend([
         item("Settings…", Command::Settings),
@@ -5780,6 +5946,11 @@ fn set_reduce_motion(reduce: bool, cx: &mut App) {
 
 unsafe extern "C" fn stopping(_: *mut c_void) {
     log!("browser: stopping");
+    // On Windows, a ready update installs once the app has gone.
+    #[cfg(not(target_os = "linux"))]
+    unsafe {
+        platform::host_finish_update()
+    };
     // The recovery words a Copy put on the clipboard don't outlast the app (settings.rs).
     unsafe { platform::host_forget_secret() };
 }
@@ -6160,6 +6331,10 @@ unsafe extern "C" fn tab_favicon_changed(
         Arc::new(Image::from_bytes(ImageFormat::Png, png))
     });
     log!("browser: favicon {tab} {size} bytes");
+    // A tab of no window's is the link preview's, which shows its site's.
+    if unsafe { bc::bc_tab_window(tab) } == 0 {
+        update_app(|cx| link_preview::set_favicon(tab, favicon.clone(), cx));
+    }
     update_shells(|shell, cx| shell.set_favicon(tab, favicon.clone(), cx));
 }
 
@@ -7316,6 +7491,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         profile_autofill_changed: Some(profile_autofill_changed),
         passwords_imported: Some(passwords_imported),
         open_links: Some(open_links),
+        launched_again: Some(launched_again),
         agent_activity: Some(agent_activity),
         #[cfg(target_os = "linux")]
         window_resized: Some(window_resized),
@@ -7437,11 +7613,6 @@ unsafe extern "C" fn ui_committed(_: *mut c_void, window: bc::bc_id, text: *cons
     if let Some(ui_view) = ui_view_of(window) {
         gpui_linux::commit_embedded(ui_view, &text);
     }
-}
-
-#[cfg(target_os = "linux")]
-fn ui_view_of(window: bc::bc_id) -> Option<*mut c_void> {
-    WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == window).map(|w| w.ui_view))
 }
 
 /// On Linux this program only says where the browser is: chrome runs it from libBrowser.so.

@@ -131,8 +131,8 @@ jobs:
           ./setup.sh
           [ -x "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" ] || choco install innosetup -y --no-progress
 
-      # The installer's ilo updates itself with WinSparkle, from updates signed with the key whose
-      # public half is app/branding/update-key, or the UPDATE_PUBLIC_KEY secret when it's set.
+      # The installer's ilo updates itself (platform/windows/updates.cc), from updates signed with
+      # the key whose public half is app/branding/update-key, or the UPDATE_PUBLIC_KEY secret.
       # With Cargo's release profile, which strips debuginfo, MSVC's linker writes no PDB, and
       # Browser.pdb's public symbols are what name Browser.dll's functions in a crash report.
       - name: Browser.dll

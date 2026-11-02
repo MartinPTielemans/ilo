@@ -14,9 +14,9 @@ struct Recorder {
 }
 
 impl Host for Recorder {
-    fn show(&self, left: f32, top: f32, corners: &[(f32, f32, f32)]) {
+    fn show(&self, window: u64, left: f32, top: f32, corners: &[(f32, f32, f32)]) {
         let (_, tip, _) = corners[0];
-        self.calls.borrow_mut().push(format!("show {left:.1} {top:.1} tip {tip:.1}"));
+        self.calls.borrow_mut().push(format!("show {left:.1} {top:.1} tip {tip:.1} over {window}"));
     }
 
     fn hide(&self) {
@@ -42,7 +42,8 @@ impl Picker {
         let recorded = host.clone();
         let changed: Changed =
             Rc::new(move |theme, done, _| recorded.themes.borrow_mut().push((theme, done)));
-        cx.update(|cx| show(7, theme, point(262., 300.), 900., changed, cx));
+        // From browser window 2, as a context menu in a window behind another asks (#1432).
+        cx.update(|cx| show(2, 7, theme, point(262., 300.), 900., changed, cx));
         let cx = VisualTestContext::from_window(window.into(), cx);
         cx.run_until_parked();
         Picker { cx, window, host }
@@ -95,6 +96,13 @@ impl Picker {
 
 fn close(a: (f32, f32), b: (f32, f32)) -> bool {
     (a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01
+}
+
+#[gpui::test]
+fn it_shows_over_the_window_that_asked(cx: &mut TestAppContext) {
+    let mut picker = Picker::new(None, cx);
+    let calls = picker.calls();
+    assert!(calls[0].starts_with("show ") && calls[0].ends_with(" over 2"), "{calls:?}");
 }
 
 #[gpui::test]
@@ -159,7 +167,7 @@ fn a_click_before_the_first_frame_still_places_the_colour(cx: &mut TestAppContex
     // One update, so no frame comes between the opening and the click. Through the window rather
     // than its view, which the press updates.
     cx.update(|cx| {
-        show(7, None, point(262., 300.), 900., changed, cx);
+        show(2, 7, None, point(262., 300.), 900., changed, cx);
         cx.update_window(window.into(), |_, window, cx| {
             let down = MouseDownEvent {
                 position: at,

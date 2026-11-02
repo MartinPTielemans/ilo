@@ -391,7 +391,7 @@ impl Shell {
         };
         // A card showing would stay under the picker, as rows' cards wait while it shows.
         self.browser.hover_card(crate::hover_card::Hover::Close, cx);
-        icon_picker::show(subject, icon, anchor, picked, cx);
+        icon_picker::show(self.browser.window(), subject, icon, anchor, picked, cx);
     }
 
     /// Shows the icon picker for `space`, its arrow at `anchor` in the window, giving the Space
@@ -411,7 +411,8 @@ impl Shell {
         });
         // As for a tab's or a folder's.
         self.browser.hover_card(crate::hover_card::Hover::Close, cx);
-        icon_picker::show(Subject::Space(space), icon.clone(), anchor, picked, cx);
+        let window = self.browser.window();
+        icon_picker::show(window, Subject::Space(space), icon.clone(), anchor, picked, cx);
     }
 
     /// Holds the icon's place in `space`'s name row, which has no icon, with the placeholder, the

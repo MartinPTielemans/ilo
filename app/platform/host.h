@@ -690,8 +690,9 @@ void host_share_with(const char* url, const char* title, size_t index);
 // milliseconds since the Unix epoch.
 void host_day_starts(double starts[4]);
 
-// Updates: Sparkle on the Mac (platform/mac/updates.mm), WinSparkle on Windows
-// (platform/windows/updates.cc).
+// Updates: Sparkle on the Mac (platform/mac/updates.mm), ilo's own on Windows
+// (platform/windows/updates.cc), both from the same appcast and key. Linux's are Flatpak's, which
+// the app asks itself.
 
 // On the Mac, before Chromium starts: makes sure Chromium can read its cookie key, "<name> Safe
 // Storage" in the Keychain, when the app's signature is new, as after a move to another signing
@@ -706,14 +707,56 @@ bool host_keep_keychain_key(void);
 // key, and on Windows not an MSIX from the Microsoft Store, which the Store updates.
 bool host_updates_available(void);
 
-// Starts the updater, which checks every 8 hours. On the Mac it downloads an update in the
-// background and installs it when the app quits; on Windows it offers it, and calls |quit| on the
-// main thread once the installer it started waits for the browser to quit. Does nothing where
-// host_updates_available is false.
-void host_start_updater(void (*quit)(void));
+// Whether the Microsoft Store updates this copy: on Windows, an MSIX from it.
+bool host_updated_by_store(void);
 
-// Checks for updates now, showing what it finds: the app menu's Check for Updates….
+// Where host_start_updater's |changed| says the update stands, for Settings › About's row and
+// Restart to Update at the sidebar's foot.
+enum {
+  // A check ended with nothing to say: on the Mac, the user closed Sparkle's window, cancelled
+  // the download or skipped the version.
+  HOST_UPDATE_IDLE = 0,
+  HOST_UPDATE_CHECKING = 1,
+  // No newer version.
+  HOST_UPDATE_CURRENT = 2,
+  // A newer version, which on the Mac Sparkle's own window offers.
+  HOST_UPDATE_FOUND = 3,
+  HOST_UPDATE_DOWNLOADING = 4,
+  // Downloaded and its signature checked, to install when the app quits, or now with
+  // host_install_update.
+  HOST_UPDATE_READY = 5,
+  HOST_UPDATE_FAILED = 6,
+};
+
+// Starts the updater, which checks every 8 hours and downloads a newer version in the background
+// with no window of its own, checks its EdDSA signature against the build's key, and installs it
+// when the app quits. On the Mac that's Sparkle; on Windows, ilo's own, which runs the installer
+// silently once the app has gone (host_finish_update). Calls |changed| on the main thread with a
+// HOST_UPDATE_* each time the update moves on, with the version it's of, else "", and |quit| on
+// the main thread for host_install_update's restart on Windows. Does nothing where
+// host_updates_available is false.
+void host_start_updater(void (*quit)(void), void (*changed)(int stage, const char* version));
+
+// The app menu's Check for Updates…, which checks now: on the Mac, Sparkle's check, which shows
+// what it finds in Sparkle's window; on Windows, the same quiet check as Settings › About's,
+// which the app shows there, as the updater has no window.
 void host_check_for_updates(void);
+
+// Settings › About's check, which |changed| follows: on the Mac, Sparkle's check in the
+// background, which downloads an update to install on quit with no window of its own, or while
+// Sparkle shows one, Check for Updates…; on Windows, the updater's check, at once.
+void host_check_for_updates_quietly(void);
+
+// Restart to Update: installs the update that's HOST_UPDATE_READY now and relaunches into it. On
+// the Mac, once macOS has checked the new version as it would at its first launch, or after 15 s;
+// on Windows, by quitting through |quit|, as the installer runs once the app has gone. Nothing if
+// none is ready.
+void host_install_update(void);
+
+// Chromium is quitting. On Windows, a ready update's installer starts, silently, and waits for
+// this process to end before it installs, then relaunches ilo if host_install_update asked. On the
+// Mac, nothing: Sparkle installs on quit by itself.
+void host_finish_update(void);
 
 // On the Mac: calls |notes| with the release notes' URL of the update this launch is the first of, once.
 void host_take_update_notes(void (*notes)(const char* url));
