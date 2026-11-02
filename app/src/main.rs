@@ -115,6 +115,7 @@ mod system;
 #[path = "../platform/linux/window_buttons.rs"]
 mod window_buttons;
 mod link_rules_host;
+mod little_sites_host;
 mod reveal;
 mod agents_core;
 mod settings;
@@ -3480,6 +3481,40 @@ impl Browser for Engine {
         });
     }
 
+    fn little_profile(&self, profile: u64, url: &str, cx: &mut App) {
+        let (id, url) = (self.window, url.to_string());
+        cx.defer(move |cx| {
+            little_sites_host::remember(&url, profile);
+            let own = unsafe { bc::bc_space_profile(bc::bc_window_space(id)) };
+            if profile == own || url.is_empty() {
+                // check.sh reads this line.
+                log!("browser: little window {id} keeps profile {profile}");
+                return;
+            }
+            let window = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == id).cloned());
+            let Some(window) = window else {
+                return;
+            };
+            let own_home = window.little.unwrap_or(0);
+            // From a regular window, whose Spaces give the new one its home's look.
+            let from = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.regular()).cloned());
+            let home = home_in_profile(own_home, profile);
+            let Some(opened) = home.and_then(|home| open_little(from.unwrap_or(window), home, cx))
+            else {
+                // check.sh reads this line.
+                log!("browser: little window {id} has no Space in profile {profile}");
+                return;
+            };
+            let tab = open_tab_behind(opened, &url, false);
+            if tab != 0 {
+                unsafe { bc::bc_window_select(opened, tab) };
+            }
+            // check.sh reads this line.
+            log!("browser: little window {id} reopened {url} in profile {profile} as {opened}");
+            unsafe { bc::bc_window_close(id) };
+        });
+    }
+
     fn close_window(&self, cx: &mut App) {
         let id = self.window;
         // Outside the shell's update: the core closes the NSWindow at once, and GPUI's handler for
@@ -4100,7 +4135,17 @@ fn open_links_in_little(front: bc::bc_id, urls: Vec<String>, cx: &mut App) {
         let Some(from) = from else {
             return;
         };
-        let home = users_space_of(front);
+        // In the profile the user last picked for its site in Little ilo's bar, as Arc's Little
+        // Arc does, in that profile's Space if the front window doesn't show one.
+        let front_space = users_space_of(front);
+        let home = match little_sites_host::profile(&url) {
+            Some(profile) => {
+                // check.sh reads this line.
+                log!("browser: little ilo opens {url} in profile {profile}");
+                home_in_profile(front_space, profile).unwrap_or(front_space)
+            }
+            None => front_space,
+        };
         let Some(opened) = open_little(from, home, cx) else {
             continue;
         };
@@ -5533,6 +5578,17 @@ unsafe extern "C" fn window_open_little(
 
 /// ⇧⌘T in `window` found a Little ilo window's tab closed last: it comes back in a new one for a
 /// Space of `profile`, the one `window` is for if it's in it, as Arc's reopens it in Little Arc.
+/// The user's Space a Little ilo window in `profile` is for: `own` if it's in that profile, else
+/// the first of the user's Spaces that is, or None.
+fn home_in_profile(own: bc::bc_id, profile: bc::bc_id) -> Option<bc::bc_id> {
+    let users = |space: bc::bc_id| name(bc::bc_space_agent, space).is_empty();
+    let in_profile = |space: bc::bc_id| unsafe { bc::bc_space_profile(space) } == profile;
+    match own != 0 && in_profile(own) {
+        true => Some(own),
+        false => ids(bc::bc_spaces).into_iter().find(|&space| in_profile(space) && users(space)),
+    }
+}
+
 unsafe extern "C" fn window_reopen_little(
     _: *mut c_void,
     window: bc::bc_id,
@@ -5544,14 +5600,9 @@ unsafe extern "C" fn window_reopen_little(
         let Some(from) = from else {
             return;
         };
-        let users = |space: bc::bc_id| name(bc::bc_space_agent, space).is_empty();
-        let in_profile = |space: bc::bc_id| unsafe { bc::bc_space_profile(space) } == profile;
         let own = from.little.unwrap_or_else(|| users_space_of(window));
-        let home = match in_profile(own) {
-            true => Some(own),
-            false => ids(bc::bc_spaces).into_iter().find(|&space| in_profile(space) && users(space)),
-        };
-        let Some(opened) = home.and_then(|home| open_little(from, home, cx)) else {
+        let Some(opened) = home_in_profile(own, profile).and_then(|home| open_little(from, home, cx))
+        else {
             return;
         };
         let tab = unsafe { bc::bc_window_reopen_tab(opened, closed) };
@@ -5738,6 +5789,8 @@ unsafe extern "C" fn spaces_changed(_: *mut c_void) {
             (space, name_of, has_color.then_some(color), profile, icon, agent, theme)
         })
         .collect();
+    let named: Vec<_> = profiles.iter().map(|(id, name)| (*id, name.to_string())).collect();
+    little_sites_host::profiles_changed(&named);
     update_shells(|shell, cx| {
         shell.set_profiles(profiles.clone(), cx);
         shell.set_spaces(spaces.clone(), cx);
