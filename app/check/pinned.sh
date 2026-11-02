@@ -390,7 +390,7 @@ link_away
 switch "2 cmd" "$a"
 # Its favicon under the pointer offers the way back.
 send move $(pinned_favicon 0)
-expect "^browser: hover tab $c close \(0\|1\|remove\) favicon $c\$" \
+expect "^browser: hover tab $c close \(0\|−\|remove\) favicon $c\$" \
   "the pointer on the pinned tab's favicon wasn't drawn"
 ../tools/window-screenshot.sh "$pid" "$out/pinned-away.png" || fail "no window to capture"
 quit_by_key
