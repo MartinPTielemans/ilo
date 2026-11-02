@@ -227,6 +227,58 @@ fn a_trace_is_open_while_it_works_unless_the_user_says_otherwise(cx: &mut TestAp
     assert!(open(cx, true));
 }
 
+/// A turn's same step on ten tabs is one line of its trace, folded, that opens to the ten tabs'
+/// lines; opening it opens none of them, and a tab's line that failed opens on its own to why
+/// (#1476).
+#[gpui::test]
+fn a_step_on_many_tabs_opens_to_each_tabs_line(cx: &mut TestAppContext) {
+    use crate::tokens::shell::conversation::TRACE_LINE;
+    let (shell, _, cx) = shown(cx);
+    let tabs = (0..10)
+        .map(|key| TraceStep {
+            title: format!("cases.example/{key}").into(),
+            failed: key == 3,
+            opens: match key {
+                3 => Opens::Text("There's no element e7 on the page.".into()),
+                _ => Opens::Nothing,
+            },
+            ..step(key, "", false)
+        })
+        .collect();
+    let group = TraceStep {
+        title: "Clicked “Closed” on 10 pages".into(),
+        description: "1 failed".into(),
+        failed: true,
+        opens: Opens::Steps(tabs),
+        ..step(0, "", false)
+    };
+    let mut talk = conversation(1);
+    let items = vec![TraceItem::Step(group)];
+    talk.lines = vec![Line::Trace(Trace { key: 0, running: true, took: None, items })];
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let draw = |cx: &mut VisualTestContext| {
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    };
+    let height = |fold, cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| view.is_open(fold, false).then(|| view.heights.borrow()[&fold]))
+    };
+    draw(cx);
+    assert_eq!(height(Fold::Group(0), cx), None, "it opened by itself");
+
+    view.update(cx, |view, cx| view.toggle(Fold::Group(0), false, cx));
+    draw(cx);
+    assert_eq!(height(Fold::Group(0), cx), Some(10. * TRACE_LINE), "it didn't open to ten lines");
+    assert_eq!(height(Fold::Step(0), cx), None, "its first tab's line opened with it");
+
+    view.update(cx, |view, cx| view.toggle(Fold::Step(3), false, cx));
+    draw(cx);
+    assert!(height(Fold::Step(3), cx).is_some_and(|why| why > 0.), "the failed tab didn't say why");
+    let opened = height(Fold::Group(0), cx).unwrap();
+    assert!(opened > 10. * TRACE_LINE, "why it failed shows under its tab: {opened}");
+}
+
 /// The newest line stays in view as lines come while the user reads at the end; scrolled up to
 /// read, they stay where they are.
 #[gpui::test]

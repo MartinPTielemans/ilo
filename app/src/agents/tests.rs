@@ -1820,6 +1820,29 @@ mod tasks {
         assert_eq!(card.question.and_then(|question| question.handoff), Some(31));
     }
 
+    /// An agent's calls on several tabs go at once (#1476), so its prompts can come together: they
+    /// show one at a time, in the order they came, the confirmation after the ask waiting for it.
+    #[gpui::test]
+    fn an_agents_prompts_show_one_at_a_time_in_turn(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Move the ten cases to Closed", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        let ask = json!({ "question": "Close all ten?", "answers": ["Yes", "No"] });
+        let asked = call(&agents, &agent, "ask", ask, cx);
+        let bank = json!({ "url": "https://www.chase.com/" });
+        let _opening = call(&agents, &agent, "open_tab", bank, cx);
+        let card = card_of(&agents, cx);
+        assert!(card.asks && card.question.is_none(), "the confirmation went first");
+        assert_eq!((card.status.as_ref(), card.answers.len()), ("Close all ten?", 2));
+        assert_eq!(*browser.asked.borrow(), None, "a window asked out of turn");
+        agents.update(cx, |agents, cx| agents.answer_task(&agent, "Yes", cx));
+        assert!(!asked.recv().unwrap().error);
+        let question = browser.asked.borrow().clone().expect("the confirmation never asked");
+        assert_eq!(question.from.as_ref(), agent);
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.asks), ("Waiting for your OK", false));
+    }
+
     #[gpui::test]
     fn limits_and_signing_out_say_what_to_do(cx: &mut TestAppContext) {
         let (agents, _) = ready(None, cx);
@@ -1985,6 +2008,7 @@ mod tasks {
             site: site.into(),
             target: target.into(),
             text: text.into(),
+            ..Default::default()
         };
         let titles = [
             (did("open_tab", "gulbenkian.pt", "", ""), Tense::Now, "Opening gulbenkian.pt"),
@@ -2052,6 +2076,107 @@ mod tasks {
         assert_eq!(said.as_ref(), "MAAT opens at 10:00.");
         assert_eq!(worked.key, working.key, "the user's opening of it carries across its end");
         assert!(worked.items.iter().all(|item| !matches!(item, TraceItem::Step(step) if step.running)));
+    }
+
+    /// A turn's same step on ten tabs is one line with how many, which opens to each tab's line by
+    /// its address, whether the agent's calls came at once, interleaved, or one after another.
+    /// Each tab's steps still read in their order (#1476).
+    #[test]
+    fn a_turns_same_step_on_many_tabs_is_one_line() {
+        use crate::agents::task::{Line, Message, Opens, TraceItem, Traced, Who, fold};
+        let start = std::time::Instant::now();
+        let at = |seconds: u64| start + Duration::from_secs(seconds);
+        let step = |tool: &str, tab: u64, target: &str, seconds: u64| Traced {
+            call: 1,
+            did: tools::Did {
+                tool: tool.into(),
+                site: "cases.example".into(),
+                target: target.into(),
+                // A page it opens makes its tab.
+                tab: (tool != "open_tab").then_some(tab),
+                page: format!("cases.example/{tab}"),
+                ..Default::default()
+            },
+            after: 1,
+            started: at(seconds),
+            ended: Some(at(seconds + 1)),
+            error: None,
+            picture: None,
+        };
+        let messages = [Message { who: Who::User, text: "Close cases 1 to 10".into(), at: at(0) }];
+        let lines = |trace: &[Traced]| {
+            let lines = fold(&messages, trace, false, true);
+            let [Line::You(_), Line::Trace(trace)] = lines.as_slice() else { panic!("{lines:?}") };
+            (trace.items.iter())
+                .map(|item| match item {
+                    TraceItem::Step(step) => step.clone(),
+                    TraceItem::Said(said) => panic!("{said}"),
+                })
+                .collect::<Vec<_>>()
+        };
+        let titles = |trace: &[Traced]| {
+            (lines(trace).iter())
+                .map(|step| (step.title.to_string(), step.description.to_string()))
+                .collect::<Vec<_>>()
+        };
+        let mut trace: Vec<Traced> = (1..=10).map(|tab| step("open_tab", tab, "", 1)).collect();
+        // A wait then a read on each tab, whose steps come as each tab gets to them.
+        for tab in 1..=10 {
+            trace.push(step("wait", tab, "“Ready”", 3));
+            if tab > 1 {
+                trace.push(step("snapshot", tab - 1, "", 4));
+            }
+        }
+        trace.push(step("snapshot", 10, "", 4));
+        trace.extend((1..=10).map(|tab| step("click", tab, "“Closed”", 6)));
+        trace.last_mut().unwrap().ended = None;
+        let owned = |pairs: &[(&str, &str)]| {
+            (pairs.iter())
+                .map(|(title, description)| (title.to_string(), description.to_string()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            titles(&trace),
+            owned(&[
+                ("Opened 10 pages", "1s"),
+                ("Waited for “Ready” on 10 pages", ""),
+                ("Read 10 pages", "1s"),
+                ("Clicking “Closed” on 10 pages", "9 of 10"),
+            ])
+        );
+        let clicks = lines(&trace).pop().unwrap();
+        assert!(clicks.running, "the step under way shimmers");
+        let Opens::Steps(tabs) = &clicks.opens else { panic!("{:?}", clicks.opens) };
+        let addresses: Vec<String> = tabs.iter().map(|tab| tab.title.to_string()).collect();
+        assert_eq!(addresses, (1..=10).map(|tab| format!("cases.example/{tab}")).collect::<Vec<_>>());
+
+        // One tab's click failed: the line says how many, and the tab's says why.
+        let last = trace.last_mut().unwrap();
+        (last.ended, last.error) = (Some(at(7)), Some("There's no element e7 on the page.".into()));
+        let clicks = lines(&trace).pop().unwrap();
+        let said = (clicks.title.as_ref(), clicks.description.as_ref());
+        assert_eq!(said, ("Clicked “Closed” on 10 pages", "1 failed"));
+        let Opens::Steps(tabs) = &clicks.opens else { panic!() };
+        assert!(clicks.failed && tabs[9].failed && !tabs[8].failed);
+        assert_eq!(tabs[9].description.as_ref(), "not found");
+
+        // One after another, a step that came on a tab since a line began starts a line of its
+        // own, so tab 1's second click reads after its wait.
+        let trace = [
+            step("click", 1, "“Save”", 10),
+            step("wait", 1, "“Saved”", 11),
+            step("click", 2, "“Save”", 12),
+            step("wait", 2, "“Saved”", 13),
+            step("click", 1, "“Save”", 14),
+        ];
+        assert_eq!(
+            titles(&trace),
+            owned(&[
+                ("Clicked “Save” on 2 pages", "3s"),
+                ("Waited for “Saved” on 2 pages", ""),
+                ("Clicked “Save”", "1s"),
+            ])
+        );
     }
 
     #[gpui::test]

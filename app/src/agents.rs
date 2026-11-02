@@ -1648,13 +1648,16 @@ impl Agents {
     }
 
     /// The question asked now, if any: the first action asked about, else the first handoff whose
-    /// agent waits on it.
+    /// agent waits on it, of those their agents show (`first_prompt`).
     pub fn question(&self) -> Option<Question> {
-        if let Some(asking) = self.asking.first() {
+        let shown = |agent: &str, id: u64| self.first_prompt(agent) == Some(id);
+        let confirmation =
+            (self.asking.iter()).find(|asking| shown(&asking.act.agent, asking.question.id));
+        if let Some(asking) = confirmation {
             return Some(asking.question.clone());
         }
         let handoff = (self.held.iter())
-            .filter(|(_, held)| held.reply.is_some())
+            .filter(|(_, held)| held.reply.is_some() && shown(&held.agent, held.question))
             .min_by_key(|(_, held)| held.question);
         handoff.map(|(&tab, held)| Question {
             id: held.question,

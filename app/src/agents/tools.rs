@@ -20,7 +20,10 @@ pub const INSTRUCTIONS: &str = concat!(
      don't try again. You can never type into a password field: a sign-in, a 2FA prompt or a \
      CAPTCHA is the user's to do, so hand the tab to them with hand_off. The user can take a tab \
      over too; it's theirs until they hand it back, and ask_for_tab asks them for it. Use \
-     run_steps for several actions in a row."
+     run_steps for several actions in a row.\n\n\
+     When the same steps repeat across pages, open them all in one turn, then do each step on all \
+     of them in one turn, one call per tab with its tab. Calls on different tabs run at the same \
+     time."
 );
 /// What a task's CLI is told, after its own system prompt (Agent task).
 pub const TASK_INSTRUCTIONS: &str = concat!(
@@ -31,6 +34,9 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
      search, so find everything with the browser.\n\n\
      First call title with a name for the task in two to four words, as a tab's title reads, such \
      as “Lisbon museum hours”.\n\n\
+     When the same steps repeat across pages, such as one change on ten cases, open them all in \
+     one turn, then do each step on all of them in one turn, one call per tab with its tab. Calls \
+     on different tabs run at the same time.\n\n\
      When you need the user to choose or confirm something, call ask with the question in one \
      short sentence, what they need to know to answer as its context, and up to three short \
      answers when there are a few to pick from. It waits for their answer.\n\n\
@@ -391,6 +397,11 @@ pub struct Did {
     /// A thought's text, the address it opened, whole, or what it typed when that may show: never
     /// into a password field, and at most `TYPED_SHOWN` characters.
     pub text: String,
+    /// The tab it acted on, by which a turn's same step on several tabs is one line (#1476). None
+    /// for a page it opens, whose tab it makes, and for what isn't on a tab.
+    pub tab: Option<u64>,
+    /// The address it was on or opened, without its scheme, as such a line says each tab.
+    pub page: String,
 }
 
 /// What a step typed shows up to, in characters.
@@ -468,6 +479,20 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
     match on.is_empty() {
         true => verb.to_string(),
         false => format!("{verb} {on}"),
+    }
+}
+
+/// A turn's same step on `pages` tabs, as one line: "Opened 10 pages", "Clicked “Closed” on 10
+/// pages".
+pub fn group_title(did: &Did, pages: usize, tense: Tense) -> String {
+    let on = |what: &str| Did { site: format!("{pages} {what}"), ..did.clone() };
+    match did.tool.as_str() {
+        "open_tab" | "navigate" | "back" | "forward" | "read_page" | "snapshot" | "screenshot" => {
+            step_title(&on("pages"), tense)
+        }
+        "scroll" if matches!(did.target.as_str(), "up" | "down" | "") => step_title(&on("pages"), tense),
+        "close_tab" | "hand_off" | "ask_for_tab" => step_title(&on("tabs"), tense),
+        _ => format!("{} on {pages} pages", step_title(did, tense)),
     }
 }
 

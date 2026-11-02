@@ -169,6 +169,8 @@ pub enum Opens {
     Text(SharedString),
     /// What a look at the page saw.
     Picture(Arc<gpui::Image>),
+    /// A turn's same step on several tabs: each tab's line (#1476).
+    Steps(Vec<TraceStep>),
 }
 
 /// A step of a task's work as the browser saw it, timed by the browser's own clock: a tool call,
@@ -216,8 +218,9 @@ pub struct Task {
     pub dismissed: bool,
     token: String,
     process: Option<Process>,
-    /// The ask's call, which waits for the user's answer.
-    asking: Option<mpsc::Sender<ToolResult>>,
+    /// The ask's call, which waits for the user's answer, with the number it takes among the
+    /// agent's prompts, which show in the order they came.
+    asking: Option<(u64, mpsc::Sender<ToolResult>)>,
 }
 
 impl Task {
@@ -404,7 +407,7 @@ impl Agents {
             stoppable: matches!(task.state, State::Working | State::Asking { .. }),
             open: open_label(&self.open_tabs(task, cx)),
             answers: match &task.state {
-                State::Asking { answers, .. } => answers.clone(),
+                State::Asking { answers, .. } if self.ask_shown(task) => answers.clone(),
                 _ => Vec::new(),
             },
         })
@@ -417,10 +420,30 @@ impl Agents {
     }
 
     fn task_question(&self, task: &Task) -> Option<Question> {
+        let first = self.first_prompt(&task.agent)?;
         (self.asking.iter().map(|asking| &asking.question))
             .chain(self.question().as_ref().filter(|question| question.handoff.is_some()))
-            .find(|question| question.from == task.agent.as_str())
+            .find(|question| question.from == task.agent.as_str() && question.id == first)
             .cloned()
+    }
+
+    /// The number of `agent`'s prompt that came first, of its confirmations, the handoffs that
+    /// wait on the user and its task's ask. Its calls on different tabs go at once (#1476), so
+    /// several can ask together: the first shows, and the others wait their turn.
+    pub(super) fn first_prompt(&self, agent: &str) -> Option<u64> {
+        let confirmations = (self.asking.iter())
+            .filter(|asking| asking.act.agent == agent)
+            .map(|asking| asking.question.id);
+        let handoffs = (self.held.values())
+            .filter(|held| held.agent == agent && held.reply.is_some())
+            .map(|held| held.question);
+        let ask = self.task(agent).and_then(|task| task.asking.as_ref()).map(|(id, _)| *id);
+        confirmations.chain(handoffs).chain(ask).min()
+    }
+
+    /// Whether the task's ask is the prompt its agent shows.
+    fn ask_shown(&self, task: &Task) -> bool {
+        (task.asking.as_ref()).is_some_and(|(id, _)| self.first_prompt(&task.agent) == Some(*id))
     }
 
     /// Done's tabs to open, with their sites, those still in the task's Space.
@@ -449,13 +472,15 @@ impl Agents {
 
     pub fn card(&self, task: &Task, cx: &App) -> Card {
         let question = self.task_question(task);
+        let asks = self.ask_shown(task);
         let (status, dot) = match (&task.state, &question) {
-            (State::Working, Some(question)) => match question.handoff {
+            (State::Working | State::Asking { .. }, Some(question)) => match question.handoff {
                 Some(_) => ("Waiting for you".into(), Dot::Waiting),
                 None => ("Waiting for your OK".into(), Dot::Waiting),
             },
             (State::Working, None) => (working(&task.trace), Dot::Working),
-            (State::Asking { question, .. }, _) => (question.clone(), Dot::Waiting),
+            (State::Asking { question, .. }, None) if asks => (question.clone(), Dot::Waiting),
+            (State::Asking { .. }, None) => ("Waiting for you".into(), Dot::Waiting),
             (State::Done { summary, .. }, _) => {
                 (summary.clone().unwrap_or_else(|| "Done".into()), Dot::Done)
             }
@@ -479,10 +504,10 @@ impl Agents {
             cli: task.cli,
             title: task.title.clone(),
             status,
-            asks: matches!(task.state, State::Asking { .. }) && question.is_none(),
+            asks,
             dot,
             answers: match &task.state {
-                State::Asking { answers, .. } => answers.clone(),
+                State::Asking { answers, .. } if asks => answers.clone(),
                 _ => Vec::new(),
             },
             question,
@@ -813,12 +838,13 @@ impl Agents {
     /// The user's answer to the task's ask.
     pub fn answer_task(&mut self, agent: &str, answer: &str, cx: &mut Context<Self>) {
         let Some(task) = self.task_mut(agent) else { return };
-        let Some(reply) = task.asking.take() else { return };
+        let Some((_, reply)) = task.asking.take() else { return };
         task.messages.push(Message::new(Who::User, answer.to_string()));
         task.state = State::Working;
         _ = reply.send(ToolResult::text(format!("The user answered: {answer}")));
         self.note(agent, "answered", "", "");
-        cx.notify();
+        // The agent's next prompt, if one waited its turn.
+        self.asked(cx);
     }
 
     /// ⌘. or Stop: ends what the task is doing at once. A reply goes on from there.
@@ -1015,25 +1041,32 @@ impl Agents {
         let string = |name: &str| arguments.get(name).and_then(Value::as_str).unwrap_or("").trim().to_string();
         let tab = (tab.or_else(|| tools::tab_argument(arguments).ok().flatten()))
             .or_else(|| self.current.get(agent).copied());
-        let on = tab.map(|tab| site(&self.browser.tab(tab, cx).url)).unwrap_or_default();
+        let url = tab.map(|tab| self.browser.tab(tab, cx).url.to_string()).unwrap_or_default();
         let element = (arguments.get("ref").and_then(Value::as_str).zip(tab))
             .and_then(|(name, tab)| self.refs.get(&tab)?.get(name).cloned());
         let named = |element: &page::Element| match element.name.trim().is_empty() {
             true => format!("the {}", element.role),
             false => format!("“{}”", page::clip(element.name.trim(), 40)),
         };
-        let mut did = tools::Did { tool: tool.to_string(), site: on, ..Default::default() };
+        let (on, page) = (site(&url), address(&url));
+        let mut did = tools::Did { tool: tool.to_string(), site: on, tab, page, ..Default::default() };
         match tool {
             "open_tab" | "navigate" => match string("url").as_str() {
                 back @ ("back" | "forward") => did.tool = back.to_string(),
                 // Its title says the site; the line opens to the address, whole.
-                url => match self.browser.url_for(url) {
-                    Some(url) => {
-                        did.site = site(&url);
-                        did.text = url;
+                url => {
+                    match self.browser.url_for(url) {
+                        Some(url) => {
+                            did.site = site(&url);
+                            did.page = address(&url);
+                            did.text = url;
+                        }
+                        None => (did.site, did.page) = (page::clip(url, 40), page::clip(url, 60)),
                     }
-                    None => did.site = page::clip(url, 40),
-                },
+                    if tool == "open_tab" {
+                        did.tab = None;
+                    }
+                }
             },
             "click" | "type" => {
                 did.target = element.as_ref().map(named).unwrap_or_default();
@@ -1063,7 +1096,7 @@ impl Agents {
                     (true, None) => String::new(),
                 };
             }
-            "list_tabs" | "ask" => did.site.clear(),
+            "list_tabs" | "ask" => (did.site, did.tab, did.page) = (String::new(), None, String::new()),
             _ => {}
         }
         did
@@ -1145,10 +1178,12 @@ impl Agents {
                     context => format!("{}\n\n{}", page::clip(context, 2000), page::clip(question, 300)),
                 };
                 let question: SharedString = page::clip(card_question(question), 300).into();
+                let number = self.next_request;
+                self.next_request += 1;
                 let Some(task) = self.task_mut(agent) else { return };
                 task.messages.push(Message::new(Who::Asked, said));
                 task.state = State::Asking { question, answers: buttons };
-                task.asking = Some(reply);
+                task.asking = Some((number, reply));
                 self.note(agent, "ask", "", "");
             }
             "finish" => {
@@ -1274,6 +1309,13 @@ fn tense(step: &Traced) -> tools::Tense {
     }
 }
 
+/// A page's address as a trace's line says it: without its scheme, "www." or a lone "/".
+fn address(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let rest = rest.strip_prefix("www.").unwrap_or(rest);
+    page::clip(rest.strip_suffix('/').unwrap_or(rest), 60)
+}
+
 /// A duration in whole seconds as a trace says it: "41s", "2m 5s".
 pub fn duration(seconds: u64) -> String {
     match seconds {
@@ -1311,7 +1353,7 @@ pub fn fold(messages: &[Message], trace: &[Traced], ended: bool, working: bool) 
             stretch.step(key, step);
         }
         if !shown[index] {
-            stretch.items.push(TraceItem::Said(message.text.clone()));
+            stretch.gathered.push(Gathered::Said(message.text.clone()));
             continue;
         }
         let end = (message.who != Who::User).then_some(message.at);
@@ -1330,65 +1372,54 @@ pub fn fold(messages: &[Message], trace: &[Traced], ended: bool, working: bool) 
 
 /// The stretch of work a trace is made of, as it gathers.
 #[derive(Default)]
-struct Stretch {
-    items: Vec<TraceItem>,
+struct Stretch<'a> {
+    gathered: Vec<Gathered<'a>>,
     key: Option<usize>,
     started: Option<Instant>,
     ended: Option<Instant>,
 }
 
-impl Stretch {
-    fn step(&mut self, key: usize, step: &Traced) {
+/// A step of a stretch, with its place in the task's trace, or what the agent said in it.
+enum Gathered<'a> {
+    Step(usize, &'a Traced),
+    Said(SharedString),
+}
+
+impl<'a> Stretch<'a> {
+    fn step(&mut self, key: usize, step: &'a Traced) {
         self.key.get_or_insert(key);
         self.started = Some(self.started.map_or(step.started, |started| started.min(step.started)));
         let end = step.ended.unwrap_or(step.started);
         self.ended = Some(self.ended.map_or(end, |ended| ended.max(end)));
-        let took = step.ended.map(|ended| ended.saturating_duration_since(step.started));
-        let description = match (&step.error, took) {
-            (Some(error), _) => tools::reason(error),
-            // A wait's title says its time.
-            (None, Some(took)) if took >= Duration::from_secs(1) && step.did.tool != "wait" => {
-                duration(took.as_secs())
-            }
-            _ => String::new(),
-        };
-        let text = (!step.did.text.is_empty()).then(|| step.did.text.clone());
-        let opened = matches!(step.did.tool.as_str(), "open_tab" | "navigate");
-        let opens = match (&step.error, &step.picture, text) {
-            (Some(error), _, Some(address)) if opened => Opens::Text(format!("{address}\n{error}").into()),
-            (Some(error), _, _) => Opens::Text(error.clone()),
-            (None, Some(picture), _) => Opens::Picture(picture.clone()),
-            (None, None, Some(text)) if opened || step.did.tool == "thought" => Opens::Text(text.into()),
-            _ => Opens::Nothing,
-        };
-        self.items.push(TraceItem::Step(TraceStep {
-            key,
-            glyph: tools::step_glyph(&step.did.tool),
-            title: tools::step_title(&step.did, tense(step)).into(),
-            description: description.into(),
-            running: step.ended.is_none(),
-            failed: step.error.is_some(),
-            opens,
-        }));
+        self.gathered.push(Gathered::Step(key, step));
     }
 
     /// The stretch as its lines: a trace, or with no steps, what the agent said, as itself. It's
     /// `running` if it's the stretch under way, and ends at the agent's message `end`, if one ends
     /// it.
     fn flush(&mut self, lines: &mut Vec<Line>, running: bool, end: Option<Instant>) {
-        let mut items = std::mem::take(&mut self.items);
+        let gathered = std::mem::take(&mut self.gathered);
         let (key, started, ended) = (self.key.take(), self.started.take(), self.ended.take());
         let Some(key) = key else {
-            lines.extend(items.into_iter().filter_map(|item| match item {
-                TraceItem::Said(text) => Some(Line::Said(text)),
-                TraceItem::Step(_) => None,
+            lines.extend(gathered.into_iter().filter_map(|item| match item {
+                Gathered::Said(text) => Some(Line::Said(text)),
+                Gathered::Step(..) => None,
             }));
             return;
         };
+        let mut items: Vec<TraceItem> = (together(gathered).into_iter())
+            .map(|item| match item {
+                Together::Steps(steps) => TraceItem::Step(trace_step(&steps)),
+                Together::Said(text) => TraceItem::Said(text),
+            })
+            .collect();
         if !running {
             for item in &mut items {
                 if let TraceItem::Step(step) = item {
                     step.running = false;
+                    if let Opens::Steps(steps) = &mut step.opens {
+                        steps.iter_mut().for_each(|step| step.running = false);
+                    }
                 }
             }
         }
@@ -1398,6 +1429,149 @@ impl Stretch {
             (ended.saturating_duration_since(started).as_secs_f32().round() as u64).max(1)
         });
         lines.push(Line::Trace(Trace { key, running, took, items }));
+    }
+}
+
+/// A line of a stretch as it gathers: its steps, or what the agent said.
+enum Together<'a> {
+    Steps(Vec<(usize, &'a Traced)>),
+    Said(SharedString),
+}
+
+/// A stretch's lines, in which a turn's same step on several tabs is one (#1476), as an agent
+/// sends a call a tab at once, or one after another. A step joins the last line of its tool and
+/// target since the agent last said or thought something, if that line has nothing on the step's
+/// tab and nothing came on its tab since that line began, so each tab's steps still read in their
+/// order; a page it opens joins the line right before it.
+fn together(gathered: Vec<Gathered<'_>>) -> Vec<Together<'_>> {
+    let mut lines: Vec<Together> = Vec::new();
+    // The first line a step may join: after what the agent last said or thought.
+    let mut from = 0;
+    for item in gathered {
+        let (key, step) = match item {
+            Gathered::Step(key, step) => (key, step),
+            Gathered::Said(text) => {
+                lines.push(Together::Said(text));
+                from = lines.len();
+                continue;
+            }
+        };
+        let did = &step.did;
+        let groups = (did.tab.is_some() || did.tool == "open_tab")
+            && !matches!(did.tool.as_str(), "thought" | "ask" | "list_tabs");
+        let like = |line: &Together| {
+            matches!(line, Together::Steps(steps)
+                if steps[0].1.did.tool == did.tool && steps[0].1.did.target == did.target)
+        };
+        let on_tab = |line: &Together| {
+            matches!(line, Together::Steps(steps) if steps.iter().any(|(_, each)| each.did.tab == did.tab))
+        };
+        let joins = (lines.len() > from && groups)
+            .then(|| (from..lines.len()).rev().find(|&at| like(&lines[at])))
+            .flatten()
+            .filter(|&at| match did.tab {
+                None => at + 1 == lines.len(),
+                Some(_) => !lines[at..].iter().any(on_tab),
+            });
+        match joins.map(|at| &mut lines[at]) {
+            Some(Together::Steps(steps)) => steps.push((key, step)),
+            _ => {
+                lines.push(Together::Steps(vec![(key, step)]));
+                if did.tool == "thought" {
+                    from = lines.len();
+                }
+            }
+        }
+    }
+    lines
+}
+
+/// A line of a trace: a step, or a turn's same step on several tabs, which opens to each tab's.
+fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
+    let &[(key, step)] = steps else { return trace_group(steps) };
+    let took = step.ended.map(|ended| ended.saturating_duration_since(step.started));
+    let description = match (&step.error, took) {
+        (Some(error), _) => tools::reason(error),
+        // A wait's title says its time.
+        (None, Some(took)) if took >= Duration::from_secs(1) && step.did.tool != "wait" => {
+            duration(took.as_secs())
+        }
+        _ => String::new(),
+    };
+    let text = (!step.did.text.is_empty()).then(|| step.did.text.clone());
+    let opened = matches!(step.did.tool.as_str(), "open_tab" | "navigate");
+    let opens = match (&step.error, &step.picture, text) {
+        (Some(error), _, Some(address)) if opened => Opens::Text(format!("{address}\n{error}").into()),
+        (Some(error), _, _) => Opens::Text(error.clone()),
+        (None, Some(picture), _) => Opens::Picture(picture.clone()),
+        (None, None, Some(text)) if opened || step.did.tool == "thought" => Opens::Text(text.into()),
+        _ => Opens::Nothing,
+    };
+    TraceStep {
+        key,
+        glyph: tools::step_glyph(&step.did.tool),
+        title: tools::step_title(&step.did, tense(step)).into(),
+        description: description.into(),
+        running: step.ended.is_none(),
+        failed: step.error.is_some(),
+        opens,
+    }
+}
+
+/// A turn's same step on several tabs, as one line with how many, which opens to each tab's line
+/// by its address. While it works, it says how many are done; once done, how many failed, or what
+/// it took.
+fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
+    let (key, first) = steps[0];
+    let tabs: Vec<TraceStep> = (steps.iter())
+        .map(|&(key, step)| {
+            let line = trace_step(&[(key, step)]);
+            match step.did.page.is_empty() {
+                true => line,
+                false => TraceStep { title: step.did.page.clone().into(), ..line },
+            }
+        })
+        .collect();
+    let count = tabs.len();
+    let running = tabs.iter().filter(|tab| tab.running).count();
+    let failed = tabs.iter().filter(|tab| tab.failed).count();
+    let tense = match (running, failed) {
+        (1.., _) => tools::Tense::Now,
+        (0, failed) if failed == count => tools::Tense::Failed,
+        _ => tools::Tense::Done,
+    };
+    // What it typed, if it typed the same on each.
+    let mut did = first.did.clone();
+    if steps.iter().any(|(_, step)| step.did.text != did.text) {
+        did.text.clear();
+    }
+    let started = steps.iter().map(|(_, step)| step.started).min().unwrap_or(first.started);
+    let ended = steps.iter().map(|(_, step)| step.ended).collect::<Option<Vec<_>>>();
+    let took = (ended.into_iter().flatten().max()).map(|ended| ended.saturating_duration_since(started));
+    let description = match (running, failed) {
+        (1.., _) => format!("{} of {count}", count - running),
+        // Failed on each, it says why if it's the same why.
+        (0, failed) if failed == count => {
+            let why = &tabs[0].description;
+            match tabs.iter().all(|tab| tab.description == *why) {
+                true => why.to_string(),
+                false => String::new(),
+            }
+        }
+        (0, 1..) => format!("{failed} failed"),
+        _ => match took {
+            Some(took) if took >= Duration::from_secs(1) && did.tool != "wait" => duration(took.as_secs()),
+            _ => String::new(),
+        },
+    };
+    TraceStep {
+        key,
+        glyph: tools::step_glyph(&did.tool),
+        title: tools::group_title(&did, count, tense).into(),
+        description: description.into(),
+        running: running > 0,
+        failed: failed > 0,
+        opens: Opens::Steps(tabs),
     }
 }
 

@@ -159,11 +159,13 @@ pub struct TalkView {
     made: Instant,
 }
 
-/// What opens in a conversation: a trace, or a line of one, by its key.
+/// What opens in a conversation: a trace, a line of one, or a turn's same step on several tabs,
+/// by its key.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) enum Fold {
     Trace(usize),
     Step(usize),
+    Group(usize),
 }
 
 impl Shell {
@@ -451,9 +453,15 @@ impl TalkView {
             let Line::Trace(trace) = line else { continue };
             folds.push((Fold::Trace(trace.key), self.is_open(Fold::Trace(trace.key), trace.running)));
             for item in &trace.items {
-                if let TraceItem::Step(step) = item
-                    && step.opens != Opens::Nothing
-                {
+                let TraceItem::Step(step) = item else { continue };
+                let steps = match &step.opens {
+                    Opens::Steps(steps) => {
+                        folds.push((Fold::Group(step.key), self.is_open(Fold::Group(step.key), false)));
+                        steps.as_slice()
+                    }
+                    _ => std::slice::from_ref(step),
+                };
+                for step in steps.iter().filter(|step| step.opens != Opens::Nothing) {
                     folds.push((Fold::Step(step.key), self.is_open(Fold::Step(step.key), false)));
                 }
             }
@@ -727,24 +735,10 @@ impl TalkView {
         let running = trace.running;
         let summary = trace_line(look, fold, None, false, title, steps, Some(open), None)
             .on_click(cx.listener(move |view, _, _, cx| view.toggle(fold, running, cx)));
-        let mut nest = div()
-            .relative()
-            .flex()
-            .flex_col()
-            .items_start()
-            .pl(px(TRACE_INDENT))
-            .child(
-                div()
-                    .absolute()
-                    .left(px(TRACE_RULE_X))
-                    .top_0()
-                    .bottom_0()
-                    .w(px(TRACE_RULE))
-                    .bg(look.palette.plate(TRACE_RULE_FILL)),
-            );
+        let mut nest = nest(look);
         for (index, item) in trace.items.iter().enumerate() {
             nest = match item {
-                TraceItem::Step(step) => nest.children(self.step(step, look, cx)),
+                TraceItem::Step(step) => nest.children(self.step(step, true, look, cx)),
                 TraceItem::Said(text) => nest.child(
                     div()
                         .py(px((TRACE_LINE - TEXT_LINE) / 2.))
@@ -763,15 +757,26 @@ impl TalkView {
             .into_any_element()
     }
 
-    /// A step's line, and what it opens to while it's open.
-    fn step(&self, step: &TraceStep, look: &Look, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
-        let fold = Fold::Step(step.key);
+    /// A step's line, and what it opens to while it's open. A turn's same step on several tabs
+    /// opens to each tab's line, by its address under the step's title and with no glyph, so the
+    /// addresses read as one column.
+    fn step(
+        &self,
+        step: &TraceStep,
+        glyph: bool,
+        look: &Look,
+        cx: &mut Context<Self>,
+    ) -> Vec<gpui::AnyElement> {
+        let fold = match step.opens {
+            Opens::Steps(_) => Fold::Group(step.key),
+            _ => Fold::Step(step.key),
+        };
         let opens = step.opens != Opens::Nothing;
         let open = opens && self.is_open(fold, false);
         let mut line = trace_line(
             look,
             fold,
-            Some(step.glyph),
+            glyph.then_some(step.glyph),
             step.failed,
             step.title.clone(),
             step.description.clone(),
@@ -782,18 +787,20 @@ impl TalkView {
             line = line.on_click(cx.listener(move |view, _, _, cx| view.toggle(fold, false, cx)));
         }
         let palette = look.palette;
+        // What a line opens to starts under its title.
+        let under = if glyph { TRACE_GLYPH + TRACE_GAP } else { 0. };
         let content = match &step.opens {
             Opens::Nothing => None,
             Opens::Text(text) => Some(
                 div()
-                    .pl(px(TRACE_GLYPH + TRACE_GAP))
+                    .pl(px(under))
                     .pt(px(OPEN_TOP))
                     .pb(px(OPEN_BELOW))
                     .text_color(palette.text(SECONDARY))
                     .child(text.clone()),
             ),
             Opens::Picture(picture) => Some(
-                div().pl(px(TRACE_GLYPH + TRACE_GAP)).pt(px(OPEN_TOP)).pb(px(OPEN_BELOW)).child(
+                div().pl(px(under)).pt(px(OPEN_TOP)).pb(px(OPEN_BELOW)).child(
                     img(picture.clone())
                         .w(px(TRACE_PICTURE_WIDTH))
                         .h(px(TRACE_PICTURE_HEIGHT))
@@ -801,6 +808,9 @@ impl TalkView {
                         .rounded(px(TRACE_PICTURE_RADIUS)),
                 ),
             ),
+            Opens::Steps(steps) => {
+                Some(nest(look).children(steps.iter().flat_map(|step| self.step(step, false, look, cx))))
+            }
         };
         let opened = content.and_then(|content| self.unfolding(fold, open, content.w_full(), look.now));
         std::iter::once(line.into_any_element()).chain(opened).collect()
@@ -872,6 +882,20 @@ impl TalkView {
     }
 }
 
+/// What a trace, or a turn's same step on several tabs, opens to: its lines, a step in, along a
+/// rule under the glyph above them.
+fn nest(look: &Look) -> gpui::Div {
+    div().relative().flex().flex_col().items_start().pl(px(TRACE_INDENT)).child(
+        div()
+            .absolute()
+            .left(px(TRACE_RULE_X))
+            .top_0()
+            .bottom_0()
+            .w(px(TRACE_RULE))
+            .bg(look.palette.plate(TRACE_RULE_FILL)),
+    )
+}
+
 /// The steps a conversation's traces hold, which change as it works without a line coming.
 fn steps(lines: &[Line]) -> usize {
     (lines.iter())
@@ -902,6 +926,12 @@ fn trace_line(
     let (id, group): (ElementId, SharedString) = match fold {
         Fold::Trace(key) => (("trace", key).into(), format!("trace-{key}").into()),
         Fold::Step(key) => (("trace-step", key).into(), format!("trace-step-{key}").into()),
+        Fold::Group(key) => (("trace-group", key).into(), format!("trace-group-{key}").into()),
+    };
+    // A failed line with no glyph to say so says it in why it failed.
+    let note = match failed && glyph.is_none() {
+        true => rgb(NOT_FOUND).into(),
+        false => palette.text(TRACE_NOTE),
     };
     let glyph = glyph.map(|glyph| {
         let color = match failed {
@@ -954,7 +984,7 @@ fn trace_line(
                 }),
         )
         .when(!description.is_empty(), |line| {
-            line.child(div().flex_none().text_color(palette.text(TRACE_NOTE)).child(description))
+            line.child(div().flex_none().text_color(note).child(description))
         })
         .children(chevron)
 }
