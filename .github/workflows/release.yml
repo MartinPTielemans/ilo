@@ -12,11 +12,13 @@
 # its message is the release's notes. By hand before the tag exists, it's a try: it skips, and says so
 # in the run, what needs the owner (the Store's identity, the Developer ID, notarization, the appcast)
 # and makes no release, leaving its packages as the run's artifact release-try. Each job builds on
-# its OS's prebuilt engine for the commit, which engine/fetch.sh finds or fails on; a release never builds an engine. The Windows engine is
-# built nightly, not for each core change, so before pushing the tag, dispatch Engine on Windows
-# (cross-compiled) on its commit (gh workflow run engine-windows-cross.yml --ref main, with main at
-# that commit) and wait for its release engine-windows-<commit>; otherwise the Windows job stops at
-# "No Windows engine release for this commit", or packs an older core. The owner publishes
+# its OS's prebuilt engine for the commit, which engine/fetch.sh finds or fails on; a release never
+# builds an engine. The Linux and Windows engines are built nightly, not for each core change, so
+# before pushing the tag, dispatch Engine on Linux and Engine on Windows (cross-compiled) on its
+# commit (gh workflow run engine-linux.yml --ref main, and engine-windows-cross.yml, with main at
+# that commit) and wait for their releases engine-linux-<commit> and engine-windows-<commit>;
+# otherwise the Windows job stops at "No Windows engine release for this commit", or either packs an
+# older core. The owner publishes
 # the draft, which puts its Linux build in the Flatpak repository (the publish job) and the release
 # on ilobrowser.com (the site job), and tells the bot that announces releases (the announce job).
 # docs/releasing.md names the secrets it needs. GitHub's hosted runners only.
