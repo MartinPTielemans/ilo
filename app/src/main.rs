@@ -164,6 +164,7 @@ mod platform {
             y: f64,
             width: f64,
             height: f64,
+            maximized: bool,
         );
         pub fn host_screens(frames: *mut f64, count: usize) -> usize;
         pub fn host_pointer(x: *mut f64, y: *mut f64) -> bool;
@@ -277,6 +278,16 @@ mod platform {
         pub fn host_start_window_move(ui_view: *mut c_void);
         #[cfg(target_os = "windows")]
         pub fn host_window_maximized(ui_view: *mut c_void) -> bool;
+        #[cfg(target_os = "windows")]
+        pub fn host_window_restored_frame(
+            ui_view: *mut c_void,
+            x: *mut f64,
+            y: *mut f64,
+            width: *mut f64,
+            height: *mut f64,
+        ) -> bool;
+        #[cfg(target_os = "windows")]
+        pub fn host_maximize_window(ui_view: *mut c_void);
         pub fn host_add_reveal(
             ui_view: *mut c_void,
             reveal_view: *mut c_void,
@@ -4323,6 +4334,12 @@ fn open_window_as(
     let ui_view = gpui_linux::new_host_window().unwrap_or(0) as usize as *mut c_void;
     let after = from.as_ref().map(|from| from.ui_view);
     let id = open_browser_window(ui_view, after, own, saved)?;
+    // The launch's first window, maximized as it quit, at the frame it un-maximizes to. Before its
+    // UI opens, so that starts at the maximized size.
+    if from.is_none() && LAUNCH_MAXIMIZED.take() && own.is_none() {
+        #[cfg(target_os = "windows")]
+        unsafe { platform::host_maximize_window(ui_view) };
+    }
     // Under Wayland, the window's surface, which GPUI's goes in as a subsurface, is the view, and
     // GPUI's window starts at its size.
     #[cfg(target_os = "linux")]
@@ -5629,28 +5646,37 @@ unsafe extern "C" fn window_reopen_little(
     });
 }
 
+thread_local! {
+    /// The launch window is maximized, as the first browser window opens (open_window_as).
+    static LAUNCH_MAXIMIZED: Cell<bool> = const { Cell::new(false) };
+}
+
 unsafe extern "C" fn launching(_: *mut c_void) {
     unsafe { platform::host_watch_finished_launching(finished_launching) };
     let Ok(profile) = CString::new(profile_dir()) else {
         return;
     };
-    // Where the front window was, which the browser window opens at again.
+    // Where the front window was, which the browser window opens at again, and whether it was
+    // maximized, which only Windows saves (save_launch_frame).
     let saved = std::fs::read_to_string(launch_frame_path()).ok().and_then(|text| {
         let numbers: Vec<f64> = text.split_whitespace().filter_map(|n| n.parse().ok()).collect();
         let [x, y, width, height] = numbers[..] else {
             return None;
         };
-        placed(bc::bc_rect { x, y, width, height })
+        let maximized = text.split_whitespace().any(|word| word == "maximized");
+        Some((placed(bc::bc_rect { x, y, width, height })?, maximized))
     });
-    let bc::bc_rect { x, y, width, height } = saved.unwrap_or_else(|| {
+    let (bc::bc_rect { x, y, width, height }, maximized) = saved.unwrap_or_else(|| {
         let (width, height) = WINDOW_SIZE;
         let (mut x, mut y) = (0., 0.);
         unsafe { platform::host_centered(width, height, &mut x, &mut y) };
-        bc::bc_rect { x, y, width, height }
+        (bc::bc_rect { x, y, width, height }, false)
     });
-    unsafe { platform::host_show_launch_window(profile.as_ptr(), x, y, width, height) };
+    LAUNCH_MAXIMIZED.set(maximized);
+    unsafe { platform::host_show_launch_window(profile.as_ptr(), x, y, width, height, maximized) };
     // check.sh reads this line.
-    log!("browser: launch window frame {x:.0} {y:.0} {width:.0} {height:.0}");
+    let state = if maximized { " maximized" } else { "" };
+    log!("browser: launch window frame {x:.0} {y:.0} {width:.0} {height:.0}{state}");
     // The launch's times, from the process's start, for the performance gate.
     log!("browser: launch window at {:.1} ms", unsafe { platform::host_since_launch() });
     unsafe { platform::host_dock_dot_launch(profile.as_ptr()) };
@@ -5749,10 +5775,18 @@ fn forget_launch_pictures() {
 
 /// Keeps the frame of the browser window of `ui_view` for the next launch's first window to open
 /// at. Out of full screen only: the core keeps the frame a window in full screen comes back at.
+/// Maximized on Windows, the frame it un-maximizes to and "maximized" after it (launching).
 fn save_launch_frame(ui_view: *mut c_void) {
     let (mut x, mut y, mut width, mut height) = (0., 0., 0., 0.);
     if unsafe { platform::host_window_frame(ui_view, &mut x, &mut y, &mut width, &mut height) } {
         _ = std::fs::write(launch_frame_path(), format!("{x} {y} {width} {height}\n"));
+        return;
+    }
+    #[cfg(target_os = "windows")]
+    if unsafe {
+        platform::host_window_restored_frame(ui_view, &mut x, &mut y, &mut width, &mut height)
+    } {
+        _ = std::fs::write(launch_frame_path(), format!("{x} {y} {width} {height} maximized\n"));
     }
 }
 

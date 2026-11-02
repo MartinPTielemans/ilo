@@ -22,9 +22,10 @@ void host_centered(double width, double height, double* x, double* y);
 // Puts a window on screen at |x|, |y|, |width| by |height| in host_centered's terms, where the
 // first browser window will open, with the window's material and the sidebar as it was when the
 // app last quit at that size, from |profile_dir|. For the moment between NSApp being made and the
-// browser starting.
+// browser starting. With |maximized|, Windows' alone, it's maximized on that frame's screen, as the
+// first browser window will be (host_maximize_window), without a picture of another size's sidebar.
 void host_show_launch_window(const char* profile_dir, double x, double y, double width,
-                             double height);
+                             double height, bool maximized);
 
 // The visible frames of the screens a window may open on, in host_centered's terms, as x, y,
 // width and height, four to a screen: the main display's first, or with BROWSER_DISPLAY=builtin
@@ -521,6 +522,13 @@ void host_press_window_button(void* ui_view, int button);
 // it's maximized. Linux has the core's (bc_window_start_move, bc_window_is_maximized).
 void host_start_window_move(void* ui_view);
 bool host_window_maximized(void* ui_view);
+// While |ui_view|'s window is maximized, or if it closed maximized, the frame it un-maximizes to,
+// in host_window_frame's terms, which leaves a maximized window's be. False, leaving them be,
+// otherwise.
+bool host_window_restored_frame(void* ui_view, double* x, double* y, double* width, double* height);
+// Maximizes |ui_view|'s window on the screen of the frame it has, which it then un-maximizes to, as
+// the first window comes back when it quit maximized.
+void host_maximize_window(void* ui_view);
 #endif
 
 // Makes the window of |reveal_view| the sidebar reveal of |ui_view|'s window, which shows over its
