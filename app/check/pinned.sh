@@ -1,8 +1,8 @@
 # ⌘D pins the tab shown, from the page and from the UI, at the bottom of the pinned tabs, and unpins
-# it to the top of Today. ⌘1–⌘9 count the pinned tabs first. ⌘W, the ✕ under the pointer, which is −
-# on the tab shown, or a middle-click on its row, unloads a pinned tab and keeps its row, and shows
+# it to the top of Today. ⌘1–⌘9 count the pinned tabs first. ⌘W, the − under the pointer, on the
+# tab shown or not, or a middle-click on its row, unloads a pinned tab and keeps its row, and shows
 # the top Today tab, else the nearest pinned tab still loaded, else no page, as closing the last
-# Today tab does. The unloaded row has a remove button in the ✕'s place, which takes the tab out of
+# Today tab does. The unloaded row has a remove button in the −'s place, which takes the tab out of
 # the pinned tabs and not into Today, and ⌘Z pins it again at its place. Shown again, the tab loads. A link in its page takes it away from
 # its pinned URL, and ⌘↩ from the page and the UI, and a click on its favicon, go back there. An
 # address typed into it opens in a Today tab of its own, as in Arc, and closing that shows the
@@ -133,27 +133,27 @@ expect "^browser: selected $a in " "a click on the unloaded pinned tab didn't sh
 expect "^browser: loaded $a $site\$" "the unloaded pinned tab didn't load once shown"
 expect "^browser: page $a unloaded 0\$" "the pinned tab still read as unloaded once it loaded"
 
-# The ✕ under the pointer unloads a pinned tab, and the remove button the unloaded row has instead
+# The − under the pointer unloads a pinned tab not shown, and the remove button the unloaded row has instead
 # waits for the pointer to leave it, so the second click shows the tab. The pointer comes from the
-# page, where the card of the row it was on goes, so the capture has the ✕ alone.
+# page, where the card of the row it was on goes, so the capture has the − alone.
 send move 600 400
 [ "$(grep -E '^browser: hover card (window shown|hidden)$' "$log" | tail -1)" != \
   "browser: hover card window shown" ] ||
   expect '^browser: hover card hidden$' "the hover card stayed after the pointer left the rows"
 send move $(pinned_close 0)
-expect "^browser: hover tab $c close 1 favicon none\$" "the pinned tab's row didn't draw its ✕"
+expect "^browser: hover tab $c close − favicon none\$" "the pinned tab's row didn't draw its −"
 ../tools/window-screenshot.sh "$pid" "$out/pinned-close.png" || fail "no window to capture"
 send click $(pinned_close 0)
-expect '^browser: command close-tab via sidebar$' "a click on a pinned tab's ✕ didn't run Close Tab"
-expect "^browser: page $c unloaded 1\$" "the ✕ didn't unload the pinned tab"
+expect '^browser: command close-tab via sidebar$' "a click on a pinned tab's − didn't run Close Tab"
+expect "^browser: page $c unloaded 1\$" "the − didn't unload the pinned tab"
 none_since '^browser: selected' || fail "unloading a pinned tab not shown changed the tab shown"
-expect "^browser: hover tab $c close 0 favicon none\$" "the unloaded pinned tab's row kept its ✕"
+expect "^browser: hover tab $c close 0 favicon none\$" "the unloaded pinned tab's row kept its −"
 send click $(pinned_close 0)
-expect "^browser: selected $c in " "a click where an unloaded pinned tab's ✕ was didn't show the tab"
-none_since '^browser: command close-tab' || fail "an unloaded pinned tab showed its ✕"
-none_since '^browser: command remove-tab' || fail "a second click on the ✕ removed the pinned tab"
+expect "^browser: selected $c in " "a click where an unloaded pinned tab's − was didn't show the tab"
+none_since '^browser: command close-tab' || fail "an unloaded pinned tab showed its −"
+none_since '^browser: command remove-tab' || fail "a second click on the − removed the pinned tab"
 expect "^browser: loaded $c https://example.org/\$" "the pinned tab didn't load once shown"
-# Shown, its ✕ is −, which unloads it too and shows the top Today tab.
+# Shown, its − unloads it too and shows the top Today tab.
 expect "^browser: hover tab $c close − favicon none\$" "the pinned tab shown didn't draw −"
 send click $(pinned_close 0)
 expect '^browser: command close-tab via sidebar$' "a click on a pinned tab's − didn't run Close Tab"
@@ -163,7 +163,7 @@ expect "^browser: selected $b\$" "the − on a pinned tab didn't show the top To
 send click $(pinned_row 0)
 expect "^browser: selected $c in " "a click on the unloaded pinned tab didn't show it"
 expect "^browser: loaded $c https://example.org/\$" "the pinned tab didn't load once shown"
-# A middle-click on a row closes its tab as the ✕ does, which unloads a pinned one.
+# A middle-click on a row closes its tab as its − does, which unloads a pinned one.
 send middleclick $(pinned_row 1)
 expect '^browser: command close-tab via sidebar$' "a middle-click on a pinned tab didn't run Close Tab"
 expect "^browser: page $a unloaded 1\$" "a middle-click didn't unload the pinned tab"
@@ -187,7 +187,7 @@ expect "^browser: page $c unloaded 1\$" "⌘W didn't unload the last pinned tab 
 none_since '^browser: loaded' || fail "closing a pinned tab loaded another"
 ../tools/window-screenshot.sh "$pid" "$out/pinned-unloaded.png" || fail "no window to capture"
 
-# Under the pointer, an unloaded pinned row has the remove button in its ✕'s place, which its
+# Under the pointer, an unloaded pinned row has the remove button in its −'s place, which its
 # tooltip names. A click takes the tab out of the pinned tabs, not into Today, without loading or
 # showing it, and ⌘Z pins it again at its place (#1349).
 # The button comes with the row's hover, and the pointer's next move finds it, as a hand's does.
@@ -349,9 +349,9 @@ expect '^browser: command undo via \(ui\|page\)$' "⌘Z didn't undo the pinned U
 expect "^browser: page $c away 1\$" "⌘Z didn't give the pinned tab back the pinned URL Edit… replaced"
 # ⌘-click on its favicon goes back too, keeping the page it's at in a new tab at the top of Today,
 # opened first, which shows (Arc).
-# Shown, its row draws − in place of ✕.
+# Its row draws −, shown or not.
 send move $(pinned_favicon 0)
-expect "^browser: hover tab $c close \(0\|1\|−\) favicon $c\$" \
+expect "^browser: hover tab $c close \(0\|−\) favicon $c\$" \
   "the pointer on the pinned tab's favicon wasn't drawn"
 send click $(pinned_favicon 0) cmd
 expect '^browser: command back-to-pinned-url-keeping-page via sidebar$' \
@@ -428,7 +428,7 @@ if [ "$active" != 1 ]; then
   echo "skip: the restored pinned tab's way back. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
-# Unloaded, its row has the remove button in its ✕'s place.
+# Unloaded, its row has the remove button in its −'s place.
 send move $(pinned_favicon 0)
 expect "^browser: hover tab $c close remove favicon $c\$" \
   "the pointer on the pinned tab's favicon wasn't drawn"
@@ -933,4 +933,4 @@ expect "^browser: selected $added\$" "the added file's tab didn't show"
 expect "^browser: loaded $added file:///.*/Notes/A.txt\$" "the added file didn't load in its tab"
 exec 3>&-
 quit
-echo "ok: ⌘D pins and unpins from the page and the UI, and ⌘1–⌘9 count pinned tabs first. A middle-click on a row closes its tab as its ✕ does. Dragging a row moves its tab in the pinned tabs, pins it and unpins it, without showing it, and escape puts it back. ⌘W and ✕ unload a pinned tab and keep its row, showing the top Today tab, else a pinned tab still loaded, else no page, and an unloaded pinned tab loads once shown. An unloaded pinned row's remove button, named by its tooltip, takes the tab out of the pinned tabs without loading it and not into Today, and ⌘Z pins it again at its place, while a second click on the ✕ that unloaded it shows the tab. Away from its pinned URL, ⌘↩ from the page and the UI, and a click on its favicon, go back there. Pinned tabs come back pinned, unloaded and at their page, still away. New Folder makes a folder its field names, a drag right and left takes a tab in and out of it, a folder drags as a row, a click closes and opens it, and the command bar finds Collapse All Folders, which closes it, and Expand All Folders, which opens it. Resting on it closed previews its tab, and typing the tab's title in the preview's search and ↩ show it, the folder kept closed. It comes back closed, a double-click renames it, its menu's Copy All Links is Copy All Links as Markdown with ⌥ held, which copies them, Change Icon… gives it an emoji and offers Remove Icon after, and Delete Folder leaves its tab in place. A link and a file dragged onto the list open as tabs where they're let go, Today or pinned, and show, text that isn't a link opens a search for it there, and a link that isn't a web link doesn't open. Delete Folder offers Undo, ⌘Z remakes the folder around its tab and ⇧⌘Z deletes it again. Settings' Export… writes the folder and its pinned tab as Markdown links. ⌥-click on a pinned tab's link opens a pinned split. Away from its pinned URL, Pinned URL › Replace Pinned URL with Current and Edit… change the pinned URL, which ⌘Z and ⇧⌘Z undo and redo, and ⌘-click on its favicon goes back after opening the page in a new tab. The chevron after the Space's name collapses the pinned rows, which ⌘1 then skips, Expand Pinned Tabs and Collapse Pinned Tabs in the command bar and the View menu bring them back and fold them, and they come back collapsed. Focus Sidebar from the command bar and the View menu rings the tab shown's row, ↑ and ↓ move the ring past the collapsed rows, return shows its tab with the page holding the keyboard, and a key in the page and escape end it. A folder from the desktop dropped on the list becomes an open folder of its folder, closed, and its files' tabs, none shown, a file's row dragged onto the page starts the system's drag of its file, and the +'s Add File or Folder… opens a file at the top of Today. Windows: $out/pinned-close.png, $out/pinned-remove.png, $out/pinned-remove-undone.png, $out/pinned-split.png, $out/pinned-url-menu.png, $out/pinned-url-edit.png, $out/pinned-kept-page.png, $out/drag.png, $out/pinned.png, $out/pinned-unloaded.png, $out/pinned-away.png, $out/pinned-restored.png, $out/folder.png, $out/folder-preview.png, $out/folder-preview-search.png, $out/folder-restored.png, $out/export.png, $out/folder-menu.png, $out/folder-menu-option.png, $out/folder-icon.png, $out/folder-motion.mp4, $out/drop-before.png, $out/drop-line.png, $out/dropped.png, $out/dropped-text.png, $out/command-bar-commands.png, $out/pinned-caret.png, $out/pinned-collapsed.png, $out/sidebar-keyed.png, $out/sidebar-keyed-down.png, $out/pinned-expanded.png, $out/dropped-folder.png, $out/plus-add.png"
+echo "ok: ⌘D pins and unpins from the page and the UI, and ⌘1–⌘9 count pinned tabs first. A middle-click on a row closes its tab as its ✕ or − does. Dragging a row moves its tab in the pinned tabs, pins it and unpins it, without showing it, and escape puts it back. ⌘W and − unload a pinned tab, shown or not, and keep its row, showing the top Today tab, else a pinned tab still loaded, else no page, and an unloaded pinned tab loads once shown. An unloaded pinned row's remove button, named by its tooltip, takes the tab out of the pinned tabs without loading it and not into Today, and ⌘Z pins it again at its place, while a second click on the − that unloaded it shows the tab. Away from its pinned URL, ⌘↩ from the page and the UI, and a click on its favicon, go back there. Pinned tabs come back pinned, unloaded and at their page, still away. New Folder makes a folder its field names, a drag right and left takes a tab in and out of it, a folder drags as a row, a click closes and opens it, and the command bar finds Collapse All Folders, which closes it, and Expand All Folders, which opens it. Resting on it closed previews its tab, and typing the tab's title in the preview's search and ↩ show it, the folder kept closed. It comes back closed, a double-click renames it, its menu's Copy All Links is Copy All Links as Markdown with ⌥ held, which copies them, Change Icon… gives it an emoji and offers Remove Icon after, and Delete Folder leaves its tab in place. A link and a file dragged onto the list open as tabs where they're let go, Today or pinned, and show, text that isn't a link opens a search for it there, and a link that isn't a web link doesn't open. Delete Folder offers Undo, ⌘Z remakes the folder around its tab and ⇧⌘Z deletes it again. Settings' Export… writes the folder and its pinned tab as Markdown links. ⌥-click on a pinned tab's link opens a pinned split. Away from its pinned URL, Pinned URL › Replace Pinned URL with Current and Edit… change the pinned URL, which ⌘Z and ⇧⌘Z undo and redo, and ⌘-click on its favicon goes back after opening the page in a new tab. The chevron after the Space's name collapses the pinned rows, which ⌘1 then skips, Expand Pinned Tabs and Collapse Pinned Tabs in the command bar and the View menu bring them back and fold them, and they come back collapsed. Focus Sidebar from the command bar and the View menu rings the tab shown's row, ↑ and ↓ move the ring past the collapsed rows, return shows its tab with the page holding the keyboard, and a key in the page and escape end it. A folder from the desktop dropped on the list becomes an open folder of its folder, closed, and its files' tabs, none shown, a file's row dragged onto the page starts the system's drag of its file, and the +'s Add File or Folder… opens a file at the top of Today. Windows: $out/pinned-close.png, $out/pinned-remove.png, $out/pinned-remove-undone.png, $out/pinned-split.png, $out/pinned-url-menu.png, $out/pinned-url-edit.png, $out/pinned-kept-page.png, $out/drag.png, $out/pinned.png, $out/pinned-unloaded.png, $out/pinned-away.png, $out/pinned-restored.png, $out/folder.png, $out/folder-preview.png, $out/folder-preview-search.png, $out/folder-restored.png, $out/export.png, $out/folder-menu.png, $out/folder-menu-option.png, $out/folder-icon.png, $out/folder-motion.mp4, $out/drop-before.png, $out/drop-line.png, $out/dropped.png, $out/dropped-text.png, $out/command-bar-commands.png, $out/pinned-caret.png, $out/pinned-collapsed.png, $out/sidebar-keyed.png, $out/sidebar-keyed-down.png, $out/pinned-expanded.png, $out/dropped-folder.png, $out/plus-add.png"

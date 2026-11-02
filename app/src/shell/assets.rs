@@ -17,7 +17,7 @@ use crate::tokens::shell::assets::BAR_WIDTH;
 use crate::tokens::shell::assets::BARS_BOX;
 
 /// The close button's bars, crossing `angle` degrees from level either way, to the nearest
-/// degree, so the turn between ✕ and − draws a few dozen glyphs at most.
+/// degree: 45 for ✕ and 0 for −.
 pub(super) fn bars_path(angle: f32) -> SharedString {
     format!("{BARS}{}.svg", angle.round() as i32).into()
 }
@@ -257,7 +257,7 @@ mod tests {
 
     /// The ✕ crosses its bars, the − lays them on one line, and both are the glyph one path draws.
     #[test]
-    fn the_close_bars_turn_from_a_cross_to_a_line() {
+    fn the_close_bars_cross_for_x_and_lie_level_for_minus() {
         let load = |angle: f32| {
             let svg = Assets.load(&bars_path(angle)).unwrap().unwrap();
             String::from_utf8(svg.into_owned()).unwrap()
