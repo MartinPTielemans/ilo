@@ -1,6 +1,7 @@
 //! Little ilo, Arc's Little Arc (docs/ux-spec.md › Little Arc): one page in a small window with no
 //! sidebar, under a bar in its Space's colour with the page's favicon, host and title, a click on
-//! which opens the command bar on its URL, and Copy Link and Open in Main Window at its end.
+//! which opens the command bar on its URL, and Copy Link and Open in Main Window at its end, after
+//! the profile picker while there's more than one profile.
 //!
 //! The window is the main window with its sidebar hidden: the same material and colours, the card
 //! at the same inset and radius. The bar's row is the main window's header row, its buttons the
@@ -12,13 +13,13 @@ use gpui::{
 };
 
 use super::{
-    Command, NAV, NAV_HOVERED, NAV_RADIUS, Shell, Space, SpaceEntry, Swapped, TITLE,
+    Command, MenuEntry, NAV, NAV_HOVERED, NAV_RADIUS, Shell, Space, SpaceEntry, Swapped, TITLE,
     WINDOW_BUTTONS,
     access::Accessible,
-    host,
     browser::Browser,
     favicon,
     header::TipSide,
+    host,
     swap::{CHECK, LINK},
 };
 use crate::theme::Theme;
@@ -64,8 +65,10 @@ impl Shell {
         shell.little = Some(Little { home });
         shell.space = space;
         shell.sidebar_hidden = true;
+        // The profiles too, for the bar's picker, which the core reports again only as they change.
         let look = from.and_then(|from| {
             let from = from.read(cx);
+            shell.profiles = from.profiles.clone();
             from.spaces.iter().find(|each| each.id == home).cloned()
         });
         shell.spaces = vec![Space {
@@ -176,6 +179,55 @@ impl Shell {
         }
     }
 
+    /// The profiles the bar's picker offers, each with whether the window's page is in it, or
+    /// None with only one, when there's nothing to pick.
+    fn little_profiles(&self) -> Option<Vec<(u64, SharedString, bool)>> {
+        let own = self.spaces.first()?.profile;
+        let profiles = self.profiles.iter().map(|(id, name)| (*id, name.clone(), *id == own));
+        Some(profiles.collect()).filter(|profiles: &Vec<_>| profiles.len() > 1)
+    }
+
+    /// The bar's buttons, from its right end: Open in Main Window, Copy Link and, while there's
+    /// more than one profile, the profile picker.
+    fn little_buttons(&self) -> usize {
+        if self.little_profiles().is_some() { 3 } else { 2 }
+    }
+
+    /// The profile picker's menu, hanging from its button: the profiles, the page's checked. One
+    /// picked opens the page in it and is kept for its site (Arc's Little Arc).
+    fn little_profile_menu(&mut self, cx: &mut Context<Self>) {
+        let Some(profiles) = self.little_profiles() else {
+            return;
+        };
+        let entries = (profiles.iter())
+            .map(|(_, name, own)| MenuEntry::named(name.clone(), true).checked(*own))
+            .collect();
+        // From its plate's left edge, 4 under it.
+        let plate = little_button_middle(self.viewport.width, 2);
+        let at = point(plate.x - px(NAV_SIZE / 2.), plate.y + px(NAV_SIZE / 2. + 4.));
+        let shell = cx.weak_entity();
+        self.browser.context_menu(
+            entries,
+            at,
+            false,
+            self.menu_look(),
+            Box::new(move |chosen, cx| {
+                let Some(&(profile, ..)) = chosen.and_then(|index| profiles.get(index)) else {
+                    return;
+                };
+                // check.sh reads this line.
+                log!("browser: little profile {profile} via bar");
+                shell
+                    .update(cx, |shell, cx| {
+                        let url = shell.url(shell.selected);
+                        shell.browser.little_profile(profile, &url, cx)
+                    })
+                    .ok();
+            }),
+            cx,
+        );
+    }
+
     /// The card in a Little ilo window, under its bar, or `card` in any other.
     pub(super) fn little_card(&self, card: Bounds<Pixels>) -> Bounds<Pixels> {
         if self.little.is_none() || self.page_fullscreen {
@@ -183,11 +235,6 @@ impl Shell {
         }
         let top = px(LITTLE_BAR);
         Bounds::new(point(card.origin.x, top), size(card.size.width, card.bottom() - top))
-    }
-
-    /// How many buttons the bar has at its end: Copy Link and Open in Main Window.
-    fn little_buttons(&self) -> usize {
-        2
     }
 
     /// Where the bar's title goes, which a click opens the command bar over, as the URL field's
@@ -207,8 +254,8 @@ impl Shell {
         self.little.as_ref().map(|_| self.little_title_bounds())
     }
 
-    /// The bar, over the window's tint: the page's favicon, host and title, then Copy Link and
-    /// Open in Main Window. None while the page is full screen.
+    /// The bar, over the window's tint: the page's favicon, host and title, then the profile
+    /// picker, Copy Link and Open in Main Window. None while the page is full screen.
     pub(super) fn little_bar(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         if self.little.is_none() || self.page_fullscreen {
             return None;
@@ -276,7 +323,7 @@ impl Shell {
         // The header's buttons: its plates, hover and tooltips, with the key they share.
         let button = |id: &'static str,
                       index: usize,
-                      command: Command,
+                      command: Option<Command>,
                       name: &'static str,
                       cx: &mut Context<Self>| {
             let middle = little_button_middle(self.viewport.width, index);
@@ -293,9 +340,12 @@ impl Shell {
                 .rounded(px(NAV_RADIUS))
                 .block_mouse_except_scroll()
                 .hover(|style| style.bg(self.palette.plate(NAV_HOVERED)));
-            self.with_tooltip(button, command, TipSide::Under, cx)
+            match command {
+                Some(command) => self.with_tooltip(button, command, TipSide::Under, cx),
+                None => button,
+            }
         };
-        let copy = button("little-copy", 1, Command::CopyUrl, "Copy URL", cx)
+        let copy = button("little-copy", 1, Some(Command::CopyUrl), "Copy URL", cx)
             .on_click(cx.listener(|shell, _, _, cx| shell.copy_url_from_button(cx)))
             .child(self.swaps.glyph(
                 Swapped::CopyUrl,
@@ -303,13 +353,20 @@ impl Shell {
                 LITTLE_GLYPH,
                 glyph,
             ));
-        let main = button("little-main", 0, Command::OpenInMainWindow, "Open in Main Window", cx)
+        let main = button("little-main", 0, Some(Command::OpenInMainWindow), "Open in Main Window", cx)
             .on_click(cx.listener(|shell, _, _, cx| {
                 shell.run(Command::OpenInMainWindow, "little bar", cx)
             }))
             .child(svg().path("icons/external-link.svg").size(px(LITTLE_GLYPH)).text_color(glyph));
+        // Profiles' glyph, as Settings' Profiles tab has it, and nothing with only one profile. It
+        // runs no command, so it has no tooltip: its menu names the profiles.
+        let profile = self.little_profiles().map(|_| {
+            button("little-profile", 2, None, "Profile", cx)
+                .on_click(cx.listener(|shell, _, _, cx| shell.little_profile_menu(cx)))
+                .child(svg().path("icons/user.svg").size(px(LITTLE_GLYPH)).text_color(glyph))
+        });
         let bar = div().absolute().top_0().left_0().right_0().h(px(LITTLE_BAR));
-        Some(bar.child(title).child(copy).child(main))
+        Some(bar.child(title).children(profile).child(copy).child(main))
     }
 }
 

@@ -1008,6 +1008,8 @@ impl Browser for Fake {
         }
     }
 
+    fn restore_sidebar(&self, _: u64, _: &mut App) {}
+
     fn delete_space(&self, space: u64, cx: &mut App) -> bool {
         self.spaces.borrow_mut().retain(|(id, ..)| *id != space);
         self.report_spaces(cx);
@@ -1322,6 +1324,8 @@ impl Browser for Fake {
     fn open_tab_in_little(&self, _: u64, _: &mut App) {}
 
     fn open_in_main_window(&self, _: u64, _: u64, _: &mut App) {}
+
+    fn little_profile(&self, _: u64, _: &str, _: &mut App) {}
 
     fn close_window(&self, cx: &mut App) {
         cx.quit();

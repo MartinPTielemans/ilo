@@ -1183,6 +1183,13 @@ bc_id bc_window_undo_delete_space(bc_id window_id, bc_id space) {
   return window ? window->UndoDeleteSpace(space) : 0;
 }
 
+bool bc_window_restore_sidebar(bc_id window_id, double time) {
+  browser_core::Window* window = browser_core::Window::FromId(window_id);
+  return window && browser_core::RestoreSidebar(
+                       *window, base::Time::FromMillisecondsSinceUnixEpoch(
+                                    static_cast<int64_t>(time)));
+}
+
 bc_id bc_window_reopen_closed_tab(bc_id window_id) {
   browser_core::Window* window = browser_core::Window::FromId(window_id);
   return window ? window->ReopenClosedTab() : 0;
