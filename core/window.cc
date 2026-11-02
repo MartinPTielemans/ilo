@@ -1363,6 +1363,11 @@ void Window::Show(content::WebContents* contents, const gfx::Rect& frame) {
 }
 
 void Window::LayOutPage() {
+  // As the browser quits, Chromium closes every native window itself (Widget::CloseAllWidgets)
+  // before the core's Window goes, and the app, still drawing, may set its colours then (#1478).
+  if (widget_->IsClosed()) {
+    return;
+  }
   std::vector<content::WebContents*> shown;
   for (bc_id pane : panes_) {
     if (content::WebContents* contents = Tab::FromId(pane)) {
