@@ -899,6 +899,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("enter", KeepName, Some("Naming")),
         KeyBinding::new("escape", CancelName, Some("Naming")),
     ]);
+    super::bind_conversation_keys(cx);
     cx.on_action(|run: &Run, cx| {
         // The menu's keys reach it from the dialog's window too, and the dialog has to be
         // answered first, as an alert's does.
@@ -949,6 +950,13 @@ pub fn shown_tab(cx: &App) -> u64 {
     shell.map_or(0, |shell| shell.read(cx).selected)
 }
 
+/// Whether `tab` is a task's page the window shows in place, which the user may edit the address
+/// of but which stays in the task's Space.
+pub fn task_page_shown(tab: u64, cx: &App) -> bool {
+    let shell = cx.try_global::<ShellHandle>().and_then(|handle| handle.0.upgrade());
+    shell.is_some_and(|shell| shell.read(cx).task_page_live() == Some(tab))
+}
+
 /// A menu item that runs `command`, showing its shortcut.
 pub fn menu_item(name: impl Into<SharedString>, command: Command) -> MenuItem {
     MenuItem::action(name, Run(command))
@@ -977,6 +985,9 @@ impl Shell {
         if matches!(command, Command::Stop) && (self.cancel_drag(cx) || self.unchoose(cx)) {
             return;
         }
+        if self.run_in_task_area(command, from, cx) {
+            return;
+        }
         // An Esc with nothing to stop closes a Little ilo window (Arc), as no menu's Stop does.
         let key = matches!(from, "ui" | "page");
         if matches!(command, Command::Stop) && key && self.escape_unused(cx) {
@@ -1000,7 +1011,8 @@ impl Shell {
             }
             Command::EditUrl => {
                 self.set_new_tab(false, cx);
-                let editing = (self.selected != 0).then(|| (self.selected, self.url(self.selected)));
+                let tab = self.field_tab();
+                let editing = (tab != 0).then(|| (tab, self.url(tab)));
                 // A click on the URL field opens the bar over the field, and ⌘L centred (Arc). A
                 // Little ilo window's opens compact over its bar's title either way.
                 let field = match self.little_field_bounds() {
@@ -1319,8 +1331,9 @@ impl Shell {
     /// Clears the Space shown, but the tab shown, unless that's all there is to clear. Its rows go
     /// in one frame, with no toast (Arc).
     fn clear(&mut self, cx: &mut Context<Self>) {
+        let space = self.space;
+        // The tasks at the foot are the window's, not the Space's, so they stay (Agent task).
         if let Some(clear) = self.clear_now(cx) {
-            let space = self.space;
             self.keep(What::CLEAR, Some(Edit::UndoClear { space, clear }), cx);
         }
     }
@@ -1363,7 +1376,7 @@ impl Shell {
     /// Copies the selected tab's URL, or a Markdown link to it, without its tracking parameters,
     /// and says so in the toast.
     fn copy_url(&mut self, markdown: bool, cx: &mut Context<Self>) {
-        if let Some((text, toast)) = self.link_to_copy(self.selected, markdown) {
+        if let Some((text, toast)) = self.link_to_copy(self.field_tab(), markdown) {
             self.copy(&text, toast, cx);
         }
     }
@@ -1429,7 +1442,7 @@ impl Shell {
     pub(super) fn copy_url_from_button(&mut self, cx: &mut Context<Self>) {
         // check.sh waits for this line.
         log!("browser: command copy-url via sidebar");
-        let Some((text, toast)) = self.link_to_copy(self.selected, false) else {
+        let Some((text, toast)) = self.link_to_copy(self.field_tab(), false) else {
             return;
         };
         self.copy(&text, toast, cx);

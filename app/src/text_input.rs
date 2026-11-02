@@ -2,7 +2,8 @@
 // b36b283021c48f1712714b8a0e2ad6ffb578920b). Copyright Zed Industries, Inc. Licensed under the
 // Apache License, Version 2.0. Changes: a constructor, `text`, `composing`, `selection`, `pasted`,
 // `reset`, `complete`, `set_text`, a placeholder colour, `set_placeholder`, key bindings scoped to
-// the field, ⌘← and ⌘→ as Home and End, a context menu, `Away`, and no styling of its own.
+// the field, ⌘← and ⌘→ as Home and End, a context menu, `Away`, scrolling to keep the caret in
+// view with a fade where text runs past an edge, and no styling of its own.
 //
 //! A single-line text field, with IME support through GPUI's input handler. GPUI has no text
 //! field of its own; Zed's is its editor.
@@ -10,9 +11,10 @@
 use std::{ops::Range, rc::Rc};
 
 use gpui::{
-    Action, App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler,
-    Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, Global, GlobalElementId, Hsla,
-    KeyBinding, LayoutId, MouseButton, Role, accesskit,
+    Action, App, Bounds, ClipboardItem, ContentMask, Context, CursorStyle, ElementId,
+    ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, Global,
+    GlobalElementId, Hsla, KeyBinding, LayoutId, MouseButton, Role, accesskit, linear_color_stop,
+    linear_gradient,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine,
     SharedString, Style, Subscription, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div,
     fill, hsla,
@@ -197,6 +199,10 @@ pub struct TextInput {
     pasted: bool,
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
+    /// How far the line has scrolled left to keep the caret in view.
+    scroll: Pixels,
+    /// How wide a fade an edge with more text past it gets, and the ground it fades into.
+    fade: Option<(Pixels, Hsla)>,
     is_selecting: bool,
     paste_and_go: bool,
     secure: bool,
@@ -219,6 +225,8 @@ impl TextInput {
             pasted: false,
             last_layout: None,
             last_bounds: None,
+            scroll: px(0.),
+            fade: None,
             is_selecting: false,
             paste_and_go: false,
             secure: false,
@@ -278,6 +286,12 @@ impl TextInput {
     pub fn set_colors(&mut self, placeholder: Hsla, caret: Hsla, selection: Hsla) {
         (self.placeholder_color, self.caret_color, self.selection_color) =
             (placeholder, caret, selection);
+    }
+
+    /// Fades an edge with more text past it over `width` into `ground`, the opaque fill under the
+    /// field, which may change with the Space.
+    pub fn set_fade(&mut self, width: Pixels, ground: Hsla) {
+        self.fade = Some((width, ground));
     }
 
     pub fn caret_color(mut self, color: impl Into<Hsla>) -> Self {
@@ -460,7 +474,8 @@ impl TextInput {
         let x = (self.last_layout.as_ref())
             .filter(|line| line.text == self.content)
             .map_or(px(0.), |line| line.x_for_index(self.cursor_offset()));
-        self.show_menu(menu, point(bounds.left() + x, bounds.bottom()), true, window, cx);
+        let at = point(bounds.left() + x - self.scroll, bounds.bottom());
+        self.show_menu(menu, at, true, window, cx);
     }
 
     fn show_menu(
@@ -589,7 +604,7 @@ impl TextInput {
         if position.y > bounds.bottom() {
             return self.content.len();
         }
-        self.text_offset(line.closest_index_for_x(position.x - bounds.left()))
+        self.text_offset(line.closest_index_for_x(position.x - bounds.left() + self.scroll))
     }
 
     fn select_to(&mut self, offset: usize, window: &Window, cx: &mut Context<Self>) {
@@ -682,6 +697,7 @@ impl TextInput {
         self.pasted = false;
         self.last_layout = None;
         self.last_bounds = None;
+        self.scroll = px(0.);
         self.is_selecting = false;
         window.notify_text_input_changed(&self.focus_handle);
         cx.notify();
@@ -865,15 +881,10 @@ impl EntityInputHandler for TextInput {
             return None;
         }
         let range = self.range_from_utf16(&range_utf16);
+        let left = bounds.left() - self.scroll;
         Some(Bounds::from_corners(
-            point(
-                bounds.left() + last_layout.x_for_index(self.shown_offset(range.start)),
-                bounds.top(),
-            ),
-            point(
-                bounds.left() + last_layout.x_for_index(self.shown_offset(range.end)),
-                bounds.bottom(),
-            ),
+            point(left + last_layout.x_for_index(self.shown_offset(range.start)), bounds.top()),
+            point(left + last_layout.x_for_index(self.shown_offset(range.end)), bounds.bottom()),
         ))
     }
 
@@ -901,7 +912,8 @@ impl EntityInputHandler for TextInput {
         if last_layout.text != self.shown() {
             return None;
         }
-        let utf8_index = self.text_offset(last_layout.closest_index_for_x(line_point.x));
+        let utf8_index =
+            self.text_offset(last_layout.closest_index_for_x(line_point.x + self.scroll));
         Some(self.offset_to_utf16(utf8_index))
     }
 }
@@ -914,6 +926,33 @@ struct PrepaintState {
     line: Option<ShapedLine>,
     cursor: Option<PaintQuad>,
     selection: Option<PaintQuad>,
+    /// How far the line is scrolled left.
+    scroll: Pixels,
+    /// The fades over the start and the end, where more text runs past them.
+    fades: Vec<PaintQuad>,
+}
+
+/// The caret's width.
+const CARET: Pixels = px(2.);
+
+/// Where a fade is the ground at full, from its inner side: its outer third is solid, so a glyph
+/// the field's edge cuts doesn't show a sliver.
+const SOLID: f32 = 2. / 3.;
+
+/// How far a field `width` wide scrolls a line `text` wide so the caret, at `caret`, is in view
+/// and `margin` clear of an edge with more text past it, moving no further from `scroll` than it
+/// must, so the line stays put while the caret moves within it.
+fn scrolled(scroll: Pixels, caret: Pixels, text: Pixels, width: Pixels, margin: Pixels) -> Pixels {
+    let end = (text + CARET - width).max(px(0.));
+    let margin = margin.min(width / 4.);
+    let mut scroll = scroll.min(end);
+    if caret + CARET > scroll + width - margin {
+        scroll = caret + CARET - width + margin;
+    }
+    if caret < scroll + margin {
+        scroll = caret - margin;
+    }
+    scroll.clamp(px(0.), end)
 }
 
 impl IntoElement for TextElement {
@@ -964,6 +1003,8 @@ impl Element for TextElement {
         let selected_range = input.shown_offset(selected.start)..input.shown_offset(selected.end);
         let cursor = input.shown_offset(input.cursor_offset());
         let style = window.text_style();
+        let empty = content.is_empty();
+        let all = !empty && selected_range == (0..content.len());
 
         let (display_text, text_color) = if content.is_empty() {
             (input.placeholder.clone(), input.placeholder_color)
@@ -1014,13 +1055,25 @@ impl Element for TextElement {
             .shape_line(display_text, font_size, &runs, None);
 
         let cursor_pos = line.x_for_index(cursor);
+        // The line follows the caret, except under a selection of all of it, as a field shows when
+        // it opens holding a URL: that keeps where it was, from its start.
+        let width = bounds.size.width;
+        let fade = input.fade.map_or(px(0.), |(width, _)| width);
+        let scroll = if empty {
+            px(0.)
+        } else if all {
+            input.scroll.min((line.width - width).max(px(0.)))
+        } else {
+            scrolled(input.scroll, cursor_pos, line.width, width, fade)
+        };
+        let left = bounds.left() - scroll;
         let (selection, cursor) = if selected_range.is_empty() {
             (
                 None,
                 Some(fill(
                     Bounds::new(
-                        point(bounds.left() + cursor_pos, bounds.top()),
-                        size(px(2.), bounds.bottom() - bounds.top()),
+                        point(left + cursor_pos, bounds.top()),
+                        size(CARET, bounds.bottom() - bounds.top()),
                     ),
                     input.caret_color,
                 )),
@@ -1029,24 +1082,32 @@ impl Element for TextElement {
             (
                 Some(fill(
                     Bounds::from_corners(
-                        point(
-                            bounds.left() + line.x_for_index(selected_range.start),
-                            bounds.top(),
-                        ),
-                        point(
-                            bounds.left() + line.x_for_index(selected_range.end),
-                            bounds.bottom(),
-                        ),
+                        point(left + line.x_for_index(selected_range.start), bounds.top()),
+                        point(left + line.x_for_index(selected_range.end), bounds.bottom()),
                     ),
                     input.selection_color,
                 )),
                 None,
             )
         };
+        let mut fades = Vec::new();
+        if let Some((fade, ground)) = input.fade {
+            let (clear, ground) = (linear_color_stop(ground.opacity(0.), 0.), linear_color_stop(ground, SOLID));
+            let band = |x: Pixels| Bounds::new(point(x, bounds.top()), size(fade, bounds.size.height));
+            if scroll > px(0.) {
+                fades.push(fill(band(bounds.left()), linear_gradient(270., clear, ground)));
+            }
+            if line.width - scroll > width {
+                fades.push(fill(band(bounds.right() - fade), linear_gradient(90., clear, ground)));
+            }
+        }
+        self.input.update(cx, |input, _| input.scroll = scroll);
         PrepaintState {
             line: Some(line),
             cursor,
             selection,
+            scroll,
+            fades,
         }
     }
 
@@ -1066,25 +1127,30 @@ impl Element for TextElement {
             ElementInputHandler::new(bounds, self.input.clone()),
             cx,
         );
-        if let Some(selection) = prepaint.selection.take() {
-            window.paint_quad(selection)
-        }
         let line = prepaint.line.take().unwrap();
-        line.paint(
-            bounds.origin,
-            window.line_height(),
-            gpui::TextAlign::Left,
-            None,
-            window,
-            cx,
-        )
-        .unwrap();
-
-        if focus_handle.is_focused(window)
-            && let Some(cursor) = prepaint.cursor.take()
-        {
-            window.paint_quad(cursor);
-        }
+        // A line scrolled, or longer than the field, shows only within the field's sides; its
+        // glyphs may still reach above and below the line's height.
+        let tall = window.line_height();
+        let mask = Bounds::from_corners(
+            point(bounds.left(), bounds.top() - tall),
+            point(bounds.right(), bounds.bottom() + tall),
+        );
+        let clip = prepaint.scroll > px(0.) || line.width > bounds.size.width;
+        window.with_content_mask(clip.then_some(ContentMask { bounds: mask }), |window| {
+            if let Some(selection) = prepaint.selection.take() {
+                window.paint_quad(selection)
+            }
+            let origin = point(bounds.left() - prepaint.scroll, bounds.top());
+            line.paint(origin, tall, gpui::TextAlign::Left, None, window, cx).unwrap();
+            for fade in prepaint.fades.drain(..) {
+                window.paint_quad(fade);
+            }
+            if focus_handle.is_focused(window)
+                && let Some(cursor) = prepaint.cursor.take()
+            {
+                window.paint_quad(cursor);
+            }
+        });
 
         self.input.update(cx, |input, _cx| {
             input.last_layout = Some(line);

@@ -42,10 +42,10 @@ impl Shell {
         self.all_favorites.contains(&tab) || self.spaces.iter().any(in_space)
     }
 
-    /// Where the pages above the footer end, over the players and Restart to Update.
+    /// Where the pages above the footer end, over Restart to Update, the players and the tasks'
+    /// plates.
     pub(super) fn list_bottom(&self) -> f32 {
-        let players = self.media_players().len() as f32 * (MEDIA_HEIGHT + MEDIA_GAP);
-        FOOTER_HEIGHT + self.update_sign_room() + players
+        self.media_top() + self.foot_height()
     }
 
     /// × on `tab`'s player: it goes until the page plays again.
@@ -175,7 +175,8 @@ impl Shell {
             }))
     }
 
-    fn media_button(&self, id: &'static str, tab: u64, glyph: &'static str) -> Stateful<Div> {
+    /// A player's button, which a task's plate at the foot has for its ✕ too.
+    pub(super) fn media_button(&self, id: &'static str, tab: u64, glyph: &'static str) -> Stateful<Div> {
         div()
             .id((id, tab))
             .flex_none()

@@ -7,6 +7,8 @@
 A token's pen name is its table and key joined with "-" ([shell.library] column is
 shell-library-column), and an array's items add -0, -1 and so on. Hex of six or eight digits is a
 colour, #rrggbb or #rrggbbaa; anything else is a number. It reads the same small TOML build.rs does.
+A table named motion, such as [shell.task.motion], holds timings, which the design file has none of,
+so it's left out both ways.
 """
 import json, os, re, sys
 
@@ -20,6 +22,8 @@ def parse(lines):
         text = line.split('#', 1)[0].strip()
         if text.startswith('['):
             table = text[1:-1].replace('.', '-')
+        elif table and (table == 'motion' or table.endswith('-motion')):
+            continue
         elif '=' in text:
             key, value = (part.strip() for part in text.split('=', 1))
             if value.startswith('['):
