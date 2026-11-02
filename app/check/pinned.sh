@@ -664,13 +664,14 @@ expect "^browser: renamed folder $f later\$" "the folder didn't take the name ty
 ../tools/window-screenshot.sh "$pid" "$out/folder-restored.png" || fail "no window to capture"
 post rightclick $(pinned_row 0)
 # Paste URL as New Tab comes and goes with the clipboard, so it isn't pinned here.
-expect "^browser: menu shown $(cased 'Rename Folder, Change Icon…, Duplicate, Copy All Links'), .*$(cased 'Delete Folder')\$" \
-  "the folder's menu isn't Rename Folder, Change Icon…, Duplicate, Copy All Links … Delete Folder"
+# Move to Space is dimmed, as the pinned tab's is: this run has no other Space (#1353).
+expect "^browser: menu shown $(cased 'Rename Folder, Change Icon…, Duplicate, Move to Space (disabled), Copy All Links'), .*$(cased 'Delete Folder')\$" \
+  "the folder's menu isn't Rename Folder, Change Icon…, Duplicate, Move to Space, Copy All Links … Delete Folder"
 expect '^browser: menu drawn ' "the folder's menu didn't draw"
 ../tools/window-screenshot.sh "$pid" "$out/folder-menu.png" || fail "no window to capture"
 # With ⌥ held, Copy All Links is Copy All Links as Markdown, as in Arc's.
 send flags alt
-expect "^browser: menu drawn with ⌥ held $(cased 'Rename Folder, Change Icon…, Duplicate, Copy All Links as Markdown'), " \
+expect "^browser: menu drawn with ⌥ held $(cased 'Rename Folder, Change Icon…, Duplicate, Move to Space (disabled), Copy All Links as Markdown'), " \
   "⌥ didn't turn the folder's Copy All Links into Copy All Links as Markdown"
 ../tools/window-screenshot.sh "$pid" "$out/folder-menu-option.png" || fail "no window to capture"
 send choose "$(cased 'Copy All Links')"
