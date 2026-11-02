@@ -499,11 +499,16 @@ fn target_in(window: xproto::Window, x: f64, y: f64) -> Option<Target> {
     })
 }
 
-/// The window of the app's that the pointer at (`x`, `y`) in the driven browser window is over, as
-/// the X server picks it: an overlay over the window, or a panel in it, then GPUI's window, but
-/// where its shape leaves holes for the pages, which are Chromium's window's.
+/// The window of the app's that the pointer at (`x`, `y`) in the driven browser window is over
+/// (`target_at_in`).
 fn target_at(x: f64, y: f64) -> Option<Target> {
-    let browser = driven()?;
+    target_at_in(driven()?, x, y)
+}
+
+/// The window of the app's that the pointer at (`x`, `y`) in `browser` is over, as the X server
+/// picks it: an overlay over the window, or a panel in it, then GPUI's window, but where its shape
+/// leaves holes for the pages, which are Chromium's window's.
+fn target_at_in(browser: Browser, x: f64, y: f64) -> Option<Target> {
     let at = target_in(browser.window, x, y)?;
     let connection = server()?;
     let (connection, root) = &*connection;
@@ -585,11 +590,13 @@ fn close(window: xproto::Window) -> Option<()> {
 }
 
 /// The point (`x`, `y`) in points from the key window's top-left corner, such as the command
-/// bar's, or the driven browser window's.
+/// bar's or a Little ilo window's that has the keyboard though another is driven, as the Mac's
+/// driver clicks in its key window, or else the driven browser window's.
 fn target_in_key(x: f64, y: f64) -> Option<Target> {
     match keyboard_window() {
         Some(Keyboard::Overlay(window) | Keyboard::Settings(window, _)) => target_in(window, x, y),
-        _ => target_at(x, y),
+        Some(Keyboard::Browser(browser, _)) => target_at_in(browser, x, y),
+        None => target_at(x, y),
     }
 }
 
