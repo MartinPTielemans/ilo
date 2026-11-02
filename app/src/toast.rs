@@ -634,10 +634,22 @@ impl Render for Toast {
             .child(canvas(
                 {
                     let (host, told) = (self.host.clone(), self.plate.clone());
-                    move |bounds, _, _| {
+                    move |bounds, window, _| {
                         // Inside the plate's 0.5 border.
                         let bounds = bounds.dilate(px(0.5));
                         if at_rest && told.replace(Some(bounds)) != Some(bounds) {
+                            let (x, y) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+                            let (width, height) = (bounds.size.width, bounds.size.height);
+                            let window = window.viewport_size();
+                            // check.sh reads this line, to click just outside the plate and to see
+                            // the window holds it whole.
+                            log!(
+                                "browser: toast plate {x:.0} {y:.0} {:.0} {:.0} in {:.0} {:.0}",
+                                f32::from(width),
+                                f32::from(height),
+                                f32::from(window.width),
+                                f32::from(window.height)
+                            );
                             host.plate(bounds);
                         }
                     }

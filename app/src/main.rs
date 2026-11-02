@@ -1416,8 +1416,6 @@ impl toast::Host for ToastHost {
     fn plate(&self, bounds: Bounds<Pixels>) {
         let (x, y) = (bounds.origin.x.into(), bounds.origin.y.into());
         let (width, height) = (bounds.size.width.into(), bounds.size.height.into());
-        // check.sh reads this line, to click just outside the plate.
-        log!("browser: toast plate {x:.0} {y:.0} {width:.0} {height:.0}");
         unsafe { platform::host_set_toast_plate(x, y, width, height) };
     }
 }
