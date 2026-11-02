@@ -36,7 +36,7 @@ Once the draft is published:
 - The `publish` job puts its `appcast.xml` in the release `updates`, the feed the Mac and Windows builds read (`app/branding/update-feed`).
 - The Linux build, already in the Flatpak repository unseen, goes live.
 - [ilo-site](https://github.com/MartinPTielemans/ilo-site)'s release workflow puts the demo on [ilobrowser.com](https://ilobrowser.com), links its source to the tag and deploys the site, whose download buttons link the newest release. It checks every half hour, or at once with `SITE_DISPATCH_TOKEN`.
-- Martin's Grok bot announces it: it records clips and a film of the new features on the published build, adds the clips to the site's changelog through its own ilo-site pull request, and drafts the post. The release never waits for it.
+- Martin's Grok bot announces it: it records clips and a film of the new features on the published build, adds the clips to the site's changelog through its own ilo-site pull request, and drafts the post. With `RELEASE_WEBHOOK_URL` and `RELEASE_WEBHOOK_KEY` set, the `announce` job tells it at once; without them, it finds the release at its own hourly check. The release never waits for it.
 
 Every other release in this repository, such as `updates`, is made with `--latest=false`, or the site's buttons would link it. The prebuilt engines live in [ilo-engine](https://github.com/MartinPTielemans/ilo-engine), the repository `engine/prebuilt.ini` names, as `engine-mac-`, `engine-linux-` and `engine-windows-<commit>`, also with `--latest=false`.
 
@@ -67,12 +67,14 @@ The Mac and Windows builds carry the key's public half from `app/branding/update
 
 and the repository variable `FLATPAK_REPO_URL`, the bucket's public address, such as `https://flatpak.<domain>/`.
 
-**Other repositories.**
+**Outside this repository.**
 
 | Secret | What |
 |---|---|
 | `SITE_DISPATCH_TOKEN` | A fine-grained token with Contents read and write on `MartinPTielemans/ilo-site` alone, so the site takes a release at once |
 | `ENGINE_RELEASE_TOKEN` | A fine-grained token with Contents read and write on `MartinPTielemans/ilo-engine` alone, for the engine workflows |
+| `RELEASE_WEBHOOK_URL` | The announcement bot's webhook, which a published release POSTs `{"tag", "url"}` to, so the bot hears of it at once |
+| `RELEASE_WEBHOOK_KEY` | The bearer key that webhook takes |
 
 ## The Flatpak repository, once
 
