@@ -4,6 +4,7 @@
 use gpui::{Context, Pixels, Point, SharedString};
 
 use super::{MenuEntry, Shell};
+use crate::bc::BC_PAGE_MENU_PREVIEW_LINK;
 
 /// A row of a page's menu, as the core gives it.
 #[derive(Clone, Debug, PartialEq)]
@@ -31,10 +32,26 @@ fn entries(items: &[PageMenuItem]) -> Vec<MenuEntry> {
         .collect()
 }
 
+/// `items` without the rows that run `command`, each submenu's rows still under their own.
+fn without(items: Vec<PageMenuItem>, command: i32) -> Vec<PageMenuItem> {
+    let gone: Vec<usize> = (items.iter().enumerate())
+        .filter(|(_, item)| item.command == command)
+        .map(|(at, _)| at)
+        .collect();
+    (items.into_iter().enumerate())
+        .filter(|(at, _)| !gone.contains(at))
+        .map(|(_, item)| {
+            let before = |parent: usize| gone.iter().filter(|&&at| at < parent).count();
+            PageMenuItem { parent: item.parent.map(|parent| parent - before(parent)), ..item }
+        })
+        .collect()
+}
+
 /// A made-up page menu of `kind` (link, image, text or field), as Chromium 156 builds it once the
-/// core has taken out what Arc's leaves out, for the preview to show without the engine. On the
-/// Mac it's in title case, with the Mac's Look Up, Speech and Writing Direction; elsewhere it's in
-/// Chromium's sentence case, and a misspelt word's Language settings is in Spell check instead.
+/// core has taken out what Arc's leaves out and added Open Link in Peek, for the preview to show
+/// without the engine. On the Mac it's in title case, with the Mac's Look Up, Speech and Writing
+/// Direction; elsewhere it's in Chromium's sentence case, and a misspelt word's Language settings
+/// is in Spell check instead.
 pub fn made_up(kind: &str, mac: bool) -> Vec<PageMenuItem> {
     let row = |command: i32, title: &str| PageMenuItem {
         command,
@@ -104,6 +121,7 @@ pub fn made_up(kind: &str, mac: bool) -> Vec<PageMenuItem> {
         }
         _ => vec![
             row(50100, &os("Open Link in New Tab", "Open link in new tab")),
+            row(BC_PAGE_MENU_PREVIEW_LINK, &os("Open Link in Peek", "Open link in Peek")),
             row(50101, &os("Open Link in New Window", "Open link in new window")),
             row(50105, &os("Open Link in Split View", "Open link in split view")),
             row(50102, &os("Open Link in Incognito Window", "Open link in incognito window")),
@@ -126,6 +144,12 @@ impl Shell {
         at: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
+        // The core offers Open Link in Peek for any web link, as only the app knows where a link
+        // preview can open.
+        let items = match self.peeks_links_of(tab) {
+            true => items,
+            false => without(items, BC_PAGE_MENU_PREVIEW_LINK),
+        };
         if items.is_empty() {
             self.browser.close_page_menu(tab, None, cx);
             return;
@@ -234,6 +258,7 @@ mod tests {
             titles(&made_up("link", true)),
             [
                 "Open Link in New Tab",
+                "Open Link in Peek",
                 "Open Link in New Window",
                 "Open Link in Split View",
                 "Open Link in Incognito Window",
@@ -248,6 +273,7 @@ mod tests {
             titles(&made_up("link", false)),
             [
                 "Open link in new tab",
+                "Open link in Peek",
                 "Open link in new window",
                 "Open link in split view",
                 "Open link in incognito window",
@@ -280,6 +306,16 @@ mod tests {
         let field = made_up("field", false);
         assert!(titles(&field).contains(&"Paste as plain text"));
         assert!(titles(&made_up("field", true)).contains(&"Paste and Match Style"));
+    }
+
+    #[test]
+    fn a_row_left_out_leaves_each_submenu_under_its_own() {
+        let mut items = field_menu();
+        items.insert(1, row(BC_PAGE_MENU_PREVIEW_LINK, "Open Link in Peek"));
+        for item in &mut items[2..] {
+            item.parent = item.parent.map(|parent| parent + 1);
+        }
+        assert_eq!(without(items, BC_PAGE_MENU_PREVIEW_LINK), field_menu());
     }
 
     #[test]

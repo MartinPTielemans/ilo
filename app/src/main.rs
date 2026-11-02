@@ -1325,6 +1325,20 @@ unsafe extern "C" fn tab_link_to_site(
     true
 }
 
+/// The user asked for a link in `tab`'s page in a link preview, by ⇧-click or Open Link in Peek:
+/// it opens over the window showing the tab, where the shell has one for it.
+unsafe extern "C" fn tab_link_to_preview(
+    _: *mut c_void,
+    tab: bc::bc_id,
+    url: *const c_char,
+    x: f64,
+    y: f64,
+) -> bool {
+    let url = unsafe { CStr::from_ptr(url) }.to_string_lossy().into_owned().into();
+    let at = point(px(x as f32), px(y as f32));
+    update_tab_window(tab, |shell, cx| shell.preview_link(tab, url, at, cx)).unwrap_or(false)
+}
+
 /// A key from the link preview's page acts on the preview alone: done, and whether the page loses
 /// it. None for another page's.
 fn link_preview_key(tab: bc::bc_id, key: *const bc::bc_key, reserved: bool) -> Option<bool> {
@@ -2233,25 +2247,31 @@ impl Browser for Engine {
         unsafe { bc::bc_window_reopen_tab(self.window, closed) }
     }
 
-    fn reopen_preview(
+    fn open_preview(
         &self,
-        closed: &link_preview::Closed,
+        over: u64,
+        url: SharedString,
+        link: Point<Pixels>,
         page: (Bounds<Pixels>, f32),
         _: &mut App,
     ) {
-        let (window, closed) = (self.window, closed.clone());
+        let window = self.window;
         // Outside the shell's update, as the core tells the shell of the tab it opens.
         update_app_later(move |cx| {
-            let Ok(url) = CString::new(closed.url.as_ref()) else {
+            let Ok(text) = CString::new(url.as_ref()) else {
                 return;
             };
-            let preview = unsafe { bc::bc_tab_open_preview(closed.over, url.as_ptr()) };
+            let preview = unsafe { bc::bc_tab_open_preview(over, text.as_ptr()) };
             if preview == 0 {
-                log!("browser: link preview over {} not reopened", closed.over);
+                log!("browser: link preview over {over} not opened");
                 return;
             }
-            link_preview::show(window, preview, closed.over, closed.url, page, closed.link, cx);
+            link_preview::show(window, preview, over, url, page, link, cx);
         });
+    }
+
+    fn link_previews(&self) -> bool {
+        LINK_PREVIEWS.get() && unsafe { bc::bc_link_previews() }
     }
 
     fn close_preview(&self, over: u64, cx: &mut App) -> bool {
@@ -7228,6 +7248,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         agent_session_ended: Some(agent_session_ended),
         tab_dialog: Some(tab_dialog),
         tab_link_to_site: Some(tab_link_to_site),
+        tab_link_to_preview: Some(tab_link_to_preview),
         tab_link_dragged: Some(tab_link_dragged),
         crash_report_offered: Some(crash_report_offered),
         #[cfg(target_os = "linux")]

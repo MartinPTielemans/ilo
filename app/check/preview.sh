@@ -1,11 +1,13 @@
-# The link preview. A link to another site in a pinned tab's page opens in a card over the window,
-# its page in a tab of no Space, and the pinned tab stays on its page. Esc closes it and its page.
+# The link preview. ⇧-click on a link in any tab's page, here a Today tab's, opens it in a card over
+# the window, and so does Open Link in Peek in the link's menu, with no tab opened and the tab on its
+# page (#1370). A link to another site in a pinned tab's page opens in one too, its page in a tab of
+# no Space, and the pinned tab stays on its page. Esc closes it and its page.
 # ⌘↩ keeps it as the top Today tab, shown, without loading it again. A click on the dim closes it,
 # and the page behind doesn't get the click, and so does Settings taking the keyboard. ⌘W with its
 # page focused closes it, and not the tab behind. ⌘Z reopens a closed one over its tab at its page,
 # and so does ⇧⌘T while no tab has closed since. A favorite's link opens it too. A call's link, such
 # as Google Meet's, opens as a tab instead. With the Settings switch off, the link goes in the
-# pinned tab. Back on, a link rule to another Space sends the link there as a tab instead. Reports
+# pinned tab, ⇧-click opens it in a new tab, and the link's menu has no Open Link in Peek. Back on, a link rule to another Space sends the link there as a tab instead. Reports
 # how long the first preview took to draw its first frame.
 
 serve
@@ -104,6 +106,47 @@ settings_at() {
   await "^browser: settings $1 at " || fail "Settings didn't draw its $1"
   grep "^browser: settings $1 at " "$log" | tail -1 | sed "s/^browser: settings $1 at //"
 }
+
+# A link's menu, with Open Link in Peek after Open Link in New Tab. Off the Mac its items are in
+# sentence case, as Chrome's are there, and Peek keeps its capital, as ilo's name for the preview.
+if windows || [ "$(uname)" = Linux ]; then
+  in_tab='Open link in new tab' in_peek='Open link in Peek' in_window='Open link in new window'
+else
+  in_tab='Open Link in New Tab' in_peek='Open Link in Peek' in_window='Open Link in New Window'
+fi
+# Waits for the preview the user asked for from the test page's tab to settle, setting $p to its
+# tab. $1 says how they asked.
+asked_preview() {
+  expect "^browser: link preview asked from $a\$" "$1 didn't ask for the link in a preview"
+  expect "^browser: link preview [1-9][0-9]* $target\$" "$1 didn't open the link in a preview"
+  p=$(grep "^browser: link preview [1-9][0-9]* $target\$" "$log" | tail -1 | cut -d' ' -f4)
+  expect '^browser: link preview shown$' "$1: the preview's window didn't show"
+  expect '^browser: link preview settled$' "$1: the preview didn't settle"
+  expect "^browser: loaded $p $target\$" "$1: the preview's page didn't load"
+}
+# Asked for, a link opens in the preview from any tab, here a Today tab, whose plain click opens it
+# in the tab (#1370): ⇧-click, which Chrome opens in a new window, and Open Link in Peek in the
+# link's menu. No tab opens, and the tab stays on its page.
+send click $link_point shift
+asked_preview "⇧-click on the Today tab's link"
+[ "$(today)" = "$a" ] || fail "⇧-click on the link opened a tab too: Today is \"$(today)\""
+../tools/window-screenshot.sh "$pid" "$out/preview-shift-click.png" || fail "no window to capture"
+send key escape
+in_order "after Esc on the ⇧-click's preview" '^browser: link preview closing (escape)$' \
+  "^browser: tab $p closed\$"
+post rightclick $link_point
+expect "^browser: menu shown $in_tab, $in_peek, $in_window, " \
+  "a right-click on the link didn't show $in_peek after $in_tab: \
+$(grep '^browser: menu shown' "$log" | tail -1)"
+../tools/window-screenshot.sh "$pid" "$out/preview-menu.png" || fail "no window to capture"
+send choose "$in_peek"
+asked_preview "$in_peek"
+[ "$(today)" = "$a" ] || fail "$in_peek opened a tab too: Today is \"$(today)\""
+../tools/window-screenshot.sh "$pid" "$out/preview-menu-chosen.png" || fail "no window to capture"
+send key escape
+in_order "after Esc on $in_peek's preview" '^browser: link preview closing (escape)$' \
+  "^browser: tab $p closed\$"
+still_home "after the previews asked for"
 
 # Pinned, the tab's links to other sites open in the preview, which grows from the link.
 send key d cmd
@@ -257,6 +300,26 @@ none_since '^browser: link preview ' || fail "with previews off, the link opened
 send key left cmd
 expect "^browser: command back via " "⌘← in the pinned tab didn't reach the UI"
 expect "^browser: loaded $a ${site}preview.html\$" "⌘← didn't take the pinned tab back to its page"
+# Off, the link's menu has no Open Link in Peek, and ⇧-click opens the link in a new tab, as
+# before.
+post rightclick $link_point
+expect "^browser: menu shown $in_tab, $in_window, " \
+  "with previews off, the link's menu didn't go from $in_tab to $in_window: \
+$(grep '^browser: menu shown' "$log" | tail -1)"
+send key escape
+expect '^browser: menu closed$' "Esc didn't close the link's menu"
+send click $link_point shift
+opened="^browser: loaded [1-9][0-9]* $target\$"
+expect "$opened" "with previews off, ⇧-click on the link didn't open it in a tab"
+o=$(grep "$opened" "$log" | tail -1 | cut -d' ' -f3)
+[ "$o" != "$a" ] || fail "with previews off, ⇧-click on the link loaded it in the pinned tab"
+none_since '^browser: link preview ' || fail "with previews off, ⇧-click opened the link in a preview"
+expect "^browser: selected $o\( in .*\)\{0,1\}\$" "with previews off, ⇧-click's tab didn't show"
+send key w cmd
+expect "^browser: tab $o closed\$" "⌘W didn't close the tab ⇧-click opened"
+away
+send click $(home_row)
+expect "^browser: selected $a\( in .*\)\{0,1\}\$" "a click on the pinned row didn't show its tab"
 
 # Back on, a link rule to another Space sends the link there as a tab, as it sends one from another
 # app, and the preview doesn't open (#692). Settings' Links tab adds the rule, as ./check.sh links
@@ -303,5 +366,5 @@ none_since "^browser: loaded $a " || fail "the link a rule sent loaded in the pi
 
 exec 3>&-
 quit
-echo "ok: a link to another site in a pinned tab or a favorite opens in a preview over the window, which Esc, a click on the dim and ⌘W close, with its page, leaving the tab and the page behind as they were, ⇧⌘C copies the address of, and ⌘↩ keeps as the top Today tab, shown, without loading it again. ⌘Z reopens a closed one over its tab, and so does ⇧⌘T. A Google Meet link opens as a tab of the Space shown instead. With the Settings switch off, the link goes in the pinned tab, and back on, a link rule to another Space sends it there as a tab instead. Windows: $out/preview-open.png, $out/preview-kept.png, $out/preview-reopened.png, $out/preview-meeting.png, $out/preview-ruled.png"
+echo "ok: ⇧-click on a Today tab's link and $in_peek in its menu open it in a preview, with no tab opened. A link to another site in a pinned tab or a favorite opens in a preview over the window, which Esc, a click on the dim and ⌘W close, with its page, leaving the tab and the page behind as they were, ⇧⌘C copies the address of, and ⌘↩ keeps as the top Today tab, shown, without loading it again. ⌘Z reopens a closed one over its tab, and so does ⇧⌘T. A Google Meet link opens as a tab of the Space shown instead. With the Settings switch off, the link goes in the pinned tab, ⇧-click opens it in a new tab and its menu has no $in_peek, and back on, a link rule to another Space sends it there as a tab instead. Windows: $out/preview-shift-click.png, $out/preview-menu.png, $out/preview-menu-chosen.png, $out/preview-open.png, $out/preview-kept.png, $out/preview-reopened.png, $out/preview-meeting.png, $out/preview-ruled.png"
 echo "  The first preview's first frame came $first_frame after the click reached the UI."

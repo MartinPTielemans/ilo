@@ -607,7 +607,7 @@ impl Shell {
         self.closed_preview = None;
         // check.sh waits for this line.
         log!("browser: link preview reopened over {} via {via}", closed.over);
-        self.browser.reopen_preview(closed, page, cx);
+        self.browser.open_preview(closed.over, closed.url.clone(), closed.link, page, cx);
         true
     }
 

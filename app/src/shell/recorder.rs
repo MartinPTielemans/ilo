@@ -76,6 +76,8 @@ pub(super) struct Recorder {
     pub(super) agents: Cell<Option<bool>>,
     /// The user turned off ⌥ bringing the hidden sidebar out.
     pub(super) option_off: Cell<bool>,
+    /// The user turned link previews off.
+    pub(super) previews_off: Cell<bool>,
     /// The window's own buttons as the system says it draws them, once their window shows them.
     pub(super) window_buttons: Cell<Option<super::WindowButtonGeometry>>,
     /// The Spaces it was asked to show, in order.
@@ -459,13 +461,20 @@ impl Browser for Recorder {
         self.record("reopen closed tab".into());
     }
 
-    fn reopen_preview(
+    fn open_preview(
         &self,
-        closed: &crate::link_preview::Closed,
+        over: u64,
+        url: SharedString,
+        link: Point<Pixels>,
         _: (Bounds<Pixels>, f32),
         _: &mut App,
     ) {
-        self.record(format!("reopen preview over {} {}", closed.over, closed.url));
+        let (x, y) = (f32::from(link.x), f32::from(link.y));
+        self.record(format!("open preview over {over} {url} from {x},{y}"));
+    }
+
+    fn link_previews(&self) -> bool {
+        !self.previews_off.get()
     }
 
     fn close_preview(&self, over: u64, _: &mut App) -> bool {

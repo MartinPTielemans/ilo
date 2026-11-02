@@ -57,17 +57,17 @@ expect "^browser: today $opener $popup $other\$" "the popup's tab didn't go unde
 expect '^browser: loaded [0-9]* https://example.com/$' "the popup's page didn't load in its tab"
 check_layout "with the popup's tab"
 ../tools/window-screenshot.sh "$pid" "$out/popup.png" || fail "no window to capture"
-# The page's context menu is Chrome's, with Arc's link items, without those Arc's leaves out or
-# whose UI is in Chrome's own window (Copy Link Text, Reading Mode, Lens, QR Code, Cast). It shows
-# in ilo's menu, with its top left at the click. Off the Mac its items are in sentence case, as
-# Chrome's are there.
+# The page's context menu is Chrome's, with Arc's link items and ilo's Open Link in Peek (#1370),
+# without those Arc's leaves out or whose UI is in Chrome's own window (Copy Link Text, Reading
+# Mode, Lens, QR Code, Cast). It shows in ilo's menu, with its top left at the click. Off the Mac
+# its items are in sentence case, as Chrome's are there.
 if windows || [ "$(uname)" = Linux ]; then
   in_tab='Open link in new tab'
-  link_items="$in_tab, Open link in new window, Open link in split view, "
+  link_items="$in_tab, Open link in Peek, Open link in new window, Open link in split view, "
   link_items="${link_items}Open link in incognito window, Save link as…"
 else
   in_tab='Open Link in New Tab'
-  link_items="$in_tab, Open Link in New Window, Open Link in Split View, "
+  link_items="$in_tab, Open Link in Peek, Open Link in New Window, Open Link in Split View, "
   link_items="${link_items}Open Link in Incognito Window, Save Link As…"
 fi
 send key 1 cmd
