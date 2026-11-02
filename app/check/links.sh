@@ -223,20 +223,29 @@ if [ "$driven" = 1 ]; then
       fail "the launch with no link didn't bring the window to the front"
     again=1
   elif [ "$(uname)" = Darwin ]; then
-    # AppKit's: the browser windows on screen front to back, a minimized one not among them, and
-    # the key window.
+    # AppKit's: whether the window is on screen, as the driver does nothing while it's out of sight
+    # but bring it back, saying it can't to the rest, and then the browser windows front to back
+    # with the key one.
+    out_of_sight() {
+      post order
+      await "^browser: drive $step done" || fail "the driver didn't finish \"order\""
+      grep -q "^browser: drive $step: can't do that" "$log"
+    }
     last_order() {
       grep '^browser: order' "$log" | tail -1
     }
     send minimize
     for _ in $(seq 50); do
-      send order
-      [ "$(last_order)" = "browser: order, key none" ] && break
+      out_of_sight && break
       sleep 0.1
     done
-    [ "$(last_order)" = "browser: order, key none" ] ||
-      fail "the driver didn't minimize the window: $(last_order)"
+    out_of_sight || fail "the driver didn't minimize the window: $(last_order)"
     send_link
+    for _ in $(seq 50); do
+      out_of_sight || break
+      sleep 0.1
+    done
+    ! out_of_sight || fail "the launch with no link left the window minimized"
     for _ in $(seq 50); do
       send order
       case $(last_order) in "browser: order window 1"*", key window 1") break ;; esac
@@ -244,7 +253,7 @@ if [ "$driven" = 1 ]; then
     done
     case $(last_order) in
     "browser: order window 1"*", key window 1") again=1 ;;
-    *) fail "the launch with no link didn't bring the window back to the front: $(last_order)" ;;
+    *) fail "the launch with no link didn't bring the window to the front: $(last_order)" ;;
     esac
   else
     echo "skip: the launch with no link while the window is minimized. It reads the window's" \
