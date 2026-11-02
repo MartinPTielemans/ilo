@@ -108,10 +108,10 @@ const GLIDE: f32 = 0.2;
 
 /// What the picker asks of its window.
 pub trait Host {
-    /// Shows the picker's window with its top left at `left`, `top` in the browser window, with
-    /// the keyboard, in the shape of `corners` (x, y and radius, clockwise from the arrow's tip,
-    /// which it grows in from).
-    fn show(&self, left: f32, top: f32, corners: &[(f32, f32, f32)]);
+    /// Shows the picker's window with its top left at `left`, `top` in browser window `window`,
+    /// the one that asked for it, with the keyboard, in the shape of `corners` (x, y and radius,
+    /// clockwise from the arrow's tip, which it grows in from).
+    fn show(&self, window: u64, left: f32, top: f32, corners: &[(f32, f32, f32)]);
     /// Hides it, and the browser window gets the keyboard back.
     fn hide(&self);
     /// A detent on the trackpad, as a drag reaches a stop, if the user has haptics on.
@@ -259,9 +259,10 @@ pub fn placed(anchor: Point<f32>, height: f32) -> (f32, f32, f32) {
 }
 
 /// Shows the picker for `space`, which has `theme` or none yet, pointing at `anchor`, the middle
-/// of a row's right end, in a browser window `height` tall. `changed` gets the theme as the user
-/// makes it.
+/// of a row's right end, in browser window `over`, `height` tall. `changed` gets the theme as the
+/// user makes it. A context menu in a window behind another asks for it there.
 pub fn show(
+    over: u64,
     space: u64,
     theme: Option<Theme>,
     anchor: Point<f32>,
@@ -294,7 +295,7 @@ pub fn show(
                 palette: Palette::of(theme.as_ref(), Tone::Dark),
             });
             window.focus(&picker.focus, cx);
-            picker.host.show(left, top, &corners(arrow_y));
+            picker.host.show(over, left, top, &corners(arrow_y));
             cx.notify();
         })
         .ok();

@@ -56,10 +56,12 @@ impl Shell {
     }
 
     /// Shows the note for the tab shown while its page is hung, and takes it away once it isn't,
-    /// or another tab shows.
+    /// or another tab shows. A window behind another notes it once it comes in front, as the
+    /// toast shows over the window in front and would tell of a page it doesn't show (#1432).
     pub(super) fn note_hang(&mut self, cx: &mut Context<Self>) {
         let tab = self.selected;
-        let hung = (tab != 0 && self.page(tab).trouble == Trouble::Hung).then_some(tab);
+        let hung = tab != 0 && self.page(tab).trouble == Trouble::Hung && self.browser.in_front();
+        let hung = hung.then_some(tab);
         if hung == self.hang_noted {
             return;
         }

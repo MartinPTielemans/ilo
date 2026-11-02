@@ -11,8 +11,8 @@ use super::*;
 struct Recorder(RefCell<Vec<String>>);
 
 impl Host for Recorder {
-    fn show(&self, left: f32, top: f32, width: f32, height: f32) {
-        self.0.borrow_mut().push(format!("show {left} {top} {width} {height}"));
+    fn show(&self, window: u64, left: f32, top: f32, width: f32, height: f32) {
+        self.0.borrow_mut().push(format!("show {left} {top} {width} {height} over {window}"));
     }
 
     fn hide(&self) {
@@ -51,6 +51,11 @@ fn card(tab: u64, pictured: bool) -> Card {
 }
 
 fn rest_on(cx: &mut TestAppContext, told: &Told, card: Card) {
+    rest_in(cx, told, 1, card);
+}
+
+/// The pointer rests on `card`'s row in the sidebar of browser window `window`.
+fn rest_in(cx: &mut TestAppContext, told: &Told, window: u64, card: Card) {
     let told = told.clone();
     let events = Rc::new(move |tab: u64, event: Event, _: &mut App| {
         told.borrow_mut().push(match event {
@@ -60,7 +65,7 @@ fn rest_on(cx: &mut TestAppContext, told: &Told, card: Card) {
         })
     });
     let anchor = row(card.tab);
-    cx.update(|cx| hover(Hover::Rest(Rest { card, anchor, events }), cx));
+    cx.update(|cx| hover(Hover::Rest(Rest { window, card, anchor, events }), cx));
     cx.run_until_parked();
 }
 
@@ -75,10 +80,14 @@ fn after(cx: &mut TestAppContext, host: &Recorder, time: Duration) -> Vec<String
     host.0.take()
 }
 
-/// Where the host is told a card of `tab` goes, `height` tall.
+/// Where the host is told a card of `tab` goes, `height` tall, in browser window 1.
 fn shown(tab: u64, height: f32) -> String {
+    shown_in(1, tab, height)
+}
+
+fn shown_in(window: u64, tab: u64, height: f32) -> String {
     let (left, top) = place(row(tab), height);
-    format!("show {left} {top} {WIDTH} {height}")
+    format!("show {left} {top} {WIDTH} {height} over {window}")
 }
 
 /// A card with a picture's box but no picture yet.
@@ -137,6 +146,24 @@ fn the_next_row_swaps_in_at_once_while_a_card_shows(cx: &mut TestAppContext) {
     assert_eq!(host.0.take(), [shown(2, waiting_height())]);
     assert!(after(cx, &host, LEAVE * 4).is_empty(), "leaving the old row leaves the new card");
     assert_eq!(*told.borrow(), ["shown 1", "shown 2"]);
+}
+
+#[gpui::test]
+fn it_shows_over_the_window_whose_row_the_pointer_rests_on(cx: &mut TestAppContext) {
+    let (host, told) = open_card(cx);
+    // A window behind another still hears the pointer, so its row's card shows over it (#1432).
+    rest_in(cx, &told, 2, card(4, true));
+    assert_eq!(after(cx, &host, DWELL), [shown_in(2, 4, waiting_height())]);
+    rest_in(cx, &told, 1, card(1, true));
+    assert_eq!(host.0.take(), [shown_in(1, 1, waiting_height())]);
+    ask(cx, Hover::Close);
+    after(cx, &host, FADE * 4);
+    // The pointer crossing from one window's row to the other's before the dwell ends shows the
+    // card it rests on, over its own window.
+    rest_in(cx, &told, 1, card(1, true));
+    after(cx, &host, DWELL / 2);
+    rest_in(cx, &told, 2, card(4, true));
+    assert_eq!(after(cx, &host, DWELL), [shown_in(2, 4, waiting_height())]);
 }
 
 #[gpui::test]
@@ -229,7 +256,8 @@ fn a_card_back_before_its_window_hid_stays(cx: &mut TestAppContext) {
     let window = card_window(cx);
     ask(cx, Hover::Close);
     // As a press on its button can show it again within the fade, on the shell's say.
-    let rest = Rest { card: card(2, true), anchor: row(2), events: Rc::new(|_, _, _| {}) };
+    let events = Rc::new(|_, _, _: &mut App| {});
+    let rest = Rest { window: 1, card: card(2, true), anchor: row(2), events };
     cx.update(|cx| window.update(cx, |card, _, cx| card.show(rest, cx)).unwrap());
     assert_eq!(after(cx, &host, FADE * 4), [shown(2, waiting_height())]);
 }

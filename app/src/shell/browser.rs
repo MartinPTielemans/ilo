@@ -390,9 +390,10 @@ pub trait Browser {
     /// hasn't drawn at its new size yet shows its last frame stretched to fill the view, rather
     /// than at its old size in the corner, so its right edge and scrollbar stay with the frame's.
     fn page_moving(&self, moving: bool, cx: &mut App);
-    /// Keeps the find bar and the zoom HUD at the top right corner of a split view's focused page,
-    /// `right` points further in from the window's right edge and `top` further down.
-    fn set_pane_corner(&self, right: f32, top: f32, cx: &mut App);
+    /// Keeps the find bar, the zoom HUD and the toast at the top right corner of a split view's
+    /// focused page, `right` points further in from the window's right edge and `top` further
+    /// down, and the toast's window from that page's left edge, `left` points from the window's.
+    fn set_pane_corner(&self, left: f32, right: f32, top: f32, cx: &mut App);
     /// Shows the window's close, minimize and zoom buttons, or hides them.
     fn show_window_buttons(&self, shown: bool, cx: &mut App);
     /// Does what a click on the window's close, minimize or zoom button does.

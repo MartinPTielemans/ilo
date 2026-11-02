@@ -173,7 +173,7 @@ type Placed = Rc<RefCell<Vec<(f32, f32)>>>;
 struct IconHost(Placed);
 
 impl icon_picker::Host for IconHost {
-    fn show(&self, left: f32, top: f32) {
+    fn show(&self, _: u64, left: f32, top: f32) {
         self.0.borrow_mut().push((left, top));
     }
 
@@ -185,7 +185,7 @@ impl icon_picker::Host for IconHost {
 struct ThemeHost(Placed);
 
 impl theme_picker::Host for ThemeHost {
-    fn show(&self, left: f32, top: f32, _: &[(f32, f32, f32)]) {
+    fn show(&self, _: u64, left: f32, top: f32, _: &[(f32, f32, f32)]) {
         self.0.borrow_mut().push((left, top));
     }
 

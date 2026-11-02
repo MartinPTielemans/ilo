@@ -7,7 +7,11 @@
 # the site sends without them, and ↩ signs in, with the password in no log. A link to another app
 # asks first, and ↩ there opens nothing. The pointer on and off a link 20 times shows and hides the
 # link target each time, with the command bar and a tab's menu opened and closed between, and the
-# app lives through it with no panic (#1351).
+# app lives through it with no panic (#1351). On Windows, with another app's window in front of
+# ilo's, the link target and the hover card show under it, and the link target over ilo's window
+# again once it's gone (#1419). On Windows and the Mac, with a second window beside the first and
+# the first in front, the pointer resting on a row of the second shows its card over the second,
+# and on a row of the first over the first (#1432).
 
 serve
 log="$out/dialogs.log"
@@ -176,6 +180,150 @@ for round in $(seq 20); do
 done
 kill -0 "$pid" 2>/dev/null || gone
 ! grep -q 'panicked' "$log" || fail "the app panicked as the link target, the bar or a menu showed"
+
+# On Windows, another app's window in front of ilo's lower half, where the link target's corner
+# is: the plate a link shows then, and the card a row shows, go under that window and over ilo's,
+# by Windows' own z-order, front first (#1419), with the foreground in ilo's window and then in a
+# window away from both. They went to the front of every app's window, which Windows allows unless
+# the window in front has the foreground. Once it's gone the plate is over ilo's window again.
+covered=
+# The window and plate on top of the stack the driver last listed match $1, or fail with $2.
+stacked() {
+  send stack
+  stack=$(grep '^browser: stack ' "$log" | tail -1 | cut -c16-)
+  case $stack in $1) ;; *) fail "$2: $stack" ;; esac
+}
+# Another app's window over ilo's, with the foreground in $1 (ilo or away).
+under_cover() {
+  python3 -I -u check/app-windows.py cover "$(cat "/proc/$pid/winpid")" "$1" \
+    > "$out/cover-$1.log" 2>&1 &
+  helper=$!
+  for _ in $(seq 100); do
+    grep -q '^cover ' "$out/cover-$1.log" || ! kill -0 "$helper" 2>/dev/null && break
+    sleep 0.1
+  done
+  grep -q '^cover ' "$out/cover-$1.log" ||
+    fail "another app's window didn't open over ilo's: $(cat "$out/cover-$1.log")"
+  local foreground
+  foreground=$(sed -n 's/^cover .*, foreground //p' "$out/cover-$1.log")
+  stacked "*other cover, *driven" "the other app's window isn't in front of ilo's ($1)"
+  send move $link_point
+  expect '^browser: link target window shown$' \
+    "the pointer on the link showed no plate under the other app ($1)"
+  ../tools/window-screenshot.sh "$pid" "$out/link-target-covered-$1.png" ||
+    fail "no window to capture"
+  stacked "*other cover, *link target, *driven" \
+    "the link target isn't under the other app's window in front of ilo (foreground $foreground)"
+  send move $page_point
+  expect '^browser: link target hidden$' \
+    "the plate under the other app stayed after the pointer left ($1)"
+  send move $(row 0)
+  expect '^browser: hover card window shown$' \
+    "resting on the tab's row showed no card under the other app ($1)"
+  stacked "*other cover, *hover card, *driven" \
+    "the hover card isn't under the other app's window in front of ilo (foreground $foreground)"
+  send move $page_point
+  expect '^browser: hover card hidden$' "leaving the rows didn't hide the card under the other app"
+  covered="$covered${covered:+, }the foreground in $foreground with ilo active $active"
+  # By its Windows id, as Git Bash's kill may not end a native process.
+  taskkill //F //PID "$(cat "/proc/$helper/winpid")" > /dev/null 2>&1 || true
+  helper=
+  for _ in $(seq 50); do
+    send stack
+    grep '^browser: stack ' "$log" | tail -1 | grep -q 'other cover' || break
+    sleep 0.1
+  done
+}
+if windows; then
+  under_cover ilo
+  under_cover away
+  send move $link_point
+  expect '^browser: link target window shown$' \
+    "the pointer on the link showed no plate once the other app went"
+  stacked "*link target, *driven" "the link target isn't over ilo's window once the other app went"
+  case $stack in *"other cover"*) fail "the other app's window outlived its process: $stack" ;; esac
+  ../tools/window-screenshot.sh "$pid" "$out/link-target-uncovered.png" ||
+    fail "no window to capture"
+  send move $page_point
+  expect '^browser: link target hidden$' \
+    "the plate stayed after the pointer left, the other app gone"
+fi
+
+# Two windows side by side, the first in front with the keyboard: the pointer resting on a row of
+# the second, behind it, which still hears the pointer, shows that row's card over the second, not
+# over the first, the browser window last in front, where every overlay showed (#1432). Read from
+# the OS's windows: on Windows the card is on the stack over the second, and on the Mac a child
+# window of it. A row of the first shows its card over the first again.
+two_windows=
+if windows || [ "$(uname)" = Darwin ]; then
+  first=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
+  send key n cmd
+  expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
+  second=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+  # The driver numbers windows in the order they opened.
+  driven_second=$(grep -c '^browser: window opened ' "$log")
+  # The Windows runner's screen is 1920 by 1080 (check-windows.yml).
+  screen="0 0 1920 1080"
+  if [ "$(uname)" = Darwin ]; then
+    send screen
+    screen=$(grep '^browser: screen at ' "$log" | tail -1 | cut -d' ' -f4-)
+  fi
+  read -r screen_x screen_y screen_width screen_height <<< "$screen"
+  wide=$(((screen_width - 60) / 2))
+  [ "$wide" -le 900 ] || wide=900
+  tall=$((screen_height - 120))
+  [ "$tall" -le 700 ] || tall=700
+  send window "$driven_second"
+  send place $((screen_x + 40 + wide)) $((screen_y + 60)) $wide $tall
+  send window 1
+  expect "^browser: key window $first\$" "the first window didn't come in front of the second"
+  send place $((screen_x + 20)) $((screen_y + 60)) $wide $tall
+  # The driven window's children on the Mac, which the card's window becomes one of, in $children.
+  children() {
+    send layout
+    children=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -c '^browser: layout child' ||
+      true)
+  }
+  send window "$driven_second" behind
+  windows || children
+  before=${children:-0}
+  send move $(row 0)
+  expect '^browser: hover card window shown$' \
+    "resting on a row of the second window, behind the first, showed no card"
+  send order
+  order=$(grep '^browser: order ' "$log" | tail -1 | cut -c16-)
+  case $order in
+  *"window 1 window $driven_second, key window 1") ;;
+  *) fail "the second window didn't stay behind the first as its row showed a card: $order" ;;
+  esac
+  if windows; then
+    stacked "*hover card, *driven" "the card for a row of the window behind isn't over that window"
+  else
+    children
+    [ "$children" -gt "$before" ] ||
+      fail "the card for a row of the window behind isn't a child window of that window"
+  fi
+  ../tools/window-screenshot.sh "$pid" "$out/hover-card-window-behind.png" all ||
+    fail "no window to capture"
+  send move $page_point
+  expect '^browser: hover card hidden$' "leaving the second window's rows didn't hide its card"
+  # The reverse: the first's row, in front, shows its card over the first.
+  send window 1
+  windows || children
+  before=${children:-0}
+  send move $(row 0)
+  expect '^browser: hover card window shown$' "resting on a row of the first window showed no card"
+  if windows; then
+    stacked "*hover card, *driven" "the card for a row of the window in front isn't over it"
+  else
+    children
+    [ "$children" -gt "$before" ] ||
+      fail "the card for a row of the window in front isn't a child window of it"
+  fi
+  send move $page_point
+  expect '^browser: hover card hidden$' "leaving the first window's rows didn't hide its card"
+  two_windows=1
+fi
 exec 3>&-
 quit
 echo "ok: a page's alert, confirm and prompt ask over its card, answer with ↩ and Esc, and an alert"
@@ -183,3 +331,10 @@ echo "  comes back with its tab. The confirm's Cancel and OK show the pointer on
 echo "  stays with Esc and leaves with ↩. A site's sign-in cancels with Esc and signs in with ↩, and"
 echo "  the password reaches no log. A link to Maps asks, and ↩ opens nothing. The link target shows"
 echo "  and hides 20 times, between the command bar and a tab's menu, with no panic."
+[ -z "$covered" ] || echo "  Under another app's window in front of ilo's ($covered), the" \
+  "link target and the hover card show under it, and the link target over ilo's window once it's" \
+  "gone. Windows: $out/link-target-covered-ilo.png, $out/link-target-covered-away.png," \
+  "$out/link-target-uncovered.png"
+[ -z "$two_windows" ] || echo "  With two windows side by side, a row of the one behind shows its" \
+  "card over that window, and a row of the one in front over the one in front:" \
+  "$out/hover-card-window-behind.png"
