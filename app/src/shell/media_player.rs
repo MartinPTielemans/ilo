@@ -42,9 +42,10 @@ impl Shell {
         self.all_favorites.contains(&tab) || self.spaces.iter().any(in_space)
     }
 
-    /// Where the pages above the footer end, over the players.
+    /// Where the pages above the footer end, over the players and Restart to Update.
     pub(super) fn list_bottom(&self) -> f32 {
-        FOOTER_HEIGHT + self.media_players().len() as f32 * (MEDIA_HEIGHT + MEDIA_GAP)
+        let players = self.media_players().len() as f32 * (MEDIA_HEIGHT + MEDIA_GAP);
+        FOOTER_HEIGHT + self.update_sign_room() + players
     }
 
     /// × on `tab`'s player: it goes until the page plays again.
@@ -126,7 +127,9 @@ impl Shell {
                 shell.dismiss_media(tab, cx);
             },
         ));
-        let bottom = FOOTER_HEIGHT + index as f32 * (MEDIA_HEIGHT + MEDIA_GAP);
+        // Over Restart to Update, while an update waits.
+        let bottom =
+            FOOTER_HEIGHT + self.update_sign_room() + index as f32 * (MEDIA_HEIGHT + MEDIA_GAP);
         // check.sh finds the bottom one's buttons from where it's drawn.
         let listener = (index == 0).then(|| card_listener("media player", &self.media_drawn, tab));
         div()

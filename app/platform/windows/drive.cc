@@ -12,9 +12,10 @@
 // rightdragto, rightrelease, move, key, keydown, keyup, flags, type, insert, scroll, swipe, wheel,
 // resize, place, minimize, window, order, layout, state, title, pasteboard, front, menu, menubar,
 // choose, dismiss, agentspace, agentmayact, agentrelease, agentdisconnect, takeback and age, and
-// Windows' own maximize, which the Mac's has no command for; overlays, which lists the windows on
-// screen over the app's browser windows; and reshow, which shows those of the UI's that are hidden
-// again, as Windows does. The Mac's modifiers are
+// Windows' own maximize, which the Mac's has no command for, and placement, which logs the window's
+// maximized state and the frame it un-maximizes to as Windows keeps them; overlays, which lists the
+// windows on screen over the app's browser windows; and reshow, which shows those of the UI's that
+// are hidden again, as Windows does. The Mac's modifiers are
 // pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl with Alt, but Ctrl for
 // ⌃Tab, and alt with both. A trackpad's scrolls and swipes are wheel messages with the pixels in
 // their deltas, as a precision touchpad sends them. choose and dismiss work on ilo's menu and the
@@ -1104,6 +1105,29 @@ bool Run(const std::string& line) {
     g_steps.push_back({[root] {
       PostMessageW(root, WM_SYSCOMMAND, IsZoomed(root) ? SC_RESTORE : SC_MAXIMIZE, 0);
     }});
+    return true;
+  }
+  // The driven window's state and the frame it un-maximizes to, as Windows keeps them, in
+  // LogFrame's terms: "browser: placement <maximized|minimized|normal> <x> <y> <width> <height>".
+  if (action == "placement") {
+    HWND root = Driven();
+    WINDOWPLACEMENT placement{sizeof placement};
+    if (!root || !GetWindowPlacement(root, &placement)) {
+      return false;
+    }
+    // Windows keeps the frame from the work area's corner, not the screen's.
+    MONITORINFO monitor{sizeof monitor};
+    GetMonitorInfoW(MonitorFromWindow(root, MONITOR_DEFAULTTONEAREST), &monitor);
+    RECT normal = placement.rcNormalPosition;
+    OffsetRect(&normal, monitor.rcWork.left - monitor.rcMonitor.left,
+               monitor.rcWork.top - monitor.rcMonitor.top);
+    const char* state = placement.showCmd == SW_SHOWMAXIMIZED   ? "maximized"
+                        : placement.showCmd == SW_SHOWMINIMIZED ? "minimized"
+                                                                : "normal";
+    const double scale = Scale(root);
+    fprintf(stderr, "browser: placement %s %.0f %.0f %.0f %.0f\n", state, normal.left / scale,
+            normal.top / scale, (normal.right - normal.left) / scale,
+            (normal.bottom - normal.top) / scale);
     return true;
   }
   if (action == "click" || action == "rightclick" || action == "middleclick" ||

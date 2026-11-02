@@ -5,11 +5,13 @@
 # agent's, and the user's tab's Move to lists it after the user's own Space, checked: choosing it
 # gives the agent the tab, which moving it back takes away. The agent's mark on its tab goes as its
 # session there ends: it releases the tab, its client disconnects, or the user takes the tab back.
-# On Windows, Settings › Agents' Connect finds Claude Code's claude where its own installer, winget
-# or npm put it, though none of those is on the PATH (#1420), and gives it the browser's server
-# whole, which runs and reaches the browser as Claude Code. Disconnect takes it out again. With
-# claude gone, the row says so in words. Each claude is a stand-in that records its arguments, in a
-# home folder of the run's own, never the user's.
+# Settings › Agents' Connect finds Claude Code's claude where a terminal would, though the browser's
+# PATH doesn't have it: on Windows where its own installer, winget or npm put it (#1420), on the Mac
+# in ~/.local/bin, which only ~/.zshrc puts on PATH (#1441), run with that PATH, as npm's claude
+# needs it to find node. It gives claude the browser's server whole, which runs and reaches the
+# browser as Claude Code. Disconnect takes it out again. With claude gone, the row says so in words.
+# Each claude is a stand-in that records its arguments, in a home folder of the run's own, never the
+# user's.
 
 log="$out/agents.log"
 step=0
@@ -170,7 +172,7 @@ fi
 quit
 
 connected=
-if windows; then
+if windows || [ -n "$mac" ]; then
   log="$out/agents-connect.log"
   step=0
   rm -f "$saved" "$launch_frame"
@@ -179,10 +181,17 @@ if windows; then
   rm -rf "$home"
   mkdir -p "$home/.claude"
   native="$home/.local/bin"
+  # What each stand-in for claude runs: it writes each call's arguments, as the system hands a
+  # program them, in claude-calls beside the program, a JSON array a line without spaces.
+  python=$(python3 -I -c 'import sys; print(sys.executable)')
+  printf '%s\n' 'import json, os, sys' \
+    'with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "claude-calls"), "a", encoding="utf-8") as calls:' \
+    '    calls.write(json.dumps(sys.argv[1:], separators=(",", ":")) + "\n")' > "$out/claude-calls.py"
+fi
+if windows; then
   winget="$home/AppData/Local/Microsoft/WinGet/Links"
   npm="$home/AppData/Roaming/npm"
-  # The stand-in for Claude Code's claude.exe: it writes each call's arguments, as Windows hands a
-  # program them, in claude-calls beside it, a JSON array a line without spaces.
+  # The stand-in for Claude Code's claude.exe, which records its calls as claude-calls.py does.
   cat > "$out/claude-stand-in.rs" << 'EOF'
 use std::io::Write;
 fn main() {
@@ -206,14 +215,12 @@ EOF
     fail "rustc couldn't build the stand-in for claude.exe"
   # npm's claude.cmd, as npm writes it for a global install, which runs Python with a script that
   # records the arguments where it runs node with Claude Code's cli.js: both read them alike.
-  python=$(python3 -I -c 'import sys; print(sys.executable)')
   printf '%s\n' '@ECHO off' 'GOTO start' ':find_dp0' 'SET dp0=%~dp0' 'EXIT /b' ':start' 'SETLOCAL' \
     'CALL :find_dp0' "SET \"_prog=$python\"" \
     'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\claude-calls.py" %*' |
     sed 's/$/\r/' > "$out/claude.cmd"
-  printf '%s\n' 'import json, os, sys' \
-    'with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "claude-calls"), "a", encoding="utf-8") as calls:' \
-    '    calls.write(json.dumps(sys.argv[1:], separators=(",", ":")) + "\n")' > "$out/claude-calls.py"
+  standin="$out/claude.exe"
+  bridge=$(cygpath -w "$app/mcp-bridge.exe")
   agents_file="$(dirname "$saved")/Agents"
   printf '{"on":true,"agents":[]}' > "$agents_file"
   # The PATH stays the run's, which has none of the three folders.
@@ -224,6 +231,29 @@ EOF
   pid=$!
   exec 3> "$out/drive"
   await '^browser: agents server on \\\\\.\\pipe\\' || fail "the saved switch didn't start the server"
+elif [ -n "$mac" ]; then
+  # Claude Code's installer has the user put ~/.local/bin on PATH in ~/.zshrc, which a login
+  # shell that isn't interactive doesn't read (#1441). The stand-in is npm's kind, a script run by
+  # `#!/usr/bin/env` with a node only that PATH has too, so claude has to get it.
+  node="$home/.node/bin"
+  mkdir -p "$node"
+  printf '#!/bin/sh\nexec "%s" -I "$@"\n' "$python" > "$node/ilo-check-node"
+  { echo '#!/usr/bin/env ilo-check-node'; cat "$out/claude-calls.py"; } > "$out/claude"
+  chmod +x "$node/ilo-check-node" "$out/claude"
+  echo 'export PATH="$HOME/.local/bin:$HOME/.node/bin:$PATH"' > "$home/.zshrc"
+  standin="$out/claude"
+  bridge="$(dirname "$browser")/mcp-bridge"
+  agents_file="$(dirname "$saved")/Agents"
+  printf '{"on":true,"agents":[]}' > "$agents_file"
+  # The PATH the Dock and Finder give an app, and zsh's files from the run's home.
+  HOME="$home" ZDOTDIR="$home" SHELL=/bin/zsh PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+    BROWSER_PROFILE_DIR="${BROWSER_PROFILE_DIR:-$profile_dir}" BROWSER_DRIVE=1 \
+    "$browser" < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await '^browser: agents server on /.*/Agents\.sock$' || fail "the saved switch didn't start the server"
+fi
+if windows || [ -n "$mac" ]; then
   socket=$(grep '^browser: agents server on' "$log" | tail -1 | sed 's/^browser: agents server on //')
   name="$(echo "$app_name" | tr '[:upper:]' '[:lower:]')-dev"
   send menu Settings…
@@ -258,7 +288,7 @@ EOF
     logged '^browser: agent claude-code connected$' ||
       fail "Connect with $1 failed: $(sed -n 's/^browser: agent claude-code couldn.t connect: //p' "$log" | tail -1)"
     hellos=$(grep -c '^browser: agent claude-code hello from check$' "$log" || true)
-    python3 -I - "$calls" "$name" "$(cygpath -w "$app/mcp-bridge.exe")" "$socket" << 'PY' || fail "Claude Code didn't get the server whole from $1"
+    python3 -I - "$calls" "$name" "$bridge" "$socket" << 'PY' || fail "Claude Code didn't get the server whole from $1"
 import json, os, subprocess, sys, threading
 path, name, bridge, socket = sys.argv[1:]
 with open(path, encoding="utf-8") as file:
@@ -298,23 +328,25 @@ PY
     settings_tab General
     settings_tab Agents
   }
-  for install in "$native/claude.exe" "$winget/claude.exe" "$npm/claude.cmd"; do
+  if windows; then installs="native winget npm"; else installs=native; fi
+  for kind in $installs; do
+    case $kind in
+      native) install="$native/$(basename "$standin")" ;;
+      winget) install="$winget/claude.exe" ;;
+      npm) install="$npm/claude.cmd" ;;
+    esac
     mkdir -p "$(dirname "$install")"
     cp "$out/$(basename "$install")" "$install"
     [ "${install%.cmd}" = "$install" ] || cp "$out/claude-calls.py" "$(dirname "$install")/"
-    case $install in
-      "$native"/*) connect_with "$install" native ;;
-      "$winget"/*) connect_with "$install" winget ;;
-      *) connect_with "$install" npm ;;
-    esac
+    connect_with "$install" "$kind"
     rm -rf "$(dirname "$install")"
   done
   # Claude Code uninstalled while connected: Disconnect ends its token, and says it couldn't reach
   # claude to take the server out, and Connect says it isn't installed.
   mkdir -p "$native"
-  cp "$out/claude.exe" "$native/"
+  cp "$standin" "$native/"
   send clickkey $(drawn "connect claude-code")
-  expect_late '^browser: agent claude-code connected$' "Connect with claude.exe didn't connect"
+  expect_late '^browser: agent claude-code connected$' "Connect with $(basename "$standin") didn't connect"
   rm -rf "$native"
   settings_tab General
   settings_tab Agents
@@ -333,7 +365,11 @@ PY
   quit
   rm -f "$agents_file"
   rm -rf "$home"
-  connected="; on Windows, Connect finds Claude Code's claude off the PATH where its installer, winget or npm put it, gives it the server whole, which runs as Claude Code's, Disconnect takes it out, and with claude gone the row says it isn't installed"
+  if windows; then
+    connected="; on Windows, Connect finds Claude Code's claude off the PATH where its installer, winget or npm put it, gives it the server whole, which runs as Claude Code's, Disconnect takes it out, and with claude gone the row says it isn't installed"
+  else
+    connected="; Connect finds Claude Code's claude in ~/.local/bin, on the PATH only through ~/.zshrc, runs it with that PATH, gives it the server whole, which runs as Claude Code's, Disconnect takes it out, and with claude gone the row says it isn't installed"
+  fi
 fi
 if [ "$driven" = 1 ]; then
   echo "ok: $made; an agent's Space shows and switches as the user's, keeps the user's tabs out, refuses an agent ad blocking, passwords, DevTools, a profile's settings and any action agents lack, with why in the activity log, gets a tab the user gives it until they move it back, clears its mark as each session ends, and comes back the agent's$connected"

@@ -295,28 +295,31 @@ fn asking(cx: &mut gpui::TestAppContext) -> bool {
     cx.update(|cx| crate::dialog::asking(cx))
 }
 
-// Installing asks nothing; the build being in offers the restart, whose Restart starts it.
+// Installing asks nothing, and nor does the build being in: Restart to Update at the sidebar's
+// foot says it's ready, as on the Mac and Windows, and its restart starts it.
 #[gpui::test]
-fn a_build_installed_offers_a_restart_into_it(cx: &mut gpui::TestAppContext) {
+fn a_build_installed_asks_nothing_and_restarts_when_told(cx: &mut gpui::TestAppContext) {
     let restarts = updating(cx);
     cx.update(|cx| changed(State::Installing, cx));
     assert!(!asking(cx), "nothing to restart into yet");
     cx.update(|cx| changed(State::Ready, cx));
-    assert!(asking(cx), "no offer to restart");
-    assert!(choose("Restart", cx));
+    assert!(!asking(cx), "a dialog for a build that's in");
+    assert!(cx.update(|cx| crate::updates::ready(cx)), "nothing says it's ready");
+    cx.update(restart);
     assert_eq!(restarts.get(), 1);
-    assert!(!asking(cx));
 }
 
-// Later leaves the build for the next launch, and Check for Updates… offers the restart again.
+// Check for Updates… called once a build is in, as the app calls Restart to Update in its place,
+// still offers the restart.
 #[gpui::test]
-fn later_leaves_the_restart_to_check_for_updates(cx: &mut gpui::TestAppContext) {
+fn check_for_updates_offers_the_restart_once_a_build_is_in(cx: &mut gpui::TestAppContext) {
     let restarts = updating(cx);
     cx.update(|cx| changed(State::Ready, cx));
+    cx.update(check);
+    assert!(asking(cx), "Check for Updates… didn't offer the restart");
     assert!(choose("Later", cx));
     assert_eq!(restarts.get(), 0);
     cx.update(check);
-    assert!(asking(cx), "Check for Updates… didn't offer the restart");
     assert!(choose("Restart", cx));
     assert_eq!(restarts.get(), 1);
 }
@@ -364,7 +367,7 @@ fn what_check_for_updates_says() {
     let looking = format!("{name} looks for one every half hour while it’s open.");
     assert_eq!(said(None), ["No update yet", &looking, "", "OK"]);
     assert_eq!(said(Some(&State::Current)), said(None));
-    let installing = "It will offer to restart once the new version is in.";
+    let installing = "Restart to Update shows in the sidebar once the new version is in.";
     let updating = format!("{name} is updating");
     assert_eq!(said(Some(&State::Installing)), [&updating, installing, "", "OK"]);
     // A portal that never answered says so, rather than that it's looking.

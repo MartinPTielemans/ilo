@@ -2,7 +2,8 @@
 # Spaces: their names, colours and icons, their tabs with each tab's history, the tab each showed
 # and the Space it showed, and the sidebar's width. Only a tab shown loads; the others show their
 # titles and favicons. A tab named with a double-click on its row, where escape cancels, keeps its
-# name over its page's title, and Rename… in its menu with no name gives the title back. An
+# name over its page's title, a click in the page keeps the name typed, and Rename… in its menu with
+# no name gives the title back. An
 # emoji picked in the icon picker that Change Icon… hangs under its favicon takes the favicon's
 # place until Remove Icon, and a Japanese conversion in the picker's search isn't a pick. A Space's
 # icon, picked in its icon picker, comes back too. A tab closed before the quit stays closed,
@@ -301,6 +302,16 @@ if [ "$active" != 1 ]; then
   echo "skip: restored history. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
+# A click in the page ends the tab's field and keeps the name typed, as one elsewhere in the
+# sidebar does, though only the host sees the page take the keyboard (#1414).
+send doubleclick $(row 0)
+expect "^browser: rename tab $c\$" \
+  "a double-click on the row didn't rename the tab after the relaunch"
+send type clicked
+send click $page_point
+expect '^browser: name field left$' "a click in the page left the tab's field open"
+expect "^browser: title $c clicked\$" "a click in the page didn't keep the name typed"
+../tools/window-screenshot.sh "$pid" "$out/rename-click-away.png" || fail "no window to capture"
 # Rename… in its menu, with the name taken out, gives the tab back its page's title.
 post rightclick $(row 0)
 menu=$(cased "Copy Link$share, Change Icon…, Remove Icon, Rename…, Mute (disabled), Add Split View, Duplicate, Add to Folder › New Folder, Move to › [^,]* (checked), Move to › reading list, Move to › New Space…, Archive Tab, Archive Tabs Below")
