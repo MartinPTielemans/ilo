@@ -183,9 +183,10 @@ green = 0x0E9F55
 # pages; the outline, a black line a point of blur wide round the outside, which reads on light
 # ones; and one drop shadow. Resting sits on the window: favorite tiles, library cards, pictures
 # of pages. A popover opens from something and closes on a click outside: menus, the Site
-# Controls, the toast, the zoom HUD, tooltips, the link target, the find bar. A modal takes the
-# keyboard: the command bar, the dialog, the icon and theme pickers. A shadow's blur is CSS's,
-# twice the Gaussian's standard deviation, which is what the host's layers take halved.
+# Controls, the toast, the zoom HUD, tooltips, the link target, the find bar, and the command bar
+# over the URL field, a row tall. A modal takes the keyboard: the centred command bar, the dialog,
+# the icon and theme pickers. A shadow's blur is CSS's, twice the Gaussian's standard deviation,
+# which is what the host's layers take halved.
 outline = 0x0000_00b3
 outline-blur = 1.0
 resting-rim = 0xffff_ff14
@@ -954,6 +955,10 @@ window-button-zoom = 0x58bb18
 windows-button-plate = 22.0
 windows-button-glyph = 10.0
 windows-close-hovered = 0xc42b1c
+# The bar over a Little ilo window's card (Arc's Little Arc): its row centred on the window
+# buttons, with the card's inset under it, and its favicon past them. Ours, until Arc's is measured.
+little-bar = 44.0
+little-title-x = 86.0
 
 [shell.agent-pointer]
 # Ours (#365), as Arc and Dia have no agents in pages: while an agent clicks or types in the page

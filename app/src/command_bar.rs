@@ -64,6 +64,9 @@ pub use crate::tokens::command_bar::FIELD_RADIUS;
 /// There the input's row is a row tall, with no line under it, and its icon and text sit in
 /// the rows' icon and title columns.
 const FIELD_INPUT: f32 = ROW_HEIGHT;
+/// There it hangs from the field as the Site Controls do. The modal shadow, 24 down at a 64 blur,
+/// fell mostly below a panel only 50 tall, a grey bar under it over a light page (#1306).
+const FIELD_LEVEL: Level = Level::Popover;
 use crate::tokens::command_bar::FIELD_INPUT_TEXT;
 use crate::tokens::command_bar::BESIDE_END;
 use crate::elevation::Level;
@@ -284,15 +287,18 @@ pub trait Host {
     fn open_split(&self, url: &str, with: u64, cx: &mut App);
     /// Copies `text`, a sum's result, and says so.
     fn copy(&self, text: &str, cx: &mut App);
-    /// Shows the bar's window, `width` wide and its corners rounded by `radius`, with the keyboard:
-    /// centred across the browser window with its top `top` above the window's middle, else at
-    /// `left` and `top` in it.
-    fn show(&self, centered: bool, left: f32, top: f32, width: f32, radius: f32);
+    /// Shows the bar's window, `width` wide, its corners rounded by `radius` and shadowed as
+    /// `level` is, with the keyboard: centred across the browser window with its top `top` above
+    /// the window's middle, else at `left` and `top` in it.
+    fn show(&self, centered: bool, left: f32, top: f32, width: f32, radius: f32, level: Level);
     fn set_height(&self, height: f32);
     /// Hides the bar's window once the user has chosen something in it.
     fn hide(&self);
     /// Hides the bar's window as the user leaves it without choosing anything.
     fn dismiss(&self);
+    /// Gives the bar's window the keyboard back, which it found it hasn't while it shows, unless
+    /// the user left it, which the host knows first.
+    fn take_keyboard(&self);
     /// The browser's commands that match `text` and do something now, best first.
     fn commands(&self, text: &str, cx: &App) -> Vec<shell::BarCommand>;
 }
@@ -444,6 +450,14 @@ pub fn open_at(
                 bar.edited(window, cx)
             })
             .detach();
+            cx.observe_window_activation(window, |bar: &mut CommandBar, window, cx| {
+                bar.activation_changed(window, cx)
+            })
+            .detach();
+            text_input::on_leave(&input.focus_handle(cx), window, cx, |bar, window, cx| {
+                bar.keep_focus(window, cx)
+            })
+            .detach();
             CommandBar {
                 host,
                 input,
@@ -507,9 +521,9 @@ pub fn show(
     match field {
         Some(field) => {
             let top = f32::from(field.top()) - FIELD_ABOVE;
-            host.show(false, field.left().into(), top, FIELD_WIDTH, FIELD_RADIUS);
+            host.show(false, field.left().into(), top, FIELD_WIDTH, FIELD_RADIUS, FIELD_LEVEL);
         }
-        None => host.show(true, 0., ABOVE_MIDDLE, WIDTH, RADIUS),
+        None => host.show(true, 0., ABOVE_MIDDLE, WIDTH, RADIUS, Level::Modal),
     }
 }
 
@@ -521,7 +535,7 @@ pub fn show_tabs(tabs: Vec<shell::BarTab>, cx: &mut App) {
         tabs.iter().take(shell::BAR_ROWS).map(|tab| tab.tab.to_string()).collect();
     log!("browser: command bar searches tabs {}", ids.join(" "));
     if let Some(host) = reset(Target::Tabs, SharedString::default(), tabs, false, cx) {
-        host.show(true, 0., ABOVE_MIDDLE, WIDTH, RADIUS);
+        host.show(true, 0., ABOVE_MIDDLE, WIDTH, RADIUS, Level::Modal);
     }
 }
 
@@ -536,7 +550,7 @@ pub fn show_split(with: u64, pane: Bounds<Pixels>, card: Bounds<Pixels>, cx: &mu
         // The card is as far in from the window's bottom as from its top.
         let window = f32::from(card.top() + card.bottom());
         let top = centered_top(window) + f32::from(pane.top() - card.top());
-        host.show(false, left.into(), top, WIDTH, RADIUS);
+        host.show(false, left.into(), top, WIDTH, RADIUS, Level::Modal);
     }
 }
 
@@ -584,6 +598,7 @@ fn reset(
             let rows = if text.is_empty() { bar.tab_rows() } else { Vec::new() };
             bar.set_rows(String::new(), rows, window, cx);
             bar.input.update(cx, |input, cx| input.reset(text, window, cx));
+            bar.keep_focus(window, cx);
             // The last query's suggestions are of no use now.
             bar.host.suggest(None, "", false);
             bar.host.clone()
@@ -1584,6 +1599,32 @@ impl CommandBar {
     fn close(&self) {
         self.open.set(false);
         self.host.hide();
+    }
+
+    /// While it shows, the keys are the bar's until the user leaves it (#1314). Chromium makes its
+    /// window key by itself, such as when a page commits, which the host undoes as it's told; if
+    /// the bar finds its window isn't key anyway, it asks for the keyboard back.
+    fn activation_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.open.get() {
+            return;
+        }
+        if window.is_window_active() {
+            self.keep_focus(window, cx);
+        } else {
+            self.host.take_keyboard();
+        }
+    }
+
+    /// Gives the field the focus back while the bar shows: without it, GPUI hands the field no
+    /// input method's text, and the bar shows deaf. Nothing else in its window takes the focus,
+    /// but an assistive app can.
+    fn keep_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let field = self.input.focus_handle(cx);
+        if self.open.get() && !field.is_focused(window) {
+            let from = if window.focused(cx).is_some() { "another view" } else { "nothing" };
+            log!("browser: command bar's field takes the focus back from {from}");
+            window.focus(&field, cx);
+        }
     }
 
     /// ⌘T or ⌘L, which open the bar, close it again, as Arc's do, whichever opened it. The browser's

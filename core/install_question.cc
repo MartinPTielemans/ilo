@@ -62,10 +62,10 @@ void InstallQuestion::Ask(std::unique_ptr<ExtensionInstallPromptShowParams> show
                 : nullptr;
     window = browser ? Window::ForBrowser(browser) : nullptr;
     if (!window) {
-      // A private window is never the one to ask.
+      // A window with a Space of its own is never the one to ask.
       const std::vector<Window*> all = Window::All();
       const auto regular = std::ranges::find_if(
-          all, [](const Window* each) { return !each->off_the_record(); });
+          all, [](const Window* each) { return !each->own_space(); });
       window = regular == all.end() ? nullptr : *regular;
     }
   }

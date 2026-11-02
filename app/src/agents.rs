@@ -44,6 +44,18 @@ pub fn server_name() -> String {
     }
 }
 
+thread_local! {
+    /// An agent's action in a page is under way in the core (`Browser::page`).
+    static IN_PAGE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether a key the core asks the app about is one an agent pressed (press_key), which the core
+/// asks about from inside the Agents' call, while their update holds the app. The key goes to the
+/// page alone, as an agent never runs ilo's shortcuts, and the app answers without an update.
+pub fn pressing_key() -> bool {
+    IN_PAGE.get()
+}
+
 /// A tab as an agent sees it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TabInfo {
@@ -1084,7 +1096,23 @@ impl Agents {
         let note = String::new();
         let acting = Acting { agent: agent.into(), tab, element: 0, note, reply };
         self.acting.insert(request, acting);
-        self.browser.page(agent, tab, request, PageAction::Snapshot, 0, "");
+        self.act_in_page(agent, tab, request, PageAction::Snapshot, 0, "");
+    }
+
+    /// Asks the core to act in the page, which can ask the app about a key from inside the call
+    /// (`pressing_key`).
+    fn act_in_page(
+        &self,
+        agent: &str,
+        tab: u64,
+        request: u64,
+        action: PageAction,
+        element: i64,
+        text: &str,
+    ) {
+        IN_PAGE.set(true);
+        self.browser.page(agent, tab, request, action, element, text);
+        IN_PAGE.set(false);
     }
 
     /// Takes each run's step that has answered: the next step, or the run's answer.
@@ -1628,7 +1656,7 @@ impl Agents {
         self.next_request += 1;
         let acting = Acting { agent: agent.clone(), tab, element, note, reply };
         self.acting.insert(request, acting);
-        self.browser.page(&agent, tab, request, page, element, &text);
+        self.act_in_page(&agent, tab, request, page, element, &text);
     }
 
     /// The ref of the element the action `request` acts on, such as "e12", as the agent named it.

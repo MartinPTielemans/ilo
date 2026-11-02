@@ -290,9 +290,9 @@ namespace {
 
 Saved Collect() {
   Saved saved;
-  // The regular windows, as nothing of a private one is saved.
+  // The regular windows, as nothing of a window with a Space of its own is saved.
   std::vector<Window*> windows = Window::All();
-  std::erase_if(windows, [](const Window* each) { return each->off_the_record(); });
+  std::erase_if(windows, [](const Window* each) { return each->own_space(); });
   saved.settings = UserSettings();
   // Each Space saved, by its place among them.
   std::map<bc_id, int> spaces;

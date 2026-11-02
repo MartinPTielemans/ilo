@@ -36,6 +36,8 @@ struct Made {
     held: RefCell<HashSet<u64>>,
     /// Each action the agents asked the core whether they may take (bc_agent_may_act).
     checked: RefCell<Vec<String>>,
+    /// The app, which the core asks about the key press_key presses from inside bc_agent_page.
+    app: RefCell<Option<gpui::AsyncApp>>,
 }
 
 impl Made {
@@ -142,6 +144,12 @@ impl Browser for Made {
 
     fn page(&self, _: &str, tab: u64, request: u64, action: PageAction, element: i64, text: &str) {
         (self.pages.borrow_mut()).push((tab, request, action, element, text.into()));
+        // The page's key hooks ask the app about the key before the page has it, synchronously,
+        // and the app's tab_key_before_page answers in an update of its own unless it's an agent's.
+        let app = self.app.borrow();
+        if let Some(app) = app.as_ref().filter(|_| action == PageAction::Key && !pressing_key()) {
+            app.update(|_| ());
+        }
     }
 
     /// A name with a dot is a site's, as the address bar takes it; other words are a search.
@@ -737,6 +745,21 @@ fn page_done(
     let request = browser.pages.borrow().last().unwrap().1;
     agents.update(cx, |agents, cx| agents.page_done(request, text, false, cx));
     answer.recv().unwrap()
+}
+
+/// The key press_key presses reaches the app's key hooks from inside the Agents' update, where
+/// another update of the app's would abort ilo (#1288), so it goes to the page alone.
+#[gpui::test]
+fn an_agents_key_goes_to_the_page_without_an_update_of_the_app(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    *browser.app.borrow_mut() = Some(cx.to_async());
+    for key in ["Tab", "Enter"] {
+        let answer = call(&agents, "claude-code", "press_key", json!({ "tab": 20, "key": key }), cx);
+        assert_eq!(browser.pages.borrow().last().unwrap().4, key);
+        assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
+    }
+    // The user's keys, after it, are the app's again.
+    assert!(!pressing_key());
 }
 
 /// An agent opens a page in its Space, gets its outline with refs, and acts by ref: each action
