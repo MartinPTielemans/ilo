@@ -1039,7 +1039,7 @@ Place ToastPlace(void* ui_view) {
   WindowSize(g_toast.hwnd, &width, &height);
   auto [right, top] = g_pane_corners[ui_view];
   const double left = g_page_lefts[ui_view];
-  return {left, top, std::max(content_width - right - left, 0.0), height};
+  return {left, top, (std::max)(content_width - right - left, 0.0), height};
 }
 
 // Keeps the toast's window there as its browser window or its page changes, without raising it.
