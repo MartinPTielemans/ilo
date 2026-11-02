@@ -32,7 +32,7 @@ use gpui::{
 };
 
 use crate::{bc, ns_view, platform, show_menu};
-use browser::menu::Look;
+use browser::menu::{self, Look};
 use browser::palette::{Palette, STATE_HOVERED, STATE_PRESSED, state_alpha};
 use browser::settings_rows::{
     Look as RowLook, SLIDE, button, group, popup, row, switch, tile,
@@ -635,8 +635,8 @@ impl widevine::Module for Module {
 struct Renaming {
     profile: u64,
     name: Entity<TextInput>,
-    /// Keeps the name once the field loses the keyboard, as the sidebar's renaming does.
-    _blur: Option<Subscription>,
+    /// Keep the name once the field loses the keyboard, however it goes, as the sidebar's do.
+    _watches: Vec<Subscription>,
 }
 
 /// A profile as the Profiles tab lists it.
@@ -1548,7 +1548,7 @@ impl Settings {
         drop(texts);
         self.choosing = Some(which);
         cx.notify();
-        show_menu(ns_view(window), items, at, false, Look::dark(), picked, cx);
+        show_menu(ns_view(window), items, at, false, Look::dark(), menu::picked(picked), cx);
     }
 
     /// The pop-up's menu closed.
@@ -1744,7 +1744,7 @@ impl Settings {
         self.renaming = Some(Renaming {
             profile,
             name,
-            _blur: None,
+            _watches: Vec::new(),
         });
         self.focus_renaming = true;
         cx.notify();
@@ -2299,16 +2299,23 @@ impl Settings {
             })
         });
         let agents = agents.clone();
-        let action = match connected {
-            true => button(&RowLook::settings(), ("disconnect-agent", index), "Disconnect").on_click(move |_, _, cx| {
-                agents.update(cx, |agents, cx| agents.disconnect(client, cx))
-            }),
-            false => button(&RowLook::settings(), ("connect-agent", index), "Connect").on_click(move |_, _, cx| {
-                // check.sh reads this line.
-                log!("browser: connect agent {}", client.id());
-                agents.update(cx, |agents, cx| agents.connect(client, cx))
-            }),
+        let (action, at) = match connected {
+            true => (
+                button(&RowLook::settings(), ("disconnect-agent", index), "Disconnect").on_click(move |_, _, cx| {
+                    agents.update(cx, |agents, cx| agents.disconnect(client, cx))
+                }),
+                "disconnect",
+            ),
+            false => (
+                button(&RowLook::settings(), ("connect-agent", index), "Connect").on_click(move |_, _, cx| {
+                    // check.sh reads this line.
+                    log!("browser: connect agent {}", client.id());
+                    agents.update(cx, |agents, cx| agents.connect(client, cx))
+                }),
+                "connect",
+            ),
         };
+        let action = action.relative().child(self.drawn(format!("{at} {}", client.id())));
         let icon = match client {
             Client::ClaudeCode => "icons/terminal.svg",
             Client::Codex => "icons/square-terminal.svg",
@@ -2321,6 +2328,11 @@ impl Settings {
     }
 
     fn advanced(&self, accent: Rgba, cx: &mut Context<Self>) -> AnyElement {
+        // Every way into Peek the switch turns off, in the names each OS gives its keys.
+        const PEEK_ROW: &str = match cfg!(target_os = "macos") {
+            true => "Peek at links from pinned tabs, favorites, ⇧-click and a link's menu",
+            false => "Peek at links from pinned tabs, favorites, Shift-click and a link's menu",
+        };
         let haptics = unsafe { bc::bc_haptics() };
         let haptics = self.toggle("haptics", haptics, set_haptics, accent, cx);
         let previews = unsafe { bc::bc_link_previews() };
@@ -2369,11 +2381,7 @@ impl Settings {
                         "Haptic feedback when swiping between Spaces",
                         haptics,
                     ),
-                    row(
-                        Some(("icons/app-window.svg", LINK_PREVIEWS_TILE)),
-                        "Preview links to other sites from pinned tabs and favorites",
-                        previews,
-                    ),
+                    row(Some(("icons/app-window.svg", LINK_PREVIEWS_TILE)), PEEK_ROW, previews),
                     row(
                         Some(("icons/picture-in-picture-2.svg", MINI_PLAYER_TILE)),
                         "Float a video or call in Picture in Picture as you leave its tab",
@@ -2423,10 +2431,10 @@ impl Settings {
         window.focus(&field, cx);
         // check.sh waits for this line, which says the field has the keyboard.
         log!("browser: rename profile {}", renaming.profile);
-        renaming._blur =
-            Some(text_input::on_leave(&field, window, cx, |settings, window, cx| {
-                settings.keep_name(window, cx)
-            }));
+        let name = renaming.name.clone();
+        renaming._watches = text_input::on_lose_keyboard(&name, window, cx, |settings, window, cx| {
+            settings.keep_name(window, cx)
+        });
     }
 
     /// The search, then the commands it finds by section, each with its keys in a chip. A click on
@@ -2601,7 +2609,7 @@ impl Settings {
             save_shortcuts(cx);
             settings.update(cx, |_, cx| cx.notify()).ok();
         });
-        show_menu(ns_view(window), items, at, false, Look::dark(), picked, cx);
+        show_menu(ns_view(window), items, at, false, Look::dark(), menu::picked(picked), cx);
     }
 
     /// Takes the next keys pressed for `command`, or stops if it's taking them already.

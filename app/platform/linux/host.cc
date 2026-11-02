@@ -262,7 +262,8 @@ void host_centered(double width, double height, double* x, double* y) {
 // gives no client a say in (host_centered), and a tiling compositor such as Hyprland would lay the
 // screen out twice, for it and then for the browser window. Chromium's window goes on screen as the
 // core opens it instead.
-void host_show_launch_window(const char* profile_dir, double x, double y, double width, double height) {}
+void host_show_launch_window(const char* profile_dir, double x, double y, double width, double height,
+                             bool maximized) {}
 
 void host_close_launch_window(void) {}
 

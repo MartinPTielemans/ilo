@@ -253,6 +253,9 @@ struct Browser {
 // In the order their views were made. Each is allocated alone, so the pointers stay put.
 std::vector<std::unique_ptr<Browser>> g_browsers;
 
+// Told of a press in a browser window's page, which takes the keyboard from its UI.
+void (*g_ui_keyboard_left)(void* ui_view);
+
 // The browser whose UI draws in |ui_view|, or null.
 Browser* BrowserWithView(void* ui_view) {
   for (auto& browser : g_browsers) {
@@ -1184,8 +1187,9 @@ NSString* LaunchPicturePath(const char* profile_dir, double width, double height
 
 }  // namespace
 
+// Never maximized, which is Windows' alone: a zoomed window's frame is the one it has.
 void host_show_launch_window(const char* profile_dir, double x, double y, double width,
-                             double height) {
+                             double height, bool) {
   // The core's y runs down from the main display's top, AppKit's up from its bottom.
   const NSRect frame =
       NSMakeRect(x, NSHeight(NSScreen.screens.firstObject.frame) - y - height, width, height);
@@ -1484,6 +1488,18 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
                                                 if (each->find_bar.keyWindow ||
                                                     each->offer.keyWindow) {
                                                   [each->window makeKeyWindow];
+                                                }
+                                                // A press in the window's content outside the
+                                                // UI's view is in a page, which becomes first
+                                                // responder without GPUI hearing.
+                                                NSView* content = each->window.contentView;
+                                                NSView* hit = [content.superview
+                                                    hitTest:event.locationInWindow];
+                                                if (g_ui_keyboard_left && hit &&
+                                                    [hit isDescendantOf:content] &&
+                                                    ![hit isDescendantOf:each->ui_view]) {
+                                                  g_ui_keyboard_left(
+                                                      (__bridge void*)each->ui_view);
                                                 }
                                               } else if (event.window == each->find_bar) {
                                                 each->find_bar_keyboard = true;
@@ -1861,6 +1877,10 @@ void host_watch_swipes(bool (*swiped)(void* ui_view, double x, double y, bool ba
                                                      ? nil
                                                      : event;
                                         }];
+}
+
+void host_watch_ui_keyboard(void (*left)(void* ui_view)) {
+  g_ui_keyboard_left = left;
 }
 
 void host_watch_option_taps(void (*tapped)(void* ui_view)) {

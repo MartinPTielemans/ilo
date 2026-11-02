@@ -974,6 +974,22 @@ void bc_folder_move(bc_id folder, bc_id to, size_t index) {
   }
 }
 
+void bc_folder_move_to_space(bc_id folder, bc_id space) {
+  browser_core::Space* from = browser_core::Space::HoldingFolder(folder);
+  const bool agents = from && from->agent();
+  browser_core::Window::MoveFolderToSpace(folder, space);
+  browser_core::Space* to = browser_core::Space::HoldingFolder(folder);
+  if (!agents || !to || to == from || to->agent()) {
+    return;
+  }
+  // Its tabs became the user's, as bc_tab_move_to_space's does.
+  for (bc_id row : to->pinned_rows()) {
+    if (!to->IsFolder(row) && to->Within(row, folder)) {
+      browser_core::FillForUser(row);
+    }
+  }
+}
+
 void bc_folder_delete(bc_id folder) {
   if (browser_core::Space* space = browser_core::Space::HoldingFolder(folder)) {
     space->DeleteFolder(folder);

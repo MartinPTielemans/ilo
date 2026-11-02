@@ -2,7 +2,7 @@
 // b36b283021c48f1712714b8a0e2ad6ffb578920b). Copyright Zed Industries, Inc. Licensed under the
 // Apache License, Version 2.0. Changes: a constructor, `text`, `composing`, `selection`, `pasted`,
 // `reset`, `complete`, `set_text`, a placeholder colour, `set_placeholder`, key bindings scoped to
-// the field, ⌘← and ⌘→ as Home and End, a context menu, and no styling of its own.
+// the field, ⌘← and ⌘→ as Home and End, a context menu, `Away`, and no styling of its own.
 //
 //! A single-line text field, with IME support through GPUI's input handler. GPUI has no text
 //! field of its own; Zed's is its editor.
@@ -11,14 +11,15 @@ use std::{ops::Range, rc::Rc};
 
 use gpui::{
     Action, App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler,
-    Entity, EntityInputHandler, FocusHandle, Focusable, Global, GlobalElementId, Hsla, KeyBinding,
-    LayoutId, MouseButton, Role, accesskit,
+    Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, Global, GlobalElementId, Hsla,
+    KeyBinding, LayoutId, MouseButton, Role, accesskit,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine,
     SharedString, Style, Subscription, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div,
     fill, hsla,
     point, prelude::*, px, relative, rgb, size,
 };
 use unicode_segmentation::*;
+use crate::menu::Closed;
 use crate::shell::MenuEntry;
 use crate::tokens::text_input::PLACEHOLDER;
 use crate::tokens::palette::{NO_THEME_ACCENT, SELECTION};
@@ -52,12 +53,12 @@ actions!(
 
 /// Shows a field's context menu: `items`' titles, dimmed where they aren't enabled and a line for
 /// an empty one, at `position` in `window`, with its first item highlighted where it opened from
-/// the keyboard, and calls `chosen` with the index of the one chosen once it closes. The app's,
+/// the keyboard, and calls `chosen` once it closes, with how it closed. The app's,
 /// `menu::field_menu`, shows it in ilo's own menu.
 pub struct FieldMenu(pub Rc<ShowMenu>);
 
 pub type ShowMenu = dyn Fn(Vec<(SharedString, bool)>, Point<Pixels>, bool, &Window, Chosen, &mut App);
-pub type Chosen = Box<dyn FnOnce(usize, &mut Window, &mut App)>;
+pub type Chosen = Box<dyn FnOnce(Closed, &mut Window, &mut App)>;
 
 impl Global for FieldMenu {}
 
@@ -76,6 +77,39 @@ pub fn on_leave<T: 'static>(
             listener(view, window, cx)
         }
     })
+}
+
+/// The user went away from the field with the keyboard still in it: a press outside it, which
+/// moves the keyboard only where it lands on something that takes it, or its own menu closed by a
+/// press away from both or by the user going to another window or app.
+pub struct Away;
+
+impl EventEmitter<Away> for TextInput {}
+
+/// Calls `listener` once the field loses the keyboard, however it goes (owner, 2026-11-02, #1414):
+/// to something else in its window, with a press away from it (`Away`), or with its window, to an
+/// overlay, another window or another app. Its own menu takes the window's keyboard and gives it
+/// back, so it counts only once the user goes away from both.
+pub fn on_lose_keyboard<T: 'static>(
+    field: &Entity<TextInput>,
+    window: &mut Window,
+    cx: &mut Context<T>,
+    listener: impl Fn(&mut T, &mut Window, &mut Context<T>) + 'static,
+) -> Vec<Subscription> {
+    let listener = Rc::new(listener);
+    let (left, away, deactivated) = (listener.clone(), listener.clone(), listener);
+    let input = field.downgrade();
+    let focus = field.focus_handle(cx);
+    vec![
+        on_leave(&focus, window, cx, move |view, window, cx| left(view, window, cx)),
+        cx.subscribe_in(field, window, move |view, _, _: &Away, window, cx| away(view, window, cx)),
+        cx.observe_window_activation(window, move |view, window, cx| {
+            let menu = input.upgrade().is_some_and(|input| input.read(cx).menu_shown);
+            if !window.is_window_active() && !menu {
+                deactivated(view, window, cx)
+            }
+        }),
+    ]
 }
 
 /// `text` without the `javascript:` schemes it starts with, past any whitespace and control
@@ -166,6 +200,8 @@ pub struct TextInput {
     is_selecting: bool,
     paste_and_go: bool,
     secure: bool,
+    /// The field's own menu shows, with the keyboard its window had.
+    menu_shown: bool,
 }
 
 impl TextInput {
@@ -186,6 +222,7 @@ impl TextInput {
             is_selecting: false,
             paste_and_go: false,
             secure: false,
+            menu_shown: false,
         }
     }
 
@@ -267,6 +304,12 @@ impl TextInput {
     /// An input method is composing in the field, so its text isn't what the user means yet.
     pub fn composing(&self) -> bool {
         self.marked_range.is_some()
+    }
+
+    /// The field's own menu shows, which has its window's keyboard until it closes, so the field
+    /// hasn't been left.
+    pub fn menu_shown(&self) -> bool {
+        self.menu_shown
     }
 
     pub fn selection(&self) -> Range<usize> {
@@ -446,11 +489,24 @@ impl TextInput {
             .collect();
         let mut actions: Vec<Option<Box<dyn Action>>> =
             items.into_iter().map(|(_, _, action)| action).collect();
-        let chosen: Chosen = Box::new(move |index, window, cx| {
-            if let Some(action) = actions.get_mut(index).and_then(Option::take) {
+        let field = cx.weak_entity();
+        let chosen: Chosen = Box::new(move |closed, window, cx| {
+            let away = field.update(cx, |field, _| {
+                field.menu_shown = false;
+                match closed {
+                    Closed::PressedAt(at) => !field.last_bounds.is_some_and(|it| it.contains(&at)),
+                    Closed::Left => true,
+                    Closed::Chose(_) | Closed::Otherwise => false,
+                }
+            });
+            if let Some(action) = closed.chosen().and_then(|index| actions.get_mut(index)?.take()) {
                 window.dispatch_action(action, cx);
             }
+            if away.unwrap_or(false) {
+                field.update(cx, |_, cx| cx.emit(Away)).ok();
+            }
         });
+        self.menu_shown = true;
         menu(titles, position, from_keys, window, chosen, cx);
     }
 
@@ -1107,6 +1163,11 @@ impl Render for TextInput {
             .on_mouse_down(MouseButton::Right, cx.listener(Self::on_right_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .on_mouse_down_out(cx.listener(|field, _, window, cx| {
+                if field.focus_handle.is_focused(window) {
+                    cx.emit(Away)
+                }
+            }))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .w_full()
             .child(TextElement { input: cx.entity() })
@@ -1121,3 +1182,5 @@ impl Focusable for TextInput {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod leave_tests;

@@ -1,14 +1,15 @@
 """The app's top-level windows on Windows, for lib.sh's quit and what it says of an app that didn't.
 
-`close PID` asks each browser window of process PID to close, as its close button does: the
-top-level windows holding the UI's view (platform/windows/host.cc's BrowserUI). `list PID` prints
-each top-level window of the process, with its class, title, state and whether it's a browser
-window. `icon PID ICO` checks that each window of the process the taskbar and Alt+Tab show has the
-.ico's image for its big and small icons, read as the shell reads them, and prints them (#1350).
-`cover PID ilo|away` opens a window of another app in front of the process's browser window, over
-its lower half, with the foreground in ilo's window or in a window away from it, says
-"cover <handle>, foreground <ilo|away|other>" and keeps it until it's ended (#1419).
-Usage: app-windows.py close|list|icon PID [ICO] or app-windows.py cover PID ilo|away"""
+`close PID [front]` asks each browser window of process PID to close, as its close button does: the
+top-level windows holding the UI's view (platform/windows/host.cc's BrowserUI), or with front the
+one in front alone. `list PID` prints each top-level window of the process, with its class, title,
+state and whether it's a browser window. `icon PID ICO` checks that each window of the process the
+taskbar and Alt+Tab show has the .ico's image for its big and small icons, read as the shell reads
+them, and prints them (#1350). `cover PID ilo|away` opens a window of another app in front of the
+process's browser window, over its lower half, with the foreground in ilo's window or in a window
+away from it, says "cover <handle>, foreground <ilo|away|other>" and keeps it until it's ended
+(#1419).
+Usage: app-windows.py close|list|icon PID [front|ICO] or app-windows.py cover PID ilo|away"""
 
 import ctypes
 import ctypes.wintypes as w
@@ -242,8 +243,9 @@ def cover(pid, foreground):
 
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else ""
+    front = command == "close" and sys.argv[3:] == ["front"]
     known = ("close", "list", "icon", "cover")
-    if len(sys.argv) != (4 if command in ("icon", "cover") else 3) or command not in known:
+    if len(sys.argv) != (4 if command in ("icon", "cover") or front else 3) or command not in known:
         sys.exit(__doc__.splitlines()[-1])
     pid = int(sys.argv[2])
     if command == "icon":
@@ -257,6 +259,8 @@ def main():
         if command == "close":
             if browser:
                 user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+                if front:
+                    break
             continue
         states = [
             "browser" if browser else "",

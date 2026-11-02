@@ -181,17 +181,19 @@ expect "^browser: loaded $n ${site}notes.txt\$" "the dropped link didn't load in
 send key w cmd
 expect "^browser: panes $a\$" "⌘W on the dropped link's pane didn't leave the page alone"
 send click $page_point
-# The link menu is Arc's: Open Link in New Tab, in New Window, in Split View and in Incognito
-# Window, then Save Link As… and Copy Link Address, before the menu's other items. Off the Mac
-# they're in sentence case, as Chrome's are there.
+# The link menu is Arc's: Open Link in New Tab, ilo's Open Link in Peek (#1370), in New Window,
+# in Split View and in Incognito Window, then Save Link As… and Copy Link Address, before the
+# menu's other items. Off the Mac they're in sentence case, as Chrome's are there.
 if windows || [ "$(uname)" = Linux ]; then
   in_window='Open link in new window' in_private='Open link in incognito window'
   in_split='Open link in split view'
-  link_items="Open link in new tab, $in_window, $in_split, $in_private, Save link as…, Copy link address"
+  link_items="Open link in new tab, Open link in Peek, $in_window, $in_split, $in_private, "
+  link_items="${link_items}Save link as…, Copy link address"
 else
   in_window='Open Link in New Window' in_private='Open Link in Incognito Window'
   in_split='Open Link in Split View'
-  link_items="Open Link in New Tab, $in_window, $in_split, $in_private, Save Link As…, Copy Link Address"
+  link_items="Open Link in New Tab, Open Link in Peek, $in_window, $in_split, $in_private, "
+  link_items="${link_items}Save Link As…, Copy Link Address"
 fi
 link_menu() {
   post rightclick $((x + 20)) $((y + 20))
