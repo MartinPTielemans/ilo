@@ -64,13 +64,13 @@ No open-ended UX exploration. Arc's structure (sidebar, Spaces, pinned and Today
 
 The look is ilo's own: colour, window material, corner radii, type, icons, shadows and edges. It's built from ilo's brand and `docs/ux-principles.md`, not from Arc's or Dia's values. A Space's theme stays the user's, chosen freely; ilo owns the look of a Space with no theme, the preset swatches, and everything drawn on top, which has to read on any theme. ilo is Arc's successor, so an Arc user has to find everything where their hands expect it and feel the same speed and calm. It can't read as one more Arc clone. Familiarity comes from where things are and how they move, so those stay measured: the sidebar's layout, row pitch and plates, the state alphas, every timing and spring, and the nav glyphs.
 
-Dia's surfaces built around its assistant aren't copied, since our agents work from outside the browser and nothing would fill them. So ⌘T opens Arc's command bar over the page, not Dia's New Tab page, whose box is the assistant's chat field and whose empty card holds its answers. Without the assistant, that page was Arc's bar moved into the card with the page hidden behind it.
+Dia's surfaces built around its assistant aren't copied, since ilo has no assistant of its own and the user's agents (decision 8) are asked from Arc's bar. So ⌘T opens Arc's command bar over the page, not Dia's New Tab page, whose box is the assistant's chat field and whose empty card holds its answers. Without the assistant, that page was Arc's bar moved into the card with the page hidden behind it.
 
 - Start from Ardia's measured `docs/dia-spec.md` and `docs/dia-feature-parity.md` (Apache-2.0, credited).
 - Measure Arc ourselves before it is shut down on 2026-12-22.
 - Copy behavior, layout and timings. Never ship their assets or names.
 
-AI features are out of scope for v1, but the sidebar, command bar and core leave room for them.
+AI features of ilo's own are out of scope for v1. The user's agents (decision 8) are the one way AI comes in.
 
 Revisit the look if Arc users moving over say ilo doesn't feel like Arc continued, and it traces to a look change rather than layout or motion.
 
@@ -84,15 +84,22 @@ Revisit the look if Arc users moving over say ilo doesn't feel like Arc continue
 - The name and logo are trademarks, which is what actually protects the product.
 - Contributions use DCO sign-off, not a CLA.
 
-## 8. Agents: the browser is the tool agents use
+## 8. Agents: the user's own agents, in their real browser
 
-Not an assistant inside the browser, which is what Dia and Comet do. External agents (Claude Code, Codex, any MCP client) drive the user's real browser as a first-class, built-in capability.
+Agents drive the user's real browser through ilo's built-in MCP server, as a first-class, built-in capability. They come two ways, and both take that one path:
+
+- **From outside.** Any MCP client (Claude Code, Codex, others) connects to the server.
+- **From ilo.** The user asks from ⌘T, and ilo runs the `claude` or `codex` CLI the user installed and signed into, with ilo's MCP server added for that task. The user's own subscription pays. ilo never handles their login, token or key, and when the CLI is missing or signed out it says how to fix that.
+
+ilo has no assistant of its own, as Dia and Comet do: no model, agent loop or AI account. What answers is the user's agent, and it can do in a page only what the MCP server lets any agent do.
 
 - **Built-in MCP server.** Local-only at first, on a socket only this user's processes can reach. Cloud agents come later, through explicit pairing.
-- **Agent Spaces.** An agent works in its own Space, visible in the sidebar. It never takes the user's focus or cursor. The user can watch, take over and hand back at any time.
+- **Where the work shows.** An outside agent works in its own Agent Space, visible in the sidebar. A task asked from ilo shows among the user's tabs without becoming tabs: its pages and its conversation live in the task. An agent never takes the user's focus or cursor. The user can watch, take over and hand back at any time.
 - **Engine-native page access.** The core serves the accessibility tree, a cleaned-up DOM, stable element references and screenshots straight from Chromium. No extension, and no remote-debugging port.
 - **Permissions per agent and per site,** plus an activity log. Defaults are conservative: no payments, no sending messages or forms on sensitive sites without confirmation, and no banking sites unless the user allows them.
 - **Handoff to the human.** At a login, 2FA prompt or CAPTCHA, the agent's tab pauses and the sidebar asks the user to step in.
+- **Same rules either way.** To the core, a task asked from ilo is an agent like any other: the same tools, permission checks, confirmations and activity log.
+- **Browser tools only.** A CLI that ilo runs gets ilo's MCP tools and nothing else. Its shell, file and web tools, the user's other MCP servers, plugins, hooks and settings are all off, it runs in an empty folder, and ilo declines any other approval it asks for. Page text can steer an agent, and a shell would reach the user's files, keys included. A CLI that can't be limited this way isn't offered.
 - **Sessions, never secrets.** Agents act inside the user's logged-in sessions but can never read passwords, cookies or autofill data.
 
 Why:
@@ -100,6 +107,9 @@ Why:
 - Every current option fails an agent working beside a human. Headless Playwright has no logins and gets flagged as a bot; cloud browsers too, and they take the data off the machine. Remote-debugging the user's Chrome is fragile and insecure, and Chrome 136 blocks it on the default profile.
 - Owning the Chromium core layer (decision 3) is what makes this possible. Spaces (decision 5) are the natural unit of isolation.
 - It sets us apart from Ardia and the other Arc-style browsers.
+- People want to hand a task over from where they are, without a terminal, and many already pay for Claude or Codex. Running their own CLI costs them nothing more, needs no AI service of ilo's, and keeps one path, so every agent rule lives in the core once.
+
+Revisit asking from ilo if Anthropic or OpenAI stop other apps from running their CLIs on a subscription. Then ilo takes the vendor's sign-in program where there is one, or the user's API key.
 
 Consequences now:
 

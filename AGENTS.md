@@ -16,7 +16,7 @@ Ambitious ideas, simple systems, software that feels obvious. Do not preserve co
 ## Glossary
 
 - **Space** and **profile** are different things (decision 5). A Space is a tab container: pinned tabs, Today tabs, a color. A profile holds cookies, history, logins and extensions. Several Spaces share one profile.
-- **Agent** means an external AI client (Claude Code, Codex, any MCP client) driving the browser through its built-in MCP server. It works in its own **Agent Space**. It's not an assistant inside the browser, and it's not you.
+- **Agent** means an AI client driving the browser through its built-in MCP server: one from outside (Claude Code, Codex, any MCP client), working in its own **Agent Space**, or the user's own `claude` or `codex` CLI that ilo runs for a task they asked from ⌘T. It's never an assistant of ilo's own, and it's not you.
 - **Handoff**: the agent's tab pauses at a sign-in, 2FA or CAPTCHA, and the user does that step.
 - **Engine**: Chromium built as Chrome's framework, from ungoogled-chromium plus `engine/series`. **Core**: our portable C++ inside Chromium (`//browser_core`), with each native window holding a Chrome `Browser` per profile. **UI**: GPUI, calling the core through the plain C API in `core/public/browser_core.h`, since the app and Chromium build with different C++ standard libraries. **Platform layer**: the only per-OS code.
 
