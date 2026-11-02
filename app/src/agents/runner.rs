@@ -44,6 +44,14 @@ impl Cli {
         }
     }
 
+    /// Its glyph, the same in Settings › Agents and ⌘T's ask: a terminal, as each is a CLI.
+    pub fn glyph(self) -> &'static str {
+        match self {
+            Cli::Claude => "icons/terminal.svg",
+            Cli::Codex => "icons/square-terminal.svg",
+        }
+    }
+
     /// Its executable's file name. npm puts a .cmd shim on Windows, as clients.rs runs it.
     pub fn program(self) -> &'static str {
         match (self, cfg!(windows)) {

@@ -2255,7 +2255,7 @@ impl Settings {
                         settings.choose_task_agent(&agents, window, cx)
                     }),
                 );
-                let detail = "The agent ⇥ asks first in the command bar";
+                let detail = "⇥ in the command bar gives the task to this agent";
                 described(None, "Run tasks on".into(), Some(detail.into())).child(popup)
             }
             None => described(
@@ -2279,11 +2279,7 @@ impl Settings {
             Ready::SignedOut => (format!("Not signed in. Run {} in a terminal", cli.sign_in()).into(), Some(cli.sign_in())),
             Ready::SignedIn => ("Signed in".into(), None),
         };
-        let icon = match cli {
-            Cli::Claude => "icons/terminal.svg",
-            Cli::Codex => "icons/square-terminal.svg",
-        };
-        let row = described(Some((icon, CLIENT_TILE)), cli.name().into(), Some(detail));
+        let row = described(Some((cli.glyph(), CLIENT_TILE)), cli.name().into(), Some(detail));
         if let Some(command) = command {
             let copy = button(&RowLook::settings(), ("copy-task-command", cli as usize), "Copy")
                 .ml(px(PADDING))

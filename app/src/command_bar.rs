@@ -55,7 +55,7 @@ use crate::tokens::command_bar::INPUT_TEXT;
 use crate::tokens::command_bar::INPUT_ICON_X;
 use crate::tokens::command_bar::INPUT_TEXT_X;
 use crate::tokens::command_bar::HINT_END;
-use crate::tokens::command_bar::HINT_GAP;
+use crate::tokens::command_bar::{FIELD_FADE, HINT_GAP};
 pub use crate::tokens::command_bar::RADIUS;
 pub use crate::tokens::command_bar::ABOVE_MIDDLE;
 pub use crate::tokens::command_bar::FIELD_WIDTH;
@@ -124,16 +124,24 @@ pub struct Suggestion {
 /// A row of ⌘T's ask (Agent task).
 #[derive(Clone, Debug, PartialEq)]
 pub enum TaskRow {
-    /// The agent with this id, and when its plan's limit resets, if it's at it, which dims it.
-    Agent { id: SharedString, resets: Option<SharedString> },
+    /// The agent with this id, its glyph, the model it runs on unless it's its own default, and
+    /// when its plan's limit resets, if it's at it, which dims it.
+    Agent {
+        id: SharedString,
+        glyph: &'static str,
+        model: Option<SharedString>,
+        resets: Option<SharedString>,
+    },
     /// No agent is ready: Settings › Agents.
     SetUp,
 }
 
 impl TaskRow {
-    fn resets(&self) -> Option<SharedString> {
+    /// What the row says at its end: when its limit resets, or else its model.
+    fn end(&self) -> Option<SharedString> {
         match self {
-            TaskRow::Agent { resets, .. } => resets.clone(),
+            TaskRow::Agent { resets: Some(resets), .. } => Some(format!("Limit resets {resets}").into()),
+            TaskRow::Agent { model, .. } => model.clone(),
             TaskRow::SetUp => None,
         }
     }
@@ -144,6 +152,10 @@ impl TaskRow {
 pub struct TaskAgent {
     pub id: SharedString,
     pub name: SharedString,
+    /// Its glyph, Settings › Agents' own.
+    pub glyph: &'static str,
+    /// The model it runs tasks on, by name, or None for its own default.
+    pub model: Option<SharedString>,
     /// When its plan's limit resets, if it's at it.
     pub resets: Option<SharedString>,
 }
@@ -188,9 +200,6 @@ enum Icon {
 
 /// The glyph a command shares with the others no Lucide icon plainly names.
 const COMMAND_GLYPH: &str = "icons/command.svg";
-/// The agents' mark, Settings › Agents' own: an agent is named in words, never by its maker's logo
-/// or colour.
-pub const AGENT_GLYPH: &str = "icons/sparkles.svg";
 
 impl Suggestion {
     /// Whether it's an agent at its plan's limit, which runs no task until the limit resets.
@@ -211,7 +220,8 @@ impl Suggestion {
     /// site its favicon. Each command has its own glyph.
     fn icon(&self) -> Icon {
         match &self.task {
-            Some(TaskRow::Agent { .. }) => return Icon::Glyph(AGENT_GLYPH),
+            // Its CLI's terminal: an agent is named in words, never by its maker's logo or colour.
+            Some(TaskRow::Agent { glyph, .. }) => return Icon::Glyph(glyph),
             Some(TaskRow::SetUp) => return Icon::Glyph("icons/settings.svg"),
             None => {}
         }
@@ -1302,7 +1312,12 @@ impl CommandBar {
             (_, false) => (agents.agents.into_iter())
                 .map(|agent| Suggestion {
                     text: agent.name,
-                    task: Some(TaskRow::Agent { id: agent.id, resets: agent.resets }),
+                    task: Some(TaskRow::Agent {
+                        id: agent.id,
+                        glyph: agent.glyph,
+                        model: agent.model,
+                        resets: agent.resets,
+                    }),
                     ..Suggestion::default()
                 })
                 .collect(),
@@ -1351,7 +1366,7 @@ impl CommandBar {
         let page = ask.page.clone();
         let asked = self.input.read(cx).text().trim().to_string();
         match self.rows.get(index).and_then(|row| row.task.clone()) {
-            Some(TaskRow::Agent { id, resets: None }) if !asked.is_empty() => {
+            Some(TaskRow::Agent { id, resets: None, .. }) if !asked.is_empty() => {
                 // check.sh reads this line.
                 log!("browser: command bar runs a task on {id}");
                 // The card fills the slot, which the host closes then, so it doesn't close first.
@@ -2177,8 +2192,8 @@ impl CommandBar {
             .when_some(row.shortcut.clone(), |line, shortcut| {
                 line.child(div().flex_1()).child(chip(shortcut))
             })
-            .when_some(row.task.as_ref().and_then(TaskRow::resets), |line, resets| {
-                let said = format!("Limit resets {resets}");
+            // An agent's row ends with its model, or when its limit resets if it's at it.
+            .when_some(row.task.as_ref().and_then(TaskRow::end), |line, said| {
                 line.child(div().flex_1()).child(div().flex_none().text_color(dim).child(said))
             })
             // Under the pointer, the selected row too, as Arc's.
@@ -2258,7 +2273,8 @@ impl Render for CommandBar {
         let palette = palette::current(cx);
         // The placeholder and the accent follow the Space's, which may have changed since it opened.
         self.input.update(cx, |input, _| {
-            input.set_colors(palette.on_overlay(PLACEHOLDER), palette.accent.into(), palette.selection())
+            input.set_colors(palette.on_overlay(PLACEHOLDER), palette.accent.into(), palette.selection());
+            input.set_fade(px(FIELD_FADE), palette.overlay.into());
         });
         // The browser's shortcuts work here too, below the bar's own keys.
         div().key_context(shell::KEY_CONTEXT).size_full().font_family(crate::face::UI).child(

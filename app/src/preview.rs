@@ -1375,7 +1375,13 @@ impl command_bar::Host for PreviewBar {
 
     /// Made up: Claude ready, so ⇥ shows the ask without an agent's CLI.
     fn task_agents(&self, _: &App) -> Option<command_bar::TaskAgents> {
-        let claude = command_bar::TaskAgent { id: "claude".into(), name: "Claude".into(), resets: None };
+        let claude = command_bar::TaskAgent {
+            id: "claude".into(),
+            name: "Claude".into(),
+            glyph: "icons/terminal.svg",
+            model: Some("Haiku".into()),
+            resets: None,
+        };
         Some(command_bar::TaskAgents { agents: vec![claude], known: true })
     }
 

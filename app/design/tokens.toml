@@ -64,6 +64,9 @@ input-text-x = 53.0
 # The hint after the input ends this far from the panel's side, 11 after the field.
 hint-end = 22.0
 hint-gap = 11.0
+# A long ask scrolls to keep the caret in view, and an edge with more text past it fades over this
+# far into the bar (ours).
+field-fade = 24.0
 # The panel's corners, which the host's blur and shadow take too: the plates' 12 and their 8 in.
 radius = 20.0
 # How far above the browser window's middle the panel's top is: Arc's is at y 396 of 1130 and at

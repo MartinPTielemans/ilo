@@ -1785,6 +1785,8 @@ impl command_bar::Host for Bar {
         let listed = (agents.ask_agents().into_iter()).map(|agent| command_bar::TaskAgent {
             id: agent.cli.id().into(),
             name: agent.cli.name().into(),
+            glyph: agent.cli.glyph(),
+            model: agents.task_model_name(agent.cli),
             resets: agent.resets,
         });
         Some(command_bar::TaskAgents { agents: listed.collect(), known: agents.task_agents_known() })

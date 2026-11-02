@@ -166,12 +166,15 @@ impl Host for Recorder {
     }
 }
 
-/// The agents the host offers: each ready, at its limit if it has a reset time.
+/// The agents the host offers: each ready, at its limit if it has a reset time. Claude runs on
+/// Haiku, and Codex on its own default.
 fn agents(listed: &[(&str, Option<&str>)]) -> Option<TaskAgents> {
     let agents = (listed.iter())
         .map(|&(id, resets)| TaskAgent {
             id: id.to_string().into(),
             name: id.to_string().into(),
+            glyph: if id == "claude" { "icons/terminal.svg" } else { "icons/square-terminal.svg" },
+            model: (id == "claude").then(|| "Haiku".into()),
             resets: resets.map(|at| at.to_string().into()),
         })
         .collect();
@@ -2007,13 +2010,13 @@ impl Bar {
         Bar::open(cx, Vec::new(), host)
     }
 
-    /// The rows' names, an agent at its limit with its reset time after it.
+    /// The rows' names, each with what its end says: its model, or when its limit resets.
     fn agent_rows(&mut self) -> Vec<String> {
         self.window
             .read_with(&self.cx.cx, |bar, _| {
                 (bar.rows.iter())
-                    .map(|row| match row.task.as_ref().and_then(TaskRow::resets) {
-                        Some(at) => format!("{} until {at}", row.text),
+                    .map(|row| match row.task.as_ref().and_then(TaskRow::end) {
+                        Some(end) => format!("{} · {end}", row.text),
                         None => row.text.to_string(),
                     })
                     .collect()
@@ -2045,7 +2048,15 @@ fn tab_makes_what_is_typed_a_task(cx: &mut TestAppContext) {
     let asked = bar.host.asked.borrow().len();
     bar.keys("tab");
     assert_eq!(bar.chip_and_hint(), (Some("Lisbon guide".into()), true, false));
-    assert_eq!(bar.agent_rows(), ["claude", "codex"]);
+    assert_eq!(bar.agent_rows(), ["claude · Haiku", "codex"]);
+    let icons = bar.window.read_with(&bar.cx.cx, |bar, _| {
+        bar.rows.iter().map(Suggestion::icon).collect::<Vec<_>>()
+    });
+    assert_eq!(
+        icons.unwrap(),
+        [Icon::Glyph("icons/terminal.svg"), Icon::Glyph("icons/square-terminal.svg")],
+        "each agent has its CLI's glyph"
+    );
     assert_eq!(bar.calls(), ["asking true"]);
     // What's typed now is the task's, which the core isn't asked to suggest for.
     bar.type_text(" under 150");
@@ -2101,7 +2112,7 @@ fn agents_at_their_limit_or_none_ready(cx: &mut TestAppContext) {
     let mut bar = Bar::with_agents(cx, &[("claude", Some("18:00")), ("codex", None)], None);
     bar.type_text("summarise this");
     bar.keys("tab");
-    assert_eq!(bar.agent_rows(), ["claude until 18:00", "codex"]);
+    assert_eq!(bar.agent_rows(), ["claude · Limit resets 18:00", "codex"]);
     bar.keys("up enter");
     // ↩ on the agent at its limit runs nothing.
     assert!(!bar.calls().iter().any(|call| call.starts_with("task")));
