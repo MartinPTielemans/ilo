@@ -39,7 +39,9 @@ bool Ed25519Verify(const uint8_t signature[64], const uint8_t public_key[32],
 namespace {
 
 // A release build's, from build.rs: the feed, the key its updates are signed with, and the version
-// and build number the appcast's are, as chrome.exe's own version resource is Chromium's.
+// and build number the appcast's are, as chrome.exe's own version resource is Chromium's. A nightly
+// feed beside it, if the build carries one. A check build's (UPDATE_CHECK_BUILD) are on the check's
+// own server instead (check/nightly.sh).
 #if defined(UPDATE_FEED) && defined(UPDATE_PUBLIC_KEY) && defined(APP_VERSION) && defined(APP_BUILD)
 constexpr bool kReleaseBuild = true;
 #else
@@ -49,6 +51,14 @@ constexpr bool kReleaseBuild = false;
 #define APP_VERSION ""
 #define APP_BUILD ""
 #endif
+#ifndef UPDATE_FEED_NIGHTLY
+#define UPDATE_FEED_NIGHTLY ""
+#endif
+#ifdef UPDATE_CHECK_BUILD
+constexpr bool kCheckBuild = true;
+#else
+constexpr bool kCheckBuild = false;
+#endif
 #define WIDE2(s) L##s
 #define WIDE(s) WIDE2(s)
 
@@ -56,7 +66,9 @@ constexpr bool kReleaseBuild = false;
 constexpr ULONGLONG kInterval = 8ULL * 60 * 60 * 10'000'000;
 // Where the last check's time is kept, under HKEY_CURRENT_USER, so a launch doesn't check again
 // before it's due.
-constexpr wchar_t kSettings[] = L"Software\\ilo\\Updates";
+// A check build's are its own, so it never moves a copy of ilo's next check.
+constexpr const wchar_t* kSettings =
+    kCheckBuild ? L"Software\\ilo\\Updates (check)" : L"Software\\ilo\\Updates";
 // No appcast is this big, and no installer: past it, the download stops.
 constexpr size_t kMostFeed = 4 << 20;
 constexpr ULONGLONG kMostInstaller = 1ULL << 30;
@@ -73,6 +85,8 @@ std::string g_version;
 // quit it runs at is Restart to Update's, which relaunches ilo.
 std::atomic<bool> g_ready{false};
 std::wstring g_installer;
+// Whether the checks read the nightly feed (host_follow_nightly).
+std::atomic<bool> g_nightly{false};
 HANDLE g_held = INVALID_HANDLE_VALUE;
 bool g_relaunch = false;
 
@@ -191,16 +205,20 @@ void Said(int stage, const std::string& version = "") {
 }
 
 // GETs |url|, which must be https, as it redirects only to https, handing |take| each piece of
-// the body until it says to stop. Whether the whole body came, with status 200.
+// the body until it says to stop. Whether the whole body came, with status 200. A check build's
+// feed is http, on the check's own server at 127.0.0.1.
 bool Get(const std::string& url, const std::function<bool(const uint8_t*, DWORD)>& take) {
   const std::wstring wide = Wide(url);
   URL_COMPONENTS parts = {sizeof parts};
   parts.dwHostNameLength = parts.dwUrlPathLength = parts.dwExtraInfoLength = ~DWORD{0};
-  if (!WinHttpCrackUrl(wide.c_str(), 0, 0, &parts) || parts.nScheme != INTERNET_SCHEME_HTTPS) {
+  const bool cracked = WinHttpCrackUrl(wide.c_str(), 0, 0, &parts);
+  const std::wstring host =
+      cracked ? std::wstring(parts.lpszHostName, parts.dwHostNameLength) : std::wstring();
+  const bool local = kCheckBuild && parts.nScheme == INTERNET_SCHEME_HTTP && host == L"127.0.0.1";
+  if (!cracked || (parts.nScheme != INTERNET_SCHEME_HTTPS && !local)) {
     fprintf(stderr, "browser: update: not https: %s\n", url.c_str());
     return false;
   }
-  const std::wstring host(parts.lpszHostName, parts.dwHostNameLength);
   const std::wstring path = std::wstring(parts.lpszUrlPath, parts.dwUrlPathLength) +
                             std::wstring(parts.lpszExtraInfo, parts.dwExtraInfoLength);
   bool done = false;
@@ -211,7 +229,7 @@ bool Get(const std::string& url, const std::function<bool(const uint8_t*, DWORD)
   HINTERNET request =
       connection ? WinHttpOpenRequest(connection, L"GET", path.c_str(), nullptr,
                                       WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
-                                      WINHTTP_FLAG_SECURE)
+                                      local ? 0 : WINHTTP_FLAG_SECURE)
                  : nullptr;
   if (request) {
     // WinHTTP's default too: GitHub's release downloads redirect, but never to http.
@@ -437,8 +455,11 @@ bool Download(const Update& update) {
 void Check() {
   Said(HOST_UPDATE_CHECKING);
   SetLastCheck(Now());
+  // The log names the feed, which the nightly run waits for.
+  const char* url = g_nightly && *UPDATE_FEED_NIGHTLY ? UPDATE_FEED_NIGHTLY : UPDATE_FEED;
+  fprintf(stderr, "browser: update feed %s\n", url);
   std::string feed;
-  const bool read = Get(UPDATE_FEED, [&](const uint8_t* data, DWORD size) {
+  const bool read = Get(url, [&](const uint8_t* data, DWORD size) {
     feed.append(reinterpret_cast<const char*>(data), size);
     return feed.size() <= kMostFeed;
   });
@@ -487,6 +508,24 @@ bool host_updated_by_store(void) {
 bool host_updates_available(void) {
   static const bool available = kReleaseBuild && !FromTheStore() && !PublicKey().empty();
   return available;
+}
+
+// build.rs defines APP_NIGHTLY for a build with APP_TRACK=nightly.
+bool host_nightly_build(void) {
+#ifdef APP_NIGHTLY
+  return true;
+#else
+  return false;
+#endif
+}
+
+bool host_nightly_feed(void) {
+  return host_updates_available() && *UPDATE_FEED_NIGHTLY;
+}
+
+// The thread reads it at each check.
+void host_follow_nightly(bool nightly) {
+  g_nightly = nightly;
 }
 
 void host_start_updater(void (*quit)(void), void (*changed)(int stage, const char* version)) {
