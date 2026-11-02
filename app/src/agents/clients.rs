@@ -85,6 +85,10 @@ pub trait Clients: Send + Sync {
     fn disconnect(&self, client: Client, name: &str) -> Result<(), String>;
     /// Whether the client is on this computer, for Settings › Agents to list it. Other is always.
     fn found(&self, client: Client) -> bool;
+    /// Whether a CLI that runs agent tasks is on this computer and signed in, which runs it.
+    fn look_for_task_cli(&self, cli: super::runner::Cli) -> super::ready::Found {
+        super::ready::look(cli)
+    }
 }
 
 /// The configs in the user's home.

@@ -257,6 +257,11 @@ impl Clients for Configs {
     fn found(&self, client: Client) -> bool {
         client == Client::Other || self.found.lock().unwrap().contains(&client)
     }
+
+    /// The tests never run a CLI of this computer's: none is found.
+    fn look_for_task_cli(&self, _: crate::agents::runner::Cli) -> crate::agents::ready::Found {
+        crate::agents::ready::Found { ready: crate::agents::ready::Ready::NotFound, ..Default::default() }
+    }
 }
 
 fn agents(
@@ -1733,7 +1738,7 @@ mod tasks {
     }
 
     #[gpui::test]
-    fn dismissed_tasks_come_back_and_clear_takes_the_done(cx: &mut TestAppContext) {
+    fn dismissed_tasks_come_back(cx: &mut TestAppContext) {
         let (agents, browser) = ready(None, cx);
         let first = start(&agents, "One", cx);
         let second = start(&agents, "Two", cx);
@@ -1746,8 +1751,7 @@ mod tasks {
             agents.read_with(cx, |agents, cx| agents.cards(1, cx).into_iter().map(|card| card.title.to_string()).collect())
         };
         assert_eq!(titles(&agents, cx), ["Two", "One"], "newest on top");
-        let cleared = agents.update(cx, |agents, cx| agents.clear_tasks(1, cx));
-        assert_eq!(cleared, vec![first.clone()]);
+        agents.update(cx, |agents, cx| agents.dismiss_task(&first, cx));
         assert_eq!(titles(&agents, cx), ["Two"]);
         agents.update(cx, |agents, cx| agents.dismiss_task(&second, cx));
         assert!(titles(&agents, cx).is_empty());

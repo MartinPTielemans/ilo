@@ -1371,6 +1371,46 @@ check-box = 24.0
 # The check is Lucide's, so it draws at the icons' one stroke, `shell::assets::ICON_STROKE`.
 check-stroke = 2.25
 
+[shell.task]
+# Ours, as Arc had no tasks: an agent task's card is a tab row two lines tall, its mark in the
+# favicon's column and its title in the title's, over its status in the small size, with its
+# buttons, the question card's, under them. The ask's slot is a card's height, so the card fills
+# it without a row moving.
+height = 50.0
+title-top = 6.0
+line = 18.0
+buttons-top = 4.0
+buttons-bottom = 8.0
+# The mark's size: a favicon's drawn size.
+mark = 16.0
+
+[shell.conversation]
+# Ours, as Arc had no tasks: a task's conversation in the page's place, a column of text no wider
+# than reads easily, inset from the card as the empty card's line is. Its pages' pictures in a row
+# at its top, a tab's hover card's shape at a third of its size, with their sites under them. The
+# user's lines are plates of the empty card's key chip, at a row's corners, and the reply field at
+# its foot is one, as tall as the URL field's row. A picture has a control's corners.
+column = 640.0
+inset = 24.0
+top = 16.0
+header = 28.0
+picture-width = 112.0
+picture-height = 72.0
+picture-radius = 6.0
+picture-gap = 10.0
+site = 16.0
+line-gap = 10.0
+bubble-x = 10.0
+bubble-y = 4.0
+radius = 12.0
+reply-height = 34.0
+reply-inset = 12.0
+reply-bottom = 16.0
+# It comes in from the card's side, this far, as fast as a header button's plate lights, so it reads
+# at once, and goes back the same way.
+slide = 24.0
+time = 0.13
+
 [shell.tile-theme]
 # A pixel counts towards the icon's colour from this alpha.
 opaque = 0.975

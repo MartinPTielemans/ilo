@@ -108,7 +108,8 @@ impl Shell {
     /// centred, while no page is shown, or the welcome on the first run. A click anywhere on the
     /// card does what that key does: ⌘T's command bar, centred on the window.
     pub(super) fn empty_card(&self, cx: &mut Context<Self>) -> Option<Stateful<gpui::Div>> {
-        if self.selected != 0 {
+        // A task's conversation has the card (Agent task).
+        if self.selected != 0 || self.talk.as_ref().is_some_and(|talk| talk.space() == self.space) {
             return None;
         }
         let (frame, _) = self.page_frame(self.viewport);

@@ -1775,6 +1775,72 @@ impl command_bar::Host for Bar {
     fn commands(&self, text: &str, cx: &App) -> Vec<shell::BarCommand> {
         shell::bar_commands(text, cx)
     }
+
+    fn task_agents(&self, cx: &App) -> Option<command_bar::TaskAgents> {
+        let agents = browser::agents::global(cx)?;
+        let agents = agents.read(cx);
+        if !agents.is_on() {
+            return None;
+        }
+        let listed = (agents.ask_agents().into_iter()).map(|agent| command_bar::TaskAgent {
+            id: agent.cli.id().into(),
+            name: agent.cli.name().into(),
+            resets: agent.resets,
+        });
+        Some(command_bar::TaskAgents { agents: listed.collect(), known: agents.task_agents_known() })
+    }
+
+    fn asking(&self, shown: bool, cx: &mut App) {
+        if shown {
+            agents_core::update(|agents, cx| agents.task_ask_shown(cx));
+            // Only the window the bar shows over opens one.
+            let front = front().0;
+            let shells: Vec<_> = WINDOWS.with_borrow(|windows| {
+                windows.iter().map(|window| (window.id == front, window.shell.clone())).collect()
+            });
+            for (shown, shell) in shells {
+                shell.update(cx, |shell, cx| shell.set_ask_slot(shown, cx)).ok();
+            }
+        } else {
+            update_shells_in(cx, |shell, cx| shell.set_ask_slot(false, cx));
+        }
+    }
+
+    fn task_page(&self, cx: &App) -> Option<(SharedString, SharedString)> {
+        let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
+        let shell = shell?.upgrade()?;
+        let shell = shell.read(cx);
+        let tab = shell::shown_tab(cx);
+        let url = shell.page(tab).url;
+        let web = url.starts_with("https://") || url.starts_with("http://");
+        web.then(|| (url.into(), shell.title(tab).into()))
+    }
+
+    fn run_task(
+        &self,
+        agent: &str,
+        asked: &str,
+        page: Option<(SharedString, SharedString)>,
+        cx: &mut App,
+    ) {
+        let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
+            return;
+        };
+        let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
+        let home = shell.and_then(|shell| shell.upgrade()).map_or(0, |shell| shell.read(cx).space());
+        let asked = asked.to_string();
+        let page = page.map(|(url, title)| browser::agents::task::AskedOn { url, title });
+        agents_core::update(move |agents, cx| {
+            // The card takes the slot as it comes; one that didn't start leaves it empty.
+            if agents.start_task(cli, &asked, page, home, cx).is_none() {
+                update_shells_in(cx, |shell, cx| shell.set_ask_slot(false, cx));
+            }
+        });
+    }
+
+    fn set_up_agents(&self, cx: &mut App) {
+        settings::show_agents(cx);
+    }
 }
 
 /// The user left the command bar without choosing anything in it.
@@ -2461,6 +2527,31 @@ impl Browser for Engine {
 
     fn stop_agent(&self, agent: SharedString, _: &mut App) {
         agents_core::update(move |agents, cx| agents.stop_agent(&agent, cx));
+    }
+
+    fn task(&self, agent: SharedString, action: browser::agents::task::TaskAction, _: &mut App) {
+        let window = self.window;
+        agents_core::update(move |agents, cx| {
+            let (opened, _) = agents.task_action(&agent, action, cx);
+            // Open shows the tab it moved into the user's Space, in the window it was opened from.
+            if let Some(tab) = opened {
+                unsafe { bc::bc_window_select(window, tab) };
+            }
+        });
+    }
+
+    fn show_task(&self, _: SharedString, _: &mut App) {
+        let window = self.window;
+        unsafe { bc::bc_window_show_space_empty(window, bc::bc_window_space(window)) };
+        // The Agents send a window its conversation as it changes; this sends it now.
+        agents_core::update(|_, cx| cx.notify());
+    }
+
+    fn task_picture(&self, tab: u64, request: u64, _: &mut App) {
+        // At twice the picture's size, for a Retina screen.
+        let width = (2. * browser::tokens::shell::conversation::PICTURE_WIDTH) as i32;
+        let height = (2. * browser::tokens::shell::conversation::PICTURE_HEIGHT) as i32;
+        unsafe { bc::bc_tab_picture(tab, request, width, height) };
     }
 
     fn disconnect_agent(&self, space: u64, _: &mut App) {
@@ -5696,6 +5787,14 @@ unsafe extern "C" fn stopping(_: *mut c_void) {
     log!("browser: stopping");
     // The recovery words a Copy put on the clipboard don't outlast the app (settings.rs).
     unsafe { platform::host_forget_secret() };
+    // Tasks live for the run: their CLIs stop and their Spaces go while the core still answers,
+    // on every way out, the Dock's Quit and logging out included. A crash leaves them for the
+    // next launch.
+    update_app(|cx| {
+        if let Some(agents) = browser::agents::global(cx) {
+            agents.update(cx, |agents, cx| agents.end_tasks(cx));
+        }
+    });
 }
 
 // The next launch's first window opens where the regular window in front is, showing its sidebar

@@ -1243,6 +1243,18 @@ impl Browser for Recorder {
         self.record(format!("stop agent {agent}"));
     }
 
+    fn task(&self, agent: SharedString, action: crate::agents::task::TaskAction, _: &mut App) {
+        self.record(format!("task {agent} {action:?}"));
+    }
+
+    fn show_task(&self, agent: SharedString, _: &mut App) {
+        self.record(format!("show task {agent}"));
+    }
+
+    fn task_picture(&self, tab: u64, _: u64, _: &mut App) {
+        self.record(format!("task picture {tab}"));
+    }
+
     fn find_next(&self, _: u64, _: bool, _: &mut App) {}
 
     fn jump_to_selection(&self, _: u64, _: &mut App) {}

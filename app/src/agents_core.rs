@@ -269,7 +269,18 @@ pub fn start(cx: &mut App) {
     // The bar in an agent's Space follows what it does, and what the user holds from it.
     cx.observe(&made, |agents, cx| {
         let status = agents.read(cx).status();
-        crate::update_shells_in(cx, |shell, cx| shell.set_agent_status(status.clone(), cx));
+        // Each card is compared with the last, so a window redraws only for a task that changed.
+        let cards = agents.read(cx).shown_cards(cx);
+        crate::update_shells_in(cx, |shell, cx| {
+            shell.set_agent_status(status.clone(), cx);
+            shell.set_task_cards(cards.clone(), cx);
+            // Only a window that shows a task's conversation is sent it.
+            if let Some(agent) = shell.talk_agent() {
+                let conversation = agents.read(cx).conversation(&agent, cx);
+                shell.set_conversation(conversation, cx);
+            }
+        });
+        browser::command_bar::task_agents_changed(cx);
     })
     .detach();
     cx.spawn(async move |cx| {

@@ -227,6 +227,9 @@ impl Shell {
         image: Option<PagePicture>,
         cx: &mut Context<Self>,
     ) {
+        if self.talk_pictured(request, &image, cx) {
+            return;
+        }
         let window = self.browser.window();
         let Some(picture) = self.picture.as_mut().filter(|picture| picture.request == request)
         else {

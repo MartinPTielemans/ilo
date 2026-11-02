@@ -1,6 +1,7 @@
 //! Whether each task CLI is installed and signed in (Agent task). The browser learns it when
-//! Settings › Agents or ⌘T's ask first shows, and after a task fails, on a background thread, and
-//! keeps the last answer till then: never on a timer, and never while ⌘T opens or takes keys.
+//! Settings › Agents or ⌘T's ask first shows in a run, and after a task fails, on a background
+//! thread, and keeps the last answer till then, across runs too, so ⇥ lists the agents at once:
+//! never on a timer, and never while ⌘T opens or takes keys.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -21,6 +22,26 @@ pub enum Ready {
     SignedIn,
 }
 
+impl Ready {
+    fn id(self) -> &'static str {
+        match self {
+            Ready::Unknown => "unknown",
+            Ready::NotFound => "not-found",
+            Ready::SignedOut => "signed-out",
+            Ready::SignedIn => "signed-in",
+        }
+    }
+
+    fn from_id(id: &str) -> Ready {
+        match id {
+            "not-found" => Ready::NotFound,
+            "signed-out" => Ready::SignedOut,
+            "signed-in" => Ready::SignedIn,
+            _ => Ready::Unknown,
+        }
+    }
+}
+
 /// A CLI as found: whether it's ready, and what runs it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Found {
@@ -28,6 +49,25 @@ pub struct Found {
     pub program: Option<PathBuf>,
     /// The PATH it runs with: the user's login shell's.
     pub path: Option<String>,
+}
+
+impl Found {
+    /// As the agents' settings keep it.
+    pub fn saved(&self) -> Value {
+        serde_json::json!({
+            "ready": self.ready.id(),
+            "program": self.program.as_ref().map(|program| program.to_string_lossy()),
+            "path": self.path,
+        })
+    }
+
+    pub fn from_saved(saved: &Value) -> Found {
+        Found {
+            ready: Ready::from_id(saved.get("ready").and_then(Value::as_str).unwrap_or_default()),
+            program: saved.get("program").and_then(Value::as_str).map(PathBuf::from),
+            path: saved.get("path").and_then(Value::as_str).map(String::from),
+        }
+    }
 }
 
 /// Looks for `cli` and asks it whether the user is signed in. Blocks: runs the CLI.

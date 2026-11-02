@@ -86,6 +86,9 @@ mod cast;
 mod agent_bar;
 mod agent_pointer;
 mod agent_question;
+mod task_cards;
+mod conversation;
+pub use conversation::bind_keys as bind_conversation_keys;
 mod picture;
 mod recent_downloads;
 #[cfg(test)]
@@ -544,6 +547,8 @@ struct Space {
     folders: Folders,
     /// The tab it shows, or showed last.
     shown: u64,
+    /// The ask's slot and its task cards at the top of its Today, each with its height.
+    tasks: Vec<(Slot, f32)>,
 }
 
 impl Space {
@@ -649,7 +654,7 @@ impl Space {
     /// Where its rows are in the list, from its top.
     fn slots(&self) -> HashMap<Slot, f32> {
         let (pinned, today) = self.rows();
-        slots(&pinned, &today)
+        slots(&pinned, &today, &self.tasks)
     }
 }
 
@@ -708,6 +713,10 @@ enum Slot {
     Tab(u64),
     Divider,
     NewTab,
+    /// The empty slot at the top of Today while ⌘T asks for a task, and a task's card, by its
+    /// number.
+    Ask,
+    Task(u64),
 }
 
 /// Tabs' rows new in the list, fading in since `start`: a new tab's plate, or whole rows when
@@ -1343,6 +1352,18 @@ pub struct Shell {
     /// What an agent asks the user first, in every window (agent_question.rs).
     agent_question: Option<crate::agents::Question>,
     agent_question_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Every Space's agent tasks' cards, newest first, as the Agents last said (Agent task).
+    task_cards: Vec<crate::agents::task::Card>,
+    /// The Space whose Today holds an empty slot at its top for the card of the task ⌘T asks.
+    ask_slot: Option<u64>,
+    /// The task card under the pointer, which shows its ✕.
+    task_hovered: Option<SharedString>,
+    /// The task ✕ dismissed last, which ⇧⌘T brings back unless a tab has closed since.
+    closed_task: Option<SharedString>,
+    /// The task's conversation shown in the page's place, and whether its field takes the keyboard
+    /// once drawn (Agent task).
+    talk: Option<conversation::Talk>,
+    focus_talk: bool,
     /// What the agents do and what the user holds from them, for the bar in an agent's Space
     /// (agent_bar.rs).
     agent_status: Vec<crate::agents::Status>,
@@ -1618,6 +1639,12 @@ impl Shell {
             question_settling: RefCell::default(),
             agent_question: None,
             agent_question_drawn: Rc::default(),
+            task_cards: Vec::new(),
+            ask_slot: None,
+            task_hovered: None,
+            closed_task: None,
+            talk: None,
+            focus_talk: false,
             agent_status: Vec::new(),
             agent_bar_drawn: Rc::default(),
             media_dismissed: HashSet::new(),
@@ -1684,6 +1711,7 @@ impl Shell {
             splits: Vec::new(),
             folders: Folders::default(),
             shown: 0,
+            tasks: Vec::new(),
         }];
         shell
     }
@@ -1769,7 +1797,7 @@ impl Shell {
 
     /// Where the rows of the Space shown are in the list.
     fn layout(&self) -> HashMap<Slot, f32> {
-        self.shown_space().map_or_else(|| slots(&[], &[]), Space::slots)
+        self.shown_space().map_or_else(|| slots(&[], &[], &[]), Space::slots)
     }
 
     /// The tabs shown with `tab` in the Space shown, in their order: its split's, else `tab` alone.
@@ -1974,6 +2002,7 @@ impl Shell {
                         splits: Vec::new(),
                         folders: Folders::default(),
                         shown: 0,
+                        tasks: Vec::new(),
                     };
                 };
                 if space.name != name {
@@ -2008,6 +2037,7 @@ impl Shell {
                     splits: std::mem::take(&mut space.splits),
                     folders: std::mem::take(&mut space.folders),
                     shown: space.shown,
+                    tasks: std::mem::take(&mut space.tasks),
                 }
             })
             .collect();
@@ -2074,6 +2104,7 @@ impl Shell {
         }
         self.end_hovers(cx);
         let before = std::mem::replace(&mut self.space, space);
+        self.page_ends_talk();
         self.bar_follows |= before != space;
         if before != space {
             self.unchoose(cx);
@@ -2342,6 +2373,7 @@ impl Shell {
         let before = self.selected_row();
         let hidden = self.panes(self.selected);
         self.selected = tab;
+        self.page_ends_talk();
         self.show_in_space(tab);
         self.scroll_to_row(tab);
         if self.walked.is_none() {
@@ -3113,6 +3145,7 @@ impl Render for Shell {
         {
             window.focus(&form.name.focus_handle(cx), cx);
         }
+        self.focus_talk(window, cx);
         // A new folder's field is drawn once the browser reports the folder, and blurs if focused
         // before.
         let drawn = self.renaming.as_ref().is_some_and(|renaming| match renaming.naming {
@@ -3190,6 +3223,7 @@ impl Render for Shell {
         self.step_scroll_edge(window);
         self.step_tools(window);
         self.step_empty(window);
+        self.step_talk(window, cx);
         self.step_crash_cards(window);
         let drop_targets = self.drag.as_ref().is_some_and(|drag| drag.over_page.is_some())
             || self.link_over.is_some()
@@ -3345,6 +3379,7 @@ impl Render for Shell {
             .children(self.little_bar(cx))
             .children(self.picture_element(cx))
             .children(self.empty_card(cx))
+            .children(self.talk_view(cx))
             .children(self.crash_cards(cx))
             .children(self.pane_gaps(cx))
             .children(self.pane_handles(cx))
@@ -3623,10 +3658,12 @@ impl Shell {
         for tab in pinned {
             rows.push((Some(tab), self.list_row(tab, cx)));
         }
-        if !today.is_empty() {
+        let tasks = self.task_rows(cx);
+        if !today.is_empty() || !tasks.is_empty() {
             rows.push((None, self.divider(cx).into_any_element()));
         }
         rows.push((None, self.new_tab_row(cx).into_any_element()));
+        rows.extend(tasks.into_iter().map(|row| (None, row)));
         for tab in today {
             rows.push((Some(tab), self.list_row(tab, cx)));
         }
@@ -4000,12 +4037,13 @@ pub(crate) fn spring(t: f32, response: f32, damping: f32) -> Option<f32> {
 }
 
 /// Where the list's rows are from its top, by the heights they're drawn at in `list`.
-fn slots(pinned: &[u64], today: &[u64]) -> HashMap<Slot, f32> {
+fn slots(pinned: &[u64], today: &[u64], tasks: &[(Slot, f32)]) -> HashMap<Slot, f32> {
     let rows = pinned
         .iter()
         .map(|&tab| (Slot::Tab(tab), ROW_PITCH))
-        .chain((!today.is_empty()).then_some((Slot::Divider, DIVIDER_HEIGHT)))
+        .chain((!(today.is_empty() && tasks.is_empty())).then_some((Slot::Divider, DIVIDER_HEIGHT)))
         .chain([(Slot::NewTab, ROW_PITCH)])
+        .chain(tasks.iter().copied())
         .chain(today.iter().map(|&tab| (Slot::Tab(tab), ROW_PITCH)));
     let mut top = NAME_HEIGHT;
     rows.map(|(slot, height)| {
@@ -4449,6 +4487,7 @@ mod tests {
             splits: Vec::new(),
             folders: Folders::default(),
             shown: 0,
+            tasks: Vec::new(),
         }
     }
 

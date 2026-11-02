@@ -1212,7 +1212,7 @@ pub(super) struct Breath {
 
 impl Breath {
     /// How strong a loading dot drawn now is.
-    fn strength(&self) -> f32 {
+    pub(super) fn strength(&self) -> f32 {
         self.drawn.set(true);
         if self.still.get() {
             return 1.;

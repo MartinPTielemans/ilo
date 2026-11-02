@@ -8,12 +8,13 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::mpsc;
+use std::time::SystemTime;
 
 use futures::StreamExt;
 use gpui::{App, AppContext, Context, SharedString};
 use serde_json::Value;
 
-use super::ready::{self, Found, Ready};
+use super::ready::{Found, Ready};
 use super::runner::{self, Cli, Failure, Launch, Out, Process};
 use super::{Agents, Question, ToolResult, page, site, tools};
 
@@ -38,11 +39,47 @@ pub enum State {
     Failed { why: SharedString, command: Option<&'static str> },
 }
 
-/// A line of the conversation.
+/// A line of the conversation, and when it was said, which places the steps between lines.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Message {
     pub from_user: bool,
     pub text: SharedString,
+    pub at: SystemTime,
+}
+
+impl Message {
+    fn new(from_user: bool, text: impl Into<SharedString>) -> Self {
+        Self { from_user, text: text.into(), at: SystemTime::now() }
+    }
+}
+
+/// What a task's conversation shows, in the page's place (Agent task): compared with the last, so
+/// it redraws only when it changed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Conversation {
+    pub agent: SharedString,
+    /// The agent's name, in text: Claude or Codex.
+    pub name: &'static str,
+    pub title: SharedString,
+    /// What was asked, and the page it was asked on, by its title.
+    pub asked: SharedString,
+    pub page: Option<AskedOn>,
+    pub lines: Vec<Line>,
+    /// What it's doing now, while it works.
+    pub doing: Option<SharedString>,
+    /// Its pages, for their pictures, each by its tab and site.
+    pub tabs: Vec<(u64, SharedString)>,
+    /// Whether it works or waits on the user, which ⌘. stops.
+    pub stoppable: bool,
+}
+
+/// A line of a task's conversation.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Line {
+    You(SharedString),
+    Said(SharedString),
+    /// The steps between two lines, folded into one: what the last did, and how many there were.
+    Steps { last: SharedString, count: usize },
 }
 
 /// The page the user was on when they asked, which goes as its address and title only.
@@ -112,6 +149,20 @@ pub enum Dot {
     None,
 }
 
+/// What the user does to a task from its card or its conversation.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TaskAction {
+    Dismiss,
+    /// ⇧⌘T or ⌘Z: the task named, or with none named, the last dismissed.
+    Restore,
+    Answer(SharedString),
+    Reply(SharedString),
+    Retry,
+    Stop,
+    /// Done's Open <site>.
+    Open,
+}
+
 /// An agent as ⌘T's ask lists it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AskAgent {
@@ -129,6 +180,8 @@ pub struct Tasks {
     pub(super) next: u64,
     pub found: HashMap<Cli, Found>,
     pub(super) looking: bool,
+    /// Whether ⌘T's ask has shown in this run, which learns again once.
+    pub(super) asked_once: bool,
     /// The default agent, from Settings › Agents.
     pub default: Option<Cli>,
     /// Each CLI's model, or none for its own default.
@@ -151,6 +204,86 @@ impl Agents {
 
     pub(super) fn task_mut(&mut self, agent: &str) -> Option<&mut Task> {
         self.tasks.tasks.iter_mut().find(|task| task.agent == agent)
+    }
+
+    /// Every Space's task cards, newest first, for the windows to show at the top of each Today.
+    pub fn shown_cards(&self, cx: &App) -> Vec<Card> {
+        (self.tasks.tasks.iter().rev())
+            .filter(|task| !task.dismissed)
+            .map(|task| self.card(task, cx))
+            .collect()
+    }
+
+    /// Does what the user did to `agent`'s task. Returns the tab Open moved into the user's
+    /// Space, for the window to show, and the task Restore brought back.
+    pub fn task_action(
+        &mut self,
+        agent: &str,
+        action: TaskAction,
+        cx: &mut Context<Self>,
+    ) -> (Option<u64>, Option<String>) {
+        match action {
+            TaskAction::Dismiss => self.dismiss_task(agent, cx),
+            TaskAction::Restore => {
+                let named = Some(agent).filter(|agent| !agent.is_empty());
+                return (None, self.restore_task(named, cx));
+            }
+            TaskAction::Answer(answer) => self.answer_task(agent, &answer, cx),
+            TaskAction::Reply(text) => self.reply(agent, &text, cx),
+            TaskAction::Retry => self.retry_task(agent, cx),
+            TaskAction::Stop => self.stop_task(agent, cx),
+            TaskAction::Open => return (self.open_result(agent, cx), None),
+        }
+        (None, None)
+    }
+
+    /// `agent`'s task's conversation: what was asked, then what each side said, with the steps
+    /// between folded into a line each.
+    pub fn conversation(&self, agent: &str, cx: &App) -> Option<Conversation> {
+        let task = self.task(agent)?;
+        let mut steps: Vec<&super::Activity> = self.activity(agent).collect();
+        steps.reverse();
+        let mut steps = steps.into_iter().peekable();
+        let mut lines = Vec::new();
+        let mut fold = |lines: &mut Vec<Line>, until: Option<SystemTime>| {
+            let mut folded = Vec::new();
+            while let Some(step) = steps.next_if(|step| until.is_none_or(|until| step.at <= until)) {
+                folded.push(step);
+            }
+            if let Some(last) = folded.last() {
+                let last = match last.site.is_empty() {
+                    true => tools::describe(&last.action).to_string(),
+                    false => format!("{} · {}", tools::describe(&last.action), last.site),
+                };
+                lines.push(Line::Steps { last: last.into(), count: folded.len() });
+            }
+        };
+        for message in &task.messages {
+            fold(&mut lines, Some(message.at));
+            lines.push(match message.from_user {
+                true => Line::You(message.text.clone()),
+                false => Line::Said(message.text.clone()),
+            });
+        }
+        let working = task.state == State::Working;
+        // While it works, the steps since the last line are what it's doing, under the rest.
+        if !working {
+            fold(&mut lines, None);
+        }
+        let tabs = (self.browser.space_tabs(task.space, cx).into_iter())
+            .map(|tab| (tab.id, site(&tab.url).to_string().into()))
+            .collect();
+        Some(Conversation {
+            agent: task.agent.clone().into(),
+            name: task.cli.name(),
+            title: task.title.clone(),
+            asked: task.asked.clone(),
+            page: task.page.clone(),
+            lines,
+            doing: working.then(|| self.doing.get(agent).cloned().unwrap_or_else(|| "Starting".into())),
+            tabs,
+            stoppable: matches!(task.state, State::Working | State::Asking { .. }),
+        })
     }
 
     /// The cards of the tasks shown at the top of `home`'s Today, newest first.
@@ -231,6 +364,19 @@ impl Agents {
             .collect()
     }
 
+    /// Whether the browser has learned which CLIs are ready, in this run or a run before.
+    pub fn task_agents_known(&self) -> bool {
+        !self.tasks.found.is_empty()
+    }
+
+    /// ⌘T's ask shows: the first time in a run, the browser learns again which CLIs are ready, as
+    /// one may have been installed or signed in since.
+    pub fn task_ask_shown(&mut self, cx: &mut Context<Self>) {
+        if !std::mem::replace(&mut self.tasks.asked_once, true) {
+            self.look_for_task_agents(cx);
+        }
+    }
+
     /// What the browser last learned of `cli`.
     pub fn found(&self, cli: Cli) -> Ready {
         self.tasks.found.get(&cli).map_or(Ready::Unknown, |found| found.ready)
@@ -243,14 +389,16 @@ impl Agents {
             return;
         }
         self.tasks.looking = true;
+        let clients = self.clients.clone();
         let looked = cx.background_spawn(async move {
-            Cli::ALL.map(|cli| (cli, ready::look(cli)))
+            Cli::ALL.map(|cli| (cli, clients.look_for_task_cli(cli)))
         });
         cx.spawn(async move |agents, cx| {
             let found = looked.await;
             _ = agents.update(cx, |agents, cx| {
                 agents.tasks.looking = false;
                 agents.tasks.found.extend(found);
+                agents.save();
                 // The first ready is the default until the user picks one.
                 if agents.tasks.default.is_none_or(|cli| agents.found(cli) != Ready::SignedIn) {
                     let ready = Cli::ALL.into_iter().find(|cli| agents.found(*cli) == Ready::SignedIn);
@@ -388,7 +536,7 @@ impl Agents {
         match out {
             Out::Said(text) => {
                 let Some(task) = self.task_mut(&agent) else { return };
-                task.messages.push(Message { from_user: false, text: text.into() });
+                task.messages.push(Message::new(false, text));
             }
             Out::Ended(None) => {
                 let Some(task) = self.task_mut(&agent) else { return };
@@ -454,7 +602,7 @@ impl Agents {
             return self.answer_task(agent, text, cx);
         }
         let Some(task) = self.task_mut(agent) else { return };
-        task.messages.push(Message { from_user: true, text: text.to_string().into() });
+        task.messages.push(Message::new(true, text.to_string()));
         task.state = State::Working;
         let sent = task.process.as_mut().map(|process| process.say(text));
         if !matches!(sent, Some(Ok(()))) {
@@ -469,7 +617,7 @@ impl Agents {
     pub fn answer_task(&mut self, agent: &str, answer: &str, cx: &mut Context<Self>) {
         let Some(task) = self.task_mut(agent) else { return };
         let Some(reply) = task.asking.take() else { return };
-        task.messages.push(Message { from_user: true, text: answer.to_string().into() });
+        task.messages.push(Message::new(true, answer.to_string()));
         task.state = State::Working;
         _ = reply.send(ToolResult::text(format!("The user answered: {answer}")));
         self.note(agent, "answered", "", "");
@@ -538,19 +686,6 @@ impl Agents {
         log!("browser: task {agent} restored");
         cx.notify();
         Some(agent)
-    }
-
-    /// Clear: dismisses the done tasks of `home`, and leaves the rest. Returns them.
-    pub fn clear_tasks(&mut self, home: u64, cx: &mut Context<Self>) -> Vec<String> {
-        let done: Vec<String> = (self.tasks.tasks.iter())
-            .filter(|task| task.home == home && !task.dismissed)
-            .filter(|task| matches!(task.state, State::Done { .. }))
-            .map(|task| task.agent.clone())
-            .collect();
-        for agent in &done {
-            self.dismiss_task(agent, cx);
-        }
-        done
     }
 
     /// Done's Open <site>: the tab moves into the task's Space's Today, at its top, the user's.
@@ -656,7 +791,7 @@ impl Agents {
                 };
                 let Some(task) = self.task_mut(agent) else { return };
                 let question: SharedString = page::clip(question, 300).into();
-                task.messages.push(Message { from_user: false, text: question.clone() });
+                task.messages.push(Message::new(false, question.clone()));
                 task.state = State::Asking { question, answers: buttons };
                 task.asking = Some(reply);
                 self.note(agent, "ask", "", "");

@@ -162,7 +162,11 @@ pub(super) fn card_close(palette: &Palette, id: &'static str) -> Stateful<Div> {
 
 /// A button on a card, as wide as its share of the row, as tall as a line of text and a half, and
 /// taller if its words wrap.
-pub(super) fn card_button(palette: &Palette, id: &'static str, label: &'static str) -> Stateful<Div> {
+pub(super) fn card_button(
+    palette: &Palette,
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<gpui::SharedString>,
+) -> Stateful<Div> {
     div()
         .id(id)
         .flex_1()
@@ -179,7 +183,7 @@ pub(super) fn card_button(palette: &Palette, id: &'static str, label: &'static s
         .active(|style| style.bg(palette.state(URL_FIELD, STATE_PRESSED)))
         .font_weight(FontWeight::MEDIUM)
         .text_color(palette.text(TITLE))
-        .child(label)
+        .child(label.into())
 }
 
 impl Shell {

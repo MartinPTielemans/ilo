@@ -960,6 +960,13 @@ impl Browser for Fake {
 
     fn stop_agent(&self, _: SharedString, _: &mut App) {}
 
+    fn task(&self, _: SharedString, _: browser::agents::task::TaskAction, _: &mut App) {}
+
+    fn show_task(&self, _: SharedString, _: &mut App) {}
+
+    fn task_picture(&self, _: u64, _: u64, _: &mut App) {}
+
+
     fn shortcuts(&self, _: &mut App) {}
 
     fn about(&self, _: &mut App) {}
@@ -1365,6 +1372,22 @@ impl command_bar::Host for PreviewBar {
     fn commands(&self, text: &str, cx: &App) -> Vec<shell::BarCommand> {
         shell::bar_commands(text, cx)
     }
+
+    /// Made up: Claude ready, so ⇥ shows the ask without an agent's CLI.
+    fn task_agents(&self, _: &App) -> Option<command_bar::TaskAgents> {
+        let claude = command_bar::TaskAgent { id: "claude".into(), name: "Claude".into(), resets: None };
+        Some(command_bar::TaskAgents { agents: vec![claude], known: true })
+    }
+
+    fn asking(&self, _: bool, _: &mut App) {}
+
+    fn task_page(&self, _: &App) -> Option<(SharedString, SharedString)> {
+        None
+    }
+
+    fn run_task(&self, _: &str, _: &str, _: Option<(SharedString, SharedString)>, _: &mut App) {}
+
+    fn set_up_agents(&self, _: &mut App) {}
 }
 
 /// Opens the command bar at `at`, with the suggestions for what `mode` has typed.

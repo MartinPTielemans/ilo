@@ -514,6 +514,11 @@ impl Agents {
             Some((runner::Cli::from_id(cli)?, model.as_str()?.to_string()))
         }))
         .collect();
+        let found = tasks.get("found").and_then(Value::as_object).into_iter().flatten();
+        self.tasks.found = (found.filter_map(|(cli, found)| {
+            Some((runner::Cli::from_id(cli)?, ready::Found::from_saved(found)))
+        }))
+        .collect();
         self.on = saved.get("on").and_then(Value::as_bool).unwrap_or(false);
         if self.on {
             self.start(cx);
@@ -1921,7 +1926,13 @@ impl Agents {
             .collect();
         let models: serde_json::Map<String, Value> =
             (self.tasks.models.iter()).map(|(cli, model)| (cli.id().into(), json!(model))).collect();
-        let tasks = json!({ "default": self.tasks.default.map(runner::Cli::id), "models": models });
+        let found: serde_json::Map<String, Value> =
+            (self.tasks.found.iter()).map(|(cli, found)| (cli.id().into(), found.saved())).collect();
+        let tasks = json!({
+            "default": self.tasks.default.map(runner::Cli::id),
+            "models": models,
+            "found": found,
+        });
         let saved = json!({ "on": self.on, "agents": agents, "grants": grants, "tasks": tasks });
         if let Err(error) = clients::write_private(path, saved.to_string().as_bytes()) {
             log!("couldn't save the agents' settings: {error}");

@@ -27,6 +27,8 @@ pub(super) enum Swapped {
     Clear(u64),
     /// A row's close button, by its first tab: − on the selected pinned row, else ✕.
     Close(u64),
+    /// An agent task card's dot, by the task's number, which draws into a tick as it's done.
+    Task(u64),
 }
 
 pub(super) const CHECK: &str = "icons/check.svg";

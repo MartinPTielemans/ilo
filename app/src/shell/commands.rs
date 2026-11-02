@@ -898,6 +898,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("enter", KeepName, Some("Naming")),
         KeyBinding::new("escape", CancelName, Some("Naming")),
     ]);
+    super::bind_conversation_keys(cx);
     cx.on_action(|run: &Run, cx| {
         // The menu's keys reach it from the dialog's window too, and the dialog has to be
         // answered first, as an alert's does.
@@ -1014,6 +1015,12 @@ impl Shell {
                 if !self.browser.close_other_window(cx) {
                     self.browser.close_window(cx);
                 }
+                return;
+            }
+            // ⌘W in a task's conversation dismisses the task, as ✕ on its card does.
+            Command::CloseTab if let Some(agent) = self.talk_agent() => {
+                self.dismiss_task(agent, cx);
+                self.leave_talk(cx);
                 return;
             }
             Command::CloseTab => {
@@ -1311,10 +1318,19 @@ impl Shell {
     /// Clears the Space shown, but the tab shown, unless that's all there is to clear. Its rows go
     /// in one frame, with no toast (Arc).
     fn clear(&mut self, cx: &mut Context<Self>) {
+        let space = self.space;
+        // The Space's done tasks go with its tabs, and come back with them (Agent task).
+        let tasks = self.clear_done_tasks(cx);
+        let mut edits: Vec<Edit> = tasks.into_iter().map(Edit::RestoreTask).collect();
         if let Some(clear) = self.clear_now(cx) {
-            let space = self.space;
-            self.keep(What::CLEAR, Some(Edit::UndoClear { space, clear }), cx);
+            edits.push(Edit::UndoClear { space, clear });
         }
+        let edit = match edits.len() {
+            0 => return,
+            1 => edits.pop(),
+            _ => Some(Edit::Many(edits)),
+        };
+        self.keep(What::CLEAR, edit, cx);
     }
 
     /// Clears, and returns the core's id for the Clear if it closed any.

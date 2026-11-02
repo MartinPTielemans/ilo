@@ -326,6 +326,7 @@ impl Shell {
         let others = |rows: Vec<u64>| rows.into_iter().filter(|&other| other != tab).collect();
         let (pinned, today) = self.rows();
         let (pinned, today): (Vec<u64>, Vec<u64>) = (others(pinned), others(today));
+        let tasks = self.shown_space().map(|space| space.tasks.clone()).unwrap_or_default();
         let favorites = self.favorites.iter().filter(|&&other| other != tab).count();
         let folder = self.is_folder(tab);
         let away = drag.space != self.space;
@@ -367,7 +368,7 @@ impl Shell {
                     let (mut pinned, mut today) = (pinned.clone(), today.clone());
                     let tabs = if in_pinned { &mut pinned } else { &mut today };
                     tabs.insert(index, tab);
-                    let layout = slots(&pinned, &today);
+                    let layout = slots(&pinned, &today, &tasks);
                     ((in_pinned, index), layout[&Slot::Tab(tab)], layout)
                 })
                 .collect();
@@ -567,7 +568,13 @@ impl Shell {
             (false, at) => Some(at.map_or(Slot::NewTab, |at| Slot::Tab(today[at]))),
         };
         let layout = self.layout();
-        let below = above.map_or(Some(NAME_HEIGHT), |slot| Some(layout.get(&slot)? + ROW_PITCH))?;
+        // Today's top is under the task cards.
+        let tasks = self.shown_space().map_or(0., |space| {
+            space.tasks.iter().map(|&(_, height)| height).sum::<f32>()
+        });
+        let after = |slot: Slot| ROW_PITCH + if slot == Slot::NewTab { tasks } else { 0. };
+        let below =
+            above.map_or(Some(NAME_HEIGHT), |slot| Some(layout.get(&slot)? + after(slot)))?;
         Some(below - (ROW_PITCH - ROW_HEIGHT) / 2.)
     }
 

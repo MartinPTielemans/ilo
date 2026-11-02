@@ -629,6 +629,14 @@ pub trait Browser {
     fn hand_back(&self, tab: u64, cx: &mut App);
     /// The user gives the agent whose Space is `space` their `tab`, which moves there.
     fn give_to_agent(&self, tab: u64, space: u64, cx: &mut App);
+    /// The user does `action` to the task whose agent is `agent` (Agent task).
+    fn task(&self, agent: SharedString, action: crate::agents::task::TaskAction, cx: &mut App);
+    /// Shows the conversation of `agent`'s task in the page's place: the window shows its Space
+    /// with no page, and the Agents send it the conversation, now and as it changes.
+    fn show_task(&self, agent: SharedString, cx: &mut App);
+    /// Asks for a picture of a task's page for its conversation, which the browser answers with
+    /// `Shell::page_pictured` and `request`.
+    fn task_picture(&self, tab: u64, request: u64, cx: &mut App);
     /// The user stops the agent with the id `agent`: what it's doing and asking ends.
     fn stop_agent(&self, agent: SharedString, cx: &mut App);
     /// Selects the tab's next match, or the one before, opening its find bar if it's closed.
