@@ -11,7 +11,8 @@
 # ilo's, the link target and the hover card show under it, and the link target over ilo's window
 # again once it's gone (#1419). An alert that comes while another app has the foreground goes over
 # ilo's window but under the other app's, its taskbar button asking for attention, and has the
-# keyboard once ilo's window comes to the front (#1365). On Windows and the Mac, with a second
+# keyboard once ilo's window comes to the front (#1365). Alt+F4 in a page's dialog cancels it as Esc
+# does, and the next question asks again (#1362). On Windows and the Mac, with a second
 # window beside the first and the first in front, the pointer resting on a row of the second
 # shows its card over the second, and on a row of the first over the first (#1432).
 
@@ -276,13 +277,13 @@ if windows; then
   foreground=$(sed -n 's/^cover .*, foreground //p' "$out/cover-asking.log")
   touch "$out/site/held.go"
   expect "^browser: page $page dialog Alert .* says\$" "the page didn't alert once /held came"
+  expect '^browser: dialog settled$' "the page's alert didn't settle with another app in front"
+  ../tools/window-screenshot.sh "$pid" "$out/dialog-background.png" || fail "no window to capture"
   [ "$foreground" != away ] ||
     expect '^browser: dialog shown in the background, its window asking for attention$' \
       "the alert shown in the background didn't have its window ask for attention"
-  expect '^browser: dialog settled$' "the page's alert didn't settle with another app in front"
   stacked "*other cover, *dialog, *driven" \
     "the page's alert isn't under the other app's window in front of ilo (foreground $foreground)"
-  ../tools/window-screenshot.sh "$pid" "$out/dialog-background.png" || fail "no window to capture"
   if [ "$foreground" = away ]; then
     touch "$out/front"
     expect '^browser: dialog takes the keyboard back from its window$' \
@@ -293,9 +294,28 @@ if windows; then
   else
     background_dialog="the foreground in $foreground, so not in the background"
   fi
-  taskkill //F //PID "$(cat "/proc/$helper/winpid")" > /dev/null 2>&1 || true
+  # Brought to the front, the other app ends by itself.
+  winpid=$(cat "/proc/$helper/winpid" 2>/dev/null) && taskkill //F //PID "$winpid" > /dev/null 2>&1 ||
+    true
   helper=
   answer return accept "alerted later"
+fi
+
+# On Windows Alt+F4 in a page's dialog cancels it as Esc does, where Windows destroyed the dialog's
+# window, which the app shows again for the next question (#1362).
+closed_dialog=
+if windows; then
+  send key c
+  expect "^browser: page $page dialog Confirm .* says\$" "\"c\" in the page didn't ask with its Confirm"
+  expect '^browser: dialog settled$' "the page's Confirm didn't settle"
+  post key f4 ctrl
+  await "^browser: drive $step done" || fail "the driver didn't finish Alt+F4 in the dialog"
+  expect "^browser: page $page dialog answered cancel\$" "Alt+F4 didn't cancel the page's dialog"
+  expect '^browser: dialog hidden$' "the page's dialog didn't leave on Alt+F4"
+  expect "^browser: title $page confirm false\$" "the page didn't hear Cancel from Alt+F4"
+  ask c Confirm after-close
+  answer return accept "confirm true"
+  closed_dialog=1
 fi
 
 # Two windows side by side, the first in front with the keyboard: the pointer resting on a row of
@@ -389,6 +409,8 @@ echo "  and hides 20 times, between the command bar and a tab's menu, with no pa
 [ -z "$background_dialog" ] || echo "  An alert that came with another app in front of ilo's" \
   "window ($background_dialog) went under that app's window and over ilo's, and took the keyboard" \
   "as ilo's window came to the front: $out/dialog-background.png"
+[ -z "$closed_dialog" ] || echo "  Alt+F4 in a page's dialog cancels it as Esc does, and the" \
+  "dialog asks again: $out/dialog-after-close.png"
 [ -z "$two_windows" ] || echo "  With two windows side by side, a row of the one behind shows its" \
   "card over that window, and a row of the one in front over the one in front:" \
   "$out/hover-card-window-behind.png"
