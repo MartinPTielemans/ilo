@@ -462,8 +462,9 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
     ("Settings", Command::Settings, &["preferences"]),
     ("Essential Keyboard Shortcuts", Command::KeyboardShortcuts, &["keys"]),
     (concat!("About ", env!("APP_NAME")), Command::About, &["version", "credits", "licence"]),
-    // The app menu's, which Linux shows no bar for.
-    ("Check for Updates…", Command::CheckForUpdates, &["update", "upgrade"]),
+    // The app menu's, which Linux shows no bar for, and its name once an update is ready.
+    (crate::updates::CHECK_FOR_UPDATES, Command::CheckForUpdates, &["update", "upgrade"]),
+    (crate::updates::RESTART, Command::CheckForUpdates, &["update", "upgrade", "relaunch"]),
     ("Import from Other Browsers…", Command::Import, &["bookmarks"]),
     ("Privacy Policy", Command::PrivacyPolicy, &["data", "tracking"]),
     ("Passwords", Command::Passwords, &["logins", "keychain"]),
@@ -1243,6 +1244,13 @@ impl Shell {
             Command::RestoreSidebar(time) => return self.restore_sidebar(time, cx),
             Command::RestoreEarlierSidebar => return self.list_sidebar_backups(cx),
             Command::SelectSpace(index) => return self.show_space_at(Some(index), cx),
+            // As the chosen rows' menu moves them (#1353).
+            Command::MoveToSpace(space) if !self.chosen.is_empty() => {
+                if self.spaces_for_chosen().iter().any(|&(each, ..)| each == space) {
+                    self.move_chosen_to_space(space, cx);
+                }
+                return;
+            }
             Command::MoveToSpace(space) | Command::PinToSpace(space) => {
                 let pin = matches!(command, Command::PinToSpace(_));
                 if self.selected != 0 {
@@ -1670,6 +1678,7 @@ impl Shell {
                 (name == developer_mode_title(on)).then_some(name)
             }
             Command::RecordTrace => (name == trace::title(trace::recording(cx))).then_some(name),
+            Command::CheckForUpdates => (name == crate::updates::command_title(cx)).then_some(name),
             _ => Some(name),
         }
     }
@@ -1679,12 +1688,18 @@ impl Shell {
     /// The command bar's rows for the Spaces and the folders, each with what it's for and its
     /// command, as Arc's bar has them: Focus for each other Space, then Pin to and Move to for
     /// each other of the user's while a tab is shown, and Open for each closed folder of the Space
-    /// shown. A private window has one Space and no folders.
+    /// shown. With rows chosen, Move to is theirs, as their menu's, for the Spaces it lists. A
+    /// private window has one Space and no folders.
     pub(super) fn named_bar_rows(&self) -> Vec<(SharedString, SharedString, Command)> {
         if self.private {
             return Vec::new();
         }
-        let tab = self.selected != 0 && !self.favorites.contains(&self.selected);
+        let chosen = !self.chosen.is_empty();
+        let tab = !chosen && self.selected != 0 && !self.favorites.contains(&self.selected);
+        let for_chosen: Vec<u64> = match chosen {
+            true => self.spaces_for_chosen().into_iter().map(|(space, ..)| space).collect(),
+            false => Vec::new(),
+        };
         let mut rows = Vec::new();
         for (index, space) in self.spaces.iter().enumerate() {
             if space.id == self.space {
@@ -1697,6 +1712,8 @@ impl Shell {
             row("Focus", Command::SelectSpace(index));
             if tab && space.agent.is_empty() {
                 row("Pin to", Command::PinToSpace(space.id));
+                row("Move to", Command::MoveToSpace(space.id));
+            } else if for_chosen.contains(&space.id) {
                 row("Move to", Command::MoveToSpace(space.id));
             }
         }

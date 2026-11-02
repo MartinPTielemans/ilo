@@ -157,8 +157,8 @@ struct Floating {
   HWND hwnd = nullptr;
   // Clicks go through it to the browser window under it.
   bool mouse_through = false;
-  // Where it takes clicks, in pixels from its top-left, if not all of it: the hover card's plate,
-  // whose margin, where its shadow draws, lets them through as on the Mac and Linux.
+  // Where it takes clicks, in pixels from its top-left, if not all of it: the hover card's or the
+  // toast's plate, whose margin, where its shadow draws, lets them through as on the Mac and Linux.
   std::optional<RECT> plate;
   // Called after the event, when the user leaves it for a window that isn't its own.
   void (*dismissed)(void) = nullptr;
@@ -336,6 +336,17 @@ void Adopt(Floating& floating, void* view, bool mouse_through, void (*dismissed)
   OwnShadow(floating.hwnd);
 }
 
+// Lets go of |floating|, which is about to be freed while its window lives on: anything still
+// reaching it through its window after that wrote into freed memory, and a quit after a browser
+// window closed under Little ilo crashed in Disown (#1425).
+void Forget(Floating& floating) {
+  if (auto it = FloatingByHwnd().find(floating.hwnd);
+      it != FloatingByHwnd().end() && it->second == &floating) {
+    RemoveWindowSubclass(floating.hwnd, FloatingProc, 1);
+    FloatingByHwnd().erase(it);
+  }
+}
+
 // An overlay whose blur and shadow the host gives, as the Mac's does, and that is a rounded
 // rectangle as Windows' frame is (the command bar, the find bar and the offer): Windows 11 rounds
 // it and draws its shadow, without its outline, which the UI's rim would double.
@@ -348,9 +359,7 @@ void SystemFrame(HWND hwnd) {
 }
 
 void WatchOwner(HWND root);
-// Puts |hwnd| at |x|, |y|, |width| by |height| over the others and on screen. It's shown with
-// ShowWindow rather than SWP_SHOWWINDOW, which doesn't send WM_SHOWWINDOW, the message GPUI learns
-// its window is on screen from (window.is_visible()), where an overlay's motion starts.
+// Puts |hwnd| at |x|, |y|, |width| by |height| over its browser window and on screen.
 // The UI sizes its overlays from inside its update, where GPUI can't take the new size: its
 // renderer grows, but the UI goes on laying out at the old one, so what it adds, as the command
 // bar's suggestions, is drawn cut off. The size again after the update reaches it.
@@ -363,9 +372,48 @@ void SizeAgainLater(HWND hwnd) {
   });
 }
 
+// The window at the end of |hwnd|'s owners, the browser window an overlay or a menu over it floats
+// over, or |hwnd| if it has no owner.
+HWND TopOwner(HWND hwnd) {
+  while (HWND owner = GetWindow(hwnd, GW_OWNER)) {
+    hwnd = owner;
+  }
+  return hwnd;
+}
+
+// Where |hwnd|, owned by a browser window, goes in the z-order: over that window and the others it
+// owns, but under any other window over them, as the Mac's child windows are while the app isn't
+// the active one, and Linux's overlays are always. HWND_TOP would put it over every app's windows,
+// so a link's address or a hover card drew over another app in front of ilo (#1419).
+HWND InsertAfter(HWND hwnd) {
+  HWND root = TopOwner(hwnd);
+  if (root == hwnd) {
+    return HWND_TOP;
+  }
+  for (HWND above = GetWindow(root, GW_HWNDPREV); above; above = GetWindow(above, GW_HWNDPREV)) {
+    if (IsWindowVisible(above) && TopOwner(above) != root) {
+      // A non-topmost window can't go between topmost ones; under them all is the top of the rest.
+      return (GetWindowLongPtrW(above, GWL_EXSTYLE) & WS_EX_TOPMOST) ? HWND_TOP : above;
+    }
+  }
+  return HWND_TOP;
+}
+
 void PlaceAndShow(HWND hwnd, int x, int y, int width, int height, bool activate) {
-  SetWindowPos(hwnd, HWND_TOP, x, y, width, height, SWP_NOACTIVATE);
-  ShowWindow(hwnd, activate ? SW_SHOW : SW_SHOWNA);
+  const HWND after = InsertAfter(hwnd);
+  SetWindowPos(hwnd, after, x, y, width, height, SWP_NOACTIVATE);
+  if (activate) {
+    ShowWindow(hwnd, SW_SHOW);
+  } else if (!IsWindowVisible(hwnd)) {
+    // Shown where it was put. ShowWindow shows a window at the top, and the browser window that
+    // owns it with it, over another app's window in front of ilo while ilo has the foreground
+    // (#1419). It also sends WM_SHOWWINDOW, which SWP_SHOWWINDOW doesn't, and GPUI draws the
+    // window and learns it's on screen from it (window.is_visible()), where an overlay's motion
+    // starts, so that's sent first, as ShowWindow does.
+    SendMessageW(hwnd, WM_SHOWWINDOW, TRUE, 0);
+    SetWindowPos(hwnd, after, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+  }
   SizeAgainLater(hwnd);
 }
 
@@ -681,11 +729,42 @@ std::map<HWND, DropTarget*>& DropTargets() {
   return targets;
 }
 
-// The frame of each browser window that has closed, from its UI's holder, until the app forgets it:
-// the core closes the window before it tells the app, which then saves the last regular one's for
-// the next launch (host_window_frame).
-std::map<HWND, RECT>& ClosedFrames() {
-  static std::map<HWND, RECT> frames;
+// The frame |root| un-maximizes to, in screen pixels. Windows keeps it from the corner of the work
+// area of the window's monitor, as Chromium's GetWindowPlacement reads it.
+bool RestoredRect(HWND root, RECT* rect) {
+  WINDOWPLACEMENT placement{sizeof placement};
+  MONITORINFO monitor{sizeof monitor};
+  if (!GetWindowPlacement(root, &placement) ||
+      !GetMonitorInfoW(MonitorFromWindow(root, MONITOR_DEFAULTTONEAREST), &monitor)) {
+    return false;
+  }
+  *rect = placement.rcNormalPosition;
+  OffsetRect(rect, monitor.rcWork.left - monitor.rcMonitor.left,
+             monitor.rcWork.top - monitor.rcMonitor.top);
+  return true;
+}
+
+// |rect|, in screen pixels, in host_centered's terms.
+void Logical(const RECT& rect, double* x, double* y, double* width, double* height) {
+  const double scale = GetDpiForSystem() / 96.0;
+  *x = rect.left / scale;
+  *y = rect.top / scale;
+  *width = (rect.right - rect.left) / scale;
+  *height = (rect.bottom - rect.top) / scale;
+}
+
+// The frame of a browser window that has closed, or the one it un-maximizes to if it closed
+// maximized.
+struct ClosedFrame {
+  RECT rect{};
+  bool maximized = false;
+};
+
+// Each browser window's that has closed, from its UI's holder, until the app forgets it: the core
+// closes the window before it tells the app, which then saves the last regular one's for the next
+// launch (host_window_frame, host_window_restored_frame).
+std::map<HWND, ClosedFrame>& ClosedFrames() {
+  static std::map<HWND, ClosedFrame> frames;
   return frames;
 }
 
@@ -718,9 +797,12 @@ LRESULT CALLBACK HolderProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
       return 1;
     case WM_DESTROY:
       // Its window is still there: Windows destroys a window's children before the window.
-      if (HWND root = GetAncestor(hwnd, GA_ROOT);
-          root && root != hwnd && !IsIconic(root) && !IsZoomed(root)) {
-        GetWindowRect(root, &ClosedFrames()[hwnd]);
+      if (HWND root = GetAncestor(hwnd, GA_ROOT); root && root != hwnd && !IsIconic(root)) {
+        ClosedFrame closed{.maximized = IsZoomed(root) != FALSE};
+        if (closed.maximized ? RestoredRect(root, &closed.rect)
+                             : GetWindowRect(root, &closed.rect) != FALSE) {
+          ClosedFrames()[hwnd] = closed;
+        }
       }
       if (auto found = DropTargets().find(hwnd); found != DropTargets().end()) {
         RevokeDragDrop(hwnd);
@@ -848,6 +930,9 @@ struct Corner {
 std::map<void*, Corner> g_find_bars;
 std::map<void*, Corner> g_offers;
 std::map<void*, std::pair<double, double>> g_pane_corners;
+// Where each window's focused page's left edge is, in points from its content's, which the toast's
+// window starts at (host_set_pane_corner).
+std::map<void*, double> g_page_lefts;
 Floating g_hud;
 double g_hud_right = 0, g_hud_top = 0;
 Floating g_drop_targets;
@@ -975,6 +1060,39 @@ struct Reveal {
 std::map<void*, Reveal> g_reveals;
 Floating g_settings;
 bool g_settings_placed = false;
+
+// The UI's view of the browser window the toast shows over, while it shows.
+void* g_toast_over = nullptr;
+
+// Where the toast's window goes over |ui_view|'s browser window, in points from its content's top
+// left: at the focused page's top right corner, which in a split view is its pane's, and as wide as
+// that page from its left edge, so no toast runs past its window (#1462).
+struct Place {
+  double left, top, width, height;
+};
+Place ToastPlace(void* ui_view) {
+  double content_width, content_height, width, height;
+  ContentSize(Root(ui_view), &content_width, &content_height);
+  WindowSize(g_toast.hwnd, &width, &height);
+  auto [right, top] = g_pane_corners[ui_view];
+  const double left = g_page_lefts[ui_view];
+  return {left, top, (std::max)(content_width - right - left, 0.0), height};
+}
+
+// Keeps the toast's window there as its browser window or its page changes, without raising it.
+void PlaceToast() {
+  HWND root = g_toast_over ? Root(g_toast_over) : nullptr;
+  if (!root || !g_toast.hwnd || !IsWindowVisible(g_toast.hwnd)) {
+    return;
+  }
+  auto [left, top, width, height] = ToastPlace(g_toast_over);
+  const double scale = Scale(root);
+  POINT origin{std::lround(left * scale), std::lround(top * scale)};
+  ClientToScreen(root, &origin);
+  SetWindowPos(g_toast.hwnd, nullptr, origin.x, origin.y, std::lround(width * scale),
+               std::lround(height * scale), SWP_NOZORDER | SWP_NOACTIVATE);
+  SizeAgainLater(g_toast.hwnd);
+}
 
 // While the link target or a reveal shows, the pointer's moves over the app's windows.
 HHOOK g_mouse_hook = nullptr;
@@ -1210,6 +1328,10 @@ void PostMenuDismiss(bool give_back) {
 // windows the app goes on using, shared between browser windows or closed by the app itself, so a
 // quit with the command bar up crashed in one freed under it (#1058).
 void Disown(HWND root) {
+  // A window already destroyed has no root, and every window with no owner would match it.
+  if (!root) {
+    return;
+  }
   // The menu may be over a reveal, which root owns.
   if (HWND owner = g_menu.hwnd ? GetWindow(g_menu.hwnd, GW_OWNER) : nullptr;
       owner && (owner == root || GetWindow(owner, GW_OWNER) == root)) {
@@ -1246,8 +1368,9 @@ void Minimized(HWND root) {
 
 UINT_PTR const kOwner = 3;
 
-// |root| moved or was resized: the find bar and the offer showing over it keep to its page's top
-// right corner, as the Mac's child windows and Linux's panels do. Windows moves no owned window.
+// |root| moved or was resized: the find bar, the offer and the toast showing over it keep to its
+// page's top right corner, as the Mac's child windows and Linux's panels do. Windows moves no owned
+// window.
 void PlaceCorners(HWND root) {
   for (auto* corners : {&g_find_bars, &g_offers}) {
     for (auto& [ui_view, corner] : *corners) {
@@ -1264,6 +1387,9 @@ void PlaceCorners(HWND root) {
                      SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
       }
     }
+  }
+  if (g_toast_over && Root(g_toast_over) == root) {
+    PlaceToast();
   }
 }
 
@@ -1834,7 +1960,7 @@ void WritePng(const std::wstring& path, const std::vector<uint8_t>& pixels, UINT
 
 }  // namespace
 
-// For updates.cc, whose WinSparkle calls back on threads of its own.
+// For updates.cc, whose download runs on a thread of its own.
 void HostLater(void (*task)(void)) {
   Later(task);
 }
@@ -1890,12 +2016,24 @@ std::map<HWND, HWND>& FrameUi() {
   return ui;
 }
 
-// GPUI's window over the browser window steps aside where the frame answers.
+void (*g_ui_keyboard_left)(void* ui_view) = nullptr;
+
+// GPUI's window over the browser window steps aside where the frame answers. Embedded, it's
+// never the active window, so GPUI's focus never hears it lose the keyboard; the UI hears here.
 LRESULT CALLBACK FrameChildProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR,
                                 DWORD_PTR) {
   if (message == WM_NCHITTEST &&
       FrameHit(GetAncestor(hwnd, GA_ROOT), {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)})) {
     return HTTRANSPARENT;
+  }
+  if (message == WM_KILLFOCUS && g_ui_keyboard_left) {
+    // Once the focus settles: the core takes the keyboard to the browser window a moment on its
+    // way back to the UI (ReleaseKeyboard).
+    Later([hwnd] {
+      if (IsWindow(hwnd) && GetFocus() != hwnd && g_ui_keyboard_left) {
+        g_ui_keyboard_left(GetParent(hwnd));
+      }
+    });
   }
   return DefSubclassProc(hwnd, message, wparam, lparam);
 }
@@ -2035,7 +2173,7 @@ void host_centered(double width, double height, double* x, double* y) {
 }
 
 void host_show_launch_window(const char* profile_dir, double x, double y, double width,
-                             double height) {
+                             double height, bool maximized) {
   static const wchar_t* launch_class = [] {
     WNDCLASSW window_class{};
     window_class.lpfnWndProc = LaunchProc;
@@ -2071,15 +2209,19 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
   GetClientRect(window, &client);
   // As the Mac's: Dia's light composite over grey 20, and the dark near its dark one.
   COLORREF color = light ? RGB(232, 232, 232) : RGB(38, 38, 38);
-  g_launch.picture = LoadLaunchPicture(LaunchPicturePath(profile_dir, width, height), client.bottom,
-                                       &g_launch.picture_size, &color);
+  // A picture is of the window at |width| by |height|; maximized it's another size, kept by none.
+  if (!maximized) {
+    g_launch.picture = LoadLaunchPicture(LaunchPicturePath(profile_dir, width, height),
+                                         client.bottom, &g_launch.picture_size, &color);
+  }
   g_launch.background = CreateSolidBrush(color);
   g_launch.hwnd = window;
   if (g_launch.picture) {
     // check.sh reads this line.
     fprintf(stderr, "browser: launch picture shown\n");
   }
-  ShowWindow(window, SW_SHOW);
+  // Maximized on the screen of the frame it was made at, which it un-maximizes to.
+  ShowWindow(window, maximized ? SW_SHOWMAXIMIZED : SW_SHOW);
   // On screen now, as Chromium's startup holds the main thread for a while before its loop.
   UpdateWindow(window);
 }
@@ -2178,17 +2320,32 @@ bool host_window_frame(void* ui_view, double* x, double* y, double* width, doubl
   HWND root = Root(ui_view);
   RECT rect{};
   if (auto closed = ClosedFrames().find(Hwnd(ui_view)); !root && closed != ClosedFrames().end()) {
-    rect = closed->second;
+    if (closed->second.maximized) {
+      return false;
+    }
+    rect = closed->second.rect;
   } else if (!root || IsIconic(root) || IsZoomed(root)) {
     return false;
   } else {
     GetWindowRect(root, &rect);
   }
-  const double scale = GetDpiForSystem() / 96.0;
-  *x = rect.left / scale;
-  *y = rect.top / scale;
-  *width = (rect.right - rect.left) / scale;
-  *height = (rect.bottom - rect.top) / scale;
+  Logical(rect, x, y, width, height);
+  return true;
+}
+
+bool host_window_restored_frame(void* ui_view, double* x, double* y, double* width,
+                                double* height) {
+  HWND root = Root(ui_view);
+  RECT rect{};
+  if (auto closed = ClosedFrames().find(Hwnd(ui_view)); !root && closed != ClosedFrames().end()) {
+    if (!closed->second.maximized) {
+      return false;
+    }
+    rect = closed->second.rect;
+  } else if (!root || !IsZoomed(root) || !RestoredRect(root, &rect)) {
+    return false;
+  }
+  Logical(rect, x, y, width, height);
   return true;
 }
 
@@ -2253,6 +2410,19 @@ void host_start_window_move(void* ui_view) {
 bool host_window_maximized(void* ui_view) {
   HWND root = Root(ui_view);
   return root && IsZoomed(root);
+}
+
+void host_maximize_window(void* ui_view) {
+  HWND root = Root(ui_view);
+  if (!root) {
+    return;
+  }
+  // As Chromium's own Maximize does.
+  SendMessageW(root, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
+  // Maximizing brings it to the front, and the launch window stays over it until the UI has drawn.
+  if (g_launch.hwnd) {
+    SetWindowPos(g_launch.hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  }
 }
 
 void host_show_window(void* ui_view) {
@@ -2349,6 +2519,10 @@ void host_window_opened(void* ui_view, uint64_t window) {
 void host_watch_swipes(bool (*)(void*, double, double, bool)) {}
 void host_watch_option_taps(void (*)(void*)) {}
 
+void host_watch_ui_keyboard(void (*left)(void* ui_view)) {
+  g_ui_keyboard_left = left;
+}
+
 // A window's menu bar isn't replaced while it's open on Windows: it's modal and runs no tasks.
 bool host_after_menus(void (*)(void)) { return false; }
 
@@ -2423,10 +2597,18 @@ double host_since_launch(void) {
 void host_forget_window(void* ui_view) {
   Disown(Root(ui_view));
   FocusAfterOverlay().erase(Root(ui_view));
-  g_find_bars.erase(ui_view);
-  g_offers.erase(ui_view);
-  g_reveals.erase(ui_view);
+  for (auto* corners : {&g_find_bars, &g_offers}) {
+    if (auto it = corners->find(ui_view); it != corners->end()) {
+      Forget(it->second.floating);
+      corners->erase(it);
+    }
+  }
+  if (auto it = g_reveals.find(ui_view); it != g_reveals.end()) {
+    Forget(it->second.floating);
+    g_reveals.erase(it);
+  }
   g_pane_corners.erase(ui_view);
+  g_page_lefts.erase(ui_view);
   std::erase(UiViews(), Hwnd(ui_view));
   ClosedFrames().erase(Hwnd(ui_view));
 }
@@ -2647,8 +2829,12 @@ void host_hide_offer(void* ui_view) {
   }
 }
 
-void host_set_pane_corner(void* ui_view, double right, double top) {
+void host_set_pane_corner(void* ui_view, double left, double right, double top) {
   g_pane_corners[ui_view] = {right, top};
+  g_page_lefts[ui_view] = left;
+  if (g_toast_over == ui_view) {
+    PlaceToast();
+  }
 }
 
 void host_add_hud(void* hud_view, double right, double top, double) {
@@ -2964,25 +3150,30 @@ void host_share_png(const uint8_t* png,
 
 void host_add_toast(void* toast_view) {
   Adopt(g_toast, toast_view, true, nullptr);
+  g_toast.plate = RECT{};
 }
 
 void host_toast_takes_clicks(bool takes) {
   g_toast.mouse_through = !takes;
 }
 
-// shortcut: while it takes clicks, its whole window does, the margin round the plate included.
-void host_set_toast_plate(double, double, double, double) {}
+// Only the plate takes clicks while the toast has buttons: the rest of its window, as wide as the
+// page, lets them through, as on the Mac and Linux. None does until the UI says where it is.
+void host_set_toast_plate(double x, double y, double width, double height) {
+  const double scale = Scale(g_toast.hwnd);
+  g_toast.plate = RECT{std::lround(x * scale), std::lround(y * scale),
+                       std::lround((x + width) * scale), std::lround((y + height) * scale)};
+}
 
 void host_show_toast(void* ui_view) {
-  double content_width, content_height, width, height;
-  ContentSize(Root(ui_view), &content_width, &content_height);
-  WindowSize(g_toast.hwnd, &width, &height);
-  // At the focused page's corner, which in a split view is its pane's.
-  auto [extra_right, extra_top] = g_pane_corners[ui_view];
-  Show(g_toast, ui_view, content_width - extra_right - width, extra_top, -1, -1, false);
+  g_toast_over = ui_view;
+  auto [left, top, width, height] = ToastPlace(ui_view);
+  Show(g_toast, ui_view, left, top, width, height, false);
 }
 
 void host_hide_toast(void) {
+  g_toast_over = nullptr;
+  g_toast.plate = RECT{};
   Hide(g_toast);
 }
 
@@ -3739,6 +3930,28 @@ bool host_drive_key(unsigned vk, long lparam) {
     KeyChanged();
   }
   return g_menu_key_hook && MenuTakesKey(vk, lparam);
+}
+
+// What check.sh calls the window |hwnd| the host floats over a browser window, for the driver's
+// stack, or nothing if it's none of those.
+const char* host_floating_name(void* hwnd) {
+  const std::pair<const Floating*, const char*> named[] = {
+      {&g_link_target, "link target"}, {&g_tooltip, "tooltip"},
+      {&g_card, "hover card"},         {&g_toast, "toast"},
+      {&g_capture, "capture"},         {&g_hud, "hud"},
+      {&g_dialog, "dialog"},           {&g_site_controls, "site controls"},
+      {&g_link_preview.floating, "link preview"}};
+  for (const auto& [floating, name] : named) {
+    if (floating->hwnd && floating->hwnd == hwnd) {
+      return name;
+    }
+  }
+  for (size_t index = 0; index < std::size(g_overlays); ++index) {
+    if (g_overlays[index].hwnd && g_overlays[index].hwnd == hwnd) {
+      return kOverlayNames[index];
+    }
+  }
+  return g_menu.hwnd && g_menu.hwnd == hwnd ? "menu" : nullptr;
 }
 
 }  // extern "C"

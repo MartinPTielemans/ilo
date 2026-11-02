@@ -2,7 +2,8 @@
 # Spaces: their names, colours and icons, their tabs with each tab's history, the tab each showed
 # and the Space it showed, and the sidebar's width. Only a tab shown loads; the others show their
 # titles and favicons. A tab named with a double-click on its row, where escape cancels, keeps its
-# name over its page's title, and Rename… in its menu with no name gives the title back. An
+# name over its page's title, a click in the page keeps the name typed, and Rename… in its menu with
+# no name gives the title back. An
 # emoji picked in the icon picker that Change Icon… hangs under its favicon takes the favicon's
 # place until Remove Icon, and a Japanese conversion in the picker's search isn't a pick. A Space's
 # icon, picked in its icon picker, comes back too. A tab closed before the quit stays closed,
@@ -301,6 +302,16 @@ if [ "$active" != 1 ]; then
   echo "skip: restored history. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
+# A click in the page ends the tab's field and keeps the name typed, as one elsewhere in the
+# sidebar does, though only the host sees the page take the keyboard (#1414).
+send doubleclick $(row 0)
+expect "^browser: rename tab $c\$" \
+  "a double-click on the row didn't rename the tab after the relaunch"
+send type clicked
+send click $page_point
+expect '^browser: name field left$' "a click in the page left the tab's field open"
+expect "^browser: title $c clicked\$" "a click in the page didn't keep the name typed"
+../tools/window-screenshot.sh "$pid" "$out/rename-click-away.png" || fail "no window to capture"
 # Rename… in its menu, with the name taken out, gives the tab back its page's title.
 post rightclick $(row 0)
 menu=$(cased "Copy Link$share, Change Icon…, Remove Icon, Rename…, Mute (disabled), Add Split View, Duplicate, Add to Folder › New Folder, Move to › [^,]* (checked), Move to › reading list, Move to › New Space…, Archive Tab, Archive Tabs Below")
@@ -592,6 +603,14 @@ grep -c "^browser: toast shown $note \[view archive, dismiss\]\$" "$log" | grep 
   fail "the auto-archive's note didn't show once: $(grep '^browser: toast shown' "$log")"
 await '^browser: toast settled$' || fail "the auto-archive's note didn't settle"
 ../tools/window-screenshot.sh "$pid" "$out/archive-note.png" || fail "no window to capture"
+# It shows whole: its plate, where the app laid it out, lies inside the toast's window, which cut
+# its left end off where its words were wider than the window, as in Inter (#1462).
+await '^browser: toast plate .* in [0-9]* [0-9]*$' ||
+  fail "the auto-archive's note didn't say where its plate is"
+plate=$(grep '^browser: toast plate' "$log" | tail -1)
+set -- $(echo "${plate#browser: toast plate }" | sed 's/ in / /')
+[ "$1" -ge 0 ] && [ "$2" -ge 0 ] && [ $(($1 + $3)) -le "$5" ] && [ $(($2 + $4)) -le "$6" ] ||
+  fail "the auto-archive's note runs past its window, which cuts it: $plate"
 send layout
 content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
   sed 's/^browser: layout content \([0-9]*x[0-9]*\),.*/\1/')

@@ -1,6 +1,6 @@
 [package]
 name = "browser"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2024"
 publish = false
 license = "GPL-3.0-or-later"
@@ -50,13 +50,19 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # bring it already.
 base64 = "0.22"
 
+# The session and the timeout of the shell Connect reads the user's PATH from
+# (src/agents/clients.rs), in the version GPUI's already brings.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui_macos = { path = ".deps/zed/crates/gpui_macos" }
 
 # Windows' GPUI platform, for the window the browser embeds GPUI in.
 [target.'cfg(target_os = "windows")'.dependencies]
 gpui_windows = { path = ".deps/zed/crates/gpui_windows" }
-# The agents' MCP server's named pipe (src/agents/pipe.rs), in the version GPUI's already brings.
+# The agents' MCP server's named pipe (src/agents/pipe.rs), and the PATH Connect finds Claude Code
+# on (src/agents/clients.rs), in the version GPUI's already brings.
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
@@ -64,6 +70,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_IO",
     "Win32_System_Pipes",
+    "Win32_System_Registry",
     "Win32_System_Threading",
 ] }
 

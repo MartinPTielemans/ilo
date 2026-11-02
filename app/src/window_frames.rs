@@ -136,6 +136,20 @@ mod tests {
         assert_eq!(place(saved, &[LAPTOP, DISPLAY]), Some(frame(512., 100., 1000., 600.)));
     }
 
+    /// A maximized window's frame as Windows gives it, 8 pixels past each edge of its work area, is
+    /// placed filling its screen, not dropped for the app's own place (#1422). On a 150% system,
+    /// host_screens' points are pixels over 1.5: a 2880 by 1800 primary and a 3840 by 2160
+    /// monitor to its left, each over a 48-pixel taskbar.
+    #[test]
+    fn a_maximized_frame_past_its_work_area_fills_its_screen() {
+        const PRIMARY: Frame = Frame { x: 0., y: 0., width: 1920., height: 1168. };
+        const LEFT: Frame = Frame { x: -2560., y: 0., width: 2560., height: 1408. };
+        let maximized = frame(-3848. / 1.5, -8. / 1.5, 3856. / 1.5, 2128. / 1.5);
+        assert_eq!(place(maximized, &[PRIMARY, LEFT]), Some(LEFT));
+        // Its monitor unplugged since, on the primary.
+        assert_eq!(place(maximized, &[PRIMARY]), Some(PRIMARY));
+    }
+
     #[test]
     fn a_frame_saved_empty_is_the_apps_to_place() {
         assert_eq!(place(frame(0., 0., 0., 0.), &[LAPTOP]), None);

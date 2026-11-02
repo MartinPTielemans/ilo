@@ -11,11 +11,14 @@ use crate::settling::SETTLING;
 struct Recorder(RefCell<Vec<String>>);
 
 impl Host for Recorder {
-    fn show(&self, over: Option<Bounds<Pixels>>) {
-        let call = match over {
+    fn show(&self, window: Option<u64>, over: Option<Bounds<Pixels>>) {
+        let mut call = match over {
             Some(over) => format!("show over {}", f32::from(over.origin.x)),
             None => "show".into(),
         };
+        if let Some(window) = window {
+            call += &format!(" in {window}");
+        }
         self.0.borrow_mut().push(call);
     }
 
@@ -37,7 +40,8 @@ impl Asking {
         let deleted = host.clone();
         cx.update(|cx| {
             let delete = Box::new(move |_: &mut App| deleted.0.borrow_mut().push("delete".into()));
-            ask("Delete “Work”?".into(), "Its 3 tabs close too.".into(), "Delete", delete, cx);
+            let (message, detail) = ("Delete “Work”?".into(), "Its 3 tabs close too.".into());
+            ask(None, message, detail, "Delete", delete, cx);
         });
         let cx = VisualTestContext::from_window(window.into(), cx);
         cx.simulate_resize(size(px(800.), px(600.)));
@@ -95,10 +99,23 @@ fn an_ask_while_one_shows_is_dropped(cx: &mut TestAppContext) {
     let mut dialog = Asking::new(cx);
     dialog.cx.cx.update(|cx| {
         let clear = Box::new(|_: &mut App| panic!("the second dialog ran"));
-        ask("Clear the archive?".into(), String::new(), "Clear Archive", clear, cx);
+        ask(None, "Clear the archive?".into(), String::new(), "Clear Archive", clear, cx);
     });
     dialog.keys("enter");
     assert_eq!(dialog.calls(), ["show", "hide", "delete"]);
+}
+
+#[gpui::test]
+fn a_window_s_question_shows_over_that_window(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    cx.update(|cx| open(host.clone(), cx)).expect("no window for the dialog");
+    // A window behind another asks from its sidebar's context menu (#1432).
+    cx.update(|cx| {
+        let delete = Box::new(|_: &mut App| {});
+        ask(Some(2), "Delete “Work”?".into(), String::new(), "Delete", delete, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(*host.0.borrow(), ["show in 2"]);
 }
 
 /// The dialog asking to quit, with "Quit, and don't ask again" at the left. Each answer records
@@ -124,7 +141,7 @@ fn asking_to_quit(cx: &mut TestAppContext) -> Asking {
             check: None,
             on_return: Return::Action,
         };
-        pose(question, Box::new(move |_, _| quit.0.borrow_mut().push("quit".into())), cx);
+        pose(None, question, Box::new(move |_, _| quit.0.borrow_mut().push("quit".into())), cx);
     });
     let cx = VisualTestContext::from_window(window.into(), cx);
     cx.simulate_resize(size(px(800.), px(600.)));

@@ -103,10 +103,10 @@ struct Going {
 
 /// What the card asks of its window.
 pub trait Host {
-    /// Shows the card's window with its plate at (`left`, `top`) in the browser window, `width` by
-    /// `height`, or moves it there if it shows. The UI has kept it inside the window. Only the
-    /// plate takes the mouse; the margin round it lets it through.
-    fn show(&self, left: f32, top: f32, width: f32, height: f32);
+    /// Shows the card's window with its plate at (`left`, `top`) in browser window `window`, the
+    /// one whose row it's for, `width` by `height`, or moves it there if it shows. The UI has kept
+    /// it inside the window. Only the plate takes the mouse; the margin round it lets it through.
+    fn show(&self, window: u64, left: f32, top: f32, width: f32, height: f32);
     /// Hides it at once, once the UI has drawn it going.
     fn hide(&self);
 }
@@ -202,9 +202,12 @@ pub enum Event {
     Pointer(bool),
 }
 
-/// The pointer rests on a row: what its card shows, where, and who hears what happens to it.
+/// The pointer rests on a row: in which browser window, what its card shows, where, and who hears
+/// what happens to it.
 #[derive(Clone)]
 pub struct Rest {
+    /// The browser window whose sidebar has the row, which the card shows over (#1432).
+    pub window: u64,
     pub card: Card,
     pub anchor: Anchor,
     pub events: Rc<dyn Fn(u64, Event, &mut App)>,
@@ -538,7 +541,7 @@ impl HoverCard {
         let Some(rest) = &self.shown else {
             return "none";
         };
-        let card = rest.card.clone();
+        let (window, card) = (rest.window, rest.card.clone());
         let picture = card.pictured.then(|| self.pictures.get(&card.tab).cloned()).flatten();
         let height = height(picture_height(card.pictured, picture.as_ref().map(|p| p.size())));
         let (left, top) = place(rest.anchor, height);
@@ -550,7 +553,7 @@ impl HoverCard {
             (None, false) => "none",
         };
         self.drawn = Some(Drawn { card, picture, height });
-        self.host.show(left, top, WIDTH, height);
+        self.host.show(window, left, top, WIDTH, height);
         cx.notify();
         holds
     }

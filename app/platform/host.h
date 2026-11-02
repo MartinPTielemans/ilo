@@ -22,9 +22,10 @@ void host_centered(double width, double height, double* x, double* y);
 // Puts a window on screen at |x|, |y|, |width| by |height| in host_centered's terms, where the
 // first browser window will open, with the window's material and the sidebar as it was when the
 // app last quit at that size, from |profile_dir|. For the moment between NSApp being made and the
-// browser starting.
+// browser starting. With |maximized|, Windows' alone, it's maximized on that frame's screen, as the
+// first browser window will be (host_maximize_window), without a picture of another size's sidebar.
 void host_show_launch_window(const char* profile_dir, double x, double y, double width,
-                             double height);
+                             double height, bool maximized);
 
 // The visible frames of the screens a window may open on, in host_centered's terms, as x, y,
 // width and height, four to a screen: the main display's first, or with BROWSER_DISPLAY=builtin
@@ -147,6 +148,12 @@ void host_watch_swipes(bool (*swiped)(void* ui_view, double x, double y, bool ba
 // Calls |tapped| with the view of the browser window with the keyboard each time ⌥ is pressed and
 // let go with no other key, modifier, press or scroll between, the page's keyboard or the UI's.
 void host_watch_option_taps(void (*tapped)(void* ui_view));
+
+// Calls |left| with the view of a browser window whose UI loses the keyboard to its own page,
+// which GPUI doesn't see, so a field in the sidebar ends as it does for a click elsewhere: on the
+// Mac at a press in the page, on Windows as GPUI's window loses the focus, to the page or anything
+// else. Linux's UI hears it itself, through GPUI's patch and the overlays it shows.
+void host_watch_ui_keyboard(void (*left)(void* ui_view));
 
 // Whether a menu is open, the menu bar's or a context menu, and if so calls |apply| once none is,
 // instead of any function an earlier call left waiting. AppKit can crash when the main menu is
@@ -311,8 +318,9 @@ void host_hide_offer(void* ui_view);
 
 // Moves |ui_view|'s find bar, its offer, and the HUD and the toast over it |right| points further
 // in from the window's right edge and |top| points further down, to the focused page's top right
-// corner when a split view's focused page isn't the top right one.
-void host_set_pane_corner(void* ui_view, double right, double top);
+// corner when a split view's focused page isn't the top right one. The focused page's left edge
+// is |left| points from the window's, where the toast's window starts.
+void host_set_pane_corner(void* ui_view, double left, double right, double top);
 
 // Makes the window of |hud_view| float over a browser window when shown, |right| and |top| points
 // from the top right corner of the window's content, for the zoom HUD, which draws its pill
@@ -443,7 +451,9 @@ void host_share_png(const uint8_t* png,
                     bool messages);
 
 // Makes the window of |toast_view| the toast's, which floats over a browser window's top right
-// corner when shown, as its child, and lets the mouse through. It starts hidden.
+// corner when shown, as its child, and lets the mouse through. It starts hidden. Shown, it's as
+// wide as the focused page, from that page's left edge to its corner (host_set_pane_corner), and
+// keeps its own height.
 void host_add_toast(void* toast_view);
 
 // The toast takes clicks, while it has buttons, or lets the mouse through to the page. Even then
@@ -539,6 +549,13 @@ void host_press_window_button(void* ui_view, int button);
 // it's maximized. Linux has the core's (bc_window_start_move, bc_window_is_maximized).
 void host_start_window_move(void* ui_view);
 bool host_window_maximized(void* ui_view);
+// While |ui_view|'s window is maximized, or if it closed maximized, the frame it un-maximizes to,
+// in host_window_frame's terms, which leaves a maximized window's be. False, leaving them be,
+// otherwise.
+bool host_window_restored_frame(void* ui_view, double* x, double* y, double* width, double* height);
+// Maximizes |ui_view|'s window on the screen of the frame it has, which it then un-maximizes to, as
+// the first window comes back when it quit maximized.
+void host_maximize_window(void* ui_view);
 #endif
 
 // Makes the window of |reveal_view| the sidebar reveal of |ui_view|'s window, which shows over its
@@ -691,8 +708,9 @@ void host_share_with(const char* url, const char* title, size_t index);
 // milliseconds since the Unix epoch.
 void host_day_starts(double starts[4]);
 
-// Updates: Sparkle on the Mac (platform/mac/updates.mm), WinSparkle on Windows
-// (platform/windows/updates.cc).
+// Updates: Sparkle on the Mac (platform/mac/updates.mm), ilo's own on Windows
+// (platform/windows/updates.cc), both from the same appcast and key. Linux's are Flatpak's, which
+// the app asks itself.
 
 // On the Mac, before Chromium starts: makes sure Chromium can read its cookie key, "<name> Safe
 // Storage" in the Keychain, when the app's signature is new, as after a move to another signing
@@ -707,14 +725,56 @@ bool host_keep_keychain_key(void);
 // key, and on Windows not an MSIX from the Microsoft Store, which the Store updates.
 bool host_updates_available(void);
 
-// Starts the updater, which checks every 8 hours. On the Mac it downloads an update in the
-// background and installs it when the app quits; on Windows it offers it, and calls |quit| on the
-// main thread once the installer it started waits for the browser to quit. Does nothing where
-// host_updates_available is false.
-void host_start_updater(void (*quit)(void));
+// Whether the Microsoft Store updates this copy: on Windows, an MSIX from it.
+bool host_updated_by_store(void);
 
-// Checks for updates now, showing what it finds: the app menu's Check for Updates….
+// Where host_start_updater's |changed| says the update stands, for Settings › About's row and
+// Restart to Update at the sidebar's foot.
+enum {
+  // A check ended with nothing to say: on the Mac, the user closed Sparkle's window, cancelled
+  // the download or skipped the version.
+  HOST_UPDATE_IDLE = 0,
+  HOST_UPDATE_CHECKING = 1,
+  // No newer version.
+  HOST_UPDATE_CURRENT = 2,
+  // A newer version, which on the Mac Sparkle's own window offers.
+  HOST_UPDATE_FOUND = 3,
+  HOST_UPDATE_DOWNLOADING = 4,
+  // Downloaded and its signature checked, to install when the app quits, or now with
+  // host_install_update.
+  HOST_UPDATE_READY = 5,
+  HOST_UPDATE_FAILED = 6,
+};
+
+// Starts the updater, which checks every 8 hours and downloads a newer version in the background
+// with no window of its own, checks its EdDSA signature against the build's key, and installs it
+// when the app quits. On the Mac that's Sparkle; on Windows, ilo's own, which runs the installer
+// silently once the app has gone (host_finish_update). Calls |changed| on the main thread with a
+// HOST_UPDATE_* each time the update moves on, with the version it's of, else "", and |quit| on
+// the main thread for host_install_update's restart on Windows. Does nothing where
+// host_updates_available is false.
+void host_start_updater(void (*quit)(void), void (*changed)(int stage, const char* version));
+
+// The app menu's Check for Updates…, which checks now: on the Mac, Sparkle's check, which shows
+// what it finds in Sparkle's window; on Windows, the same quiet check as Settings › About's,
+// which the app shows there, as the updater has no window.
 void host_check_for_updates(void);
+
+// Settings › About's check, which |changed| follows: on the Mac, Sparkle's check in the
+// background, which downloads an update to install on quit with no window of its own, or while
+// Sparkle shows one, Check for Updates…; on Windows, the updater's check, at once.
+void host_check_for_updates_quietly(void);
+
+// Restart to Update: installs the update that's HOST_UPDATE_READY now and relaunches into it. On
+// the Mac, once macOS has checked the new version as it would at its first launch, or after 15 s;
+// on Windows, by quitting through |quit|, as the installer runs once the app has gone. Nothing if
+// none is ready.
+void host_install_update(void);
+
+// Chromium is quitting. On Windows, a ready update's installer starts, silently, and waits for
+// this process to end before it installs, then relaunches ilo if host_install_update asked. On the
+// Mac, nothing: Sparkle installs on quit by itself.
+void host_finish_update(void);
 
 // On the Mac: calls |notes| with the release notes' URL of the update this launch is the first of, once.
 void host_take_update_notes(void (*notes)(const char* url));

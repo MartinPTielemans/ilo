@@ -664,13 +664,14 @@ expect "^browser: renamed folder $f later\$" "the folder didn't take the name ty
 ../tools/window-screenshot.sh "$pid" "$out/folder-restored.png" || fail "no window to capture"
 post rightclick $(pinned_row 0)
 # Paste URL as New Tab comes and goes with the clipboard, so it isn't pinned here.
-expect "^browser: menu shown $(cased 'Rename Folder, Change Icon…, Duplicate, Copy All Links'), .*$(cased 'Delete Folder')\$" \
-  "the folder's menu isn't Rename Folder, Change Icon…, Duplicate, Copy All Links … Delete Folder"
+# Move to Space is dimmed, as the pinned tab's is: this run has no other Space (#1353).
+expect "^browser: menu shown $(cased 'Rename Folder, Change Icon…, Duplicate, Move to Space (disabled), Copy All Links'), .*$(cased 'Delete Folder')\$" \
+  "the folder's menu isn't Rename Folder, Change Icon…, Duplicate, Move to Space, Copy All Links … Delete Folder"
 expect '^browser: menu drawn ' "the folder's menu didn't draw"
 ../tools/window-screenshot.sh "$pid" "$out/folder-menu.png" || fail "no window to capture"
 # With ⌥ held, Copy All Links is Copy All Links as Markdown, as in Arc's.
 send flags alt
-expect "^browser: menu drawn with ⌥ held $(cased 'Rename Folder, Change Icon…, Duplicate, Copy All Links as Markdown'), " \
+expect "^browser: menu drawn with ⌥ held $(cased 'Rename Folder, Change Icon…, Duplicate, Move to Space (disabled), Copy All Links as Markdown'), " \
   "⌥ didn't turn the folder's Copy All Links into Copy All Links as Markdown"
 ../tools/window-screenshot.sh "$pid" "$out/folder-menu-option.png" || fail "no window to capture"
 send choose "$(cased 'Copy All Links')"
@@ -875,7 +876,6 @@ settled
 # and none of them shows.
 e=$(pinned | cut -d' ' -f1)
 c=$(pinned | cut -d' ' -f2)
-was=$(today)
 rm -rf "$notes"
 mkdir -p "$notes/sub"
 for file in b.txt A.txt .hidden sub/c.txt; do
@@ -914,7 +914,9 @@ case "$(outline)" in
   *) fail "the file's row didn't go back to its place: $(outline)" ;;
 esac
 # The +'s menu ends with Add File or Folder… (Add Files… and Add Folder… off the Mac, whose
-# panels pick one kind), whose file, named at launch, opens at the top of Today and shows.
+# panels pick one kind), whose file, named at launch, opens at the top of Today and shows. Today is
+# read here, as the drag before may have dropped its file on the page, which opens it as a tab.
+was=$(today)
 send layout
 height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
   sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')

@@ -12,9 +12,12 @@
 // rightdragto, rightrelease, move, key, keydown, keyup, flags, type, insert, scroll, swipe, wheel,
 // resize, place, minimize, window, order, layout, state, title, pasteboard, front, menu, menubar,
 // choose, dismiss, agentspace, agentmayact, agentrelease, agentdisconnect, takeback and age, and
-// Windows' own maximize, which the Mac's has no command for; overlays, which lists the windows on
-// screen over the app's browser windows; and reshow, which shows those of the UI's that are hidden
-// again, as Windows does. The Mac's modifiers are
+// Windows' own maximize, which the Mac's has no command for, and placement, which logs the window's
+// maximized state and the frame it un-maximizes to as Windows keeps them; overlays, which lists the
+// windows on screen over the app's browser windows; stack, which lists every app's windows over the
+// driven one, front first; and reshow, which shows those of the UI's that are hidden again, as
+// Windows does. window <n> behind drives a window without bringing it forward, as drive.mm's does.
+// The Mac's modifiers are
 // pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl with Alt, but Ctrl for
 // ⌃Tab, and alt with both. A trackpad's scrolls and swipes are wheel messages with the pixels in
 // their deltas, as a precision touchpad sends them. choose and dismiss work on ilo's menu and the
@@ -38,6 +41,7 @@
 
 #include <windows.h>
 
+#include <dwmapi.h>
 #include <shlobj.h>
 
 #include <algorithm>
@@ -64,6 +68,7 @@ bool host_menu_window_dismiss(void);
 bool host_drive_pointer(unsigned message, long x, long y);
 bool host_drive_key(unsigned vk, long lparam);
 uint64_t host_browser_window_id(size_t index);
+const char* host_floating_name(void* hwnd);
 // The app's (src/main.rs), on GPUI's window |hwnd|, for the scripted input method.
 bool browser_drive_compose(void* hwnd, const char* text, size_t start, size_t end, bool selected);
 bool browser_drive_commit(void* hwnd, const char* text);
@@ -1028,8 +1033,16 @@ bool Run(const std::string& line) {
     if (!(words >> number) || number == 0 || !Browser(number - 1)) {
       return false;
     }
+    std::string behind;
+    if (words >> behind && behind != "behind") {
+      return false;
+    }
     g_driven = number - 1;
-    fprintf(stderr, "browser: drive window %zu\n", number);
+    fprintf(stderr, "browser: drive window %zu%s\n", number, behind.empty() ? "" : " behind");
+    // With behind, it stays where it is, for the pointer over a window behind another (#1432).
+    if (!behind.empty()) {
+      return true;
+    }
     // In front of the app's other browser windows with the keyboard, as a click on it does, but
     // never over another app's.
     HWND root = Driven();
@@ -1079,6 +1092,46 @@ bool Run(const std::string& line) {
     fprintf(stderr, "browser: overlays shown %s\n", shown.empty() ? "none" : shown.c_str());
     return true;
   }
+  // The windows on screen over the driven browser window, front first, down to it, by Windows' own
+  // z-order (#1419): the host's floating windows by their names, another of the app's by what front
+  // calls it, and another app's as "other" and its title. Cloaked ones aren't on screen.
+  if (action == "stack") {
+    HWND root = Driven();
+    if (!root) {
+      return false;
+    }
+    RECT over;
+    GetWindowRect(root, &over);
+    std::string stack;
+    for (HWND top = GetTopWindow(nullptr); top; top = GetWindow(top, GW_HWNDNEXT)) {
+      RECT rect, both;
+      DWORD cloaked = 0;
+      DwmGetWindowAttribute(top, DWMWA_CLOAKED, &cloaked, sizeof cloaked);
+      if (top != root && (!IsWindowVisible(top) || cloaked || !GetWindowRect(top, &rect) ||
+                          !IntersectRect(&both, &rect, &over))) {
+        continue;
+      }
+      std::string name;
+      if (top == root) {
+        name = "driven";
+      } else if (!Ours(top)) {
+        // Without WM_GETTEXT, which would wait on the window's thread.
+        wchar_t title[128] = L"";
+        InternalGetWindowText(top, title, static_cast<int>(std::size(title)));
+        name = "other " + Utf8(title);
+      } else if (const char* floating = host_floating_name(top)) {
+        name = floating;
+      } else {
+        name = Describe(top);
+      }
+      stack += (stack.empty() ? "" : ", ") + name;
+      if (top == root) {
+        break;
+      }
+    }
+    fprintf(stderr, "browser: stack %s\n", stack.c_str());
+    return true;
+  }
   // Shows each of the UI's windows over a browser window that's hidden, as Windows shows those a
   // window owns as it comes back from minimized: none the UI has closed may come back (#1346).
   if (action == "reshow") {
@@ -1104,6 +1157,29 @@ bool Run(const std::string& line) {
     g_steps.push_back({[root] {
       PostMessageW(root, WM_SYSCOMMAND, IsZoomed(root) ? SC_RESTORE : SC_MAXIMIZE, 0);
     }});
+    return true;
+  }
+  // The driven window's state and the frame it un-maximizes to, as Windows keeps them, in
+  // LogFrame's terms: "browser: placement <maximized|minimized|normal> <x> <y> <width> <height>".
+  if (action == "placement") {
+    HWND root = Driven();
+    WINDOWPLACEMENT placement{sizeof placement};
+    if (!root || !GetWindowPlacement(root, &placement)) {
+      return false;
+    }
+    // Windows keeps the frame from the work area's corner, not the screen's.
+    MONITORINFO monitor{sizeof monitor};
+    GetMonitorInfoW(MonitorFromWindow(root, MONITOR_DEFAULTTONEAREST), &monitor);
+    RECT normal = placement.rcNormalPosition;
+    OffsetRect(&normal, monitor.rcWork.left - monitor.rcMonitor.left,
+               monitor.rcWork.top - monitor.rcMonitor.top);
+    const char* state = placement.showCmd == SW_SHOWMAXIMIZED   ? "maximized"
+                        : placement.showCmd == SW_SHOWMINIMIZED ? "minimized"
+                                                                : "normal";
+    const double scale = Scale(root);
+    fprintf(stderr, "browser: placement %s %.0f %.0f %.0f %.0f\n", state, normal.left / scale,
+            normal.top / scale, (normal.right - normal.left) / scale,
+            (normal.bottom - normal.top) / scale);
     return true;
   }
   if (action == "click" || action == "rightclick" || action == "middleclick" ||

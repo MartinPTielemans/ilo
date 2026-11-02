@@ -42,7 +42,8 @@ impl Shell {
         self.all_favorites.contains(&tab) || self.spaces.iter().any(in_space)
     }
 
-    /// Where the pages above the footer end, over the players and the tasks' plates.
+    /// Where the pages above the footer end, over Restart to Update, the players and the tasks'
+    /// plates.
     pub(super) fn list_bottom(&self) -> f32 {
         self.media_top() + self.foot_height()
     }
@@ -126,7 +127,9 @@ impl Shell {
                 shell.dismiss_media(tab, cx);
             },
         ));
-        let bottom = FOOTER_HEIGHT + index as f32 * (MEDIA_HEIGHT + MEDIA_GAP);
+        // Over Restart to Update, while an update waits.
+        let bottom =
+            FOOTER_HEIGHT + self.update_sign_room() + index as f32 * (MEDIA_HEIGHT + MEDIA_GAP);
         // check.sh finds the bottom one's buttons from where it's drawn.
         let listener = (index == 0).then(|| card_listener("media player", &self.media_drawn, tab));
         div()

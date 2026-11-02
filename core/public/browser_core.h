@@ -1014,6 +1014,17 @@ typedef struct bc_host {
                                   bc_id profile,
                                   const bc_sidebar_backup* backups,
                                   size_t count);
+  // The user asked for |url|, a web link in the tab's page, in a link preview: they ⇧-clicked it,
+  // which Chrome opens in a new window, or chose BC_PAGE_MENU_PREVIEW_LINK in its page menu. |x|,
+  // |y| is where, in points from the top-left of the page's view. Return true to open it in one
+  // with bc_tab_open_preview after this call returns, whatever tab it's in; false leaves a ⇧-click
+  // to go as it would have. The user's alone, as a preview takes the window's keyboard.
+  bool (*tab_link_to_preview)(void* context, bc_id tab, const char* url, double x, double y);
+  // The user launched the browser again while it ran, with no link it opens: from the Start menu,
+  // the taskbar or a shortcut on Windows, or the desktop's launcher on Linux. Bring the regular
+  // window in front forward, restoring it if it's minimized (host_activate). The Mac's Dock and a
+  // second `open` reopen the app instead, which Chrome answers by bringing its windows forward.
+  void (*launched_again)(void* context);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -1847,8 +1858,9 @@ BC_EXPORT void bc_set_warn_before_quitting(bool warn);
 // and bc_window_restore.
 BC_EXPORT bool bc_restore_windows(void);
 BC_EXPORT void bc_set_restore_windows(bool restore);
-// Whether a link to another site clicked in a pinned tab or a favorite opens in a link preview
-// (bc_tab_open_preview), as the user chose. The core keeps it with the Spaces.
+// Whether the user has link previews (bc_tab_open_preview) on: a link to another site clicked in a
+// pinned tab or a favorite opens in one, and a link the user asks for in one opens there
+// (tab_link_to_preview). The core keeps it with the Spaces.
 BC_EXPORT bool bc_link_previews(void);
 BC_EXPORT void bc_set_link_previews(bool previews);
 // Whether ⌥ pressed and let go alone brings the hidden sidebar out over the page, as the user
@@ -1975,8 +1987,9 @@ BC_EXPORT size_t bc_search_url(bc_id window,
                                size_t capacity);
 
 // Link previews: a page over the window, from a link the user clicked in a pinned tab or a
-// favorite, which the user closes or keeps as a tab. The user's: agents get none, as a preview takes
-// the window's keyboard. An agent's links open in its own Space, as the page asks.
+// favorite, or asked for in one, which the user closes or keeps as a tab. The user's: agents get
+// none, as a preview takes the window's keyboard. An agent's links open in its own Space, as the
+// page asks.
 
 // Opens |url| in a tab in no Space, in |opener|'s window and profile, loading it at once as the link
 // in |opener|'s page would have, for the app to show with bc_tab_show_in. bc_tab_close closes it,
@@ -2657,6 +2670,20 @@ BC_EXPORT size_t bc_window_child_title(bc_id window, char* title, size_t capacit
 // own read of the clipboard waits, as the owner it asks can be Chromium, which answers on the UI's
 // thread.
 BC_EXPORT void bc_answer_clipboard_requests(void);
+
+// Moves the folder, with the folders and pinned tabs in it, to the bottom of |space|'s pinned tabs,
+// as bc_tab_move_to_space moves a pinned tab: the folders keep their names, icons and whether
+// they're open, and the tabs their order, pinned URLs, split views and pages. A window showing one
+// of its tabs shows |space| with it. Into another profile's Space each tab goes as a new one, as
+// bc_tab_move_to_space says, and the old ones close. Never into an agent's Space or a window's
+// own. Then space_changed for both Spaces, and window_space_shown and window_selected for a window
+// that went with it.
+BC_EXPORT void bc_folder_move_to_space(bc_id folder, bc_id space);
+
+// The command of Open Link in Peek, which the core adds to a page menu after Open Link in New Tab
+// for a web link (tab_page_menu): the app leaves it out while it opens no link preview there, and
+// chosen, the core asks tab_link_to_preview. Negative, as Chrome's commands are all positive.
+#define BC_PAGE_MENU_PREVIEW_LINK (-1)
 
 #ifdef __cplusplus
 }

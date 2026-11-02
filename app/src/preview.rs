@@ -21,6 +21,7 @@ use browser::shell::{
 use browser::command_bar::{self, Suggestion};
 use browser::dialog;
 use browser::icon_picker::{self, Recents};
+use browser::link_preview;
 use browser::menu;
 use browser::palette::{self, Palette, Tone};
 use browser::site_controls::{self, Connection, Permission, Site, Value};
@@ -353,6 +354,8 @@ impl Browser for Fake {
     // The made-up tabs stay in their Space.
     fn move_to_space(&self, _: u64, _: u64, _: &mut App) {}
 
+    fn move_folder_to_space(&self, _: u64, _: u64, _: &mut App) {}
+
     fn warn_moving_profiles(&self, _: &mut App) -> bool {
         true
     }
@@ -559,12 +562,18 @@ impl Browser for Fake {
 
     fn reopen_closed_tab(&self, _: &mut App) {}
 
-    fn reopen_preview(
+    fn open_preview(
         &self,
-        _: &browser::link_preview::Closed,
+        _: u64,
+        _: SharedString,
+        _: Point<Pixels>,
         _: (Bounds<Pixels>, f32),
         _: &mut App,
     ) {
+    }
+
+    fn link_previews(&self) -> bool {
+        true
     }
 
     fn close_preview(&self, _: u64, _: &mut App) -> bool {
@@ -1087,7 +1096,7 @@ impl Browser for Fake {
 
     fn page_moving(&self, _: bool, _: &mut App) {}
 
-    fn set_pane_corner(&self, _: f32, _: f32, _: &mut App) {}
+    fn set_pane_corner(&self, _: f32, _: f32, _: f32, _: &mut App) {}
 
     // No command bar here, as for a new tab, and no split views but the made-up one.
     fn command_bar_open(&self, _: &App) -> bool {
@@ -1263,6 +1272,7 @@ impl Browser for Fake {
         let light = std::env::var("PREVIEW_MENU_LOOK").is_ok_and(|look| look == "light");
         let look = menu::Look { light: light || look.light, ..look };
         let area = Bounds::new(point(px(0.), px(0.)), PREVIEW_AREA.get());
+        let chosen = menu::picked(chosen);
         menu::show(menu::Request { items, at, area, look, chosen }, cx);
     }
 
@@ -1293,7 +1303,7 @@ impl Browser for Fake {
             let bounds = Bounds::new(PREVIEW_ORIGIN.get(), PREVIEW_AREA.get());
             dialog::open_at(Rc::new(PreviewDialog), bounds, true, cx);
         }
-        dialog::ask(message, detail, action, confirmed, cx);
+        dialog::ask(None, message, detail, action, confirmed, cx);
     }
 
     fn quit(&self, cx: &mut App) {
@@ -1856,7 +1866,7 @@ fn main() {
             {
                 let picked: icon_picker::Picked = Rc::new(|_, _| {});
                 let subject = icon_picker::Subject::Space(1);
-                icon_picker::show(subject, icon.into(), point(0., 0.), picked, cx);
+                icon_picker::show(0, subject, icon.into(), point(0., 0.), picked, cx);
             }
         }
         // PREVIEW_THEME_PICKER=1 shows the theme picker for the first Space, with PREVIEW_THEME's
@@ -1869,7 +1879,7 @@ fn main() {
             if theme_picker::open_at(Rc::new(PreviewPicker), bounds, true, cx).is_some() {
                 let changed: theme_picker::Changed = Rc::new(|_, _, _| {});
                 let anchor = point(0., theme_picker::HEIGHT / 2. + 8.);
-                theme_picker::show(1, preview_theme(), anchor, f32::MAX, changed, cx);
+                theme_picker::show(0, 1, preview_theme(), anchor, f32::MAX, changed, cx);
             }
         }
         // PREVIEW_SITE_CONTROLS=1 opens the Site Controls of the tab shown, once the shell has
@@ -1881,6 +1891,24 @@ fn main() {
                 shell
                     .update(cx, |shell, _, cx| shell.run(Command::SiteControls, "preview", cx))
                     .ok();
+            })
+            .detach();
+        }
+        // PREVIEW_PEEK=1 opens a link of the page shown in Peek, once the shell has laid the page
+        // out, with the shell's page showing through the card, as it does on Linux and Windows.
+        if let Some(shell) = shell_window.filter(|_| std::env::var_os("PREVIEW_PEEK").is_some()) {
+            let peek_bounds = Bounds::new(PREVIEW_ORIGIN.get(), PREVIEW_AREA.get());
+            cx.spawn(async move |cx| {
+                cx.background_executor().timer(Duration::from_millis(500)).await;
+                let Ok(Some(laid)) = shell.update(cx, |shell, _, _| shell.page_laid()) else {
+                    return;
+                };
+                cx.update(|cx| {
+                    link_preview::open_at(Rc::new(PreviewPeek), peek_bounds, true, cx);
+                    let url = "https://en.wikipedia.org/wiki/Hyperlink".into();
+                    let link = laid.0.origin + point(px(160.), px(120.));
+                    link_preview::show(1, 99, 1, url, laid, link, cx);
+                });
             })
             .detach();
         }
@@ -1983,7 +2011,7 @@ impl menu::Host for PreviewMenu {
 struct PreviewPicker;
 
 impl icon_picker::Host for PreviewPicker {
-    fn show(&self, _: f32, _: f32) {}
+    fn show(&self, _: u64, _: f32, _: f32) {}
 
     fn hide(&self) {}
 
@@ -1991,18 +2019,47 @@ impl icon_picker::Host for PreviewPicker {
 }
 
 impl theme_picker::Host for PreviewPicker {
-    fn show(&self, _: f32, _: f32, _: &[(f32, f32, f32)]) {}
+    fn show(&self, _: u64, _: f32, _: f32, _: &[(f32, f32, f32)]) {}
 
     fn hide(&self) {}
 
     fn detent(&self) {}
 }
 
+/// Peek over the preview's window, which it covers. There's no page of its own, so the shell's
+/// shows through its card.
+struct PreviewPeek;
+
+impl link_preview::Host for PreviewPeek {
+    fn place(&self, _: u64, _: Bounds<Pixels>, _: f32) {}
+
+    fn show(&self, _: u64) {}
+
+    fn drew(&self, _: Bounds<Pixels>, _: f32, _: f32) {}
+
+    fn page_under(&self) -> bool {
+        true
+    }
+
+    fn release(&self) {}
+
+    fn hide(&self) {}
+
+    fn close(&self, _: u64) {}
+
+    fn keep(&self, _: u64, _: u64) {}
+
+    fn closed(&self, _: u64, _: link_preview::Closed, _: bool, _: &mut App) {}
+
+    // The tooltip's window is the app's, over the page, which the preview has neither of.
+    fn tooltip(&self, _: Option<(browser::tooltip::Tip, browser::tooltip::Anchor)>, _: &mut App) {}
+}
+
 /// The dialog over the preview's window, which it covers, for its host can't move it.
 struct PreviewDialog;
 
 impl dialog::Host for PreviewDialog {
-    fn show(&self, _: Option<Bounds<Pixels>>) {}
+    fn show(&self, _: Option<u64>, _: Option<Bounds<Pixels>>) {}
 
     fn hide(&self) {}
 }

@@ -662,7 +662,7 @@ dependencies = [
 
 [[package]]
 name = "browser"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "async-io",
  "base64 0.22.1",
@@ -679,6 +679,7 @@ dependencies = [
  "gpui_platform",
  "gpui_windows",
  "image",
+ "libc",
  "plist",
  "raw-window-handle",
  "rusqlite",

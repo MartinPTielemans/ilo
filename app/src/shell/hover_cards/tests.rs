@@ -156,7 +156,7 @@ fn a_rows_menu_closes_the_card(cx: &mut TestAppContext) {
 struct NoWhere;
 
 impl theme_picker::Host for NoWhere {
-    fn show(&self, _: f32, _: f32, _: &[(f32, f32, f32)]) {}
+    fn show(&self, _: u64, _: f32, _: f32, _: &[(f32, f32, f32)]) {}
 
     fn hide(&self) {}
 
@@ -164,7 +164,7 @@ impl theme_picker::Host for NoWhere {
 }
 
 impl icon_picker::Host for NoWhere {
-    fn show(&self, _: f32, _: f32) {}
+    fn show(&self, _: u64, _: f32, _: f32) {}
 
     fn hide(&self) {}
 
@@ -193,7 +193,7 @@ fn a_picker_closes_the_card(cx: &mut TestAppContext) {
 
     shell.update(cx, |_, cx| {
         let picked: Picked = Rc::new(|_, _| {});
-        icon_picker::show(Subject::Tab(3), "".into(), point(0., 0.), picked, cx);
+        icon_picker::show(1, Subject::Tab(3), "".into(), point(0., 0.), picked, cx);
     });
     assert!(!rests(cx, 4), "the icon picker shows");
     cx.update(|_, cx| icon_picker::dismissed(cx));

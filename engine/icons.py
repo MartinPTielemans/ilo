@@ -179,13 +179,17 @@ def pak_resources(pak):
     """A .pak's resources, as ui/base/resource/data_pack.cc reads version 4 and 5."""
     version = struct.unpack_from("<I", pak)[0]
     if version == 5:
-        count, at = struct.unpack_from("<H", pak, 8)[0], 12
+        (count, aliases), at = struct.unpack_from("<HH", pak, 8), 12
     elif version == 4:
-        count, at = struct.unpack_from("<I", pak, 4)[0], 9
+        (count, aliases), at = (struct.unpack_from("<I", pak, 4)[0], 0), 9
     else:
         sys.exit(f"a .pak of version {version}, not 4 or 5")
     table = [struct.unpack_from("<HI", pak, at + 6 * i)[1] for i in range(count + 1)]
-    return [bytes(pak[start:end]) for start, end in zip(table, table[1:])]
+    found = [bytes(pak[start:end]) for start, end in zip(table, table[1:])]
+    # Version 5 keeps a resource identical to another once, and an alias names that one's entry, as
+    # two logos of the same size are once ilo's icon is both.
+    at += 6 * (count + 1)
+    return found + [found[struct.unpack_from("<HH", pak, at + 4 * i)[1]] for i in range(aliases)]
 
 
 def check_pak(path, ico, sizes):

@@ -91,6 +91,7 @@ mod conversation;
 pub use conversation::{bind_keys as bind_conversation_keys, send_agents};
 mod picture;
 mod recent_downloads;
+mod update_sign;
 #[cfg(test)]
 mod recorder;
 mod rows;
@@ -119,7 +120,7 @@ pub use browser::{
 pub use commands::{
     BAR_ROWS, BAR_TABS_SHOWN, BarCommand, BarTab, CancelName, Command, CreateSpace, KEY_CONTEXT,
     KeepName, Match, bar_commands, bind_keys, copy_from_bar, copy_url_of_preview, find_commands,
-    key_name, keystroke_label, Run, menu_item, pane_added, run_from_bar, shown_tab,
+    key_name, keystroke_keys, keystroke_label, Run, menu_item, pane_added, run_from_bar, shown_tab,
     task_page_shown, with_named_rows,
 };
 pub use drag::dropped_urls;
@@ -698,8 +699,8 @@ struct Renaming {
     name: Entity<TextInput>,
     /// Whether the field is in the Space's card in the Library rather than in the sidebar.
     in_library: bool,
-    /// Keeps the name once the field loses GPUI's focus, as Finder does.
-    _blur: Option<Subscription>,
+    /// End the field once it loses the keyboard, to elsewhere in the window or to another window.
+    _watches: Vec<Subscription>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -1264,8 +1265,9 @@ pub struct Shell {
     agent_pointer: Option<agent_pointer::AgentPointer>,
     /// A link dragged over the page, and its targets.
     link_over: Option<split_targets::LinkOver>,
-    /// How far in from the page frame's top right corner the focused page's is, as last given.
-    pane_corner: (f32, f32),
+    /// Where the focused page's left edge is in the window, and how far in from the page frame's
+    /// top right corner its own is, as last given.
+    pane_corner: (f32, f32, f32),
     /// Every Space's archived tabs, newest first, and the favicons asked for their URLs.
     archive: Vec<Archived>,
     page_favicons: HashMap<SharedString, Option<Arc<Image>>>,
@@ -1382,6 +1384,11 @@ pub struct Shell {
     /// The players last drawn, as the log has them, and where the bottom one is.
     media_logged: RefCell<Vec<u64>>,
     media_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Whether an update waits for a restart, which Restart to Update at the sidebar's foot says,
+    /// where that's drawn, and the watch on the updater.
+    update_waiting: bool,
+    update_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    _update_watch: Subscription,
     /// Whether a tooltip the agent bar asked for may be up, and whether its bar showed the agent
     /// at work, so it ends once that bar is gone (agent_bar.rs).
     agent_tip: Cell<Option<bool>>,
@@ -1601,7 +1608,7 @@ impl Shell {
             drop_targets_shown: false,
             agent_pointer: None,
             link_over: None,
-            pane_corner: (0., 0.),
+            pane_corner: (0., 0., 0.),
             archive: Vec::new(),
             page_favicons: HashMap::new(),
             downloads: Vec::new(),
@@ -1664,6 +1671,9 @@ impl Shell {
             media_dismissed: HashSet::new(),
             media_logged: RefCell::default(),
             media_drawn: Rc::default(),
+            update_waiting: crate::updates::ready(cx),
+            update_drawn: Rc::default(),
+            _update_watch: crate::updates::observe_view(cx, Self::update_changed),
             agent_tip: Cell::default(),
             drm_notes: HashMap::new(),
             keys: HashMap::new(),
@@ -1855,6 +1865,12 @@ impl Shell {
         self.shown_space().is_some_and(|space| space.is_folder(row))
     }
 
+    /// Whether `folder` is open in its Space, which isn't the one shown while it's dragged to
+    /// another.
+    fn folder_open(&self, folder: u64) -> bool {
+        self.spaces.iter().any(|space| space.is_folder(folder) && space.is_open(folder))
+    }
+
     /// How many folders `row` is in, in the Space shown.
     fn depth(&self, row: u64) -> usize {
         self.shown_space().map_or(0, |space| space.depth(row))
@@ -1944,6 +1960,33 @@ impl Shell {
     pub fn previews_links_of(&self, tab: u64) -> bool {
         let kept = self.favorites.contains(&tab) || self.pinned().contains(&tab);
         kept && !self.agents_space_shown()
+    }
+
+    /// Whether a link the user asks for in a link preview, by ⇧-click or Open Link in Peek, opens
+    /// in one: they have previews on, the window shows `tab`'s page, whatever tab it is, and the
+    /// Space is theirs, as a preview is theirs alone.
+    pub fn peeks_links_of(&self, tab: u64) -> bool {
+        self.browser.link_previews() && self.shows(tab) && !self.agents_space_shown()
+    }
+
+    /// The user asked for `url`, a link at `at` in `tab`'s page, in a link preview: it opens over
+    /// the window, growing from the link, whatever link rules and meeting links say, as those
+    /// route only the previews a plain click opens. Whether it did; a ⇧-click goes as Chrome's
+    /// would if not.
+    pub fn preview_link(
+        &mut self,
+        tab: u64,
+        url: SharedString,
+        at: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some((page, radius)) = self.page_laid.filter(|_| self.peeks_links_of(tab)) else {
+            return false;
+        };
+        // check.sh waits for this line.
+        log!("browser: link preview asked from {tab}");
+        self.browser.open_preview(tab, url, page.origin + at, (page, radius), cx);
+        true
     }
 
     /// Where the page was laid out last, and the radius of its corners.
@@ -2432,8 +2475,10 @@ impl Shell {
     /// and the menu bar lists its Space's extensions.
     pub fn became_key(&mut self, cx: &mut Context<Self>) {
         cx.set_global(ShellHandle(cx.weak_entity()));
-        // Its tab's dialog goes over its card again, as another window's may have shown since.
+        // Its tab's dialog goes over its card again, as another window's may have shown since, and
+        // its hung page's note shows, which waited while it was behind.
         self.page_dialog_shown = None;
+        self.note_hang(cx);
         cx.notify();
         self.refresh_menus(cx);
         self.refresh_picture(cx);
@@ -3202,10 +3247,9 @@ impl Render for Shell {
                 Naming::Profile(profile) => log!("browser: rename profile {profile}"),
                 _ => {}
             }
-            renaming._blur =
-                Some(text_input::on_leave(&field, window, cx, |shell, window, cx| {
-                    shell.keep_name(window, cx)
-                }));
+            // Its page taking the keyboard is the host's to say (`keyboard_left`).
+            let name = renaming.name.clone();
+            renaming._watches = text_input::on_lose_keyboard(&name, window, cx, Self::name_left);
         }
         if self.picker_pending.is_some() {
             self.open_picker_when_settled(window, cx);
@@ -3300,17 +3344,22 @@ impl Render for Shell {
             self.page_color = Some(page_color);
             self.browser.set_page_color(page_color, cx);
         }
-        // The find bar and the zoom HUD sit at the focused page's corner.
+        // The find bar, the zoom HUD and the toast sit at the focused page's corner, and the
+        // toast's window spans that page.
         let (frame, _) = self.page_frame(self.viewport);
         let panes = self.panes(self.selected);
         let focused = panes.iter().position(|&pane| pane == self.selected).unwrap_or(0);
         let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
         let pane = pane_frames(frame, panes.len(), stacked, &shares)[focused];
-        let pane_corner =
-            (f32::from(frame.right() - pane.right()), f32::from(pane.top() - frame.top()));
+        let pane_corner = (
+            f32::from(pane.left()),
+            f32::from(frame.right() - pane.right()),
+            f32::from(pane.top() - frame.top()),
+        );
         if self.pane_corner != pane_corner {
             self.pane_corner = pane_corner;
-            self.browser.set_pane_corner(pane_corner.0, pane_corner.1, cx);
+            let (left, right, top) = pane_corner;
+            self.browser.set_pane_corner(left, right, top, cx);
         }
         let window_buttons = self.window_buttons_shown();
         if window_buttons != self.window_buttons {
@@ -3509,6 +3558,7 @@ impl Shell {
                     .children(self.question_card(cx))
                     .children(self.cast_card(cx))
                     .children(self.agent_question_card(cx))
+                    .children(self.update_sign())
                     .children(self.media_player_cards(cx))
                     .children(self.task_foot(cx))
                     .children(self.task_ghosts())
