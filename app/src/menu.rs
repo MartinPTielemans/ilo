@@ -24,7 +24,7 @@ use gpui::{
 };
 
 use crate::{
-    elevation::Level as Elevation,
+    elevation::{Level as Elevation, Reach},
     shell::{MenuEntry, Shell, keystroke_label},
     text_input::FieldMenu,
 };
@@ -123,10 +123,18 @@ impl Look {
 pub trait Host {
     /// Puts the menu's window over the browser window it's for at `frame` in that window's
     /// content, as it draws now, with the keyboard. `panels` are its levels' panels in it, from its
-    /// top left, open or not: the rest is their shadows' room, which a click goes through.
+    /// top left, open or not: the rest is their shadows' room, which a click goes through. Where
+    /// the window can't blend, they're only the open ones, which it shows alone, and it's shown
+    /// again as a submenu opens or closes.
     fn show(&self, frame: Bounds<Pixels>, panels: &[Bounds<Pixels>]);
     /// Takes it away, and gives the keyboard back to what had it.
     fn hide(&self);
+    /// Whether the window blends with what's under it. One that can't, on X11 with no compositor,
+    /// shows its clear pixels black (#1479), so there the panels are opaque and square with no
+    /// shadow, and the window holds them alone.
+    fn blends(&self) -> bool {
+        true
+    }
 }
 
 /// A menu to show.
@@ -204,6 +212,28 @@ impl Layout {
     fn level_of(&self, entry: usize) -> Option<usize> {
         self.levels.iter().position(|level| level.parent == Some(entry))
     }
+
+    /// As laid out for a window that can't blend: each panel out to whole points, since a pixel its
+    /// edge only partly covers would show black, and the window just round them, with no shadows.
+    pub(crate) fn opaque(mut self) -> Layout {
+        for level in &mut self.levels {
+            let (origin, end) = (level.bounds.origin, level.bounds.bottom_right());
+            level.bounds = Bounds::from_corners(origin.map(|at| at.floor()), end.map(|at| at.ceil()));
+        }
+        self.frame = framed(&self.levels, Reach { above: 0., below: 0., sides: 0. });
+        self
+    }
+}
+
+/// The window round the panels of `levels` and the `reach` of their shadows, out to whole points.
+/// A window put at a fraction of one lands on a pixel, so each pointer move reached the menu twice,
+/// a quarter point apart, and the second left the safe triangle.
+fn framed(levels: &[Level], reach: Reach) -> Bounds<Pixels> {
+    let union = (levels.iter().skip(1)).fold(levels[0].bounds, |all, level| all.union(&level.bounds));
+    Bounds::from_corners(
+        (union.origin - point(px(reach.sides), px(reach.above))).map(|at| at.floor()),
+        (union.bottom_right() + point(px(reach.sides), px(reach.below))).map(|at| at.ceil()),
+    )
 }
 
 /// How wide a level's panel is for titles and shortcuts `width_of` measures, between the
@@ -300,15 +330,7 @@ pub(crate) fn lay_out(
         let bounds = Bounds::new(origin, gpui::size(px(size.0), px(size.1)));
         levels.push(Level { parent, items, bounds, tops, checks });
     }
-    // The window's room around the panels for their shadow, out to whole points. A window put at
-    // a fraction of one lands on a pixel, so each pointer move reached the menu twice, a quarter
-    // point apart, and the second left the safe triangle.
-    let reach = Elevation::Popover.reach();
-    let union = (levels.iter().skip(1)).fold(levels[0].bounds, |all, level| all.union(&level.bounds));
-    let frame = Bounds::from_corners(
-        (union.origin - point(px(reach.sides), px(reach.above))).map(|at| at.floor()),
-        (union.bottom_right() + point(px(reach.sides), px(reach.below))).map(|at| at.ceil()),
-    );
+    let frame = framed(&levels, Elevation::Popover.reach());
     Layout { levels, frame }
 }
 
@@ -434,6 +456,11 @@ impl Tracking {
             typed: String::new(),
             typed_at: None,
         }
+    }
+
+    /// The items whose submenus are open, the outermost first.
+    fn open_submenus(&self) -> Vec<usize> {
+        self.open[1..].iter().filter_map(|open| self.layout.levels[open.level].parent).collect()
     }
 
     fn selectable(&self, entry: usize) -> bool {
@@ -804,6 +831,26 @@ struct Shown {
     alt: bool,
     /// Whether it has drawn on screen, and with ⌥ held, which the log says as it changes.
     drawn: Option<bool>,
+    /// The items whose submenus it has drawn open since they last opened, which the log says.
+    drawn_open: Vec<usize>,
+    /// Whether its window blends with what's under it (`Host::blends`).
+    blends: bool,
+}
+
+impl Shown {
+    /// The panels the host's window holds, from its top left: every level's where it blends,
+    /// else only those open, which it shows alone.
+    fn panels(&self) -> Vec<Bounds<Pixels>> {
+        let layout = &self.tracking.layout;
+        let at = |level: usize| {
+            let bounds = layout.levels[level].bounds;
+            Bounds::new(bounds.origin - layout.frame.origin, bounds.size)
+        };
+        match self.blends {
+            true => (0..layout.levels.len()).map(at).collect(),
+            false => self.tracking.open.iter().map(|open| at(open.level)).collect(),
+        }
+    }
 }
 
 /// The menu's window's view.
@@ -901,14 +948,13 @@ pub fn show(request: Request, cx: &mut App) {
             crate::tooltip::text_width(&text, TEXT, gpui::FontWeight::NORMAL, &system)
         };
         let layout = lay_out_over(&request.items, request.at, request.area, &width_of);
+        let blends = menu.host.blends();
+        let layout = if blends { layout } else { layout.opaque() };
         // check.sh waits for this line before it chooses.
         log!("browser: menu shown {}", described(&request.items));
         let frame = layout.frame;
-        let panels: Vec<_> = (layout.levels.iter())
-            .map(|level| Bounds::new(level.bounds.origin - frame.origin, level.bounds.size))
-            .collect();
         let origin = menu.fixed.unwrap_or(frame.origin);
-        menu.shown = Some(Shown {
+        let shown = Shown {
             tracking: Tracking::new(request.items, layout, request.at),
             look: request.look,
             origin,
@@ -917,7 +963,11 @@ pub fn show(request: Request, cx: &mut App) {
             logged_open: Vec::new(),
             alt,
             drawn: None,
-        });
+            drawn_open: Vec::new(),
+            blends,
+        };
+        let panels = shown.panels();
+        menu.shown = Some(shown);
         window.focus(&menu.focus, cx);
         // After a hide that `close` asked for, so the new menu stays.
         let host = menu.host.clone();
@@ -934,7 +984,7 @@ pub fn highlight_first(cx: &mut App) {
         if shown.tracking.open[0].highlight.is_none() {
             let outcome = shown.tracking.key(Key::First, Instant::now());
             menu.outcome(outcome, cx);
-            menu.log_highlight();
+            menu.changed(cx);
         }
     });
 }
@@ -956,7 +1006,7 @@ pub fn pointer(event: Pointer, at: Point<Pixels>, cx: &mut App) -> bool {
     let mut taken = false;
     update(cx, |menu, _, cx| {
         taken = menu.pointer(event, at, cx);
-        menu.log_highlight();
+        menu.changed(cx);
     });
     taken
 }
@@ -1092,7 +1142,7 @@ impl ContextMenu {
             menu.update(cx, |menu, cx| {
                 if let Some(shown) = menu.shown.as_mut() {
                     shown.tracking.rested(Instant::now());
-                    menu.log_highlight();
+                    menu.changed(cx);
                     cx.notify();
                 }
             })
@@ -1110,18 +1160,22 @@ impl ContextMenu {
         if let Some(key) = key_of(event) {
             let outcome = shown.tracking.key(key, Instant::now());
             self.outcome(outcome, cx);
-            self.log_highlight();
+            self.changed(cx);
         }
     }
 
-    /// Logs the highlight as it moves, with its row in the browser window's content, for check.sh
-    /// to follow the keys and the pointer: the deepest level's, else the row whose submenu shows.
-    /// And each submenu as it opens, with its panel, and as it closes.
-    fn log_highlight(&mut self) {
+    /// Follows what the keys and the pointer did. Logs the highlight as it moves, with its row in
+    /// the browser window's content, for check.sh to follow them: the deepest level's, else the
+    /// row whose submenu shows. And each submenu as it opens, with its panel, and as it closes,
+    /// when a window that can't blend is shown again with the panels open now.
+    fn changed(&mut self, cx: &mut Context<Self>) {
         let Some(shown) = self.shown.as_mut() else { return };
         let tracking = &shown.tracking;
-        let open: Vec<usize> =
-            tracking.open[1..].iter().filter_map(|open| tracking.layout.levels[open.level].parent).collect();
+        let open = tracking.open_submenus();
+        if !shown.blends && open != shown.logged_open {
+            let (host, frame, panels) = (self.host.clone(), tracking.layout.frame, shown.panels());
+            cx.defer(move |_| host.show(frame, &panels));
+        }
         let kept = open.iter().zip(&shown.logged_open).take_while(|(a, b)| a == b).count();
         for &closed in shown.logged_open[kept..].iter().rev() {
             log!("browser: menu submenu {} hidden", tracking.entries[closed].title);
@@ -1316,11 +1370,11 @@ impl ContextMenu {
             .top(at.y)
             .w(level.bounds.size.width)
             .h(level.bounds.size.height)
-            .rounded(px(RADIUS))
+            // Where the window can't blend, a round corner or a shadow would show black.
+            .when(shown.blends, |panel| panel.rounded(px(RADIUS)).shadow(Elevation::Popover.shadow()))
             .bg(rgba(palette.fill))
             .border_1()
             .border_color(rgba(palette.rim))
-            .shadow(Elevation::Popover.shadow())
             .text_size(px(TEXT))
             .children(rows)
             // The root level's rows go under the window's own node, which has the keyboard.
@@ -1371,6 +1425,16 @@ impl Render for ContextMenu {
                 false => window.request_animation_frame(),
             }
         }
+        // check.sh waits for these lines to capture a submenu.
+        if let Some(shown) = self.shown.as_mut()
+            && window.is_visible()
+        {
+            let open = shown.tracking.open_submenus();
+            for &opened in open.iter().filter(|opened| !shown.drawn_open.contains(opened)) {
+                log!("browser: menu submenu {} drawn", shown.tracking.entries[opened].title);
+            }
+            shown.drawn_open = open;
+        }
         let Some(shown) = self.shown.as_ref() else { return root };
         let panels: Vec<_> = (0..shown.tracking.open.len()).map(|depth| self.panel(shown, depth)).collect();
         // On a platform whose host doesn't see the pointer first (Linux, the preview), the
@@ -1378,7 +1442,7 @@ impl Render for ContextMenu {
         let on = |event: Pointer| {
             cx.listener(move |menu: &mut Self, at: &Point<Pixels>, _: &mut Window, cx: &mut Context<Self>| {
                 menu.pointer(event, *at, cx);
-                menu.log_highlight();
+                menu.changed(cx);
             })
         };
         let (moved, pressed, right) = (on(Pointer::Moved), on(Pointer::Pressed), on(Pointer::RightPressed));
