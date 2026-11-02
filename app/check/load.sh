@@ -15,7 +15,7 @@ if windows; then
   # The window takes chrome.dll's icon. An engine from before #1350 has Chromium's, which its
   # package step now refuses, so only such an engine skips this.
   ico=platform/windows/package/Assets/ilo.ico
-  if python3 -I ../engine/windows/icons.py "$app/chrome.dll" '#101' "$ico" > /dev/null 2>&1; then
+  if python3 -I ../engine/icons.py group "$app/chrome.dll" '#101' "$ico" > /dev/null 2>&1; then
     python3 -I check/app-windows.py icon "$(cat "/proc/$pid/winpid")" "$ico" > "$out/icons.txt" ||
       fail "the window's icons aren't ilo's: $(tr '\n' ';' < "$out/icons.txt")"
     icons=" The window's icons are ilo's."

@@ -1,10 +1,11 @@
 # The engine on Linux: ungoogled-chromium-portablelinux's build with the core and our series
 # (engine/linux/), published as a release fetch.sh downloads. It runs on the owner's machine, which
 # keeps the tree and its build in $ILO_ENGINE_ROOT between runs, so a run recompiles only what
-# changed. Run by hand; on main when the pin, the series, the core or the Linux engine's scripts
-# change, so the download keeps up with the core; and on engine-build/ branches, which only those
-# who can push here make, to try an engine change before it merges. Never on other branches or pull requests,
-# as the repository is public. core-linux.yml compiles the core alone on every push.
+# changed. Run by hand; on main when the pin, the series, the core, the Linux engine's scripts or
+# ilo's icon change, so the download keeps up with the core; and on engine-build/ branches, which
+# only those who can push here make, to try an engine change before it merges. Never on other
+# branches or pull requests, as the repository is public. core-linux.yml compiles the core alone on
+# every push.
 name: Engine on Linux
 
 on:
@@ -18,6 +19,8 @@ on:
       - engine/patches/**
       - engine/tree.sh
       - engine/linux/**
+      - engine/icons.py
+      - app/platform/windows/package/Assets/ilo.ico
       - .github/workflows/engine-linux.yml
 
 # One build per branch waits, the newest, so a burst of merges to main builds once, and one that

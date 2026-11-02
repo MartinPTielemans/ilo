@@ -24,7 +24,7 @@ on:
       - engine/patches/**
       - engine/tree.sh
       - engine/windows/cross/**
-      - engine/windows/icons.py
+      - engine/icons.py
       - app/platform/windows/package/Assets/ilo.ico
       - .github/workflows/engine-windows-cross.yml
 
