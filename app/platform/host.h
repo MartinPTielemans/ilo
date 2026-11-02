@@ -31,6 +31,10 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
 // the Mac's own alone. Copies up to |count| screens into |frames| and returns how many there are.
 size_t host_screens(double* frames, size_t count);
 
+// Where the pointer is, in host_centered's terms, for Little ilo to open on its screen. False where
+// the host doesn't say, as on Linux, whose window manager places windows.
+bool host_pointer(double* x, double* y);
+
 // The frame of the browser window of |ui_view|, in host_centered's terms. False, leaving them be,
 // while it's full screen.
 bool host_window_frame(void* ui_view, double* x, double* y, double* width, double* height);

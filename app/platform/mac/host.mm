@@ -1539,6 +1539,14 @@ size_t host_screens(double* frames, size_t count) {
   return screens.count;
 }
 
+bool host_pointer(double* x, double* y) {
+  const NSPoint point = NSEvent.mouseLocation;
+  *x = point.x;
+  // AppKit's y runs up from the bottom of the main display, the core's down from its top.
+  *y = NSHeight(NSScreen.screens.firstObject.frame) - point.y;
+  return true;
+}
+
 bool host_window_frame(void* ui_view, double* x, double* y, double* width, double* height) {
   Browser* browser = BrowserWithView(ui_view);
   NSWindow* window = browser ? browser->window : nil;

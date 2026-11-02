@@ -164,6 +164,7 @@ mod platform {
             height: f64,
         );
         pub fn host_screens(frames: *mut f64, count: usize) -> usize;
+        pub fn host_pointer(x: *mut f64, y: *mut f64) -> bool;
         pub fn host_window_frame(
             ui_view: *mut c_void,
             x: *mut f64,
@@ -3844,13 +3845,19 @@ fn little_tab_opened(window: bc::bc_id, tab: u64, home: bc::bc_id) {
     log!("browser: little window {window} put {tab} in space {home}");
 }
 
-/// Where a Little ilo window opens: centred a little above the middle of the screen the windows
-/// open on. Arc's opens on the pointer's screen, which waits for the host to say where it is.
+/// Where a Little ilo window opens: centred a little above the middle of the screen the pointer is
+/// on, as Arc's, else of the one the windows open on.
 fn little_frame() -> bc::bc_rect {
     let (width, height) = little_size();
+    let screens = screens();
     let (mut x, mut y) = (0., 0.);
-    unsafe { platform::host_centered(width, height, &mut x, &mut y) };
-    let frame = window_frames::raised(Frame { x, y, width, height }, &screens());
+    let pointer = unsafe { platform::host_pointer(&mut x, &mut y) };
+    let size = (width, height);
+    let on_pointers = pointer.then(|| window_frames::on_screen_of((x, y), size, &screens));
+    let frame = on_pointers.flatten().unwrap_or_else(|| {
+        unsafe { platform::host_centered(width, height, &mut x, &mut y) };
+        window_frames::raised(Frame { x, y, width, height }, &screens)
+    });
     bc::bc_rect {
         x: frame.x,
         y: frame.y,

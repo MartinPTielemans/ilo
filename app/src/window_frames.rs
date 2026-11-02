@@ -15,6 +15,10 @@ impl Frame {
         self.width <= 0. || self.height <= 0.
     }
 
+    fn holds(&self, x: f64, y: f64) -> bool {
+        (self.x..self.x + self.width).contains(&x) && (self.y..self.y + self.height).contains(&y)
+    }
+
     fn overlap(&self, other: &Frame) -> f64 {
         let width = (self.x + self.width).min(other.x + other.width) - self.x.max(other.x);
         let height = (self.y + self.height).min(other.y + other.height) - self.y.max(other.y);
@@ -61,11 +65,7 @@ pub fn place(saved: Frame, screens: &[Frame]) -> Option<Frame> {
 /// centre it, leaving the window manager to place it, as on X11.
 pub fn raised(centered: Frame, screens: &[Frame]) -> Frame {
     let (x, y) = (centered.x + centered.width / 2., centered.y + centered.height / 2.);
-    let holds = |screen: &&Frame| {
-        (screen.x..screen.x + screen.width).contains(&x)
-            && (screen.y..screen.y + screen.height).contains(&y)
-    };
-    let Some(screen) = screens.iter().find(holds) else {
+    let Some(screen) = screens.iter().find(|screen| screen.holds(x, y)) else {
         return centered;
     };
     if (screen.x + screen.width / 2. - x).abs() > 1. {
@@ -73,6 +73,16 @@ pub fn raised(centered: Frame, screens: &[Frame]) -> Frame {
     }
     let room = (screen.height - centered.height).max(0.);
     Frame { y: screen.y + room * 0.4, ..centered }
+}
+
+/// Where a Little ilo window of `size` opens on the screen holding `pointer`, as Arc's opens on the
+/// pointer's screen: across its middle, and as `raised` puts it. None off every screen.
+pub fn on_screen_of(pointer: (f64, f64), size: (f64, f64), screens: &[Frame]) -> Option<Frame> {
+    let screen = screens.iter().find(|screen| screen.holds(pointer.0, pointer.1))?;
+    let (width, height) = size;
+    let x = screen.x + (screen.width - width) / 2.;
+    let y = screen.y + (screen.height - height) / 2.;
+    Some(raised(Frame { x, y, width, height }, screens))
 }
 
 #[cfg(test)]
@@ -130,6 +140,18 @@ mod tests {
     fn a_frame_saved_empty_is_the_apps_to_place() {
         assert_eq!(place(frame(0., 0., 0., 0.), &[LAPTOP]), None);
         assert_eq!(place(frame(0., 0., 0., 0.), &[]), None);
+    }
+
+    /// Little ilo opens on the screen the pointer is on, across its middle and four tenths of the
+    /// room down, and off every screen it's left to the screen the windows open on.
+    #[test]
+    fn little_ilo_opens_on_the_pointers_screen() {
+        let on_display = on_screen_of((3000., 700.), (900., 640.), &[LAPTOP, DISPLAY]);
+        assert_eq!(on_display, Some(frame(2342., 25. + 775. * 0.4, 900., 640.)));
+        let on_laptop = on_screen_of((10., 900.), (900., 640.), &[LAPTOP, DISPLAY]);
+        assert_eq!(on_laptop, Some(frame(306., 25. + 317. * 0.4, 900., 640.)));
+        assert_eq!(on_screen_of((-50., 700.), (900., 640.), &[LAPTOP, DISPLAY]), None);
+        assert_eq!(on_screen_of((10., 900.), (900., 640.), &[]), None);
     }
 
     #[test]

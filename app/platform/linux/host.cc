@@ -328,6 +328,11 @@ void host_capture_name(char* name, size_t capacity) {
 
 // host_screens and host_window_frame are frames.rs's, which reads them from the X server.
 
+// The window manager places a new window, Little ilo's too, wherever the pointer is.
+bool host_pointer(double*, double*) {
+  return false;
+}
+
 // shortcut: links a launch carries come in on the command line, so there's nothing to wait for.
 void host_watch_finished_launching(void (*finished)(void)) {
   finished();
