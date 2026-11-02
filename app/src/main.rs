@@ -1271,6 +1271,13 @@ impl link_preview::Host for LinkPreviewHost {
             shell.update(cx, |shell, cx| shell.preview_closed(closed, undone, cx)).ok();
         }
     }
+
+    fn tooltip(&self, tip: Option<(tooltip::Tip, tooltip::Anchor)>, cx: &mut App) {
+        match tip {
+            Some((tip, anchor)) => tooltip::hover(tip, anchor, cx),
+            None => tooltip::dismiss(cx),
+        }
+    }
 }
 
 extern "C" fn link_preview_dismissed() {
@@ -6271,6 +6278,10 @@ unsafe extern "C" fn tab_favicon_changed(
         Arc::new(Image::from_bytes(ImageFormat::Png, png))
     });
     log!("browser: favicon {tab} {size} bytes");
+    // A tab of no window's is the link preview's, which shows its site's.
+    if unsafe { bc::bc_tab_window(tab) } == 0 {
+        update_app(|cx| link_preview::set_favicon(tab, favicon.clone(), cx));
+    }
     update_shells(|shell, cx| shell.set_favicon(tab, favicon.clone(), cx));
 }
 

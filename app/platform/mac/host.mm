@@ -3067,7 +3067,7 @@ void host_link_preview_drew(double left,
                             double top,
                             double width,
                             double height,
-                            double,
+                            double radius,
                             double opacity) {
   // Posted, so the page takes the frame the UI is drawing now.
   dispatch_async(dispatch_get_main_queue(), ^{
@@ -3098,6 +3098,9 @@ void host_link_preview_drew(double left,
                                   ? CATransform3DIdentity
                                   : CATransform3DScale(CATransform3DMakeTranslation(dx, dy, 0),
                                                        scale_x, scale_y, 1);
+    // The page's corners as drawn, before the transform scales them: the preview's own at rest,
+    // the window's page's as it grows into the tab's place, so it lands with them.
+    page.layer.cornerRadius = 2 * radius / (scale_x + scale_y);
     [CATransaction commit];
     g_link_preview_page.alphaValue = opacity;
   });
@@ -3494,6 +3497,11 @@ void host_show_tooltip(void* ui_view, double left, double top, double fade) {
       g_tooltip.alphaValue = 0;
       AddOver(browser->window, g_tooltip);
       RaiseOverlays(browser, g_tooltip);
+    }
+    // Peek's buttons have tooltips, and Peek is a sibling child window at the same level, so the
+    // tooltip goes above it by name, even when it was still parented as Peek came in front.
+    if (g_link_preview_shown && g_link_preview_over == browser) {
+      [g_tooltip orderWindow:NSWindowAbove relativeTo:g_link_preview.windowNumber];
     }
     FadeTooltip(1, fade, ^{
       if (change == g_tooltip_changes) {

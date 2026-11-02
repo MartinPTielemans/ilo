@@ -116,7 +116,7 @@ pub use browser::{
 pub use commands::{
     BAR_ROWS, BAR_TABS_SHOWN, BarCommand, BarTab, CancelName, Command, CreateSpace, KEY_CONTEXT,
     KeepName, Match, bar_commands, bind_keys, copy_from_bar, copy_url_of_preview, find_commands,
-    key_name, keystroke_label, Run, menu_item, pane_added, run_from_bar, shown_tab, with_named_rows,
+    key_name, keystroke_keys, keystroke_label, Run, menu_item, pane_added, run_from_bar, shown_tab, with_named_rows,
 };
 pub use drag::dropped_urls;
 pub use drm_note::PlayReady;
