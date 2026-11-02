@@ -875,7 +875,6 @@ settled
 # and none of them shows.
 e=$(pinned | cut -d' ' -f1)
 c=$(pinned | cut -d' ' -f2)
-was=$(today)
 rm -rf "$notes"
 mkdir -p "$notes/sub"
 for file in b.txt A.txt .hidden sub/c.txt; do
@@ -914,7 +913,9 @@ case "$(outline)" in
   *) fail "the file's row didn't go back to its place: $(outline)" ;;
 esac
 # The +'s menu ends with Add File or Folder… (Add Files… and Add Folder… off the Mac, whose
-# panels pick one kind), whose file, named at launch, opens at the top of Today and shows.
+# panels pick one kind), whose file, named at launch, opens at the top of Today and shows. Today is
+# read here, as the drag before may have dropped its file on the page, which opens it as a tab.
+was=$(today)
 send layout
 height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
   sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
