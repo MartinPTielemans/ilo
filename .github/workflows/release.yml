@@ -18,8 +18,8 @@
 # that commit) and wait for its release engine-windows-<commit>; otherwise the Windows job stops at
 # "No Windows engine release for this commit", or packs an older core. The owner publishes
 # the draft, which puts its Linux build in the Flatpak repository (the publish job) and the release
-# on ilobrowser.com (the site job). docs/releasing.md names the secrets it needs. GitHub's
-# hosted runners only.
+# on ilobrowser.com (the site job), and tells the bot that announces releases (the announce job).
+# docs/releasing.md names the secrets it needs. GitHub's hosted runners only.
 name: Release
 
 on:
@@ -644,3 +644,32 @@ jobs:
           fi
           gh api repos/MartinPTielemans/ilo-site/dispatches -f event_type=ilo-release -f "client_payload[tag]=$TAG"
           echo "ilobrowser.com is updating to $TAG: https://github.com/MartinPTielemans/ilo-site/actions" >> "$GITHUB_STEP_SUMMARY"
+
+  # The owner published a draft: the bot that announces releases hears of it now, rather than at its
+  # next hourly check, and its answer never fails or holds up the release (docs/releasing.md).
+  announce:
+    if: ${{ github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    continue-on-error: true
+    steps:
+      - env:
+          TAG: ${{ github.event.release.tag_name }}
+          RELEASE_URL: ${{ github.event.release.html_url }}
+          RELEASE_WEBHOOK_URL: ${{ secrets.RELEASE_WEBHOOK_URL }}
+          RELEASE_WEBHOOK_KEY: ${{ secrets.RELEASE_WEBHOOK_KEY }}
+        run: |
+          if [ -z "$RELEASE_WEBHOOK_URL" ] || [ -z "$RELEASE_WEBHOOK_KEY" ]; then
+            echo "::notice::No RELEASE_WEBHOOK_URL or RELEASE_WEBHOOK_KEY (docs/releasing.md), so the announcement bot finds $TAG at its next hourly check."
+            exit 0
+          fi
+          # A body in a variable, not on stdin, so curl's retry can send it again. curl's own errors
+          # name the host, so they go nowhere: the status alone is printed.
+          body=$(jq -n --arg tag "$TAG" --arg url "$RELEASE_URL" '{tag: $tag, url: $url}')
+          status=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 15 --retry 1 \
+            -H "Authorization: Bearer $RELEASE_WEBHOOK_KEY" -H 'Content-Type: application/json' \
+            --data-binary "$body" "$RELEASE_WEBHOOK_URL" 2> /dev/null) || true
+          case $status in
+            2??) echo "The announcement bot heard of $TAG (HTTP $status)." >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "::warning::The announcement bot wasn't told of $TAG (HTTP ${status:-000}), so it finds it at its next hourly check." ;;
+          esac
