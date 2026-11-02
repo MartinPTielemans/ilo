@@ -30,7 +30,7 @@ Each principle has what was **seen**, with the spec section it comes from, our *
 
 ## A change shows that it happened
 
-- **Seen.** A click on Copy URL turns its link into a check that draws itself from its left end, down, then up (Sidebar › URL field, the owner's look at Arc). Reload shrinks away as stop comes, in 80 ms (Motion). A row's close button changes only when its action does: ✕ closes, − unloads and the trash removes, so a loaded pinned row shows − whether or not it's selected (owner, 2026-11-02, #1349). Clear shows no toast: the rows leaving say what it did.
+- **Seen.** A click on Copy URL turns its link into a check that draws itself from its left end, down, then up (Sidebar › URL field, the owner's look at Arc). Reload becomes stop in 80 ms. One shape per action: ✕ closes, − unloads, trash removes (owner, 2026-11-02, #1349). Clear shows no toast: the rows leaving say what it did.
 - **Reading.** A glyph that swaps in one frame is easy to miss, and a click that seems to do nothing gets clicked again. Motion on the thing clicked says it worked, where the eye already is, with nothing to read.
 - **Applies.** A glyph that changes on the same thing moves into the new one (Motion › Glyph change). One that differs because something else is shown, such as another tab, shows at once: nothing changed, and a switch stays instant.
 
