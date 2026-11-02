@@ -634,11 +634,12 @@ impl Swatch {
             .flex_none()
             .size(px(size))
             .rounded_full()
-            .overflow_hidden()
             .bg(gradient)
             .when_some(self.third, |swatch, third| {
                 let third = Hsla::from(third);
-                swatch.child(div().absolute().size_full().bg(linear_gradient(
+                // Rounded itself: GPUI clips a child to its parent's box, not its rounded corners,
+                // so a square layer's corners would show under the circle (#1354).
+                swatch.child(div().absolute().size_full().rounded_full().bg(linear_gradient(
                     180.,
                     linear_color_stop(third.opacity(0.), 0.),
                     linear_color_stop(third, 1.),
