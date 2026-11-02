@@ -5,8 +5,9 @@
 # the Mac's and WinSparkle the Windows one (tools/appcast.py). The installer is built from the
 # DMG's commit, so the two have one build number. With --publish, both go up as the GitHub release
 # v<version>, and the appcast to the release the feed (app/branding/update-feed) is served from.
-# The notes are Markdown, shown in the Mac's alert; WinSparkle shows the release's page, which the
-# Mac's first launch of the update opens.
+# The notes are Markdown, shown in the Mac's alert. WinSparkle shows the release's entry in the
+# site's changelog, /changelog#<version> on app/branding/site, which the Mac's first launch of the
+# update opens too.
 #
 # Once, on the owner's Mac, before the first release, with Sparkle from app/setup.sh:
 #   app/.deps/Sparkle/bin/generate_keys --account ilo                      # the key, in the Keychain
@@ -78,6 +79,8 @@ feed_tag=${feed_tag%%/*}
 [ -x "$bin/generate_appcast" ] || { echo "No Sparkle in app/.deps. Run app/setup.sh." >&2; exit 1; }
 version=$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")
 build=$(plutil -extract CFBundleVersion raw "$app/Contents/Info.plist")
+# The release's entry in the site's changelog, which names each entry by its version.
+notes_url=$(cat "$root/branding/site")/changelog#$version
 # An update signed with another key than the one the app carries is one it refuses.
 # With UPDATE_PRIVATE_KEY, generate_appcast leaves an update whose app carries another key unsigned,
 # which the check after it catches.
@@ -116,7 +119,7 @@ case $(curl -sSL -w '%{http_code}' -o "$work/appcast.xml" "$feed") in
 esac
 private_key | "$bin/generate_appcast" "${signing[@]}" \
   --download-url-prefix "$repo/releases/download/v$version/" \
-  --full-release-notes-url "$repo/releases/tag/v$version" \
+  --full-release-notes-url "$notes_url" \
   --embed-release-notes --maximum-deltas 0 \
   -o "$work/appcast.xml" "$work"
 after=$(grep -c '<item>' "$work/appcast.xml")
@@ -128,7 +131,7 @@ if [ -n "$windows" ]; then
   signature=$(private_key | "$bin/sign_update" "${signing[@]}" -p "$windows")
   python3 -I "$tools/appcast.py" finish "$work/appcast.xml" "$aside" --windows \
     "$repo/releases/download/v$version/$(basename "$windows")" "$(wc -c < "$windows" | tr -d ' ')" \
-    "$signature" "$version" "$build" "$repo/releases/tag/v$version"
+    "$signature" "$version" "$build" "$notes_url"
 else
   python3 -I "$tools/appcast.py" finish "$work/appcast.xml" "$aside"
 fi
