@@ -1368,7 +1368,7 @@ impl Shell {
     /// Copies the selected tab's URL, or a Markdown link to it, without its tracking parameters,
     /// and says so in the toast.
     fn copy_url(&mut self, markdown: bool, cx: &mut Context<Self>) {
-        if let Some((text, toast)) = self.link_to_copy(self.selected, markdown) {
+        if let Some((text, toast)) = self.link_to_copy(self.field_tab(), markdown) {
             self.copy(&text, toast, cx);
         }
     }
@@ -1434,7 +1434,7 @@ impl Shell {
     pub(super) fn copy_url_from_button(&mut self, cx: &mut Context<Self>) {
         // check.sh waits for this line.
         log!("browser: command copy-url via sidebar");
-        let Some((text, toast)) = self.link_to_copy(self.selected, false) else {
+        let Some((text, toast)) = self.link_to_copy(self.field_tab(), false) else {
             return;
         };
         self.copy(&text, toast, cx);

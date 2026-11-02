@@ -662,6 +662,10 @@ impl Shell {
                     _ => self.browser.zoom(tab, -1, cx),
                 }
             }
+            // The header's commands act on the page watched, as its URL field shows it.
+            Command::CopyUrl | Command::CopyMarkdownLink | Command::SiteControls if live.is_some() => {
+                return false;
+            }
             // ⌘T opens the bar over the conversation, from a page watched too.
             Command::NewTab | Command::SearchTabs => {
                 if self.task_area.as_ref().is_some_and(|area| area.page.is_some()) {

@@ -400,6 +400,35 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
     assert_eq!(says(&shell, cx), ("Stopped".into(), "".into(), false));
 }
 
+/// While a task's page is watched, the URL field shows its address, and Copy URL, Copy URL as
+/// Markdown and the Site Controls act on it, not on the user's tab under it.
+#[gpui::test]
+fn the_url_field_is_the_page_watcheds(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    shell.update(cx, |shell, cx| {
+        let page = |url: &str| Page { url: url.into(), ..Page::default() };
+        shell.set_page(10, page("https://en.wikipedia.org/wiki/Lisbon"), cx);
+        shell.set_page(30, page("https://www.gulbenkian.pt/tickets"), cx);
+        shell.set_title(30, "Tickets".into(), cx);
+    });
+    watching(&shell, &host, cx);
+    let field = shell.read_with(cx, |shell, _| shell.url(shell.field_tab()));
+    assert_eq!(field.as_ref(), "https://www.gulbenkian.pt/tickets");
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::CopyUrl, "ui", cx);
+        shell.run(Command::CopyMarkdownLink, "ui", cx);
+        shell.run(Command::SiteControls, "ui", cx);
+    });
+    let copied = host.copied.borrow().clone();
+    assert_eq!(copied, ["https://www.gulbenkian.pt/tickets", "[Tickets](https://www.gulbenkian.pt/tickets)"]);
+    assert_eq!(host.site_controls.borrow().last().map(|(tab, _)| *tab), Some(30));
+    assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), Some((3, Some(30))), "it left the page");
+
+    shell.update(cx, |shell, cx| shell.run(Command::Stop, "ui", cx));
+    let field = shell.read_with(cx, |shell, _| shell.url(shell.field_tab()));
+    assert_eq!(field.as_ref(), "https://en.wikipedia.org/wiki/Lisbon", "the conversation's is the user's");
+}
+
 /// ⌘R and Back act on the page watched; ⌘T opens the bar over the conversation, the core showing
 /// the user's Space again first, so a tab it opens is the user's.
 #[gpui::test]
