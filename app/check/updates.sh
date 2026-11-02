@@ -255,7 +255,8 @@ about_updates() {
   read -r sx sy sw sh <<EOF
 $(grep '^browser: update sign 0 at ' "$log" | tail -1 | cut -d' ' -f6-)
 EOF
-  send click $((sx + sw / 2)) $((sy + sh / 2))
+  # Posted: the app quits before the driver could say it's done.
+  post click $((sx + sw / 2)) $((sy + sh / 2))
   expect '^browser: command restart-to-update via sidebar$' "Restart to Update didn't take the click"
   expect '^browser: update installs now$' "Restart to Update didn't install the update"
   exec 3>&-
@@ -369,7 +370,8 @@ flatpak_updates_check() {
 $(grep '^browser: update sign 0 at ' "$log" | tail -1 | cut -d' ' -f6-)
 EOF
   ../tools/window-screenshot.sh "$pid" "$out/updates-ready.png" || fail "no window to capture"
-  send click $((sx + sw / 2)) $((sy + sh / 2))
+  # Posted: the app quits before the driver could say it's done.
+  post click $((sx + sw / 2)) $((sy + sh / 2))
   expect '^browser: command restart-to-update via sidebar$' "Restart to Update didn't take the click"
   for _ in $(seq 300); do
     kill -0 "$pid" 2> /dev/null || break
