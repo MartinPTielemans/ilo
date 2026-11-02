@@ -627,10 +627,11 @@ grep -q '^browser: toast shown Tabs unseen' "$log" && fail "the answered note ca
 quit
 
 # A tab put back that no window shows has no page, as the core logs, until it's first shown, when
-# its page loads scrolled where it was.
+# its page loads scrolled where it was. Its onkeydown returns nothing, since one returning false
+# cancels the key, and the page would keep every shortcut it gets first, as ⌘L.
 long='data:text/html,<title>top</title><div style="height:5000px"></div>
 <script>onscroll = () => document.title = "scrolled " + Math.round(scrollY);
-onkeydown = (e) => e.key == "f" && document.documentElement.requestFullscreen();</script>'
+onkeydown = (e) => { if (e.key == "f") document.documentElement.requestFullscreen(); };</script>'
 log="$out/unloaded-a.log"
 step=0
 rm -f "$saved" "$launch_frame"
