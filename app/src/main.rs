@@ -154,6 +154,7 @@ mod platform {
         #[cfg(target_os = "linux")]
         pub fn host_window_active(ui_view: *mut c_void, active: bool, whole_window: bool);
         pub fn host_capture_name(name: *mut c_char, capacity: usize);
+        pub fn host_set_window_little(ui_view: *mut c_void);
         pub fn host_show_window(ui_view: *mut c_void);
         pub fn host_show_window_behind(ui_view: *mut c_void, above_ui_view: *mut c_void);
         pub fn host_show_launch_window(
@@ -4410,6 +4411,9 @@ fn open_window_as(
     // Once the page frame is set, so the tab shown loads at its size, and before the window is on
     // screen, so the core's reports of its tabs can come before its first frame.
     let restored = first && restore_spaces(id, window, cx);
+    if let Some(Own::Little { .. }) = own {
+        unsafe { platform::host_set_window_little(ui_view) };
+    }
     match (&from, saved) {
         (Some(from), Some(_)) => unsafe { platform::host_show_window_behind(ui_view, from.ui_view) },
         _ => unsafe { platform::host_show_window(ui_view) },

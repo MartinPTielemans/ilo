@@ -245,6 +245,9 @@ struct Browser {
   void (*reveal_pointer)(void* ui_view, double x);
   double reveal_width = 0;
   id reveal_monitor;
+
+  // A Little ilo window's (host_set_window_little).
+  bool little = false;
 };
 
 // In the order their views were made. Each is allocated alone, so the pointers stay put.
@@ -1378,6 +1381,23 @@ void* host_ui_view(void) {
   return (__bridge void*)g_browsers.back()->ui_view;
 }
 
+void host_set_window_little(void* ui_view) {
+  if (Browser* browser = BrowserWithView(ui_view)) {
+    browser->little = true;
+  }
+}
+
+// Brings Little ilo's |window| to the desktop shown on its way on screen, as Arc's Little Arc
+// comes. macOS moves a window there only while it has MoveToActiveSpace, but counts a window with it
+// as on no desktop, so it has it only until then, as Settings does (OrderSettingsFront).
+static void ToActiveSpace(NSWindow* window) {
+  window.collectionBehavior |= NSWindowCollectionBehaviorMoveToActiveSpace;
+  __weak NSWindow* weak = window;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    weak.collectionBehavior &= ~NSWindowCollectionBehaviorMoveToActiveSpace;
+  });
+}
+
 void host_show_window(void* ui_view) {
   host_show_window_behind(ui_view, nullptr);
 }
@@ -1391,6 +1411,24 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   NSView* view = browser->ui_view;
   NSWindow* window = view.window;
   browser->window = window;
+  if (browser->little) {
+    // Over a full-screen browser window on the desktop shown, as Arc's opens over a full-screen Arc
+    // window. A window joins another's full-screen desktop only as its auxiliary, as Chromium's
+    // SetCanAppearInExistingFullscreenSpaces makes one, which can't go full screen itself.
+    for (auto& each : g_browsers) {
+      if (each.get() != browser && each->window.onActiveSpace &&
+          (each->window.styleMask & NSWindowStyleMaskFullScreen)) {
+        window.collectionBehavior =
+            (window.collectionBehavior & ~(NSWindowCollectionBehaviorPrimary |
+                                           NSWindowCollectionBehaviorFullScreenPrimary)) |
+            NSWindowCollectionBehaviorFullScreenAuxiliary;
+        // check.sh reads this line.
+        fprintf(stderr, "browser: little window over full screen\n");
+        break;
+      }
+    }
+    ToActiveSpace(window);
+  }
   // Never drawn, but Mission Control and the Window menu name the window by it.
   window.title = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleName"];
   // Under the UI's view, since the core keeps only the UI's and the page's views in its own.
@@ -1611,6 +1649,9 @@ void host_activate(void* ui_view) {
   if (!window) {
     return;
   }
+  if (browser->little) {
+    ToActiveSpace(window);
+  }
   if (window.miniaturized) {
     [window deminiaturize:nil];
   }
@@ -1624,6 +1665,9 @@ void host_activate(void* ui_view) {
 void host_set_window_shown(void* ui_view, bool shown) {
   Browser* browser = BrowserWithView(ui_view);
   NSWindow* window = browser ? browser->window : nil;
+  if (shown && browser->little) {
+    ToActiveSpace(window);
+  }
   if (!shown) {
     [window orderOut:nil];
   } else if (window.miniaturized) {

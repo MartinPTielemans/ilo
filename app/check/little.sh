@@ -4,7 +4,8 @@
 # beside the page as ⌥-click does, and ⌘W closes that window, its page with it. An escape the page
 # doesn't use closes one. A tab its page opens goes behind, to the top of its Space's Today, and
 # outlives it. The first opens 900 × 640, and each after at the size the last one closed at. On the
-# Mac the Dock's menu opens one after its New Window, and hides and shows them all.
+# Mac one opens over a full-screen window, and the Dock's menu opens one after its New Window, and
+# hides and shows them all.
 
 serve
 log="$out/little.log"
@@ -131,6 +132,26 @@ none_since "^browser: tab $behind closed\$" ||
   fail "the tab the Little ilo window's page opened behind closed with the window"
 send window 1
 
+# Over the main window in full screen, on the Mac, ⌥⌘N's Little ilo window opens on its desktop,
+# over it, rather than on another.
+if [ "$(uname)" = Darwin ]; then
+  send fullscreen
+  expect '^browser: window entered full screen$' "the main window didn't go full screen"
+  send key n cmd alt
+  expect "^browser: little window opened [0-9]* profile [0-9]* home $home\$" \
+    "⌥⌘N in full screen didn't open a Little ilo window"
+  little=$(opened)
+  expect '^browser: little window over full screen$' \
+    "the Little ilo window didn't open over the full-screen window"
+  send window 5
+  ../tools/window-screenshot.sh "$pid" "$out/little-full-screen.png" all || fail "no window to capture"
+  send key w cmd
+  expect "^browser: window closed $little\$" "⌘W didn't close the Little ilo window over full screen"
+  send window 1
+  send fullscreen
+  expect '^browser: window left full screen$' "the main window didn't leave full screen"
+fi
+
 # The Dock's menu, the Mac's alone: New Little ilo Window after the engine's New Window opens one
 # for the Space shown, and while one is open Hide All Little ilo Windows hides it, which Show All
 # Little ilo Windows brings back in front.
@@ -156,7 +177,7 @@ if [ "$(uname)" = Darwin ]; then
   send dock Show All Little ilo Windows
   expect "^browser: dock showed little windows $little\$" "Show All Little ilo Windows didn't show it"
   expect "^browser: key window $little\$" "Show All didn't put the Little ilo window in front"
-  send window 5
+  send window 6
   ../tools/window-screenshot.sh "$pid" "$out/little-dock.png" all || fail "no window to capture"
   send key w cmd
   expect "^browser: window closed $little\$" "⌘W didn't close the Dock's Little ilo window"
@@ -166,4 +187,4 @@ fi
 exec 3>&-
 quit
 kill "$server"
-echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L loads a URL in it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac the Dock's menu opens one and hides and shows them all. Windows: $out/little.png $out/little-moved.png $out/little-link.png, and on the Mac $out/little-dock.png"
+echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L loads a URL in it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one opens over the main window in full screen and the Dock's menu opens one and hides and shows them all. Windows: $out/little.png $out/little-moved.png $out/little-link.png, and on the Mac $out/little-full-screen.png $out/little-dock.png"

@@ -77,6 +77,12 @@ void host_window_active(void* ui_view, bool active, bool whole_window);
 // "Capture 2026-10-29 at 18.04.12.png".
 void host_capture_name(char* name, size_t capacity);
 
+// The browser window of |ui_view| is Little ilo's, as Arc's Little Arc: each time it comes on
+// screen it comes to the desktop shown rather than taking the user to the one it was on, and opened
+// while a full-screen browser window has that desktop, it opens over it there. Before
+// host_show_window. Off the Mac, where the window manager places windows, nothing.
+void host_set_window_little(void* ui_view);
+
 // Shows the window holding |ui_view| in front, with its title bar over the UI, and makes the
 // app the active one.
 void host_show_window(void* ui_view);
