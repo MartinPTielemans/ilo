@@ -149,7 +149,7 @@ peek_look dark 231.7
 # ⇧⌘C copies the preview's address, not the pinned tab's under it, as Arc's Peek does, and the
 # preview stays. ⌘↩ keeps it as the top Today tab, shown, as it is: its page doesn't load again.
 # Recorded, from the click on the link to the tab it grows into.
-record preview-motion 6
+record preview-motion 3
 open_preview "for ⌘↩"
 kept=$p
 send key c cmd shift
@@ -159,9 +159,10 @@ in_order "after ⌘↩" '^browser: link preview keeping (cmd-enter)$' "^browser:
 expect "^browser: today $p\$" "⌘↩ didn't put the preview's tab at the top of Today: Today is \"$(today)\""
 expect "^browser: selected $p\( in .*\)\{0,1\}\$" "⌘↩ didn't show the preview's tab"
 expect '^browser: link preview hidden$' "⌘↩ didn't hide the preview"
+# A screenshot while the window records ends the recording with ReplayKit's -5814, so it waits.
+recorded
 check_layout "the kept tab"
 ../tools/window-screenshot.sh "$pid" "$out/preview-kept.png" || fail "no window to capture"
-recorded
 [ "$(grep -c "^browser: loaded $p " "$log")" = 1 ] || fail "the kept tab's page loaded again"
 still_home "after ⌘↩"
 away
