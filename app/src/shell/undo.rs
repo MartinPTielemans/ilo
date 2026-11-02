@@ -39,6 +39,7 @@ impl What {
     pub const CLOSE_TAB: What = What::quiet("Close Tab");
     pub const CLOSE_TABS: What = What::said("Close Tabs", "Tabs Closed");
     pub const CLOSE_PREVIEW: What = What::quiet("Close Link Preview");
+    pub const REMOVE_TAB: What = What::quiet(super::rows::REMOVE_TIP);
     pub const PIN: What = What::quiet("Pin Tab");
     pub const UNPIN: What = What::quiet("Unpin Tab");
     pub const PIN_TABS: What = What::quiet("Pin Tabs");
@@ -136,6 +137,11 @@ pub(super) enum Edit {
     Reopen { tabs: Vec<u64>, show: Option<u64> },
     /// Closes Today tabs.
     Close(Vec<u64>),
+    /// Reopens the tabs of a pinned row the user removed, by the ids they had, each with the URL it
+    /// went back to, and pins the row again at `spot`.
+    Repin { tabs: Vec<(u64, String)>, spot: Spot },
+    /// Removes a pinned row from the pinned tabs, as its remove button does.
+    Remove(u64),
     /// Puts a tab, a favorite or a folder at a spot, and a pinned tab's or favorite's URL back.
     Put {
         tab: u64,
@@ -243,6 +249,13 @@ impl Edit {
                 show.iter_mut().for_each(|each| id_of(each, from, to));
             }
             Edit::Close(tabs) => ids(tabs),
+            Edit::Repin { tabs, spot } => {
+                tabs.iter_mut().for_each(|(each, _)| id_of(each, from, to));
+                if let At::Pinned { folder, .. } = &mut spot.at {
+                    id(folder);
+                }
+            }
+            Edit::Remove(tab) => id(tab),
             Edit::Put { tab, spot, .. } => {
                 id(tab);
                 if let At::Pinned { folder, .. } = &mut spot.at {
@@ -330,6 +343,34 @@ impl Edit {
                     shell.browser.close(tab, false, cx);
                 }
                 (!tabs.is_empty()).then_some(Edit::Reopen { tabs, show })
+            }
+            Edit::Repin { tabs: closed, spot } => {
+                let At::Pinned { folder, index } = spot.at else {
+                    return None;
+                };
+                // Last first: each pane left the split as it closed, so only the one before the
+                // last names a tab of it, and the core puts each back beside the one it names,
+                // which the one reopened before it has become. They come back at the top of
+                // Today, where they closed.
+                let mut tabs = Vec::new();
+                for (old, url) in closed.into_iter().rev() {
+                    let new = shell.browser.reopen_tab(old, cx);
+                    if new != 0 {
+                        shell.history.rekey(old, new);
+                        tabs.push((new, url));
+                    }
+                }
+                let &(first, _) = tabs.last()?;
+                shell.browser.move_tab(first, true, folder, index, cx);
+                for (tab, url) in tabs.iter().filter(|(_, url)| !url.is_empty()) {
+                    shell.browser.set_pinned_url(*tab, url, cx);
+                }
+                Some(Edit::Remove(first))
+            }
+            Edit::Remove(tab) => {
+                let back = shell.repin_of(tab)?;
+                shell.unpin_and_close(tab, cx);
+                Some(back)
             }
             Edit::Put { tab, spot, url } => {
                 let now = shell.spot_of(tab)?;
@@ -492,9 +533,9 @@ impl Shell {
             return;
         };
         // ⇧⌘T reopens what closed last: a tab closed since comes before the preview.
-        if matches!(edit, Edit::Reopen { .. } | Edit::UndoClear { .. }) {
+        if matches!(edit, Edit::Reopen { .. } | Edit::Repin { .. } | Edit::UndoClear { .. }) {
             self.closed_preview = None;
-            self.closed_pane = None;
+            self.closed_pinned = None;
         }
         self.history.redo.clear();
         self.history.undo.push(Entry { what, edit });
@@ -586,7 +627,7 @@ impl Shell {
             return;
         }
         self.closed_preview = Some(closed.clone());
-        self.closed_pane = None;
+        self.closed_pinned = None;
         if !undone {
             self.keep(What::CLOSE_PREVIEW, Some(Edit::ReopenPreview(closed)), cx);
         }
@@ -624,10 +665,10 @@ impl Shell {
         }
         self.closed_preview = None;
         // Unless ⌘Z has put it back already, which takes its step off the history.
-        if let Some(join) = self.closed_pane.take() {
+        if let Some(back) = self.closed_pinned.take() {
             let kept = self.history.undo.len();
-            self.history.undo.retain(|entry| entry.edit != join);
-            if self.history.undo.len() < kept && join.apply(self, cx).is_some() {
+            self.history.undo.retain(|entry| entry.edit != back);
+            if self.history.undo.len() < kept && back.apply(self, cx).is_some() {
                 self.send_edit_titles(false, cx);
                 return;
             }
@@ -651,7 +692,7 @@ impl Shell {
         {
             self.browser.close(tab, false, cx);
             self.closed_preview = None;
-            self.closed_pane = (!self.private).then(|| join.clone());
+            self.closed_pinned = (!self.private).then(|| join.clone());
             return self.keep(What::CLOSE_TAB, Some(join), cx);
         }
         let tabs = match (closing, split) {
@@ -667,6 +708,38 @@ impl Shell {
             What::CLOSE_TAB
         };
         self.keep(what, (!tabs.is_empty()).then_some(Edit::Reopen { tabs, show }), cx);
+    }
+
+    /// Removes the pinned row whose first tab is `tab` from the pinned tabs, with its split, as
+    /// its remove button does. It goes to the archive, as unpinning and closing it would, and not
+    /// into Today; ⌘Z and ⇧⌘T pin it again at its place.
+    pub(super) fn remove_pinned(&mut self, tab: u64, cx: &mut Context<Self>) {
+        let Some(back) = self.repin_of(tab) else {
+            return;
+        };
+        self.unpin_and_close(tab, cx);
+        self.keep(What::REMOVE_TAB, Some(back.clone()), cx);
+        self.closed_pinned = (!self.private).then_some(back);
+    }
+
+    /// The core has no call that removes a pinned tab, so it's the two the other way takes: Unpin,
+    /// which puts the row at the top of Today, and closing it there.
+    fn unpin_and_close(&mut self, tab: u64, cx: &mut Context<Self>) {
+        self.browser.set_pinned(tab, false, cx);
+        self.browser.close(tab, true, cx);
+    }
+
+    /// The step that pins the row whose first tab is `tab` again where it is, once it's removed.
+    fn repin_of(&self, tab: u64) -> Option<Edit> {
+        if self.is_folder_anywhere(tab) {
+            return None;
+        }
+        let spot = self.spot_of(tab).filter(|spot| matches!(spot.at, At::Pinned { .. }))?;
+        let space = self.spaces.iter().find(|space| space.id == spot.space)?;
+        let tabs = (space.panes(tab).into_iter())
+            .map(|pane| (pane, self.browser.pinned_url(pane)))
+            .collect();
+        Some(Edit::Repin { tabs, spot })
     }
 
     /// Closes the Today tabs below `tab`.

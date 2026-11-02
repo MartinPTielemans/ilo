@@ -810,6 +810,10 @@ speaker-gap = 4.0
 close-size = 26.0
 close-right = 5.0
 close-glyph = 14.0
+# An unloaded pinned row's button in the same place and plate, which removes the tab from the
+# pinned tabs (owner, 2026-11-02, #1349): Lucide's trash, the icon picker's remove, drawn in the
+# close glyph's box, so it reads as remove beside ✕ and − without growing past them.
+remove-glyph = 14.0
 # A split's row (Arc): a segment per tab, all as wide, each after the first behind a line. Its
 # favicon is 7 pt after the line, its title 10 pt after the favicon, and it ends 5 pt before the
 # next line.
