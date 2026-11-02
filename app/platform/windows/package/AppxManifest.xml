@@ -61,8 +61,10 @@
     <!-- The bridge an agent's MCP client runs (app/src/agents/bridge.rs), by an alias Windows keeps
          in the user's %LOCALAPPDATA%\Microsoft\WindowsApps, which Connect names: the package's
          own folder is named for its version, so a client given the path in it broke with each
-         Store update (#1442). It runs in the client's console, and the Start menu doesn't list it. -->
-    <Application Id="McpBridge" Executable="mcp-bridge.exe" EntryPoint="Windows.FullTrustApplication">
+         Store update (#1442). Each client runs a copy of its own, in its console, and the Start
+         menu doesn't list it. -->
+    <Application Id="McpBridge" Executable="mcp-bridge.exe" EntryPoint="Windows.FullTrustApplication"
+      desktop4:SupportsMultipleInstances="true">
       <uap:VisualElements DisplayName="@NAME@ MCP bridge" Description="@NAME@ MCP bridge"
         BackgroundColor="transparent" AppListEntry="none"
         Square150x150Logo="Assets\Square150x150Logo.png"
