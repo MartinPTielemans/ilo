@@ -2454,7 +2454,7 @@ impl Shell {
         self.follow_dock(cx);
     }
 
-    /// The user left the command bar without choosing anything in it.
+    /// The command bar closed with no tab chosen in it: the user left it, or its ask ran a task.
     pub fn command_bar_dismissed(&mut self, cx: &mut Context<Self>) {
         self.set_new_tab(false, cx);
         if self.adding_pane.take().is_some() {

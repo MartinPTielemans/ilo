@@ -1832,6 +1832,8 @@ impl command_bar::Host for Bar {
         let home = shell.and_then(|shell| shell.upgrade()).map_or(0, |shell| shell.read(cx).space());
         let asked = asked.to_string();
         let page = page.map(|(url, title)| browser::agents::task::AskedOn { url, title });
+        // The bar has closed on no tab, so New Tab gives back the plate ⌘T gave it.
+        update_window_in(front().0, cx, |shell, cx| shell.command_bar_dismissed(cx));
         agents_core::update(move |agents, cx| {
             // The card takes the slot as it comes; one that didn't start leaves it empty.
             if agents.start_task(cli, &asked, page, home, cx).is_none() {
