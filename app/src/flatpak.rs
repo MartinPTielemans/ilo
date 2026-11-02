@@ -278,6 +278,7 @@ pub fn check(cx: &mut App) {
     let action = if failed { told.retry.clone() } else { told.restart.clone() };
     let question = question(told.state.as_ref(), told.retry.is_some());
     dialog::pose(
+        None,
         question,
         Box::new(move |_, cx| {
             if let Some(action) = action {

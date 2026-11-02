@@ -55,9 +55,10 @@ use crate::palette::{INK, OVERLAY_DARK, PAPER, over};
 
 /// What the tooltip asks of its window.
 pub trait Host {
-    /// Shows the tooltip's window with its top left at (`left`, `top`) in the browser window, or
-    /// moves it there if it shows. The UI has kept it inside the window.
-    fn show(&self, left: f32, top: f32);
+    /// Shows the tooltip's window with its top left at (`left`, `top`) in browser window `window`,
+    /// the one the pointer is in, or moves it there if it shows. The UI has kept it inside the
+    /// window.
+    fn show(&self, window: u64, left: f32, top: f32);
     /// Hides it.
     fn hide(&self);
 }
@@ -308,21 +309,21 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<Tooltip>> {
     }
 }
 
-/// The pointer has come onto the tile, row or button that says `tip`, which the tooltip hangs from
-/// at `anchor`, wherever the pointer is on it. The tooltip shows after DELAY, one timer that
-/// `dismiss` cancels, or at once if another showed less than GRACE ago, as the system's does when
-/// the pointer moves from one tile to the next.
-pub fn hover(tip: Tip, anchor: Anchor, cx: &mut App) {
-    let Some(window) = cx.try_global::<TooltipWindow>().map(|tooltip| tooltip.0) else {
+/// The pointer has come onto the tile, row or button that says `tip` in browser window `window`,
+/// which the tooltip hangs from at `anchor` in that window, wherever the pointer is on it. The
+/// tooltip shows after DELAY, one timer that `dismiss` cancels, or at once if another showed less
+/// than GRACE ago, as the system's does when the pointer moves from one tile to the next.
+pub fn hover(window: u64, tip: Tip, anchor: Anchor, cx: &mut App) {
+    let Some(tooltip) = cx.try_global::<TooltipWindow>().map(|tooltip| tooltip.0) else {
         return;
     };
-    window
+    tooltip
         .update(cx, |tooltip, _, cx| {
             let now = cx.background_executor().now();
             let soon = tooltip.went.is_some_and(|went| now.duration_since(went) < GRACE);
             if tooltip.shown.is_some() || soon {
                 tooltip.wait = None;
-                tooltip.show(tip, anchor, cx);
+                tooltip.show(window, tip, anchor, cx);
                 return;
             }
             tooltip.wait = Some(cx.spawn(async move |tooltip, cx| {
@@ -330,7 +331,7 @@ pub fn hover(tip: Tip, anchor: Anchor, cx: &mut App) {
                 tooltip
                     .update(cx, |tooltip, cx| {
                         tooltip.wait = None;
-                        tooltip.show(tip, anchor, cx)
+                        tooltip.show(window, tip, anchor, cx)
                     })
                     .ok();
             }));
@@ -348,7 +349,7 @@ pub fn dismiss(cx: &mut App) {
 }
 
 impl Tooltip {
-    fn show(&mut self, tip: Tip, anchor: Anchor, cx: &mut Context<Self>) {
+    fn show(&mut self, window: u64, tip: Tip, anchor: Anchor, cx: &mut Context<Self>) {
         let layout = measure(&tip, &self.system);
         let (left, top) = place(anchor, (layout.width, HEIGHT));
         // check.sh reads this line, to see the tooltip hangs from what it names.
@@ -360,7 +361,7 @@ impl Tooltip {
         self.shown = Some(tip.clone());
         let near = near(anchor, layout.width, HEIGHT);
         self.drawn = Some((tip, layout, near));
-        self.host.show(left, top);
+        self.host.show(window, left, top);
         cx.notify();
     }
 

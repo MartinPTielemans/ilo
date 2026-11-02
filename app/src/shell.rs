@@ -2387,8 +2387,10 @@ impl Shell {
     /// and the menu bar lists its Space's extensions.
     pub fn became_key(&mut self, cx: &mut Context<Self>) {
         cx.set_global(ShellHandle(cx.weak_entity()));
-        // Its tab's dialog goes over its card again, as another window's may have shown since.
+        // Its tab's dialog goes over its card again, as another window's may have shown since, and
+        // its hung page's note shows, which waited while it was behind.
         self.page_dialog_shown = None;
+        self.note_hang(cx);
         cx.notify();
         self.refresh_menus(cx);
         self.refresh_picture(cx);
