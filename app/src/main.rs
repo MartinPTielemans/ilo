@@ -570,6 +570,8 @@ thread_local! {
     // The links other apps sent before the first window had brought back the Spaces, which they
     // open over; None after.
     static LAUNCH_LINKS: RefCell<Option<Vec<String>>> = const { RefCell::new(Some(Vec::new())) };
+    // The release notes of the update this launch is the first of, which the first window opens.
+    static UPDATE_NOTES: RefCell<Option<String>> = const { RefCell::new(None) };
     // The account as the core last said, which it says first as it starts, before GPUI has: the
     // first window hands it to Settings.
     static SYNC_STATE: RefCell<Option<account::State>> = const { RefCell::new(None) };
@@ -4249,12 +4251,13 @@ fn open_saved_windows(cx: &mut App) {
 }
 
 /// Shows the Spaces as the user left them in `window`, else a first Space, and says whether it
-/// brought them back. A page given in BROWSER_URL, and the links from other apps that launched the
-/// browser, open on top either way, in this window, the one in front. With nothing to bring back
-/// and nothing to open, it's a new profile's first run: `shell` plays the onboarding, then shows
-/// the welcome on the empty card. This is its only way in at launch, so a launch that brings Spaces
-/// back never reads more than `restored` for it. check.sh sets BROWSER_ONBOARDING to "skip" for
-/// every run but the onboarding run's, which sets "light" or "dark".
+/// brought them back. A page given in BROWSER_URL, an update's notes, and the links from other apps
+/// that launched the browser, open on top either way, in this window, the one in front, the links
+/// where Settings › Links sends them. With nothing to bring back and nothing to open, it's a new
+/// profile's first run: `shell` plays the onboarding, then shows the welcome on the empty card. This
+/// is its only way in at launch, so a launch that brings Spaces back never reads more than
+/// `restored` for it. check.sh sets BROWSER_ONBOARDING to "skip" for every run but the onboarding
+/// run's, which sets "light" or "dark".
 fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -> bool {
     let start = Instant::now();
     let restored = unsafe { bc::bc_window_restore(window) };
@@ -4270,9 +4273,10 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
     // The rules name the Spaces by their places, so they're read once the Spaces are back.
     link_rules_host::read();
     let links = LAUNCH_LINKS.take().unwrap_or_default();
+    let notes = UPDATE_NOTES.take();
     match std::env::var("BROWSER_URL") {
         Ok(url) => open_tab(window, &url),
-        Err(_) if !restored && links.is_empty() => {
+        Err(_) if !restored && links.is_empty() && notes.is_none() => {
             let onboarding = std::env::var("BROWSER_ONBOARDING").ok();
             shell
                 .update(cx, |shell, _, cx| {
@@ -4284,6 +4288,13 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
                 .ok();
         }
         Err(_) => {}
+    }
+    // An update's notes are ilo's own page, What's New, so they open here as the command's does,
+    // whatever Settings › Links says of links from other apps (#1484), and the links over them.
+    if let Some(url) = notes {
+        let (window, tab, space) = open_link_in(window, &url, 0);
+        // check.sh reads this line.
+        log!("browser: update notes {url}: tab {tab} in space {space} of window {window}");
     }
     open_links_in(window, &links);
     restored
@@ -7709,13 +7720,14 @@ fn main() {
         if !unsafe { platform::host_keep_keychain_key() } {
             return;
         }
-        // The first launch of an update opens its release notes, over the Spaces it brings back.
-        extern "C" fn update_notes(url: *const c_char) {
-            let url = unsafe { CStr::from_ptr(url) }.to_string_lossy().into_owned();
-            LAUNCH_LINKS.with_borrow_mut(|links| links.as_mut().map(|links| links.push(url)));
-        }
-        unsafe { platform::host_take_update_notes(update_notes) };
     }
+    // The first launch of an update opens its release notes, over the Spaces it brings back. Only
+    // a build that carries Sparkle keeps them, and check.sh's links run, for its own build.
+    extern "C" fn update_notes(url: *const c_char) {
+        let url = unsafe { CStr::from_ptr(url) }.to_string_lossy().into_owned();
+        UPDATE_NOTES.set(Some(url));
+    }
+    unsafe { platform::host_take_update_notes(update_notes) };
     let (args, host) = switches_and_host(std::env::args().collect());
     let mut argv: Vec<*const c_char> = args.iter().map(|arg| arg.as_ptr()).collect();
     let code = unsafe { bc::bc_main(argv.len() as c_int, argv.as_mut_ptr(), &host) };
