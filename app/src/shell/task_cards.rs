@@ -78,7 +78,7 @@ impl Shell {
         if let Some(agent) = self.talk_agent()
             && !self.task_cards.iter().any(|card| card.agent == agent)
         {
-            self.leave_talk(cx);
+            self.close_task(cx);
         }
         self.lay_out_tasks();
         cx.notify();
@@ -316,7 +316,8 @@ impl Shell {
         self.keep(What::DISMISS_TASK, Some(Edit::RestoreTask(agent.clone())), cx);
         self.closed_preview = None;
         self.closed_pane = None;
-        self.closed_task = Some(agent);
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+        self.closed_task = Some((agent, now.unwrap_or_default().as_secs_f64() * 1000.));
     }
 
     /// Clear's part: the Space's done tasks go. Returns their agents.
@@ -372,6 +373,7 @@ mod tests {
         Card {
             agent: format!("task-{n}").into(),
             home: 1,
+            space: 100 + n,
             cli: Cli::Claude,
             title: "Find a flight to Lisbon".into(),
             status: "Searching flights".into(),
@@ -465,6 +467,24 @@ mod tests {
         // It's back, so ⌘Z has no dismissal of it left to undo.
         shell.update(cx, |shell, cx| shell.undo(cx));
         assert!(!host.take().iter().any(|line| line.starts_with("task ")));
+
+        // A page closed after the dismissal, a task's own too, is what ⇧⌘T reopens.
+        shell.update(cx, |shell, cx| {
+            shell.dismiss_task("task-1".into(), cx);
+            let later = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+            let archived = later.unwrap().as_secs_f64() * 1000. + 1.;
+            let tab = crate::shell::library::Archived {
+                id: 5,
+                url: "https://example.com".into(),
+                title: "Example".into(),
+                archived,
+                little: false,
+            };
+            shell.set_archive(vec![tab], cx);
+            host.take();
+            shell.reopen_closed(cx);
+        });
+        assert_eq!(host.take(), ["reopen closed tab"]);
     }
 
     /// Clear takes the Space's done tasks with its Today tabs and leaves the working ones, and one

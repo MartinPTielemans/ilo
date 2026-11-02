@@ -629,7 +629,7 @@ impl Shell {
     /// last. ⌘Z then has nothing of the preview's to reopen.
     pub(super) fn reopen_closed(&mut self, cx: &mut Context<Self>) {
         // The task dismissed last, unless a tab has closed since (Agent task).
-        if let Some(agent) = self.closed_task.take() {
+        if let Some((agent, _)) = self.closed_task.take() {
             let restore = Edit::RestoreTask(agent.clone());
             self.history.undo.retain(|entry| entry.edit != restore);
             self.browser.task(agent, crate::agents::task::TaskAction::Restore, cx);

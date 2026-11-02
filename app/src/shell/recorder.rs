@@ -80,6 +80,8 @@ pub(super) struct Recorder {
     pub(super) window_buttons: Cell<Option<super::WindowButtonGeometry>>,
     /// The Spaces it was asked to show, in order.
     pub(super) shown: RefCell<Vec<u64>>,
+    /// The id of the agent each agent's Space belongs to, as `space_agent` answers.
+    pub(super) space_agents: RefCell<HashMap<u64, SharedString>>,
     /// The menus it was asked to show, each item by its title and whether it's enabled.
     pub(super) menus: RefCell<Vec<Vec<(SharedString, bool)>>>,
     /// Where the last menu was asked to show, in the window.
@@ -792,6 +794,10 @@ impl Browser for Recorder {
 
     fn space_tab(&self, _: u64) -> u64 {
         Default::default()
+    }
+
+    fn space_agent(&self, space: u64) -> SharedString {
+        self.space_agents.borrow().get(&space).cloned().unwrap_or_default()
     }
 
     // The Space it makes is always 7.

@@ -1655,6 +1655,11 @@ mod tasks {
         assert_eq!(card.open, Some((30, "shop.example".into())));
         let actions: Vec<String> = log(&agents, &agent, cx).into_iter().map(|(action, _, _)| action).collect();
         assert_eq!(actions, ["finish", "answered", "ask", "title"], "newest first");
+        // The core's auto-archive taking its page leaves the card saying where it went.
+        let kept = browser.tabs.borrow_mut().pop().unwrap();
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.open), ("Its page went to the Archive", None));
+        browser.tabs.borrow_mut().push(kept);
         // Open <site> moves the tab to the user's Space.
         agents.update(cx, |agents, cx| agents.open_result(&agent, cx));
         assert!(browser.tabs.borrow().contains(&(30, 1, "Checkout", "https://shop.example/checkout")));

@@ -106,6 +106,9 @@ impl Shell {
     pub(super) fn show_page_dialog(&mut self, cx: &mut Context<Self>) {
         let asked = self.page_dialogs.get(&self.selected);
         let asked = asked.filter(|_| !self.page(self.selected).system_engine);
+        // The user's page is out of the window while a task has the page area, and its dialog
+        // waits for it.
+        let asked = asked.filter(|_| self.task_area.is_none());
         let wanted = match (asked, self.page_laid) {
             (Some(dialog), Some(over)) => Some((self.selected, dialog.clone(), over)),
             _ => None,

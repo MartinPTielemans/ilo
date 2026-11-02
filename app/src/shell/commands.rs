@@ -977,6 +977,9 @@ impl Shell {
         if matches!(command, Command::Stop) && (self.cancel_drag(cx) || self.unchoose(cx)) {
             return;
         }
+        if self.run_in_task_area(command, from, cx) {
+            return;
+        }
         // An Esc with nothing to stop closes a Little ilo window (Arc), as no menu's Stop does.
         let key = matches!(from, "ui" | "page");
         if matches!(command, Command::Stop) && key && self.escape_unused(cx) {
@@ -1015,12 +1018,6 @@ impl Shell {
                 if !self.browser.close_other_window(cx) {
                     self.browser.close_window(cx);
                 }
-                return;
-            }
-            // ⌘W in a task's conversation dismisses the task, as ✕ on its card does.
-            Command::CloseTab if let Some(agent) = self.talk_agent() => {
-                self.dismiss_task(agent, cx);
-                self.leave_talk(cx);
                 return;
             }
             Command::CloseTab => {

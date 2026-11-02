@@ -2526,7 +2526,11 @@ impl Browser for Engine {
     }
 
     fn stop_agent(&self, agent: SharedString, _: &mut App) {
-        agents_core::update(move |agents, cx| agents.stop_agent(&agent, cx));
+        // A task's Stop, from its page's strip too, ends its turn as well as what it's doing.
+        agents_core::update(move |agents, cx| match browser::agents::is_task(&agent) {
+            true => agents.stop_task(&agent, cx),
+            false => agents.stop_agent(&agent, cx),
+        });
     }
 
     fn task(&self, agent: SharedString, action: browser::agents::task::TaskAction, _: &mut App) {
@@ -2541,8 +2545,6 @@ impl Browser for Engine {
     }
 
     fn show_task(&self, _: SharedString, _: &mut App) {
-        let window = self.window;
-        unsafe { bc::bc_window_show_space_empty(window, bc::bc_window_space(window)) };
         // The Agents send a window its conversation as it changes; this sends it now.
         agents_core::update(|_, cx| cx.notify());
     }
@@ -2878,6 +2880,10 @@ impl Browser for Engine {
 
     fn space_tab(&self, space: u64) -> u64 {
         unsafe { bc::bc_window_space_tab(self.window, space) }
+    }
+
+    fn space_agent(&self, space: u64) -> SharedString {
+        name(bc::bc_space_agent, space)
     }
 
     fn create_space(&self, name: &str, profile: u64, after: u64, _: &mut App) -> u64 {

@@ -981,6 +981,17 @@ tag-height = 16.0
 tag-inset = 5.0
 tag-radius = 6.0
 
+[shell.task-area]
+# Ours (Agent task), as Arc and Dia have no tasks: a task's page watched in the page area has its
+# strip under it, not over it, as GPUI can't draw over a page. The strip is this tall at the
+# card's foot, the page's bottom edge this far up from the card's, and its back, words and buttons
+# this far apart. The back is the Library's; the words and buttons are the Agent Space bar's.
+strip = 40.0
+page-room = 46.0
+gap = 10.0
+# The back's glyph, as the Library's back has it in a header button's box.
+back-glyph = 16.0
+
 [shell.assets]
 # Every Lucide outline's stroke, in its 24 grid: 1.5 pt in a 16 pt box, 1.3 at 14 and 1.69 at 18.
 # The nav glyphs keep Arc's 1.75 pt in 24 and the window buttons their 1.3 in 14, so those files
@@ -1406,10 +1417,6 @@ radius = 12.0
 reply-height = 34.0
 reply-inset = 12.0
 reply-bottom = 16.0
-# It comes in from the card's side, this far, as fast as a header button's plate lights, so it reads
-# at once, and goes back the same way.
-slide = 24.0
-time = 0.13
 
 [shell.tile-theme]
 # A pixel counts towards the icon's colour from this alpha.

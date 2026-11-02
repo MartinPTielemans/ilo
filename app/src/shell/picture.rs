@@ -227,7 +227,7 @@ impl Shell {
         image: Option<PagePicture>,
         cx: &mut Context<Self>,
     ) {
-        if self.talk_pictured(request, &image, cx) {
+        if self.talk_pictured(request, &image, cx) || self.task_pictured(request, image.clone(), cx) {
             return;
         }
         let window = self.browser.window();

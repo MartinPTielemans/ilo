@@ -103,6 +103,7 @@ mod space_form;
 mod split_targets;
 mod swap;
 mod swipe;
+mod task_area;
 mod themes;
 mod trace;
 mod tile_theme;
@@ -1358,8 +1359,9 @@ pub struct Shell {
     ask_slot: Option<u64>,
     /// The task card under the pointer, which shows its ✕.
     task_hovered: Option<SharedString>,
-    /// The task ✕ dismissed last, which ⇧⌘T brings back unless a tab has closed since.
-    closed_task: Option<SharedString>,
+    /// The task ✕ dismissed last, which ⇧⌘T brings back unless a tab has closed since, and when,
+    /// in milliseconds since the Unix epoch, as the archive dates what closed.
+    closed_task: Option<(SharedString, f64)>,
     /// The task's conversation shown in the page's place, and whether its field takes the keyboard
     /// once drawn (Agent task).
     talk: Option<conversation::Talk>,
@@ -1368,6 +1370,14 @@ pub struct Shell {
     /// (agent_bar.rs).
     agent_status: Vec<crate::agents::Status>,
     agent_bar_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The Spaces of the tasks the user asked from ⌘T, which the window never lists, and what the
+    /// page area shows of one (task_area.rs).
+    task_spaces: Vec<Space>,
+    task_area: Option<task_area::TaskArea>,
+    /// The task Space the core shows while one of its pages is watched, else 0.
+    task_core: u64,
+    task_live_logged: Option<u64>,
+    task_strip_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The tabs whose player × put away until their page plays again.
     media_dismissed: HashSet<u64>,
     /// The players last drawn, as the log has them, and where the bottom one is.
@@ -1647,6 +1657,11 @@ impl Shell {
             focus_talk: false,
             agent_status: Vec::new(),
             agent_bar_drawn: Rc::default(),
+            task_spaces: Vec::new(),
+            task_area: None,
+            task_core: 0,
+            task_live_logged: None,
+            task_strip_drawn: Rc::default(),
             media_dismissed: HashSet::new(),
             media_logged: RefCell::default(),
             media_drawn: Rc::default(),
@@ -1898,7 +1913,8 @@ impl Shell {
             return None;
         }
         self.page_held = None;
-        Some(self.page_frame(viewport))
+        let (frame, radius) = self.page_frame(viewport);
+        Some((self.task_page_frame(frame, viewport), radius))
     }
 
     /// Lays the page out at `page_frame`, unless it's there already or held.
@@ -1962,6 +1978,7 @@ impl Shell {
         if self.little.is_some() {
             return self.set_little_spaces(spaces, cx);
         }
+        let spaces = self.take_task_spaces(spaces);
         // check.sh reads these lines.
         let ids: Vec<String> = spaces.iter().map(|(id, ..)| id.to_string()).collect();
         log!("browser: spaces {}", ids.join(" "));
@@ -2063,6 +2080,7 @@ impl Shell {
         if filled {
             self.toast_spaces(made, cx);
         }
+        self.task_spaces_changed(cx);
         self.follow_dock(cx);
         self.update_menus(cx);
         self.update_title(cx);
@@ -2091,6 +2109,9 @@ impl Shell {
 
     /// The Space the window shows. Which of its tabs shows follows in set_selected.
     pub fn set_space(&mut self, space: u64, cx: &mut Context<Self>) {
+        if self.task_space_shown(space, cx) {
+            return;
+        }
         // check.sh reads these lines.
         match self.switching {
             Some((Switch::Space(asked), start)) if asked == space => {
@@ -2104,7 +2125,6 @@ impl Shell {
         }
         self.end_hovers(cx);
         let before = std::mem::replace(&mut self.space, space);
-        self.page_ends_talk();
         self.bar_follows |= before != space;
         if before != space {
             self.unchoose(cx);
@@ -2173,7 +2193,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let Some(entry) = self.spaces.iter_mut().find(|entry| entry.id == space) else {
-            return;
+            return self.set_task_tabs(space, pinned, today, cx);
         };
         // The rows of the Space shown move from where they were, unless it's being filled.
         let had_tabs = !entry.pinned.is_empty() || !entry.today.is_empty();
@@ -2301,10 +2321,12 @@ impl Shell {
     /// before it leaves the old, so one moving between a Space and the favorites stays.
     fn forget_closed(&mut self, cx: &mut App) {
         let (spaces, favorites) = (&self.spaces, &self.all_favorites);
+        let task_spaces = &self.task_spaces;
         let open = |tab: &u64| {
             favorites.contains(tab)
                 || spaces
                     .iter()
+                    .chain(task_spaces)
                     .any(|space| space.pinned.contains(tab) || space.today.contains(tab))
         };
         // A closed tab's hover card picture goes with it.
@@ -2315,7 +2337,7 @@ impl Shell {
         }
         // An agent is at work only in its own Space's tabs, so not in one the user took out.
         self.agents_at.retain(|_, tab| {
-            spaces.iter().any(|space| {
+            spaces.iter().chain(task_spaces).any(|space| {
                 !space.agent.is_empty() && (space.pinned.contains(tab) || space.today.contains(tab))
             })
         });
@@ -2354,6 +2376,9 @@ impl Shell {
     }
 
     pub fn set_selected(&mut self, tab: u64, cx: &mut Context<Self>) {
+        if self.task_tab_shown(tab, cx) {
+            return;
+        }
         // A Space's switch can report a tab, even none, before the Space itself (#1332), so only a
         // tab's switch ends here.
         match self.switching {
@@ -2373,7 +2398,6 @@ impl Shell {
         let before = self.selected_row();
         let hidden = self.panes(self.selected);
         self.selected = tab;
-        self.page_ends_talk();
         self.show_in_space(tab);
         self.scroll_to_row(tab);
         if self.walked.is_none() {
@@ -2828,6 +2852,9 @@ impl Shell {
     }
 
     fn show_space(&mut self, space: u64, cx: &mut Context<Self>) {
+        if self.task_area.is_some() {
+            self.leave_task_area(cx);
+        }
         if space == self.space {
             return;
         }
@@ -2836,8 +2863,14 @@ impl Shell {
     }
 
     fn select(&mut self, tab: u64, cx: &mut Context<Self>) {
+        // While a task's page shows, the core shows the task's Space, so the user's tab selected is
+        // shown again by selecting it.
+        let core_away = self.task_core != 0;
+        if self.task_select(tab, cx) {
+            return;
+        }
         // The tab selected whose page another window shows is taken from it by selecting it again.
-        if tab == self.selected && !self.pictured(tab) {
+        if tab == self.selected && !self.pictured(tab) && !core_away {
             return;
         }
         self.switching = Some((Switch::Tab(tab), Instant::now()));
@@ -3201,6 +3234,7 @@ impl Render for Shell {
         self.step_library(window, cx);
         self.step_new_space(window);
         self.step_flight(window);
+        self.step_task_area(window, cx);
         self.step_picture(window);
         self.step_recent_downloads(window, cx);
         if let Some((_, left)) = &self.leaving_form {
@@ -3223,7 +3257,6 @@ impl Render for Shell {
         self.step_scroll_edge(window);
         self.step_tools(window);
         self.step_empty(window);
-        self.step_talk(window, cx);
         self.step_crash_cards(window);
         let drop_targets = self.drag.as_ref().is_some_and(|drag| drag.over_page.is_some())
             || self.link_over.is_some()
@@ -3327,6 +3360,8 @@ impl Render for Shell {
             && self.library.is_none();
         let edge = docked.then(|| self.sidebar_edge(cx));
         let own_buttons = self.draws_own_window_buttons().then(|| self.window_buttons(cx));
+        let normal = self.task_area.is_none();
+        let task_area = self.task_area_element(cx);
         self.breath.arm(cx);
         div()
             .key_context(KEY_CONTEXT)
@@ -3374,15 +3409,19 @@ impl Render for Shell {
                 }),
             )
             .child(self.window_background())
-            // The page views go over the cards, as native views.
-            .children(self.cards())
-            .children(self.little_bar(cx))
-            .children(self.picture_element(cx))
-            .children(self.empty_card(cx))
-            .children(self.talk_view(cx))
-            .children(self.crash_cards(cx))
-            .children(self.pane_gaps(cx))
-            .children(self.pane_handles(cx))
+            // The page views go over the cards, as native views. A task the page area shows takes
+            // the card's place, the Space's page pushed out of the window (task_area.rs).
+            .when(normal, |shell| {
+                shell
+                    .children(self.cards())
+                    .children(self.little_bar(cx))
+                    .children(self.picture_element(cx))
+                    .children(self.empty_card(cx))
+                    .children(self.crash_cards(cx))
+                    .children(self.pane_gaps(cx))
+                    .children(self.pane_handles(cx))
+            })
+            .children(task_area)
             .children(self.side_panel(cx))
             .children(under)
             .children(sidebar)

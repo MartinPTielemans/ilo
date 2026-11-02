@@ -120,6 +120,8 @@ impl Task {
 pub struct Card {
     pub agent: SharedString,
     pub home: u64,
+    /// The task's own Space, which the page area shows it from.
+    pub space: u64,
     pub cli: Cli,
     pub title: SharedString,
     /// What it's doing, as the activity log says it, or what it waits for, or its result.
@@ -320,7 +322,16 @@ impl Agents {
             (State::Stopped, _) => ("Stopped".into(), Dot::None),
             (State::Failed { why, .. }, _) => (why.clone(), Dot::None),
         };
+        let mut status = status;
         let open = match task.state {
+            // The core's auto-archive can take a task's page it never showed (window.cc), and a
+            // task lives for one run, so its card says where it went rather than offer it.
+            State::Done { tab: Some(tab), .. }
+                if !self.browser.space_tab_ids(task.space, cx).contains(&tab) =>
+            {
+                status = "Its page went to the Archive".into();
+                None
+            }
             State::Done { tab: Some(tab), .. } => {
                 let url = self.browser.tab(tab, cx).url;
                 Some((tab, site(&url).into()))
@@ -330,6 +341,7 @@ impl Agents {
         Card {
             agent: task.agent.clone().into(),
             home: task.home,
+            space: task.space,
             cli: task.cli,
             title: task.title.clone(),
             status,

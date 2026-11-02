@@ -42,8 +42,8 @@ use crate::tokens::shell::EMOJI_SIZE;
 use crate::tokens::shell::library::LIBRARY_WIDTH;
 /// The push, on Arc's measured spring (1 run, rms 1.0 pt). The Library comes with it from its own
 /// width to the left, so they meet as they stop.
-const LIBRARY_RESPONSE: f32 = 0.245;
-const LIBRARY_DAMPING: f32 = 0.92;
+pub(super) const LIBRARY_RESPONSE: f32 = 0.245;
+pub(super) const LIBRARY_DAMPING: f32 = 0.92;
 /// Opened or closed by a click, the sidebar under the Library fades out in 2 frames at 60 fps as
 /// it comes, and back in over 130 ms from 80 ms after it starts to go (Arc on video, 2 opens and 2
 /// closes).
@@ -417,6 +417,12 @@ const FIELD: &str = "space-field";
 impl Shell {
     /// The archive changed, all of it, newest first.
     pub fn set_archive(&mut self, archive: Vec<Archived>, cx: &mut Context<Self>) {
+        // A tab closed since a task was dismissed is what ⇧⌘T reopens: the core's to reopen, as
+        // the archive is its list of what closed, a task's pages too.
+        let newest = archive.first().map_or(0., |tab| tab.archived);
+        if self.closed_task.as_ref().is_some_and(|(_, at)| newest >= *at) {
+            self.closed_task = None;
+        }
         self.archive = archive;
         let archive = &self.archive;
         self.page_favicons.retain(|url, _| archive.iter().any(|tab| tab.url == *url));
