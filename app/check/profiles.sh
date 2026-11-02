@@ -269,6 +269,8 @@ await "^browser: title $a cookie p\$" ||
 send click $page_point
 send key 2 ctrl
 expect "^browser: space $second in " "⌃2 after the relaunch didn't show the second Space"
+# The right-click below would land where the Space's rows aren't yet while its page slides in.
+expect "^browser: settled space $second\$" "the second Space's page didn't settle"
 expect '^browser: favorites $' "the second Space showed the first profile's favorite"
 b=$(today)
 expect "^browser: title $b cookie none\$" "the second Space's tab came back in the first profile"
