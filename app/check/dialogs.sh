@@ -276,8 +276,8 @@ if windows || [ "$(uname)" = Darwin ]; then
   send window "$driven_second"
   send place $((screen_x + 40 + wide)) $((screen_y + 60)) $wide $tall
   send window 1
-  send place $((screen_x + 20)) $((screen_y + 60)) $wide $tall
   expect "^browser: key window $first\$" "the first window didn't come in front of the second"
+  send place $((screen_x + 20)) $((screen_y + 60)) $wide $tall
   # The driven window's children on the Mac, which the card's window becomes one of, in $children.
   children() {
     send layout
