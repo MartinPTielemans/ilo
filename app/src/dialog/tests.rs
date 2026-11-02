@@ -40,7 +40,7 @@ impl Asking {
         let deleted = host.clone();
         cx.update(|cx| {
             let delete = Box::new(move |_: &mut App| deleted.0.borrow_mut().push("delete".into()));
-            let (message, detail) = ("Delete “Work”?".into(), "Its 3 tabs close too.".into());
+            let (message, detail) = ("Delete “Work”?".into(), "Its 3 tabs go with it. ⌘Z brings them back.".into());
             ask(None, message, detail, "Delete", delete, cx);
         });
         let cx = VisualTestContext::from_window(window.into(), cx);
