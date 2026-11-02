@@ -70,12 +70,14 @@ fn page() -> Bounds<Pixels> {
     bounds(240., 10., 550., 580.)
 }
 
-// Over that page the card is inset 27.5, 5% of its width: from x 267.5 to 762.5 and y 37.5 to
-// 562.5, its header 36 tall over the page, which is 6 in from its sides and bottom.
-const PLACED: &str = "place 7 273.5 73.5 483 483 r6";
+// Over that page the card is inset 55, 10% of its width, and 40 more at the top for the controls
+// over it: from x 295 to 735 and y 105 to 535, with the page 1 in, inside its rim. The controls are
+// 32 tall, from y 65 to 97: the site at the left, keep and close at the right.
+const PLACED: &str = "place 7 296 106 438 428 r16";
 const DIM_SPOT: (f32, f32) = (100., 300.);
-const KEEP_BUTTON: (f32, f32) = (710., 56.);
-const CLOSE_BUTTON: (f32, f32) = (743., 56.);
+const SITE: (f32, f32) = (305., 81.);
+const KEEP_BUTTON: (f32, f32) = (679., 81.);
+const CLOSE_BUTTON: (f32, f32) = (719., 81.);
 
 /// A preview opened from a link at 400, 200 in the window.
 struct Shown {
@@ -121,14 +123,15 @@ impl Shown {
     }
 }
 
-/// The card sits over the window's page, inset by a share of it within its bounds, with the page
-/// under its header, and kept, the page lands exactly on the window's.
+/// The card sits over the window's page, inset by a share of it within its bounds, with room for
+/// its controls above it, and kept, the page lands exactly on the window's.
 #[test]
 fn the_card_sits_over_the_page_and_grows_into_it() {
-    assert_eq!(card(page()), bounds(267.5, 37.5, 495., 525.));
-    assert_eq!(card(bounds(0., 0., 200., 150.)), bounds(16., 16., 168., 118.));
-    assert_eq!(card(bounds(0., 0., 3000., 2000.)), bounds(48., 48., 2904., 1904.));
-    assert_eq!(page_in(card(page())), bounds(273.5, 73.5, 483., 483.));
+    assert_eq!(card(page()), bounds(295., 105., 440., 430.));
+    assert_eq!(card(bounds(0., 0., 200., 150.)), bounds(24., 64., 152., 62.));
+    assert_eq!(card(bounds(0., 0., 3000., 2000.)), bounds(120., 160., 2760., 1720.));
+    assert_eq!(page_in(card(page())), bounds(296., 106., 438., 428.));
+    assert_eq!(controls_over(card(page())), bounds(295., 65., 440., 32.));
     assert_eq!(card_around(page_in(card(page()))), card(page()));
     let link = point(px(400.), px(200.));
     let rest = Pose { scale: 1., kept: 0., page: 1., card: 1., dim: 1. };
@@ -148,9 +151,9 @@ fn it_grows_from_the_link() {
     assert_eq!((start.scale, start.page, start.dim), (FROM_SCALE, 0., 0.));
     let (_, about, shown) = frames(start, page(), point(px(400.), px(200.)));
     assert_eq!(about, point(px(400.), px(200.)));
-    assert_eq!(shown, bounds(336.75, 136.75, 241.5, 241.5));
+    assert_eq!(shown, bounds(348., 153., 219., 214.));
     let (_, about, _) = frames(start, page(), point(px(100.), px(20.)));
-    assert_eq!(about, point(px(267.5), px(37.5)));
+    assert_eq!(about, point(px(295.), px(105.)));
     let open = Pose::arriving(OPEN);
     assert_eq!((open.scale, open.page, open.dim), (1., 1., 1.));
     let closed = open.closing(CLOSE);
@@ -169,11 +172,14 @@ fn its_keys() {
     assert_eq!(key_action("cmd-t", true), None);
 }
 
+/// The site it shows is the host alone: no www., port or user.
 #[test]
-fn the_header_shows_the_site() {
+fn it_shows_the_site() {
     assert_eq!(site_of("https://www.example.org/a?b#c"), "example.org");
-    assert_eq!(site_of("http://user@news.example.com:8080/"), "news.example.com:8080");
+    assert_eq!(site_of("http://user@news.example.com:8080/"), "news.example.com");
     assert_eq!(site_of("https://example.org"), "example.org");
+    assert_eq!(site_of("http://localhost:50821/b.html"), "localhost");
+    assert_eq!(site_of("http://[::1]:8080/"), "[::1]");
 }
 
 /// Esc closes it back into the link, and its page once it has left.
@@ -203,11 +209,12 @@ fn its_buttons_keep_and_close_it(cx: &mut TestAppContext) {
     assert_eq!(shown.calls(), ["release", "hide", "close 7", CLOSED]);
 }
 
-/// A click on the dim closes it; one on the card doesn't.
+/// A click on the dim closes it; one on the card or the site over it doesn't.
 #[gpui::test]
 fn a_click_outside_closes_it(cx: &mut TestAppContext) {
     let mut shown = Shown::new(cx);
-    shown.click((400., 50.));
+    shown.click((400., 300.));
+    shown.click(SITE);
     assert_eq!(shown.calls(), Vec::<String>::new());
     shown.click(DIM_SPOT);
     assert_eq!(shown.calls(), ["release", "hide", "close 7", CLOSED]);
@@ -282,7 +289,7 @@ fn meeting_links_are_known_by_site_and_path() {
 fn a_second_preview_takes_the_firsts_place(cx: &mut TestAppContext) {
     let mut shown = Shown::new(cx);
     shown.show(8);
-    assert_eq!(shown.calls(), ["hide", "close 7", "place 8 273.5 73.5 483 483 r6", "show 1"]);
+    assert_eq!(shown.calls(), ["hide", "close 7", "place 8 296 106 438 428 r16", "show 1"]);
     assert_eq!(shown.cx.cx.update(|cx| tab(cx)), Some(8));
 }
 
@@ -302,5 +309,5 @@ fn it_follows_the_window(cx: &mut TestAppContext) {
     shown.cx.cx.update(|cx| page_moved(2, (bounds(0., 0., 100., 100.), 6.), cx));
     shown.cx.cx.update(|cx| page_moved(WINDOW, (page(), 6.), cx));
     shown.cx.cx.update(|cx| page_moved(WINDOW, (bounds(240., 10., 750., 580.), 6.), cx));
-    assert_eq!(shown.calls(), ["place 7 275 75 680 480 r6"]);
+    assert_eq!(shown.calls(), ["place 7 299 109 632 422 r16"]);
 }

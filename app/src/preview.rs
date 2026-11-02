@@ -21,6 +21,7 @@ use browser::shell::{
 use browser::command_bar::{self, Suggestion};
 use browser::dialog;
 use browser::icon_picker::{self, Recents};
+use browser::link_preview;
 use browser::menu;
 use browser::palette::{self, Palette, Tone};
 use browser::site_controls::{self, Connection, Permission, Site, Value};
@@ -1854,6 +1855,24 @@ fn main() {
             })
             .detach();
         }
+        // PREVIEW_PEEK=1 opens a link of the page shown in Peek, once the shell has laid the page
+        // out, with the shell's page showing through the card, as it does on Linux and Windows.
+        if let Some(shell) = shell_window.filter(|_| std::env::var_os("PREVIEW_PEEK").is_some()) {
+            let peek_bounds = Bounds::new(PREVIEW_ORIGIN.get(), PREVIEW_AREA.get());
+            cx.spawn(async move |cx| {
+                cx.background_executor().timer(Duration::from_millis(500)).await;
+                let Ok(Some(laid)) = shell.update(cx, |shell, _, _| shell.page_laid()) else {
+                    return;
+                };
+                cx.update(|cx| {
+                    link_preview::open_at(Rc::new(PreviewPeek), peek_bounds, true, cx);
+                    let url = "https://en.wikipedia.org/wiki/Hyperlink".into();
+                    let link = laid.0.origin + point(px(160.), px(120.));
+                    link_preview::show(1, 99, 1, url, laid, link, cx);
+                });
+            })
+            .detach();
+        }
         // PREVIEW_MENU=<x>,<y>[,<key>…] right-clicks there in the window, as on a row or a Space's
         // name, and then presses the keys in ilo's menu, such as `m,right` for a submenu.
         if let Ok(what) = std::env::var("PREVIEW_MENU") {
@@ -1966,6 +1985,32 @@ impl theme_picker::Host for PreviewPicker {
     fn hide(&self) {}
 
     fn detent(&self) {}
+}
+
+/// Peek over the preview's window, which it covers. There's no page of its own, so the shell's
+/// shows through its card.
+struct PreviewPeek;
+
+impl link_preview::Host for PreviewPeek {
+    fn place(&self, _: u64, _: Bounds<Pixels>, _: f32) {}
+
+    fn show(&self, _: u64) {}
+
+    fn drew(&self, _: Bounds<Pixels>, _: f32, _: f32) {}
+
+    fn page_under(&self) -> bool {
+        true
+    }
+
+    fn release(&self) {}
+
+    fn hide(&self) {}
+
+    fn close(&self, _: u64) {}
+
+    fn keep(&self, _: u64, _: u64) {}
+
+    fn closed(&self, _: u64, _: link_preview::Closed, _: bool, _: &mut App) {}
 }
 
 /// The dialog over the preview's window, which it covers, for its host can't move it.

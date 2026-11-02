@@ -3047,7 +3047,7 @@ void host_link_preview_drew(double left,
                             double top,
                             double width,
                             double height,
-                            double,
+                            double radius,
                             double opacity) {
   // Posted, so the page takes the frame the UI is drawing now.
   dispatch_async(dispatch_get_main_queue(), ^{
@@ -3078,6 +3078,9 @@ void host_link_preview_drew(double left,
                                   ? CATransform3DIdentity
                                   : CATransform3DScale(CATransform3DMakeTranslation(dx, dy, 0),
                                                        scale_x, scale_y, 1);
+    // The page's corners as drawn, before the transform scales them: the preview's own at rest,
+    // the window's page's as it grows into the tab's place, so it lands with them.
+    page.layer.cornerRadius = 2 * radius / (scale_x + scale_y);
     [CATransaction commit];
     g_link_preview_page.alphaValue = opacity;
   });

@@ -354,20 +354,33 @@ title = 0.9
 hint = 0.55
 
 [link-preview]
-# Ours, as nothing of Arc's preview is recorded yet (docs/ux-spec.md › Measurement plan, 8). The
-# card sits over the window's page, in from it by a share of the page's smaller side, within these.
-inset-share = 0.05
-inset-min = 16.0
-inset-max = 48.0
-# The card's frame round the page at its sides and bottom, and over it a header a button's
-# height, as the side panel's, with the site's name this far in.
-frame = 6.0
-header-left = 12.0
-header-text = 13.0
-# The page's corners, at least, where the window's page has none, as when it's full screen. The
-# card's are concentric round them, the frame further out. Its fill is the palette's overlay, with
-# the modal level's rim and shadow, over the dialog's dim.
-min-radius = 6.0
+# Ours (the owner, 2026-11-02, #1373), as nothing of Arc's preview is recorded: a quick look over
+# the page, which is the card, with its controls floating over the dim above it. The card and its
+# controls sit in from the window's page by a share of the page's smaller side, within these, so
+# the page under them shows round them as the context the link came from.
+inset-share = 0.1
+inset-min = 24.0
+inset-max = 120.0
+# The page's corners, a card that floats. Round them, the modal level's rim, its thickness, inside
+# the card's edge, as every overlay has it; the card's corners are concentric with the page's.
+radius = 16.0
+rim = 1.0
+# The controls: round plates as tall as the header's buttons (`[shell] nav-size`), this far above
+# the card's top edge and level with its sides, keep and close this far apart at the right, with
+# Little ilo's bar's glyphs (`[shell] little-glyph`). Each is the palette's overlay with the
+# popover level, as a chip floating over the page.
+controls = 32.0
+controls-gap = 8.0
+button-gap = 8.0
+glyph = 18.0
+# The site at the left, on a plate as tall: its favicon this far in, centred in the plate's round
+# end, then its host in body type at medium, as text on an overlay is, at the URL field's alpha.
+site-x = 8.0
+site-gap = 6.0
+site-end = 12.0
+# The whole window under it, sidebar too, takes the dialog's dim at this, lighter than the
+# dialog's, so the page under the card stays readable.
+dim-opacity = 0.4
 
 [link-target]
 height = 24.0

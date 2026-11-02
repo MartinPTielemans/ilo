@@ -1,41 +1,44 @@
 //! The link preview: a link clicked in a pinned tab or a favorite, to another site than the tab's,
 //! opens over the window in a card rather than taking the tab away from its own site (Arc's Peek,
 //! docs/ux-spec.md › Phase 4 features). The page is a real one, in a tab of no Space, in its
-//! native view, which the host puts over this window's card. ⌘↩ or the card's button keeps it as a
-//! Today tab, as it is. GPUI can't draw over the page's native view, so the dim and the card are a
-//! window of their own that the host shows over the browser window, as its child, as the
-//! dialog's are. Where no window of the app's can hold a page, as on Linux, the page shows in the
-//! browser window under this one, which leaves it a hole and draws the card round it. What it asks
-//! of its window and the core goes through `Host`.
+//! native view, which the host puts over this window's card: the page is the card, with the site
+//! and the buttons floating over the dim above it. ⌘↩ or the keep button keeps it as a Today tab,
+//! as it is. GPUI can't draw over the page's native view, so the dim and the card are a window of
+//! their own that the host shows over the browser window, as its child, as the dialog's are, and
+//! nothing of the preview's own lies over the page. Where no window of the app's can hold a page,
+//! as on Linux, the page shows in the browser window under this one, which leaves it a hole and
+//! draws the card's rim round it. What it asks of its window and the core goes through `Host`.
 
 use std::{
     rc::Rc,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 use gpui::{
-    App, Bounds, Context, FocusHandle, Global, Hsla, KeyBinding, MouseButton, PathBuilder, Pixels,
-    Point, SharedString, Size, Task, TitlebarOptions, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions, actions, canvas, div, fill, point,
-    prelude::*, px, rgb, size, svg,
+    AnyElement, App, Bounds, BoxShadow, Context, FocusHandle, FontWeight, Global, Hsla, Image,
+    KeyBinding, MouseButton, PathBuilder, Pixels, Point, SharedString, Size, Task,
+    TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
+    WindowOptions, accesskit::Role, actions, canvas, div, fill, img, point, prelude::*, px, rgb,
+    size, svg,
 };
 
 use crate::elevation::Level;
 use crate::icon_picker::outline;
-use crate::palette::{self, STATE_HOVERED, STATE_PRESSED};
+use crate::palette::{self, Palette, STATE_HOVERED, STATE_PRESSED};
 use crate::shell::{cubic_bezier, scaled::scaled};
-use crate::tokens::dialog::{DIM, DIM_OPACITY};
+use crate::tokens::dialog::DIM;
 use crate::tokens::link_preview::{
-    FRAME, HEADER_LEFT, HEADER_TEXT, INSET_MAX, INSET_MIN, INSET_SHARE, MIN_RADIUS,
+    BUTTON_GAP, CONTROLS, CONTROLS_GAP, DIM_OPACITY, GLYPH, INSET_MAX, INSET_MIN, INSET_SHARE,
+    RADIUS, RIM, SITE_END, SITE_GAP, SITE_X,
 };
-use crate::tokens::shell::{
-    NAV, NAV_RADIUS, TITLE, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE,
-};
+use crate::tokens::shell::{FAVICON_DRAWN, NAV, SECONDARY};
+use crate::tokens::text::BODY;
 
 actions!(link_preview, [Close, Keep]);
 
-/// The header over the page, a button's height, as the side panel's.
-const HEADER: f32 = URL_BUTTON_SIZE + 2. * URL_BUTTON_INSET;
+/// The controls' row over the card: their height and the gap under them.
+const OVER_CARD: f32 = CONTROLS + CONTROLS_GAP;
 
 /// The dialog's measured motion, from the link: it grows in over 0.275 s from half its size,
 /// opaque after the first 0.135 s, as the window dims. It shrinks back into the link in 0.2 s,
@@ -124,38 +127,53 @@ pub fn is_meeting(url: &str) -> bool {
     }
 }
 
-/// The site a URL is on, as the header shows it: its host, without "www.".
+/// The site a URL is on, as the preview shows it: its host, without "www." or a port.
 pub fn site_of(url: &str) -> &str {
     let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
     let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
     let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
+    // An IPv6 address keeps its colons, in its brackets.
+    let host = match host.find(']') {
+        Some(end) if host.starts_with('[') => &host[..=end],
+        _ => host.split(':').next().unwrap_or(host),
+    };
     host.strip_prefix("www.").unwrap_or(host)
 }
 
-/// Where the card goes over a window's page at `page`.
+/// Where the card goes over a window's page at `page`: in from its sides and bottom by a share of
+/// it, and from its top by that and the controls' row over the card.
 fn card(page: Bounds<Pixels>) -> Bounds<Pixels> {
     let side = f32::from(page.size.width.min(page.size.height));
     let inset = (side * INSET_SHARE).clamp(INSET_MIN, INSET_MAX);
+    let top = inset + OVER_CARD;
     Bounds::new(
-        page.origin + point(px(inset), px(inset)),
-        size(page.size.width - px(2. * inset), page.size.height - px(2. * inset)),
+        page.origin + point(px(inset), px(top)),
+        size(
+            (page.size.width - px(2. * inset)).max(px(0.)),
+            (page.size.height - px(top + inset)).max(px(0.)),
+        ),
     )
 }
 
-/// Where the page goes in `card`: under the header, inside the frame.
+/// Where the page goes in `card`: all of it inside the rim.
 fn page_in(card: Bounds<Pixels>) -> Bounds<Pixels> {
     Bounds::new(
-        card.origin + point(px(FRAME), px(HEADER)),
-        size(card.size.width - px(2. * FRAME), card.size.height - px(HEADER + FRAME)),
+        card.origin + point(px(RIM), px(RIM)),
+        size(card.size.width - px(2. * RIM), card.size.height - px(2. * RIM)),
     )
 }
 
 /// The card with its page at `page`.
 fn card_around(page: Bounds<Pixels>) -> Bounds<Pixels> {
     Bounds::new(
-        page.origin - point(px(FRAME), px(HEADER)),
-        size(page.size.width + px(2. * FRAME), page.size.height + px(HEADER + FRAME)),
+        page.origin - point(px(RIM), px(RIM)),
+        size(page.size.width + px(2. * RIM), page.size.height + px(2. * RIM)),
     )
+}
+
+/// The controls' row over a card at `card`, as wide as it.
+fn controls_over(card: Bounds<Pixels>) -> Bounds<Pixels> {
+    Bounds::new(card.origin - point(px(0.), px(OVER_CARD)), size(card.size.width, px(CONTROLS)))
 }
 
 fn scaled_about(frame: Bounds<Pixels>, scale: f32, about: Point<Pixels>) -> Bounds<Pixels> {
@@ -289,6 +307,76 @@ fn paint_frame(
     }
 }
 
+/// A control's plate, floating over the dim: the overlay's fill with the popover level, `shadow`
+/// as the window allows, round at its ends. Clicks on it stay off the dim under it.
+fn plate(id: &'static str, palette: &Palette, shadow: Vec<BoxShadow>) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .h(px(CONTROLS))
+        .rounded_full()
+        .bg(palette.overlay)
+        .border(px(RIM))
+        .border_color(Level::Popover.rim_in(palette))
+        .shadow(shadow)
+        .occlude()
+}
+
+/// A round button: its id, its icon and its name, as the header's buttons are, on its own plate.
+fn button(
+    (id, icon, name): (&'static str, &'static str, &'static str),
+    palette: &Palette,
+    shadow: Vec<BoxShadow>,
+) -> gpui::Stateful<gpui::Div> {
+    let rest = palette.overlay;
+    plate(id, palette, shadow)
+        .w(px(CONTROLS))
+        .flex()
+        .items_center()
+        .justify_center()
+        .role(Role::Button)
+        .aria_label(name)
+        .hover(|style| style.bg(palette.state_over(rest, STATE_HOVERED)))
+        .active(|style| style.bg(palette.state_over(rest, STATE_PRESSED)))
+        .child(svg().path(icon).size(px(GLYPH)).text_color(palette.on_overlay_glyph(NAV)))
+}
+
+/// The site, quietly, on a plate: its favicon, or a globe until it has one, in the plate's round
+/// end, and its host, which ends in an ellipsis where the row is too narrow for it.
+fn site_plate(
+    (site, favicon): (SharedString, Option<Arc<Image>>),
+    palette: &Palette,
+    shadow: Vec<BoxShadow>,
+) -> gpui::Stateful<gpui::Div> {
+    let icon: AnyElement = match favicon {
+        Some(favicon) => img(favicon).size(px(FAVICON_DRAWN)).into_any_element(),
+        None => svg()
+            .path("icons/globe.svg")
+            .size(px(FAVICON_DRAWN))
+            .text_color(palette.on_overlay_glyph(NAV))
+            .into_any_element(),
+    };
+    plate("link-preview-site", palette, shadow)
+        .flex_shrink(1.)
+        .min_w_0()
+        .flex()
+        .items_center()
+        .gap(px(SITE_GAP))
+        // From the plate's edge, outside its rim.
+        .pl(px(SITE_X - RIM))
+        .pr(px(SITE_END - RIM))
+        .child(div().flex_none().child(icon))
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_size(px(BODY))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(palette.on_overlay(SECONDARY))
+                .child(site),
+        )
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Leave {
     Close,
@@ -305,6 +393,8 @@ struct Preview {
     /// The tab whose link it opened from.
     over: u64,
     url: SharedString,
+    /// Its page's favicon, once the core has one.
+    favicon: Option<Arc<Image>>,
     /// Redo closed it, so ⌘Z's history has it already.
     undone: bool,
     /// Where the link was clicked in the browser window.
@@ -333,9 +423,10 @@ impl Preview {
             || self.shown.is_none_or(|shown| shown.elapsed().as_secs_f32() < OPEN)
     }
 
-    /// The page's corners, which the card's follow outside the frame.
-    fn radius(&self) -> f32 {
-        self.radius.max(MIN_RADIUS)
+    /// The page's corners, which the card's follow outside its rim: the preview's own at rest, and
+    /// the window's page's once `kept` has grown it into the tab's place, so it lands with them.
+    fn page_radius(&self, kept: f32) -> f32 {
+        RADIUS + (self.radius - RADIUS) * kept
     }
 }
 
@@ -365,6 +456,18 @@ impl LinkPreviewWindow {
 /// Opens the preview's window, hidden, for `host` to show over a browser window, ahead of time as
 /// the dialog's is.
 pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<LinkPreview>> {
+    let bounds = Bounds::new(point(px(0.), px(0.)), size(px(800.), px(600.)));
+    open_at(host, bounds, false, cx)
+}
+
+/// Opens the preview's window at `bounds`, shown if `show`, as the preview binary has it over its
+/// window, whose host can't place one.
+pub fn open_at(
+    host: Rc<dyn Host>,
+    bounds: Bounds<Pixels>,
+    show: bool,
+    cx: &mut App,
+) -> Option<WindowHandle<LinkPreview>> {
     let key = |key, action| crate::shell::view_binding(key, action, "LinkPreview", cx);
     let mac_keys = [key("cmd-w", Box::new(Close)), key("cmd-enter", Box::new(Keep))];
     cx.bind_keys(mac_keys);
@@ -372,17 +475,14 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<LinkPreview
         KeyBinding::new("escape", Close, Some("LinkPreview")),
     ]);
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-            point(px(0.), px(0.)),
-            size(px(800.), px(600.)),
-        ))),
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions {
             title: None,
             appears_transparent: true,
             traffic_light_position: None,
         }),
         kind: WindowKind::Floating,
-        show: false,
+        show,
         focus: false,
         is_movable: false,
         is_resizable: false,
@@ -437,6 +537,7 @@ pub fn show(
             tab,
             over,
             url,
+            favicon: None,
             undone: false,
             link,
             asked: Instant::now(),
@@ -445,11 +546,11 @@ pub fn show(
             leaving: None,
             _leave: None,
         };
-        preview.host.place(tab, page_in(card(page)), shown.radius());
+        preview.host.place(tab, page_in(card(page)), RADIUS);
         preview.host.show(window);
         preview.preview = Some(shown);
-        // The page has the keyboard, and the header's keys are there once a click gives it to the
-        // card.
+        // The page has the keyboard, and the preview's keys are there once a click gives it to the
+        // controls.
         gpui_window.focus(&preview.focus, cx);
         cx.notify();
     });
@@ -468,7 +569,7 @@ pub fn page_moved(window: u64, (page, radius): (Bounds<Pixels>, f32), cx: &mut A
         }
         shown.page = page;
         shown.radius = radius;
-        host.place(shown.tab, page_in(card(page)), shown.radius());
+        host.place(shown.tab, page_in(card(page)), RADIUS);
         cx.notify();
     });
 }
@@ -478,6 +579,16 @@ pub fn set_url(tab: u64, url: SharedString, cx: &mut App) {
     update(cx, |preview, _, cx| {
         if let Some(shown) = preview.preview.as_mut().filter(|shown| shown.tab == tab) {
             shown.url = url;
+            cx.notify();
+        }
+    });
+}
+
+/// `tab`'s page has `favicon` now, or none.
+pub fn set_favicon(tab: u64, favicon: Option<Arc<Image>>, cx: &mut App) {
+    update(cx, |preview, _, cx| {
+        if let Some(shown) = preview.preview.as_mut().filter(|shown| shown.tab == tab) {
+            shown.favicon = favicon;
             cx.notify();
         }
     });
@@ -638,62 +749,18 @@ impl Render for LinkPreview {
             true => page.intersect(&page_in(card(shown.page))),
             false => page,
         };
+        let page_radius = shown.page_radius(pose.kept);
         if moving || settling || under {
-            self.host.drew(page, shown.radius() * pose.scale, pose.page);
+            self.host.drew(page, page_radius * pose.scale, pose.page);
         }
         if settling {
             // check.sh reads this line.
             log!("browser: link preview settled");
         }
         let palette = palette::current(cx);
-        let radius = shown.radius() + FRAME;
-        let site = SharedString::from(site_of(&shown.url).to_string());
-        let button = |id: &'static str, icon: &'static str| {
-            div()
-                .id(id)
-                .flex_none()
-                .size(px(URL_BUTTON_SIZE))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(NAV_RADIUS))
-                .hover(|style| style.bg(palette.plate(STATE_HOVERED)))
-                .active(|style| style.bg(palette.plate(STATE_PRESSED)))
-                .child(
-                    svg()
-                        .path(icon)
-                        .size(px(URL_BUTTON_GLYPH))
-                        .text_color(palette.on_overlay_glyph(NAV)),
-                )
-        };
-        let header = div()
-            .h(px(HEADER))
-            .flex()
-            .items_center()
-            .gap(px(URL_BUTTON_INSET))
-            .pl(px(HEADER_LEFT))
-            .pr(px(URL_BUTTON_INSET))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(HEADER_TEXT))
-                    .text_color(palette.on_overlay(TITLE))
-                    .child(site),
-            )
-            .child(
-                button("link-preview-keep", "icons/maximize.svg").on_click(
-                    cx.listener(|preview, _, _, cx| {
-                        preview.keep("button", cx);
-                    }),
-                ),
-            )
-            .child(button("link-preview-close", "icons/x.svg").on_click(cx.listener(
-                |preview, _, _, cx| {
-                    preview.close("button", cx);
-                },
-            )));
+        let card_radius = page_radius + RIM;
+        // Nothing casts a shadow where the page shows under the window, as it would fall on it.
+        let shadow = |level: Level| if under { Vec::new() } else { level.shadow() };
         let card = div()
             .id("link-preview-card")
             .absolute()
@@ -701,29 +768,51 @@ impl Render for LinkPreview {
             .top(card_frame.top())
             .w(card_frame.size.width)
             .h(card_frame.size.height)
-            .rounded(px(radius))
+            .rounded(px(card_radius))
             .opacity(pose.card)
             // Clicks on the card stay off the dim under it.
             .occlude();
         let card = match under {
+            // The page lies over all of it but the rim.
             false => card
                 .bg(palette.overlay)
-                .border_1()
+                .border(px(RIM))
                 .border_color(Level::Modal.rim_in(&palette))
-                .shadow(Level::Modal.shadow()),
-            // No shadow, which would show in the hole.
+                .shadow(shadow(Level::Modal)),
             true => {
-                let hole = (scaled_about(page, 1. / pose.scale, about), shown.radius());
+                let hole = (scaled_about(page, 1. / pose.scale, about), page_radius);
                 let color = Hsla::from(palette.overlay);
                 let colors = (color, color.opacity(1. - pose.page), Level::Modal.rim_in(&palette));
-                let frame = canvas(
-                    |_, _, _| {},
-                    move |_, _, window, _| paint_frame((card_frame, radius), hole, colors, window),
-                );
+                let frame = canvas(|_, _, _| {}, move |_, _, window, _| {
+                    paint_frame((card_frame, card_radius), hole, colors, window)
+                });
                 card.child(frame.absolute().size_full())
             }
-        }
-        .child(header);
+        };
+        let site = site_of(&shown.url).to_string();
+        let site = (!site.is_empty()).then(|| (site.into(), shown.favicon.clone()));
+        let lift = shadow(Level::Popover);
+        let keep = button(("link-preview-keep", "icons/maximize.svg", "Open as Tab"), &palette, lift.clone());
+        let close = button(("link-preview-close", "icons/x.svg", "Close"), &palette, lift.clone());
+        let row = controls_over(card_frame);
+        let controls = div()
+            .absolute()
+            .left(row.left())
+            .top(row.top())
+            .w(row.size.width)
+            .h(row.size.height)
+            .flex()
+            .items_center()
+            .gap(px(BUTTON_GAP))
+            .opacity(pose.card)
+            .children(site.map(|site| site_plate(site, &palette, lift)))
+            .child(div().flex_1())
+            .child(keep.on_click(cx.listener(|preview, _, _, cx| {
+                preview.keep("button", cx);
+            })))
+            .child(close.on_click(cx.listener(|preview, _, _, cx| {
+                preview.close("button", cx);
+            })));
         let dim = div()
             .id("link-preview-dim")
             .absolute()
@@ -748,7 +837,9 @@ impl Render for LinkPreview {
                     .bg(dim_color)
             })),
         };
-        root.child(dim).child(scaled(card, pose.scale, about))
+        // The controls grow from the link and leave with the card, as part of it.
+        let preview = div().absolute().size_full().child(card).child(controls);
+        root.child(dim).child(scaled(preview, pose.scale, about))
     }
 }
 
