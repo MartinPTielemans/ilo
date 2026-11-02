@@ -156,7 +156,8 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> bool {
         let users = self.shown_space().is_some_and(|space| space.agent.is_empty());
-        let takes = event.modifiers.alt && event.modifiers.platform && !event.modifiers.shift;
+        // ⌘ is Control off the Mac, where the platform key is Super.
+        let takes = event.modifiers.alt && event.modifiers.secondary(cx) && !event.modifiers.shift;
         if !takes || !users || self.private || self.little.is_some() || self.is_folder(tab) {
             return false;
         }

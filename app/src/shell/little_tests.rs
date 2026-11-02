@@ -177,6 +177,12 @@ fn press_row(
     shell.update(cx, |shell, cx| shell.little_press_row(tab, &event, cx))
 }
 
+/// ⌥ and ⌘, which is Control off the Mac, as the host's platform has them.
+fn option_command(cx: &mut TestAppContext) -> gpui::Modifiers {
+    let command = cx.read(gpui::Modifiers::secondary_key);
+    gpui::Modifiers { alt: true, ..command }
+}
+
 /// ⌥⌘-click on a Today tab's row opens that tab in a Little ilo window (Arc), and on a pinned
 /// tab, with ⇧ too, or with ⌥ alone it doesn't, leaving ⌥-click's split view to the row.
 #[gpui::test]
@@ -188,7 +194,7 @@ fn option_command_click_on_a_today_tab_opens_it_in_little_ilo(cx: &mut TestAppCo
         shell.set_selected(5, cx);
     });
     host.take();
-    let alt_cmd = gpui::Modifiers { alt: true, platform: true, ..Default::default() };
+    let alt_cmd = option_command(cx);
     assert!(!press_row(&main, 4, alt_cmd, cx), "a pinned tab keeps its place");
     let alt = gpui::Modifiers { alt: true, ..Default::default() };
     assert!(!press_row(&main, 6, alt, cx));
@@ -200,10 +206,30 @@ fn option_command_click_on_a_today_tab_opens_it_in_little_ilo(cx: &mut TestAppCo
     assert_eq!(host.take().last().map(String::as_str), Some("open tab in little 6"));
 }
 
+/// Off the Mac ⌘ is Control, so ⌃⌥-click opens the tab in Little ilo there, and ⌥ with Super,
+/// the platform key there, is left to ⌥-click's split.
+#[gpui::test]
+fn off_the_mac_option_control_click_opens_little_ilo(cx: &mut TestAppContext) {
+    let info = cx.read(|cx| cx.platform_info());
+    cx.set_platform_info(gpui::PlatformInfo { os: gpui::OperatingSystem::Linux, ..info });
+    let host = Rc::new(Recorder::default());
+    let main = main_window(cx, &host);
+    main.update(cx, |shell, cx| {
+        shell.set_tabs(1, vec![4], vec![5, 6], Vec::new(), Folders::default(), cx);
+        shell.set_selected(5, cx);
+    });
+    host.take();
+    let alt_super = gpui::Modifiers { alt: true, platform: true, ..Default::default() };
+    assert!(!press_row(&main, 6, alt_super, cx));
+    let alt_control = gpui::Modifiers { alt: true, control: true, ..Default::default() };
+    assert!(press_row(&main, 6, alt_control, cx));
+    assert_eq!(host.take().last().map(String::as_str), Some("open tab in little 6"));
+}
+
 /// A Little ilo window has no sidebar rows of its own to send, and an agent's Space keeps its tabs.
 #[gpui::test]
 fn option_command_click_is_the_users_spaces_alone(cx: &mut TestAppContext) {
-    let alt_cmd = gpui::Modifiers { alt: true, platform: true, ..Default::default() };
+    let alt_cmd = option_command(cx);
     let (shell, host) = little(cx, "https://example.com/");
     assert!(!press_row(&shell, 10, alt_cmd, cx));
     let main = main_window(cx, &host);
