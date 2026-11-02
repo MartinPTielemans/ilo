@@ -94,6 +94,7 @@ mod rows;
 pub(crate) mod scaled;
 mod side_panel;
 mod sidebar;
+mod sidebar_backups;
 mod sidebar_keys;
 mod space_form;
 mod split_targets;
@@ -128,7 +129,7 @@ pub use keys::{
 };
 pub use history::HistoryPage;
 pub use library::{Archived, Captured, Download, DownloadAction, DownloadState};
-pub use menu_bar::{MenuBar, ProfileChoice};
+pub use menu_bar::{MenuBar, ProfileChoice, SidebarBackup};
 pub use themes::{AppAppearance, app_appearance};
 pub use menus::{MenuEntry, new_profile_name};
 pub use page_menu::{PageMenuItem, made_up as made_up_page_menu};
@@ -1290,6 +1291,8 @@ pub struct Shell {
     stale_pictures: Vec<Arc<gpui::RenderImage>>,
     /// Each profile's extensions.
     extensions: HashMap<u64, Vec<Extension>>,
+    /// Each profile's sidebar backups, as the core last listed them (`set_sidebar_backups`).
+    sidebar_backups: HashMap<u64, Vec<SidebarBackup>>,
     /// What the menu bar was last given for this window, and the window's title.
     menus: MenuBar,
     window_title: SharedString,
@@ -1588,6 +1591,7 @@ impl Shell {
             picture: None,
             stale_pictures: Vec::new(),
             extensions: HashMap::new(),
+            sidebar_backups: HashMap::new(),
             menus: MenuBar::default(),
             window_title: SharedString::default(),
             url_field_drawn: RefCell::default(),

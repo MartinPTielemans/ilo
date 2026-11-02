@@ -2167,7 +2167,9 @@ void Window::SelectAfterClosing() {
   if (next && Tab::Get(next)) {
     Pick(next);
   } else {
-    ReportSelected();
+    // Laid out with no page, as after an unload or in an empty Space, so no pane keeps the closed
+    // tab's: on Windows one is a window of its own, which went on drawing over the Space (#1343).
+    ShowNothing();
   }
 }
 

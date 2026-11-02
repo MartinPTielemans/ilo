@@ -199,6 +199,18 @@ Settings& UserSettings();
 // window showed (RestoreSavedWindow), unless there are Spaces already. Returns whether it did.
 bool RestoreSession(Window& window);
 
+// The sidebar's backups, as Arc's Help › Restore Data has them, but each profile's apart, in its
+// own directory: its Spaces and favorites, as the session file keeps them. One is taken as the
+// Spaces are saved anyway, if the profile's newest is an hour old, so nothing wakes an idle
+// browser for it. Arc's schedule keeps ten from today, then one a day for ten days, one a week to
+// a month back and one a month to a year back. The app hears of each profile's through
+// sidebar_backups_changed.
+
+// Brings back the sidebar of the profile of the Space |window| shows from its backup taken at
+// |time|, once the sidebar as it is has become a backup too, so this can be undone the same way.
+// Returns whether it will: not in a private window or an agent's Space.
+bool RestoreSidebar(Window& window, base::Time time);
+
 }  // namespace browser_core
 
 #endif  // BROWSER_CORE_SESSION_H_

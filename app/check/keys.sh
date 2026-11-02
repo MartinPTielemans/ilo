@@ -464,7 +464,7 @@ send clickkey 300 120
 send type sidebar
 expect '^browser: shortcuts search "sidebar" finds ' "the search for sidebar didn't end"
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts-sidebar.png" || fail "no window to capture"
-found='Reveal Tab in Sidebar, Focus Sidebar, Show/Hide Sidebar'
+found='Reveal Tab in Sidebar, Focus Sidebar, Show/Hide Sidebar, Restore Earlier Sidebar'
 grep -q "^browser: shortcuts search \"sidebar\" finds $found\$" "$log" ||
   fail "the search didn't find the sidebar's commands: $(grep '"sidebar" finds' "$log" | tail -1)"
 send key a cmd

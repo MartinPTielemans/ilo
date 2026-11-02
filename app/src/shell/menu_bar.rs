@@ -30,6 +30,18 @@ pub struct MenuBar {
     pub profiles: Option<(Vec<ProfileChoice>, bool)>,
     /// View › Appearance's choice, which it checks.
     pub appearance: Appearance,
+    /// Help › Restore Earlier Sidebar: the backups of the shown Space's profile's sidebar, newest
+    /// first. None in a private window or an agent's Space.
+    pub sidebar_backups: Vec<SidebarBackup>,
+}
+
+/// A backup of a profile's sidebar, as the core lists it.
+#[derive(Clone, PartialEq, Debug)]
+pub struct SidebarBackup {
+    /// When it was taken, in milliseconds since 1970.
+    pub time: u64,
+    /// When, as the user's locale writes it.
+    pub label: SharedString,
 }
 
 /// A profile a Space can be in, as its menus list it.
@@ -105,6 +117,11 @@ impl Shell {
             tracing: trace::recording(cx),
             profiles: self.profile_choices(self.space).filter(|_| !self.private),
             appearance: self.app_appearance,
+            sidebar_backups: (self.shown_space())
+                .filter(|space| !self.private && space.agent.is_empty())
+                .and_then(|space| self.sidebar_backups.get(&space.profile))
+                .cloned()
+                .unwrap_or_default(),
         }
     }
 
