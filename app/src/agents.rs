@@ -15,10 +15,14 @@
 
 pub mod bridge;
 pub mod clients;
+mod codex;
 pub mod page;
 #[cfg(windows)]
 mod pipe;
 mod server;
+pub mod ready;
+pub mod runner;
+pub mod task;
 pub mod tools;
 
 pub use server::address;
@@ -85,6 +89,8 @@ pub struct Question {
     pub id: u64,
     /// The agent's name, as its Space has it.
     pub agent: SharedString,
+    /// The agent's id, by which a task's card asks it rather than the windows' card.
+    pub from: SharedString,
     /// What it would do, following "wants to", such as "click “Place order” on shop.example".
     pub what: SharedString,
     /// Why that asks, such as "It looks like a payment or an order.", or for a handoff, what the
@@ -183,6 +189,15 @@ pub trait Browser {
     /// The user gives the agent whose Space is `space` their `tab`, which moves there
     /// (bc_tab_give_to_agent). Whether it did.
     fn give(&self, tab: u64, space: u64, cx: &mut App) -> bool;
+    /// Makes the hidden Space of the task agent `agent`, named `name`, in the profile of the
+    /// user's Space `like` (bc_space_create_for_agent, bc_space_set_profile).
+    fn make_task_space(&self, agent: &str, name: &str, like: u64, cx: &mut App) -> u64;
+    /// Deletes a task's Space, with its tabs.
+    fn delete_space(&self, space: u64, cx: &mut App);
+    /// The Spaces of task agents, as a run before may have left them.
+    fn task_spaces(&self) -> Vec<u64>;
+    /// Moves `tab` out of a task's Space to the top of the user's Space `space`'s Today tabs.
+    fn move_tab(&self, tab: u64, space: u64, cx: &mut App);
 }
 
 /// What the server's threads hand the UI thread.
@@ -362,6 +377,8 @@ pub struct Agents {
     runs: Vec<Run>,
     /// The agent whose run's step is starting, whose log entries go under the run's.
     stepping: Option<String>,
+    /// The tasks the user asked from ⌘T, and their CLIs' settings.
+    tasks: task::Tasks,
 }
 
 /// A run of steps (run_steps): one at a time, each as its tool would run alone.
@@ -430,6 +447,7 @@ impl Agents {
         socket: PathBuf,
         bridge: Vec<String>,
     ) -> Self {
+        let dir = path.as_ref().and_then(|path| path.parent()).map(PathBuf::from);
         Agents {
             browser,
             clients,
@@ -457,6 +475,7 @@ impl Agents {
             held: HashMap::new(),
             runs: Vec::new(),
             stepping: None,
+            tasks: task::Tasks { dir, ..Default::default() },
         }
     }
 
@@ -486,6 +505,13 @@ impl Agents {
                 })
                 .collect();
             Some((agent.clone(), sites))
+        }))
+        .collect();
+        let tasks = saved.get("tasks").unwrap_or(&Value::Null);
+        self.tasks.default = tasks.get("default").and_then(Value::as_str).and_then(runner::Cli::from_id);
+        let models = tasks.get("models").and_then(Value::as_object).into_iter().flatten();
+        self.tasks.models = (models.filter_map(|(cli, model)| {
+            Some((runner::Cli::from_id(cli)?, model.as_str()?.to_string()))
         }))
         .collect();
         self.on = saved.get("on").and_then(Value::as_bool).unwrap_or(false);
@@ -791,19 +817,18 @@ impl Agents {
             arguments,
             reply,
         } = call;
-        // A token's agent is always one the user connected.
-        let Some(client) = Client::from_id(&agent).filter(|client| self.is_connected(*client))
-        else {
+        // A token's agent is always one the user connected, or a task of theirs.
+        if !self.may_call(&agent) {
             _ = reply.send(ToolResult::error("This agent isn't connected."));
             return;
-        };
+        }
         // check.sh reads this line.
         log!("browser: agent {agent} calls {tool}");
         self.live.insert(agent.clone());
         match tool.as_str() {
             "list_tabs" => {
                 // Its first call makes its Space, which the core then lists.
-                self.space(client, cx);
+                self.space(&agent, cx);
                 let tabs = self.browser.agent_tabs(&agent, cx);
                 self.note(&agent, "list_tabs", "", "");
                 cx.notify();
@@ -815,7 +840,7 @@ impl Agents {
             "read_page" => {
                 let tab = match tools::tab_argument(&arguments) {
                     Ok(Some(tab)) => tab,
-                    Ok(None) => match self.default_tab(client, cx) {
+                    Ok(None) => match self.default_tab(&agent, cx) {
                         Some(tab) => tab,
                         None => {
                             _ = reply.send(ToolResult::text(tools::tab_list(&[], None)));
@@ -861,7 +886,7 @@ impl Agents {
             "navigate" | "snapshot" | "click" | "type" | "press_key" | "scroll" | "screenshot" => {
                 let tab = match tools::tab_argument(&arguments) {
                     Ok(Some(tab)) => tab,
-                    Ok(None) => match self.default_tab(client, cx) {
+                    Ok(None) => match self.default_tab(&agent, cx) {
                         Some(tab) => tab,
                         None => {
                             _ = reply.send(ToolResult::error(
@@ -878,7 +903,7 @@ impl Agents {
                 self.page_tool(&agent, &tool, tab, &arguments, reply, cx);
             }
             "run_steps" => {
-                let Some(tab) = self.tab_for(client, &arguments, &reply, cx) else {
+                let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {
                     return;
                 };
                 let steps = arguments.get("steps").and_then(Value::as_array).cloned();
@@ -904,7 +929,7 @@ impl Agents {
                 self.advance(cx);
             }
             "hand_off" => {
-                let Some(tab) = self.tab_for(client, &arguments, &reply, cx) else {
+                let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {
                     return;
                 };
                 let why = arguments.get("reason").and_then(Value::as_str).unwrap_or("").trim();
@@ -931,7 +956,7 @@ impl Agents {
                 self.asked(cx);
             }
             "close_tab" => {
-                let Some(tab) = self.tab_for(client, &arguments, &reply, cx) else {
+                let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {
                     return;
                 };
                 if !self.act(&agent, tab, "close_tab", &reply, cx) {
@@ -951,7 +976,7 @@ impl Agents {
                 }));
             }
             "ask_for_tab" => {
-                let Some(tab) = self.tab_for(client, &arguments, &reply, cx) else {
+                let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {
                     return;
                 };
                 let why = arguments.get("reason").and_then(Value::as_str).unwrap_or("").trim();
@@ -984,7 +1009,26 @@ impl Agents {
                 held.reply = Some(reply);
                 self.asked(cx);
             }
+            "title" | "ask" | "finish" if is_task(&agent) => {
+                self.task_tool(&agent, &tool, &arguments, reply, cx)
+            }
             _ => _ = reply.send(ToolResult::error(format!("There's no tool {tool}."))),
+        }
+    }
+
+    /// Whether the agent may call tools: a client the user connected, or a task not dropped.
+    fn may_call(&self, agent: &str) -> bool {
+        match Client::from_id(agent) {
+            Some(client) => self.is_connected(client),
+            None => is_task(agent) && self.task(agent).is_some(),
+        }
+    }
+
+    /// The agent's name, as the user sees it: a task's CLI's, a client's, else its id.
+    fn agent_name(&self, agent: &str) -> SharedString {
+        match self.task(agent) {
+            Some(task) => task.cli.name().into(),
+            None => name(agent).to_string().into(),
         }
     }
 
@@ -1174,14 +1218,14 @@ impl Agents {
     /// The tab a call names, else the one its agent used last; or None, having answered why.
     fn tab_for(
         &mut self,
-        client: Client,
+        agent: &str,
         arguments: &Value,
         reply: &mpsc::Sender<ToolResult>,
         cx: &mut Context<Self>,
     ) -> Option<u64> {
         let why = match tools::tab_argument(arguments) {
             Ok(Some(tab)) => return Some(tab),
-            Ok(None) => match self.default_tab(client, cx) {
+            Ok(None) => match self.default_tab(agent, cx) {
                 Some(tab) => return Some(tab),
                 None => "You have no tab open yet. Open one with open_tab.".into(),
             },
@@ -1477,7 +1521,8 @@ impl Agents {
         }
         let question = Question {
             id: self.next_request,
-            agent: name(&act.agent).into(),
+            agent: self.agent_name(&act.agent),
+            from: act.agent.clone().into(),
             what: act.what.clone().into(),
             why: why.into(),
             handoff: None,
@@ -1587,7 +1632,8 @@ impl Agents {
             .min_by_key(|(_, held)| held.question);
         handoff.map(|(&tab, held)| Question {
             id: held.question,
-            agent: name(&held.agent).into(),
+            agent: self.agent_name(&held.agent),
+            from: held.agent.clone().into(),
             what: match held.back {
                 Some(_) => "have a tab back".into(),
                 None => "hand you a tab".into(),
@@ -1747,20 +1793,26 @@ impl Agents {
 
     /// The agent's Space, made the first time it calls, so it shows in the sidebar for the user
     /// to open pages in.
-    fn space(&mut self, client: Client, cx: &mut Context<Self>) -> u64 {
-        match self.browser.agent_space(client.id()) {
-            0 => self
-                .browser
-                .make_agent_space(client.id(), client.name(), cx),
+    fn space(&mut self, agent: &str, cx: &mut Context<Self>) -> u64 {
+        match self.browser.agent_space(agent) {
+            0 => match self.task(agent) {
+                Some(task) => {
+                    let (cli, home) = (task.cli, task.home);
+                    let space = self.browser.make_task_space(agent, cli.name(), home, cx);
+                    self.task_space_made(agent, space);
+                    space
+                }
+                None => self.browser.make_agent_space(agent, name(agent), cx),
+            },
             space => space,
         }
     }
 
     /// The tab the agent used last, if it's still in its Space, else its first.
-    fn default_tab(&mut self, client: Client, cx: &mut Context<Self>) -> Option<u64> {
-        let space = self.space(client, cx);
+    fn default_tab(&mut self, agent: &str, cx: &mut Context<Self>) -> Option<u64> {
+        let space = self.space(agent, cx);
         let tabs = self.browser.space_tabs(space, cx);
-        let last = self.current.get(client.id()).copied();
+        let last = self.current.get(agent).copied();
         (last.filter(|last| tabs.iter().any(|tab| tab.id == *last)))
             .or_else(|| tabs.first().map(|tab| tab.id))
     }
@@ -1849,7 +1901,8 @@ impl Agents {
             .agents
             .iter()
             .map(|agent| (agent.token.clone(), agent.client.id().into()));
-        *self.tokens.lock().unwrap() = tokens.collect();
+        let tasks = (self.tasks.tasks.iter()).map(|task| (task.token().to_string(), task.agent.clone()));
+        *self.tokens.lock().unwrap() = tokens.chain(tasks).collect();
     }
 
     fn save(&self) {
@@ -1866,7 +1919,10 @@ impl Agents {
                 (agent.clone(), Value::Object(sites.collect()))
             })
             .collect();
-        let saved = json!({ "on": self.on, "agents": agents, "grants": grants });
+        let models: serde_json::Map<String, Value> =
+            (self.tasks.models.iter()).map(|(cli, model)| (cli.id().into(), json!(model))).collect();
+        let tasks = json!({ "default": self.tasks.default.map(runner::Cli::id), "models": models });
+        let saved = json!({ "on": self.on, "agents": agents, "grants": grants, "tasks": tasks });
         if let Err(error) = clients::write_private(path, saved.to_string().as_bytes()) {
             log!("couldn't save the agents' settings: {error}");
         }
@@ -1926,6 +1982,17 @@ pub fn site(url: &str) -> String {
     host.strip_prefix("www.").unwrap_or(host).to_string()
 }
 
+/// The local time `at`, in seconds since 1970, reads on the clock here, such as "18:00", with
+/// its day if it's a day or more away, such as "Tue 18:00".
+pub fn local_time(at: u64) -> String {
+    use chrono::{Local, TimeZone};
+    let Some(time) = Local.timestamp_opt(at as i64, 0).single() else {
+        return String::new();
+    };
+    let soon = time.signed_duration_since(Local::now()) < chrono::Duration::hours(20);
+    time.format(if soon { "%H:%M" } else { "%a %H:%M" }).to_string()
+}
+
 /// How long ago `at` was, as the log says it.
 pub fn ago(at: SystemTime, now: SystemTime) -> String {
     let seconds = now.duration_since(at).map_or(0, |since| since.as_secs());
@@ -1939,3 +2006,8 @@ pub fn ago(at: SystemTime, now: SystemTime) -> String {
 
 #[cfg(test)]
 mod tests;
+
+/// Whether the agent with the id `agent` runs a task the user asked from ⌘T (Agent task).
+pub fn is_task(agent: &str) -> bool {
+    agent.starts_with("task-")
+}

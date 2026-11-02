@@ -369,7 +369,7 @@ fn message(shared: &Shared, number: u64, agent: &str, line: &str) -> Option<Valu
     let result = match method {
         "initialize" => initialize(shared, number, agent, &params),
         "ping" => json!({}),
-        "tools/list" => json!({ "tools": tools::list() }),
+        "tools/list" => json!({ "tools": tools::list(agent) }),
         "tools/call" => {
             let name = params
                 .get("name")

@@ -38,6 +38,9 @@ struct Made {
     checked: RefCell<Vec<String>>,
     /// The app, which the core asks about the key press_key presses from inside bc_agent_page.
     app: RefCell<Option<gpui::AsyncApp>>,
+    /// The tasks' Spaces made, and the Spaces deleted.
+    task_spaces: RefCell<Vec<u64>>,
+    deleted: RefCell<Vec<u64>>,
 }
 
 impl Made {
@@ -194,6 +197,32 @@ impl Browser for Made {
         each.1 = space;
         self.held.borrow_mut().remove(&tab);
         true
+    }
+
+    /// A task's Space is 100 and up, in the order they're made, in the profile of `like`.
+    fn make_task_space(&self, agent: &str, name: &str, like: u64, _: &mut App) -> u64 {
+        let space = 100 + self.task_spaces.borrow().len() as u64;
+        self.made.borrow_mut().push((agent.into(), format!("{name} like {like}")));
+        self.agent_spaces.borrow_mut().insert(agent.into(), space);
+        self.task_spaces.borrow_mut().push(space);
+        space
+    }
+
+    fn delete_space(&self, space: u64, _: &mut App) {
+        self.deleted.borrow_mut().push(space);
+        self.agent_spaces.borrow_mut().retain(|_, each| *each != space);
+        self.tabs.borrow_mut().retain(|tab| tab.1 != space);
+    }
+
+    fn task_spaces(&self) -> Vec<u64> {
+        let deleted = self.deleted.borrow();
+        (self.task_spaces.borrow().iter()).filter(|space| !deleted.contains(space)).copied().collect()
+    }
+
+    fn move_tab(&self, tab: u64, space: u64, _: &mut App) {
+        if let Some(each) = self.tabs.borrow_mut().iter_mut().find(|each| each.0 == tab) {
+            each.1 = space;
+        }
     }
 }
 
@@ -1412,7 +1441,7 @@ const CORE_ALLOWS: [&str; 13] = [
 /// so a tool or action that could reach them fails here until it's added on purpose, with its rule.
 #[gpui::test]
 fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
-    let listed = tools::list();
+    let listed = tools::list("claude-code");
     let names: Vec<&str> = (listed.as_array().unwrap().iter())
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
@@ -1480,5 +1509,303 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
     let page_actions = ["snapshot", "read_page", "click", "type", "press_key", "scroll"];
     for action in page_actions.into_iter().chain(["screenshot", "back", "hand_off", "close_tab"]) {
         assert!(checked.contains(action), "{action} didn't ask the core: {checked:?}");
+    }
+}
+
+/// Agent tasks: a task is an agent of its own, `task-<n>`, with a hidden Space in the profile it
+/// was asked from, and a card that says what it does.
+mod tasks {
+    use super::*;
+    use crate::agents::ready::{Found, Ready};
+    use crate::agents::runner::{self, Cli, Failure, Out};
+    use crate::agents::task::{AskedOn, Dot, State};
+
+    /// A stand-in for `claude` that keeps what it's sent beside itself, and never answers.
+    #[cfg(unix)]
+    fn fake_cli(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ilo-tasks-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let program = dir.join("claude");
+        std::fs::write(&program, "#!/bin/sh\nexec cat > \"$0.in\"\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        program
+    }
+
+    /// Agents on, with Claude signed in at `program`, and the user's Space 1.
+    fn ready(program: Option<PathBuf>, cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>) {
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let agents = agents(&browser, &configs, None, cx);
+        agents.update(cx, |agents, cx| {
+            agents.set_on(true, cx);
+            let found = Found { ready: Ready::SignedIn, program, path: None };
+            agents.tasks.found.insert(Cli::Claude, found);
+            agents.tasks.default = Some(Cli::Claude);
+        });
+        (agents, browser)
+    }
+
+    fn page() -> Option<AskedOn> {
+        Some(AskedOn {
+            url: "https://en.wikipedia.org/wiki/Arc_(web_browser)".into(),
+            title: "Arc (web browser)".into(),
+        })
+    }
+
+    fn start(agents: &Entity<Agents>, asked: &str, cx: &mut TestAppContext) -> String {
+        agents
+            .update(cx, |agents, cx| agents.start_task(Cli::Claude, asked, page(), 1, cx))
+            .expect("started")
+    }
+
+    fn card_of(agents: &Entity<Agents>, cx: &mut TestAppContext) -> crate::agents::task::Card {
+        agents.read_with(cx, |agents, cx| agents.cards(1, cx).remove(0))
+    }
+
+    fn said(agents: &Entity<Agents>, agent: &str, out: Out, cx: &mut TestAppContext) {
+        let event = runner::Event { agent: agent.into(), out };
+        agents.update(cx, |agents, cx| agents.task_said(event, cx));
+    }
+
+    #[cfg(unix)]
+    #[gpui::test]
+    fn a_task_runs_its_cli_with_the_ask_and_the_pages_address_alone(cx: &mut TestAppContext) {
+        let program = fake_cli("first");
+        let (agents, browser) = ready(Some(program.clone()), cx);
+        let agent = start(&agents, "Find a flight to Lisbon", cx);
+        assert_eq!(agent, "task-1");
+        // Its Space is the agent's own, in the profile of the Space it was asked in.
+        assert_eq!(browser.made.borrow().last().unwrap(), &("task-1".to_string(), "Claude like 1".to_string()));
+        let token = agents.read_with(cx, |agents, _| agents.task("task-1").unwrap().token().to_string());
+        assert_eq!(agents.read_with(cx, |agents, _| agents.tokens.lock().unwrap().get(&token).cloned()), Some(agent.clone()));
+        // The fake CLI has the first message once it reads it.
+        let input = program.with_extension("in");
+        let mut sent = String::new();
+        for _ in 0..200 {
+            sent = std::fs::read_to_string(&input).unwrap_or_default();
+            if !sent.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let message: Value = serde_json::from_str(sent.lines().next().unwrap()).unwrap();
+        assert_eq!(message["type"], json!("user"));
+        let text = message["message"]["content"].as_str().unwrap();
+        assert!(text.starts_with("Find a flight to Lisbon"));
+        assert!(text.contains("“Arc (web browser)”, https://en.wikipedia.org/wiki/Arc_(web_browser)"));
+        let card = card_of(&agents, cx);
+        assert_eq!((card.title.as_ref(), card.status.as_ref(), card.dot), ("Find a flight to Lisbon", "Starting", Dot::Working));
+        // Dropped, its CLI ends and its Space goes.
+        agents.update(cx, |agents, cx| agents.end_tasks(cx));
+        assert_eq!(*browser.deleted.borrow(), vec![100]);
+        assert!(agents.read_with(cx, |agents, _| agents.tokens.lock().unwrap().is_empty() || !agents.tokens.lock().unwrap().contains_key(&token)));
+    }
+
+    #[gpui::test]
+    fn a_cli_not_installed_says_how_to_install_it(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        start(&agents, "Find a flight", cx);
+        let card = card_of(&agents, cx);
+        assert_eq!(card.status.as_ref(), "Claude isn't installed.");
+        assert_eq!(card.command, Some("npm install -g @anthropic-ai/claude-code"));
+        assert_eq!(card.dot, Dot::None);
+    }
+
+    #[gpui::test]
+    fn the_task_tools_are_a_tasks_alone(cx: &mut TestAppContext) {
+        let names = tools::names("task-1");
+        for tool in ["title", "ask", "finish", "open_tab", "hand_off"] {
+            assert!(names.iter().any(|name| name == tool), "{tool}");
+        }
+        assert!(!tools::names("claude-code").iter().any(|name| name == "finish"));
+        let (agents, _, _) = connected(cx);
+        let answer = call(&agents, "claude-code", "title", json!({ "text": "Flights" }), cx);
+        assert_eq!(answer.recv().unwrap(), ToolResult::error("There's no tool title."));
+        // A task that isn't one the user asked can't call anything.
+        let answer = call(&agents, "task-9", "list_tabs", json!({}), cx);
+        assert_eq!(answer.recv().unwrap(), ToolResult::error("This agent isn't connected."));
+    }
+
+    #[gpui::test]
+    fn title_ask_and_finish_show_on_the_card_and_in_the_log(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Find a flight to Lisbon", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        let answer = call(&agents, &agent, "title", json!({ "text": "Flights to Lisbon" }), cx);
+        assert!(!answer.recv().unwrap().error);
+        let asked = call(&agents, &agent, "ask", json!({ "question": "Which day?", "answers": ["Friday", "Saturday"] }), cx);
+        let card = card_of(&agents, cx);
+        assert_eq!(card.title.as_ref(), "Flights to Lisbon");
+        assert_eq!((card.status.as_ref(), card.dot), ("Which day?", Dot::Waiting));
+        assert_eq!(card.answers, vec![SharedString::from("Friday"), SharedString::from("Saturday")]);
+        assert!(asked.try_recv().is_err(), "ask waits for the user");
+        agents.update(cx, |agents, cx| agents.answer_task(&agent, "Saturday", cx));
+        assert_eq!(asked.recv().unwrap(), ToolResult::text("The user answered: Saturday"));
+        assert_eq!(card_of(&agents, cx).dot, Dot::Working);
+        browser.tabs.borrow_mut().push((30, 100, "Checkout", "https://shop.example/checkout"));
+        let done = call(&agents, &agent, "finish", json!({ "result": "Found a flight for €80.", "tab": 30 }), cx);
+        assert!(!done.recv().unwrap().error);
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.dot), ("Found a flight for €80.", Dot::Done));
+        assert_eq!(card.open, Some((30, "shop.example".into())));
+        let actions: Vec<String> = log(&agents, &agent, cx).into_iter().map(|(action, _, _)| action).collect();
+        assert_eq!(actions, ["finish", "answered", "ask", "title"], "newest first");
+        // Open <site> moves the tab to the user's Space.
+        agents.update(cx, |agents, cx| agents.open_result(&agent, cx));
+        assert!(browser.tabs.borrow().contains(&(30, 1, "Checkout", "https://shop.example/checkout")));
+        assert_eq!(card_of(&agents, cx).open, None);
+    }
+
+    #[gpui::test]
+    fn a_long_answer_or_many_ask_in_the_conversation(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Plan a trip", cx);
+        let _asked = call(&agents, &agent, "ask", json!({
+            "question": "Where to?", "answers": ["Lisbon", "Porto", "Faro", "Madeira"],
+        }), cx);
+        assert!(card_of(&agents, cx).answers.is_empty());
+        // A reply answers it.
+        agents.update(cx, |agents, cx| agents.reply(&agent, "Porto", cx));
+        assert_eq!(_asked.recv().unwrap(), ToolResult::text("The user answered: Porto"));
+    }
+
+    #[gpui::test]
+    fn a_confirmation_or_a_handoff_waits_on_the_card(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Check my balance", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        let _opening = call(&agents, &agent, "open_tab", json!({ "url": "https://www.chase.com/" }), cx);
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.dot), ("Waiting for your OK", Dot::Waiting));
+        let question = card.question.expect("asked on the card");
+        assert_eq!((question.agent.as_ref(), question.from.as_ref()), ("Claude", "task-1"));
+        agents.update(cx, |agents, cx| agents.answer(question.id, Answer::Never, cx));
+        browser.tabs.borrow_mut().push((31, 100, "Sign in", "https://example.com/login"));
+        let _handed = call(&agents, &agent, "hand_off", json!({ "reason": "Sign in, please.", "tab": 31 }), cx);
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.dot), ("Waiting for you", Dot::Waiting));
+        assert_eq!(card.question.and_then(|question| question.handoff), Some(31));
+    }
+
+    #[gpui::test]
+    fn limits_and_signing_out_say_what_to_do(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Find a flight", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        said(&agents, &agent, Out::Ended(Some(Failure::Limit(None))), cx);
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.retry), ("At its plan's limit", true));
+        let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 3600;
+        said(&agents, &agent, Out::Ended(Some(Failure::Limit(Some(at)))), cx);
+        let resets = crate::agents::local_time(at);
+        assert_eq!(card_of(&agents, cx).status.to_string(), format!("Limit resets at {resets}"));
+        let listed = agents.read_with(cx, |agents, _| agents.ask_agents());
+        assert_eq!(listed[0].resets.as_deref(), Some(resets.as_str()));
+        said(&agents, &agent, Out::Ended(Some(Failure::SignedOut)), cx);
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.command), ("Claude isn't signed in.", Some("claude auth login")));
+    }
+
+    #[gpui::test]
+    fn a_turn_ending_without_finish_is_done_with_what_it_said(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "What's on today?", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        said(&agents, &agent, Out::Said("Three meetings.".into()), cx);
+        said(&agents, &agent, Out::Ended(None), cx);
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.dot), ("Three meetings.", Dot::Done));
+    }
+
+    #[gpui::test]
+    fn stop_ends_it_and_refuses_what_waits(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Check my balance", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        let opening = call(&agents, &agent, "open_tab", json!({ "url": "https://www.chase.com/" }), cx);
+        agents.update(cx, |agents, cx| agents.stop_task(&agent, cx));
+        assert_eq!(opening.recv().unwrap(), ToolResult::error(STOPPED));
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.question), ("Stopped", None));
+        // Its turn ending after the stop leaves it stopped.
+        said(&agents, &agent, Out::Ended(None), cx);
+        assert_eq!(card_of(&agents, cx).status.as_ref(), "Stopped");
+    }
+
+    #[gpui::test]
+    fn dismissed_tasks_come_back_and_clear_takes_the_done(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        let first = start(&agents, "One", cx);
+        let second = start(&agents, "Two", cx);
+        agents.update(cx, |agents, cx| {
+            agents.task_mut(&first).unwrap().state = State::Done { result: "Did one.".into(), tab: None };
+            agents.task_mut(&second).unwrap().state = State::Working;
+            let _ = cx;
+        });
+        let titles = |agents: &Entity<Agents>, cx: &mut TestAppContext| -> Vec<String> {
+            agents.read_with(cx, |agents, cx| agents.cards(1, cx).into_iter().map(|card| card.title.to_string()).collect())
+        };
+        assert_eq!(titles(&agents, cx), ["Two", "One"], "newest on top");
+        let cleared = agents.update(cx, |agents, cx| agents.clear_tasks(1, cx));
+        assert_eq!(cleared, vec![first.clone()]);
+        assert_eq!(titles(&agents, cx), ["Two"]);
+        agents.update(cx, |agents, cx| agents.dismiss_task(&second, cx));
+        assert!(titles(&agents, cx).is_empty());
+        assert_eq!(agents.update(cx, |agents, cx| agents.restore_task(None, cx)), Some(second.clone()));
+        assert_eq!(agents.update(cx, |agents, cx| agents.restore_task(None, cx)), Some(first.clone()));
+        assert_eq!(titles(&agents, cx), ["Two", "One"]);
+        // Past the last few dismissed, a task goes for good, with its Space.
+        for each in 0..11 {
+            let agent = start(&agents, &format!("Task {each}"), cx);
+            agents.update(cx, |agents, cx| agents.dismiss_task(&agent, cx));
+        }
+        assert_eq!(*browser.deleted.borrow(), vec![102]);
+    }
+
+    #[gpui::test]
+    fn the_spaces_a_run_before_left_go_at_launch(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        browser.task_spaces.borrow_mut().extend([100, 101]);
+        agents.update(cx, |agents, cx| agents.end_old_tasks(cx));
+        assert_eq!(*browser.deleted.borrow(), vec![100, 101]);
+    }
+
+    #[gpui::test]
+    fn ask_lists_the_signed_in_with_the_default_first(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        agents.update(cx, |agents, cx| {
+            let found = Found { ready: Ready::SignedIn, program: None, path: None };
+            agents.tasks.found.insert(Cli::Codex, found);
+            agents.set_default_task_agent(Cli::Codex, cx);
+        });
+        let listed: Vec<Cli> = agents.read_with(cx, |agents, _| agents.ask_agents().into_iter().map(|agent| agent.cli).collect());
+        assert_eq!(listed, [Cli::Codex, Cli::Claude]);
+        agents.update(cx, |agents, cx| {
+            agents.tasks.found.get_mut(&Cli::Codex).unwrap().ready = Ready::SignedOut;
+            agents.set_on(false, cx);
+        });
+        assert!(agents.read_with(cx, |agents, _| agents.ask_agents()).is_empty(), "off lists none");
+    }
+
+    #[gpui::test]
+    fn the_default_and_models_are_saved(cx: &mut TestAppContext) {
+        let folder = std::env::temp_dir().join(format!("ilo-task-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("Agents");
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let agents = agents(&browser, &configs, Some(path.clone()), cx);
+        agents.update(cx, |agents, cx| {
+            agents.set_default_task_agent(Cli::Codex, cx);
+            agents.set_task_model(Cli::Claude, "haiku", cx);
+        });
+        let again = super::agents(&browser, &configs, Some(path.clone()), cx);
+        let saved = std::fs::read_to_string(&path).unwrap();
+        again.update(cx, |agents, cx| agents.load(&saved, cx));
+        again.read_with(cx, |agents, _| {
+            assert_eq!(agents.tasks.default, Some(Cli::Codex));
+            assert_eq!(agents.task_model(Cli::Claude), "haiku");
+            assert_eq!(agents.task_model(Cli::Codex), "");
+        });
+        std::fs::remove_dir_all(folder).unwrap();
     }
 }

@@ -139,7 +139,7 @@ impl Clients for System {
     }
 }
 
-fn home() -> PathBuf {
+pub fn home() -> PathBuf {
     let home = std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" });
     PathBuf::from(home.unwrap_or_default())
 }
@@ -178,7 +178,7 @@ fn claude(arguments: &[&str]) -> Result<(), String> {
     }
 }
 
-fn codex_config() -> PathBuf {
+pub fn codex_config() -> PathBuf {
     let home = std::env::var("CODEX_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| home().join(".codex"));

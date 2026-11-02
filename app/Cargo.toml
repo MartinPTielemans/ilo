@@ -44,6 +44,8 @@ plist = { version = "1", default-features = false }
 # tokens. The server itself is the app's own (src/agents/server.rs).
 futures = "0.3"
 getrandom = "0.3"
+# The local time an agent task's limit resets at. GPUI's dependencies bring it already.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui_macos = { path = ".deps/zed/crates/gpui_macos" }

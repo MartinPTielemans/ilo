@@ -667,6 +667,7 @@ dependencies = [
  "async-io",
  "bindgen",
  "cc",
+ "chrono",
  "emojis",
  "futures",
  "futures-lite",

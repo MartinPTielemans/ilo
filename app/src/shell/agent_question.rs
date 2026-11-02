@@ -141,6 +141,7 @@ mod tests {
         Question {
             id,
             agent: "Claude Code".into(),
+            from: "claude-code".into(),
             what: "click “Place order” on shop.example".into(),
             why: "It looks like a payment or an order.".into(),
             handoff: None,

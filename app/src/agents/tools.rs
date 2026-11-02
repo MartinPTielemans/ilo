@@ -22,11 +22,98 @@ pub const INSTRUCTIONS: &str = concat!(
      over too; it's theirs until they hand it back, and ask_for_tab asks them for it. Use \
      run_steps for several actions in a row."
 );
+/// What a task's CLI is told, after its own system prompt (Agent task).
+pub const TASK_INSTRUCTIONS: &str = concat!(
+    "You do a task the user asked in ",
+    env!("APP_NAME"),
+    ", their web browser, signed in wherever they are. You work only through its tools, in a \
+     Space of your own: open pages, read them and act in them. You have no shell, files or web \
+     search, so find everything with the browser.\n\n\
+     First call title with a name for the task in two to five words.\n\n\
+     When you need the user to choose or confirm something, call ask with the question, and up \
+     to three short answers when there are a few to pick from. It waits for their answer.\n\n\
+     Never ask for a password, a one-time code or a card number in the conversation. A sign-in, \
+     a 2FA prompt or a CAPTCHA is the user's to do: hand them the tab with hand_off.\n\n\
+     Never pay, and never place an order, book or send a message unless the user asked you to. \
+     When the work ends on a page only the user may finish, such as a checkout, stop there.\n\n\
+     When you're done, call finish with the result in a sentence or two, and the tab the user \
+     should open, if there is one. Keep what you say to the user short and plain."
+);
 /// A page's text an agent gets at most, as a long page would fill its context.
 pub const MAX_TEXT: usize = 40_000;
 
-/// The tools, for tools/list.
-pub fn list() -> Value {
+/// The tools `agent` may call, for tools/list: a task's own too.
+pub fn list(agent: &str) -> Value {
+    let mut tools = shared();
+    if super::is_task(agent)
+        && let Some(tools) = tools.as_array_mut()
+    {
+        tools.extend(task_tools());
+    }
+    tools
+}
+
+/// The names of the tools `agent` may call.
+pub fn names(agent: &str) -> Vec<String> {
+    let list = list(agent);
+    (list.as_array().into_iter().flatten())
+        .filter_map(|tool| Some(tool.get("name")?.as_str()?.to_string()))
+        .collect()
+}
+
+/// A task's own tools: its title, a question for the user, and finishing.
+fn task_tools() -> Vec<Value> {
+    let own = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false });
+    vec![
+        json!({
+            "name": "title",
+            "title": "Name the task",
+            "description": "Name the task, in two to five words, for the user's sidebar.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "text": { "type": "string", "description": "The task's name." } },
+                "required": ["text"],
+            },
+            "annotations": own,
+        }),
+        json!({
+            "name": "ask",
+            "title": "Ask the user",
+            "description": "Ask the user a question, and wait for their answer. With up to three short answers to pick from, each shows as a button. Never ask for a password, a code or a card number.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "question": { "type": "string", "description": "The question, in a sentence." },
+                    "answers": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "maxItems": 3,
+                        "description": "Up to three short answers, a few words each.",
+                    },
+                },
+                "required": ["question"],
+            },
+            "annotations": own,
+        }),
+        json!({
+            "name": "finish",
+            "title": "Finish",
+            "description": "End the task with its result. Give the tab the user should open, if there is one, such as a checkout only they may finish.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "result": { "type": "string", "description": "What you did or found, in a sentence or two." },
+                    "tab": { "type": "integer", "description": "The tab to offer the user, from your Space." },
+                },
+                "required": ["result"],
+            },
+            "annotations": own,
+        }),
+    ]
+}
+
+/// The tools every agent may call.
+fn shared() -> Value {
     let tab = json!({
         "type": "integer",
         "description": "The tab's id, from list_tabs or open_tab. Without it, the tab you used last, else your first."
@@ -301,6 +388,10 @@ pub fn describe(action: &str) -> &'static str {
         "wait" => "Waited for the page",
         "revoked" => "You revoked its permission",
         "revoked all" => "You revoked all its permissions",
+        "title" => "Named the task",
+        "ask" => "Asked you",
+        "answered" => "You answered",
+        "finish" => "Finished",
         _ => "Acted",
     }
 }

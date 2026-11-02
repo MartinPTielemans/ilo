@@ -1708,6 +1708,7 @@ fn main() {
                         let question = browser::agents::Question {
                             id: 1,
                             agent: "Claude Code".into(),
+                            from: "claude-code".into(),
                             what: "hand you a tab".into(),
                             why,
                             handoff: Some(reading[3]),
