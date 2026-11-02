@@ -218,7 +218,7 @@ fn the_picker_puts_the_username_chosen_in_the_field(cx: &mut TestAppContext) {
     prompt.click(WIDTH - INSET - ROW / 2., row_middle);
     let (titles, chosen) = shown.take().expect("the chevron showed no menu");
     assert_eq!(titles, ["check@example.test", "check"]);
-    prompt.cx.update(|window, cx| chosen(Some(1), window, cx));
+    prompt.cx.update(|window, cx| chosen(crate::menu::Closed::Chose(1), window, cx));
     prompt.keys("enter");
     assert_eq!(prompt.calls(), ["Accept 1 check", "hide"]);
 }

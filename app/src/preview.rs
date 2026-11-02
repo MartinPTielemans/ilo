@@ -1256,6 +1256,7 @@ impl Browser for Fake {
         let light = std::env::var("PREVIEW_MENU_LOOK").is_ok_and(|look| look == "light");
         let look = menu::Look { light: light || look.light, ..look };
         let area = Bounds::new(point(px(0.), px(0.)), PREVIEW_AREA.get());
+        let chosen = menu::picked(chosen);
         menu::show(menu::Request { items, at, area, look, chosen }, cx);
     }
 

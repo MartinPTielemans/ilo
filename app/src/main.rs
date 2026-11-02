@@ -802,7 +802,7 @@ fn show_menu(
     at: Point<Pixels>,
     in_reveal: bool,
     look: menu::Look,
-    chosen: Box<dyn FnOnce(Option<usize>, &mut App)>,
+    chosen: menu::Chosen,
     cx: &mut App,
 ) {
     with_overlays(
@@ -1095,6 +1095,7 @@ impl site_controls::Host for SiteControlsHost {
         cx: &mut App,
     ) {
         // The panel's menus are dark, as the panel is.
+        let chosen = menu::picked(chosen);
         show_menu(self.view.get(), items, position, false, menu::Look::dark(), chosen, cx);
     }
 
@@ -2898,7 +2899,7 @@ impl Browser for Engine {
         chosen: Box<dyn FnOnce(Option<usize>, &mut App)>,
         cx: &mut App,
     ) {
-        show_menu(self.ui_view, items, at, in_reveal, look, chosen, cx);
+        show_menu(self.ui_view, items, at, in_reveal, look, menu::picked(chosen), cx);
     }
 
     fn confirm(

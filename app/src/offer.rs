@@ -40,6 +40,7 @@ pub const HEIGHT: f32 = INSET * 2.
     + BUTTON_HEIGHT;
 pub const RIGHT: f32 = shell::CARD_INSET + 8.;
 pub const TOP: f32 = shell::CARD_INSET + 8.;
+use crate::menu::Closed;
 use crate::tokens::offer::INSET;
 use crate::tokens::offer::RADIUS;
 use crate::tokens::offer::TITLE_LINE;
@@ -370,8 +371,8 @@ impl OfferPrompt {
         let items = offer.usernames.iter().map(|username| (username.clone(), true)).collect();
         let input = self.input.clone();
         let usernames = offer.usernames;
-        let chosen = Box::new(move |index: Option<usize>, window: &mut Window, cx: &mut App| {
-            if let Some(username) = index.and_then(|index| usernames.get(index)) {
+        let chosen = Box::new(move |closed: Closed, window: &mut Window, cx: &mut App| {
+            if let Some(username) = closed.chosen().and_then(|index| usernames.get(index)) {
                 input.update(cx, |input, cx| input.reset(username.clone(), window, cx));
             }
         });

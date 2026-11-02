@@ -610,7 +610,6 @@ impl Shell {
             .on_action(
                 cx.listener(|shell, _: &CancelName, window, cx| shell.cancel_name(window, cx)),
             )
-            .on_mouse_down_out(cx.listener(|shell, _, window, cx| shell.name_left(window, cx)))
             .text_size(px(text::BODY))
             .text_color(self.palette.text(FORM_TEXT))
             .child(renaming.name.clone())

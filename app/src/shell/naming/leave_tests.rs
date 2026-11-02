@@ -11,6 +11,7 @@ use gpui::{
 };
 
 use crate::{
+    menu::Closed,
     shell::{Folders, Naming, ROW_HEIGHT, Shell, Slot, commands::bind_keys, recorder::Recorder},
     text_input::{self, Chosen, FieldMenu},
 };
@@ -178,11 +179,8 @@ fn a_pinned_url_typed_is_undone_however_the_field_loses_the_keyboard(cx: &mut Te
     }
 }
 
-/// The field's own menu takes the window's keyboard while it shows, and gives it back to the
-/// field, which is still there for Esc to cancel.
-#[gpui::test]
-fn the_fields_own_menu_leaves_it_open(cx: &mut TestAppContext) {
-    let (shell, cx, host) = window(cx);
+/// Shows the field's menus as ilo's menu does, handing over each one's answer for the test to give.
+fn field_menus(cx: &mut VisualTestContext) -> Rc<RefCell<Option<Chosen>>> {
     let shown: Rc<RefCell<Option<Chosen>>> = Rc::default();
     let menu = shown.clone();
     cx.update(|_, cx| {
@@ -190,6 +188,15 @@ fn the_fields_own_menu_leaves_it_open(cx: &mut TestAppContext) {
             *menu.borrow_mut() = Some(chosen);
         })))
     });
+    shown
+}
+
+/// The field's own menu takes the window's keyboard while it shows, and gives it back to the
+/// field, which is still there for Esc to cancel.
+#[gpui::test]
+fn the_fields_own_menu_leaves_it_open(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    let shown = field_menus(cx);
     rename(&shell, cx, &host, 3);
     cx.simulate_input("Gone");
     let at = row(&shell, cx, 3);
@@ -199,7 +206,7 @@ fn the_fields_own_menu_leaves_it_open(cx: &mut TestAppContext) {
         leave(&shell, cx, way);
         assert!(naming(&shell, cx) == Some(Naming::Tab(3)), "the menu's {way:?} closed the field");
     }
-    cx.update(|window, cx| chosen(None, window, cx));
+    cx.update(|window, cx| chosen(Closed::Otherwise, window, cx));
     cx.update(|window, _| window.activate_window());
     cx.run_until_parked();
     assert!(naming(&shell, cx) == Some(Naming::Tab(3)), "the menu closing closed the field");
@@ -211,4 +218,43 @@ fn the_fields_own_menu_leaves_it_open(cx: &mut TestAppContext) {
     cx.simulate_input("Work");
     leave(&shell, cx, Way::Page);
     assert_eq!(host.take_edits(), ["rename tab 3 Work"]);
+}
+
+/// The press that closes the field's menu goes no further, as a click outside any menu doesn't, but
+/// one away from the field ends it as any other click away does, a click in the page as on
+/// Windows, keeping what's typed. One on the field leaves it open, and so does Esc in the menu.
+#[gpui::test]
+fn a_press_away_that_closes_the_fields_menu_ends_it(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    let shown = field_menus(cx);
+    let page = shell.read_with(cx, |shell, _| point(px(shell.width() + 200.), px(300.)));
+    rename(&shell, cx, &host, 3);
+    cx.simulate_input("Work");
+    let field = row(&shell, cx, 3);
+    for closed in [Closed::PressedAt(field), Closed::Otherwise] {
+        press(cx, field, MouseButton::Right, 1);
+        let chosen = shown.take().expect("a right-click in the field showed no menu");
+        cx.update(|window, cx| chosen(closed, window, cx));
+        cx.run_until_parked();
+        assert!(naming(&shell, cx) == Some(Naming::Tab(3)), "{closed:?} closed the field");
+    }
+    press(cx, field, MouseButton::Right, 1);
+    let chosen = shown.take().expect("a right-click in the field showed no menu");
+    cx.update(|window, cx| chosen(Closed::PressedAt(page), window, cx));
+    cx.run_until_parked();
+    assert!(naming(&shell, cx).is_none(), "a press in the page left the field open");
+    assert_eq!(host.take_edits(), ["rename tab 3 Work"]);
+    shell.update(cx, |shell, cx| shell.set_selected(3, cx));
+
+    // The user going to another window or app, with the menu up, ends it too.
+    rename(&shell, cx, &host, 3);
+    cx.simulate_input("Home");
+    press(cx, field, MouseButton::Right, 1);
+    let chosen = shown.take().expect("a right-click in the field showed no menu");
+    cx.deactivate_window();
+    assert!(naming(&shell, cx) == Some(Naming::Tab(3)), "the menu taking the keyboard closed it");
+    cx.update(|window, cx| chosen(Closed::Left, window, cx));
+    cx.run_until_parked();
+    assert!(naming(&shell, cx).is_none(), "leaving with the menu up left the field open");
+    assert_eq!(host.take_edits(), ["rename tab 3 Home"]);
 }

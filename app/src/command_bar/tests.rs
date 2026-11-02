@@ -355,7 +355,7 @@ impl Bar {
     /// Chooses `title` in the menu a right-click showed.
     fn choose(&mut self, (items, chosen): (Vec<String>, Chosen), title: &str) {
         let index = items.iter().position(|item| item == title).expect("no such item");
-        self.cx.update(|window, cx| chosen(Some(index), window, cx));
+        self.cx.update(|window, cx| chosen(crate::menu::Closed::Chose(index), window, cx));
         self.cx.run_until_parked();
     }
 
