@@ -183,9 +183,10 @@ green = 0x0E9F55
 # pages; the outline, a black line a point of blur wide round the outside, which reads on light
 # ones; and one drop shadow. Resting sits on the window: favorite tiles, library cards, pictures
 # of pages. A popover opens from something and closes on a click outside: menus, the Site
-# Controls, the toast, the zoom HUD, tooltips, the link target, the find bar. A modal takes the
-# keyboard: the command bar, the dialog, the icon and theme pickers. A shadow's blur is CSS's,
-# twice the Gaussian's standard deviation, which is what the host's layers take halved.
+# Controls, the toast, the zoom HUD, tooltips, the link target, the find bar, and the command bar
+# over the URL field, a row tall. A modal takes the keyboard: the centred command bar, the dialog,
+# the icon and theme pickers. A shadow's blur is CSS's, twice the Gaussian's standard deviation,
+# which is what the host's layers take halved.
 outline = 0x0000_00b3
 outline-blur = 1.0
 resting-rim = 0xffff_ff14
