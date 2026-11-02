@@ -1184,8 +1184,9 @@ NSString* LaunchPicturePath(const char* profile_dir, double width, double height
 
 }  // namespace
 
+// Never maximized, which is Windows' alone: a zoomed window's frame is the one it has.
 void host_show_launch_window(const char* profile_dir, double x, double y, double width,
-                             double height) {
+                             double height, bool) {
   // The core's y runs down from the main display's top, AppKit's up from its bottom.
   const NSRect frame =
       NSMakeRect(x, NSHeight(NSScreen.screens.firstObject.frame) - y - height, width, height);
