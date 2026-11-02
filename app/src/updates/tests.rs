@@ -154,6 +154,24 @@ fn a_dev_build_has_no_button(cx: &mut TestAppContext) {
     assert_eq!(about.cx.update(|_, cx| command_title(cx)), "Check for Updates…");
 }
 
+/// A launch that's older than the update the last quit started installing is the copy it was to
+/// replace, so the install didn't go in: the row says so at once, with Try Again, which checks
+/// again (#1459). A launch that's the update, or newer, says nothing of it.
+#[gpui::test]
+fn a_launch_older_than_the_update_installed_says_it_didn_t_install(cx: &mut TestAppContext) {
+    assert!(went_in(1572, 1572), "the update's own build");
+    assert!(went_in(1572, 1580), "a newer build, as one installed by hand");
+    assert!(!went_in(1572, 1571), "the build it was to replace");
+    let mut about = shown(Updater::Own, cx);
+    about.cx.update(|_, cx| didnt_install(cx));
+    about.cx.run_until_parked();
+    assert_eq!(about.reads(), (Some("The update didn’t install".into()), Some("Try Again")));
+    about.click();
+    assert_eq!(about.asked(), ["check"]);
+    about.says(Stage::Checking);
+    assert_eq!(about.reads(), (Some("Checking…".into()), None));
+}
+
 /// The ways back: a failed check says so and tries again; a failed download or install says the
 /// update didn't install; and when the user closes the updater's own window, the row offers the
 /// check again.

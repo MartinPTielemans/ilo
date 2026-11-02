@@ -122,11 +122,26 @@ pub fn changed(stage: Stage, cx: &mut App) {
         }
         stage => stage,
     };
-    if stage == previous {
-        return;
+    if stage != previous {
+        set(stage, cx);
     }
+}
+
+fn set(stage: Stage, cx: &mut App) {
     crate::log!("browser: update stage {}", stage.name());
     cx.default_global::<Updates>().stage = stage;
+}
+
+/// Whether the update a quit started installing, build `build`, went in, as this launch, build
+/// `own`, is it or newer: an older one is the copy it was to replace (#1459).
+pub fn went_in(build: u64, own: u64) -> bool {
+    own >= build
+}
+
+/// The update the last quit started installing didn't go in, so the row says so, with Try Again,
+/// as for a failed download.
+pub fn didnt_install(cx: &mut App) {
+    set(Stage::Failed { found: true }, cx);
 }
 
 pub fn stage(cx: &App) -> Stage {

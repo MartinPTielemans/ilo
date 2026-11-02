@@ -44,6 +44,12 @@ use crate::tokens::shell::header::URL_PLACEHOLDER;
 use crate::tokens::text;
 
 impl Shell {
+    /// The tab whose page the header is about: a task's page watched in place, else the tab
+    /// selected. The URL field shows its address, and its buttons act on it.
+    pub(super) fn field_tab(&self) -> u64 {
+        self.task_page_live().unwrap_or(self.selected)
+    }
+
     /// A header button at `x`, with the glyph `icon`, that runs `command`. One that can't dims, as
     /// back does on a page with no history.
     fn nav_button(
@@ -57,7 +63,7 @@ impl Shell {
         let color = Hsla::from(self.palette.glyph(if enabled { NAV } else { NAV_DISABLED }));
         // Reload and stop are one button, which changes with the tab shown's page.
         let glyph = match x == RELOAD_X {
-            true => self.swaps.glyph(Swapped::Reload(self.selected), icon, NAV_GLYPH, color),
+            true => self.swaps.glyph(Swapped::Reload(self.field_tab()), icon, NAV_GLYPH, color),
             false => svg().path(icon).size(px(NAV_GLYPH)).text_color(color).into_any_element(),
         };
         let button = div()
@@ -252,10 +258,10 @@ impl Shell {
     /// The sidebar button, back, forward, and reload, which is stop while the page loads, as many
     /// as fit.
     pub(super) fn nav_buttons(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
-        let page = self.page(self.selected);
+        let page = self.page(self.field_tab());
         let reload = match page.loading {
             true => (RELOAD_X, reload_glyph(true), Command::Stop, true),
-            false => (RELOAD_X, reload_glyph(false), Command::Reload, self.selected != 0),
+            false => (RELOAD_X, reload_glyph(false), Command::Reload, self.field_tab() != 0),
         };
         if self.reload_drawn.replace(Some(reload.2)) != Some(reload.2) {
             // check.sh reads this line: a press hits the button the window drew last, which
@@ -338,7 +344,7 @@ impl Shell {
     /// hidden at the page's top left corner, as an extension's popup is; or closes them. They list
     /// every turned-on extension, the pinned ones first, which the core reports once they show.
     pub(super) fn site_controls(&mut self, cx: &mut Context<Self>) {
-        if self.selected == 0 {
+        if self.field_tab() == 0 {
             return;
         }
         let place = match self.url_field_bounds() {
@@ -353,7 +359,7 @@ impl Shell {
             None => Place::Corner(point(px(self.card_left() + PLATE_INSET), px(PLATE_INSET))),
         };
         let extensions = self.site_controls_extensions();
-        self.browser.site_controls(self.selected, place, self.viewport, extensions, cx);
+        self.browser.site_controls(self.field_tab(), place, self.viewport, extensions, cx);
     }
 
     /// A button at the URL field's end, `end` in from it, shown while the pointer is over the
@@ -375,7 +381,7 @@ impl Shell {
     /// What the URL field says, in its colour: the page's host, or with no page shown, the
     /// command bar's placeholder, there from the frame the card's mark is.
     pub(super) fn url_field_words(&self, url: &str) -> (SharedString, Hsla) {
-        self.url_words(self.selected, url, self.empty_opacity(Instant::now()))
+        self.url_words(self.field_tab(), url, self.empty_opacity(Instant::now()))
     }
 
     /// What a URL field showing `tab`, at `url`, says, in its colour: the page's host, its whole
@@ -396,7 +402,7 @@ impl Shell {
     }
 
     pub(super) fn url_field(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let url = self.url(self.selected);
+        let url = self.url(self.field_tab());
         let (words, color) = self.url_field_words(&url);
         if *self.url_field_drawn.borrow() != words {
             // check.sh reads this line.
@@ -456,7 +462,7 @@ impl Shell {
         });
         // In Developer Mode, DevTools before them, as ⌥⌘I opens them (ours, as Arc's buttons
         // aren't recorded). Agents get no DevTools, so it's the user's alone.
-        let devtools = (tools && self.page(self.selected).developer_mode).then(|| {
+        let devtools = (tools && self.page(self.field_tab()).developer_mode).then(|| {
             let button = self.field_tool("devtools", end + 2. * TOOL_PITCH);
             let button = button.when(self.a11y, |button| button.button_named("Developer Tools"));
             self.with_tooltip(button, Command::DevTools, TipSide::Under, cx)
@@ -475,11 +481,11 @@ impl Shell {
                         .text_color(self.palette.glyph(NAV)),
                 )
         });
-        let engine = self.engine_mark(self.selected);
+        let engine = self.engine_mark(self.field_tab());
         // The password manager's key, after the host (ours, for Chrome's key icon): a click brings
         // back the offer showing another tab closed, or opens the Site Controls, which list the
         // site's logins. On the press, as Site Controls' button opens them.
-        let key = (self.selected != 0).then(|| self.keys.get(&self.selected).copied()).flatten();
+        let key = (self.field_tab() != 0).then(|| self.keys.get(&self.field_tab()).copied()).flatten();
         let key = key.map(|key| {
             div()
                 .id("key")
@@ -553,9 +559,9 @@ impl Shell {
         if actions > 0. && x >= width - URL_BUTTON_INSET - actions {
             return AtRest::Action;
         }
-        let tools = self.tools_shown() && self.tools_live() && !self.url(self.selected).is_empty();
+        let tools = self.tools_shown() && self.tools_live() && !self.url(self.field_tab()).is_empty();
         let button = |end: f32| (width - end - URL_BUTTON_SIZE..width - end).contains(&x);
-        let developer = self.page(self.selected).developer_mode;
+        let developer = self.page(self.field_tab()).developer_mode;
         match tools {
             true if button(self.site_controls_end()) => AtRest::SiteControls,
             true if button(self.site_controls_end() + TOOL_PITCH) => AtRest::CopyUrl,
@@ -572,13 +578,13 @@ impl Shell {
             Some(key) => self.keys.insert(tab, key) != Some(key),
             None => self.keys.remove(&tab).is_some(),
         };
-        if changed && tab == self.selected {
+        if changed && tab == self.field_tab() {
             cx.notify();
         }
     }
 
     fn key_clicked(&mut self, key: Key, cx: &mut Context<Self>) {
-        let tab = self.selected;
+        let tab = self.field_tab();
         // check.sh reads this line.
         log!("browser: key {tab} clicked");
         match key {

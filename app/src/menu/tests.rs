@@ -233,6 +233,32 @@ fn the_menus_window_sits_on_whole_points_round_its_shadow() {
     }
 }
 
+/// Where the window can't blend, a pixel a panel's edge partly covers would show black, and so
+/// would a shadow's room: each panel goes out to whole points, and the window is just round them.
+#[test]
+fn where_the_window_cant_blend_the_panels_sit_on_whole_points_with_nothing_round_them() {
+    for at in [at(100., 100.), at(1000., 100.), at(100.5, 700.25)] {
+        let menu = lay_out(&tab_menu(), at, area(), &width_of);
+        let opaque = menu.clone().opaque();
+        for (level, was) in opaque.levels.iter().zip(&menu.levels) {
+            let (bounds, was) = (level.bounds, was.bounds);
+            for value in [bounds.left(), bounds.top(), bounds.right(), bounds.bottom()] {
+                assert_eq!(value, value.round(), "{bounds:?} isn't on whole points");
+            }
+            let out = [
+                was.left() - bounds.left(),
+                was.top() - bounds.top(),
+                bounds.right() - was.right(),
+                bounds.bottom() - was.bottom(),
+            ];
+            assert!(out.iter().all(|&by| by >= px(0.) && by < px(1.)), "{bounds:?} from {was:?}");
+        }
+        let levels = &opaque.levels;
+        let union = (levels.iter()).fold(levels[0].bounds, |all, level| all.union(&level.bounds));
+        assert_eq!(opaque.frame, union, "the window is just round the panels");
+    }
+}
+
 #[test]
 fn a_submenu_opens_beside_its_row_and_on_the_left_where_the_right_has_no_room() {
     let menu = lay_out(&tab_menu(), at(100., 100.), area(), &width_of);
@@ -370,6 +396,8 @@ struct Recorder {
     calls: RefCell<Vec<&'static str>>,
     /// Each window the menu asked for, and its panels in it.
     shown: RefCell<Vec<(Bounds<Pixels>, Vec<Bounds<Pixels>>)>>,
+    /// Whether its window can't blend (`Host::blends`).
+    opaque: bool,
 }
 
 impl super::Host for Recorder {
@@ -380,6 +408,10 @@ impl super::Host for Recorder {
 
     fn hide(&self) {
         self.calls.borrow_mut().push("hide");
+    }
+
+    fn blends(&self) -> bool {
+        !self.opaque
     }
 }
 
@@ -423,6 +455,32 @@ fn the_menu_takes_the_pointer_on_its_panels_and_not_in_their_shadows(cx: &mut Te
     // The root's top left is where the menu opened, the shadow's room from the window's edges.
     assert_eq!(frame.origin + panels[0].origin, at(100., 100.));
     assert!(f32::from(panels[0].origin.x) >= reach.sides && f32::from(panels[0].origin.y) >= reach.above);
+}
+
+/// A window that can't blend, on X11 with no compositor, shows its clear pixels black (#1479), so
+/// it holds the open panels alone, with no room round them, and is shown again with each submenu
+/// that opens or closes.
+#[gpui::test]
+fn where_the_window_cant_blend_it_holds_the_open_panels_alone(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder { opaque: true, ..Recorder::default() });
+    let window = cx.update(|cx| super::open(host.clone(), cx)).expect("no window for the menu");
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+
+    show_menu(cx);
+    let (frame, panels) = host.shown.borrow()[0].clone();
+    assert_eq!(panels, [Bounds::new(at(0., 0.), panels[0].size)], "the tab menu alone, at the corner");
+    assert_eq!(frame.origin, at(100., 100.), "where the menu opened, with no room for a shadow");
+
+    cx.simulate_keystrokes("m right");
+    let (again, panels) = host.shown.borrow().last().unwrap().clone();
+    assert_eq!(again, frame, "the window stays");
+    assert_eq!(panels.len(), 2, "and holds Move to's submenu too: {panels:?}");
+    assert_eq!(panels[0].union(&panels[1]), Bounds::new(at(0., 0.), frame.size), "just round the two");
+
+    cx.simulate_keystrokes("escape");
+    assert_eq!(host.shown.borrow().last().unwrap().1.len(), 1, "Move to's submenu closed");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(*host.calls.borrow(), ["show", "show", "show", "hide"]);
 }
 
 /// The menu in its window, driven the ways the host drives it: keys through the window, pointer

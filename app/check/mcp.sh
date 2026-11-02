@@ -2,7 +2,9 @@
 # it's connected, as the saved settings say here. The socket is the user's alone, and the bridge
 # gets nowhere without the agent's token. Its first call makes its Space, and it may list and read
 # only the tabs there: its list leaves out the user's tab, a read of the user's tab is refused, with
-# an activity-log entry, and a read of example.com, opened in its Space, gives the page's text. A
+# an activity-log entry, and a read of example.com, opened in its Space, gives the page's text. Ten
+# cases, each the same form in a tab of its own the user isn't looking at, move to Closed a step a
+# turn, a turn's ten calls answered at once, which logs the turns and how long they took. A
 # page with fields gives its prose and none of their values: typed, filled in or a password, in its
 # text and in its outline, and the agent can't type into the password field. It types into another.
 # A page's frames, of its own site and of another, are in its outline, where the agent clicks and
@@ -96,6 +98,28 @@ if BROWSER_AGENT_TOKEN=0 "$bridge" "$socket" < /dev/null > /dev/null 2> "$out/mc
   fail "the bridge got in without the agent's token"
 fi
 grep -q 'Settings › Agents' "$out/mcp-refused" || fail "a refused bridge said: $(cat "$out/mcp-refused")"
+# A copy from the Store names its bridge to clients by the alias its MSIX declares, which Windows
+# keeps in the user's WindowsApps folder across updates, as the package's own folder is named for
+# its version (#1442). check-windows.yml installs an MSIX of this build and names it in CHECK_MSIX.
+# A client starts the alias as Claude Code and Codex start a command, and it carries the client's
+# hello to this browser's pipe and the answer back.
+msix=
+if windows && [ -n "${CHECK_MSIX:-}" ]; then
+  alias=$(cygpath -w "$(cygpath -u "$LOCALAPPDATA")/Microsoft/WindowsApps/$(cat branding/name)-mcp-bridge.exe")
+  python3 -I - "$alias" "$socket" "$token" > "$out/mcp-alias.log" 2>&1 << 'PY' ||
+import os, subprocess, sys
+alias, socket, token = sys.argv[1:]
+hello = (b'{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18",'
+         b'"capabilities":{},"clientInfo":{"name":"msix","version":"1"}}}\n')
+run = subprocess.run([alias, socket], input=hello, capture_output=True, timeout=30,
+                     env={**os.environ, "BROWSER_AGENT_TOKEN": token})
+print(run.stdout.decode(errors="replace"), run.stderr.decode(errors="replace"))
+sys.exit(b'"protocolVersion":"2025-06-18"' not in run.stdout)
+PY
+    fail "the MSIX's bridge, by its alias, didn't answer: $(tr '\n' ' ' < "$out/mcp-alias.log")"
+  await_log '^browser: agent mcp-client hello from msix$' "the app didn't hear the hello the MSIX's bridge carried"
+  msix=1
+fi
 
 # The client: the bridge on two pipes, which stay open until the session ends, its stderr added to
 # mcp-bridge.log.
@@ -173,6 +197,43 @@ refused=$(call read_page "{\"tab\":$user_tab}")
 await_log "^browser: agent activity mcp-client $user_tab read_page refused: The tab isn't in the agent's own Space\.\$" \
   "the refused read didn't reach the activity log"
 grep -q "^browser: tab text $user_tab " "$log" && fail "the core read the user's tab"
+
+# Ten cases of a web toolkit, each the same form on a page of its own, which an agent moves to
+# Closed in tabs the user isn't looking at, each step on all ten in one turn: cases.py, through a
+# bridge of its own. The server answers a turn's calls at once (#1476). The form says Ready once
+# it has painted (painted.js, site.sh). Its status list opens on the next frame, as an animated
+# one does, which a tab drawing no frames never shows, and closes once focus leaves its button for
+# anything but the list, as the page losing focus takes it. Save saves on a timer, as a request
+# would, which a hidden page may throttle.
+serve
+printf '%s' '<script src="painted.js"></script>
+<h1 id=heading>Case</h1>
+<p>Status <button id=pick aria-haspopup=listbox aria-expanded=false>Open</button></p>
+<ul id=list role=listbox aria-label=Status hidden>
+<li role=option tabindex=-1>Open<li role=option tabindex=-1>Pending<li role=option tabindex=-1>Closed
+</ul>
+<p><button id=save>Save</button> <span id=state></span></p>
+<script>
+const n = new URLSearchParams(location.search).get("n");
+heading.textContent = "Case " + n;
+const show = open => { list.hidden = !open; pick.ariaExpanded = open; };
+pick.onclick = () => requestAnimationFrame(() => show(list.hidden));
+pick.onblur = event => list.contains(event.relatedTarget) || show(false);
+list.onclick = event => { pick.textContent = event.target.textContent; show(false); };
+save.onclick = () => setTimeout(() => {
+  state.textContent = "Saved " + pick.textContent;
+  document.title = "case " + n + " saved " + pick.textContent;
+}, 300);
+painted(() => { state.textContent = "Ready"; document.title = "case " + n; });
+</script>' > "$out/site/case.html"
+BROWSER_AGENT_TOKEN=$token python3 -I check/cases.py "$(app_path "$bridge")" "$socket" \
+  "localhost:$port/case.html" > "$out/cases.log" 2>&1 || fail "$(tail -1 "$out/cases.log")"
+await_log '^browser: agent mcp-client answered 10 calls at once$' \
+  "the server answered a turn's ten calls one after another"
+for n in $(seq 10); do
+  grep -q "^browser: title [0-9]* case $n saved Closed\$" "$log" || fail "case $n wasn't saved Closed"
+done
+cases=$(sed -n 's/^cases: \(10 cases in .*\)/\1/p' "$out/cases.log")
 
 send click $page_point
 driven=$active
@@ -714,7 +775,12 @@ forget_login
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, is refused a tab the user took over until they hand it back and Keep answers its ask, its bar's Stop naming ⌘. in its tooltip, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow and again once that's revoked, and off takes the socket away"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, is refused a tab the user took over until they hand it back and Keep answers its ask, its bar's Stop naming ⌘. in its tooltip, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow and again once that's revoked, and off takes the socket away"
 else
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases). skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
+fi
+if [ -n "$msix" ]; then
+  echo "ok: a Store copy's bridge, run by the alias its MSIX declares in the user's WindowsApps folder, carries a client's hello to the browser and its answer back."
+elif windows; then
+  echo "skip: a Store copy's bridge, by its alias. No MSIX of this build is installed here; CHECK_MSIX names one."
 fi

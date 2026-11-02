@@ -4,7 +4,7 @@ ilo's look lives in `app/design/tokens.toml`, which the code reads (as `crate::t
 
 - **The design file:** `~/.cache/browser-explore/ilo-chrome.pen`, kept outside the repo by the owner's decision (#325). Boards from it are linked from issues and PRs.
 - **The tools:** pen has no command line, and its file is reachable only through the running pen.dev app's MCP server, `pencil`. Read `pencil`'s `execute.md` skill once; `GetVariables`, `SetVariables`, `Get` and `Print` run inside its `execute` tool. `tools/design-tokens.py` converts between the two formats, using only Python's standard library.
-- **Names:** a token's pen variable is its table and key joined with `-`, so `[shell.library] column` is `shell-library-column`, and an array's items add `-0`, `-1` and so on. Six or eight hex digits make a colour (`#rrggbb` or `#rrggbbaa`); every other value is a number.
+- **Names:** a token's pen variable is its table and key joined with `-`, so `[shell.library] column` is `shell-library-column`, and an array's items add `-0`, `-1` and so on. Six or eight hex digits make a colour (`#rrggbb` or `#rrggbbaa`); every other value is a number. A table named `motion`, such as `[shell.task.motion]`, holds timings, which the design file has none of, so the script leaves it out both ways.
 - **When:** the lane that merges runs it after any merge that touches `app/design/tokens.toml` or a file named in a component's `context`.
 
 ## Code to pen

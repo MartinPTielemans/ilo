@@ -298,6 +298,37 @@ expect '^browser: menu highlights Move to at ' "typing m didn't pass the dimmed 
 send key right
 expect '^browser: menu submenu Move to shown at ' "→ didn't open Move to's submenu"
 expect '^browser: menu highlights Move to › ' "→ didn't highlight the submenu's first item"
+# On Linux the menu is a window over the browser window's. Under X11 with no compositor, as under
+# Xvfb, a window can't blend and shows its clear pixels black, so there the panels are square and
+# opaque with nothing round them (#1479): no corner of the menu or its submenu is black, and nor is
+# the sidebar just left of it, where the shadow's room was.
+if [ "$(uname)" = Linux ]; then
+  expect '^browser: menu submenu Move to drawn$' "Move to's submenu wasn't drawn"
+  set -- $(grep '^browser: menu window at ' "$log" | tail -1 | sed 's/.* at //; s/[,x]/ /g')
+  left=$1 top=$2 bottom=$(($2 + $4))
+  set -- $(grep '^browser: menu submenu Move to shown at ' "$log" | tail -1 | sed 's/.* at //')
+  sub_right=$(($1 + $3 - 2)) sub_bottom=$(($2 + $4 - 2))
+  points="$((left + 1)),$((top + 1)) $(($1 + 2)),$((top + 1)) $((left - 3)),$((top + 12))"
+  points="$points $(($1 + 1)),$(($2 + 1)) $sub_right,$(($2 + 1)) $(($1 + 1)),$sub_bottom $sub_right,$sub_bottom"
+  # The root's bottom is the window's where the submenu ends above it.
+  [ "$sub_bottom" -ge $((bottom - 2)) ] || points="$points $((left + 1)),$((bottom - 2))"
+  # A few captures, as the window takes its new shape as the submenu draws.
+  black=
+  for _ in 1 2 3 4 5; do
+    ../tools/window-screenshot.sh "$pid" "$out/menu.png" || fail "no window to capture"
+    [ "${BROWSER_HEADLESS:-}" = xvfb ] || break
+    size=$(magick identify -format '%w %h' "$out/menu.png")
+    width=${size% *} height=${size#* } black=
+    for point in $points; do
+      x=${point%,*} y=${point#*,}
+      set -- $(pixel "$out/menu.png" "$(awk "BEGIN { print ($x + 0.5) / $width }")" \
+        "$(awk "BEGIN { print ($y + 0.5) / $height }")")
+      [ "$1" -ge 8 ] || [ "$2" -ge 8 ] || [ "$3" -ge 8 ] || black="$black $x,$y"
+    done
+    [ -n "$black" ] || break
+  done
+  [ -z "$black" ] || fail "with no compositor, the menu at $left,$top shows black at$black (#1479)"
+fi
 send key escape
 expect '^browser: menu submenu Move to hidden$' "escape didn't close Move to's submenu"
 none_since '^browser: menu closed$' || fail "escape in the submenu closed the whole menu"

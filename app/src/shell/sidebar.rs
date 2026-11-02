@@ -140,6 +140,8 @@ impl Shell {
         if to != self.sidebar_width {
             self.sidebar_width = to;
             self.browser.set_sidebar_width(to, cx);
+            // The tasks' lines and chips at the foot wrap to the new width.
+            self.reshape_foot(cx);
         }
         self.width_motion = (from != to).then(|| (from, Instant::now()));
         if self.width_motion.is_none() {

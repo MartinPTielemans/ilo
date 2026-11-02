@@ -7,7 +7,8 @@
 # and AppKit's ordered and key windows on the Mac. With the app
 # running, one opens in a Little ilo window of its own for the Space the window in front shows, and
 # loads there, as Settings › Links sends everything else there until the user picks another, and
-# the same link again brings that window back to the front. Sent
+# the same link again brings that window back to the front. On Windows one sent to the Store's MSIX,
+# which Windows activates for it, opens the same way, once (#1427). Sent
 # instead to the Space in front, one opens as a new tab in the Space the window in front shows. With
 # an agent's Space shown, it goes in the user's Space the window showed before, which comes back;
 # with a private window in front, in the regular window, which comes to the front. Settings › Links
@@ -18,7 +19,8 @@
 # (build.sh), and making it the default asks in a system dialog the driver can't answer; on Linux
 # the desktop's defaults name no dev build. A link that launches the browser opens over the Spaces
 # it brings back, before the UI comes out from under the launch picture, or with no rules, in Little
-# ilo, over them. On the Mac ⌘Q keeps the
+# ilo, over them; on the Mac the notes of an update that launch is the first of open beside it as a
+# tab in the window, never in Little ilo. On the Mac ⌘Q keeps the
 # sidebar's picture, which both the launch without a link and the one with it show; Linux has no
 # launch picture (host_show_launch_window). Reports the launch times from the process's start,
 # without a link and with one.
@@ -35,6 +37,7 @@ step=0
 # Elsewhere the run keeps its own and names it in each link's command, which only Chrome's slower
 # way takes, as an ilo of the user's could be the one running on the engine's.
 fast=
+via_msix=
 if windows; then
   switches=$(sed -n 's/^Root: HKCU; Subkey: "Software\\Classes\\IloHTML\\shell\\open\\command";.* ValueData: """{app}\\chrome\.exe"" \(.*\) %1"$/\1/p' \
     platform/windows/package/ilo.iss)
@@ -100,6 +103,19 @@ send_link() {
   [ $# = 1 ] || what="the launch with no link"
   if [ "$(uname)" = Darwin ]; then
     open -a "$app" "$@"
+  elif [ -n "$via_msix" ]; then
+    python3 -I check/msix.py "$CHECK_MSIX" "$1" >> "$out/links-sent.log" 2>&1 ||
+      fail "Windows didn't activate the MSIX for $what: $(tail -1 "$out/links-sent.log")"
+    # Its chrome.exe hands the link to the browser running on the engine's folder and ends, as the
+    # installer's does, rather than starting a browser of its own.
+    for _ in $(seq 100); do
+      pgrep -f "/WindowsApps/$CHECK_MSIX/" > /dev/null || break
+      sleep 0.1
+    done
+    if pgrep -f "/WindowsApps/$CHECK_MSIX/" > /dev/null; then
+      pkill -9 -f "/WindowsApps/$CHECK_MSIX/" || true
+      fail "the MSIX's chrome.exe didn't hand $what over and end"
+    fi
   elif windows; then
     status=0
     registered "$@" < /dev/null > "$out/links-sent-now.log" 2>&1 || status=$?
@@ -173,6 +189,28 @@ send window 2
   fail "the same link again loaded in a tab of Chrome's own beside its Little ilo window"
 send key w cmd
 await "^browser: window closed $little\$" || fail "⌘W didn't close the link's Little ilo window"
+# The Store's MSIX declares http and https in its manifest, not by ilo.iss's command, so Windows
+# activates the package for a link sent to it, and the package's chrome.exe, which names no
+# profile, hands the link to the browser running on the engine's folder (#1427). check-windows.yml
+# installs an MSIX of this build, signed for its runner alone, and names it in CHECK_MSIX.
+msix=
+if windows; then
+  if [ -z "${CHECK_MSIX:-}" ]; then
+    echo "skip: a link sent to the Store's MSIX. None of this build is installed here; CHECK_MSIX names one."
+  elif [ -z "$fast" ]; then
+    echo "skip: a link sent to the Store's MSIX, whose chrome.exe hands it only to a browser on the" \
+      "engine's folder, which the run keeps for an ilo of the user's."
+  else
+    via_msix=1
+    open_little_link "?msix" "$first"
+    via_msix=
+    msix=1
+    # The third window the app made, after the regular one and the first link's.
+    send window 3
+    send key w cmd
+    await "^browser: window closed $little\$" || fail "⌘W didn't close the MSIX's link's Little ilo window"
+  fi
+fi
 send window 1
 send click $page_point
 driven=$active
@@ -482,9 +520,27 @@ cold="launch window $(at 'launch window') ms, started $(at 'started') ms, first 
 quit_launched
 rm -f "$rules_file"
 
+# On the Mac the first launch of an update opens the notes Sparkle kept for it, here the run's, as
+# What's New, ilo's own page: a tab in the window's Space, never where links from other apps go
+# (#1484). Off it no updater keeps notes.
+if [ -n "$mac" ]; then
+  defaults write "$app_id" UpdateNotes -dict \
+    version "$(plutil -extract CFBundleVersion raw "$app/Contents/Info.plist")" url "${site}?notes"
+fi
 # With no rules, the link that launches the browser opens in Little ilo, for the Space the window
 # brings back, over it.
 launch "$out/links-little.log" "${site}?little"
+if [ -n "$mac" ]; then
+  notes_line="^browser: update notes ${site}?notes: tab [1-9][0-9]* in space [1-9][0-9]* of window [0-9]*\$"
+  await "$notes_line" ||
+    fail "the update's notes didn't open as a tab in the window: $(grep '^browser: \(update notes\|link\)' "$log" | head -2)"
+  tab=$(grep "$notes_line" "$log" | sed 's/.*: tab \([0-9]*\) .*/\1/')
+  await "^browser: loaded $tab ${site}?notes\$" || fail "the update's notes didn't load in their tab"
+  ! grep -q "^browser: link from another app ${site}?notes" "$log" ||
+    fail "the update's notes opened as a link from another app"
+  ! defaults read "$app_id" UpdateNotes > /dev/null 2>&1 ||
+    fail "the update's notes were kept for the next launch too"
+fi
 await '^browser: restored in ' || fail "the Spaces didn't come back under the link"
 await "$(little_line "?little" "[0-9]*")" ||
   fail "the link that launched the browser didn't open in Little ilo: $(grep '^browser: link' "$log" | tail -1)"
@@ -513,5 +569,8 @@ else
   echo "ok: a link from another app opens once, in Little ilo by default, and loads there."
   echo "skip: the launch with no link while the window is minimized, the agent's Space, the private window, Settings and the link rules. Browser wasn't the active app, so the page ignored the click."
 fi
+[ -z "$msix" ] || echo "ok: a link sent to the Store's MSIX, which Windows activates for it, opens" \
+  "once, in Little ilo, and loads there, the package's chrome.exe handing it over and ending."
 echo "ok: a link that launches the browser opens once, over the Spaces it brings back, before the UI comes out from under the launch picture, and loads, and both launches show the sidebar's picture; with no rules, it opens in Little ilo. Windows: $out/links-cold.png $out/links-little-launch.png"
+[ -z "$mac" ] || echo "ok: an update's notes open as a tab in the window at its first launch, with links from other apps going to Little ilo, and only then."
 echo "  Launch without a link: $plain; with one: $cold"

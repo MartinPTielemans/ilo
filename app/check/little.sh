@@ -263,7 +263,7 @@ send window 1
 send key l cmd shift
 expect '^browser: library shown$' "⇧⌘L didn't open the Library"
 post click 372 28
-expect "^browser: menu shown $(cased 'All Tabs (checked), Little ilo')\$" \
+expect "^browser: menu shown $(cased 'All (checked), Little ilo, Tasks')\$" \
   "a click on the archive's Filter didn't show its menu"
 send choose "$(cased 'Little ilo')"
 expect '^browser: archive filter little$' "choosing Little ilo didn't filter the archive"
