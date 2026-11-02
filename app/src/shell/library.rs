@@ -585,6 +585,13 @@ impl Shell {
         self.library_out().min(1.)
     }
 
+    /// Where the Library's column is across the window: its width to the left as it comes, and at
+    /// the window's edge from where it opens on, the copy of the window's buttons on it over the
+    /// window's own.
+    pub(super) fn library_column_left(&self) -> f32 {
+        (self.library_edge() - 1.) * self.library_width()
+    }
+
     /// How far, in points, fingers past where the Library opens have taken it on with the card.
     fn library_past(&self) -> f32 {
         match self.clicked_fade() {
@@ -1081,7 +1088,7 @@ impl Shell {
         let width = self.library_width();
         let panel = div()
             .absolute()
-            .left(px((self.library_edge() - 1.) * width + past))
+            .left(px(self.library_column_left() + past))
             .top_0()
             .bottom_0()
             .w(px(width))

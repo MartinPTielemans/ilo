@@ -650,7 +650,7 @@ Arc's panel and rows (Arc 1.170.0 cap, ax); Dia's materials and colours where Ar
 | Width | 350 (x 8 to 358), whatever the sidebar's width; it reaches over the page |
 | Height | 310 with five rows: the input row 50, the rows at 50 each from y 94, 10 below. No line under the input. With no rows it's the input row alone (ours: Arc's always listed five) |
 | Radius | ≈ 12, read off the corner's curve at 2× (± 1) |
-| Edge, fill, shadow | the centred panel's: a 0.5 pt near-black outline, a 1 pt grey one inside it (≈ 77, where the centred panel's reads 75 in the same recording), and the translucent fill, ≈ (28, 27, 30) over the sidebar and 22–24 over the page |
+| Edge, fill, shadow | the centred panel's: a 0.5 pt near-black outline, a 1 pt grey one inside it (≈ 77, where the centred panel's reads 75 in the same recording), and the translucent fill, ≈ (28, 27, 30) over the sidebar and 22–24 over the page. Ours: the shadow is the popover level's, as the other panels hanging from the field have, since the centred panel's modal one falls further than this panel is tall and read as a blank grey bar under it over a light page (#1306) |
 | Input row | the page's favicon, 16 pt, its centre 32 in, and the text at 14 pt from 51 in: the rows' icon and title columns, centred in the row. Arc's input text sits ≈ 6 lower than the field's own |
 | Rows | the centred panel's: 8 in, a 50 pitch, the selected plate inset 2 (x 18 to 348, 46 tall) in the accent, the icon's white tile from x 28. Titles have no " — host" after them |
 
