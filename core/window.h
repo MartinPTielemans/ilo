@@ -164,6 +164,11 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Into an agent's Space only |to_agent|, as the user gives the agent the tab
   // (bc_tab_give_to_agent), and then nowhere else.
   static void MoveToSpace(bc_id tab, bc_id space, bool to_agent = false);
+  // Moves |folder|, with the folders and pinned tabs in it, to the bottom of |space|'s pinned tabs,
+  // as bc_folder_move_to_space says: a window showing one of its tabs goes with it, as with
+  // MoveToSpace, and into another profile's Space each tab goes as a new one. Never into an agent's
+  // Space or a window's own.
+  static void MoveFolderToSpace(bc_id folder, bc_id space);
   // A Little ilo window takes |tab|, a Today tab of one of the user's Spaces, into its own Space
   // while that's empty, and shows its page live (bc_window_take_tab). Returns |tab|, or 0.
   bc_id TakeTab(bc_id tab);
@@ -417,6 +422,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Shows |tab|, or if another window shows it the first tab of the Space shown no window shows,
   // else no page: for the window's own picks, which never take another window's page.
   void Pick(bc_id tab);
+  // |tab| went from |from| to |space|, as |moved|: each window showing it goes with it, and each
+  // that would show it in |from| shows |next| there instead.
+  static void FollowMove(bc_id tab, bc_id moved, bc_id from, bc_id space, bc_id next);
   // Shows next_after_closing_, as the tab shown has closed.
   void SelectAfterClosing();
   // Chrome stopped a close or a quit (|closing| false): the window stays if its Browsers did.

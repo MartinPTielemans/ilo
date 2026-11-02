@@ -183,7 +183,7 @@ impl Shell {
             Row::NewTab => (("new-tab", 0), Slot::NewTab),
             Row::Tab(tab) => (("tab", tab), Slot::Tab(tab)),
         };
-        let folder = matches!(row, Row::Tab(tab) if self.is_folder(tab));
+        let folder = matches!(row, Row::Tab(tab) if self.is_folder_anywhere(tab));
         // Full for a dragged row's ghost, which the pointer holds, and none for the others then.
         let dragging = self.dragging();
         let hover = match dragging {
@@ -281,8 +281,8 @@ impl Shell {
     ) -> gpui::Stateful<gpui::Div> {
         match row {
             Row::NewTab => element.accessibility_id(NEW_TAB).button_named("New Tab"),
-            Row::Tab(folder) if self.is_folder(folder) => {
-                let open = self.shown_space().is_some_and(|space| space.is_open(folder));
+            Row::Tab(folder) if self.is_folder_anywhere(folder) => {
+                let open = self.folder_open(folder);
                 element
                     .role(Role::Button)
                     .accessibility_id(Self::folder_access_id(folder))
@@ -391,7 +391,8 @@ impl Shell {
 
     /// A tab's row, its split view's for the split's first tab, or a folder's, or its `ghost`.
     pub(super) fn tab_row(&self, tab: u64, ghost: bool, cx: &mut Context<Self>) -> AnyElement {
-        if self.is_folder(tab) {
+        // A folder dragged to another Space is drawn there as one too.
+        if self.is_folder_anywhere(tab) {
             return self.folder_row(tab, ghost, cx).into_any_element();
         }
         let panes = self.panes(tab);
@@ -409,7 +410,7 @@ impl Shell {
         ghost: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let open = self.shown_space().is_some_and(|space| space.is_open(folder));
+        let open = self.folder_open(folder);
         let renaming =
             self.renaming.as_ref().filter(|renaming| renaming.naming == Naming::Folder(folder));
         let label = match renaming {
@@ -441,6 +442,9 @@ impl Shell {
                     // The first press opened or closed it.
                     if event.click_count == 2 {
                         return shell.rename_folder(folder, cx);
+                    }
+                    if shell.choose_by_press(folder, event, cx) {
+                        return;
                     }
                     shell.press_folder(folder, cx);
                     shell.press_row(folder, event.position)
@@ -713,7 +717,7 @@ impl Shell {
             MouseButton::Left if event.modifiers.alt && !self.is_folder(tab) => {
                 self.alt_press_list_row(tab, event.position, cx)
             }
-            MouseButton::Left if !self.is_folder(tab) && self.choose_by_press(tab, event, cx) => {}
+            MouseButton::Left if self.choose_by_press(tab, event, cx) => {}
             MouseButton::Left => {
                 self.end_hovers(cx);
                 if self.is_folder(tab) {

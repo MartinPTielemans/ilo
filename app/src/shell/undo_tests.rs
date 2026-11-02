@@ -1246,3 +1246,109 @@ fn only_a_pinned_tab_joining_today_moves_a_row_first(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| shell.join_split(11, 10, false, false, cx));
     assert_eq!(host.take_edits(), ["split 11 10 false"]);
 }
+
+/// One's pinned 4, then the folder Reading holding 6 and the closed folder Old, which holds 8.
+fn reading() -> Folders {
+    Folders {
+        folders: HashMap::from([(5, ("Reading".into(), true)), (7, ("Old".into(), false))]),
+        parents: HashMap::from([(6, 5), (7, 5), (8, 7)]),
+        ..Default::default()
+    }
+}
+
+fn folder_menu(shell: &Entity<Shell>, cx: &mut TestAppContext, folder: u64) {
+    let at = gpui::point(gpui::px(100.), gpui::px(200.));
+    shell.update(cx, |shell, cx| shell.tab_menu(folder, at, cx));
+}
+
+/// A folder's Move to Space › another Space of its profile moves it whole, which the core reports
+/// in that Space, and ⌘Z puts it back at its place in its own, ⇧⌘Z moving it again (#1353).
+#[gpui::test]
+fn a_folder_moved_to_another_space_is_put_back_by_undo(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![4, 5, 6, 7, 8], vec![9], reading(), Vec::new());
+    folder_menu(&shell, cx, 5);
+    host.take_edits();
+    cx.update(|cx| host.choose("Two", cx));
+    assert_eq!(host.take_edits(), ["space folder 5 2"]);
+    assert_eq!(host.undo_toasts.borrow().as_slice(), ["Folder Moved to Space"]);
+    assert_eq!(titles(&shell, cx).0, Some("Move to Space"));
+    let two = |shell: &Entity<Shell>, cx: &mut TestAppContext, pinned: Vec<u64>, folders| {
+        shell.update(cx, |shell, cx| shell.set_tabs(2, pinned, Vec::new(), Vec::new(), folders, cx))
+    };
+    report(&shell, cx, vec![4], vec![9]);
+    two(&shell, cx, vec![10, 5, 6, 7, 8], reading());
+
+    assert!(undo(&shell, cx));
+    assert_eq!(host.take_edits(), ["space folder 5 1", "move folder 5 0 1"]);
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(1, vec![4, 5, 6, 7, 8], vec![9], Vec::new(), reading(), cx)
+    });
+    two(&shell, cx, vec![10], Folders::default());
+    // Done again, it goes back under Two's pinned tab.
+    assert!(redo(&shell, cx));
+    assert_eq!(host.take_edits(), ["space folder 5 2", "move folder 5 0 1"]);
+}
+
+/// Into another profile's Space a folder goes as a tab's Move to Space takes one: asked first,
+/// its tabs there as new ones that load again, with nothing for ⌘Z to give back.
+#[gpui::test]
+fn a_folder_moved_to_another_profile_is_asked_first_and_not_undone(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![4, 5, 6, 7, 8], vec![9], reading(), Vec::new());
+    host.warn_profiles.set(true);
+    shell.update(cx, |shell, cx| {
+        shell.set_profiles(vec![(1, "Personal".into()), (2, "Work".into())], cx)
+    });
+    folder_menu(&shell, cx, 5);
+    host.take_edits();
+    cx.update(|cx| host.choose("Three", cx));
+    assert!(host.take_edits().is_empty(), "moved before it asked");
+    let (message, detail, moved) = host.confirming.take().expect("an action to confirm");
+    assert_eq!(
+        format!("{message} {detail}"),
+        "Move this folder to the “Work” profile? Its pages load again there, without this \
+         profile's cookies and logins, so a site may ask you to sign in."
+    );
+    cx.update(|cx| moved(cx));
+    assert_eq!(host.take_edits(), ["space folder 5 3"]);
+    assert!(!undo(&shell, cx));
+}
+
+/// A chosen folder moves from the command bar as from its menu: its Move to rows are the Spaces of
+/// its profile, with no Pin to, and it goes whole, a row chosen in it going with it, as one step.
+#[gpui::test]
+fn the_command_bar_moves_a_chosen_folder_to_another_space(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![4, 5, 6, 7, 8], vec![9], reading(), Vec::new());
+    shell.update(cx, |shell, cx| {
+        shell.set_selected(9, cx);
+        shell.choose_row(5, cx);
+        shell.choose_row(6, cx);
+        // The tab shown, chosen with the first, lets go.
+        shell.choose_row(9, cx);
+    });
+    let found = |typed: &str, cx: &mut TestAppContext| {
+        shell.read_with(cx, |shell, _| {
+            let keys = crate::shell::UserKeys::default();
+            let rows = shell.named_bar_rows();
+            let rows = crate::shell::with_named_rows(Vec::new(), typed, &rows, &keys);
+            rows.into_iter().map(|row| (row.name.to_string(), row.command)).collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(
+        found("two", cx),
+        [
+            ("Focus Two".to_string(), Command::SelectSpace(1)),
+            ("Move to Two".to_string(), Command::MoveToSpace(2)),
+        ]
+    );
+    assert_eq!(found("three", cx), [("Focus Three".to_string(), Command::SelectSpace(2))]);
+    host.take_edits();
+    shell.update(cx, |shell, cx| shell.run(Command::MoveToSpace(2), "command-bar", cx));
+    assert_eq!(host.take_edits(), ["space folder 5 2"]);
+    assert!(shell.read_with(cx, |shell, _| shell.chosen.is_empty()));
+    report(&shell, cx, vec![4], vec![9]);
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(2, vec![5, 6, 7, 8], Vec::new(), Vec::new(), reading(), cx)
+    });
+    assert!(undo(&shell, cx));
+    assert_eq!(host.take_edits(), ["space folder 5 1", "move folder 5 0 1"]);
+}
