@@ -182,8 +182,8 @@ struct Floating {
   // Where it was shown, in points from its browser window's content's top left, which it keeps as
   // that window moves (Moved).
   std::optional<std::pair<double, double>> place;
-  // The UI answers Windows asking it to close, as the dialog and the find bar do, by closing as
-  // Esc does; Windows would destroy any other, which the host closes itself (FloatingProc).
+  // The UI answers Windows asking it to close, as the dialog does by cancelling; Windows would
+  // destroy any other, which the host closes itself (FloatingProc).
   bool ui_closes = false;
 };
 
@@ -318,9 +318,10 @@ LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpa
       }
       break;
     case WM_CLOSE:
-      // Alt+F4 asks the window with the keyboard to close, and Windows would destroy this one,
-      // which the app goes on using (#1362). It closes for the user as Esc closes it, as a menu or
-      // a dialog of Windows' own does, so a second Alt+F4 closes the browser window.
+      // Alt+F4 asks the window with the keyboard to close, where the UI hasn't taken it as Close
+      // Window, as the command bar does like Chrome's address field, and Windows would destroy
+      // this one, which the app goes on using (#1362). It closes as Esc closes it, as a dialog of
+      // Windows' own does, so a second Alt+F4 closes the browser window.
       if (floating->ui_closes) {
         break;
       }
@@ -2889,7 +2890,6 @@ void host_release_held_keys(void) {
 void host_add_find_bar(void* ui_view, void* find_bar_view, double right, double top) {
   Corner& corner = g_find_bars[ui_view];
   Adopt(corner.floating, find_bar_view, false, nullptr);
-  corner.floating.ui_closes = true;
   SystemFrame(corner.floating.hwnd);
   corner.right = right;
   corner.top = top;
