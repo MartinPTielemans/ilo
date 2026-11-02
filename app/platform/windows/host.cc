@@ -336,6 +336,17 @@ void Adopt(Floating& floating, void* view, bool mouse_through, void (*dismissed)
   OwnShadow(floating.hwnd);
 }
 
+// Lets go of |floating|, which is about to be freed while its window lives on: anything still
+// reaching it through its window after that wrote into freed memory, and a quit after a browser
+// window closed under Little ilo crashed in Disown (#1425).
+void Forget(Floating& floating) {
+  if (auto it = FloatingByHwnd().find(floating.hwnd);
+      it != FloatingByHwnd().end() && it->second == &floating) {
+    RemoveWindowSubclass(floating.hwnd, FloatingProc, 1);
+    FloatingByHwnd().erase(it);
+  }
+}
+
 // An overlay whose blur and shadow the host gives, as the Mac's does, and that is a rounded
 // rectangle as Windows' frame is (the command bar, the find bar and the offer): Windows 11 rounds
 // it and draws its shadow, without its outline, which the UI's rim would double.
@@ -681,11 +692,42 @@ std::map<HWND, DropTarget*>& DropTargets() {
   return targets;
 }
 
-// The frame of each browser window that has closed, from its UI's holder, until the app forgets it:
-// the core closes the window before it tells the app, which then saves the last regular one's for
-// the next launch (host_window_frame).
-std::map<HWND, RECT>& ClosedFrames() {
-  static std::map<HWND, RECT> frames;
+// The frame |root| un-maximizes to, in screen pixels. Windows keeps it from the corner of the work
+// area of the window's monitor, as Chromium's GetWindowPlacement reads it.
+bool RestoredRect(HWND root, RECT* rect) {
+  WINDOWPLACEMENT placement{sizeof placement};
+  MONITORINFO monitor{sizeof monitor};
+  if (!GetWindowPlacement(root, &placement) ||
+      !GetMonitorInfoW(MonitorFromWindow(root, MONITOR_DEFAULTTONEAREST), &monitor)) {
+    return false;
+  }
+  *rect = placement.rcNormalPosition;
+  OffsetRect(rect, monitor.rcWork.left - monitor.rcMonitor.left,
+             monitor.rcWork.top - monitor.rcMonitor.top);
+  return true;
+}
+
+// |rect|, in screen pixels, in host_centered's terms.
+void Logical(const RECT& rect, double* x, double* y, double* width, double* height) {
+  const double scale = GetDpiForSystem() / 96.0;
+  *x = rect.left / scale;
+  *y = rect.top / scale;
+  *width = (rect.right - rect.left) / scale;
+  *height = (rect.bottom - rect.top) / scale;
+}
+
+// The frame of a browser window that has closed, or the one it un-maximizes to if it closed
+// maximized.
+struct ClosedFrame {
+  RECT rect{};
+  bool maximized = false;
+};
+
+// Each browser window's that has closed, from its UI's holder, until the app forgets it: the core
+// closes the window before it tells the app, which then saves the last regular one's for the next
+// launch (host_window_frame, host_window_restored_frame).
+std::map<HWND, ClosedFrame>& ClosedFrames() {
+  static std::map<HWND, ClosedFrame> frames;
   return frames;
 }
 
@@ -718,9 +760,12 @@ LRESULT CALLBACK HolderProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
       return 1;
     case WM_DESTROY:
       // Its window is still there: Windows destroys a window's children before the window.
-      if (HWND root = GetAncestor(hwnd, GA_ROOT);
-          root && root != hwnd && !IsIconic(root) && !IsZoomed(root)) {
-        GetWindowRect(root, &ClosedFrames()[hwnd]);
+      if (HWND root = GetAncestor(hwnd, GA_ROOT); root && root != hwnd && !IsIconic(root)) {
+        ClosedFrame closed{.maximized = IsZoomed(root) != FALSE};
+        if (closed.maximized ? RestoredRect(root, &closed.rect)
+                             : GetWindowRect(root, &closed.rect) != FALSE) {
+          ClosedFrames()[hwnd] = closed;
+        }
       }
       if (auto found = DropTargets().find(hwnd); found != DropTargets().end()) {
         RevokeDragDrop(hwnd);
@@ -1210,6 +1255,10 @@ void PostMenuDismiss(bool give_back) {
 // windows the app goes on using, shared between browser windows or closed by the app itself, so a
 // quit with the command bar up crashed in one freed under it (#1058).
 void Disown(HWND root) {
+  // A window already destroyed has no root, and every window with no owner would match it.
+  if (!root) {
+    return;
+  }
   // The menu may be over a reveal, which root owns.
   if (HWND owner = g_menu.hwnd ? GetWindow(g_menu.hwnd, GW_OWNER) : nullptr;
       owner && (owner == root || GetWindow(owner, GW_OWNER) == root)) {
@@ -2035,7 +2084,7 @@ void host_centered(double width, double height, double* x, double* y) {
 }
 
 void host_show_launch_window(const char* profile_dir, double x, double y, double width,
-                             double height) {
+                             double height, bool maximized) {
   static const wchar_t* launch_class = [] {
     WNDCLASSW window_class{};
     window_class.lpfnWndProc = LaunchProc;
@@ -2071,15 +2120,19 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
   GetClientRect(window, &client);
   // As the Mac's: Dia's light composite over grey 20, and the dark near its dark one.
   COLORREF color = light ? RGB(232, 232, 232) : RGB(38, 38, 38);
-  g_launch.picture = LoadLaunchPicture(LaunchPicturePath(profile_dir, width, height), client.bottom,
-                                       &g_launch.picture_size, &color);
+  // A picture is of the window at |width| by |height|; maximized it's another size, kept by none.
+  if (!maximized) {
+    g_launch.picture = LoadLaunchPicture(LaunchPicturePath(profile_dir, width, height),
+                                         client.bottom, &g_launch.picture_size, &color);
+  }
   g_launch.background = CreateSolidBrush(color);
   g_launch.hwnd = window;
   if (g_launch.picture) {
     // check.sh reads this line.
     fprintf(stderr, "browser: launch picture shown\n");
   }
-  ShowWindow(window, SW_SHOW);
+  // Maximized on the screen of the frame it was made at, which it un-maximizes to.
+  ShowWindow(window, maximized ? SW_SHOWMAXIMIZED : SW_SHOW);
   // On screen now, as Chromium's startup holds the main thread for a while before its loop.
   UpdateWindow(window);
 }
@@ -2178,17 +2231,32 @@ bool host_window_frame(void* ui_view, double* x, double* y, double* width, doubl
   HWND root = Root(ui_view);
   RECT rect{};
   if (auto closed = ClosedFrames().find(Hwnd(ui_view)); !root && closed != ClosedFrames().end()) {
-    rect = closed->second;
+    if (closed->second.maximized) {
+      return false;
+    }
+    rect = closed->second.rect;
   } else if (!root || IsIconic(root) || IsZoomed(root)) {
     return false;
   } else {
     GetWindowRect(root, &rect);
   }
-  const double scale = GetDpiForSystem() / 96.0;
-  *x = rect.left / scale;
-  *y = rect.top / scale;
-  *width = (rect.right - rect.left) / scale;
-  *height = (rect.bottom - rect.top) / scale;
+  Logical(rect, x, y, width, height);
+  return true;
+}
+
+bool host_window_restored_frame(void* ui_view, double* x, double* y, double* width,
+                                double* height) {
+  HWND root = Root(ui_view);
+  RECT rect{};
+  if (auto closed = ClosedFrames().find(Hwnd(ui_view)); !root && closed != ClosedFrames().end()) {
+    if (!closed->second.maximized) {
+      return false;
+    }
+    rect = closed->second.rect;
+  } else if (!root || !IsZoomed(root) || !RestoredRect(root, &rect)) {
+    return false;
+  }
+  Logical(rect, x, y, width, height);
   return true;
 }
 
@@ -2253,6 +2321,19 @@ void host_start_window_move(void* ui_view) {
 bool host_window_maximized(void* ui_view) {
   HWND root = Root(ui_view);
   return root && IsZoomed(root);
+}
+
+void host_maximize_window(void* ui_view) {
+  HWND root = Root(ui_view);
+  if (!root) {
+    return;
+  }
+  // As Chromium's own Maximize does.
+  SendMessageW(root, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
+  // Maximizing brings it to the front, and the launch window stays over it until the UI has drawn.
+  if (g_launch.hwnd) {
+    SetWindowPos(g_launch.hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  }
 }
 
 void host_show_window(void* ui_view) {
@@ -2423,9 +2504,16 @@ double host_since_launch(void) {
 void host_forget_window(void* ui_view) {
   Disown(Root(ui_view));
   FocusAfterOverlay().erase(Root(ui_view));
-  g_find_bars.erase(ui_view);
-  g_offers.erase(ui_view);
-  g_reveals.erase(ui_view);
+  for (auto* corners : {&g_find_bars, &g_offers}) {
+    if (auto it = corners->find(ui_view); it != corners->end()) {
+      Forget(it->second.floating);
+      corners->erase(it);
+    }
+  }
+  if (auto it = g_reveals.find(ui_view); it != g_reveals.end()) {
+    Forget(it->second.floating);
+    g_reveals.erase(it);
+  }
   g_pane_corners.erase(ui_view);
   std::erase(UiViews(), Hwnd(ui_view));
   ClosedFrames().erase(Hwnd(ui_view));

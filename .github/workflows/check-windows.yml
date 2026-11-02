@@ -94,7 +94,7 @@ jobs:
         working-directory: app
     env:
       # The runs the Windows driver (platform/windows/drive.cc) is meant to pass so far.
-      WINDOWS_RUNS: load tabs dialogs crash about onboarding agents access passkeys passwords
+      WINDOWS_RUNS: load tabs dialogs crash about onboarding agents access passkeys passwords quit
     steps:
       # setup.sh and the patches it applies need the repository's line endings.
       - run: git config --global core.autocrlf false

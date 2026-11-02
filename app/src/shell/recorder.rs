@@ -76,6 +76,8 @@ pub(super) struct Recorder {
     pub(super) agents: Cell<Option<bool>>,
     /// The user turned off ⌥ bringing the hidden sidebar out.
     pub(super) option_off: Cell<bool>,
+    /// The user turned link previews off.
+    pub(super) previews_off: Cell<bool>,
     /// The window's own buttons as the system says it draws them, once their window shows them.
     pub(super) window_buttons: Cell<Option<super::WindowButtonGeometry>>,
     /// The Spaces it was asked to show, in order.
@@ -113,6 +115,8 @@ pub(super) struct Recorder {
     pub(super) told_action: RefCell<Option<Box<dyn FnOnce(Vec<String>, &mut App)>>>,
     /// The dialog asks something else, so `tell` doesn't ask.
     pub(super) dialog_busy: Cell<bool>,
+    /// It warns before a move to another profile's Space, as `warn_moving_profiles` answers.
+    pub(super) warn_profiles: Cell<bool>,
     /// Each time the shell opened the Site Controls: the tab, and where they hang from.
     pub(super) site_controls: RefCell<Vec<(u64, crate::site_controls::Place)>>,
     /// The ids of the extensions the Site Controls were given to list, each time.
@@ -290,8 +294,12 @@ impl Browser for Recorder {
         self.edit(format!("space {tab} {space}"));
     }
 
+    fn move_folder_to_space(&self, folder: u64, space: u64, _: &mut App) {
+        self.edit(format!("space folder {folder} {space}"));
+    }
+
     fn warn_moving_profiles(&self, _: &mut App) -> bool {
-        Default::default()
+        self.warn_profiles.get()
     }
 
     fn set_warn_moving_profiles(&self, _: bool, _: &mut App) {}
@@ -459,13 +467,20 @@ impl Browser for Recorder {
         self.record("reopen closed tab".into());
     }
 
-    fn reopen_preview(
+    fn open_preview(
         &self,
-        closed: &crate::link_preview::Closed,
+        over: u64,
+        url: SharedString,
+        link: Point<Pixels>,
         _: (Bounds<Pixels>, f32),
         _: &mut App,
     ) {
-        self.record(format!("reopen preview over {} {}", closed.over, closed.url));
+        let (x, y) = (f32::from(link.x), f32::from(link.y));
+        self.record(format!("open preview over {over} {url} from {x},{y}"));
+    }
+
+    fn link_previews(&self) -> bool {
+        !self.previews_off.get()
     }
 
     fn close_preview(&self, over: u64, _: &mut App) -> bool {
