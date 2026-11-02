@@ -348,9 +348,9 @@ void SystemFrame(HWND hwnd) {
 }
 
 void WatchOwner(HWND root);
-// Puts |hwnd| at |x|, |y|, |width| by |height| over the others and on screen. It's shown with
-// ShowWindow rather than SWP_SHOWWINDOW, which doesn't send WM_SHOWWINDOW, the message GPUI learns
-// its window is on screen from (window.is_visible()), where an overlay's motion starts.
+// Puts |hwnd| at |x|, |y|, |width| by |height| over its browser window and on screen. It's shown
+// with ShowWindow rather than SWP_SHOWWINDOW, which doesn't send WM_SHOWWINDOW, the message GPUI
+// learns its window is on screen from (window.is_visible()), where an overlay's motion starts.
 // The UI sizes its overlays from inside its update, where GPUI can't take the new size: its
 // renderer grows, but the UI goes on laying out at the old one, so what it adds, as the command
 // bar's suggestions, is drawn cut off. The size again after the update reaches it.
@@ -363,8 +363,35 @@ void SizeAgainLater(HWND hwnd) {
   });
 }
 
+// The window at the end of |hwnd|'s owners, the browser window an overlay or a menu over it floats
+// over, or |hwnd| if it has no owner.
+HWND TopOwner(HWND hwnd) {
+  while (HWND owner = GetWindow(hwnd, GW_OWNER)) {
+    hwnd = owner;
+  }
+  return hwnd;
+}
+
+// Where |hwnd|, owned by a browser window, goes in the z-order: over that window and the others it
+// owns, but under any other window over them, as the Mac's child windows are while the app isn't
+// the active one, and Linux's overlays are always. HWND_TOP would put it over every app's windows,
+// so a link's address or a hover card drew over another app in front of ilo (#1419).
+HWND InsertAfter(HWND hwnd) {
+  HWND root = TopOwner(hwnd);
+  if (root == hwnd) {
+    return HWND_TOP;
+  }
+  for (HWND above = GetWindow(root, GW_HWNDPREV); above; above = GetWindow(above, GW_HWNDPREV)) {
+    if (IsWindowVisible(above) && TopOwner(above) != root) {
+      // A non-topmost window can't go between topmost ones; under them all is the top of the rest.
+      return (GetWindowLongPtrW(above, GWL_EXSTYLE) & WS_EX_TOPMOST) ? HWND_TOP : above;
+    }
+  }
+  return HWND_TOP;
+}
+
 void PlaceAndShow(HWND hwnd, int x, int y, int width, int height, bool activate) {
-  SetWindowPos(hwnd, HWND_TOP, x, y, width, height, SWP_NOACTIVATE);
+  SetWindowPos(hwnd, InsertAfter(hwnd), x, y, width, height, SWP_NOACTIVATE);
   ShowWindow(hwnd, activate ? SW_SHOW : SW_SHOWNA);
   SizeAgainLater(hwnd);
 }
