@@ -737,6 +737,12 @@ enum {
 // host_updates_available is false.
 void host_start_updater(void (*quit)(void), void (*changed)(int stage, const char* version));
 
+// On Windows, before host_start_updater: if a quit since the last launch started installing an
+// update, calls |installed| with the update's build number and this copy's own, once. Where it
+// answers that the update didn't go in, the updater's first check waits its 8 hours, so the app
+// can say so and offer Try Again until the user asks.
+void host_take_install(bool (*installed)(uint64_t build, uint64_t own));
+
 // The app menu's Check for Updates…, which checks now: on the Mac, Sparkle's check, which shows
 // what it finds in Sparkle's window; on Windows, the same quiet check as Settings › About's,
 // which the app shows there, as the updater has no window.

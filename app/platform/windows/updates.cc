@@ -55,8 +55,10 @@ constexpr bool kReleaseBuild = false;
 // How long between checks, as Sparkle's on the Mac, in 100 ns, as a FILETIME counts.
 constexpr ULONGLONG kInterval = 8ULL * 60 * 60 * 10'000'000;
 // Where the last check's time is kept, under HKEY_CURRENT_USER, so a launch doesn't check again
-// before it's due.
+// before it's due, and the build a quit started installing, so the next launch can tell whether it
+// went in.
 constexpr wchar_t kSettings[] = L"Software\\ilo\\Updates";
+constexpr wchar_t kInstalling[] = L"Installing";
 // No appcast is this big, and no installer: past it, the download stops.
 constexpr size_t kMostFeed = 4 << 20;
 constexpr ULONGLONG kMostInstaller = 1ULL << 30;
@@ -69,10 +71,11 @@ HANDLE g_wake = nullptr;
 std::mutex g_said_lock;
 int g_stage = HOST_UPDATE_IDLE;
 std::string g_version;
-// The installer, once verified, held open so nothing can change it until it runs, and whether the
-// quit it runs at is Restart to Update's, which relaunches ilo.
+// The installer, once verified, held open so nothing can change it until it runs, the build it
+// installs, and whether the quit it runs at is Restart to Update's, which relaunches ilo.
 std::atomic<bool> g_ready{false};
 std::wstring g_installer;
+ULONGLONG g_build = 0;
 HANDLE g_held = INVALID_HANDLE_VALUE;
 bool g_relaunch = false;
 
@@ -457,6 +460,7 @@ void Check() {
     return Said(HOST_UPDATE_FAILED);
   }
   fprintf(stderr, "browser: update %s ready\n", update.version.c_str());
+  g_build = update.build;
   g_ready = true;
   Said(HOST_UPDATE_READY, update.version);
 }
@@ -506,6 +510,24 @@ void host_start_updater(void (*quit)(void), void (*changed)(int stage, const cha
   fprintf(stderr, "browser: updater started\n");
 }
 
+void host_take_install(bool (*installed)(uint64_t build, uint64_t own)) {
+  ULONGLONG build = 0;
+  DWORD size = sizeof build;
+  if (!host_updates_available() ||
+      RegGetValueW(HKEY_CURRENT_USER, kSettings, kInstalling, RRF_RT_REG_QWORD, nullptr, &build,
+                   &size) != ERROR_SUCCESS) {
+    return;
+  }
+  RegDeleteKeyValueW(HKEY_CURRENT_USER, kSettings, kInstalling);
+  const ULONGLONG own = Build(APP_BUILD);
+  if (!installed(build, own)) {
+    fprintf(stderr, "browser: update build %llu didn't install: this is build %llu\n", build, own);
+    // About's "The update didn't install" stays for the user's Try Again, as no check due at
+    // launch moves it on.
+    SetLastCheck(Now());
+  }
+}
+
 // Check for Updates…, whose stages the app shows in Settings › About.
 void host_check_for_updates(void) {
   if (g_wake && !g_ready) {
@@ -534,6 +556,8 @@ void host_finish_update(void) {
   if (!g_ready || GetSystemMetrics(SM_SHUTTINGDOWN)) {
     return;
   }
+  // Before it starts, so one that never starts counts as one that failed.
+  RegSetKeyValueW(HKEY_CURRENT_USER, kSettings, kInstalling, REG_QWORD, &g_build, sizeof g_build);
   std::wstring command = L"\"" + g_installer +
                          L"\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /waitpid=" +
                          std::to_wstring(GetCurrentProcessId());
