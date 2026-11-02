@@ -7,7 +7,9 @@
 # the site sends without them, and ↩ signs in, with the password in no log. A link to another app
 # asks first, and ↩ there opens nothing. The pointer on and off a link 20 times shows and hides the
 # link target each time, with the command bar and a tab's menu opened and closed between, and the
-# app lives through it with no panic (#1351).
+# app lives through it with no panic (#1351). On Windows, with another app's window in front of
+# ilo's, the link target and the hover card show under it, and the link target over ilo's window
+# again once it's gone (#1419).
 
 serve
 log="$out/dialogs.log"
@@ -176,6 +178,64 @@ for round in $(seq 20); do
 done
 kill -0 "$pid" 2>/dev/null || gone
 ! grep -q 'panicked' "$log" || fail "the app panicked as the link target, the bar or a menu showed"
+
+# On Windows, another app's window opened in front of ilo's lower half, where the link target's
+# corner is: the plate the link shows then, and the hover card a row shows, go under that window
+# and over ilo's, by Windows' own z-order, front first, and once it's gone the plate is over ilo's
+# window again (#1419). They came to the front of every app's windows, over the other app.
+covered=
+if windows; then
+  python3 -I -u check/app-windows.py cover "$(cat "/proc/$pid/winpid")" > "$out/cover.log" 2>&1 &
+  helper=$!
+  for _ in $(seq 100); do
+    grep -q '^cover ' "$out/cover.log" || ! kill -0 "$helper" 2>/dev/null && break
+    sleep 0.1
+  done
+  grep -q '^cover ' "$out/cover.log" ||
+    fail "another app's window didn't open over ilo's: $(cat "$out/cover.log")"
+  # The window and plate on top of the stack the driver last listed match $1, or fail with $2.
+  stacked() {
+    send stack
+    stack=$(grep '^browser: stack ' "$log" | tail -1 | cut -c16-)
+    case $stack in $1) ;; *) fail "$2: $stack" ;; esac
+  }
+  stacked "*other cover, *driven" "the other app's window isn't in front of ilo's"
+  send move $link_point
+  expect '^browser: link target window shown$' \
+    "the pointer on the link showed no plate under the other app"
+  ../tools/window-screenshot.sh "$pid" "$out/link-target-covered.png" || fail "no window to capture"
+  stacked "*other cover, *link target, *driven" \
+    "the link target isn't under the other app's window in front of ilo"
+  send move $page_point
+  expect '^browser: link target hidden$' \
+    "the plate under the other app stayed after the pointer left"
+  send move $(row 0)
+  expect '^browser: hover card window shown$' \
+    "resting on the tab's row showed no card under the other app"
+  stacked "*other cover, *hover card, *driven" \
+    "the hover card isn't under the other app's window in front of ilo"
+  send move $page_point
+  expect '^browser: hover card hidden$' "leaving the rows didn't hide the card under the other app"
+  covered="$(sed -n 's/^cover .*, foreground \([01]\)$/\1/p' "$out/cover.log") $active"
+  # By its Windows id, as Git Bash's kill may not end a native process.
+  taskkill //F //PID "$(cat "/proc/$helper/winpid")" > /dev/null 2>&1 || true
+  helper=
+  for _ in $(seq 50); do
+    send stack
+    grep '^browser: stack ' "$log" | tail -1 | grep -q 'other cover' || break
+    sleep 0.1
+  done
+  send move $link_point
+  expect '^browser: link target window shown$' \
+    "the pointer on the link showed no plate once the other app went"
+  stacked "*link target, *driven" "the link target isn't over ilo's window once the other app went"
+  case $stack in *"other cover"*) fail "the other app's window outlived its process: $stack" ;; esac
+  ../tools/window-screenshot.sh "$pid" "$out/link-target-uncovered.png" ||
+    fail "no window to capture"
+  send move $page_point
+  expect '^browser: link target hidden$' \
+    "the plate stayed after the pointer left, the other app gone"
+fi
 exec 3>&-
 quit
 echo "ok: a page's alert, confirm and prompt ask over its card, answer with ↩ and Esc, and an alert"
@@ -183,3 +243,7 @@ echo "  comes back with its tab. The confirm's Cancel and OK show the pointer on
 echo "  stays with Esc and leaves with ↩. A site's sign-in cancels with Esc and signs in with ↩, and"
 echo "  the password reaches no log. A link to Maps asks, and ↩ opens nothing. The link target shows"
 echo "  and hides 20 times, between the command bar and a tab's menu, with no panic."
+[ -z "$covered" ] || echo "  Under another app's window in front of ilo's (it had the" \
+  "foreground: ${covered% *}, ilo active: ${covered#* }), the link target and the hover card show" \
+  "under it, and the link target over ilo's window once it's gone. Windows:" \
+  "$out/link-target-covered.png, $out/link-target-uncovered.png"

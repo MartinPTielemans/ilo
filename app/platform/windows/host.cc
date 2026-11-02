@@ -3725,4 +3725,26 @@ bool host_drive_key(unsigned vk, long lparam) {
   return g_menu_key_hook && MenuTakesKey(vk, lparam);
 }
 
+// What check.sh calls the window |hwnd| the host floats over a browser window, for the driver's
+// stack, or nothing if it's none of those.
+const char* host_floating_name(void* hwnd) {
+  const std::pair<const Floating*, const char*> named[] = {
+      {&g_link_target, "link target"}, {&g_tooltip, "tooltip"},
+      {&g_card, "hover card"},         {&g_toast, "toast"},
+      {&g_capture, "capture"},         {&g_hud, "hud"},
+      {&g_dialog, "dialog"},           {&g_site_controls, "site controls"},
+      {&g_link_preview.floating, "link preview"}};
+  for (const auto& [floating, name] : named) {
+    if (floating->hwnd && floating->hwnd == hwnd) {
+      return name;
+    }
+  }
+  for (size_t index = 0; index < std::size(g_overlays); ++index) {
+    if (g_overlays[index].hwnd && g_overlays[index].hwnd == hwnd) {
+      return kOverlayNames[index];
+    }
+  }
+  return g_menu.hwnd && g_menu.hwnd == hwnd ? "menu" : nullptr;
+}
+
 }  // extern "C"
