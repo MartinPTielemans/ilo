@@ -20,39 +20,13 @@ remove_agent_instructions() {
 # Explorer, Task Manager and its shortcuts show, chrome.dll's IDR_MAINFRAME, which the browser
 # windows take for the taskbar's thumbnails, Alt+Tab and the title bar, and the exe's HTML and PDF
 # document icons, which the installer gives ilo's icon too. Copied only when it differs, so a kept
-# tree doesn't relink chrome.dll for nothing. icons.py reads them back from a build.
+# tree doesn't relink chrome.dll for nothing. windows/icons.py reads them back from a build.
 windows_icons() {
   local theme=$1/chrome/app/theme/chromium/win name
   local ico=$engine/../app/platform/windows/package/Assets/ilo.ico
   for name in chromium chromium_doc chromium_pdf; do
     cmp -s "$ico" "$theme/$name.ico" || cp "$ico" "$theme/$name.ico"
   done
-}
-
-# The same in a Linux build, whose logos are PNGs in its .pak files: IDR_PRODUCT_LOGO_128 is the
-# windows' icon, which X11 and Wayland get, and the rest are logos Chromium's own UI, notifications
-# and shortcuts show. Each is the size Chromium's file is, from ilo.ico's PNGs, its 128 the 256
-# halved, as the .ico has none (icons.py png). icons.py reads them back from a build.
-linux_icons() {
-  local theme=$1/chrome/app/theme size file png
-  local ico=$engine/../app/platform/windows/package/Assets/ilo.ico
-  png=$(mktemp)
-  while read -r size file; do
-    python3 -I "$engine/icons.py" png "$ico" "$size" "$png"
-    cmp -s "$png" "$theme/$file" || cp "$png" "$theme/$file"
-  done <<'LOGOS'
-16 chromium/product_logo_16.png
-24 chromium/product_logo_24.png
-64 chromium/product_logo_64.png
-128 chromium/product_logo_128.png
-64 chromium/linux/product_logo_64.png
-128 chromium/linux/product_logo_128.png
-256 chromium/linux/product_logo_256.png
-16 default_100_percent/chromium/linux/product_logo_16.png
-32 default_100_percent/chromium/product_logo_32.png
-64 default_200_percent/chromium/product_logo_32.png
-LOGOS
-  rm -f "$png"
 }
 
 # Checks that a platform repository's ungoogled-chromium submodule builds the pinned tag, or a

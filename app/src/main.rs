@@ -6915,14 +6915,6 @@ pub extern "C" fn bc_app_host(argc: *mut c_int, argv: *mut *const *const c_char)
         _ => &[],
     };
     let given = (given.iter()).map(|&arg| unsafe { CStr::from_ptr(arg) }.to_string_lossy().into());
-    // Chromium names the windows' X11 class and Wayland app id after this desktop entry, and the
-    // desktop takes their icon from the entry it matches: ilo's, not "chromium-browser" (#1350).
-    // The Flatpak's launcher sets the same. Chromium reads it later, when it opens a window.
-    #[cfg(target_os = "linux")]
-    if std::env::var_os("CHROME_DESKTOP").is_none_or(|desktop| desktop.is_empty()) {
-        let desktop = format!("{}.desktop", include_str!("../branding/id").trim());
-        unsafe { std::env::set_var("CHROME_DESKTOP", desktop) };
-    }
     let (args, host) = switches_and_host(given.collect());
     let pointers: Vec<*const c_char> = args.leak().iter().map(|arg| arg.as_ptr()).collect();
     unsafe {

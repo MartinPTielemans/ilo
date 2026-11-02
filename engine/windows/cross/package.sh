@@ -24,13 +24,11 @@ grep -qE '(^| )bc_main$' <<<"$symbols" ||
   fail "chrome.dll doesn't export the core's C API (core/BUILD.gn)"
 
 # ilo's icon, not Chromium's, where Windows reads one: chrome.exe's first, for it and its shortcuts,
-# its document icons, and chrome.dll's IDR_MAINFRAME, the browser windows' (tree.sh's
-# windows_icons).
+# its document icons, and chrome.dll's IDR_MAINFRAME, the browser windows' (tree.sh's windows_icons).
 here=$(cd "$(dirname "$0")" && pwd)
 ico=$here/../../../app/platform/windows/package/Assets/ilo.ico
 while read -r file group; do
-  python3 -I "$here/../../icons.py" group "$out/$file" "$group" "$ico" ||
-    fail "$file's icon $group isn't ilo's"
+  python3 -I "$here/../icons.py" "$out/$file" "$group" "$ico" || fail "$file's icon $group isn't ilo's"
 done <<'ICONS'
 chrome.exe 0
 chrome.exe IDR_X006_HTML_DOC
