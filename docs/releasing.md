@@ -6,7 +6,8 @@
 
 1. Set the version in `app/Cargo.toml` and merge it to main.
 2. Make sure the Windows engine exists for that commit. It builds nightly, so run Engine on Windows (cross-compiled) on it, `gh workflow run engine-windows-cross.yml --ref main` with main at that commit, and wait for its release `engine-windows-<commit>`. The Mac and Linux engines must exist for the commit too; each OS's job stops without one.
-3. Tag the commit with the release notes as the tag's message, and push the tag:
+3. Write the release's entry in [ilo-site](https://github.com/MartinPTielemans/ilo-site)'s `src/changelog.ts` from the notes, and merge it before tagging: each update's notes and its first launch open `/changelog#<version>` on the site (`tools/appcast.sh`).
+4. Tag the commit with the release notes as the tag's message, and push the tag:
 
    ```bash
    git tag -a v0.1.0      # the editor's text is the release's notes
@@ -14,8 +15,8 @@
    ```
 
    A lightweight tag fails the run, since the notes come from the message. Running the workflow by hand before the tag exists tries the release: it builds everything, and its notes say it isn't for publishing.
-4. Check the draft release's files, then publish it.
-5. Open a pull request to [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) with the manifests in the run's `winget` artifact.
+5. Check the draft release's files, then publish it.
+6. Open a pull request to [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) with the manifests in the run's `winget` artifact.
 
 Publish each draft before building the next: a Linux build doesn't follow a draft that isn't live yet.
 
@@ -35,6 +36,7 @@ Once the draft is published:
 - The `publish` job puts its `appcast.xml` in the release `updates`, the feed the Mac and Windows builds read (`app/branding/update-feed`).
 - The Linux build, already in the Flatpak repository unseen, goes live.
 - [ilo-site](https://github.com/MartinPTielemans/ilo-site)'s release workflow puts the demo on [ilobrowser.com](https://ilobrowser.com), links its source to the tag and deploys the site, whose download buttons link the newest release. It checks every half hour, or at once with `SITE_DISPATCH_TOKEN`.
+- Martin's Grok bot announces it: it records clips and a film of the new features on the published build, adds the clips to the site's changelog through its own ilo-site pull request, and drafts the post. The release never waits for it.
 
 Every other release in this repository, such as `updates`, is made with `--latest=false`, or the site's buttons would link it. The prebuilt engines live in [ilo-engine](https://github.com/MartinPTielemans/ilo-engine), the repository `engine/prebuilt.ini` names, as `engine-mac-`, `engine-linux-` and `engine-windows-<commit>`, also with `--latest=false`.
 
