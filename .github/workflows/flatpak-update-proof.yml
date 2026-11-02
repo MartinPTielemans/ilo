@@ -1,0 +1,37 @@
+# A proof for 0.1.2's cut, on test branches only and never in a pull request: a Flatpak install of
+# one release updates to the next from ilo's Flatpak repository, as a user's does. The repository
+# is made here by tools/flatpak-repo.sh, the tool that makes the live one, with a key of the run's
+# own and served on localhost, so nothing reads or touches the live repository.
+name: Flatpak update proof
+
+on:
+  push:
+    branches: ['test/flatpak-0112-*']
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq flatpak ostree xvfb imagemagick
+          # Ubuntu's AppArmor keeps bubblewrap, which flatpak runs in, from making user namespaces.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Proof
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/winsparkle-proof/flatpak.sh "$RUNNER_TEMP/proof" $(cat .github/winsparkle-proof/from-to-linux)
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-proof
+          path: |
+            ${{ runner.temp }}/proof/*.log
+            ${{ runner.temp }}/proof/*.png
+          if-no-files-found: warn
