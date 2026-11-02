@@ -2851,6 +2851,8 @@ impl Shell {
             self.keep(What::DELETE_SPACE, Some(Edit::UndoDeleteSpace(space)), cx);
             let undo = keystroke_label("cmd-z");
             self.browser.toast("Space deleted! Use", Some((&undo, "to undo.")), DELETED_TIME, cx);
+            // It offers the undo by its key, and goes as an Undo button's toast does.
+            self.undo_offered = true;
         }
     }
 

@@ -795,6 +795,26 @@ fn clearing_and_deleting_a_space_are_undone_and_done_again(cx: &mut TestAppConte
     assert_eq!(host.take_edits(), ["delete space 2"]);
 }
 
+/// "Space deleted! Use ⌘Z to undo." goes with the ⌘Z it names, so it can't prompt a second one,
+/// which would undo the edit before, and with the next edit, which ⌘Z would undo instead.
+#[gpui::test]
+fn the_space_deleted_toast_goes_with_its_undo(cx: &mut TestAppContext) {
+    let (shell, host) = plain(cx, vec![10, 11]);
+    shell.update(cx, |shell, cx| shell.delete_space_now(2, cx));
+    assert_eq!(host.toasts.borrow().as_slice(), ["Space deleted! Use"]);
+    assert_eq!(host.undo_toasts_hidden.get(), 0);
+    undo(&shell, cx);
+    assert_eq!(host.take_edits(), ["delete space 2", "undo delete space 2"]);
+    assert_eq!(host.undo_toasts_hidden.get(), 1);
+    // Nothing offers it now, so a second ⌘Z leaves the toasts alone.
+    undo(&shell, cx);
+    assert_eq!(host.undo_toasts_hidden.get(), 1);
+
+    shell.update(cx, |shell, cx| shell.delete_space_now(2, cx));
+    shell.update(cx, |shell, cx| shell.close_tab(11, false, cx));
+    assert_eq!(host.undo_toasts_hidden.get(), 2);
+}
+
 #[gpui::test]
 fn the_archives_delete_and_clear_are_undone_and_done_again(cx: &mut TestAppContext) {
     let (shell, host) = plain(cx, vec![10]);
