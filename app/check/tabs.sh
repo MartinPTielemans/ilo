@@ -1162,17 +1162,6 @@ if windows; then
   else
     echo "skip: a menu in a minimized window, as the app wasn't active once its window came back."
   fi
-  # Alt+F4 in the bar asks Windows to close the bar's window, which destroyed it under the UI: it
-  # closes the bar as Esc does, and the bar opens again (#1362).
-  send key t cmd
-  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
-  post key f4 ctrl
-  await "^browser: drive $step done" || fail "the driver didn't finish Alt+F4 in the command bar"
-  bar_gone "Alt+F4 in the command bar"
-  send key t cmd
-  expect '^browser: command bar shown$' "⌘T didn't open the command bar after Alt+F4 closed it"
-  send key escape
-  bar_gone "Esc in the command bar opened after Alt+F4"
   # Moved with the bar open, the window takes the bar along, over the same place, where it stayed
   # behind on the screen, and the window's menu closes, as the Mac's do (#1364).
   # Where each window over the page is, "x,y" in points, in the driver's order, once there's one.
@@ -1198,6 +1187,7 @@ FRAME
   hidden=$(grep -c '^browser: command bar hidden$' "$log" || true)
   send place $((frame_x + 60)) $((frame_y + 40)) "$frame_width" "$frame_height"
   overlays_at "the command bar's window left the screen as its window moved"
+  ../tools/window-screenshot.sh "$pid" "$out/command-bar-moved.png" || fail "no window to capture"
   # Within a point, as each is rounded from pixels.
   echo "$bar_before" "$at" | awk '{ n = NF / 2; for (i = 1; i <= n; i++) {
       split($i, a, ","); split($(i + n), b, ",")
@@ -1205,7 +1195,6 @@ FRAME
     fail "moving the window by 60,40 points left the command bar behind: $bar_before, then $at"
   [ "$(grep -c '^browser: command bar hidden$' "$log")" = "$hidden" ] ||
     fail "moving the window closed its command bar"
-  ../tools/window-screenshot.sh "$pid" "$out/command-bar-moved.png" || fail "no window to capture"
   send place "$frame_x" "$frame_y" "$frame_width" "$frame_height"
   send key escape
   bar_gone "Esc in the command bar after its window moved"
@@ -1250,6 +1239,25 @@ FRAME
   bar_gone "Esc in the command bar after the page under it committed"
   send key w cmd
   expect "^browser: tab $committing closed\$" "⌘W didn't close the tab that loaded /held"
+  # Alt+F4 in the bar closes the browser window under it, as in Chrome's address field, and the
+  # bar's window, which every browser window shares, lives on to open over the next one: Ctrl+T
+  # there opens the bar again (#1362). The windows over the page that have no Alt+F4 of the UI's,
+  # such as the dialog, close themselves on it (dialogs.sh).
+  send key n cmd
+  expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
+  second=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar in the second window"
+  post key f4 ctrl
+  await "^browser: drive $step done" || fail "the driver didn't finish Alt+F4 in the command bar"
+  expect '^browser: command close-window via ui$' "Alt+F4 in the command bar didn't reach the UI"
+  expect "^browser: window closed $second\$" "Alt+F4 in the command bar didn't close its window"
+  expect '^browser: command bar hidden$' "the command bar stayed open as its window closed"
+  send window 1
+  send key t cmd
+  expect '^browser: command bar shown$' "Ctrl+T didn't open the command bar after Alt+F4 closed a window"
+  send key escape
+  bar_gone "Esc in the command bar after Alt+F4 closed the window it was over"
 fi
 
 exec 3>&-
@@ -1292,7 +1300,8 @@ chrome_ms=$(echo "$spans" | grep -v incomplete | summary)
 # grep -c finds none in a run where no switch was cut off, and exits 1 then.
 chrome_ms="$chrome_ms, $(echo "$spans" | grep -c incomplete || true) incomplete, not counted"
 echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's ✕ take a page out of history and ⌥⌘⌫ a search typed before, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row and a space after an engine's keyword search with it alone until ⌫ leaves, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, ⌘W shows the tab below or above, an empty Space shows no pane, its window resizes, and on Windows maximizes and restores, and it still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one. ⌘-click and ⇧-click choose three rows, whose menu and ⇧⌘C copy their links in order, and ⌘D pins them, New Folder folders them and ⌘W closes them, each undone by ⌘Z. On Windows the bar, a tooltip and a menu are on screen only while the UI shows them: after Esc, ⌘T again or a click on the page, as the pointer leaves, after Windows shows them again and after their window was minimized."
-[ -z "${committed:-}" ] || echo "  On Windows Alt+F4 in the bar closes it as Esc does, the bar" \
+[ -z "${committed:-}" ] || echo "  On Windows Alt+F4 in the bar closes its window and the bar opens" \
+  "over the next one, the bar" \
   "moves with its window and the window's menu closes, and the bar stays open over a page that" \
   "commits in another site's renderer and $committed: $out/command-bar-moved.png"
 echo "  Switch to a loaded tab, tab strip to frame shown (Chrome's measure; gate 16 ms): $chrome_ms."
