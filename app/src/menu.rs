@@ -137,8 +137,38 @@ pub struct Request {
     /// Where it may go, in the same terms: the screen's work area.
     pub area: Bounds<Pixels>,
     pub look: Look,
-    /// Called once it closes, with the index of the item chosen, if any.
-    pub chosen: Box<dyn FnOnce(Option<usize>, &mut App)>,
+    /// Called once it closes, with how it closed.
+    pub chosen: Chosen,
+}
+
+pub type Chosen = Box<dyn FnOnce(Closed, &mut App)>;
+
+/// How a menu closed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Closed {
+    /// With the item at this index chosen.
+    Chose(usize),
+    /// With a press outside it, at this point in the browser window's content.
+    PressedAt(Point<Pixels>),
+    /// With the user gone to another window or app, or its browser window changed under it.
+    Left,
+    /// With its keys, a shortcut, a scroll outside it or another menu taking its place.
+    Otherwise,
+}
+
+impl Closed {
+    /// The item chosen, if one was.
+    pub fn chosen(self) -> Option<usize> {
+        match self {
+            Closed::Chose(item) => Some(item),
+            _ => None,
+        }
+    }
+}
+
+/// `chosen` as a menu's answer, for whoever hears only which item was chosen.
+pub fn picked(chosen: impl FnOnce(Option<usize>, &mut App) + 'static) -> Chosen {
+    Box::new(move |closed: Closed, cx: &mut App| chosen(closed.chosen(), cx))
 }
 
 /// One level of the menu, the root or a submenu, placed.
@@ -766,7 +796,7 @@ struct Shown {
     look: Look,
     /// Where its window's top left is in the browser window's content.
     origin: Point<Pixels>,
-    chosen: Option<Box<dyn FnOnce(Option<usize>, &mut App)>>,
+    chosen: Option<Chosen>,
     /// The highlighted item the log last named, and the items whose submenus it said were open.
     logged: Option<usize>,
     logged_open: Vec<usize>,
@@ -864,7 +894,7 @@ pub fn show(request: Request, cx: &mut App) {
         .unwrap_or(false);
     update(cx, |menu, window, cx| {
         let Some(request) = request.take() else { return };
-        menu.close(None, cx);
+        menu.close(Closed::Otherwise, cx);
         let system = window.text_system().clone();
         let width_of = |text: &str| {
             let text = SharedString::from(text.to_string());
@@ -934,7 +964,7 @@ pub fn pointer(event: Pointer, at: Point<Pixels>, cx: &mut App) -> bool {
 /// The user left the menu without choosing: another window or app, or the browser window
 /// resizing, moving or going full screen.
 pub fn dismissed(cx: &mut App) {
-    update(cx, |menu, _, cx| menu.close(None, cx));
+    update(cx, |menu, _, cx| menu.close(Closed::Left, cx));
 }
 
 /// Chooses the enabled item titled `title`, as the driver does. Returns whether there was one.
@@ -944,7 +974,7 @@ pub fn choose(title: &str, cx: &mut App) -> bool {
         let found = menu.shown.as_ref().and_then(|shown| shown.tracking.find(title));
         if let Some(item) = found {
             chosen = true;
-            menu.close(Some(item), cx);
+            menu.close(Closed::Chose(item), cx);
         }
     });
     chosen
@@ -955,8 +985,8 @@ pub fn choose(title: &str, cx: &mut App) -> bool {
 pub type ShowOver = dyn Fn(AnyWindowHandle, Request, &mut App);
 
 /// Text fields' menus (`FieldMenu`) in ilo's menu, over the field's window, in its Space's look in a
-/// browser window and dark elsewhere, once the update that asked is over. The item chosen runs in
-/// the field's window, which has the keyboard back by then, as the menu gives it back as it closes.
+/// browser window and dark elsewhere, once the update that asked is over. The field hears in its
+/// window how the menu closed, which has the keyboard back by then unless the user left.
 pub fn field_menu(show: Rc<ShowOver>) -> FieldMenu {
     FieldMenu(Rc::new(move |items, at, from_keys, window, chosen, cx| {
         let handle = window.window_handle();
@@ -969,10 +999,8 @@ pub fn field_menu(show: Rc<ShowOver>) -> FieldMenu {
                 return;
             };
             let items = (items.into_iter()).map(|(title, enabled)| MenuEntry::named(title, enabled)).collect();
-            let chosen = Box::new(move |index: Option<usize>, cx: &mut App| {
-                if let Some(index) = index {
-                    cx.update_window(handle, |_, window, cx| chosen(index, window, cx)).ok();
-                }
+            let chosen = Box::new(move |closed: Closed, cx: &mut App| {
+                cx.update_window(handle, |_, window, cx| chosen(closed, window, cx)).ok();
             });
             show(handle, Request { items, at, area: Bounds::default(), look, chosen }, cx);
             if from_keys {
@@ -983,20 +1011,25 @@ pub fn field_menu(show: Rc<ShowOver>) -> FieldMenu {
 }
 
 impl ContextMenu {
-    /// Closes the menu, if it shows, and says which item was chosen once the update is over.
-    fn close(&mut self, chosen: Option<usize>, cx: &mut Context<Self>) {
+    /// Closes the menu, if it shows, and says how once the update is over.
+    fn close(&mut self, closed: Closed, cx: &mut Context<Self>) {
         let Some(mut shown) = self.shown.take() else { return };
-        let chosen = chosen.map(|item| as_held(&shown.tracking.entries, item, shown.alt));
+        let closed = match closed {
+            Closed::Chose(item) => Closed::Chose(as_held(&shown.tracking.entries, item, shown.alt)),
+            closed => closed,
+        };
         self._rest = None;
         let host = self.host.clone();
         cx.defer(move |_| host.hide());
         // check.sh reads this line.
-        match chosen {
-            Some(item) => log!("browser: menu chose {}", shown.tracking.entries[item].title),
-            None => log!("browser: menu closed"),
+        match closed {
+            Closed::Chose(item) => {
+                log!("browser: menu chose {}", shown.tracking.entries[item].title)
+            }
+            _ => log!("browser: menu closed"),
         }
         if let Some(answer) = shown.chosen.take() {
-            cx.defer(move |cx| answer(chosen, cx));
+            cx.defer(move |cx| answer(closed, cx));
         }
         cx.notify();
     }
@@ -1004,8 +1037,8 @@ impl ContextMenu {
     fn outcome(&mut self, outcome: Outcome, cx: &mut Context<Self>) {
         match outcome {
             Outcome::Stay => cx.notify(),
-            Outcome::Pick(item) => self.close(Some(item), cx),
-            Outcome::Close => self.close(None, cx),
+            Outcome::Pick(item) => self.close(Closed::Chose(item), cx),
+            Outcome::Close => self.close(Closed::Otherwise, cx),
         }
     }
 
@@ -1033,7 +1066,7 @@ impl ContextMenu {
                 }
                 // A click outside closes the menu and goes no further; a right-click goes on, to
                 // open the menu of what it's on.
-                self.close(None, cx);
+                self.close(Closed::PressedAt(at), cx);
                 event == Pointer::Pressed
             }
             Pointer::Released => {
@@ -1045,7 +1078,7 @@ impl ContextMenu {
                 if tracking.hit(at) != Hit::Outside {
                     return true;
                 }
-                self.close(None, cx);
+                self.close(Closed::Otherwise, cx);
                 false
             }
         }
@@ -1072,7 +1105,7 @@ impl ContextMenu {
         let modifiers = event.keystroke.modifiers;
         // A shortcut closes the menu, as the menu shows them but doesn't run them.
         if modifiers.platform || modifiers.control {
-            return self.close(None, cx);
+            return self.close(Closed::Otherwise, cx);
         }
         if let Some(key) = key_of(event) {
             let outcome = shown.tracking.key(key, Instant::now());

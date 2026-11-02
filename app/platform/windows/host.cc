@@ -1939,12 +1939,24 @@ std::map<HWND, HWND>& FrameUi() {
   return ui;
 }
 
-// GPUI's window over the browser window steps aside where the frame answers.
+void (*g_ui_keyboard_left)(void* ui_view) = nullptr;
+
+// GPUI's window over the browser window steps aside where the frame answers. Embedded, it's
+// never the active window, so GPUI's focus never hears it lose the keyboard; the UI hears here.
 LRESULT CALLBACK FrameChildProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR,
                                 DWORD_PTR) {
   if (message == WM_NCHITTEST &&
       FrameHit(GetAncestor(hwnd, GA_ROOT), {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)})) {
     return HTTRANSPARENT;
+  }
+  if (message == WM_KILLFOCUS && g_ui_keyboard_left) {
+    // Once the focus settles: the core takes the keyboard to the browser window a moment on its
+    // way back to the UI (ReleaseKeyboard).
+    Later([hwnd] {
+      if (IsWindow(hwnd) && GetFocus() != hwnd && g_ui_keyboard_left) {
+        g_ui_keyboard_left(GetParent(hwnd));
+      }
+    });
   }
   return DefSubclassProc(hwnd, message, wparam, lparam);
 }
@@ -2429,6 +2441,10 @@ void host_window_opened(void* ui_view, uint64_t window) {
 // here for the host to watch.
 void host_watch_swipes(bool (*)(void*, double, double, bool)) {}
 void host_watch_option_taps(void (*)(void*)) {}
+
+void host_watch_ui_keyboard(void (*left)(void* ui_view)) {
+  g_ui_keyboard_left = left;
+}
 
 // A window's menu bar isn't replaced while it's open on Windows: it's modal and runs no tasks.
 bool host_after_menus(void (*)(void)) { return false; }
