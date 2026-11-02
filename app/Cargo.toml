@@ -45,6 +45,11 @@ plist = { version = "1", default-features = false }
 futures = "0.3"
 getrandom = "0.3"
 
+# The session and the timeout of the shell Connect reads the user's PATH from
+# (src/agents/clients.rs), in the version GPUI's already brings.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui_macos = { path = ".deps/zed/crates/gpui_macos" }
 

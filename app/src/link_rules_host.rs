@@ -111,6 +111,7 @@ impl Host for CoreLinkRules {
         picked: Box<dyn FnOnce(Option<usize>, &mut App)>,
         cx: &mut App,
     ) {
+        let picked = browser::menu::picked(picked);
         crate::show_menu(ns_view(window), items, at, false, Look::dark(), picked, cx);
     }
 }

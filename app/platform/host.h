@@ -149,6 +149,12 @@ void host_watch_swipes(bool (*swiped)(void* ui_view, double x, double y, bool ba
 // let go with no other key, modifier, press or scroll between, the page's keyboard or the UI's.
 void host_watch_option_taps(void (*tapped)(void* ui_view));
 
+// Calls |left| with the view of a browser window whose UI loses the keyboard to its own page,
+// which GPUI doesn't see, so a field in the sidebar ends as it does for a click elsewhere: on the
+// Mac at a press in the page, on Windows as GPUI's window loses the focus, to the page or anything
+// else. Linux's UI hears it itself, through GPUI's patch and the overlays it shows.
+void host_watch_ui_keyboard(void (*left)(void* ui_view));
+
 // Whether a menu is open, the menu bar's or a context menu, and if so calls |apply| once none is,
 // instead of any function an earlier call left waiting. AppKit can crash when the main menu is
 // replaced while it tracks one, and the core's callbacks still come in while it does.

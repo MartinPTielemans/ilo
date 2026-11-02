@@ -10,8 +10,8 @@ use gpui::{
 };
 
 use super::{
-    CHECK, GAP, Key, Layout, Look, Outcome, PADDING, Pointer, ROW_X, Request, Swatch, Tracking,
-    as_held, described, described_held, key_of, lay_out, lay_out_over,
+    CHECK, Closed, GAP, Key, Layout, Look, Outcome, PADDING, Pointer, ROW_X, Request, Swatch,
+    Tracking, as_held, described, described_held, key_of, lay_out, lay_out_over,
 };
 use crate::elevation::Level as Elevation;
 use crate::shell::MenuEntry;
@@ -383,9 +383,9 @@ impl super::Host for Recorder {
     }
 }
 
-/// Shows the tab menu at (100, 100) and returns what it chose once it closes. Each call is an
-/// update of the app, as the host's calls are, not of the menu's window.
-fn show_menu(cx: &mut VisualTestContext) -> Rc<Cell<Option<Option<usize>>>> {
+/// Shows the tab menu at (100, 100) and returns how it closed once it does. Each call is an update
+/// of the app, as the host's calls are, not of the menu's window.
+fn show_menu(cx: &mut VisualTestContext) -> Rc<Cell<Option<Closed>>> {
     let chosen = Rc::new(Cell::new(None));
     let answer = chosen.clone();
     cx.cx.update(|cx: &mut App| {
@@ -394,7 +394,7 @@ fn show_menu(cx: &mut VisualTestContext) -> Rc<Cell<Option<Option<usize>>>> {
             at: at(100., 100.),
             area: area(),
             look: Look::dark(),
-            chosen: Box::new(move |index, _| answer.set(Some(index))),
+            chosen: Box::new(move |closed, _| answer.set(Some(closed))),
         };
         super::show(request, cx);
     });
@@ -436,7 +436,7 @@ fn the_host_drives_the_menu_and_the_menu_closes_outside_its_update(cx: &mut Test
 
     let chosen = show_menu(cx);
     cx.simulate_keystrokes("m right down enter");
-    assert_eq!(chosen.get(), Some(Some(7)), "Move to › reading list");
+    assert_eq!(chosen.get(), Some(Closed::Chose(7)), "Move to › reading list");
     assert_eq!(*host.calls.borrow(), ["show", "hide"]);
 
     // Press and release on Duplicate, in the window's terms, which start left of the menu and
@@ -452,25 +452,34 @@ fn the_host_drives_the_menu_and_the_menu_closes_outside_its_update(cx: &mut Test
         assert!(super::pointer(Pointer::Released, duplicate, cx));
     });
     cx.run_until_parked();
-    assert_eq!(chosen.get(), Some(Some(4)));
+    assert_eq!(chosen.get(), Some(Closed::Chose(4)));
 
     let chosen = show_menu(cx);
     assert!(cx.cx.update(|cx: &mut App| super::choose("Archive Tab", cx)));
     cx.run_until_parked();
-    assert_eq!(chosen.get(), Some(Some(10)));
+    assert_eq!(chosen.get(), Some(Closed::Chose(10)));
 
     let chosen = show_menu(cx);
     cx.cx.update(|cx: &mut App| super::dismissed(cx));
     cx.run_until_parked();
-    assert_eq!(chosen.get(), Some(None));
+    assert_eq!(chosen.get(), Some(Closed::Left));
+
+    // A press outside it, which it takes, says where it landed in the browser window, so a field
+    // whose menu it was knows whether the user went away from it.
+    let chosen = show_menu(cx);
+    let page = point(px(60.), px(40.));
+    let menu_at = host.shown.borrow().last().expect("no menu shown").0.origin;
+    assert!(cx.cx.update(|cx: &mut App| super::pointer(Pointer::Pressed, page - menu_at, cx)));
+    cx.run_until_parked();
+    assert_eq!(chosen.get(), Some(Closed::PressedAt(page)));
 
     // A menu opened over one that shows takes its place and stays.
     show_menu(cx);
     let chosen = show_menu(cx);
     assert_eq!(host.calls.borrow().last(), Some(&"show"));
     cx.simulate_keystrokes("escape");
-    assert_eq!(chosen.get(), Some(None));
-    assert_eq!(host.calls.borrow().iter().filter(|call| **call == "hide").count(), 6);
+    assert_eq!(chosen.get(), Some(Closed::Otherwise));
+    assert_eq!(host.calls.borrow().iter().filter(|call| **call == "hide").count(), 7);
 }
 
 /// An item's ⌥ alternate takes no row of its own, as AppKit's: holding ⌥ shows it in the item's
@@ -502,7 +511,7 @@ fn holding_option_shows_and_picks_an_items_alternate(cx: &mut TestAppContext) {
                 at: at(100., 100.),
                 area: area(),
                 look: Look::dark(),
-                chosen: Box::new(move |index, _| answer.set(Some(index))),
+                chosen: Box::new(move |closed: Closed, _| answer.set(Some(closed.chosen()))),
             };
             super::show(request, cx);
         });
