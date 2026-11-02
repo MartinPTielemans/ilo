@@ -288,9 +288,11 @@ send insert "${site}autofocus.html"
 send key return
 expect "^browser: title [0-9]* ready\$" "the autofocus page didn't draw in the Little ilo window"
 long="a title as long as this one, which runs on past the end of the bar however wide the window is, ends in an ellipsis rather than in the middle of a word"
+# Its text field is at the page's top left, under the bar, and has the keyboard once clicked.
+send click 40 70
 send insert "$long"
 expect "^browser: title [0-9]* value $long\$" "the autofocus page didn't take the typed title"
-# Its home's theme: the theme picker's first swatch, then the sun, and later the moon, each 13
+# Its home's theme: the theme picker's blue swatch, then the sun, and later the moon, each 13
 # right of its appearance-x token, past the picker's arrow, as cards.sh clicks the sun.
 look_theme() {
   send window 1
@@ -302,8 +304,8 @@ look_theme() {
   expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
 }
 look_theme
-send clickkey "$(swatch_x 0)" $swatch_y
-expect '^browser: colored space [0-9]* [0-9a-f]*$' "the first swatch didn't colour the Space"
+send clickkey "$(swatch_x 7)" $swatch_y
+expect '^browser: colored space [0-9]* [0-9a-f]*$' "the blue swatch didn't colour the Space"
 send clickkey 191.3 49
 expect "^browser: little window for $home looks .*appearance=light" \
   "the Little ilo window didn't take its Space's light theme"
