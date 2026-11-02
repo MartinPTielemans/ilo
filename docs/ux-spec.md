@@ -1029,14 +1029,11 @@ Ours, through Settings › Sync (Settings). The account keeps the same on each o
 
 ### Peek
 
-Ardia's docs record nothing of Arc's Peek. Everything about it is in the capture plan:
-
-- which clicks open it;
-- its geometry, backdrop and buttons;
-- how it opens, closes and expands into a tab.
+Ardia's docs record nothing of Arc's Peek. Which clicks open it, and how it opens, closes and expands into a tab, are in the capture plan. Its look is ours (the owner, 2026-11-02, #1373).
 
 It floats over the page, so it is a child window (decision 4). While it's open, ⇧⌘C copies its page's address, not the tab's under it, with ⇧⌘C's toast (Arc's Copy Link copies the Peek's URL).
 
+- **Look.** The page is the card: edge to edge with corners of 16, inside the modal level's 1 pt rim, with that level's outline and shadow, as the dialog floats, and no frame of its own. Its controls float over the dim, 8 above the card's top edge and level with its sides, on round plates 32 tall in the palette's overlay at the popover level. The site is at the left: its favicon, then its host in body type at medium, without www., a port or a user. Open as Tab (⌘↩) and Close are at the right, 8 apart, with Little ilo's bar's glyphs. The whole window under it, sidebar too, takes the dialog's dim at 0.4, lighter than the dialog's, so the page under it reads as the context the link came from. The card sits in from the window's page by 10% of the page's smaller side, from 24 to 120, with 40 more at the top for the controls. As it grows into the tab's place on ⌘↩, its corners turn to the window's page's, so it lands without a step. On Linux and Windows the page shows through a hole in the preview's window, so nothing there casts a shadow, which would fall on the page: the rim draws round the hole. Its motion, opening, closing and growing into a tab, is unchanged (the owner, 2026-11-02, #1373).
 - **Reopening.** ⌘Z and ⇧⌘T reopen a closed Peek, as they reopen closed tabs (Arc). Closing one, by Esc, ⌘W, its button or a click outside, is a step of the window's undo history, Close Link Preview in the Edit menu: ⌘Z opens it again over the tab it was on, at the page it was at, growing from its link, and shows that tab first if another shows; ⇧⌘Z closes it. ⇧⌘T reopens it while no tab has closed since, as it reopens what closed last, and then ⌘Z has nothing of it to reopen. A private window keeps none, as it keeps no history. The user's alone: agents get no Peek (ours).
 - **Meeting links.** A call's link skips Peek and opens as a tab at the top of Today in the Space shown, the one used last, which it shows (Arc), as a call outlasts a look: Google Meet's, Zoom's and Microsoft Teams' meeting pages, and Webex's, Whereby's and Jitsi Meet's (ours). Links from other apps already open as a tab in the front window's Space (Links from other apps), so a call's lands there too. With Peek turned off, a call's link goes where any link does.
 

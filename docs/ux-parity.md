@@ -527,7 +527,7 @@ Dia's New Tab page isn't ours (decision 6). ⌘T opens the command bar over the 
 |---|---|---|---|---|
 | [ ] | Peek: Copy URL | 4 | ⇧⌘C in it copies its address. Built, and checked by `cargo test`; a step in `./check.sh preview` waits on a Mac run | Arc help |
 | [ ] | Peek: triggers | 4 | measure | — |
-| [ ] | Peek: geometry, backdrop, buttons | 4 | measure | — |
+| [x] | Peek: look | 4 | *ours*: the page is the card, corners 16 in the modal level's rim, outline and shadow; the site, Open as Tab and Close on round overlay plates 32 tall, 8 above the card; the whole window dimmed at 0.4; inset 10% of the page's smaller side, 24 to 120, and 40 more at the top. Checked by `./check.sh preview`'s `preview-light.png` and `preview-dark.png` | the owner (#1373) |
 | [ ] | Peek: open, close, expand motion | 4 | measure | — |
 | [ ] | Peek: reopening | 4 | ⌘Z reopens the Peek closed last over its tab, at its page, and ⇧⌘Z closes it; ⇧⌘T reopens it while no tab has closed since; none in a private window. Built (#692): `Shell::preview_closed` keeps it as Close Link Preview, and a UI test runs ⌘Z, ⇧⌘Z and ⇧⌘T. To tick: `./check.sh preview` on the Mac, which closes one, reopens it with ⌘Z and then ⇧⌘T, each waiting for it to settle, with `preview-reopened.png` | Arc |
 | [ ] | Peek: meeting links | 4 | a call's link (Meet, Zoom, Teams, Webex, Whereby, Jitsi Meet) opens as a tab at the top of Today in the Space shown, not in Peek. Built (#692): `link_preview::is_meeting`, which a UI test holds to each service's meeting pages and not their others. To tick: `./check.sh preview` on the Mac, whose Meet link, its host mapped to the run's server, opens a tab shown with no preview, with `preview-meeting.png` | Arc |
