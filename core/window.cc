@@ -694,6 +694,20 @@ void Window::AdjustNavigate(NavigateParams& params) {
                        ProfileId(DirOf(clicked_in))));
     return;
   }
+  // ⇧-click on a web link, which Chrome opens in a new window: the app may open it in a link
+  // preview instead (the owner, 2026-11-02, #1370). Not a page's window.open(), which holds the
+  // page it made, or a form sent.
+  if (source && params.disposition == WindowOpenDisposition::NEW_WINDOW &&
+      !params.started_from_context_menu && params.user_gesture && !params.contents_to_insert &&
+      !params.post_data && params.url.SchemeIsHTTPOrHTTPS() && Host().tab_link_to_preview) {
+    const gfx::PointF click = source->last_click();
+    // The app only answers here: it opens the preview after this call, outside the navigation.
+    if (Host().tab_link_to_preview(Host().context, Tab::IdOf(params.source_contents),
+                                   params.url.spec().c_str(), click.x(), click.y())) {
+      params.disposition = WindowOpenDisposition::IGNORE_ACTION;
+      return;
+    }
+  }
   // ⌥-click on a link opens it beside its page in a split view, as Arc's does
   // (chromium-core-alt-click-split.patch).
   const bool split = source && params.disposition == WindowOpenDisposition::NEW_SPLIT_VIEW;
