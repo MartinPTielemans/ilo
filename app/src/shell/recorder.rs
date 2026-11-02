@@ -76,6 +76,8 @@ pub(super) struct Recorder {
     pub(super) agents: Cell<Option<bool>>,
     /// The user turned off ⌥ bringing the hidden sidebar out.
     pub(super) option_off: Cell<bool>,
+    /// The window's own buttons as the system says it draws them, once their window shows them.
+    pub(super) window_buttons: Cell<Option<super::WindowButtonGeometry>>,
     /// The Spaces it was asked to show, in order.
     pub(super) shown: RefCell<Vec<u64>>,
     /// The menus it was asked to show, each item by its title and whether it's enabled.
@@ -945,6 +947,10 @@ impl Browser for Recorder {
     fn set_pane_corner(&self, _: f32, _: f32, _: &mut App) {}
 
     fn show_window_buttons(&self, _: bool, _: &mut App) {}
+
+    fn window_button_geometry(&self, _: &mut App) -> Option<super::WindowButtonGeometry> {
+        self.window_buttons.get()
+    }
 
     fn press_window_button(&self, button: WindowButton, _: &mut App) {
         if let WindowButton::Zoom = button {
