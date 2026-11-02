@@ -179,6 +179,8 @@ impl Shell {
 
     /// The pointer pressed `tab`'s row at `position`, which may start a drag.
     pub(super) fn press_row(&mut self, tab: u64, position: Point<Pixels>) {
+        // A press on the row is past the click its ✕ took, so its remove button needn't wait.
+        self.remove_held = None;
         let pinned = self.pinned().contains(&tab);
         let (pinned_rows, today_rows) = self.rows();
         let rows = if pinned { pinned_rows } else { today_rows };

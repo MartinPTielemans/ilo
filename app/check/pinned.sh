@@ -1,8 +1,9 @@
 # ⌘D pins the tab shown, from the page and from the UI, at the bottom of the pinned tabs, and unpins
 # it to the top of Today. ⌘1–⌘9 count the pinned tabs first. ⌘W, the ✕ under the pointer, which is −
-# on the tab shown, or a middle-click on its row, unloads a pinned tab and keeps its row, which has
-# no ✕ then, and shows the top Today tab, else the nearest pinned tab still loaded, else no page, as
-# closing the last Today tab does. Shown again, the tab loads. A link in its page takes it away from
+# on the tab shown, or a middle-click on its row, unloads a pinned tab and keeps its row, and shows
+# the top Today tab, else the nearest pinned tab still loaded, else no page, as closing the last
+# Today tab does. The unloaded row has a remove button in the ✕'s place, which takes the tab out of
+# the pinned tabs and not into Today, and ⌘Z pins it again at its place. Shown again, the tab loads. A link in its page takes it away from
 # its pinned URL, and ⌘↩ from the page and the UI, and a click on its favicon, go back there. An
 # address typed into it opens in a Today tab of its own, as in Arc, and closing that shows the
 # pinned tab again. Launched again, the app brings back the pinned tab pinned and away from its
@@ -132,9 +133,11 @@ expect "^browser: selected $a in " "a click on the unloaded pinned tab didn't sh
 expect "^browser: loaded $a $site\$" "the unloaded pinned tab didn't load once shown"
 expect "^browser: page $a unloaded 0\$" "the pinned tab still read as unloaded once it loaded"
 
-# The ✕ under the pointer unloads a pinned tab, and an unloaded one has none.
+# The ✕ under the pointer unloads a pinned tab, and the remove button the unloaded row has instead
+# waits for the pointer to leave it, so the second click shows the tab.
 send move $(pinned_close 0)
 expect "^browser: hover tab $c close 1 favicon none\$" "the pinned tab's row didn't draw its ✕"
+../tools/window-screenshot.sh "$pid" "$out/pinned-close.png" || fail "no window to capture"
 send click $(pinned_close 0)
 expect '^browser: command close-tab via sidebar$' "a click on a pinned tab's ✕ didn't run Close Tab"
 expect "^browser: page $c unloaded 1\$" "the ✕ didn't unload the pinned tab"
@@ -143,6 +146,7 @@ expect "^browser: hover tab $c close 0 favicon none\$" "the unloaded pinned tab'
 send click $(pinned_close 0)
 expect "^browser: selected $c in " "a click where an unloaded pinned tab's ✕ was didn't show the tab"
 none_since '^browser: command close-tab' || fail "an unloaded pinned tab showed its ✕"
+none_since '^browser: command remove-tab' || fail "a second click on the ✕ removed the pinned tab"
 expect "^browser: loaded $c https://example.org/\$" "the pinned tab didn't load once shown"
 # Shown, its ✕ is −, which unloads it too and shows the top Today tab.
 expect "^browser: hover tab $c close − favicon none\$" "the pinned tab shown didn't draw −"
@@ -177,6 +181,31 @@ expect '^browser: selected 0$' "⌘W on the last pinned tab loaded didn't leave 
 expect "^browser: page $c unloaded 1\$" "⌘W didn't unload the last pinned tab loaded"
 none_since '^browser: loaded' || fail "closing a pinned tab loaded another"
 ../tools/window-screenshot.sh "$pid" "$out/pinned-unloaded.png" || fail "no window to capture"
+
+# Under the pointer, an unloaded pinned row has the remove button in its ✕'s place, which its
+# tooltip names. A click takes the tab out of the pinned tabs, not into Today, without loading or
+# showing it, and ⌘Z pins it again at its place (#1349).
+# The button comes with the row's hover, and the pointer's next move finds it, as a hand's does.
+send move $(pinned_row 1)
+send move $(pinned_row 0)
+expect "^browser: hover tab $c close remove favicon none\$" \
+  "the unloaded pinned tab's row didn't draw its remove button"
+send move $(pinned_close 0)
+expect '^browser: tooltip shown Remove Tab$' "the remove button's tooltip didn't name it"
+expect '^browser: tooltip window shown$' "the remove button's tooltip didn't fade in"
+../tools/window-screenshot.sh "$pid" "$out/pinned-remove.png" || fail "no window to capture"
+send click $(pinned_close 0)
+expect '^browser: command remove-tab via sidebar$' "a click on the remove button didn't run Remove Tab"
+expect "^browser: tab $c closed\$" "the remove button didn't close the pinned tab"
+expect_lists "$a" " *" "after removing a pinned tab"
+none_since '^browser: loaded' || fail "removing an unloaded pinned tab loaded it"
+none_since '^browser: selected' || fail "removing a pinned tab changed the tab shown"
+send key z cmd
+expect '^browser: undo done$' "⌘Z didn't undo removing the pinned tab"
+expect_lists "[0-9][0-9]* $a" " *" "after ⌘Z on removing a pinned tab"
+c=$(pinned | cut -d' ' -f1)
+none_since '^browser: loaded' || fail "⌘Z loaded the pinned tab it brought back"
+../tools/window-screenshot.sh "$pid" "$out/pinned-remove-undone.png" || fail "no window to capture"
 
 # ⌘D unpins a tab to the top of Today. The served page stays pinned, for its link, and the names
 # swap with it: from here $c is the pinned tab, the served page, and $a the Today tab.
