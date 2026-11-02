@@ -410,6 +410,20 @@ impl Agents {
         .detach();
     }
 
+    /// The CLI ⌘T's ask lists first.
+    pub fn default_task_agent(&self) -> Option<Cli> {
+        self.tasks.default
+    }
+
+    /// The models `cli`'s Model pop-up offers after its own default, as id and name: Claude's
+    /// aliases, and the models Codex listed when it was last looked for.
+    pub fn task_models(&self, cli: Cli) -> Vec<(String, String)> {
+        match cli.models() {
+            [] => self.tasks.found.get(&cli).map(|found| found.models.clone()).unwrap_or_default(),
+            models => models.iter().map(|(id, name)| (id.to_string(), name.to_string())).collect(),
+        }
+    }
+
     /// Run tasks on, in Settings › Agents.
     pub fn set_default_task_agent(&mut self, cli: Cli, cx: &mut Context<Self>) {
         self.tasks.default = Some(cli);

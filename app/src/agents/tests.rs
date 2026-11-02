@@ -1543,7 +1543,7 @@ mod tasks {
         let agents = agents(&browser, &configs, None, cx);
         agents.update(cx, |agents, cx| {
             agents.set_on(true, cx);
-            let found = Found { ready: Ready::SignedIn, program, path: None };
+            let found = Found { ready: Ready::SignedIn, program, ..Default::default() };
             agents.tasks.found.insert(Cli::Claude, found);
             agents.tasks.default = Some(Cli::Claude);
         });
@@ -1778,7 +1778,7 @@ mod tasks {
     fn ask_lists_the_signed_in_with_the_default_first(cx: &mut TestAppContext) {
         let (agents, _) = ready(None, cx);
         agents.update(cx, |agents, cx| {
-            let found = Found { ready: Ready::SignedIn, program: None, path: None };
+            let found = Found { ready: Ready::SignedIn, ..Default::default() };
             agents.tasks.found.insert(Cli::Codex, found);
             agents.set_default_task_agent(Cli::Codex, cx);
         });

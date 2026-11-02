@@ -3,9 +3,11 @@
 //! thread, and keeps the last answer till then, across runs too, so ⇥ lists the agents at once:
 //! never on a timer, and never while ⌘T opens or takes keys.
 
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::OnceLock;
+use std::sync::{OnceLock, mpsc};
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -49,6 +51,8 @@ pub struct Found {
     pub program: Option<PathBuf>,
     /// The PATH it runs with: the user's login shell's.
     pub path: Option<String>,
+    /// The models it lists itself, as id and name, for those ilo can't name ahead: Codex's.
+    pub models: Vec<(String, String)>,
 }
 
 impl Found {
@@ -58,6 +62,7 @@ impl Found {
             "ready": self.ready.id(),
             "program": self.program.as_ref().map(|program| program.to_string_lossy()),
             "path": self.path,
+            "models": self.models.iter().map(|(id, name)| [id, name]).collect::<Vec<_>>(),
         })
     }
 
@@ -66,6 +71,17 @@ impl Found {
             ready: Ready::from_id(saved.get("ready").and_then(Value::as_str).unwrap_or_default()),
             program: saved.get("program").and_then(Value::as_str).map(PathBuf::from),
             path: saved.get("path").and_then(Value::as_str).map(String::from),
+            models: saved
+                .get("models")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|model| {
+                    let id = model.get(0)?.as_str()?;
+                    let name = model.get(1)?.as_str()?;
+                    Some((id.to_string(), name.to_string()))
+                })
+                .collect(),
         }
     }
 }
@@ -75,7 +91,9 @@ pub fn look(cli: Cli) -> Found {
     let path = login_path().clone();
     let search = path.clone().or_else(|| std::env::var("PATH").ok()).unwrap_or_default();
     let Some(program) = find(cli.program(), &search) else {
-        return Found { ready: Ready::NotFound, program: None, path };
+        // check.sh reads this line.
+        log!("browser: task agent {} is NotFound", cli.id());
+        return Found { ready: Ready::NotFound, program: None, path, models: Vec::new() };
     };
     let mut command = Command::new(&program);
     match cli {
@@ -101,7 +119,78 @@ pub fn look(cli: Cli) -> Found {
     };
     // check.sh reads this line.
     log!("browser: task agent {} is {ready:?} at {}", cli.id(), program.display());
-    Found { ready, program: Some(program), path }
+    let models = match (cli, ready) {
+        (Cli::Codex, Ready::SignedIn) => codex_models(&program, path.as_deref()),
+        _ => Vec::new(),
+    };
+    Found { ready, program: Some(program), path, models }
+}
+
+/// The models Codex lists for the signed-in user, which change with their plan and Codex's
+/// version: asked of its app-server, which starts no thread for it, and left after 10 s.
+fn codex_models(program: &Path, path: Option<&str>) -> Vec<(String, String)> {
+    let mut command = Command::new(program);
+    command.arg("app-server").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    if let Some(path) = path {
+        command.env("PATH", path);
+    }
+    let Ok(mut child) = command.spawn() else {
+        return Vec::new();
+    };
+    let mut stdin = child.stdin.take().expect("piped");
+    let stdout = child.stdout.take().expect("piped");
+    let (send, lines) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if send.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let mut say = |message: Value| writeln!(stdin, "{message}").ok();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let models = (|| {
+        say(serde_json::json!({
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "clientInfo": { "name": env!("APP_NAME").to_lowercase(), "title": env!("APP_NAME"), "version": env!("CARGO_PKG_VERSION") },
+                "capabilities": { "experimentalApi": true },
+            },
+        }))?;
+        loop {
+            let line = lines.recv_timeout(deadline.saturating_duration_since(Instant::now())).ok()?;
+            let Ok(message) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            match message.get("id").and_then(Value::as_u64) {
+                Some(1) => {
+                    say(serde_json::json!({ "method": "initialized" }))?;
+                    say(serde_json::json!({ "id": 2, "method": "model/list", "params": { "limit": 100 } }))?;
+                }
+                Some(2) => return Some(codex_listed(&message)),
+                _ => {}
+            }
+        }
+    })();
+    _ = child.kill();
+    _ = child.wait();
+    models.unwrap_or_default()
+}
+
+/// The models in Codex's answer to model/list, hidden ones left out.
+pub fn codex_listed(answer: &Value) -> Vec<(String, String)> {
+    let listed = answer.pointer("/result/data").and_then(Value::as_array);
+    listed
+        .into_iter()
+        .flatten()
+        .filter(|model| !model.get("hidden").and_then(Value::as_bool).unwrap_or(false))
+        .filter_map(|model| {
+            let id = model.get("id").or_else(|| model.get("model"))?.as_str()?;
+            let name = model.get("displayName").and_then(Value::as_str).unwrap_or(id);
+            Some((id.to_string(), name.to_string()))
+        })
+        .collect()
 }
 
 /// Whether `claude auth status --json` says the user is signed in.

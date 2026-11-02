@@ -192,6 +192,21 @@ fn claudes_sign_in_status() {
     assert!(!crate::agents::ready::claude_signed_in("Not logged in"));
 }
 
+#[test]
+fn codexs_models_are_kept_without_the_hidden_ones() {
+    use crate::agents::ready::{Found, Ready, codex_listed};
+    let listed = codex_listed(&json!({ "id": 2, "result": { "data": [
+        { "id": "gpt-5-codex", "displayName": "GPT-5 Codex", "hidden": false },
+        { "id": "old", "displayName": "Old", "hidden": true },
+        { "id": "bare" },
+    ], "nextCursor": null } }));
+    let models: Vec<(String, String)> =
+        [("gpt-5-codex", "GPT-5 Codex"), ("bare", "bare")].map(|(id, name)| (id.into(), name.into())).into();
+    assert_eq!(listed, models);
+    let found = Found { ready: Ready::SignedIn, models, ..Default::default() };
+    assert_eq!(Found::from_saved(&found.saved()), found, "kept across runs");
+}
+
 #[cfg(unix)]
 #[test]
 fn a_cli_is_found_on_the_path_given() {
