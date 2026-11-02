@@ -50,7 +50,7 @@ index 4ad4cc77b3..44d7b2ce80 100644
              self.end_gesture();
  
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 08f91bd626..bc9dfc6b20 100644
+index 08f91bd626..04f77424a7 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
 @@ -109,7 +109,7 @@ impl WindowsWindowInner {
@@ -81,6 +81,15 @@ index 08f91bd626..bc9dfc6b20 100644
              WM_SETCURSOR => self.handle_set_cursor(handle, lparam),
              WM_SETTINGCHANGE => self.handle_system_settings_changed(handle, wparam, lparam),
              WM_INPUTLANGCHANGE => self.handle_input_language_changed(),
+@@ -169,7 +176,7 @@ impl WindowsWindowInner {
+         }
+     }
+ 
+-    fn handle_move_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
++    fn handle_move_msg(self: &Rc<Self>, handle: HWND, lparam: LPARAM) -> Option<isize> {
+         let origin = logical_point(
+             lparam.signed_loword() as f32,
+             lparam.signed_hiword() as f32,
 @@ -381,8 +388,28 @@ impl WindowsWindowInner {
          if handled { Some(0) } else { Some(1) }
      }
@@ -216,7 +225,43 @@ index 08f91bd626..bc9dfc6b20 100644
      fn handle_ime_composition(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
          let ctx = ImeContext::get(handle)?;
          self.handle_ime_composition_inner(*ctx, lparam)
-@@ -1823,3 +1941,42 @@ fn notify_frame_changed(handle: HWND) {
+@@ -933,7 +1051,7 @@ impl WindowsWindowInner {
+         Some(0)
+     }
+ 
+-    fn handle_display_change_msg(&self, handle: HWND) -> Option<isize> {
++    fn handle_display_change_msg(self: &Rc<Self>, handle: HWND) -> Option<isize> {
+         let new_monitor = unsafe { MonitorFromWindow(handle, MONITOR_DEFAULTTONULL) };
+         if new_monitor.is_invalid() {
+             log::error!("No monitor detected!");
+@@ -944,12 +1062,21 @@ impl WindowsWindowInner {
+         Some(0)
+     }
+ 
+-    fn set_display(&self, display: WindowsDisplay) {
++    // A move onto another monitor arrives from inside `SetWindowPos`, which can be called while
++    // GPUI is updating a window (e.g. placing a popup over a window on another monitor), and the
++    // callback borrows the App, so deliver it after that update completes, as gpui_macos's
++    // `report_display_change` does. The window reads its display at delivery.
++    fn set_display(self: &Rc<Self>, display: WindowsDisplay) {
+         self.state.display.set(display);
+-        if let Some(mut callback) = self.state.callbacks.display_changed.take() {
+-            callback();
+-            self.state.callbacks.display_changed.set(Some(callback));
+-        }
++        let this = self.clone();
++        self.executor
++            .spawn(async move {
++                if let Some(mut callback) = this.state.callbacks.display_changed.take() {
++                    callback();
++                    this.state.callbacks.display_changed.set(Some(callback));
++                }
++            })
++            .detach();
+     }
+ 
+     fn handle_hit_test_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
+@@ -1823,3 +1950,42 @@ fn notify_frame_changed(handle: HWND) {
          .log_err();
      }
  }
@@ -394,7 +439,7 @@ index 8164bc1564..ed7d01d6c4 100644
      #[test]
      fn test_keyboard_mapper() {
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index 095e009e23..32e8217aad 100644
+index 095e009e23..972fd91b7e 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
 @@ -587,6 +587,11 @@ impl Platform for WindowsPlatform {
@@ -409,7 +454,52 @@ index 095e009e23..32e8217aad 100644
          let mut msg = MSG::default();
          unsafe {
              while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-@@ -1980,3 +1985,12 @@ mod tests {
+@@ -1637,10 +1642,43 @@ fn file_save_dialog(
+ 
+ fn load_icon() -> Result<HICON> {
+     let module = unsafe { GetModuleHandleW(None).context("unable to get module handle")? };
++    load_icon_named(module, windows::core::PCWSTR(1 as _)).or_else(|_| {
++        // An embedder's executable, such as a browser engine's, can name its icons rather than
++        // number them. Its first is the one Explorer shows for it.
++        unsafe extern "system" fn first(
++            module: HMODULE,
++            _: PCWSTR,
++            name: PCWSTR,
++            icon: isize,
++        ) -> BOOL {
++            if let Ok(handle) = load_icon_named(module, name) {
++                unsafe { *(icon as *mut HICON) = handle };
++            }
++            FALSE
++        }
++        let mut icon = HICON::default();
++        // It returns false once the first has ended the enumeration.
++        let _ = unsafe {
++            EnumResourceNamesW(
++                Some(module),
++                RT_GROUP_ICON,
++                Some(first),
++                &mut icon as *mut HICON as isize,
++            )
++        };
++        if icon.is_invalid() {
++            Err(anyhow!("the executable has no icon"))
++        } else {
++            Ok(icon)
++        }
++    })
++}
++
++fn load_icon_named(module: HMODULE, name: PCWSTR) -> Result<HICON> {
+     let handle = unsafe {
+         LoadImageW(
+             Some(module.into()),
+-            windows::core::PCWSTR(1 as _),
++            name,
+             IMAGE_ICON,
+             0,
+             0,
+@@ -1980,3 +2018,12 @@ mod tests {
          );
      }
  }
