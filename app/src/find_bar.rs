@@ -127,7 +127,7 @@ pub fn open(browser: bc::bc_id, ui_view: *mut c_void, cx: &mut App) -> Option<An
                 .placeholder_color(rgba(PLACEHOLDER))
         });
         window.focus(&input.focus_handle(cx), cx);
-        cx.new(|cx| {
+        let bar = cx.new(|cx| {
             cx.observe(&input, |bar: &mut FindBar, _, cx| bar.edited(cx))
                 .detach();
             FindBar {
@@ -136,7 +136,15 @@ pub fn open(browser: bc::bc_id, ui_view: *mut c_void, cx: &mut App) -> Option<An
                 tab: 0,
                 searched: String::new(),
             }
-        })
+        });
+        // Asked to close, as Windows asks the window with the keyboard on Alt+F4, it closes the
+        // tab's find as Esc does and stays, as the app shows it again (#1362).
+        let shown = bar.downgrade();
+        window.on_window_should_close(cx, move |window, cx| {
+            shown.update(cx, |bar, cx| bar.close(&Close, window, cx)).ok();
+            false
+        });
+        bar
     });
     match window {
         Ok(window) => {
