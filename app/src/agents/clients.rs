@@ -94,6 +94,7 @@ impl Clients for System {
     fn connect(&self, client: Client, entry: &Entry) -> Result<(), String> {
         match client {
             Client::ClaudeCode => {
+                let claude = claude()?;
                 // add-json refuses a name it has, as after a Connect the user undid by hand.
                 _ = claude(&["mcp", "remove", "--scope", "user", &entry.name]);
                 claude(
@@ -114,7 +115,7 @@ impl Clients for System {
 
     fn disconnect(&self, client: Client, name: &str) -> Result<(), String> {
         match client {
-            Client::ClaudeCode => claude(&["mcp", "remove", "--scope", "user", name]),
+            Client::ClaudeCode => claude()?(&["mcp", "remove", "--scope", "user", name]),
             Client::Codex => {
                 let path = codex_config();
                 match std::fs::read_to_string(&path) {
@@ -155,44 +156,169 @@ pub fn claude_add(entry: &Entry) -> Vec<String> {
 /// What Connect says when there's no `claude` to run.
 const NO_CLAUDE: &str = "Claude Code's claude command isn't installed.";
 
-/// Runs Claude Code's `claude` with `arguments`.
-fn claude(arguments: &[&str]) -> Result<(), String> {
-    let output = claude_command()?
-        .args(arguments)
-        .output()
-        .map_err(|error| error.to_string())?;
-    match output.status.success() {
-        true => Ok(()),
-        false if output.status.code() == Some(127) => Err(NO_CLAUDE.into()),
-        false => Err(String::from_utf8_lossy(&output.stderr).trim().to_string()),
-    }
-}
-
-/// The app may not have the user's PATH, so `claude` runs in their login shell, which does, with
-/// the arguments as the shell's own rather than in its command line.
-#[cfg(not(windows))]
-fn claude_command() -> Result<Command, String> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-    let mut command = Command::new(shell);
-    command.args(["-l", "-c", r#"exec claude "$@""#, "claude"]);
-    Ok(command)
+/// Claude Code's `claude`, found once for a Connect's two runs, to run with each one's arguments.
+fn claude() -> Result<impl Fn(&[&str]) -> Result<(), String>, String> {
+    let (program, path) = find_claude().ok_or(NO_CLAUDE)?;
+    Ok(move |arguments: &[&str]| {
+        let mut command = Command::new(&program);
+        command.env("PATH", &path).args(arguments);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // A console program the windowed browser starts would get a console window of its own.
+            command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+        }
+        let output = command.output().map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => NO_CLAUDE.into(),
+            _ => error.to_string(),
+        })?;
+        match output.status.success() {
+            true => Ok(()),
+            false => Err(String::from_utf8_lossy(&output.stderr).trim().to_string()),
+        }
+    })
 }
 
 /// `claude` where a terminal opened now would find it, or where an installer put it (#1420),
-/// with that terminal's PATH, where npm's claude.cmd finds node. Rust runs a .cmd through cmd.exe
+/// and that terminal's PATH, where npm's claude.cmd finds node. Rust runs a .cmd through cmd.exe
 /// with each argument quoted for it, the JSON's quotes doubled, which node reads back whole.
 #[cfg(windows)]
-fn claude_command() -> Result<Command, String> {
-    use std::os::windows::process::CommandExt;
+fn find_claude() -> Option<(PathBuf, String)> {
     let var = |name: &str| std::env::var(name).ok();
     let path = windows_path(&var, registry_path(false), registry_path(true));
     let folders = windows_folders(&var, &path);
-    let program = windows_claude(&folders, var("PATHEXT")).ok_or(NO_CLAUDE)?;
-    let mut command = Command::new(program);
-    command.env("PATH", path.join(";"));
-    // A console program the windowed browser starts would get a console window of its own.
-    command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
-    Ok(command)
+    Some((windows_claude(&folders, var("PATHEXT"))?, path.join(";")))
+}
+
+/// `claude` where a terminal the user opens would find it, or where an installer put it, which
+/// may be on no PATH the browser has (#1441), and those folders as its PATH, where npm's `claude`
+/// finds node. A browser the Dock or Finder started has only the system's PATH.
+#[cfg(not(windows))]
+fn find_claude() -> Option<(PathBuf, String)> {
+    let var = |name: &str| std::env::var(name).ok();
+    let home = home();
+    let npmrc = std::fs::read_to_string(home.join(".npmrc")).ok();
+    let npm = npm_bin(&var, &home, npmrc.as_deref());
+    let folders = unix_folders(&[var("PATH"), shell_path()], &home, npm, Path::new("/"));
+    let path = folders.iter().map(|folder| folder.to_string_lossy()).collect::<Vec<_>>();
+    Some((unix_claude(&folders)?, path.join(":")))
+}
+
+/// Where a terminal finds `claude`: the folders on `paths`, the browser's PATH and then the user's
+/// shell's, first to last, then where Claude Code's installer, npm and Homebrew put it, and the
+/// folder of the install Claude Code once made in ~/.claude, which the user reached by an alias.
+/// Each folder once, and only from its root, `root`, as the app's working folder means nothing.
+#[cfg(not(windows))]
+fn unix_folders(
+    paths: &[Option<String>],
+    home: &Path,
+    npm: Option<PathBuf>,
+    root: &Path,
+) -> Vec<PathBuf> {
+    let path = paths.iter().flatten().flat_map(|path| path.split(':'));
+    let path = path.map(PathBuf::from).filter(|folder| folder.is_absolute());
+    let installed = [
+        Some(home.join(".local/bin")),
+        npm,
+        Some(root.join("opt/homebrew/bin")),
+        Some(root.join("usr/local/bin")),
+        Some(home.join(".claude/local")),
+    ];
+    let mut folders: Vec<PathBuf> = Vec::new();
+    for folder in path.chain(installed.into_iter().flatten()) {
+        if !folders.contains(&folder) {
+            folders.push(folder);
+        }
+    }
+    folders
+}
+
+/// The first `claude` in `folders` that's a program, as a shell runs one.
+#[cfg(not(windows))]
+fn unix_claude(folders: &[PathBuf]) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let runs = |program: &PathBuf| {
+        (program.metadata()).is_ok_and(|file| file.is_file() && file.permissions().mode() & 0o111 != 0)
+    };
+    folders.iter().map(|folder| folder.join("claude")).find(runs)
+}
+
+/// The folder npm installs global packages' commands in when the user moved its prefix, as npm's
+/// docs have them do to install without sudo: in npm_config_prefix, or `npmrc`, ~/.npmrc. npm's
+/// own prefix is node's folder, which the PATH that has node has too.
+#[cfg(not(windows))]
+fn npm_bin(var: &dyn Fn(&str) -> Option<String>, home: &Path, npmrc: Option<&str>) -> Option<PathBuf> {
+    let set = npmrc.unwrap_or_default().lines().find_map(|line| {
+        let (key, value) = line.split_once('=')?;
+        (key.trim() == "prefix").then(|| value.trim().trim_matches('"').to_string())
+    });
+    let prefix = (var("npm_config_prefix").or_else(|| var("NPM_CONFIG_PREFIX")).or(set))
+        .filter(|prefix| !prefix.is_empty())?;
+    let home = home.to_string_lossy();
+    let prefix = prefix.replace("${HOME}", &home);
+    let prefix = match prefix.strip_prefix("~/") {
+        Some(rest) => format!("{home}/{rest}"),
+        None => prefix,
+    };
+    Some(Path::new(&prefix).join("bin"))
+}
+
+/// What starts the line the user's shell prints its PATH on, after anything their rc files print.
+#[cfg(not(windows))]
+const SHELL_PATH: &str = "ilo-shell-path=";
+
+/// The shell command that prints the PATH, on a line of its own.
+#[cfg(not(windows))]
+const PRINT_PATH: &str = r#"printf '\nilo-shell-path=%s\n' "$PATH""#;
+
+/// How long the user's shell may take to start before Connect does without its PATH.
+#[cfg(not(windows))]
+const SHELL_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The PATH a terminal the user opens has: their shell's, started as a terminal starts it, an
+/// interactive login shell, which reads ~/.zshrc or ~/.bashrc, where Claude Code's installer has
+/// the user put ~/.local/bin on PATH, as well as the login files (#1441).
+#[cfg(not(windows))]
+fn shell_path() -> Option<String> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+    let mut command = Command::new(shell);
+    command.args(["-i", "-l", "-c", PRINT_PATH]);
+    printed_path(command, SHELL_WAIT)
+}
+
+/// The PATH `command` prints with PRINT_PATH, within `wait`. It starts in a session of its own,
+/// without the terminal the browser may have been started from, and with nothing to read, so an
+/// rc file that asks something goes on without an answer; one still going after `wait` is
+/// given up on, with all it started.
+#[cfg(not(windows))]
+fn printed_path(mut command: Command, wait: std::time::Duration) -> Option<String> {
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    // setsid is async-signal-safe, as pre_exec asks: an interactive shell with the browser's
+    // terminal would try to take it over, and stop until it could.
+    unsafe {
+        command.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    let mut shell = command.spawn().ok()?;
+    let output = shell.stdout.take()?;
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut lines = BufReader::new(output).lines().map_while(Result::ok);
+        _ = send.send(lines.find_map(|line| line.strip_prefix(SHELL_PATH).map(String::from)));
+    });
+    let path = receive.recv_timeout(wait);
+    if path.is_err() {
+        // The session's leader is its process group's: the group is the shell and all it started.
+        unsafe { libc::kill(-(shell.id() as libc::pid_t), libc::SIGKILL) };
+    }
+    // Reaped once it exits, which may be after it printed the PATH.
+    std::thread::spawn(move || shell.wait());
+    path.ok().flatten()
 }
 
 /// The folders on PATH as a terminal opened now has them: the browser's own PATH, from when
@@ -463,7 +589,7 @@ mod tests {
         assert_eq!(server["env"]["BROWSER_AGENT_TOKEN"], "t0k");
     }
 
-    /// A home of its own, with `programs` in it, each a file at a path under it.
+    /// A home of its own, with `programs` in it, each a file at a path under it that may run.
     fn home_with(programs: &[&[&str]]) -> PathBuf {
         static HOMES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let number = HOMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -472,7 +598,13 @@ mod tests {
         for program in programs {
             let program = program.iter().fold(home.clone(), |path, part| path.join(part));
             std::fs::create_dir_all(program.parent().unwrap()).unwrap();
-            std::fs::write(program, "").unwrap();
+            std::fs::write(&program, "").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let runs = std::fs::Permissions::from_mode(0o755);
+                std::fs::set_permissions(&program, runs).unwrap();
+            }
         }
         home
     }
@@ -548,5 +680,141 @@ mod tests {
             windows_path(&var, Some(r"C:\Windows;;".into()), Some(r#""%USERPROFILE%\bin""#.into())),
             [r"C:\Windows", r"C:\Users\Me Too\bin"]
         );
+    }
+
+    #[cfg(not(windows))]
+    const LOCAL: &[&str] = &[".local", "bin", "claude"];
+    #[cfg(not(windows))]
+    const NPM_PREFIX: &[&str] = &[".npm-global", "bin", "claude"];
+    #[cfg(not(windows))]
+    const HOMEBREW: &[&str] = &["opt", "homebrew", "bin", "claude"];
+    #[cfg(not(windows))]
+    const USR_LOCAL: &[&str] = &["usr", "local", "bin", "claude"];
+    #[cfg(not(windows))]
+    const CLAUDE_LOCAL: &[&str] = &[".claude", "local", "claude"];
+    #[cfg(not(windows))]
+    const TOOLS: &[&str] = &["tools", "bin", "claude"];
+
+    /// Where Connect on the Mac or Linux finds `claude` in `home`, with `path` the browser's PATH,
+    /// `shell` the user's shell's, and `home` the system's root too, for Homebrew's folders.
+    #[cfg(not(windows))]
+    fn unix_found_in(home: &Path, path: &str, shell: Option<&str>) -> Option<PathBuf> {
+        let npmrc = std::fs::read_to_string(home.join(".npmrc")).ok();
+        let npm = npm_bin(&|_| None, home, npmrc.as_deref());
+        let folders = unix_folders(&[Some(path.into()), shell.map(String::from)], home, npm, home);
+        let found = unix_claude(&folders);
+        found.map(|program| program.strip_prefix(home).unwrap().to_path_buf())
+    }
+
+    /// On the Mac and Linux, Connect finds Claude Code wherever a terminal would, though the
+    /// browser's PATH has none of it: on the PATH the user's shell gives, as ~/.zshrc sets it, or
+    /// where Claude Code's installer, npm or Homebrew put it. Of two, the first on the browser's
+    /// PATH runs, then the first on the shell's, as in a terminal, then the installers' in order.
+    #[cfg(not(windows))]
+    #[test]
+    fn finds_claude_however_it_was_installed() {
+        assert_eq!(unix_found_in(&home_with(&[]), "/usr/bin:/bin", None), None);
+        assert_eq!(unix_found_in(&home_with(&[LOCAL]), "/usr/bin:/bin", None), at(LOCAL));
+        assert_eq!(unix_found_in(&home_with(&[HOMEBREW]), "", None), at(HOMEBREW));
+        assert_eq!(unix_found_in(&home_with(&[USR_LOCAL]), "", None), at(USR_LOCAL));
+        assert_eq!(unix_found_in(&home_with(&[CLAUDE_LOCAL]), "", None), at(CLAUDE_LOCAL));
+        // npm's folder, once ~/.npmrc moves npm's prefix there.
+        let npm = home_with(&[NPM_PREFIX]);
+        assert_eq!(unix_found_in(&npm, "", None), None);
+        std::fs::write(npm.join(".npmrc"), "; mine\nprefix = ~/.npm-global\n").unwrap();
+        assert_eq!(unix_found_in(&npm, "", None), at(NPM_PREFIX));
+        // A folder only the shell's PATH has.
+        let tools = home_with(&[TOOLS]);
+        let folder = tools.join("tools/bin");
+        assert_eq!(unix_found_in(&tools, "/usr/bin", None), None);
+        assert_eq!(unix_found_in(&tools, "/usr/bin", folder.to_str()), at(TOOLS));
+
+        let two = home_with(&[TOOLS, LOCAL, HOMEBREW]);
+        let (tools, local) = (two.join("tools/bin"), two.join(".local/bin"));
+        let (tools, local) = (tools.to_str().unwrap(), local.to_str().unwrap());
+        assert_eq!(unix_found_in(&two, "", None), at(LOCAL));
+        assert_eq!(unix_found_in(&two, "", Some(tools)), at(TOOLS));
+        assert_eq!(unix_found_in(&two, "", Some(&format!("{local}:{tools}"))), at(LOCAL));
+        assert_eq!(unix_found_in(&two, local, Some(tools)), at(LOCAL));
+    }
+
+    /// A `claude` that isn't a program, a folder of that name or a file that may not run, is passed
+    /// over, as a shell passes it over.
+    #[cfg(not(windows))]
+    #[test]
+    fn passes_over_a_claude_that_doesnt_run() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = home_with(&[TOOLS, HOMEBREW]);
+        let tools = home.join("tools/bin");
+        std::fs::set_permissions(tools.join("claude"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::create_dir_all(home.join(".local/bin/claude")).unwrap();
+        assert_eq!(unix_found_in(&home, tools.to_str().unwrap(), None), at(HOMEBREW));
+    }
+
+    /// claude runs with the browser's PATH, the shell's and the installers' folders, each once,
+    /// without the folders the shell's names relative to wherever it runs.
+    #[cfg(not(windows))]
+    #[test]
+    fn claude_gets_each_folder_once() {
+        let paths = [
+            Some("/usr/bin:/bin".into()),
+            Some("/Users/me/.local/bin:bin:/usr/bin::/opt/homebrew/bin".into()),
+        ];
+        let folders = unix_folders(&paths, Path::new("/Users/me"), None, Path::new("/"));
+        let path = [
+            "/usr/bin",
+            "/bin",
+            "/Users/me/.local/bin",
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/Users/me/.claude/local",
+        ];
+        assert_eq!(folders, path.map(PathBuf::from));
+    }
+
+    /// npm's folder where the user moved its prefix, as npm's docs and its config have it.
+    #[cfg(not(windows))]
+    #[test]
+    fn finds_npms_folder_where_the_user_moved_it() {
+        let home = Path::new("/Users/me");
+        let unset = |_: &str| None;
+        let bin = |path: &str| Some(PathBuf::from(path));
+        assert_eq!(npm_bin(&unset, home, None), None);
+        assert_eq!(npm_bin(&unset, home, Some("registry=https://registry.npmjs.org/\n")), None);
+        let packages = Some("prefix=${HOME}/.npm-packages");
+        assert_eq!(npm_bin(&unset, home, packages), bin("/Users/me/.npm-packages/bin"));
+        assert_eq!(npm_bin(&unset, home, Some("prefix = \"/opt/npm\"")), bin("/opt/npm/bin"));
+        let set = |name: &str| (name == "npm_config_prefix").then(|| "~/npm".to_string());
+        assert_eq!(npm_bin(&set, home, Some("prefix=/opt/npm")), bin("/Users/me/npm/bin"));
+    }
+
+    #[cfg(not(windows))]
+    fn sh(script: &str) -> Command {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", script]);
+        command
+    }
+
+    /// The shell's PATH is read past what its rc files print, and an rc file that asks something
+    /// gets no answer and goes on.
+    #[cfg(not(windows))]
+    #[test]
+    fn reads_the_path_the_shell_prints() {
+        let wait = std::time::Duration::from_secs(10);
+        let rc = format!("echo Welcome; read answer; PATH=/tools/bin:/usr/bin; {PRINT_PATH}");
+        assert_eq!(printed_path(sh(&rc), wait).as_deref(), Some("/tools/bin:/usr/bin"));
+        assert_eq!(printed_path(sh("echo Welcome"), wait), None);
+        assert_eq!(printed_path(Command::new("/no/such/shell"), wait), None);
+    }
+
+    /// A shell still starting after the wait, as on an rc file that waits on the network, is given
+    /// up on then.
+    #[cfg(not(windows))]
+    #[test]
+    fn gives_up_on_a_shell_that_hangs() {
+        let start = std::time::Instant::now();
+        let hangs = sh(&format!("sleep 30; {PRINT_PATH}"));
+        assert_eq!(printed_path(hangs, std::time::Duration::from_millis(200)), None);
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
     }
 }
