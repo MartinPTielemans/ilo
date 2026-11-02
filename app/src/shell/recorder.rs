@@ -92,6 +92,8 @@ pub(super) struct Recorder {
     pub(super) menus_in_reveal: RefCell<Vec<bool>>,
     /// What the menu bar was last asked to show, and the window's title.
     pub(super) menu_bar: RefCell<MenuBar>,
+    /// What `confirm` asked last, with what it does if the test confirms it.
+    pub(super) confirming: RefCell<Option<(String, String, Box<dyn FnOnce(&mut App)>)>>,
     pub(super) window_title: RefCell<String>,
     /// Whether it was last asked to draw the window's material light.
     pub(super) window_light: Cell<Option<bool>>,
@@ -113,9 +115,6 @@ pub(super) struct Recorder {
     pub(super) dialog_busy: Cell<bool>,
     /// It warns before a move to another profile's Space, as `warn_moving_profiles` answers.
     pub(super) warn_profiles: Cell<bool>,
-    /// What `confirm` asked, each its message and detail, and what the last one's action does.
-    pub(super) confirms: RefCell<Vec<String>>,
-    pub(super) confirm_action: RefCell<Option<Box<dyn FnOnce(&mut App)>>>,
     /// Each time the shell opened the Site Controls: the tab, and where they hang from.
     pub(super) site_controls: RefCell<Vec<(u64, crate::site_controls::Place)>>,
     /// The ids of the extensions the Site Controls were given to list, each time.
@@ -820,6 +819,10 @@ impl Browser for Recorder {
         self.edit(format!("icon {tab} {icon}"));
     }
 
+    fn restore_sidebar(&self, time: u64, _: &mut App) {
+        self.record(format!("restore sidebar {time}"));
+    }
+
     fn delete_space(&self, space: u64, _: &mut App) -> bool {
         self.edit(format!("delete space {space}"));
         let mut deleted = self.core.deleted.borrow_mut();
@@ -896,11 +899,10 @@ impl Browser for Recorder {
         message: String,
         detail: String,
         _: &'static str,
-        action: Box<dyn FnOnce(&mut App)>,
+        confirmed: Box<dyn FnOnce(&mut App)>,
         _: &mut App,
     ) {
-        self.confirms.borrow_mut().push(format!("{message} {detail}"));
-        *self.confirm_action.borrow_mut() = Some(action);
+        *self.confirming.borrow_mut() = Some((message, detail, confirmed));
     }
 
     fn tell(
@@ -1307,6 +1309,10 @@ impl Browser for Recorder {
 
     fn open_tab_in_little(&self, tab: u64, _: &mut App) {
         self.record(format!("open tab in little {tab}"))
+    }
+
+    fn little_profile(&self, profile: u64, url: &str, _: &mut App) {
+        self.record(format!("little profile {profile} {url}"))
     }
 }
 

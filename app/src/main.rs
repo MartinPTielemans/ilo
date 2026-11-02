@@ -115,6 +115,7 @@ mod system;
 #[path = "../platform/linux/window_buttons.rs"]
 mod window_buttons;
 mod link_rules_host;
+mod little_sites_host;
 mod reveal;
 mod agents_core;
 mod settings;
@@ -2819,6 +2820,10 @@ impl Browser for Engine {
         unsafe { bc::bc_space_delete(space) }
     }
 
+    fn restore_sidebar(&self, time: u64, _: &mut App) {
+        unsafe { bc::bc_window_restore_sidebar(self.window, time as f64) };
+    }
+
     fn set_space_color(&self, space: u64, color: Option<u32>, _: &mut App) {
         unsafe { bc::bc_space_set_color(space, color.is_some(), color.unwrap_or(0)) };
     }
@@ -3484,6 +3489,40 @@ impl Browser for Engine {
         });
     }
 
+    fn little_profile(&self, profile: u64, url: &str, cx: &mut App) {
+        let (id, url) = (self.window, url.to_string());
+        cx.defer(move |cx| {
+            little_sites_host::remember(&url, profile);
+            let own = unsafe { bc::bc_space_profile(bc::bc_window_space(id)) };
+            if profile == own || url.is_empty() {
+                // check.sh reads this line.
+                log!("browser: little window {id} keeps profile {profile}");
+                return;
+            }
+            let window = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == id).cloned());
+            let Some(window) = window else {
+                return;
+            };
+            let own_home = window.little.unwrap_or(0);
+            // From a regular window, whose Spaces give the new one its home's look.
+            let from = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.regular()).cloned());
+            let home = home_in_profile(own_home, profile);
+            let Some(opened) = home.and_then(|home| open_little(from.unwrap_or(window), home, cx))
+            else {
+                // check.sh reads this line.
+                log!("browser: little window {id} has no Space in profile {profile}");
+                return;
+            };
+            let tab = open_tab_behind(opened, &url, false);
+            if tab != 0 {
+                unsafe { bc::bc_window_select(opened, tab) };
+            }
+            // check.sh reads this line.
+            log!("browser: little window {id} reopened {url} in profile {profile} as {opened}");
+            unsafe { bc::bc_window_close(id) };
+        });
+    }
+
     fn close_window(&self, cx: &mut App) {
         let id = self.window;
         // Outside the shell's update: the core closes the NSWindow at once, and GPUI's handler for
@@ -4104,7 +4143,17 @@ fn open_links_in_little(front: bc::bc_id, urls: Vec<String>, cx: &mut App) {
         let Some(from) = from else {
             return;
         };
-        let home = users_space_of(front);
+        // In the profile the user last picked for its site in Little ilo's bar, as Arc's Little
+        // Arc does, in that profile's Space if the front window doesn't show one.
+        let front_space = users_space_of(front);
+        let home = match little_sites_host::profile(&url) {
+            Some(profile) => {
+                // check.sh reads this line.
+                log!("browser: little ilo opens {url} in profile {profile}");
+                home_in_profile(front_space, profile).unwrap_or(front_space)
+            }
+            None => front_space,
+        };
         let Some(opened) = open_little(from, home, cx) else {
             continue;
         };
@@ -5288,6 +5337,7 @@ fn menus(bar: &shell::MenuBar, undo: Option<&str>, redo: Option<&str>) -> Vec<Me
                 item("Essential Keyboard Shortcuts", Command::KeyboardShortcuts),
                 MenuItem::separator(),
                 item("Report a Problem…", Command::ReportProblem),
+                restore_sidebar(&bar.sidebar_backups),
                 MenuItem::submenu(menu(
                     "Troubleshooting",
                     vec![
@@ -5321,6 +5371,16 @@ fn give_host_appearance(appearance: Appearance) {
     // The Mac's pages follow NSApp's appearance, which the host sets.
     #[cfg(not(target_os = "macos"))]
     unsafe { bc::bc_set_appearance(code) };
+}
+
+/// Help › Restore Earlier Sidebar: the shown Space's profile's sidebar backups, newest first, each
+/// by when it was taken. Dimmed until the profile has one.
+fn restore_sidebar(backups: &[shell::SidebarBackup]) -> MenuItem {
+    let items = (backups.iter())
+        .map(|backup| shell::menu_item(backup.label.clone(), Command::RestoreSidebar(backup.time)))
+        .collect();
+    let disabled = backups.is_empty();
+    MenuItem::submenu(Menu { name: "Restore Earlier Sidebar".into(), items, disabled })
 }
 
 /// Spaces › Change Profile: the profiles the Space shown can be in, as its menu's Profile items
@@ -5537,6 +5597,17 @@ unsafe extern "C" fn window_open_little(
 
 /// ⇧⌘T in `window` found a Little ilo window's tab closed last: it comes back in a new one for a
 /// Space of `profile`, the one `window` is for if it's in it, as Arc's reopens it in Little Arc.
+/// The user's Space a Little ilo window in `profile` is for: `own` if it's in that profile, else
+/// the first of the user's Spaces that is, or None.
+fn home_in_profile(own: bc::bc_id, profile: bc::bc_id) -> Option<bc::bc_id> {
+    let users = |space: bc::bc_id| name(bc::bc_space_agent, space).is_empty();
+    let in_profile = |space: bc::bc_id| unsafe { bc::bc_space_profile(space) } == profile;
+    match own != 0 && in_profile(own) {
+        true => Some(own),
+        false => ids(bc::bc_spaces).into_iter().find(|&space| in_profile(space) && users(space)),
+    }
+}
+
 unsafe extern "C" fn window_reopen_little(
     _: *mut c_void,
     window: bc::bc_id,
@@ -5548,14 +5619,9 @@ unsafe extern "C" fn window_reopen_little(
         let Some(from) = from else {
             return;
         };
-        let users = |space: bc::bc_id| name(bc::bc_space_agent, space).is_empty();
-        let in_profile = |space: bc::bc_id| unsafe { bc::bc_space_profile(space) } == profile;
         let own = from.little.unwrap_or_else(|| users_space_of(window));
-        let home = match in_profile(own) {
-            true => Some(own),
-            false => ids(bc::bc_spaces).into_iter().find(|&space| in_profile(space) && users(space)),
-        };
-        let Some(opened) = home.and_then(|home| open_little(from, home, cx)) else {
+        let Some(opened) = home_in_profile(own, profile).and_then(|home| open_little(from, home, cx))
+        else {
             return;
         };
         let tab = unsafe { bc::bc_window_reopen_tab(opened, closed) };
@@ -5742,6 +5808,8 @@ unsafe extern "C" fn spaces_changed(_: *mut c_void) {
             (space, name_of, has_color.then_some(color), profile, icon, agent, theme)
         })
         .collect();
+    let named: Vec<_> = profiles.iter().map(|(id, name)| (*id, name.to_string())).collect();
+    little_sites_host::profiles_changed(&named);
     update_shells(|shell, cx| {
         shell.set_profiles(profiles.clone(), cx);
         shell.set_spaces(spaces.clone(), cx);
@@ -6103,6 +6171,25 @@ unsafe extern "C" fn download_icon(
         Arc::new(Image::from_bytes(ImageFormat::Png, png))
     });
     update_shells(|shell, cx| shell.set_download_icon(download, icon.clone(), cx));
+}
+
+unsafe extern "C" fn sidebar_backups_changed(
+    _: *mut c_void,
+    profile: bc::bc_id,
+    backups: *const bc::bc_sidebar_backup,
+    count: usize,
+) {
+    let backups = match backups.is_null() {
+        true => &[][..],
+        false => unsafe { std::slice::from_raw_parts(backups, count) },
+    };
+    let backups: Vec<_> = (backups.iter())
+        .map(|backup| shell::SidebarBackup {
+            time: backup.time as u64,
+            label: unsafe { CStr::from_ptr(backup.label) }.to_string_lossy().into_owned().into(),
+        })
+        .collect();
+    update_shells(|shell, cx| shell.set_sidebar_backups(profile, backups.clone(), cx));
 }
 
 unsafe extern "C" fn extensions_changed(
@@ -7111,6 +7198,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         download_icon: Some(download_icon),
         window_show_downloads: Some(window_show_downloads),
         extensions_changed: Some(extensions_changed),
+        sidebar_backups_changed: Some(sidebar_backups_changed),
         window_extension_popup: Some(window_extension_popup),
         window_extension_actions: Some(window_extension_actions),
         window_extension_question: Some(window_extension_question),
@@ -7329,6 +7417,14 @@ pub extern "C" fn bc_app_host(argc: *mut c_int, argv: *mut *const *const c_char)
         _ => &[],
     };
     let given = (given.iter()).map(|&arg| unsafe { CStr::from_ptr(arg) }.to_string_lossy().into());
+    // Chromium names the windows' X11 class and Wayland app id after this desktop entry, and the
+    // desktop takes their icon from the entry it matches: ilo's, not "chromium-browser" (#1350).
+    // The Flatpak's launcher sets the same. Chromium reads it later, when it opens a window.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("CHROME_DESKTOP").is_none_or(|desktop| desktop.is_empty()) {
+        let desktop = format!("{}.desktop", include_str!("../branding/id").trim());
+        unsafe { std::env::set_var("CHROME_DESKTOP", desktop) };
+    }
     let (args, host) = switches_and_host(given.collect());
     let pointers: Vec<*const c_char> = args.leak().iter().map(|arg| arg.as_ptr()).collect();
     unsafe {

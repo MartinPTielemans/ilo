@@ -298,6 +298,9 @@ pub trait Browser {
     fn set_icon(&self, tab: u64, icon: &str, cx: &mut App);
     /// Deletes a Space, closing its tabs, and returns whether it will, as the last can't go.
     fn delete_space(&self, space: u64, cx: &mut App) -> bool;
+    /// Brings back the sidebar of the profile of the Space the window shows from its backup taken
+    /// at `time`, in milliseconds since 1970, keeping the one it has as a backup.
+    fn restore_sidebar(&self, time: u64, cx: &mut App);
     /// Gives a Space a colour, 0xRRGGBB, or none, for the system's accent colour.
     fn set_space_color(&self, space: u64, color: Option<u32>, cx: &mut App);
     /// Gives a Space `icon`, an emoji or a glyph's `glyph:` name (`space_icon`), to show in place
@@ -679,6 +682,10 @@ pub trait Browser {
     /// A Little ilo window's ⌘O: moves `tab`, live, to the user's Space `home` in a regular window,
     /// which shows it and comes to the front, and closes this window.
     fn open_in_main_window(&self, tab: u64, home: u64, cx: &mut App);
+    /// A Little ilo window's profile picker: opens its page, at `url`, in `profile`, in a new Little ilo
+    /// window for a Space of it, closing this one, and keeps `profile` for the page's site, which
+    /// links from other apps then open in (Arc's Little Arc). With the window's own, only keeps it.
+    fn little_profile(&self, profile: u64, url: &str, cx: &mut App);
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]

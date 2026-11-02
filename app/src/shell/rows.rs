@@ -18,14 +18,14 @@ use super::{
     FOLDER_INDENT, FORM_TEXT, HOVERED, KeepName, LOADING_ROW_MIN, LOADING_SIZE,
     STATUS_AGENT, STATUS_DOT, STATUS_LOADING, STATUS_RING, STATUS_RING_COLOR,
     BREATH, BREATH_LOW, NAME_HEIGHT, NAV, NAV_HOVERED, NAV_RADIUS, Naming, CHOSEN, PINNED_CARET,
-    PINNED_CARET_GAP, PINNED_CARET_PLATE, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS, SPACE_NAME,
-    SPACE_NAME_SHUT, Page,
+    PINNED_CARET_GAP, PINNED_CARET_PLATE, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS, REMOVE_GLYPH,
+    SPACE_NAME, SPACE_NAME_SHUT, Page,
     ROW_HEIGHT, ROW_PITCH, Row, SECONDARY, SEGMENT_END, SEGMENT_FAVICON_X, SEGMENT_LINE, SEGMENT_TITLE_GAP,
     SELECTED_UNHOVER, SLEEPING_FAVICON, SPACE_ICON_PLATE, SPEAKER_DRAWN, SPEAKER_GAP, SPEAKER_SIZE,
     Shell, Slot, Swapped, TITLE_END_INSET, URL_BUTTON_GLYPH, URL_BUTTON_SIZE, clear_label, cubic_bezier, divider_box, favicon,
     folder_icon, icon_placeholder, name_box, new_tab_label, plate, row_box, row_spring,
     developer_outline, scaled::scaled_from_middle, selected_plate, space_icon, split_plate,
-    swap::{ARROW_DOWN, CLOSE, NONE, UNLOAD, folder_glyph}, title,
+    swap::{ARROW_DOWN, NONE, folder_glyph}, title,
 };
 use super::{
     access::{Accessible, NEW_TAB},
@@ -40,6 +40,13 @@ use crate::{
 
 /// What Clear's tooltip says (Arc 1.170.0 cap).
 pub(super) const CLEAR_TIP: &str = "Clear unpinned tabs in this space";
+/// What an unloaded pinned row's remove button's tooltip says, and the Edit menu after Undo.
+pub(super) const REMOVE_TIP: &str = "Remove Tab";
+/// The remove button's glyph, in the icon picker's trash's style.
+const REMOVE: &str = "icons/trash.svg";
+/// The close button's glyphs, its two bars crossed or level, drawn rather than a file.
+pub(super) const CLOSE: &str = "close";
+pub(super) const UNLOAD: &str = "unload";
 
 impl Shell {
     /// Opens `folder` of the Space shown, with the folders it's in, and scrolls the sidebar to it,
@@ -454,10 +461,10 @@ impl Shell {
         })
     }
 
-    /// The button that closes `tabs`, which shows under the pointer at a row's end: −, which
-    /// unloads them and keeps the row, on the selected pinned row, else ✕, as Arc's.
+    /// The button that closes `tabs`, which shows under the pointer at a row's end: − on a pinned
+    /// row, which unloads them and keeps the row, else ✕.
     fn close_button(&self, tabs: Vec<u64>, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
-        let glyph = self.close_glyph(tabs[0]);
+        let angle = if self.close_glyph(tabs[0]) == UNLOAD { 0. } else { 45. };
         div()
             .id(("close", tabs[0]))
             .flex_none()
@@ -469,20 +476,97 @@ impl Shell {
             .flex()
             .items_center()
             .justify_center()
-            .child(self.swaps.glyph(
-                Swapped::Close(tabs[0]),
-                glyph,
-                CLOSE_GLYPH,
-                self.palette.text(SECONDARY).into(),
-            ))
+            // The bars as one glyph, so they don't darken where they cross (assets::bars).
+            .child(
+                svg()
+                    .path(super::assets::bars_path(angle))
+                    .flex_none()
+                    .size(px(CLOSE_GLYPH))
+                    .text_color(self.palette.text(SECONDARY)),
+            )
             // Not the row's press, which would show the tab before closing it.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             // A pinned tab closed unloads, which the core does for the same call.
             .on_click(cx.listener(move |shell, _, _, cx| {
                 cx.stop_propagation();
                 log!("browser: command close-tab via sidebar");
-                shell.close_tab(tabs[0], true, cx);
+                shell.close_row(tabs[0], cx);
             }))
+    }
+
+    /// Closes the row whose first tab is `row`, as its ✕ or − does. A pinned row keeps its place
+    /// without its pages, and its remove button waits for the pointer to leave it.
+    fn close_row(&mut self, row: u64, cx: &mut Context<Self>) {
+        if self.pinned().contains(&row) {
+            self.remove_held = Some(row);
+        }
+        self.close_tab(row, true, cx);
+    }
+
+    /// The button an unloaded pinned row shows in its close button's place under the pointer,
+    /// which takes the row, `tabs`, out of the pinned tabs: unpinned and closed, not into Today
+    /// (owner, 2026-11-02, #1349). It names itself after a moment, as a header button does.
+    fn remove_button(&self, tabs: Vec<u64>, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let row = tabs[0];
+        div()
+            .id(("remove", row))
+            .flex_none()
+            .ml(px(4.))
+            .mr(px(CLOSE_RIGHT))
+            .size(px(CLOSE_SIZE))
+            .rounded(px(NAV_RADIUS))
+            .hover(|style| style.bg(self.palette.plate(CLOSE_HOVERED)))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(svg().path(REMOVE).size(px(REMOVE_GLYPH)).text_color(self.palette.text(SECONDARY)))
+            .child(self.button_frame(REMOVE_TIP))
+            .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
+                shell.hover_remove(row, *hovered, cx)
+            }))
+            // Not the row's press, which would show the tab and load it before removing it.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|shell, _, _, cx| {
+                    cx.stop_propagation();
+                    shell.browser.tooltip(None, cx)
+                }),
+            )
+            .on_click(cx.listener(move |shell, _, _, cx| {
+                cx.stop_propagation();
+                log!("browser: command remove-tab via sidebar");
+                shell.remove_pinned(row, cx);
+            }))
+    }
+
+    /// The pointer has come onto the remove button of the row whose first tab is `row`, or left
+    /// it: the button's tooltip names it, and the row's card waits until the pointer is back on
+    /// the row, so only one speaks at a time.
+    fn hover_remove(&mut self, row: u64, hovered: bool, cx: &mut Context<Self>) {
+        let busy = self.dragging().is_some() || self.menu_row.is_some();
+        let frame = self.button_frames.borrow().get(REMOVE_TIP).copied();
+        let tip = frame.filter(|_| hovered && !busy).map(|frame| {
+            (Tip::named(REMOVE_TIP.into()), Anchor::under(frame, self.viewport))
+        });
+        self.hover_tip(tip, cx);
+        if hovered || self.pointer_row() == Some(Row::Tab(row)) {
+            self.hover_card(Row::Tab(row), !hovered, cx);
+        }
+    }
+
+    /// The button at the end of the row whose first tab is `tabs[0]`, under the pointer: ✕ or −
+    /// while it has a page to close, else, on a pinned row, remove.
+    fn row_button(
+        &self,
+        tabs: Vec<u64>,
+        closable: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Stateful<gpui::Div>> {
+        match (closable, self.removable(tabs[0])) {
+            (true, _) => Some(self.close_button(tabs, cx)),
+            (false, true) => Some(self.remove_button(tabs, cx)),
+            (false, false) => None,
+        }
     }
 
     /// The speaker after `tab`'s favicon while its page plays sound, crossed out while it's muted,
@@ -779,7 +863,7 @@ impl Shell {
                 plate(self.tab_icon(tab), self.naming_field(renaming, cx))
             }
             None => {
-                let close = (hovered && closable).then(|| self.close_button(panes.clone(), cx));
+                let close = hovered.then(|| self.row_button(panes.clone(), closable, cx)).flatten();
                 let width = self.segment_width(self.depth(first), panes.len());
                 let segments: Vec<_> = panes
                     .iter()
@@ -807,44 +891,36 @@ impl Shell {
         })
     }
 
-    /// A middle press on the row whose first tab is `row` closes it as its ✕ does, on the press as
-    /// a row's press shows its tab.
+    /// A middle press on the row whose first tab is `row` closes it as its ✕ or − does, on the
+    /// press as a row's press shows its tab.
     fn middle_press(&mut self, row: u64, closable: bool, cx: &mut Context<Self>) {
         // As every press does: the card would show a tab the press closes.
         self.end_hovers(cx);
         if closable && self.dragging().is_none() {
             log!("browser: command close-tab via sidebar");
-            self.close_tab(row, true, cx);
+            self.close_row(row, cx);
         }
     }
 
-    /// Whether a tab's row has a ✕ to show: a pinned tab closed already has nothing to close.
+    /// Whether a tab's row has a ✕ or − to show: a pinned tab closed already has nothing to close.
     pub(super) fn closable(&self, tab: u64) -> bool {
         !(self.page(tab).unloaded && self.pinned().contains(&tab))
     }
 
-    /// The close button's glyph on the row whose first tab is `row`: − on the selected pinned
-    /// row, else ✕.
-    pub(super) fn close_glyph(&self, row: u64) -> &'static str {
-        let selected = self.selected_row() == Row::Tab(row);
-        if selected && self.pinned().contains(&row) { UNLOAD } else { CLOSE }
+    /// Whether the row whose first tab is `row` shows the remove button in the −'s place: a pinned
+    /// row whose pages are all unloaded, unless the pointer hasn't left it since its − unloaded it.
+    pub(super) fn removable(&self, row: u64) -> bool {
+        self.pinned().contains(&row)
+            && !self.is_folder(row)
+            && self.remove_held != Some(row)
+            && self.panes(row).iter().all(|&tab| self.page(tab).unloaded)
     }
 
-    /// Turns the ✕ under the pointer into − as its pinned row becomes the selected one, and back
-    /// as it stops being, from what the rows showed before the selection moved. Others show their
-    /// own at once.
-    pub(super) fn selection_moved(&mut self, before: Row) {
-        let after = self.selected_row();
-        let Some(Row::Tab(row)) = self.pointer_row() else {
-            return;
-        };
-        let moved = before != after && (before == Row::Tab(row) || after == Row::Tab(row));
-        if !moved || !self.pinned().contains(&row) {
-            return;
-        }
-        let to = self.close_glyph(row);
-        let from = if to == UNLOAD { CLOSE } else { UNLOAD };
-        self.swaps.start(Swapped::Close(row), from, to, Instant::now());
+    /// The close button's glyph on the row whose first tab is `row`: one shape per action (owner,
+    /// 2026-11-02, #1349), so − on a pinned row, selected or not, which unloads it and keeps the
+    /// row, and ✕ on a Today row, which closes it for good.
+    pub(super) fn close_glyph(&self, row: u64) -> &'static str {
+        if self.pinned().contains(&row) { UNLOAD } else { CLOSE }
     }
 
     fn single_row(
@@ -862,8 +938,8 @@ impl Shell {
         let label = if back { "Back to Pinned URL".into() } else { self.title(tab) };
         let bright = Row::Tab(tab) == self.selected_row() || page.developer_mode;
         let title = title(&self.palette, label, bright);
-        // The close button shows under the pointer, and the title truncates before it.
-        let close = self.close_button(vec![tab], cx);
+        // The row's button shows under the pointer, and the title truncates before it.
+        let button = hovered.then(|| self.row_button(vec![tab], closable, cx)).flatten();
         let renaming =
             self.renaming.as_ref().filter(|renaming| renaming.naming.tab() == Some(tab));
         let label = match renaming {
@@ -874,7 +950,7 @@ impl Shell {
                 .h_full()
                 .flex()
                 .items_center()
-                .when(!(hovered && closable), |label| label.pr(px(TITLE_END_INSET)))
+                .when(button.is_none(), |label| label.pr(px(TITLE_END_INSET)))
                 // The mark takes the speaker's place while the page has died or hung.
                 .children(match self.trouble_mark(tab) {
                     Some(mark) => vec![mark.into_any_element()],
@@ -883,7 +959,7 @@ impl Shell {
                         .collect(),
                 })
                 .child(title)
-                .when(hovered && closable, |label| label.child(close))
+                .children(button)
                 .when(!hovered, |label| label.children(self.status_dot(tab))),
         };
         let renaming = renaming.is_some();
@@ -1327,6 +1403,7 @@ pub(super) fn capture_glyph(page: &Page) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::HashMap,
         rc::Rc,
         time::{Duration, Instant},
     };
@@ -1345,7 +1422,7 @@ mod tests {
             drag::detents::shell_with,
             recorder::Recorder,
         },
-        BREATH, BREATH_LOW, Breath, CLOSE, LOADING_GAP, Pending, Subject, UNLOAD, breath_strength,
+        BREATH, BREATH_LOW, Breath, CLOSE, LOADING_GAP, Pending, Subject, breath_strength,
     };
     use crate::icon_picker::{self, Picked, Recents};
 
@@ -1723,59 +1800,53 @@ mod tests {
         })
     }
 
-    /// Under the pointer, the selected pinned row's button is −, and a click on it unloads the tab
-    /// with the call that closes one, without showing it again. A pinned row not selected and a
-    /// Today row, selected or not, keep ✕.
+    /// One shape per action (owner, 2026-11-02, #1349): under the pointer, a loaded pinned row's
+    /// button is −, selected or not, and a click on it unloads the tab with the call that closes
+    /// one, without showing it. A Today row's is ✕, selected or not.
     #[gpui::test]
-    fn the_selected_pinned_row_shows_minus_which_unloads_it(cx: &mut TestAppContext) {
+    fn a_loaded_pinned_row_shows_minus_and_a_today_row_x(cx: &mut TestAppContext) {
         let (shell, cx, host) = window(cx, vec![2, 3], vec![4, 5], 2);
-        let minus = close_button(&shell, cx, 2);
+        let minus = close_button(&shell, cx, 3);
         move_to(cx, minus);
-        assert!(shell.read_with(cx, |shell, _| shell.hovered == Some(Row::Tab(2))));
-        assert_eq!(hovered_glyph(&shell, cx), Some(UNLOAD));
+        assert!(shell.read_with(cx, |shell, _| shell.hovered == Some(Row::Tab(3))));
+        assert_eq!(drawn_button(&shell, cx), "−", "a pinned row not selected");
 
         host.take();
         cx.simulate_click(point(px(minus.0), px(minus.1)), Modifiers::none());
         cx.run_until_parked();
-        assert_eq!(host.take(), ["close 2"]);
+        assert_eq!(host.take(), ["close 3"]);
 
-        let pinned = close_button(&shell, cx, 3);
-        move_to(cx, pinned);
-        assert_eq!(hovered_glyph(&shell, cx), Some(CLOSE), "a pinned row not selected");
+        let selected = close_button(&shell, cx, 2);
+        move_to(cx, selected);
+        assert_eq!(drawn_button(&shell, cx), "−", "the selected pinned row");
         let today = close_button(&shell, cx, 5);
         move_to(cx, today);
-        assert_eq!(hovered_glyph(&shell, cx), Some(CLOSE), "a Today row");
+        assert_eq!(drawn_button(&shell, cx), "1", "a Today row");
         shell.update(cx, |shell, cx| shell.set_selected(5, cx));
         assert_eq!(hovered_glyph(&shell, cx), Some(CLOSE), "a selected Today row");
     }
 
-    /// A pinned row selected under the pointer turns its ✕ into −, and back as another row is
-    /// selected. A Today row's ✕ stays still, and a pinned row the pointer isn't on shows its
-    /// glyph at once.
+    /// A loaded pinned row in a folder, and a pinned split's row, show − as well.
     #[gpui::test]
-    fn the_cross_turns_into_minus_as_its_pinned_row_is_selected(cx: &mut TestAppContext) {
-        let (shell, cx, _) = window(cx, vec![2, 3], vec![4], 4);
-        let turning = |shell: &Entity<Shell>, cx: &mut VisualTestContext, row| {
-            shell.read_with(cx, |shell, _| shell.swaps.changing(Swapped::Close(row)))
+    fn pinned_rows_in_a_folder_or_a_split_show_minus(cx: &mut TestAppContext) {
+        let folders = Folders {
+            folders: HashMap::from([(5, ("Reading".into(), true))]),
+            parents: HashMap::from([(6, 5)]),
+            ..Default::default()
         };
-        let pinned = close_button(&shell, cx, 2);
-        move_to(cx, pinned);
-        shell.update(cx, |shell, cx| shell.set_selected(2, cx));
-        assert!(turning(&shell, cx, 2));
-        assert_eq!(hovered_glyph(&shell, cx), Some(UNLOAD));
+        let (shell, cx, _) = window_with(cx, vec![2, 5, 6, 7, 8], vec![4], 4, folders.clone());
+        let in_folder = close_button(&shell, cx, 6);
+        move_to(cx, in_folder);
+        assert_eq!(drawn_button(&shell, cx), "−", "a pinned row in a folder");
 
-        shell.update(cx, |shell, _| shell.swaps = Default::default());
-        shell.update(cx, |shell, cx| shell.set_selected(4, cx));
-        assert!(turning(&shell, cx, 2), "back to ✕ as it stops being selected");
-        assert_eq!(hovered_glyph(&shell, cx), Some(CLOSE));
-
-        shell.update(cx, |shell, _| shell.swaps = Default::default());
-        shell.update(cx, |shell, cx| shell.set_selected(3, cx));
-        assert!(!turning(&shell, cx, 3), "not under the pointer");
-        let today = close_button(&shell, cx, 4);
-        move_to(cx, today);
-        shell.update(cx, |shell, cx| shell.set_selected(4, cx));
-        assert!(!turning(&shell, cx, 4), "a Today row");
+        shell.update(cx, |shell, cx| {
+            let split = crate::shell::Split { tabs: vec![7, 8], ..Default::default() };
+            shell.set_tabs(1, vec![2, 5, 6, 7, 8], vec![4], vec![split], folders, cx)
+        });
+        cx.run_until_parked();
+        let split = close_button(&shell, cx, 7);
+        move_to(cx, split);
+        assert_eq!(drawn_button(&shell, cx), "−", "a pinned split's row");
     }
 
     /// A pressed row's plate shrinks to PRESS_SCALE over PRESS_TIME while it's held and grows
@@ -1827,7 +1898,7 @@ mod tests {
 
     /// A press on a row shows its tab at once, as Arc's does, before it's let go, and gives its
     /// page the keyboard, as Chrome's tab strip does; letting go asks for nothing more. A press on
-    /// the row shown gives its page the keyboard too. A row's ✕ closes its tab without showing
+    /// the row shown gives its page the keyboard too. A row's − or ✕ closes its tab without showing
     /// it, and a right-click shows the row's menu without showing its tab or moving the keyboard.
     #[gpui::test]
     fn a_press_shows_its_tab_before_it_is_let_go(cx: &mut TestAppContext) {
@@ -1852,7 +1923,7 @@ mod tests {
         cx.simulate_click(point(px(close.0), px(close.1)), Modifiers::none());
         cx.run_until_parked();
         // The pointer left the row whose card the press closed.
-        assert_eq!(host.take(), ["card left 4", "close 2"], "the ✕ of a row not shown");
+        assert_eq!(host.take(), ["card left 4", "close 2"], "the − of a pinned row not shown");
 
         let middle = point(px(close.0 - 100.), px(close.1));
         cx.simulate_mouse_down(middle, MouseButton::Right, Modifiers::none());
@@ -2354,16 +2425,13 @@ mod tests {
     }
 
     /// A Today tab whose page was let go after hours unseen keeps its ✕, as the tab itself is
-    /// still there to close, and a click on it closes it without loading it. A pinned tab without
-    /// its page has nothing to close.
+    /// still there to close, and a click on it closes it without loading it.
     #[gpui::test]
     fn a_today_tab_without_its_page_still_closes(cx: &mut TestAppContext) {
         let (shell, cx, host) = window(cx, vec![2], vec![4, 5], 4);
         shell.update(cx, |shell, cx| {
-            for tab in [2, 5] {
-                let page = Page { unloaded: true, ..shell.page(tab) };
-                shell.set_page(tab, page, cx);
-            }
+            let page = Page { unloaded: true, ..shell.page(5) };
+            shell.set_page(5, page, cx);
         });
         let today = close_button(&shell, cx, 5);
         move_to(cx, today);
@@ -2373,14 +2441,148 @@ mod tests {
         cx.simulate_click(point(px(today.0), px(today.1)), Modifiers::none());
         cx.run_until_parked();
         assert_eq!(host.take(), ["close 5"]);
+    }
 
-        let pinned = close_button(&shell, cx, 2);
-        move_to(cx, pinned);
-        assert!(!shell.read_with(cx, |shell, _| shell.closable(2)));
-        host.take();
-        cx.simulate_click(point(px(pinned.0), px(pinned.1)), Modifiers::none());
+    /// The button the row under the pointer draws, as check.sh reads it: "1" for ✕, "−" for −,
+    /// "remove" for remove and "0" for none.
+    fn drawn_button(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> &'static str {
+        shell.read_with(cx, |shell, _| shell.drawn_hover.2)
+    }
+
+    /// The core reports the Space's tabs, as it does a moment after each call.
+    fn report_lists(
+        shell: &Entity<Shell>,
+        cx: &mut VisualTestContext,
+        pinned: Vec<u64>,
+        today: Vec<u64>,
+    ) {
+        shell.update(cx, |shell, cx| {
+            shell.set_tabs(1, pinned, today, Vec::new(), Folders::default(), cx)
+        });
         cx.run_until_parked();
-        assert!(!host.take().iter().any(|call| call.starts_with("close")), "the pinned row");
+    }
+
+    /// A pinned tab without its page has nothing to close, so under the pointer its row shows the
+    /// remove button in the −'s place (#1349), selected or not. A click on it takes the tab out of
+    /// the pinned tabs without showing or loading it: the core unpins it, which puts it at the top
+    /// of Today, and closes it there, into the archive, so Today doesn't gain it. ⌘Z pins it again
+    /// at its place, with its pinned URL.
+    #[gpui::test]
+    fn an_unloaded_pinned_rows_button_removes_it_and_undo_pins_it_again(
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, cx, host) = window(cx, vec![2, 3], vec![4, 5], 4);
+        host.pinned_urls.borrow_mut().insert(3, "https://p.example/".into());
+        shell.update(cx, |shell, cx| {
+            let page = Page { unloaded: true, ..shell.page(3) };
+            shell.set_page(3, page, cx);
+        });
+        let remove = close_button(&shell, cx, 3);
+        move_to(cx, remove);
+        assert_eq!(drawn_button(&shell, cx), "remove");
+        host.take();
+        host.take_edits();
+        cx.simulate_click(point(px(remove.0), px(remove.1)), Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(host.take_edits(), ["pinned 3 false", "close 3"]);
+        assert!(!host.take().iter().any(|call| call.starts_with("select")));
+        assert_eq!(shell.read_with(cx, |shell, _| shell.history.titles().0), Some("Remove Tab"));
+        assert!(host.undo_toasts.borrow().is_empty(), "the row going is plain to see");
+        report_lists(&shell, cx, vec![2], vec![4, 5]);
+        assert_eq!(shell.read_with(cx, |shell, _| shell.today().to_vec()), [4, 5]);
+
+        // The core forgot its pinned URL when it unpinned it.
+        host.pinned_urls.borrow_mut().clear();
+        shell.update(cx, |shell, cx| shell.run(Command::Undo, "ui", cx));
+        assert_eq!(
+            host.take_edits(),
+            ["reopen 3 as 1001", "move 1001 true 0 1", "pinned url 1001 https://p.example/"]
+        );
+        assert!(!host.take().iter().any(|call| call.starts_with("select")));
+        report_lists(&shell, cx, vec![2, 1001], vec![4, 5]);
+        assert_eq!(shell.read_with(cx, |shell, _| shell.pinned().to_vec()), [2, 1001]);
+        assert_eq!(shell.read_with(cx, |shell, _| shell.today().to_vec()), [4, 5]);
+    }
+
+    /// A click on a pinned row's − unloads it, and the remove button it now has waits until the
+    /// pointer has left the row or pressed it, so a second click meant for the − never removes the
+    /// tab. A middle press on the unloaded row does nothing, as removing is the button's alone.
+    #[gpui::test]
+    fn the_remove_button_waits_for_the_pointer_to_leave_the_row_it_unloaded(
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, cx, host) = window(cx, vec![2, 3], vec![4], 4);
+        let button = close_button(&shell, cx, 2);
+        move_to(cx, button);
+        assert_eq!(drawn_button(&shell, cx), "−");
+        host.take_edits();
+        cx.simulate_click(point(px(button.0), px(button.1)), Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(host.take_edits(), ["close 2"]);
+        // The core lets go of its page and keeps its row.
+        shell.update(cx, |shell, cx| {
+            let page = Page { unloaded: true, ..shell.page(2) };
+            shell.set_page(2, page, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(drawn_button(&shell, cx), "0");
+        cx.simulate_click(point(px(button.0), px(button.1)), Modifiers::none());
+        cx.run_until_parked();
+        assert!(!host.take_edits().iter().any(|edit| edit.starts_with("pinned")));
+        cx.simulate_mouse_down(point(px(60.), px(button.1)), MouseButton::Middle, Modifiers::none());
+        cx.simulate_mouse_up(point(px(60.), px(button.1)), MouseButton::Middle, Modifiers::none());
+        cx.run_until_parked();
+        assert!(host.take_edits().is_empty(), "a middle press");
+        // The core hasn't loaded it yet, so the row has the button once pressed.
+        cx.simulate_click(point(px(60.), px(button.1)), Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(drawn_button(&shell, cx), "remove", "pressed");
+
+        let below = close_button(&shell, cx, 3);
+        move_to(cx, below);
+        cx.simulate_click(point(px(below.0), px(below.1)), Modifiers::none());
+        cx.run_until_parked();
+        shell.update(cx, |shell, cx| {
+            let page = Page { unloaded: true, ..shell.page(3) };
+            shell.set_page(3, page, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(drawn_button(&shell, cx), "0");
+        move_to(cx, button);
+        move_to(cx, below);
+        assert_eq!(drawn_button(&shell, cx), "remove", "left and back");
+    }
+
+    /// A pinned tab in a folder has the same button, and ⌘Z pins it again in its folder, at its
+    /// place there.
+    #[gpui::test]
+    fn a_pinned_tab_in_a_folder_is_removed_and_comes_back_in_it(cx: &mut TestAppContext) {
+        let folders = Folders {
+            folders: HashMap::from([(5, ("Reading".into(), true))]),
+            parents: HashMap::from([(6, 5), (7, 5)]),
+            ..Default::default()
+        };
+        let (shell, cx, host) = window_with(cx, vec![2, 5, 6, 7], vec![4], 4, folders.clone());
+        shell.update(cx, |shell, cx| {
+            let page = Page { unloaded: true, ..shell.page(7) };
+            shell.set_page(7, page, cx);
+        });
+        let remove = close_button(&shell, cx, 7);
+        move_to(cx, remove);
+        assert_eq!(drawn_button(&shell, cx), "remove");
+        host.take_edits();
+        cx.simulate_click(point(px(remove.0), px(remove.1)), Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(host.take_edits(), ["pinned 7 false", "close 7"]);
+        let folders_after = Folders {
+            parents: HashMap::from([(6, 5)]),
+            ..folders
+        };
+        shell.update(cx, |shell, cx| {
+            shell.set_tabs(1, vec![2, 5, 6], vec![4], Vec::new(), folders_after, cx)
+        });
+        shell.update(cx, |shell, cx| shell.run(Command::Undo, "ui", cx));
+        assert_eq!(host.take_edits(), ["reopen 7 as 1001", "move 1001 true 5 1"]);
     }
 
     /// ⌘D, from the UI or the page, unpins the tab shown under a pointer that doesn't move, and

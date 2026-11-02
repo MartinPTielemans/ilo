@@ -628,6 +628,14 @@ typedef struct bc_sync_device {
 
 // What the app gives the core when it starts Chromium. Any callback may be null, and a string it's
 // passed lasts only for the call.
+// A backup of a profile's sidebar: its Spaces, with their folders and tabs, and its favorites.
+typedef struct bc_sidebar_backup {
+  // When it was taken, in milliseconds since 1970.
+  double time;
+  // When, as the user's locale writes a weekday, date and time, UTF-8.
+  const char* label;
+} bc_sidebar_backup;
+
 typedef struct bc_host {
   // Passed back to every callback.
   void* context;
@@ -999,6 +1007,13 @@ typedef struct bc_host {
   // The account's devices, after bc_sync_read_devices, and again after bc_sync_remove_device:
   // |count| of them, this one first. The user's alone: agents hear none.
   void (*sync_devices_changed)(void* context, const bc_sync_device* devices, size_t count);
+  // The backups of the profile's sidebar, newest first, once the core has listed them after
+  // launch, and after each backup and restore (bc_window_restore_sidebar). Only the user's: an
+  // agent's Space isn't backed up, and agents can't restore one.
+  void (*sidebar_backups_changed)(void* context,
+                                  bc_id profile,
+                                  const bc_sidebar_backup* backups,
+                                  size_t count);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -1699,6 +1714,16 @@ BC_EXPORT size_t bc_window_undo_clear(bc_id window, bc_id clear);
 // while a page keeps one of its tabs open. Then spaces_changed and window_space_shown. Returns the
 // Space, or 0 if it can't: it is back, or 25 others were deleted since.
 BC_EXPORT bc_id bc_window_undo_delete_space(bc_id window, bc_id space);
+
+// Brings back the sidebar of the profile of the Space the window shows from its backup taken at
+// |time| (sidebar_backups_changed), and returns whether it will: not in a private window or an
+// agent's Space. The sidebar as it is becomes a backup first, so another call can undo it. Its
+// Spaces take the place of the profile's, as bc_space_delete deletes them, and the window shows
+// the one it showed, if the backup has it, else the backup's first. Under BC_FAVORITES_PROFILE
+// the profile's favorites are the backup's too. Agents' Spaces and other profiles' stay. Then
+// spaces_changed and sidebar_backups_changed, or only the latter if the backup can't be read.
+// The user's alone: agents work in their own Spaces, and get no tool for this.
+BC_EXPORT bool bc_window_restore_sidebar(bc_id window, double time);
 
 // Reopens the Today tab closed last, in any window, with its history: at its place in its Space's
 // Today tabs, else at the top of the Space the window shows. One closed from a split view goes back

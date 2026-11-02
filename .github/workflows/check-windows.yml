@@ -137,7 +137,8 @@ jobs:
             check-windows-
             app-windows-
 
-      - run: ./setup.sh && ./build.sh
+      - id: build
+        run: ./setup.sh && ./build.sh
 
       # The runner's screen is 1024 by 768, where the app's 1280 by 800 window doesn't fit and the
       # windows the runs place are kept on screen elsewhere. A screen as big as the ones the Mac's
@@ -214,6 +215,45 @@ jobs:
             echo "| $run | $result |" | tee -a "$GITHUB_STEP_SUMMARY"
           done
           exit "$failed"
+
+      # Windows' own Microsoft sign-in, which Chromium logs on or off as it starts (#1345). The core
+      # turns it on by default only on a device joined or registered to a work or school directory,
+      # which a runner isn't, so here it's off until the CloudAPAuthEnabled policy turns it on.
+      - name: Microsoft sign-in
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          out=$RUNNER_TEMP/check
+          mkdir -p "$out"
+          key='HKCU\SOFTWARE\Policies\Chromium'
+          # Git Bash would take reg's and taskkill's switches for paths.
+          export MSYS2_ARG_CONV_EXCL='*'
+          trap 'reg delete "$key" /v CloudAPAuthEnabled /f > /dev/null 2>&1 || true' EXIT
+          # Starts the app with a profile of its own, named $1, and checks that it logs $2: 0 for
+          # off, 1 for on.
+          sign_in() {
+            log="$out/sign-in-$1.log"
+            build/Browser/chrome.exe "--user-data-dir=$(cygpath -w "$RUNNER_TEMP/sign-in-$1")" \
+              --enable-logging=stderr --vmodule=platform_auth_policy_observer=1 \
+              < /dev/null > "$log" 2>&1 &
+            pid=$!
+            said=
+            for _ in $(seq 300); do
+              said=$(grep -o 'PlatformAuthProviderManager enabled: [01]' "$log" | head -1) || true
+              [ -z "$said" ] || break
+              sleep 0.1
+            done
+            taskkill /F /T /PID "$(cat "/proc/$pid/winpid")" > /dev/null 2>&1 || true
+            wait "$pid" || true
+            echo "$1: ${said:-nothing logged in 30 s}"
+            [ "$said" = "PlatformAuthProviderManager enabled: $2" ] || {
+              echo "::error::With $1, Microsoft sign-in should log enabled: $2. Its log: sign-in-$1.log in the artifact."
+              exit 1
+            }
+          }
+          reg delete "$key" /v CloudAPAuthEnabled /f > /dev/null 2>&1 || true
+          sign_in no-policy 0
+          reg add "$key" /v CloudAPAuthEnabled /t REG_DWORD /d 1 /f > /dev/null
+          sign_in policy-on 1
 
       - if: ${{ always() }}
         uses: actions/upload-artifact@v4

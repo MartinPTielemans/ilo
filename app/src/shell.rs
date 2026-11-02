@@ -94,6 +94,7 @@ mod rows;
 pub(crate) mod scaled;
 mod side_panel;
 mod sidebar;
+mod sidebar_backups;
 mod sidebar_keys;
 mod space_form;
 mod split_targets;
@@ -128,7 +129,7 @@ pub use keys::{
 };
 pub use history::HistoryPage;
 pub use library::{Archived, Captured, Download, DownloadAction, DownloadState};
-pub use menu_bar::{MenuBar, ProfileChoice};
+pub use menu_bar::{MenuBar, ProfileChoice, SidebarBackup};
 pub use themes::{AppAppearance, app_appearance};
 pub use menus::{MenuEntry, new_profile_name};
 pub use page_menu::{PageMenuItem, made_up as made_up_page_menu};
@@ -149,9 +150,9 @@ use library::{MediaVideo, RECEDE_X, Section};
 use menus::MenuAction;
 use panes::pane_frames;
 use recent_downloads::RecentDownloads;
-use rows::Breath;
+use rows::{Breath, UNLOAD};
 use scaled::scaled;
-use swap::{ARROW_DOWN, Swapped, Swaps, UNLOAD};
+use swap::{ARROW_DOWN, Swapped, Swaps};
 use tile_theme::TileTheme;
 use undo::{Edit, What};
 
@@ -336,6 +337,7 @@ use crate::tokens::shell::SPEAKER_GAP;
 use crate::tokens::shell::CLOSE_SIZE;
 use crate::tokens::shell::CLOSE_RIGHT;
 use crate::tokens::shell::CLOSE_GLYPH;
+use crate::tokens::shell::REMOVE_GLYPH;
 use crate::tokens::shell::SEGMENT_FAVICON_X;
 use crate::tokens::shell::SEGMENT_TITLE_GAP;
 use crate::tokens::shell::SEGMENT_END;
@@ -993,6 +995,10 @@ pub struct Shell {
     /// until ⌃ goes up, and then its last one does, though a click may have shown another since.
     walked: Option<u64>,
     hovered: Option<Row>,
+    /// The pinned row the pointer is on, whose − or middle press just unloaded it. Its remove
+    /// button waits until the pointer has left the row or pressed it, so a second click meant for
+    /// the − never removes the tab.
+    remove_held: Option<u64>,
     /// A shortcut the page handed back ran since the pointer last moved. The sidebar draws no row
     /// or favicon under the pointer until it moves, as GPUI hides its hover after a key of its own,
     /// so a row the pointer rests on doesn't read as selected beside the tab a key showed.
@@ -1136,8 +1142,8 @@ pub struct Shell {
     /// Whether an assistive app reads the window being drawn, so its elements say what they are
     /// (access.rs). Each render sets it from its window.
     a11y: bool,
-    /// The row and favicon hovered when the rows were last drawn, and that row's close button:
-    /// "0" for none, "1" for ✕ and "−", for the line check.sh waits for.
+    /// The row and favicon hovered when the rows were last drawn, and that row's button: "0" for
+    /// none, "1" for ✕, "−" for − and "remove" for remove, for the line check.sh waits for.
     drawn_hover: (Option<Row>, Option<u64>, &'static str),
     /// What ⌘Z undoes and ⇧⌘Z does again (`undo`).
     history: undo::History,
@@ -1145,9 +1151,10 @@ pub struct Shell {
     undo_offered: bool,
     /// The link preview the user closed last, for ⇧⌘T while no tab has closed since.
     closed_preview: Option<crate::link_preview::Closed>,
-    /// The step that puts the pinned tab whose split pane the user closed last back in its split,
-    /// for ⇧⌘T while no tab has closed since: closing it only took it out, unloaded.
-    closed_pane: Option<undo::Edit>,
+    /// The step that brings back the pinned tab the user closed last, for ⇧⌘T while no tab has
+    /// closed since: into its split, where closing its pane only took it out, unloaded, or pinned
+    /// at its place, where the user removed it.
+    closed_pinned: Option<undo::Edit>,
     /// What the Edit menu was last told Undo and Redo do.
     edit_titles: (Option<&'static str>, Option<&'static str>),
     /// Whether the pointer is over the docked sidebar, which shows Clear and the URL field's button
@@ -1290,6 +1297,8 @@ pub struct Shell {
     stale_pictures: Vec<Arc<gpui::RenderImage>>,
     /// Each profile's extensions.
     extensions: HashMap<u64, Vec<Extension>>,
+    /// Each profile's sidebar backups, as the core last listed them (`set_sidebar_backups`).
+    sidebar_backups: HashMap<u64, Vec<SidebarBackup>>,
     /// What the menu bar was last given for this window, and the window's title.
     menus: MenuBar,
     window_title: SharedString,
@@ -1450,6 +1459,7 @@ impl Shell {
             walked: None,
             selected: 0,
             hovered: None,
+            remove_held: None,
             page_keyed: false,
             retip: false,
             menu_row: None,
@@ -1518,7 +1528,7 @@ impl Shell {
             history: undo::History::default(),
             undo_offered: false,
             closed_preview: None,
-            closed_pane: None,
+            closed_pinned: None,
             edit_titles: (None, None),
             sidebar_hovered: false,
             hover_changed: false,
@@ -1588,6 +1598,7 @@ impl Shell {
             picture: None,
             stale_pictures: Vec::new(),
             extensions: HashMap::new(),
+            sidebar_backups: HashMap::new(),
             menus: MenuBar::default(),
             window_title: SharedString::default(),
             url_field_drawn: RefCell::default(),
@@ -2341,7 +2352,6 @@ impl Shell {
             }
             _ => log!("browser: selected {tab}"),
         }
-        let before = self.selected_row();
         let hidden = self.panes(self.selected);
         self.selected = tab;
         self.show_in_space(tab);
@@ -2368,7 +2378,6 @@ impl Shell {
         let new_tab =
             follows && self.browser.command_bar_follows(self.bar_tabs(), self.open_tabs(), cx);
         self.set_new_tab(new_tab, cx);
-        self.selection_moved(before);
         self.adding_pane = None;
         self.link_tab_changed(cx);
         self.note_hang(cx);
@@ -2873,6 +2882,9 @@ impl Shell {
             self.unhovered.retain(|&(old, _)| old != left);
             self.unhover(left);
         }
+        if self.remove_held.is_some_and(|held| self.hovered != Some(Row::Tab(held))) {
+            self.remove_held = None;
+        }
         cx.notify();
     }
 
@@ -3082,6 +3094,7 @@ impl Render for Shell {
                 UNLOAD => "−",
                 _ => "1",
             },
+            Some(Row::Tab(tab)) if self.removable(tab) => "remove",
             _ => "0",
         };
         let hover = (self.pointer_row(), self.pointer_favicon(), close);

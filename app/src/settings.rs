@@ -382,6 +382,7 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
             ("What's New", Keys::Of(Command::WhatsNew)),
             ("Essential Keyboard Shortcuts", Keys::Of(Command::KeyboardShortcuts)),
             ("Report a Problem", Keys::Of(Command::ReportProblem)),
+            ("Restore Earlier Sidebar", Keys::Of(Command::RestoreEarlierSidebar)),
             ("Copy Build Info", Keys::Of(Command::CopyBuildInfo)),
         ],
     ),

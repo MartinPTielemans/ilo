@@ -168,9 +168,15 @@ struct Floating {
   int fades = 0;
   // Counts the overlays' shows and hides, so a show still to come after a hide leaves it hidden.
   int shows = 0;
+  // Which of g_overlays it is, or -1.
+  int overlay = -1;
+  // Whether the UI has it shown, from the call that shows it, or for an overlay the call whose show
+  // waits for the UI's next frame, until the one that hides it or the user leaving it. Its window
+  // is on screen only while it is, whoever else shows it (FloatingProc).
+  bool shown = false;
 };
 
-bool HideOverlayOf(HWND hwnd);
+void LeaveOverlay(int index);
 
 std::map<HWND, Floating*>& FloatingByHwnd() {
   static std::map<HWND, Floating*> all;
@@ -226,6 +232,13 @@ LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpa
       // find bar's 32 is under, and a smaller least size in WM_GETMINMAXINFO doesn't lower it. An
       // overlay is the size the UI gives it.
       auto* pos = reinterpret_cast<WINDOWPOS*>(lparam);
+      // One the UI has hidden stays off screen. Windows hides the windows a browser window owns
+      // as it's minimized and shows them again as it comes back, and a command bar, a tooltip and
+      // a menu the UI hid meanwhile came back over the page, empty but for Windows' shadow or
+      // their last frame, taking its clicks (#1346).
+      if (!floating->shown) {
+        pos->flags &= ~SWP_SHOWWINDOW;
+      }
       const int width = pos->cx, height = pos->cy;
       const LRESULT result = DefSubclassProc(hwnd, message, wparam, lparam);
       if (!(pos->flags & SWP_NOSIZE)) {
@@ -253,19 +266,22 @@ LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpa
       }
       break;
     case WM_ACTIVATE:
+      // Shown, even once Windows has hidden it with its browser window, which takes the keyboard
+      // from it only then.
       if (LOWORD(wparam) == WA_INACTIVE && floating->dismissed && !floating->hiding &&
-          IsWindowVisible(hwnd)) {
+          floating->shown) {
         // ilo's menu, opened over this overlay, isn't the user leaving it.
         if (g_menu.shown && reinterpret_cast<HWND>(lparam) == g_menu.hwnd) {
           break;
         }
         // After the press that left it, as Windows has taken it by now: an overlay goes then, as
         // the Mac's and Linux's hosts close one, and the UI hears so after the press (#872).
-        void (*dismissed)(void) = floating->dismissed;
-        Later([dismissed, hwnd] {
-          HideOverlayOf(hwnd);
-          dismissed();
-        });
+        if (floating->overlay >= 0) {
+          LeaveOverlay(floating->overlay);
+        } else {
+          void (*dismissed)(void) = floating->dismissed;
+          Later([dismissed] { dismissed(); });
+        }
       }
       break;
   }
@@ -371,6 +387,7 @@ void Show(Floating& floating, void* ui_view, double left, double top, double wid
   ClientToScreen(root, &origin);
   SetWindowLongPtrW(floating.hwnd, GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(root));
   WatchOwner(root);
+  floating.shown = true;
   PlaceAndShow(floating.hwnd, origin.x, origin.y, static_cast<int>(std::lround(width * scale)),
                static_cast<int>(std::lround(height * scale)), keyboard);
   if (keyboard) {
@@ -395,8 +412,10 @@ std::map<HWND, HWND>& FocusAfterOverlay() {
   return views;
 }
 
-// Hides |floating|, giving its browser window the keyboard back if it had it.
+// Hides |floating|, giving its browser window the keyboard back if it had it. Hidden already, as
+// Windows hides it with its minimized browser window, it stays so as that window comes back.
 void Hide(Floating& floating) {
+  floating.shown = false;
   if (!floating.hwnd || !IsWindowVisible(floating.hwnd)) {
     return;
   }
@@ -410,8 +429,8 @@ void Hide(Floating& floating) {
   floating.hiding = true;
   ShowWindow(floating.hwnd, SW_HIDE);
   floating.hiding = false;
-  // Not to a browser window that's hiding to close.
-  if (had_keyboard && owner && IsWindowVisible(owner)) {
+  // Not to a browser window that's hiding to close, or minimized.
+  if (had_keyboard && owner && IsWindowVisible(owner) && !IsIconic(owner)) {
     SetForegroundWindow(owner);
     if (focus && IsWindow(focus)) {
       SetFocus(focus);
@@ -786,27 +805,40 @@ Floating g_overlays[4];
 // What check.sh calls each overlay, as the Mac's and Linux's hosts do.
 const char* const kOverlayNames[std::size(g_overlays)] = {"command bar", "icon picker",
                                                          "theme picker", "folder preview"};
-// Hides overlay |index| if it's shown, saying so, and whether it was.
-bool HideOverlay(int index) {
+int const kFolderPreview = 3;
+// Hides overlay |index| if it's shown, on screen or not, saying so, and whether it was, as the
+// Mac's host does: its show waits for the UI's next frame, and Windows hides it with its minimized
+// browser window.
+bool CloseOverlay(int index) {
   Floating& floating = g_overlays[index];
   ++floating.shows;
-  if (!floating.hwnd || !IsWindowVisible(floating.hwnd)) {
-    return false;
-  }
+  const bool was_shown = floating.shown;
   Hide(floating);
-  // check.sh reads this line.
-  fprintf(stderr, "browser: %s hidden\n", kOverlayNames[index]);
-  return true;
+  if (was_shown) {
+    // check.sh reads this line.
+    fprintf(stderr, "browser: %s hidden\n", kOverlayNames[index]);
+  }
+  return was_shown;
 }
 
-// Hides the overlay whose window is |hwnd|, if it's one and shown, saying so.
-bool HideOverlayOf(HWND hwnd) {
-  for (int index = 0; index < int(std::size(g_overlays)); ++index) {
-    if (g_overlays[index].hwnd == hwnd) {
-      return HideOverlay(index);
-    }
+// Closes overlay |index| for the user, who left it, and the UI hears so after the event: it may
+// be handling the one that closed it, as Esc's action is, and would borrow the app again.
+void DismissOverlay(int index) {
+  if (CloseOverlay(index) && g_overlays[index].dismissed) {
+    void (*dismissed)(void) = g_overlays[index].dismissed;
+    Later([dismissed] { dismissed(); });
   }
-  return false;
+}
+
+// The user left overlay |index| for another window: it goes after the event, unless it opened
+// again first.
+void LeaveOverlay(int index) {
+  const int shows = g_overlays[index].shows;
+  Later([index, shows] {
+    if (g_overlays[index].shows == shows) {
+      DismissOverlay(index);
+    }
+  });
 }
 struct Corner {
   Floating floating;
@@ -1187,8 +1219,27 @@ void Disown(HWND root) {
   }
   for (auto& [hwnd, floating] : FloatingByHwnd()) {
     if (GetWindow(hwnd, GW_OWNER) == root) {
-      Hide(*floating);
+      // An overlay the UI has open closes with the window, and the UI hears so.
+      if (floating->overlay >= 0) {
+        DismissOverlay(floating->overlay);
+      } else {
+        Hide(*floating);
+      }
       SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, 0);
+    }
+  }
+}
+
+// |root| was minimized, which Windows hides the windows it owns with: the user has left the menu
+// and the overlays over it, which Windows would show again without the keyboard as it comes back,
+// deaf, and never hearing the user leave them (#1346).
+void Minimized(HWND root) {
+  if (g_menu.shown && g_menu.browser == root) {
+    PostMenuDismiss(false);
+  }
+  for (int index = 0; index < int(std::size(g_overlays)); ++index) {
+    if (g_overlays[index].shown && GetWindow(g_overlays[index].hwnd, GW_OWNER) == root) {
+      DismissOverlay(index);
     }
   }
 }
@@ -1224,6 +1275,8 @@ LRESULT CALLBACK OwnerProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
       message == WM_WINDOWPOSCHANGED ? reinterpret_cast<const WINDOWPOS*>(lparam)->flags : 0;
   if (flags & SWP_HIDEWINDOW) {
     Disown(hwnd);
+  } else if (message == WM_WINDOWPOSCHANGED && IsIconic(hwnd)) {
+    Minimized(hwnd);
   } else if (message == WM_WINDOWPOSCHANGED && (~flags & (SWP_NOMOVE | SWP_NOSIZE))) {
     PlaceCorners(hwnd);
   } else if (message == WM_NCDESTROY) {
@@ -1348,8 +1401,11 @@ void MenuForegroundChanged(HWND root, bool ours) {
     // The menu itself.
   } else if (root == g_menu.browser || root == g_menu.parent) {
     // Chromium made its own window key, such as when a page commits; that isn't the user leaving,
-    // so the menu takes the keyboard back.
-    SetForegroundWindow(g_menu.hwnd);
+    // so the menu takes the keyboard back. Not while it's off screen, as when Windows hid it with
+    // its minimized window, which then has the keyboard.
+    if (IsWindowVisible(g_menu.hwnd)) {
+      SetForegroundWindow(g_menu.hwnd);
+    }
   } else {
     PostMenuDismiss(false);
   }
@@ -1985,8 +2041,9 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
     window_class.lpfnWndProc = LaunchProc;
     window_class.hInstance = GetModuleHandleW(nullptr);
     window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    // chrome.exe's own, IDR_MAINFRAME, which the browser window's frame shows too.
-    window_class.hIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(101));
+    // IDR_MAINFRAME, which the browser window's frame shows too, from chrome.dll, as Chromium's
+    // GetAppIcon takes it: chrome.exe names its icons, so it has no 101.
+    window_class.hIcon = LoadIconW(GetModuleHandleW(L"chrome.dll"), MAKEINTRESOURCEW(101));
     window_class.lpszClassName = L"BrowserLaunch";
     RegisterClassW(&window_class);
     return window_class.lpszClassName;
@@ -2376,6 +2433,7 @@ void host_forget_window(void* ui_view) {
 
 void host_add_overlay(int overlay, void* overlay_view, double, void (*dismissed)(void)) {
   Adopt(g_overlays[overlay], overlay_view, false, dismissed);
+  g_overlays[overlay].overlay = overlay;
   // The command bar is a rounded rectangle, as Windows' frame is. The pickers and the folder
   // preview have a beak, whose shape a rectangle's corners and shadow would show round.
   if (overlay == 0) {
@@ -2400,12 +2458,8 @@ void host_show_overlay(int overlay,
                        double top,
                        double width) {
   for (int each = 0; each < int(std::size(g_overlays)); ++each) {
-    Floating& other = g_overlays[each];
-    if (each != overlay && HideOverlay(each)) {
-      if (other.dismissed) {
-        void (*dismissed)(void) = other.dismissed;
-        Later([dismissed] { dismissed(); });
-      }
+    if (each != overlay) {
+      DismissOverlay(each);
     }
   }
   double content_width, content_height;
@@ -2417,6 +2471,7 @@ void host_show_overlay(int overlay,
     left = content_width - 8 - width;
   }
   Floating& floating = g_overlays[overlay];
+  floating.shown = true;
   const int shows = ++floating.shows;
   // The window still holds what it drew when it last closed, such as the previous query, as the
   // Mac's does. It goes on screen once the UI has drawn it as it is now, which can't happen while
@@ -2426,24 +2481,39 @@ void host_show_overlay(int overlay,
       ReleaseKeys(floating.hwnd);
       return;
     }
+    // Its browser window closed or was minimized since: on screen, it would stand alone where the
+    // window was.
+    HWND root = Root(ui_view);
+    if (!root || !IsWindowVisible(root) || IsIconic(root)) {
+      ReleaseKeys(nullptr);
+      DismissOverlay(overlay);
+      return;
+    }
     const bool was_shown = IsWindowVisible(floating.hwnd);
     if (!was_shown) {
-      if (HWND root = Root(ui_view)) {
-        // Placed and drawn before it's on screen, as the menu is: Windows sends a hidden window no
-        // WM_PAINT, but GPUI's window draws on any it's sent.
-        const double scale = Scale(root);
-        POINT origin{std::lround(left * scale), std::lround(top * scale)};
-        ClientToScreen(root, &origin);
-        double own_width, own_height;
-        WindowSize(floating.hwnd, &own_width, &own_height);
-        SetWindowPos(floating.hwnd, nullptr, origin.x, origin.y,
-                     static_cast<int>(std::lround(width * scale)),
-                     static_cast<int>(std::lround(own_height * scale)),
-                     SWP_NOACTIVATE | SWP_NOZORDER);
-        SendMessageW(floating.hwnd, WM_PAINT, 0, 0);
-      }
+      // Placed and drawn before it's on screen, as the menu is: Windows sends a hidden window no
+      // WM_PAINT, but GPUI's window draws on any it's sent.
+      const double scale = Scale(root);
+      POINT origin{std::lround(left * scale), std::lround(top * scale)};
+      ClientToScreen(root, &origin);
+      double own_width, own_height;
+      WindowSize(floating.hwnd, &own_width, &own_height);
+      SetWindowPos(floating.hwnd, nullptr, origin.x, origin.y,
+                   static_cast<int>(std::lround(width * scale)),
+                   static_cast<int>(std::lround(own_height * scale)),
+                   SWP_NOACTIVATE | SWP_NOZORDER);
+      SendMessageW(floating.hwnd, WM_PAINT, 0, 0);
     }
     Show(floating, ui_view, left, top, width, -1, true);
+    // One Windows didn't give the keyboard, as when another app came to the front since the
+    // shortcut, would sit over the page deaf, and, never having had the keyboard, never hear the
+    // user leave it: they have already. The folder preview goes as the pointer leaves it, as the
+    // hover card does, so it may show over a window in the background.
+    if (overlay != kFolderPreview && GetForegroundWindow() != floating.hwnd) {
+      ReleaseKeys(nullptr);
+      DismissOverlay(overlay);
+      return;
+    }
     // The bar now has the keyboard, so the keys held since the shortcut go to it.
     ReleaseKeys(floating.hwnd);
     if (!IsWindowVisible(floating.hwnd)) {
@@ -2480,16 +2550,11 @@ void host_set_overlay_height(int overlay, double height) {
 // host_can_draw_emoji is the app's, from GPUI's text system (platform/linux/emoji.rs).
 
 void host_hide_overlay(int overlay) {
-  HideOverlay(overlay);
+  CloseOverlay(overlay);
 }
 
 void host_dismiss_overlay(int overlay) {
-  // Posted: the UI may be handling the event that closed the overlay, as Esc's action is, and
-  // would borrow the app again.
-  if (HideOverlay(overlay) && g_overlays[overlay].dismissed) {
-    void (*dismissed)(void) = g_overlays[overlay].dismissed;
-    Later([dismissed] { dismissed(); });
-  }
+  DismissOverlay(overlay);
 }
 
 void host_hold_keys(void) {
@@ -2698,6 +2763,8 @@ void host_show_link_preview(void* ui_view) {
     SetWindowSubclass(root, LinkPreviewOwnerProc, kLinkPreviewOwner, 0);
   }
   g_link_preview.root = root;
+  // Shown from here, though it goes on screen after the event (FloatingProc).
+  g_link_preview.floating.shown = true;
   // All of it until its first frame says where the page is.
   g_link_preview.hole.reset();
   g_link_preview.floating.mouse_through = false;
@@ -3009,12 +3076,18 @@ void host_add_menu_window(void* view,
   g_menu.choose = choose;
   ShowWindow(g_menu.hwnd, SW_HIDE);
   OffTaskbar(g_menu.hwnd);
-  // All of it is the UI's, as an overlay's is (FloatingProc).
+  // All of it is the UI's, and it's on screen only while the UI shows it, as an overlay is
+  // (FloatingProc).
   SetWindowSubclass(
       g_menu.hwnd,
       [](HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR, DWORD_PTR) -> LRESULT {
-        return message == WM_NCCALCSIZE && wparam ? 0
-                                                  : DefSubclassProc(hwnd, message, wparam, lparam);
+        if (message == WM_NCCALCSIZE && wparam) {
+          return 0;
+        }
+        if (message == WM_WINDOWPOSCHANGING && !g_menu.shown) {
+          reinterpret_cast<WINDOWPOS*>(lparam)->flags &= ~SWP_SHOWWINDOW;
+        }
+        return DefSubclassProc(hwnd, message, wparam, lparam);
       },
       1, 0);
   SetWindowPos(g_menu.hwnd, nullptr, 0, 0, 0, 0,
@@ -3055,6 +3128,11 @@ void host_show_menu_window(void* ui_view,
     if (showing != g_menu.showing) {
       return;
     }
+    // Its browser window was minimized or went since the press: on screen, it would stand alone.
+    if (!IsWindowVisible(base) || IsIconic(root)) {
+      PostMenuDismiss(false);
+      return;
+    }
     SetWindowLongPtrW(g_menu.hwnd, GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(base));
     WatchOwner(root);
     const int wide = frame.right - frame.left, high = frame.bottom - frame.top;
@@ -3070,6 +3148,11 @@ void host_show_menu_window(void* ui_view,
     InstallMenuHooks();
     // check.sh reads this line.
     fprintf(stderr, "browser: menu window at %.0f,%.0f %.0fx%.0f\n", left, top, width, height);
+    // As the command bar (host_show_overlay): one Windows didn't give the keyboard, as when another
+    // app came to the front since the press, the user has left, and it would never hear so.
+    if (GetForegroundWindow() != g_menu.hwnd) {
+      PostMenuDismiss(false);
+    }
   });
 }
 

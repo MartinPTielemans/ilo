@@ -1119,6 +1119,79 @@ fn undoing_a_pinned_panes_close_rejoins_it_once(cx: &mut TestAppContext) {
     assert!(host.take().contains(&"reopen closed tab".to_string()));
 }
 
+/// Removing an unloaded pinned split view's row takes its tabs out together, and ⌘Z pins them again
+/// at their place, each with its pinned URL, reopening the last first, as the core puts each back
+/// beside the one its close named; ⇧⌘Z removes them again.
+#[gpui::test]
+fn a_removed_pinned_split_comes_back_split_at_its_place(cx: &mut TestAppContext) {
+    let split = Split {
+        tabs: vec![20, 21],
+        ..Default::default()
+    };
+    let (shell, host) = window(cx, vec![19, 20, 21], vec![10], Folders::default(), vec![split]);
+    shell.update(cx, |shell, cx| shell.set_selected(10, cx));
+    host.pinned_urls.borrow_mut().extend([
+        (20, "https://a.example/".to_string()),
+        (21, "https://b.example/".to_string()),
+    ]);
+    shell.update(cx, |shell, cx| shell.remove_pinned(20, cx));
+    assert_eq!(host.take_edits(), ["pinned 20 false", "close 20"]);
+    report(&shell, cx, vec![19], vec![10]);
+
+    host.pinned_urls.borrow_mut().clear();
+    assert!(undo(&shell, cx));
+    assert_eq!(
+        host.take_edits(),
+        [
+            "reopen 21 as 1001",
+            "reopen 20 as 1002",
+            "move 1002 true 0 1",
+            "pinned url 1001 https://b.example/",
+            "pinned url 1002 https://a.example/",
+        ]
+    );
+    report_lists(&shell, cx, vec![19, 1002, 1001], vec![10], vec![1002, 1001]);
+    assert!(redo(&shell, cx));
+    assert_eq!(host.take_edits(), ["pinned 1002 false", "close 1002"]);
+}
+
+/// ⇧⌘T after removing a pinned tab pins it again at its place, as ⌘Z does, where the core's
+/// reopen would put it in Today; then ⌘Z has nothing of it to undo, and the next ⇧⌘T is the
+/// core's.
+#[gpui::test]
+fn reopening_a_removed_pinned_tab_pins_it_again(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![19, 20], vec![10], Folders::default(), Vec::new());
+    shell.update(cx, |shell, cx| shell.remove_pinned(20, cx));
+    report(&shell, cx, vec![19], vec![10]);
+    host.take();
+    host.take_edits();
+    shell.update(cx, |shell, cx| shell.run(Command::ReopenClosedTab, "ui", cx));
+    assert_eq!(host.take_edits(), ["reopen 20 as 1001", "move 1001 true 0 1"]);
+    assert!(!host.take().contains(&"reopen closed tab".to_string()));
+    assert_eq!(titles(&shell, cx).0, None);
+    report(&shell, cx, vec![19, 1001], vec![10]);
+    shell.update(cx, |shell, cx| shell.run(Command::ReopenClosedTab, "ui", cx));
+    assert!(host.take().contains(&"reopen closed tab".to_string()));
+}
+
+/// Only a pinned row has the step: a Today tab or a folder isn't removed.
+#[gpui::test]
+fn only_a_pinned_tab_is_removed(cx: &mut TestAppContext) {
+    let folders = Folders {
+        folders: HashMap::from([(5, ("Reading".into(), true))]),
+        parents: HashMap::from([(6, 5)]),
+        ..Default::default()
+    };
+    let (shell, host) = window(cx, vec![5, 6], vec![10], folders, Vec::new());
+    host.take_edits();
+    shell.update(cx, |shell, cx| {
+        shell.remove_pinned(10, cx);
+        shell.remove_pinned(5, cx);
+    });
+    assert!(host.take_edits().is_empty());
+    assert_eq!(titles(&shell, cx).0, None);
+}
+
 /// ⌃⇧- on a Today tab's pane closes the tab, into the archive, which ⌘Z reopens at its place, and
 /// ⇧⌘T asks the core for, which puts it back in its split.
 #[gpui::test]
@@ -1229,14 +1302,12 @@ fn a_folder_moved_to_another_profile_is_asked_first_and_not_undone(cx: &mut Test
     host.take_edits();
     cx.update(|cx| host.choose("Three", cx));
     assert!(host.take_edits().is_empty(), "moved before it asked");
+    let (message, detail, moved) = host.confirming.take().expect("an action to confirm");
     assert_eq!(
-        host.confirms.take(),
-        [
-            "Move this folder to the “Work” profile? Its pages load again there, without this \
-             profile's cookies and logins, so a site may ask you to sign in."
-        ]
+        format!("{message} {detail}"),
+        "Move this folder to the “Work” profile? Its pages load again there, without this \
+         profile's cookies and logins, so a site may ask you to sign in."
     );
-    let moved = host.confirm_action.take().expect("an action to confirm");
     cx.update(|cx| moved(cx));
     assert_eq!(host.take_edits(), ["space folder 5 3"]);
     assert!(!undo(&shell, cx));
