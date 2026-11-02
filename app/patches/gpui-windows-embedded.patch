@@ -439,7 +439,7 @@ index 8164bc1564..ed7d01d6c4 100644
      #[test]
      fn test_keyboard_mapper() {
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index 095e009e23..32e8217aad 100644
+index 095e009e23..972fd91b7e 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
 @@ -587,6 +587,11 @@ impl Platform for WindowsPlatform {
@@ -454,7 +454,52 @@ index 095e009e23..32e8217aad 100644
          let mut msg = MSG::default();
          unsafe {
              while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-@@ -1980,3 +1985,12 @@ mod tests {
+@@ -1637,10 +1642,43 @@ fn file_save_dialog(
+ 
+ fn load_icon() -> Result<HICON> {
+     let module = unsafe { GetModuleHandleW(None).context("unable to get module handle")? };
++    load_icon_named(module, windows::core::PCWSTR(1 as _)).or_else(|_| {
++        // An embedder's executable, such as a browser engine's, can name its icons rather than
++        // number them. Its first is the one Explorer shows for it.
++        unsafe extern "system" fn first(
++            module: HMODULE,
++            _: PCWSTR,
++            name: PCWSTR,
++            icon: isize,
++        ) -> BOOL {
++            if let Ok(handle) = load_icon_named(module, name) {
++                unsafe { *(icon as *mut HICON) = handle };
++            }
++            FALSE
++        }
++        let mut icon = HICON::default();
++        // It returns false once the first has ended the enumeration.
++        let _ = unsafe {
++            EnumResourceNamesW(
++                Some(module),
++                RT_GROUP_ICON,
++                Some(first),
++                &mut icon as *mut HICON as isize,
++            )
++        };
++        if icon.is_invalid() {
++            Err(anyhow!("the executable has no icon"))
++        } else {
++            Ok(icon)
++        }
++    })
++}
++
++fn load_icon_named(module: HMODULE, name: PCWSTR) -> Result<HICON> {
+     let handle = unsafe {
+         LoadImageW(
+             Some(module.into()),
+-            windows::core::PCWSTR(1 as _),
++            name,
+             IMAGE_ICON,
+             0,
+             0,
+@@ -1980,3 +2018,12 @@ mod tests {
          );
      }
  }
