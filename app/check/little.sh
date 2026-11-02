@@ -219,7 +219,29 @@ if [ "$(uname)" = Darwin ]; then
   send window 1
 fi
 
+# ⌥⌘-click on a Today tab's row moves the tab, its page live, into a Little ilo window for its
+# Space, and the main window shows another.
+send window 1
+# Shown first, so its page has loaded and can move live: a tab opened behind loads only when shown.
+send click $(row 0)
+expect '^browser: selected [0-9][0-9]*' "a click on the first Today row didn't show its tab"
+shown=$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)
+expect "^browser: loaded $shown " "the first Today tab's page didn't load once shown"
+# Read from the sidebar's own line: each Little ilo window logs its own Today, so the last Today
+# line may be one of theirs.
+send click $(row 0) alt cmd
+expect '^browser: command little via sidebar [0-9][0-9]*$' "⌥⌘-click on a Today tab's row didn't reach the sidebar"
+taken=$(grep '^browser: command little via sidebar ' "$log" | tail -1 | cut -d' ' -f6)
+expect "^browser: little window opened [0-9]* profile [0-9]* home $home\$" \
+  "⌥⌘-click on a Today tab's row didn't open a Little ilo window for Space $home"
+little=$(opened)
+expect "^browser: little window $little took $taken from window $main\$" \
+  "the Little ilo window didn't take the tab: $(grep "^browser: little window $little " "$log" | tail -1)"
+expect "^browser: window $little shows $taken\$" "the Little ilo window doesn't show the tab's page"
+none_since "^browser: loaded $taken " || fail "the tab's page loaded again instead of moving live"
+none_since "^browser: splits [0-9]" || fail "⌥⌘-click on a Today tab's row opened a split view too"
+
 exec 3>&-
 quit
 kill "$server"
-echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L loads a URL in it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. Windows: $out/little.png $out/little-moved.png $out/little-link.png, and on the Mac $out/little-full-screen.png $out/little-dock.png"
+echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L loads a URL in it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Windows: $out/little.png $out/little-moved.png $out/little-link.png, and on the Mac $out/little-full-screen.png $out/little-dock.png"

@@ -1293,6 +1293,10 @@ impl Browser for Recorder {
     fn open_in_main_window(&self, tab: u64, home: u64, _: &mut App) {
         self.record(format!("open in main window {tab} {home}"))
     }
+
+    fn open_tab_in_little(&self, tab: u64, _: &mut App) {
+        self.record(format!("open tab in little {tab}"))
+    }
 }
 
 /// The account's core, recording what the account step asks of it.

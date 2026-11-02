@@ -670,6 +670,9 @@ pub trait Browser {
     /// Opens an empty Little ilo window (docs/ux-spec.md › Little Arc) for the user's Space
     /// `home`, after this one's draw.
     fn new_little_window(&self, home: u64, cx: &mut App);
+    /// Opens a Little ilo window for `tab`'s Space and moves `tab`, one of its Today tabs, into it,
+    /// its page live with its history, as ⌥⌘-click on its row does (Arc).
+    fn open_tab_in_little(&self, tab: u64, cx: &mut App);
     /// A Little ilo window's ⌘O: moves `tab`, live, to the user's Space `home` in a regular window,
     /// which shows it and comes to the front, and closes this window.
     fn open_in_main_window(&self, tab: u64, home: u64, cx: &mut App);

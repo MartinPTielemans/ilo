@@ -114,6 +114,30 @@ impl Shell {
         true
     }
 
+    /// ⌥⌘-click on a Today tab's row in the sidebar opens the tab in a Little ilo window, its page
+    /// live (Arc), and says whether it did. Not a pinned tab or a favorite, which keep their place,
+    /// a split view's, a folder, an agent's or a private window's: those take ⌥-click's split.
+    pub(super) fn little_press_row(
+        &mut self,
+        tab: u64,
+        event: &gpui::MouseDownEvent,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let users = self.shown_space().is_some_and(|space| space.agent.is_empty());
+        let takes = event.modifiers.alt && event.modifiers.platform && !event.modifiers.shift;
+        if !takes || !users || self.private || self.little.is_some() || self.is_folder(tab) {
+            return false;
+        }
+        if !self.today().contains(&tab) || self.panes(tab).len() > 1 {
+            return false;
+        }
+        self.end_hovers(cx);
+        // check.sh reads this line.
+        log!("browser: command little via sidebar {tab}");
+        self.browser.open_tab_in_little(tab, cx);
+        true
+    }
+
     /// ⌘O: its page goes, live, to its Space in the main window, and the Little ilo window closes.
     pub(super) fn open_in_main_window(&mut self, cx: &mut Context<Self>) {
         if let Some(home) = self.little()

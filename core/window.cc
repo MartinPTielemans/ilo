@@ -944,6 +944,43 @@ void Window::CloseBelow(bc_id tab) {
   }
 }
 
+bc_id Window::TakeTab(bc_id tab) {
+  Space* from = Space::Holding(tab);
+  Space* to = Space::FromId(space_);
+  // Only a Little ilo window's empty Space takes one, of the user's own Today tabs in its profile:
+  // a pinned tab or a favorite keeps its place, an agent's stays out of the user's window, and a
+  // page can't take its cookies to another profile or out of incognito.
+  if (!own_space_ || off_the_record_ || !from || !to || from == to || !to->today().empty() ||
+      from->own() || from->off_the_record() || from->agent().has_value() ||
+      from->profile() != to->profile() || from->IsPinned(tab) || Favorites::Has(tab) ||
+      from->Panes(tab).size() > 1 || DeletingSpaces().contains(from->id())) {
+    return 0;
+  }
+  const bc_id next = from->NextAfterLeaving(tab, &Tab::Loaded);
+  // In its new Space before it leaves the old, as MoveToSpace does.
+  to->AddAt(tab, 0);
+  from->Remove(tab);
+  // Its page comes here, which lets go of it in the window that showed it.
+  Select(tab);
+  for (auto& [id, window] : Windows()) {
+    if (id == id_) {
+      continue;
+    }
+    if (window->selected_ == tab) {
+      window->selected_ = next;
+      if (next) {
+        window->Pick(next);
+      } else {
+        window->ShowNothing();
+      }
+    } else if (window->SelectedIn(from->id()) == tab) {
+      window->SetSelectedIn(from->id(), next);
+    }
+  }
+  PanesChanged();
+  return tab;
+}
+
 // static
 void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent) {
   Space* from = Space::Holding(tab);

@@ -159,3 +159,66 @@ fn its_keys_are_option_command_n_and_command_o() {
     assert_eq!(keys.command_for("cmd-o", true), None);
     assert_eq!(keys.command_for("cmd-o", false), Some(Command::OpenInMainWindow));
 }
+
+/// A left press on a sidebar row of the main window, with `modifiers`, as the row's handler gets it.
+fn press_row(
+    shell: &Entity<Shell>,
+    tab: u64,
+    modifiers: gpui::Modifiers,
+    cx: &mut TestAppContext,
+) -> bool {
+    let event = gpui::MouseDownEvent {
+        button: gpui::MouseButton::Left,
+        position: gpui::point(gpui::px(40.), gpui::px(200.)),
+        modifiers,
+        click_count: 1,
+        first_mouse: false,
+    };
+    shell.update(cx, |shell, cx| shell.little_press_row(tab, &event, cx))
+}
+
+/// ⌥⌘-click on a Today tab's row opens that tab in a Little ilo window (Arc), and on a pinned
+/// tab, with ⇧ too, or with ⌥ alone it doesn't, leaving ⌥-click's split view to the row.
+#[gpui::test]
+fn option_command_click_on_a_today_tab_opens_it_in_little_ilo(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let main = main_window(cx, &host);
+    main.update(cx, |shell, cx| {
+        shell.set_tabs(1, vec![4], vec![5, 6], Vec::new(), Folders::default(), cx);
+        shell.set_selected(5, cx);
+    });
+    host.take();
+    let alt_cmd = gpui::Modifiers { alt: true, platform: true, ..Default::default() };
+    assert!(!press_row(&main, 4, alt_cmd, cx), "a pinned tab keeps its place");
+    let alt = gpui::Modifiers { alt: true, ..Default::default() };
+    assert!(!press_row(&main, 6, alt, cx));
+    let alt_shift_cmd = gpui::Modifiers { shift: true, ..alt_cmd };
+    assert!(!press_row(&main, 6, alt_shift_cmd, cx));
+    assert!(host.take().is_empty());
+    assert!(press_row(&main, 6, alt_cmd, cx));
+    // After the hover cards it closes.
+    assert_eq!(host.take().last().map(String::as_str), Some("open tab in little 6"));
+}
+
+/// A Little ilo window has no sidebar rows of its own to send, and an agent's Space keeps its tabs.
+#[gpui::test]
+fn option_command_click_is_the_users_spaces_alone(cx: &mut TestAppContext) {
+    let alt_cmd = gpui::Modifiers { alt: true, platform: true, ..Default::default() };
+    let (shell, host) = little(cx, "https://example.com/");
+    assert!(!press_row(&shell, 10, alt_cmd, cx));
+    let main = main_window(cx, &host);
+    main.update(cx, |shell, cx| {
+        shell.set_spaces(
+            vec![
+                (1, "One".into(), None, 1, "".into(), "".into(), "".into()),
+                (3, "Agent".into(), None, 1, "".into(), "claude".into(), "".into()),
+            ],
+            cx,
+        );
+        shell.set_space(3, cx);
+        shell.set_tabs(3, Vec::new(), vec![7], Vec::new(), Folders::default(), cx);
+    });
+    host.take();
+    assert!(!press_row(&main, 7, alt_cmd, cx));
+    assert!(host.take().is_empty());
+}

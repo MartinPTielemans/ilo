@@ -1317,6 +1317,8 @@ impl Browser for Fake {
 
     fn new_little_window(&self, _: u64, _: &mut App) {}
 
+    fn open_tab_in_little(&self, _: u64, _: &mut App) {}
+
     fn open_in_main_window(&self, _: u64, _: u64, _: &mut App) {}
 
     fn close_window(&self, cx: &mut App) {

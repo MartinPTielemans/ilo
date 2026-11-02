@@ -2058,6 +2058,11 @@ bc_id bc_window_open_little(bc_rect bounds, void* ui_view, bc_id profile_id) {
   return window ? window->id() : 0;
 }
 
+bc_id bc_window_take_tab(bc_id window_id, bc_id tab) {
+  browser_core::Window* window = browser_core::Window::FromId(window_id);
+  return window ? window->TakeTab(tab) : 0;
+}
+
 void bc_window_set_side_panel_frame(bc_id window_id, bc_rect frame) {
   if (browser_core::Window* window = browser_core::Window::FromId(window_id)) {
     window->SetSidePanelFrame(ToRect(frame));

@@ -163,6 +163,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Into an agent's Space only |to_agent|, as the user gives the agent the tab
   // (bc_tab_give_to_agent), and then nowhere else.
   static void MoveToSpace(bc_id tab, bc_id space, bool to_agent = false);
+  // A Little ilo window takes |tab|, a Today tab of one of the user's Spaces, into its own Space
+  // while that's empty, and shows its page live (bc_window_take_tab). Returns |tab|, or 0.
+  bc_id TakeTab(bc_id tab);
 
   Window(const Window&) = delete;
   Window& operator=(const Window&) = delete;

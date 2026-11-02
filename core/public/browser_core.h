@@ -2477,6 +2477,14 @@ BC_EXPORT bc_id bc_window_open_private(bc_rect bounds, void* ui_view, bc_id prof
 // user's alone, as a private window is: bc_windows leaves it out, and agents get none.
 BC_EXPORT bc_id bc_window_open_little(bc_rect bounds, void* ui_view, bc_id profile);
 
+// Moves |tab|, a Today tab of one of the user's Spaces, into the Little ilo window |window|'s own
+// Space while that holds no tab, and shows its page there live, with its history, as ⌥⌘-click on
+// a sidebar tab does (Arc). A window that showed it shows what its Space would once the tab
+// closed. Not a pinned tab or a favorite, one in a split view, an agent's, a private window's or
+// another profile's: returns 0 for those, else |tab|. The user's alone: agents get none, as they
+// get no Little ilo window.
+BC_EXPORT bc_id bc_window_take_tab(bc_id window, bc_id tab);
+
 // Extensions' side panels. Each profile's tabs have their own, as each Chrome window does: one for
 // every tab, or one for a tab that its extension gave it, which shows only while that tab does. An
 // extension opens its panel with sidePanel.open() or from its action, and the user does with

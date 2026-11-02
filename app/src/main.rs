@@ -3439,6 +3439,24 @@ impl Browser for Engine {
         });
     }
 
+    fn open_tab_in_little(&self, tab: u64, cx: &mut App) {
+        let id = self.window;
+        cx.defer(move |cx| {
+            let from = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == id).cloned());
+            let Some(little) = from.and_then(|from| open_little(from, 0, cx)) else {
+                return;
+            };
+            if unsafe { bc::bc_window_take_tab(little, tab) } == 0 {
+                // check.sh reads this line.
+                log!("browser: little window {little} refused {tab}");
+                unsafe { bc::bc_window_close(little) };
+                return;
+            }
+            // check.sh reads this line.
+            log!("browser: little window {little} took {tab} from window {id}");
+        });
+    }
+
     fn open_in_main_window(&self, tab: u64, home: u64, cx: &mut App) {
         let id = self.window;
         cx.defer(move |_| {
