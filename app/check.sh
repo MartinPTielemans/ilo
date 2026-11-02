@@ -131,6 +131,10 @@ launch_frame="$(dirname "$saved")/launch-frame"
 # The mcp run turns agents on with a token of its own, which a failed one left. The keys run gives
 # Go to Space 1 ⌃⌘1 and leaves the favorites out of ⌘1–⌘8, which a failed one left for the runs after.
 rm -f "$(dirname "$saved")/Agents" "$(dirname "$saved")/Shortcuts"
+# The crash run's minidump stays in Crashpad's folder, as on Windows a report waiting to be sent
+# does, and cleanup would take it for a crash of this check's (lib.sh). The check that left it
+# took its own copy.
+rm -rf "$(dirname "$saved")/Crashpad"
 # DevTools open where the profile last had them, so an undocked try would leave them in a window.
 # The find run docks them, so they start on the right. The restore run's download goes in the
 # check's own folder, never the user's Downloads. A failed extensions run may have left one of its
