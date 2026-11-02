@@ -18,7 +18,8 @@
 # (build.sh), and making it the default asks in a system dialog the driver can't answer; on Linux
 # the desktop's defaults name no dev build. A link that launches the browser opens over the Spaces
 # it brings back, before the UI comes out from under the launch picture, or with no rules, in Little
-# ilo, over them. On the Mac ⌘Q keeps the
+# ilo, over them; on the Mac the notes of an update that launch is the first of open beside it as a
+# tab in the window, never in Little ilo. On the Mac ⌘Q keeps the
 # sidebar's picture, which both the launch without a link and the one with it show; Linux has no
 # launch picture (host_show_launch_window). Reports the launch times from the process's start,
 # without a link and with one.
@@ -482,9 +483,27 @@ cold="launch window $(at 'launch window') ms, started $(at 'started') ms, first 
 quit_launched
 rm -f "$rules_file"
 
+# On the Mac the first launch of an update opens the notes Sparkle kept for it, here the run's, as
+# What's New, ilo's own page: a tab in the window's Space, never where links from other apps go
+# (#1484). Off it no updater keeps notes.
+if [ -n "$mac" ]; then
+  defaults write "$app_id" UpdateNotes -dict \
+    version "$(plutil -extract CFBundleVersion raw "$app/Contents/Info.plist")" url "${site}?notes"
+fi
 # With no rules, the link that launches the browser opens in Little ilo, for the Space the window
 # brings back, over it.
 launch "$out/links-little.log" "${site}?little"
+if [ -n "$mac" ]; then
+  notes_line="^browser: update notes ${site}?notes: tab [1-9][0-9]* in space [1-9][0-9]* of window [0-9]*\$"
+  await "$notes_line" ||
+    fail "the update's notes didn't open as a tab in the window: $(grep '^browser: \(update notes\|link\)' "$log" | head -2)"
+  tab=$(grep "$notes_line" "$log" | sed 's/.*: tab \([0-9]*\) .*/\1/')
+  await "^browser: loaded $tab ${site}?notes\$" || fail "the update's notes didn't load in their tab"
+  ! grep -q "^browser: link from another app ${site}?notes" "$log" ||
+    fail "the update's notes opened as a link from another app"
+  ! defaults read "$app_id" UpdateNotes > /dev/null 2>&1 ||
+    fail "the update's notes were kept for the next launch too"
+fi
 await '^browser: restored in ' || fail "the Spaces didn't come back under the link"
 await "$(little_line "?little" "[0-9]*")" ||
   fail "the link that launched the browser didn't open in Little ilo: $(grep '^browser: link' "$log" | tail -1)"
@@ -514,4 +533,5 @@ else
   echo "skip: the launch with no link while the window is minimized, the agent's Space, the private window, Settings and the link rules. Browser wasn't the active app, so the page ignored the click."
 fi
 echo "ok: a link that launches the browser opens once, over the Spaces it brings back, before the UI comes out from under the launch picture, and loads, and both launches show the sidebar's picture; with no rules, it opens in Little ilo. Windows: $out/links-cold.png $out/links-little-launch.png"
+[ -z "$mac" ] || echo "ok: an update's notes open as a tab in the window at its first launch, with links from other apps going to Little ilo, and only then."
 echo "  Launch without a link: $plain; with one: $cold"
