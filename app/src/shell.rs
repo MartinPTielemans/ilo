@@ -938,6 +938,14 @@ impl Settle {
     }
 }
 
+/// What the user asked to show, timed until the core shows it: a Space's switch ends only at the
+/// Space's report and a tab's only at a tab's, whatever the core reports between.
+#[derive(Clone, Copy)]
+enum Switch {
+    Space(u64),
+    Tab(u64),
+}
+
 pub struct Shell {
     browser: Rc<dyn Browser>,
     /// Holds GPUI's focus while nothing in the shell takes it, so the shortcuts have their context.
@@ -1357,7 +1365,7 @@ pub struct Shell {
     /// The page dialog asked over the card last, by its tab and id, and where.
     page_dialog_shown: Option<(u64, u64, (Bounds<Pixels>, f32))>,
     /// The tab or Space the user asked for and when, until it's shown.
-    switching: Option<(u64, Instant)>,
+    switching: Option<(Switch, Instant)>,
     /// A press on the window's background, until the pointer moves and it moves the window.
     background_pressed: bool,
     /// What the chrome draws with, for the Space shown (palette.rs), and each theme's, worked
@@ -2038,7 +2046,7 @@ impl Shell {
     pub fn set_space(&mut self, space: u64, cx: &mut Context<Self>) {
         // check.sh reads these lines.
         match self.switching {
-            Some((asked, start)) if asked == space => {
+            Some((Switch::Space(asked), start)) if asked == space => {
                 self.switching = None;
                 log!(
                     "browser: space {space} in {:.1} ms",
@@ -2298,11 +2306,20 @@ impl Shell {
     }
 
     pub fn set_selected(&mut self, tab: u64, cx: &mut Context<Self>) {
-        match self.switching.take() {
-            Some((asked, start)) if asked == tab => log!(
-                "browser: selected {tab} in {:.1} ms",
-                start.elapsed().as_secs_f64() * 1000.
-            ),
+        // A Space's switch can report a tab, even none, before the Space itself (#1332), so only a
+        // tab's switch ends here.
+        match self.switching {
+            Some((Switch::Tab(asked), start)) => {
+                self.switching = None;
+                if asked == tab {
+                    log!(
+                        "browser: selected {tab} in {:.1} ms",
+                        start.elapsed().as_secs_f64() * 1000.
+                    );
+                } else {
+                    log!("browser: selected {tab}");
+                }
+            }
             _ => log!("browser: selected {tab}"),
         }
         let before = self.selected_row();
@@ -2765,7 +2782,7 @@ impl Shell {
         if space == self.space {
             return;
         }
-        self.switching = Some((space, Instant::now()));
+        self.switching = Some((Switch::Space(space), Instant::now()));
         self.browser.show_space(space, cx);
     }
 
@@ -2774,7 +2791,7 @@ impl Shell {
         if tab == self.selected && !self.pictured(tab) {
             return;
         }
-        self.switching = Some((tab, Instant::now()));
+        self.switching = Some((Switch::Tab(tab), Instant::now()));
         self.browser.select(tab, cx);
     }
 
