@@ -1,15 +1,19 @@
 # UI Automation for proof.sh: the windows WinSparkle and the installer show, as a user sees them.
 #   ui.ps1 dump WINDOW            every top-level window WINDOW matches, with what's in it
-#   ui.ps1 click WINDOW BUTTON    presses the first enabled button whose name matches BUTTON, in a
-#                                 window WINDOW matches; exits 1 if there's none
+#   ui.ps1 click WINDOW BUTTON    presses the first enabled control whose name matches BUTTON, in a
+#                                 window WINDOW matches; exits 1 if there's none. WinSparkle's
+#                                 buttons are wxWidgets panes with no Invoke, so those get a click
+#                                 at their centre, as the mouse would.
 # WINDOW is a process id, or else a regular expression for the window's title.
 param([string]$Command, [string]$Window, [string]$Button)
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 $Element = [System.Windows.Automation.AutomationElement]
 $Scope = [System.Windows.Automation.TreeScope]
 $All = [System.Windows.Automation.Condition]::TrueCondition
-$Buttons = New-Object System.Windows.Automation.PropertyCondition(
-  $Element::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
+Add-Type -Namespace Proof -Name Mouse -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+[DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint x, uint y, uint data, System.UIntPtr extra);
+'@
 
 function Matching {
   foreach ($w in $Element::RootElement.FindAll($Scope::Children, $All)) {
@@ -31,10 +35,20 @@ switch ($Command) {
   }
   'click' {
     foreach ($w in Matching) {
-      foreach ($e in $w.FindAll($Scope::Descendants, $Buttons)) {
-        if ($e.Current.IsEnabled -and $e.Current.Name -match $Button) {
-          "pressed '$($e.Current.Name)' in '$($w.Current.Name)'"
-          $e.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+      foreach ($e in $w.FindAll($Scope::Descendants, $All)) {
+        if ($e.Current.IsEnabled -and -not $e.Current.IsOffscreen -and $e.Current.Name -match $Button) {
+          $invoke = $null
+          if ($e.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$invoke)) {
+            "pressed '$($e.Current.Name)' in '$($w.Current.Name)'"
+            $invoke.Invoke()
+          } else {
+            $r = $e.Current.BoundingRectangle
+            if ($r.IsEmpty) { continue }
+            "clicked '$($e.Current.Name)' in '$($w.Current.Name)' at $([int]($r.X + $r.Width / 2)),$([int]($r.Y + $r.Height / 2))"
+            [Proof.Mouse]::SetCursorPos([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2)) | Out-Null
+            [Proof.Mouse]::mouse_event(2, 0, 0, 0, [System.UIntPtr]::Zero)
+            [Proof.Mouse]::mouse_event(4, 0, 0, 0, [System.UIntPtr]::Zero)
+          }
           exit 0
         }
       }
