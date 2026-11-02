@@ -646,7 +646,7 @@ jobs:
           echo "ilobrowser.com is updating to $TAG: https://github.com/MartinPTielemans/ilo-site/actions" >> "$GITHUB_STEP_SUMMARY"
 
   # The owner published a draft: the bot that announces releases hears of it now, rather than at its
-  # next hourly check, and its answer never fails or holds up the release (docs/releasing.md).
+  # next check-in, and its answer never fails or holds up the release (docs/releasing.md).
   announce:
     if: ${{ github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') }}
     runs-on: ubuntu-24.04
@@ -660,7 +660,7 @@ jobs:
           RELEASE_WEBHOOK_KEY: ${{ secrets.RELEASE_WEBHOOK_KEY }}
         run: |
           if [ -z "$RELEASE_WEBHOOK_URL" ] || [ -z "$RELEASE_WEBHOOK_KEY" ]; then
-            echo "::notice::No RELEASE_WEBHOOK_URL or RELEASE_WEBHOOK_KEY (docs/releasing.md), so the announcement bot finds $TAG at its next hourly check."
+            echo "::notice::No RELEASE_WEBHOOK_URL or RELEASE_WEBHOOK_KEY (docs/releasing.md), so the announcement bot finds $TAG at its next check-in."
             exit 0
           fi
           # A body in a variable, not on stdin, so curl's retry can send it again. curl's own errors
@@ -671,5 +671,5 @@ jobs:
             --data-binary "$body" "$RELEASE_WEBHOOK_URL" 2> /dev/null) || true
           case $status in
             2??) echo "The announcement bot heard of $TAG (HTTP $status)." >> "$GITHUB_STEP_SUMMARY" ;;
-            *) echo "::warning::The announcement bot wasn't told of $TAG (HTTP ${status:-000}), so it finds it at its next hourly check." ;;
+            *) echo "::warning::The announcement bot wasn't told of $TAG (HTTP ${status:-000}), so it finds it at its next check-in." ;;
           esac
