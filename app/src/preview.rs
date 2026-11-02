@@ -1323,6 +1323,8 @@ impl Browser for Fake {
 
     fn open_in_main_window(&self, _: u64, _: u64, _: &mut App) {}
 
+    fn little_profile(&self, _: u64, _: &str, _: &mut App) {}
+
     fn close_window(&self, cx: &mut App) {
         cx.quit();
     }

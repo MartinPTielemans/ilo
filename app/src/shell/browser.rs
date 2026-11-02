@@ -676,6 +676,10 @@ pub trait Browser {
     /// A Little ilo window's ⌘O: moves `tab`, live, to the user's Space `home` in a regular window,
     /// which shows it and comes to the front, and closes this window.
     fn open_in_main_window(&self, tab: u64, home: u64, cx: &mut App);
+    /// A Little ilo window's profile picker: opens its page, at `url`, in `profile`, in a new Little ilo
+    /// window for a Space of it, closing this one, and keeps `profile` for the page's site, which
+    /// links from other apps then open in (Arc's Little Arc). With the window's own, only keeps it.
+    fn little_profile(&self, profile: u64, url: &str, cx: &mut App);
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
