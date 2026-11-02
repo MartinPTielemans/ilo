@@ -119,11 +119,13 @@ expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on s
 at=$(grep '^browser: theme picker at' "$log" | tail -1 | cut -d' ' -f5-)
 [ "$(echo "$at" | awk '{ print $3, $4 }')" = "370 509" ] ||
   fail "the theme picker opened at $at, not 370 by 509"
-# Half way from the field's middle to its right edge is red: hue 0 at lightness 0.5. A whole
-# pixel's click lands half a point right of it and below.
+# Half way from the field's middle to its right edge is red: hue 0 at lightness 0.5. X11's and
+# Windows' drivers click on whole pixels, which lands half a point right of it and below, a little
+# less on Windows, whose picker opens a fraction of a point to the right (#1368).
 red_at="x=0.5000 y=0.0000"
 red_color=ff0000
 [ -z "$x11" ] || { red_at="x=0.5030 y=0.0030"; red_color=ff0302; }
+! windows || { red_at="x=0.5029 y=0.0029"; red_color=ff0302; }
 rest="intensity=0.810 grain=0.000 appearance=automatic"
 red="$red_at colors=1 $rest"
 send clickkey 276.5 178.5
