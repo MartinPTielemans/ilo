@@ -3794,8 +3794,27 @@ fn screens() -> Vec<Frame> {
         .collect()
 }
 
-/// The size a Little ilo window opens at (Arc's first).
+/// The size the first Little ilo window opens at (Arc's).
 const LITTLE_SIZE: (f64, f64) = (900., 640.);
+
+/// Where the size of the Little ilo window closed last is kept, beside the launch frame.
+fn little_size_path() -> String {
+    format!("{}/little-size", profile_dir())
+}
+
+/// The size a Little ilo window opens at: the last one's, as Arc's, else Arc's first, no bigger
+/// than the main screen.
+fn little_size() -> (f64, f64) {
+    let kept = std::fs::read_to_string(little_size_path()).ok().and_then(|kept| {
+        let mut numbers = kept.split_whitespace().map(|n| n.parse::<f64>().ok());
+        Some((numbers.next()??, numbers.next()??))
+    });
+    let (width, height) = kept.filter(|&(w, h)| w > 0. && h > 0.).unwrap_or(LITTLE_SIZE);
+    match screens().first() {
+        Some(screen) => (width.min(screen.width), height.min(screen.height)),
+        None => (width, height),
+    }
+}
 
 /// The regular window showing `home`, else the one in front, which ⌘O shows it in.
 fn main_window_for(home: bc::bc_id) -> Option<bc::bc_id> {
@@ -3828,7 +3847,7 @@ fn little_tab_opened(window: bc::bc_id, tab: u64, home: bc::bc_id) {
 /// Where a Little ilo window opens: centred a little above the middle of the screen the windows
 /// open on. Arc's opens on the pointer's screen, which waits for the host to say where it is.
 fn little_frame() -> bc::bc_rect {
-    let (width, height) = LITTLE_SIZE;
+    let (width, height) = little_size();
     let (mut x, mut y) = (0., 0.);
     unsafe { platform::host_centered(width, height, &mut x, &mut y) };
     let frame = window_frames::raised(Frame { x, y, width, height }, &screens());
@@ -5211,6 +5230,9 @@ unsafe extern "C" fn window_closed(_: *mut c_void, id: bc::bc_id) {
         if !own && !regular && !unsafe { bc::bc_quitting() } {
             save_launch_frame(window.ui_view);
         }
+        if window.little.is_some() {
+            save_little_size(window.ui_view);
+        }
         unsafe { platform::host_forget_window(window.ui_view) };
         update_app(|cx| {
             find_bar::window_closed(id, cx);
@@ -5512,6 +5534,15 @@ fn save_launch_frame(ui_view: *mut c_void) {
     let (mut x, mut y, mut width, mut height) = (0., 0., 0., 0.);
     if unsafe { platform::host_window_frame(ui_view, &mut x, &mut y, &mut width, &mut height) } {
         _ = std::fs::write(launch_frame_path(), format!("{x} {y} {width} {height}\n"));
+    }
+}
+
+/// Keeps the size of the Little ilo window of `ui_view` for the next one to open at, as Arc's
+/// does. Out of full screen only, as for the launch frame.
+fn save_little_size(ui_view: *mut c_void) {
+    let (mut x, mut y, mut width, mut height) = (0., 0., 0., 0.);
+    if unsafe { platform::host_window_frame(ui_view, &mut x, &mut y, &mut width, &mut height) } {
+        _ = std::fs::write(little_size_path(), format!("{width} {height}\n"));
     }
 }
 

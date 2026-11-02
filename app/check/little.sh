@@ -3,12 +3,12 @@
 # that Space in the main window and closes it. ⌥⌘-click on a link opens the link in one, not
 # beside the page as ⌥-click does, and ⌘W closes that window, its page with it. An escape the page
 # doesn't use closes one. A tab its page opens goes behind, to the top of its Space's Today, and
-# outlives it. Links from other apps come with the next slice (#693).
+# outlives it. The first opens 900 × 640, and each after at the size the last one closed at.
 
 serve
 log="$out/little.log"
 step=0
-rm -f "$saved" "$launch_frame"
+rm -f "$saved" "$launch_frame" "$(dirname "$saved")/little-size"
 BROWSER_DRIVE=1 BROWSER_URL="$site" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
@@ -36,6 +36,8 @@ expect "^browser: little window opened [0-9]* profile [0-9]* home $home\$" \
   "⌥⌘N didn't open a Little ilo window for Space $home"
 little=$(opened)
 expect "^browser: window opened $little\$" "the Little ilo window didn't open"
+expect "^browser: window $little frame -\{0,1\}[0-9]* -\{0,1\}[0-9]* 900 640\$" \
+  "the first Little ilo window didn't open 900 × 640: $(grep "^browser: window $little frame" "$log")"
 send window 2
 send key l cmd
 expect '^browser: command bar shown$' "⌘L didn't open the command bar in the Little ilo window"
@@ -76,7 +78,8 @@ none_since "^browser: splits $a+" || fail "⌥⌘-click on a link opened it besi
 # The driver numbers windows in the order they were made, the closed one too.
 send window 3
 ../tools/window-screenshot.sh "$pid" "$out/little-link.png" all || fail "no window to capture"
-# ⌘W closes the window, its page with it.
+# ⌘W closes the window, its page with it, and the next opens at the size it had.
+send resize 760 520
 send key w cmd
 expect '^browser: command close-tab via ' "⌘W didn't run in the Little ilo window"
 expect "^browser: window closed $little\$" "⌘W didn't close the Little ilo window"
@@ -88,6 +91,8 @@ send key n cmd alt
 expect "^browser: little window opened [0-9]* profile [0-9]* home $home\$" \
   "⌥⌘N didn't open a second Little ilo window"
 little=$(opened)
+expect "^browser: window $little frame -\{0,1\}[0-9]* -\{0,1\}[0-9]* 760 520\$" \
+  "the Little ilo window didn't open at the last one's size: $(grep "^browser: window $little frame" "$log")"
 send window 4
 send key l cmd
 expect '^browser: command bar shown$' "⌘L didn't open the second Little ilo window's command bar"
@@ -128,4 +133,4 @@ send window 1
 exec 3>&-
 quit
 kill "$server"
-echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L loads a URL in it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape. Windows: $out/little.png $out/little-moved.png $out/little-link.png"
+echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L loads a URL in it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, and each opens at the size the last closed at, the first 900 × 640. Windows: $out/little.png $out/little-moved.png $out/little-link.png"
