@@ -379,6 +379,8 @@ bool host_window_shown(void* ui_view) {
 }
 void host_add_dock_items(int (*little)(void), void (*chosen)(int item)) {}
 
+void host_set_little_status_item(void (*clicked)(void)) {}
+
 // The app reports each browser window GPUI's window in it hears become active (host_window_active).
 void host_watch_key_window(void (*changed)(void* ui_view)) {
   g_key_window_changed = changed;

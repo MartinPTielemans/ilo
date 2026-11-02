@@ -194,6 +194,7 @@ mod platform {
         pub fn host_set_window_shown(ui_view: *mut c_void, shown: bool);
         pub fn host_window_shown(ui_view: *mut c_void) -> bool;
         pub fn host_add_dock_items(little: extern "C" fn() -> c_int, chosen: extern "C" fn(c_int));
+        pub fn host_set_little_status_item(clicked: Option<extern "C" fn()>);
         pub fn host_watch_key_window(changed: extern "C" fn(*mut c_void));
         pub fn host_watch_full_screen(changed: extern "C" fn(*mut c_void, bool));
         pub fn host_watch_swipes(swiped: extern "C" fn(*mut c_void, f64, f64, bool) -> bool);
@@ -4885,6 +4886,9 @@ unsafe extern "C" fn started(_: *mut c_void) {
 /// AppKit has finished launching the app, and so has handed over the links that launched it.
 extern "C" fn finished_launching() {
     unsafe { platform::host_add_dock_items(dock_little, dock_chosen) };
+    if little_in_menu_bar() {
+        unsafe { platform::host_set_little_status_item(Some(status_item_clicked)) };
+    }
     if !FINISHED_LAUNCHING.replace(true)
         && let Some(then) = AFTER_LAUNCH.take()
     {
@@ -4913,19 +4917,7 @@ extern "C" fn dock_little() -> c_int {
 extern "C" fn dock_chosen(item: c_int) {
     update_app_later(move |cx| {
         if item == 0 {
-            let from = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.regular()).cloned());
-            let Some(opened) = from.and_then(|from| open_little(from, 0, cx)) else {
-                return;
-            };
-            // check.sh reads this line.
-            log!("browser: dock opened little window {opened}");
-            let ui_view = WINDOWS.with_borrow(|windows| {
-                windows.iter().find(|w| w.id == opened).map(|w| w.ui_view)
-            });
-            if let Some(ui_view) = ui_view {
-                unsafe { platform::host_activate(ui_view) };
-            }
-            return;
+            return new_little_window("dock", cx);
         }
         let shown = item == 1;
         let little: Vec<(bc::bc_id, *mut c_void)> = WINDOWS.with_borrow(|windows| {
@@ -4943,6 +4935,49 @@ extern "C" fn dock_chosen(item: c_int) {
         // check.sh reads this line.
         log!("browser: dock {} little windows {}", if shown { "showed" } else { "hid" }, ids.join(" "));
     });
+}
+
+/// Opens a Little ilo window from outside the browser's windows, `from` the Dock's menu or the menu
+/// bar's button, for the Space the regular window in front shows, as a link from another app opens
+/// one, and puts it in front.
+fn new_little_window(from: &str, cx: &mut App) {
+    let front = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.regular()).cloned());
+    let Some(opened) = front.and_then(|front| open_little(front, 0, cx)) else {
+        return;
+    };
+    // check.sh reads this line.
+    log!("browser: {from} opened little window {opened}");
+    let ui_view =
+        WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == opened).map(|w| w.ui_view));
+    if let Some(ui_view) = ui_view {
+        unsafe { platform::host_activate(ui_view) };
+    }
+}
+
+/// The menu bar's Little ilo button was clicked.
+extern "C" fn status_item_clicked() {
+    update_app_later(|cx| new_little_window("menu bar", cx));
+}
+
+/// Where the choice to show Little ilo's button in the menu bar is kept, beside its size: there
+/// while it's on. The app's, not a profile's, as the menu bar is.
+fn little_in_menu_bar_path() -> String {
+    format!("{}/little-in-menu-bar", profile_dir())
+}
+
+/// Whether the user turned on Little ilo's button in the menu bar, in Settings › General. Off on
+/// a first launch, as Arc's is.
+pub(crate) fn little_in_menu_bar() -> bool {
+    std::path::Path::new(&little_in_menu_bar_path()).exists()
+}
+
+/// Puts Little ilo's button in the menu bar, or takes it out, and keeps the choice for the next
+/// launch.
+pub(crate) fn set_little_in_menu_bar(on: bool) {
+    let path = little_in_menu_bar_path();
+    _ = if on { std::fs::write(path, "") } else { std::fs::remove_file(path) };
+    let clicked = on.then_some(status_item_clicked as extern "C" fn());
+    unsafe { platform::host_set_little_status_item(clicked) };
 }
 
 /// Whether this build updates itself, asked once, as the menu bar is rebuilt often: a release

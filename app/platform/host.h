@@ -127,6 +127,12 @@ bool host_window_shown(void* ui_view);
 // Off the Mac, which has no Dock menu, nothing.
 void host_add_dock_items(int (*little)(void), void (*chosen)(int item));
 
+// Puts a button in the menu bar whose click calls |clicked|, which opens a Little ilo window, as
+// Arc's optional one does, or with NULL takes it out again. Off until the user turns it on in
+// Settings › General. It draws once and then waits for a click, so an idle browser stays asleep.
+// Off the Mac, nothing, and Settings offers no switch there.
+void host_set_little_status_item(void (*clicked)(void));
+
 // Calls |changed| with the view of each browser window that becomes the key window.
 void host_watch_key_window(void (*changed)(void* ui_view));
 

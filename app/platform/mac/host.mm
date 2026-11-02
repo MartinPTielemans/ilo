@@ -1752,6 +1752,59 @@ void host_add_dock_items(int (*little)(void), void (*chosen)(int item)) {
   }
 }
 
+static void (*g_little_clicked)(void);
+static NSStatusItem* g_little_status_item;
+
+@interface LittleStatusTarget : NSObject
+- (void)clicked:(id)sender;
+@end
+
+@implementation LittleStatusTarget
+- (void)clicked:(id)sender {
+  if (g_little_clicked) {
+    g_little_clicked();
+  }
+}
+@end
+
+static LittleStatusTarget* g_little_status_target;
+
+// The menu bar's Little ilo button, for drive.mm's statusitem; nil while it's off.
+NSStatusBarButton* HostLittleStatusButton() {
+  return g_little_status_item.button;
+}
+
+void host_set_little_status_item(void (*clicked)(void)) {
+  g_little_clicked = clicked;
+  if (!clicked) {
+    if (g_little_status_item) {
+      [NSStatusBar.systemStatusBar removeStatusItem:g_little_status_item];
+      g_little_status_item = nil;
+    }
+    return;
+  }
+  if (g_little_status_item) {
+    return;
+  }
+  if (!g_little_status_target) {
+    g_little_status_target = [[LittleStatusTarget alloc] init];
+  }
+  NSStatusItem* item =
+      [NSStatusBar.systemStatusBar statusItemWithLength:NSSquareStatusItemLength];
+  // A symbol is a template image, so the menu bar tints it as it does its own.
+  NSImage* image = [NSImage imageWithSystemSymbolName:@"macwindow.badge.plus"
+                             accessibilityDescription:@"New Little ilo Window"];
+  if (image) {
+    item.button.image = image;
+  } else {
+    item.button.title = @"ilo";
+  }
+  item.button.toolTip = @"New Little ilo Window";
+  item.button.target = g_little_status_target;
+  item.button.action = @selector(clicked:);
+  g_little_status_item = item;
+}
+
 void host_watch_key_window(void (*changed)(void* ui_view)) {
   [NSNotificationCenter.defaultCenter addObserverForName:NSWindowDidBecomeKeyNotification
                                                   object:nil

@@ -126,6 +126,8 @@
 //   dock [<title>]                        chooses the Dock menu's item titled <title>, the menu
 //                                         the Dock icon's right click opens, or with none logs
 //                                         its items, as "browser: dock menu <titles>"
+//   statusitem [click]                    logs whether the menu bar has Little ilo's button,
+//                                         "browser: status item shown" or "none", or clicks it
 //   openmenu <menu>                       opens the main menu's <menu>, the same menu the menu
 //                                         bar opens, near the window's top left, tracked until
 //                                         dismiss or choose closes it. Commands still come in
@@ -186,6 +188,9 @@
 #include "browser_core.h"
 #include "../host.h"
 #include "menu_window.h"
+
+// host.mm's menu bar button for Little ilo, nil while it's off.
+NSStatusBarButton* HostLittleStatusButton();
 
 // A drag from another app, as AppKit describes it to the view under the pointer: what it carries
 // and where it is.
@@ -1717,6 +1722,19 @@ bool Run(const std::string& line, void (^done)(void)) {
         }
       }
       fprintf(stderr, "browser: dock menu %s\n", [titles componentsJoinedByString:@", "].UTF8String);
+    }
+    done();
+    return true;
+  }
+  if (action == "statusitem") {
+    NSStatusBarButton* button = HostLittleStatusButton();
+    if (line.size() > action.size()) {
+      if (!button) {
+        return false;
+      }
+      [button performClick:nil];
+    } else {
+      fprintf(stderr, "browser: status item %s\n", button ? "shown" : "none");
     }
     done();
     return true;

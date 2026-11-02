@@ -10,7 +10,7 @@
 serve
 log="$out/little.log"
 step=0
-rm -f "$saved" "$launch_frame" "$(dirname "$saved")/little-size"
+rm -f "$saved" "$launch_frame" "$(dirname "$saved")/little-size" "$(dirname "$saved")/little-in-menu-bar"
 BROWSER_DRIVE=1 BROWSER_URL="$site" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
@@ -184,7 +184,42 @@ if [ "$(uname)" = Darwin ]; then
   send window 1
 fi
 
+# The menu bar's button, the Mac's alone: none until Settings › General turns it on, a click on it
+# opens a Little ilo window for the Space shown, and turned off it's gone.
+if [ "$(uname)" = Darwin ]; then
+  send statusitem
+  expect '^browser: status item none$' "the menu bar has Little ilo's button before it was turned on"
+  send menu Settings…
+  expect '^browser: settings shown General$' "Settings… didn't show General"
+  settings_drew General
+  menu_bar_switch=$(drawn "switch little in the menu bar") ||
+    fail "Settings didn't draw Show Little ilo in the menu bar's switch"
+  send clickkey $menu_bar_switch
+  expect '^browser: little in the menu bar on$' "a click on the menu bar switch didn't turn it on"
+  send statusitem
+  expect '^browser: status item shown$' "turning the switch on didn't put the button in the menu bar"
+  send statusitem click
+  expect '^browser: menu bar opened little window [0-9]*$' "the menu bar's button didn't open a Little ilo window"
+  little=$(opened)
+  expect "^browser: little window opened $little profile [0-9]* home $home\$" \
+    "the menu bar's Little ilo window isn't for Space $home"
+  # A new window goes in front of the others, so it logs no "key window"; ⌘W closing it shows it's key.
+  send key w cmd
+  expect "^browser: window closed $little\$" "the menu bar's Little ilo window didn't come to the front: ⌘W didn't close it"
+  send menu Settings…
+  expect '^browser: settings shown General$' "Settings… didn't show General again"
+  settings_drew General
+  send clickkey $menu_bar_switch
+  expect '^browser: little in the menu bar off$' "a click on the menu bar switch didn't turn it off"
+  send statusitem
+  expect '^browser: status item none$' "turning the switch off left the button in the menu bar"
+  settings_close
+  post clickkey $close
+  expect '^browser: settings hidden$' "the close button didn't hide Settings"
+  send window 1
+fi
+
 exec 3>&-
 quit
 kill "$server"
-echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L loads a URL in it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one opens over the main window in full screen and the Dock's menu opens one and hides and shows them all. Windows: $out/little.png $out/little-moved.png $out/little-link.png, and on the Mac $out/little-full-screen.png $out/little-dock.png"
+echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L loads a URL in it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. Windows: $out/little.png $out/little-moved.png $out/little-link.png, and on the Mac $out/little-full-screen.png $out/little-dock.png"

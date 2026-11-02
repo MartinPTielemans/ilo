@@ -1225,6 +1225,12 @@ impl Settings {
         let unload = self.toggle("unload idle tabs", unload, set_unload_idle_tabs, accent, cx);
         let ad_blocking = unsafe { bc::bc_ad_blocking() };
         let ad_blocking = self.toggle("ad blocking", ad_blocking, set_ad_blocking, accent, cx);
+        // The Mac's alone, the one with a host for the button so far.
+        let menu_bar = cfg!(target_os = "macos").then(|| {
+            let on = crate::little_in_menu_bar();
+            let switch = self.toggle("little in the menu bar", on, set_little_in_menu_bar, accent, cx);
+            row(None, "Show Little ilo in the menu bar", switch)
+        });
         div()
             .flex()
             .flex_col()
@@ -1238,7 +1244,7 @@ impl Settings {
                 row(None, "Favorites", favorites.into_any_element()),
                 // Last, so the checks find the pop-ups where they were.
                 row(None, "Block ads and trackers", ad_blocking),
-            ]))
+            ].into_iter().chain(menu_bar)))
             .children(self.off_sites(off_sites, cx))
             .child(group(&RowLook::settings(), [self.default_browser_row(cx)]))
             .into_any_element()
@@ -2624,6 +2630,10 @@ const _: () = {
 
 fn set_warn_before_quitting(warn: bool, _: &mut App) {
     unsafe { bc::bc_set_warn_before_quitting(warn) };
+}
+
+fn set_little_in_menu_bar(on: bool, _: &mut App) {
+    crate::set_little_in_menu_bar(on);
 }
 
 fn set_unload_idle_tabs(unload: bool, _: &mut App) {
