@@ -100,14 +100,19 @@ send_link() {
     "$browser" "$1" >> "$out/links-sent.log" 2>&1 || fail "the second launch with $1 failed"
   fi
 }
-# Fails if Chrome opened a tab of its own for the link $1 send_link sent, beside the one the app
-# placed, as it did for a link from another app on Windows (#1413). Called once the app's tab has
-# loaded, or the driver has done a command since, long after Chrome would have told of its own: it
-# posts that in the task that hands the app the link.
+# How many tabs loaded the link $1 after line $2 of the log. Chrome opened a tab of its own for a
+# link from another app on Windows, beside the one the app placed (#1413), in the task that hands
+# the app the link, so once the app's tab has loaded, or the driver has done a command since, its
+# own would show.
+tabs_loading() {
+  tail -n "+$(($2 + 1))" "$log" | awk -v url="$1" '
+    $1 == "browser:" && $2 == "page" && $(NF - 2) == "loading" && $NF == url && !seen[$3]++ { n++ }
+    END { print n + 0 }'
+}
+# Fails unless the link $1 send_link sent loaded in one tab.
 opened_once() {
-  tail -n "+$((sent + 1))" "$log" | grep -q '^browser: tab [0-9]* opened by 0 ' &&
-    fail "the link $1 opened twice: Chrome opened a tab of its own for it too"
-  return 0
+  tabs=$(tabs_loading "$1" "$sent")
+  [ "$tabs" = 1 ] || fail "the link $1 loaded in $tabs tabs, not one: Chrome opened one of its own too"
 }
 # The line the app logs for a link from another app in a Little ilo window for Space $2.
 little_line() {
@@ -151,7 +156,8 @@ expect "^browser: key window $little\$" "the link's Little ilo window didn't com
 [ "$(grep -c "$(little_line "?ext" "[0-9]*")" "$log")" = 1 ] ||
   fail "the same link again opened a second Little ilo window"
 send window 2
-opened_once "${site}?ext"
+[ "$(tabs_loading "${site}?ext" "$sent")" = 0 ] ||
+  fail "the same link again loaded in a tab of Chrome's own beside its Little ilo window"
 send key w cmd
 await "^browser: window closed $little\$" || fail "⌘W didn't close the link's Little ilo window"
 send window 1
@@ -348,12 +354,6 @@ quit_launched() {
 at() {
   grep -m1 "^browser: $1 at " "$log" | sed 's/.* at \([0-9.]*\) ms$/\1/'
 }
-# Fails unless the check's server was asked once for the page at $1 after the site's address, as the
-# link that launched the browser opened it once. Called once its tab has loaded.
-asked_once() {
-  asked=$(grep -cF "GET chromium ${site#http://}$1 cookie " "$out/site.log" || true)
-  [ "$asked" = 1 ] || fail "the link ${site}$1 that launched the browser was asked for $asked times, not once"
-}
 
 launch "$out/links-plain.log"
 await '^browser: restored in ' || fail "the Spaces didn't come back"
@@ -375,7 +375,8 @@ await '^browser: restored in ' || fail "the Spaces didn't come back under the li
 await "$(link_line "?cold" "[0-9]*" "[0-9]*")" || fail "the link that launched the browser didn't open"
 tab=$(grep "$(link_line "?cold" "[0-9]*" "[0-9]*")" "$log" | sed 's/.*: tab \([0-9]*\) .*/\1/')
 await "^browser: loaded $tab ${site}?cold\$" || fail "the link that launched the browser didn't load"
-asked_once "?cold"
+sent=0
+opened_once "${site}?cold"
 opened=$(grep -n -m1 '^browser: link from another app ' "$log" | cut -d: -f1)
 await '^browser: UI shown at ' || fail "the UI didn't come out from under the launch picture"
 shown=$(grep -n -m1 '^browser: UI shown at ' "$log" | cut -d: -f1)
@@ -393,7 +394,8 @@ await "$(little_line "?little" "[0-9]*")" ||
   fail "the link that launched the browser didn't open in Little ilo: $(grep '^browser: link' "$log" | tail -1)"
 tab=$(grep "$(little_line "?little" "[0-9]*")" "$log" | sed 's/.*: tab \([0-9]*\) .*/\1/')
 await "^browser: loaded $tab ${site}?little\$" || fail "the link that launched the browser didn't load in Little ilo"
-asked_once "?little"
+sent=0
+opened_once "${site}?little"
 grep -q '^browser: link from another app .* of window ' "$log" &&
   fail "the link that launched the browser opened as a tab too"
 ../tools/window-screenshot.sh "$pid" "$out/links-little-launch.png" all || fail "no window to capture"
