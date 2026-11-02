@@ -1315,6 +1315,10 @@ impl Browser for Fake {
 
     fn new_private_window(&self, _: &mut App) {}
 
+    fn new_little_window(&self, _: u64, _: &mut App) {}
+
+    fn open_in_main_window(&self, _: u64, _: u64, _: &mut App) {}
+
     fn close_window(&self, cx: &mut App) {
         cx.quit();
     }

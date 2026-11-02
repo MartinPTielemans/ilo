@@ -66,9 +66,10 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Returns null once Chromium is quitting. With |behind|, it opens behind the windows open and
   // isn't key, as the windows a relaunch brings back after the first do.
   static Window* Open(const gfx::Rect& bounds, void* ui_view, bool behind = false);
-  // A private window for |profile|'s off-the-record profile, showing a Space of its own
-  // (Space::CreateOffTheRecord). See bc_window_open_private. Null once Chromium is quitting.
-  static Window* OpenPrivate(const gfx::Rect& bounds, void* ui_view, Profile* profile);
+  // A window showing a Space of its own (Space::CreateOwn) for |profile|: a private window, in its
+  // off-the-record profile (bc_window_open_private), or a Little ilo window
+  // (bc_window_open_little). Null once Chromium is quitting.
+  static Window* OpenOwn(const gfx::Rect& bounds, void* ui_view, Profile* profile, Space::Own own);
   static Window* FromId(bc_id id);
   // Every window, the most recently active first.
   static std::vector<Window*> All();
@@ -173,8 +174,11 @@ class Window : public web_modal::WebContentsModalDialogHost,
   bc_id space() const { return space_; }
   // The tab the window shows, or 0. In a split view, the one focused.
   bc_id selected() const { return selected_; }
-  // Whether it's a private window, which shows its own Space alone and is never saved.
+  // Whether it's a private window, whose pages are in its profile's off-the-record session.
   bool off_the_record() const { return off_the_record_; }
+  // Whether it shows a Space of its own alone, which no other window shows and is never saved: a
+  // private window's or a Little ilo window's.
+  bool own_space() const { return own_space_; }
   // Whether its Browsers stay with no tabs left: a private window's does while the window is
   // open, as it holds the private session, which ends once the profile's last Browser has gone.
   bool KeepsBrowsers() const;
@@ -391,8 +395,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   void HoldPictured();
   // Sets let_go_, and tells the app when it changes.
   void SetLetGo(bool let_go);
-  // Moves every tab of this window's Browsers into |to|'s, unshown, which empties them.
-  void HandOver(Window& to);
+  // Moves every tab of this window's Browsers into |to|'s, unshown, which empties them, or with
+  // |others_only| those not in its own Space, as a Little ilo window's page opens behind.
+  void HandOver(Window& to, bool others_only = false);
   // Whether another window shows |tab|'s page, which an implicit pick passes over.
   bool ShownElsewhere(bc_id tab) const;
   // Shows |tab|, or if another window shows it the first tab of the Space shown no window shows,
@@ -459,6 +464,7 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // While closing, for a page's Stay or the downloads question, which keeps the window open.
   base::CallbackListSubscription close_stopped_;
   bool off_the_record_ = false;
+  bool own_space_ = false;
   // Another window took the page shown. The tab stays selected, and the window shows no page.
   bool let_go_ = false;
   bool opening_tab_ = false;

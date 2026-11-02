@@ -785,6 +785,11 @@ typedef struct bc_host {
                            const char* url,
                            bc_id profile,
                            bool private_window);
+  // The user ⌥⌘-clicked a link to |url| in a page of |window|, a regular window or a Little ilo
+  // window: open it in a new Little ilo window for |profile| (bc_window_open_little), as Arc's
+  // Little Arc does. A private window's link opens beside its page instead, as ⌥-click's does. The
+  // user's alone: agents' clicks hold no keys.
+  void (*window_open_little)(void* context, bc_id window, const char* url, bc_id profile);
   // The page of |tab|, the tab |window| has selected, went to another window, which shows it live,
   // and |window| shows no page; or |tab| is 0, and |window| shows a page again, or has selected
   // another tab. Once for each change. window_selected doesn't say it: the tab stays selected.
@@ -2461,6 +2466,16 @@ BC_EXPORT void bc_window_show_space_empty(bc_id window, bc_id space);
 // tabs never move to a regular window, nor regular tabs to it. Closing it closes its tabs. Returns
 // 0 if |profile| isn't loaded or Chromium is quitting. The user's alone: agents get none.
 BC_EXPORT bc_id bc_window_open_private(bc_rect bounds, void* ui_view, bc_id profile);
+
+// Opens a Little ilo window at |bounds|, as bc_window_open does: Arc's Little Arc, a small window
+// for one page, from ⌥⌘N or a link ⌥⌘-clicked (window_open_little). It shows a Space of its own in
+// |profile|, which no other window shows, holds Today tabs alone and is never saved or listed by
+// bc_spaces, reported by window_space_shown, and no page until one opens. bc_tab_move_to_space
+// moves its tab to one of the user's Spaces, and bc_window_select then shows it live in the window
+// that selects it; the Little ilo window shows no page after. Closing it closes its tabs, which no
+// archive or ⇧⌘T brings back. Returns 0 if |profile| isn't loaded or Chromium is quitting. The
+// user's alone, as a private window is: bc_windows leaves it out, and agents get none.
+BC_EXPORT bc_id bc_window_open_little(bc_rect bounds, void* ui_view, bc_id profile);
 
 // Extensions' side panels. Each profile's tabs have their own, as each Chrome window does: one for
 // every tab, or one for a tab that its extension gave it, which shows only while that tab does. An

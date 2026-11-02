@@ -3,7 +3,7 @@
 # Each run's file in check/ says what it checks. ./check.sh tabs spaces does only those runs, in
 # that order, and ./check.sh all of them:
 #   load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear
-#   split favorites cards extensions adblock adblock-lists windows private capture media
+#   split favorites cards extensions adblock adblock-lists windows private little capture media
 #   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp
 #   appearance about sync sync-account sync-devices
 # The store run installs from Google's Web Store, adblock-live blocks Google's ad servers with
@@ -66,7 +66,7 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
   exec ../tools/headless.sh --x11 --run ./check.sh "$@"
 fi
 runs="load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear"
-runs="$runs split favorites cards extensions adblock adblock-lists windows private capture media"
+runs="$runs split favorites cards extensions adblock adblock-lists windows private little capture media"
 runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp"
 runs="$runs appearance about sync sync-account sync-devices"
 named="store adblock-live widevine updates keychain shots"

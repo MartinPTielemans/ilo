@@ -667,6 +667,12 @@ pub trait Browser {
     fn new_private_window(&self, cx: &mut App);
     /// Closes this window. Its tabs go to the window that was in front before it, live.
     fn close_window(&self, cx: &mut App);
+    /// Opens an empty Little ilo window (docs/ux-spec.md › Little Arc) for the user's Space
+    /// `home`, after this one's draw.
+    fn new_little_window(&self, home: u64, cx: &mut App);
+    /// A Little ilo window's ⌘O: moves `tab`, live, to the user's Space `home` in a regular window,
+    /// which shows it and comes to the front, and closes this window.
+    fn open_in_main_window(&self, tab: u64, home: u64, cx: &mut App);
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]

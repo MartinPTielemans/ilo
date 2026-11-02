@@ -482,8 +482,27 @@ struct BrowserWindow {
     children: Vec<AnyWindowHandle>,
     /// A private window's: it shows a Space of its own, in an off-the-record session.
     private: bool,
+    /// A Little ilo window's: it shows a Space of its own, for the user's Space here, which ⌘O
+    /// moves its page to.
+    little: Option<bc::bc_id>,
     /// The user's Space it showed last, not an agent's, or 0, for a link from another app.
     users_space: bc::bc_id,
+}
+
+impl BrowserWindow {
+    /// Whether it shows the user's Spaces, as neither a private nor a Little ilo window does.
+    fn regular(&self) -> bool {
+        !self.private && self.little.is_none()
+    }
+}
+
+/// A window that shows a Space of its own, which the core makes with it.
+#[derive(Clone, Copy)]
+enum Own {
+    /// ⇧⌘N's private window, in this profile's off-the-record session.
+    Private(bc::bc_id),
+    /// Little ilo's, in `profile`, for the user's Space `home`, which ⌘O moves its page to.
+    Little { profile: bc::bc_id, home: bc::bc_id },
 }
 
 thread_local! {
@@ -3353,8 +3372,8 @@ impl Browser for Engine {
         cx.defer(move |cx| {
             // From a private window, the Spaces are the regular window's in front.
             let from = WINDOWS.with_borrow(|windows| {
-                let this = windows.iter().find(|w| w.id == id && !w.private);
-                this.or_else(|| windows.iter().find(|w| !w.private)).cloned()
+                let this = windows.iter().find(|w| w.id == id && w.regular());
+                this.or_else(|| windows.iter().find(|w| w.regular())).cloned()
             });
             if from.is_some() {
                 open_window(from, None, cx);
@@ -3374,8 +3393,8 @@ impl Browser for Engine {
         let id = self.window;
         cx.defer(move |cx| {
             let from = WINDOWS.with_borrow(|windows| {
-                let this = windows.iter().find(|w| w.id == id && !w.private);
-                this.or_else(|| windows.iter().find(|w| !w.private)).cloned()
+                let this = windows.iter().find(|w| w.id == id && w.regular());
+                this.or_else(|| windows.iter().find(|w| w.regular())).cloned()
             });
             let Some(window) = from.and_then(|from| open_window(Some(from), None, cx)) else {
                 return;
@@ -3396,8 +3415,41 @@ impl Browser for Engine {
             // The profile of the Space this window shows, a private one's too.
             let profile = unsafe { bc::bc_space_profile(bc::bc_window_space(id)) };
             if from.is_some() && profile != 0 {
-                open_window(from, Some(profile), cx);
+                open_window(from, Some(Own::Private(profile)), cx);
             }
+        });
+    }
+
+    fn new_little_window(&self, home: u64, cx: &mut App) {
+        let id = self.window;
+        cx.defer(move |cx| {
+            let from = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == id).cloned());
+            if let Some(from) = from {
+                open_little(from, home, cx);
+            }
+        });
+    }
+
+    fn open_in_main_window(&self, tab: u64, home: u64, cx: &mut App) {
+        let id = self.window;
+        cx.defer(move |_| {
+            let Some(main) = main_window_for(home) else {
+                // check.sh reads this line.
+                log!("browser: little window {id} has no main window for {tab}");
+                return;
+            };
+            let home = little_home(home, main);
+            unsafe {
+                if bc::bc_window_space(main) != home {
+                    bc::bc_window_show_space(main, home);
+                }
+                bc::bc_tab_move_to_space(tab, home);
+                bc::bc_window_select(main, tab);
+                bc::bc_window_activate(main);
+            }
+            // check.sh reads this line.
+            log!("browser: little window {id} put {tab} in window {main} space {home}");
+            unsafe { bc::bc_window_close(id) };
         });
     }
 
@@ -3656,16 +3708,19 @@ unsafe extern "C" fn tab_key_unhandled(
 /// Opens a browser window and returns its id, with `ui_view` filling it under the page: the first
 /// at the frame the front window had when the browser last quit, saved window `saved` behind the
 /// others at its own (bc_window_open_saved), each kept on screen, else centered on the main
-/// display, or cascaded from the one of `after` and as big. With `private`, a profile, it's a
-/// private window in that profile's off-the-record session.
+/// display, or cascaded from the one of `after` and as big. With `own`, it's a private window in
+/// that profile's off-the-record session, or a Little ilo window, where Little ilo's open.
 fn open_browser_window(
     ui_view: *mut c_void,
     after: Option<*mut c_void>,
-    private: Option<bc::bc_id>,
+    own: Option<Own>,
     saved: Option<usize>,
 ) -> Option<bc::bc_id> {
     let frames = if after.is_none() || saved.is_some() { saved_frames() } else { Vec::new() };
-    let frame = frames.get(saved.unwrap_or(0)).copied().and_then(placed);
+    let frame = match own {
+        Some(Own::Little { .. }) => Some(little_frame()),
+        _ => frames.get(saved.unwrap_or(0)).copied().and_then(placed),
+    };
     let bounds = frame.unwrap_or_else(|| {
         let (mut width, mut height) = WINDOW_SIZE;
         let (mut x, mut y) = (0., 0.);
@@ -3682,8 +3737,13 @@ fn open_browser_window(
             height,
         }
     });
-    let window = match (private, saved) {
-        (Some(profile), _) => unsafe { bc::bc_window_open_private(bounds, ui_view, profile) },
+    let window = match (own, saved) {
+        (Some(Own::Private(profile)), _) => unsafe {
+            bc::bc_window_open_private(bounds, ui_view, profile)
+        },
+        (Some(Own::Little { profile, .. }), _) => unsafe {
+            bc::bc_window_open_little(bounds, ui_view, profile)
+        },
         (None, Some(index)) => unsafe { bc::bc_window_open_saved(index, bounds, ui_view) },
         (None, None) => unsafe { bc::bc_window_open(bounds, ui_view) },
     };
@@ -3710,24 +3770,85 @@ fn saved_frames() -> Vec<bc::bc_rect> {
 /// Where a window saved at `saved` opens on the screens there are now, or None for the app's own
 /// place.
 fn placed(saved: bc::bc_rect) -> Option<bc::bc_rect> {
-    let count = unsafe { platform::host_screens(std::ptr::null_mut(), 0) };
-    let mut screens = vec![0.; count * 4];
-    let count = unsafe { platform::host_screens(screens.as_mut_ptr(), count) };
-    let screens: Vec<Frame> = screens
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .take(count)
-        .map(|&[x, y, width, height]| Frame { x, y, width, height })
-        .collect();
     let saved = Frame { x: saved.x, y: saved.y, width: saved.width, height: saved.height };
-    let frame = window_frames::place(saved, &screens)?;
+    let frame = window_frames::place(saved, &screens())?;
     Some(bc::bc_rect {
         x: frame.x,
         y: frame.y,
         width: frame.width,
         height: frame.height,
     })
+}
+
+/// The visible frames of the screens a window may open on, the main one first (host_screens).
+fn screens() -> Vec<Frame> {
+    let count = unsafe { platform::host_screens(std::ptr::null_mut(), 0) };
+    let mut screens = vec![0.; count * 4];
+    let count = unsafe { platform::host_screens(screens.as_mut_ptr(), count) };
+    (screens.as_chunks::<4>().0.iter())
+        .take(count)
+        .map(|&[x, y, width, height]| Frame { x, y, width, height })
+        .collect()
+}
+
+/// The size a Little ilo window opens at (Arc's first).
+const LITTLE_SIZE: (f64, f64) = (900., 640.);
+
+/// The regular window showing `home`, else the one in front, which ⌘O shows it in.
+fn main_window_for(home: bc::bc_id) -> Option<bc::bc_id> {
+    WINDOWS.with_borrow(|windows| {
+        let regular = || windows.iter().filter(|w| w.regular());
+        let showing = regular().find(|w| unsafe { bc::bc_window_space(w.id) } == home);
+        showing.or_else(|| regular().next()).map(|w| w.id)
+    })
+}
+
+/// The user's Space a Little ilo window's pages go to: its own, or, once that's gone or an agent's,
+/// the one `main` shows.
+fn little_home(home: bc::bc_id, main: bc::bc_id) -> bc::bc_id {
+    let gone = !ids(bc::bc_spaces).contains(&home);
+    match gone || !name(bc::bc_space_agent, home).is_empty() {
+        true => users_space_of(main),
+        false => home,
+    }
+}
+
+/// A tab a Little ilo window's page opened, by ⌘-click, `target=_blank` or ⌥-click, goes to the
+/// top of its Space's Today, behind, as the window has one page and no sidebar to show it in (Arc).
+fn little_tab_opened(window: bc::bc_id, tab: u64, home: bc::bc_id) {
+    let home = little_home(home, main_window_for(home).unwrap_or(0));
+    unsafe { bc::bc_tab_move_to_space(tab, home) };
+    // check.sh reads this line.
+    log!("browser: little window {window} put {tab} in space {home}");
+}
+
+/// Where a Little ilo window opens: centred a little above the middle of the screen the windows
+/// open on. Arc's opens on the pointer's screen, which waits for the host to say where it is.
+fn little_frame() -> bc::bc_rect {
+    let (width, height) = LITTLE_SIZE;
+    let (mut x, mut y) = (0., 0.);
+    unsafe { platform::host_centered(width, height, &mut x, &mut y) };
+    let frame = window_frames::raised(Frame { x, y, width, height }, &screens());
+    bc::bc_rect {
+        x: frame.x,
+        y: frame.y,
+        width: frame.width,
+        height: frame.height,
+    }
+}
+
+/// Opens a Little ilo window from `from` for the user's Space `home`, in its profile, and returns
+/// it.
+fn open_little(from: BrowserWindow, home: bc::bc_id, cx: &mut App) -> Option<bc::bc_id> {
+    let home = match home {
+        0 => users_space_of(from.id),
+        home => home,
+    };
+    let profile = unsafe { bc::bc_space_profile(home) };
+    if profile == 0 {
+        return None;
+    }
+    open_window(Some(from), Some(Own::Little { profile, home }), cx)
 }
 
 /// The front window's frame, kept beside its launch picture, for the next launch's window to open
@@ -3813,7 +3934,7 @@ unsafe extern "C" fn open_links(_: *mut c_void, urls: *const *const c_char, coun
     }
     // A private window's session is the user's on purpose, so a link from elsewhere goes to the
     // regular window in front, as Chrome's does.
-    let Some(window) = WINDOWS.with_borrow(|windows| windows.iter().find(|w| !w.private).cloned())
+    let Some(window) = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.regular()).cloned())
     else {
         return;
     };
@@ -3857,7 +3978,7 @@ fn open_in_profile(profile: bc::bc_id, url: &str) {
 /// the regular window in front, showing a Space of the profile first if it shows another's. Returns
 /// whether it did: not for a profile none of the user's Spaces is in, as its tabs would have none.
 pub fn clear_browsing_data(profile: u64) -> bool {
-    let Some(window) = WINDOWS.with_borrow(|windows| windows.iter().find(|w| !w.private).cloned())
+    let Some(window) = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.regular()).cloned())
     else {
         return false;
     };
@@ -3904,7 +4025,7 @@ fn open_link_in(front: bc::bc_id, url: &str, routed: bc::bc_id) -> (bc::bc_id, u
     let showing = (routed != 0).then(|| {
         WINDOWS.with_borrow(|windows| {
             let shows = |w: &&BrowserWindow| unsafe { bc::bc_window_space(w.id) } == routed;
-            windows.iter().filter(|w| !w.private).find(shows).map(|w| w.id)
+            windows.iter().filter(|w| w.regular()).find(shows).map(|w| w.id)
         })
     });
     let window = showing.flatten().unwrap_or(front);
@@ -4019,20 +4140,16 @@ fn open_window_after(id: bc::bc_id, cx: &mut App) -> Option<bc::bc_id> {
     if private == Some(0) {
         return None;
     }
-    open_window(Some(from), private, cx)
+    open_window(Some(from), private.map(Own::Private), cx)
 }
 
 /// Opens a browser window and the shell inside it under the page, and returns it. The first opens
 /// the overlays every window shares and the Spaces as the user left them. Another, from `from`,
 /// starts with its shell's state and shows its Space with no page, as ⌘N's window does. With
-/// `private`, a profile, it's ⇧⌘N's private window, which shows a Space of its own instead, with
-/// no page.
-fn open_window(
-    from: Option<BrowserWindow>,
-    private: Option<bc::bc_id>,
-    cx: &mut App,
-) -> Option<bc::bc_id> {
-    open_window_as(from, private, None, cx)
+/// `own`, it's ⇧⌘N's private window or a Little ilo window, which shows a Space of its own
+/// instead, with no page.
+fn open_window(from: Option<BrowserWindow>, own: Option<Own>, cx: &mut App) -> Option<bc::bc_id> {
+    open_window_as(from, own, None, cx)
 }
 
 /// open_window, or with `saved`, the saved window after the first the launch brings back
@@ -4040,7 +4157,7 @@ fn open_window(
 /// window does, but showing the Space it showed, with its page.
 fn open_window_as(
     from: Option<BrowserWindow>,
-    private: Option<bc::bc_id>,
+    own: Option<Own>,
     saved: Option<usize>,
     cx: &mut App,
 ) -> Option<bc::bc_id> {
@@ -4050,7 +4167,7 @@ fn open_window_as(
     #[cfg(target_os = "linux")]
     let ui_view = gpui_linux::new_host_window().unwrap_or(0) as usize as *mut c_void;
     let after = from.as_ref().map(|from| from.ui_view);
-    let id = open_browser_window(ui_view, after, private, saved)?;
+    let id = open_browser_window(ui_view, after, own, saved)?;
     // Under Wayland, the window's surface, which GPUI's goes in as a subsurface, is the view, and
     // GPUI's window starts at its size.
     #[cfg(target_os = "linux")]
@@ -4066,7 +4183,7 @@ fn open_window_as(
     unsafe { platform::host_window_opened(ui_view, id) };
     let from_shell = from.as_ref().and_then(|from| from.shell.upgrade());
     // Its Space, which the core made with the window.
-    let private_space = private.map(|profile| (unsafe { bc::bc_window_space(id) }, profile));
+    let own_space = own.map(|own| (unsafe { bc::bc_window_space(id) }, own));
     // The shell reads its sidebar's width from the core as it's made. A saved window's is its own.
     if let Some(from) = from.as_ref().filter(|_| saved.is_none()) {
         let width = unsafe { bc::bc_window_sidebar_width(from.id) };
@@ -4128,9 +4245,12 @@ fn open_window_as(
                 view: ns_view(window),
                 videos: RefCell::default(),
             });
-            match (&from_shell, private_space) {
-                (_, Some((space, profile))) => {
+            match (&from_shell, own_space) {
+                (_, Some((space, Own::Private(profile)))) => {
                     Shell::private_window(engine, space, private_name(profile), profile, cx)
+                }
+                (from, Some((space, Own::Little { profile, home }))) => {
+                    Shell::little_window(engine, space, home, profile, from.as_ref(), cx)
                 }
                 (Some(from), None) if saved.is_some() => Shell::seeded_behind(from, engine, cx),
                 (Some(from), None) => Shell::seeded_from(from, engine, cx),
@@ -4154,7 +4274,11 @@ fn open_window_as(
                     shell: shell.downgrade(),
                     handle: Window::window_handle(window),
                     children: Vec::new(),
-                    private: private.is_some(),
+                    private: matches!(own, Some(Own::Private(_))),
+                    little: match own {
+                        Some(Own::Little { home, .. }) => Some(home),
+                        _ => None,
+                    },
                     users_space: 0,
                 },
             )
@@ -4183,7 +4307,7 @@ fn open_window_as(
             set_frames(id, shell, shell.page_frame(viewport), viewport)
         })
         .ok();
-    if let Some(from) = from.as_ref().filter(|_| private.is_none()) {
+    if let Some(from) = from.as_ref().filter(|_| own.is_none()) {
         // A saved window shows the Space the core put back in it.
         let space = if saved.is_some() {
             unsafe { bc::bc_window_space(id) }
@@ -4205,7 +4329,7 @@ fn open_window_as(
     }
     log_frame(id, ui_view);
     if !first {
-        finish_opening(id, ui_view, window, true, saved.is_none(), private, cx);
+        finish_opening(id, ui_view, window, true, saved.is_none(), own, cx);
         return Some(id);
     }
     // check.sh reads this line.
@@ -4217,7 +4341,7 @@ fn open_window_as(
     // don't wait, as a page may open in them at once. A window that isn't visible (another
     // desktop, launched hidden) draws no frames, so a timer makes them if the frames haven't.
     let open = move |cx: &mut App| {
-        finish_opening(id, ui_view, window, false, false, private, cx);
+        finish_opening(id, ui_view, window, false, false, own, cx);
         // After the overlays, so the window the user sees first waits for neither.
         if restored {
             open_saved_windows(cx);
@@ -4316,7 +4440,7 @@ fn finish_opening(
     window: WindowHandle<Shell>,
     seeded: bool,
     ui_keyboard: bool,
-    private: Option<bc::bc_id>,
+    own: Option<Own>,
     cx: &mut App,
 ) {
     let Ok(shell) = window.entity(cx) else {
@@ -4355,8 +4479,16 @@ fn finish_opening(
     });
     // check.sh reads these lines.
     log!("browser: window opened {id}");
-    if let Some(profile) = private {
-        log!("browser: private window opened {id} profile {profile}");
+    match own {
+        Some(Own::Private(profile)) => {
+            log!("browser: private window opened {id} profile {profile}")
+        }
+        Some(Own::Little { profile, home }) => {
+            log!("browser: little window opened {id} profile {profile} home {home}")
+        }
+        None => {}
+    }
+    if own.is_some() {
         // The core showed its Space before there was a window to title.
         shell.update(cx, |shell, cx| shell.update_title(cx));
     }
@@ -4776,6 +4908,7 @@ fn menus(bar: &shell::MenuBar, undo: Option<&str>, redo: Option<&str>) -> Vec<Me
             vec![
                 item("New Tab…", Command::NewTab),
                 item("New Window", Command::NewWindow),
+                item("New Little ilo Window", Command::NewLittleWindow),
                 item("New Incognito Window", Command::NewPrivateWindow),
                 item("Restore Last Closed Tab", Command::ReopenClosedTab),
                 MenuItem::separator(),
@@ -5011,13 +5144,13 @@ unsafe extern "C" fn window_closed(_: *mut c_void, id: bc::bc_id) {
         let index = windows.iter().position(|window| window.id == id);
         (index.map(|index| windows.remove(index)), windows.len())
     });
-    let private = window.as_ref().is_some_and(|window| window.private);
-    let regular = WINDOWS.with_borrow(|windows| windows.iter().any(|window| !window.private));
+    let own = window.as_ref().is_some_and(|window| !window.regular());
+    let regular = WINDOWS.with_borrow(|windows| windows.iter().any(BrowserWindow::regular));
     if let Some(window) = window {
         // The user closing the last regular window, which doesn't resign the app, sets where the
         // next launch's window opens. Not in a quit, which closes the windows in no order once the
         // user's Quit has taken the one in front.
-        if !private && !regular && !unsafe { bc::bc_quitting() } {
+        if !own && !regular && !unsafe { bc::bc_quitting() } {
             save_launch_frame(window.ui_view);
         }
         unsafe { platform::host_forget_window(window.ui_view) };
@@ -5034,9 +5167,9 @@ unsafe extern "C" fn window_closed(_: *mut c_void, id: bc::bc_id) {
         });
     }
     log!("browser: window closed {id}");
-    // A private window alone doesn't keep the browser: the Spaces' pages closed with the last
-    // regular window, which the next launch brings back, so the private ones close with them.
-    if left == 0 || (!private && !regular) {
+    // A private or Little ilo window alone doesn't keep the browser: the Spaces' pages closed with
+    // the last regular window, which the next launch brings back, so theirs close with them.
+    if left == 0 || (!own && !regular) {
         quit_because("the last window closed");
     }
 }
@@ -5162,13 +5295,38 @@ unsafe extern "C" fn window_open_link(
     update_app(|cx| {
         // A regular window takes its Spaces from a regular one, as ⌘N's does from a private one.
         let from = WINDOWS.with_borrow(|windows| {
-            let this = windows.iter().find(|w| w.id == window && (private || !w.private));
-            this.or_else(|| windows.iter().find(|w| !w.private)).cloned()
+            let this = windows.iter().find(|w| w.id == window && (private || w.regular()));
+            this.or_else(|| windows.iter().find(|w| w.regular())).cloned()
         });
-        let private = private.then_some(profile);
+        let private = private.then_some(Own::Private(profile));
         if let Some(opened) = from.and_then(|from| open_window(Some(from), private, cx)) {
             open_tab(opened, &url);
         }
+    });
+}
+
+/// ⌥⌘-click on a link in a page of `window`: `url` opens in a new Little ilo window, for the
+/// Space `window` is for, as Arc's opens in Little Arc. `profile` is the page's, which the Space's
+/// has.
+unsafe extern "C" fn window_open_little(
+    _: *mut c_void,
+    window: bc::bc_id,
+    url: *const c_char,
+    profile: bc::bc_id,
+) {
+    let url = unsafe { CStr::from_ptr(url) }.to_string_lossy().into_owned();
+    update_app(|cx| {
+        let from = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == window).cloned());
+        let Some(from) = from else {
+            return;
+        };
+        let home = from.little.unwrap_or_else(|| users_space_of(window));
+        let Some(opened) = open_little(from, home, cx) else {
+            return;
+        };
+        // check.sh reads this line.
+        log!("browser: link {url} in little window {opened} from {window} profile {profile}");
+        open_tab(opened, &url);
     });
 }
 
@@ -5252,7 +5410,7 @@ extern "C" fn launch_picture_on_resigning() {
 
 fn save_launch_picture(cx: &mut App) {
     // The regular window in front, which the next launch opens first.
-    let Some(window) = WINDOWS.with_borrow(|windows| windows.iter().find(|w| !w.private).cloned())
+    let Some(window) = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.regular()).cloned())
     else {
         return;
     };
@@ -5942,6 +6100,13 @@ unsafe extern "C" fn tab_opened(
 ) {
     let side = if foreground { "foreground" } else { "background" };
     log!("browser: tab {tab} opened by {opener} in the {side}");
+    let little = WINDOWS.with_borrow(|windows| {
+        windows.iter().find(|each| each.id == window).and_then(|each| each.little)
+    });
+    if let Some(home) = little.filter(|_| opener != 0) {
+        update_app_later(move |_| little_tab_opened(window, tab, home));
+        return;
+    }
     // A link ⌥⌘-clicked, or opened in a split view from the page's menu, joined its page's split,
     // which ⌘Z takes back as it does the user's other ways in.
     let mut split = [0; 3];
@@ -6678,6 +6843,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         window_closed: Some(window_closed),
         private_session_ended: Some(private_session_ended),
         window_open_link: Some(window_open_link),
+        window_open_little: Some(window_open_little),
         space_changed: Some(space_changed),
         spaces_changed: Some(spaces_changed),
         favorites_changed: Some(favorites_changed),

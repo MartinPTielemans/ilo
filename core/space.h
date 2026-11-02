@@ -59,14 +59,21 @@ class Space {
                        bc_id id = 0,
                        std::optional<Agent> agent = std::nullopt,
                        size_t at = SIZE_MAX);
-  // A private window's Space, its tabs in the off-the-record profile of the profile in the
-  // directory |profile|. It holds Today tabs alone, and isn't among All(), so it's never saved,
-  // archived or listed with the Spaces. It goes with its window.
-  static Space* CreateOffTheRecord(std::string profile);
+  // What a window's own Space is for.
+  enum class Own {
+    // A private window's: its tabs in the profile's off-the-record profile.
+    kPrivate,
+    // A Little ilo window's (Arc's Little Arc): its tabs in the profile itself.
+    kLittle,
+  };
+  // A window's own Space, its tabs in the profile in the directory |profile|, or for a private
+  // window in its off-the-record profile. It holds Today tabs alone, and isn't among All(), so
+  // it's never saved, archived or listed with the Spaces. It goes with its window.
+  static Space* CreateOwn(std::string profile, Own own);
   // Deletes the Space, which windows no longer show.
   static void Delete(bc_id id);
   static Space* FromId(bc_id id);
-  // Every Space but the private windows', in the switcher's order, which sync's places set.
+  // Every Space but the windows' own, in the switcher's order, which sync's places set.
   static std::vector<Space*> All();
   // The Space holding |tab|, pinned or in Today, if any.
   static Space* Holding(bc_id tab);
@@ -96,10 +103,14 @@ class Space {
   const std::string& profile() const { return profile_; }
   // The agent it belongs to, or none for the user's own.
   const std::optional<Agent>& agent() const { return agent_; }
-  // Whether it's a private window's (CreateOffTheRecord), whose tabs open in that profile's
-  // off-the-record profile instead.
-  bool off_the_record() const { return off_the_record_; }
-  // The Space's node. A private window's has none.
+  // Whether it's a window's own (CreateOwn), which no other window shows.
+  bool own() const { return own_.has_value(); }
+  // Whether it's a private window's, whose tabs open in that profile's off-the-record profile
+  // instead.
+  bool off_the_record() const { return own_ == Own::kPrivate; }
+  // Whether it's a Little ilo window's.
+  bool little() const { return own_ == Own::kLittle; }
+  // The Space's node. A window's own has none.
   const Node& node() const { return node_; }
   // The pinned tab's or folder's |id|'s node, or null if it isn't one of the Space's.
   const Node* NodeOf(bc_id id) const;
@@ -270,7 +281,7 @@ class Space {
   std::string theme_;
   std::string profile_;
   bool touched_ = false;
-  bool off_the_record_ = false;
+  std::optional<Own> own_;
   Node node_;
   // Pinned tabs and folders.
   std::vector<bc_id> pinned_;

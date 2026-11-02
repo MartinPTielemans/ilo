@@ -955,6 +955,10 @@ window-button-zoom = 0x58bb18
 windows-button-plate = 22.0
 windows-button-glyph = 10.0
 windows-close-hovered = 0xc42b1c
+# The bar over a Little ilo window's card (Arc's Little Arc): its row centred on the window
+# buttons, with the card's inset under it, and its favicon past them. Ours, until Arc's is measured.
+little-bar = 44.0
+little-title-x = 86.0
 
 [shell.agent-pointer]
 # Ours (#365), as Arc and Dia have no agents in pages: while an agent clicks or types in the page

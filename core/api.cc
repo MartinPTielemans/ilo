@@ -558,7 +558,7 @@ bc_id bc_agent_open_tab(const char* agent, const char* url) {
   // The window showing the agent's Space, or else the first of the user's, for its Browser.
   browser_core::Window* window = nullptr;
   for (browser_core::Window* each : browser_core::Window::All()) {
-    if (!each->off_the_record() && (!window || (space && each->space() == space->id()))) {
+    if (!each->own_space() && (!window || (space && each->space() == space->id()))) {
       window = each;
     }
   }
@@ -643,7 +643,7 @@ bc_id bc_space_profile(bc_id id) {
 bool bc_space_set_profile(bc_id id, bc_id profile) {
   browser_core::Space* space = browser_core::Space::FromId(id);
   const std::string dir = browser_core::ProfileDir(profile);
-  if (!space || space->off_the_record() || dir.empty() || !space->pinned_rows().empty() ||
+  if (!space || space->own() || dir.empty() || !space->pinned_rows().empty() ||
       !space->today().empty()) {
     return false;
   }
@@ -2018,7 +2018,7 @@ void bc_tab_close(bc_id id, bool split) {
 size_t bc_windows(bc_id* windows, size_t capacity) {
   // Private windows are the user's alone.
   std::vector<browser_core::Window*> all = browser_core::Window::All();
-  std::erase_if(all, [](const browser_core::Window* each) { return each->off_the_record(); });
+  std::erase_if(all, [](const browser_core::Window* each) { return each->own_space(); });
   for (size_t i = 0; i < all.size() && i < capacity && windows; ++i) {
     windows[i] = all[i]->id();
   }
@@ -2043,7 +2043,18 @@ bc_id bc_tab_window(bc_id tab) {
 bc_id bc_window_open_private(bc_rect bounds, void* ui_view, bc_id profile_id) {
   Profile* profile = LoadedProfile(profile_id);
   browser_core::Window* window =
-      profile ? browser_core::Window::OpenPrivate(ToRect(bounds), ui_view, profile) : nullptr;
+      profile ? browser_core::Window::OpenOwn(ToRect(bounds), ui_view, profile,
+                                              browser_core::Space::Own::kPrivate)
+              : nullptr;
+  return window ? window->id() : 0;
+}
+
+bc_id bc_window_open_little(bc_rect bounds, void* ui_view, bc_id profile_id) {
+  Profile* profile = LoadedProfile(profile_id);
+  browser_core::Window* window =
+      profile ? browser_core::Window::OpenOwn(ToRect(bounds), ui_view, profile,
+                                              browser_core::Space::Own::kLittle)
+              : nullptr;
   return window ? window->id() : 0;
 }
 
