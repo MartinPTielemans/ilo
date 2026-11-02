@@ -2041,8 +2041,9 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
     window_class.lpfnWndProc = LaunchProc;
     window_class.hInstance = GetModuleHandleW(nullptr);
     window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    // chrome.exe's own, IDR_MAINFRAME, which the browser window's frame shows too.
-    window_class.hIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(101));
+    // IDR_MAINFRAME, which the browser window's frame shows too, from chrome.dll, as Chromium's
+    // GetAppIcon takes it: chrome.exe names its icons, so it has no 101.
+    window_class.hIcon = LoadIconW(GetModuleHandleW(L"chrome.dll"), MAKEINTRESOURCEW(101));
     window_class.lpszClassName = L"BrowserLaunch";
     RegisterClassW(&window_class);
     return window_class.lpszClassName;

@@ -4,11 +4,11 @@
 # recompiles only what changed. Microsoft's compiler and SDK come from a zip the owner packaged on a
 # Windows machine, which Microsoft's licence lets no one redistribute: it stays on that machine, in
 # $ILO_ENGINE_ROOT/windows-toolchain, and nothing here uploads it (engine/README.md, Windows). Run
-# by hand, nightly on main, and on main when the pin, the series or the cross build's scripts
-# change. Not for each core change: that rebuilt it on every merge, on the one runner the Linux
-# engines wait for, so a Windows lane that needs today's core from main dispatches it by hand.
-# Never on branches or pull requests, as the repository is public. engine-windows.yml builds the
-# same engine on GitHub's Windows runners, by hand only.
+# by hand, nightly on main, and on main when the pin, the series, the cross build's scripts or
+# ilo's Windows icon change. Not for each core change: that rebuilt it on every merge, on the one
+# runner the Linux engines wait for, so a Windows lane that needs today's core from main dispatches
+# it by hand. Never on branches or pull requests, as the repository is public. engine-windows.yml
+# builds the same engine on GitHub's Windows runners, by hand only.
 name: Engine on Windows (cross-compiled)
 
 on:
@@ -24,6 +24,8 @@ on:
       - engine/patches/**
       - engine/tree.sh
       - engine/windows/cross/**
+      - engine/icons.py
+      - app/platform/windows/package/Assets/ilo.ico
       - .github/workflows/engine-windows-cross.yml
 
 # The runner takes one job at a time, so this never builds beside the Linux engine. Of this
