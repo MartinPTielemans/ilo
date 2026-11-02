@@ -88,6 +88,7 @@ mod agent_pointer;
 mod agent_question;
 mod picture;
 mod recent_downloads;
+mod update_sign;
 #[cfg(test)]
 mod recorder;
 mod rows;
@@ -115,7 +116,7 @@ pub use browser::{
 pub use commands::{
     BAR_ROWS, BAR_TABS_SHOWN, BarCommand, BarTab, CancelName, Command, CreateSpace, KEY_CONTEXT,
     KeepName, Match, bar_commands, bind_keys, copy_from_bar, copy_url_of_preview, find_commands,
-    key_name, keystroke_label, Run, menu_item, pane_added, run_from_bar, shown_tab, with_named_rows,
+    key_name, keystroke_keys, keystroke_label, Run, menu_item, pane_added, run_from_bar, shown_tab, with_named_rows,
 };
 pub use drag::dropped_urls;
 pub use drm_note::PlayReady;
@@ -1358,6 +1359,11 @@ pub struct Shell {
     /// The players last drawn, as the log has them, and where the bottom one is.
     media_logged: RefCell<Vec<u64>>,
     media_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Whether an update waits for a restart, which Restart to Update at the sidebar's foot says,
+    /// where that's drawn, and the watch on the updater.
+    update_waiting: bool,
+    update_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    _update_watch: Subscription,
     /// Whether a tooltip the agent bar asked for may be up, and whether its bar showed the agent
     /// at work, so it ends once that bar is gone (agent_bar.rs).
     agent_tip: Cell<Option<bool>>,
@@ -1630,6 +1636,9 @@ impl Shell {
             media_dismissed: HashSet::new(),
             media_logged: RefCell::default(),
             media_drawn: Rc::default(),
+            update_waiting: crate::updates::ready(cx),
+            update_drawn: Rc::default(),
+            _update_watch: crate::updates::observe_view(cx, Self::update_changed),
             agent_tip: Cell::default(),
             drm_notes: HashMap::new(),
             keys: HashMap::new(),
@@ -3477,6 +3486,7 @@ impl Shell {
                     .children(self.question_card(cx))
                     .children(self.cast_card(cx))
                     .children(self.agent_question_card(cx))
+                    .children(self.update_sign())
                     .children(self.media_player_cards(cx))
                     .children(self.agent_bar_card(cx))
                     .children(self.drm_note_card(cx))

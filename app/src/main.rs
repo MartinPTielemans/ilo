@@ -26,7 +26,7 @@ use browser::widevine::Widevine;
 use browser::{
     account, capture, command_bar, dialog, dock_dot, elevation::Level, folder_preview, hover_card,
     icon_picker, launch, link_preview, link_target, log, menu, offer, passwords, site_controls,
-    theme_picker, toast, tooltip, zoom_hud,
+    theme_picker, toast, tooltip, updates, zoom_hud,
 };
 use browser::shell::{
     self, Archived, BarTab, Browser, Command, Download, DownloadAction, DownloadState, Extension,
@@ -462,12 +462,31 @@ mod platform {
         #[cfg(not(target_os = "linux"))]
         pub fn host_updates_available() -> bool;
         #[cfg(not(target_os = "linux"))]
-        pub fn host_start_updater(quit: extern "C" fn());
+        pub fn host_updated_by_store() -> bool;
+        #[cfg(not(target_os = "linux"))]
+        pub fn host_start_updater(
+            quit: extern "C" fn(),
+            changed: extern "C" fn(stage: c_int, version: *const c_char),
+        );
         #[cfg(not(target_os = "linux"))]
         pub fn host_check_for_updates();
+        #[cfg(not(target_os = "linux"))]
+        pub fn host_check_for_updates_quietly();
+        #[cfg(not(target_os = "linux"))]
+        pub fn host_install_update();
+        #[cfg(not(target_os = "linux"))]
+        pub fn host_finish_update();
         #[cfg(target_os = "macos")]
         pub fn host_take_update_notes(notes: extern "C" fn(url: *const c_char));
     }
+
+    /// Where host_start_updater's `changed` says the update stands (host.h's HOST_UPDATE_*).
+    pub const UPDATE_CHECKING: c_int = 1;
+    pub const UPDATE_CURRENT: c_int = 2;
+    pub const UPDATE_FOUND: c_int = 3;
+    pub const UPDATE_DOWNLOADING: c_int = 4;
+    pub const UPDATE_READY: c_int = 5;
+    pub const UPDATE_FAILED: c_int = 6;
 
     /// What host_take_drops hears of a drag.
     pub const DRAG_OVER: c_int = 0;
@@ -554,11 +573,13 @@ struct Menus {
     bar: shell::MenuBar,
     undo: Option<String>,
     redo: Option<String>,
+    /// Check for Updates… reads Restart to Update once an update is ready.
+    update_ready: bool,
 }
 
 impl Menus {
     fn build(&self) -> Vec<Menu> {
-        menus(&self.bar, self.undo.as_deref(), self.redo.as_deref())
+        menus(&self.bar, self.undo.as_deref(), self.redo.as_deref(), self.update_ready)
     }
 }
 
@@ -1248,6 +1269,13 @@ impl link_preview::Host for LinkPreviewHost {
         });
         if let Some(shell) = shell {
             shell.update(cx, |shell, cx| shell.preview_closed(closed, undone, cx)).ok();
+        }
+    }
+
+    fn tooltip(&self, tip: Option<(tooltip::Tip, tooltip::Anchor)>, cx: &mut App) {
+        match tip {
+            Some((tip, anchor)) => tooltip::hover(tip, anchor, cx),
+            None => tooltip::dismiss(cx),
         }
     }
 }
@@ -5021,7 +5049,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
             KeyBinding::new("alt-cmd-h", HideOthers, Some(shell::KEY_CONTEXT)),
             KeyBinding::new("cmd-m", Minimize, Some(shell::KEY_CONTEXT)),
         ]);
-        cx.set_menus(menus(&shell::MenuBar::default(), None, None));
+        cx.set_menus(menus(&shell::MenuBar::default(), None, None, false));
         // check.sh reads this line, as launches are timed from it.
         log!("browser: started at {:.1} ms", unsafe { platform::host_since_launch() });
         dock_dot::open(Rc::new(DockDot), cx);
@@ -5154,16 +5182,34 @@ fn updates_available() -> bool {
     *AVAILABLE.get_or_init(available)
 }
 
-/// Starts checking for updates: Sparkle or WinSparkle, or on Linux Flatpak's portal.
+/// Starts checking for updates: Sparkle on the Mac, ilo's own on Windows, Flatpak's portal on
+/// Linux. Settings › About's row, Restart to Update at the sidebar's foot and Check for Updates…'s
+/// title follow what it says.
 fn start_updates(cx: &mut App) {
+    let updater = if updates_available() {
+        updates::Updater::Own
+    } else if updated_by_store() {
+        updates::Updater::Store
+    } else {
+        updates::Updater::None
+    };
+    updates::start(updater, Rc::new(SystemUpdater), cx);
+    updates::observe(cx, |cx| {
+        let ready = updates::ready(cx);
+        if MENUS.with_borrow(|menus| menus.update_ready) != ready {
+            MENUS.with_borrow_mut(|menus| menus.update_ready = ready);
+            show_menus(cx);
+        }
+    })
+    .detach();
     #[cfg(not(target_os = "linux"))]
     {
-        _ = cx;
-        // The installer WinSparkle started waits for the browser to quit, which needs no asking.
+        // Restart to Update on Windows, whose installer runs once the browser has gone, which needs
+        // no asking.
         extern "C" fn quit() {
             quit_because("the updater's install");
         }
-        unsafe { platform::host_start_updater(quit) };
+        unsafe { platform::host_start_updater(quit, update_changed) };
     }
     #[cfg(target_os = "linux")]
     if updates_available() {
@@ -5193,16 +5239,81 @@ fn start_updates(cx: &mut App) {
     }
 }
 
-/// The app menu's and the command bar's Check for Updates…: Sparkle's or WinSparkle's, or on Linux
-/// where the Flatpak's update stands.
+/// The app menu's and the command bar's Check for Updates…: Sparkle's on the Mac; on Windows, whose
+/// updater has no window, the check, with Settings › About saying where it stands; on Linux, where
+/// the Flatpak's update stands. Once an update is ready, it's Restart to Update.
 fn check_for_updates(cx: &mut App) {
-    #[cfg(not(target_os = "linux"))]
-    {
-        _ = cx;
-        unsafe { platform::host_check_for_updates() };
+    if updates::ready(cx) {
+        return updates::act(updates::Action::Restart, cx);
     }
+    #[cfg(target_os = "windows")]
+    settings::show_about(cx);
+    #[cfg(not(target_os = "linux"))]
+    unsafe {
+        platform::host_check_for_updates()
+    };
     #[cfg(target_os = "linux")]
     flatpak::check(cx);
+}
+
+/// Whether the Microsoft Store updates this copy, an MSIX from it.
+fn updated_by_store() -> bool {
+    #[cfg(not(target_os = "linux"))]
+    return unsafe { platform::host_updated_by_store() };
+    #[cfg(target_os = "linux")]
+    false
+}
+
+/// The system's updater, as Settings › About's row asks it.
+struct SystemUpdater;
+
+impl updates::Host for SystemUpdater {
+    /// On the Mac, Sparkle's check in the background, whose download the row follows and which
+    /// shows no window of its own; on Windows, the updater's, which has none; on Linux, where the
+    /// Flatpak's update stands, or after a failed install, another try.
+    fn check(&self, cx: &mut App) {
+        #[cfg(not(target_os = "linux"))]
+        {
+            _ = cx;
+            unsafe { platform::host_check_for_updates_quietly() };
+        }
+        #[cfg(target_os = "linux")]
+        if !flatpak::retry(cx) {
+            flatpak::check(cx);
+        }
+    }
+
+    fn restart(&self, cx: &mut App) {
+        #[cfg(not(target_os = "linux"))]
+        {
+            _ = cx;
+            unsafe { platform::host_install_update() };
+        }
+        #[cfg(target_os = "linux")]
+        flatpak::restart(cx);
+    }
+}
+
+/// Sparkle or Windows's updater says where the update stands, and the version it's of, if it says.
+#[cfg(not(target_os = "linux"))]
+extern "C" fn update_changed(stage: c_int, version: *const c_char) {
+    use updates::Stage;
+    let version = (!version.is_null())
+        .then(|| unsafe { CStr::from_ptr(version) }.to_string_lossy().into_owned())
+        .filter(|version| !version.is_empty())
+        .map(SharedString::from);
+    let stage = match stage {
+        platform::UPDATE_CHECKING => Stage::Checking,
+        platform::UPDATE_CURRENT => Stage::Current,
+        platform::UPDATE_FOUND => Stage::Found(version),
+        platform::UPDATE_DOWNLOADING => Stage::Downloading(version),
+        platform::UPDATE_READY => Stage::Ready(version),
+        platform::UPDATE_FAILED => Stage::Failed { found: false },
+        // HOST_UPDATE_IDLE.
+        _ => Stage::Idle,
+    };
+    // Sparkle can say it from inside the call that asked it to check.
+    update_app_later(move |cx| updates::changed(stage, cx));
 }
 
 /// Starts the build Flatpak installed, once this one has let go of the profile, and quits.
@@ -5221,7 +5332,7 @@ fn restart_into_newest(portal: flatpak::Portal, cx: &mut App) {
 /// the titles Undo and Redo have for what it would undo and redo (docs/ux-spec.md › Menus). The
 /// Edit menu's standard items go to the first responder, so a focused page cuts, copies, pastes,
 /// selects and undoes for itself.
-fn menus(bar: &shell::MenuBar, undo: Option<&str>, redo: Option<&str>) -> Vec<Menu> {
+fn menus(bar: &shell::MenuBar, undo: Option<&str>, redo: Option<&str>, update_ready: bool) -> Vec<Menu> {
     let menu = |name: &str, items| Menu { name: name.to_string().into(), items, disabled: false };
     let item = shell::menu_item;
     let (spaces, extensions) = (&bar.spaces, &bar.extensions);
@@ -5229,7 +5340,8 @@ fn menus(bar: &shell::MenuBar, undo: Option<&str>, redo: Option<&str>) -> Vec<Me
     let mut app = vec![about, MenuItem::separator()];
     // Only a release build that carries Sparkle has updates to check for.
     if updates_available() {
-        app.extend([MenuItem::action("Check for Updates…", CheckForUpdates), MenuItem::separator()]);
+        let title = updates::title(update_ready);
+        app.extend([MenuItem::action(title, CheckForUpdates), MenuItem::separator()]);
     }
     app.extend([
         item("Settings…", Command::Settings),
@@ -5799,6 +5911,11 @@ fn set_reduce_motion(reduce: bool, cx: &mut App) {
 
 unsafe extern "C" fn stopping(_: *mut c_void) {
     log!("browser: stopping");
+    // On Windows, a ready update installs once the app has gone.
+    #[cfg(not(target_os = "linux"))]
+    unsafe {
+        platform::host_finish_update()
+    };
     // The recovery words a Copy put on the clipboard don't outlast the app (settings.rs).
     unsafe { platform::host_forget_secret() };
 }
@@ -6179,6 +6296,10 @@ unsafe extern "C" fn tab_favicon_changed(
         Arc::new(Image::from_bytes(ImageFormat::Png, png))
     });
     log!("browser: favicon {tab} {size} bytes");
+    // A tab of no window's is the link preview's, which shows its site's.
+    if unsafe { bc::bc_tab_window(tab) } == 0 {
+        update_app(|cx| link_preview::set_favicon(tab, favicon.clone(), cx));
+    }
     update_shells(|shell, cx| shell.set_favicon(tab, favicon.clone(), cx));
 }
 

@@ -69,3 +69,29 @@ fn check_for_updates_is_in_the_bar_of_a_build_that_updates(cx: &mut TestAppConte
     shell.update(cx, |shell, cx| shell.run(Command::CheckForUpdates, "command bar", cx));
     assert_eq!(host.checked_for_updates.get(), 1);
 }
+
+/// Once an update is ready, the command bar lists Check for Updates… as Restart to Update, and
+/// lists it once, as it does a toggle's row; it's Check for Updates… again for a dev build.
+#[gpui::test]
+fn check_for_updates_reads_restart_to_update_once_one_is_ready(cx: &mut TestAppContext) {
+    use crate::shell::commands::{ShellHandle, bar_commands};
+    let (shell, host) = window(cx);
+    host.updates.set(true);
+    cx.update(|cx| cx.set_global(ShellHandle(shell.downgrade())));
+    let names = |cx: &mut TestAppContext| {
+        let found = cx.update(|cx| bar_commands("updat", cx));
+        let rows = found.iter().filter(|row| row.command == Command::CheckForUpdates);
+        rows.map(|row| row.name.to_string()).collect::<Vec<_>>()
+    };
+    assert_eq!(names(cx), ["Check for Updates…"]);
+    struct Updater;
+    impl crate::updates::Host for Updater {
+        fn check(&self, _: &mut gpui::App) {}
+        fn restart(&self, _: &mut gpui::App) {}
+    }
+    cx.update(|cx| {
+        crate::updates::start(crate::updates::Updater::Own, std::rc::Rc::new(Updater), cx);
+        crate::updates::changed(crate::updates::Stage::Ready(Some("0.1.1".into())), cx);
+    });
+    assert_eq!(names(cx), ["Restart to Update"]);
+}
