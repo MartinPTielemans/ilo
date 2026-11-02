@@ -5,7 +5,8 @@
 # doesn't use closes one. A tab its page opens goes behind, to the top of its Space's Today, and
 # outlives it. Closing one archives its tab, and ⇧⌘T reopens it in a new one. The first opens 900 × 640, and each after at the size the last one closed at. On the
 # Mac one opens over a full-screen window, and the Dock's menu opens one after its New Window, and
-# hides and shows them all.
+# hides and shows them all. One takes its Space's look as its theme turns light and dark, captured
+# with a title too long for its bar.
 
 serve
 log="$out/little.log"
@@ -270,7 +271,58 @@ expect '^browser: archive filter little$' "choosing Little ilo didn't filter the
 send key l cmd shift
 expect '^browser: library hidden$' "⇧⌘L didn't close the Library"
 
+# A Little ilo window takes its Space's look as it changes, light and then dark, and its bar ends a
+# title too long for it in an ellipsis: the autofocus page puts what's typed in its title.
+send window 1
+send key n cmd alt
+expect "^browser: little window opened [0-9]* profile [0-9]* home $home\$" \
+  "⌥⌘N didn't open a Little ilo window for Space $home"
+look=$(opened)
+expect "^browser: window opened $look\$" "the Little ilo window didn't open"
+# The driver numbers windows in the order they were made, the closed ones too.
+look_window=$(grep -c '^browser: window opened ' "$log")
+send window "$look_window"
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the command bar in the Little ilo window"
+send insert "${site}autofocus.html"
+send key return
+expect "^browser: title [0-9]* ready\$" "the autofocus page didn't draw in the Little ilo window"
+long="a title as long as this one, which runs on past the end of the bar however wide the window is, ends in an ellipsis rather than in the middle of a word"
+# Its text field is at the page's top left, under the bar, and has the keyboard once clicked.
+send click 40 70
+send insert "$long"
+expect "^browser: title [0-9]* value $long\$" "the autofocus page didn't take the typed title"
+# Its home's theme: the theme picker's blue swatch, then the sun, and later the moon, each 13
+# right of its appearance-x token, past the picker's arrow, as cards.sh clicks the sun.
+look_theme() {
+  send window 1
+  post rightclick 100 112
+  expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $colors")" \
+    "the Space's menu didn't offer its theme"
+  send choose "$(cased 'Edit Theme Color…')"
+  expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
+  expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
+}
+look_theme
+send clickkey "$(swatch_x 7)" $swatch_y
+expect '^browser: colored space [0-9]* [0-9a-f]*$' "the blue swatch didn't colour the Space"
+send clickkey 191.3 49
+expect "^browser: little window for $home looks .*appearance=light" \
+  "the Little ilo window didn't take its Space's light theme"
+send key escape
+expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
+send window "$look_window"
+../tools/window-screenshot.sh "$pid" "$out/little-light.png" all || fail "no window to capture"
+look_theme
+send clickkey 231.7 49
+expect "^browser: little window for $home looks .*appearance=dark" \
+  "the Little ilo window didn't take its Space's dark theme"
+send key escape
+expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
+send window "$look_window"
+../tools/window-screenshot.sh "$pid" "$out/little-dark.png" all || fail "no window to capture"
+
 exec 3>&-
 quit
 kill "$server"
-echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L loads a URL in it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Closing one archives its tab, ⇧⌘T reopens it in a new one, and the Library's Filter lists Little ilo's alone. Windows: $out/little.png $out/little-moved.png $out/little-link.png $out/little-archive.png, and on the Mac $out/little-full-screen.png $out/little-dock.png"
+echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L loads a URL in it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Closing one archives its tab, ⇧⌘T reopens it in a new one, and the Library's Filter lists Little ilo's alone. One takes its Space's look as it changes, light and dark, and its bar ends a long title in an ellipsis. Windows: $out/little.png $out/little-moved.png $out/little-link.png $out/little-archive.png $out/little-light.png $out/little-dark.png, and on the Mac $out/little-full-screen.png $out/little-dock.png"

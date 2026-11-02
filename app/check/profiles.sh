@@ -216,8 +216,9 @@ send insert "$cookie_page"
 send key return
 expect "^browser: loaded [0-9]* $cookie_page\$" "the cookie page didn't load in the Little ilo window"
 width=$(grep "^browser: window $little frame " "$log" | tail -1 | cut -d' ' -f7)
-# The picker is the first of the bar's three 30-point buttons, 6 apart, 10 in from its right end.
-post clickkey $((width - 10 - 3 * 30 - 2 * 6 + 15)) 24
+# The picker is the third of the bar's header plates from its end: the last one's middle is 20 in
+# from the right edge, and each is 34 before the next (little.rs).
+post clickkey $((width - 20 - 2 * 34)) 24
 expect "^browser: menu shown $(cased 'Default (checked), Profile 2')\$" \
   "Little ilo's profile picker didn't list the profiles, the page's checked"
 ../tools/window-screenshot.sh "$pid" "$out/little-profile.png" all || fail "no window to capture"

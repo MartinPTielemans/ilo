@@ -959,10 +959,12 @@ window-button-zoom = 0x58bb18
 windows-button-plate = 22.0
 windows-button-glyph = 10.0
 windows-close-hovered = 0xc42b1c
-# The bar over a Little ilo window's card (Arc's Little Arc): its row centred on the window
-# buttons, with the card's inset under it, and its favicon past them. Ours, until Arc's is measured.
-little-bar = 44.0
-little-title-x = 86.0
+# The bar over a Little ilo window's card (Arc's Little Arc), ours until Arc's is measured. Its row
+# is the header's, with the window buttons, and the card starts under it where the main window's
+# URL field does, so the page has the room under the row the header leaves. The buttons are the
+# header's, their glyphs Lucide's at 18, whose 1.69 pt stroke matches the header glyphs' 1.75.
+little-bar = 46.0
+little-glyph = 18.0
 
 [shell.agent-pointer]
 # Ours (#365), as Arc and Dia have no agents in pages: while an agent clicks or types in the page
