@@ -1,0 +1,17 @@
+# Throwaway: times the reverse lookup HTTPServer.server_bind makes, on the image check-mac runs on.
+name: Probe getfqdn
+on:
+  push:
+    branches: [probe/getfqdn-macos26]
+jobs:
+  probe:
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - run: |
+          python3 --version; hostname; cat /etc/hosts
+          for i in 1 2 3; do
+            python3 -I -u -c 'import socket,time;t=time.time();n=socket.getfqdn("127.0.0.1");print("getfqdn", repr(n), round(time.time()-t,3))'
+            python3 -I -u -c 'import time;t=time.time();import http.server;s=http.server.ThreadingHTTPServer(("127.0.0.1",0),http.server.SimpleHTTPRequestHandler);print("ThreadingHTTPServer", s.server_name, round(time.time()-t,3))'
+            python3 -I -u -c 'import time;t=time.time();import socketserver;s=socketserver.TCPServer(("127.0.0.1",0),None);print("TCPServer bind", round(time.time()-t,3))'
+          done
