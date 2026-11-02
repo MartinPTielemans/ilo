@@ -976,6 +976,9 @@ impl Shell {
         if matches!(command, Command::Stop) && (self.cancel_drag(cx) || self.unchoose(cx)) {
             return;
         }
+        if self.run_in_task_area(command, from, cx) {
+            return;
+        }
         // An Esc with nothing to stop closes a Little ilo window (Arc), as no menu's Stop does.
         let key = matches!(from, "ui" | "page");
         if matches!(command, Command::Stop) && key && self.escape_unused(cx) {

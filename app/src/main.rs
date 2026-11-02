@@ -2789,6 +2789,10 @@ impl Browser for Engine {
         unsafe { bc::bc_window_space_tab(self.window, space) }
     }
 
+    fn space_agent(&self, space: u64) -> SharedString {
+        name(bc::bc_space_agent, space)
+    }
+
     fn create_space(&self, name: &str, profile: u64, after: u64, _: &mut App) -> u64 {
         let space = create_space(name, after);
         if profile != 0 {

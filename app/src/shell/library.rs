@@ -42,8 +42,8 @@ use crate::tokens::shell::EMOJI_SIZE;
 use crate::tokens::shell::library::LIBRARY_WIDTH;
 /// The push, on Arc's measured spring (1 run, rms 1.0 pt). The Library comes with it from its own
 /// width to the left, so they meet as they stop.
-const LIBRARY_RESPONSE: f32 = 0.245;
-const LIBRARY_DAMPING: f32 = 0.92;
+pub(super) const LIBRARY_RESPONSE: f32 = 0.245;
+pub(super) const LIBRARY_DAMPING: f32 = 0.92;
 /// Opened or closed by a click, the sidebar under the Library fades out in 2 frames at 60 fps as
 /// it comes, and back in over 130 ms from 80 ms after it starts to go (Arc on video, 2 opens and 2
 /// closes).

@@ -39,11 +39,12 @@ const HEADER: f32 = URL_BUTTON_SIZE + 2. * URL_BUTTON_INSET;
 
 /// The dialog's measured motion, from the link: it grows in over 0.275 s from half its size,
 /// opaque after the first 0.135 s, as the window dims. It shrinks back into the link in 0.2 s,
-/// as fast as an overlay grows in, and grows into the tab's place in 0.275 s.
-const OPEN: f32 = 0.275;
+/// as fast as an overlay grows in, and grows into the tab's place in 0.275 s. A task's page watched
+/// in the page area zooms out of its thumbnail and back on the same curves (shell/task_area.rs).
+pub(crate) const OPEN: f32 = 0.275;
 const FADE_IN: f32 = 0.135;
 const FROM_SCALE: f32 = 0.5;
-const CLOSE: f32 = 0.2;
+pub(crate) const CLOSE: f32 = 0.2;
 const KEEP: f32 = 0.275;
 
 /// What the preview asks of its window and the core.

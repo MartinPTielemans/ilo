@@ -693,6 +693,12 @@ fn off_sites() -> Vec<OffSite> {
 fn profiles() -> Vec<Profile> {
     let in_space = |space| unsafe { bc::bc_space_profile(space) };
     let spaces: Vec<u64> = crate::ids(bc::bc_spaces).into_iter().map(in_space).collect();
+    // A task's Space is never listed as a Space, so its profile's count leaves it out, though it
+    // keeps the profile from being deleted.
+    let listed = crate::ids(bc::bc_spaces).into_iter().filter(|&space| {
+        !agents::is_task(&crate::name(bc::bc_space_agent, space))
+    });
+    let listed: Vec<u64> = listed.map(in_space).collect();
     let users = crate::ids(bc::bc_spaces).into_iter().filter(|&space| {
         crate::name(bc::bc_space_agent, space).is_empty()
     });
@@ -705,7 +711,7 @@ fn profiles() -> Vec<Profile> {
             Profile {
                 id,
                 name: crate::name(bc::bc_profile_name, id),
-                spaces: count,
+                spaces: listed.iter().filter(|&&each| each == id).count(),
                 deletable: index > 0 && count == 0 && !favorites.contains(&id),
                 users_space: users.contains(&id),
             }

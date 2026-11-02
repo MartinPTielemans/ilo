@@ -283,6 +283,11 @@ pub trait Browser {
     fn show_space(&self, space: u64, cx: &mut App);
     /// The tab the window shows when it shows `space`, or the one it shows, else 0.
     fn space_tab(&self, space: u64) -> u64;
+    /// The id of the agent `space` belongs to, which says whether it's a task's
+    /// (`agents::is_task`), else empty.
+    fn space_agent(&self, _space: u64) -> SharedString {
+        SharedString::default()
+    }
     /// Makes an empty Space named `name` right after `after`, else after the others, in `profile`
     /// if it isn't 0, and returns it.
     fn create_space(&self, name: &str, profile: u64, after: u64, cx: &mut App) -> u64;

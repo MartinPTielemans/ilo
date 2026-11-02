@@ -4,7 +4,9 @@
 //! the page too, and each button's tooltip shows its key. It's a card at the sidebar's foot, which
 //! GPUI draws, as the window's question cards are.
 
-use gpui::{App, Context, FontWeight, MouseButton, SharedString, div, prelude::*, px, rgba};
+use gpui::{
+    App, Context, Div, FontWeight, MouseButton, SharedString, Stateful, div, prelude::*, px, rgba,
+};
 
 use super::{
     Command, Shell, TITLE,
@@ -32,8 +34,8 @@ pub(super) enum Bar {
 const STOP_KEY: &str = "cmd-.";
 
 /// The bar's buttons, by the ids their frames are kept under.
-const STOP: &str = "agent-stop";
-const PRIMARY: &str = "agent-primary";
+pub(super) const STOP: &str = "agent-stop";
+pub(super) const PRIMARY: &str = "agent-primary";
 
 /// ⌘. for Stop while the UI has the keyboard, before it's Stop Loading. The page hands it over
 /// before it sees it (`run_agent_key`).
@@ -73,13 +75,13 @@ impl Shell {
         }
     }
 
-    /// The bar the Space shown has, if it's an agent's and the agent is at work in it or the user
-    /// holds the tab shown.
+    /// The bar of the agent's page the window shows (`agent_page`), if the agent is at work in its
+    /// Space or the user holds that page.
     pub(super) fn agent_bar(&self) -> Option<Bar> {
-        let space = self.shown_space().filter(|space| !space.agent.is_empty())?;
+        let (space, shown) = self.agent_page()?;
         let status = self.agent_status.iter().find(|status| status.space == space.id)?;
         let name = space.agent.clone();
-        if let Some((tab, why)) = status.held.iter().find(|(tab, _)| *tab == self.selected) {
+        if let Some((tab, why)) = status.held.iter().find(|(tab, _)| *tab == shown) {
             return Some(Bar::Held { name, why: why.clone(), tab: *tab });
         }
         let tab = self.agents_at.get(&status.agent).copied()?;
@@ -101,14 +103,26 @@ impl Shell {
                 self.browser.take_over(agent, tab, cx);
                 self.select(tab, cx);
             }
-            Some(Bar::Held { tab, .. }) => self.browser.hand_back(tab, cx),
+            Some(Bar::Held { tab, .. }) => {
+                self.browser.hand_back(tab, cx);
+                // A task's page watched is the agent's again, so the keys the user types next
+                // aren't its.
+                if self.watched_task_page().is_some() {
+                    self.browser.focus_ui(cx);
+                }
+            }
             None => {}
         }
     }
 
     /// The pointer has come onto or left the bar's button `key`, whose tooltip shows its key:
     /// ⌘. for Stop, and Back to Pinned URL's, ⌘↩ unless the user moved it, for the other.
-    fn hover_agent_button(&self, key: &'static str, hovered: bool, cx: &mut Context<Self>) {
+    pub(super) fn hover_agent_button(
+        &self,
+        key: &'static str,
+        hovered: bool,
+        cx: &mut Context<Self>,
+    ) {
         let busy = self.dragging().is_some() || self.menu_row.is_some();
         let frame = self.button_frames.borrow().get(key).copied();
         let tip = (self.agent_bar().zip(frame).filter(|_| hovered && !busy)).map(|(bar, frame)| {
@@ -126,7 +140,7 @@ impl Shell {
     }
 
     /// A click on a button ends its tooltip, as other buttons' do.
-    fn end_agent_tip(&self, cx: &mut Context<Self>) {
+    pub(super) fn end_agent_tip(&self, cx: &mut Context<Self>) {
         self.agent_tip.set(None);
         self.browser.tooltip(None, cx);
     }
@@ -140,22 +154,38 @@ impl Shell {
             let browser = self.browser.clone();
             cx.defer(move |cx| browser.tooltip(None, cx));
         }
-        let Some(bar) = self.agent_bar() else {
+        // A task's page watched has the bar laid under it instead (task_area.rs).
+        let Some(bar) = self.agent_bar().filter(|_| self.task_page_drawn().is_none()) else {
             // Drawn again, it's logged again.
             self.agent_bar_drawn.set(None);
             return None;
         };
-        let (title, detail, tab) = match &bar {
-            Bar::Working { name, doing, tab, .. } => {
-                (format!("{name} is at work"), doing.to_string(), *tab)
-            }
-            Bar::Held { name, why, tab } if why.is_empty() => (
-                "You have this tab".to_string(),
-                format!("{name} can't act in it until you hand it back."),
-                *tab,
-            ),
-            Bar::Held { name, why, tab } => (format!("{name} needs you"), why.to_string(), *tab),
-        };
+        let (title, detail, tab) = bar_words(&bar);
+        let buttons = self.agent_bar_buttons(&bar, cx);
+        let listener = card_listener("agent bar", &self.agent_bar_drawn, tab);
+        Some(
+            self.plate("agent-bar")
+                .top(gpui::auto())
+                .bottom(px(self.list_bottom() + GAP))
+                .child(listener)
+                .child(
+                    div()
+                        .text_color(self.palette.text(TITLE))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(title),
+                )
+                .child(div().truncate().text_color(rgba(DETAIL)).child(detail))
+                .child(div().mt(px(BUTTONS_TOP)).flex().gap(px(BUTTON_GAP)).children(buttons)),
+        )
+    }
+
+    /// The bar's buttons: Stop while the agent is at work, then Take Over or Hand Back, each with
+    /// its tooltip.
+    pub(super) fn agent_bar_buttons(
+        &self,
+        bar: &Bar,
+        cx: &mut Context<Self>,
+    ) -> Vec<Stateful<Div>> {
         let primary = match bar {
             Bar::Working { .. } => card_button(&self.palette, "agent-take-over", "Take Over"),
             Bar::Held { .. } => card_button(&self.palette, "agent-hand-back", "Hand Back"),
@@ -166,7 +196,7 @@ impl Shell {
             }))
             .on_mouse_down(MouseButton::Left, cx.listener(|shell, _, _, cx| shell.end_agent_tip(cx)))
             .on_click(cx.listener(|shell, _, _, cx| shell.agent_bar_primary(cx)));
-        let stop = match &bar {
+        let stop = match bar {
             Bar::Working { agent, .. } => {
                 let agent = agent.clone();
                 let stop = card_button(&self.palette, STOP, "Stop").relative();
@@ -181,28 +211,22 @@ impl Shell {
             }
             Bar::Held { .. } => None,
         };
-        let listener = card_listener("agent bar", &self.agent_bar_drawn, tab);
-        Some(
-            self.plate("agent-bar")
-                .top(gpui::auto())
-                .bottom(px(self.list_bottom() + GAP))
-                .child(listener)
-                .child(
-                    div()
-                        .text_color(self.palette.text(TITLE))
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(title),
-                )
-                .child(div().truncate().text_color(rgba(DETAIL)).child(detail))
-                .child(
-                    div()
-                        .mt(px(BUTTONS_TOP))
-                        .flex()
-                        .gap(px(BUTTON_GAP))
-                        .children(stop)
-                        .child(primary),
-                ),
-        )
+        stop.into_iter().chain([primary]).collect()
+    }
+}
+
+/// What the bar says, its title and the line under it, and the tab it's about.
+pub(super) fn bar_words(bar: &Bar) -> (String, String, u64) {
+    match bar {
+        Bar::Working { name, doing, tab, .. } => {
+            (format!("{name} is at work"), doing.to_string(), *tab)
+        }
+        Bar::Held { name, why, tab } if why.is_empty() => (
+            "You have this tab".to_string(),
+            format!("{name} can't act in it until you hand it back."),
+            *tab,
+        ),
+        Bar::Held { name, why, tab } => (format!("{name} needs you"), why.to_string(), *tab),
     }
 }
 
