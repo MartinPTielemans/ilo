@@ -27,7 +27,7 @@ pub mod session;
 pub mod sources;
 pub mod suggested;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::path::{Path, PathBuf};
 use std::cell::RefCell;
@@ -337,7 +337,8 @@ pub struct Later {
 /// What the view tells whoever shows it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ImportEvent {
-    /// An import began, which goes on while the view isn't shown; running() says so.
+    /// An import read what it brings, and goes on by itself while the view isn't shown; running()
+    /// says so. Until then the view may still need the user, as for Full Disk Access.
     Started,
     /// The import that began is over, and this says what came in, or why nothing did.
     Finished(SharedString),
@@ -345,8 +346,6 @@ pub enum ImportEvent {
     Done,
     /// The user went on without importing.
     Skipped,
-    /// The import read the history, and suggested() has the favorites it offers.
-    Suggested,
 }
 
 enum Step {
@@ -503,16 +502,16 @@ impl ImportView {
         self.suggested.as_deref()
     }
 
-    /// Whether an import is reading what it'll offer, so suggested() comes later.
-    pub fn suggesting(&self) -> bool {
-        matches!(self.step, Step::Running { .. }) && self.suggested.is_none()
-    }
-
     /// Offers `tabs` as an import's history would, for the first launch's tests.
     #[cfg(test)]
-    pub(crate) fn offer(&mut self, tabs: Vec<Tab>, cx: &mut Context<Self>) {
+    pub(crate) fn offer(&mut self, tabs: Vec<Tab>) {
         self.suggested = Some(tabs);
-        cx.emit(ImportEvent::Suggested);
+    }
+
+    /// The step last drawn, as check.sh reads it from the log.
+    #[cfg(test)]
+    pub(crate) fn drawn(&self) -> Option<&'static str> {
+        self.drawn
     }
 
     /// Makes `tabs` favorites of `space`, as the user ticked them.
@@ -525,7 +524,7 @@ impl ImportView {
         }
     }
 
-    fn pick(&mut self, source: usize, cx: &mut Context<Self>) {
+    pub(crate) fn pick(&mut self, source: usize, cx: &mut Context<Self>) {
         // check.sh waits for this line.
         log!("browser: import pick {}", self.sources[source].name());
         let picked = read::kinds(&self.sources[source]).to_vec();
@@ -602,7 +601,7 @@ impl ImportView {
     }
 
     /// Reads what was picked from the browser, away from the UI, then brings it in.
-    fn import(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn import(&mut self, cx: &mut Context<Self>) {
         let (Step::Pick { source, picked } | Step::NoAccess { source, picked }) = &self.step else {
             return;
         };
@@ -615,7 +614,6 @@ impl ImportView {
             run: Run::default(),
         };
         self.suggested = None;
-        cx.emit(ImportEvent::Started);
         cx.notify();
         let read = cx.background_spawn(async move {
             let mut found = read::read(&from, &picked, SystemTime::now());
@@ -707,7 +705,8 @@ impl ImportView {
         // check.sh reads this line.
         log!("browser: import suggests {}", urls.join(" "));
         self.suggested = Some(suggested);
-        cx.emit(ImportEvent::Suggested);
+        // What's read is all the import needs of the user; the rest goes on by itself.
+        cx.emit(ImportEvent::Started);
         // Another ad blocker is left off the list, which says so once (extensions_box).
         let listed = found.extensions.iter().filter(|each| !each.blocks_ads()).count();
         if !found.extensions.is_empty() {
@@ -805,19 +804,13 @@ impl ImportView {
         let said = said.into();
         // check.sh waits for this line.
         log!("browser: import done: {said}");
-        // An import from a browser that ended before reading its history offers nothing.
-        let reading = matches!(self.step, Step::Running { .. });
         self.step = Step::Done(said.clone());
-        if reading && self.suggested.is_none() {
-            self.suggested = Some(Vec::new());
-            cx.emit(ImportEvent::Suggested);
-        }
         cx.emit(ImportEvent::Finished(said));
         cx.notify();
     }
 
     /// Asks for the file of passwords, and imports it.
-    fn choose_passwords(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn choose_passwords(&mut self, cx: &mut Context<Self>) {
         let view = cx.entity().downgrade();
         let then = Box::new(move |file: Option<PathBuf>, cx: &mut App| {
             if let Some(file) = file {
@@ -853,7 +846,6 @@ impl ImportView {
             run: Run::default(),
         };
         self.suggested = None;
-        cx.emit(ImportEvent::Started);
         cx.notify();
         let read = cx.background_spawn(async move {
             let bytes = std::fs::read(&file).map_err(|error| error.to_string())?;
@@ -902,8 +894,8 @@ impl ImportView {
         }
         // check.sh waits for this line.
         log!("browser: import passwords");
+        // No Started: its end offers to delete the file, which the user sees there.
         self.step = Step::Passwords;
-        cx.emit(ImportEvent::Started);
         cx.notify();
     }
 
@@ -919,7 +911,7 @@ impl ImportView {
     }
 
     /// Deletes the passwords file the import read, as the user asked.
-    fn delete_passwords_file(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn delete_passwords_file(&mut self, cx: &mut Context<Self>) {
         let (Some(file), Step::Done(said)) = (self.passwords_file.take(), &self.step) else {
             return;
         };
@@ -936,7 +928,7 @@ impl ImportView {
         cx.notify();
     }
 
-    fn done(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn done(&mut self, cx: &mut Context<Self>) {
         self.passwords_file = None;
         self.step = Step::List;
         cx.emit(ImportEvent::Done);

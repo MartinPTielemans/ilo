@@ -69,6 +69,8 @@ pub(super) struct Recorder {
     pub(super) checked_for_updates: Cell<usize>,
     /// The import finds no browser on the machine.
     pub(super) no_browsers: Cell<bool>,
+    /// The browser the import reads and adds to, when a test gives one.
+    pub(super) import: RefCell<Option<std::rc::Rc<dyn crate::import::Host>>>,
     /// The window is full screen, as Linux's window manager says, for `window_full_screen`.
     pub(super) full_screen: Cell<bool>,
     /// The opt-ins' switches, as `crash_reports` and `agents` answer, None for one not offered.
@@ -886,6 +888,9 @@ impl Browser for Recorder {
     // The import's made-up Arc, so the first launch has a browser to import from, unless a test
     // says there's none.
     fn import_host(&self) -> std::rc::Rc<dyn crate::import::Host> {
+        if let Some(host) = self.import.borrow().clone() {
+            return host;
+        }
         let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/src/import/fixture");
         let home = if self.no_browsers.get() { "/nonexistent" } else { fixture };
         let os = crate::import::sources::Os::Mac;
