@@ -325,6 +325,35 @@ fn a_picture_coming_while_its_card_shows_takes_the_page_s_shape(cx: &mut TestApp
     assert_eq!(after(cx, &host, DWELL), [shown(1, height(INNER * 352. / 528.))]);
 }
 
+/// A tab renamed while its card shows, or waits for its dwell, shows its new name, not the one it
+/// had when the pointer came onto its row (#1452), and the card stays where it is. Another tab's
+/// change leaves it be.
+#[gpui::test]
+fn a_card_shows_its_tab_s_name_as_it_is_now(cx: &mut TestAppContext) {
+    let (host, told) = open_card(cx);
+    let window = card_window(cx);
+    let title = |cx: &mut TestAppContext| {
+        cx.update(|cx| window.read(cx).ok()?.drawn.as_ref().map(|drawn| drawn.card.title.clone()))
+    };
+    let renamed = |tab: u64, name: &str| Card { title: name.to_string().into(), ..card(tab, true) };
+    rest_on(cx, &told, card(1, true));
+    after(cx, &host, DWELL);
+    ask(cx, Hover::Changed(renamed(1, "Inbox")));
+    assert_eq!(title(cx).as_deref(), Some("Inbox"));
+    assert_eq!(host.0.take(), [shown(1, waiting_height())]);
+    ask(cx, Hover::Changed(renamed(2, "Elsewhere")));
+    assert_eq!(title(cx).as_deref(), Some("Inbox"));
+    assert!(host.0.take().is_empty());
+
+    ask(cx, Hover::Close);
+    after(cx, &host, FADE);
+    rest_on(cx, &told, card(2, true));
+    after(cx, &host, DWELL / 2);
+    ask(cx, Hover::Changed(renamed(2, "Calendar")));
+    assert_eq!(after(cx, &host, DWELL / 2), [shown(2, waiting_height())]);
+    assert_eq!(title(cx).as_deref(), Some("Calendar"));
+}
+
 #[gpui::test]
 fn an_unloaded_or_closed_tab_s_picture_goes(cx: &mut TestAppContext) {
     let (host, told) = open_card(cx);

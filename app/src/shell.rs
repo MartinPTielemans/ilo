@@ -2579,11 +2579,17 @@ impl Shell {
         if changed && tab == self.selected {
             self.update_title(cx);
         }
+        if changed {
+            self.card_changed(tab, cx);
+        }
         self.tab_changed(tab, changed, cx);
     }
 
     pub fn set_favicon(&mut self, tab: u64, favicon: Option<Arc<Image>>, cx: &mut Context<Self>) {
         let changed = self.tabs.entry(tab).or_default().keep_favicon(favicon);
+        if changed {
+            self.card_changed(tab, cx);
+        }
         self.tab_changed(tab, changed, cx);
     }
 
@@ -2662,7 +2668,13 @@ impl Shell {
         }
         self.swaps.page_changed(tab, self.selected, &entry.page, &page, Instant::now());
         let trouble = (page.trouble != entry.page.trouble).then_some(page.trouble);
+        // What its hover card shows of the page, besides its title: its host, emoji and buttons.
+        let carded = |page: &Page| (page.url.clone(), page.icon.clone(), page.share_instead);
+        let card_changed = carded(&page) != carded(&entry.page);
         let changed = entry.keep_page(page);
+        if card_changed {
+            self.card_changed(tab, cx);
+        }
         // An untitled tab is named by its URL.
         if changed && tab == self.selected {
             self.update_title(cx);
