@@ -487,6 +487,9 @@ struct BrowserWindow {
     little: Option<bc::bc_id>,
     /// The user's Space it showed last, not an agent's, or 0, for a link from another app.
     users_space: bc::bc_id,
+    /// The link from another app a Little ilo window opened for, which brings it back when another
+    /// app sends it again, as Arc's does.
+    link: Option<String>,
 }
 
 impl BrowserWindow {
@@ -4030,9 +4033,20 @@ fn open_links_in(front: bc::bc_id, urls: &[String]) -> bc::bc_id {
 }
 
 /// Opens each of `urls` in a Little ilo window of its own, for the user's Space `front` shows,
-/// which comes to the front, as Arc opens a link from another app in Little Arc.
+/// which comes to the front, as Arc opens a link from another app in Little Arc. A link one is
+/// still open for brings that one to the front instead, as Arc's does.
 fn open_links_in_little(front: bc::bc_id, urls: Vec<String>, cx: &mut App) {
     for url in urls {
+        let open = WINDOWS.with_borrow(|windows| {
+            let sent = |w: &&BrowserWindow| w.link.as_ref() == Some(&url);
+            windows.iter().find(sent).map(|w| (w.id, w.ui_view))
+        });
+        if let Some((window, ui_view)) = open {
+            // check.sh reads this line.
+            log!("browser: link from another app {url}: little window {window} again");
+            unsafe { platform::host_activate(ui_view) };
+            continue;
+        }
         let from = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == front).cloned());
         let Some(from) = from else {
             return;
@@ -4050,8 +4064,10 @@ fn open_links_in_little(front: bc::bc_id, urls: Vec<String>, cx: &mut App) {
             "browser: link from another app {url}: tab {tab} in little window {opened} of space \
              {home}"
         );
-        let ui_view = WINDOWS.with_borrow(|windows| {
-            windows.iter().find(|w| w.id == opened).map(|w| w.ui_view)
+        let ui_view = WINDOWS.with_borrow_mut(|windows| {
+            let window = windows.iter_mut().find(|w| w.id == opened)?;
+            window.link = Some(url);
+            Some(window.ui_view)
         });
         if let Some(ui_view) = ui_view {
             unsafe { platform::host_activate(ui_view) };
@@ -4321,6 +4337,7 @@ fn open_window_as(
                         _ => None,
                     },
                     users_space: 0,
+                    link: None,
                 },
             )
         });

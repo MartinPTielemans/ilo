@@ -1,7 +1,8 @@
 # Links from other apps, as `open` sends them on the Mac, the way a link clicked in Mail does, and
 # off it as a second launch with the link does, which `xdg-open` makes on Linux. With the app
 # running, one opens in a Little ilo window of its own for the Space the window in front shows, and
-# loads there, as Settings › Links sends everything else there until the user picks another. Sent
+# loads there, as Settings › Links sends everything else there until the user picks another, and
+# the same link again brings that window back to the front. Sent
 # instead to the Space in front, one opens as a new tab in the Space the window in front shows. With
 # an agent's Space shown, it goes in the user's Space the window showed before, which comes back;
 # with a private window in front, in the regular window, which comes to the front. Settings › Links
@@ -71,6 +72,16 @@ grep -q "^browser: link from another app .* of window " "$log" &&
   fail "the link from another app opened as a tab too"
 send window 2
 ../tools/window-screenshot.sh "$pid" "$out/links-little.png" all || fail "no window to capture"
+# The same link again, with the regular window in front, brings that Little ilo window back.
+send window 1
+expect "^browser: key window $window\$" "the regular window didn't come to the front"
+send_link "${site}?ext"
+expect_late "^browser: link from another app ${site}?ext: little window $little again\$" \
+  "the same link again didn't bring its Little ilo window back: $(grep '^browser: link' "$log" | tail -1)"
+expect "^browser: key window $little\$" "the link's Little ilo window didn't come to the front"
+[ "$(grep -c "$(little_line "?ext" "[0-9]*")" "$log")" = 1 ] ||
+  fail "the same link again opened a second Little ilo window"
+send window 2
 send key w cmd
 await "^browser: window closed $little\$" || fail "⌘W didn't close the link's Little ilo window"
 send window 1
@@ -307,7 +318,7 @@ grep -q '^browser: link from another app .* of window ' "$log" &&
 quit_launched
 
 if [ "$driven" = 1 ]; then
-  echo "ok: links from another app open in Little ilo by default, and sent to the Space in front as new tabs in the front window's Space and load there, in the user's Space when an agent's is shown, and in the regular window, brought to the front, over a private one; Settings says the browser isn't the default. Settings › Links' rules send a link whose URL holds a rule's text, or is it exactly, to the rule's Space or Little ilo, the first that matches winning, a drag reorders them, everything else goes to the Space picked, − takes a rule away, and the rules come back with the launch. Windows: $out/links-little.png, $out/links-settings.png, $out/links-rules-empty.png, $out/links-rules.png"
+  echo "ok: links from another app open in Little ilo by default, the same link again bringing its window back, and sent to the Space in front as new tabs in the front window's Space and load there, in the user's Space when an agent's is shown, and in the regular window, brought to the front, over a private one; Settings says the browser isn't the default. Settings › Links' rules send a link whose URL holds a rule's text, or is it exactly, to the rule's Space or Little ilo, the first that matches winning, a drag reorders them, everything else goes to the Space picked, − takes a rule away, and the rules come back with the launch. Windows: $out/links-little.png, $out/links-settings.png, $out/links-rules-empty.png, $out/links-rules.png"
 else
   echo "ok: a link from another app opens in Little ilo by default and loads there."
   echo "skip: the agent's Space, the private window, Settings and the link rules. Browser wasn't the active app, so the page ignored the click."
