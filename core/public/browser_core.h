@@ -2633,6 +2633,15 @@ BC_EXPORT size_t bc_window_child_title(bc_id window, char* title, size_t capacit
 // thread.
 BC_EXPORT void bc_answer_clipboard_requests(void);
 
+// Moves the folder, with the folders and pinned tabs in it, to the bottom of |space|'s pinned tabs,
+// as bc_tab_move_to_space moves a pinned tab: the folders keep their names, icons and whether
+// they're open, and the tabs their order, pinned URLs, split views and pages. A window showing one
+// of its tabs shows |space| with it. Into another profile's Space each tab goes as a new one, as
+// bc_tab_move_to_space says, and the old ones close. Never into an agent's Space or a window's
+// own. Then space_changed for both Spaces, and window_space_shown and window_selected for a window
+// that went with it.
+BC_EXPORT void bc_folder_move_to_space(bc_id folder, bc_id space);
+
 #ifdef __cplusplus
 }
 #endif

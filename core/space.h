@@ -133,6 +133,8 @@ class Space {
   bool IsFolder(bc_id id) const { return folders_.contains(id); }
   // The folder holding the pinned tab or folder |id|, else 0.
   bc_id FolderOf(bc_id id) const;
+  // Whether |id| is |folder| or inside it.
+  bool Within(bc_id id, bc_id folder) const;
   // A folder's name, its icon, empty for none, and whether it shows what's in it.
   std::string FolderName(bc_id folder) const;
   std::string FolderIcon(bc_id folder) const;
@@ -195,6 +197,12 @@ class Space {
   void SetPinnedOpen(bool open);
   // Deletes |folder|, leaving what was in it where it was, in the folder that held it.
   void DeleteFolder(bc_id folder);
+  // Takes |folder| from |from|, with what's in it in its order, to the bottom of the pinned tabs:
+  // the folders with their names, icons and whether they're open, each tab with its pinned URL and
+  // its split. |copies| maps each of |from|'s tabs that goes to another profile to the new one
+  // standing in for it here. Each is a new node here, as a tab moved to another Space is. Does
+  // nothing for a folder |from| hasn't, or into a window's own Space.
+  void TakeFolder(Space& from, bc_id folder, const std::map<bc_id, bc_id>& copies);
 
   // Puts |tab| in a split view with |with|, at its left end if |left|, else its right end, making
   // one if |with| is in none. |tab| leaves any split it was in, and goes before or after the split
@@ -265,8 +273,6 @@ class Space {
   void PlaceRows();
   // The same for the Spaces.
   static void PlaceSpaces();
-  // Whether |id| is |folder| or inside it.
-  bool Within(bc_id id, bc_id folder) const;
   // Past the end of the rows of |folder|, else of the pinned list, in |pinned_|.
   size_t EndOf(bc_id folder) const;
   // Where in |pinned_| what goes at |index| in |folder| goes, counted as Move counts.

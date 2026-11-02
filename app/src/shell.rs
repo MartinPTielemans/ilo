@@ -1810,6 +1810,12 @@ impl Shell {
         self.shown_space().is_some_and(|space| space.is_folder(row))
     }
 
+    /// Whether `folder` is open in its Space, which isn't the one shown while it's dragged to
+    /// another.
+    fn folder_open(&self, folder: u64) -> bool {
+        self.spaces.iter().any(|space| space.is_folder(folder) && space.is_open(folder))
+    }
+
     /// How many folders `row` is in, in the Space shown.
     fn depth(&self, row: u64) -> usize {
         self.shown_space().map_or(0, |space| space.depth(row))

@@ -327,7 +327,8 @@ impl Shell {
         let (pinned, today) = self.rows();
         let (pinned, today): (Vec<u64>, Vec<u64>) = (others(pinned), others(today));
         let favorites = self.favorites.iter().filter(|&&other| other != tab).count();
-        let folder = self.is_folder(tab);
+        // Its own Space's, which may not be the one shown.
+        let folder = self.is_folder_anywhere(tab);
         let away = drag.space != self.space;
         self.watch_edge(pointer.x, cx);
         // A favorite stays one in an agent's Space, which it can't move into.
@@ -467,9 +468,9 @@ impl Shell {
             return;
         };
         let tab = drag.tab;
+        // A folder goes whole, with what's in it (#1353).
         let movable = !drag.incoming
             && !self.favorites.contains(&tab)
-            && !self.is_folder(tab)
             && self.panes(tab).len() == 1
             && !self.private;
         let side = side.filter(|_| movable && self.edge_space(side == Some(true)).is_some());
@@ -541,7 +542,7 @@ impl Shell {
     /// in a split view, as Arc's does: a tab alone onto a tab's row, or a split's with room, and
     /// not a folder's.
     fn split_onto(&self, tab: u64, y: f32) -> Option<u64> {
-        if self.is_folder(tab) || self.panes(tab).len() > 1 {
+        if self.is_folder_anywhere(tab) || self.panes(tab).len() > 1 {
             return None;
         }
         let y = self.list_y(y);

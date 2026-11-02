@@ -2034,6 +2034,10 @@ impl Browser for Engine {
         unsafe { bc::bc_tab_move_to_space(tab, space) };
     }
 
+    fn move_folder_to_space(&self, folder: u64, space: u64, _: &mut App) {
+        unsafe { bc::bc_folder_move_to_space(folder, space) };
+    }
+
     fn warn_moving_profiles(&self, _: &mut App) -> bool {
         unsafe { bc::bc_warn_moving_profiles() }
     }

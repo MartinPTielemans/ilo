@@ -500,7 +500,11 @@ source_set("browser_core") {
 test("browser_core_unittests") {
   sources = [
     "search_default_unittest.cc",
+
+    # Space alone, with what it asks of the rest of the core stubbed in its test.
+    "space.cc",
     "space_default_unittest.cc",
+    "space_unittest.cc",
     "sync_guard_unittest.cc",
     "sync_pairing_unittest.cc",
   ]
@@ -519,6 +523,7 @@ test("browser_core_unittests") {
     "//components/sync_preferences:test_support",
     "//components/variations:test_support",
     "//testing/gtest",
+    "//url",
   ]
   if (use_xkbcommon) {
     sources += [ "xkb_no_keymap_unittest.cc" ]
