@@ -446,7 +446,8 @@ mod tests {
 
     use super::{heading, nearest};
     use crate::shell::{
-        Folders, PLATE_INSET, SWIPE_TRACKING, Shell, Space, SpaceForm, recorder::Recorder,
+        Folders, PLATE_INSET, SWIPE_TRACKING, Shell, Space, SpaceForm, WindowButtonGeometry,
+        recorder::Recorder,
     };
     use crate::text_input::TextInput;
 
@@ -537,6 +538,140 @@ mod tests {
     /// Two fingers across the sidebar, down, moved `way` of the page's way in one go, and up.
     fn swipe(shell: &mut Shell, way: f32, window: &mut Window, cx: &mut Context<Shell>) {
         fingers(shell, way, true, window, cx);
+    }
+
+    /// AppKit's buttons as macOS 26 and later draw them in an app built with an older SDK, as
+    /// 0.1.0 was: 12 across on a pitch of 20, where an app built with macOS 26's has 14 on 23.
+    const OLDER_SDK: WindowButtonGeometry =
+        WindowButtonGeometry { centres: [20., 40., 60.], y: 24., diameter: 12. };
+
+    /// A window of three Spaces on the first, whose host draws its buttons as `OLDER_SDK`.
+    fn older_sdk_window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext) {
+        let host = Rc::new(Recorder::default());
+        host.window_buttons.set(Some(OLDER_SDK));
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(host.clone(), cx));
+        shell.update(cx, |shell, cx| {
+            let space = |id: u64| {
+                (id, format!("Space {id}").into(), None, 1, "".into(), "".into(), "".into())
+            };
+            shell.set_spaces(vec![space(1), space(2), space(3)], cx);
+            shell.set_space(1, cx);
+        });
+        cx.run_until_parked();
+        (shell, cx)
+    }
+
+    /// Fingers going `way` in `steps` across the sidebar, still down. At each step, after
+    /// `check`, says whether the window's own buttons show.
+    fn fingers_by_steps(
+        shell: &mut Shell,
+        way: f32,
+        steps: usize,
+        window: &mut Window,
+        cx: &mut Context<Shell>,
+        mut check: impl FnMut(&Shell),
+    ) {
+        let event = |touch_phase, x: f32| ScrollEvent {
+            delta: ScrollDelta::Pixels(point(px(x), px(0.))),
+            touch_phase,
+            ..Default::default()
+        };
+        shell.scroll(&event(TouchPhase::Started, 0.), window, cx);
+        for _ in 0..steps {
+            let step = way / steps as f32 / SWIPE_TRACKING;
+            shell.scroll(&event(TouchPhase::Moved, step), window, cx);
+            check(shell);
+        }
+    }
+
+    /// The copy the Library's panel draws of the window's buttons, where it is in the window.
+    fn panel_copy(shell: &Shell) -> [Bounds<Pixels>; 3] {
+        let left = px(shell.library_column_left());
+        let moved =
+            |frame: Bounds<Pixels>| Bounds { origin: frame.origin + point(left, px(0.)), ..frame };
+        shell.window_button_frames().map(moved)
+    }
+
+    /// Whether buttons' frames `a` are `b`'s size and row, and across to within `across`.
+    fn same(a: [Bounds<Pixels>; 3], b: [Bounds<Pixels>; 3], across: f32) -> bool {
+        a.iter().zip(&b).all(|(a, b)| {
+            let near = |a: Pixels, b: Pixels, by: f32| (f32::from(a) - f32::from(b)).abs() <= by;
+            near(a.left(), b.left(), across) && a.top() == b.top() && a.size == b.size
+        })
+    }
+
+    /// The copies of the window's buttons take the size and places the system draws its own at,
+    /// not Arc's under macOS 26's SDK, so a swipe into the Library can't show them change size
+    /// (#1310): the panel's copy is the window's own size all the way in, on them where they
+    /// swap, and the sidebar's, which recedes with it, is their size where it takes over.
+    #[gpui::test]
+    fn the_copies_of_the_windows_buttons_are_its_own_size_into_the_library(
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, cx) = older_sdk_window(cx);
+        let own = OLDER_SDK.frames();
+        shell.update_in(cx, |shell, window, cx| {
+            assert!(shell.window_buttons_shown(), "the window's own aren't up at rest");
+            assert_eq!(shell.window_button_frames(), own, "the copies aren't the system's");
+            let (mut was_own, mut swapped, mut receded) = (true, false, false);
+            let way = 1.2 * shell.library_width();
+            fingers_by_steps(shell, way, 600, window, cx, |shell| {
+                let own_up = shell.window_buttons_shown();
+                let (panel, sidebar) = (shell.library_buttons(), shell.sidebar_buttons());
+                assert!(own_up != panel, "drawn twice or not at all");
+                if panel {
+                    let copy = panel_copy(shell);
+                    assert!(copy.iter().all(|frame| frame.size == own[0].size), "{copy:?}");
+                }
+                if sidebar && was_own {
+                    // Where the sidebar's copy takes over, it hasn't begun to recede.
+                    assert!(shell.sidebar_scale() > 0.999, "at {}", shell.sidebar_scale());
+                    receded = true;
+                }
+                if own_up && !was_own {
+                    // Where the panel stops, to within a pixel's half.
+                    assert!(same(panel_copy(shell), own, 0.5), "swapped off the window's own");
+                    swapped = true;
+                }
+                was_own = own_up;
+            });
+            assert!(receded && swapped, "the swipe didn't swap both ways");
+        });
+    }
+
+    /// Back out of the Library, the panel's copy takes over on the window's own, at their size,
+    /// and stays their size as it goes.
+    #[gpui::test]
+    fn the_copies_of_the_windows_buttons_are_its_own_size_out_of_the_library(
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, cx) = older_sdk_window(cx);
+        let own = OLDER_SDK.frames();
+        shell.update(cx, |shell, cx| {
+            shell.set_library(true, cx);
+            shell.library_motion = None;
+            shell.sidebar_fade = None;
+        });
+        cx.run_until_parked();
+        shell.update_in(cx, |shell, window, cx| {
+            assert!(shell.window_buttons_shown(), "the window's own aren't up over the Library");
+            let mut swapped = false;
+            let (way, steps) = (-shell.library_width(), 600);
+            // The window's own go once the panel has left them by a pixel's half: the copy is
+            // then on them but for the step that took it there.
+            let step = shell.library_width() / steps as f32;
+            fingers_by_steps(shell, way, steps, window, cx, |shell| {
+                if shell.library_buttons() {
+                    let copy = panel_copy(shell);
+                    assert!(copy.iter().all(|frame| frame.size == own[0].size), "{copy:?}");
+                    if !swapped {
+                        assert!(same(copy, own, step + 0.5), "swapped off the window's own");
+                        swapped = true;
+                    }
+                }
+            });
+            assert!(swapped, "the window's own never went");
+        });
     }
 
     /// Fingers taking the Library back land on the first Space, which it sits left of, though it
