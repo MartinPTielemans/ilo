@@ -150,9 +150,9 @@ use library::{MediaVideo, RECEDE_X, Section};
 use menus::MenuAction;
 use panes::pane_frames;
 use recent_downloads::RecentDownloads;
-use rows::Breath;
+use rows::{Breath, UNLOAD};
 use scaled::scaled;
-use swap::{ARROW_DOWN, Swapped, Swaps, UNLOAD};
+use swap::{ARROW_DOWN, Swapped, Swaps};
 use tile_theme::TileTheme;
 use undo::{Edit, What};
 
@@ -995,9 +995,9 @@ pub struct Shell {
     /// until ⌃ goes up, and then its last one does, though a click may have shown another since.
     walked: Option<u64>,
     hovered: Option<Row>,
-    /// The pinned row the pointer is on, whose ✕ or middle press just unloaded it. Its remove
+    /// The pinned row the pointer is on, whose − or middle press just unloaded it. Its remove
     /// button waits until the pointer has left the row or pressed it, so a second click meant for
-    /// the ✕ never removes the tab.
+    /// the − never removes the tab.
     remove_held: Option<u64>,
     /// A shortcut the page handed back ran since the pointer last moved. The sidebar draws no row
     /// or favicon under the pointer until it moves, as GPUI hides its hover after a key of its own,
@@ -2346,7 +2346,6 @@ impl Shell {
             }
             _ => log!("browser: selected {tab}"),
         }
-        let before = self.selected_row();
         let hidden = self.panes(self.selected);
         self.selected = tab;
         self.show_in_space(tab);
@@ -2373,7 +2372,6 @@ impl Shell {
         let new_tab =
             follows && self.browser.command_bar_follows(self.bar_tabs(), self.open_tabs(), cx);
         self.set_new_tab(new_tab, cx);
-        self.selection_moved(before);
         self.adding_pane = None;
         self.link_tab_changed(cx);
         self.note_hang(cx);
