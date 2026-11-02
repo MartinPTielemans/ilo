@@ -52,6 +52,7 @@ impl What {
     pub const DUPLICATE: What = What::quiet("Duplicate");
     pub const MOVE_FAVORITE: What = What::quiet("Move Favorite");
     pub const MOVE_TO_SPACE: What = What::said("Move to Space", "Tab Moved to Space");
+    pub const MOVE_FOLDER_TO_SPACE: What = What::said("Move to Space", "Folder Moved to Space");
     pub const DELETE_FOLDER: What = What::said("Delete Folder", "Folder Deleted");
     pub const REMOVE_FROM_SPLIT: What = What::quiet("Remove from Split");
     pub const SPLIT: What = What::quiet("Split View");
@@ -814,8 +815,9 @@ impl Shell {
         self.keep(what, before, cx);
     }
 
-    /// Moves `tab` to `space`, pinning it first if `pin`, which the one undo takes back too. Into
-    /// another profile's Space it goes as a new tab, which has nothing to give back.
+    /// Moves `tab` to `space`, pinning it first if `pin`, which the one undo takes back too, or a
+    /// folder with what's in it. Into another profile's Space it goes as a new tab, which has
+    /// nothing to give back, as the tabs of a folder do.
     pub(super) fn send_to_space(
         &mut self,
         tab: u64,
@@ -834,6 +836,10 @@ impl Shell {
             from.is_some() && from == profile(space)
         };
         let before = same_profile(self).then(|| self.put_back(tab)).flatten();
+        if self.is_folder_anywhere(tab) {
+            self.browser.move_folder_to_space(tab, space, cx);
+            return self.keep(What::MOVE_FOLDER_TO_SPACE, before, cx);
+        }
         // The core moves a pinned tab pinned, into another profile's Space too.
         let pinned = matches!(self.spot_of(tab).map(|spot| spot.at), Some(At::Pinned { .. }));
         if pin && !pinned {
@@ -991,7 +997,10 @@ impl Shell {
     fn put(&mut self, tab: u64, now: &Spot, spot: &Spot, cx: &mut Context<Self>) {
         let favorite = |at: At| matches!(at, At::Favorite(_));
         if now.space != spot.space && !favorite(now.at) && !favorite(spot.at) {
-            self.browser.move_to_space(tab, spot.space, cx);
+            match self.is_folder_anywhere(tab) {
+                true => self.browser.move_folder_to_space(tab, spot.space, cx),
+                false => self.browser.move_to_space(tab, spot.space, cx),
+            }
         }
         match spot.at {
             At::Favorite(index) => self.browser.move_to_favorites(tab, index, cx),
@@ -1053,7 +1062,7 @@ impl Shell {
         made
     }
 
-    fn is_folder_anywhere(&self, row: u64) -> bool {
+    pub(super) fn is_folder_anywhere(&self, row: u64) -> bool {
         self.spaces.iter().any(|space| space.is_folder(row))
     }
 
