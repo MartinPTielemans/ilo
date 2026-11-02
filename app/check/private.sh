@@ -1,9 +1,11 @@
-# ⇧⌘N opens a private window, titled as one in the Window menu, whose pages load in the profile's
-# off-the-record session: a cookie set there isn't seen in the regular window, and the profile's
-# second private window sees it, as they share the session. Closing the last private window ends
-# the session, and the next ⇧⌘N starts a new one without its cookie. Nothing private is written:
-# after the quit the Spaces file and the profile's history have none of its pages, the profile's
-# cookies don't have its cookie, and a relaunch brings back no private window.
+# After ⌘N opens a window and ⇧⌘W closes it, ⇧⌘N opens a private window, and ⇧⌘W closes it before
+# it has a page, ending its session while the browser keeps running. ⇧⌘N opens another, titled as
+# one in the Window menu, whose pages load in the profile's off-the-record session: a cookie set
+# there isn't seen in the regular window, and the profile's second private window sees it, as they
+# share the session. Closing the last private window ends the session, and the next ⇧⌘N starts a
+# new one without its cookie. Nothing private is written: after the quit the Spaces file and the
+# profile's history have none of its pages, the profile's cookies don't have its cookie, and a
+# relaunch brings back no private window.
 
 # The served cookie page: its title says whether the site has the private cookie, and "p" in it
 # sets it. The private windows load it at a URL of their own, which nothing may write.
@@ -51,13 +53,43 @@ open_private_page() {
   expect "^browser: window $1 shows $tab\$" "the private window didn't show its page"
 }
 
+# Waits up to 30 s for the app to have heard $1 private sessions end, saying so if it has exited.
+ended() {
+  for _ in $(seq 300); do
+    [ "$(grep -c '^browser: private session ended ' "$log")" -ge "$1" ] && return 0
+    kill -0 "$pid" 2>/dev/null || gone
+    sleep 0.1
+  done
+  return 1
+}
+
+# ⌘N opens a window and ⇧⌘W closes it. Then ⇧⌘N opens a private window, which ⇧⌘W closes before
+# it has had a page: Chrome ends its session as the window's Browser goes, and the browser keeps
+# running. On Windows this second close crashed in what the first had left behind (#1474).
+send key n cmd
+expect '^browser: window opened [0-9]*$' "⌘N didn't open a window"
+regular=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+send key w cmd shift
+expect "^browser: window closed $regular\$" "⇧⌘W didn't close the window ⌘N opened"
+send window 1
+send click $page_point
+send key n cmd shift
+expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
+empty=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
+send key w cmd shift
+expect "^browser: window closed $empty\$" "⇧⌘W didn't close the private window with no page"
+ended 1 || fail "closing the private window with no page didn't end its session"
+# send fails if the app has exited, or no longer takes the driver's commands. The drivers number
+# windows in the order they opened, closed ones too, so the next private window is window 4.
+send window 1
+
 # ⇧⌘N from the page opens a private window, titled as one, which opens with no page.
 send key n cmd shift
 expect '^browser: command new-private-window via ' "⇧⌘N didn't run New Incognito Window"
 expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
-first=$(grep -m1 '^browser: private window opened ' "$log" | cut -d' ' -f5)
+first=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
 expect "^browser: window opened $first\$" "the private window didn't open"
-send window 2
+send window 4
 send title
 expect '^browser: key window titled Incognito$' "the private window isn't titled as one"
 
@@ -66,7 +98,7 @@ open_private_page "$first"
 p=$tab
 [ "$p" != "$a" ] || fail "the private window showed the regular window's tab"
 expect "^browser: title $p cookie none\$" "the private session started with the private cookie"
-send window 2
+send window 4
 send click $page_point
 send key p
 expect "^browser: title $p cookie set\$" "p in the private page didn't set the cookie"
@@ -82,7 +114,7 @@ none_since "^browser: title $a cookie private\$" ||
   fail "the regular window saw the private window's cookie"
 
 # The profile's second private window shares the session.
-send window 2
+send window 4
 send key n cmd shift
 expect '^browser: private window opened [0-9]* profile [0-9]*$' \
   "⇧⌘N in the private window didn't open another"
@@ -93,16 +125,15 @@ expect "^browser: title $tab cookie private\$" "the second private window didn't
 
 # Closing one keeps the session, closing the last ends it, and the next ⇧⌘N starts without the
 # cookie.
-send window 3
+send window 5
 send key w cmd shift
 expect "^browser: window closed $second\$" "⇧⌘W didn't close the second private window"
 none_since '^browser: private session ended' || fail "the session ended with a private window open"
-send window 2
+send window 4
 send key w cmd shift
 expect "^browser: window closed $first\$" "⇧⌘W didn't close the first private window"
-# await, which says so if the app has exited. Its line can only be this close's: none came before.
-await '^browser: private session ended [0-9]*$' ||
-  fail "the last private window's closing didn't end the session"
+# The second session's end: only the first's came before.
+ended 2 || fail "the last private window's closing didn't end the session"
 # Chrome ends it as the session's last Browser goes. When something else kept one, the core ended
 # it, and its line, an error, names what.
 outlived=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
@@ -115,10 +146,10 @@ expect '^browser: private window opened [0-9]* profile [0-9]*$' \
 third=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
 open_private_page "$third"
 expect "^browser: title $tab cookie none\$" "the new private session had the ended one's cookie"
-# Chrome destroying the profile and the core finding it gone both end the session, and the app
-# hears it once.
-[ "$(grep -c '^browser: private session ended ' "$log")" = 1 ] ||
-  fail "the app heard the session end more than once"
+# Chrome destroying the profile and the core finding it gone both end a session, and the app hears
+# it once: the two sessions so far, the empty window's and the cookie's.
+[ "$(grep -c '^browser: private session ended ' "$log")" = 2 ] ||
+  fail "the app heard a session end more than once"
 
 # The quit, with the private window open, writes nothing of it.
 exec 3>&-
