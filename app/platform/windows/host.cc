@@ -1920,7 +1920,7 @@ void WritePng(const std::wstring& path, const std::vector<uint8_t>& pixels, UINT
 
 }  // namespace
 
-// For updates.cc, whose WinSparkle calls back on threads of its own.
+// For updates.cc, whose download runs on a thread of its own.
 void HostLater(void (*task)(void)) {
   Later(task);
 }

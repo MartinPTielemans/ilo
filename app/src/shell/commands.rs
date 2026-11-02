@@ -462,8 +462,9 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
     ("Settings", Command::Settings, &["preferences"]),
     ("Essential Keyboard Shortcuts", Command::KeyboardShortcuts, &["keys"]),
     (concat!("About ", env!("APP_NAME")), Command::About, &["version", "credits", "licence"]),
-    // The app menu's, which Linux shows no bar for.
-    ("Check for Updates…", Command::CheckForUpdates, &["update", "upgrade"]),
+    // The app menu's, which Linux shows no bar for, and its name once an update is ready.
+    (crate::updates::CHECK_FOR_UPDATES, Command::CheckForUpdates, &["update", "upgrade"]),
+    (crate::updates::RESTART, Command::CheckForUpdates, &["update", "upgrade", "relaunch"]),
     ("Import from Other Browsers…", Command::Import, &["bookmarks"]),
     ("Privacy Policy", Command::PrivacyPolicy, &["data", "tracking"]),
     ("Passwords", Command::Passwords, &["logins", "keychain"]),
@@ -1664,6 +1665,7 @@ impl Shell {
                 (name == developer_mode_title(on)).then_some(name)
             }
             Command::RecordTrace => (name == trace::title(trace::recording(cx))).then_some(name),
+            Command::CheckForUpdates => (name == crate::updates::command_title(cx)).then_some(name),
             _ => Some(name),
         }
     }

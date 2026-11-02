@@ -3,12 +3,12 @@
 `close PID [front]` asks each browser window of process PID to close, as its close button does: the
 top-level windows holding the UI's view (platform/windows/host.cc's BrowserUI), or with front the
 one in front alone. `list PID` prints each top-level window of the process, with its class, title,
-state and whether it's a browser window. `icon PID ICO` checks that each window of the process the
-taskbar and Alt+Tab show has the .ico's image for its big and small icons, read as the shell reads
-them, and prints them (#1350). `cover PID ilo|away` opens a window of another app in front of the
-process's browser window, over its lower half, with the foreground in ilo's window or in a window
-away from it, says "cover <handle>, foreground <ilo|away|other>" and keeps it until it's ended
-(#1419).
+state and whether it's a browser window, minimized (IsIconic) or the one in front
+(GetForegroundWindow). `icon PID ICO` checks that each window of the process the taskbar and
+Alt+Tab show has the .ico's image for its big and small icons, read as the shell reads them, and
+prints them (#1350). `cover PID ilo|away` opens a window of another app in front of the process's
+browser window, over its lower half, with the foreground in ilo's window or in a window away from
+it, says "cover <handle>, foreground <ilo|away|other>" and keeps it until it's ended (#1419).
 Usage: app-windows.py close|list|icon PID [front|ICO] or app-windows.py cover PID ilo|away"""
 
 import ctypes
@@ -254,6 +254,8 @@ def main():
         if sys.argv[3] not in ("ilo", "away"):
             sys.exit(__doc__.splitlines()[-1])
         cover(pid, sys.argv[3])
+    user32.GetForegroundWindow.restype = w.HWND
+    foreground = user32.GetForegroundWindow()
     for hwnd in windows(pid):
         browser = holds_ui(hwnd)
         if command == "close":
@@ -267,6 +269,8 @@ def main():
             "visible" if user32.IsWindowVisible(hwnd) else "hidden",
             "disabled" if not user32.IsWindowEnabled(hwnd) else "",
             "owned" if user32.GetWindow(hwnd, GW_OWNER) else "",
+            "minimized" if user32.IsIconic(hwnd) else "",
+            "foreground" if hwnd == foreground else "",
         ]
         print(
             '%#x %s "%s" %s'

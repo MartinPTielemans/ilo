@@ -23,6 +23,7 @@ use browser::notes;
 use browser::passwords::{self, Login};
 use browser::shell::{self, CancelName, Command, Holder, KeepName, MenuEntry, Refused, UserKeys};
 use browser::text_input::{self, TextInput};
+use browser::updates::VersionRow;
 use browser::widevine::{self, Widevine, WidevineRow};
 use gpui::{
     AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, FontWeight,
@@ -35,7 +36,7 @@ use crate::{bc, ns_view, platform, show_menu};
 use browser::menu::{self, Look};
 use browser::palette::{Palette, STATE_HOVERED, STATE_PRESSED, state_alpha};
 use browser::settings_rows::{
-    Look as RowLook, SLIDE, button, group, popup, row, switch, tile,
+    Look as RowLook, SLIDE, button, detailed_row, group, popup, row, switch, tile,
 };
 
 actions!(settings, [CloseSettings]);
@@ -448,6 +449,8 @@ pub struct Settings {
     #[cfg(target_os = "linux")]
     dialog: Entity<dialog::Dialog>,
     widevine: Entity<WidevineRow>,
+    /// About's first row, which says where the update stands.
+    version: Entity<VersionRow>,
     /// Draws the Agents tab again as the agents change.
     _agents: Option<Subscription>,
 }
@@ -978,6 +981,7 @@ fn open(cx: &mut App) {
             cx.observe(&account, |_, _, cx| cx.notify()).detach();
             let widevine = cx.new(|_| WidevineRow::new(Rc::new(Module)));
             cx.observe(&widevine, |_, _, cx| cx.notify()).detach();
+            let version = cx.new(|cx| VersionRow::new(version(), cx));
             let agents = agents::global(cx);
             let agents = agents.map(|agents| cx.observe(&agents, |_, _, cx| cx.notify()));
             let search = cx.new(|cx| {
@@ -1001,6 +1005,7 @@ fn open(cx: &mut App) {
                 dialog,
                 default_browser,
                 widevine,
+                version,
                 _agents: agents,
                 tab: Tab::General,
                 focus: cx.focus_handle(),
@@ -2754,15 +2759,20 @@ thread_local! {
     static ABOUT_LOGGED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
-/// The app's version and its engine's, the licence it's under, and the notices of what it's built
-/// from, each of which opens in a tab.
-fn about() -> AnyElement {
-    let mut version = format!("Version {}", build_info::version());
-    if let Some(engine) = build_info::ENGINE_VERSION.as_deref() {
-        version = format!("{version}, on Chromium {engine}");
+/// The app's version and its engine's.
+fn version() -> String {
+    let version = format!("Version {}", build_info::version());
+    match build_info::ENGINE_VERSION.as_deref() {
+        Some(engine) => format!("{version}, on Chromium {engine}"),
+        None => version,
     }
+}
+
+/// The app's version and its engine's, where its update stands, the licence it's under, and the
+/// notices of what it's built from, each of which opens in a tab.
+fn about(version_row: &Entity<VersionRow>) -> AnyElement {
     // check.sh reads the engine's version here.
-    let line = format!("browser: settings about {version}");
+    let line = format!("browser: settings about {}", version());
     ABOUT_LOGGED.with_borrow_mut(|logged| {
         if logged.insert(line.clone()) {
             log!("{line}");
@@ -2816,7 +2826,7 @@ fn about() -> AnyElement {
         ),
     ];
     div()
-        .child(group(&RowLook::settings(), [detailed_row(env!("APP_NAME"), version, None)]))
+        .child(group(&RowLook::settings(), [div().child(version_row.clone())]))
         .child(group(&RowLook::settings(), notices).mt(px(BOX_GAP)))
         .into_any_element()
 }
@@ -2888,29 +2898,6 @@ fn manage_passwords(profile: u64, cx: &mut App) {
     log!("browser: manage passwords {profile}");
     crate::open_in_profile(profile, "chrome://password-manager/passwords");
     hide(cx);
-}
-
-/// A row with a grey line under its name, and its control, if any, at the right.
-fn detailed_row(
-    name: impl Into<SharedString>,
-    detail: impl Into<SharedString>,
-    control: Option<AnyElement>,
-) -> gpui::Div {
-    div()
-        .px(px(PADDING))
-        .py(px(PADDING))
-        .flex()
-        .items_center()
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .child(div().truncate().child(name.into()))
-                .child(
-                    div().text_size(px(text::SMALL)).text_color(rgb(DETAIL)).child(detail.into()),
-                ),
-        )
-        .children(control.map(|control| div().flex_none().ml(px(PADDING)).child(control)))
 }
 
 /// A section's header, over its box.
@@ -3110,7 +3097,7 @@ impl Render for Settings {
                 None => div().into_any_element(),
             },
             Tab::Advanced => self.advanced(accent, cx),
-            Tab::About => about(),
+            Tab::About => about(&self.version),
         };
         div()
             // While a command's key is recorded, every key is the recording's, ⌘W too.

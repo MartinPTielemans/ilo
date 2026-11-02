@@ -1,6 +1,6 @@
 //! Updates on Linux, where ilo is the Flatpak on Flathub (docs/ux-spec.md › Updates): Flatpak's
 //! portal says when Flathub has a newer build, ilo installs it beside the one running, without
-//! waiting for the software centre, and offers to restart into it. Outside a Flatpak, as in a dev
+//! waiting for the software centre, and Restart to Update at the sidebar's foot restarts into it. Outside a Flatpak, as in a dev
 //! build, there's no portal to ask, and no updates.
 
 use std::collections::HashMap;
@@ -260,13 +260,38 @@ pub fn retries(cx: &mut App) -> futures::channel::mpsc::UnboundedReceiver<()> {
     retries
 }
 
-/// The update is at `state` now, which once a build is ready offers to restart into it.
+/// The update is at `state` now, which Settings › About's row says, and once a build is ready,
+/// Restart to Update at the sidebar's foot, as on the Mac and Windows, rather than a dialog.
 pub fn changed(state: State, cx: &mut App) {
-    let ready = state == State::Ready;
+    crate::updates::changed(state.stage(), cx);
     cx.default_global::<Told>().state = Some(state);
-    if ready {
-        check(cx);
+}
+
+impl State {
+    /// Where the row says the update stands. The portal names no version.
+    fn stage(&self) -> crate::updates::Stage {
+        use crate::updates::Stage;
+        match self {
+            State::Current => Stage::Current,
+            State::Installing => Stage::Downloading(None),
+            State::Ready => Stage::Ready(None),
+            State::Failed(_) => Stage::Failed { found: true },
+        }
     }
+}
+
+/// Restart, as the offer's: starts the newest build and quits, once the portal has answered.
+pub fn restart(cx: &mut App) {
+    if let Some(restart) = cx.default_global::<Told>().restart.clone() {
+        restart(cx);
+    }
+}
+
+/// Try Again, after an install failed: true if it tried.
+pub fn retry(cx: &mut App) -> bool {
+    let told = cx.default_global::<Told>();
+    let retry = told.retry.clone().filter(|_| matches!(told.state, Some(State::Failed(_))));
+    retry.map(|retry| retry(cx)).is_some()
 }
 
 /// Check for Updates…. Flatpak's portal can't be asked to look now, as it looks every half hour
@@ -305,7 +330,7 @@ pub fn question(state: Option<&State>, retries: bool) -> Question {
         }
         Some(State::Installing) => (
             concat!(env!("APP_NAME"), " is updating"),
-            "It will offer to restart once the new version is in.".to_string(),
+            "Restart to Update shows in the sidebar once the new version is in.".to_string(),
         ),
         Some(State::Failed(error)) => {
             let failed = notice(concat!(env!("APP_NAME"), " couldn’t update"), error.clone());

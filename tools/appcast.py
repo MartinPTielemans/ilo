@@ -1,7 +1,8 @@
 """The appcast's entries for every OS, around generate_appcast, which knows only the Mac's.
 
-Sparkle takes an enclosure marked "macos" or not marked at all, and WinSparkle one marked "windows…"
-or not marked at all, so every Mac enclosure is marked. tools/appcast.sh runs it:
+Sparkle takes an enclosure marked "macos" or not marked at all, and ilo's Windows updater
+(app/platform/windows/updates.cc) only one marked "windows…", so every enclosure is marked.
+tools/appcast.sh runs it:
 
   appcast.py aside APPCAST ASIDE
       Moves the Windows entries to ASIDE, so generate_appcast sees only the Mac's, and prints how
@@ -94,7 +95,7 @@ def finish(appcast, aside_path, windows):
         ET.SubElement(item, "pubDate").text = email.utils.formatdate(usegmt=True)
         ET.SubElement(item, s("version")).text = build
         ET.SubElement(item, s("shortVersionString")).text = version
-        # WinSparkle shows HTML, not the Mac's Markdown, so it gets the release's page.
+        # The release's page, for WinSparkle, which a copy from before ilo's own updater still runs.
         ET.SubElement(item, s("releaseNotesLink")).text = notes
         ET.SubElement(item, "enclosure", {
             "url": url,
