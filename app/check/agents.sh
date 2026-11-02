@@ -182,7 +182,7 @@ if windows; then
   winget="$home/AppData/Local/Microsoft/WinGet/Links"
   npm="$home/AppData/Roaming/npm"
   # The stand-in for Claude Code's claude.exe: it writes each call's arguments, as Windows hands a
-  # program them, in claude-calls beside it, a JSON array a line.
+  # program them, in claude-calls beside it, a JSON array a line without spaces.
   cat > "$out/claude-stand-in.rs" << 'EOF'
 use std::io::Write;
 fn main() {
@@ -213,7 +213,7 @@ EOF
     sed 's/$/\r/' > "$out/claude.cmd"
   printf '%s\n' 'import json, os, sys' \
     'with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "claude-calls"), "a", encoding="utf-8") as calls:' \
-    '    calls.write(json.dumps(sys.argv[1:]) + "\n")' > "$out/claude-calls.py"
+    '    calls.write(json.dumps(sys.argv[1:], separators=(",", ":")) + "\n")' > "$out/claude-calls.py"
   agents_file="$(dirname "$saved")/Agents"
   printf '{"on":true,"agents":[]}' > "$agents_file"
   # The PATH stays the run's, which has none of the three folders.
