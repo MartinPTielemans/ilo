@@ -603,6 +603,14 @@ grep -c "^browser: toast shown $note \[view archive, dismiss\]\$" "$log" | grep 
   fail "the auto-archive's note didn't show once: $(grep '^browser: toast shown' "$log")"
 await '^browser: toast settled$' || fail "the auto-archive's note didn't settle"
 ../tools/window-screenshot.sh "$pid" "$out/archive-note.png" || fail "no window to capture"
+# It shows whole: its plate, where the app laid it out, lies inside the toast's window, which cut
+# its left end off where its words were wider than the window, as in Inter (#1462).
+await '^browser: toast plate .* in [0-9]* [0-9]*$' ||
+  fail "the auto-archive's note didn't say where its plate is"
+plate=$(grep '^browser: toast plate' "$log" | tail -1)
+set -- $(echo "${plate#browser: toast plate }" | sed 's/ in / /')
+[ "$1" -ge 0 ] && [ "$2" -ge 0 ] && [ $(($1 + $3)) -le "$5" ] && [ $(($2 + $4)) -le "$6" ] ||
+  fail "the auto-archive's note runs past its window, which cuts it: $plate"
 send layout
 content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
   sed 's/^browser: layout content \([0-9]*x[0-9]*\),.*/\1/')
