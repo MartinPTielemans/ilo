@@ -1,6 +1,6 @@
 //! The tasks Archived Tabs lists among the tabs: by when they left the foot, back with a click,
 //! out with Delete from Archive or Clear Archive, alone under the Filter's Tasks, found by search,
-//! and in a private window's own alone.
+//! and never in a private window.
 
 use std::rc::Rc;
 
@@ -28,8 +28,6 @@ fn tab(id: u64, archived: f64, little: bool) -> Archived {
 fn task(n: u64, left: f64) -> ArchivedTask {
     ArchivedTask {
         agent: format!("task-{n}").into(),
-        home: 1,
-        private: false,
         title: "Lisbon museum hours".into(),
         asked: "Which museums in Lisbon open on Monday?".into(),
         dot: Dot::Done,
@@ -43,7 +41,6 @@ fn card() -> Card {
     Card {
         agent: "task-1".into(),
         home: 1,
-        private: false,
         space: 101,
         cli: Cli::Claude,
         title: "Lisbon museum hours".into(),
@@ -230,21 +227,14 @@ fn search_finds_a_task_by_its_title_or_what_was_asked(cx: &mut TestAppContext) {
     assert!(items(&shell, cx).is_empty());
 }
 
-/// A task asked in a private window stays in its session: a regular window's Archive never lists
-/// it, and a private window keeps only its own.
+/// A private window, which offers no tasks, keeps none of the Archive's, so nothing there, such
+/// as Clear Archive, reaches the regular windows' tasks.
 #[gpui::test]
-fn a_private_task_lists_only_in_its_own_window(cx: &mut TestAppContext) {
-    let private = |n: u64, home: u64| ArchivedTask { home, private: true, ..task(n, 2500.) };
-    let sent = vec![private(3, 9), private(2, 8), task(1, 2000.)];
+fn a_private_window_keeps_no_archived_task(cx: &mut TestAppContext) {
     let host = Rc::new(Recorder::default());
-    let own = cx.new(|cx| Shell::private_window(host.clone(), 9, "Private".into(), 1, cx));
-    own.update(cx, |shell, cx| shell.set_archived_tasks(sent.clone(), cx));
-    let kept = own.read_with(cx, |shell, _| shell.archived_tasks.iter().map(|task| task.agent.to_string()).collect::<Vec<_>>());
-    assert_eq!(kept, ["task-3"]);
-
-    let (shell, _, cx) = archive(cx);
-    shell.update(cx, |shell, cx| shell.set_archived_tasks(sent, cx));
-    assert_eq!(items(&shell, cx), ["Today", "tab 7", "task-1", "tab 8"]);
+    let private = cx.new(|cx| Shell::private_window(host.clone(), 9, "Private".into(), 1, cx));
+    private.update(cx, |shell, cx| shell.set_archived_tasks(vec![task(1, 2000.)], cx));
+    assert!(private.read_with(cx, |shell, _| shell.archived_tasks.is_empty()));
 }
 
 /// Clear Archive empties the tasks with the tabs, saying both, and one ⌘Z brings both back. The

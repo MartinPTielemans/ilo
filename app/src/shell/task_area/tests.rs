@@ -349,7 +349,6 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
     let card = |dot: Dot, status: &str| Card {
         agent: "task-1".into(),
         home: 1,
-        private: false,
         space: 3,
         cli: Cli::Claude,
         title: "Find a flight".into(),

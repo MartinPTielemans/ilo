@@ -3,7 +3,7 @@
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use gpui::{Entity, FontWeight, Modifiers, SharedString, TestAppContext, VisualTestContext};
+use gpui::{AppContext as _, Entity, FontWeight, Modifiers, SharedString, TestAppContext, VisualTestContext};
 
 use super::{Card, Dot, Holds, Shape, chips, shape};
 use crate::agents::runner::Cli;
@@ -14,7 +14,6 @@ fn card(n: u64, dot: Dot) -> Card {
     Card {
         agent: format!("task-{n}").into(),
         home: 1,
-        private: false,
         space: 100 + n,
         cli: Cli::Claude,
         title: "Find a flight to Lisbon".into(),
@@ -549,29 +548,28 @@ fn with_motion_reduced_a_folded_task_fades(cx: &mut TestAppContext) {
     });
 }
 
-/// A task asked in a private window stays in its session: a regular window's foot never shows
-/// it, nor anything of it.
+/// A regular window's foot shows every task, as tasks are the window's: one asked from another
+/// window's Space too.
 #[gpui::test]
-fn a_regular_windows_foot_never_shows_a_private_task(cx: &mut TestAppContext) {
-    let private = Card { home: 9, private: true, ..card(3, Dot::Working) };
-    let (shell, _, cx) = shell_with(cx, vec![private, card(2, Dot::Working)]);
-    assert_eq!(plates(&shell, cx), "task-2");
-    assert!(shell.read_with(cx, |shell, _| shell.task_cards.iter().all(|card| !card.private)));
+fn a_regular_windows_foot_shows_every_task(cx: &mut TestAppContext) {
+    let elsewhere = Card { home: 9, ..card(3, Dot::Working) };
+    let (shell, _, cx) = shell_with(cx, vec![elsewhere, card(2, Dot::Working)]);
+    assert_eq!(plates(&shell, cx), "task-3 task-2");
 }
 
-/// A private window's foot shows only the tasks asked in it: not a regular window's, nor another
-/// private window's.
+/// A private window offers no tasks and shows none: its foot stays empty while a regular window
+/// shows a task.
 #[gpui::test]
-fn a_private_windows_foot_shows_only_its_own_tasks(cx: &mut TestAppContext) {
+fn a_private_windows_foot_is_empty_while_a_regular_window_has_a_task(cx: &mut TestAppContext) {
+    let (regular, _, cx) = shell_with(cx, vec![card(2, Dot::Working)]);
+    assert_eq!(plates(&regular, cx), "task-2");
     let host = Rc::new(Recorder::default());
-    let browser = host.clone();
-    let (shell, cx) = cx.add_window_view(|_, cx| Shell::private_window(browser, 9, "Private".into(), 1, cx));
-    let own = Card { home: 9, private: true, ..card(3, Dot::Working) };
-    let other = Card { home: 8, private: true, ..card(2, Dot::Working) };
-    shell.update(cx, |shell, cx| {
-        shell.set_task_cards(vec![own, other, card(1, Dot::Working)], cx);
+    let private = cx.new(|cx| Shell::private_window(host.clone(), 9, "Private".into(), 1, cx));
+    private.update(cx, |shell, cx| {
+        shell.set_task_cards(vec![card(2, Dot::Working)], cx);
         shell.foot.plates.iter_mut().for_each(|plate| plate.settle(later()));
     });
     cx.run_until_parked();
-    assert_eq!(plates(&shell, cx), "task-3");
+    assert!(private.read_with(cx, |shell, _| shell.task_cards.is_empty() && shell.foot.plates.is_empty()));
+    assert_eq!(plates(&regular, cx), "task-2");
 }

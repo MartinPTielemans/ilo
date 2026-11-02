@@ -1565,7 +1565,7 @@ mod tasks {
 
     fn start(agents: &Entity<Agents>, asked: &str, cx: &mut TestAppContext) -> String {
         agents
-            .update(cx, |agents, cx| agents.start_task(Cli::Claude, asked, page(), 1, None, cx))
+            .update(cx, |agents, cx| agents.start_task(Cli::Claude, asked, page(), 1, cx))
             .expect("started")
     }
 
@@ -2415,41 +2415,6 @@ mod tasks {
         assert_eq!(listed(&agents, cx).len(), 1);
         assert_eq!(agents.update(cx, |agents, cx| agents.restore_task(None, cx)), Some(second.clone()));
         assert!(listed(&agents, cx).is_empty());
-    }
-
-    /// A task asked in a private window ends with its session: the last private window of its
-    /// profile closing takes it, working or dismissed, from the foot, the Archive and memory, with
-    /// its Space. A regular window's task and another profile's private one stay.
-    #[gpui::test]
-    fn private_tasks_end_with_their_session(cx: &mut TestAppContext) {
-        let (agents, browser) = ready(None, cx);
-        let start_in = |private: u64, asked: &str, cx: &mut TestAppContext| -> String {
-            (agents.update(cx, |agents, cx| agents.start_task(Cli::Claude, asked, None, 1, Some(private), cx)))
-                .expect("started")
-        };
-        let regular = start(&agents, "Regular", cx);
-        let working = start_in(7, "Working", cx);
-        let dismissed = start_in(7, "Dismissed", cx);
-        let other = start_in(8, "Another profile's", cx);
-        agents.update(cx, |agents, cx| {
-            agents.task_mut(&working).unwrap().state = State::Working;
-            agents.dismiss_task(&dismissed, cx);
-        });
-        let cards = |agents: &Entity<Agents>, cx: &mut TestAppContext| -> Vec<(String, bool)> {
-            agents.read_with(cx, |agents, cx| {
-                (agents.shown_cards(cx).into_iter()).map(|card| (card.agent.to_string(), card.private)).collect()
-            })
-        };
-        assert_eq!(cards(&agents, cx), [(other.clone(), true), (working.clone(), true), (regular.clone(), false)]);
-        let archived = agents.read_with(cx, |agents, cx| agents.archived_tasks(cx));
-        assert_eq!(archived.iter().map(|task| (task.agent.to_string(), task.private)).collect::<Vec<_>>(), [(dismissed.clone(), true)]);
-
-        agents.update(cx, |agents, cx| agents.end_private_session(7, cx));
-        assert_eq!(cards(&agents, cx), [(other.clone(), true), (regular.clone(), false)]);
-        assert!(agents.read_with(cx, |agents, cx| agents.archived_tasks(cx).is_empty()));
-        assert!(agents.read_with(cx, |agents, _| agents.task(&working).is_none() && agents.task(&dismissed).is_none()));
-        assert_eq!(*browser.deleted.borrow(), vec![101, 102]);
-        assert_eq!(agents.update(cx, |agents, cx| agents.restore_task(None, cx)), None, "⇧⌘T brought back a task of the ended session");
     }
 
     #[gpui::test]

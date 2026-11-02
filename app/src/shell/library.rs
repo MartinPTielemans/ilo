@@ -459,10 +459,12 @@ impl Shell {
         }
     }
 
-    /// The tasks in the Archive changed, all of them, the last to leave the foot first, of which
-    /// the window keeps those it shows.
+    /// The tasks in the Archive changed, all of them, the last to leave the foot first. A private
+    /// window, which offers no tasks, lists none.
     pub fn set_archived_tasks(&mut self, mut tasks: Vec<ArchivedTask>, cx: &mut Context<Self>) {
-        tasks.retain(|task| self.shows_task(task.home, task.private));
+        if self.private {
+            tasks.clear();
+        }
         if tasks == self.archived_tasks {
             return;
         }

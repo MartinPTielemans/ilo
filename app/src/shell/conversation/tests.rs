@@ -16,7 +16,6 @@ fn card() -> Card {
     Card {
         agent: "task-1".into(),
         home: 1,
-        private: false,
         space: 3,
         cli: Cli::Claude,
         title: "Flight to Lisbon".into(),

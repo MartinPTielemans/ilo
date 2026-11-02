@@ -1894,6 +1894,10 @@ impl command_bar::Host for Bar {
         Some(command_bar::TaskAgents { agents: listed.collect(), known: agents.task_agents_known() })
     }
 
+    fn over_private(&self) -> bool {
+        WINDOWS.with_borrow(|windows| windows.first().is_some_and(|window| window.private))
+    }
+
     fn asking(&self, shown: bool, cx: &mut App) {
         if shown {
             agents_core::update(|agents, cx| agents.task_ask_shown(cx));
@@ -1930,13 +1934,8 @@ impl command_bar::Host for Bar {
         let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
             return;
         };
-        let asked_in = WINDOWS.with_borrow(|windows| windows.first().map(|w| (w.shell.clone(), w.private)));
-        let (shell, private) = asked_in.unzip();
+        let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
         let home = shell.and_then(|shell| shell.upgrade()).map_or(0, |shell| shell.read(cx).space());
-        // Asked in a private window, it stays in that profile's private session, which it ends with.
-        let private = (private == Some(true))
-            .then(|| unsafe { bc::bc_space_profile(home) })
-            .filter(|&profile| profile != 0);
         let asked = asked.to_string();
         let page = page.map(|(url, title)| browser::agents::task::AskedOn { url, title });
         // The bar folds into the slot at the foot that its task's card takes, where the window
@@ -1976,7 +1975,7 @@ impl command_bar::Host for Bar {
         });
         agents_core::update(move |agents, cx| {
             // The card takes the slot as it comes; one that didn't start leaves it empty.
-            if agents.start_task(cli, &asked, page, home, private, cx).is_none() {
+            if agents.start_task(cli, &asked, page, home, cx).is_none() {
                 update_shells_in(cx, |shell, cx| shell.set_ask_slot(false, cx));
             }
         });
@@ -5847,7 +5846,6 @@ fn quit_because(why: &str) {
 unsafe extern "C" fn private_session_ended(_: *mut c_void, profile: bc::bc_id) {
     // check.sh reads this line.
     log!("browser: private session ended {profile}");
-    agents_core::update(move |agents, cx| agents.end_private_session(profile, cx));
 }
 
 /// An agent's action as the core judged it, for the activity log in Settings › Agents, which

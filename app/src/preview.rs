@@ -1395,6 +1395,10 @@ impl command_bar::Host for PreviewBar {
         Some(command_bar::TaskAgents { agents: vec![claude], known: true })
     }
 
+    fn over_private(&self) -> bool {
+        false
+    }
+
     fn asking(&self, _: bool, _: &mut App) {}
 
     fn task_page(&self, _: &App) -> Option<(SharedString, SharedString)> {

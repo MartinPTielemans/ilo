@@ -380,6 +380,9 @@ pub trait Host {
     /// which leaves ⇥ as it was (Agent task). It only reads: nothing about tasks runs while the
     /// bar opens or takes keys.
     fn task_agents(&self, cx: &App) -> Option<TaskAgents>;
+    /// Whether the bar shows over a private window, which offers no tasks, as agents get no path
+    /// into private windows.
+    fn over_private(&self) -> bool;
     /// The ask shows, or no longer does: Today opens an empty slot at its top for the card, or
     /// closes it. As it first shows in a run, the browser learns again which agents are ready, in
     /// the background, which `task_agents_changed` reports.
@@ -689,7 +692,7 @@ fn reset(
             bar.commands = None;
             bar.end_ask(cx);
             // What the browser last learned, read in memory: nothing about tasks runs as it opens.
-            bar.task_agents = bar.host.task_agents(cx);
+            bar.task_agents = bar.learned_agents(cx);
             let placeholder = match target {
                 Target::Tabs => TABS_PLACEHOLDER,
                 _ => PLACEHOLDER_TEXT,
@@ -802,7 +805,7 @@ pub fn task_agents_changed(cx: &mut App) {
             if !bar.open.get() {
                 return;
             }
-            let agents = bar.host.task_agents(cx);
+            let agents = bar.learned_agents(cx);
             if agents == bar.task_agents {
                 return;
             }
@@ -1261,6 +1264,12 @@ impl CommandBar {
         {
             cx.stop_propagation();
         }
+    }
+
+    /// The agents ⇥ asks, as the browser last learned, or None, as while tasks are off, over a
+    /// private window, so nothing of tasks shows there.
+    fn learned_agents(&self, cx: &App) -> Option<TaskAgents> {
+        (!self.host.over_private()).then(|| self.host.task_agents(cx)).flatten()
     }
 
     /// Whether ⇥ makes what's typed a task: tasks are on, and the bar opens a page, outside a site

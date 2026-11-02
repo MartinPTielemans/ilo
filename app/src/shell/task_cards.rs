@@ -576,10 +576,12 @@ impl Default for Foot {
 }
 
 impl Shell {
-    /// The Agents' cards, newest first, of which the window keeps those it shows. A new one takes
-    /// the ask's slot once ⌘T ran it, so nothing at the foot moves.
+    /// The Agents' cards, newest first, none of which a private window shows, as it offers no
+    /// tasks. A new one takes the ask's slot once ⌘T ran it, so nothing at the foot moves.
     pub fn set_task_cards(&mut self, mut cards: Vec<Card>, cx: &mut Context<Self>) {
-        cards.retain(|card| self.shows_task(card.home, card.private));
+        if self.private {
+            cards.clear();
+        }
         if cards == self.task_cards {
             return;
         }
@@ -632,16 +634,6 @@ impl Shell {
     /// The sidebar's width changed: the cards' text and chips wrap to it.
     pub(super) fn reshape_foot(&mut self, cx: &mut Context<Self>) {
         self.sync_foot(None, cx);
-    }
-
-    /// Whether the window shows a task asked from the Space `home`, in a `private` window or not:
-    /// a private window only its own Spaces' tasks, as with its players, and every other window
-    /// every task but those, which stay in their private session as its tabs do.
-    pub(super) fn shows_task(&self, home: u64, private: bool) -> bool {
-        match self.private {
-            true => self.spaces.iter().any(|space| space.id == home),
-            false => !private,
-        }
     }
 
     /// A finished task's mark at rest, as its card shows it: Done's tick, or the grey ring of one

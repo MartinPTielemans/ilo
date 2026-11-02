@@ -29,6 +29,8 @@ struct Recorder {
     /// The agents ⇥ asks, None while tasks are off, and the page the user is on.
     agents: RefCell<Option<TaskAgents>>,
     page: Option<(SharedString, SharedString)>,
+    /// The bar shows over a private window.
+    private: bool,
 }
 
 impl Recorder {
@@ -140,6 +142,10 @@ impl Host for Recorder {
 
     fn task_agents(&self, _: &App) -> Option<TaskAgents> {
         self.agents.borrow().clone()
+    }
+
+    fn over_private(&self) -> bool {
+        self.private
     }
 
     fn asking(&self, shown: bool, _: &mut App) {
@@ -2133,6 +2139,33 @@ fn agents_at_their_limit_or_none_ready(cx: &mut TestAppContext) {
     bar.keys("tab");
     assert_eq!(bar.chip_and_hint(), (None, false, false));
     assert_eq!(bar.plates().0, 1);
+}
+
+/// A private window offers no task, as agents get no path into private windows: with agents
+/// ready, a question typed there says no Ask ⇥, ⇥ selects the next row as with tasks off, and ↩
+/// opens it. Nothing of tasks shows, even as the browser learns the agents again.
+#[gpui::test]
+fn a_private_window_offers_no_task(cx: &mut TestAppContext) {
+    let host = Recorder {
+        agents: RefCell::new(agents(&[("claude", None), ("codex", None)])),
+        page: Some(("https://rijksmuseum.nl/".into(), "Rijksmuseum".into())),
+        private: true,
+        ..Recorder::default()
+    };
+    let mut bar = Bar::open(cx, Vec::new(), host);
+    let asked = "when does the rijksmuseum open";
+    bar.type_text(asked);
+    bar.suggest(asked, vec![searching(asked), page("https://www.rijksmuseum.nl/en/visit")]);
+    assert_eq!(bar.chip_and_hint(), (None, false, false), "Ask ⇥ is offered");
+    bar.keys("tab");
+    bar.cx.cx.update(task_agents_changed);
+    bar.cx.run_until_parked();
+    assert_eq!(bar.chip_and_hint(), (None, false, false), "⇥ asked an agent");
+    let tasks = bar.window.read_with(&bar.cx.cx, |bar, _| bar.rows.iter().any(|row| row.task.is_some()));
+    assert!(!tasks.unwrap(), "a row is a task's");
+    assert_eq!(bar.plates().0, 1);
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["open https://www.rijksmuseum.nl/en/visit", "hide"]);
 }
 
 /// While the browser hasn't learned which agents are ready, the ask lists none, then lists them
