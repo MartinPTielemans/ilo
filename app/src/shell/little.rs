@@ -15,6 +15,7 @@ use super::{
     Command, NAV, NAV_HOVERED, NAV_RADIUS, Shell, Space, SpaceEntry, Swapped, TITLE,
     WINDOW_BUTTONS,
     access::Accessible,
+    host,
     browser::Browser,
     favicon,
     header::TipSide,
@@ -219,10 +220,13 @@ impl Shell {
         // the bar does, in the URL field's colours.
         let (site, site_color) = self.url_words(tab, &url, 1.);
         let icon = (tab != 0).then(|| self.tabs.get(&tab).and_then(|tab| tab.favicon.clone()));
-        // A page with no title of its own is named by its host, which the bar shows already.
+        // A page with no title of its own is named by its host, which the bar shows already, as
+        // part of the whole URL in Developer Mode.
         let title = match tab {
             0 => SharedString::default(),
-            _ => Some(self.title(tab)).filter(|title| *title != site).unwrap_or_default(),
+            _ => Some(self.title(tab))
+                .filter(|title| *title != site && title.as_ref() != host(&url))
+                .unwrap_or_default(),
         };
         let title = div()
             .id("little-title")
