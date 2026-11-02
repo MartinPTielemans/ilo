@@ -5,9 +5,10 @@ top-level windows holding the UI's view (platform/windows/host.cc's BrowserUI). 
 each top-level window of the process, with its class, title, state and whether it's a browser
 window. `icon PID ICO` checks that each window of the process the taskbar and Alt+Tab show has the
 .ico's image for its big and small icons, read as the shell reads them, and prints them (#1350).
-`cover PID` opens a window of another app in front of the process's browser window, over its lower
-half, says "cover <handle>, foreground <0|1>" and keeps it until it's ended (#1419).
-Usage: app-windows.py close|list|cover|icon PID [ICO]"""
+`cover PID ilo|away` opens a window of another app in front of the process's browser window, over
+its lower half, with the foreground in ilo's window or in a window away from it, says
+"cover <handle>, foreground <ilo|away|other>" and keeps it until it's ended (#1419).
+Usage: app-windows.py close|list|icon PID [ICO] or app-windows.py cover PID ilo|away"""
 
 import ctypes
 import ctypes.wintypes as w
@@ -151,11 +152,12 @@ class WNDCLASSW(ctypes.Structure):
                 ("lpszClassName", w.LPCWSTR)]
 
 
-def cover(pid):
-    """A plain window over the lower half of the browser window of process PID, where the link
-    target's corner is, in front of every app's normal windows, as a window the user opens over ilo
-    is, and with the keyboard if Windows lets this process take it. Returns once the browser's
-    process has ended."""
+def cover(pid, foreground):
+    """Another app's plain window over the lower half of the browser window of process PID, where
+    the link target's corner is, with ilo's window under it, and the foreground in ilo's window
+    (FOREGROUND "ilo"), as when a window opens over ilo without taking the keyboard, or in a small
+    window away from ilo's ("away"), as the user's app on another part of the screen. Returns once
+    the browser's process has ended."""
     user32.SetProcessDPIAware()
     browser = next((hwnd for hwnd in windows(pid)
                     if holds_ui(hwnd) and user32.IsWindowVisible(hwnd)), None)
@@ -180,23 +182,40 @@ def cover(pid):
                                        ctypes.c_int, ctypes.c_int, ctypes.c_int, w.HWND, w.HMENU,
                                        w.HINSTANCE, w.LPVOID]
     user32.CreateWindowExW.restype = w.HWND
-    WS_POPUP, WS_BORDER = 0x80000000, 0x00800000
-    middle = (frame.top + frame.bottom) // 2
-    hwnd = user32.CreateWindowExW(0, "CheckCover", "cover", WS_POPUP | WS_BORDER, frame.left,
-                                  middle, frame.right - frame.left, frame.bottom - middle, None,
-                                  None, instance, None)
-    if not hwnd:
-        sys.exit("couldn't open the cover")
-    SW_SHOW, SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE = 5, 0x1, 0x2, 0x10
-    user32.ShowWindow(w.HWND(hwnd), SW_SHOW)
-    user32.SetForegroundWindow(w.HWND(hwnd))
-    # In front whether or not Windows let it take the foreground: over the topmost ones, then back
-    # among the normal ones, at their top.
     user32.SetWindowPos.argtypes = [w.HWND, w.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int,
                                     ctypes.c_int, w.UINT]
-    for after in (-1, -2):
-        user32.SetWindowPos(hwnd, after, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)
     user32.GetForegroundWindow.restype = w.HWND
+    SW_SHOWNOACTIVATE, SW_SHOW, SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE = 4, 5, 0x1, 0x2, 0x10
+
+    def show(title, x, y, width, height, front):
+        hwnd = user32.CreateWindowExW(0, "CheckCover", title, 0x80000000 | 0x00800000, x, y,
+                                      width, height, None, None, instance, None)
+        if not hwnd:
+            sys.exit("couldn't open the %s window" % title)
+        user32.ShowWindow(w.HWND(hwnd), SW_SHOW if front else SW_SHOWNOACTIVATE)
+        if front:
+            user32.SetForegroundWindow(w.HWND(hwnd))
+        return hwnd
+
+    middle = (frame.top + frame.bottom) // 2
+    cover = show("cover", frame.left, middle, frame.right - frame.left, frame.bottom - middle,
+                 False)
+    if foreground == "away":
+        # Beside ilo's window where the screen has room, so it's over none of it.
+        screen = (user32.GetSystemMetrics(0), user32.GetSystemMetrics(1))
+        size = (160, 120)
+        if frame.right + 20 + size[0] <= screen[0]:
+            at = (frame.right + 20, frame.top)
+        elif frame.left - 20 - size[0] >= 0:
+            at = (frame.left - 20 - size[0], frame.top)
+        elif frame.bottom + 20 + size[1] <= screen[1]:
+            at = (frame.left, frame.bottom + 20)
+        else:
+            at = (screen[0] - size[0], 0)
+        show("away", at[0], at[1], size[0], size[1], True)
+    # ilo's window goes under the cover, rather than the cover over it, as Windows keeps a window
+    # that doesn't have the foreground from going over the window that has it.
+    user32.SetWindowPos(browser, cover, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)
     # Until it's ended, or the browser's process ends, so it's never over a later run's windows.
     SYNCHRONIZE, INFINITE, QS_ALLINPUT, PM_REMOVE = 0x100000, 0xFFFFFFFF, 0x4FF, 1
     kernel32.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
@@ -207,7 +226,12 @@ def cover(pid):
     browser_process = w.HANDLE(kernel32.OpenProcess(SYNCHRONIZE, False, pid))
     if not browser_process:
         sys.exit("couldn't watch process %d" % pid)
-    print("cover %#x, foreground %d" % (hwnd, user32.GetForegroundWindow() == hwnd), flush=True)
+    owner = w.DWORD()
+    front = user32.GetForegroundWindow()
+    user32.GetWindowThreadProcessId(front, ctypes.byref(owner))
+    print("cover %#x, foreground %s" % (cover, "ilo" if owner.value == pid else
+                                        "away" if text(user32.GetWindowTextW, front) == "away"
+                                        else "other"), flush=True)
     message = w.MSG()
     while user32.MsgWaitForMultipleObjects(1, ctypes.byref(browser_process), False, INFINITE,
                                            QS_ALLINPUT) == 1:
@@ -219,13 +243,15 @@ def cover(pid):
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else ""
     known = ("close", "list", "icon", "cover")
-    if len(sys.argv) != (4 if command == "icon" else 3) or command not in known:
+    if len(sys.argv) != (4 if command in ("icon", "cover") else 3) or command not in known:
         sys.exit(__doc__.splitlines()[-1])
     pid = int(sys.argv[2])
     if command == "icon":
         sys.exit(0 if check_icons(pid, sys.argv[3]) else 1)
     if command == "cover":
-        cover(pid)
+        if sys.argv[3] not in ("ilo", "away"):
+            sys.exit(__doc__.splitlines()[-1])
+        cover(pid, sys.argv[3])
     for hwnd in windows(pid):
         browser = holds_ui(hwnd)
         if command == "close":

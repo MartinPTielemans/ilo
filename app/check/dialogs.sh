@@ -179,44 +179,50 @@ done
 kill -0 "$pid" 2>/dev/null || gone
 ! grep -q 'panicked' "$log" || fail "the app panicked as the link target, the bar or a menu showed"
 
-# On Windows, another app's window opened in front of ilo's lower half, where the link target's
-# corner is: the plate the link shows then, and the hover card a row shows, go under that window
-# and over ilo's, by Windows' own z-order, front first, and once it's gone the plate is over ilo's
-# window again (#1419). They came to the front of every app's windows, over the other app.
+# On Windows, another app's window in front of ilo's lower half, where the link target's corner
+# is: the plate a link shows then, and the card a row shows, go under that window and over ilo's,
+# by Windows' own z-order, front first (#1419), with the foreground in ilo's window and then in a
+# window away from both. They went to the front of every app's window, which Windows allows unless
+# the window in front has the foreground. Once it's gone the plate is over ilo's window again.
 covered=
-if windows; then
-  python3 -I -u check/app-windows.py cover "$(cat "/proc/$pid/winpid")" > "$out/cover.log" 2>&1 &
+# The window and plate on top of the stack the driver last listed match $1, or fail with $2.
+stacked() {
+  send stack
+  stack=$(grep '^browser: stack ' "$log" | tail -1 | cut -c16-)
+  case $stack in $1) ;; *) fail "$2: $stack" ;; esac
+}
+# Another app's window over ilo's, with the foreground in $1 (ilo or away).
+under_cover() {
+  python3 -I -u check/app-windows.py cover "$(cat "/proc/$pid/winpid")" "$1" \
+    > "$out/cover-$1.log" 2>&1 &
   helper=$!
   for _ in $(seq 100); do
-    grep -q '^cover ' "$out/cover.log" || ! kill -0 "$helper" 2>/dev/null && break
+    grep -q '^cover ' "$out/cover-$1.log" || ! kill -0 "$helper" 2>/dev/null && break
     sleep 0.1
   done
-  grep -q '^cover ' "$out/cover.log" ||
-    fail "another app's window didn't open over ilo's: $(cat "$out/cover.log")"
-  # The window and plate on top of the stack the driver last listed match $1, or fail with $2.
-  stacked() {
-    send stack
-    stack=$(grep '^browser: stack ' "$log" | tail -1 | cut -c16-)
-    case $stack in $1) ;; *) fail "$2: $stack" ;; esac
-  }
-  stacked "*other cover, *driven" "the other app's window isn't in front of ilo's"
+  grep -q '^cover ' "$out/cover-$1.log" ||
+    fail "another app's window didn't open over ilo's: $(cat "$out/cover-$1.log")"
+  local foreground
+  foreground=$(sed -n 's/^cover .*, foreground //p' "$out/cover-$1.log")
+  stacked "*other cover, *driven" "the other app's window isn't in front of ilo's ($1)"
   send move $link_point
   expect '^browser: link target window shown$' \
-    "the pointer on the link showed no plate under the other app"
-  ../tools/window-screenshot.sh "$pid" "$out/link-target-covered.png" || fail "no window to capture"
+    "the pointer on the link showed no plate under the other app ($1)"
+  ../tools/window-screenshot.sh "$pid" "$out/link-target-covered-$1.png" ||
+    fail "no window to capture"
   stacked "*other cover, *link target, *driven" \
-    "the link target isn't under the other app's window in front of ilo"
+    "the link target isn't under the other app's window in front of ilo (foreground $foreground)"
   send move $page_point
   expect '^browser: link target hidden$' \
-    "the plate under the other app stayed after the pointer left"
+    "the plate under the other app stayed after the pointer left ($1)"
   send move $(row 0)
   expect '^browser: hover card window shown$' \
-    "resting on the tab's row showed no card under the other app"
+    "resting on the tab's row showed no card under the other app ($1)"
   stacked "*other cover, *hover card, *driven" \
-    "the hover card isn't under the other app's window in front of ilo"
+    "the hover card isn't under the other app's window in front of ilo (foreground $foreground)"
   send move $page_point
   expect '^browser: hover card hidden$' "leaving the rows didn't hide the card under the other app"
-  covered="$(sed -n 's/^cover .*, foreground \([01]\)$/\1/p' "$out/cover.log") $active"
+  covered="$covered${covered:+, }the foreground in $foreground with ilo active $active"
   # By its Windows id, as Git Bash's kill may not end a native process.
   taskkill //F //PID "$(cat "/proc/$helper/winpid")" > /dev/null 2>&1 || true
   helper=
@@ -225,6 +231,10 @@ if windows; then
     grep '^browser: stack ' "$log" | tail -1 | grep -q 'other cover' || break
     sleep 0.1
   done
+}
+if windows; then
+  under_cover ilo
+  under_cover away
   send move $link_point
   expect '^browser: link target window shown$' \
     "the pointer on the link showed no plate once the other app went"
@@ -243,7 +253,7 @@ echo "  comes back with its tab. The confirm's Cancel and OK show the pointer on
 echo "  stays with Esc and leaves with ↩. A site's sign-in cancels with Esc and signs in with ↩, and"
 echo "  the password reaches no log. A link to Maps asks, and ↩ opens nothing. The link target shows"
 echo "  and hides 20 times, between the command bar and a tab's menu, with no panic."
-[ -z "$covered" ] || echo "  Under another app's window in front of ilo's (it had the" \
-  "foreground: ${covered% *}, ilo active: ${covered#* }), the link target and the hover card show" \
-  "under it, and the link target over ilo's window once it's gone. Windows:" \
-  "$out/link-target-covered.png, $out/link-target-uncovered.png"
+[ -z "$covered" ] || echo "  Under another app's window in front of ilo's ($covered), the" \
+  "link target and the hover card show under it, and the link target over ilo's window once it's" \
+  "gone. Windows: $out/link-target-covered-ilo.png, $out/link-target-covered-away.png," \
+  "$out/link-target-uncovered.png"
