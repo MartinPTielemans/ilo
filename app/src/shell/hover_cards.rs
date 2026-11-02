@@ -46,7 +46,8 @@ impl Shell {
             });
         });
         let anchor = Anchor { row, window: self.viewport };
-        self.browser.hover_card(Hover::Rest(Rest { card, anchor, events }), cx);
+        let window = self.browser.window();
+        self.browser.hover_card(Hover::Rest(Rest { window, card, anchor, events }), cx);
     }
 
     /// The pointer came onto `row` or left it: a closed folder's row rests for its preview of the
@@ -87,6 +88,7 @@ impl Shell {
             });
         });
         let rest = folder_preview::Rest {
+            window: self.browser.window(),
             folder,
             name: self.folder_name(folder),
             items,

@@ -461,7 +461,7 @@ struct InWindow;
 
 #[cfg(target_os = "linux")]
 impl dialog::Host for InWindow {
-    fn show(&self, _: Option<Bounds<gpui::Pixels>>) {}
+    fn show(&self, _: Option<u64>, _: Option<Bounds<gpui::Pixels>>) {}
 
     fn hide(&self) {}
 }
@@ -556,7 +556,9 @@ impl account::Host for CoreAccount {
                 dialog::ask_in(dialog, message, detail, action, on_return, confirmed, window, cx)
             }
             None => crate::with_overlays(
-                move |cx| dialog::ask_returning(message, detail, action, on_return, confirmed, cx),
+                move |cx| {
+                    dialog::ask_returning(None, message, detail, action, on_return, confirmed, cx)
+                },
                 cx,
             ),
         }

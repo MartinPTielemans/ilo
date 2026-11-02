@@ -6,8 +6,10 @@ one in front alone. `list PID` prints each top-level window of the process, with
 state and whether it's a browser window, minimized (IsIconic) or the one in front
 (GetForegroundWindow). `icon PID ICO` checks that each window of the process the taskbar and
 Alt+Tab show has the .ico's image for its big and small icons, read as the shell reads them, and
-prints them (#1350).
-Usage: app-windows.py close|list|icon PID [front|ICO]"""
+prints them (#1350). `cover PID ilo|away` opens a window of another app in front of the process's
+browser window, over its lower half, with the foreground in ilo's window or in a window away from
+it, says "cover <handle>, foreground <ilo|away|other>" and keeps it until it's ended (#1419).
+Usage: app-windows.py close|list|icon PID [front|ICO] or app-windows.py cover PID ilo|away"""
 
 import ctypes
 import ctypes.wintypes as w
@@ -144,18 +146,114 @@ def check_icons(pid, ico):
     return ok
 
 
+class WNDCLASSW(ctypes.Structure):
+    _fields_ = [("style", w.UINT), ("lpfnWndProc", ctypes.c_void_p), ("cbClsExtra", ctypes.c_int),
+                ("cbWndExtra", ctypes.c_int), ("hInstance", w.HINSTANCE), ("hIcon", w.HICON),
+                ("hCursor", w.HANDLE), ("hbrBackground", w.HBRUSH), ("lpszMenuName", w.LPCWSTR),
+                ("lpszClassName", w.LPCWSTR)]
+
+
+def cover(pid, foreground):
+    """Another app's plain window over the lower half of the browser window of process PID, where
+    the link target's corner is, with ilo's window under it, and the foreground in ilo's window
+    (FOREGROUND "ilo"), as when a window opens over ilo without taking the keyboard, or in a small
+    window away from ilo's ("away"), as the user's app on another part of the screen. Returns once
+    the browser's process has ended."""
+    user32.SetProcessDPIAware()
+    browser = next((hwnd for hwnd in windows(pid)
+                    if holds_ui(hwnd) and user32.IsWindowVisible(hwnd)), None)
+    if not browser:
+        sys.exit("process %d has no browser window on screen" % pid)
+    frame = w.RECT()
+    user32.GetWindowRect(w.HWND(browser), ctypes.byref(frame))
+    WNDPROC = ctypes.WINFUNCTYPE(w.LPARAM, w.HWND, w.UINT, w.WPARAM, w.LPARAM)
+    user32.DefWindowProcW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
+    user32.DefWindowProcW.restype = w.LPARAM
+    procedure = WNDPROC(lambda *message: user32.DefWindowProcW(*message))
+    kernel32 = ctypes.windll.kernel32
+    kernel32.GetModuleHandleW.restype = w.HMODULE
+    gdi32.CreateSolidBrush.restype = w.HBRUSH
+    instance = kernel32.GetModuleHandleW(None)
+    window_class = WNDCLASSW(lpfnWndProc=ctypes.cast(procedure, ctypes.c_void_p),
+                             hInstance=instance, hbrBackground=gdi32.CreateSolidBrush(0x806040),
+                             lpszClassName="CheckCover")
+    if not user32.RegisterClassW(ctypes.byref(window_class)):
+        sys.exit("couldn't register the cover's class")
+    user32.CreateWindowExW.argtypes = [w.DWORD, w.LPCWSTR, w.LPCWSTR, w.DWORD, ctypes.c_int,
+                                       ctypes.c_int, ctypes.c_int, ctypes.c_int, w.HWND, w.HMENU,
+                                       w.HINSTANCE, w.LPVOID]
+    user32.CreateWindowExW.restype = w.HWND
+    user32.SetWindowPos.argtypes = [w.HWND, w.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                    ctypes.c_int, w.UINT]
+    user32.GetForegroundWindow.restype = w.HWND
+    SW_SHOWNOACTIVATE, SW_SHOW, SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE = 4, 5, 0x1, 0x2, 0x10
+
+    def show(title, x, y, width, height, front):
+        hwnd = user32.CreateWindowExW(0, "CheckCover", title, 0x80000000 | 0x00800000, x, y,
+                                      width, height, None, None, instance, None)
+        if not hwnd:
+            sys.exit("couldn't open the %s window" % title)
+        user32.ShowWindow(w.HWND(hwnd), SW_SHOW if front else SW_SHOWNOACTIVATE)
+        if front:
+            user32.SetForegroundWindow(w.HWND(hwnd))
+        return hwnd
+
+    middle = (frame.top + frame.bottom) // 2
+    cover = show("cover", frame.left, middle, frame.right - frame.left, frame.bottom - middle,
+                 False)
+    if foreground == "away":
+        # Beside ilo's window where the screen has room, so it's over none of it.
+        screen = (user32.GetSystemMetrics(0), user32.GetSystemMetrics(1))
+        size = (160, 120)
+        if frame.right + 20 + size[0] <= screen[0]:
+            at = (frame.right + 20, frame.top)
+        elif frame.left - 20 - size[0] >= 0:
+            at = (frame.left - 20 - size[0], frame.top)
+        elif frame.bottom + 20 + size[1] <= screen[1]:
+            at = (frame.left, frame.bottom + 20)
+        else:
+            at = (screen[0] - size[0], 0)
+        show("away", at[0], at[1], size[0], size[1], True)
+    # ilo's window goes under the cover, rather than the cover over it, as Windows keeps a window
+    # that doesn't have the foreground from going over the window that has it.
+    user32.SetWindowPos(browser, cover, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)
+    # Until it's ended, or the browser's process ends, so it's never over a later run's windows.
+    SYNCHRONIZE, INFINITE, QS_ALLINPUT, PM_REMOVE = 0x100000, 0xFFFFFFFF, 0x4FF, 1
+    kernel32.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+    kernel32.OpenProcess.restype = w.HANDLE
+    user32.MsgWaitForMultipleObjects.argtypes = [w.DWORD, ctypes.POINTER(w.HANDLE), w.BOOL,
+                                                 w.DWORD, w.DWORD]
+    user32.MsgWaitForMultipleObjects.restype = w.DWORD
+    browser_process = w.HANDLE(kernel32.OpenProcess(SYNCHRONIZE, False, pid))
+    if not browser_process:
+        sys.exit("couldn't watch process %d" % pid)
+    owner = w.DWORD()
+    front = user32.GetForegroundWindow()
+    user32.GetWindowThreadProcessId(front, ctypes.byref(owner))
+    print("cover %#x, foreground %s" % (cover, "ilo" if owner.value == pid else
+                                        "away" if text(user32.GetWindowTextW, front) == "away"
+                                        else "other"), flush=True)
+    message = w.MSG()
+    while user32.MsgWaitForMultipleObjects(1, ctypes.byref(browser_process), False, INFINITE,
+                                           QS_ALLINPUT) == 1:
+        while user32.PeekMessageW(ctypes.byref(message), None, 0, 0, PM_REMOVE):
+            user32.TranslateMessage(ctypes.byref(message))
+            user32.DispatchMessageW(ctypes.byref(message))
+
+
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else ""
     front = command == "close" and sys.argv[3:] == ["front"]
-    if len(sys.argv) != (4 if command == "icon" or front else 3) or command not in (
-        "close",
-        "list",
-        "icon",
-    ):
+    known = ("close", "list", "icon", "cover")
+    if len(sys.argv) != (4 if command in ("icon", "cover") or front else 3) or command not in known:
         sys.exit(__doc__.splitlines()[-1])
     pid = int(sys.argv[2])
     if command == "icon":
         sys.exit(0 if check_icons(pid, sys.argv[3]) else 1)
+    if command == "cover":
+        if sys.argv[3] not in ("ilo", "away"):
+            sys.exit(__doc__.splitlines()[-1])
+        cover(pid, sys.argv[3])
     user32.GetForegroundWindow.restype = w.HWND
     foreground = user32.GetForegroundWindow()
     for hwnd in windows(pid):

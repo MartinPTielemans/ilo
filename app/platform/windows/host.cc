@@ -359,9 +359,7 @@ void SystemFrame(HWND hwnd) {
 }
 
 void WatchOwner(HWND root);
-// Puts |hwnd| at |x|, |y|, |width| by |height| over the others and on screen. It's shown with
-// ShowWindow rather than SWP_SHOWWINDOW, which doesn't send WM_SHOWWINDOW, the message GPUI learns
-// its window is on screen from (window.is_visible()), where an overlay's motion starts.
+// Puts |hwnd| at |x|, |y|, |width| by |height| over its browser window and on screen.
 // The UI sizes its overlays from inside its update, where GPUI can't take the new size: its
 // renderer grows, but the UI goes on laying out at the old one, so what it adds, as the command
 // bar's suggestions, is drawn cut off. The size again after the update reaches it.
@@ -374,9 +372,48 @@ void SizeAgainLater(HWND hwnd) {
   });
 }
 
+// The window at the end of |hwnd|'s owners, the browser window an overlay or a menu over it floats
+// over, or |hwnd| if it has no owner.
+HWND TopOwner(HWND hwnd) {
+  while (HWND owner = GetWindow(hwnd, GW_OWNER)) {
+    hwnd = owner;
+  }
+  return hwnd;
+}
+
+// Where |hwnd|, owned by a browser window, goes in the z-order: over that window and the others it
+// owns, but under any other window over them, as the Mac's child windows are while the app isn't
+// the active one, and Linux's overlays are always. HWND_TOP would put it over every app's windows,
+// so a link's address or a hover card drew over another app in front of ilo (#1419).
+HWND InsertAfter(HWND hwnd) {
+  HWND root = TopOwner(hwnd);
+  if (root == hwnd) {
+    return HWND_TOP;
+  }
+  for (HWND above = GetWindow(root, GW_HWNDPREV); above; above = GetWindow(above, GW_HWNDPREV)) {
+    if (IsWindowVisible(above) && TopOwner(above) != root) {
+      // A non-topmost window can't go between topmost ones; under them all is the top of the rest.
+      return (GetWindowLongPtrW(above, GWL_EXSTYLE) & WS_EX_TOPMOST) ? HWND_TOP : above;
+    }
+  }
+  return HWND_TOP;
+}
+
 void PlaceAndShow(HWND hwnd, int x, int y, int width, int height, bool activate) {
-  SetWindowPos(hwnd, HWND_TOP, x, y, width, height, SWP_NOACTIVATE);
-  ShowWindow(hwnd, activate ? SW_SHOW : SW_SHOWNA);
+  const HWND after = InsertAfter(hwnd);
+  SetWindowPos(hwnd, after, x, y, width, height, SWP_NOACTIVATE);
+  if (activate) {
+    ShowWindow(hwnd, SW_SHOW);
+  } else if (!IsWindowVisible(hwnd)) {
+    // Shown where it was put. ShowWindow shows a window at the top, and the browser window that
+    // owns it with it, over another app's window in front of ilo while ilo has the foreground
+    // (#1419). It also sends WM_SHOWWINDOW, which SWP_SHOWWINDOW doesn't, and GPUI draws the
+    // window and learns it's on screen from it (window.is_visible()), where an overlay's motion
+    // starts, so that's sent first, as ShowWindow does.
+    SendMessageW(hwnd, WM_SHOWWINDOW, TRUE, 0);
+    SetWindowPos(hwnd, after, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+  }
   SizeAgainLater(hwnd);
 }
 
@@ -3827,6 +3864,28 @@ bool host_drive_key(unsigned vk, long lparam) {
     KeyChanged();
   }
   return g_menu_key_hook && MenuTakesKey(vk, lparam);
+}
+
+// What check.sh calls the window |hwnd| the host floats over a browser window, for the driver's
+// stack, or nothing if it's none of those.
+const char* host_floating_name(void* hwnd) {
+  const std::pair<const Floating*, const char*> named[] = {
+      {&g_link_target, "link target"}, {&g_tooltip, "tooltip"},
+      {&g_card, "hover card"},         {&g_toast, "toast"},
+      {&g_capture, "capture"},         {&g_hud, "hud"},
+      {&g_dialog, "dialog"},           {&g_site_controls, "site controls"},
+      {&g_link_preview.floating, "link preview"}};
+  for (const auto& [floating, name] : named) {
+    if (floating->hwnd && floating->hwnd == hwnd) {
+      return name;
+    }
+  }
+  for (size_t index = 0; index < std::size(g_overlays); ++index) {
+    if (g_overlays[index].hwnd && g_overlays[index].hwnd == hwnd) {
+      return kOverlayNames[index];
+    }
+  }
+  return g_menu.hwnd && g_menu.hwnd == hwnd ? "menu" : nullptr;
 }
 
 }  // extern "C"

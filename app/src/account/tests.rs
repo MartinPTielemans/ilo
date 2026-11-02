@@ -120,7 +120,7 @@ impl Render for Page {
 struct InWindow;
 
 impl dialog::Host for InWindow {
-    fn show(&self, _: Option<Bounds<Pixels>>) {}
+    fn show(&self, _: Option<u64>, _: Option<Bounds<Pixels>>) {}
 
     fn hide(&self) {}
 }
