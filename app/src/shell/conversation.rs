@@ -1245,14 +1245,15 @@ fn lifted<E: Styled>(element: E, since: Option<Instant>, length: f32, look: &Loo
     element.relative().top(px(by)).opacity(opacity)
 }
 
-/// Words rolling in over `old`, which go up, as they changed: as tall as `line`.
+/// Words rolling in over `old`, which go up, as they changed: as tall as `line`, and as wide as
+/// the new, the old going out past it if they're longer.
 fn rolled(new: SharedString, old: Option<&(SharedString, Instant)>, line: f32, look: &Look) -> gpui::AnyElement {
     let Some((old, since)) = old else { return div().flex_none().child(new).into_any_element() };
     let [(old_opacity, old_by), (new_opacity, new_by)] = motion::roll(*since, look.now, look.still);
     div()
         .flex_none()
         .relative()
-        .overflow_hidden()
+        .overflow_y_hidden()
         .h(px(line))
         .child(div().relative().top(px(new_by)).opacity(new_opacity).whitespace_nowrap().child(new))
         .child(

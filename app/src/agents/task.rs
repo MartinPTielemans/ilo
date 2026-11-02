@@ -1499,8 +1499,9 @@ pub fn fold(
     let mut shown = vec![false; messages.len()];
     let mut first = 0;
     let turns: Vec<&[Message]> = messages.split_inclusive(|message| message.who == Who::User).collect();
-    for (index, turn) in turns.iter().enumerate() {
-        let turn_ended = ended || index + 1 < turns.len();
+    for turn in &turns {
+        // A turn the user has written after is over, even as the next is under way.
+        let turn_ended = ended || turn.last().is_some_and(|message| message.who == Who::User);
         // The turn's last message: its result, else the last thing it said, once it's over.
         let last = (turn.iter().rposition(|message| message.who == Who::Result))
             .or_else(|| turn.iter().rposition(|message| message.who != Who::User))

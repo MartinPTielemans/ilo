@@ -2193,6 +2193,31 @@ mod tasks {
         assert!(worked.items.iter().all(|item| !matches!(item, TraceItem::Step(step) if step.running)));
     }
 
+    /// A reply leaves the turn before it as it was, its answer and how long it worked, as the
+    /// next turn gets under way.
+    #[test]
+    fn a_reply_leaves_the_turn_before_it_as_it_was() {
+        use crate::agents::task::{Line, Message, Traced, Who, fold};
+        let start = std::time::Instant::now();
+        let at = |seconds: u64| start + Duration::from_secs(seconds);
+        let message = |who, text: &str, seconds| Message { who, text: text.to_string().into(), at: at(seconds) };
+        let trace = vec![Traced {
+            call: 1,
+            did: tools::Did { tool: "open_tab".into(), site: "maat.pt".into(), ..Default::default() },
+            after: 1,
+            started: at(1),
+            ended: Some(at(3)),
+            error: None,
+            picture: None,
+        }];
+        let mut messages = vec![message(Who::User, "Museum hours", 0), message(Who::Result, "MAAT opens at 10:00.", 5)];
+        let before = fold(&messages, &trace, true, false, None);
+        messages.push(message(Who::User, "And on Sunday?", 9));
+        let lines = fold(&messages, &trace, false, true, None);
+        assert_eq!(lines[..before.len()], before[..], "{lines:?}");
+        assert_eq!(lines.last(), Some(&Line::You("And on Sunday?".into())));
+    }
+
     /// A turn's same step on ten tabs is one line with how many, which opens to each tab's line by
     /// its address, whether the agent's calls came at once, interleaved, or one after another.
     /// Each tab's steps still read in their order (#1476).
