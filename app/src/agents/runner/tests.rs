@@ -90,7 +90,33 @@ fn claudes_text_is_said_its_thinking_is_a_thought_and_its_tool_calls_are_neither
     ]);
     let Out::Thought { text, .. } = &outs[0] else { panic!("{outs:?}") };
     assert_eq!(text, "Hmm.");
-    assert_eq!(outs[1..], [Out::Said("Looking for flights.".into()), Out::Ended(None)]);
+    assert_eq!(outs[1..], [Out::Said("Looking for flights.".into()), Out::Calling, Out::Ended(None)]);
+}
+
+#[test]
+fn claudes_text_comes_as_it_writes_it_until_it_calls_a_tool() {
+    let piece = |event: Value| json!({ "type": "stream_event", "event": event });
+    let delta = |text: &str| piece(json!({ "type": "content_block_delta", "delta": { "type": "text_delta", "text": text } }));
+    let outs = read(&[
+        piece(json!({ "type": "message_start", "message": {} })),
+        piece(json!({ "type": "content_block_start", "content_block": { "type": "text", "text": "" } })),
+        delta("Two"),
+        delta(" shows "),
+        json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "Two shows" }] } }),
+        piece(json!({ "type": "content_block_start", "content_block": { "type": "text", "text": "" } })),
+        delta("Both"),
+        piece(json!({ "type": "content_block_start", "content_block": { "type": "tool_use", "name": "mcp__ilo__open_tab" } })),
+        piece(json!({ "type": "content_block_delta", "delta": { "type": "input_json_delta", "partial_json": "{" } })),
+    ]);
+    assert_eq!(outs, [
+        Out::Writing(String::new()),
+        Out::Writing("Two".into()),
+        Out::Writing("Two shows".into()),
+        Out::Said("Two shows".into()),
+        Out::Writing("Both".into()),
+        Out::Calling,
+    ]);
+    assert!(claude_args(&launch(Cli::Claude)).iter().any(|arg| arg == "--include-partial-messages"));
 }
 
 #[test]

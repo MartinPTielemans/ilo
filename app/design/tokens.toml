@@ -1614,6 +1614,30 @@ reply-gap = 16.0
 # the window's material under them is the system's, so no fade's colour can match it.
 lines-below = 16.0
 
+[shell.conversation.motion]
+# Ours, in seconds on the task's ease ([shell.task.motion], whose roll, chips and crossfade it
+# shares): only what changes while the conversation shows moves. What the user sent goes from the
+# reply field's box to its plate over `land`, and the lines, at their end, follow on the same
+# curve. A line or a step rises the chips' distance over `rise`, as Thinking does, and Stop fades
+# in and out over it; Open comes as a question's chips do. A line's words crossfade, the old going over `swap` and the new coming
+# over the crossfade's rest; a finished step's note fades in over the task's `fade`. A page grows
+# into the pictures over `picture` as it fades in over `rise`, and the Signal ring slides to it
+# `ring-delay` later. As the turn ends its trace folds: its steps fade over `steps-fade` and it
+# closes over the task's `height`, its chevron turning over `chevron`. The answer comes once it
+# has folded, each block `stagger` after the one before and fading in over `stream`, as each run
+# of the words Claude writes does as it comes. A picked answer lands as a sent reply does; the
+# others fade over `pick-fade` as their row closes over `land`.
+land = 0.26
+rise = 0.15
+swap = 0.09
+picture = 0.22
+ring-delay = 0.14
+steps-fade = 0.11
+chevron = 0.2
+stream = 0.16
+stagger = 0.05
+pick-fade = 0.12
+
 [shell.tile-theme]
 # A pixel counts towards the icon's colour from this alpha.
 opaque = 0.975

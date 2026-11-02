@@ -126,6 +126,11 @@ pub struct Launch {
 pub enum Out {
     /// The agent said something to the user.
     Said(String),
+    /// What the agent has written so far of the message it's writing, as it comes: Claude's,
+    /// which streams. Empty as a new message starts.
+    Writing(String),
+    /// The message being written goes on to call a tool, so what it said is said along the way.
+    Calling,
     /// The agent thought, for as long as `took`: its reasoning, as its CLI sends it.
     Thought { text: String, took: Duration },
     /// Its turn ended, and it waits for the user's next message: well, or with what went wrong.
@@ -345,6 +350,8 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
         "--output-format",
         "stream-json",
         "--verbose",
+        // Its text as it writes it, which the conversation shows as it comes.
+        "--include-partial-messages",
         // None of its own tools: no shell, files, web fetch or search.
         "--tools",
         "",
@@ -385,15 +392,20 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
 #[derive(Default)]
 pub struct Turn {
     limit: Option<Option<u64>>,
-    /// When the last line came, which a thought took since.
+    /// When the last whole line came, which a thought took since.
     heard: Option<Instant>,
+    /// The text of the message being written, as its pieces came.
+    writing: String,
 }
 
 /// What a line of Claude's stream-json output says to the user, if anything.
 pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
     let kind = message.get("type").and_then(Value::as_str).unwrap_or_default();
+    if kind == "stream_event" {
+        return claude_piece(message.get("event").unwrap_or(&Value::Null), turn);
+    }
     let now = Instant::now();
-    // A message comes whole, so its thinking took from the line before it.
+    // A message comes whole, so its thinking took from the whole line before it.
     let took = turn.heard.replace(now).map_or(Duration::ZERO, |heard| now - heard);
     match kind {
         "assistant" => {
@@ -405,6 +417,7 @@ pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
                         Some("text") => text("text").filter(|text| !text.is_empty()).map(|text| Out::Said(text.into())),
                         Some("thinking") => (text("thinking").filter(|text| !text.is_empty()))
                             .map(|text| Out::Thought { text: text.into(), took }),
+                        Some("tool_use") => Some(Out::Calling),
                         _ => None,
                     }
                 })
@@ -427,6 +440,35 @@ pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
                 (None, true) => Some(claude_failure(text, message)),
             };
             vec![Out::Ended(failure)]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// What a piece of the message Claude is writing says: its text so far as a piece of it comes, and
+/// that it goes on to call a tool as one starts. Its thinking comes whole, as its message does.
+fn claude_piece(event: &Value, turn: &mut Turn) -> Vec<Out> {
+    match event.get("type").and_then(Value::as_str).unwrap_or_default() {
+        "message_start" => {
+            turn.writing.clear();
+            vec![Out::Writing(String::new())]
+        }
+        "content_block_start" => match event.pointer("/content_block/type").and_then(Value::as_str) {
+            Some("tool_use") => vec![Out::Calling],
+            // Each text block comes whole as a message of its own, so the next starts afresh.
+            Some("text") => {
+                turn.writing.clear();
+                Vec::new()
+            }
+            _ => Vec::new(),
+        },
+        "content_block_delta" if event.pointer("/delta/type").and_then(Value::as_str) == Some("text_delta") => {
+            let piece = event.pointer("/delta/text").and_then(Value::as_str).unwrap_or_default();
+            turn.writing.push_str(piece);
+            match turn.writing.trim().is_empty() {
+                true => Vec::new(),
+                false => vec![Out::Writing(turn.writing.trim().to_string())],
+            }
         }
         _ => Vec::new(),
     }

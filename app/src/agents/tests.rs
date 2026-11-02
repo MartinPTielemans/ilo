@@ -1789,6 +1789,38 @@ mod tasks {
         assert_eq!(card_of(&agents, cx).status.as_ref(), summary);
     }
 
+    /// What Claude writes shows as it comes, under the trace under way, and once whole, still
+    /// once; a tool call takes it into the trace, where it showed.
+    #[gpui::test]
+    fn what_the_agent_writes_shows_as_it_comes_until_a_call_takes_it_in(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, TraceItem};
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "What's on at MAAT?", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        let shown = |cx: &mut TestAppContext| agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+        said(&agents, &agent, Out::Thought { text: "Look at its page.".into(), took: Duration::from_secs(1) }, cx);
+        said(&agents, &agent, Out::Writing(String::new()), cx);
+        said(&agents, &agent, Out::Writing("Two".into()), cx);
+        let conversation = shown(cx);
+        assert!(conversation.writing);
+        assert!(
+            matches!(&conversation.lines[..], [Line::Trace(trace), Line::Said(text)] if trace.running && text == "Two"),
+            "{:?}",
+            conversation.lines
+        );
+        said(&agents, &agent, Out::Writing("Two shows".into()), cx);
+        said(&agents, &agent, Out::Said("Two shows".into()), cx);
+        let conversation = shown(cx);
+        assert!(!conversation.writing, "it's whole");
+        assert_eq!(format!("{:?}", conversation.lines).matches("Two shows").count(), 1, "{:?}", conversation.lines);
+        assert_eq!(conversation.lines.last(), Some(&Line::Said("Two shows".into())));
+
+        said(&agents, &agent, Out::Calling, cx);
+        let lines = shown(cx).lines;
+        let said_in = |trace: &crate::agents::task::Trace| trace.items.contains(&TraceItem::Said("Two shows".into()));
+        assert!(matches!(&lines[..], [Line::Trace(trace)] if said_in(trace)), "{lines:?}");
+    }
+
     /// A turn the user sends says Thinking at once, under their message and on the card, before
     /// the CLI says anything; the agent's first step or message takes its place, and its result
     /// folds it. Nothing waits on the CLI once it has answered.
@@ -1827,7 +1859,8 @@ mod tasks {
         cx.executor().advance_clock(NO_ANSWER * 2);
         cx.run_until_parked();
         assert_eq!(card_of(&agents, cx).dot, Dot::Done, "a timer ended a task that had answered");
-        agents.update(cx, |agents, cx| agents.end_tasks(cx));
+        // Its CLI ends with the test's app, not before: ended here, the thread that reads it would
+        // wake the test's scheduler, which takes that for a test that isn't deterministic.
     }
 
     /// A CLI that never answers, or goes before it does, never leaves Thinking going: the line
@@ -2072,7 +2105,7 @@ mod tasks {
             error: Some("Timed out waiting for the page.".into()),
             picture: None,
         };
-        let lines = fold(&[], &[failed], true, false);
+        let lines = fold(&[], &[failed], true, false, None);
         let [Line::Trace(trace)] = lines.as_slice() else { panic!("{lines:?}") };
         let [TraceItem::Step(step)] = trace.items.as_slice() else { panic!("{:?}", trace.items) };
         assert_eq!((step.title.as_ref(), step.description.as_ref(), step.failed), ("Couldn't open maat.pt", "timed out", true));
@@ -2141,7 +2174,7 @@ mod tasks {
         messages.push(message(Who::Agent, "Looking at MAAT first.", 3));
         trace.push(step("read_page", 2, 4, None));
 
-        let lines = fold(&messages, &trace, false, true);
+        let lines = fold(&messages, &trace, false, true, None);
         let [Line::You(_), Line::Trace(working)] = lines.as_slice() else { panic!("{lines:?}") };
         assert!(working.running);
         assert_eq!(working.summary(), ("Working".into(), "2 steps".into()));
@@ -2151,7 +2184,7 @@ mod tasks {
 
         trace[1].ended = Some(at(6));
         messages.push(message(Who::Agent, "MAAT opens at 10:00.", 41));
-        let lines = fold(&messages, &trace, true, false);
+        let lines = fold(&messages, &trace, true, false, None);
         let [Line::You(_), Line::Trace(worked), Line::Said(said)] = lines.as_slice() else { panic!("{lines:?}") };
         assert!(!worked.running);
         assert_eq!(worked.summary(), ("Worked for 40s".into(), "2 steps".into()));
@@ -2187,7 +2220,7 @@ mod tasks {
         };
         let messages = [Message { who: Who::User, text: "Close cases 1 to 10".into(), at: at(0) }];
         let lines = |trace: &[Traced]| {
-            let lines = fold(&messages, trace, false, true);
+            let lines = fold(&messages, trace, false, true, None);
             let [Line::You(_), Line::Trace(trace)] = lines.as_slice() else { panic!("{lines:?}") };
             (trace.items.iter())
                 .map(|item| match item {

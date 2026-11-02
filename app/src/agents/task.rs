@@ -98,6 +98,8 @@ pub struct Conversation {
     pub open: Option<SharedString>,
     /// The answers to the question it waits on, as chips under it.
     pub answers: Vec<SharedString>,
+    /// Whether its last line is the message the agent is writing, which comes in as it's written.
+    pub writing: bool,
 }
 
 /// A line of a task's conversation.
@@ -231,6 +233,18 @@ pub struct Task {
     /// While it's thinking, what ends the turn if its CLI never answers (NO_ANSWER). It goes as
     /// the CLI answers, so nothing waits once the agent is under way.
     pub(super) waiting: Option<gpui::Task<()>>,
+    /// The message the agent is writing at the end of the turn under way, as it comes.
+    pub(super) writing: Option<Writing>,
+}
+
+/// The message an agent is writing as the turn's last, which shows under its trace as it comes,
+/// until a call it goes on to make takes it into the trace.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Writing {
+    /// Its text so far.
+    pub text: SharedString,
+    /// Whether it has come whole, as the turn's last message.
+    pub said: bool,
 }
 
 impl Task {
@@ -246,7 +260,9 @@ impl Task {
     /// Whether the turn is sent and its CLI hasn't answered yet: no step and no message since.
     fn heard_nothing(&self) -> bool {
         let turn = self.turn();
-        self.messages.len() == turn && self.trace.last().is_none_or(|step| step.after < turn)
+        self.messages.len() == turn
+            && self.trace.last().is_none_or(|step| step.after < turn)
+            && self.writing.is_none()
     }
 
     fn thinking(&self) -> bool {
@@ -407,7 +423,8 @@ impl Agents {
     pub fn conversation(&self, agent: &str, cx: &App) -> Option<Conversation> {
         let task = self.task(agent)?;
         let ended = !matches!(task.state, State::Working | State::Asking { .. });
-        let mut lines = fold(&task.messages, &task.trace, ended, task.state == State::Working);
+        let working = task.state == State::Working;
+        let mut lines = fold(&task.messages, &task.trace, ended, working, task.writing.as_ref());
         // A turn the CLI hasn't answered says it's thinking from the moment it's sent, and if the
         // CLI goes or never answers, why, so nothing is left running.
         if task.heard_nothing() {
@@ -456,6 +473,7 @@ impl Agents {
                 State::Asking { answers, .. } if self.ask_shown(task) => answers.clone(),
                 _ => Vec::new(),
             },
+            writing: working && task.writing.as_ref().is_some_and(|writing| !writing.said),
         })
     }
 
@@ -714,6 +732,7 @@ impl Agents {
             process: None,
             asking: None,
             waiting: None,
+            writing: None,
         };
         self.tasks.tasks.push(task);
         self.tokens_changed();
@@ -822,7 +841,23 @@ impl Agents {
                 if matches!(task.state, State::Done { .. }) {
                     return;
                 }
+                // What it was writing is this message, which stays where it showed.
+                if let Some(writing) = &mut task.writing {
+                    *writing = Writing { text: text.clone().into(), said: true };
+                }
                 task.messages.push(Message::new(Who::Agent, text));
+            }
+            Out::Writing(text) => {
+                let Some(task) = self.task_mut(&agent) else { return };
+                if task.state != State::Working {
+                    return;
+                }
+                task.writing = (!text.is_empty()).then(|| Writing { text: text.into(), said: false });
+            }
+            // A call takes what it wrote into the trace, as what it said along the way.
+            Out::Calling => {
+                let Some(task) = self.task_mut(&agent) else { return };
+                task.writing = None;
             }
             Out::Thought { text, took } => {
                 let Some(task) = self.task_mut(&agent) else { return };
@@ -839,6 +874,7 @@ impl Agents {
             }
             Out::Ended(None) => {
                 let Some(task) = self.task_mut(&agent) else { return };
+                task.writing = None;
                 // A turn that ends without finish ends the task with what it said last.
                 if task.state == State::Working {
                     let result = (task.messages.iter().rev())
@@ -887,6 +923,7 @@ impl Agents {
         if let Some(task) = self.task_mut(agent) {
             task.state = state;
             task.waiting = None;
+            task.writing = None;
         }
         self.forget_waiting(agent, cx);
         // What's ready may have changed.
@@ -907,6 +944,7 @@ impl Agents {
         let Some(task) = self.task_mut(agent) else { return };
         task.messages.push(Message::new(Who::User, text.to_string()));
         task.state = State::Working;
+        task.writing = None;
         let sent = task.process.as_mut().map(|process| process.say(text));
         if !matches!(sent, Some(Ok(()))) {
             // Gone, or never started: a new run, with the conversation so far.
@@ -923,6 +961,7 @@ impl Agents {
         let Some((_, reply)) = task.asking.take() else { return };
         task.messages.push(Message::new(Who::User, answer.to_string()));
         task.state = State::Working;
+        task.writing = None;
         _ = reply.send(ToolResult::text(format!("The user answered: {answer}")));
         self.note(agent, "answered", "", "");
         self.wait_for_answer(agent, cx);
@@ -938,6 +977,7 @@ impl Agents {
         }
         task.state = State::Stopped;
         task.asking = None;
+        task.writing = None;
         task.waiting = None;
         if let Some(process) = task.process.as_mut() {
             process.interrupt();
@@ -953,6 +993,7 @@ impl Agents {
             return;
         }
         task.state = State::Working;
+        task.writing = None;
         let sent = task.process.as_mut().map(|process| process.say(RETRY));
         let cli = task.cli;
         self.tasks.limits.remove(&cli);
@@ -1096,8 +1137,9 @@ impl Agents {
         let ended = (did.tool == "ask").then_some(at);
         let after = task.messages.len();
         task.trace.push(Traced { call, did, after, started: at, ended, error: None, picture: None });
-        // Its first step: it's under way.
+        // Its first step: it's under way, and what it wrote before it was said along the way.
         task.waiting = None;
+        task.writing = None;
     }
 
     /// `agent`'s call was answered `at`: its step ends, with why it failed or what it saw.
@@ -1438,8 +1480,21 @@ pub fn duration(seconds: u64) -> String {
 /// A conversation's lines from its `messages` and its `trace`, oldest first. Each turn, from a
 /// message of the user's to the next, shows its questions and, once it has `ended`, its last
 /// message; the steps between those are a trace each, with what the agent said along the way in
-/// it. The last stretch is under way while the task is `working`.
-pub fn fold(messages: &[Message], trace: &[Traced], ended: bool, working: bool) -> Vec<Line> {
+/// it. The last stretch is under way while the task is `working`, and what the agent is `writing`
+/// shows under it, as it comes and once it's whole, until the turn ends or a call takes it in.
+pub fn fold(
+    messages: &[Message],
+    trace: &[Traced],
+    ended: bool,
+    working: bool,
+    writing: Option<&Writing>,
+) -> Vec<Line> {
+    let writing = writing.filter(|_| working && !ended);
+    // Once whole, it's the last message, which shows where it was written rather than in the trace.
+    let held = (writing.is_some_and(|writing| writing.said))
+        .then(|| messages.len().checked_sub(1))
+        .flatten()
+        .filter(|&last| messages[last].who == Who::Agent);
     // Which messages show as lines of their own.
     let mut shown = vec![false; messages.len()];
     let mut first = 0;
@@ -1462,6 +1517,9 @@ pub fn fold(messages: &[Message], trace: &[Traced], ended: bool, working: bool) 
         while let Some((key, step)) = steps.next_if(|(_, step)| step.after <= index) {
             stretch.step(key, step);
         }
+        if Some(index) == held {
+            continue;
+        }
         if !shown[index] {
             stretch.gathered.push(Gathered::Said(message.text.clone()));
             continue;
@@ -1477,6 +1535,7 @@ pub fn fold(messages: &[Message], trace: &[Traced], ended: bool, working: bool) 
         stretch.step(key, step);
     }
     stretch.flush(&mut lines, working, None);
+    lines.extend(writing.map(|writing| Line::Said(writing.text.clone())));
     lines
 }
 

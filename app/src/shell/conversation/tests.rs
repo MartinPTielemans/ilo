@@ -61,6 +61,7 @@ fn conversation(steps: usize) -> Conversation {
         stoppable: true,
         open: None,
         answers: Vec::new(),
+        writing: false,
     }
 }
 
@@ -382,4 +383,17 @@ fn the_newest_line_stays_in_view_at_the_end(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(size.width, size.height - px(260.)));
     draw(cx);
     assert_eq!(scrolled(cx).0, px(-100.), "it pulled the user away from what they read");
+}
+
+/// The lines follow what comes at their end while the user reads there, on the curve it lands
+/// on, at once as the conversation opens or with motion reduced, and not once they've scrolled up.
+#[test]
+fn the_lines_follow_only_while_the_user_reads_at_their_end() {
+    use super::{Follows, follows};
+    // grew, opening, pinned, moves
+    assert_eq!(follows(false, false, true, true), Follows::Not, "nothing came");
+    assert_eq!(follows(true, true, false, true), Follows::AtOnce, "it opens at its end");
+    assert_eq!(follows(true, false, false, true), Follows::Not, "the user scrolled up to read");
+    assert_eq!(follows(true, false, true, false), Follows::AtOnce, "motion reduced");
+    assert_eq!(follows(true, false, true, true), Follows::Eased);
 }
