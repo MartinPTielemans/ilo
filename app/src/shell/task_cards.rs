@@ -28,14 +28,18 @@ use gpui::{
     prelude::*, px, rgb,
 };
 
+use super::library::LIBRARY_BACK_INSET;
 use super::{
-    Edit, FAVICON_SIZE, FAVICON_X, FOOTER_HEIGHT, HOVERED, NAV_RADIUS, PLATE_HEIGHT, PLATE_INSET,
-    PLATE_RADIUS, Palette, ROW_HEIGHT, SECONDARY, STATUS_AGENT, Shell, Slot, TILE, TILE_RADIUS,
-    TITLE, TITLE_END_INSET, TITLE_GAP, What, dashed_plate, selected_plate, title,
+    Edit, FAVICON_SIZE, FAVICON_X, FOOTER_HEIGHT, HOVERED, NAV, NAV_RADIUS, NAV_SIZE, PLATE_HEIGHT,
+    PLATE_INSET, PLATE_RADIUS, Palette, ROW_HEIGHT, SECONDARY, STATUS_AGENT, Shell, Slot, TILE,
+    TILE_RADIUS, TITLE, TITLE_END_INSET, TITLE_GAP, What, cubic_bezier, dashed_plate,
+    selected_plate, title,
 };
 use crate::agents::task::{Card, Dot, TaskAction, open_label};
 use crate::palette::{STATE_HOVERED, STATE_PRESSED};
 use crate::tokens::shell::task::motion::{
+    ARCHIVE, ARCHIVE_CLOSE, ARCHIVE_CLOSE_DELAY, ARCHIVE_CONTENT, ARCHIVE_EASE, ARCHIVE_HOLD,
+    ARCHIVE_LEAVE, ARCHIVE_OPEN, BUMP, BUMP_EASE, BUMP_GLYPH, BUMP_PEAK, BUMP_SCALE,
     CHIPS, CHIPS_DELAY, CHIPS_RISE, CHIPS_STAGGER, CONTENT, CROSSFADE, FADE, FOLD, GHOST,
     GHOST_CONTENT, GHOST_DELAY, GHOST_LAND, GHOST_STAGGER, HEIGHT as GROW, ROLL, ROLL_RISE,
     SHIMMER, TITLE as TITLE_FADE,
@@ -54,6 +58,11 @@ use motion::{Curve, Ease};
 /// A task's number, from its agent's id, `task-<n>`.
 pub(super) fn number(agent: &str) -> u64 {
     agent.strip_prefix("task-").and_then(|n| n.parse().ok()).unwrap_or(0)
+}
+
+/// `seconds` as a duration.
+fn seconds(seconds: f32) -> Duration {
+    Duration::from_secs_f32(seconds.max(0.))
 }
 
 /// The most tasks the foot shows before a plate says how many more there are, the slot counting
@@ -404,6 +413,9 @@ struct Plate {
     fill: Ease,
     content: Ease,
     leaving: bool,
+    /// Since when a copy of it flies into the Archive button, from where it was in the sidebar,
+    /// as it goes.
+    archived: Option<(Instant, Bounds<Pixels>)>,
     face: Option<Face>,
 }
 
@@ -419,6 +431,7 @@ impl Plate {
             fill: Ease::rest(if empty { 0. } else { 1. }),
             content: Ease::rest(if empty { 0. } else { 1. }),
             leaving: false,
+            archived: None,
             face: None,
         };
         if animate {
@@ -453,9 +466,10 @@ impl Plate {
         }
     }
 
-    /// Comes back as it went.
+    /// Comes back as it went, its copy on the way to the Archive gone.
     fn stay(&mut self, now: Instant, still: bool) {
         self.leaving = false;
+        self.archived = None;
         let (length, curve) = if still { (CROSSFADE, Curve::Linear) } else { (FADE, Curve::Ease) };
         self.opacity.go(1., now, length, 0., curve);
     }
@@ -463,6 +477,7 @@ impl Plate {
     fn moving(&self, now: Instant, still: bool) -> bool {
         [self.height, self.opacity, self.fill, self.content].iter().any(|ease| ease.moving(now))
             || self.face.as_ref().is_some_and(|face| face.moving(now, still))
+            || self.archived.is_some_and(|(since, _)| now < since + seconds(ARCHIVE))
     }
 
     fn settle(&mut self, now: Instant) {
@@ -515,6 +530,11 @@ pub(super) struct Foot {
     still: bool,
     ghosts: Vec<Ghost>,
     opening: Option<Opening>,
+    /// Finished tasks the user has seen, which fold into the Archive once each is due and its pages
+    /// have landed.
+    folds: Vec<(SharedString, Instant)>,
+    /// When the Archive button's glyph bumps, as a fold lands in it.
+    bump: Option<Instant>,
     /// Where each plate and each chip was last drawn in the window, for Open's pages' flight and
     /// for check.sh, by the plate's key and the chip's place.
     plates_drawn: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
@@ -542,6 +562,8 @@ impl Default for Foot {
             still: false,
             ghosts: Vec::new(),
             opening: None,
+            folds: Vec::new(),
+            bump: None,
             plates_drawn: Rc::default(),
             chips_drawn: Rc::default(),
             rested: Rc::default(),
@@ -724,6 +746,15 @@ impl Shell {
         self.foot_room(Instant::now())
     }
 
+    /// Whether the sidebar shows the foot where it rests.
+    fn foot_drawn(&self) -> bool {
+        !self.page_fullscreen
+            && !self.sidebar_hidden
+            && self.sidebar_motion.is_none()
+            && self.library.is_none()
+            && self.form().is_none()
+    }
+
     /// Whether a task's plate shows `agent`'s conversation.
     fn foot_shows(&self, agent: &SharedString) -> bool {
         self.talk_agent().as_ref() == Some(agent)
@@ -732,12 +763,7 @@ impl Shell {
     /// Where ⌘T's bar folds to as it runs a task: the slot's plate as it will rest, in the window,
     /// if the sidebar shows it, with its corners' radius and its fill.
     pub fn fold_target(&self) -> Option<(Bounds<Pixels>, f32, Hsla)> {
-        let shown = !self.page_fullscreen
-            && !self.sidebar_hidden
-            && self.sidebar_motion.is_none()
-            && self.library.is_none()
-            && self.form().is_none();
-        if !shown || !self.foot.slot {
+        if !self.foot_drawn() || !self.foot.slot {
             return None;
         }
         let live = || self.foot.plates.iter().filter(|plate| !plate.leaving);
@@ -797,15 +823,21 @@ impl Shell {
                     agent: opening.agent.clone(),
                     tab,
                     from: opening.from,
-                    start: now + Duration::from_secs_f32(GHOST_DELAY + index as f32 * GHOST_STAGGER),
+                    start: now + seconds(GHOST_DELAY + index as f32 * GHOST_STAGGER),
                 });
                 self.foot.ghosts.extend(ghosts);
             } else if now.saturating_duration_since(opening.at) > OPENING_WAIT {
                 self.foot.opening = None;
             }
         }
-        let flight = Duration::from_secs_f32(GHOST + GHOST_LAND);
+        let flight = seconds(GHOST + GHOST_LAND);
         self.foot.ghosts.retain(|ghost| now < ghost.start + flight);
+        for agent in self.due_folds(now) {
+            cx.defer_in(window, move |shell, _, cx| shell.archive_task(agent, cx));
+        }
+        if self.foot.bump.is_some_and(|start| now >= start + seconds(BUMP)) {
+            self.foot.bump = None;
+        }
         let before = self.foot.plates.len();
         self.foot.plates.retain(|plate| !(plate.leaving && !plate.moving(now, still)));
         if self.foot.plates.len() != before {
@@ -828,6 +860,8 @@ impl Shell {
         let still = self.foot.still;
         self.foot.opening.is_some()
             || !self.foot.ghosts.is_empty()
+            || !self.foot.folds.is_empty()
+            || self.foot.bump.is_some_and(|start| now < start + seconds(BUMP))
             || self.foot.plates.iter().any(|plate| plate.moving(now, still))
     }
 
@@ -840,7 +874,7 @@ impl Shell {
     /// Whether `tab`'s row waits for its page's flight to land, which draws it meanwhile.
     pub(super) fn landing(&self, tab: u64) -> bool {
         let now = Instant::now();
-        let flight = Duration::from_secs_f32(GHOST + GHOST_LAND);
+        let flight = seconds(GHOST + GHOST_LAND);
         self.foot.opening.as_ref().is_some_and(|opening| opening.tabs.contains(&tab))
             || (self.foot.ghosts.iter()).any(|ghost| ghost.tab == tab && now < ghost.start + flight)
     }
@@ -861,6 +895,12 @@ impl Shell {
             Some(tab) => vec![tab],
             None => card.open.iter().map(|(tab, _)| *tab).collect(),
         };
+        // Its last page opened, a finished task has nothing left on its card, which folds into the
+        // Archive once its pages have landed.
+        let last = card.open.iter().all(|(each, _)| tabs.contains(each));
+        if card.finished() && last {
+            self.fold_later(agent.clone(), 0.);
+        }
         if let Some(from) = from
             && !cx.reduce_motion()
             && !tabs.is_empty()
@@ -892,6 +932,197 @@ impl Shell {
         self.closed_pinned = None;
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
         self.closed_task = Some((agent, now.unwrap_or_default().as_secs_f64() * 1000.));
+    }
+
+    /// The user left `agent`'s conversation: a finished task they've now seen folds into the
+    /// Archive, so the foot keeps only what's live or unread.
+    pub(super) fn talk_left(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+        if self.task_cards.iter().any(|card| card.agent == agent && card.finished()) {
+            self.fold_later(agent, ARCHIVE_LEAVE);
+            cx.notify();
+        }
+    }
+
+    /// Folds `agent`'s card into the Archive `delay` seconds from now, or once its pages land.
+    fn fold_later(&mut self, agent: SharedString, delay: f32) {
+        self.foot.folds.retain(|(each, _)| each != &agent);
+        self.foot.folds.push((agent, Instant::now() + seconds(delay)));
+    }
+
+    /// The folds due at `now`, taken off the list: each waits for its task's pages to land first.
+    fn due_folds(&mut self, now: Instant) -> Vec<SharedString> {
+        let Foot { folds, ghosts, opening, .. } = &mut self.foot;
+        let mut due = Vec::new();
+        folds.retain_mut(|(agent, at)| {
+            if opening.as_ref().is_some_and(|opening| &opening.agent == agent) {
+                return true;
+            }
+            let lands = (ghosts.iter()).filter(|ghost| &ghost.agent == agent).map(|ghost| ghost.start + seconds(GHOST)).max();
+            if let Some(lands) = lands {
+                *at = (*at).max(lands + seconds(ARCHIVE_OPEN));
+            }
+            let ready = *at <= now;
+            if ready {
+                due.push(agent.clone());
+            }
+            !ready
+        });
+        due
+    }
+
+    /// A finished task the user has seen leaves the foot as ✕ takes it, which ⌘Z and ⇧⌘T bring
+    /// back: its plate goes at once and the plates above close its room, as a copy
+    /// flies into the Archive button, whose glyph bumps as it lands. Where the sidebar doesn't
+    /// show it, or with motion reduced, it goes as ✕ has it go. Not while its conversation shows.
+    pub(super) fn archive_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+        let finished = self.task_cards.iter().any(|card| card.agent == agent && card.finished());
+        if !finished || self.talk_agent().as_ref() == Some(&agent) {
+            return;
+        }
+        let now = Instant::now();
+        let flies = self.foot.primed && !cx.reduce_motion() && !self.private && self.foot_drawn();
+        let from = self.foot.plates_drawn.borrow().get(&number(&agent)).copied();
+        let plate = (self.foot.plates.iter_mut())
+            .find(|plate| plate.holds == Holds::Task(agent.clone()) && !plate.leaving);
+        if flies
+            && let Some(from) = from
+            && let Some(plate) = plate
+        {
+            let origin = self.sidebar_origin.get();
+            plate.archived = Some((now, Bounds::new(from.origin - origin, from.size)));
+            plate.leaving = true;
+            plate.opacity = Ease::rest(0.);
+            plate.height.go(0., now, ARCHIVE_CLOSE, ARCHIVE_CLOSE_DELAY, Curve::Ease);
+            self.foot.bump = Some(now + seconds(ARCHIVE));
+        }
+        log!("browser: task {agent} archived");
+        self.dismiss_task(agent.clone(), cx);
+        // The Agents take its card away; the foot doesn't wait for them, so a change meanwhile
+        // can't bring its plate back.
+        self.task_cards.retain(|card| card.agent != agent);
+        self.sync_foot(None, cx);
+        cx.notify();
+    }
+
+    /// How far the Archive button's glyph is through its bump at `now`, 0 at rest and 1 at its
+    /// peak, growing to it and going back.
+    pub(super) fn archive_bump(&self, now: Instant) -> f32 {
+        let Some(start) = self.foot.bump else { return 0. };
+        let Some(since) = now.checked_duration_since(start) else { return 0. };
+        let t = since.as_secs_f32() / BUMP;
+        if t >= 1. {
+            return 0.;
+        }
+        let way = cubic_bezier(BUMP_EASE[0], BUMP_EASE[1], BUMP_EASE[2], BUMP_EASE[3], t);
+        match way < BUMP_PEAK {
+            true => way / BUMP_PEAK,
+            false => 1. - (way - BUMP_PEAK) / (1. - BUMP_PEAK),
+        }
+    }
+
+    /// The Archive button's glyph's scale and alpha at `now`, through its bump.
+    pub(super) fn archive_glyph(&self, now: Instant) -> (f32, f32) {
+        let bump = self.archive_bump(now);
+        (1. + (BUMP_SCALE - 1.) * bump, NAV + (BUMP_GLYPH - NAV) * bump)
+    }
+
+    /// The copies of finished tasks' plates on their way into the Archive button: each from its
+    /// plate's place to the button's box, its corners to the box's, its content fading at once and
+    /// its plate over the end of the flight.
+    pub(super) fn archive_flights(&self) -> Vec<AnyElement> {
+        let now = Instant::now();
+        let to = Bounds::new(
+            point(
+                px(LIBRARY_BACK_INSET),
+                self.viewport.height - px((FOOTER_HEIGHT - NAV_SIZE) / 2. + NAV_SIZE),
+            ),
+            gpui::size(px(NAV_SIZE), px(NAV_SIZE)),
+        );
+        let flights = self.foot.plates.iter().filter_map(|plate| {
+            let (since, from) = plate.archived?;
+            let face = plate.face.as_ref()?;
+            let gone = now.saturating_duration_since(since).as_secs_f32();
+            let t = gone / ARCHIVE;
+            if t >= 1. {
+                return None;
+            }
+            let way = cubic_bezier(ARCHIVE_EASE[0], ARCHIVE_EASE[1], ARCHIVE_EASE[2], ARCHIVE_EASE[3], t);
+            let lerp = |a: Pixels, b: Pixels| a + (b - a) * way;
+            let opacity = match t < ARCHIVE_HOLD {
+                true => 1.,
+                false => 1. - (t - ARCHIVE_HOLD) / (1. - ARCHIVE_HOLD),
+            };
+            let content = 1. - (gone / ARCHIVE_CONTENT).min(1.);
+            let flight = div()
+                .absolute()
+                .left(lerp(from.origin.x, to.origin.x))
+                .top(lerp(from.origin.y, to.origin.y))
+                .w(lerp(from.size.width, to.size.width))
+                .h(lerp(from.size.height, to.size.height))
+                .rounded(px(TILE_RADIUS + (NAV_RADIUS - TILE_RADIUS) * way))
+                .overflow_hidden()
+                .bg(self.palette.plate(TILE))
+                .opacity(opacity)
+                .children((content > 0.).then(|| self.archived_face(face, from, content, now)));
+            Some(flight.into_any_element())
+        });
+        flights.collect()
+    }
+
+    /// A plate's content as its copy takes it into the Archive: laid out at the plate's size,
+    /// clipped as the copy shrinks, at `alpha`, and taking no clicks.
+    fn archived_face(&self, face: &Face, from: Bounds<Pixels>, alpha: f32, now: Instant) -> AnyElement {
+        let drawn = face.glyph.drawn(now);
+        let signal: Hsla = rgb(STATUS_AGENT).into();
+        let stopped = self.palette.text(STOPPED);
+        let glyph = canvas(|_, _, _| {}, move |bounds, _, window, _| glyph::paint(&drawn, bounds, signal, stopped, window))
+            .absolute()
+            .left(px(FAVICON_X - PLATE_INSET + FAVICON_SIZE / 2. - GLYPH / 2.))
+            .top(px(GLYPH_TOP))
+            .size(px(GLYPH));
+        let status = div()
+            .mt(px(STATUS_GAP))
+            .h(px(STATUS_LINE))
+            .text_size(px(text::SMALL))
+            .line_height(px(STATUS_LINE))
+            .text_color(self.palette.text(SECONDARY))
+            .truncate()
+            .child(face.status.text.clone());
+        let text = div()
+            .absolute()
+            .left(px(COLUMN))
+            .right(px(TITLE_END_INSET))
+            .top(px(TOP))
+            .flex()
+            .flex_col()
+            .child(div().h(px(LINE)).flex().items_center().child(title(&self.palette, face.title.text.clone(), false)))
+            .child(status);
+        let rows = face.shape.rows.iter().map(|row| {
+            let row = (row.iter())
+                .filter_map(|&index| face.chips.get(index))
+                .map(|chip| card_chip(&self.palette, "task-chip-archived", chip.label()));
+            div().flex().gap(px(CHIP_GAP)).children(row)
+        });
+        let chips = div()
+            .absolute()
+            .top(px(chips_top(face.card.asks, face.shape.lines)))
+            .left(px(COLUMN - CHIP_X))
+            .right(px(CHIP_END))
+            .flex()
+            .flex_col()
+            .gap(px(CHIP_GAP))
+            .children(rows);
+        div()
+            .absolute()
+            .left_0()
+            .top_0()
+            .w(from.size.width)
+            .h(from.size.height)
+            .opacity(alpha)
+            .child(glyph)
+            .child(text)
+            .child(chips)
+            .into_any_element()
     }
 
     /// The foot, over the players, as tall as the room its plates take, scrolling once opened past

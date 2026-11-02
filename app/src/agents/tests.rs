@@ -1931,7 +1931,8 @@ mod tasks {
         agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
         said(&agents, &agent, Out::Ended(Some(Failure::Limit(None))), cx);
         let card = card_of(&agents, cx);
-        assert_eq!((card.status.as_ref(), card.retry), ("At its plan's limit", true));
+        assert_eq!((card.status.as_ref(), card.retry), ("Claude hit its usage limit", true));
+        assert!(!card.finished(), "Retry waits for the reset");
         let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 3600;
         said(&agents, &agent, Out::Ended(Some(Failure::Limit(Some(at)))), cx);
         let resets = crate::agents::local_time(at);
@@ -1949,7 +1950,7 @@ mod tasks {
         let agent = start(&agents, "Find a flight", cx);
         agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
         agents.update(cx, |agents, cx| agents.stop_task(&agent, cx));
-        let interrupted = Failure::Other("It stopped (error_during_execution).".into());
+        let interrupted = Failure::Other("Claude ran into an error.".into());
         said(&agents, &agent, Out::Ended(Some(interrupted)), cx);
         let card = card_of(&agents, cx);
         assert_eq!((card.status.as_ref(), card.dot), ("Stopped", Dot::Ended));
@@ -2265,10 +2266,12 @@ mod tasks {
         let (agents, _) = ready(None, cx);
         let agent = start(&agents, "What's on today?", cx);
         agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
-        said(&agents, &agent, Out::Said("Three meetings.".into()), cx);
+        said(&agents, &agent, Out::Said("## Today\n\n**Three meetings**, the first at 9.".into()), cx);
         said(&agents, &agent, Out::Ended(None), cx);
         let card = card_of(&agents, cx);
-        assert_eq!((card.status.as_ref(), card.dot), ("Done", Dot::Done));
+        // The tick says it's done, so the line says what the result does.
+        assert_eq!((card.status.as_ref(), card.dot), ("Today", Dot::Done));
+        assert!(card.finished());
     }
 
     #[gpui::test]

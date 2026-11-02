@@ -1497,6 +1497,26 @@ ghost-delay = 0.04
 ghost-stagger = 0.07
 ghost-content = 0.2
 ghost-land = 0.03
+# A finished task the user has seen folds into the Archive button: its plate goes at once, the
+# plates above closing its room after `archive-close-delay`, as a copy flies from where it was to
+# the button's box and its corners on `archive-ease`, its content fading in its first
+# `archive-content` and its plate from `archive-hold` of the way to the end. As it lands, the
+# button's glyph grows to `bump-scale` and brightens to the `bump-glyph` alpha `bump-peak` of the
+# way through `bump`, eased out, and goes back. It starts `archive-leave` after the user leaves
+# its conversation, or `archive-open` after Open's last page lands.
+archive = 0.38
+archive-ease = [0.4, 0.0, 0.2, 1.0]
+archive-content = 0.1
+archive-hold = 0.6
+archive-close = 0.28
+archive-close-delay = 0.04
+archive-leave = 0.12
+archive-open = 0.08
+bump = 0.3
+bump-ease = [0.0, 0.0, 0.58, 1.0]
+bump-peak = 0.35
+bump-scale = 1.18
+bump-glyph = 0.95
 # With motion reduced, every change is a crossfade this long.
 crossfade = 0.2
 

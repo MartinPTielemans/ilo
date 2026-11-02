@@ -280,6 +280,14 @@ pub struct Card {
     pub command: Option<&'static str>,
 }
 
+impl Card {
+    /// Whether the task is over and has nothing left to do: done, stopped or failed. One at its
+    /// plan's limit isn't, as its Retry waits for the reset.
+    pub fn finished(&self) -> bool {
+        self.dot == Dot::Done || (self.dot == Dot::Ended && !self.retry)
+    }
+}
+
 /// What the card's favicon column shows of the task's state.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Dot {
@@ -406,8 +414,7 @@ impl Agents {
             let failed = match &task.state {
                 State::Working => Some(None),
                 State::Failed { why, .. } => Some(Some(why.trim_end_matches('.').to_string())),
-                State::Limit { resets: Some(at) } => Some(Some(format!("Limit resets at {at}"))),
-                State::Limit { resets: None } => Some(Some("At its plan's limit".to_string())),
+                State::Limit { resets } => Some(Some(limit_words(task.cli, resets))),
                 _ => None,
             };
             if let Some(failed) = failed {
@@ -426,8 +433,7 @@ impl Agents {
                 Some(at) => format!("Done {}", super::local_time(seconds(at))),
                 None => "Done".to_string(),
             },
-            State::Limit { resets: Some(at) } => format!("Limit resets at {at}"),
-            State::Limit { resets: None } => "At its plan's limit".to_string(),
+            State::Limit { resets } => limit_words(task.cli, resets),
             State::Stopped | State::Failed { .. } => "Stopped".to_string(),
         };
         let about = match task.model.is_empty() {
@@ -521,11 +527,11 @@ impl Agents {
             (State::Working, None) => (working(task), Dot::Working),
             (State::Asking { question, .. }, None) if asks => (question.clone(), Dot::Waiting),
             (State::Asking { .. }, None) => ("Waiting for you".into(), Dot::Waiting),
-            (State::Done { summary, .. }, _) => {
-                (summary.clone().unwrap_or_else(|| "Done".into()), Dot::Done)
+            // The tick says it's done, so a finish with no line says the result's first words.
+            (State::Done { result, summary, .. }, _) => {
+                (summary.clone().unwrap_or_else(|| first_words(result)), Dot::Done)
             }
-            (State::Limit { resets: Some(at) }, _) => (format!("Limit resets at {at}").into(), Dot::Ended),
-            (State::Limit { resets: None }, _) => ("At its plan's limit".into(), Dot::Ended),
+            (State::Limit { resets }, _) => (limit_words(task.cli, resets).into(), Dot::Ended),
             (State::Stopped, _) => ("Stopped".into(), Dot::Ended),
             (State::Failed { why, .. }, _) => (why.clone(), Dot::Ended),
         };
@@ -1372,6 +1378,26 @@ fn seconds(at: SystemTime) -> u64 {
     at.duration_since(SystemTime::UNIX_EPOCH).map_or(0, |since| since.as_secs())
 }
 
+
+/// What a task at its plan's limit says: when it resets, if the CLI said.
+fn limit_words(cli: Cli, resets: &Option<SharedString>) -> String {
+    match resets {
+        Some(at) => format!("Limit resets at {at}"),
+        None => format!("{} hit its usage limit", cli.name()),
+    }
+}
+
+/// A result's first words for its card's line: its first line of text, without the marks that
+/// make it a heading, a list's item or bold.
+fn first_words(result: &str) -> SharedString {
+    let line = (result.lines())
+        .map(|line| line.trim().trim_start_matches(['#', '>', '-', '*', ' ']).trim_end_matches(['*', ' ']))
+        .find(|line| !line.is_empty());
+    match line {
+        Some(line) => page::clip(&line.replace("**", ""), 120).into(),
+        None => "Finished".into(),
+    }
+}
 /// A task's status while it works: the step of the turn it's on, else the last it took, and
 /// Thinking until it takes one.
 fn working(task: &Task) -> SharedString {

@@ -443,11 +443,24 @@ fn claude_failure(text: &str, message: &Value) -> Failure {
         let resets = text.rsplit_once('|').and_then(|(_, at)| at.trim().parse().ok());
         return Failure::Limit(resets);
     }
+    // With no words, the result's subtype says why, which the card says in plain words.
     let subtype = message.get("subtype").and_then(Value::as_str).unwrap_or_default();
-    Failure::Other(match text.is_empty() {
-        true => format!("It stopped ({subtype})."),
-        false => text.to_string(),
+    Failure::Other(match (text.is_empty(), subtype) {
+        (true, "error_max_turns") => "Claude hit its turn limit.".into(),
+        (true, "error_max_budget_usd") => "Claude hit its budget.".into(),
+        _ => plain_failure("Claude", text),
     })
+}
+
+/// A CLI's failure as the card says it: its words, unless they're a code, a status or JSON, which
+/// the log keeps and the user can't act on.
+pub(super) fn plain_failure(name: &str, text: &str) -> String {
+    let text = text.trim();
+    let code = !text.contains(char::is_whitespace) || text.contains('{') || text.starts_with("API Error");
+    match code {
+        true => format!("{name} ran into an error."),
+        false => text.to_string(),
+    }
 }
 
 #[cfg(test)]

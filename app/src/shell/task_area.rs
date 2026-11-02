@@ -504,8 +504,12 @@ impl Shell {
         }
         // check.sh reads this line.
         log!("browser: task area {} closed", area.space);
+        let left = self.talk_in(area.space);
         self.talk_closed(cx);
         self.lay_out_page(cx);
+        if let Some(agent) = left {
+            self.talk_left(agent, cx);
+        }
         cx.notify();
     }
 

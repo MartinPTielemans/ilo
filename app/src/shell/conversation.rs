@@ -183,6 +183,11 @@ impl Shell {
         (self.task_open() == Some(talk.space)).then(|| talk.agent.clone())
     }
 
+    /// The task whose conversation is kept for `space`'s area.
+    pub(super) fn talk_in(&self, space: u64) -> Option<SharedString> {
+        self.talk.as_ref().filter(|talk| talk.space == space).map(|talk| talk.agent.clone())
+    }
+
     /// The card's click: its conversation in the page area, or, shown already, the Space's tab
     /// again.
     pub(super) fn show_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
@@ -192,6 +197,7 @@ impl Shell {
         if self.talk_agent().as_ref() == Some(&agent) {
             return self.close_task(cx);
         }
+        let left = self.talk_agent();
         let (space, name) = (card.space, card.cli.name());
         let view = match self.talk.take() {
             // Opened again, it shows its newest line, as the task went on while it was away.
@@ -233,6 +239,10 @@ impl Shell {
         self.open_task(space, view.into(), cx);
         self.browser.show_task(agent, cx);
         self.focus_talk = true;
+        // The conversation it replaced was left.
+        if let Some(left) = left {
+            self.talk_left(left, cx);
+        }
         cx.notify();
     }
 
@@ -302,12 +312,16 @@ impl Shell {
     }
 
     /// ⌘W with a conversation shown: its card closes, dismissing the task, which ⌘Z and ⇧⌘T bring
-    /// back. Says whether there was one.
+    /// back; a finished task's folds into the Archive as the conversation goes. Says whether there
+    /// was one.
     pub(super) fn dismiss_talk(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(agent) = self.talk_agent() else { return false };
         // check.sh reads this line.
         log!("browser: command dismiss-task via conversation");
-        self.dismiss_task(agent, cx);
+        let finished = self.task_cards.iter().any(|card| card.agent == agent && card.finished());
+        if !finished {
+            self.dismiss_task(agent, cx);
+        }
         self.close_task(cx);
         true
     }

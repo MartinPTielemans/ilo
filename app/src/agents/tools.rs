@@ -32,8 +32,8 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
     ", their web browser, signed in wherever they are. You work only through its tools, in a \
      Space of your own: open pages, read them and act in them. You have no shell, files or web \
      search, so find everything with the browser.\n\n\
-     First call title with a name for the task in two to four words, as a tab's title reads, such \
-     as “Lisbon museum hours”.\n\n\
+     First call title with a name for the task in two to four words and at most 24 characters, as \
+     a tab's title reads, such as “Lisbon museum hours”.\n\n\
      When the same steps repeat across pages, such as one change on ten cases, open them all in \
      one turn, then do each step on all of them in one turn, one call per tab with its tab. Calls \
      on different tabs run at the same time.\n\n\
@@ -78,10 +78,10 @@ fn task_tools() -> Vec<Value> {
         json!({
             "name": "title",
             "title": "Name the task",
-            "description": "Name the task in two to four words, as a tab's title reads, such as “Lisbon museum hours”, for the user's sidebar.",
+            "description": "Name the task in two to four words and at most 24 characters, as a tab's title reads, such as “Lisbon museum hours”, for the user's sidebar.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "text": { "type": "string", "description": "The task's name, two to four words." } },
+                "properties": { "text": { "type": "string", "description": "The task's name, two to four words, at most 24 characters." } },
                 "required": ["text"],
             },
             "annotations": own,

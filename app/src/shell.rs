@@ -3570,6 +3570,7 @@ impl Shell {
             .children(self.new_space_circle())
             .children(self.recent_download_rows(cx))
             .children((!self.private).then(|| self.library_button(cx)))
+            .children(self.archive_flights())
             .children((!self.private).then(|| self.plus_button(cx)))
             .children(self.switcher(cx))
             .children(self.flying_icon())

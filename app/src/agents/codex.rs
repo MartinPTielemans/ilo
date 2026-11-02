@@ -123,11 +123,11 @@ pub fn read(
     }
     if let Some(id) = id.and_then(Value::as_u64) {
         if let Some(error) = message.get("error") {
-            let text = error.get("message").and_then(Value::as_str).unwrap_or("Codex failed.");
+            let text = error.get("message").and_then(Value::as_str).unwrap_or_default();
             inner.starting = false;
             return vec![match id {
                 INITIALIZE | THREAD => Out::Gone(text.to_string()),
-                _ => Out::Ended(Some(Failure::Other(text.to_string()))),
+                _ => Out::Ended(Some(Failure::Other(super::runner::plain_failure("Codex", text)))),
             }];
         }
         match id {
@@ -238,9 +238,10 @@ fn codex_failure(error: &Value, resets: Option<u64>) -> Failure {
     match kind.as_str() {
         "usageLimitExceeded" | "rateLimitExceeded" => Failure::Limit(resets),
         "unauthorized" => Failure::SignedOut,
-        _ => Failure::Other(
-            error.get("message").and_then(Value::as_str).unwrap_or("Codex failed.").to_string(),
-        ),
+        _ => Failure::Other(super::runner::plain_failure(
+            "Codex",
+            error.get("message").and_then(Value::as_str).unwrap_or_default(),
+        )),
     }
 }
 

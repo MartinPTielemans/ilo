@@ -124,9 +124,22 @@ fn signed_out_claude_says_so() {
 }
 
 #[test]
-fn another_failure_keeps_claudes_words() {
-    let outs = read(&[json!({ "type": "result", "subtype": "error_max_turns", "is_error": true })]);
-    assert_eq!(outs, vec![Out::Ended(Some(Failure::Other("It stopped (error_max_turns).".into())))]);
+fn a_failure_says_why_in_words_never_a_code() {
+    let ended = |result: Value| {
+        let outs = read(&[result]);
+        match outs.as_slice() {
+            [Out::Ended(Some(Failure::Other(why)))] => why.clone(),
+            outs => panic!("{outs:?}"),
+        }
+    };
+    let failed = |subtype: &str, text: &str| {
+        ended(json!({ "type": "result", "subtype": subtype, "is_error": true, "result": text }))
+    };
+    assert_eq!(ended(json!({ "type": "result", "subtype": "error_max_turns", "is_error": true })), "Claude hit its turn limit.");
+    assert_eq!(failed("error_during_execution", ""), "Claude ran into an error.");
+    assert_eq!(failed("error_during_execution", "error_during_execution"), "Claude ran into an error.");
+    assert_eq!(failed("success", "API Error: 500 {\"type\":\"error\"}"), "Claude ran into an error.");
+    assert_eq!(failed("success", "The page wouldn't load."), "The page wouldn't load.");
 }
 
 #[test]
