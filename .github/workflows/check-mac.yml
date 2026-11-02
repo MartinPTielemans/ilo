@@ -59,7 +59,7 @@ jobs:
     if: needs.gate.outputs.check == 'true'
     # Named apart when it does other runs than the default ones, so it's no verdict on the commit.
     name: ${{ inputs.runs != '' && 'check (runs asked for)' || 'check' }}
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 120
     outputs:
       found: ${{ steps.engine.outputs.found }}

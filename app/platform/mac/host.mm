@@ -358,6 +358,22 @@ Overlay* OverlayAt(int index) {
              : nullptr;
 }
 
+// What a log line calls |object|, by its class.
+const char* ClassName(id object) {
+  return object ? NSStringFromClass([object class]).UTF8String : "nothing";
+}
+
+// The overlay's view takes the keys only as its window's first responder. GPUI makes it that and
+// nothing here changes it, but an assistive app can, which would leave the overlay key and deaf.
+void KeepFirstResponder(Overlay& overlay) {
+  NSResponder* responder = overlay.window.firstResponder;
+  if (responder != overlay.view) {
+    fprintf(stderr, "browser: %s takes its window's keys back from %s\n", overlay.name,
+            ClassName(responder));
+    [overlay.window makeFirstResponder:overlay.view];
+  }
+}
+
 // The dialog's window and view, and the browser it shows over.
 Browser* g_dialog_over;
 NSWindow* g_dialog;
@@ -2056,7 +2072,10 @@ void host_set_overlay_elevation(int index,
   Overlay* overlay = index == HOST_SITE_CONTROLS ? &g_site_controls_overlay
                      : index >= 0 && index < int(std::size(g_overlays)) ? &g_overlays[index]
                                                                           : nullptr;
-  if (!overlay) {
+  if (!overlay || (overlay->outline_opacity == outline_opacity &&
+                   overlay->outline_radius == outline_radius &&
+                   overlay->shadow_opacity == shadow_opacity &&
+                   overlay->shadow_radius == shadow_radius && overlay->shadow_drop == shadow_drop)) {
     return;
   }
   overlay->outline_opacity = outline_opacity;
@@ -2064,6 +2083,20 @@ void host_set_overlay_elevation(int index,
   overlay->shadow_opacity = shadow_opacity;
   overlay->shadow_radius = shadow_radius;
   overlay->shadow_drop = shadow_drop;
+  if (!overlay->shadow_layer) {
+    return;
+  }
+  // Already added, as the command bar is, whose level changes with where it shows.
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
+  overlay->shadow_layer.shadowOpacity = shadow_opacity;
+  overlay->shadow_layer.shadowRadius = shadow_radius;
+  overlay->shadow_layer.shadowOffset = CGSizeMake(0, -shadow_drop);
+  overlay->outline_layer.shadowOpacity = outline_opacity;
+  overlay->outline_layer.shadowRadius = outline_radius;
+  [CATransaction commit];
+  // Drawn again at its next show, as its reach changed.
+  [overlay->shadow setFrame:NSZeroRect display:NO];
 }
 
 void host_add_overlay(int index, void* overlay_view, double radius, void (*dismissed)(void)) {
@@ -2102,10 +2135,19 @@ void host_add_overlay(int index, void* overlay_view, double radius, void (*dismi
                       return;
                     }
                     Browser* browser = BrowserOf(window);
-                    if (each->shown && window != each->window) {
+                    if (each->shown && window == each->window) {
+                      KeepFirstResponder(*each);
+                    } else if (each->shown) {
+                      // What took the keyboard, for the next time an overlay is shown and deaf
+                      // (#1314): the release build's log is stderr alone.
                       if (browser == each->over) {
+                        fprintf(stderr,
+                                "browser: %s takes the keyboard back from its window's %s\n",
+                                each->name, ClassName(window.firstResponder));
                         [each->window makeKeyWindow];
                       } else {
+                        fprintf(stderr, "browser: %s closes as %s takes the keyboard\n",
+                                each->name, ClassName(window));
                         host_dismiss_overlay(index);
                       }
                     } else if (index == 0 && !g_dialog_shown && browser &&
@@ -2383,6 +2425,27 @@ void host_dismiss_overlay(int index) {
       dismissed();
     });
   }
+}
+
+void host_take_overlay_keyboard(int index) {
+  Overlay* overlay = OverlayAt(index);
+  // Not yet on screen, it takes the keyboard as it goes there.
+  if (!overlay || !overlay->shown || !overlay->window.visible || !NSApp.active) {
+    return;
+  }
+  if (overlay->window.keyWindow) {
+    KeepFirstResponder(*overlay);
+    return;
+  }
+  // ilo's menu over it has the keyboard, or another window took it, which closed the overlay.
+  NSWindow* key = NSApp.keyWindow;
+  if (key && (HostIsMenuWindow(key) || BrowserOf(key) != overlay->over)) {
+    return;
+  }
+  fprintf(stderr, "browser: %s takes the keyboard back from %s\n", overlay->name,
+          key ? ClassName(key.firstResponder) : "no window");
+  [overlay->window makeKeyWindow];
+  KeepFirstResponder(*overlay);
 }
 
 void host_hold_keys(void) {
@@ -3739,6 +3802,66 @@ void host_show_window_buttons(void* ui_view, bool shown) {
        {NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton}) {
     [browser->window standardWindowButton:button].hidden = !shown;
   }
+}
+
+// The diameter of the circle |button| draws, from the middle row of a picture of it: macOS 26
+// draws a larger one for an app built with its SDK than for one built with an older SDK, in a
+// frame of the same width (#1310). A pixel counts once it's half as covered as the most covered.
+static CGFloat DrawnDiameter(NSButton* button) {
+  NSBitmapImageRep* picture = [button bitmapImageRepForCachingDisplayInRect:button.bounds];
+  [button cacheDisplayInRect:button.bounds toBitmapImageRep:picture];
+  const NSInteger row = picture.pixelsHigh / 2;
+  CGFloat most = 0;
+  for (NSInteger x = 0; x < picture.pixelsWide; x++) {
+    most = MAX(most, [picture colorAtX:x y:row].alphaComponent);
+  }
+  NSInteger drawn = 0;
+  for (NSInteger x = 0; most > 0 && x < picture.pixelsWide; x++) {
+    drawn += [picture colorAtX:x y:row].alphaComponent >= most / 2;
+  }
+  return drawn * NSWidth(button.bounds) / MAX(picture.pixelsWide, 1);
+}
+
+bool host_window_buttons(void* ui_view, double centres[3], double* y, double* diameter) {
+  // Read once: they're the same in every browser window, by the SDK the app was built with and
+  // the system it runs on. Hidden, AppKit lays the others out again, so all three must show.
+  static double g_centres[3], g_y, g_diameter;
+  if (g_diameter == 0) {
+    Browser* browser = BrowserWithView(ui_view);
+    if (!browser || (browser->window.styleMask & NSWindowStyleMaskFullScreen)) {
+      return false;
+    }
+    NSWindow* window = browser->window;
+    const NSWindowButton types[] = {NSWindowCloseButton, NSWindowMiniaturizeButton,
+                                    NSWindowZoomButton};
+    double read[3];
+    double row = 0;
+    for (int i = 0; i < 3; i++) {
+      NSButton* button = [window standardWindowButton:types[i]];
+      if (!button || button.hidden) {
+        return false;
+      }
+      // As drive.mm's layout line gives them: points from the window's top-left corner.
+      NSRect frame = [button convertRect:button.bounds toView:nil];
+      read[i] = NSMidX(frame);
+      row = NSHeight(window.frame) - NSMidY(frame);
+    }
+    const CGFloat drawn = DrawnDiameter([window standardWindowButton:NSWindowCloseButton]);
+    if (drawn <= 0) {
+      return false;
+    }
+    for (int i = 0; i < 3; i++) {
+      g_centres[i] = read[i];
+    }
+    g_y = row;
+    g_diameter = drawn;
+  }
+  for (int i = 0; i < 3; i++) {
+    centres[i] = g_centres[i];
+  }
+  *y = g_y;
+  *diameter = g_diameter;
+  return true;
 }
 
 // Level change: AppKit's alignment haptic was too faint to feel (#1075).

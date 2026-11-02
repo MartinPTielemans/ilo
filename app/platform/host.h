@@ -195,7 +195,8 @@ void host_forget_window(void* ui_view);
 // Gives the |overlay| (or the Site Controls) the shadow its elevation level draws, in Core
 // Animation's terms: a black line round its shape and a black drop shadow, each with an opacity
 // and a blur |radius|, which is half CSS's blur, and the drop shadow falling |shadow_drop| points.
-// The shadow reaches three radii and the drop past the window. Call it before the overlay is added.
+// The shadow reaches three radii and the drop past the window. Call it before the overlay is added,
+// and again before a show that takes another level, as the command bar's over the URL field does.
 void host_set_overlay_elevation(int overlay,
                                 float outline_opacity,
                                 double outline_radius,
@@ -251,6 +252,11 @@ void host_hide_overlay(int overlay);
 
 // Hides the overlay as the user leaving it, as escape does.
 void host_dismiss_overlay(int overlay);
+
+// Gives the overlay the keyboard back if it shows, the user hasn't left it, and the browser window
+// it shows over or no window has it: for the UI, once it finds the overlay's window isn't key.
+// The Mac's alone: Linux's and Windows' hosts close an overlay whose keyboard goes elsewhere.
+void host_take_overlay_keyboard(int overlay);
 
 // Holds the keys typed from now until the command bar or the find bar takes the keyboard, and then
 // gives them to it: for a shortcut that opens one but reaches the page first, which may keep it.
@@ -499,6 +505,12 @@ int host_ask(const char* message, const char* detail, const char* const* buttons
 // Shows the close, minimize and zoom buttons of |ui_view|'s window, or hides them, as Arc does
 // while its sidebar is hidden.
 void host_show_window_buttons(void* ui_view, bool shown);
+
+// The Mac's close, minimize and zoom buttons as AppKit draws them in |ui_view|'s window, for the
+// copies the UI draws in their place: each one's centre across from the window's left edge, their
+// row's centre down from its top, and their circles' diameter. False until a window shows all
+// three out of full screen.
+bool host_window_buttons(void* ui_view, double centres[3], double* y, double* diameter);
 
 // Does what a click on the close (0), minimize (1) or zoom (2) button of |ui_view|'s window does.
 void host_press_window_button(void* ui_view, int button);
