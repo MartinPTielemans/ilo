@@ -1155,6 +1155,21 @@ fn a_removed_pinned_split_comes_back_split_at_its_place(cx: &mut TestAppContext)
     assert_eq!(host.take_edits(), ["pinned 1002 false", "close 1002"]);
 }
 
+/// The trash takes the pinned tab out of sight, so the toast offers its Undo, as Remove from
+/// Favorites' does, and its button pins the tab again at its place.
+#[gpui::test]
+fn removing_a_pinned_tab_offers_its_undo(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![19, 20], vec![10], Folders::default(), Vec::new());
+    shell.update(cx, |shell, cx| shell.remove_pinned(20, cx));
+    report(&shell, cx, vec![19], vec![10]);
+    assert_eq!(host.undo_toasts.borrow().as_slice(), ["Tab Removed"]);
+    host.take_edits();
+    let button = host.undo_toast.borrow().clone().expect("the toast offers Undo");
+    cx.update(|cx: &mut App| button(cx));
+    assert_eq!(host.take_edits(), ["reopen 20 as 1001", "move 1001 true 0 1"]);
+    assert!(host.undo_toast.borrow().is_none(), "the offer goes once it's taken");
+}
+
 /// ⇧⌘T after removing a pinned tab pins it again at its place, as ⌘Z does, where the core's
 /// reopen would put it in Today; then ⌘Z has nothing of it to undo, and the next ⇧⌘T is the
 /// core's.

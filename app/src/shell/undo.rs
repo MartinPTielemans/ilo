@@ -39,7 +39,7 @@ impl What {
     pub const CLOSE_TAB: What = What::quiet("Close Tab");
     pub const CLOSE_TABS: What = What::said("Close Tabs", "Tabs Closed");
     pub const CLOSE_PREVIEW: What = What::quiet("Close Link Preview");
-    pub const REMOVE_TAB: What = What::quiet(super::rows::REMOVE_TIP);
+    pub const REMOVE_TAB: What = What::said(super::rows::REMOVE_TIP, "Tab Removed");
     pub const DISMISS_TASK: What = What::quiet("Dismiss Task");
     pub const PIN: What = What::quiet("Pin Tab");
     pub const UNPIN: What = What::quiet("Unpin Tab");
