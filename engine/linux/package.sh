@@ -24,6 +24,19 @@ grep -q ' T bc_main$' <<<"$exports" ||
 grep -q ' T wl_display_dispatch_queue_pending$' <<<"$exports" ||
   fail "chrome doesn't export libwayland's client API (chromium-core-wayland.patch, linux_exports)"
 
+# ilo's icon, not Chromium's logo, in each of the paks' logo resources, the windows' icon among them
+# (tree.sh's linux_icons): a size listed twice is in two of them.
+here=$(cd "$(dirname "$0")" && pwd)
+ico=$here/../../app/platform/windows/package/Assets/ilo.ico
+while read -r pak sizes; do
+  # shellcheck disable=SC2086 # The sizes are words.
+  python3 -I "$here/../icons.py" pak "$out/$pak" "$ico" $sizes || fail "$pak has Chromium's logo"
+done <<'LOGOS'
+resources.pak 16 24 64 64 128 128 256
+chrome_100_percent.pak 16 32
+chrome_200_percent.pak 32 64
+LOGOS
+
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 mkdir "$stage/Chromium"
