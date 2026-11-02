@@ -88,6 +88,7 @@ mod agent_pointer;
 mod agent_question;
 mod picture;
 mod recent_downloads;
+mod update_sign;
 #[cfg(test)]
 mod recorder;
 mod rows;
@@ -1358,6 +1359,11 @@ pub struct Shell {
     /// The players last drawn, as the log has them, and where the bottom one is.
     media_logged: RefCell<Vec<u64>>,
     media_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Whether an update waits for a restart, which Restart to Update at the sidebar's foot says,
+    /// where that's drawn, and the watch on the updater.
+    update_waiting: bool,
+    update_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    _update_watch: Subscription,
     /// Whether a tooltip the agent bar asked for may be up, and whether its bar showed the agent
     /// at work, so it ends once that bar is gone (agent_bar.rs).
     agent_tip: Cell<Option<bool>>,
@@ -1630,6 +1636,9 @@ impl Shell {
             media_dismissed: HashSet::new(),
             media_logged: RefCell::default(),
             media_drawn: Rc::default(),
+            update_waiting: crate::updates::ready(cx),
+            update_drawn: Rc::default(),
+            _update_watch: crate::updates::observe_view(cx, Self::update_changed),
             agent_tip: Cell::default(),
             drm_notes: HashMap::new(),
             keys: HashMap::new(),
@@ -3445,6 +3454,7 @@ impl Shell {
                     .children(self.question_card(cx))
                     .children(self.cast_card(cx))
                     .children(self.agent_question_card(cx))
+                    .children(self.update_sign())
                     .children(self.media_player_cards(cx))
                     .children(self.agent_bar_card(cx))
                     .children(self.drm_note_card(cx))

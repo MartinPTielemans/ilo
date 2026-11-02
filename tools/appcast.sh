@@ -2,11 +2,12 @@
 # Makes the DMG tools/release.sh made, and the Windows installer --windows names, the update every
 # copy of ilo checks for: an entry in the appcast for each, with its release notes and signed with
 # the owner's EdDSA key in their Keychain, in app/build/release/appcast/appcast.xml. Sparkle reads
-# the Mac's and WinSparkle the Windows one (tools/appcast.py). The installer is built from the
-# DMG's commit, so the two have one build number. With --publish, both go up as the GitHub release
-# v<version>, and the appcast to the release the feed (app/branding/update-feed) is served from.
-# The notes are Markdown, shown in the Mac's alert; WinSparkle shows the release's page, which the
-# Mac's first launch of the update opens.
+# the Mac's and ilo's Windows updater the Windows one (tools/appcast.py). The installer is built
+# from the DMG's commit, so the two have one build number. With --publish, both go up as the GitHub
+# release v<version>, and the appcast to the release the feed (app/branding/update-feed) is served
+# from.
+# The notes are Markdown, shown in the Mac's alert; the release's page, which the Mac's first launch
+# of the update opens, is the Windows entry's, for a copy still on WinSparkle.
 #
 # Once, on the owner's Mac, before the first release, with Sparkle from app/setup.sh:
 #   app/.deps/Sparkle/bin/generate_keys --account ilo                      # the key, in the Keychain

@@ -1008,14 +1008,18 @@ A new profile's first launch (*Ours*: Arc's and Dia's are films and sign-ups of 
 
 ### Updates
 
-Sparkle 2 (Dia and Ardia, P§24). Its feed URL is a default service URL, so forks change it (principle 2).
+Each system's own updater downloads an update in the background and then says it's ready, and the user restarts into it when they choose, the same on every OS (owner, 2026-11-02, #1416, #1418). The Mac's and Windows' read one appcast, signed with one EdDSA key, whose URL is a default service URL, so forks change it (principle 2).
 
-- "Check for Updates…" sits in the app menu, and in the command bar, as Linux shows no menu bar. Automatic checks run every 8 hours (**Ardia**).
-- On Linux ilo is the Flatpak, and Flatpak's portal is the updater: it looks every half hour, ilo installs a build it announces beside the running one at once, and then offers Restart or Later. Check for Updates… says where the update stands, or offers the restart again. Outside a Flatpak, as a dev build, nothing updates ilo and the command isn't offered.
+- **Mac.** Sparkle 2 (Dia and Ardia, P§24). It checks every 8 hours (**Ardia**), downloads a newer build in the background, and installs it as ilo quits, after macOS's check of the new build, which it starts warm.
+- **Windows.** ilo's own updater, for a copy from winget or the website (#1418): every 8 hours, and when asked, it reads the appcast over https for the newest Windows installer whose build is above its own, downloads it in the background, checks its EdDSA signature against the key built in and holds it unchanged until it runs. Restart to Update quits ilo and runs it silently, and it starts ilo again, with its windows and tabs, once it's in; any other quit runs it without the relaunch, so the next launch is new, as on the Mac. Nothing shows a window of its own, and an installer that isn't signed, isn't newer or isn't https never runs. A copy from the Microsoft Store is the Store's to update.
+- **Linux.** ilo is the Flatpak, and Flatpak's portal is the updater: it looks every half hour, and ilo installs a build it announces beside the running one at once, then says it's ready as the others do. Outside a Flatpak, as a dev build, nothing updates ilo.
+- **Restart to Update.** Once an update is downloaded and waiting, and only then, one row at the sidebar's foot says so, over the footer and under any media player, so neither moves the other: the circle-fading-arrow-up glyph and "Restart to Update" in "+ New Tab"'s quiet ink, with a row's plate on hover and press. A click restarts into the update. It's in every window, private ones too, never pops up, has no badge and never draws over the page, and the restart that installs the update takes it away. No ×: a plain quit installs the update too.
+- **Settings › About.** Its first row, the app's name over its version, says at its end where the update stands, in the row's secondary words, with a button where one moves it on: Check for Updates at rest; "Checking…"; "ilo is up to date" with Check for Updates; "ilo 0.1.1 is available"; "Downloading 0.1.1…"; "ilo 0.1.1 is ready" with Restart to Update; "Couldn’t check for updates" or "The update didn’t install" with Try Again. The button runs the same check as Check for Updates… without a window of its own, and the row follows it. A copy from the Microsoft Store says "The Microsoft Store updates ilo", and a build with no updater says nothing, both without a button.
+- **Check for Updates….** In the app menu, and in the command bar, as Linux shows no menu bar. It's Restart to Update while an update waits. On the Mac it's Sparkle's own window, as before. On Windows it opens Settings › About, whose row says where the update stands. On Linux it says where the update stands, or tries a failed install again. A build with no updater doesn't offer it.
+- **Agents.** The core has no update state, so agents can't see one; none is added.
 - ilo needs macOS 15 (Sequoia) or later, the owner's call (#678); Arc needs 13 (Ventura). The bundle says so (`LSMinimumSystemVersion`), so macOS won't open it on an older Mac and the feed offers that Mac no update. README.md and each release's notes name it.
-- An install waits until no window is in full screen.
+- An install never starts by itself while ilo runs: it waits for Restart to Update or a quit, so a window in full screen is never interrupted, and Sparkle's alert for a check it shows waits until no window is in full screen.
 - The first launch after an update opens its release notes.
-- Settings › General › Updates.
 - Measure Arc's update prompt, if one can still be triggered.
 
 ### Sync

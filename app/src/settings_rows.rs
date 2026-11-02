@@ -13,6 +13,7 @@ use crate::tokens::settings::{
     ON_SWITCH_OFF, PADDING, RADIUS, SWITCH_HEIGHT, SWITCH_OFF, SWITCH_WIDTH, TEXT, TILE, TILE_GAP,
     TILE_GLYPH, TILE_GLYPH_COLOR, TILE_RADIUS,
 };
+use crate::tokens::text::SMALL;
 
 /// Fills the relative element it's put in and logs where that is drawn, its centre in the window,
 /// as "browser: settings `what` at x y", each time it moves, for check.sh to click it there.
@@ -117,6 +118,27 @@ pub fn row(
         .children(icon.map(|(glyph, color)| tile(glyph, color)))
         .child(div().flex_1().min_w_0().truncate().child(name.into()))
         .child(div().flex_none().ml(px(PADDING)).child(control))
+}
+
+/// A row with a grey line under its name, and its control, if any, at the right.
+pub fn detailed_row(
+    name: impl Into<SharedString>,
+    detail: impl Into<SharedString>,
+    control: Option<gpui::AnyElement>,
+) -> gpui::Div {
+    div()
+        .px(px(PADDING))
+        .py(px(PADDING))
+        .flex()
+        .items_center()
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(div().truncate().child(name.into()))
+                .child(div().text_size(px(SMALL)).text_color(rgb(DETAIL)).child(detail.into())),
+        )
+        .children(control.map(|control| div().flex_none().ml(px(PADDING)).child(control)))
 }
 
 /// A row's icon: a white glyph on a tile of colour.

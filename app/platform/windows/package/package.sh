@@ -5,9 +5,9 @@
 # --target-dir target` there makes, and the engine setup.sh puts in .deps/engine, whose chrome.exe
 # runs it:
 #   <out>/ilo-<version>-x64.msix, for the Microsoft Store, unsigned, as the Store signs it, with
-#     the identity in branding/windows-store.ini and without WinSparkle, as the Store updates it;
+#     the identity in branding/windows-store.ini, which the Store updates;
 #   <out>/ilo-<version>-x64-setup.exe, the per-user installer (ilo.iss) for winget and direct
-#     downloads, unsigned for 0.1.0, with WinSparkle beside Browser.dll when setup.sh fetched it.
+#     downloads, unsigned for 0.1.0, which ilo's own updater (updates.cc) updates.
 # Without an engine it packs Browser.dll alone, and with the identity's placeholders a test MSIX,
 # each named for it, to try the packaging: neither installs a browser that runs. --release stops on
 # either instead. The version is Cargo.toml's, with the 0 the Store wants last in the MSIX's.
@@ -99,14 +99,6 @@ msix=$out/$name-$version-x64$alone$test_identity.msix
 MSYS2_ARG_CONV_EXCL='*' "$makeappx" pack /o ${alone:+/nv} /d "$(cygpath -w "$stage/msix")" \
   /p "$(cygpath -w "$msix")"
 
-# The installer's: WinSparkle, which updates it, and WinSparkle's licence.
-sparkle=$app/.deps/WinSparkle
-if [ -f "$sparkle/WinSparkle.dll" ]; then
-  cp "$sparkle/WinSparkle.dll" "$stage/app/"
-  cp "$sparkle/COPYING" "$stage/app/WinSparkle-COPYING.txt"
-else
-  echo "package: no $sparkle/WinSparkle.dll, so the installer's ilo can't update itself."
-fi
 iscc=$(command -v iscc || echo "/c/Program Files (x86)/Inno Setup 6/ISCC.exe")
 [ -x "$iscc" ] || fail "no ISCC.exe: install Inno Setup 6."
 MSYS2_ARG_CONV_EXCL='*' "$iscc" /Q "/DAppName=$name" "/DAppPublisher=$publisher" \
