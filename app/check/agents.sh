@@ -172,7 +172,9 @@ grep -q "^browser: added space $agent Claude Code\$" "$log" ||
 grep -q "^browser: agent space $agent Claude Code\$" "$log" ||
   fail "the agent's Space came back the user's"
 grep -q "^browser: agent space $first " "$log" && fail "the user's Space came back an agent's"
-grep -q '^browser: task space [1-9][0-9]* Find a flight$' "$log" ||
+# The window sees the task's Space as a task's before the launch deletes it as one a run before
+# left, or the deletion comes first when the Agents are made sooner; either way it's in no list.
+grep -qE '^browser: (task space [1-9][0-9]* Find a flight|deleting space [1-9][0-9]* of a task before)$' "$log" ||
   fail "the task's Space didn't come back apart from the Spaces"
 if [ "$driven" = 1 ]; then
   await_load
