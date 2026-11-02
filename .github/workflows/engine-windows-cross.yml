@@ -14,7 +14,7 @@ name: Engine on Windows (cross-compiled)
 
 on:
   workflow_dispatch:
-  # Main's core, once a day, at 02:00 UTC, when it changed (.github/scripts/engine-changed.sh).
+  # Main's core, once a day, at 02:00 UTC, when it changed (tools/engine-changed.sh).
   schedule:
     - cron: '0 2 * * *'
   # Not on a change to this file, so a change to how it builds never starts a build, or replaces
@@ -59,7 +59,7 @@ jobs:
         run: |
           status=0
           if [ "$GITHUB_EVENT_NAME" = schedule ]; then
-            .github/scripts/engine-changed.sh windows > "$RUNNER_TEMP/changed" || status=$?
+            tools/engine-changed.sh windows > "$RUNNER_TEMP/changed" || status=$?
             tee -a "$GITHUB_STEP_SUMMARY" < "$RUNNER_TEMP/changed"
           fi
           if [ "$status" = 3 ]; then echo build=false; else echo build=true; fi >> "$GITHUB_OUTPUT"

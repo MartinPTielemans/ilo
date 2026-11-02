@@ -6,8 +6,8 @@
 # package isn't uploaded, or when it can't tell: a night it can't read builds.
 # The inputs are each workflow's push paths, and the core, which the night builds too.
 # engine-linux.yml and engine-windows-cross.yml ask it on their schedules; a push or a dispatch
-# always builds. It's here, not in engine/, so a change to it doesn't start Core on Linux
-# (ci-changes.cjs). tools/mac-nightly.sh makes the same call for the Mac's.
+# always builds. It's in tools/, not engine/, so a change to it doesn't start Core on Linux
+# (ci-changes.cjs). mac-nightly.sh beside it makes the same call for the Mac's.
 # Usage: engine-changed.sh linux|windows
 build() {
   echo "engine-changed: $*"
@@ -27,7 +27,7 @@ platform=$1
 inputs=(core engine/pins.ini engine/series engine/patches engine/tree.sh "$own" engine/icons.py
   app/platform/windows/package/Assets/ilo.ico ':(exclude)*.md')
 
-cd "$(dirname "$0")/../.." || build "no checkout to read."
+cd "$(dirname "$0")/.." || build "no checkout to read."
 repo=$(git config -f engine/prebuilt.ini prebuilt.repository) || build "no engine/prebuilt.ini."
 tags=$(git ls-remote --tags "$repo.git" "refs/tags/engine-$platform-*") ||
   build "couldn't list $repo's engine-$platform releases."
