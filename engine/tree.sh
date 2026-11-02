@@ -16,6 +16,19 @@ remove_agent_instructions() {
   rm -rf "$src/agents"
 }
 
+# ilo's icon in place of Chromium's logo in a Windows build (#1350): chrome.exe's first icon, which
+# Explorer, Task Manager and its shortcuts show, chrome.dll's IDR_MAINFRAME, which the browser
+# windows take for the taskbar's thumbnails, Alt+Tab and the title bar, and the exe's HTML and PDF
+# document icons, which the installer gives ilo's icon too. Copied only when it differs, so a kept
+# tree doesn't relink chrome.dll for nothing. windows/icons.py reads them back from a build.
+windows_icons() {
+  local theme=$1/chrome/app/theme/chromium/win name
+  local ico=$engine/../app/platform/windows/package/Assets/ilo.ico
+  for name in chromium chromium_doc chromium_pdf; do
+    cmp -s "$ico" "$theme/$name.ico" || cp "$ico" "$theme/$name.ico"
+  done
+}
+
 # Checks that a platform repository's ungoogled-chromium submodule builds the pinned tag, or a
 # later commit after it (ungoogled-chromium-macos 156.0.8078.47 builds one that fixes the tag's
 # patches), for the pinned Chromium version. A platform whose tag names another version lags the
