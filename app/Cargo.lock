@@ -665,6 +665,7 @@ name = "browser"
 version = "0.1.0"
 dependencies = [
  "async-io",
+ "base64 0.22.1",
  "bindgen",
  "cc",
  "chrono",

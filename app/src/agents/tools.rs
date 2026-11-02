@@ -29,15 +29,18 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
     ", their web browser, signed in wherever they are. You work only through its tools, in a \
      Space of your own: open pages, read them and act in them. You have no shell, files or web \
      search, so find everything with the browser.\n\n\
-     First call title with a name for the task in two to five words.\n\n\
+     First call title with a name for the task in two to four words, as a tab's title reads, such \
+     as “Lisbon museum hours”.\n\n\
      When you need the user to choose or confirm something, call ask with the question, and up \
      to three short answers when there are a few to pick from. It waits for their answer.\n\n\
      Never ask for a password, a one-time code or a card number in the conversation. A sign-in, \
      a 2FA prompt or a CAPTCHA is the user's to do: hand them the tab with hand_off.\n\n\
      Never pay, and never place an order, book or send a message unless the user asked you to. \
      When the work ends on a page only the user may finish, such as a checkout, stop there.\n\n\
-     When you're done, call finish with the result in a sentence or two, and the tab the user \
-     should open, if there is one. Keep what you say to the user short and plain."
+     When you're done, call finish with the result in a sentence or two, and its summary in one \
+     short line, such as “Gulbenkian, Sat 10:00–21:00”. Give finish a tab only when the user must \
+     act there themselves: pay, sign, submit, or take over a session. Otherwise give none. Keep \
+     what you say to the user short and plain."
 );
 /// A page's text an agent gets at most, as a long page would fill its context.
 pub const MAX_TEXT: usize = 40_000;
@@ -68,10 +71,10 @@ fn task_tools() -> Vec<Value> {
         json!({
             "name": "title",
             "title": "Name the task",
-            "description": "Name the task, in two to five words, for the user's sidebar.",
+            "description": "Name the task in two to four words, as a tab's title reads, such as “Lisbon museum hours”, for the user's sidebar.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "text": { "type": "string", "description": "The task's name." } },
+                "properties": { "text": { "type": "string", "description": "The task's name, two to four words." } },
                 "required": ["text"],
             },
             "annotations": own,
@@ -98,14 +101,15 @@ fn task_tools() -> Vec<Value> {
         json!({
             "name": "finish",
             "title": "Finish",
-            "description": "End the task with its result. Give the tab the user should open, if there is one, such as a checkout only they may finish.",
+            "description": "End the task with its result, and its summary for the user's sidebar. Give a tab only when the user must act there themselves: pay, sign, submit, or take over a session, such as a checkout only they may finish. Otherwise give none.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "result": { "type": "string", "description": "What you did or found, in a sentence or two." },
-                    "tab": { "type": "integer", "description": "The tab to offer the user, from your Space." },
+                    "summary": { "type": "string", "maxLength": 32, "description": "The result in one short line of 32 characters at most, such as “Gulbenkian, Sat 10:00–21:00”." },
+                    "tab": { "type": "integer", "description": "The tab the user must act in themselves, from your Space. Leave it out when there's nothing left for them to do there." },
                 },
-                "required": ["result"],
+                "required": ["result", "summary"],
             },
             "annotations": own,
         }),
@@ -355,6 +359,143 @@ pub fn tab_argument(arguments: &Value) -> Result<Option<u64>, String> {
 
 fn not_a_tab() -> String {
     "tab is a tab's id, a number from list_tabs.".into()
+}
+
+/// A step of an agent's work, as a task's trace, its card and the activity log say it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Did {
+    /// The tool, a run's step's action, "back" or "forward", or "thought".
+    pub tool: String,
+    /// The site it was on, or the address it went to.
+    pub site: String,
+    /// What on the page: an element by its name in quotes or its role, a key, a direction, or a
+    /// wait's text in quotes or its seconds.
+    pub target: String,
+    /// A thought's text, or what it typed when that may show: never into a password field, and
+    /// at most `TYPED_SHOWN` characters.
+    pub text: String,
+}
+
+/// What a step typed shows up to, in characters.
+pub const TYPED_SHOWN: usize = 40;
+
+/// Whether a step is under way, done, or failed, which its title says.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Tense {
+    Now,
+    Done,
+    Failed,
+}
+
+/// A step's title, in one sentence: "Opening gulbenkian.pt", "Read maat.pt",
+/// "Couldn't open maat.pt/en/visit".
+pub fn step_title(did: &Did, tense: Tense) -> String {
+    let site = |none: &str| match did.site.is_empty() {
+        true => none.to_string(),
+        false => did.site.clone(),
+    };
+    let target = |none: &str| match did.target.is_empty() {
+        true => none.to_string(),
+        false => did.target.clone(),
+    };
+    // Each step's verb in its three tenses, and what it acts on.
+    let (now, done, failed, on) = match did.tool.as_str() {
+        "open_tab" | "navigate" => ("Opening", "Opened", "Couldn't open", site("a page")),
+        "back" => ("Going back on", "Went back on", "Couldn't go back on", site("the page")),
+        "forward" => ("Going forward on", "Went forward on", "Couldn't go forward on", site("the page")),
+        "read_page" | "snapshot" => ("Reading", "Read", "Couldn't read", site("the page")),
+        "screenshot" => ("Looking at", "Looked at", "Couldn't look at", site("the page")),
+        "click" => ("Clicking", "Clicked", "Couldn't click", target("on the page")),
+        "type" => {
+            let into = target("a field");
+            return match (tense, did.text.is_empty()) {
+                (Tense::Now, true) => format!("Typing in {into}"),
+                (Tense::Now, false) => format!("Typing “{}” in {into}", did.text),
+                (Tense::Done, true) => format!("Typed in {into}"),
+                (Tense::Done, false) => format!("Typed “{}” in {into}", did.text),
+                (Tense::Failed, _) => format!("Couldn't type in {into}"),
+            };
+        }
+        "press_key" => ("Pressing", "Pressed", "Couldn't press", target("a key")),
+        "scroll" => {
+            let to = match did.target.as_str() {
+                "up" | "down" | "" => format!("{} on {}", target("down"), site("the page")),
+                element => format!("to {element}"),
+            };
+            ("Scrolling", "Scrolled", "Couldn't scroll", to)
+        }
+        "wait" => match did.target.starts_with('“') {
+            true => ("Waiting for", "Waited for", "Didn't see", target("the page")),
+            false => ("Waiting", "Waited", "Couldn't wait", target("")),
+        },
+        "list_tabs" => ("Looking over", "Looked over", "Couldn't look over", "its tabs".to_string()),
+        "close_tab" => ("Closing", "Closed", "Couldn't close", site("a tab")),
+        "hand_off" => ("Handing you", "Handed you", "Couldn't hand you", site("a tab")),
+        "ask_for_tab" => {
+            let tab = site("a tab");
+            return match tense {
+                Tense::Now => format!("Asking for {tab} back"),
+                Tense::Done => format!("Asked for {tab} back"),
+                Tense::Failed => format!("Couldn't ask for {tab} back"),
+            };
+        }
+        "ask" => ("Asking you", "Asked you", "Couldn't ask you", String::new()),
+        "thought" => ("Thinking", "Thought", "Thought", String::new()),
+        action => return describe(action).to_string(),
+    };
+    let verb = match tense {
+        Tense::Now => now,
+        Tense::Done => done,
+        Tense::Failed => failed,
+    };
+    match on.is_empty() {
+        true => verb.to_string(),
+        false => format!("{verb} {on}"),
+    }
+}
+
+/// A step's glyph, by its tool, from the shell's one family.
+pub fn step_glyph(tool: &str) -> &'static str {
+    match tool {
+        "read_page" | "snapshot" => "icons/text-align-start.svg",
+        "click" => "icons/mouse-pointer-2.svg",
+        "type" => "icons/type.svg",
+        "press_key" => "icons/keyboard.svg",
+        "scroll" => "icons/arrow-down.svg",
+        "screenshot" => "icons/eye.svg",
+        "wait" => "icons/clock.svg",
+        "list_tabs" | "close_tab" | "hand_off" | "ask_for_tab" => "icons/app-window.svg",
+        "ask" => "icons/circle-question-mark.svg",
+        "thought" => "icons/lightbulb.svg",
+        _ => "icons/globe.svg",
+    }
+}
+
+/// Why a step failed, in a few words, from its call's error: "not found".
+pub fn reason(error: &str) -> &'static str {
+    let error = error.to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|word| error.contains(word));
+    if has(&["stopped you", "turned agents off", "connection closed"]) {
+        "stopped"
+    } else if has(&["you said no", "said never", "the user said no", "declined"]) {
+        "you said no"
+    } else if has(&["asks the user first"]) {
+        "needs your OK"
+    } else if has(&["password"]) {
+        "password field"
+    } else if has(&["only http and https"]) {
+        "not a web page"
+    } else if has(&["there's no element", "no tab", "isn't open", "not found", "404"]) {
+        "not found"
+    } else if has(&["didn't show"]) {
+        "didn't show"
+    } else if has(&["couldn't open", "couldn't go there", "couldn't load"]) {
+        "didn't load"
+    } else if has(&["user's already", "user has", "user doesn't have", "took it over"]) {
+        "it's yours"
+    } else {
+        "failed"
+    }
 }
 
 /// What an action an agent took is, for the activity log, by the name the core's entry gives it.

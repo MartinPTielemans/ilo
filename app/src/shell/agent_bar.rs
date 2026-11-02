@@ -218,6 +218,11 @@ impl Shell {
     }
 }
 
+/// Stop's key, ⌘., as a chip after its words shows it.
+pub(super) fn stop_keys() -> String {
+    keystroke_keys(STOP_KEY).concat()
+}
+
 /// What the bar says, its title and the line under it, and the tab it's about.
 pub(super) fn bar_words(bar: &Bar) -> (String, String, u64) {
     match bar {

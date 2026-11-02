@@ -212,14 +212,26 @@ pub enum Event {
         agent: String,
     },
     Call(Call),
+    /// The call `id` was answered, `at` then: with why it failed, if it did, and its picture.
+    Answered {
+        agent: String,
+        id: u64,
+        at: Instant,
+        error: Option<String>,
+        image: Option<String>,
+    },
 }
 
 /// A tool call, which the server's thread waits on until `reply` has the answer.
 pub struct Call {
+    /// Its number, which its answer's event names.
+    pub id: u64,
     pub agent: String,
     pub tool: String,
     pub arguments: Value,
     pub reply: mpsc::Sender<ToolResult>,
+    /// When it came.
+    pub at: Instant,
 }
 
 /// A tool's answer.
@@ -384,6 +396,8 @@ pub struct Agents {
 /// A run of steps (run_steps): one at a time, each as its tool would run alone.
 struct Run {
     agent: String,
+    /// The call it answers.
+    call: u64,
     tab: u64,
     /// The steps still to take.
     steps: std::collections::VecDeque<Value>,
@@ -812,21 +826,27 @@ impl Agents {
                 }
             }
             Event::Call(call) => self.call(call, cx),
+            Event::Answered { agent, id, at, error, image } => {
+                self.answered(&agent, id, at, error, image, cx)
+            }
         }
     }
 
     fn call(&mut self, call: Call, cx: &mut Context<Self>) {
+        // A token's agent is always one the user connected, or a task of theirs.
+        if !self.may_call(&call.agent) {
+            _ = call.reply.send(ToolResult::error("This agent isn't connected."));
+            return;
+        }
+        self.trace_call(&call, cx);
         let Call {
+            id,
             agent,
             tool,
             arguments,
             reply,
+            ..
         } = call;
-        // A token's agent is always one the user connected, or a task of theirs.
-        if !self.may_call(&agent) {
-            _ = reply.send(ToolResult::error("This agent isn't connected."));
-            return;
-        }
         // check.sh reads this line.
         log!("browser: agent {agent} calls {tool}");
         self.live.insert(agent.clone());
@@ -929,7 +949,7 @@ impl Agents {
                 self.note(&agent, "run_steps", &host, "");
                 let (_, step) = mpsc::channel();
                 let steps = steps.into();
-                let run = Run { agent, tab, steps, done: Vec::new(), step, reply, wait: None };
+                let run = Run { agent, call: id, tab, steps, done: Vec::new(), step, reply, wait: None };
                 self.next_step(run, cx);
                 self.advance(cx);
             }
@@ -1046,6 +1066,7 @@ impl Agents {
         let tool = step.get("action").and_then(Value::as_str).unwrap_or_default().to_string();
         let (reply, answer) = mpsc::channel();
         run.step = answer;
+        self.trace_step(&run.agent, run.call, run.tab, &step, cx);
         if tool == "wait" {
             return self.wait(run, &step, reply, cx);
         }

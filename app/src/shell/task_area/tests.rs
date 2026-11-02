@@ -316,7 +316,7 @@ fn selecting_a_tab_or_a_space_leaves_the_area(cx: &mut TestAppContext) {
 
 /// ⌘↩ on the page watched is the strip's Take Over while the agent drives it, which gives the
 /// page the keyboard, and Hand Back once the user has it, which takes it back for the UI. ⌘. is
-/// Stop. Escape from the page stops neither the agent nor its load.
+/// Stop.
 #[gpui::test]
 fn the_strip_takes_over_hands_back_and_stops(cx: &mut TestAppContext) {
     let (shell, host, cx) = shell_with_task(cx);
@@ -330,8 +330,6 @@ fn the_strip_takes_over_hands_back_and_stops(cx: &mut TestAppContext) {
         shell.agent_acted("task-1".into(), 30, cx);
     });
     host.take();
-    shell.update(cx, |shell, cx| shell.run(Command::Stop, "page", cx));
-    assert_eq!(host.take(), Vec::<String>::new());
     assert!(shell.update(cx, |shell, cx| shell.run_agent_key("cmd-.", cx)));
     assert_eq!(host.take(), ["stop agent task-1"]);
     shell.update(cx, |shell, cx| shell.run(Command::BackToPinnedUrl, "ui", cx));
@@ -341,6 +339,65 @@ fn the_strip_takes_over_hands_back_and_stops(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| shell.run(Command::BackToPinnedUrl, "page", cx));
     assert_eq!(host.take(), ["hand back 30", "focus ui"]);
     assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), Some((3, Some(30))));
+}
+
+/// Escape on a task's page watched steps back to the conversation from the page's keyboard, which
+/// a page the user clicked into has, as from the UI's, and stops neither the agent nor its load.
+#[gpui::test]
+fn escape_from_the_page_watched_steps_back(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    assert!(shell.update(cx, |shell, cx| shell.run_for_page(Command::Stop, cx)));
+    assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), Some((3, None)));
+    let calls = host.take();
+    assert!(!calls.iter().any(|call| call.starts_with("stop")), "{calls:?}");
+}
+
+/// The strip says who works and on what, that it finished and where, or that it stopped, and the
+/// Signal ring goes round the page only while the task works: its chips are Stop while it works
+/// and Open once it left the user a tab.
+#[gpui::test]
+fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
+    use crate::agents::runner::Cli;
+    use crate::agents::task::{Card, Dot};
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    let card = |dot: Dot, status: &str| Card {
+        agent: "task-1".into(),
+        home: 1,
+        space: 3,
+        cli: Cli::Claude,
+        title: "Find a flight".into(),
+        status: status.to_string().into(),
+        asks: false,
+        dot,
+        answers: Vec::new(),
+        question: None,
+        open: None,
+        retry: false,
+        command: None,
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_page(30, Page { url: "https://www.gulbenkian.pt/tickets".into(), ..Page::default() }, cx);
+    });
+    let says = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| {
+            let (title, detail) = shell.task_strip_words(30);
+            (title, detail, shell.task_working())
+        })
+    };
+    let working = card(Dot::Working, "Clicking “Tickets”");
+    shell.update(cx, |shell, cx| shell.set_task_cards(vec![working], cx));
+    let expected = ("Claude is working".to_string(), "Clicking “Tickets”".to_string(), true);
+    assert_eq!(says(&shell, cx), expected);
+
+    let mut done = card(Dot::Done, "Tickets for Saturday");
+    done.open = Some((30, "gulbenkian.pt".into()));
+    shell.update(cx, |shell, cx| shell.set_task_cards(vec![done], cx));
+    assert_eq!(says(&shell, cx), ("Claude finished".into(), "gulbenkian.pt".into(), false));
+
+    shell.update(cx, |shell, cx| shell.set_task_cards(vec![card(Dot::Ended, "Stopped")], cx));
+    assert_eq!(says(&shell, cx), ("Stopped".into(), "".into(), false));
 }
 
 /// ⌘R and Back act on the page watched; ⌘T opens the bar over the conversation, the core showing

@@ -7,8 +7,8 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::mpsc;
-use std::time::SystemTime;
+use std::sync::{Arc, mpsc};
+use std::time::{Duration, Instant, SystemTime};
 
 use futures::StreamExt;
 use gpui::{App, AppContext, Context, SharedString};
@@ -21,6 +21,8 @@ use super::{Agents, Question, ToolResult, page, site, tools};
 /// The answers an ask shows as buttons on the card, at most, and how long each may be.
 pub const ANSWERS: usize = 3;
 pub const ANSWER_LENGTH: usize = 24;
+/// A done card's line, at most, which the agent gives as finish's summary.
+pub const SUMMARY_LENGTH: usize = 32;
 /// The dismissed tasks ⇧⌘T and ⌘Z can bring back. An older one is dropped, its Space with it.
 const KEPT: usize = 10;
 
@@ -30,8 +32,9 @@ pub enum State {
     Working,
     /// The agent asks the user (ask), and waits for the answer.
     Asking { question: SharedString, answers: Vec<SharedString> },
-    /// The agent finished, with its result, and the tab the user may open, if any.
-    Done { result: SharedString, tab: Option<u64> },
+    /// The agent finished, with its result, the line its card says it in, and the tab the user may
+    /// open, if any.
+    Done { result: SharedString, summary: Option<SharedString>, tab: Option<u64> },
     /// The user's plan is at its limit, until this time, as the clock reads it.
     Limit { resets: Option<SharedString> },
     Stopped,
@@ -39,17 +42,28 @@ pub enum State {
     Failed { why: SharedString, command: Option<&'static str> },
 }
 
-/// A line of the conversation, and when it was said, which places the steps between lines.
+/// A line of the conversation, and when it was said, which ends the stretch of work before it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Message {
-    pub from_user: bool,
+    pub who: Who,
     pub text: SharedString,
-    pub at: SystemTime,
+    pub at: Instant,
+}
+
+/// Who said a message, and as what: the conversation folds what the agent says as it works.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Who {
+    User,
+    Agent,
+    /// The agent's question (ask).
+    Asked,
+    /// The agent's result (finish).
+    Result,
 }
 
 impl Message {
-    fn new(from_user: bool, text: impl Into<SharedString>) -> Self {
-        Self { from_user, text: text.into(), at: SystemTime::now() }
+    fn new(who: Who, text: impl Into<SharedString>) -> Self {
+        Self { who, text: text.into(), at: Instant::now() }
     }
 }
 
@@ -61,16 +75,22 @@ pub struct Conversation {
     /// The agent's name, in text: Claude or Codex.
     pub name: &'static str,
     pub title: SharedString,
+    /// The agent, its model and where the task is, under the title: "Claude · Haiku · Working".
+    pub about: SharedString,
     /// What was asked, and the page it was asked on, by its title.
     pub asked: SharedString,
     pub page: Option<AskedOn>,
     pub lines: Vec<Line>,
-    /// What it's doing now, while it works.
-    pub doing: Option<SharedString>,
     /// Its pages, for their pictures, each by its tab and site.
     pub tabs: Vec<(u64, SharedString)>,
+    /// The tab the agent is on while it works, whose picture has the Signal ring.
+    pub on: Option<u64>,
     /// Whether it works or waits on the user, which ⌘. stops.
     pub stoppable: bool,
+    /// The site of the tab its result left the user, which Open under the result moves to them.
+    pub open: Option<SharedString>,
+    /// The answers to the question it waits on, as chips under it.
+    pub answers: Vec<SharedString>,
 }
 
 /// A line of a task's conversation.
@@ -78,8 +98,89 @@ pub struct Conversation {
 pub enum Line {
     You(SharedString),
     Said(SharedString),
-    /// The steps between two lines, folded into one: what the last did, and how many there were.
-    Steps { last: SharedString, count: usize },
+    /// A stretch of work between two messages.
+    Trace(Trace),
+}
+
+/// A stretch of the agent's work between two messages: a summary line, "Working · 5 steps" or
+/// "Worked for 41s · 8 steps", with its steps under it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Trace {
+    /// Its first step's key, which keeps the user's opening or folding of it.
+    pub key: usize,
+    /// Whether it's the stretch under way, which shows open unless the user folded it.
+    pub running: bool,
+    /// How long it worked, in seconds, once it's over.
+    pub took: Option<u64>,
+    /// Its steps, with what the agent said between them.
+    pub items: Vec<TraceItem>,
+}
+
+impl Trace {
+    pub fn steps(&self) -> usize {
+        (self.items.iter()).filter(|item| matches!(item, TraceItem::Step(_))).count()
+    }
+
+    /// Its summary line's title and description.
+    pub fn summary(&self) -> (SharedString, SharedString) {
+        let steps = match self.steps() {
+            1 => "1 step".to_string(),
+            count => format!("{count} steps"),
+        };
+        let title = match self.took {
+            Some(seconds) => format!("Worked for {}", duration(seconds)),
+            None => "Working".to_string(),
+        };
+        (title.into(), steps.into())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TraceItem {
+    Step(TraceStep),
+    /// What the agent said as it worked, which isn't its turn's last message.
+    Said(SharedString),
+}
+
+/// A line of a trace: a step, in one sentence.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TraceStep {
+    /// Its place in the task's trace, which keeps the user's opening of it.
+    pub key: usize,
+    pub glyph: &'static str,
+    pub title: SharedString,
+    /// After the title: how long it took, from 1 s, or why it failed.
+    pub description: SharedString,
+    /// Whether it's the step under way, which shimmers.
+    pub running: bool,
+    pub failed: bool,
+    pub opens: Opens,
+}
+
+/// What a trace's line opens to.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Opens {
+    Nothing,
+    /// A thought's text, or a failed step's error.
+    Text(SharedString),
+    /// What a look at the page saw.
+    Picture(Arc<gpui::Image>),
+}
+
+/// A step of a task's work as the browser saw it, timed by the browser's own clock: a tool call,
+/// a run's step, or a thought the CLI sent.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Traced {
+    /// The call it's of, whose answer ends it, or 0 for a thought.
+    pub call: u64,
+    pub did: tools::Did,
+    /// How many of the task's messages came before it, which places it among them.
+    pub after: usize,
+    pub started: Instant,
+    pub ended: Option<Instant>,
+    /// Why it failed, as its call's answer said.
+    pub error: Option<SharedString>,
+    pub picture: Option<Arc<gpui::Image>>,
 }
 
 /// The page the user was on when they asked, which goes as its address and title only.
@@ -100,8 +201,14 @@ pub struct Task {
     pub page: Option<AskedOn>,
     /// The name the agent gives it (title), else what was asked.
     pub title: SharedString,
+    /// The model it runs on, by name, or empty for its CLI's own default.
+    pub model: SharedString,
     pub state: State,
+    /// When it finished, for its conversation.
+    pub ended: Option<SystemTime>,
     pub messages: Vec<Message>,
+    /// Its steps, oldest first.
+    pub trace: Vec<Traced>,
     pub dismissed: bool,
     token: String,
     process: Option<Process>,
@@ -124,8 +231,10 @@ pub struct Card {
     pub space: u64,
     pub cli: Cli,
     pub title: SharedString,
-    /// What it's doing, as the activity log says it, or what it waits for, or its result.
+    /// The step it's on, such as "Opening gulbenkian.pt", what it waits for, or its result's line.
     pub status: SharedString,
+    /// Whether the status is the agent's question, which may take two lines.
+    pub asks: bool,
     pub dot: Dot,
     /// An ask's answers, as buttons.
     pub answers: Vec<SharedString>,
@@ -139,16 +248,17 @@ pub struct Card {
     pub command: Option<&'static str>,
 }
 
-/// The card's status dot.
+/// What the card's favicon column shows of the task's state.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Dot {
     /// Signal, breathing, as a tab's while an agent works in it.
     Working,
-    /// Still: it waits for the user.
+    /// Ringed and still: it waits for the user.
     Waiting,
     /// A tick.
     Done,
-    None,
+    /// A hollow ring: stopped, at its limit, or it couldn't go on.
+    Ended,
 }
 
 /// What the user does to a task from its card or its conversation.
@@ -239,53 +349,75 @@ impl Agents {
         (None, None)
     }
 
-    /// `agent`'s task's conversation: what was asked, then what each side said, with the steps
-    /// between folded into a line each.
+    /// `agent`'s task's conversation: what was asked, then each turn with what the agent said
+    /// as it worked folded into its steps, so only the user's messages, the agent's questions and
+    /// each turn's last message show.
     pub fn conversation(&self, agent: &str, cx: &App) -> Option<Conversation> {
         let task = self.task(agent)?;
-        let mut steps: Vec<&super::Activity> = self.activity(agent).collect();
-        steps.reverse();
-        let mut steps = steps.into_iter().peekable();
-        let mut lines = Vec::new();
-        let mut fold = |lines: &mut Vec<Line>, until: Option<SystemTime>| {
-            let mut folded = Vec::new();
-            while let Some(step) = steps.next_if(|step| until.is_none_or(|until| step.at <= until)) {
-                folded.push(step);
-            }
-            if let Some(last) = folded.last() {
-                let last = match last.site.is_empty() {
-                    true => tools::describe(&last.action).to_string(),
-                    false => format!("{} · {}", tools::describe(&last.action), last.site),
-                };
-                lines.push(Line::Steps { last: last.into(), count: folded.len() });
-            }
-        };
-        for message in &task.messages {
-            fold(&mut lines, Some(message.at));
-            lines.push(match message.from_user {
-                true => Line::You(message.text.clone()),
-                false => Line::Said(message.text.clone()),
-            });
-        }
-        let working = task.state == State::Working;
-        // While it works, the steps since the last line are what it's doing, under the rest.
-        if !working {
-            fold(&mut lines, None);
-        }
+        let ended = !matches!(task.state, State::Working | State::Asking { .. });
+        let lines = fold(&task.messages, &task.trace, ended, task.state == State::Working);
         let tabs = (self.browser.space_tabs(task.space, cx).into_iter())
             .map(|tab| (tab.id, site(&tab.url).to_string().into()))
             .collect();
+        let about = match &task.state {
+            State::Working if self.waits_on_user(task) => "Waiting for you".to_string(),
+            State::Working => "Working".to_string(),
+            State::Asking { .. } => "Waiting for you".to_string(),
+            State::Done { .. } => match task.ended {
+                Some(at) => format!("Done {}", super::local_time(seconds(at))),
+                None => "Done".to_string(),
+            },
+            State::Limit { resets: Some(at) } => format!("Limit resets at {at}"),
+            State::Limit { resets: None } => "At its plan's limit".to_string(),
+            State::Stopped | State::Failed { .. } => "Stopped".to_string(),
+        };
+        let about = match task.model.is_empty() {
+            true => format!("{} · {about}", task.cli.name()),
+            false => format!("{} · {} · {about}", task.cli.name(), task.model),
+        };
         Some(Conversation {
             agent: task.agent.clone().into(),
             name: task.cli.name(),
             title: task.title.clone(),
+            about: about.into(),
             asked: task.asked.clone(),
             page: task.page.clone(),
             lines,
-            doing: working.then(|| self.doing.get(agent).cloned().unwrap_or_else(|| "Starting".into())),
             tabs,
+            on: (task.state == State::Working).then(|| self.current.get(agent).copied()).flatten(),
             stoppable: matches!(task.state, State::Working | State::Asking { .. }),
+            open: self.open_site(task, cx),
+            answers: match &task.state {
+                State::Asking { answers, .. } => answers.clone(),
+                _ => Vec::new(),
+            },
         })
+    }
+
+
+    /// Whether a confirmation or a handoff of the task's waits on the user.
+    fn waits_on_user(&self, task: &Task) -> bool {
+        self.task_question(task).is_some()
+    }
+
+    fn task_question(&self, task: &Task) -> Option<Question> {
+        (self.asking.iter().map(|asking| &asking.question))
+            .chain(self.question().as_ref().filter(|question| question.handoff.is_some()))
+            .find(|question| question.from == task.agent.as_str())
+            .cloned()
+    }
+
+    /// Done's tab to open, with its site, while it's still in the task's Space.
+    fn open_tab(&self, task: &Task, cx: &App) -> Option<(u64, SharedString)> {
+        let State::Done { tab: Some(tab), .. } = task.state else { return None };
+        if !self.browser.space_tab_ids(task.space, cx).contains(&tab) {
+            return None;
+        }
+        Some((tab, site(&self.browser.tab(tab, cx).url).into()))
+    }
+
+    fn open_site(&self, task: &Task, cx: &App) -> Option<SharedString> {
+        self.open_tab(task, cx).map(|(_, site)| site)
     }
 
     /// The cards of the tasks shown at the top of `home`'s Today, newest first.
@@ -304,39 +436,28 @@ impl Agents {
     }
 
     pub fn card(&self, task: &Task, cx: &App) -> Card {
-        let question = (self.asking.iter().map(|asking| &asking.question))
-            .chain(self.question().as_ref().filter(|question| question.handoff.is_some()))
-            .find(|question| question.from == task.agent.as_str())
-            .cloned();
-        let doing = self.doing.get(&task.agent).cloned();
+        let question = self.task_question(task);
         let (status, dot) = match (&task.state, &question) {
             (State::Working, Some(question)) => match question.handoff {
                 Some(_) => ("Waiting for you".into(), Dot::Waiting),
                 None => ("Waiting for your OK".into(), Dot::Waiting),
             },
-            (State::Working, None) => (doing.unwrap_or_else(|| "Starting".into()), Dot::Working),
+            (State::Working, None) => (working(&task.trace), Dot::Working),
             (State::Asking { question, .. }, _) => (question.clone(), Dot::Waiting),
-            (State::Done { result, .. }, _) => (result.clone(), Dot::Done),
-            (State::Limit { resets: Some(at) }, _) => (format!("Limit resets at {at}").into(), Dot::None),
-            (State::Limit { resets: None }, _) => ("At its plan's limit".into(), Dot::None),
-            (State::Stopped, _) => ("Stopped".into(), Dot::None),
-            (State::Failed { why, .. }, _) => (why.clone(), Dot::None),
+            (State::Done { summary, .. }, _) => {
+                (summary.clone().unwrap_or_else(|| "Done".into()), Dot::Done)
+            }
+            (State::Limit { resets: Some(at) }, _) => (format!("Limit resets at {at}").into(), Dot::Ended),
+            (State::Limit { resets: None }, _) => ("At its plan's limit".into(), Dot::Ended),
+            (State::Stopped, _) => ("Stopped".into(), Dot::Ended),
+            (State::Failed { why, .. }, _) => (why.clone(), Dot::Ended),
         };
-        let mut status = status;
-        let open = match task.state {
-            // The core's auto-archive can take a task's page it never showed (window.cc), and a
-            // task lives for one run, so its card says where it went rather than offer it.
-            State::Done { tab: Some(tab), .. }
-                if !self.browser.space_tab_ids(task.space, cx).contains(&tab) =>
-            {
-                status = "Its page went to the Archive".into();
-                None
-            }
-            State::Done { tab: Some(tab), .. } => {
-                let url = self.browser.tab(tab, cx).url;
-                Some((tab, site(&url).into()))
-            }
-            _ => None,
+        let open = self.open_tab(task, cx);
+        // The core's auto-archive can take a task's page it never showed (window.cc), and a task
+        // lives for one run, so its card says where it went rather than offer it.
+        let status = match task.state {
+            State::Done { tab: Some(_), .. } if open.is_none() => "Its page went to the Archive".into(),
+            _ => status,
         };
         Card {
             agent: task.agent.clone().into(),
@@ -345,6 +466,7 @@ impl Agents {
             cli: task.cli,
             title: task.title.clone(),
             status,
+            asks: matches!(task.state, State::Asking { .. }) && question.is_none(),
             dot,
             answers: match &task.state {
                 State::Asking { answers, .. } => answers.clone(),
@@ -448,6 +570,17 @@ impl Agents {
         self.tasks.models.get(&cli).map_or("", String::as_str)
     }
 
+    /// The model `cli` runs tasks with, by name, such as Haiku, or None for its own default.
+    pub fn task_model_name(&self, cli: Cli) -> Option<SharedString> {
+        let chosen = self.task_model(cli);
+        if chosen.is_empty() {
+            return None;
+        }
+        let models = self.task_models(cli);
+        let name = models.into_iter().find(|(id, _)| id == chosen).map_or(chosen.to_string(), |(_, name)| name);
+        Some(name.into())
+    }
+
     pub fn set_task_model(&mut self, cli: Cli, model: &str, cx: &mut Context<Self>) {
         match model.is_empty() {
             true => self.tasks.models.remove(&cli),
@@ -478,6 +611,7 @@ impl Agents {
         log!("browser: task {agent} on {} asked from space {home}", cli.id());
         let space = self.browser.make_task_space(&agent, cli.name(), home, cx);
         let title: SharedString = page::clip(asked, 80).into();
+        let model = self.task_model_name(cli).unwrap_or_default();
         let task = Task {
             agent: agent.clone(),
             cli,
@@ -486,8 +620,11 @@ impl Agents {
             asked: asked.to_string().into(),
             page,
             title,
+            model,
             state: State::Working,
+            ended: None,
             messages: Vec::new(),
+            trace: Vec::new(),
             dismissed: false,
             token: super::random_token(),
             process: None,
@@ -562,16 +699,30 @@ impl Agents {
         match out {
             Out::Said(text) => {
                 let Some(task) = self.task_mut(&agent) else { return };
-                task.messages.push(Message::new(false, text));
+                task.messages.push(Message::new(Who::Agent, text));
+            }
+            Out::Thought { text, took } => {
+                let Some(task) = self.task_mut(&agent) else { return };
+                let now = Instant::now();
+                task.trace.push(Traced {
+                    call: 0,
+                    did: tools::Did { tool: "thought".into(), text: page::clip(&text, 4000), ..Default::default() },
+                    after: task.messages.len(),
+                    started: now.checked_sub(took).unwrap_or(now),
+                    ended: Some(now),
+                    error: None,
+                    picture: None,
+                });
             }
             Out::Ended(None) => {
                 let Some(task) = self.task_mut(&agent) else { return };
                 // A turn that ends without finish ends the task with what it said last.
                 if task.state == State::Working {
                     let result = (task.messages.iter().rev())
-                        .find(|message| !message.from_user)
+                        .find(|message| message.who != Who::User)
                         .map_or_else(|| "Done".into(), |message| message.text.clone());
-                    task.state = State::Done { result, tab: None };
+                    task.state = State::Done { result, summary: None, tab: None };
+                    task.ended = Some(SystemTime::now());
                 }
             }
             Out::Ended(Some(failure)) => self.fail(&agent, failure, cx),
@@ -628,7 +779,7 @@ impl Agents {
             return self.answer_task(agent, text, cx);
         }
         let Some(task) = self.task_mut(agent) else { return };
-        task.messages.push(Message::new(true, text.to_string()));
+        task.messages.push(Message::new(Who::User, text.to_string()));
         task.state = State::Working;
         let sent = task.process.as_mut().map(|process| process.say(text));
         if !matches!(sent, Some(Ok(()))) {
@@ -643,7 +794,7 @@ impl Agents {
     pub fn answer_task(&mut self, agent: &str, answer: &str, cx: &mut Context<Self>) {
         let Some(task) = self.task_mut(agent) else { return };
         let Some(reply) = task.asking.take() else { return };
-        task.messages.push(Message::new(true, answer.to_string()));
+        task.messages.push(Message::new(Who::User, answer.to_string()));
         task.state = State::Working;
         _ = reply.send(ToolResult::text(format!("The user answered: {answer}")));
         self.note(agent, "answered", "", "");
@@ -717,11 +868,11 @@ impl Agents {
     /// Done's Open <site>: the tab moves into the task's Space's Today, at its top, the user's.
     pub fn open_result(&mut self, agent: &str, cx: &mut Context<Self>) -> Option<u64> {
         let task = self.task_mut(agent)?;
-        let State::Done { tab: Some(tab), result } = task.state.clone() else {
+        let State::Done { tab: Some(tab), result, summary } = task.state.clone() else {
             return None;
         };
         let home = task.home;
-        task.state = State::Done { result, tab: None };
+        task.state = State::Done { result, summary, tab: None };
         self.browser.move_tab(tab, home, cx);
         // check.sh reads this line.
         log!("browser: task {agent} opens {tab} in space {home}");
@@ -771,6 +922,121 @@ impl Agents {
         _ = std::fs::remove_file(dir.join(format!("{agent}.json")));
     }
 
+    /// A task's call, as a step of its trace from when it came. A run's steps are steps of their
+    /// own (`trace_step`); its name and its finish aren't steps of its work.
+    pub(super) fn trace_call(&mut self, call: &super::Call, cx: &App) {
+        let tool = call.tool.as_str();
+        if matches!(tool, "title" | "finish" | "run_steps") || self.task(&call.agent).is_none() {
+            return;
+        }
+        let did = self.did(&call.agent, tool, &call.arguments, None, cx);
+        self.trace(&call.agent, call.id, did, call.at);
+    }
+
+    /// A step of the run `call` on `tab`, starting now, which ends the step before it.
+    pub(super) fn trace_step(&mut self, agent: &str, call: u64, tab: u64, step: &Value, cx: &App) {
+        if self.task(agent).is_none() {
+            return;
+        }
+        let tool = step.get("action").and_then(Value::as_str).unwrap_or_default();
+        let did = self.did(agent, tool, step, Some(tab), cx);
+        let now = Instant::now();
+        let Some(task) = self.task_mut(agent) else { return };
+        let before = task.trace.iter_mut().rev().find(|each| each.call == call && each.ended.is_none());
+        if let Some(before) = before {
+            before.ended = Some(now);
+        }
+        self.trace(agent, call, did, now);
+    }
+
+    fn trace(&mut self, agent: &str, call: u64, did: tools::Did, at: Instant) {
+        let Some(task) = self.task_mut(agent) else { return };
+        // An ask is done once asked: the wait for the answer is the user's.
+        let ended = (did.tool == "ask").then_some(at);
+        let after = task.messages.len();
+        task.trace.push(Traced { call, did, after, started: at, ended, error: None, picture: None });
+    }
+
+    /// `agent`'s call was answered `at`: its step ends, with why it failed or what it saw.
+    pub(super) fn answered(
+        &mut self,
+        agent: &str,
+        call: u64,
+        at: Instant,
+        error: Option<String>,
+        image: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(task) = self.task_mut(agent) else { return };
+        let step = task.trace.iter_mut().rev().find(|step| step.call == call && step.ended.is_none());
+        let Some(step) = step else { return };
+        step.ended = Some(at);
+        // An error's first paragraph: a wait's goes on with the page's outline.
+        step.error = error.map(|error| {
+            page::clip(error.split("\n\n").next().unwrap_or_default().trim(), 300).into()
+        });
+        step.picture = image.and_then(|image| picture(&image));
+        cx.notify();
+    }
+
+    /// What a call or a run's step does, as its trace says it: on `tab`, else the tab it names,
+    /// else the agent's last.
+    fn did(&self, agent: &str, tool: &str, arguments: &Value, tab: Option<u64>, cx: &App) -> tools::Did {
+        let string = |name: &str| arguments.get(name).and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let tab = (tab.or_else(|| tools::tab_argument(arguments).ok().flatten()))
+            .or_else(|| self.current.get(agent).copied());
+        let on = tab.map(|tab| site(&self.browser.tab(tab, cx).url)).unwrap_or_default();
+        let element = (arguments.get("ref").and_then(Value::as_str).zip(tab))
+            .and_then(|(name, tab)| self.refs.get(&tab)?.get(name).cloned());
+        let named = |element: &page::Element| match element.name.trim().is_empty() {
+            true => format!("the {}", element.role),
+            false => format!("“{}”", page::clip(element.name.trim(), 40)),
+        };
+        let mut did = tools::Did { tool: tool.to_string(), site: on, ..Default::default() };
+        match tool {
+            "open_tab" | "navigate" => match string("url").as_str() {
+                back @ ("back" | "forward") => did.tool = back.to_string(),
+                url => {
+                    did.site = match self.browser.url_for(url) {
+                        Some(url) => address(&url),
+                        None => page::clip(url, 40),
+                    }
+                }
+            },
+            "click" | "type" => {
+                did.target = element.as_ref().map(named).unwrap_or_default();
+                let typed = string("text");
+                // Never a password field's value, nor one whose name says it's a secret.
+                let shows = element.as_ref().is_some_and(|element| {
+                    let name = element.name.to_lowercase();
+                    !element.password && !name.contains("password") && !name.contains("passcode")
+                });
+                if tool == "type" && shows && typed.chars().count() <= tools::TYPED_SHOWN {
+                    did.text = typed;
+                }
+            }
+            "press_key" => did.target = string("key"),
+            "scroll" => {
+                did.target = match &element {
+                    Some(element) => named(element),
+                    None => string("direction"),
+                }
+            }
+            "wait" => {
+                let text = string("text");
+                let seconds = arguments.get("seconds").and_then(Value::as_f64);
+                did.target = match (text.is_empty(), seconds) {
+                    (false, _) => format!("“{}”", page::clip(&text, 40)),
+                    (true, Some(seconds)) => duration(seconds.round().max(1.) as u64),
+                    (true, None) => String::new(),
+                };
+            }
+            "list_tabs" | "ask" => did.site.clear(),
+            _ => {}
+        }
+        did
+    }
+
     /// The task-only tools: title, ask and finish. Each writes an activity-log entry.
     pub(super) fn task_tool(
         &mut self,
@@ -785,7 +1051,7 @@ impl Agents {
             "title" => {
                 let title = text("text");
                 if title.is_empty() {
-                    _ = reply.send(ToolResult::error("text is the task's name, in a few words."));
+                    _ = reply.send(ToolResult::error("text is the task's name, in two to four words."));
                     return;
                 }
                 let Some(task) = self.task_mut(agent) else { return };
@@ -817,7 +1083,7 @@ impl Agents {
                 };
                 let Some(task) = self.task_mut(agent) else { return };
                 let question: SharedString = page::clip(question, 300).into();
-                task.messages.push(Message::new(false, question.clone()));
+                task.messages.push(Message::new(Who::Asked, question.clone()));
                 task.state = State::Asking { question, answers: buttons };
                 task.asking = Some(reply);
                 self.note(agent, "ask", "", "");
@@ -832,8 +1098,14 @@ impl Agents {
                 let space = self.task(agent).map_or(0, |task| task.space);
                 let tab = tab.filter(|tab| self.browser.space_tab_ids(space, cx).contains(tab));
                 let site = tab.map(|tab| site(&self.browser.tab(tab, cx).url));
+                let summary = Some(text("summary"))
+                    .filter(|summary| !summary.is_empty())
+                    .map(|summary| page::clip(summary, SUMMARY_LENGTH).into());
                 let Some(task) = self.task_mut(agent) else { return };
-                task.state = State::Done { result: page::clip(result, 300).into(), tab };
+                let result: SharedString = page::clip(result, 2000).into();
+                task.messages.push(Message::new(Who::Result, result.clone()));
+                task.state = State::Done { result, summary, tab };
+                task.ended = Some(SystemTime::now());
                 self.note(agent, "finish", site.as_deref().unwrap_or(""), "");
                 _ = reply.send(ToolResult::text("Done. The user sees your result. Stop here."));
             }
@@ -861,7 +1133,7 @@ pub fn first_message(asked: &str, page: Option<&AskedOn>) -> String {
 fn conversation(task: &Task) -> String {
     let mut text = first_message(&task.asked, task.page.as_ref());
     for message in &task.messages {
-        let who = if message.from_user { "Me" } else { "You" };
+        let who = if message.who == Who::User { "Me" } else { "You" };
         text.push_str(&format!("\n\n{who}: {}", message.text));
     }
     text.push_str("\n\nGo on from here.");
@@ -871,4 +1143,167 @@ fn conversation(task: &Task) -> String {
 /// A time in seconds since 1970 as the clock reads it here, such as 18:00.
 fn clock(at: u64) -> SharedString {
     crate::agents::local_time(at).into()
+}
+
+fn seconds(at: SystemTime) -> u64 {
+    at.duration_since(SystemTime::UNIX_EPOCH).map_or(0, |since| since.as_secs())
+}
+
+/// A task's status while it works: the step it's on, else the last it took.
+fn working(trace: &[Traced]) -> SharedString {
+    let last = trace.iter().rev().find(|step| step.did.tool != "thought");
+    match last {
+        Some(step) => tools::step_title(&step.did, tense(step)).into(),
+        None if !trace.is_empty() => "Thinking".into(),
+        None => "Starting".into(),
+    }
+}
+
+fn tense(step: &Traced) -> tools::Tense {
+    match (step.ended, &step.error) {
+        (None, _) => tools::Tense::Now,
+        (Some(_), None) => tools::Tense::Done,
+        (Some(_), Some(_)) => tools::Tense::Failed,
+    }
+}
+
+/// A duration in whole seconds as a trace says it: "41s", "2m 5s".
+pub fn duration(seconds: u64) -> String {
+    match seconds {
+        0..60 => format!("{seconds}s"),
+        _ if seconds % 60 == 0 => format!("{}m", seconds / 60),
+        _ => format!("{}m {}s", seconds / 60, seconds % 60),
+    }
+}
+
+/// A conversation's lines from its `messages` and its `trace`, oldest first. Each turn, from a
+/// message of the user's to the next, shows its questions and, once it has `ended`, its last
+/// message; the steps between those are a trace each, with what the agent said along the way in
+/// it. The last stretch is under way while the task is `working`.
+pub fn fold(messages: &[Message], trace: &[Traced], ended: bool, working: bool) -> Vec<Line> {
+    // Which messages show as lines of their own.
+    let mut shown = vec![false; messages.len()];
+    let mut first = 0;
+    let turns: Vec<&[Message]> = messages.split_inclusive(|message| message.who == Who::User).collect();
+    for (index, turn) in turns.iter().enumerate() {
+        let turn_ended = ended || index + 1 < turns.len();
+        // The turn's last message: its result, else the last thing it said, once it's over.
+        let last = (turn.iter().rposition(|message| message.who == Who::Result))
+            .or_else(|| turn.iter().rposition(|message| message.who != Who::User))
+            .filter(|_| turn_ended);
+        for (at, message) in turn.iter().enumerate() {
+            shown[first + at] = matches!(message.who, Who::User | Who::Asked) || Some(at) == last;
+        }
+        first += turn.len();
+    }
+    let mut lines = Vec::new();
+    let mut stretch = Stretch::default();
+    let mut steps = trace.iter().enumerate().peekable();
+    for (index, message) in messages.iter().enumerate() {
+        while let Some((key, step)) = steps.next_if(|(_, step)| step.after <= index) {
+            stretch.step(key, step);
+        }
+        if !shown[index] {
+            stretch.items.push(TraceItem::Said(message.text.clone()));
+            continue;
+        }
+        let end = (message.who != Who::User).then_some(message.at);
+        stretch.flush(&mut lines, false, end);
+        lines.push(match message.who {
+            Who::User => Line::You(message.text.clone()),
+            _ => Line::Said(message.text.clone()),
+        });
+    }
+    for (key, step) in steps {
+        stretch.step(key, step);
+    }
+    stretch.flush(&mut lines, working, None);
+    lines
+}
+
+/// The stretch of work a trace is made of, as it gathers.
+#[derive(Default)]
+struct Stretch {
+    items: Vec<TraceItem>,
+    key: Option<usize>,
+    started: Option<Instant>,
+    ended: Option<Instant>,
+}
+
+impl Stretch {
+    fn step(&mut self, key: usize, step: &Traced) {
+        self.key.get_or_insert(key);
+        self.started = Some(self.started.map_or(step.started, |started| started.min(step.started)));
+        let end = step.ended.unwrap_or(step.started);
+        self.ended = Some(self.ended.map_or(end, |ended| ended.max(end)));
+        let took = step.ended.map(|ended| ended.saturating_duration_since(step.started));
+        let description = match (&step.error, took) {
+            (Some(error), _) => tools::reason(error).to_string(),
+            // A wait's title says its time.
+            (None, Some(took)) if took >= Duration::from_secs(1) && step.did.tool != "wait" => {
+                duration(took.as_secs())
+            }
+            _ => String::new(),
+        };
+        let opens = match (&step.error, &step.picture) {
+            (Some(error), _) => Opens::Text(error.clone()),
+            (None, Some(picture)) => Opens::Picture(picture.clone()),
+            (None, None) if step.did.tool == "thought" && !step.did.text.is_empty() => {
+                Opens::Text(step.did.text.clone().into())
+            }
+            _ => Opens::Nothing,
+        };
+        self.items.push(TraceItem::Step(TraceStep {
+            key,
+            glyph: tools::step_glyph(&step.did.tool),
+            title: tools::step_title(&step.did, tense(step)).into(),
+            description: description.into(),
+            running: step.ended.is_none(),
+            failed: step.error.is_some(),
+            opens,
+        }));
+    }
+
+    /// The stretch as its lines: a trace, or with no steps, what the agent said, as itself. It's
+    /// `running` if it's the stretch under way, and ends at the agent's message `end`, if one ends
+    /// it.
+    fn flush(&mut self, lines: &mut Vec<Line>, running: bool, end: Option<Instant>) {
+        let mut items = std::mem::take(&mut self.items);
+        let (key, started, ended) = (self.key.take(), self.started.take(), self.ended.take());
+        let Some(key) = key else {
+            lines.extend(items.into_iter().filter_map(|item| match item {
+                TraceItem::Said(text) => Some(Line::Said(text)),
+                TraceItem::Step(_) => None,
+            }));
+            return;
+        };
+        if !running {
+            for item in &mut items {
+                if let TraceItem::Step(step) = item {
+                    step.running = false;
+                }
+            }
+        }
+        let took = (!running).then(|| {
+            let started = started.unwrap_or_else(Instant::now);
+            let ended = ended.into_iter().chain(end).max().unwrap_or(started);
+            (ended.saturating_duration_since(started).as_secs_f32().round() as u64).max(1)
+        });
+        lines.push(Line::Trace(Trace { key, running, took, items }));
+    }
+}
+
+/// An address as a trace says it: its site and path, without its scheme, query or fragment.
+fn address(url: &str) -> String {
+    let rest = url.split_once("://").map_or("", |(_, rest)| rest);
+    let path = rest.find('/').map_or("", |at| &rest[at..]);
+    let path = path.split(['?', '#']).next().unwrap_or_default().trim_end_matches('/');
+    page::clip(&format!("{}{path}", site(url)), 60)
+}
+
+/// A screenshot's picture, from its JPEG in base64.
+fn picture(base64: &str) -> Option<Arc<gpui::Image>> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(base64).ok()?;
+    Some(Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Jpeg, bytes)))
 }

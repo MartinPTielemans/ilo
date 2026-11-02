@@ -2174,18 +2174,30 @@ impl Settings {
                 let grants = self.grants(agents, client, cx);
                 let entries: Vec<gpui::Div> = (model.activity(client.id()).take(ACTIVITY_SHOWN))
                     .map(|entry| {
-                        let what = agents::tools::describe(&entry.action);
+                        // Each entry in the words a task's trace says its steps in.
+                        let title = |entry: &agents::Activity| {
+                            let did = agents::tools::Did {
+                                tool: entry.action.to_string(),
+                                site: entry.site.to_string(),
+                                ..Default::default()
+                            };
+                            let tense = match entry.refused.is_empty() {
+                                true => agents::tools::Tense::Done,
+                                false => agents::tools::Tense::Failed,
+                            };
+                            agents::tools::step_title(&did, tense)
+                        };
+                        let what = title(entry);
                         let refused = (entry.steps.iter().map(|step| &step.refused))
                             .find(|refused| !refused.is_empty())
                             .unwrap_or(&entry.refused);
-                        let steps = (entry.steps.iter())
-                            .map(|step| agents::tools::describe(&step.action));
+                        let steps = entry.steps.iter().map(title);
                         let detail: SharedString = if !refused.is_empty() {
                             format!("Refused: {refused}").into()
                         } else if !entry.steps.is_empty() {
                             steps.collect::<Vec<_>>().join(" · ").into()
                         } else {
-                            entry.site.clone()
+                            SharedString::default()
                         };
                         let detail = Some(detail).filter(|detail| !detail.is_empty());
                         let ago = div().flex_none().ml(px(PADDING)).text_color(rgb(DETAIL));

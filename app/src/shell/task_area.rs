@@ -10,15 +10,20 @@
 
 use std::time::{Duration, Instant};
 
+use std::f32::consts::FRAC_PI_2;
+
 use gpui::{
-    AnyElement, AnyView, Bounds, Context, Corners, FontWeight, MouseButton, Pixels, Size, Window,
-    canvas, div, point, prelude::*, px, rgb, rgba, size, svg,
+    AnyElement, AnyView, Bounds, Context, Corners, FontWeight, MouseButton, Pixels, Radians, Size,
+    Transformation, Window, canvas, div, point, prelude::*, px, rgb, size, svg,
 };
 
 use super::{
-    CARD_INSET, CARD_RADIUS, Command, Folders, NAV, NAV_RADIUS, NAV_SIZE, PagePicture, Shell, Space,
+    CARD_INSET, CARD_RADIUS, Command, Folders, NAV_RADIUS, PagePicture, SECONDARY, Shell, Space,
     SpaceEntry, TITLE, Theme,
-    agent_bar::{Bar, bar_words},
+    agent_bar::{Bar, bar_words, stop_keys},
+    keys::user_keys,
+    conversation::page_chip,
+    task_cards::act,
     card, cubic_bezier,
     library::{LIBRARY_DAMPING, LIBRARY_RESPONSE},
     permission::card_listener,
@@ -26,11 +31,13 @@ use super::{
     spring_to,
 };
 use crate::agents::is_task;
+use crate::agents::task::{Card, Dot, TaskAction};
 use crate::link_preview::{CLOSE, OPEN};
 use crate::palette::{STATE_HOVERED, STATE_PRESSED};
 use crate::tokens::shell::agent_pointer::{COLOR, RING};
-use crate::tokens::shell::permission::{BUTTON_GAP, DETAIL, LINE};
-use crate::tokens::shell::task_area::{BACK_GLYPH, GAP, PAGE_ROOM, STRIP};
+use crate::tokens::shell::permission::LINE;
+use crate::tokens::shell::task_area::{BACK, BACK_GLYPH, GAP, PAGE_ROOM, STRIP};
+use crate::tokens::toast::CHIP_GAP;
 use crate::tokens::text;
 
 /// What the page area shows of a task, at most one per window.
@@ -625,7 +632,9 @@ impl Shell {
         let live = self.task_page_live();
         match command {
             Command::BackToPinnedUrl if self.agent_bar().is_some() => self.agent_bar_primary(cx),
-            Command::Stop if from == "ui" => self.task_step_back(cx),
+            // Esc steps back, from a page watched too, whose page has the keyboard (the menu's
+            // Stop comes from elsewhere).
+            Command::Stop if matches!(from, "ui" | "page") => self.task_step_back(cx),
             // The conversation is its card's, selected, so ⌘W closes the card, dismissing the
             // task, as it closes a tab; from a page watched it steps back to the conversation.
             Command::CloseTab if self.watched_task_page().is_none() && self.dismiss_talk(cx) => {}
@@ -802,6 +811,7 @@ impl Shell {
         }
         // While the agent drives the page, the Signal ring of its pointer goes round it.
         let driving = in_place
+            && self.task_working()
             && matches!(self.agent_bar(), Some(Bar::Working { tab, .. }) if tab == page.tab);
         if driving {
             let ring = place.dilate(px(RING));
@@ -866,9 +876,40 @@ impl Shell {
             .into_any_element()
     }
 
-    /// The strip under a page watched: back to the conversation, then the Agent Space bar's words
-    /// and buttons in a row, or the page's title while no agent is at work in the task. It comes
-    /// in with the page.
+    /// The card of the task the page area shows.
+    fn task_card_shown(&self) -> Option<&Card> {
+        let space = self.task_open()?;
+        self.task_cards.iter().find(|card| card.space == space)
+    }
+
+    /// What the strip under a page watched says, by its task's card: who works and on what, or
+    /// that it finished and where, or that it stopped. The user holding the page has the Agent
+    /// Space bar's words.
+    pub(super) fn task_strip_words(&self, tab: u64) -> (String, String) {
+        if let Some(bar @ Bar::Held { .. }) = self.agent_bar() {
+            let (title, detail, _) = bar_words(&bar);
+            return (title, detail);
+        }
+        let Some(card) = self.task_card_shown() else {
+            return (self.title(tab).to_string(), String::new());
+        };
+        let name = card.cli.name();
+        match card.dot {
+            Dot::Working => (format!("{name} is working"), card.status.to_string()),
+            Dot::Waiting => (format!("{name} is waiting"), card.status.to_string()),
+            Dot::Done => (format!("{name} finished"), crate::agents::site(&self.page(tab).url).to_string()),
+            Dot::Ended => ("Stopped".to_string(), String::new()),
+        }
+    }
+
+    /// Whether the task the page area shows is at work, which its page's ring says.
+    pub(super) fn task_working(&self) -> bool {
+        self.task_card_shown().is_some_and(|card| card.dot == Dot::Working)
+    }
+
+    /// The strip under a page watched: back to the conversation, the words, and the chips at its
+    /// right: Take Over and Stop while the agent works, Hand Back while the user holds the page,
+    /// Open <site> once a task left the user a tab. It comes in with the page.
     fn task_strip(
         &self,
         card_frame: Bounds<Pixels>,
@@ -876,34 +917,54 @@ impl Shell {
         shown: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let bar = self.agent_bar();
-        let (title, detail) = match &bar {
-            Some(bar) => {
-                let (title, detail, _) = bar_words(bar);
-                (title, detail)
+        let (title, detail) = self.task_strip_words(tab);
+        let palette = self.palette;
+        let card = self.task_card_shown();
+        let agent = card.map(|card| card.agent.clone()).unwrap_or_default();
+        let take_over = |cx: &mut Context<Self>| Some(user_keys(cx).chips(Command::BackToPinnedUrl).concat());
+        let mut chips = Vec::new();
+        match (self.agent_bar(), card.map(|card| (card.dot, card.open.clone()))) {
+            (Some(Bar::Held { .. }), _) => chips.push(
+                page_chip(palette, "task-hand-back", "Hand Back", take_over(cx))
+                    .on_click(cx.listener(|shell, _, _, cx| shell.agent_bar_primary(cx))),
+            ),
+            (bar, Some((Dot::Working | Dot::Waiting, _))) => {
+                if matches!(bar, Some(Bar::Working { .. })) {
+                    chips.push(
+                        page_chip(palette, "task-take-over", "Take Over", take_over(cx))
+                            .on_click(cx.listener(|shell, _, _, cx| shell.agent_bar_primary(cx))),
+                    );
+                }
+                let stop = page_chip(palette, "task-stop", "Stop", Some(stop_keys()));
+                chips.push(stop.on_click(act(agent.clone(), TaskAction::Stop, cx)));
             }
-            None => (self.title(tab).to_string(), String::new()),
-        };
-        let buttons = bar.map(|bar| self.agent_bar_buttons(&bar, cx)).unwrap_or_default();
-        // The back's glyph lines up with the page's edge, its plate hanging outside.
-        let left = card_frame.left() - px((NAV_SIZE - BACK_GLYPH) / 2.);
+            (_, Some((Dot::Done, Some((_, site))))) => {
+                let open = page_chip(palette, "task-open", format!("Open {site}"), None);
+                chips.push(open.on_click(act(agent.clone(), TaskAction::Open, cx)));
+            }
+            _ => {}
+        }
+        // The back's chevron lines up with the page's edge, its plate hanging outside.
+        let left = card_frame.left() - px((BACK - BACK_GLYPH) / 2.);
         let back = div()
             .id("task-back")
             .flex_none()
-            .size(px(NAV_SIZE))
+            .size(px(BACK))
             .flex()
             .items_center()
             .justify_center()
             .rounded(px(NAV_RADIUS))
-            .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
-            .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+            .hover(|style| style.bg(palette.plate(STATE_HOVERED)))
+            .active(|style| style.bg(palette.plate(STATE_PRESSED)))
             .on_click(cx.listener(|shell, _, _, cx| shell.task_page_back(cx)))
             .child(
                 svg()
-                    .path("icons/arrow-left.svg")
+                    .path("icons/chevron-down.svg")
                     .size(px(BACK_GLYPH))
-                    .text_color(self.palette.glyph(NAV)),
+                    .with_transformation(Transformation::rotate(Radians(FRAC_PI_2)))
+                    .text_color(palette.text(SECONDARY)),
             );
+        let detail = (!detail.is_empty()).then(|| format!(" · {detail}"));
         div()
             .id("task-strip")
             .absolute()
@@ -922,20 +983,23 @@ impl Shell {
             .child(back)
             .child(
                 div()
-                    .flex_none()
-                    .whitespace_nowrap()
-                    .text_color(self.palette.text(TITLE))
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(title),
-            )
-            .child(div().flex_1().min_w(px(0.)).truncate().text_color(rgba(DETAIL)).child(detail))
-            .child(
-                div()
-                    .flex_none()
+                    .flex_1()
+                    .min_w(px(0.))
                     .flex()
-                    .gap(px(BUTTON_GAP))
-                    .children(buttons.into_iter().map(|button| button.flex_none())),
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_color(palette.text(TITLE))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(title),
+                    )
+                    .children(detail.map(|detail| {
+                        div().min_w(px(0.)).truncate().text_color(palette.text(SECONDARY)).child(detail)
+                    })),
             )
+            .child(div().flex_none().flex().gap(px(CHIP_GAP)).children(chips))
             .into_any_element()
     }
 }

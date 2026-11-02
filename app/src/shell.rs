@@ -1176,7 +1176,7 @@ pub struct Shell {
     /// The link the pointer is on in the page shown, whose address the plate in the card's corner
     /// shows, and what measures it.
     link: Option<link::Link>,
-    link_system: Option<WindowTextSystem>,
+    text_system: Option<WindowTextSystem>,
     /// Whether the window is full screen, as macOS last told once its transition was over.
     full_screen: bool,
     /// On Linux, whether the window is maximized, which its third button shows.
@@ -1365,6 +1365,8 @@ pub struct Shell {
     ask_slot: Option<u64>,
     /// The task card under the pointer, which shows its ✕.
     task_hovered: Option<SharedString>,
+    /// How each task's card lays out in the sidebar's width, by its agent.
+    task_shapes: Vec<(SharedString, task_cards::Shape)>,
     /// The task ✕ dismissed last, which ⇧⌘T brings back unless a tab has closed since, and when,
     /// in milliseconds since the Unix epoch, as the archive dates what closed.
     closed_task: Option<(SharedString, f64)>,
@@ -1565,7 +1567,7 @@ impl Shell {
             hover_changed: false,
             page_fullscreen: false,
             link: None,
-            link_system: None,
+            text_system: None,
             full_screen: false,
             maximized: false,
             window_for_page: false,
@@ -1659,6 +1661,7 @@ impl Shell {
             task_cards: Vec::new(),
             ask_slot: None,
             task_hovered: None,
+            task_shapes: Vec::new(),
             closed_task: None,
             talk: None,
             focus_talk: false,

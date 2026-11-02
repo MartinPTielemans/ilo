@@ -46,6 +46,9 @@ futures = "0.3"
 getrandom = "0.3"
 # The local time an agent task's limit resets at. GPUI's dependencies bring it already.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# The screenshots a task's trace shows, which the core hands over in base64. GPUI's dependencies
+# bring it already.
+base64 = "0.22"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui_macos = { path = ".deps/zed/crates/gpui_macos" }

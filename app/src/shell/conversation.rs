@@ -1,39 +1,82 @@
 //! A task's conversation, which the page area shows in the page's place (Agent task,
-//! task_area.rs). A click on a task's card shows it, coming in from the card's side. Its pages'
-//! pictures are along its top, taken only while it shows, then what was asked with its page, what
-//! each side said with the steps between folded into a line, what it's doing now, and the reply
-//! field at its foot. A picture's click zooms its page out of it. Esc steps back to the Space's
-//! tab, ⌘W closes the card, and ⌘. stops the task.
+//! task_area.rs). A click on a task's card shows it, coming in from the card's side. Its title and
+//! where it is head it, its pages' pictures under them, taken only while it shows, then what was
+//! asked with its page and what each side said, with the work between two messages a trace, and
+//! the reply field at its foot. A picture's click zooms its page out of it. Esc steps back to the
+//! Space's tab, ⌘W closes the card, and ⌘. stops the task.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::f32::consts::FRAC_PI_2;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
 use gpui::{
-    Bounds, Context, Corners, Entity, Focusable, FontWeight, IntoElement, MouseButton, Pixels,
-    Render, RenderImage, SharedString, WeakEntity, Window, actions, canvas, div, prelude::*, px,
-    rgba,
+    Bounds, Context, Corners, ElementId, Entity, Focusable, FontWeight, HighlightStyle, Image,
+    IntoElement, MouseButton, ObjectFit, Pixels, Radians, Render, RenderImage, ScrollHandle,
+    SharedString, StyledText, Transformation, WeakEntity, Window, actions, canvas, div, img,
+    linear_color_stop, linear_gradient, prelude::*, px, rgb, svg,
 };
 
 use super::{
-    SECONDARY, STATUS_AGENT, STATUS_DOT, Shell, TITLE,
+    NAV_RADIUS, SECONDARY, Shell, TITLE,
+    agent_bar::stop_keys,
     browser::Browser,
-    permission::card_button,
     picture::{PagePicture, next_request},
-    rows::ringed_dot,
+    row_spring,
 };
 use crate::agents::Status;
-use crate::agents::task::{Card, Conversation, Dot, Line, TaskAction};
+use crate::agents::task::{Card, Conversation, Dot, Line, Opens, TaskAction, Trace, TraceItem, TraceStep};
+use crate::palette::{STATE_HOVERED, STATE_PRESSED};
 use crate::text_input::TextInput;
+use crate::tokens::find_bar::NOT_FOUND;
 use crate::tokens::shell::FORM_PLACEHOLDER;
+use crate::tokens::shell::agent_pointer::{COLOR as SIGNAL, RING};
 use crate::tokens::shell::conversation::{
-    BUBBLE_X, BUBBLE_Y, COLUMN, HEADER, INSET, LINE_GAP, PICTURE_GAP, PICTURE_HEIGHT,
-    PICTURE_RADIUS, PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_HEIGHT, REPLY_INSET, SITE, TOP,
+    BLOCK_GAP, BUBBLE_BOTTOM, BUBBLE_FILL, BUBBLE_TOP, BUBBLE_WIDTH, BUBBLE_X, CHIPS_BELOW,
+    CHIPS_TOP, COLUMN, FADE, HEADER_BOTTOM, INSET, META_GAP, META_LINE, OPEN_BELOW, OPEN_TOP,
+    PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON, PAGE_CHIP_FILL, PAGE_CHIP_GAP, PAGE_CHIP_HANG,
+    PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PICTURE_GAP, PICTURE_HEIGHT, PICTURE_RADIUS, PICTURE_WIDTH,
+    PICTURES_BOTTOM, RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP, REPLY_HEIGHT, REPLY_INSET,
+    SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD, SITE, SITE_GAP, TEXT_LINE, TITLE_LINE, TOP, TRACE_BELOW,
+    TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH, TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER,
+    TRACE_INDENT, TRACE_LINE, TRACE_NOTE, TRACE_PICTURE_HEIGHT, TRACE_PICTURE_RADIUS,
+    TRACE_PICTURE_WIDTH, TRACE_RULE, TRACE_RULE_FILL, TRACE_RULE_X, TRACE_TITLE,
 };
 use crate::tokens::shell::empty::KEYS_FILL;
 use crate::tokens::text;
+use crate::tokens::toast::{CHIP_FILL, CHIP_GAP, CHIP_HEIGHT, CHIP_RADIUS, CHIP_X, KEY_COLOR, KEY_GAP};
 
 actions!(conversation, [SendReply, StopTask]);
+
+/// A chip at the page's scale, the toast's: its words, and its key after them, fainter. The
+/// conversation's and the page strip's buttons are these.
+pub(super) fn page_chip(
+    palette: super::Palette,
+    id: impl Into<ElementId>,
+    words: impl Into<SharedString>,
+    key: Option<String>,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .h(px(CHIP_HEIGHT))
+        .px(px(CHIP_X))
+        .flex()
+        .items_center()
+        .gap(px(KEY_GAP))
+        .rounded(px(CHIP_RADIUS))
+        .bg(palette.plate(CHIP_FILL))
+        .hover(move |style| style.bg(palette.state(CHIP_FILL, STATE_HOVERED)))
+        .active(move |style| style.bg(palette.state(CHIP_FILL, STATE_PRESSED)))
+        .whitespace_nowrap()
+        .text_size(px(text::BODY))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(palette.text(TITLE))
+        .child(words.into())
+        .children(key.map(|key| div().text_color(palette.text(KEY_COLOR)).child(key)))
+}
 
 /// Sends the windows' `shells` what the Agents show as they change: their status, the task cards
 /// and, to a window showing a task's conversation, that conversation, as `conversation` makes it
@@ -96,6 +139,25 @@ pub struct TalkView {
     drawn: Rc<RefCell<Vec<(u64, Bounds<Pixels>)>>>,
     /// Its pages changed while one was watched over it, so they're pictured again once it shows.
     stale: bool,
+    /// Its lines, which keep the newest in view as they come while the user is at the end.
+    scroll: ScrollHandle,
+    /// What the user opened or folded of its traces and their lines, which wins over what the
+    /// trace would do by itself.
+    opened: HashMap<Fold, bool>,
+    /// Whether each was open as last drawn, and since when each has unfolded or folded.
+    was_open: HashMap<Fold, bool>,
+    folding: HashMap<Fold, Instant>,
+    /// How tall what each opens to is, as last laid out, for it to unfold from and fold to.
+    heights: Rc<RefCell<HashMap<Fold, f32>>>,
+    /// When it was made, which the shimmer's band sweeps from.
+    made: Instant,
+}
+
+/// What opens in a conversation: a trace, or a line of one, by its key.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) enum Fold {
+    Trace(usize),
+    Step(usize),
 }
 
 impl Shell {
@@ -135,6 +197,12 @@ impl Shell {
                     pictures: Vec::new(),
                     drawn: Rc::default(),
                     stale: false,
+                    scroll: ScrollHandle::new(),
+                    opened: HashMap::new(),
+                    was_open: HashMap::new(),
+                    folding: HashMap::new(),
+                    heights: Rc::default(),
+                    made: Instant::now(),
                 })
             }
         };
@@ -201,9 +269,6 @@ impl Shell {
 
     /// ⌘. with a conversation shown: its task stops, if it works or waits on the user.
     pub(super) fn stop_talk(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.watched_task_page().is_some() {
-            return false;
-        }
         let Some(agent) = self.talk_agent() else { return false };
         let card = self.task_cards.iter().find(|card| card.agent == agent);
         if !card.is_some_and(|card| matches!(card.dot, Dot::Working | Dot::Waiting)) {
@@ -250,8 +315,8 @@ impl TalkView {
         let conversation = conversation.filter(|shown| shown.agent == self.agent)?;
         let moved = self.stale
             || self.shown.as_ref().is_none_or(|shown| {
-                (&shown.doing, &shown.tabs, shown.lines.len())
-                    != (&conversation.doing, &conversation.tabs, conversation.lines.len())
+                (&shown.tabs, shown.on, shown.lines.len(), steps(&shown.lines))
+                    != (&conversation.tabs, conversation.on, conversation.lines.len(), steps(&conversation.lines))
             });
         let mut stale = Vec::new();
         if moved && watched {
@@ -269,10 +334,24 @@ impl TalkView {
             stale.extend(gone.into_iter().filter_map(|(_, _, picture)| Some(picture?.image())));
         }
         if self.shown.as_ref() != Some(&conversation) {
+            // The newest line stays in view as lines come, while the user reads at the end.
+            let grew = self.shown.as_ref().is_none_or(|shown| {
+                (shown.lines.len(), steps(&shown.lines), &shown.answers, &shown.open)
+                    != (conversation.lines.len(), steps(&conversation.lines), &conversation.answers, &conversation.open)
+            });
+            if grew && (self.shown.is_none() || self.at_end()) {
+                self.scroll.scroll_to_bottom();
+            }
             self.shown = Some(conversation);
             cx.notify();
         }
         Some(stale)
+    }
+
+    /// Whether its lines are scrolled to their end, or all show.
+    fn at_end(&self) -> bool {
+        let (offset, max) = (self.scroll.offset(), self.scroll.max_offset());
+        -offset.y >= max.y - px(2.)
     }
 
     /// The picture asked with `request` came. Returns the one it replaces to let go of, or None if
@@ -307,10 +386,12 @@ impl TalkView {
             return;
         }
         self.reply.update(cx, |input, cx| input.reset(SharedString::default(), window, cx));
+        self.act(TaskAction::Reply(text.into()), cx);
+    }
+
+    fn act(&self, action: TaskAction, cx: &mut Context<Self>) {
         let agent = self.agent.clone();
-        self.shell
-            .update(cx, |shell, cx| shell.browser.task(agent, TaskAction::Reply(text.into()), cx))
-            .ok();
+        self.shell.update(cx, |shell, cx| shell.browser.task(agent, action, cx)).ok();
     }
 
     /// A picture's click: its page zooms out of it to fill the area.
@@ -324,32 +405,117 @@ impl TalkView {
         self.shell.update(cx, |shell, cx| shell.watch_task_page(tab, from, picture, cx)).ok();
     }
 
-    /// The agent's name and the task's title, with Stop ⌘. while it works or waits on the user.
+    /// Whether a trace or a line of one is open: as the user left it, else a trace while its
+    /// stretch is under way, and a line not.
+    pub(super) fn is_open(&self, fold: Fold, running: bool) -> bool {
+        self.opened.get(&fold).copied().unwrap_or(running)
+    }
+
+    /// The user's click on a trace's line, which opens or folds it from then on.
+    pub(super) fn toggle(&mut self, fold: Fold, running: bool, cx: &mut Context<Self>) {
+        let open = self.is_open(fold, running);
+        self.opened.insert(fold, !open);
+        cx.notify();
+    }
+
+    /// Starts the motion of each trace or line whose open changed since it was last drawn, by the
+    /// user's click or as its stretch ended.
+    fn settle_folds(&mut self, now: Instant, still: bool) {
+        let Some(shown) = &self.shown else { return };
+        let mut folds = Vec::new();
+        for line in &shown.lines {
+            let Line::Trace(trace) = line else { continue };
+            folds.push((Fold::Trace(trace.key), self.is_open(Fold::Trace(trace.key), trace.running)));
+            for item in &trace.items {
+                if let TraceItem::Step(step) = item
+                    && step.opens != Opens::Nothing
+                {
+                    folds.push((Fold::Step(step.key), self.is_open(Fold::Step(step.key), false)));
+                }
+            }
+        }
+        for (fold, open) in folds {
+            let was = self.was_open.insert(fold, open);
+            if was.is_some_and(|was| was != open) && !still {
+                self.folding.insert(fold, now);
+            }
+        }
+        self.folding.retain(|_, since| row_spring((now - *since).as_secs_f32()).is_some());
+    }
+
+    /// What opens under a line: it unfolds and folds on Row motion, the rows under it moving with
+    /// it, or None while folded.
+    fn unfolding(&self, fold: Fold, open: bool, content: gpui::Div, now: Instant) -> Option<gpui::AnyElement> {
+        let done = (self.folding.get(&fold)).and_then(|since| row_spring((now - *since).as_secs_f32()));
+        if !open && done.is_none() {
+            return None;
+        }
+        let heights = self.heights.clone();
+        let measure = canvas(
+            move |bounds, _, _| _ = heights.borrow_mut().insert(fold, f32::from(bounds.size.height)),
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full();
+        let content = content.relative().flex_none().child(measure);
+        let Some(done) = done else {
+            return Some(content.into_any_element());
+        };
+        let full = self.heights.borrow().get(&fold).copied().unwrap_or(0.);
+        let height = if open { full * done } else { full * (1. - done) };
+        Some(div().flex_none().h(px(height.max(0.))).overflow_hidden().child(content).into_any_element())
+    }
+
+    /// The task's title and, under it, what it runs on and where it is, with Stop ⌘. at its right
+    /// while it works or waits on the user.
     fn header(&self, look: &Look, cx: &mut Context<Self>) -> gpui::Div {
         let shown = self.shown.as_ref();
-        let name = shown.map_or(SharedString::default(), |shown| {
-            format!("{} · {}", shown.name, shown.title).into()
-        });
+        let palette = look.palette;
+        let title = shown.map(|shown| shown.title.clone()).unwrap_or_default();
+        let about = shown.map(|shown| shown.about.clone()).unwrap_or_default();
         let stop = shown.filter(|shown| shown.stoppable).map(|_| {
-            card_button(&look.palette, "conversation-stop", "Stop ⌘.").on_click(cx.listener(
+            page_chip(palette, "conversation-stop", "Stop", Some(stop_keys())).on_click(cx.listener(
                 |view, _, _, cx| {
                     view.shell.update(cx, |shell, cx| shell.stop_talk(cx)).ok();
                 },
             ))
         });
+        let words = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .truncate()
+                    .text_size(px(text::TITLE))
+                    .line_height(px(TITLE_LINE))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(palette.text(TITLE))
+                    .child(title),
+            )
+            .child(
+                div()
+                    .mt(px(META_GAP))
+                    .truncate()
+                    .text_size(px(text::SMALL))
+                    .line_height(px(META_LINE))
+                    .text_color(palette.text(SECONDARY))
+                    .child(about),
+            );
         div()
             .flex_none()
-            .h(px(HEADER))
+            .mb(px(HEADER_BOTTOM))
             .flex()
             .items_center()
-            .justify_between()
-            .text_color(look.palette.text(SECONDARY))
-            .child(div().min_w_0().truncate().child(name))
+            .gap(px(BUBBLE_X))
+            .child(words)
             .children(stop)
     }
 
-    /// Its pages' pictures, each over its site, in a row; a click zooms the page out of it.
-    fn pictures(&self, look: &Look, cx: &mut Context<Self>) -> Option<gpui::Div> {
+    /// Its pages' pictures, each over its site, in a row that scrolls sideways rather than wrap;
+    /// the agent's tab has the Signal ring while it works, and a click zooms the page out of it.
+    fn pictures(&self, look: &Look, cx: &mut Context<Self>) -> Option<gpui::Stateful<gpui::Div>> {
         let shown = self.shown.as_ref().filter(|shown| !shown.tabs.is_empty())?;
         self.drawn.borrow_mut().clear();
         let pictures = shown.tabs.iter().map(|(tab, site)| {
@@ -369,14 +535,23 @@ impl TalkView {
             )
             .absolute()
             .size_full();
+            let ring = (shown.on == Some(tab)).then(|| {
+                div()
+                    .absolute()
+                    .inset_0()
+                    .rounded(px(PICTURE_RADIUS))
+                    .border(px(RING))
+                    .border_color(rgb(SIGNAL))
+            });
             let picture = div()
                 .relative()
                 .w(px(PICTURE_WIDTH))
                 .h(px(PICTURE_HEIGHT))
                 .rounded(px(PICTURE_RADIUS))
-                .bg(look.palette.plate(rgba(KEYS_FILL).a))
+                .bg(look.palette.plate(gpui::rgba(KEYS_FILL).a))
                 .overflow_hidden()
-                .child(paint);
+                .child(paint)
+                .children(ring);
             div()
                 .id(("conversation-page", tab))
                 .flex_none()
@@ -385,6 +560,7 @@ impl TalkView {
                 .child(picture)
                 .child(
                     div()
+                        .mt(px(SITE_GAP))
                         .h(px(SITE))
                         .truncate()
                         .text_size(px(text::SMALL))
@@ -393,58 +569,196 @@ impl TalkView {
                 )
                 .on_click(cx.listener(move |view, _, _, cx| view.watch(tab, cx)))
         });
-        Some(div().flex_none().flex().gap(px(PICTURE_GAP)).pt(px(LINE_GAP)).children(pictures))
+        Some(
+            div()
+                .id("conversation-pictures")
+                .flex_none()
+                .mb(px(PICTURES_BOTTOM))
+                .overflow_x_scroll()
+                .flex()
+                .gap(px(PICTURE_GAP))
+                .children(pictures),
+        )
     }
 
-    /// What was asked, with its page, and the lines after it, then what it's doing now.
-    fn lines(&self, look: &Look) -> Vec<gpui::AnyElement> {
-        let Some(shown) = &self.shown else { return Vec::new() };
+    /// A message of the user's, on its plate at the column's right: the first with the page they
+    /// asked on, as a chip over its text.
+    fn you(&self, text: SharedString, page: Option<(SharedString, Option<Arc<Image>>)>, look: &Look) -> gpui::AnyElement {
         let palette = look.palette;
-        let quiet = |text: SharedString| {
-            div().text_size(px(text::SMALL)).text_color(palette.text(SECONDARY)).child(text)
-        };
-        let you = |text: SharedString| {
+        let chip = page.map(|(title, favicon)| {
+            let icon = match favicon {
+                Some(favicon) => img(favicon).size(px(PAGE_CHIP_FAVICON)).into_any_element(),
+                None => svg()
+                    .path("icons/globe.svg")
+                    .size(px(PAGE_CHIP_FAVICON))
+                    .text_color(palette.text(SECONDARY))
+                    .into_any_element(),
+            };
             div()
                 .flex()
-                .justify_end()
+                .mb(px(PAGE_CHIP_BELOW))
                 .child(
                     div()
-                        .max_w(px(COLUMN * 0.75))
-                        .px(px(BUBBLE_X))
-                        .py(px(BUBBLE_Y))
-                        .rounded(px(RADIUS))
-                        .bg(palette.plate(rgba(KEYS_FILL).a))
-                        .child(text),
+                        .h(px(PAGE_CHIP_HEIGHT))
+                        .max_w_full()
+                        .ml(px(-PAGE_CHIP_HANG))
+                        .px(px(PAGE_CHIP_X))
+                        .flex()
+                        .items_center()
+                        .gap(px(PAGE_CHIP_GAP))
+                        .rounded(px(CHIP_RADIUS))
+                        .bg(palette.plate(PAGE_CHIP_FILL))
+                        .text_size(px(text::SMALL))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(icon)
+                        .child(div().min_w_0().truncate().child(title)),
                 )
-                .into_any_element()
-        };
-        let mut lines = vec![you(shown.asked.clone())];
-        if let Some(page) = &shown.page {
-            let title = if page.title.is_empty() { &page.url } else { &page.title };
-            lines.push(div().flex().justify_end().child(quiet(title.clone())).into_any_element());
+        });
+        div()
+            .flex()
+            .justify_end()
+            .mb(px(BLOCK_GAP))
+            .child(
+                div()
+                    .max_w(gpui::relative(BUBBLE_WIDTH))
+                    .pt(px(BUBBLE_TOP))
+                    .pb(px(BUBBLE_BOTTOM))
+                    .px(px(BUBBLE_X))
+                    .rounded(px(RADIUS))
+                    .bg(palette.plate(BUBBLE_FILL))
+                    .children(chip)
+                    .child(text),
+            )
+            .into_any_element()
+    }
+
+    /// A trace: its summary line, and its steps under it while it's open.
+    fn trace(&self, trace: &Trace, look: &Look, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let fold = Fold::Trace(trace.key);
+        let open = self.is_open(fold, trace.running);
+        let (title, steps) = trace.summary();
+        let running = trace.running;
+        let summary = trace_line(look, fold, None, false, title, steps, Some(open), None)
+            .on_click(cx.listener(move |view, _, _, cx| view.toggle(fold, running, cx)));
+        let mut nest = div()
+            .relative()
+            .flex()
+            .flex_col()
+            .items_start()
+            .pl(px(TRACE_INDENT))
+            .child(
+                div()
+                    .absolute()
+                    .left(px(TRACE_RULE_X))
+                    .top_0()
+                    .bottom_0()
+                    .w(px(TRACE_RULE))
+                    .bg(look.palette.plate(TRACE_RULE_FILL)),
+            );
+        for item in &trace.items {
+            nest = match item {
+                TraceItem::Step(step) => nest.children(self.step(step, look, cx)),
+                TraceItem::Said(text) => nest.child(
+                    div()
+                        .py(px((TRACE_LINE - TEXT_LINE) / 2.))
+                        .text_color(look.palette.text(SECONDARY))
+                        .child(text.clone()),
+                ),
+            };
         }
+        div()
+            .flex()
+            .flex_col()
+            .items_start()
+            .mb(px(TRACE_BELOW))
+            .child(summary)
+            .children(self.unfolding(fold, open, nest.w_full(), look.now))
+            .into_any_element()
+    }
+
+    /// A step's line, and what it opens to while it's open.
+    fn step(&self, step: &TraceStep, look: &Look, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let fold = Fold::Step(step.key);
+        let opens = step.opens != Opens::Nothing;
+        let open = opens && self.is_open(fold, false);
+        let mut line = trace_line(
+            look,
+            fold,
+            Some(step.glyph),
+            step.failed,
+            step.title.clone(),
+            step.description.clone(),
+            opens.then_some(open),
+            step.running.then(|| look.shimmer(self.made)),
+        );
+        if opens {
+            line = line.on_click(cx.listener(move |view, _, _, cx| view.toggle(fold, false, cx)));
+        }
+        let palette = look.palette;
+        let content = match &step.opens {
+            Opens::Nothing => None,
+            Opens::Text(text) => Some(
+                div()
+                    .pl(px(TRACE_GLYPH + TRACE_GAP))
+                    .pt(px(OPEN_TOP))
+                    .pb(px(OPEN_BELOW))
+                    .text_color(palette.text(SECONDARY))
+                    .child(text.clone()),
+            ),
+            Opens::Picture(picture) => Some(
+                div().pl(px(TRACE_GLYPH + TRACE_GAP)).pt(px(OPEN_TOP)).pb(px(OPEN_BELOW)).child(
+                    img(picture.clone())
+                        .w(px(TRACE_PICTURE_WIDTH))
+                        .h(px(TRACE_PICTURE_HEIGHT))
+                        .object_fit(ObjectFit::Cover)
+                        .rounded(px(TRACE_PICTURE_RADIUS)),
+                ),
+            ),
+        };
+        let opened = content.and_then(|content| self.unfolding(fold, open, content.w_full(), look.now));
+        std::iter::once(line.into_any_element()).chain(opened).collect()
+    }
+
+    /// What was asked, with its page, and the lines after it, then the answers to the question it
+    /// waits on, or Open under its result.
+    fn lines(&self, look: &Look, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let Some(shown) = self.shown.clone() else { return Vec::new() };
+        let palette = look.palette;
+        let page = (shown.page.as_ref()).map(|page| {
+            let title = if page.title.is_empty() { page.url.clone() } else { page.title.clone() };
+            (title, look.asked_favicon.clone())
+        });
+        let mut lines = vec![self.you(shown.asked.clone(), page, look)];
         for line in &shown.lines {
             lines.push(match line {
-                Line::You(text) => you(text.clone()),
-                Line::Said(text) => div().child(text.clone()).into_any_element(),
-                Line::Steps { last, count } => {
-                    let steps = match count {
-                        1 => "1 step".to_string(),
-                        count => format!("{count} steps"),
-                    };
-                    quiet(format!("{last} · {steps}").into()).into_any_element()
-                }
+                Line::You(text) => self.you(text.clone(), None, look),
+                Line::Said(text) => div()
+                    .mb(px(BLOCK_GAP))
+                    .text_color(palette.text(TITLE))
+                    .child(text.clone())
+                    .into_any_element(),
+                Line::Trace(trace) => self.trace(trace, look, cx),
             });
         }
-        if let Some(doing) = &shown.doing {
-            let dot = ringed_dot(STATUS_AGENT, STATUS_DOT).opacity(look.breath);
+        let answers = shown.answers.iter().enumerate().map(|(index, answer)| {
+            let action = TaskAction::Answer(answer.clone());
+            page_chip(palette, ("conversation-answer", index), answer.clone(), None)
+                .on_click(cx.listener(move |view, _, _, cx| view.act(action.clone(), cx)))
+        });
+        let open = shown.open.as_ref().map(|site| {
+            page_chip(palette, "conversation-open", format!("Open {site}"), None)
+                .on_click(cx.listener(|view, _, _, cx| view.act(TaskAction::Open, cx)))
+        });
+        let chips: Vec<_> = answers.chain(open).collect();
+        if !chips.is_empty() {
             lines.push(
                 div()
                     .flex()
-                    .items_center()
-                    .gap(px(BUBBLE_X))
-                    .child(dot)
-                    .child(quiet(doing.clone()))
+                    .flex_wrap()
+                    .gap(px(CHIP_GAP))
+                    .mt(px(CHIPS_TOP - BLOCK_GAP))
+                    .mb(px(CHIPS_BELOW))
+                    .children(chips)
                     .into_any_element(),
             );
         }
@@ -457,13 +771,12 @@ impl TalkView {
         div()
             .id("conversation-reply")
             .flex_none()
-            .mt(px(LINE_GAP))
             .h(px(REPLY_HEIGHT))
             .px(px(REPLY_INSET))
             .flex()
             .items_center()
             .rounded(px(RADIUS))
-            .bg(look.palette.plate(rgba(KEYS_FILL).a))
+            .bg(look.palette.plate(REPLY_FILL))
             .font_weight(FontWeight::NORMAL)
             .on_click(cx.listener(move |_, _, window, cx| {
                 window.focus(&reply.focus_handle(cx), cx);
@@ -472,49 +785,193 @@ impl TalkView {
     }
 }
 
-/// What the view takes from its window as it draws: the colours, and how far the working dot has
-/// breathed.
+/// The steps a conversation's traces hold, which change as it works without a line coming.
+fn steps(lines: &[Line]) -> usize {
+    (lines.iter())
+        .map(|line| match line {
+            Line::Trace(trace) => trace.items.len(),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// A line of a trace: its glyph, its title, what it took or why it failed, and a chevron if it
+/// opens, which turns down while it's open. Under the pointer, a line that opens has a plate
+/// hanging outside its text, which goes to the title's colour. The step under way's title
+/// `shimmers`, as far through its pass as it says, or under Reduce Motion, holds at the title's
+/// colour.
+#[allow(clippy::too_many_arguments)]
+fn trace_line(
+    look: &Look,
+    fold: Fold,
+    glyph: Option<&'static str>,
+    failed: bool,
+    title: SharedString,
+    description: SharedString,
+    open: Option<bool>,
+    shimmers: Option<Option<f32>>,
+) -> gpui::Stateful<gpui::Div> {
+    let palette = look.palette;
+    let (id, group): (ElementId, SharedString) = match fold {
+        Fold::Trace(key) => (("trace", key).into(), format!("trace-{key}").into()),
+        Fold::Step(key) => (("trace-step", key).into(), format!("trace-step-{key}").into()),
+    };
+    let glyph = glyph.map(|glyph| {
+        let color = match failed {
+            true => rgb(NOT_FOUND).into(),
+            false => palette.glyph(TRACE_GLYPH_ALPHA),
+        };
+        svg().flex_none().path(glyph).size(px(TRACE_GLYPH)).text_color(color)
+    });
+    let chevron = open.map(|open| {
+        svg()
+            .flex_none()
+            .path("icons/chevron-down.svg")
+            .size(px(TRACE_CHEVRON))
+            .text_color(palette.glyph(TRACE_NOTE))
+            .when(!open, |glyph| glyph.with_transformation(Transformation::rotate(Radians(-FRAC_PI_2))))
+    });
+    let opens = open.is_some();
+    let hover = group.clone();
+    div()
+        .id(id)
+        .group(group)
+        .flex_none()
+        .max_w_full()
+        .h(px(TRACE_LINE))
+        .ml(px(-TRACE_HANG))
+        .px(px(TRACE_HANG))
+        .flex()
+        .items_center()
+        .gap(px(TRACE_GAP))
+        .rounded(px(NAV_RADIUS))
+        .whitespace_nowrap()
+        .when(opens, |line| {
+            line.cursor_pointer().hover(move |style| style.bg(palette.plate(TRACE_HOVER)))
+        })
+        .children(glyph)
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(palette.text(match shimmers {
+                    Some(None) => TITLE,
+                    _ => TRACE_TITLE,
+                }))
+                .when(opens, |title| {
+                    title.group_hover(hover, move |style| style.text_color(palette.text(TITLE)))
+                })
+                .child(match shimmers {
+                    Some(Some(phase)) => shimmering(&palette, title, phase),
+                    _ => StyledText::new(title),
+                }),
+        )
+        .when(!description.is_empty(), |line| {
+            line.child(div().flex_none().text_color(palette.text(TRACE_NOTE)).child(description))
+        })
+        .children(chevron)
+}
+
+/// A title a band of near-white sweeps across, `phase` of the way through a pass.
+fn shimmering(palette: &super::Palette, title: SharedString, phase: f32) -> StyledText {
+    let count = title.chars().count().max(1) as f32;
+    let middle = -SHIMMER_BAND + (1. + 2. * SHIMMER_BAND) * phase;
+    let highlights: Vec<_> = (title.char_indices().enumerate())
+        .map(|(index, (at, char))| {
+            let along = (index as f32 + 0.5) / count;
+            let near = (1. - (along - middle).abs() / SHIMMER_BAND).max(0.);
+            let alpha = TRACE_TITLE + (SHIMMER - TRACE_TITLE) * near;
+            let style = HighlightStyle { color: Some(palette.text(alpha)), ..Default::default() };
+            (at..at + char.len_utf8(), style)
+        })
+        .collect();
+    StyledText::new(title).with_highlights(highlights)
+}
+
+/// What the view takes from its window as it draws: the colours, the time, whether motion is
+/// reduced, and the favicon of the page the task was asked on.
 struct Look {
     palette: super::Palette,
-    breath: f32,
+    now: Instant,
+    still: bool,
+    asked_favicon: Option<Arc<Image>>,
+}
+
+impl Look {
+    /// How far through its pass the shimmer is, or None under Reduce Motion.
+    fn shimmer(&self, since: Instant) -> Option<f32> {
+        (!self.still).then(|| ((self.now - since).as_secs_f32() / SHIMMER_PERIOD).fract())
+    }
+}
+
+impl Shell {
+    /// The favicon of an open tab at `url`, if one has it.
+    fn favicon_at(&self, url: &str) -> Option<Arc<Image>> {
+        (self.tabs.values()).find(|tab| tab.page.url.as_ref() == url).and_then(|tab| tab.favicon.clone())
+    }
 }
 
 impl Render for TalkView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let now = Instant::now();
+        let still = cx.reduce_motion();
+        let asked = self.shown.as_ref().and_then(|shown| shown.page.as_ref()).map(|page| page.url.clone());
         let Some(look) = self.shell.upgrade().map(|shell| {
             let shell = shell.read(cx);
-            Look { palette: shell.palette, breath: shell.breath.strength() }
+            let asked_favicon = asked.and_then(|url| shell.favicon_at(&url));
+            Look { palette: shell.palette, now, still, asked_favicon }
         }) else {
             return div().into_any_element();
         };
+        self.settle_folds(now, still);
+        // The step under way shimmers, and what opens moves, on frames only while they show.
+        let running = self.shown.as_ref().is_some_and(|shown| {
+            shown.lines.iter().any(|line| matches!(line, Line::Trace(trace) if trace.running
+                && self.is_open(Fold::Trace(trace.key), true)
+                && trace.items.iter().any(|item| matches!(item, TraceItem::Step(step) if step.running))))
+        });
+        if (running && !still) || !self.folding.is_empty() {
+            window.request_animation_frame();
+        }
+        let palette = look.palette;
+        let fade = div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .h(px(FADE))
+            .bg(linear_gradient(
+                180.,
+                linear_color_stop(palette.page.alpha(0.), 0.),
+                linear_color_stop(palette.page, 1.),
+            ));
+        let lines = div()
+            .id("conversation-lines")
+            .size_full()
+            .track_scroll(&self.scroll)
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .pb(px(FADE))
+            .children(self.lines(&look, cx));
         let column = div()
             .size_full()
             .max_w(px(COLUMN))
             .flex()
             .flex_col()
             .text_size(px(text::BODY))
-            .text_color(look.palette.text(TITLE))
+            .line_height(px(TEXT_LINE))
+            .text_color(palette.text(TITLE))
             .child(self.header(&look, cx))
             .children(self.pictures(&look, cx))
-            .child(
-                div()
-                    .id("conversation-lines")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .gap(px(LINE_GAP))
-                    .pt(px(LINE_GAP))
-                    .children(self.lines(&look)),
-            )
+            .child(div().relative().flex_1().min_h_0().mb(px(REPLY_GAP)).child(lines).child(fade))
             .child(self.reply(&look, cx));
         div()
             .id("conversation")
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(|view, _: &SendReply, window, cx| view.send_reply(window, cx)))
             .size_full()
-            .bg(look.palette.page)
+            .bg(palette.page)
             .px(px(INSET))
             .pt(px(TOP))
             .pb(px(REPLY_BOTTOM))

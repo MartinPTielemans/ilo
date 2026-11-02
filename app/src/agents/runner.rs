@@ -10,6 +10,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use futures::channel::mpsc::UnboundedSender;
 use serde_json::{Value, json};
@@ -117,6 +118,8 @@ pub struct Launch {
 pub enum Out {
     /// The agent said something to the user.
     Said(String),
+    /// The agent thought, for as long as `took`: its reasoning, as its CLI sends it.
+    Thought { text: String, took: Duration },
     /// Its turn ended, and it waits for the user's next message: well, or with what went wrong.
     Ended(Option<Failure>),
     /// The process has gone: its output closed. What it last said on stderr.
@@ -374,20 +377,29 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
 #[derive(Default)]
 pub struct Turn {
     limit: Option<Option<u64>>,
+    /// When the last line came, which a thought took since.
+    heard: Option<Instant>,
 }
 
 /// What a line of Claude's stream-json output says to the user, if anything.
 pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
     let kind = message.get("type").and_then(Value::as_str).unwrap_or_default();
+    let now = Instant::now();
+    // A message comes whole, so its thinking took from the line before it.
+    let took = turn.heard.replace(now).map_or(Duration::ZERO, |heard| now - heard);
     match kind {
         "assistant" => {
             let content = message.pointer("/message/content").and_then(Value::as_array);
             (content.into_iter().flatten())
-                .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
-                .filter_map(|block| block.get("text").and_then(Value::as_str))
-                .map(str::trim)
-                .filter(|text| !text.is_empty())
-                .map(|text| Out::Said(text.to_string()))
+                .filter_map(|block| {
+                    let text = |name| block.get(name).and_then(Value::as_str).map(str::trim);
+                    match block.get("type").and_then(Value::as_str) {
+                        Some("text") => text("text").filter(|text| !text.is_empty()).map(|text| Out::Said(text.into())),
+                        Some("thinking") => (text("thinking").filter(|text| !text.is_empty()))
+                            .map(|text| Out::Thought { text: text.into(), took }),
+                        _ => None,
+                    }
+                })
                 .collect()
         }
         "rate_limit_event" => {

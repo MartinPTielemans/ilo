@@ -988,12 +988,13 @@ tag-radius = 6.0
 [shell.task-area]
 # Ours (Agent task), as Arc and Dia have no tasks: a task's page watched in the page area has its
 # strip under it, not over it, as GPUI can't draw over a page. The strip is this tall at the
-# card's foot, the page's bottom edge this far up from the card's, and its back, words and buttons
-# this far apart. The back is the Library's; the words and buttons are the Agent Space bar's.
+# card's foot, the page's bottom edge this far up from the card's, and its back, words and chips
+# this far apart. The back is a chevron in a close button's box, on a plate under the pointer; the
+# words say who works and what it does; the chips are the toast's, its key after its words.
 strip = 40.0
 page-room = 46.0
 gap = 10.0
-# The back's glyph, as the Library's back has it in a header button's box.
+back = 26.0
 back-glyph = 16.0
 
 [shell.assets]
@@ -1387,40 +1388,113 @@ check-box = 24.0
 check-stroke = 2.25
 
 [shell.task]
-# Ours, as Arc had no tasks: an agent task's card is a tab row two lines tall, its mark in the
-# favicon's column and its title in the title's, over its status in the small size, with its
-# buttons, the question card's, under them. The ask's slot is a card's height, so the card fills
-# it without a row moving.
-height = 50.0
-title-top = 6.0
+# Ours, as Arc had no tasks: an agent task's card is a tab row with a line under its title. The
+# favicon's column holds the task's state: the status dot, Signal and breathing, while it works;
+# ringed and still while it waits on the user; Signal's tick drawing in once it's done; a hollow
+# ring at the secondary alpha once it stopped. Its title is a row's, one line; its status small and
+# secondary, one line, or two for the agent's question. ✕ shows under the pointer, a tab row's. The
+# ask's slot is a card's height without chips, so the card fills it without a row moving.
+top = 7.0
 line = 18.0
-buttons-top = 4.0
-buttons-bottom = 8.0
-# The mark's size: a favicon's drawn size.
-mark = 16.0
+status-line = 15.0
+status-gap = 1.0
+bottom = 8.0
+# The state's box, a favicon's, this far down the plate.
+state-top = 9.0
+hollow = 8.0
+hollow-stroke = 1.25
+# Its chips, the sidebar's scale: the URL field's plate 22 tall at a control's corners, 11 pt
+# medium, each as wide as its words. The first one's words start on the title's column, its plate
+# hanging out to the left by its padding, and they may run to 6 from the plate's edge. They wrap
+# to a second row; past that none show, and the card's click opens the conversation.
+chips-top = 7.0
+chip-height = 22.0
+chip-x = 8.0
+chip-gap = 6.0
+chip-end = 6.0
 
 [shell.conversation]
 # Ours, as Arc had no tasks: a task's conversation in the page's place, a column of text no wider
-# than reads easily, inset from the card as the empty card's line is. Its pages' pictures in a row
-# at its top, a tab's hover card's shape at a third of its size, with their sites under them. The
-# user's lines are plates of the empty card's key chip, at a row's corners, and the reply field at
-# its foot is one, as tall as the URL field's row. A picture has a control's corners.
+# than reads easily, inset from the card as the empty card's line is. A header of the task's title
+# over what it runs on and where it is, with Stop at its right while it works; its pages' pictures
+# in a row under it, a tab's hover card's shape at a third of its size with their sites under them,
+# which scrolls sideways rather than wrap. The user's messages are plates at a row's corners, the
+# page they asked on a chip inside the first. Its chips are the toast's, the page's scale. The reply
+# field at its foot is as tall as the URL field's row, and the lines fade into the page's colour
+# above it.
 column = 640.0
 inset = 24.0
 top = 16.0
-header = 28.0
+title-line = 20.0
+meta-line = 15.0
+meta-gap = 1.0
+header-bottom = 14.0
 picture-width = 112.0
 picture-height = 72.0
 picture-radius = 6.0
 picture-gap = 10.0
 site = 16.0
-line-gap = 10.0
-bubble-x = 10.0
-bubble-y = 4.0
+site-gap = 3.0
+pictures-bottom = 18.0
+# The agent's text, at body, and the gap under each block.
+text-line = 20.0
+block-gap = 14.0
+# The user's message: its plate's padding, its share of the column at most.
+bubble-top = 7.0
+bubble-bottom = 8.0
+bubble-x = 12.0
+bubble-width = 0.8
 radius = 12.0
+bubble-fill = 0.08
+# The page chip in the first message, over its text: its words on the text's column, the plate
+# hanging out by its padding less 2.
+page-chip-height = 20.0
+page-chip-x = 6.0
+page-chip-hang = 4.0
+page-chip-favicon = 12.0
+page-chip-gap = 5.0
+page-chip-below = 5.0
+page-chip-fill = 0.08
+# The work between two messages, as a trace: a summary line, "Working · 5 steps" or "Worked for
+# 41s · 8 steps", and a chevron, right while folded and down while open. Open, its steps nest under
+# it, each a line of its glyph, its title in secondary and, fainter, what it took from 1 s or why
+# it failed. A line that opens has its own chevron and, under the pointer, a plate hanging outside
+# its text, which then goes to the title's colour. A rule runs down the open trace, in from the
+# column's edge. The step under way shimmers: a band of near-white sweeps across its title, a pass
+# each period. A failed step's glyph is the find bar's red.
+trace-line = 26.0
+trace-glyph = 14.0
+trace-glyph-alpha = 0.38
+trace-gap = 8.0
+trace-title = 0.55
+trace-note = 0.38
+trace-chevron = 10.0
+trace-hover = 0.06
+trace-hang = 6.0
+trace-indent = 22.0
+trace-rule = 1.0
+trace-rule-fill = 0.1
+trace-rule-x = 7.0
+trace-below = 12.0
+# What a line opens to, under its title: a thought's or an error's text, or the page it saw.
+open-top = 2.0
+open-below = 6.0
+trace-picture-width = 150.0
+trace-picture-height = 94.0
+trace-picture-radius = 6.0
+shimmer = 0.95
+shimmer-period = 1.6
+# Half the band, in the title's widths.
+shimmer-band = 0.3
+# The question's answers, and the result's Open, under its text.
+chips-top = 10.0
+chips-below = 16.0
 reply-height = 34.0
 reply-inset = 12.0
+reply-fill = 0.07
 reply-bottom = 16.0
+reply-gap = 16.0
+fade = 16.0
 
 [shell.tile-theme]
 # A pixel counts towards the icon's colour from this alpha.

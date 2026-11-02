@@ -5,8 +5,10 @@ use std::rc::Rc;
 
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext, point, px};
 
+use super::Fold;
+
 use crate::agents::runner::Cli;
-use crate::agents::task::{Card, Conversation, Dot, Line};
+use crate::agents::task::{Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep};
 use crate::shell::picture::PagePicture;
 use crate::shell::{Command, Folders, Shell, Slot, recorder::Recorder};
 
@@ -18,6 +20,7 @@ fn card() -> Card {
         cli: Cli::Claude,
         title: "Flight to Lisbon".into(),
         status: "Searching flights".into(),
+        asks: false,
         dot: Dot::Working,
         answers: Vec::new(),
         question: None,
@@ -27,17 +30,37 @@ fn card() -> Card {
     }
 }
 
-fn conversation(doing: &str) -> Conversation {
+/// A step of a trace, under way or done.
+fn step(key: usize, title: &str, running: bool) -> TraceStep {
+    TraceStep {
+        key,
+        glyph: "icons/globe.svg",
+        title: title.to_string().into(),
+        description: "".into(),
+        running,
+        failed: false,
+        opens: Opens::Nothing,
+    }
+}
+
+/// Task-1's conversation as it works, `steps` steps in.
+fn conversation(steps: usize) -> Conversation {
+    let items = (0..steps)
+        .map(|key| TraceItem::Step(step(key, "Opened skyscanner.net", key + 1 == steps)))
+        .collect();
     Conversation {
         agent: "task-1".into(),
         name: "Claude",
         title: "Flight to Lisbon".into(),
+        about: "Claude · Haiku · Working".into(),
         asked: "a flight to Lisbon next Friday".into(),
         page: None,
-        lines: vec![Line::Steps { last: "Opened a page · skyscanner.net".into(), count: 3 }],
-        doing: Some(doing.to_string().into()),
+        lines: vec![Line::Trace(Trace { key: 0, running: true, took: None, items })],
         tabs: vec![(30, "skyscanner.net".into())],
+        on: Some(30),
         stoppable: true,
+        open: None,
+        answers: Vec::new(),
     }
 }
 
@@ -96,7 +119,7 @@ fn the_agents_send_a_shown_conversation_made_before_its_shell_changes(cx: &mut T
         // As the core's Browser::tab reads a page's title and address from the window's shell.
         let made = move |agent: &str, cx: &gpui::App| {
             reads.upgrade()?.read(cx).talk_agent()?;
-            (agent == "task-1").then(|| conversation("Asking"))
+            (agent == "task-1").then(|| conversation(1))
         };
         super::super::send_agents(Vec::new(), vec![card()], made, &[weak.clone()], cx);
     });
@@ -115,11 +138,11 @@ fn the_card_shows_its_conversation(cx: &mut TestAppContext) {
         assert_eq!(shell.task_shown(), Some((3, None)));
     });
 
-    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation("Reading")), cx));
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation(1)), cx));
     assert_eq!(host.take(), ["task picture 30"]);
-    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation("Reading")), cx));
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation(1)), cx));
     assert!(host.take().is_empty(), "pictured again with nothing changed");
-    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation("Clicked")), cx));
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation(2)), cx));
     assert_eq!(host.take(), ["task picture 30"]);
 
     cx.simulate_input("Ryanair");
@@ -134,7 +157,7 @@ fn the_card_shows_its_conversation(cx: &mut TestAppContext) {
 #[gpui::test]
 fn escape_steps_back_and_command_w_dismisses(cx: &mut TestAppContext) {
     let (shell, host, cx) = shown(cx);
-    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation("Reading")), cx));
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation(1)), cx));
     host.take();
     cx.simulate_keystrokes("escape");
     assert!(!host.take().iter().any(|line| line.starts_with("task ")), "Esc stopped it");
@@ -145,7 +168,7 @@ fn escape_steps_back_and_command_w_dismisses(cx: &mut TestAppContext) {
 
     shell.update(cx, |shell, cx| shell.show_task("task-1".into(), cx));
     shell.read_with(cx, |shell, _| assert_eq!(shell.talk_agent().as_deref(), Some("task-1")));
-    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation("Reading")), cx));
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation(1)), cx));
     assert!(host.take().contains(&"task picture 30".to_string()), "pictured again");
     shell.update(cx, |shell, cx| shell.run(Command::CloseTab, "ui", cx));
     assert!(host.take().contains(&"task task-1 Dismiss".to_string()));
@@ -157,7 +180,7 @@ fn escape_steps_back_and_command_w_dismisses(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_picture_shows_its_page(cx: &mut TestAppContext) {
     let (shell, host, cx) = shown(cx);
-    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation("Reading")), cx));
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation(1)), cx));
     let request = crate::shell::picture::next_request() - 1;
     let picture = PagePicture::from_bgra(vec![255; 4 * 4], 2, 2);
     shell.update(cx, |shell, cx| shell.page_pictured(request, picture, cx));
@@ -173,11 +196,67 @@ fn a_picture_shows_its_page(cx: &mut TestAppContext) {
     let zoomed = shell.read_with(cx, |shell, _| shell.task_page_drawn());
     assert_eq!(zoomed, Some((3, 30)));
 
-    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation("Clicked")), cx));
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation(2)), cx));
     assert!(!host.take().contains(&"task picture 30".to_string()), "pictured under the page");
     shell.update(cx, |shell, cx| shell.run(Command::Stop, "ui", cx));
     shell.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
     shell.read_with(cx, |shell, _| assert_eq!(shell.task_shown(), Some((3, None))));
     assert!(host.take().contains(&"task picture 30".to_string()), "pictured once back");
+}
+
+/// A trace shows open while its stretch is under way and folds once it's over, unless the user
+/// opened or folded it, which holds across its end.
+#[gpui::test]
+fn a_trace_is_open_while_it_works_unless_the_user_says_otherwise(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shown(cx);
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation(2)), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let open = |cx: &mut VisualTestContext, running| {
+        view.read_with(cx, |view, _| view.is_open(Fold::Trace(0), running))
+    };
+    assert!(open(cx, true), "under way, it shows its steps");
+    assert!(!open(cx, false), "over, it folds by itself");
+
+    view.update(cx, |view, cx| view.toggle(Fold::Trace(0), true, cx));
+    assert!(!open(cx, true), "folded by the user while it works");
+    assert!(!open(cx, false), "and still folded once it's over");
+    view.update(cx, |view, cx| view.toggle(Fold::Trace(0), false, cx));
+    assert!(open(cx, false), "opened by the user once it's over");
+    assert!(open(cx, true));
+}
+
+/// The newest line stays in view as lines come while the user reads at the end; scrolled up to
+/// read, they stay where they are.
+#[gpui::test]
+fn the_newest_line_stays_in_view_at_the_end(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shown(cx);
+    let talk = |lines: usize| {
+        let mut talk = conversation(1);
+        talk.lines.extend((0..lines).map(|n| Line::Said(format!("Line {n}").into())));
+        talk
+    };
+    let draw = |cx: &mut VisualTestContext| {
+        shell.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk(80)), cx));
+    draw(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let scrolled = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| (view.scroll.offset().y, view.scroll.max_offset().y))
+    };
+    let (offset, max) = scrolled(cx);
+    assert!(max > px(0.), "the lines fit, so nothing scrolls");
+    assert_eq!(offset, -max, "it opened away from its end");
+
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk(81)), cx));
+    draw(cx);
+    let (offset, max) = scrolled(cx);
+    assert_eq!(offset, -max, "a new line went out of view");
+
+    view.update(cx, |view, _| view.scroll.set_offset(point(px(0.), px(0.))));
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk(82)), cx));
+    draw(cx);
+    assert_eq!(scrolled(cx).0, px(0.), "it pulled the user away from what they read");
 }

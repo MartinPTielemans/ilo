@@ -6,6 +6,7 @@
 use std::collections::VecDeque;
 use std::process::ChildStdin;
 use std::sync::Mutex;
+use std::time::Instant;
 
 use serde_json::{Map, Value, json};
 
@@ -34,6 +35,8 @@ struct Inner {
     resets: Option<u64>,
     /// What went wrong in the turn under way, which its end reports.
     failure: Option<Failure>,
+    /// When the reasoning under way started.
+    thinking: Option<Instant>,
 }
 
 /// Starts the server: initialize, which `read` follows with the thread and the first turn.
@@ -157,12 +160,32 @@ pub fn read(
             inner.turn = params.pointer("/turn/id").and_then(Value::as_str).map(String::from);
             Vec::new()
         }
+        "item/started" => {
+            if params.pointer("/item/type").and_then(Value::as_str) == Some("reasoning") {
+                inner.thinking = Some(Instant::now());
+            }
+            Vec::new()
+        }
         "item/completed" => {
             let item = params.get("item").unwrap_or(&Value::Null);
             let text = item.get("text").and_then(Value::as_str).map(str::trim);
             match (item.get("type").and_then(Value::as_str), text) {
                 (Some("agentMessage"), Some(text)) if !text.is_empty() => {
                     vec![Out::Said(text.to_string())]
+                }
+                (Some("reasoning"), _) => {
+                    let took = inner.thinking.take().map(|started| started.elapsed()).unwrap_or_default();
+                    // Its summary, else its whole reasoning, as the model gives either.
+                    let parts = |name: &str| -> String {
+                        let parts = item.get(name).and_then(Value::as_array).into_iter().flatten();
+                        let parts: Vec<&str> = parts.filter_map(Value::as_str).map(str::trim).collect();
+                        parts.join("\n\n").trim().to_string()
+                    };
+                    let text = Some(parts("summary")).filter(|text| !text.is_empty()).unwrap_or_else(|| parts("content"));
+                    match text.is_empty() {
+                        true => Vec::new(),
+                        false => vec![Out::Thought { text, took }],
+                    }
                 }
                 _ => Vec::new(),
             }

@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
+use std::time::Instant;
 
 use futures::channel::mpsc::UnboundedSender;
 use serde_json::{Value, json};
@@ -411,14 +412,21 @@ fn initialize(shared: &Shared, number: u64, agent: &str, params: &Value) -> Valu
     })
 }
 
-/// Runs a tool on the UI thread, and waits for its answer.
+/// Each call's number, for the UI to match its answer to it.
+static NEXT_CALL: AtomicU64 = AtomicU64::new(1);
+
+/// Runs a tool on the UI thread, and waits for its answer, which the UI then hears too: a task's
+/// trace times each step by when its call came and was answered here.
 fn call(shared: &Shared, number: u64, agent: &str, tool: &str, arguments: Value) -> ToolResult {
     let (reply, answer) = mpsc::channel();
+    let id = NEXT_CALL.fetch_add(1, Ordering::Relaxed);
     let call = Call {
+        id,
         agent: agent.into(),
         tool: tool.into(),
         arguments,
         reply,
+        at: Instant::now(),
     };
     // Sent while the connection is open, under the lock `end` closes it with, so that the UI
     // hears no call of a session after its agent's bye.
@@ -432,9 +440,17 @@ fn call(shared: &Shared, number: u64, agent: &str, tool: &str, arguments: Value)
         }
     }
     // The UI drops the call unanswered when the user turns agents off or disconnects the agent.
-    answer
+    let result = answer
         .recv()
-        .unwrap_or_else(|_| ToolResult::error("The browser has turned agents off."))
+        .unwrap_or_else(|_| ToolResult::error("The browser has turned agents off."));
+    _ = shared.events.unbounded_send(Event::Answered {
+        agent: agent.into(),
+        id,
+        at: Instant::now(),
+        error: result.error.then(|| result.text.clone()),
+        image: result.image.clone(),
+    });
+    result
 }
 
 /// The connection closed. The agent's last session ending tells the UI it's gone.

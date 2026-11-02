@@ -75,8 +75,10 @@ fn claudes_config_names_the_browsers_server_alone() {
     );
 }
 
+/// Its thinking goes to the trace as a thought, its text is said, and its tool calls are neither,
+/// as the browser sees those itself.
 #[test]
-fn claudes_text_is_said_and_its_tool_calls_are_not() {
+fn claudes_text_is_said_its_thinking_is_a_thought_and_its_tool_calls_are_neither() {
     let outs = read(&[
         json!({ "type": "system", "subtype": "init", "tools": ["mcp__ilo__open_tab"] }),
         json!({ "type": "assistant", "message": { "content": [
@@ -86,7 +88,9 @@ fn claudes_text_is_said_and_its_tool_calls_are_not() {
         ] } }),
         json!({ "type": "result", "subtype": "success", "is_error": false, "result": "Found one." }),
     ]);
-    assert_eq!(outs, vec![Out::Said("Looking for flights.".into()), Out::Ended(None)]);
+    let Out::Thought { text, .. } = &outs[0] else { panic!("{outs:?}") };
+    assert_eq!(text, "Hmm.");
+    assert_eq!(outs[1..], [Out::Said("Looking for flights.".into()), Out::Ended(None)]);
 }
 
 #[test]

@@ -310,10 +310,12 @@ fn call(
 ) -> mpsc::Receiver<ToolResult> {
     let (reply, answer) = mpsc::channel();
     let call = Call {
+        id: 0,
         agent: agent.into(),
         tool: tool.into(),
         arguments,
         reply,
+        at: std::time::Instant::now(),
     };
     agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
     answer
@@ -1613,7 +1615,7 @@ mod tasks {
         let card = card_of(&agents, cx);
         assert_eq!(card.status.as_ref(), "Claude isn't installed.");
         assert_eq!(card.command, Some("npm install -g @anthropic-ai/claude-code"));
-        assert_eq!(card.dot, Dot::None);
+        assert_eq!(card.dot, Dot::Ended);
     }
 
     #[gpui::test]
@@ -1648,10 +1650,10 @@ mod tasks {
         assert_eq!(asked.recv().unwrap(), ToolResult::text("The user answered: Saturday"));
         assert_eq!(card_of(&agents, cx).dot, Dot::Working);
         browser.tabs.borrow_mut().push((30, 100, "Checkout", "https://shop.example/checkout"));
-        let done = call(&agents, &agent, "finish", json!({ "result": "Found a flight for €80.", "tab": 30 }), cx);
+        let done = call(&agents, &agent, "finish", json!({ "result": "Found a flight for €80.", "summary": "€80 flight, Saturday", "tab": 30 }), cx);
         assert!(!done.recv().unwrap().error);
         let card = card_of(&agents, cx);
-        assert_eq!((card.status.as_ref(), card.dot), ("Found a flight for €80.", Dot::Done));
+        assert_eq!((card.status.as_ref(), card.dot), ("€80 flight, Saturday", Dot::Done));
         assert_eq!(card.open, Some((30, "shop.example".into())));
         let actions: Vec<String> = log(&agents, &agent, cx).into_iter().map(|(action, _, _)| action).collect();
         assert_eq!(actions, ["finish", "answered", "ask", "title"], "newest first");
@@ -1716,15 +1718,167 @@ mod tasks {
         assert_eq!((card.status.as_ref(), card.command), ("Claude isn't signed in.", Some("claude auth login")));
     }
 
+    /// Calls `tool` as the server does, which stamps when it started and, once answered, when it
+    /// ended: by `page` from the core, if it goes to one.
+    fn traced(
+        agents: &Entity<Agents>,
+        browser: &Made,
+        agent: &str,
+        tool: &str,
+        arguments: Value,
+        page: Option<String>,
+        cx: &mut TestAppContext,
+    ) -> ToolResult {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let (reply, answer) = mpsc::channel();
+        let at = std::time::Instant::now();
+        let call = Call { id, agent: agent.into(), tool: tool.into(), arguments, reply, at };
+        agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
+        let result = match page {
+            Some(text) => page_done(agents, browser, answer, text, cx),
+            None => answer.recv().unwrap(),
+        };
+        let error = result.error.then(|| result.text.clone());
+        let at = std::time::Instant::now();
+        let answered = Event::Answered { agent: agent.into(), id, at, error, image: result.image.clone() };
+        agents.update(cx, |agents, cx| agents.handle(answered, cx));
+        result
+    }
+
+    /// A task's calls are its conversation's trace, each titled by what it did and opening to what
+    /// it saw or why it failed. What it typed shows, but never what it typed into a password
+    /// field, though the field refused it.
     #[gpui::test]
-    fn a_turn_ending_without_finish_is_done_with_what_it_said(cx: &mut TestAppContext) {
+    fn a_tasks_calls_are_its_trace_and_never_show_a_password(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, Opens, TraceItem};
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Use the coupon", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        browser.tabs.borrow_mut().push((30, 100, "Shop", "https://shop.example/basket"));
+        traced(&agents, &browser, &agent, "snapshot", json!({ "tab": 30 }), Some(shop_tree()), cx);
+        let coupon = json!({ "tab": 30, "ref": "e1", "text": "SPRING10" });
+        traced(&agents, &browser, &agent, "type", coupon, Some(shop_tree()), cx);
+        let password = json!({ "tab": 30, "ref": "e2", "text": "hunter2" });
+        assert!(traced(&agents, &browser, &agent, "type", password, None, cx).error);
+        traced(&agents, &browser, &agent, "screenshot", json!({ "tab": 30 }), Some("/9j/4AAQ".into()), cx);
+
+        let conversation = agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+        let [Line::Trace(trace)] = conversation.lines.as_slice() else { panic!("{:?}", conversation.lines) };
+        assert!(trace.running, "it's still at work");
+        let steps: Vec<_> = (trace.items.iter())
+            .filter_map(|item| match item {
+                TraceItem::Step(step) => Some(step),
+                TraceItem::Said(_) => None,
+            })
+            .collect();
+        let titles: Vec<_> = steps.iter().map(|step| (step.title.as_ref(), step.description.as_ref(), step.failed)).collect();
+        assert_eq!(
+            titles,
+            [
+                ("Read shop.example", "", false),
+                ("Typed “SPRING10” in “Coupon”", "", false),
+                ("Couldn't type in “Password”", "password field", true),
+                ("Looked at shop.example", "", false),
+            ]
+        );
+        assert!(matches!(&steps[2].opens, Opens::Text(why) if why.starts_with("Password fields are off limits")));
+        assert!(matches!(steps[3].opens, Opens::Picture(_)));
+        let card = card_of(&agents, cx);
+        assert_eq!(card.status.as_ref(), "Looked at shop.example", "the card says the step it's on");
+        assert!(!format!("{conversation:?}{card:?}").contains("hunter2"), "the password showed");
+        let log = format!("{:?}", log(&agents, &agent, cx));
+        assert!(!log.contains("hunter2"), "the password reached the activity log");
+    }
+
+    /// A step says what it did in the tense it's in: under way, done or failed. A field's text
+    /// shows only with the field's name, and a wait says what it waited for or how long.
+    #[test]
+    fn each_step_says_what_it_did_in_its_tense() {
+        use crate::agents::tools::{Did, Tense, step_title};
+        let did = |tool: &str, site: &str, target: &str, text: &str| Did {
+            tool: tool.into(),
+            site: site.into(),
+            target: target.into(),
+            text: text.into(),
+        };
+        let titles = [
+            (did("open_tab", "gulbenkian.pt", "", ""), Tense::Now, "Opening gulbenkian.pt"),
+            (did("navigate", "maat.pt", "", ""), Tense::Done, "Opened maat.pt"),
+            (did("open_tab", "maat.pt/en/visit", "", ""), Tense::Failed, "Couldn't open maat.pt/en/visit"),
+            (did("back", "maat.pt", "", ""), Tense::Done, "Went back on maat.pt"),
+            (did("read_page", "maat.pt", "", ""), Tense::Now, "Reading maat.pt"),
+            (did("snapshot", "maat.pt", "", ""), Tense::Done, "Read maat.pt"),
+            (did("screenshot", "maat.pt", "", ""), Tense::Done, "Looked at maat.pt"),
+            (did("click", "gulbenkian.pt", "“Reabertura do Museu”", ""), Tense::Done, "Clicked “Reabertura do Museu”"),
+            (did("type", "", "“Search”", "Lisbon"), Tense::Done, "Typed “Lisbon” in “Search”"),
+            (did("type", "", "“Search”", ""), Tense::Now, "Typing in “Search”"),
+            (did("press_key", "", "Enter", ""), Tense::Done, "Pressed Enter"),
+            (did("scroll", "maat.pt", "down", ""), Tense::Done, "Scrolled down on maat.pt"),
+            (did("scroll", "maat.pt", "“Opening hours”", ""), Tense::Now, "Scrolling to “Opening hours”"),
+            (did("wait", "", "2s", ""), Tense::Done, "Waited 2s"),
+            (did("wait", "", "“Tickets”", ""), Tense::Failed, "Didn't see “Tickets”"),
+            (did("list_tabs", "", "", ""), Tense::Done, "Looked over its tabs"),
+            (did("close_tab", "maat.pt", "", ""), Tense::Done, "Closed maat.pt"),
+            (did("ask", "", "", ""), Tense::Done, "Asked you"),
+            (did("thought", "", "", ""), Tense::Now, "Thinking"),
+            (did("thought", "", "", ""), Tense::Done, "Thought"),
+        ];
+        for (did, tense, title) in titles {
+            assert_eq!(step_title(&did, tense), title, "{did:?} {tense:?}");
+        }
+    }
+
+    /// The stretch under way is an open trace with what the agent said along the way in it; its
+    /// turn's message folds it to how long it worked, from its first step to that message.
+    #[test]
+    fn a_stretch_folds_when_its_turns_message_comes() {
+        use crate::agents::task::{Line, Message, TraceItem, Traced, Who, fold};
+        let start = std::time::Instant::now();
+        let at = |seconds: u64| start + Duration::from_secs(seconds);
+        let message = |who, text: &str, seconds| Message { who, text: text.to_string().into(), at: at(seconds) };
+        let step = |tool: &str, after, started, ended: Option<u64>| Traced {
+            call: 1,
+            did: tools::Did { tool: tool.into(), site: "maat.pt".into(), ..Default::default() },
+            after,
+            started: at(started),
+            ended: ended.map(at),
+            error: None,
+            picture: None,
+        };
+        let mut messages = vec![message(Who::User, "Museum hours", 0)];
+        let mut trace = vec![step("open_tab", 1, 1, Some(3))];
+        messages.push(message(Who::Agent, "Looking at MAAT first.", 3));
+        trace.push(step("read_page", 2, 4, None));
+
+        let lines = fold(&messages, &trace, false, true);
+        let [Line::You(_), Line::Trace(working)] = lines.as_slice() else { panic!("{lines:?}") };
+        assert!(working.running);
+        assert_eq!(working.summary(), ("Working".into(), "2 steps".into()));
+        assert!(matches!(&working.items[1], TraceItem::Said(said) if said == "Looking at MAAT first."));
+        let TraceItem::Step(last) = &working.items[2] else { panic!() };
+        assert!(last.running, "the step under way shimmers");
+
+        trace[1].ended = Some(at(6));
+        messages.push(message(Who::Agent, "MAAT opens at 10:00.", 41));
+        let lines = fold(&messages, &trace, true, false);
+        let [Line::You(_), Line::Trace(worked), Line::Said(said)] = lines.as_slice() else { panic!("{lines:?}") };
+        assert!(!worked.running);
+        assert_eq!(worked.summary(), ("Worked for 40s".into(), "2 steps".into()));
+        assert_eq!(said.as_ref(), "MAAT opens at 10:00.");
+        assert_eq!(worked.key, working.key, "the user's opening of it carries across its end");
+        assert!(worked.items.iter().all(|item| !matches!(item, TraceItem::Step(step) if step.running)));
+    }
+
+    #[gpui::test]
+    fn a_turn_ending_without_finish_is_done(cx: &mut TestAppContext) {
         let (agents, _) = ready(None, cx);
         let agent = start(&agents, "What's on today?", cx);
         agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
         said(&agents, &agent, Out::Said("Three meetings.".into()), cx);
         said(&agents, &agent, Out::Ended(None), cx);
         let card = card_of(&agents, cx);
-        assert_eq!((card.status.as_ref(), card.dot), ("Three meetings.", Dot::Done));
+        assert_eq!((card.status.as_ref(), card.dot), ("Done", Dot::Done));
     }
 
     #[gpui::test]
@@ -1748,7 +1902,7 @@ mod tasks {
         let first = start(&agents, "One", cx);
         let second = start(&agents, "Two", cx);
         agents.update(cx, |agents, cx| {
-            agents.task_mut(&first).unwrap().state = State::Done { result: "Did one.".into(), tab: None };
+            agents.task_mut(&first).unwrap().state = State::Done { result: "Did one.".into(), summary: None, tab: None };
             agents.task_mut(&second).unwrap().state = State::Working;
             let _ = cx;
         });
