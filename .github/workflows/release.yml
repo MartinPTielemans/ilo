@@ -336,10 +336,8 @@ jobs:
           path: ${{ runner.temp }}/linux
           if-no-files-found: error
 
-  # After Windows, as the appcast that tools/appcast.sh makes here holds the Windows installer too.
   mac:
-    needs: [version, windows]
-    if: ${{ !cancelled() && needs.version.result == 'success' }}
+    needs: version
     runs-on: macos-26
     timeout-minutes: 180
     defaults:
@@ -459,27 +457,70 @@ jobs:
           SIGN_IDENTITY: '-'
         run: ../tools/release.sh
 
+      - name: DMG
+        if: ${{ steps.secrets.outputs.signed == 'true' }}
+        run: |
+          mkdir "$RUNNER_TEMP/mac"
+          mv build/release/ilo.dmg "$RUNNER_TEMP/mac/ilo-mac-arm64.dmg"
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ steps.secrets.outputs.signed == 'true' }}
+        with:
+          name: mac
+          path: ${{ runner.temp }}/mac
+          if-no-files-found: error
+
+  # The updates feed's next state, with the Mac's DMG and, when Windows's job built it, its
+  # installer. Sparkle's tools, which sign both, run on macOS alone, so this is a job of its own
+  # after both: the Mac's build runs beside Windows's rather than after it.
+  appcast:
+    needs: [version, windows, mac]
+    if: ${{ !cancelled() && needs.mac.result == 'success' && needs.mac.outputs.signed == 'true' }}
+    runs-on: macos-26
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      # Sparkle's tools come from setup.sh, which links the engine too, found in the history.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup
+        run: ./setup.sh
+
       - uses: actions/download-artifact@v4
-        if: ${{ needs.windows.result == 'success' && steps.secrets.outputs.signed == 'true' }}
+        with:
+          name: mac
+          path: ${{ runner.temp }}/mac
+
+      - uses: actions/download-artifact@v4
+        if: ${{ needs.windows.result == 'success' }}
         with:
           name: windows
           path: ${{ runner.temp }}/windows
 
       - uses: actions/download-artifact@v4
-        if: ${{ steps.secrets.outputs.signed == 'true' }}
         with:
           name: notes
           path: ${{ runner.temp }}/notes
 
-      # Signed with UPDATE_PRIVATE_KEY, which appcast.sh hands Sparkle's tools on their standard
-      # input, never through the Keychain. appcast.sh names the DMG ilo.dmg in the appcast; the
-      # release's is ilo-mac-arm64.dmg.
+      # appcast.sh finds the DMG, and the app in it, where tools/release.sh left them in the Mac's
+      # job. Signed with UPDATE_PRIVATE_KEY, which appcast.sh hands Sparkle's tools on their
+      # standard input, never through the Keychain. appcast.sh names the DMG ilo.dmg in the
+      # appcast; the release's is ilo-mac-arm64.dmg.
       - name: Appcast
-        if: ${{ steps.secrets.outputs.signed == 'true' }}
         env:
           UPDATE_PRIVATE_KEY: ${{ secrets.UPDATE_PRIVATE_KEY }}
           version: ${{ needs.version.outputs.version }}
         run: |
+          mkdir -p build/release
+          mv "$RUNNER_TEMP/mac/ilo-mac-arm64.dmg" build/release/ilo.dmg
+          volume=$RUNNER_TEMP/volume
+          hdiutil attach -quiet -nobrowse -readonly -mountpoint "$volume" build/release/ilo.dmg
+          ditto "$volume/ilo.app" build/release/ilo.app
+          hdiutil detach -quiet "$volume"
           installer=$RUNNER_TEMP/windows/ilo-windows-x64-setup.exe
           if [ -f "$installer" ]; then
             ../tools/appcast.sh "$RUNNER_TEMP/notes/notes.md" --windows "$installer"
@@ -492,23 +533,24 @@ jobs:
             echo "::error::The appcast doesn't name $url/ilo.dmg once, which the release renames."
             exit 1
           fi
-          mkdir "$RUNNER_TEMP/mac"
-          sed "s#$url/ilo\.dmg\"#$url/ilo-mac-arm64.dmg\"#" "$appcast" > "$RUNNER_TEMP/mac/appcast.xml"
-          mv build/release/ilo.dmg "$RUNNER_TEMP/mac/ilo-mac-arm64.dmg"
+          mkdir "$RUNNER_TEMP/appcast"
+          sed "s#$url/ilo\.dmg\"#$url/ilo-mac-arm64.dmg\"#" "$appcast" > "$RUNNER_TEMP/appcast/appcast.xml"
 
       - uses: actions/upload-artifact@v4
-        if: ${{ steps.secrets.outputs.signed == 'true' }}
         with:
-          name: mac
-          path: ${{ runner.temp }}/mac
+          name: appcast
+          path: ${{ runner.temp }}/appcast
           if-no-files-found: error
 
-  # The draft, once the Mac's and Linux's packages are built. Windows's join it when they built;
-  # 0.1.0's Windows packages wait on a Windows engine and the Store's identity. The site's demo
-  # joins it when it built, and a release without one leaves the site's demo as it was.
+  # The draft, once the Mac's and Linux's packages and, with a signed DMG, the appcast are built.
+  # Windows's join it when they built; 0.1.0's Windows packages wait on a Windows engine and the
+  # Store's identity. The site's demo joins it when it built, and a release without one leaves the
+  # site's demo as it was.
   release:
-    needs: [version, windows, flatpak-repo, mac, demo]
-    if: ${{ !cancelled() && needs.mac.result == 'success' && needs.flatpak-repo.result == 'success' }}
+    needs: [version, windows, flatpak-repo, mac, appcast, demo]
+    if: >-
+      ${{ !cancelled() && needs.mac.result == 'success' && needs.flatpak-repo.result == 'success' &&
+      (needs.appcast.result == 'success' || needs.mac.outputs.signed != 'true') }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -522,6 +564,11 @@ jobs:
         if: ${{ needs.mac.outputs.signed == 'true' }}
         with:
           name: mac
+          path: assets
+      - uses: actions/download-artifact@v4
+        if: ${{ needs.mac.outputs.signed == 'true' }}
+        with:
+          name: appcast
           path: assets
       - uses: actions/download-artifact@v4
         if: ${{ needs.windows.result == 'success' }}
