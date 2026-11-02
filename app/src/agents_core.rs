@@ -271,15 +271,10 @@ pub fn start(cx: &mut App) {
         let status = agents.read(cx).status();
         // Each card is compared with the last, so a window redraws only for a task that changed.
         let cards = agents.read(cx).shown_cards(cx);
-        crate::update_shells_in(cx, |shell, cx| {
-            shell.set_agent_status(status.clone(), cx);
-            shell.set_task_cards(cards.clone(), cx);
-            // Only a window that shows a task's conversation is sent it.
-            if let Some(agent) = shell.talk_agent() {
-                let conversation = agents.read(cx).conversation(&agent, cx);
-                shell.set_conversation(conversation, cx);
-            }
-        });
+        let shells: Vec<_> = WINDOWS
+            .with_borrow(|windows| windows.iter().map(|window| window.shell.clone()).collect());
+        let conversation = |agent: &str, cx: &App| agents.read(cx).conversation(agent, cx);
+        browser::shell::send_agents(status, cards, conversation, &shells, cx);
         browser::command_bar::task_agents_changed(cx);
     })
     .detach();

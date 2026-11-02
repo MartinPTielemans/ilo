@@ -88,7 +88,7 @@ mod agent_pointer;
 mod agent_question;
 mod task_cards;
 mod conversation;
-pub use conversation::bind_keys as bind_conversation_keys;
+pub use conversation::{bind_keys as bind_conversation_keys, send_agents};
 mod picture;
 mod recent_downloads;
 #[cfg(test)]

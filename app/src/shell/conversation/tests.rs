@@ -82,6 +82,27 @@ fn shown(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTe
     (shell, host, cx)
 }
 
+/// The conversation the Agents send a window that shows it is made before the window's shell
+/// changes: the core reads its pages from a window's shell, which can't be read while it's being
+/// changed. Made inside the change, it took the app down once a task changed with its
+/// conversation open.
+#[gpui::test]
+fn the_agents_send_a_shown_conversation_made_before_its_shell_changes(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    host.take();
+    let weak = shell.downgrade();
+    cx.update(|_, cx| {
+        let reads = weak.clone();
+        // As the core's Browser::tab reads a page's title and address from the window's shell.
+        let made = move |agent: &str, cx: &gpui::App| {
+            reads.upgrade()?.read(cx).talk_agent()?;
+            (agent == "task-1").then(|| conversation("Asking"))
+        };
+        super::super::send_agents(Vec::new(), vec![card()], made, &[weak.clone()], cx);
+    });
+    assert!(host.take().contains(&"task picture 30".to_string()), "the conversation wasn't sent");
+}
+
 /// A click on the card shows its conversation in the page area, with the reply field's keyboard;
 /// its pages are pictured only while it shows, and again as what it does changes. Return sends
 /// the reply and ⌘. stops the task.
