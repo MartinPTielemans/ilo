@@ -1164,7 +1164,7 @@ impl menu::Host for MenuHost {
     fn show(&self, frame: Bounds<Pixels>, panels: &[Bounds<Pixels>]) {
         // Linux's window takes the pointer on the panels alone, as its host can shape it.
         #[cfg(target_os = "linux")]
-        menu_window::take_pointer_on(panels);
+        menu_window::set_panels(panels);
         #[cfg(not(target_os = "linux"))]
         let _ = panels;
         let (ui_view, in_reveal) = MENU_OVER.get();
@@ -1175,6 +1175,11 @@ impl menu::Host for MenuHost {
 
     fn hide(&self) {
         unsafe { platform::host_hide_menu_window() };
+    }
+
+    #[cfg(target_os = "linux")]
+    fn blends(&self) -> bool {
+        gpui_linux::overlays_blend()
     }
 }
 
