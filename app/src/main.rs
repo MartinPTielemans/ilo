@@ -1283,7 +1283,8 @@ impl link_preview::Host for LinkPreviewHost {
 
     fn tooltip(&self, tip: Option<(tooltip::Tip, tooltip::Anchor)>, cx: &mut App) {
         match tip {
-            Some((tip, anchor)) => tooltip::hover(tip, anchor, cx),
+            // The preview opens from a click in the window in front, and its tooltips go over it.
+            Some((tip, anchor)) => tooltip::hover(front().0, tip, anchor, cx),
             None => tooltip::dismiss(cx),
         }
     }
