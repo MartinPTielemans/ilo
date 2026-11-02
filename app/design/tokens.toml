@@ -1423,8 +1423,7 @@ chip-end = 6.0
 # in a row under it, a tab's hover card's shape at a third of its size with their sites under them,
 # which scrolls sideways rather than wrap. The user's messages are plates at a row's corners, the
 # page they asked on a chip inside the first. Its chips are the toast's, the page's scale. The reply
-# field at its foot is as tall as the URL field's row, and the lines fade into the page's colour
-# above it.
+# field at its foot is as tall as the URL field's row, and the lines meet a clean edge above it.
 column = 640.0
 inset = 24.0
 top = 16.0
@@ -1442,6 +1441,16 @@ pictures-bottom = 18.0
 # The agent's text, at body, and the gap under each block.
 text-line = 20.0
 block-gap = 14.0
+# Its Markdown: paragraphs this far apart and a list's items closer, each item's marker in a column
+# of its own so its lines wrap under its text, and a list in a list in by that column. Bold is
+# semibold; inline code sits on a faint plate in the text's face; a link is underlined in the
+# text's colour, fainter.
+paragraph-gap = 8.0
+item-gap = 4.0
+list-marker = 18.0
+code-fill = 0.08
+link-line = 1.0
+link-underline = 0.4
 # The user's message: its plate's padding, its share of the column at most.
 bubble-top = 7.0
 bubble-bottom = 8.0

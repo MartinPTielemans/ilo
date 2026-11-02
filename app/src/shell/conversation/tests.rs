@@ -24,7 +24,7 @@ fn card() -> Card {
         dot: Dot::Working,
         answers: Vec::new(),
         question: None,
-        open: None,
+        open: Vec::new(),
         retry: false,
         command: None,
     }
@@ -271,4 +271,17 @@ fn the_newest_line_stays_in_view_at_the_end(cx: &mut TestAppContext) {
     draw(cx);
     let (offset, max) = scrolled(cx);
     assert_eq!(offset, -max, "it opened again where the user had left it");
+
+    // A shorter window keeps the end in view while the user reads there, and leaves a line above
+    // it where it is.
+    let size = cx.update(|window, _| window.viewport_size());
+    cx.simulate_resize(gpui::size(size.width, size.height - px(200.)));
+    draw(cx);
+    let (offset, shorter) = scrolled(cx);
+    assert!(shorter > max, "the window didn't get shorter");
+    assert_eq!(offset, -shorter, "a shorter window lost the end");
+    view.update(cx, |view, _| view.scroll.set_offset(point(px(0.), px(-100.))));
+    cx.simulate_resize(gpui::size(size.width, size.height - px(260.)));
+    draw(cx);
+    assert_eq!(scrolled(cx).0, px(-100.), "it pulled the user away from what they read");
 }

@@ -1777,6 +1777,8 @@ impl CommandBar {
             return self.go(&Go, window, cx);
         }
         let with = match self.target {
+            // A task's page stays in its Space, so it never goes into a split of the user's.
+            Target::Tab(tab) if shell::task_page_shown(tab, cx) => 0,
             Target::Tab(tab) | Target::Beside(tab) => tab,
             Target::NewTab => shell::shown_tab(cx),
             Target::Tabs => 0,

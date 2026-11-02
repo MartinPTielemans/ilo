@@ -24,7 +24,7 @@ use super::{
     swap::{CHECK, NONE, Swapped},
     title,
 };
-use crate::agents::task::{Card, Dot, TaskAction};
+use crate::agents::task::{Card, Dot, TaskAction, open_label};
 use crate::palette::{STATE_HOVERED, STATE_PRESSED};
 use crate::tokens::shell::URL_FIELD;
 use crate::tokens::shell::task::{
@@ -65,13 +65,13 @@ impl Chip {
             Chip::Answer(answer) => answer.clone(),
             Chip::Retry => "Retry".into(),
             Chip::Copy(_) => "Copy".into(),
-            Chip::Open(site) => format!("Open {site}").into(),
+            Chip::Open(label) => label.clone(),
         }
     }
 }
 
 /// A card's chips: the ask's answers, Limit's Retry, Copy for the command that fixes a failure, or
-/// Done's Open <site>.
+/// Done's Open <site> or Open 3 pages.
 fn chips(card: &Card) -> Vec<Chip> {
     let mut chips: Vec<Chip> = card.answers.iter().cloned().map(Chip::Answer).collect();
     if card.retry {
@@ -80,8 +80,8 @@ fn chips(card: &Card) -> Vec<Chip> {
     if let Some(command) = card.command {
         chips.push(Chip::Copy(command));
     }
-    if let Some((_, site)) = &card.open {
-        chips.push(Chip::Open(site.clone()));
+    if let Some(label) = open_label(&card.open) {
+        chips.push(Chip::Open(label));
     }
     chips
 }
@@ -515,7 +515,7 @@ mod tests {
             dot,
             answers: Vec::new(),
             question: None,
-            open: None,
+            open: Vec::new(),
             retry: false,
             command: None,
         }
@@ -547,8 +547,11 @@ mod tests {
         assert!(shape(&asks, 240., &measure).rows.is_empty(), "an answer wider than the room");
 
         let mut done = card(3, Dot::Done);
-        done.open = Some((30, "tickets.gulbenkian.pt.example.org".into()));
+        done.open = vec![(30, "tickets.gulbenkian.pt.example.org".into())];
         assert_eq!(shape(&done, 240., &measure).rows, [vec![0]]);
+        assert_eq!(chips(&done)[0].label().as_ref(), "Open tickets.gulbenkian.pt.example.org");
+        done.open.extend([(31, "maat.pt".into()), (32, "gulbenkian.pt".into())]);
+        assert_eq!(chips(&done)[0].label().as_ref(), "Open 3 pages");
         let mut failed = card(4, Dot::Ended);
         failed.command = Some("claude auth login");
         assert_eq!(chips(&failed)[0].label().as_ref(), "Copy");

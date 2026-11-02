@@ -31,14 +31,15 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
      search, so find everything with the browser.\n\n\
      First call title with a name for the task in two to four words, as a tab's title reads, such \
      as “Lisbon museum hours”.\n\n\
-     When you need the user to choose or confirm something, call ask with the question, and up \
-     to three short answers when there are a few to pick from. It waits for their answer.\n\n\
+     When you need the user to choose or confirm something, call ask with the question in one \
+     short sentence, what they need to know to answer as its context, and up to three short \
+     answers when there are a few to pick from. It waits for their answer.\n\n\
      Never ask for a password, a one-time code or a card number in the conversation. A sign-in, \
      a 2FA prompt or a CAPTCHA is the user's to do: hand them the tab with hand_off.\n\n\
      Never pay, and never place an order, book or send a message unless the user asked you to. \
      When the work ends on a page only the user may finish, such as a checkout, stop there.\n\n\
      When you're done, call finish with the result in a sentence or two, and its summary in one \
-     short line, such as “Gulbenkian, Sat 10:00–21:00”. Give finish a tab only when the user must \
+     short line, such as “Gulbenkian, Sat 10:00–21:00”. Give finish tabs only when the user must \
      act there themselves: pay, sign, submit, or take over a session. Otherwise give none. Keep \
      what you say to the user short and plain."
 );
@@ -82,11 +83,12 @@ fn task_tools() -> Vec<Value> {
         json!({
             "name": "ask",
             "title": "Ask the user",
-            "description": "Ask the user a question, and wait for their answer. With up to three short answers to pick from, each shows as a button. Never ask for a password, a code or a card number.",
+            "description": "Ask the user a question, and wait for their answer. The question alone shows in the user's sidebar, so put what they need to know to answer in context. With up to three short answers to pick from, each shows as a button. Never ask for a password, a code or a card number.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "question": { "type": "string", "description": "The question, in a sentence." },
+                    "question": { "type": "string", "description": "The question alone, in one short sentence ending in “?”, such as “Which would you rather visit?”." },
+                    "context": { "type": "string", "description": "What the user needs to know to answer, in a sentence or two, shown above the question in the conversation. Leave it out when the question says it all." },
                     "answers": {
                         "type": "array",
                         "items": { "type": "string" },
@@ -101,13 +103,28 @@ fn task_tools() -> Vec<Value> {
         json!({
             "name": "finish",
             "title": "Finish",
-            "description": "End the task with its result, and its summary for the user's sidebar. Give a tab only when the user must act there themselves: pay, sign, submit, or take over a session, such as a checkout only they may finish. Otherwise give none.",
+            "description": "End the task with its result, and its summary for the user's sidebar. Give tabs only when the user must act there themselves: pay, sign, submit, or take over a session, such as a checkout only they may finish. Otherwise give none.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "result": { "type": "string", "description": "What you did or found, in a sentence or two." },
-                    "summary": { "type": "string", "maxLength": 32, "description": "The result in one short line of 32 characters at most, such as “Gulbenkian, Sat 10:00–21:00”." },
-                    "tab": { "type": "integer", "description": "The tab the user must act in themselves, from your Space. Leave it out when there's nothing left for them to do there." },
+                    "summary": {
+                        "type": "string",
+                        "maxLength": super::task::SUMMARY_LENGTH,
+                        "description": format!(
+                            "The result in one short line of {} characters at most, such as “Gulbenkian, Sat 10:00–21:00”.",
+                            super::task::SUMMARY_LENGTH,
+                        ),
+                    },
+                    "tabs": {
+                        "type": "array",
+                        "items": { "type": "integer" },
+                        "maxItems": super::task::PAGES,
+                        "description": format!(
+                            "The tabs the user must act in themselves, from your Space, in the order they'll want them, {} at most. Leave it out when there's nothing left for them to do.",
+                            super::task::PAGES,
+                        ),
+                    },
                 },
                 "required": ["result", "summary"],
             },
@@ -366,13 +383,13 @@ fn not_a_tab() -> String {
 pub struct Did {
     /// The tool, a run's step's action, "back" or "forward", or "thought".
     pub tool: String,
-    /// The site it was on, or the address it went to.
+    /// The site it was on, or went to.
     pub site: String,
     /// What on the page: an element by its name in quotes or its role, a key, a direction, or a
     /// wait's text in quotes or its seconds.
     pub target: String,
-    /// A thought's text, or what it typed when that may show: never into a password field, and
-    /// at most `TYPED_SHOWN` characters.
+    /// A thought's text, the address it opened, whole, or what it typed when that may show: never
+    /// into a password field, and at most `TYPED_SHOWN` characters.
     pub text: String,
 }
 
@@ -471,11 +488,19 @@ pub fn step_glyph(tool: &str) -> &'static str {
     }
 }
 
-/// Why a step failed, in a few words, from its call's error: "not found".
-pub fn reason(error: &str) -> &'static str {
+/// Why a step failed, in a few words, from its call's error: "not found", "timed out", "504".
+/// Empty when the error gives no reason, as the step's title already says it couldn't.
+pub fn reason(error: &str) -> String {
     let error = error.to_lowercase();
     let has = |words: &[&str]| words.iter().any(|word| error.contains(word));
-    if has(&["stopped you", "turned agents off", "connection closed"]) {
+    // An HTTP error's status, as "HTTP 504" or "status 504" says it.
+    let words: Vec<&str> = error.split(|char: char| !char.is_ascii_alphanumeric()).collect();
+    let status = words.windows(2).find_map(|pair| {
+        let [before, code] = pair else { return None };
+        let status = code.len() == 3 && code.parse::<u16>().is_ok_and(|code| (400..600).contains(&code));
+        (matches!(*before, "http" | "status" | "error") && status).then_some(*code)
+    });
+    let reason = if has(&["stopped you", "turned agents off", "connection closed"]) {
         "stopped"
     } else if has(&["you said no", "said never", "the user said no", "declined"]) {
         "you said no"
@@ -483,19 +508,24 @@ pub fn reason(error: &str) -> &'static str {
         "needs your OK"
     } else if has(&["password"]) {
         "password field"
-    } else if has(&["only http and https"]) {
+    } else if has(&["http or https", "only http and https"]) {
         "not a web page"
     } else if has(&["there's no element", "no tab", "isn't open", "not found", "404"]) {
         "not found"
+    } else if has(&["timed out", "timeout", "took too long"]) {
+        "timed out"
+    } else if has(&["still loading", "hasn't loaded", "is loading"]) {
+        "still loading"
+    } else if let Some(code) = status {
+        code
     } else if has(&["didn't show"]) {
         "didn't show"
-    } else if has(&["couldn't open", "couldn't go there", "couldn't load"]) {
-        "didn't load"
     } else if has(&["user's already", "user has", "user doesn't have", "took it over"]) {
         "it's yours"
     } else {
-        "failed"
-    }
+        ""
+    };
+    reason.to_string()
 }
 
 /// What an action an agent took is, for the activity log, by the name the core's entry gives it.

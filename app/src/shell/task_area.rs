@@ -664,8 +664,11 @@ impl Shell {
                     _ => self.browser.zoom(tab, -1, cx),
                 }
             }
-            // The header's commands act on the page watched, as its URL field shows it.
-            Command::CopyUrl | Command::CopyMarkdownLink | Command::SiteControls if live.is_some() => {
+            // The header's commands act on the page watched, as its URL field shows it, and Edit
+            // URL edits it.
+            Command::CopyUrl | Command::CopyMarkdownLink | Command::SiteControls | Command::EditUrl
+                if live.is_some() =>
+            {
                 return false;
             }
             // ⌘T opens the bar over the conversation, from a page watched too.
@@ -908,6 +911,13 @@ impl Shell {
         }
     }
 
+    /// The strip's Open on a finished task's page: the page shown's own, of those the task left the
+    /// user, and none once it moved.
+    pub(super) fn task_strip_open(&self, tab: u64) -> Option<String> {
+        let card = self.task_card_shown().filter(|card| card.dot == Dot::Done)?;
+        (card.open.iter()).find(|(each, _)| *each == tab).map(|(_, site)| format!("Open {site}"))
+    }
+
     /// Whether the task the page area shows is at work, which its page's ring says.
     pub(super) fn task_working(&self) -> bool {
         self.task_card_shown().is_some_and(|card| card.dot == Dot::Working)
@@ -915,7 +925,7 @@ impl Shell {
 
     /// The strip under a page watched: back to the conversation, the words, and the chips at its
     /// right: Take Over and Stop while the agent works, Hand Back while the user holds the page,
-    /// Open <site> once a task left the user a tab. It comes in with the page.
+    /// Open <site> once a task left the user this page. It comes in with the page.
     fn task_strip(
         &self,
         card_frame: Bounds<Pixels>,
@@ -929,12 +939,12 @@ impl Shell {
         let agent = card.map(|card| card.agent.clone()).unwrap_or_default();
         let take_over = |cx: &mut Context<Self>| Some(user_keys(cx).chips(Command::BackToPinnedUrl).concat());
         let mut chips = Vec::new();
-        match (self.agent_bar(), card.map(|card| (card.dot, card.open.clone()))) {
+        match (self.agent_bar(), card.map(|card| card.dot)) {
             (Some(Bar::Held { .. }), _) => chips.push(
                 page_chip(palette, "task-hand-back", "Hand Back", take_over(cx))
                     .on_click(cx.listener(|shell, _, _, cx| shell.agent_bar_primary(cx))),
             ),
-            (bar, Some((Dot::Working | Dot::Waiting, _))) => {
+            (bar, Some(Dot::Working | Dot::Waiting)) => {
                 if matches!(bar, Some(Bar::Working { .. })) {
                     chips.push(
                         page_chip(palette, "task-take-over", "Take Over", take_over(cx))
@@ -944,9 +954,11 @@ impl Shell {
                 let stop = page_chip(palette, "task-stop", "Stop", Some(stop_keys()));
                 chips.push(stop.on_click(act(agent.clone(), TaskAction::Stop, cx)));
             }
-            (_, Some((Dot::Done, Some((_, site))))) => {
-                let open = page_chip(palette, "task-open", format!("Open {site}"), None);
-                chips.push(open.on_click(act(agent.clone(), TaskAction::Open, cx)));
+            (_, Some(Dot::Done)) => {
+                if let Some(words) = self.task_strip_open(tab) {
+                    let open = page_chip(palette, "task-open", words, None);
+                    chips.push(open.on_click(act(agent.clone(), TaskAction::OpenTab(tab), cx)));
+                }
             }
             _ => {}
         }

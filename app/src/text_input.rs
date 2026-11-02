@@ -879,6 +879,10 @@ struct PrepaintState {
 /// The caret's width.
 const CARET: Pixels = px(2.);
 
+/// Where a fade is the ground at full, from its inner side: its outer third is solid, so a glyph
+/// the field's edge cuts doesn't show a sliver.
+const SOLID: f32 = 2. / 3.;
+
 /// How far a field `width` wide scrolls a line `text` wide so the caret, at `caret`, is in view
 /// and `margin` clear of an edge with more text past it, moving no further from `scroll` than it
 /// must, so the line stays put while the caret moves within it.
@@ -1032,15 +1036,13 @@ impl Element for TextElement {
         };
         let mut fades = Vec::new();
         if let Some((fade, ground)) = input.fade {
-            let clear = ground.opacity(0.);
+            let (clear, ground) = (linear_color_stop(ground.opacity(0.), 0.), linear_color_stop(ground, SOLID));
             let band = |x: Pixels| Bounds::new(point(x, bounds.top()), size(fade, bounds.size.height));
             if scroll > px(0.) {
-                let to_start = linear_gradient(270., linear_color_stop(clear, 0.), linear_color_stop(ground, 1.));
-                fades.push(fill(band(bounds.left()), to_start));
+                fades.push(fill(band(bounds.left()), linear_gradient(270., clear, ground)));
             }
             if line.width - scroll > width {
-                let to_end = linear_gradient(90., linear_color_stop(clear, 0.), linear_color_stop(ground, 1.));
-                fades.push(fill(band(bounds.right() - fade), to_end));
+                fades.push(fill(band(bounds.right() - fade), linear_gradient(90., clear, ground)));
             }
         }
         self.input.update(cx, |input, _| input.scroll = scroll);

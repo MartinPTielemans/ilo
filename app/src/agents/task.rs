@@ -21,8 +21,11 @@ use super::{Agents, Question, ToolResult, page, site, tools};
 /// The answers an ask shows as buttons on the card, at most, and how long each may be.
 pub const ANSWERS: usize = 3;
 pub const ANSWER_LENGTH: usize = 24;
-/// A done card's line, at most, which the agent gives as finish's summary.
-pub const SUMMARY_LENGTH: usize = 32;
+/// A done card's line, at most, which finish asks the agent's summary to keep to. The card's own
+/// ellipsis cuts one longer.
+pub const SUMMARY_LENGTH: usize = 28;
+/// The pages a finished task may leave the user, at most.
+pub const PAGES: usize = 10;
 /// The dismissed tasks ⇧⌘T and ⌘Z can bring back. An older one is dropped, its Space with it.
 const KEPT: usize = 10;
 
@@ -32,9 +35,9 @@ pub enum State {
     Working,
     /// The agent asks the user (ask), and waits for the answer.
     Asking { question: SharedString, answers: Vec<SharedString> },
-    /// The agent finished, with its result, the line its card says it in, and the tab the user may
-    /// open, if any.
-    Done { result: SharedString, summary: Option<SharedString>, tab: Option<u64> },
+    /// The agent finished, with its result, the line its card says it in, and the tabs it left the
+    /// user to open, in its order, until each is opened.
+    Done { result: SharedString, summary: Option<SharedString>, tabs: Vec<u64> },
     /// The user's plan is at its limit, until this time, as the clock reads it.
     Limit { resets: Option<SharedString> },
     Stopped,
@@ -87,7 +90,8 @@ pub struct Conversation {
     pub on: Option<u64>,
     /// Whether it works or waits on the user, which ⌘. stops.
     pub stoppable: bool,
-    /// The site of the tab its result left the user, which Open under the result moves to them.
+    /// Open under the result, which moves the tabs it left the user to them: "Open maat.pt", or
+    /// "Open 2 pages".
     pub open: Option<SharedString>,
     /// The answers to the question it waits on, as chips under it.
     pub answers: Vec<SharedString>,
@@ -240,8 +244,8 @@ pub struct Card {
     pub answers: Vec<SharedString>,
     /// A confirmation or a handoff of the task's, which the card asks instead of the windows'.
     pub question: Option<Question>,
-    /// Done's tab to open, and its site.
-    pub open: Option<(u64, SharedString)>,
+    /// Done's tabs to open, each with its site, in the agent's order.
+    pub open: Vec<(u64, SharedString)>,
     /// Limit's Retry.
     pub retry: bool,
     /// The command that fixes a failure.
@@ -271,8 +275,19 @@ pub enum TaskAction {
     Reply(SharedString),
     Retry,
     Stop,
-    /// Done's Open <site>.
+    /// Done's Open <site> or Open 3 pages: every tab it left the user.
     Open,
+    /// A page's own Open <site>, from the strip under it.
+    OpenTab(u64),
+}
+
+/// Open's words, for the tabs a task left the user: its site for one, and how many for several.
+pub fn open_label(open: &[(u64, SharedString)]) -> Option<SharedString> {
+    match open {
+        [] => None,
+        [(_, site)] => Some(format!("Open {site}").into()),
+        tabs => Some(format!("Open {} pages", tabs.len()).into()),
+    }
 }
 
 /// An agent as ⌘T's ask lists it.
@@ -344,7 +359,8 @@ impl Agents {
             TaskAction::Reply(text) => self.reply(agent, &text, cx),
             TaskAction::Retry => self.retry_task(agent, cx),
             TaskAction::Stop => self.stop_task(agent, cx),
-            TaskAction::Open => return (self.open_result(agent, cx), None),
+            TaskAction::Open => return (self.open_result(agent, None, cx), None),
+            TaskAction::OpenTab(tab) => return (self.open_result(agent, Some(tab), cx), None),
         }
         (None, None)
     }
@@ -386,7 +402,7 @@ impl Agents {
             tabs,
             on: (task.state == State::Working).then(|| self.current.get(agent).copied()).flatten(),
             stoppable: matches!(task.state, State::Working | State::Asking { .. }),
-            open: self.open_site(task, cx),
+            open: open_label(&self.open_tabs(task, cx)),
             answers: match &task.state {
                 State::Asking { answers, .. } => answers.clone(),
                 _ => Vec::new(),
@@ -407,17 +423,13 @@ impl Agents {
             .cloned()
     }
 
-    /// Done's tab to open, with its site, while it's still in the task's Space.
-    fn open_tab(&self, task: &Task, cx: &App) -> Option<(u64, SharedString)> {
-        let State::Done { tab: Some(tab), .. } = task.state else { return None };
-        if !self.browser.space_tab_ids(task.space, cx).contains(&tab) {
-            return None;
-        }
-        Some((tab, site(&self.browser.tab(tab, cx).url).into()))
-    }
-
-    fn open_site(&self, task: &Task, cx: &App) -> Option<SharedString> {
-        self.open_tab(task, cx).map(|(_, site)| site)
+    /// Done's tabs to open, with their sites, those still in the task's Space.
+    fn open_tabs(&self, task: &Task, cx: &App) -> Vec<(u64, SharedString)> {
+        let State::Done { tabs, .. } = &task.state else { return Vec::new() };
+        let own = self.browser.space_tab_ids(task.space, cx);
+        (tabs.iter().filter(|tab| own.contains(tab)))
+            .map(|&tab| (tab, site(&self.browser.tab(tab, cx).url).into()))
+            .collect()
     }
 
     /// The cards of the tasks shown at the top of `home`'s Today, newest first.
@@ -452,11 +464,12 @@ impl Agents {
             (State::Stopped, _) => ("Stopped".into(), Dot::Ended),
             (State::Failed { why, .. }, _) => (why.clone(), Dot::Ended),
         };
-        let open = self.open_tab(task, cx);
+        let open = self.open_tabs(task, cx);
         // The core's auto-archive can take a task's page it never showed (window.cc), and a task
-        // lives for one run, so its card says where it went rather than offer it.
-        let status = match task.state {
-            State::Done { tab: Some(_), .. } if open.is_none() => "Its page went to the Archive".into(),
+        // lives for one run, so its card says where they went rather than offer them.
+        let status = match &task.state {
+            State::Done { tabs, .. } if open.is_empty() && tabs.len() == 1 => "Its page went to the Archive".into(),
+            State::Done { tabs, .. } if open.is_empty() && !tabs.is_empty() => "Its pages went to the Archive".into(),
             _ => status,
         };
         Card {
@@ -699,6 +712,11 @@ impl Agents {
         match out {
             Out::Said(text) => {
                 let Some(task) = self.task_mut(&agent) else { return };
+                // Finish's result is the answer, and the task has ended: what the CLI writes after
+                // it, as its turn winds down, isn't shown.
+                if matches!(task.state, State::Done { .. }) {
+                    return;
+                }
                 task.messages.push(Message::new(Who::Agent, text));
             }
             Out::Thought { text, took } => {
@@ -721,7 +739,7 @@ impl Agents {
                     let result = (task.messages.iter().rev())
                         .find(|message| message.who != Who::User)
                         .map_or_else(|| "Done".into(), |message| message.text.clone());
-                    task.state = State::Done { result, summary: None, tab: None };
+                    task.state = State::Done { result, summary: None, tabs: Vec::new() };
                     task.ended = Some(SystemTime::now());
                 }
             }
@@ -865,19 +883,29 @@ impl Agents {
         Some(agent)
     }
 
-    /// Done's Open <site>: the tab moves into the task's Space's Today, at its top, the user's.
-    pub fn open_result(&mut self, agent: &str, cx: &mut Context<Self>) -> Option<u64> {
+    /// Done's Open: the tabs it left the user, or `only` that one of them, move to the top of the
+    /// Today tabs of the Space it was asked in, in the agent's order, the user's now. Returns the
+    /// first, to show. A tab moved is out of the task's for good: bringing its card back with ⌘Z
+    /// offers the rest.
+    pub fn open_result(&mut self, agent: &str, only: Option<u64>, cx: &mut Context<Self>) -> Option<u64> {
+        let task = self.task(agent)?;
+        let open: Vec<u64> = (self.open_tabs(task, cx).into_iter())
+            .map(|(tab, _)| tab)
+            .filter(|tab| only.is_none_or(|only| only == *tab))
+            .collect();
+        let (home, first) = (task.home, *open.first()?);
         let task = self.task_mut(agent)?;
-        let State::Done { tab: Some(tab), result, summary } = task.state.clone() else {
-            return None;
-        };
-        let home = task.home;
-        task.state = State::Done { result, summary, tab: None };
-        self.browser.move_tab(tab, home, cx);
-        // check.sh reads this line.
-        log!("browser: task {agent} opens {tab} in space {home}");
+        if let State::Done { tabs, .. } = &mut task.state {
+            tabs.retain(|tab| !open.contains(tab));
+        }
+        // Each goes to the top, so the last goes first.
+        for &tab in open.iter().rev() {
+            self.browser.move_tab(tab, home, cx);
+            // check.sh reads this line.
+            log!("browser: task {agent} opens {tab} in space {home}");
+        }
         cx.notify();
-        Some(tab)
+        Some(first)
     }
 
     /// The task goes for good: its CLI ends and its Space goes, with its tabs.
@@ -996,12 +1024,14 @@ impl Agents {
         match tool {
             "open_tab" | "navigate" => match string("url").as_str() {
                 back @ ("back" | "forward") => did.tool = back.to_string(),
-                url => {
-                    did.site = match self.browser.url_for(url) {
-                        Some(url) => address(&url),
-                        None => page::clip(url, 40),
+                // Its title says the site; the line opens to the address, whole.
+                url => match self.browser.url_for(url) {
+                    Some(url) => {
+                        did.site = site(&url);
+                        did.text = url;
                     }
-                }
+                    None => did.site = page::clip(url, 40),
+                },
             },
             "click" | "type" => {
                 did.target = element.as_ref().map(named).unwrap_or_default();
@@ -1035,6 +1065,32 @@ impl Agents {
             _ => {}
         }
         did
+    }
+
+    /// The tabs finish's `tabs` leaves the user, in its order, each once: the task's own, and at
+    /// most `PAGES`. Else why not.
+    fn left_tabs(&self, agent: &str, arguments: &Value, cx: &App) -> Result<Vec<u64>, String> {
+        let ids = match arguments.get("tabs") {
+            None | Some(Value::Null) => return Ok(Vec::new()),
+            Some(Value::Array(ids)) => ids,
+            Some(_) => return Err("tabs is a list of your tabs' ids, from list_tabs.".into()),
+        };
+        let mut tabs = Vec::new();
+        for id in ids {
+            let tab = id.as_u64().ok_or("tabs is a list of your tabs' ids, from list_tabs.")?;
+            if !tabs.contains(&tab) {
+                tabs.push(tab);
+            }
+        }
+        if tabs.len() > PAGES {
+            return Err(format!("tabs takes {PAGES} tabs at most: leave the user the {PAGES} that matter most."));
+        }
+        let space = self.task(agent).map_or(0, |task| task.space);
+        let own = self.browser.space_tab_ids(space, cx);
+        match tabs.iter().find(|tab| !own.contains(tab)) {
+            Some(tab) => Err(format!("Tab {tab} isn't one of yours: give the ids of tabs in your Space, from list_tabs.")),
+            None => Ok(tabs),
+        }
     }
 
     /// The task-only tools: title, ask and finish. Each writes an activity-log entry.
@@ -1081,9 +1137,14 @@ impl Agents {
                     true => answers,
                     false => Vec::new(),
                 };
+                // The conversation has the context over the question; the card, the question.
+                let said = match text("context") {
+                    "" => page::clip(question, 2000),
+                    context => format!("{}\n\n{}", page::clip(context, 2000), page::clip(question, 300)),
+                };
+                let question: SharedString = page::clip(card_question(question), 300).into();
                 let Some(task) = self.task_mut(agent) else { return };
-                let question: SharedString = page::clip(question, 300).into();
-                task.messages.push(Message::new(Who::Asked, question.clone()));
+                task.messages.push(Message::new(Who::Asked, said));
                 task.state = State::Asking { question, answers: buttons };
                 task.asking = Some(reply);
                 self.note(agent, "ask", "", "");
@@ -1094,19 +1155,40 @@ impl Agents {
                     _ = reply.send(ToolResult::error("result is what you did, in a sentence or two."));
                     return;
                 }
-                let tab = arguments.get("tab").and_then(Value::as_u64);
-                let space = self.task(agent).map_or(0, |task| task.space);
-                let tab = tab.filter(|tab| self.browser.space_tab_ids(space, cx).contains(tab));
-                let site = tab.map(|tab| site(&self.browser.tab(tab, cx).url));
-                let summary = Some(text("summary"))
-                    .filter(|summary| !summary.is_empty())
-                    .map(|summary| page::clip(summary, SUMMARY_LENGTH).into());
+                // A model can write its other arguments into result as markup, which would show as
+                // it is and lose them, so it calls again.
+                if result.contains("<parameter name=") || result.contains("</result>") {
+                    _ = reply.send(ToolResult::error(FINISH_AGAIN));
+                    return;
+                }
+                let tabs = match self.left_tabs(agent, arguments, cx) {
+                    Ok(tabs) => tabs,
+                    Err(why) => {
+                        _ = reply.send(ToolResult::error(why));
+                        return;
+                    }
+                };
+                let site = match tabs.as_slice() {
+                    [tab] => site(&self.browser.tab(*tab, cx).url),
+                    [] => String::new(),
+                    tabs => format!("{} pages", tabs.len()),
+                };
+                // Whole: the card's ellipsis is the only cut.
+                let summary = Some(text("summary")).filter(|summary| !summary.is_empty()).map(SharedString::from);
                 let Some(task) = self.task_mut(agent) else { return };
+                // The answer written just before finish is its result, which shows once.
+                if (task.messages.last()).is_some_and(|last| last.who == Who::Agent && last.text.trim() == result) {
+                    task.messages.pop();
+                    let messages = task.messages.len();
+                    for step in &mut task.trace {
+                        step.after = step.after.min(messages);
+                    }
+                }
                 let result: SharedString = page::clip(result, 2000).into();
                 task.messages.push(Message::new(Who::Result, result.clone()));
-                task.state = State::Done { result, summary, tab };
+                task.state = State::Done { result, summary, tabs };
                 task.ended = Some(SystemTime::now());
-                self.note(agent, "finish", site.as_deref().unwrap_or(""), "");
+                self.note(agent, "finish", &site, "");
                 _ = reply.send(ToolResult::text("Done. The user sees your result. Stop here."));
             }
             _ => _ = reply.send(ToolResult::error(format!("There's no tool {tool}."))),
@@ -1114,6 +1196,29 @@ impl Agents {
         cx.notify();
     }
 }
+
+/// An ask's line on the card: the question alone. An agent that put what the user needs to know
+/// in it too has its last sentence that asks, else all of it.
+pub fn card_question(asked: &str) -> &str {
+    let Some(end) = asked.rfind('?') else { return asked };
+    let before = &asked[..end];
+    // A sentence starts after a newline, or after an end and a space with no lowercase after it,
+    // so "i.e. the museum" stays one.
+    let start = (before.char_indices().rev())
+        .find(|&(at, char)| {
+            let rest = &asked[at + char.len_utf8()..];
+            char == '\n'
+                || (matches!(char, '.' | '!' | '?')
+                    && rest.starts_with(char::is_whitespace)
+                    && !rest.trim_start().starts_with(char::is_lowercase))
+        })
+        .map_or(0, |(at, char)| at + char.len_utf8());
+    asked[start..=end].trim()
+}
+
+/// What finish says to a result with its other arguments written into it.
+pub const FINISH_AGAIN: &str =
+    "result has your other arguments written into it: call finish again with result, summary and tabs each an argument of its own.";
 
 /// What Retry says to the agent.
 const RETRY: &str = "Go on from where you stopped.";
@@ -1238,19 +1343,20 @@ impl Stretch {
         self.ended = Some(self.ended.map_or(end, |ended| ended.max(end)));
         let took = step.ended.map(|ended| ended.saturating_duration_since(step.started));
         let description = match (&step.error, took) {
-            (Some(error), _) => tools::reason(error).to_string(),
+            (Some(error), _) => tools::reason(error),
             // A wait's title says its time.
             (None, Some(took)) if took >= Duration::from_secs(1) && step.did.tool != "wait" => {
                 duration(took.as_secs())
             }
             _ => String::new(),
         };
-        let opens = match (&step.error, &step.picture) {
-            (Some(error), _) => Opens::Text(error.clone()),
-            (None, Some(picture)) => Opens::Picture(picture.clone()),
-            (None, None) if step.did.tool == "thought" && !step.did.text.is_empty() => {
-                Opens::Text(step.did.text.clone().into())
-            }
+        let text = (!step.did.text.is_empty()).then(|| step.did.text.clone());
+        let opened = matches!(step.did.tool.as_str(), "open_tab" | "navigate");
+        let opens = match (&step.error, &step.picture, text) {
+            (Some(error), _, Some(address)) if opened => Opens::Text(format!("{address}\n{error}").into()),
+            (Some(error), _, _) => Opens::Text(error.clone()),
+            (None, Some(picture), _) => Opens::Picture(picture.clone()),
+            (None, None, Some(text)) if opened || step.did.tool == "thought" => Opens::Text(text.into()),
             _ => Opens::Nothing,
         };
         self.items.push(TraceItem::Step(TraceStep {
@@ -1291,14 +1397,6 @@ impl Stretch {
         });
         lines.push(Line::Trace(Trace { key, running, took, items }));
     }
-}
-
-/// An address as a trace says it: its site and path, without its scheme, query or fragment.
-fn address(url: &str) -> String {
-    let rest = url.split_once("://").map_or("", |(_, rest)| rest);
-    let path = rest.find('/').map_or("", |at| &rest[at..]);
-    let path = path.split(['?', '#']).next().unwrap_or_default().trim_end_matches('/');
-    page::clip(&format!("{}{path}", site(url)), 60)
 }
 
 /// A screenshot's picture, from its JPEG in base64.

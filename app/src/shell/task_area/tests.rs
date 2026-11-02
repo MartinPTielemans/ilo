@@ -373,7 +373,7 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         dot,
         answers: Vec::new(),
         question: None,
-        open: None,
+        open: Vec::new(),
         retry: false,
         command: None,
     };
@@ -391,17 +391,23 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
     let expected = ("Claude is working".to_string(), "Clicking “Tickets”".to_string(), true);
     assert_eq!(says(&shell, cx), expected);
 
-    let mut done = card(Dot::Done, "Tickets for Saturday");
-    done.open = Some((30, "gulbenkian.pt".into()));
-    shell.update(cx, |shell, cx| shell.set_task_cards(vec![done], cx));
+    let mut done = card(Dot::Done, "Tickets for two museums");
+    done.open = vec![(30, "gulbenkian.pt".into()), (31, "maat.pt".into())];
+    shell.update(cx, |shell, cx| shell.set_task_cards(vec![done.clone()], cx));
     assert_eq!(says(&shell, cx), ("Claude finished".into(), "gulbenkian.pt".into(), false));
+    // Of the pages it left, the strip opens the page shown alone, and has nothing once it moved.
+    let open = |shell: &Entity<Shell>, cx: &mut VisualTestContext| shell.read_with(cx, |shell, _| shell.task_strip_open(30));
+    assert_eq!(open(&shell, cx).as_deref(), Some("Open gulbenkian.pt"));
+    done.open.remove(0);
+    shell.update(cx, |shell, cx| shell.set_task_cards(vec![done], cx));
+    assert_eq!(open(&shell, cx), None);
 
     shell.update(cx, |shell, cx| shell.set_task_cards(vec![card(Dot::Ended, "Stopped")], cx));
     assert_eq!(says(&shell, cx), ("Stopped".into(), "".into(), false));
 }
 
 /// While a task's page is watched, the URL field shows its address, and Copy URL, Copy URL as
-/// Markdown and the Site Controls act on it, not on the user's tab under it.
+/// Markdown, the Site Controls and Edit URL act on it, not on the user's tab under it.
 #[gpui::test]
 fn the_url_field_is_the_page_watcheds(cx: &mut TestAppContext) {
     let (shell, host, cx) = shell_with_task(cx);
@@ -422,6 +428,9 @@ fn the_url_field_is_the_page_watcheds(cx: &mut TestAppContext) {
     let copied = host.copied.borrow().clone();
     assert_eq!(copied, ["https://www.gulbenkian.pt/tickets", "[Tickets](https://www.gulbenkian.pt/tickets)"]);
     assert_eq!(host.site_controls.borrow().last().map(|(tab, _)| *tab), Some(30));
+    // Edit URL opens the bar on the page watched, which stays in place under it.
+    shell.update(cx, |shell, cx| shell.run(Command::EditUrl, "ui", cx));
+    assert_eq!(*host.bar_edits.borrow(), [Some(30)]);
     assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), Some((3, Some(30))), "it left the page");
 
     shell.update(cx, |shell, cx| shell.run(Command::Stop, "ui", cx));

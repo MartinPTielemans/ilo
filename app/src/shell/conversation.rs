@@ -13,12 +13,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use gpui::{
-    Bounds, Context, Corners, ElementId, Entity, Focusable, FontWeight, HighlightStyle, Image,
-    IntoElement, MouseButton, ObjectFit, Pixels, Radians, Render, RenderImage, ScrollHandle,
-    SharedString, StyledText, Transformation, WeakEntity, Window, actions, canvas, div, img,
-    prelude::*, px, rgb, svg,
+    Bounds, Context, Corners, ElementId, Entity, Focusable, FontStyle, FontWeight, HighlightStyle,
+    Image, InteractiveText, IntoElement, MouseButton, ObjectFit, Pixels, Radians, Render,
+    RenderImage, ScrollHandle, SharedString, Size, StyledText, Transformation, UnderlineStyle,
+    WeakEntity, Window, actions, canvas, div, img, prelude::*, px, rgb, svg,
 };
 
+use self::markdown::{Block, Inline};
 use super::{
     NAV_RADIUS, SECONDARY, Shell, TITLE,
     agent_bar::stop_keys,
@@ -35,8 +36,9 @@ use crate::tokens::shell::FORM_PLACEHOLDER;
 use crate::tokens::shell::agent_pointer::{COLOR as SIGNAL, RING};
 use crate::tokens::shell::conversation::{
     BLOCK_GAP, BUBBLE_BOTTOM, BUBBLE_FILL, BUBBLE_TOP, BUBBLE_WIDTH, BUBBLE_X, CHIPS_BELOW,
-    CHIPS_TOP, COLUMN, HEADER_BOTTOM, INSET, LINES_BELOW, META_GAP, META_LINE, OPEN_BELOW,
-    OPEN_TOP, PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON, PAGE_CHIP_FILL, PAGE_CHIP_GAP, PAGE_CHIP_HANG,
+    CHIPS_TOP, CODE_FILL, COLUMN, HEADER_BOTTOM, INSET, ITEM_GAP, LINES_BELOW, LINK_LINE,
+    LINK_UNDERLINE, LIST_MARKER, META_GAP, META_LINE, OPEN_BELOW, OPEN_TOP, PARAGRAPH_GAP,
+    PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON, PAGE_CHIP_FILL, PAGE_CHIP_GAP, PAGE_CHIP_HANG,
     PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PICTURE_GAP, PICTURE_HEIGHT, PICTURE_RADIUS, PICTURE_WIDTH,
     PICTURES_BOTTOM, RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP, REPLY_HEIGHT, REPLY_INSET,
     SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD, SITE, SITE_GAP, TEXT_LINE, TITLE_LINE, TOP, TRACE_BELOW,
@@ -49,6 +51,8 @@ use crate::tokens::text;
 use crate::tokens::toast::{CHIP_FILL, CHIP_GAP, CHIP_HEIGHT, CHIP_RADIUS, CHIP_X, KEY_COLOR, KEY_GAP};
 
 actions!(conversation, [SendReply, StopTask]);
+
+mod markdown;
 
 /// A chip at the page's scale, the toast's: its words, and its key after them, fainter. The
 /// conversation's and the page strip's buttons are these.
@@ -141,6 +145,8 @@ pub struct TalkView {
     stale: bool,
     /// Its lines, which keep the newest in view as they come while the user is at the end.
     scroll: ScrollHandle,
+    /// The window's size as last drawn: a change keeps the lines at their end if they were.
+    viewport: Size<Pixels>,
     /// What the user opened or folded of its traces and their lines, which wins over what the
     /// trace would do by itself.
     opened: HashMap<Fold, bool>,
@@ -161,6 +167,14 @@ pub(super) enum Fold {
 }
 
 impl Shell {
+    /// A link in a task's conversation: its page opens as a tab of the user's Space, and shows.
+    fn open_link(&mut self, url: &str, cx: &mut Context<Self>) {
+        // check.sh reads this line.
+        log!("browser: task link {url}");
+        self.leave_task_area(cx);
+        self.browser.open_page(url, cx);
+    }
+
     /// The task whose conversation the page area shows, for the Agents to send.
     pub fn talk_agent(&self) -> Option<SharedString> {
         let talk = self.talk.as_ref()?;
@@ -202,6 +216,7 @@ impl Shell {
                     drawn: Rc::default(),
                     stale: false,
                     scroll: ScrollHandle::new(),
+                    viewport: Size::default(),
                     opened: HashMap::new(),
                     was_open: HashMap::new(),
                     folding: HashMap::new(),
@@ -590,6 +605,69 @@ impl TalkView {
         )
     }
 
+    /// What the agent said, as its Markdown marks it: its paragraphs and lists, with bold, italic,
+    /// code and links, a link's click opening its page as a tab of the user's. Each of its texts
+    /// is `name` and `number`'s, which tell it from the others in the lines.
+    fn said(&self, name: &'static str, number: usize, text: &str, look: &Look) -> gpui::Div {
+        let mut column = div().flex().flex_col();
+        let mut items = false;
+        for (index, block) in markdown::blocks(text).into_iter().enumerate() {
+            let id = ElementId::NamedInteger(name.into(), ((number as u64) << 16) | index as u64);
+            let (item, block) = match block {
+                Block::Paragraph(text) => (false, self.inline(id, text, look)),
+                Block::Item { depth, marker, text } => (
+                    true,
+                    div()
+                        .flex()
+                        .pl(px(depth as f32 * LIST_MARKER))
+                        .child(div().flex_none().w(px(LIST_MARKER)).child(marker))
+                        .child(div().flex_1().min_w_0().child(self.inline(id, text, look)))
+                        .into_any_element(),
+                ),
+            };
+            let gap = match (index, item && items) {
+                (0, _) => 0.,
+                (_, true) => ITEM_GAP,
+                _ => PARAGRAPH_GAP,
+            };
+            column = column.child(div().mt(px(gap)).child(block));
+            items = item;
+        }
+        column
+    }
+
+    /// A block's text with its marks, and its links, if any, which take a click.
+    fn inline(&self, id: ElementId, inline: Inline, look: &Look) -> gpui::AnyElement {
+        let palette = look.palette;
+        let highlights = (inline.styled.iter()).map(|(range, style)| {
+            let underline = UnderlineStyle {
+                thickness: px(LINK_LINE),
+                color: Some(palette.text(LINK_UNDERLINE)),
+                wavy: false,
+            };
+            let highlight = HighlightStyle {
+                font_weight: style.bold.then_some(FontWeight::SEMIBOLD),
+                font_style: style.italic.then_some(FontStyle::Italic),
+                background_color: style.code.then(|| palette.plate(CODE_FILL)),
+                underline: style.link.then_some(underline),
+                ..HighlightStyle::default()
+            };
+            (range.clone(), highlight)
+        });
+        let text = StyledText::new(inline.text).with_highlights(highlights.collect::<Vec<_>>());
+        if inline.links.is_empty() {
+            return text.into_any_element();
+        }
+        let (ranges, urls): (Vec<_>, Vec<SharedString>) = inline.links.into_iter().unzip();
+        let shell = self.shell.clone();
+        InteractiveText::new(id, text)
+            .on_click(ranges, move |index, _, cx| {
+                let Some(url) = urls.get(index).cloned() else { return };
+                shell.update(cx, |shell, cx| shell.open_link(&url, cx)).ok();
+            })
+            .into_any_element()
+    }
+
     /// A message of the user's, on its plate at the column's right: the first with the page they
     /// asked on, as a chip over its text.
     fn you(&self, text: SharedString, page: Option<(SharedString, Option<Arc<Image>>)>, look: &Look) -> gpui::AnyElement {
@@ -664,14 +742,14 @@ impl TalkView {
                     .w(px(TRACE_RULE))
                     .bg(look.palette.plate(TRACE_RULE_FILL)),
             );
-        for item in &trace.items {
+        for (index, item) in trace.items.iter().enumerate() {
             nest = match item {
                 TraceItem::Step(step) => nest.children(self.step(step, look, cx)),
                 TraceItem::Said(text) => nest.child(
                     div()
                         .py(px((TRACE_LINE - TEXT_LINE) / 2.))
                         .text_color(look.palette.text(SECONDARY))
-                        .child(text.clone()),
+                        .child(self.said("trace-said", (trace.key << 16) | index, text, look)),
                 ),
             };
         }
@@ -738,13 +816,13 @@ impl TalkView {
             (title, look.asked_favicon.clone())
         });
         let mut lines = vec![self.you(shown.asked.clone(), page, look)];
-        for line in &shown.lines {
+        for (index, line) in shown.lines.iter().enumerate() {
             lines.push(match line {
                 Line::You(text) => self.you(text.clone(), None, look),
                 Line::Said(text) => div()
                     .mb(px(BLOCK_GAP))
                     .text_color(palette.text(TITLE))
-                    .child(text.clone())
+                    .child(self.said("said", index, text, look))
                     .into_any_element(),
                 Line::Trace(trace) => self.trace(trace, look, cx),
             });
@@ -754,8 +832,8 @@ impl TalkView {
             page_chip(palette, ("conversation-answer", index), answer.clone(), None)
                 .on_click(cx.listener(move |view, _, _, cx| view.act(action.clone(), cx)))
         });
-        let open = shown.open.as_ref().map(|site| {
-            page_chip(palette, "conversation-open", format!("Open {site}"), None)
+        let open = shown.open.as_ref().map(|label| {
+            page_chip(palette, "conversation-open", label.clone(), None)
                 .on_click(cx.listener(|view, _, _, cx| view.act(TaskAction::Open, cx)))
         });
         let chips: Vec<_> = answers.chain(open).collect();
@@ -933,6 +1011,12 @@ impl Render for TalkView {
             return div().into_any_element();
         };
         self.settle_folds(now, still);
+        // A shorter or narrower window keeps the newest line in view while the user reads at the
+        // end, as the scroll keeps its distance from the top.
+        let viewport = window.viewport_size();
+        if std::mem::replace(&mut self.viewport, viewport) != viewport && self.at_end() {
+            self.scroll.scroll_to_bottom();
+        }
         // The step under way shimmers, and what opens moves, on frames only while they show.
         let running = self.shown.as_ref().is_some_and(|shown| {
             shown.lines.iter().any(|line| matches!(line, Line::Trace(trace) if trace.running

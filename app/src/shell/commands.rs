@@ -949,6 +949,13 @@ pub fn shown_tab(cx: &App) -> u64 {
     shell.map_or(0, |shell| shell.read(cx).selected)
 }
 
+/// Whether `tab` is a task's page the window shows in place, which the user may edit the address
+/// of but which stays in the task's Space.
+pub fn task_page_shown(tab: u64, cx: &App) -> bool {
+    let shell = cx.try_global::<ShellHandle>().and_then(|handle| handle.0.upgrade());
+    shell.is_some_and(|shell| shell.read(cx).task_page_live() == Some(tab))
+}
+
 /// A menu item that runs `command`, showing its shortcut.
 pub fn menu_item(name: impl Into<SharedString>, command: Command) -> MenuItem {
     MenuItem::action(name, Run(command))
@@ -1003,7 +1010,8 @@ impl Shell {
             }
             Command::EditUrl => {
                 self.set_new_tab(false, cx);
-                let editing = (self.selected != 0).then(|| (self.selected, self.url(self.selected)));
+                let tab = self.field_tab();
+                let editing = (tab != 0).then(|| (tab, self.url(tab)));
                 // A click on the URL field opens the bar over the field, and ⌘L centred (Arc). A
                 // Little ilo window's opens compact over its bar's title either way.
                 let field = match self.little_field_bounds() {
