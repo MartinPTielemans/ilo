@@ -26,7 +26,7 @@ use gpui::{
 use crate::elevation::Level;
 use crate::icon_picker::outline;
 use crate::palette::{self, Palette, STATE_HOVERED, STATE_PRESSED};
-use crate::shell::{cubic_bezier, scaled::scaled};
+use crate::shell::{cubic_bezier, keystroke_keys, scaled::scaled};
 use crate::tokens::dialog::DIM;
 use crate::tokens::link_preview::{
     BUTTON_GAP, CONTROLS, CONTROLS_GAP, DIM_OPACITY, GLYPH, INSET_MAX, INSET_MIN, INSET_SHARE,
@@ -34,6 +34,7 @@ use crate::tokens::link_preview::{
 };
 use crate::tokens::shell::{FAVICON_DRAWN, NAV, SECONDARY};
 use crate::tokens::text::BODY;
+use crate::tooltip::{Anchor, Tip};
 
 actions!(link_preview, [Close, Keep]);
 
@@ -75,6 +76,9 @@ pub trait Host {
     /// The user closed the preview over the browser window `window`, for ⌘Z and ⇧⌘T to open
     /// again; `undone` if Redo closed it, as that history has it already.
     fn closed(&self, window: u64, closed: Closed, undone: bool, cx: &mut App);
+    /// Shows `tip` hanging from a button at its anchor, in the browser window, after the tooltip's
+    /// delay, or ends the tooltip, as the shell's buttons ask for theirs.
+    fn tooltip(&self, tip: Option<(Tip, Anchor)>, cx: &mut App);
 }
 
 /// A preview the user closed: the tab it was over, the page it was at and where its link was.
@@ -174,6 +178,15 @@ fn card_around(page: Bounds<Pixels>) -> Bounds<Pixels> {
 /// The controls' row over a card at `card`, as wide as it.
 fn controls_over(card: Bounds<Pixels>) -> Bounds<Pixels> {
     Bounds::new(card.origin - point(px(0.), px(OVER_CARD)), size(card.size.width, px(CONTROLS)))
+}
+
+/// Where the keep and close buttons are, at the right end of the controls' row `row`.
+fn buttons_in(row: Bounds<Pixels>) -> [Bounds<Pixels>; 2] {
+    let at = |from_right: f32| {
+        let origin = point(row.right() - px(from_right), row.origin.y);
+        Bounds::new(origin, size(px(CONTROLS), px(CONTROLS)))
+    };
+    [at(2. * CONTROLS + BUTTON_GAP), at(CONTROLS)]
 }
 
 fn scaled_about(frame: Bounds<Pixels>, scale: f32, about: Point<Pixels>) -> Bounds<Pixels> {
@@ -322,9 +335,10 @@ fn plate(id: &'static str, palette: &Palette, shadow: Vec<BoxShadow>) -> gpui::S
         .occlude()
 }
 
-/// A round button: its id, its icon and its name, as the header's buttons are, on its own plate.
+/// A round button: its id, its icon and how the preview leaves on its click, which names it, as
+/// the header's buttons are, on its own plate.
 fn button(
-    (id, icon, name): (&'static str, &'static str, &'static str),
+    (id, icon, how): (&'static str, &'static str, Leave),
     palette: &Palette,
     shadow: Vec<BoxShadow>,
 ) -> gpui::Stateful<gpui::Div> {
@@ -335,7 +349,7 @@ fn button(
         .items_center()
         .justify_center()
         .role(Role::Button)
-        .aria_label(name)
+        .aria_label(how.named().0)
         .hover(|style| style.bg(palette.state_over(rest, STATE_HOVERED)))
         .active(|style| style.bg(palette.state_over(rest, STATE_PRESSED)))
         .child(svg().path(icon).size(px(GLYPH)).text_color(palette.on_overlay_glyph(NAV)))
@@ -381,6 +395,17 @@ fn site_plate(
 enum Leave {
     Close,
     Keep,
+}
+
+impl Leave {
+    /// The name of the button that leaves this way, and the key that does the same, which its
+    /// tooltip shows.
+    fn named(self) -> (&'static str, &'static str) {
+        match self {
+            Leave::Keep => ("Open as Tab", "cmd-enter"),
+            Leave::Close => ("Close", "escape"),
+        }
+    }
 }
 
 /// The preview of one page, from the click that opens it until it has left.
@@ -434,6 +459,9 @@ pub struct LinkPreview {
     host: Rc<dyn Host>,
     focus: FocusHandle,
     preview: Option<Preview>,
+    /// The button whose tooltip it asked for, until the pointer leaves it or the preview goes,
+    /// since a button that goes from under the pointer sends no hover-out.
+    tipped: Option<Leave>,
 }
 
 pub struct LinkPreviewWindow(WindowHandle<LinkPreview>);
@@ -492,7 +520,7 @@ pub fn open_at(
         ..Default::default()
     };
     let window = cx.open_window(options, |_, cx| {
-        cx.new(|cx| LinkPreview { host, focus: cx.focus_handle(), preview: None })
+        cx.new(|cx| LinkPreview { host, focus: cx.focus_handle(), preview: None, tipped: None })
     });
     match window {
         Ok(window) => {
@@ -641,6 +669,7 @@ pub fn tab_closed(tab: u64, cx: &mut App) {
     update(cx, |preview, _, cx| {
         if preview.preview.as_ref().is_some_and(|shown| shown.tab == tab) {
             preview.preview = None;
+            preview.end_tip(cx);
             preview.host.hide();
             cx.notify();
         }
@@ -660,6 +689,8 @@ impl LinkPreview {
     }
 
     fn leave(&mut self, how: Leave, why: &str, seconds: f32, cx: &mut Context<Self>) -> bool {
+        // A click on a button ends its tooltip, as on other buttons, and a key does too.
+        self.end_tip(cx);
         let Some(shown) = self.preview.as_mut().filter(|shown| shown.leaving.is_none()) else {
             return false;
         };
@@ -688,6 +719,7 @@ impl LinkPreview {
     /// Ends the preview shown, if any, where its leaving would: its page closed or kept, and its
     /// window hidden. One the user closed is the window's to reopen.
     fn finish(&mut self, cx: &mut App) {
+        self.end_tip(cx);
         let Some(shown) = self.preview.take() else {
             return;
         };
@@ -706,6 +738,35 @@ impl LinkPreview {
                     self.host.closed(window, Closed { over, url, link }, undone, cx);
                 }
             }
+        }
+    }
+}
+
+impl LinkPreview {
+    /// The pointer has come onto or left the button that leaves `how`, whose tooltip names it and
+    /// its key, as the header's buttons' do: Open as Tab ⌘↩, and Close ⎋, written off the Mac as
+    /// Settings writes them there. It hangs from the button where it rests.
+    fn hover_button(&mut self, how: Leave, hovered: bool, window: Size<Pixels>, cx: &mut App) {
+        let resting = self.preview.as_ref().filter(|shown| shown.leaving.is_none());
+        match resting.filter(|_| hovered) {
+            Some(shown) => {
+                let [keep, close] = buttons_in(controls_over(card(shown.page)));
+                let frame = if how == Leave::Keep { keep } else { close };
+                let (name, keystroke) = how.named();
+                let keys = keystroke_keys(keystroke).into_iter().map(Into::into).collect();
+                self.tipped = Some(how);
+                self.host.tooltip(Some((Tip { text: name.into(), keys }, Anchor::under(frame, window))), cx);
+            }
+            // Unless the pointer went from it onto the other button, whose tooltip took its place.
+            None if self.tipped == Some(how) => self.end_tip(cx),
+            None => {}
+        }
+    }
+
+    /// Ends the tooltip of the button it asked for one for, if any.
+    fn end_tip(&mut self, cx: &mut App) {
+        if self.tipped.take().is_some() {
+            self.host.tooltip(None, cx);
         }
     }
 }
@@ -754,7 +815,10 @@ impl Render for LinkPreview {
             self.host.drew(page, page_radius * pose.scale, pose.page);
         }
         if settling {
-            // check.sh reads this line.
+            // check.sh reads these lines, the button's before it waits on the other, to rest on it.
+            let [keep, _] = buttons_in(controls_over(card(shown.page)));
+            let (x, y) = (f32::from(keep.center().x), f32::from(keep.center().y));
+            log!("browser: link preview keep button at {x} {y}");
             log!("browser: link preview settled");
         }
         let palette = palette::current(cx);
@@ -792,8 +856,8 @@ impl Render for LinkPreview {
         let site = site_of(&shown.url).to_string();
         let site = (!site.is_empty()).then(|| (site.into(), shown.favicon.clone()));
         let lift = shadow(Level::Popover);
-        let keep = button(("link-preview-keep", "icons/maximize.svg", "Open as Tab"), &palette, lift.clone());
-        let close = button(("link-preview-close", "icons/x.svg", "Close"), &palette, lift.clone());
+        let keep = button(("link-preview-keep", "icons/maximize.svg", Leave::Keep), &palette, lift.clone());
+        let close = button(("link-preview-close", "icons/x.svg", Leave::Close), &palette, lift.clone());
         let row = controls_over(card_frame);
         let controls = div()
             .absolute()
@@ -807,12 +871,23 @@ impl Render for LinkPreview {
             .opacity(pose.card)
             .children(site.map(|site| site_plate(site, &palette, lift)))
             .child(div().flex_1())
-            .child(keep.on_click(cx.listener(|preview, _, _, cx| {
-                preview.keep("button", cx);
-            })))
-            .child(close.on_click(cx.listener(|preview, _, _, cx| {
-                preview.close("button", cx);
-            })));
+            .child(
+                keep.on_hover(cx.listener(|preview, hovered, window, cx| {
+                    preview.hover_button(Leave::Keep, *hovered, window.viewport_size(), cx);
+                }))
+                .on_click(cx.listener(|preview, _, _, cx| {
+                    preview.keep("button", cx);
+                })),
+            )
+            .child(
+                close
+                    .on_hover(cx.listener(|preview, hovered, window, cx| {
+                        preview.hover_button(Leave::Close, *hovered, window.viewport_size(), cx);
+                    }))
+                    .on_click(cx.listener(|preview, _, _, cx| {
+                        preview.close("button", cx);
+                    })),
+            );
         let dim = div()
             .id("link-preview-dim")
             .absolute()

@@ -7,7 +7,8 @@
 # as Google Meet's, opens as a tab instead. With the Settings switch off, the link goes in the
 # pinned tab. Back on, a link rule to another Space sends the link there as a tab instead. Reports
 # how long the first preview took to draw its first frame. Captures it at rest in a light and a dark
-# Space theme, and records it opening and growing into a tab, for its look (#1373).
+# Space theme, and records it opening and growing into a tab, for its look (#1373). Resting on its
+# keep button names it and its key in the tooltip, over the preview (#1410).
 
 serve
 # The test page's top 40% is a link to the same server under another name, localhost, which is
@@ -145,6 +146,24 @@ peek_look() { # <light|dark> <the appearance button's x> [swatch]
 }
 peek_look light 191.3 swatch
 peek_look dark 231.7
+
+# Resting on the keep button names it and its key under it, in the tooltip's window, which shows
+# over the preview's, so it lies over the card's page; the pointer leaving ends it.
+open_preview "for the keep button's tooltip"
+keep_at=$(grep '^browser: link preview keep button at ' "$log" | tail -1 | sed 's/.* at //')
+[ -n "$keep_at" ] || fail "the preview didn't say where its keep button is"
+send move $keep_at
+# Off the Mac the keys are named as Chrome names them there.
+keep_keys=⌘↩
+[ "$(uname)" = Darwin ] || keep_keys=Ctrl+Enter
+expect "^browser: tooltip shown Open as Tab $keep_keys\$" \
+  "resting on the keep button didn't show Open as Tab and $keep_keys"
+expect '^browser: tooltip window shown$' "the keep button's tooltip didn't fade in"
+../tools/window-screenshot.sh "$pid" "$out/preview-tooltip.png" || fail "no window to capture"
+send move $dim_point
+expect '^browser: tooltip hidden$' "the pointer leaving the keep button didn't hide its tooltip"
+send key escape
+expect "^browser: tab $p closed\$" "Esc didn't close the preview after its keep button's tooltip"
 
 # ⇧⌘C copies the preview's address, not the pinned tab's under it, as Arc's Peek does, and the
 # preview stays. ⌘↩ keeps it as the top Today tab, shown, as it is: its page doesn't load again.

@@ -2011,6 +2011,9 @@ impl link_preview::Host for PreviewPeek {
     fn keep(&self, _: u64, _: u64) {}
 
     fn closed(&self, _: u64, _: link_preview::Closed, _: bool, _: &mut App) {}
+
+    // The tooltip's window is the app's, over the page, which the preview has neither of.
+    fn tooltip(&self, _: Option<(browser::tooltip::Tip, browser::tooltip::Anchor)>, _: &mut App) {}
 }
 
 /// The dialog over the preview's window, which it covers, for its host can't move it.

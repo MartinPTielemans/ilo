@@ -52,6 +52,19 @@ impl Host for Recorder {
         let undone = if undone { " undone" } else { "" };
         self.push(format!("closed {window} over {} {} {x} {y}{undone}", closed.over, closed.url));
     }
+    fn tooltip(&self, tip: Option<(Tip, Anchor)>, _: &mut App) {
+        match tip {
+            // What it says, and the middle of the button's bottom edge it hangs from.
+            Some((tip, anchor)) => self.push(format!(
+                "tooltip {} {} under {} {}",
+                tip.text,
+                tip.keys.concat(),
+                anchor.x,
+                anchor.bottom
+            )),
+            None => self.push("tooltip none".into()),
+        }
+    }
 }
 
 const WINDOW: u64 = 1;
@@ -107,6 +120,11 @@ impl Shown {
 
     fn keys(&mut self, keys: &str) {
         self.cx.simulate_keystrokes(keys);
+        self.cx.run_until_parked();
+    }
+
+    fn hover(&mut self, (x, y): (f32, f32)) {
+        self.cx.simulate_mouse_move(point(px(x), px(y)), None, Modifiers::none());
         self.cx.run_until_parked();
     }
 
@@ -205,8 +223,42 @@ fn its_buttons_keep_and_close_it(cx: &mut TestAppContext) {
     assert_eq!(shown.calls(), ["release", "keep 1 7", "hide"]);
     shown.show(TAB);
     shown.calls();
+    // The next preview's keep button came in under the pointer, which asked for its tooltip, and
+    // the click on close ends it.
     shown.click(CLOSE_BUTTON);
-    assert_eq!(shown.calls(), ["release", "hide", "close 7", CLOSED]);
+    assert_eq!(shown.calls(), ["tooltip none", "release", "hide", "close 7", CLOSED]);
+}
+
+/// Each button's tooltip names it and its key, as written here, and hangs from it: from the
+/// middle of its bottom edge, 97. It goes as the pointer leaves for the dim, a click or a key
+/// ends it with the preview, and the site, which does nothing on a click, has none.
+#[gpui::test]
+fn its_buttons_name_themselves_and_their_keys(cx: &mut TestAppContext) {
+    let keys = |keystroke| crate::shell::keystroke_keys(keystroke).concat();
+    let keep = format!("tooltip Open as Tab {} under 679 97", keys("cmd-enter"));
+    let close = format!("tooltip Close {} under 719 97", keys("escape"));
+    if !crate::shell::OFF_THE_MAC {
+        assert_eq!(keep, "tooltip Open as Tab ⌘↩ under 679 97");
+        assert_eq!(close, "tooltip Close ⎋ under 719 97");
+    }
+    let mut shown = Shown::new(cx);
+    shown.hover(KEEP_BUTTON);
+    assert_eq!(shown.calls(), [keep.clone()]);
+    // Onto the next button, its tooltip takes the other's place, which isn't ended under it.
+    shown.hover(CLOSE_BUTTON);
+    assert_eq!(shown.calls(), [close.clone()]);
+    shown.hover(SITE);
+    assert_eq!(shown.calls(), ["tooltip none"]);
+    shown.hover(DIM_SPOT);
+    assert_eq!(shown.calls(), Vec::<String>::new());
+    shown.hover(KEEP_BUTTON);
+    shown.click(KEEP_BUTTON);
+    assert_eq!(shown.calls(), [keep.as_str(), "tooltip none", "release", "keep 1 7", "hide"]);
+    shown.show(TAB);
+    shown.calls();
+    shown.hover(CLOSE_BUTTON);
+    shown.keys("escape");
+    assert_eq!(shown.calls(), [close.as_str(), "tooltip none", "release", "hide", "close 7", CLOSED]);
 }
 
 /// A click on the dim closes it; one on the card or the site over it doesn't.

@@ -1211,6 +1211,13 @@ impl link_preview::Host for LinkPreviewHost {
             shell.update(cx, |shell, cx| shell.preview_closed(closed, undone, cx)).ok();
         }
     }
+
+    fn tooltip(&self, tip: Option<(tooltip::Tip, tooltip::Anchor)>, cx: &mut App) {
+        match tip {
+            Some((tip, anchor)) => tooltip::hover(tip, anchor, cx),
+            None => tooltip::dismiss(cx),
+        }
+    }
 }
 
 extern "C" fn link_preview_dismissed() {

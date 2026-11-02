@@ -3478,6 +3478,11 @@ void host_show_tooltip(void* ui_view, double left, double top, double fade) {
       AddOver(browser->window, g_tooltip);
       RaiseOverlays(browser, g_tooltip);
     }
+    // Peek's buttons have tooltips, and Peek is a sibling child window at the same level, so the
+    // tooltip goes above it by name, even when it was still parented as Peek came in front.
+    if (g_link_preview_shown && g_link_preview_over == browser) {
+      [g_tooltip orderWindow:NSWindowAbove relativeTo:g_link_preview.windowNumber];
+    }
     FadeTooltip(1, fade, ^{
       if (change == g_tooltip_changes) {
         // check.sh waits for this line, so a capture after it shows the tooltip whole.
