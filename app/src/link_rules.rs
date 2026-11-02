@@ -1,6 +1,7 @@
 //! Link rules (docs/ux-spec.md › Link rules): the Space a link from another app, or one that would
-//! open in a link preview, opens in, and Settings' Links tab, which makes them. They're the user's alone: agents get no way to read or
-//! change them, as with the default browser.
+//! open in a link preview, opens in, or Little ilo, and Settings' Links tab, which makes them.
+//! They're the user's alone: agents get no way to read or change them, as with the default
+//! browser.
 
 use std::rc::Rc;
 
@@ -48,7 +49,14 @@ impl Condition {
     }
 }
 
-/// A rule: links whose URL meets its condition open in its Space, 0 for none chosen.
+/// Where a rule or everything else sends a link in place of a Space: a new Little ilo window, for
+/// the Space in front. No Space of the core's has this id.
+pub const LITTLE: u64 = u64::MAX;
+
+/// Little ilo's name in the pop-ups, the rules' file and check.sh's lines.
+const LITTLE_NAME: &str = "Little ilo";
+
+/// A rule: links whose URL meets its condition open in its Space, or Little ilo, 0 for none chosen.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Rule {
     pub condition: Condition,
@@ -68,19 +76,26 @@ impl Rule {
     }
 }
 
-/// The rules, top to bottom, and the Space everything else opens in, 0 for the Space in front.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// The rules, top to bottom, and the Space everything else opens in, 0 for the Space in front:
+/// Little ilo unless the user picks another, as Arc's Little Arc (the owner, 2026-10-31).
+#[derive(Clone, Debug, PartialEq)]
 pub struct Rules {
     pub rules: Vec<Rule>,
     pub otherwise: u64,
 }
 
+impl Default for Rules {
+    fn default() -> Rules {
+        Rules { rules: Vec::new(), otherwise: LITTLE }
+    }
+}
+
 impl Rules {
     /// Where a link to `url` opens, of the user's `spaces`: the Space of the first rule it meets
-    /// whose Space is still there, with that rule, else everything else's, 0 being the Space in
-    /// front.
+    /// whose Space is still there, or Little ilo, with that rule, else everything else's, 0 being
+    /// the Space in front.
     pub fn route(&self, url: &str, spaces: &[u64]) -> (u64, Option<usize>) {
-        let there = |space: u64| spaces.contains(&space);
+        let there = |space: u64| space == LITTLE || spaces.contains(&space);
         let rule = self.rules.iter().position(|rule| there(rule.space) && rule.matches(url));
         match rule {
             Some(index) => (self.rules[index].space, Some(index)),
@@ -90,20 +105,25 @@ impl Rules {
 
     /// Where a link that would open in a link preview goes instead, of the user's `spaces`: the
     /// Space of the first rule it meets, with that rule, if it's another than `shown`. A rule to
-    /// the Space shown keeps it in the preview, and everything else's Space is only for links from
-    /// other apps.
+    /// the Space shown keeps it in the preview, as does one to Little ilo, a quick look as the
+    /// preview is, and everything else's Space is only for links from other apps.
     pub fn preview_route(&self, url: &str, spaces: &[u64], shown: u64) -> Option<(u64, usize)> {
         match self.route(url, spaces) {
-            (space, Some(rule)) if space != shown => Some((space, rule)),
+            (space, Some(rule)) if space != shown && space != LITTLE => Some((space, rule)),
             _ => None,
         }
     }
 
     /// The rules the file `text` holds, its Spaces by their places among the user's `spaces`, as
-    /// the core's ids are new each launch and the Spaces come back in their order.
+    /// the core's ids are new each launch and the Spaces come back in their order. A file with no
+    /// line for everything else sends it to Little ilo, the default.
     pub fn parse(text: &str, spaces: &[u64]) -> Rules {
-        let space = |place: &str| {
-            place.parse::<usize>().ok().and_then(|place| spaces.get(place.wrapping_sub(1)))
+        let space = |place: &str| match place {
+            LITTLE_NAME => Some(LITTLE),
+            place => {
+                let place = place.parse::<usize>().ok()?;
+                spaces.get(place.wrapping_sub(1)).copied()
+            }
         };
         let mut rules = Rules::default();
         for line in text.lines() {
@@ -114,11 +134,11 @@ impl Rules {
                     else {
                         continue;
                     };
-                    let space = space(place).copied().unwrap_or(0);
+                    let space = space(place).unwrap_or(0);
                     rules.rules.push(Rule { condition, text: text.to_string(), space });
                 }
                 (Some("otherwise"), Some(place), None, None) => {
-                    rules.otherwise = space(place).copied().unwrap_or(0);
+                    rules.otherwise = space(place).unwrap_or(0);
                 }
                 _ => {}
             }
@@ -127,9 +147,10 @@ impl Rules {
     }
 
     /// The file of the rules, as `parse` reads it. A Space not among `spaces`, such as one
-    /// deleted, is written as none.
+    /// deleted, is written as none, and so is the Space in front.
     pub fn to_text(&self, spaces: &[u64]) -> String {
         let place = |space: u64| match spaces.iter().position(|&each| each == space) {
+            _ if space == LITTLE => LITTLE_NAME.to_string(),
             Some(index) => (index + 1).to_string(),
             None => "-".to_string(),
         };
@@ -139,7 +160,7 @@ impl Rules {
             let key = rule.condition.key();
             text.push_str(&format!("rule\t{key}\t{}\t{line}\n", place(rule.space)));
         }
-        if self.otherwise != 0 {
+        if self.otherwise != LITTLE {
             text.push_str(&format!("otherwise\t{}\n", place(self.otherwise)));
         }
         text
@@ -161,12 +182,17 @@ impl Rules {
 
 /// The name a rule's pop-up shows for `space`: "No Space" for one deleted or none.
 fn space_name(space: u64, spaces: &[(u64, SharedString)]) -> SharedString {
-    spaces.iter().find(|(id, _)| *id == space).map_or("No Space".into(), |(_, name)| name.clone())
+    match spaces.iter().find(|(id, _)| *id == space) {
+        _ if space == LITTLE => LITTLE_NAME.into(),
+        Some((_, name)) => name.clone(),
+        None => "No Space".into(),
+    }
 }
 
 /// The name Everything else's pop-up shows for `space`: the Space in front for 0, or one deleted.
 fn otherwise_name(space: u64, spaces: &[(u64, SharedString)]) -> SharedString {
     match spaces.iter().find(|(id, _)| *id == space) {
+        _ if space == LITTLE => LITTLE_NAME.into(),
         Some((_, name)) => name.clone(),
         None => MenuEntry::label("The Space in Front"),
     }
@@ -338,8 +364,8 @@ impl LinkRulesView {
         self.keep(cx);
     }
 
-    /// Opens `which`'s menu over its button: the conditions, or the user's Spaces, Everything
-    /// else's after the Space in front.
+    /// Opens `which`'s menu over its button: the conditions, or the user's Spaces then Little ilo,
+    /// Everything else's after the Space in front.
     fn choose(&mut self, which: Popup, window: &Window, cx: &mut Context<Self>) {
         let entry = |title: SharedString, on: bool| MenuEntry {
             checked: on,
@@ -347,6 +373,9 @@ impl LinkRulesView {
             ..MenuEntry::named(title, true)
         };
         let spaces = self.host.spaces();
+        // What a Space pop-up picks from, in its order.
+        let targets: Vec<u64> =
+            spaces.iter().map(|(space, _)| *space).chain(std::iter::once(LITTLE)).collect();
         let items: Vec<MenuEntry> = match which {
             Popup::Condition(index) => {
                 let chosen = self.rules.rules.get(index).map(|rule| rule.condition);
@@ -356,13 +385,18 @@ impl LinkRulesView {
             }
             Popup::Space(index) => {
                 let chosen = self.rules.rules.get(index).map_or(0, |rule| rule.space);
-                spaces.iter().map(|(space, name)| entry(name.clone(), *space == chosen)).collect()
+                (targets.iter())
+                    .map(|&space| entry(space_name(space, &spaces), space == chosen))
+                    .collect()
             }
             Popup::Otherwise => {
                 let chosen = self.rules.otherwise;
-                let front = spaces.iter().all(|(space, _)| *space != chosen);
+                let front = !targets.contains(&chosen);
                 std::iter::once(entry(otherwise_name(0, &spaces), front))
-                    .chain(spaces.iter().map(|(space, name)| entry(name.clone(), *space == chosen)))
+                    .chain(
+                        (targets.iter())
+                            .map(|&space| entry(otherwise_name(space, &spaces), space == chosen)),
+                    )
                     .collect()
             }
         };
@@ -374,10 +408,10 @@ impl LinkRulesView {
                     (Popup::Condition(index), Some(picked)) => {
                         view.set_condition(index, Condition::ALL[picked], cx)
                     }
-                    (Popup::Space(_), Some(picked)) => view.set_space(which, spaces[picked].0, cx),
+                    (Popup::Space(_), Some(picked)) => view.set_space(which, targets[picked], cx),
                     (Popup::Otherwise, Some(0)) => view.set_space(which, 0, cx),
                     (Popup::Otherwise, Some(picked)) => {
-                        view.set_space(which, spaces[picked - 1].0, cx)
+                        view.set_space(which, targets[picked - 1], cx)
                     }
                     (_, None) => cx.notify(),
                 }

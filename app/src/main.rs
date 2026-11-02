@@ -4002,12 +4002,20 @@ pub fn clear_browsing_data(profile: u64) -> bool {
 }
 
 /// Opens `urls` as new tabs in `front`, the regular window in front, in the Space it shows, or in
-/// the user's it showed last if that's an agent's, which none of the user's tabs go in. The last
-/// one opened shows, and the window it's in is returned.
+/// the user's it showed last if that's an agent's, which none of the user's tabs go in, else where
+/// a link rule sends them. The last one opened shows, and the window it's in is returned. Those
+/// for Little ilo, by default all of them, each open in one of their own once this is over, as
+/// it can be a window's opening.
 fn open_links_in(front: bc::bc_id, urls: &[String]) -> bc::bc_id {
     let mut window = front;
+    let mut little = Vec::new();
     for url in urls {
-        let (shown, tab, space) = open_link_in(front, url, link_rules_host::route(url));
+        let routed = link_rules_host::route(url);
+        if routed == browser::link_rules::LITTLE {
+            little.push(url.clone());
+            continue;
+        }
+        let (shown, tab, space) = open_link_in(front, url, routed);
         window = shown;
         if space == 0 {
             continue;
@@ -4015,7 +4023,40 @@ fn open_links_in(front: bc::bc_id, urls: &[String]) -> bc::bc_id {
         // check.sh reads this line.
         log!("browser: link from another app {url}: tab {tab} in space {space} of window {window}");
     }
+    if !little.is_empty() {
+        update_app_later(move |cx| open_links_in_little(front, little, cx));
+    }
     window
+}
+
+/// Opens each of `urls` in a Little ilo window of its own, for the user's Space `front` shows,
+/// which comes to the front, as Arc opens a link from another app in Little Arc.
+fn open_links_in_little(front: bc::bc_id, urls: Vec<String>, cx: &mut App) {
+    for url in urls {
+        let from = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == front).cloned());
+        let Some(from) = from else {
+            return;
+        };
+        let home = users_space_of(front);
+        let Some(opened) = open_little(from, home, cx) else {
+            continue;
+        };
+        let tab = open_tab_behind(opened, &url, false);
+        if tab != 0 {
+            unsafe { bc::bc_window_select(opened, tab) };
+        }
+        // check.sh reads this line.
+        log!(
+            "browser: link from another app {url}: tab {tab} in little window {opened} of space \
+             {home}"
+        );
+        let ui_view = WINDOWS.with_borrow(|windows| {
+            windows.iter().find(|w| w.id == opened).map(|w| w.ui_view)
+        });
+        if let Some(ui_view) = ui_view {
+            unsafe { platform::host_activate(ui_view) };
+        }
+    }
 }
 
 /// Opens `url` as a new tab, shown, in the Space `routed`, a link rule's, in the regular window

@@ -174,15 +174,15 @@ fn plus_adds_a_rule_whose_field_takes_the_typing(cx: &mut TestAppContext) {
     click(cx, (CONTROL_HEIGHT / 2., PROFILE_ROW + 2. + BUTTONS_TOP + CONTROL_HEIGHT / 2.));
     assert_eq!(
         host.rules(),
-        Rules { rules: vec![rule(Condition::Contains, "", WORK)], otherwise: 0 }
+        Rules { rules: vec![rule(Condition::Contains, "", WORK)], otherwise: LITTLE }
     );
     cx.simulate_input("work.example");
     cx.run_until_parked();
     assert_eq!(host.rules().rules, [rule(Condition::Contains, "work.example", WORK)]);
 }
 
-/// A rule's pop-ups open on its condition and Space, checked, and set what's picked; Everything
-/// else's offers the Space in front first.
+/// A rule's pop-ups open on its condition and Space, checked, and set what's picked; a Space's
+/// offers Little ilo after the Spaces, and Everything else's the Space in front first.
 #[gpui::test]
 fn pop_ups_set_a_rules_condition_and_space(cx: &mut TestAppContext) {
     let rules = Rules { rules: vec![rule(Condition::Contains, "work", WORK)], otherwise: 0 };
@@ -202,8 +202,11 @@ fn pop_ups_set_a_rules_condition_and_space(cx: &mut TestAppContext) {
         host.menus.take(),
         [
             format!("{}: URL contains (checked), URL is equal to", place(Popup::Condition(0))),
-            format!("{}: Work (checked), Home", place(Popup::Space(0))),
-            format!("{}: The Space in Front (checked), Work, Home", place(Popup::Otherwise)),
+            format!("{}: Work (checked), Home, Little ilo", place(Popup::Space(0))),
+            format!(
+                "{}: The Space in Front (checked), Work, Home, Little ilo",
+                place(Popup::Otherwise)
+            ),
         ]
     );
     assert_eq!(
@@ -250,4 +253,48 @@ fn the_rules_read_with_their_spaces_names() {
         "URL contains \"work\" → Work, URL is equal to \"x\" → No Space; \
          everything else The Space in Front"
     );
+}
+
+/// Everything else goes to Little ilo until the user picks another, as Arc's goes to Little Arc,
+/// and a rule can send its links there too: links from other apps, not a preview's, which is a
+/// quick look already. The file names it, and leaves out the default.
+#[test]
+fn little_ilo_is_the_default_and_a_rules_place() {
+    let spaces = [WORK, HOME];
+    let rules = Rules::default();
+    assert_eq!(rules.route("https://news.example/", &spaces), (LITTLE, None));
+    assert_eq!(rules.to_text(&spaces), "");
+    assert_eq!(Rules::parse("", &spaces), rules);
+    let names = [(WORK, SharedString::from("Work"))];
+    assert_eq!(rules.describe(&names), "none; everything else Little ilo");
+    let little = Rules { rules: vec![rule(Condition::Contains, "doc", LITTLE)], otherwise: 0 };
+    assert_eq!(little.route("https://doc.example/", &spaces), (LITTLE, Some(0)));
+    assert_eq!(little.route("https://news.example/", &spaces), (0, None));
+    assert_eq!(little.preview_route("https://doc.example/", &spaces, WORK), None);
+    let text = little.to_text(&spaces);
+    assert_eq!(text, "rule\tcontains\tLittle ilo\tdoc\notherwise\t-\n");
+    assert_eq!(Rules::parse(&text, &[15, 17]), little);
+}
+
+/// Little ilo, picked last in a rule's pop-up or Everything else's, is where they send links, and
+/// the Space in front takes Everything else back from it.
+#[gpui::test]
+fn the_pop_ups_pick_little_ilo_and_back(cx: &mut TestAppContext) {
+    let rules = Rules { rules: vec![rule(Condition::Contains, "work", WORK)], otherwise: LITTLE };
+    let (host, cx) = tab(rules, cx);
+    host.answer.set(Some(2));
+    click(cx, (SPACE_X, row_y(0)));
+    let otherwise_y = 2. + PROFILE_ROW + BUTTONS_TOP + CONTROL_HEIGHT + SECTION_GAP + 22.;
+    let otherwise = (BOX_WIDTH - PADDING - POPUP_END - 40., otherwise_y);
+    host.answer.set(Some(0));
+    click(cx, otherwise);
+    let picked = Rules { rules: vec![rule(Condition::Contains, "work", LITTLE)], otherwise: 0 };
+    assert_eq!(host.rules(), picked);
+    host.answer.set(Some(3));
+    click(cx, otherwise);
+    let menus = host.menus.take();
+    let ends = |menu: usize, items: &str| menus[menu].ends_with(&format!(": {items}"));
+    assert!(ends(1, "The Space in Front, Work, Home, Little ilo (checked)"), "{menus:?}");
+    assert!(ends(2, "The Space in Front (checked), Work, Home, Little ilo"), "{menus:?}");
+    assert_eq!(host.rules().otherwise, LITTLE);
 }
