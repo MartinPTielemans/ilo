@@ -711,13 +711,14 @@ expect '^browser: toast shown New Tab Created \[show\]$' \
 expect '^browser: toast settled$' "the new tab's toast didn't settle"
 ../tools/window-screenshot.sh "$pid" "$out/new-tab-toast.png" || fail "no window to capture"
 # A click 20 in from the plate's left, on its words, as there's no chip. The plate is logged in the
-# toast's window, 420 wide at the content's right.
-expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]*$' "the new tab's toast didn't tell where its plate is"
-set -- $(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //')
+# toast's window, whose width comes after it, at the content's right.
+expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]* in [0-9]* [0-9]*$' \
+  "the new tab's toast didn't tell where its plate is"
+set -- $(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //; s/ in / /')
 send layout
 content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
   sed 's/^browser: layout content \([0-9]*\)x[0-9]*,.*/\1/')
-show="$((content - 420 + $1 + 20)) $(($2 + $4 / 2))"
+show="$((content - $5 + $1 + 20)) $(($2 + $4 / 2))"
 send move $show
 send click $show
 expect '^browser: toast button show$' "a click on the new tab's toast at $show didn't take"

@@ -268,7 +268,9 @@ if windows || [ "$(uname)" = Darwin ]; then
     send screen
     screen=$(grep '^browser: screen at ' "$log" | tail -1 | cut -d' ' -f4-)
   fi
-  read -r screen_x screen_y screen_width screen_height <<< "$screen"
+  read -r screen_x screen_y screen_width screen_height <<SCREEN
+$screen
+SCREEN
   wide=$(((screen_width - 60) / 2))
   [ "$wide" -le 900 ] || wide=900
   tall=$((screen_height - 120))

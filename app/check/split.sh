@@ -57,13 +57,15 @@ read_pages() {
     grep -o '\(WebContentsViewCocoa\|BrowserCoreFocusRing\) [0-9,]* [0-9x]*' | tr '\n' ' ' |
     sed 's/ $//')
 }
-# Sets $toast to the left edge of the toast's window, from the content's, and $keyboard to the frame
-# of the page that has the keyboard, as read_pages has them, or none.
+# Sets $toast to the right edge of the toast's window, from the content's, and $keyboard to the frame
+# of the page that has the keyboard, as read_pages has them, or none. The window is as wide as its
+# pane, so its right edge is the one that follows the pane's corner (#1462).
 read_toast() {
   send layout
   toast=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
-    grep -m1 '^browser: layout child .* 420x114$' |
-    sed 's/^browser: layout child \([0-9-]*\),.*/\1/')
+    grep -m1 '^browser: layout child [0-9-]*,[0-9-]* [0-9]*x114$' |
+    sed 's/^browser: layout child \([0-9-]*\),[0-9-]* \([0-9]*\)x114$/\1 + \2/')
+  [ -z "$toast" ] || toast=$(($toast))
 }
 read_keyboard() {
   send layout
