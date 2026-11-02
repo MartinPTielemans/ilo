@@ -423,7 +423,8 @@ fn keyboard_window() -> Option<Keyboard> {
 
 /// Commits `text` to the field of the UI or overlay with the keyboard, as an input method does, or
 /// the Mac's character palette: as a keystroke that types it, with no key, which GPUI hands the
-/// field as it would a commit.
+/// field as it would a commit. A page with the keyboard gets its characters as plain keys, as
+/// Windows' driver posts them, since Chromium's input method is out of the driver's reach.
 fn insert(text: &str) -> Option<()> {
     let x = server()?;
     let (connection, _) = &*x;
@@ -434,15 +435,22 @@ fn insert(text: &str) -> Option<()> {
         key: String::new(),
         key_char: Some(text.to_string()),
     };
-    cx.update(|cx| {
+    let in_ui = cx.update(|cx| {
         let handle = cx.windows().into_iter().find(|handle| {
             (handle.update(cx, |_, window, _| crate::ns_view(window) as usize as u32))
                 .is_ok_and(|view| within(connection, focus, view))
         })?;
-        handle.update(cx, |_, window, cx| window.dispatch_keystroke(typed, cx)).ok()
-    })
-    .filter(|&typed| typed)
-    .map(drop)
+        let typed = handle.update(cx, |_, window, cx| window.dispatch_keystroke(typed, cx));
+        Some(typed.is_ok_and(|typed| typed))
+    });
+    match in_ui {
+        Some(typed) => typed.then_some(()),
+        None => {
+            matches!(keyboard_window(), Some(Keyboard::Browser(..))).then_some(())?;
+            let kinds = [xproto::KEY_PRESS_EVENT, xproto::KEY_RELEASE_EVENT];
+            text.chars().try_for_each(|c| key_events(&c.to_string(), 0, &kinds))
+        }
+    }
 }
 
 /// The done line's key window, focus and whether the app is active.
