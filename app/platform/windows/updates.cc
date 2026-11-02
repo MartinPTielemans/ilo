@@ -108,8 +108,8 @@ std::vector<uint8_t> Base64(const std::string& text) {
 // The key built in, 32 bytes, or empty if it isn't one.
 const std::vector<uint8_t>& PublicKey() {
   static const std::vector<uint8_t> key = [] {
-    std::vector<uint8_t> key = Base64(UPDATE_PUBLIC_KEY);
-    return key.size() == 32 ? key : std::vector<uint8_t>();
+    std::vector<uint8_t> bytes = Base64(UPDATE_PUBLIC_KEY);
+    return bytes.size() == 32 ? bytes : std::vector<uint8_t>();
   }();
   return key;
 }
@@ -123,7 +123,7 @@ std::wstring Wide(const std::string& text) {
 }
 
 // Where updates are downloaded: %LOCALAPPDATA%\ilo\Updates, with a backslash.
-std::wstring Folder() {
+std::wstring DownloadFolder() {
   PWSTR local = nullptr;
   std::wstring folder;
   if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &local))) {
@@ -375,7 +375,7 @@ class Sha512 {
 // Downloads |update| into the folder and checks its length and signature as it comes: whether it
 // can be installed.
 bool Download(const Update& update) {
-  const std::wstring folder = Folder();
+  const std::wstring folder = DownloadFolder();
   const int made = folder.empty() ? ERROR_PATH_NOT_FOUND
                                   : SHCreateDirectoryExW(nullptr, folder.c_str(), nullptr);
   if (made != ERROR_SUCCESS && made != ERROR_ALREADY_EXISTS && made != ERROR_FILE_EXISTS) {
@@ -495,7 +495,7 @@ void host_start_updater(void (*quit)(void), void (*changed)(int stage, const cha
   }
   g_quit = quit;
   g_changed = changed;
-  ClearFolder(Folder());
+  ClearFolder(DownloadFolder());
   g_wake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
   HANDLE thread = g_wake ? CreateThread(nullptr, 0, Watch, nullptr, 0, nullptr) : nullptr;
   if (!thread) {
