@@ -9,7 +9,9 @@
 # link target each time, with the command bar and a tab's menu opened and closed between, and the
 # app lives through it with no panic (#1351). On Windows, with another app's window in front of
 # ilo's, the link target and the hover card show under it, and the link target over ilo's window
-# again once it's gone (#1419).
+# again once it's gone (#1419). On Windows and the Mac, with a second window beside the first and
+# the first in front, the pointer resting on a row of the second shows its card over the second,
+# and on a row of the first over the first (#1432).
 
 serve
 log="$out/dialogs.log"
@@ -246,6 +248,82 @@ if windows; then
   expect '^browser: link target hidden$' \
     "the plate stayed after the pointer left, the other app gone"
 fi
+
+# Two windows side by side, the first in front with the keyboard: the pointer resting on a row of
+# the second, behind it, which still hears the pointer, shows that row's card over the second, not
+# over the first, the browser window last in front, where every overlay showed (#1432). Read from
+# the OS's windows: on Windows the card is on the stack over the second, and on the Mac a child
+# window of it. A row of the first shows its card over the first again.
+two_windows=
+if windows || [ "$(uname)" = Darwin ]; then
+  first=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
+  send key n cmd
+  expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
+  second=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+  # The driver numbers windows in the order they opened.
+  driven_second=$(grep -c '^browser: window opened ' "$log")
+  # The Windows runner's screen is 1920 by 1080 (check-windows.yml).
+  screen="0 0 1920 1080"
+  if [ "$(uname)" = Darwin ]; then
+    send screen
+    screen=$(grep '^browser: screen at ' "$log" | tail -1 | cut -d' ' -f4-)
+  fi
+  read -r screen_x screen_y screen_width screen_height <<< "$screen"
+  wide=$(((screen_width - 60) / 2))
+  [ "$wide" -le 900 ] || wide=900
+  tall=$((screen_height - 120))
+  [ "$tall" -le 700 ] || tall=700
+  send window "$driven_second"
+  send place $((screen_x + 40 + wide)) $((screen_y + 60)) $wide $tall
+  send window 1
+  send place $((screen_x + 20)) $((screen_y + 60)) $wide $tall
+  expect "^browser: key window $first\$" "the first window didn't come in front of the second"
+  # The driven window's children on the Mac, which the card's window becomes one of, in $children.
+  children() {
+    send layout
+    children=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -c '^browser: layout child' ||
+      true)
+  }
+  send window "$driven_second" behind
+  windows || children
+  before=${children:-0}
+  send move $(row 0)
+  expect '^browser: hover card window shown$' \
+    "resting on a row of the second window, behind the first, showed no card"
+  send order
+  order=$(grep '^browser: order ' "$log" | tail -1 | cut -c16-)
+  case $order in
+  *"window 1 window $driven_second, key window 1") ;;
+  *) fail "the second window didn't stay behind the first as its row showed a card: $order" ;;
+  esac
+  if windows; then
+    stacked "*hover card, *driven" "the card for a row of the window behind isn't over that window"
+  else
+    children
+    [ "$children" -gt "$before" ] ||
+      fail "the card for a row of the window behind isn't a child window of that window"
+  fi
+  ../tools/window-screenshot.sh "$pid" "$out/hover-card-window-behind.png" all ||
+    fail "no window to capture"
+  send move $page_point
+  expect '^browser: hover card hidden$' "leaving the second window's rows didn't hide its card"
+  # The reverse: the first's row, in front, shows its card over the first.
+  send window 1
+  windows || children
+  before=${children:-0}
+  send move $(row 0)
+  expect '^browser: hover card window shown$' "resting on a row of the first window showed no card"
+  if windows; then
+    stacked "*hover card, *driven" "the card for a row of the window in front isn't over it"
+  else
+    children
+    [ "$children" -gt "$before" ] ||
+      fail "the card for a row of the window in front isn't a child window of it"
+  fi
+  send move $page_point
+  expect '^browser: hover card hidden$' "leaving the first window's rows didn't hide its card"
+  two_windows=1
+fi
 exec 3>&-
 quit
 echo "ok: a page's alert, confirm and prompt ask over its card, answer with ↩ and Esc, and an alert"
@@ -257,3 +335,6 @@ echo "  and hides 20 times, between the command bar and a tab's menu, with no pa
   "link target and the hover card show under it, and the link target over ilo's window once it's" \
   "gone. Windows: $out/link-target-covered-ilo.png, $out/link-target-covered-away.png," \
   "$out/link-target-uncovered.png"
+[ -z "$two_windows" ] || echo "  With two windows side by side, a row of the one behind shows its" \
+  "card over that window, and a row of the one in front over the one in front:" \
+  "$out/hover-card-window-behind.png"
