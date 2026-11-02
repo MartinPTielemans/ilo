@@ -2,10 +2,10 @@
 
 `close PID [front]` asks each browser window of process PID to close, as its close button does: the
 top-level windows holding the UI's view (platform/windows/host.cc's BrowserUI), or with front the
-one in front alone. `list PID` prints
-each top-level window of the process, with its class, title, state and whether it's a browser
-window. `icon PID ICO` checks that each window of the process the taskbar and Alt+Tab show has the
-.ico's image for its big and small icons, read as the shell reads them, and prints them (#1350).
+one in front alone. `list PID` prints each top-level window of the process, with its class, title,
+state and whether it's a browser window. `icon PID ICO` checks that each window of the process the
+taskbar and Alt+Tab show has the .ico's image for its big and small icons, read as the shell reads
+them, and prints them (#1350).
 Usage: app-windows.py close|list|icon PID [front|ICO]"""
 
 import ctypes
