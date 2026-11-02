@@ -70,34 +70,9 @@ cp -R "$("$app/fetch-ublock.sh")" "$stage/app/ublock"
 "$app/../tools/licences.sh" "$stage/app" "$app/windows/Cargo.toml" \
   "$(rustc -vV | sed -n 's/^host: //p')" --features prod
 
-# The Store's: Windows reads the manifest and its logos from the package's top.
-cp -r "$stage/app" "$stage/msix"
-mkdir "$stage/msix/Assets"
-cp "$here/Assets/"*.png "$stage/msix/Assets/"
-# Bash 5.2 reads & in a replacement as what it replaces.
-shopt -u patsub_replacement 2>/dev/null || true
-xml() {
-  local value=${1//&/&amp;}
-  value=${value//</&lt;}
-  value=${value//>/&gt;}
-  printf '%s' "${value//\"/&quot;}"
-}
-manifest=$(<"$here/AppxManifest.xml")
-manifest=${manifest//@IDENTITY_NAME@/$(xml "$(store identity-name)")}
-manifest=${manifest//@PUBLISHER_DISPLAY_NAME@/$(xml "$(store publisher-display-name)")}
-manifest=${manifest//@PUBLISHER@/$(xml "$(store publisher)")}
-manifest=${manifest//@VERSION@/$version.0}
-manifest=${manifest//@NAME@/$(xml "$name")}
-printf '%s\n' "$manifest" >"$stage/msix/AppxManifest.xml"
-! grep -q '@[A-Z_]*@' "$stage/msix/AppxManifest.xml" || fail "AppxManifest.xml has a value package.sh doesn't fill."
-
-# The newest SDK's makeappx. Packed alone, there's no chrome.exe for the manifest to name, so the
-# check that it's there is skipped.
-makeappx=$(ls -d "/c/Program Files (x86)/Windows Kits/10/bin/"10.*/x64/makeappx.exe 2>/dev/null | sort -V | tail -1)
-[ -n "$makeappx" ] || fail "no makeappx.exe: install the Windows SDK."
+# The Store's (msix.sh).
 msix=$out/$name-$version-x64$alone$test_identity.msix
-MSYS2_ARG_CONV_EXCL='*' "$makeappx" pack /o ${alone:+/nv} /d "$(cygpath -w "$stage/msix")" \
-  /p "$(cygpath -w "$msix")"
+"$here/msix.sh" "$stage/app" "$msix"
 
 iscc=$(command -v iscc || echo "/c/Program Files (x86)/Inno Setup 6/ISCC.exe")
 [ -x "$iscc" ] || fail "no ISCC.exe: install Inno Setup 6."
