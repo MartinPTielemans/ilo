@@ -10,7 +10,7 @@
 serve
 log="$out/little.log"
 step=0
-rm -f "$saved" "$launch_frame" "$(dirname "$saved")/little-size"
+rm -f "$saved" "$launch_frame" "$(dirname "$saved")/little-size" "$(dirname "$saved")/little-in-menu-bar"
 BROWSER_DRIVE=1 BROWSER_URL="$site" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
@@ -203,9 +203,9 @@ if [ "$(uname)" = Darwin ]; then
   little=$(opened)
   expect "^browser: little window opened $little profile [0-9]* home $home\$" \
     "the menu bar's Little ilo window isn't for Space $home"
-  expect "^browser: key window $little\$" "the menu bar's Little ilo window didn't come to the front"
+  # A new window goes in front of the others, so it logs no "key window"; ⌘W closing it shows it's key.
   send key w cmd
-  expect "^browser: window closed $little\$" "⌘W didn't close the menu bar's Little ilo window"
+  expect "^browser: window closed $little\$" "the menu bar's Little ilo window didn't come to the front: ⌘W didn't close it"
   send menu Settings…
   expect '^browser: settings shown General$' "Settings… didn't show General again"
   settings_drew General
@@ -222,10 +222,16 @@ fi
 # ⌥⌘-click on a Today tab's row moves the tab, its page live, into a Little ilo window for its
 # Space, and the main window shows another.
 send window 1
-taken=$(today | cut -d' ' -f1)
-[ -n "$taken" ] || fail "no Today tab left to ⌥⌘-click"
+# Shown first, so its page has loaded and can move live: a tab opened behind loads only when shown.
+send click $(row 0)
+expect '^browser: selected [0-9][0-9]*' "a click on the first Today row didn't show its tab"
+shown=$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)
+expect "^browser: loaded $shown " "the first Today tab's page didn't load once shown"
+# Read from the sidebar's own line: each Little ilo window logs its own Today, so the last Today
+# line may be one of theirs.
 send click $(row 0) alt cmd
-expect "^browser: command little via sidebar $taken\$" "⌥⌘-click on a Today tab's row didn't reach the sidebar"
+expect '^browser: command little via sidebar [0-9][0-9]*$' "⌥⌘-click on a Today tab's row didn't reach the sidebar"
+taken=$(grep '^browser: command little via sidebar ' "$log" | tail -1 | cut -d' ' -f6)
 expect "^browser: little window opened [0-9]* profile [0-9]* home $home\$" \
   "⌥⌘-click on a Today tab's row didn't open a Little ilo window for Space $home"
 little=$(opened)
@@ -233,13 +239,13 @@ expect "^browser: little window $little took $taken from window $main\$" \
   "the Little ilo window didn't take the tab: $(grep "^browser: little window $little " "$log" | tail -1)"
 expect "^browser: window $little shows $taken\$" "the Little ilo window doesn't show the tab's page"
 none_since "^browser: loaded $taken " || fail "the tab's page loaded again instead of moving live"
-none_since "^browser: splits " || fail "⌥⌘-click on a Today tab's row opened a split view too"
+none_since "^browser: splits [0-9]" || fail "⌥⌘-click on a Today tab's row opened a split view too"
 
 # ⌘W closes it into the archive, as Arc's Little Arc does, and ⇧⌘T in the main window reopens it
 # in a new Little ilo window for its Space.
-expect "^browser: key window $little\$" "the Little ilo window holding the tab didn't come to the front"
+# New, so it logs no "key window"; ⌘W closing it shows it's key.
 send key w cmd
-expect "^browser: window closed $little\$" "⌘W didn't close the Little ilo window holding the tab"
+expect "^browser: window closed $little\$" "the Little ilo window holding the tab didn't come to the front: ⌘W didn't close it"
 expect '^browser: archive [1-9][0-9]* tabs$' "closing the Little ilo window didn't archive its tab"
 send window 1
 send key t cmd shift
@@ -248,9 +254,8 @@ expect "^browser: little window opened [0-9]* profile [0-9]* home $home\$" \
 little=$(opened)
 expect "^browser: little window $little reopened [0-9]* as [0-9]*\$" \
   "⇧⌘T didn't reopen the Little ilo window's tab in it: $(grep "^browser: little window $little " "$log" | tail -1)"
-expect "^browser: key window $little\$" "the reopened Little ilo window didn't come to the front"
 send key w cmd
-expect "^browser: window closed $little\$" "⌘W didn't close the reopened Little ilo window"
+expect "^browser: window closed $little\$" "the reopened Little ilo window didn't come to the front: ⌘W didn't close it"
 send window 1
 
 # The Library's Archived Tabs then has a Filter button, whose Little ilo lists only its tabs.
