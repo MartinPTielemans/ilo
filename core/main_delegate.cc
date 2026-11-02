@@ -82,6 +82,10 @@
 #endif
 #if BUILDFLAG(IS_WIN)
 #include "base/strings/utf_string_conversions.h"
+#include "base/values.h"
+#include "base/win/win_util.h"
+#include "chrome/common/pref_names.h"
+#include "components/prefs/pref_service.h"
 #endif
 #if BUILDFLAG(IS_LINUX)
 #include "browser_core/platform/linux/wayland.h"
@@ -160,7 +164,21 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
                    public ProfileObserver {
  public:
   // Chrome has just set its crash keys again, with the switches about:flags added.
-  void PreCreateThreads() override { crash_reports::LeaveOutFolders(); }
+  void PreCreateThreads() override {
+    crash_reports::LeaveOutFolders();
+#if BUILDFLAG(IS_WIN)
+    // A work account whose organisation requires a compliant device signs in only with Windows'
+    // own Microsoft sign-in, which Chromium leaves off unless a policy turns it on (#1345). It's
+    // on by default on a device joined or registered to a work or school directory, and stays off
+    // anywhere else, a home PC signed in with a personal Microsoft account too. The
+    // CloudAPAuthEnabled policy wins either way. Windows' answer is kept, and Chrome asks for it
+    // on this thread anyway as it loads the first profile, unless the device is in a local domain.
+    if (base::win::IsJoinedToAzureAD()) {
+      g_browser_process->local_state()->SetDefaultPrefValue(prefs::kCloudApAuthEnabled,
+                                                            base::Value(1));
+    }
+#endif
+  }
 
   // Before Chrome stops taking factories, as the first profile is made.
   void PreProfileInit() override {
