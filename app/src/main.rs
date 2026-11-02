@@ -4130,6 +4130,24 @@ unsafe extern "C" fn open_links(_: *mut c_void, urls: *const *const c_char, coun
     finished_launching();
 }
 
+/// The user launched the browser again with no link, from the Start menu, the taskbar or a
+/// shortcut on Windows, or the desktop's launcher on Linux: the regular window in front comes
+/// forward, restored if minimized, as the Mac's Dock brings its windows. One is always open, as the
+/// browser quits with the last (window_closed), but while it launches, whose first window comes to
+/// the front anyway.
+unsafe extern "C" fn launched_again(_: *mut c_void) {
+    if LAUNCH_LINKS.with_borrow(Option::is_some) {
+        return;
+    }
+    let Some(window) = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.regular()).cloned())
+    else {
+        return;
+    };
+    // check.sh reads this line.
+    log!("browser: launched again: window {} to the front", window.id);
+    unsafe { platform::host_activate(window.ui_view) };
+}
+
 /// Opens a tab loading `url` in the front window and shows it: in the Space the window shows if
 /// it's one of the user's in `profile`, else in the first of theirs that is, which the window then
 /// shows, as a profile's own page, such as Chrome's password manager, shows that profile's data.
@@ -7438,6 +7456,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         profile_autofill_changed: Some(profile_autofill_changed),
         passwords_imported: Some(passwords_imported),
         open_links: Some(open_links),
+        launched_again: Some(launched_again),
         agent_activity: Some(agent_activity),
         #[cfg(target_os = "linux")]
         window_resized: Some(window_resized),

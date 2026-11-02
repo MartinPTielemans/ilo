@@ -1020,6 +1020,11 @@ typedef struct bc_host {
   // with bc_tab_open_preview after this call returns, whatever tab it's in; false leaves a ⇧-click
   // to go as it would have. The user's alone, as a preview takes the window's keyboard.
   bool (*tab_link_to_preview)(void* context, bc_id tab, const char* url, double x, double y);
+  // The user launched the browser again while it ran, with no link it opens: from the Start menu,
+  // the taskbar or a shortcut on Windows, or the desktop's launcher on Linux. Bring the regular
+  // window in front forward, restoring it if it's minimized (host_activate). The Mac's Dock and a
+  // second `open` reopen the app instead, which Chrome answers by bringing its windows forward.
+  void (*launched_again)(void* context);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
