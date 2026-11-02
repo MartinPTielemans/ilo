@@ -205,6 +205,12 @@ bool SignedLikeThisApp(NSURL* app) {
 @property(nonatomic) void (*changed)(int stage, const char* version);
 // Sparkle's install now, of the update downloaded to install on quit.
 @property(nonatomic, copy) dispatch_block_t installNow;
+// Restarts the browser, for Install and Relaunch.
+@property(nonatomic) void (*restart)(void);
+// Sparkle's Install and Relaunch, and the version it's of, held until the restart goes ahead.
+@property(nonatomic, copy) dispatch_block_t relaunch;
+@property(nonatomic, copy) NSString* relaunchVersion;
+- (void)restartOnceWarm;
 @end
 
 @implementation Updates {
@@ -415,22 +421,32 @@ bool SignedLikeThisApp(NSURL* app) {
   [self keepNotes:item];
 }
 
-// Install and Relaunch: the restart waits for macOS's check of the new version, up to 15 s.
+// Install and Relaunch, Restart to Update's or Sparkle's own window's: Sparkle's installer learns
+// it relaunches only once the restart goes ahead (host_relaunch_into_update), as it can't be told
+// otherwise after, so a quit a page stops leaves it to install on quit alone. Sparkle asks this
+// once, so Restart to Update, which About and the sidebar offer from now on, tries it again.
 - (BOOL)updater:(SPUUpdater*)updater
     shouldPostponeRelaunchForUpdate:(SUAppcastItem*)item
                  untilInvokingBlock:(void (^)(void))installHandler {
   [self keepNotes:item];
-  if ([_warmed containsObject:item.versionString]) return NO;
-  __block BOOL installed = NO;
-  dispatch_block_t install = ^{
-    if (installed) return;
-    installed = YES;
-    installHandler();
-  };
-  [self warm:item.versionString then:install];
-  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, kInstallWait * NSEC_PER_SEC),
-                 dispatch_get_main_queue(), install);
+  self.relaunch = installHandler;
+  self.relaunchVersion = item.versionString;
+  if (_stage != HOST_UPDATE_READY) [self tell:HOST_UPDATE_READY item:item];
+  [self restartOnceWarm];
   return YES;
+}
+
+// The restart waits for macOS's check of the new version, up to 15 s.
+- (void)restartOnceWarm {
+  __block BOOL restarted = NO;
+  dispatch_block_t restart = ^{
+    if (restarted) return;
+    restarted = YES;
+    if (self.restart) self.restart();
+  };
+  [self warm:self.relaunchVersion then:restart];
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, kInstallWait * NSEC_PER_SEC),
+                 dispatch_get_main_queue(), restart);
 }
 
 // A scheduled update's alert waits while a window is full screen (ux-spec), and shows when none is.
@@ -571,8 +587,7 @@ bool host_updated_by_store(void) {
   return false;
 }
 
-// Sparkle quits the app itself, for Install and Relaunch.
-void host_start_updater(void (*)(void), void (*changed)(int stage, const char* version)) {
+void host_start_updater(void (*restart)(void), void (*changed)(int stage, const char* version)) {
   if (g_updates || !host_updates_available()) return;
   NSString* path =
       [NSBundle.mainBundle.privateFrameworksPath stringByAppendingPathComponent:@"Sparkle.framework"];
@@ -584,6 +599,7 @@ void host_start_updater(void (*)(void), void (*changed)(int stage, const char* v
   }
   g_updates = [[Updates alloc] init];
   g_updates.changed = changed;
+  g_updates.restart = restart;
   g_updates.controller = [[NSClassFromString(@"SPUStandardUpdaterController") alloc]
       initWithStartingUpdater:YES
               updaterDelegate:g_updates
@@ -605,12 +621,24 @@ void host_check_for_updates_quietly(void) {
   }
 }
 
-// Sparkle quits the app and relaunches the new version, once shouldPostponeRelaunchForUpdate has
-// let it, which waits for macOS's check. A quit that's cancelled leaves it ready to try again.
+// Sparkle's install now comes back through shouldPostponeRelaunchForUpdate, which restarts.
 void host_install_update(void) {
-  if (!g_updates.installNow) return;
-  Log(@"update installs now");
-  g_updates.installNow();
+  if (g_updates.relaunch) {
+    Log(@"update installs now");
+    [g_updates restartOnceWarm];
+  } else if (g_updates.installNow) {
+    Log(@"update installs now");
+    g_updates.installNow();
+  }
+}
+
+bool host_relaunch_into_update(void) {
+  dispatch_block_t relaunch = g_updates.relaunch;
+  if (!relaunch) return false;
+  g_updates.relaunch = nil;
+  Log(@"update relaunches once installed");
+  relaunch();
+  return true;
 }
 
 void host_take_update_notes(void (*notes)(const char* url)) {
