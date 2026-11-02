@@ -317,9 +317,7 @@ none_since '^browser: link preview ' || fail "with previews off, ⇧-click opene
 expect "^browser: selected $o\( in .*\)\{0,1\}\$" "with previews off, ⇧-click's tab didn't show"
 send key w cmd
 expect "^browser: tab $o closed\$" "⌘W didn't close the tab ⇧-click opened"
-away
-send click $(home_row)
-expect "^browser: selected $a\( in .*\)\{0,1\}\$" "a click on the pinned row didn't show its tab"
+expect "^browser: selected $a\( in .*\)\{0,1\}\$" "⌘W didn't show the pinned tab again"
 
 # Back on, a link rule to another Space sends the link there as a tab, as it sends one from another
 # app, and the preview doesn't open (#692). Settings' Links tab adds the rule, as ./check.sh links
