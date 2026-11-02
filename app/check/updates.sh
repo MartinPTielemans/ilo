@@ -178,20 +178,23 @@ $out/updates-sample.txt, the window: $out/updates-stalled.png"
 }
 # About's row and Restart to Update, on the Mac, from launch to the relaunch into the update.
 about_updates() {
-  # The update: the check build one build on, as a release is, sealed again after the change.
+  # The update: the check build one build and one version on, as a release is, sealed again after
+  # the change.
   mkdir "$scratch/next"
   cp -cR "$app" "$scratch/next/"
-  local copy
+  local copy version
   copy=$scratch/next/$(basename "$app")
+  version=$(plutil -extract CFBundleShortVersionString raw "$copy/Contents/Info.plist" |
+    awk -F. '{ print $1 "." $2 "." $3 + 1 }')
   plutil -replace CFBundleVersion -string "$next" "$copy/Contents/Info.plist"
+  plutil -replace CFBundleShortVersionString -string "$version" "$copy/Contents/Info.plist"
   codesign --force --deep --sign - "$copy" 2> "$out/updates-codesign.txt" ||
     fail "the update didn't sign: $out/updates-codesign.txt"
   local archive=$out/site/updates/update-$next.zip
   ditto -c -k --keepParent "$copy" "$archive"
   local signature
   signature=$(.deps/Sparkle/bin/sign_update --ed-key-file "$scratch/key" -p "$archive")
-  python3 -I ../tools/appcast.py local "$out/site/updates/appcast.xml" \
-    "$(plutil -extract CFBundleShortVersionString raw "$copy/Contents/Info.plist")" "$next" \
+  python3 -I ../tools/appcast.py local "$out/site/updates/appcast.xml" "$version" "$next" \
     "$scratch/notes.md" "${site}updates/$(basename "$archive")" "$(wc -c < "$archive" | tr -d ' ')" \
     "$signature" > /dev/null || fail "appcast.py local didn't make the feed"
   log="$out/updates-about.log"
@@ -201,9 +204,10 @@ about_updates() {
     # shellcheck disable=SC2046 # x and y
     send clickkey $(sed -n "s/^browser: settings update $1 at //p" "$log" | tail -1)
   }
-  # Waits up to 2 minutes for the update's stage $1, as a download takes.
+  # Waits up to 5 minutes for the update's stage $1, as a download and Sparkle's checks of the
+  # update take.
   stage() {
-    for _ in $(seq 1200); do
+    for _ in $(seq 3000); do
       grep -q "^browser: update stage $1\$" "$log" && return 0
       kill -0 "$pid" 2> /dev/null || fail "the app exited"
       sleep 0.1
@@ -225,8 +229,8 @@ about_updates() {
     fail "no window to capture"
   mv "$scratch/appcast.xml" "$out/site/updates/appcast.xml"
   about_click check
-  stage 'ready [0-9.]*' "Try Again didn't download build $next"
-  grep -q '^browser: update stage downloading [0-9.]*$' "$log" ||
+  stage "ready $version" "Try Again didn't download build $next"
+  grep -q "^browser: update stage downloading $version\$" "$log" ||
     fail "the row never said it was downloading"
   ! grep -q '^browser: update [0-9]* \(shown\|held\)' "$log" ||
     fail "the download showed Sparkle's alert"
@@ -235,7 +239,8 @@ about_updates() {
     fail "no window to capture"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
-  expect '^browser: update sign 0 at ' "Restart to Update didn't show at the sidebar's foot"
+  # Drawn as the update became ready, behind Settings.
+  await '^browser: update sign 0 at ' || fail "Restart to Update didn't show at the sidebar's foot"
   # In each look, which the window says as it changes.
   local sx sy sw sh tone light
   for tone in light dark; do
