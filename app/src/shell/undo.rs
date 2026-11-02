@@ -997,10 +997,24 @@ impl Shell {
         self.keep(What::DELETE_ARCHIVED, edit, cx);
     }
 
-    /// Empties the archive.
+    /// Empties the archive: its tabs, and the tasks it lists, which leave it as Delete from Archive
+    /// takes one. One ⌘Z brings both back.
     pub(super) fn empty_archive(&mut self, cx: &mut Context<Self>) {
         let removal = self.browser.clear_archive(cx);
-        let edit = (removal != 0).then_some(Edit::UndoArchive { removal, id: None });
+        let tabs = (removal != 0).then_some(Edit::UndoArchive { removal, id: None });
+        let tasks: Vec<SharedString> = self.archived_tasks.iter().map(|task| task.agent.clone()).collect();
+        if self.closed_task.as_ref().is_some_and(|(closed, _)| tasks.contains(closed)) {
+            self.closed_task = None;
+        }
+        for agent in &tasks {
+            log!("browser: remove archived task {agent}");
+            self.browser.task(agent.clone(), crate::agents::task::TaskAction::Delete, cx);
+        }
+        let mut edits: Vec<Edit> = tabs.into_iter().chain(tasks.into_iter().map(Edit::UndeleteTask)).collect();
+        let edit = match edits.len() {
+            0 | 1 => edits.pop(),
+            _ => Some(Edit::Many(edits)),
+        };
         self.keep(What::CLEAR_ARCHIVE, edit, cx);
     }
 

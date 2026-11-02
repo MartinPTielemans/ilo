@@ -459,8 +459,10 @@ impl Shell {
         }
     }
 
-    /// The tasks in the Archive changed, all of them, the last to leave the foot first.
-    pub fn set_archived_tasks(&mut self, tasks: Vec<ArchivedTask>, cx: &mut Context<Self>) {
+    /// The tasks in the Archive changed, all of them, the last to leave the foot first, of which
+    /// the window keeps those it shows.
+    pub fn set_archived_tasks(&mut self, mut tasks: Vec<ArchivedTask>, cx: &mut Context<Self>) {
+        tasks.retain(|task| self.shows_task(task.home, task.private));
         if tasks == self.archived_tasks {
             return;
         }
@@ -1057,7 +1059,8 @@ impl Shell {
     /// The menu a right-click on the Archived Tabs section shows, Clear Archive as Arc's has it,
     /// which asks first as the Archive menu's does.
     fn archive_section_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let entries = vec![MenuEntry::new("Clear Archive", !self.archive.is_empty())];
+        let full = !self.archive.is_empty() || !self.archived_tasks.is_empty();
+        let entries = vec![MenuEntry::new("Clear Archive", full)];
         let shell = cx.weak_entity();
         self.browser.context_menu(
             entries,
@@ -1073,10 +1076,10 @@ impl Shell {
         );
     }
 
-    /// Empties the archive, once the user says so.
+    /// Empties the archive, its tabs and the tasks it lists, once the user says so.
     pub(super) fn clear_archive(&mut self, cx: &mut Context<Self>) {
-        let count = self.archive.len();
-        if count == 0 {
+        let (tabs, tasks) = (self.archive.len(), self.archived_tasks.len());
+        if tabs + tasks == 0 {
             return;
         }
         let shell = cx.weak_entity();
@@ -1084,9 +1087,20 @@ impl Shell {
             "Clear the archive?".into(),
             {
                 let undo = keystroke_label("cmd-z");
-                match count {
-                    1 => format!("Its tab leaves the archive. {undo} brings it back."),
-                    _ => format!("Its {count} tabs leave the archive. {undo} brings them back."),
+                let some = |count: usize, what: &str| match count {
+                    1 => format!("1 {what}"),
+                    _ => format!("{count} {what}s"),
+                };
+                match (tabs, tasks) {
+                    (1, 0) => format!("Its tab leaves the archive. {undo} brings it back."),
+                    (0, 1) => format!("Its task leaves the archive. {undo} brings it back."),
+                    (_, 0) => format!("Its {tabs} tabs leave the archive. {undo} brings them back."),
+                    (0, _) => format!("Its {tasks} tasks leave the archive. {undo} brings them back."),
+                    _ => format!(
+                        "Its {} and {} leave the archive. {undo} brings them back.",
+                        some(tabs, "tab"),
+                        some(tasks, "task")
+                    ),
                 }
             },
             "Clear Archive",

@@ -14,6 +14,7 @@ fn card(n: u64, dot: Dot) -> Card {
     Card {
         agent: format!("task-{n}").into(),
         home: 1,
+        private: false,
         space: 100 + n,
         cli: Cli::Claude,
         title: "Find a flight to Lisbon".into(),
@@ -546,4 +547,31 @@ fn with_motion_reduced_a_folded_task_fades(cx: &mut TestAppContext) {
         assert!(plate.opacity.at(now) > 0. && plate.height.at(now) > 0., "it didn't fade where it was");
         assert!(shell.foot.bump.is_none() && shell.archive_flights().is_empty());
     });
+}
+
+/// A task asked in a private window stays in its session: a regular window's foot never shows
+/// it, nor anything of it.
+#[gpui::test]
+fn a_regular_windows_foot_never_shows_a_private_task(cx: &mut TestAppContext) {
+    let private = Card { home: 9, private: true, ..card(3, Dot::Working) };
+    let (shell, _, cx) = shell_with(cx, vec![private, card(2, Dot::Working)]);
+    assert_eq!(plates(&shell, cx), "task-2");
+    assert!(shell.read_with(cx, |shell, _| shell.task_cards.iter().all(|card| !card.private)));
+}
+
+/// A private window's foot shows only the tasks asked in it: not a regular window's, nor another
+/// private window's.
+#[gpui::test]
+fn a_private_windows_foot_shows_only_its_own_tasks(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::private_window(browser, 9, "Private".into(), 1, cx));
+    let own = Card { home: 9, private: true, ..card(3, Dot::Working) };
+    let other = Card { home: 8, private: true, ..card(2, Dot::Working) };
+    shell.update(cx, |shell, cx| {
+        shell.set_task_cards(vec![own, other, card(1, Dot::Working)], cx);
+        shell.foot.plates.iter_mut().for_each(|plate| plate.settle(later()));
+    });
+    cx.run_until_parked();
+    assert_eq!(plates(&shell, cx), "task-3");
 }

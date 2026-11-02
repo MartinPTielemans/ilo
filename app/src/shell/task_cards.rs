@@ -576,9 +576,10 @@ impl Default for Foot {
 }
 
 impl Shell {
-    /// The Agents' cards, newest first. A new one the window shows takes the ask's slot once ⌘T
-    /// ran it, so nothing at the foot moves.
-    pub fn set_task_cards(&mut self, cards: Vec<Card>, cx: &mut Context<Self>) {
+    /// The Agents' cards, newest first, of which the window keeps those it shows. A new one takes
+    /// the ask's slot once ⌘T ran it, so nothing at the foot moves.
+    pub fn set_task_cards(&mut self, mut cards: Vec<Card>, cx: &mut Context<Self>) {
+        cards.retain(|card| self.shows_task(card.home, card.private));
         if cards == self.task_cards {
             return;
         }
@@ -591,9 +592,9 @@ impl Shell {
         }
         let fresh = |card: &&Card| !self.task_cards.iter().any(|old| old.agent == card.agent);
         let ran = self.foot.plates.iter().any(|plate| plate.holds == Holds::Slot && !plate.leaving && plate.fill.end() > 0.);
-        let took = (cards.iter().filter(fresh))
-            .filter(|card| ran && self.foot.slot && self.shows_card(card))
-            .max_by_key(|card| number(&card.agent))
+        let took = (ran && self.foot.slot)
+            .then(|| cards.iter().filter(fresh).max_by_key(|card| number(&card.agent)))
+            .flatten()
             .map(|card| card.agent.clone());
         if took.is_some() {
             self.foot.slot = false;
@@ -633,10 +634,14 @@ impl Shell {
         self.sync_foot(None, cx);
     }
 
-    /// Whether the window shows `card`: every window does, as each lists every Space, but a
-    /// private window only its own Spaces' tasks, as with its players.
-    fn shows_card(&self, card: &Card) -> bool {
-        self.spaces.iter().any(|space| space.id == card.home) || !self.private
+    /// Whether the window shows a task asked from the Space `home`, in a `private` window or not:
+    /// a private window only its own Spaces' tasks, as with its players, and every other window
+    /// every task but those, which stay in their private session as its tabs do.
+    pub(super) fn shows_task(&self, home: u64, private: bool) -> bool {
+        match self.private {
+            true => self.spaces.iter().any(|space| space.id == home),
+            false => !private,
+        }
     }
 
     /// A finished task's mark at rest, as its card shows it: Done's tick, or the grey ring of one
@@ -662,7 +667,7 @@ impl Shell {
         let system = (self.text_system.take())
             .unwrap_or_else(|| WindowTextSystem::new(cx.text_system().clone()));
         let width = self.width();
-        let cards: Vec<Card> = (self.task_cards.iter()).filter(|card| self.shows_card(card)).cloned().collect();
+        let cards = self.task_cards.clone();
         let listed: Vec<&Card> = cards.iter().collect();
         let (shown, more) = choose(&listed, self.foot.all, self.foot.slot);
         if more == 0 {
@@ -1205,7 +1210,7 @@ impl Shell {
 
     /// "3 more tasks", which opens the foot to every task, or, opened, "Show less".
     fn more_plate(&self, plate: &Plate, now: Instant, cx: &mut Context<Self>) -> AnyElement {
-        let listed = self.task_cards.iter().filter(|card| self.shows_card(card)).count();
+        let listed = self.task_cards.len();
         let more = listed.saturating_sub(MOST - usize::from(self.foot.slot));
         let words: SharedString = match (self.foot.all, more) {
             (true, _) => "Show less".into(),

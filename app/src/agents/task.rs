@@ -210,6 +210,9 @@ pub struct Task {
     pub cli: Cli,
     /// The user's Space it was asked in, whose Today it shows at the top of.
     pub home: u64,
+    /// The profile whose private session it was asked in, which it ends with, as the session's
+    /// tabs do. None for a task asked in a regular window.
+    pub private: Option<u64>,
     /// Its own Space, hidden, where its tabs open.
     pub space: u64,
     pub asked: SharedString,
@@ -280,6 +283,8 @@ impl Task {
 pub struct Card {
     pub agent: SharedString,
     pub home: u64,
+    /// Asked in a private window, which alone shows it.
+    pub private: bool,
     /// The task's own Space, which the page area shows it from.
     pub space: u64,
     pub cli: Cli,
@@ -345,6 +350,10 @@ pub enum TaskAction {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ArchivedTask {
     pub agent: SharedString,
+    /// The user's Space it was asked in.
+    pub home: u64,
+    /// Asked in a private window, which alone shows it.
+    pub private: bool,
     pub title: SharedString,
     pub asked: SharedString,
     /// Done's tick, or Stopped's and Failed's grey dot, as its card had.
@@ -438,6 +447,8 @@ impl Agents {
                 let left = task.left.and_then(|at| at.duration_since(SystemTime::UNIX_EPOCH).ok());
                 ArchivedTask {
                     agent: task.agent.clone().into(),
+                    home: task.home,
+                    private: task.private.is_some(),
                     title: task.title.clone(),
                     asked: task.asked.clone(),
                     dot,
@@ -621,6 +632,7 @@ impl Agents {
         Card {
             agent: task.agent.clone().into(),
             home: task.home,
+            private: task.private.is_some(),
             space: task.space,
             cli: task.cli,
             title: task.title.clone(),
@@ -750,14 +762,15 @@ impl Agents {
     }
 
     /// Starts a task: `cli` does what the user `asked`, on `page` if it goes with it, from the
-    /// user's Space `home`. Returns its agent's id, or None if it couldn't start, which its card
-    /// says.
+    /// user's Space `home`, in the `private` session of that profile if asked in a private window.
+    /// Returns its agent's id, or None if it couldn't start, which its card says.
     pub fn start_task(
         &mut self,
         cli: Cli,
         asked: &str,
         page: Option<AskedOn>,
         home: u64,
+        private: Option<u64>,
         cx: &mut Context<Self>,
     ) -> Option<String> {
         let asked = asked.trim();
@@ -775,6 +788,7 @@ impl Agents {
             agent: agent.clone(),
             cli,
             home,
+            private,
             space,
             asked: asked.to_string().into(),
             page,
@@ -1156,6 +1170,25 @@ impl Agents {
         }
         self.remove_task_files(agent);
         log!("browser: task {agent} dropped");
+    }
+
+    /// The last private window of `profile` closed: the tasks asked in its session go with it, as
+    /// its tabs do, from the foot, the Archive and memory, and a CLI still running stops.
+    pub fn end_private_session(&mut self, profile: u64, cx: &mut Context<Self>) {
+        let agents: Vec<String> = (self.tasks.tasks.iter())
+            .filter(|task| task.private == Some(profile))
+            .map(|task| task.agent.clone())
+            .collect();
+        for agent in &agents {
+            // check.sh reads this line.
+            log!("browser: task {agent} ends with its private session");
+            self.stop_task(agent, cx);
+            self.tasks.dismissed.retain(|each| each != agent);
+            self.drop_task(agent, cx);
+        }
+        if !agents.is_empty() {
+            cx.notify();
+        }
     }
 
     /// At quit: every task goes, with its Space.
