@@ -253,9 +253,8 @@ expect "^browser: today $b\$" "⌘Z didn't take the dragged tab back: \"$(today)
 send click 97 $dots_y
 expect '^browser: command select-space via sidebar$' "the first Space's dot didn't run select-space"
 expect "^browser: space $first in " "the first Space's dot didn't show it"
-# A click while the Space's page still slides in lands where its rows aren't yet.
-expect "^browser: settled space $first\$" "the first Space's page didn't settle"
 expect_tabs "$c $a" "$a" "after ⌘Z put the dragged tab back"
+# Sent while the Space's page still slides in, the click acts on the row that rests under it.
 send click "$(row 0)"
 expect "^browser: selected $c\( in .*\)\{0,1\}\$" "a click on the top row didn't show tab $c"
 send key w cmd
