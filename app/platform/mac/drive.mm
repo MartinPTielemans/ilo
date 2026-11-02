@@ -123,6 +123,9 @@
 //                                         "browser: menu bar <menu>: <titles>", enabled as
 //                                         AppKit would show them now, written as "menu shown"
 //                                         writes a menu's, and chooses none
+//   dock [<title>]                        chooses the Dock menu's item titled <title>, the menu
+//                                         the Dock icon's right click opens, or with none logs
+//                                         its items, as "browser: dock menu <titles>"
 //   openmenu <menu>                       opens the main menu's <menu>, the same menu the menu
 //                                         bar opens, near the window's top left, tracked until
 //                                         dismiss or choose closes it. Commands still come in
@@ -1688,6 +1691,33 @@ bool Run(const std::string& line, void (^done)(void)) {
                           atLocation:NSMakePoint(40, NSHeight(view.bounds) - 40)
                               inView:view];
     });
+    done();
+    return true;
+  }
+  if (action == "dock") {
+    NSString* title = @(line.substr(std::min(line.size(), action.size() + 1)).c_str());
+    id<NSApplicationDelegate> delegate = NSApp.delegate;
+    NSMenu* menu = [delegate respondsToSelector:@selector(applicationDockMenu:)]
+                       ? [delegate applicationDockMenu:NSApp]
+                       : nil;
+    if (!menu) {
+      return false;
+    }
+    if (title.length) {
+      NSInteger index = [menu indexOfItemWithTitle:title];
+      if (index < 0) {
+        return false;
+      }
+      [menu performActionForItemAtIndex:index];
+    } else {
+      NSMutableArray<NSString*>* titles = [NSMutableArray array];
+      for (NSMenuItem* item in menu.itemArray) {
+        if (!item.separatorItem && !item.hidden) {
+          [titles addObject:item.title];
+        }
+      }
+      fprintf(stderr, "browser: dock menu %s\n", [titles componentsJoinedByString:@", "].UTF8String);
+    }
     done();
     return true;
   }

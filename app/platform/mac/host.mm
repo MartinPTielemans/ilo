@@ -1621,6 +1621,93 @@ void host_activate(void* ui_view) {
   }
 }
 
+void host_set_window_shown(void* ui_view, bool shown) {
+  Browser* browser = BrowserWithView(ui_view);
+  NSWindow* window = browser ? browser->window : nil;
+  if (!shown) {
+    [window orderOut:nil];
+  } else if (window.miniaturized) {
+    [window deminiaturize:nil];
+  } else {
+    [window orderFront:nil];
+  }
+}
+
+bool host_window_shown(void* ui_view) {
+  Browser* browser = BrowserWithView(ui_view);
+  return browser && browser->window.visible;
+}
+
+static int (*g_dock_little)(void);
+static void (*g_dock_chosen)(int);
+// The engine's applicationDockMenu:, which ours calls first.
+static IMP g_engine_dock_menu;
+
+@interface DockItems : NSObject
+- (void)chose:(NSMenuItem*)item;
+@end
+
+@implementation DockItems
+- (void)chose:(NSMenuItem*)item {
+  g_dock_chosen((int)item.tag);
+}
+@end
+
+static DockItems* g_dock_items;
+
+// The engine's Dock menu with Little ilo's items after its first command, New Window.
+static NSMenu* DockMenu(id delegate, SEL selector, NSApplication* app) {
+  NSMenu* menu = g_engine_dock_menu
+                     ? ((NSMenu * (*)(id, SEL, NSApplication*)) g_engine_dock_menu)(delegate,
+                                                                                    selector, app)
+                     : nil;
+  if (!menu) {
+    menu = [[NSMenu alloc] initWithTitle:@""];
+  }
+  // After New Window, the first item that isn't a profile's, which the engine puts first.
+  NSInteger at = menu.numberOfItems;
+  for (NSInteger index = 0; index < menu.numberOfItems; index++) {
+    if ([menu itemAtIndex:index].action == NSSelectorFromString(@"commandFromDock:")) {
+      at = index + 1;
+      break;
+    }
+  }
+  auto add = [&](NSString* title, NSInteger tag) {
+    NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:title
+                                                  action:@selector(chose:)
+                                           keyEquivalent:@""];
+    item.target = g_dock_items;
+    item.tag = tag;
+    [menu insertItem:item atIndex:at++];
+  };
+  add(@"New Little ilo Window", 0);
+  switch (g_dock_little()) {
+    case 1:
+      add(@"Hide All Little ilo Windows", 2);
+      break;
+    case 2:
+      add(@"Show All Little ilo Windows", 1);
+      break;
+  }
+  return menu;
+}
+
+void host_add_dock_items(int (*little)(void), void (*chosen)(int item)) {
+  Class kind = object_getClass(NSApp.delegate);
+  if (!kind || g_dock_items) {
+    return;
+  }
+  g_dock_little = little;
+  g_dock_chosen = chosen;
+  g_dock_items = [[DockItems alloc] init];
+  const SEL selector = @selector(applicationDockMenu:);
+  if (Method method = class_getInstanceMethod(kind, selector)) {
+    g_engine_dock_menu = method_setImplementation(method, (IMP)DockMenu);
+  } else {
+    class_addMethod(kind, selector, (IMP)DockMenu, "@@:@");
+  }
+}
+
 void host_watch_key_window(void (*changed)(void* ui_view)) {
   [NSNotificationCenter.defaultCenter addObserverForName:NSWindowDidBecomeKeyNotification
                                                   object:nil

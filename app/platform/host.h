@@ -107,6 +107,20 @@ void host_set_app_appearance(int appearance);
 // takes the user's focus (decision 8).
 void host_activate(void* ui_view);
 
+// Hides the browser window of |ui_view| without closing it, or with |shown| puts it back in front,
+// out of the Dock if it's minimized, as the Dock's Hide All and Show All Little ilo Windows do.
+// Whether it's on screen now: host_window_shown. The user's: agents get none.
+void host_set_window_shown(void* ui_view, bool shown);
+bool host_window_shown(void* ui_view);
+
+// Adds Little ilo's items to the Dock icon's menu, the engine's, after its New Window, as Arc's:
+// New Little ilo Window, then, while one is open, Hide All Little ilo Windows, or Show All Little
+// ilo Windows once they're all hidden. |little| is asked as the menu opens: 0 with no Little ilo
+// window open, 1 with one on screen and 2 with all hidden. |chosen| gets the item picked: 0 New, 1
+// Show All, 2 Hide All. Once the app has finished launching, as the engine's delegate is set then.
+// Off the Mac, which has no Dock menu, nothing.
+void host_add_dock_items(int (*little)(void), void (*chosen)(int item));
+
 // Calls |changed| with the view of each browser window that becomes the key window.
 void host_watch_key_window(void (*changed)(void* ui_view));
 

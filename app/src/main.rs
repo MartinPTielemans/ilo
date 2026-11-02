@@ -190,6 +190,9 @@ mod platform {
         pub fn host_set_window_light(ui_view: *mut c_void, light: bool);
         pub fn host_set_app_appearance(appearance: c_int);
         pub fn host_activate(ui_view: *mut c_void);
+        pub fn host_set_window_shown(ui_view: *mut c_void, shown: bool);
+        pub fn host_window_shown(ui_view: *mut c_void) -> bool;
+        pub fn host_add_dock_items(little: extern "C" fn() -> c_int, chosen: extern "C" fn(c_int));
         pub fn host_watch_key_window(changed: extern "C" fn(*mut c_void));
         pub fn host_watch_full_screen(changed: extern "C" fn(*mut c_void, bool));
         pub fn host_watch_swipes(swiped: extern "C" fn(*mut c_void, f64, f64, bool) -> bool);
@@ -4877,11 +4880,65 @@ unsafe extern "C" fn started(_: *mut c_void) {
 
 /// AppKit has finished launching the app, and so has handed over the links that launched it.
 extern "C" fn finished_launching() {
+    unsafe { platform::host_add_dock_items(dock_little, dock_chosen) };
     if !FINISHED_LAUNCHING.replace(true)
         && let Some(then) = AFTER_LAUNCH.take()
     {
         update_app(then);
     }
+}
+
+/// The Little ilo windows open, as the Dock's menu opens: 0 with none, 1 with one on screen, 2
+/// with all of them hidden.
+extern "C" fn dock_little() -> c_int {
+    WINDOWS.with_borrow(|windows| {
+        let mut little = windows.iter().filter(|w| w.little.is_some()).peekable();
+        if little.peek().is_none() {
+            0
+        } else if little.any(|w| unsafe { platform::host_window_shown(w.ui_view) }) {
+            1
+        } else {
+            2
+        }
+    })
+}
+
+/// The Dock menu's Little ilo item `item` was chosen: 0 New Little ilo Window, for the Space the
+/// regular window in front shows, as a link from another app opens one; 1 Show All, the one used
+/// last in front; 2 Hide All.
+extern "C" fn dock_chosen(item: c_int) {
+    update_app_later(move |cx| {
+        if item == 0 {
+            let from = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.regular()).cloned());
+            let Some(opened) = from.and_then(|from| open_little(from, 0, cx)) else {
+                return;
+            };
+            // check.sh reads this line.
+            log!("browser: dock opened little window {opened}");
+            let ui_view = WINDOWS.with_borrow(|windows| {
+                windows.iter().find(|w| w.id == opened).map(|w| w.ui_view)
+            });
+            if let Some(ui_view) = ui_view {
+                unsafe { platform::host_activate(ui_view) };
+            }
+            return;
+        }
+        let shown = item == 1;
+        let little: Vec<(bc::bc_id, *mut c_void)> = WINDOWS.with_borrow(|windows| {
+            let little = windows.iter().filter(|w| w.little.is_some());
+            little.map(|w| (w.id, w.ui_view)).collect()
+        });
+        // The one used last goes in front, last.
+        for &(_, ui_view) in little.iter().rev() {
+            unsafe { platform::host_set_window_shown(ui_view, shown) };
+        }
+        if let (true, Some(&(_, ui_view))) = (shown, little.first()) {
+            unsafe { platform::host_activate(ui_view) };
+        }
+        let ids: Vec<String> = little.iter().map(|(id, _)| id.to_string()).collect();
+        // check.sh reads this line.
+        log!("browser: dock {} little windows {}", if shown { "showed" } else { "hid" }, ids.join(" "));
+    });
 }
 
 /// Whether this build updates itself, asked once, as the menu bar is rebuilt often: a release

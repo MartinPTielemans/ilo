@@ -369,6 +369,13 @@ void host_activate(void* ui_view) {
   }
 }
 
+// Little ilo's Dock items alone hide windows, and there's no Dock.
+void host_set_window_shown(void* ui_view, bool shown) {}
+bool host_window_shown(void* ui_view) {
+  return true;
+}
+void host_add_dock_items(int (*little)(void), void (*chosen)(int item)) {}
+
 // The app reports each browser window GPUI's window in it hears become active (host_window_active).
 void host_watch_key_window(void (*changed)(void* ui_view)) {
   g_key_window_changed = changed;
