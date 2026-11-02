@@ -2,20 +2,22 @@
 //! done to them together: ⌘W closes them, ⇧⌘C copies their links, and ⌘D, New Folder and their
 //! menu pin, folder or move them, each as one step to undo. The tab shown stays the one shown;
 //! the others are drawn with the secondary fill. A plain click, Esc or another Space lets them
-//! go.
+//! go. A chosen folder stands for itself and what's in it: it moves whole, its links are copied,
+//! and ⌘W and ⌘D, which are a tab's, leave it be.
 
 use gpui::{Context, MouseDownEvent, SharedString};
 
 use super::{Edit, NEW_FOLDER, Shell, What, clean_link};
 
 impl Shell {
-    /// The rows that can be chosen, in the sidebar's order: the shown Space's pinned tabs, outside
-    /// closed folders, then its Today tabs. A split view is one row, by its first tab.
+    /// The rows that can be chosen, in the sidebar's order: the shown Space's pinned tabs and
+    /// folders, outside closed folders, then its Today tabs. A split view is one row, by its first
+    /// tab.
     fn choosable_rows(&self) -> Vec<u64> {
         let (pinned, today) = self.rows();
         let space = self.shown_space();
         let shut = |row: u64| space.is_some_and(|space| space.shut(row));
-        let pinned = pinned.into_iter().filter(|&row| !self.is_folder(row) && !shut(row));
+        let pinned = pinned.into_iter().filter(|&row| !shut(row));
         pinned.chain(today).collect()
     }
 
@@ -119,16 +121,40 @@ impl Shell {
         cx.notify();
     }
 
-    /// The chosen rows in the sidebar's order.
+    /// The chosen rows in the sidebar's order, but those in a chosen folder, which go with it.
     pub(super) fn chosen_in_order(&self) -> Vec<u64> {
+        let space = self.shown_space();
+        let in_chosen = |row: u64| {
+            let mut folder = space.map_or(0, |space| space.folder_of(row));
+            while folder != 0 && !self.chosen.contains(&folder) {
+                folder = space.map_or(0, |space| space.folder_of(folder));
+            }
+            folder != 0
+        };
         let rows = self.choosable_rows();
-        rows.into_iter().filter(|row| self.chosen.contains(row)).collect()
+        rows.into_iter().filter(|&row| self.chosen.contains(&row) && !in_chosen(row)).collect()
+    }
+
+    /// The chosen rows that are tabs, which ⌘W and ⌘D act on.
+    pub(super) fn chosen_tabs(&self) -> Vec<u64> {
+        let rows = self.chosen_in_order();
+        rows.into_iter().filter(|&row| !self.is_folder(row)).collect()
+    }
+
+    /// The tabs of `rows`, each folder's in it, in the sidebar's order.
+    fn tabs_of(&self, rows: &[u64]) -> Vec<u64> {
+        (rows.iter())
+            .flat_map(|&row| match self.is_folder(row) {
+                true => self.folder_tabs(row),
+                false => self.panes(row),
+            })
+            .collect()
     }
 
     /// ⌘W with rows chosen closes them all, as Arc's does: Today's archive, as one step to undo,
     /// and pinned tabs unload and keep their rows, as ⌘W does to one.
     pub(super) fn close_chosen(&mut self, cx: &mut Context<Self>) {
-        let rows = self.chosen_in_order();
+        let rows = self.chosen_tabs();
         let today = self.today();
         let tabs: Vec<u64> = (rows.iter().filter(|row| today.contains(row)))
             .flat_map(|&row| self.panes(row))
@@ -148,7 +174,7 @@ impl Shell {
     /// parameters, as Arc's Copy URLs does.
     pub(super) fn copy_chosen(&mut self, cx: &mut Context<Self>) {
         let rows = self.chosen_in_order();
-        let links: Vec<String> = (rows.iter().flat_map(|&row| self.panes(row)))
+        let links: Vec<String> = (self.tabs_of(&rows).into_iter())
             .map(|tab| clean_link(&self.url(tab)))
             .filter(|link| !link.is_empty())
             .collect();
@@ -167,7 +193,7 @@ impl Shell {
     pub(super) fn pin_chosen(&mut self, cx: &mut Context<Self>) {
         let pin = self.chosen_pin();
         let today = self.today();
-        let mut rows: Vec<u64> = (self.chosen_in_order().into_iter())
+        let mut rows: Vec<u64> = (self.chosen_tabs().into_iter())
             .filter(|row| today.contains(row) == pin)
             .collect();
         // Pinning puts a tab at the bottom of the pinned tabs and unpinning at the top of Today.
@@ -190,11 +216,14 @@ impl Shell {
         let (today_rows, pinned): (Vec<u64>, Vec<u64>) =
             self.chosen_in_order().into_iter().partition(|row| today.contains(row));
         let mut edits = Vec::new();
-        // A pinned tab goes to the bottom of the Space's pinned tabs and a Today tab to the top
-        // of its Today.
+        // A pinned tab or folder goes to the bottom of the Space's pinned tabs and a Today tab to
+        // the top of its Today.
         for row in pinned.into_iter().chain(today_rows.into_iter().rev()) {
             edits.extend(self.put_back(row));
-            self.browser.move_to_space(row, space, cx);
+            match self.is_folder(row) {
+                true => self.browser.move_folder_to_space(row, space, cx),
+                false => self.browser.move_to_space(row, space, cx),
+            }
         }
         self.unchoose(cx);
         self.keep(What::MOVE_TABS_TO_SPACE, (!edits.is_empty()).then_some(Edit::Many(edits)), cx);
@@ -227,7 +256,7 @@ impl Shell {
         let mut index = 0;
         for row in rows {
             edits.extend(self.put_back(row));
-            self.browser.move_tab(row, true, folder, index, cx);
+            self.put_in_folder(row, folder, index, cx);
             index += self.panes(row).len();
         }
         self.unchoose(cx);
@@ -245,20 +274,36 @@ impl Shell {
         let held = |row: &&u64| space.folder_of(**row) == folder && !moving.contains(row);
         let mut index = space.pinned.iter().filter(held).count();
         let mut edits = Vec::new();
+        // Not a folder into itself, or into one it holds.
+        let holds = |row: u64| {
+            let mut inside = folder;
+            while inside != 0 && inside != row {
+                inside = space.folder_of(inside);
+            }
+            inside != 0
+        };
+        let rows: Vec<u64> = rows.into_iter().filter(|&row| !holds(row)).collect();
         for row in rows {
             edits.extend(self.put_back(row));
-            self.browser.move_tab(row, true, folder, index, cx);
+            self.put_in_folder(row, folder, index, cx);
             index += self.panes(row).len();
         }
         self.unchoose(cx);
         self.keep(What::MOVE_TAB, (!edits.is_empty()).then_some(Edit::Many(edits)), cx);
     }
 
+    /// Pins `row` at `index` in `folder`, a folder whole.
+    fn put_in_folder(&mut self, row: u64, folder: u64, index: usize, cx: &mut Context<Self>) {
+        match self.is_folder(row) {
+            true => self.browser.move_folder(row, folder, index, cx),
+            false => self.browser.move_tab(row, true, folder, index, cx),
+        }
+    }
+
     /// The name of a folder made from `rows`: their site's, if every tab in them is on one, else
     /// New Folder.
     fn folder_name_for(&self, rows: &[u64]) -> SharedString {
-        let tabs: Vec<(SharedString, SharedString)> = (rows.iter())
-            .flat_map(|&row| self.panes(row))
+        let tabs: Vec<(SharedString, SharedString)> = (self.tabs_of(rows).into_iter())
             .map(|tab| (self.page(tab).url, self.title(tab)))
             .collect();
         let tabs = tabs.iter().map(|(url, title)| (url.as_ref(), title.as_ref()));

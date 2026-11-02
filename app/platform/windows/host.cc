@@ -336,6 +336,17 @@ void Adopt(Floating& floating, void* view, bool mouse_through, void (*dismissed)
   OwnShadow(floating.hwnd);
 }
 
+// Lets go of |floating|, which is about to be freed while its window lives on: anything still
+// reaching it through its window after that wrote into freed memory, and a quit after a browser
+// window closed under Little ilo crashed in Disown (#1425).
+void Forget(Floating& floating) {
+  if (auto it = FloatingByHwnd().find(floating.hwnd);
+      it != FloatingByHwnd().end() && it->second == &floating) {
+    RemoveWindowSubclass(floating.hwnd, FloatingProc, 1);
+    FloatingByHwnd().erase(it);
+  }
+}
+
 // An overlay whose blur and shadow the host gives, as the Mac's does, and that is a rounded
 // rectangle as Windows' frame is (the command bar, the find bar and the offer): Windows 11 rounds
 // it and draws its shadow, without its outline, which the UI's rim would double.
@@ -1210,6 +1221,10 @@ void PostMenuDismiss(bool give_back) {
 // windows the app goes on using, shared between browser windows or closed by the app itself, so a
 // quit with the command bar up crashed in one freed under it (#1058).
 void Disown(HWND root) {
+  // A window already destroyed has no root, and every window with no owner would match it.
+  if (!root) {
+    return;
+  }
   // The menu may be over a reveal, which root owns.
   if (HWND owner = g_menu.hwnd ? GetWindow(g_menu.hwnd, GW_OWNER) : nullptr;
       owner && (owner == root || GetWindow(owner, GW_OWNER) == root)) {
@@ -2439,9 +2454,16 @@ double host_since_launch(void) {
 void host_forget_window(void* ui_view) {
   Disown(Root(ui_view));
   FocusAfterOverlay().erase(Root(ui_view));
-  g_find_bars.erase(ui_view);
-  g_offers.erase(ui_view);
-  g_reveals.erase(ui_view);
+  for (auto* corners : {&g_find_bars, &g_offers}) {
+    if (auto it = corners->find(ui_view); it != corners->end()) {
+      Forget(it->second.floating);
+      corners->erase(it);
+    }
+  }
+  if (auto it = g_reveals.find(ui_view); it != g_reveals.end()) {
+    Forget(it->second.floating);
+    g_reveals.erase(it);
+  }
   g_pane_corners.erase(ui_view);
   std::erase(UiViews(), Hwnd(ui_view));
   ClosedFrames().erase(Hwnd(ui_view));

@@ -26,6 +26,9 @@ pub trait Browser {
     /// Moves `tab` to `space`. The window goes with it if it shows it. Into another profile's Space
     /// it goes as a new tab, whose page loads there again.
     fn move_to_space(&self, tab: u64, space: u64, cx: &mut App);
+    /// Moves the pinned folder, with what's in it, to the bottom of `space`'s pinned tabs, as
+    /// `move_to_space` moves a pinned tab.
+    fn move_folder_to_space(&self, folder: u64, space: u64, cx: &mut App);
     /// Whether to warn before moving a tab to another profile's Space, which the UI does once.
     fn warn_moving_profiles(&self, cx: &mut App) -> bool;
     fn set_warn_moving_profiles(&self, warn: bool, cx: &mut App);

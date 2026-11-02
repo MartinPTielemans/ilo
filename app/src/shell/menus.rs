@@ -448,8 +448,8 @@ impl Shell {
         );
     }
 
-    /// Moves the tab to the Space, warning the first time it goes to another profile's, where its
-    /// page loads again without this profile's cookies and logins.
+    /// Moves the tab, or the folder with what's in it, to the Space, warning the first time either
+    /// goes to another profile's, where pages load again without this profile's cookies and logins.
     pub(super) fn move_to_space(
         &mut self,
         tab: u64,
@@ -472,11 +472,16 @@ impl Shell {
             .map(|(_, name)| name.clone())
             .unwrap_or_default();
         let shell = cx.weak_entity();
+        let (title, body) = match self.is_folder_anywhere(tab) {
+            true => ("folder", "Its pages load"),
+            false => ("tab", "Its page loads"),
+        };
         self.browser.confirm(
-            format!("Move this tab to the “{name}” profile?"),
-            "Its page loads again there, without this profile's cookies and logins, so a site may \
-             ask you to sign in."
-                .into(),
+            format!("Move this {title} to the “{name}” profile?"),
+            format!(
+                "{body} again there, without this profile's cookies and logins, so a site may ask \
+                 you to sign in."
+            ),
             "Move",
             Box::new(move |cx| {
                 shell
@@ -673,8 +678,10 @@ impl Shell {
     /// The chosen rows' menu (ours, *interim* until Arc's is captured): what's done to them
     /// together, each as one step to undo.
     fn chosen_menu(&self, keys: &UserKeys) -> Vec<(MenuEntry, &'static str, MenuAction)> {
+        // A chosen folder isn't a tab to close or unpin.
+        let tabs = !self.chosen_tabs().is_empty();
         let close: (MenuEntry, &'static str, MenuAction) = (
-            MenuEntry::new("Close Tabs", true).shortcut(Command::CloseTab, keys),
+            MenuEntry::new("Close Tabs", tabs).shortcut(Command::CloseTab, keys),
             "close-tab",
             Box::new(|shell, cx| shell.close_chosen(cx)),
         );
@@ -694,19 +701,13 @@ impl Shell {
         let pin = if self.chosen_pin() { "Pin Tabs" } else { "Unpin Tabs" };
         let mut items: Vec<(MenuEntry, &'static str, MenuAction)> = vec![
             (
-                MenuEntry::new(pin, true).shortcut(Command::TogglePin, keys),
+                MenuEntry::new(pin, tabs).shortcut(Command::TogglePin, keys),
                 "toggle-pin",
                 Box::new(|shell, cx| shell.pin_chosen(cx)),
             ),
         ];
         self.push_add_to_folder(self.chosen_in_order(), &mut items);
-        // The other Spaces of the profile, where every tab keeps its place to undo.
-        let profile = self.shown_space().map(|space| space.profile);
-        let others: Vec<_> = (self.spaces_to_move_to(false).into_iter())
-            .filter(|&(space, ..)| {
-                self.spaces.iter().any(|each| each.id == space && Some(each.profile) == profile)
-            })
-            .collect();
+        let others = self.spaces_for_chosen();
         let move_to = items.len();
         items.push((MenuEntry::new("Move to Space", !others.is_empty()), "", Box::new(|_, _| {})));
         for (space, name, _) in others {
@@ -749,6 +750,17 @@ impl Shell {
             "duplicate-folder",
             Box::new(move |shell, cx| shell.duplicate_folder(folder, cx)),
         ));
+        // Each other Space, as a pinned tab's Move to Space lists them (owner, #1353).
+        let others = self.spaces_to_move_to(false);
+        let move_to = items.len();
+        items.push((MenuEntry::new("Move to Space", !others.is_empty()), "", Box::new(|_, _| {})));
+        for (space, name, _) in others {
+            items.push((
+                MenuEntry::named(name, true).swatch(self.space_swatch(space)).under(move_to),
+                "move-to-space",
+                Box::new(move |shell, cx| shell.move_to_space(folder, space, false, cx)),
+            ));
+        }
         let rest: [(MenuEntry, &'static str, MenuAction); 6] = [
             (MenuEntry::line(), "", Box::new(|_, _| {})),
             (
@@ -1100,6 +1112,17 @@ impl Shell {
             .collect()
     }
 
+    /// The other Spaces the chosen rows can move to: the profile's, where every row keeps its
+    /// place to undo.
+    pub(super) fn spaces_for_chosen(&self) -> Vec<(u64, SharedString, bool)> {
+        let profile = self.shown_space().map(|space| space.profile);
+        (self.spaces_to_move_to(false).into_iter())
+            .filter(|&(space, ..)| {
+                self.spaces.iter().any(|each| each.id == space && Some(each.profile) == profile)
+            })
+            .collect()
+    }
+
     /// The folders of `space` that `tab` can move into, in the sidebar's order, each named by its
     /// path, "Docs / Old". None in another profile's Space, where the tab goes as a new tab.
     fn folders_to_move_to(&self, tab: u64, space: u64) -> Vec<(u64, String)> {
@@ -1358,7 +1381,7 @@ mod empty_space_tests;
 
 #[cfg(test)]
 mod tests {
-    use gpui::{Entity, TestAppContext, point, px};
+    use gpui::{AppContext, Entity, TestAppContext, point, px};
 
     use super::{MenuEntry, sentence_case, space_menu_head, space_menu_label};
     use crate::shell::{
@@ -1622,9 +1645,16 @@ mod tests {
         };
         let (shell, host) = shell_with(cx, &[20, 21, 22], &[24], folders);
         let menu = tab_menu(&shell, &host, cx, 20);
-        // Its tab has no address here, so Copy All Links is greyed out.
-        let head = ["Rename Folder", "Change Icon…", "Duplicate", "Copy All Links (disabled)"];
-        assert_eq!(menu[..4], head, "{menu:?}");
+        // Its tab has no address here, so Copy All Links is greyed out, and the window has no other
+        // Space to move it to.
+        let head = [
+            "Rename Folder",
+            "Change Icon…",
+            "Duplicate",
+            "Move to Space (disabled)",
+            "Copy All Links (disabled)",
+        ];
+        assert_eq!(menu[..5], head, "{menu:?}");
         assert_eq!(menu.last().unwrap(), "Delete Folder");
         let menu = tab_menu(&shell, &host, cx, 22);
         assert_eq!(menu[..4], ["Rename Folder", "Change Icon…", "Remove Icon", "Duplicate"]);
@@ -1636,6 +1666,39 @@ mod tests {
         cx.update(|cx| host.choose("Duplicate", cx));
         let edits = host.take_edits();
         assert!(edits.len() == 1 && edits[0].starts_with("duplicate folder 20 "), "{edits:?}");
+    }
+
+    /// A folder's Move to Space lists the user's other Spaces, another profile's too, as a pinned
+    /// tab's does, never an agent's, and moves the folder whole (owner, #1353).
+    #[gpui::test]
+    fn a_folder_moves_to_the_users_other_spaces_but_never_an_agents(cx: &mut TestAppContext) {
+        let host = std::rc::Rc::new(Recorder::default());
+        let shell = cx.new(|cx| Shell::new(host.clone(), cx));
+        let folders = Folders {
+            folders: [(20, ("Docs".into(), true))].into(),
+            parents: [(21, 20)].into(),
+            ..Default::default()
+        };
+        shell.update(cx, |shell, cx| {
+            let space = |id, name: &str, profile, agent: &str| {
+                (id, name.into(), None, profile, "".into(), agent.into(), "".into())
+            };
+            let spaces = vec![
+                space(1, "Work", 0, ""),
+                space(2, "Home", 0, ""),
+                space(3, "Other", 1, ""),
+                space(9, "Agent", 0, "claude"),
+            ];
+            shell.set_spaces(spaces, cx);
+            shell.set_space(1, cx);
+            shell.set_tabs(1, vec![20, 21], vec![24], Vec::new(), folders, cx);
+        });
+        let menu = tab_menu(&shell, &host, cx, 20);
+        let moves: Vec<&String> = menu.iter().filter(|title| title.contains("Space")).collect();
+        assert_eq!(moves, ["Move to Space › Home", "Move to Space › Other"], "{menu:?}");
+        host.take_edits();
+        cx.update(|cx| host.choose("Home", cx));
+        assert_eq!(host.take_edits(), ["space folder 20 2"]);
     }
 
     /// A folder's menu copies the links of every tab in it, nested folders' too, each on a line or
