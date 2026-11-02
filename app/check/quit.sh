@@ -4,10 +4,12 @@
 # (#905). So does each with a Little ilo window open over the window, its page loaded, and on
 # Windows each window's close button: all of them at once, as Windows asks each window to close
 # as it shuts down, the regular window's alone, which quits as the last regular window closes, or
-# the last window's with no Little ilo. One of those crashed (#1425). So does a quit with a page
-# playing music, and one with a link preview open. None leaves a crash report, where on Linux a
-# crash as the window closed once left one at every quit (#474). A quit by signal, as the other
-# runs' is, never closes the window, so only a quit the user makes finds it.
+# the last window's with no Little ilo. One of those crashed (#1425). So, on Linux, does a quit by
+# signal just after a switch to a coloured Space, ten times, which crashed one launch in two
+# (#1478). So does a quit with a page playing music, and one with a link preview open. None
+# leaves a crash report, where on Linux a crash as the window closed once left one at every quit
+# (#474). A quit by signal, as the other runs' is, never closes the window as the user does, so
+# only a quit the user makes finds that one.
 
 serve
 # The reports Crashpad keeps until they're sent, in the profile's Crashpad folder, as crash.sh
@@ -130,6 +132,56 @@ if windows; then
   quit_cleanly
 fi
 
+# On Linux, quits by signal as a switch to a coloured Space cross-fades the window's colours: as
+# Chromium quits it closes every window before the core lets its window go, and the app setting
+# the colours of the closed one crashed about one launch in two (#1478), so ten launches.
+if [ "$(uname)" = Linux ]; then
+  printf '%s' '<title>two</title><p style="font:24px system-ui">Space two</p>' \
+    > "$out/site/quit-two.html"
+  start space-switch "$site"
+  await_load
+  first=$(space)
+  send menu New Space…
+  expect "^browser: spaces $first [0-9]*\$" "$way: New Space didn't make a second Space"
+  second=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f4)
+  send type two
+  send key return
+  expect "^browser: create space $second two\$" "$way: return didn't name the Space"
+  send key t cmd
+  expect '^browser: command bar shown$' "$way: ⌘T in the new Space didn't open the command bar"
+  send type "${site}quit-two.html"
+  send key return
+  expect '^browser: today [0-9][0-9]*$' "$way: the page didn't open in the new Space"
+  expect "^browser: loaded $(today) ${site}quit-two.html\$" "$way: the page didn't load in the new Space"
+  post rightclick 100 112
+  expect '^browser: menu shown ' "$way: the Space's menu didn't show"
+  send choose "$(cased 'Edit Theme Color…')"
+  expect '^browser: theme picker drawn$' "$way: the theme picker didn't draw itself on screen"
+  send clickkey "$(swatch_x 1)" $swatch_y
+  expect "^browser: colored space $second [0-9a-f]*\$" "$way: the pink swatch didn't colour the Space"
+  send key escape
+  expect '^browser: theme picker hidden$' "$way: escape didn't close the theme picker"
+  quit_app
+  quit_cleanly
+  for launch in $(seq 10); do
+    way="space-switch, launch $launch"
+    log="$out/quit-space-switch-$launch.log"
+    step=0
+    before=$(reports)
+    BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
+    pid=$!
+    exec 3> "$out/drive"
+    await "^browser: space $second\$" || fail "$way: the second Space didn't come back"
+    send key 1 ctrl
+    expect "^browser: space $first in " "$way: ⌃1 didn't show the first Space"
+    send key 2 ctrl
+    expect "^browser: space $second in " "$way: ⌃2 didn't show the second Space"
+    exec 3>&-
+    quit_app
+    quit_cleanly
+  done
+fi
+
 # Music playing, which Chromium lets a page start without the user's click under this switch: the
 # media.sh page's ten seconds of silence, over and over, as music Chrome gives controls.
 printf '%s' '<title>loading</title><script>
@@ -188,4 +240,6 @@ kill "$server"
 
 closed=
 ! windows || closed=", and on Windows the close buttons of every window with Little ilo open, of the regular window alone under it, and of the last window"
-echo "ok: quitting through the menu and with ⌘Q, answering Quit, through the menu as the window comes on screen, and through both with a Little ilo window open$closed, with music playing$previewed, ends every Chromium process with status 0 after Chromium stops, and leaves no crash report"
+switched=
+[ "$(uname)" != Linux ] || switched=", and on Linux ten quits by signal just after a switch to a coloured Space"
+echo "ok: quitting through the menu and with ⌘Q, answering Quit, through the menu as the window comes on screen, and through both with a Little ilo window open$closed$switched, with music playing$previewed, ends every Chromium process with status 0 after Chromium stops, and leaves no crash report"
