@@ -1,14 +1,16 @@
 Lets the core open the links in a launch's command line (//browser_core/hooks.h): `xdg-open
 https://…` and a link clicked in a mail client on Linux, a link another app opens on Windows, and a
-second `chrome <url>`, which the process singleton hands to the running browser. The hook comes just
-before Chrome would open its own windows for the launch, and the launch is then silent: the core's
-windows are the only ones. The core starts Chrome with --no-startup-window, which made every launch
-silent until chrome.exe on Windows handed a second launch's command line over without it, and the
-link opened twice (#1413). The Mac's come by AppController (chromium-core-open-links.patch).
+second `chrome <url>`, which the process singleton hands to the running browser. A later launch
+with no link, from the Start menu or a shortcut, brings the core's window in front forward instead.
+The hook comes just before Chrome would open its own windows for the launch, and the launch is then
+silent: the core's windows are the only ones. The core starts Chrome with --no-startup-window, which
+made every launch silent until chrome.exe on Windows handed a second launch's command line over
+without it, and the link opened twice (#1413). The Mac's come by AppController
+(chromium-core-open-links.patch).
 
 --- a/chrome/browser/ui/startup/startup_browser_creator.cc
 +++ b/chrome/browser/ui/startup/startup_browser_creator.cc
-@@ -154,6 +154,12 @@
+@@ -154,6 +154,13 @@
  using content::BrowserThread;
  using content::ChildProcessSecurityPolicy;
  
@@ -16,21 +18,25 @@ link opened twice (#1413). The Mac's come by AppController (chromium-core-open-l
 +// (//browser_core/hooks.h).
 +void (*g_browser_core_open_command_line)(const base::CommandLine& command_line,
 +                                         const base::FilePath& cur_dir,
-+                                         Profile* profile) = nullptr;
++                                         Profile* profile,
++                                         bool process_startup) = nullptr;
 +
  namespace {
  
  // Dumps the current set of the browser process's histograms to |output_file|.
-@@ -1169,6 +1175,15 @@
+@@ -1169,6 +1176,18 @@
    }
  #endif  //  !BUILDFLAG(IS_CHROMEOS)
  
 +  // browser_core: the core's windows open the links, this launch's or another's the process
-+  // singleton handed over, and Chrome opens none. The core gives each launch it starts the switch
-+  // below, but on Windows chrome.exe hands a second launch's command line over before the core has
-+  // added it, and Chrome opened the link a second time (#1413).
++  // singleton handed over, and one comes forward for a later launch with none, and Chrome opens
++  // none. The core gives each launch it starts the switch below, but on Windows chrome.exe hands a
++  // second launch's command line over before the core has added it, and Chrome opened the link a
++  // second time (#1413).
 +  if (g_browser_core_open_command_line) {
-+    g_browser_core_open_command_line(command_line, cur_dir, privacy_safe_profile);
++    g_browser_core_open_command_line(
++        command_line, cur_dir, privacy_safe_profile,
++        process_startup == chrome::startup::IsProcessStartup::kYes);
 +    silent_launch = true;
 +  }
 +

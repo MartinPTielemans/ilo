@@ -1014,6 +1014,11 @@ typedef struct bc_host {
                                   bc_id profile,
                                   const bc_sidebar_backup* backups,
                                   size_t count);
+  // The user launched the browser again while it ran, with no link it opens: from the Start menu,
+  // the taskbar or a shortcut on Windows, or the desktop's launcher on Linux. Bring the regular
+  // window in front forward, restoring it if it's minimized (host_activate). The Mac's Dock and a
+  // second `open` reopen the app instead, which Chrome answers by bringing its windows forward.
+  void (*launched_again)(void* context);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit

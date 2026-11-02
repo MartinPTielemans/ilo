@@ -3,8 +3,9 @@
 `close PID` asks each browser window of process PID to close, as its close button does: the
 top-level windows holding the UI's view (platform/windows/host.cc's BrowserUI). `list PID` prints
 each top-level window of the process, with its class, title, state and whether it's a browser
-window. `icon PID ICO` checks that each window of the process the taskbar and Alt+Tab show has the
-.ico's image for its big and small icons, read as the shell reads them, and prints them (#1350).
+window, minimized (IsIconic) or the one in front (GetForegroundWindow). `icon PID ICO` checks
+that each window of the process the taskbar and Alt+Tab show has the .ico's image for its big and
+small icons, read as the shell reads them, and prints them (#1350).
 Usage: app-windows.py close|list|icon PID [ICO]"""
 
 import ctypes
@@ -149,6 +150,8 @@ def main():
     pid = int(sys.argv[2])
     if command == "icon":
         sys.exit(0 if check_icons(pid, sys.argv[3]) else 1)
+    user32.GetForegroundWindow.restype = w.HWND
+    foreground = user32.GetForegroundWindow()
     for hwnd in windows(pid):
         browser = holds_ui(hwnd)
         if command == "close":
@@ -160,6 +163,8 @@ def main():
             "visible" if user32.IsWindowVisible(hwnd) else "hidden",
             "disabled" if not user32.IsWindowEnabled(hwnd) else "",
             "owned" if user32.GetWindow(hwnd, GW_OWNER) else "",
+            "minimized" if user32.IsIconic(hwnd) else "",
+            "foreground" if hwnd == foreground else "",
         ]
         print(
             '%#x %s "%s" %s'

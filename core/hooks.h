@@ -150,12 +150,14 @@ extern void (*g_browser_core_password_prompt)(content::WebContents* contents, bo
 extern void (*g_browser_core_open_links)(const std::vector<GURL>& urls);
 // chrome/browser/ui/startup/startup_browser_creator.cc: opens the links in a launch's command line,
 // such as `xdg-open https://…` or a second `chrome <url>` on Linux, or a link another app opens on
-// Windows, in place of Chrome's tabs for them: Chrome then opens nothing for the launch. A second
-// launch's comes through the process singleton; the first launch's before the app has started.
-// |profile| is the launch's, or null.
+// Windows, in place of Chrome's tabs for them, and for a later launch with none, from the Start menu
+// or a shortcut, brings the window in front forward in place of Chrome's new window: Chrome then
+// opens nothing for the launch. A second launch's comes through the process singleton; the first
+// launch's, |process_startup|, before the app has started. |profile| is the launch's, or null.
 extern void (*g_browser_core_open_command_line)(const base::CommandLine& command_line,
                                                 const base::FilePath& cur_dir,
-                                                Profile* profile);
+                                                Profile* profile,
+                                                bool process_startup);
 // chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc: the page of
 // |source|, a tab of |browser|, has the pointer on the link |url|, or on none and |url| is empty.
 // Chrome draws it in a status bubble, which the core's windows don't have.
