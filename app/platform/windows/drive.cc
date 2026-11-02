@@ -15,7 +15,8 @@
 // Windows' own maximize, which the Mac's has no command for; overlays, which lists the windows on
 // screen over the app's browser windows; stack, which lists every app's windows over the driven
 // one, front first; and reshow, which shows those of the UI's that are hidden again, as Windows
-// does. The Mac's modifiers are
+// does. window <n> behind drives a window without bringing it forward, as drive.mm's does. The
+// Mac's modifiers are
 // pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl with Alt, but Ctrl for
 // ⌃Tab, and alt with both. A trackpad's scrolls and swipes are wheel messages with the pixels in
 // their deltas, as a precision touchpad sends them. choose and dismiss work on ilo's menu and the
@@ -1031,8 +1032,16 @@ bool Run(const std::string& line) {
     if (!(words >> number) || number == 0 || !Browser(number - 1)) {
       return false;
     }
+    std::string behind;
+    if (words >> behind && behind != "behind") {
+      return false;
+    }
     g_driven = number - 1;
-    fprintf(stderr, "browser: drive window %zu\n", number);
+    fprintf(stderr, "browser: drive window %zu%s\n", number, behind.empty() ? "" : " behind");
+    // With behind, it stays where it is, for the pointer over a window behind another (#1432).
+    if (!behind.empty()) {
+      return true;
+    }
     // In front of the app's other browser windows with the keyboard, as a click on it does, but
     // never over another app's.
     HWND root = Driven();

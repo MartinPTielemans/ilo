@@ -141,9 +141,11 @@
 //                                         page, Chromium's or Safari's engine's: letters add to a
 //                                         composition, space converts it to 日本語, return
 //                                         commits it and escape cancels it
-//   window <n>                            drives the n-th browser window opened, from 1, from
+//   window <n> [behind]                   drives the n-th browser window opened, from 1, from
 //                                         now, bringing it to the front with the keyboard as a
-//                                         click on it does, logging "browser: drive window <n>"
+//                                         click on it does, logging "browser: drive window <n>",
+//                                         or with behind leaving it where it is, for the pointer
+//                                         over a window behind another (#1432)
 //   agentspace <agent> <name>             makes a Space named <name> for the agent with the id
 //                                         <agent> and the name <name>, as agent code will once
 //                                         there is some, logging "browser: made space <space> for
@@ -1150,9 +1152,15 @@ bool Run(const std::string& line, void (^done)(void)) {
     if (!(words >> number) || number == 0 || !host_browser_window(number - 1)) {
       return false;
     }
+    std::string behind;
+    if (words >> behind && behind != "behind") {
+      return false;
+    }
     g_driven = number - 1;
-    fprintf(stderr, "browser: drive window %zu\n", number);
-    [(__bridge NSWindow*)host_browser_window(g_driven) makeKeyAndOrderFront:nil];
+    fprintf(stderr, "browser: drive window %zu%s\n", number, behind.empty() ? "" : " behind");
+    if (behind.empty()) {
+      [(__bridge NSWindow*)host_browser_window(g_driven) makeKeyAndOrderFront:nil];
+    }
     done();
     return true;
   }
