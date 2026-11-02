@@ -232,7 +232,7 @@ await "^browser: title $a cookie p\$" ||
   fail "the favorite came back without its profile's cookie"
 send click $page_point
 send key 2 ctrl
-expect "^browser: space $second in " "⌃2 didn't show the second Space"
+expect "^browser: space $second in " "⌃2 after the relaunch didn't show the second Space"
 expect '^browser: favorites $' "the second Space showed the first profile's favorite"
 b=$(today)
 expect "^browser: title $b cookie none\$" "the second Space's tab came back in the first profile"
@@ -306,7 +306,7 @@ expect "^browser: menu shown $(cased 'Back to Favorite URL, ')" "⌘Z put the fa
 send choose "$(cased 'Back to Favorite URL')"
 expect "^browser: title $a cookie p\$" "Back to Favorite URL didn't load the favorite's URL"
 send key 2 ctrl
-expect "^browser: space $second in " "⌃2 didn't show the second Space"
+expect "^browser: space $second in " "⌃2 after Back to Favorite URL didn't show the second Space"
 expect '^browser: favorites [0-9][0-9]*$' "⌘Z didn't bring back the favorite's twin"
 twin=$(grep '^browser: favorites' "$log" | tail -1 | cut -d' ' -f3)
 [ "$twin" != "$a" ] || fail "the other profile's Space shows the first profile's favorite itself"
@@ -465,7 +465,7 @@ expect '^browser: command bar go https://duckduckgo\.com/?q=ilo' \
   "the first profile's Space didn't search with DuckDuckGo: $(grep '^browser: command bar go' "$log" | tail -1)"
 send key w cmd
 send key 2 ctrl
-expect "^browser: space $second in " "⌃2 didn't show the second Space"
+expect "^browser: space $second in " "⌃2 after ⌘W closed the first Space's search didn't show the second Space"
 expect "^browser: settled space $second\$" "the second Space's page didn't settle"
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
