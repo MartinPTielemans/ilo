@@ -5,14 +5,20 @@
 # Check for Updates… finds the feed's update and shows it with its Markdown notes. A scheduled
 # check that finds one while a window is full screen holds it, and shows it with the keyboard once
 # the window leaves full screen.
+# Settings › About's row checks without a window of Sparkle's own and says where the update
+# stands: with the feed gone the check fails, Try Again checks again once it's back, and Sparkle
+# downloads the update, here the check build one build on, in the background. Once it's ready,
+# Restart to Update shows at the sidebar's foot, in light and dark, and its click installs the
+# update and relaunches into it.
 # Not here: the release notes the first launch of an update opens, which only the prod build does,
-# for https notes only, and the install, which needs a signed app to update to.
+# for https notes only.
 # On Linux, ilo's Flatpak, built as a release's (tools/flatpak.sh), installed from a repository of
 # the run's own, where a newer build then comes, as a release puts one in ilo's. Flatpak's own
 # portal, on a session bus of the run's own and looking every 10 s rather than every half hour,
-# announces it, ilo installs it beside the build running and offers to restart into it, and
-# Restart starts the new build once this one has quit. Flatpak asks the user once whether an app
-# may update itself; the run says yes for them, in a home of its own, which has the profile too.
+# announces it, ilo installs it beside the build running and shows Restart to Update at the
+# sidebar's foot, which starts the new build once this one has quit. Flatpak asks the user once
+# whether an app may update itself; the run says yes for them, in a home of its own, which has the
+# profile too.
 # It needs flatpak, flatpak-builder and ostree, and skips where ilo's Flatpak is installed from
 # another repository, which it would replace.
 
@@ -153,18 +159,128 @@ $out/updates-sample.txt, the window: $out/updates-stalled.png"
       fail "no window to capture"
     exec 3>&-
     quit
+    about_updates
     echo "ok: the check build's app menu has Check for Updates… under About, and Sparkle checks 8" \
       "hours after the last check, in $interval s here. Check for Updates… found the run's" \
       "signed update and showed it with its Markdown notes. A check in full screen held its" \
-      "update, which came with the keyboard once the window left full screen." \
+      "update, which came with the keyboard once the window left full screen. About's check" \
+      "failed with no feed, Try Again downloaded build $next, Restart to Update showed at the" \
+      "sidebar's foot, and its click relaunched into build $next." \
       "Interval: $out/updates-interval.txt." \
       "Windows: $out/updates-menu.png, $out/updates-found.png, $out/updates-held.png," \
-      "$out/updates-after-full-screen.png"
+      "$out/updates-after-full-screen.png, $out/updates-about-*.png, $out/updates-sign-*.png," \
+      "$out/updates-relaunched.png"
   fi
   defaults delete "$app_id" > /dev/null 2>&1 || true
   rm -rf "$scratch"
   scratch=
   app=$saved_app browser=$saved_browser procs=$saved_procs app_id=dev.browser.app
+}
+# About's row and Restart to Update, on the Mac, from launch to the relaunch into the update.
+about_updates() {
+  # The update: the check build one build on, as a release is, sealed again after the change.
+  mkdir "$scratch/next"
+  cp -cR "$app" "$scratch/next/"
+  local copy
+  copy=$scratch/next/$(basename "$app")
+  plutil -replace CFBundleVersion -string "$next" "$copy/Contents/Info.plist"
+  codesign --force --deep --sign - "$copy" 2> "$out/updates-codesign.txt" ||
+    fail "the update didn't sign: $out/updates-codesign.txt"
+  local archive=$out/site/updates/update-$next.zip
+  ditto -c -k --keepParent "$copy" "$archive"
+  local signature
+  signature=$(.deps/Sparkle/bin/sign_update --ed-key-file "$scratch/key" -p "$archive")
+  python3 -I ../tools/appcast.py local "$out/site/updates/appcast.xml" \
+    "$(plutil -extract CFBundleShortVersionString raw "$copy/Contents/Info.plist")" "$next" \
+    "$scratch/notes.md" "${site}updates/$(basename "$archive")" "$(wc -c < "$archive" | tr -d ' ')" \
+    "$signature" > /dev/null || fail "appcast.py local didn't make the feed"
+  log="$out/updates-about.log"
+  launch +0S
+  # Clicks the row's button, which logs where it's drawn as it changes.
+  about_click() {
+    # shellcheck disable=SC2046 # x and y
+    send clickkey $(sed -n "s/^browser: settings update $1 at //p" "$log" | tail -1)
+  }
+  # Waits up to 2 minutes for the update's stage $1, as a download takes.
+  stage() {
+    for _ in $(seq 1200); do
+      grep -q "^browser: update stage $1\$" "$log" && return 0
+      kill -0 "$pid" 2> /dev/null || fail "the app exited"
+      sleep 0.1
+    done
+    fail "$2: $(grep '^browser: update stage' "$log" | tr '\n' ';')"
+  }
+  send menu "About $app_name"
+  expect '^browser: settings \(shown\|tab\|drew\) About$' "About ilo didn't show Settings' About tab"
+  expect '^browser: settings update check at ' "About's row had no Check for Updates"
+  ../tools/window-screenshot.sh "$pid" "$out/updates-about-idle.png" all || fail "no window to capture"
+  # With the feed gone, the check fails, and Try Again finds the update once it's back.
+  mv "$out/site/updates/appcast.xml" "$scratch/appcast.xml"
+  about_click check
+  expect '^browser: update check asked$' "About's Check for Updates didn't ask the updater"
+  stage 'failed to check' "with no feed, About's check didn't fail"
+  ! grep -q '^browser: update [0-9]* \(shown\|held\)' "$log" ||
+    fail "About's check showed Sparkle's alert"
+  ../tools/window-screenshot.sh "$pid" "$out/updates-about-failed.png" all ||
+    fail "no window to capture"
+  mv "$scratch/appcast.xml" "$out/site/updates/appcast.xml"
+  about_click check
+  stage 'ready [0-9.]*' "Try Again didn't download build $next"
+  grep -q '^browser: update stage downloading [0-9.]*$' "$log" ||
+    fail "the row never said it was downloading"
+  ! grep -q '^browser: update [0-9]* \(shown\|held\)' "$log" ||
+    fail "the download showed Sparkle's alert"
+  expect '^browser: settings update restart at ' "About's row had no Restart to Update"
+  ../tools/window-screenshot.sh "$pid" "$out/updates-about-ready.png" all ||
+    fail "no window to capture"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+  expect '^browser: update sign 0 at ' "Restart to Update didn't show at the sidebar's foot"
+  # In each look, which the window says as it changes.
+  local sx sy sw sh tone light
+  for tone in light dark; do
+    if [ $tone = light ]; then light=true; else light=false; fi
+    if ! grep '^browser: window light ' "$log" | tail -1 | grep -q " $light\$"; then
+      send menu "Appearance › $([ $tone = light ] && echo Light || echo Dark)"
+      expect "^browser: window light $light\$" "View › Appearance didn't make the window $tone"
+    fi
+    ../tools/window-screenshot.sh "$pid" "$out/updates-sign-$tone.png" || fail "no window to capture"
+  done
+  send menu "Appearance › Automatic"
+  read -r sx sy sw sh <<EOF
+$(grep '^browser: update sign 0 at ' "$log" | tail -1 | cut -d' ' -f6-)
+EOF
+  send click $((sx + sw / 2)) $((sy + sh / 2))
+  expect '^browser: command restart-to-update via sidebar$' "Restart to Update didn't take the click"
+  expect '^browser: update installs now$' "Restart to Update didn't install the update"
+  exec 3>&-
+  # Sparkle quits the app, installs the update over it and opens it again, as a new process.
+  local old=$pid relaunched=
+  for _ in $(seq 1200); do
+    kill -0 "$old" 2> /dev/null || break
+    sleep 0.1
+  done
+  kill -0 "$old" 2> /dev/null && fail "Restart to Update didn't quit the app"
+  for _ in $(seq 1200); do
+    relaunched=$(pgrep -n -f "^$browser" || true)
+    [ -n "$relaunched" ] && [ "$relaunched" != "$old" ] && break
+    relaunched=
+    sleep 0.1
+  done
+  [ -n "$relaunched" ] || fail "the app didn't come back after Restart to Update"
+  [ "$(plutil -extract CFBundleVersion raw "$app/Contents/Info.plist")" = "$next" ] ||
+    fail "the app that came back isn't build $next"
+  pid=$relaunched
+  for _ in $(seq 300); do
+    ../tools/window-screenshot.sh "$pid" "$out/updates-relaunched.png" 2> /dev/null && break
+    sleep 0.1
+  done
+  [ -f "$out/updates-relaunched.png" ] || fail "the update's window didn't come up"
+  kill "$pid" 2> /dev/null
+  for _ in $(seq 100); do
+    kill -0 "$pid" 2> /dev/null || break
+    sleep 0.1
+  done
 }
 flatpak_updates_check() {
   local id=app.ilo.browser remote=ilo-updates-check portal= tool
@@ -240,8 +356,15 @@ flatpak_updates_check() {
     fail "the new build didn't install: $(grep '^browser: update' "$log" | tail -1)"
   [ "$(flatpak info --user "$id" | sed -n 's/^ *Commit: //p')" = "$next" ] ||
     fail "Flatpak didn't install build $next beside $installed"
+  expect '^browser: update stage ready$' "the build installed didn't make the update ready"
+  expect '^browser: update sign 0 at ' "Restart to Update didn't show at the sidebar's foot"
+  local sx sy sw sh
+  read -r sx sy sw sh <<EOF
+$(grep '^browser: update sign 0 at ' "$log" | tail -1 | cut -d' ' -f6-)
+EOF
   ../tools/window-screenshot.sh "$pid" "$out/updates-ready.png" || fail "no window to capture"
-  send choose Restart
+  send click $((sx + sw / 2)) $((sy + sh / 2))
+  expect '^browser: command restart-to-update via sidebar$' "Restart to Update didn't take the click"
   for _ in $(seq 300); do
     kill -0 "$pid" 2> /dev/null || break
     sleep 0.1
@@ -279,8 +402,8 @@ flatpak_updates_check() {
   scratch=
   procs=$saved_procs
   echo "ok: ilo's Flatpak, installed at $(echo "$installed" | cut -c1-12), installed the newer" \
-    "build $(echo "$next" | cut -c1-12) Flatpak's portal announced, offered to restart into it," \
-    "and Restart started it once the build running had quit." \
+    "build $(echo "$next" | cut -c1-12) Flatpak's portal announced, showed Restart to Update at" \
+    "the sidebar's foot, and its click started it once the build running had quit." \
     "Windows: $out/updates-ready.png, $out/updates-restarted.png"
 }
 updates_check

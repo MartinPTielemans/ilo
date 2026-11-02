@@ -73,25 +73,6 @@ if [ "$(uname -s)" = Darwin ]; then
   tar xJf "$archive" -C .deps/Sparkle
 fi
 
-# WinSparkle, Windows's updater, which reads the same appcast: the WinSparkle.dll a Windows release
-# carries beside Browser.dll, for where the Windows app is built, on Windows or cross-compiled on
-# Linux. platform/windows/updates.cc loads it, so nothing builds against it.
-case $(uname -s) in
-  Linux | MINGW*)
-    WINSPARKLE=0.9.4
-    WINSPARKLE_SHA256=6037df37fc263bd1650a1c4949681a9d40ffe991d01f35892a406cb5d103c976
-    archive=.deps/WinSparkle-$WINSPARKLE.zip
-    if ! echo "$WINSPARKLE_SHA256  $archive" | sha256 -c --status 2>/dev/null; then
-      curl -sSfL "https://github.com/vslavik/winsparkle/releases/download/v$WINSPARKLE/WinSparkle-$WINSPARKLE.zip" -o "$archive"
-      echo "$WINSPARKLE_SHA256  $archive" | sha256 -c --status
-    fi
-    rm -rf .deps/WinSparkle
-    mkdir .deps/WinSparkle
-    unzip -qj "$archive" "WinSparkle-$WINSPARKLE/x64/Release/WinSparkle.dll" \
-      "WinSparkle-$WINSPARKLE/COPYING" -d .deps/WinSparkle
-    ;;
-esac
-
 # The engine: the Mac's, linked here; on Linux and Windows, the prebuilt one the engine's CI
 # publishes, when there is one for this checkout. Without one there is the UI alone: the tests and
 # the preview (AGENTS.md, Dev).
