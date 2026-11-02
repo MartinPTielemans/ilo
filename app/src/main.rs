@@ -164,6 +164,7 @@ mod platform {
             y: f64,
             width: f64,
             height: f64,
+            maximized: bool,
         );
         pub fn host_screens(frames: *mut f64, count: usize) -> usize;
         pub fn host_pointer(x: *mut f64, y: *mut f64) -> bool;
@@ -277,6 +278,16 @@ mod platform {
         pub fn host_start_window_move(ui_view: *mut c_void);
         #[cfg(target_os = "windows")]
         pub fn host_window_maximized(ui_view: *mut c_void) -> bool;
+        #[cfg(target_os = "windows")]
+        pub fn host_window_restored_frame(
+            ui_view: *mut c_void,
+            x: *mut f64,
+            y: *mut f64,
+            width: *mut f64,
+            height: *mut f64,
+        ) -> bool;
+        #[cfg(target_os = "windows")]
+        pub fn host_maximize_window(ui_view: *mut c_void);
         pub fn host_add_reveal(
             ui_view: *mut c_void,
             reveal_view: *mut c_void,
@@ -1332,6 +1343,20 @@ unsafe extern "C" fn tab_link_to_site(
     true
 }
 
+/// The user asked for a link in `tab`'s page in a link preview, by ⇧-click or Open Link in Peek:
+/// it opens over the window showing the tab, where the shell has one for it.
+unsafe extern "C" fn tab_link_to_preview(
+    _: *mut c_void,
+    tab: bc::bc_id,
+    url: *const c_char,
+    x: f64,
+    y: f64,
+) -> bool {
+    let url = unsafe { CStr::from_ptr(url) }.to_string_lossy().into_owned().into();
+    let at = point(px(x as f32), px(y as f32));
+    update_tab_window(tab, |shell, cx| shell.preview_link(tab, url, at, cx)).unwrap_or(false)
+}
+
 /// A key from the link preview's page acts on the preview alone: done, and whether the page loses
 /// it. None for another page's.
 fn link_preview_key(tab: bc::bc_id, key: *const bc::bc_key, reserved: bool) -> Option<bool> {
@@ -2042,6 +2067,10 @@ impl Browser for Engine {
         unsafe { bc::bc_tab_move_to_space(tab, space) };
     }
 
+    fn move_folder_to_space(&self, folder: u64, space: u64, _: &mut App) {
+        unsafe { bc::bc_folder_move_to_space(folder, space) };
+    }
+
     fn warn_moving_profiles(&self, _: &mut App) -> bool {
         unsafe { bc::bc_warn_moving_profiles() }
     }
@@ -2240,25 +2269,31 @@ impl Browser for Engine {
         unsafe { bc::bc_window_reopen_tab(self.window, closed) }
     }
 
-    fn reopen_preview(
+    fn open_preview(
         &self,
-        closed: &link_preview::Closed,
+        over: u64,
+        url: SharedString,
+        link: Point<Pixels>,
         page: (Bounds<Pixels>, f32),
         _: &mut App,
     ) {
-        let (window, closed) = (self.window, closed.clone());
+        let window = self.window;
         // Outside the shell's update, as the core tells the shell of the tab it opens.
         update_app_later(move |cx| {
-            let Ok(url) = CString::new(closed.url.as_ref()) else {
+            let Ok(text) = CString::new(url.as_ref()) else {
                 return;
             };
-            let preview = unsafe { bc::bc_tab_open_preview(closed.over, url.as_ptr()) };
+            let preview = unsafe { bc::bc_tab_open_preview(over, text.as_ptr()) };
             if preview == 0 {
-                log!("browser: link preview over {} not reopened", closed.over);
+                log!("browser: link preview over {over} not opened");
                 return;
             }
-            link_preview::show(window, preview, closed.over, closed.url, page, closed.link, cx);
+            link_preview::show(window, preview, over, url, page, link, cx);
         });
+    }
+
+    fn link_previews(&self) -> bool {
+        LINK_PREVIEWS.get() && unsafe { bc::bc_link_previews() }
     }
 
     fn close_preview(&self, over: u64, cx: &mut App) -> bool {
@@ -4330,6 +4365,12 @@ fn open_window_as(
     let ui_view = gpui_linux::new_host_window().unwrap_or(0) as usize as *mut c_void;
     let after = from.as_ref().map(|from| from.ui_view);
     let id = open_browser_window(ui_view, after, own, saved)?;
+    // The launch's first window, maximized as it quit, at the frame it un-maximizes to. Before its
+    // UI opens, so that starts at the maximized size.
+    if from.is_none() && LAUNCH_MAXIMIZED.take() && own.is_none() {
+        #[cfg(target_os = "windows")]
+        unsafe { platform::host_maximize_window(ui_view) };
+    }
     // Under Wayland, the window's surface, which GPUI's goes in as a subsurface, is the view, and
     // GPUI's window starts at its size.
     #[cfg(target_os = "linux")]
@@ -5636,28 +5677,37 @@ unsafe extern "C" fn window_reopen_little(
     });
 }
 
+thread_local! {
+    /// The launch window is maximized, as the first browser window opens (open_window_as).
+    static LAUNCH_MAXIMIZED: Cell<bool> = const { Cell::new(false) };
+}
+
 unsafe extern "C" fn launching(_: *mut c_void) {
     unsafe { platform::host_watch_finished_launching(finished_launching) };
     let Ok(profile) = CString::new(profile_dir()) else {
         return;
     };
-    // Where the front window was, which the browser window opens at again.
+    // Where the front window was, which the browser window opens at again, and whether it was
+    // maximized, which only Windows saves (save_launch_frame).
     let saved = std::fs::read_to_string(launch_frame_path()).ok().and_then(|text| {
         let numbers: Vec<f64> = text.split_whitespace().filter_map(|n| n.parse().ok()).collect();
         let [x, y, width, height] = numbers[..] else {
             return None;
         };
-        placed(bc::bc_rect { x, y, width, height })
+        let maximized = text.split_whitespace().any(|word| word == "maximized");
+        Some((placed(bc::bc_rect { x, y, width, height })?, maximized))
     });
-    let bc::bc_rect { x, y, width, height } = saved.unwrap_or_else(|| {
+    let (bc::bc_rect { x, y, width, height }, maximized) = saved.unwrap_or_else(|| {
         let (width, height) = WINDOW_SIZE;
         let (mut x, mut y) = (0., 0.);
         unsafe { platform::host_centered(width, height, &mut x, &mut y) };
-        bc::bc_rect { x, y, width, height }
+        (bc::bc_rect { x, y, width, height }, false)
     });
-    unsafe { platform::host_show_launch_window(profile.as_ptr(), x, y, width, height) };
+    LAUNCH_MAXIMIZED.set(maximized);
+    unsafe { platform::host_show_launch_window(profile.as_ptr(), x, y, width, height, maximized) };
     // check.sh reads this line.
-    log!("browser: launch window frame {x:.0} {y:.0} {width:.0} {height:.0}");
+    let state = if maximized { " maximized" } else { "" };
+    log!("browser: launch window frame {x:.0} {y:.0} {width:.0} {height:.0}{state}");
     // The launch's times, from the process's start, for the performance gate.
     log!("browser: launch window at {:.1} ms", unsafe { platform::host_since_launch() });
     unsafe { platform::host_dock_dot_launch(profile.as_ptr()) };
@@ -5756,10 +5806,18 @@ fn forget_launch_pictures() {
 
 /// Keeps the frame of the browser window of `ui_view` for the next launch's first window to open
 /// at. Out of full screen only: the core keeps the frame a window in full screen comes back at.
+/// Maximized on Windows, the frame it un-maximizes to and "maximized" after it (launching).
 fn save_launch_frame(ui_view: *mut c_void) {
     let (mut x, mut y, mut width, mut height) = (0., 0., 0., 0.);
     if unsafe { platform::host_window_frame(ui_view, &mut x, &mut y, &mut width, &mut height) } {
         _ = std::fs::write(launch_frame_path(), format!("{x} {y} {width} {height}\n"));
+        return;
+    }
+    #[cfg(target_os = "windows")]
+    if unsafe {
+        platform::host_window_restored_frame(ui_view, &mut x, &mut y, &mut width, &mut height)
+    } {
+        _ = std::fs::write(launch_frame_path(), format!("{x} {y} {width} {height} maximized\n"));
     }
 }
 
@@ -7239,6 +7297,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         agent_session_ended: Some(agent_session_ended),
         tab_dialog: Some(tab_dialog),
         tab_link_to_site: Some(tab_link_to_site),
+        tab_link_to_preview: Some(tab_link_to_preview),
         tab_link_dragged: Some(tab_link_dragged),
         crash_report_offered: Some(crash_report_offered),
         #[cfg(target_os = "linux")]

@@ -486,6 +486,54 @@ void Space::DeleteFolder(bc_id folder) {
   ReportChanged();
 }
 
+void Space::TakeFolder(Space& from, bc_id folder, const std::map<bc_id, bc_id>& copies) {
+  if (&from == this || !from.IsFolder(folder) || own()) {
+    return;
+  }
+  const auto here = [&](bc_id row) {
+    auto copy = copies.find(row);
+    return copy == copies.end() ? row : copy->second;
+  };
+  const size_t end = from.EndOf(folder);
+  auto first = std::ranges::find(from.pinned_, folder);
+  const std::vector<bc_id> rows(first, from.pinned_.begin() + end);
+  from.pinned_.erase(first, from.pinned_.begin() + end);
+  for (bc_id row : rows) {
+    if (row != folder) {
+      folder_of_[here(row)] = from.FolderOf(row);
+    }
+    from.folder_of_.erase(row);
+    if (auto entry = from.folders_.extract(row)) {
+      folders_[row] = std::move(entry.mapped());
+    } else {
+      if (auto url = from.pinned_urls_.extract(row)) {
+        pinned_urls_[here(row)] = std::move(url.mapped());
+      }
+      from.ForgetOpener(row);
+    }
+    pinned_.push_back(here(row));
+  }
+  // A split sits whole in one folder, so each with a tab here comes whole.
+  const std::set<bc_id> taken(rows.begin(), rows.end());
+  for (auto split = from.splits_.begin(); split != from.splits_.end();) {
+    if (!std::ranges::all_of(split->tabs, [&](bc_id tab) { return taken.contains(tab); })) {
+      ++split;
+      continue;
+    }
+    SplitView view = std::move(*split);
+    split = from.splits_.erase(split);
+    std::ranges::transform(view.tabs, view.tabs.begin(), here);
+    view.expanded = here(view.expanded);
+    splits_.push_back(std::move(view));
+  }
+  for (bc_id row : rows) {
+    from.LeaveSplit(row);
+  }
+  // This Space first, so the app never hears of a tab in neither.
+  ReportChanged();
+  from.ReportChanged();
+}
+
 bool Space::Split(bc_id tab, bc_id with, GURL url, bool left) {
   if (tab == with || !Has(tab) || !Has(with)) {
     return false;

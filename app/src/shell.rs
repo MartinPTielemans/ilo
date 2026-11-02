@@ -1821,6 +1821,12 @@ impl Shell {
         self.shown_space().is_some_and(|space| space.is_folder(row))
     }
 
+    /// Whether `folder` is open in its Space, which isn't the one shown while it's dragged to
+    /// another.
+    fn folder_open(&self, folder: u64) -> bool {
+        self.spaces.iter().any(|space| space.is_folder(folder) && space.is_open(folder))
+    }
+
     /// How many folders `row` is in, in the Space shown.
     fn depth(&self, row: u64) -> usize {
         self.shown_space().map_or(0, |space| space.depth(row))
@@ -1909,6 +1915,33 @@ impl Shell {
     pub fn previews_links_of(&self, tab: u64) -> bool {
         let kept = self.favorites.contains(&tab) || self.pinned().contains(&tab);
         kept && !self.agents_space_shown()
+    }
+
+    /// Whether a link the user asks for in a link preview, by ⇧-click or Open Link in Peek, opens
+    /// in one: they have previews on, the window shows `tab`'s page, whatever tab it is, and the
+    /// Space is theirs, as a preview is theirs alone.
+    pub fn peeks_links_of(&self, tab: u64) -> bool {
+        self.browser.link_previews() && self.shows(tab) && !self.agents_space_shown()
+    }
+
+    /// The user asked for `url`, a link at `at` in `tab`'s page, in a link preview: it opens over
+    /// the window, growing from the link, whatever link rules and meeting links say, as those
+    /// route only the previews a plain click opens. Whether it did; a ⇧-click goes as Chrome's
+    /// would if not.
+    pub fn preview_link(
+        &mut self,
+        tab: u64,
+        url: SharedString,
+        at: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some((page, radius)) = self.page_laid.filter(|_| self.peeks_links_of(tab)) else {
+            return false;
+        };
+        // check.sh waits for this line.
+        log!("browser: link preview asked from {tab}");
+        self.browser.open_preview(tab, url, page.origin + at, (page, radius), cx);
+        true
     }
 
     /// Where the page was laid out last, and the radius of its corners.

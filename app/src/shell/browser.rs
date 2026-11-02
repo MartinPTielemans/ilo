@@ -26,6 +26,9 @@ pub trait Browser {
     /// Moves `tab` to `space`. The window goes with it if it shows it. Into another profile's Space
     /// it goes as a new tab, whose page loads there again.
     fn move_to_space(&self, tab: u64, space: u64, cx: &mut App);
+    /// Moves the pinned folder, with what's in it, to the bottom of `space`'s pinned tabs, as
+    /// `move_to_space` moves a pinned tab.
+    fn move_folder_to_space(&self, folder: u64, space: u64, cx: &mut App);
     /// Whether to warn before moving a tab to another profile's Space, which the UI does once.
     fn warn_moving_profiles(&self, cx: &mut App) -> bool;
     fn set_warn_moving_profiles(&self, warn: bool, cx: &mut App);
@@ -109,14 +112,19 @@ pub trait Browser {
     fn undo_delete_space(&self, space: u64, cx: &mut App) -> bool;
     /// Reopens the Today tab closed last, and shows it.
     fn reopen_closed_tab(&self, cx: &mut App);
-    /// Opens the link preview the user closed again, at its page, over its tab, whose window's
-    /// page is at `page` with corners of that radius, growing from its link.
-    fn reopen_preview(
+    /// Opens a link preview of `url` over the tab `over`, whose window's page is at `page` with
+    /// corners of that radius, growing from its link at `link` in the window: one the user asked
+    /// for, or one they closed, again at its page.
+    fn open_preview(
         &self,
-        closed: &crate::link_preview::Closed,
+        over: u64,
+        url: SharedString,
+        link: Point<Pixels>,
         page: (Bounds<Pixels>, f32),
         cx: &mut App,
     );
+    /// Whether the user has link previews on, and the platform can show one.
+    fn link_previews(&self) -> bool;
     /// Closes the link preview over `over`, if one shows, as Redo does. Returns whether it did.
     fn close_preview(&self, over: u64, cx: &mut App) -> bool;
     /// Reopens the Today tab that had the id `closed` when it closed, at its place, and returns its

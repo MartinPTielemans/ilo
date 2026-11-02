@@ -354,6 +354,8 @@ impl Browser for Fake {
     // The made-up tabs stay in their Space.
     fn move_to_space(&self, _: u64, _: u64, _: &mut App) {}
 
+    fn move_folder_to_space(&self, _: u64, _: u64, _: &mut App) {}
+
     fn warn_moving_profiles(&self, _: &mut App) -> bool {
         true
     }
@@ -560,12 +562,18 @@ impl Browser for Fake {
 
     fn reopen_closed_tab(&self, _: &mut App) {}
 
-    fn reopen_preview(
+    fn open_preview(
         &self,
-        _: &browser::link_preview::Closed,
+        _: u64,
+        _: SharedString,
+        _: Point<Pixels>,
         _: (Bounds<Pixels>, f32),
         _: &mut App,
     ) {
+    }
+
+    fn link_previews(&self) -> bool {
+        true
     }
 
     fn close_preview(&self, _: u64, _: &mut App) -> bool {

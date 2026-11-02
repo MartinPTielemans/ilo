@@ -2297,16 +2297,23 @@ impl Settings {
             })
         });
         let agents = agents.clone();
-        let action = match connected {
-            true => button(&RowLook::settings(), ("disconnect-agent", index), "Disconnect").on_click(move |_, _, cx| {
-                agents.update(cx, |agents, cx| agents.disconnect(client, cx))
-            }),
-            false => button(&RowLook::settings(), ("connect-agent", index), "Connect").on_click(move |_, _, cx| {
-                // check.sh reads this line.
-                log!("browser: connect agent {}", client.id());
-                agents.update(cx, |agents, cx| agents.connect(client, cx))
-            }),
+        let (action, at) = match connected {
+            true => (
+                button(&RowLook::settings(), ("disconnect-agent", index), "Disconnect").on_click(move |_, _, cx| {
+                    agents.update(cx, |agents, cx| agents.disconnect(client, cx))
+                }),
+                "disconnect",
+            ),
+            false => (
+                button(&RowLook::settings(), ("connect-agent", index), "Connect").on_click(move |_, _, cx| {
+                    // check.sh reads this line.
+                    log!("browser: connect agent {}", client.id());
+                    agents.update(cx, |agents, cx| agents.connect(client, cx))
+                }),
+                "connect",
+            ),
         };
+        let action = action.relative().child(self.drawn(format!("{at} {}", client.id())));
         let icon = match client {
             Client::ClaudeCode => "icons/terminal.svg",
             Client::Codex => "icons/square-terminal.svg",
@@ -2319,6 +2326,11 @@ impl Settings {
     }
 
     fn advanced(&self, accent: Rgba, cx: &mut Context<Self>) -> AnyElement {
+        // Every way into Peek the switch turns off, in the names each OS gives its keys.
+        const PEEK_ROW: &str = match cfg!(target_os = "macos") {
+            true => "Peek at links from pinned tabs, favorites, ⇧-click and a link's menu",
+            false => "Peek at links from pinned tabs, favorites, Shift-click and a link's menu",
+        };
         let haptics = unsafe { bc::bc_haptics() };
         let haptics = self.toggle("haptics", haptics, set_haptics, accent, cx);
         let previews = unsafe { bc::bc_link_previews() };
@@ -2367,11 +2379,7 @@ impl Settings {
                         "Haptic feedback when swiping between Spaces",
                         haptics,
                     ),
-                    row(
-                        Some(("icons/app-window.svg", LINK_PREVIEWS_TILE)),
-                        "Preview links to other sites from pinned tabs and favorites",
-                        previews,
-                    ),
+                    row(Some(("icons/app-window.svg", LINK_PREVIEWS_TILE)), PEEK_ROW, previews),
                     row(
                         Some(("icons/picture-in-picture-2.svg", MINI_PLAYER_TILE)),
                         "Float a video or call in Picture in Picture as you leave its tab",

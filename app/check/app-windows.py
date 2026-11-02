@@ -1,11 +1,12 @@
 """The app's top-level windows on Windows, for lib.sh's quit and what it says of an app that didn't.
 
-`close PID` asks each browser window of process PID to close, as its close button does: the
-top-level windows holding the UI's view (platform/windows/host.cc's BrowserUI). `list PID` prints
-each top-level window of the process, with its class, title, state and whether it's a browser
-window. `icon PID ICO` checks that each window of the process the taskbar and Alt+Tab show has the
-.ico's image for its big and small icons, read as the shell reads them, and prints them (#1350).
-Usage: app-windows.py close|list|icon PID [ICO]"""
+`close PID [front]` asks each browser window of process PID to close, as its close button does: the
+top-level windows holding the UI's view (platform/windows/host.cc's BrowserUI), or with front the
+one in front alone. `list PID` prints each top-level window of the process, with its class, title,
+state and whether it's a browser window. `icon PID ICO` checks that each window of the process the
+taskbar and Alt+Tab show has the .ico's image for its big and small icons, read as the shell reads
+them, and prints them (#1350).
+Usage: app-windows.py close|list|icon PID [front|ICO]"""
 
 import ctypes
 import ctypes.wintypes as w
@@ -144,7 +145,12 @@ def check_icons(pid, ico):
 
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else ""
-    if len(sys.argv) != (4 if command == "icon" else 3) or command not in ("close", "list", "icon"):
+    front = command == "close" and sys.argv[3:] == ["front"]
+    if len(sys.argv) != (4 if command == "icon" or front else 3) or command not in (
+        "close",
+        "list",
+        "icon",
+    ):
         sys.exit(__doc__.splitlines()[-1])
     pid = int(sys.argv[2])
     if command == "icon":
@@ -154,6 +160,8 @@ def main():
         if command == "close":
             if browser:
                 user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+                if front:
+                    break
             continue
         states = [
             "browser" if browser else "",
