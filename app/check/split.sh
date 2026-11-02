@@ -546,6 +546,17 @@ expect '^browser: hover tab [0-9][0-9]* close 1 favicon none$' "the split's row 
 send click 202 $(row 2 | cut -d' ' -f2)
 expect '^browser: command close-tab via sidebar$' "a click on the split's ✕ didn't run Close Tab"
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "closing the split again didn't show $a"
+# ⌘Z brings them back together too (#1361), and the ✕ closes them once more.
+send key z cmd
+expect '^browser: command undo via \(ui\|page\)$' "⌘Z didn't undo closing the split"
+expect "^browser: splits [0-9][0-9]*+[0-9][0-9]*\$" \
+  "⌘Z didn't bring the split's panes back together: \"$(splits)\""
+send click $((x + 100)) 400
+send move 202 $(row 2 | cut -d' ' -f2)
+expect '^browser: hover tab [0-9][0-9]* close 1 favicon none$' "the split's row didn't draw its ✕"
+send click 202 $(row 2 | cut -d' ' -f2)
+expect '^browser: command close-tab via sidebar$' "a click on the split's ✕ didn't run Close Tab"
+expect "^browser: selected $a\( in .*\)\{0,1\}\$" "closing the split a third time didn't show $a"
 # A row dragged onto the page becomes a picture of a window, and a target slides in at each of the
 # card's sides. Back over the sidebar it's a row again, and let go over the left target it joins
 # the page shown on its left, focused.
