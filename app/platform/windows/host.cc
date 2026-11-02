@@ -157,8 +157,8 @@ struct Floating {
   HWND hwnd = nullptr;
   // Clicks go through it to the browser window under it.
   bool mouse_through = false;
-  // Where it takes clicks, in pixels from its top-left, if not all of it: the hover card's plate,
-  // whose margin, where its shadow draws, lets them through as on the Mac and Linux.
+  // Where it takes clicks, in pixels from its top-left, if not all of it: the hover card's or the
+  // toast's plate, whose margin, where its shadow draws, lets them through as on the Mac and Linux.
   std::optional<RECT> plate;
   // Called after the event, when the user leaves it for a window that isn't its own.
   void (*dismissed)(void) = nullptr;
@@ -930,6 +930,9 @@ struct Corner {
 std::map<void*, Corner> g_find_bars;
 std::map<void*, Corner> g_offers;
 std::map<void*, std::pair<double, double>> g_pane_corners;
+// Where each window's focused page's left edge is, in points from its content's, which the toast's
+// window starts at (host_set_pane_corner).
+std::map<void*, double> g_page_lefts;
 Floating g_hud;
 double g_hud_right = 0, g_hud_top = 0;
 Floating g_drop_targets;
@@ -1057,6 +1060,39 @@ struct Reveal {
 std::map<void*, Reveal> g_reveals;
 Floating g_settings;
 bool g_settings_placed = false;
+
+// The UI's view of the browser window the toast shows over, while it shows.
+void* g_toast_over = nullptr;
+
+// Where the toast's window goes over |ui_view|'s browser window, in points from its content's top
+// left: at the focused page's top right corner, which in a split view is its pane's, and as wide as
+// that page from its left edge, so no toast runs past its window (#1462).
+struct Place {
+  double left, top, width, height;
+};
+Place ToastPlace(void* ui_view) {
+  double content_width, content_height, width, height;
+  ContentSize(Root(ui_view), &content_width, &content_height);
+  WindowSize(g_toast.hwnd, &width, &height);
+  auto [right, top] = g_pane_corners[ui_view];
+  const double left = g_page_lefts[ui_view];
+  return {left, top, std::max(content_width - right - left, 0.0), height};
+}
+
+// Keeps the toast's window there as its browser window or its page changes, without raising it.
+void PlaceToast() {
+  HWND root = g_toast_over ? Root(g_toast_over) : nullptr;
+  if (!root || !g_toast.hwnd || !IsWindowVisible(g_toast.hwnd)) {
+    return;
+  }
+  auto [left, top, width, height] = ToastPlace(g_toast_over);
+  const double scale = Scale(root);
+  POINT origin{std::lround(left * scale), std::lround(top * scale)};
+  ClientToScreen(root, &origin);
+  SetWindowPos(g_toast.hwnd, nullptr, origin.x, origin.y, std::lround(width * scale),
+               std::lround(height * scale), SWP_NOZORDER | SWP_NOACTIVATE);
+  SizeAgainLater(g_toast.hwnd);
+}
 
 // While the link target or a reveal shows, the pointer's moves over the app's windows.
 HHOOK g_mouse_hook = nullptr;
@@ -1332,8 +1368,9 @@ void Minimized(HWND root) {
 
 UINT_PTR const kOwner = 3;
 
-// |root| moved or was resized: the find bar and the offer showing over it keep to its page's top
-// right corner, as the Mac's child windows and Linux's panels do. Windows moves no owned window.
+// |root| moved or was resized: the find bar, the offer and the toast showing over it keep to its
+// page's top right corner, as the Mac's child windows and Linux's panels do. Windows moves no owned
+// window.
 void PlaceCorners(HWND root) {
   for (auto* corners : {&g_find_bars, &g_offers}) {
     for (auto& [ui_view, corner] : *corners) {
@@ -1350,6 +1387,9 @@ void PlaceCorners(HWND root) {
                      SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
       }
     }
+  }
+  if (g_toast_over && Root(g_toast_over) == root) {
+    PlaceToast();
   }
 }
 
@@ -2568,6 +2608,7 @@ void host_forget_window(void* ui_view) {
     g_reveals.erase(it);
   }
   g_pane_corners.erase(ui_view);
+  g_page_lefts.erase(ui_view);
   std::erase(UiViews(), Hwnd(ui_view));
   ClosedFrames().erase(Hwnd(ui_view));
 }
@@ -2772,8 +2813,12 @@ void host_hide_offer(void* ui_view) {
   }
 }
 
-void host_set_pane_corner(void* ui_view, double right, double top) {
+void host_set_pane_corner(void* ui_view, double left, double right, double top) {
   g_pane_corners[ui_view] = {right, top};
+  g_page_lefts[ui_view] = left;
+  if (g_toast_over == ui_view) {
+    PlaceToast();
+  }
 }
 
 void host_add_hud(void* hud_view, double right, double top, double) {
@@ -3089,25 +3134,30 @@ void host_share_png(const uint8_t* png,
 
 void host_add_toast(void* toast_view) {
   Adopt(g_toast, toast_view, true, nullptr);
+  g_toast.plate = RECT{};
 }
 
 void host_toast_takes_clicks(bool takes) {
   g_toast.mouse_through = !takes;
 }
 
-// shortcut: while it takes clicks, its whole window does, the margin round the plate included.
-void host_set_toast_plate(double, double, double, double) {}
+// Only the plate takes clicks while the toast has buttons: the rest of its window, as wide as the
+// page, lets them through, as on the Mac and Linux. None does until the UI says where it is.
+void host_set_toast_plate(double x, double y, double width, double height) {
+  const double scale = Scale(g_toast.hwnd);
+  g_toast.plate = RECT{std::lround(x * scale), std::lround(y * scale),
+                       std::lround((x + width) * scale), std::lround((y + height) * scale)};
+}
 
 void host_show_toast(void* ui_view) {
-  double content_width, content_height, width, height;
-  ContentSize(Root(ui_view), &content_width, &content_height);
-  WindowSize(g_toast.hwnd, &width, &height);
-  // At the focused page's corner, which in a split view is its pane's.
-  auto [extra_right, extra_top] = g_pane_corners[ui_view];
-  Show(g_toast, ui_view, content_width - extra_right - width, extra_top, -1, -1, false);
+  g_toast_over = ui_view;
+  auto [left, top, width, height] = ToastPlace(ui_view);
+  Show(g_toast, ui_view, left, top, width, height, false);
 }
 
 void host_hide_toast(void) {
+  g_toast_over = nullptr;
+  g_toast.plate = RECT{};
   Hide(g_toast);
 }
 
