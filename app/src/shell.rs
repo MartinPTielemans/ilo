@@ -550,8 +550,6 @@ struct Space {
     folders: Folders,
     /// The tab it shows, or showed last.
     shown: u64,
-    /// The ask's slot and its task cards at the top of its Today, each with its height.
-    tasks: Vec<(Slot, f32)>,
 }
 
 impl Space {
@@ -657,7 +655,7 @@ impl Space {
     /// Where its rows are in the list, from its top.
     fn slots(&self) -> HashMap<Slot, f32> {
         let (pinned, today) = self.rows();
-        slots(&pinned, &today, &self.tasks)
+        slots(&pinned, &today)
     }
 }
 
@@ -716,10 +714,6 @@ enum Slot {
     Tab(u64),
     Divider,
     NewTab,
-    /// The empty slot at the top of Today while ⌘T asks for a task, and a task's card, by its
-    /// number.
-    Ask,
-    Task(u64),
 }
 
 /// Tabs' rows new in the list, fading in since `start`: a new tab's plate, or whole rows when
@@ -1362,12 +1356,8 @@ pub struct Shell {
     agent_question_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Every Space's agent tasks' cards, newest first, as the Agents last said (Agent task).
     task_cards: Vec<crate::agents::task::Card>,
-    /// The Space whose Today holds an empty slot at its top for the card of the task ⌘T asks.
-    ask_slot: Option<u64>,
-    /// The task card under the pointer, which shows its ✕.
-    task_hovered: Option<SharedString>,
-    /// How each task's card lays out in the sidebar's width, by its agent.
-    task_shapes: Vec<(SharedString, task_cards::Shape)>,
+    /// The window's tasks' plates at the sidebar's foot, and ⌘T's slot among them.
+    foot: task_cards::Foot,
     /// The task ✕ dismissed last, which ⇧⌘T brings back unless a tab has closed since, and when,
     /// in milliseconds since the Unix epoch, as the archive dates what closed.
     closed_task: Option<(SharedString, f64)>,
@@ -1660,9 +1650,7 @@ impl Shell {
             agent_question: None,
             agent_question_drawn: Rc::default(),
             task_cards: Vec::new(),
-            ask_slot: None,
-            task_hovered: None,
-            task_shapes: Vec::new(),
+            foot: task_cards::Foot::default(),
             closed_task: None,
             talk: None,
             focus_talk: false,
@@ -1737,7 +1725,6 @@ impl Shell {
             splits: Vec::new(),
             folders: Folders::default(),
             shown: 0,
-            tasks: Vec::new(),
         }];
         shell
     }
@@ -1823,7 +1810,7 @@ impl Shell {
 
     /// Where the rows of the Space shown are in the list.
     fn layout(&self) -> HashMap<Slot, f32> {
-        self.shown_space().map_or_else(|| slots(&[], &[], &[]), Space::slots)
+        self.shown_space().map_or_else(|| slots(&[], &[]), Space::slots)
     }
 
     /// The tabs shown with `tab` in the Space shown, in their order: its split's, else `tab` alone.
@@ -2030,7 +2017,6 @@ impl Shell {
                         splits: Vec::new(),
                         folders: Folders::default(),
                         shown: 0,
-                        tasks: Vec::new(),
                     };
                 };
                 if space.name != name {
@@ -2065,7 +2051,6 @@ impl Shell {
                     splits: std::mem::take(&mut space.splits),
                     folders: std::mem::take(&mut space.folders),
                     shown: space.shown,
-                    tasks: std::mem::take(&mut space.tasks),
                 }
             })
             .collect();
@@ -3248,6 +3233,7 @@ impl Render for Shell {
         self.step_new_space(window);
         self.step_flight(window);
         self.step_task_area(window, cx);
+        self.step_foot(window, cx);
         self.step_picture(window);
         self.step_recent_downloads(window, cx);
         if let Some((_, left)) = &self.leaving_form {
@@ -3524,6 +3510,8 @@ impl Shell {
                     .children(self.cast_card(cx))
                     .children(self.agent_question_card(cx))
                     .children(self.media_player_cards(cx))
+                    .children(self.task_foot(cx))
+                    .children(self.task_ghosts())
                     .children(self.agent_bar_card(cx))
                     .children(self.drm_note_card(cx))
             }
@@ -3710,12 +3698,10 @@ impl Shell {
         for tab in pinned {
             rows.push((Some(tab), self.list_row(tab, cx)));
         }
-        let tasks = self.task_rows(cx);
-        if !today.is_empty() || !tasks.is_empty() {
+        if !today.is_empty() {
             rows.push((None, self.divider(cx).into_any_element()));
         }
         rows.push((None, self.new_tab_row(cx).into_any_element()));
-        rows.extend(tasks.into_iter().map(|row| (None, row)));
         for tab in today {
             rows.push((Some(tab), self.list_row(tab, cx)));
         }
@@ -3825,6 +3811,7 @@ impl Shell {
         self.step_form_going(cx);
         self.step_scroll_edge(window);
         self.step_tools(window);
+        self.step_foot(window, cx);
         let left = REVEAL_INSET - (REVEAL_INSET + self.width()) * (1. - self.reveal_out());
         // Unless a field in the panel has it.
         if !self.reveal_focus.contains_focused(window, cx) {
@@ -4089,13 +4076,12 @@ pub(crate) fn spring(t: f32, response: f32, damping: f32) -> Option<f32> {
 }
 
 /// Where the list's rows are from its top, by the heights they're drawn at in `list`.
-fn slots(pinned: &[u64], today: &[u64], tasks: &[(Slot, f32)]) -> HashMap<Slot, f32> {
+fn slots(pinned: &[u64], today: &[u64]) -> HashMap<Slot, f32> {
     let rows = pinned
         .iter()
         .map(|&tab| (Slot::Tab(tab), ROW_PITCH))
-        .chain((!(today.is_empty() && tasks.is_empty())).then_some((Slot::Divider, DIVIDER_HEIGHT)))
+        .chain((!today.is_empty()).then_some((Slot::Divider, DIVIDER_HEIGHT)))
         .chain([(Slot::NewTab, ROW_PITCH)])
-        .chain(tasks.iter().copied())
         .chain(today.iter().map(|&tab| (Slot::Tab(tab), ROW_PITCH)));
     let mut top = NAME_HEIGHT;
     rows.map(|(slot, height)| {
@@ -4142,6 +4128,11 @@ fn icon_placeholder() -> impl IntoElement {
 
 /// A square of Arc's dashes in `color`, as big as it's laid out.
 pub(super) fn dashed_square(color: Hsla) -> gpui::Canvas<()> {
+    dashed_plate(color, ICON_PLACEHOLDER_RADIUS)
+}
+
+/// Arc's dashes in `color` round a plate with `radius` corners, as big as it's laid out.
+pub(super) fn dashed_plate(color: Hsla, radius: f32) -> gpui::Canvas<()> {
     let line = ICON_PLACEHOLDER_LINE;
     canvas(
         |_, _, _| {},
@@ -4154,7 +4145,7 @@ pub(super) fn dashed_square(color: Hsla) -> gpui::Canvas<()> {
             );
             let (dash, gap) = ICON_PLACEHOLDER_DASH;
             let mut path = PathBuilder::stroke(px(line)).dash_array(&[px(dash), px(gap)]);
-            split_targets::rounded_rect(&mut path, inner, px(ICON_PLACEHOLDER_RADIUS) - inset);
+            split_targets::rounded_rect(&mut path, inner, px(radius) - inset);
             if let Ok(path) = path.build() {
                 window.paint_path(path, color);
             }
@@ -4539,7 +4530,6 @@ mod tests {
             splits: Vec::new(),
             folders: Folders::default(),
             shown: 0,
-            tasks: Vec::new(),
         }
     }
 

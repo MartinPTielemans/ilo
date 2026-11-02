@@ -8,7 +8,8 @@
 # for `rgba`. A float is an `f32`, so a whole one keeps its `.0`. A one-line array of either is an
 # array. Comments right above a key become its docs.
 #
-# Timings, springs and other motion stay in the code: the design file has no motion.
+# Timings, springs and other motion stay in the code, as the design file has no motion, except a
+# surface's `motion` table, which design sync leaves out: seconds, and points for distances.
 
 [capture]
 # Arc's layout, measured at 1× (docs/ux-spec.md › Capture): the ring around what's chosen and the
@@ -1391,30 +1392,100 @@ check-box = 24.0
 check-stroke = 2.25
 
 [shell.task]
-# Ours, as Arc had no tasks: an agent task's card is a tab row with a line under its title. The
-# favicon's column holds the task's state: the status dot, Signal and breathing, while it works;
-# ringed and still while it waits on the user; Signal's tick drawing in once it's done; a hollow
-# ring at the secondary alpha once it stopped. Its title is a row's, one line; its status small and
-# secondary, one line, or two for the agent's question. ✕ shows under the pointer, a tab row's. The
-# ask's slot is a card's height without chips, so the card fills it without a row moving.
-top = 7.0
-line = 18.0
-status-line = 15.0
+# Ours, as Arc had no tasks: the window's agent tasks at the sidebar's foot, over the media
+# players, each a plate of a player's shape and fill, oldest lowest, the list's rows above never
+# moving as they come and go. The favicon's column holds the state's glyph, centred on the two
+# lines; the title is a row's over a status line small and secondary, or the agent's question on
+# up to two. Chips under that, as a toast's at the sidebar's scale. ✕ shows under the pointer, a
+# player's button. Three show, waiting first, then working, then done; a fourth plate says how
+# many more and opens the foot to all of them, which scrolls past this share of the sidebar's
+# height. ⌘T's ask opens an empty slot a plate tall at the top, marked by the Library card's
+# dashes at slot-dash, which its task fills.
+slot-dash = 0.3
+height = 40.0
+gap = 6.0
+top = 5.0
+line = 16.0
 status-gap = 1.0
-bottom = 8.0
-# The state's box, a favicon's, this far down the plate.
-state-top = 9.0
-hollow = 8.0
-hollow-stroke = 1.25
-# Its chips, the sidebar's scale: the URL field's plate 22 tall at a control's corners, 11 pt
-# medium, each as wide as its words. The first one's words start on the title's column, its plate
-# hanging out to the left by its padding, and they may run to 6 from the plate's edge. They wrap
-# to a second row; past that none show, and the card's click opens the conversation.
+status-line = 14.0
+question-line = 15.0
+bottom = 4.0
+foot-share = 0.5
+# The glyph: a box at the favicon's column, a ring in Signal round a dot that circles it while
+# the task works, at this alpha, and goes to the middle, grown, while it asks; done, the ring
+# shrinks away for a tick; stopped, the dot goes and the ring shrinks, in the ink at `stopped`.
+glyph = 18.0
+glyph-top = 11.0
+ring = 5.25
+ring-stroke = 1.5
+ring-working = 0.28
+ring-done = 0.6
+ring-stopped = 0.65
+stopped = 0.45
+dot = 1.9
+dot-asks = 1.58
+dot-done = 0.3
+tick-stroke = 1.6
+# The status while it works: a highlight sweeping along it, from `shimmer-low` to the
+# `shimmer-high` alpha over `shimmer-reach` of the line's width either side of its middle, which
+# goes from `shimmer-from` to `shimmer-to` of the width from the line's start, so it rests past
+# the end for a while before the next sweep.
+shimmer-low = 0.5
+shimmer-high = 0.95
+shimmer-reach = 0.312
+shimmer-from = -0.3
+shimmer-to = 2.26
+# Its chips: the URL field's plate 22 tall at a control's corners, 11 pt medium, each as wide as
+# its words. The first one's words start on the title's column, its plate hanging out to the left
+# by its padding, and they may run to 6 from the plate's edge. They wrap to a second row; past
+# that none show, and the card's click opens the conversation.
 chips-top = 7.0
 chip-height = 22.0
 chip-x = 8.0
 chip-gap = 6.0
 chip-end = 6.0
+chips-bottom = 4.0
+# A page Open sends to Today flies there from the chip as a plate going from a chip's corners and
+# fill to a row's hover plate.
+ghost-radius = 6.0
+
+[shell.task.motion]
+# Seconds, on the motion's ease, and points: the design file has no motion, so tools/design-sync.md
+# leaves this table out. ⌘T's bar folds into the slot as its drawing fades, and the card's
+# content fades in once it lands.
+ease = [0.2, 0.8, 0.2, 1.0]
+fold = 0.38
+fold-fade = 0.11
+content = 0.15
+# A plate grows to its content, or folds to nothing as it goes, and fades as it comes and goes.
+height = 0.28
+fade = 0.2
+# A new status rolls in from under the old, which goes up; a new title crossfades.
+roll = 0.2
+roll-rise = 8.0
+title = 0.2
+# Chips rise in one after another once the plate has started to grow.
+chips = 0.18
+chips-delay = 0.12
+chips-stagger = 0.05
+chips-rise = 4.0
+# The glyph's dot circles once in `orbit`, and the status's highlight sweeps in `shimmer`, both
+# linear.
+orbit = 1.4
+shimmer = 1.8
+ring = 0.24
+dot-fade = 0.2
+tick = 0.3
+tick-delay = 0.09
+# Open's pages fly to their rows one after another, their contents fading in, and their rows show
+# as they land.
+ghost = 0.42
+ghost-delay = 0.04
+ghost-stagger = 0.07
+ghost-content = 0.2
+ghost-land = 0.03
+# With motion reduced, every change is a crossfade this long.
+crossfade = 0.2
 
 [shell.conversation]
 # Ours, as Arc had no tasks: a task's conversation in the page's place, a column of text no wider

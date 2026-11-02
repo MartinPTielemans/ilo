@@ -198,6 +198,11 @@ impl Shell {
             let done = opened.done().unwrap_or(1.).clamp(0., 1.);
             if opened.whole { (done, 1.) } else { (1., done) }
         });
+        // A page Open sent from a task's plate shows as its flight lands on its row.
+        let row_in = match row {
+            Row::Tab(tab) if !ghost && self.landing(tab) => 0.,
+            _ => row_in,
+        };
         // In from its folders, or where a dragged row would go.
         let depth = match (row, &self.drag) {
             (_, Some(drag)) if ghost => drag.depth,
@@ -1299,6 +1304,17 @@ impl Breath {
         }
         let since = self.since.get().unwrap_or(now);
         breath_strength((now.duration_since(since).as_secs_f32() / BREATH.as_secs_f32()).fract())
+    }
+
+    /// Something drawn now moves on this clock, as a loading dot does.
+    pub(super) fn keep(&self) {
+        self.drawn.set(true);
+    }
+
+    /// Whether a timer is out to draw the next frame.
+    #[cfg(test)]
+    pub(super) fn pending(&self) -> bool {
+        self.pending.get()
     }
 
     /// Once a frame is built: if it drew a loading dot, draws the next in a moment.

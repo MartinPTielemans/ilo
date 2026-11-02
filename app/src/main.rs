@@ -241,6 +241,19 @@ mod platform {
         pub fn host_hide_overlay(overlay: c_int);
         pub fn host_can_draw_emoji(emoji: *const c_char) -> bool;
         pub fn host_dismiss_overlay(overlay: c_int);
+        pub fn host_fold_overlay(
+            overlay: c_int,
+            x: f64,
+            y: f64,
+            width: f64,
+            height: f64,
+            radius: f64,
+            from: u32,
+            to: u32,
+            duration: f64,
+            fade: f64,
+            fade_only: bool,
+        ) -> bool;
         #[cfg(target_os = "macos")]
         pub fn host_take_overlay_keyboard(overlay: c_int);
         pub fn host_hold_keys();
@@ -1832,8 +1845,41 @@ impl command_bar::Host for Bar {
         let home = shell.and_then(|shell| shell.upgrade()).map_or(0, |shell| shell.read(cx).space());
         let asked = asked.to_string();
         let page = page.map(|(url, title)| browser::agents::task::AskedOn { url, title });
+        // The bar folds into the slot at the foot that its task's card takes, where the window
+        // shows one; elsewhere it hides, and the card fades in.
+        let window = front().0;
+        let still = cx.reduce_motion();
+        let from = rgba_u32(browser::palette::current(cx).overlay);
+        let folded = match update_window_in(window, cx, |shell, _| shell.fold_target()).flatten() {
+            Some((to, radius, fill)) => {
+                use browser::tokens::shell::task::motion::{CROSSFADE, FOLD, FOLD_FADE};
+                let fade = if still { CROSSFADE } else { FOLD_FADE };
+                unsafe {
+                    platform::host_fold_overlay(
+                        COMMAND_BAR,
+                        f32::from(to.origin.x).into(),
+                        f32::from(to.origin.y).into(),
+                        f32::from(to.size.width).into(),
+                        f32::from(to.size.height).into(),
+                        radius.into(),
+                        from,
+                        rgba_u32(fill.into()),
+                        FOLD.into(),
+                        fade.into(),
+                        still,
+                    )
+                }
+            }
+            None => {
+                unsafe { platform::host_hide_overlay(COMMAND_BAR) };
+                false
+            }
+        };
         // The bar has closed on no tab, so New Tab gives back the plate ⌘T gave it.
-        update_window_in(front().0, cx, |shell, cx| shell.command_bar_dismissed(cx));
+        update_window_in(window, cx, |shell, cx| {
+            shell.command_bar_dismissed(cx);
+            shell.fold_started(folded, cx);
+        });
         agents_core::update(move |agents, cx| {
             // The card takes the slot as it comes; one that didn't start leaves it empty.
             if agents.start_task(cli, &asked, page, home, cx).is_none() {
@@ -1845,6 +1891,12 @@ impl command_bar::Host for Bar {
     fn set_up_agents(&self, cx: &mut App) {
         settings::show_agents(cx);
     }
+}
+
+/// `color` as the host takes a colour, 0xRRGGBBAA.
+fn rgba_u32(color: gpui::Rgba) -> u32 {
+    let byte = |value: f32| (value.clamp(0., 1.) * 255.).round() as u32;
+    byte(color.r) << 24 | byte(color.g) << 16 | byte(color.b) << 8 | byte(color.a)
 }
 
 /// The user left the command bar without choosing anything in it.

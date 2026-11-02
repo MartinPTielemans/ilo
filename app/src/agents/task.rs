@@ -743,6 +743,8 @@ impl Agents {
                     task.ended = Some(SystemTime::now());
                 }
             }
+            // The turn the user stopped ends as an error; their stop is what the card says.
+            Out::Ended(Some(_)) if self.task(&agent).is_some_and(|task| task.state == State::Stopped) => {}
             Out::Ended(Some(failure)) => self.fail(&agent, failure, cx),
             Out::Gone(said) => {
                 let Some(task) = self.task_mut(&agent) else { return };

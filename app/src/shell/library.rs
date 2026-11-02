@@ -2433,7 +2433,6 @@ mod tests {
             splits,
             folders,
             shown: 0,
-            tasks: Vec::new(),
         }
     }
 

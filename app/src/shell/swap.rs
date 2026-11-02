@@ -25,8 +25,6 @@ pub(super) enum Swapped {
     CopyUrl,
     /// The arrow before a Space's Clear, while Clear would close its last Today tabs.
     Clear(u64),
-    /// An agent task card's dot, by the task's number, which draws into a tick as it's done.
-    Task(u64),
 }
 
 pub(super) const CHECK: &str = "icons/check.svg";

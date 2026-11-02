@@ -388,7 +388,8 @@ pub trait Host {
     /// with an ask, as the agent never gets the user's tab.
     fn task_page(&self, cx: &App) -> Option<(SharedString, SharedString)>;
     /// Starts `asked` as a task on the agent `agent`, with `page`, from the Space the bar shows
-    /// over, and closes the ask's slot as its card takes it.
+    /// over, and hides the bar by folding it into the ask's slot, which its card takes, or where
+    /// the window shows no slot, as `hide` does.
     fn run_task(
         &self,
         agent: &str,
@@ -1369,9 +1370,10 @@ impl CommandBar {
             Some(TaskRow::Agent { id, resets: None, .. }) if !asked.is_empty() => {
                 // check.sh reads this line.
                 log!("browser: command bar runs a task on {id}");
-                // The card fills the slot, which the host closes then, so it doesn't close first.
+                // The host folds the bar into the slot its card fills, so the slot doesn't close
+                // first, and the bar doesn't hide on its own.
                 self.ask = None;
-                self.close();
+                self.open.set(false);
                 self.host.run_task(&id, &asked, page, cx);
             }
             Some(TaskRow::SetUp) => {

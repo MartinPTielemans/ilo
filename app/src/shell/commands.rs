@@ -1324,18 +1324,10 @@ impl Shell {
     /// in one frame, with no toast (Arc).
     fn clear(&mut self, cx: &mut Context<Self>) {
         let space = self.space;
-        // The Space's done tasks go with its tabs, and come back with them (Agent task).
-        let tasks = self.clear_done_tasks(cx);
-        let mut edits: Vec<Edit> = tasks.into_iter().map(Edit::RestoreTask).collect();
+        // The tasks at the foot are the window's, not the Space's, so they stay (Agent task).
         if let Some(clear) = self.clear_now(cx) {
-            edits.push(Edit::UndoClear { space, clear });
+            self.keep(What::CLEAR, Some(Edit::UndoClear { space, clear }), cx);
         }
-        let edit = match edits.len() {
-            0 => return,
-            1 => edits.pop(),
-            _ => Some(Edit::Many(edits)),
-        };
-        self.keep(What::CLEAR, edit, cx);
     }
 
     /// Clears, and returns the core's id for the Clear if it closed any.

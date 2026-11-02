@@ -1,8 +1,8 @@
 //! A task the user asked from ⌘T (docs/ux-spec.md › Spaces › Agent task). Its Space is an
 //! agent's that the window never lists as a Space, and the page area shows the task in place of
 //! the Space's tab while the sidebar, the Space, the selection and the URL field stay the user's.
-//! First its conversation, a view the task draws, which comes in from the card's side, pushing
-//! the page out of the window the other way as the Library does, and leaves back that way. Then,
+//! First its conversation, a view the task draws, in the card's place at once, as a tab switch
+//! is (docs/ux-principles.md › A switch stays instant), the page laid out out of the window. Then,
 //! from a thumbnail in it, one of the task's pages, which zooms out of the thumbnail to fill the
 //! area and shrinks back into it, with the Agent Space's bar (#365) laid under it as a strip, as
 //! GPUI can't draw over a page. The core shows the task's tab only while its page is watched, and
@@ -18,17 +18,15 @@ use gpui::{
 };
 
 use super::{
-    CARD_INSET, CARD_RADIUS, Command, Folders, NAV_RADIUS, PagePicture, SECONDARY, Shell, Space,
+    CARD_RADIUS, Command, Folders, NAV_RADIUS, PagePicture, SECONDARY, Shell, Space,
     SpaceEntry, TITLE, Theme,
     agent_bar::{Bar, bar_words, stop_keys},
     keys::user_keys,
     conversation::page_chip,
     task_cards::act,
     card, cubic_bezier,
-    library::{LIBRARY_DAMPING, LIBRARY_RESPONSE},
     permission::card_listener,
     picture::next_request,
-    spring_to,
 };
 use crate::agents::is_task;
 use crate::agents::task::{Card, Dot, TaskAction};
@@ -45,10 +43,6 @@ pub(super) struct TaskArea {
     space: u64,
     /// The conversation, which the task draws.
     view: AnyView,
-    /// Whether it's in or on its way out, and where its slide started, how far in and when. None
-    /// once it rests.
-    open: bool,
-    slide: Option<(f32, Instant)>,
     page: Option<Watched>,
 }
 
@@ -149,7 +143,6 @@ impl Shell {
                             splits: Vec::new(),
                             folders: Folders::default(),
                             shown: 0,
-                            tasks: Vec::new(),
                         }
                     }
                 }
@@ -299,15 +292,13 @@ impl Shell {
     }
 
     /// The page area shows `view`, the conversation of the task whose Space is `space`, in place of
-    /// the Space's tab, coming in from the card's side. Another task's conversation shown is
-    /// replaced where it is.
+    /// the Space's tab, at once, as a tab switch is. Another task's conversation shown is replaced
+    /// where it is.
     pub fn open_task(&mut self, space: u64, view: AnyView, cx: &mut Context<Self>) {
         if self.task_space(space).is_none() {
             log!("browser: no task space {space}");
             return;
         }
-        let out = self.task_out();
-        let still = cx.reduce_motion();
         let replacing = self.task_area.as_ref().is_some_and(|area| area.space != space);
         if replacing && self.task_area.as_ref().is_some_and(|area| area.page.is_some()) {
             self.leave_task_page_now(cx);
@@ -316,41 +307,22 @@ impl Shell {
             Some(area) => {
                 area.space = space;
                 area.view = view;
-                if !area.open {
-                    area.open = true;
-                    area.slide = (!still).then(|| (out, Instant::now()));
-                }
             }
-            None => {
-                let slide = (!still).then(|| (0., Instant::now()));
-                self.task_area = Some(TaskArea { space, view, open: true, slide, page: None });
-            }
+            None => self.task_area = Some(TaskArea { space, view, page: None }),
         }
         // check.sh reads these lines.
         log!("browser: task area {space} opens");
-        if self.task_area.as_ref().is_some_and(|area| area.slide.is_none()) {
-            log!("browser: task area {space} open");
-        }
+        log!("browser: task area {space} open");
         self.browser.focus_ui(cx);
         cx.notify();
     }
 
-    /// The page area goes back to the Space's tab: the conversation leaves the way it came, and a
-    /// page watched goes at once.
+    /// The page area goes back to the Space's tab at once, a page watched with it.
     pub fn close_task(&mut self, cx: &mut Context<Self>) {
-        let Some(area) = &self.task_area else {
+        if self.task_area.is_none() {
             return;
-        };
-        if area.page.is_some() || cx.reduce_motion() {
-            self.leave_task_area(cx);
-        } else if area.open {
-            let out = self.task_out();
-            if let Some(area) = &mut self.task_area {
-                area.open = false;
-                area.slide = Some((out, Instant::now()));
-            }
-            log!("browser: task area closes");
         }
+        self.leave_task_area(cx);
         if self.selected != 0 {
             self.browser.focus_page(cx);
         }
@@ -429,9 +401,9 @@ impl Shell {
         cx.notify();
     }
 
-    /// The task Space whose conversation is in the page area or on its way in, not out.
+    /// The task Space whose conversation is in the page area.
     pub(super) fn task_open(&self) -> Option<u64> {
-        self.task_area.as_ref().filter(|area| area.open).map(|area| area.space)
+        self.task_area.as_ref().map(|area| area.space)
     }
 
     /// The task Space the page area shows and the tab watched there, if any.
@@ -501,7 +473,7 @@ impl Shell {
         };
         let away = viewport.width - card.left();
         let Some(page) = &area.page else {
-            return pushed(card, away * self.task_out());
+            return pushed(card, away);
         };
         let live = self.task_core == area.space;
         match page.zoom {
@@ -510,20 +482,6 @@ impl Shell {
             Zoom::Out(_) | Zoom::Rest | Zoom::Asked(_) => pushed(watched(card), away),
             Zoom::In(_) => pushed(card, away),
         }
-    }
-
-    /// How far in the conversation is: 0 out of the area, 1 filling it.
-    fn task_out(&self) -> f32 {
-        let Some(area) = &self.task_area else {
-            return 0.;
-        };
-        let to = if area.open { 1. } else { 0. };
-        let Some((from, start)) = area.slide else {
-            return to;
-        };
-        let t = start.elapsed().as_secs_f32();
-        let out = spring_to(t, from, to, 0., LIBRARY_RESPONSE, LIBRARY_DAMPING);
-        out.map_or(to, |(out, _)| out).clamp(0., 1.)
     }
 
     /// The area goes at once, and the core shows the Space's page again if it showed a task's.
@@ -710,31 +668,14 @@ impl Shell {
         }
     }
 
-    /// Steps the area's motion for a frame: the conversation's slide and the page's zoom.
+    /// Steps the area's motion for a frame: the page's zoom.
     pub(super) fn step_task_area(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let still = cx.reduce_motion();
-        let out = self.task_out();
         let now = Instant::now();
         let Some(area) = &mut self.task_area else {
             return;
         };
-        let (mut closed, mut retake) = (false, false);
-        if let Some((_, start)) = area.slide {
-            let to = if area.open { 1. } else { 0. };
-            let t = start.elapsed().as_secs_f32();
-            let moving = !still && spring_to(t, out, to, 0., LIBRARY_RESPONSE, LIBRARY_DAMPING)
-                .is_some_and(|_| (out - to).abs() > 0.0005);
-            if moving {
-                window.request_animation_frame();
-            } else {
-                area.slide = None;
-                closed = !area.open;
-                // check.sh waits for this line.
-                if area.open {
-                    log!("browser: task area {} open", area.space);
-                }
-            }
-        }
+        let mut retake = false;
         if let Some(page) = &mut area.page {
             match page.zoom {
                 Zoom::Out(start) if still || now.duration_since(start).as_secs_f32() >= OPEN => {
@@ -753,9 +694,6 @@ impl Shell {
                 Zoom::Out(_) | Zoom::In(_) => window.request_animation_frame(),
                 Zoom::Rest | Zoom::Asked(_) => {}
             }
-        }
-        if closed {
-            self.drop_task_area(cx);
         }
         if retake {
             self.retake_talk_pictures(cx);
@@ -779,18 +717,11 @@ impl Shell {
         let zoom = area.page.as_ref().map_or(0., |page| page.zoom.at(now));
         let mut layer = div().absolute().size_full();
         // The Space's page goes out of the window on its card.
-        let out = self.task_out();
-        if area.page.is_none() && out < 1. {
-            let away = self.viewport.width - card_frame.left();
-            layer = layer.child(card(pushed(card_frame, away * out), self.palette.page));
-        }
-        // The conversation comes from the card's side as the page goes the other way, the gap
-        // between them the card's inset, and fades under a page coming out of it.
+        // The conversation is in the card's place, and fades under a page coming out of it.
         if zoom < 1. {
-            let offset = -(1. - out) * (card_frame.size.width + px(CARD_INSET));
             let view = div()
                 .absolute()
-                .left(offset)
+                .left_0()
                 .top_0()
                 .size_full()
                 .rounded(px(CARD_RADIUS))
@@ -956,8 +887,15 @@ impl Shell {
             }
             (_, Some(Dot::Done)) => {
                 if let Some(words) = self.task_strip_open(tab) {
-                    let open = page_chip(palette, "task-open", words, None);
-                    chips.push(open.on_click(act(agent.clone(), TaskAction::OpenTab(tab), cx)));
+                    let open = page_chip(palette, "task-open", words, None).child(self.strip_open_listener());
+                    let agent = agent.clone();
+                    chips.push(open.on_click(cx.listener(move |shell, _, _, cx| {
+                        cx.stop_propagation();
+                        let from = shell.foot.strip_open.get();
+                        // check.sh reads this line.
+                        log!("browser: command open-task-pages via strip");
+                        shell.open_task_pages(agent.clone(), Some(tab), from, cx);
+                    })));
                 }
             }
             _ => {}

@@ -2065,7 +2065,7 @@ fn tab_makes_what_is_typed_a_task(cx: &mut TestAppContext) {
     bar.keys("down enter");
     assert_eq!(
         bar.calls(),
-        ["hide", "task codex flight here next friday under 150 on https://lisbon.example/guide"]
+        ["task codex flight here next friday under 150 on https://lisbon.example/guide"]
     );
     assert!(!bar.is_open());
 }

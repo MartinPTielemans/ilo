@@ -172,34 +172,18 @@ fn the_conversation_pushes_the_page_out_and_gives_it_back(cx: &mut TestAppContex
     assert!(host.shown.borrow().is_empty(), "the core showed the user's Space throughout");
 }
 
-/// With motion, the conversation springs in from the card's side, the page going the other way
-/// at once with it, and leaves the same way.
+/// Even with motion, the conversation shows in the page's place at once, as a tab switch does, the
+/// page going out with it, and the page comes back at once on the way out.
 #[gpui::test]
-fn the_conversation_slides_in_and_back_out(cx: &mut TestAppContext) {
+fn the_conversation_shows_at_once(cx: &mut TestAppContext) {
     let (shell, _, cx) = shell_with_task(cx);
+    let (card, _) = frames(&shell, cx);
     let view = conversation(cx);
     shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
-    let age = |shell: &Entity<Shell>, cx: &mut VisualTestContext, ago: Duration| {
-        shell.update(cx, |shell, _| {
-            let area = shell.task_area.as_mut().expect("open");
-            let (from, _) = area.slide.expect("sliding");
-            area.slide = Some((from, Instant::now() - ago));
-        })
-    };
-    age(&shell, cx, Duration::from_millis(60));
-    draw(&shell, cx);
-    let (card, laid) = frames(&shell, cx);
-    assert!(laid.left() > card.left() && laid.left() < card.left() + away(&shell, cx), "{laid:?}");
-    age(&shell, cx, Duration::from_secs(1));
     draw(&shell, cx);
     assert_eq!(frames(&shell, cx).1, pushed(card, away(&shell, cx)));
-    assert!(shell.read_with(cx, |shell, _| shell.task_area.as_ref().unwrap().slide.is_none()));
-
+    assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), Some((3, None)));
     shell.update(cx, |shell, cx| shell.close_task(cx));
-    age(&shell, cx, Duration::from_millis(60));
-    draw(&shell, cx);
-    assert!(frames(&shell, cx).1.left() > card.left());
-    age(&shell, cx, Duration::from_secs(1));
     draw(&shell, cx);
     assert_eq!(frames(&shell, cx).1, card);
     assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);

@@ -253,6 +253,24 @@ void host_hide_overlay(int overlay);
 // Hides the overlay as the user leaving it, as escape does.
 void host_dismiss_overlay(int overlay);
 
+// Hides the overlay by folding it into |x|, |y|, |width| and |height| points from the top left of
+// the content of the browser window it shows over: its drawing fades in |fade| seconds, as its
+// plate, rounded by |radius|, goes there in |duration| on the motion's ease, its fill turning
+// from |from| to |to| (0xRRGGBBAA) and its shadow going. With |fade_only| it only fades where it
+// is, in |fade|. Returns false where the host can't, having hidden it. host_hide_overlay's
+// keyboard rule holds.
+bool host_fold_overlay(int overlay,
+                       double x,
+                       double y,
+                       double width,
+                       double height,
+                       double radius,
+                       uint32_t from,
+                       uint32_t to,
+                       double duration,
+                       double fade,
+                       bool fade_only);
+
 // Gives the overlay the keyboard back if it shows, the user hasn't left it, and the browser window
 // it shows over or no window has it: for the UI, once it finds the overlay's window isn't key.
 // The Mac's alone: Linux's and Windows' hosts close an overlay whose keyboard goes elsewhere.

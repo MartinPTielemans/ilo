@@ -10,7 +10,7 @@ use super::Fold;
 use crate::agents::runner::Cli;
 use crate::agents::task::{Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep};
 use crate::shell::picture::PagePicture;
-use crate::shell::{Command, Folders, Shell, Slot, recorder::Recorder};
+use crate::shell::{Command, Folders, Shell, recorder::Recorder};
 
 fn card() -> Card {
     Card {
@@ -96,11 +96,9 @@ fn shown(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTe
         shell.slides.clear();
     });
     cx.run_until_parked();
-    let at = shell.read_with(cx, |shell, _| {
-        (shell.drawn_list_top() + shell.layout()[&Slot::Task(1)] + 12., shell.width() / 2.)
-    });
+    let plate = shell.read_with(cx, |shell, _| shell.task_plate_drawn("task-1")).expect("the task's plate");
     host.take();
-    cx.simulate_click(point(px(at.1), px(at.0)), Modifiers::none());
+    cx.simulate_click(plate.center(), Modifiers::none());
     cx.run_until_parked();
     (shell, host, cx)
 }

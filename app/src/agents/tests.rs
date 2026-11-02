@@ -1839,6 +1839,18 @@ mod tasks {
         assert_eq!((card.status.as_ref(), card.command), ("Claude isn't signed in.", Some("claude auth login")));
     }
 
+    #[gpui::test]
+    fn a_stopped_task_says_stopped_once_its_turn_ends(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Find a flight", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        agents.update(cx, |agents, cx| agents.stop_task(&agent, cx));
+        let interrupted = Failure::Other("It stopped (error_during_execution).".into());
+        said(&agents, &agent, Out::Ended(Some(interrupted)), cx);
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.dot), ("Stopped", Dot::Ended));
+    }
+
     /// Calls `tool` as the server does, which stamps when it started and, once answered, when it
     /// ended: by `page` from the core, if it goes to one.
     fn traced(
