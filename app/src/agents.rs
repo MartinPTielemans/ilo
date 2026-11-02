@@ -1939,3 +1939,8 @@ pub fn ago(at: SystemTime, now: SystemTime) -> String {
 
 #[cfg(test)]
 mod tests;
+
+/// Whether the agent with the id `agent` runs a task the user asked from ⌘T (Agent task).
+pub fn is_task(agent: &str) -> bool {
+    agent.starts_with("task-")
+}
