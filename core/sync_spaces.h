@@ -13,6 +13,10 @@ void Install();
 // Something the session keeps changed (SessionChanged), perhaps a Space, a pinned tab or a folder.
 void Changed();
 
+// The account's Spaces hold one a newer ilo wrote, which this one may not read all of, so this
+// device sends none of its Spaces' changes until it's updated (BC_SYNC_TROUBLE_OUTDATED).
+bool Held();
+
 }  // namespace browser_core::sync_spaces
 
 #endif  // BROWSER_CORE_SYNC_SPACES_H_

@@ -9,10 +9,13 @@
 #include <utility>
 #include <vector>
 
+#include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
@@ -56,6 +59,28 @@ using Entity = sync_spaces_pb::SpaceEntity;
 
 // Long enough that a run of changes, such as a page's title settling as it loads, is one look.
 constexpr base::TimeDelta kSettle = base::Seconds(1);
+
+// The shape of entity this ilo writes. Raise it with a change to the entity that an older ilo
+// would get wrong, such as a field it would drop on its next write: an older one then holds back
+// its changes and asks to be updated. --sync-spaces-version gives another, for check/
+// sync-versions.sh to play a newer ilo.
+uint32_t Version() {
+  static const uint32_t version = [] {
+    unsigned given = 0;
+    return base::StringToUint(base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+                                  "sync-spaces-version"),
+                              &given) &&
+                   given > 0
+               ? given
+               : 1u;
+  }();
+  return version;
+}
+
+// An entity a newer ilo wrote, which may hold what this one can't read.
+bool Newer(const Entity& entity) {
+  return entity.has_version() && entity.version() > Version();
+}
 
 std::string Key(const base::Uuid& id) {
   return id.AsLowercaseString();
@@ -159,6 +184,9 @@ std::map<std::string, Entity> Current() {
       }
     }
   }
+  for (auto& [key, entity] : all) {
+    entity.set_version(Version());
+  }
   return all;
 }
 
@@ -199,6 +227,8 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
         syncer::ILO_SPACE,
         base::BindOnce(&Bridge::OnStoreCreated, weak_factory_.GetWeakPtr()));
   }
+
+  bool held() const { return held_; }
 
   void Changed() {
     if (store_ && !timer_.IsRunning()) {
@@ -266,6 +296,7 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
     }
     store_->CommitWriteBatch(std::move(batch),
                              base::BindOnce(&Bridge::OnCommit, weak_factory_.GetWeakPtr()));
+    Hold();
     Apply(std::move(put), deleted);
     // Sends what applying them changed here, such as a row given a new place among its siblings.
     Changed();
@@ -306,6 +337,7 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
     known_.clear();
     waiting_.clear();
     restoring_ = false;
+    Hold();
     if (!store_) {
       return;
     }
@@ -353,6 +385,7 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
         known_[record.id] = std::move(entity);
       }
     }
+    Hold();
     store_->ReadAllMetadata(base::BindOnce(&Bridge::OnReadAllMetadata, weak_factory_.GetWeakPtr()));
   }
 
@@ -374,6 +407,22 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
 
   // Sends what changed here since sync last heard: each Space, pinned tab and folder that's new or
   // different, and each that's gone.
+  // Holds back this device's changes while the account has an entity a newer ilo wrote, as the
+  // entities this one makes would write over what it can't read in that one and its siblings. It
+  // still takes what comes, as far as it reads it, and sends again once nothing newer is left,
+  // such as after the newer device's changes are gone, or once it's updated.
+  void Hold() {
+    const bool held = std::ranges::any_of(known_, [](const auto& known) {
+      return Newer(known.second);
+    });
+    if (held != held_) {
+      held_ = held;
+      said_held_ = false;
+      // check.sh waits for this line.
+      LOG(ERROR) << "browser: sync spaces " << (held ? "held, a newer ilo wrote them" : "sent");
+    }
+  }
+
   void Look() {
     // Before the session is back there are no Spaces, which isn't the user deleting them all.
     if (!store_ || !change_processor()->IsTrackingMetadata() || Space::All().empty()) {
@@ -392,6 +441,14 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
         }
       }
       Apply(std::move(missed), {});
+    }
+    if (held_) {
+      if (!said_held_) {
+        said_held_ = true;
+        // check.sh waits for this line: where this device would have sent its Spaces, it didn't.
+        LOG(ERROR) << "browser: sync spaces kept back";
+      }
+      return;
     }
     const std::map<std::string, Entity> current = Current();
     std::unique_ptr<syncer::DataTypeStore::WriteBatch> batch = store_->CreateWriteBatch();
@@ -581,6 +638,9 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
   std::set<std::string> waiting_;
   // Until the first look after the store is read.
   bool restoring_ = true;
+  // The account holds an entity a newer ilo wrote, so this device sends nothing (Hold).
+  bool held_ = false;
+  bool said_held_ = false;
   base::OneShotTimer timer_;
   base::WeakPtrFactory<Bridge> weak_factory_{this};
 };
@@ -619,6 +679,11 @@ void Changed() {
   for (const auto& [profile, bridge] : Bridges()) {
     bridge->Changed();
   }
+}
+
+bool Held() {
+  return std::ranges::any_of(Bridges(),
+                             [](const auto& bridge) { return bridge.second->held(); });
 }
 
 }  // namespace browser_core::sync_spaces

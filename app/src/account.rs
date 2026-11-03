@@ -109,6 +109,8 @@ pub enum Trouble {
     Throttled,
     /// Sync stopped after an error, until the browser starts again.
     Stopped,
+    /// Another device runs a newer version, whose Spaces this one holds its changes back from.
+    Outdated,
 }
 
 /// How sync is keeping up with the server, as the core said when the view last asked.
@@ -1171,6 +1173,13 @@ impl Account {
             (None, Some(Trouble::Stopped)) => (
                 Some("Sync stopped after an error.".into()),
                 format!("Quit and reopen {app} to start it again."),
+            ),
+            (None, Some(Trouble::Outdated)) => (
+                Some("Spaces are paused.".into()),
+                format!(
+                    "Another of your devices runs a newer {app}. Update {app} on this device to \
+                     keep syncing them."
+                ),
             ),
             (None, None) if synced.is_empty() => {
                 (None, format!("Syncing through {}", self.server_name()))

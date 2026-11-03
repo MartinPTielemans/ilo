@@ -46,6 +46,7 @@
 #include "browser_core/sync_guard.h"
 #include "browser_core/sync_pairing.h"
 #include "browser_core/sync_relay.h"
+#include "browser_core/sync_spaces.h"
 #include "browser_core/sync_words.h"
 #include "browser_core/window.h"
 #include "build/build_config.h"
@@ -783,6 +784,10 @@ class Account : public syncer::SyncServiceObserver,
     activity->last_synced = synced.is_null() ? 0 : synced.InMillisecondsFSinceUnixEpoch();
     if (service->HasUnrecoverableError()) {
       activity->trouble = BC_SYNC_TROUBLE_STOPPED;
+      return;
+    }
+    if (sync_spaces::Held()) {
+      activity->trouble = BC_SYNC_TROUBLE_OUTDATED;
       return;
     }
     // The last cycle's results, which the next cycle replaces, so a trouble goes once it's over.

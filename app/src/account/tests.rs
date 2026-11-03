@@ -768,6 +768,19 @@ fn the_status_line_says_when_it_synced_and_what_stops_it(cx: &mut TestAppContext
         Some("Sync stopped after an error.")
     );
 
+    // A device a newer one has outrun says so, and what to do, as Arc's did.
+    tab.shows_with("at 15:04", Some(Trouble::Outdated));
+    assert_eq!(
+        tab.status(),
+        (
+            Some("Spaces are paused.".into()),
+            format!(
+                "Another of your devices runs a newer {app}. Update {app} on this device to keep \
+                 syncing them."
+            )
+        )
+    );
+
     // A server of the user's own is named by its host.
     tab.set(State {
         default_server: false,

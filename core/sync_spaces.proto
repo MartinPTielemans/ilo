@@ -35,4 +35,8 @@ message SpaceEntity {
   // A Space's, folder's or pinned tab's emoji, and a Space's theme.
   optional string icon = 10;
   optional string theme = 11;
+  // The shape of entity the ilo that wrote it writes (sync_spaces.cc, Version). One that reads a
+  // higher one than its own may not read all of it, so it sends none of its Spaces' changes, which
+  // would write over what it can't read, until it's updated. Unset is 1's, the first shape.
+  optional uint32 version = 12;
 }

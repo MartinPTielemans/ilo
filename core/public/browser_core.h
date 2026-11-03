@@ -636,6 +636,10 @@ typedef struct bc_sync_device {
 #define BC_SYNC_TROUBLE_THROTTLED 2
 // Sync stopped after an error it doesn't recover from while the browser runs.
 #define BC_SYNC_TROUBLE_STOPPED 3
+// Another device runs a newer ilo, which wrote Spaces this one may not read all of: the rest
+// syncs, but this device sends none of its Spaces' changes, which would write over theirs, until
+// it's updated.
+#define BC_SYNC_TROUBLE_OUTDATED 4
 
 // How sync is keeping up with the server, as Settings › Sync says while it shows.
 typedef struct bc_sync_activity {
