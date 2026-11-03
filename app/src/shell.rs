@@ -2855,6 +2855,9 @@ impl Shell {
         // There for the page, or back, with no resize to end the hold, as a window already its
         // screen's size goes: held on, the page stayed put for good, under the Library (#1633).
         if entered == self.page_fullscreen && self.page_held.take().is_some() {
+            // check.sh waits for this line, which comes after the frame that lays the page out.
+            let line = format!("browser: page laid in place, full screen {}", entered as u8);
+            self.logged_once_laid.push(line);
             cx.notify();
         }
         if !entered || !self.page_fullscreen {

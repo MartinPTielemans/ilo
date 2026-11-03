@@ -50,12 +50,15 @@ send click $page_point
 send key f
 expect '^browser: page entered full screen$' "the page didn't go full screen"
 expect '^browser: window entered full screen$' "the page didn't take the window full screen"
+# The page goes to its frame there with the shell's next frame, after AppKit's word.
+expect '^browser: page laid in place, full screen 1$' "the page wasn't laid out in full screen"
 check_layout "with the page full screen in a window that filled its screen" fills
 [ "$content" = "$filled" ] || fail "full screen, the window is $content, not $filled as it was"
 ../tools/window-screenshot.sh "$pid" "$out/filled-full-screen.png" || fail "no window to capture"
 send key escape
 expect '^browser: page left full screen$' "escape didn't take the page out of full screen"
 expect '^browser: window left full screen$' "the window stayed full screen"
+expect '^browser: page laid in place, full screen 0$' "the page wasn't laid out back in its card"
 check_layout "after the page's full screen in a window that fills its screen"
 [ "$content" = "$filled" ] || fail "after full screen the window is $content, not $filled as it was"
 docked=$view
