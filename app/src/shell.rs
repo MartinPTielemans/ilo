@@ -512,6 +512,8 @@ struct Tab {
     /// What the favicon (by its id) themes the tile with when the tab is a favorite shown, made
     /// the first time that's drawn.
     theme: RefCell<Option<(u64, Option<Rc<TileTheme>>)>>,
+    /// Its page is on another host than the URL it's pinned or a favorite at, which its row names.
+    left_pinned_host: bool,
 }
 
 impl Tab {
@@ -1175,6 +1177,9 @@ pub struct Shell {
     sidebar_keys: FocusHandle,
     focus_keys: bool,
     keyed_drawn: Rc<Cell<Option<(u64, Bounds<Pixels>)>>>,
+    /// The tab Close and Keep Pinned showed, whose row has the ring for a moment, and the timer
+    /// that takes it off.
+    attention: Option<(u64, Task<()>)>,
     /// Whether Clear and the URL field's button were fading in or shown at the last frame, the
     /// fade since it last changed, from how far in they were then, and whether they were drawn
     /// when the last line was logged.
@@ -1625,6 +1630,7 @@ impl Shell {
             sidebar_keys: cx.focus_handle(),
             focus_keys: false,
             keyed_drawn: Rc::default(),
+            attention: None,
             tools_on: false,
             tools_fade: None,
             drawn_tools: false,
@@ -2832,6 +2838,9 @@ impl Shell {
             flag(page.loading),
             page.url
         );
+        // Asked here, once a report, as the row drawn each frame needs only the answer.
+        let left_pinned_host =
+            page.away_from_pinned_url && host(&page.url) != host(&self.browser.pinned_url(tab));
         let entry = self.tabs.entry(tab).or_default();
         if page.unloaded != entry.page.unloaded {
             log!("browser: page {tab} unloaded {}", flag(page.unloaded));
@@ -2844,6 +2853,12 @@ impl Shell {
             log!(
                 "browser: page {tab} away {}",
                 flag(page.away_from_pinned_url)
+            );
+        }
+        if left_pinned_host != entry.left_pinned_host {
+            log!(
+                "browser: page {tab} left pinned host {}",
+                flag(left_pinned_host)
             );
         }
         if (page.audible, page.muted) != (entry.page.audible, entry.page.muted) {
@@ -2912,7 +2927,8 @@ impl Shell {
         // What its hover card shows of the page, besides its title: its host, emoji and buttons.
         let carded = |page: &Page| (page.url.clone(), page.icon.clone(), page.share_instead);
         let card_changed = carded(&page) != carded(&entry.page);
-        let changed = entry.keep_page(page);
+        let changed =
+            entry.keep_page(page) | replace(&mut entry.left_pinned_host, left_pinned_host);
         if card_changed {
             self.card_changed(tab, cx);
         }
