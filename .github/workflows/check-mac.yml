@@ -127,6 +127,18 @@ jobs:
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: ./setup.sh prebuilt && ./build.sh
 
+      - name: PROBE grant TCC
+        if: ${{ steps.engine.outputs.found == 'true' }}
+        run: |
+          sw_vers; csrutil status || true
+          db="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+          ls -la "$db" || true
+          sqlite3 "$db" 'PRAGMA table_info(access)' || true
+          for service in kTCCServiceCamera kTCCServiceMicrophone; do
+            sqlite3 "$db" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified) VALUES ('$service', 'dev.browser.app', 0, 2, 3, 1, 'UNUSED', 0, $(date +%s))" && echo "granted $service" || echo "couldn't grant $service"
+          done
+          sqlite3 "$db" "SELECT service, client, auth_value FROM access WHERE client LIKE 'dev.browser%'" || true
+
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       - name: Runs
         if: ${{ steps.engine.outputs.found == 'true' }}
@@ -173,6 +185,12 @@ jobs:
             echo "| $run | $result |" | tee -a "$GITHUB_STEP_SUMMARY"
           done
           exit "$failed"
+
+      - name: PROBE TCC log
+        if: ${{ always() && steps.engine.outputs.found == 'true' }}
+        run: |
+          log show --last 40m --style compact --predicate 'subsystem == "com.apple.TCC"' 2>/dev/null | grep -i 'browser\|dev.browser\|ilo' | grep -iE 'service|auth|prompt|request|kTCC' | tail -60 || true
+          sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "SELECT service, client, auth_value, auth_reason FROM access WHERE client LIKE 'dev.browser%'" || true
 
       - if: ${{ always() && steps.engine.outputs.found == 'true' }}
         uses: actions/upload-artifact@v4
