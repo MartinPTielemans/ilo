@@ -779,9 +779,9 @@ content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: la
   sed 's/^browser: layout content \([0-9]*\)x[0-9]*,.*/\1/')
 show="$((content - $5 + $1 + $3 - 14 - 25)) $(($2 + $4 / 2))"
 send move $show
-moved=$step
+first_move=$step
 send move $show
-expect '^browser: toast hovered true$' "the pointer at $show wasn't on the new tab's toast" "$moved"
+expect '^browser: toast hovered true$' "the pointer at $show wasn't on the new tab's toast" "$first_move"
 recorded
 ../tools/window-screenshot.sh "$pid" "$out/new-tab-toast.png" || fail "no window to capture"
 send click $show
