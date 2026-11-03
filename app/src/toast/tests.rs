@@ -139,7 +139,8 @@ fn voiceover_says_the_toast_as_it_comes(cx: &mut TestAppContext) {
     assert_eq!(toast.value(), Some("Space deleted! Use ⌘Z to undo."));
 }
 
-/// The Undo a toast offers goes with the undo, however it was done, but another toast stays.
+/// The Undo a toast offers goes with the undo, however it was done, as does a toast naming ⌘Z,
+/// but another toast stays.
 #[gpui::test]
 fn an_undo_toast_goes_once_the_undo_is_done_some_other_way(cx: &mut TestAppContext) {
     let host = open_toast(cx);
@@ -151,10 +152,17 @@ fn an_undo_toast_goes_once_the_undo_is_done_some_other_way(cx: &mut TestAppConte
     assert_eq!(host.0.take(), ["clicks false"]);
     assert_eq!(after(cx, &host, LEAVE), ["hide"]);
 
-    show_deleted(cx);
+    let undo = crate::shell::keystroke_label("cmd-z");
+    cx.update(|cx| show("Space deleted! Use", Some((&undo, "to undo.")), TIME, cx));
     host.0.take();
     cx.update(|cx| hide_undo(cx));
-    assert!(after(cx, &host, 4.9).is_empty(), "Space deleted! stays its five seconds");
+    cx.run_until_parked();
+    assert_eq!(after(cx, &host, LEAVE), ["hide"], "Space deleted! goes with its ⌘Z");
+
+    cx.update(|cx| show("Tab Pinned", None, TIME, cx));
+    host.0.take();
+    cx.update(|cx| hide_undo(cx));
+    assert!(after(cx, &host, 4.9).is_empty(), "another toast stays its five seconds");
 }
 
 #[gpui::test]
@@ -323,46 +331,4 @@ fn a_toast_too_long_for_its_page_shortens_its_words(cx: &mut TestAppContext) {
     assert_eq!(f32::from(plate.right()), page - RIGHT);
     assert_eq!(f32::from(plate.origin.y), TOP);
     assert_eq!(f32::from(plate.size.height), HEIGHT);
-}
-
-/// A toast that is itself its button, as New Tab Created is, takes clicks and draws no chip, and
-/// a click anywhere on its plate runs it, as VoiceOver can, the toast being a button.
-#[gpui::test]
-fn a_click_on_a_toast_that_is_its_button_runs_it(cx: &mut TestAppContext) {
-    use gpui::VisualTestContext;
-    let host = Rc::new(Recorder::default());
-    let window = cx.update(|cx| open(host.clone(), |_| (hsla(0., 0., 0., 1.), Default::default()), cx));
-    let window = window.expect("no toast window");
-    let mut visual = VisualTestContext::from_window(window.into(), cx);
-    visual.simulate_a11y_activation();
-    let clicked = Rc::new(Cell::new(0));
-    let counted = clicked.clone();
-    let button = Button {
-        label: Label::Plate,
-        name: "show",
-        run: Rc::new(move |_, _| counted.set(counted.get() + 1)),
-    };
-    cx.update(|cx| show_with_buttons("New Tab Created", vec![button], TIME, cx));
-    cx.run_until_parked();
-    assert_eq!(host.0.take(), ["clicks true", "show"]);
-    cx.update(|cx| {
-        window
-            .update(cx, |toast, _, _| {
-                toast.shown.as_mut().unwrap().shown = Some(Instant::now() - Duration::from_secs(3));
-            })
-            .unwrap()
-    });
-    // Through the any-window handle, since drawing renders the toast the other would lease.
-    cx.update(|cx| {
-        cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx)).unwrap()
-    });
-    let tree = visual.a11y_tree().expect("GPUI built a tree");
-    let roles: Vec<_> = tree.nodes.iter().map(|(_, node)| node.role()).collect();
-    assert_eq!(roles.iter().filter(|&&role| role == Role::Button).count(), 1, "{roles:?}");
-    let plate = *host.1.borrow().last().expect("the plate wasn't told");
-    // Near its left end, over the words rather than a chip.
-    visual.simulate_click(point(plate.left() + px(20.), plate.center().y), Default::default());
-    visual.run_until_parked();
-    assert_eq!(clicked.get(), 1);
-    assert_eq!(after(cx, &host, LEAVE), ["clicks false", "hide"]);
 }

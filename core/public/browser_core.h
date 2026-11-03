@@ -1025,6 +1025,11 @@ typedef struct bc_host {
   // window in front forward, restoring it if it's minimized (host_activate). The Mac's Dock and a
   // second `open` reopen the app instead, which Chrome answers by bringing its windows forward.
   void (*launched_again)(void* context);
+  // A quit goes ahead: every window has closed, every page let it, and nothing can stop it now.
+  // |restarting| if it's bc_restart's. A quit that was stopped, as by a page that asked to stay,
+  // takes its restart with it, so a later quit isn't one. Return true to start the browser again
+  // yourself, as an update that installs first does, and the core doesn't.
+  bool (*quit_going_ahead)(void* context, bool restarting);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit

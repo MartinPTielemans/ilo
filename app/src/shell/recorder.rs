@@ -169,12 +169,17 @@ pub(super) struct Recorder {
     pub(super) names: RefCell<HashMap<u64, String>>,
     /// The words of the toasts with no Undo button it was asked to show.
     pub(super) toasts: RefCell<Vec<String>>,
+    /// The tabs it was asked to close with the rest of their split view.
+    pub(super) split_closes: RefCell<Vec<u64>>,
     /// The words of the toasts with an Undo button it was asked to show, and what the last one's
     /// button does.
     pub(super) undo_toasts: RefCell<Vec<String>>,
     pub(super) undo_toast: RefCell<Option<Rc<dyn Fn(&mut App)>>>,
-    /// What the last toast with a button other than Undo runs, its words in `toasts`.
-    pub(super) toast_run: RefCell<Option<Rc<dyn Fn(&mut App)>>>,
+    /// How many times a toast offering the undo was taken down.
+    pub(super) undo_toasts_hidden: Cell<usize>,
+    /// The label of the last toast's button other than Undo, and what it runs, its words in
+    /// `toasts`.
+    pub(super) toast_run: RefCell<Option<(&'static str, Rc<dyn Fn(&mut App)>)>>,
     /// Another browser window is in front of this one.
     pub(super) behind: Cell<bool>,
     /// The Edit menu's Undo and Redo titles it was last given.
@@ -282,7 +287,10 @@ impl Browser for Recorder {
         self.record(format!("select {tab}"))
     }
 
-    fn close(&self, tab: u64, _: bool, _: &mut App) {
+    fn close(&self, tab: u64, split: bool, _: &mut App) {
+        if split {
+            self.split_closes.borrow_mut().push(tab);
+        }
         self.edit(format!("close {tab}"));
         self.record(format!("close {tab}"))
     }
@@ -1064,6 +1072,7 @@ impl Browser for Recorder {
 
     fn hide_undo_toast(&self, _: &mut App) {
         self.undo_toast.borrow_mut().take();
+        self.undo_toasts_hidden.set(self.undo_toasts_hidden.get() + 1);
     }
 
     fn in_front(&self) -> bool {
@@ -1073,13 +1082,13 @@ impl Browser for Recorder {
     fn toast_button(
         &self,
         text: &str,
-        _: (Option<&'static str>, &'static str),
+        (label, _): (&'static str, &'static str),
         run: Rc<dyn Fn(&mut App)>,
         _: Duration,
         _: &mut App,
     ) {
         self.toasts.borrow_mut().push(text.into());
-        *self.toast_run.borrow_mut() = Some(run);
+        *self.toast_run.borrow_mut() = Some((label, run));
     }
 
     fn full_screen_note(&self, shown: bool, _: &mut App) {

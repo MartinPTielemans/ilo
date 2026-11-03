@@ -5,8 +5,9 @@
 # (tools/headless.sh), and on Windows, a CI runner's, its desktop (tools/window-capture.ps1).
 # The screens: the sidebar with tabs, the command bar, a tab's context menu, Site Controls, the
 # icon picker, the delete-Space dialog, the sidebar of a Space whose theme has three colours,
-# whose dot in the switcher draws all three (#1354), and Peek over the page, its card a hole the
-# shell's page shows through. The preview's Linux host places no window, so
+# whose dot in the switcher draws all three (#1354), Peek over the page, its card a hole the
+# shell's page shows through, and more Spaces than fit (#1401): 16 in the switcher of a sidebar
+# 300 wide, and 8 in the Library's Spaces in a window 1100 wide. The preview's Linux host places no window, so
 # sway puts Site Controls and the icon picker in the middle rather than where the Mac's host would.
 # It reports: a screen that won't capture is a gap in the sheet and a line on stderr, never a
 # failure.
@@ -30,6 +31,8 @@ screens=(
   "dialog|dialog settled|PREVIEW_DIALOG=1 PREVIEW_MENU=40,205,up,enter"
   "space-theme|drawn at|PREVIEW_THEME='x=0.5 y=0 colors=3'"
   "peek|link preview settled|PREVIEW_PEEK=1"
+  "many-spaces|drawn at|PREVIEW_SPACES=16 PREVIEW_SIDEBAR=300"
+  "many-spaces-library|library shown|PREVIEW_SPACES=8 PREVIEW_LIBRARY=spaces PREVIEW_SIZE=1100x700"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) ;;

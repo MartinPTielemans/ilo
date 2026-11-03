@@ -36,7 +36,6 @@ send click $page_point
 if [ "$active" != 1 ]; then
   exec 3>&-
   quit
-  kill "$server"
   echo "skip: private. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi

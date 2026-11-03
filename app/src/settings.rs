@@ -339,9 +339,9 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
             ("Previous Pane", Keys::Of(Command::PreviousPane)),
             ("Separate Page from Split View", Keys::Of(Command::SeparatePane)),
             ("Expand Current Split", Keys::Of(Command::ExpandSplit)),
-            ("Separate All Pages", Keys::Of(Command::SeparateSplit)),
+            ("Separate All Tabs", Keys::Of(Command::SeparateSplit)),
             ("Flip Split View", Keys::Of(Command::FlipSplit)),
-            ("Change Orientation", Keys::Of(Command::ChangeOrientation)),
+            ("Convert to Vertical/Horizontal Split View", Keys::Of(Command::ChangeOrientation)),
             ("Move Pane Left", Keys::Of(Command::MovePaneLeft)),
             ("Move Pane Right", Keys::Of(Command::MovePaneRight)),
         ],
@@ -641,6 +641,10 @@ impl widevine::Module for Module {
     fn remove(&self) {
         unsafe { bc::bc_widevine_remove() };
     }
+
+    fn restart(&self, cx: &mut App) {
+        crate::restart_browser(cx);
+    }
 }
 
 struct Renaming {
@@ -937,6 +941,9 @@ fn open(cx: &mut App) {
     // ⌘W, pressed as Ctrl+W off the Mac, as the browser's own shortcuts are.
     let close = if crate::shell::OFF_THE_MAC { "ctrl-w" } else { "cmd-w" };
     cx.bind_keys([gpui::KeyBinding::new(close, CloseSettings, Some("Settings"))]);
+    // ⌘Z, Ctrl+Z off the Mac, which has no menu bar to send it; a field's own comes first.
+    let undo = Box::new(browser::text_input::Undo);
+    cx.bind_keys([shell::view_binding("cmd-z", undo, "Settings", cx)]);
     account::bind_keys(cx);
     let synced = account::synced(cx);
     let options = WindowOptions {
@@ -1137,13 +1144,34 @@ fn windows_close_button(at: gpui::Canvas<()>) -> AnyElement {
         .into_any_element()
 }
 
-fn hide(_: &mut App) {
+fn hide(cx: &mut App) {
     // check.sh waits for this line.
     log!("browser: settings hidden");
     unsafe { platform::host_hide_settings() };
+    // Later, as it can come from inside the window's own update. What Links' ⌘Z would bring back
+    // goes with the window, as the issue's "until Settings closes" (#1377).
+    cx.defer(|cx| {
+        if let Some(window) = cx.try_global::<SettingsWindow>().map(|settings| settings.0) {
+            window.update(cx, |settings, _, cx| settings.forget_undo(cx)).ok();
+        }
+    });
 }
 
 impl Settings {
+    /// ⌘Z: on the Links tab, the last rule its trash took comes back. The other tabs' changes
+    /// show as they're made and are made back the same way.
+    fn undo(&mut self, cx: &mut Context<Self>) {
+        if let Some(links) = self.links.as_ref().filter(|_| self.tab == Tab::Links) {
+            links.update(cx, |links, cx| links.undo(cx));
+        }
+    }
+
+    fn forget_undo(&mut self, cx: &mut Context<Self>) {
+        if let Some(links) = &self.links {
+            links.update(cx, |links, _| links.forget_removed());
+        }
+    }
+
     fn show_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
         if tab == self.tab {
             return;
@@ -2571,18 +2599,25 @@ impl Settings {
             .into_any_element()
     }
 
-    /// Google's Widevine module, where the core offers it: where it is, and the way to get it or
-    /// remove it. The user's, as the note's yes is.
+    /// Google's Widevine module, where the core offers it: where it is, and the ways to get it,
+    /// load it or remove it. The user's, as the note's yes is.
     fn widevine_row(&self, cx: &mut Context<Self>) -> gpui::Div {
         let row = self.widevine.read(cx);
-        let action = row.action().map(|(action, title)| {
+        let (title, detail, actions) = (row.title(), row.detail(), row.actions());
+        let buttons = actions.iter().enumerate().map(|(index, &(action, title))| {
             let act = cx.listener(move |settings: &mut Self, _, _, cx| {
                 log!("browser: settings widevine {action:?}");
-                settings.widevine.read(cx).act(action);
+                settings.widevine.update(cx, |row, cx| row.act(action, cx));
             });
-            button(&RowLook::settings(), "widevine", title).on_click(act)
+            let what = format!("widevine {}", format!("{action:?}").to_lowercase());
+            button(&RowLook::settings(), ("widevine", index), title)
+                .relative()
+                .child(self.drawn(what))
+                .on_click(act)
         });
-        detailed_row(row.title(), row.detail(), action.map(IntoElement::into_any_element))
+        let buttons = div().flex().items_center().gap(px(PADDING)).children(buttons);
+        let control = (!actions.is_empty()).then(|| buttons.into_any_element());
+        detailed_row(title, detail, control)
     }
 
     /// Gives the renaming field the keyboard once its profile is listed, which a new one is once
@@ -3283,6 +3318,9 @@ impl Render for Settings {
                 settings.record(&event.keystroke, cx)
             }))
             .on_action(|_: &CloseSettings, _, cx| hide(cx))
+            .on_action(cx.listener(|settings, _: &browser::text_input::Undo, _, cx| {
+                settings.undo(cx)
+            }))
             .size_full()
             .flex()
             .flex_col()

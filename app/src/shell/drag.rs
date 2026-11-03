@@ -14,9 +14,10 @@ use gpui::{
 };
 
 use super::{
-    Closing, Curve, DRAG_START, Drag, Edit, FOLDER_INDENT, HeldRow, NAME_HEIGHT, Opened,
-    PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS, PRESS_SCALE, PRESS_TIME, Place, ROW_HEIGHT, ROW_PITCH,
-    Shape, Shell, Slot, TILE_HEIGHT, TILE_RADIUS, What, files, slots,
+    Closing, Curve, DRAG_START, Drag, Edit, FOLDER_INDENT, HeldRow, LIST_GLIDE, LIST_GLIDE_POWER,
+    ListGlide, NAME_HEIGHT, Opened, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS, PRESS_SCALE,
+    PRESS_TIME, Place, ROW_HEIGHT, ROW_PITCH, Shape, Shell, Slot, TILE_HEIGHT, TILE_RADIUS, What,
+    files, slots,
 };
 
 /// The tab that links or files dragged in stand for until they're dropped: none, as the core
@@ -145,13 +146,19 @@ impl Shell {
     /// Scrolls the list the least that shows `tab`'s row whole, if it has one: for a new tab's row,
     /// as Dia's does for a tab opened behind, and for the tab shown, as Chrome's tab strip does.
     pub(super) fn scroll_to_row(&self, tab: u64) {
-        let Some(&top) = self.layout().get(&Slot::Tab(self.row_of(tab))) else {
+        self.scroll_to_slot(Slot::Tab(self.row_of(tab)), &tab.to_string());
+    }
+
+    /// Glides the list the least that shows `slot` whole, if the Space shown has it, from where it
+    /// is or is gliding to. `what` names it in the log.
+    pub(super) fn scroll_to_slot(&self, slot: Slot, what: &str) {
+        let Some(&top) = self.layout().get(&slot) else {
             return;
         };
         let top = top + self.tiles_room();
         let height = f32::from(self.list_scroll.bounds().size.height);
-        let offset = self.list_scroll.offset();
-        let scrolled = -f32::from(offset.y);
+        let offset = -f32::from(self.list_scroll.offset().y);
+        let scrolled = self.list_glide.get().map_or(offset, |glide| glide.to);
         let to = if top < scrolled {
             top
         } else if top + ROW_PITCH > scrolled + height {
@@ -162,8 +169,40 @@ impl Shell {
         // Not before the list's first layout.
         if height > 0. {
             // check.sh reads this line.
-            log!("browser: list scrolled to {to} for {tab}");
-            self.list_scroll.set_offset(point(offset.x, px(-to)));
+            log!("browser: list scrolled to {to} for {what}");
+            let glide = ListGlide { start: Instant::now(), from: offset, to, set: offset };
+            self.list_glide.set(Some(glide));
+        }
+    }
+
+    /// Moves the list on along its glide to a row, which a scroll of the user's ends.
+    pub(super) fn step_list_glide(&mut self, window: &mut Window) {
+        let Some(glide) = self.list_glide.get() else {
+            return;
+        };
+        let offset = self.list_scroll.offset();
+        if (-f32::from(offset.y) - glide.set).abs() > 0.5 {
+            self.list_glide.set(None);
+            return;
+        }
+        let t = (glide.start.elapsed().as_secs_f32() / LIST_GLIDE).min(1.);
+        let at = glide.from + (glide.to - glide.from) * (1. - (1. - t).powi(LIST_GLIDE_POWER));
+        self.list_scroll.set_offset(point(offset.x, px(-at)));
+        if t < 1. {
+            self.list_glide.set(Some(ListGlide { set: at, ..glide }));
+            window.request_animation_frame();
+        } else {
+            self.list_glide.set(None);
+        }
+    }
+
+    /// Lands the list's glide at the next frame, as the app's frames have by the time a test
+    /// looks.
+    #[cfg(test)]
+    pub(super) fn land_list_glide(&self) {
+        if let Some(glide) = self.list_glide.get() {
+            let start = Instant::now() - Duration::from_secs_f32(LIST_GLIDE);
+            self.list_glide.set(Some(ListGlide { start, ..glide }));
         }
     }
 
@@ -420,7 +459,8 @@ impl Shell {
             }
         }
         let was_onto = self.drag.as_ref().and_then(|drag| drag.onto);
-        let onto = was_onto.filter(|&row| middle == Some(row));
+        let onto = was_onto.filter(|&(row, _)| middle == Some(row));
+        let onto = onto.map(|(row, _)| (row, self.left_half(row, pointer.x)));
         let (place, line) = if onto.is_some() { (to, None) } else { (place, line) };
         if let Some(drag) = &mut self.drag {
             drag.moving = true;
@@ -431,9 +471,11 @@ impl Shell {
             drag.onto = onto;
             drag.shape.turn(over_favorites, Instant::now());
         }
-        if onto != was_onto {
-            // check.sh waits for this line.
-            log!("browser: drop onto none");
+        match onto {
+            // check.sh waits for these lines.
+            Some((row, left)) if onto != was_onto => log!("browser: drop onto {row} {}", side(left)),
+            None if was_onto.is_some() => log!("browser: drop onto none"),
+            _ => {}
         }
         // Links dragged in have no place before their first, which they didn't pass a row to get.
         let entered = incoming && to == Place::List(false, usize::MAX);
@@ -533,15 +575,25 @@ impl Shell {
     /// joins it in a split view.
     fn rested_onto(&mut self, row: u64, cx: &mut Context<Self>) {
         let resting = |drag: &&mut Drag| drag.resting.as_ref().is_some_and(|rest| rest.0 == row);
+        let x = self.drag.as_ref().map_or(0., |drag| drag.pointer.x);
+        let left = self.left_half(row, x);
         let Some(drag) = self.drag.as_mut().filter(|drag| !drag.dropped).filter(resting) else {
             return;
         };
-        drag.onto = Some(row);
+        drag.onto = Some((row, left));
         drag.line = None;
         // check.sh waits for this line.
-        log!("browser: drop onto {row}");
+        log!("browser: drop onto {row} {}", side(left));
         self.drag_detent(cx);
         cx.notify();
+    }
+
+    /// Whether `x` across the sidebar is on the left half of `row`'s plate, where a tab rested on
+    /// it would join it on the left, before a split's first page, as Arc's does
+    /// (`SidebarDropTargetRegion`).
+    fn left_half(&self, row: u64, x: f32) -> bool {
+        let left = PLATE_INSET + self.depth(row) as f32 * FOLDER_INDENT;
+        x < (left + self.width() - PLATE_INSET) / 2.
     }
 
     /// The tab whose row's middle half is at `y` down the sidebar, which a dragged `tab` would join
@@ -635,11 +687,11 @@ impl Shell {
             cx.notify();
             return;
         }
-        if let Some(with) = drag.onto {
+        if let Some((with, left)) = drag.onto {
             // check.sh waits for this line.
             log!("browser: dragged {tab} onto {with}");
             self.settle_drag();
-            self.join_split(tab, with, false, false, cx);
+            self.join_split(tab, with, left, false, cx);
             cx.notify();
             return;
         }
@@ -1121,4 +1173,9 @@ mod tests {
         ];
         assert_eq!(dropped_urls(dragged, search), opened);
     }
+}
+
+/// The side of a row a tab rested on would join it, as check.sh reads it.
+fn side(left: bool) -> &'static str {
+    if left { "left" } else { "right" }
 }

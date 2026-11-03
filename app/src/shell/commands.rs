@@ -15,7 +15,7 @@ use crate::theme::Appearance;
 use crate::build_info::{self, BuildInfo};
 
 use super::{
-    COPIED_TIME, Edit, MAX_PANES, Section, Shell, Space, Swapped, UserKeys, What,
+    COPIED_TIME, Edit, Section, Shell, Space, Swapped, UserKeys, What,
     browser::WindowButton,
     agent_bar, clean_link, drag::dropped_urls, drm_note, extensions, keys, little::little_runs,
     sidebar_keys,
@@ -366,6 +366,16 @@ pub(super) fn developer_mode_title(on: bool) -> &'static str {
     if on { DEVELOPER_MODE_OFF } else { DEVELOPER_MODE_ON }
 }
 
+/// The split's orientation's rows in the command bar, Arc's names, of which it lists the one that
+/// would turn it: horizontal is side by side, vertical stacked (Arc 1.171).
+const CONVERT_VERTICAL: &str = "Convert to Vertical Split View";
+const CONVERT_HORIZONTAL: &str = "Convert to Horizontal Split View";
+
+/// What turns a split the other way, for one `stacked` or side by side.
+pub(super) fn orientation_title(stacked: bool) -> &'static str {
+    if stacked { CONVERT_HORIZONTAL } else { CONVERT_VERTICAL }
+}
+
 /// The commands the command bar finds, with the words besides their names' that find them, in
 /// lowercase: Arc's bar's names and words where they're known, else its menus' names and ours
 /// (docs/ux-spec.md › Command bar › Commands). Among equal matches, the first here comes first.
@@ -416,10 +426,12 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
     ("Expand Current Split", Command::ExpandSplit, &[]),
     // Dia's (docs/ux-spec.md › Split view).
     ("Flip Split View", Command::FlipSplit, &[]),
-    ("Change Orientation", Command::ChangeOrientation, &[]),
+    // Arc's names, with Dia's among the words.
+    (CONVERT_VERTICAL, Command::ChangeOrientation, &["change orientation", "stack"]),
+    (CONVERT_HORIZONTAL, Command::ChangeOrientation, &["change orientation", "side by side"]),
     ("Move Pane Left", Command::MovePaneLeft, &[]),
     ("Move Pane Right", Command::MovePaneRight, &[]),
-    ("Separate All Pages", Command::SeparateSplit, &[]),
+    ("Separate All Tabs", Command::SeparateSplit, &["separate all pages"]),
     ("New Note", Command::NewNote, &["document", "notion", "google docs", "word", "confluence"]),
     ("New Note Split", Command::NewNoteSplit, &["document", "side by side"]),
     ("Toggle Sidebar", Command::ToggleSidebar, &["hide", "show"]),
@@ -548,6 +560,14 @@ pub fn find_commands(
             let matched = match typed.is_empty() {
                 true => Match::Letters,
                 false => match_of(lowercase, keywords, &typed)?,
+            };
+            // "close" means the tab, as Arc lists Archive Tab above Close Window for it, and ↩ on
+            // the window's close would take every tab with it: Close Window comes before the
+            // suggestions only once what's typed goes past its first word.
+            let first_word = matched == Match::Name && !typed.contains(' ');
+            let matched = match command == Command::CloseWindow && first_word {
+                true => Match::Letters,
+                false => matched,
             };
             Some((matched, SharedString::from(named(name, command)?), command))
         })
@@ -1037,7 +1057,11 @@ impl Shell {
                     if !self.chosen.is_empty() {
                         self.close_chosen(cx);
                     } else if self.selected != 0 {
-                        self.close_tab(self.selected, false, cx);
+                        // A pinned split's pages all go, and it stays a pinned split, as its −
+                        // does (Arc 1.171).
+                        let tab = self.selected;
+                        let split = self.pinned().contains(&tab) && self.panes(tab).len() > 1;
+                        self.close_tab(tab, split, cx);
                     } else {
                         self.browser.close_window(cx);
                     }
@@ -1183,7 +1207,7 @@ impl Shell {
             Command::NewNote => return self.browser.new_note(self.space, None, cx),
             Command::NewNoteSplit => {
                 let with = self.selected;
-                if with != 0 && self.panes(with).len() < MAX_PANES {
+                if with != 0 && !self.split_full(with, cx) {
                     self.browser.new_note(self.space, Some(with), cx);
                 }
                 return;
@@ -1197,13 +1221,7 @@ impl Shell {
                 }
                 return;
             }
-            Command::SeparateSplit => {
-                // From the right, so the pages keep their order in the list.
-                for &tab in self.panes(self.selected)[1..].iter().rev() {
-                    self.separate_tab(tab, cx);
-                }
-                return;
-            }
+            Command::SeparateSplit => return self.separate_all(self.selected, cx),
             Command::FlipSplit => {
                 for (index, &tab) in self.panes(self.selected).iter().rev().enumerate() {
                     self.browser.move_in_split(tab, index, cx);
@@ -1676,6 +1694,9 @@ impl Shell {
             Command::ToggleDeveloperMode => {
                 let on = self.page(self.selected).developer_mode;
                 (name == developer_mode_title(on)).then_some(name)
+            }
+            Command::ChangeOrientation => {
+                (name == orientation_title(self.stacked(self.selected))).then_some(name)
             }
             Command::RecordTrace => (name == trace::title(trace::recording(cx))).then_some(name),
             Command::CheckForUpdates => (name == crate::updates::command_title(cx)).then_some(name),
