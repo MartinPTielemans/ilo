@@ -352,9 +352,11 @@ painted(() => document.title = "fields");
 <input aria-label="Cross field" oninput="document.body.append(&quot;cross typed&quot;)">
 <input type=password aria-label="Cross password"><script src="painted.js"></script>
 <script>painted(() => parent.postMessage("painted", "*"));</script>' > "$out/site/cross.html"
-  printf '%s' "<iframe src=http://nested.localhost:$port/deep.html></iframe>" >> "$out/site/cross.html"
+  printf '%s' "<iframe src=http://nested.localhost:$port/deep.html></iframe>" \
+    >> "$out/site/cross.html"
   printf '%s' '<p>Deep text</p>' > "$out/site/deep.html"
-  printf '%s' '<p>Late text</p><script>top.postMessage("late", "*")</script>' > "$out/site/late.html"
+  printf '%s' '<p>Late text</p><script>top.postMessage("late", "*")</script>' \
+    > "$out/site/late.html"
   : > "$out/site/empty.html"
   printf '%s' "<title>loading</title><p>Top text</p><iframe src=inner.html></iframe>
 <iframe src=http://127.0.0.1:$port/cross.html></iframe>
