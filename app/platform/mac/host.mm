@@ -48,6 +48,10 @@ bool (*g_dragged)(void*, int, double, double, const host_dragged*, size_t);
 - (void)draggingSession:(NSDraggingSession*)session
            endedAtPoint:(NSPoint)point
               operation:(NSDragOperation)operation {
+  NSPoint cursor = NSEvent.mouseLocation;
+  fprintf(stderr, "browser: probe drag ended at %.0f,%.0f, cursor %.0f,%.0f, buttons %lu, operation %lu\n",
+          point.x, point.y, cursor.x, cursor.y, (unsigned long)NSEvent.pressedMouseButtons,
+          (unsigned long)operation);
   self.ended(operation != NSDragOperationNone);
 }
 @end
@@ -4167,6 +4171,15 @@ bool host_drag_file(const char* path, void (*ended)(bool taken)) {
                 contents:[NSWorkspace.sharedWorkspace iconForFile:file]];
   source = [[HostFileDragSource alloc] init];
   source.ended = ended;
+  {
+    NSPoint cursor = NSEvent.mouseLocation;
+    NSRect screen = view.window.screen.frame;
+    fprintf(stderr, "browser: probe drag starts, event at %.0f,%.0f in window %.0f,%.0f %.0fx%.0f, cursor %.0f,%.0f, screen %.0fx%.0f, buttons %lu\n",
+            event.locationInWindow.x, event.locationInWindow.y, view.window.frame.origin.x,
+            view.window.frame.origin.y, view.window.frame.size.width, view.window.frame.size.height,
+            cursor.x, cursor.y, screen.size.width, screen.size.height,
+            (unsigned long)NSEvent.pressedMouseButtons);
+  }
   return [view beginDraggingSessionWithItems:@[ item ] event:event source:source] != nil;
 }
 
