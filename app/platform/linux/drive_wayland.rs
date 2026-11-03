@@ -249,10 +249,14 @@ impl Node {
     }
 }
 
-/// The app's windows, as sway's tree has them.
+/// The app's windows, as sway's tree has them. In the Flatpak the process's pid is its sandbox's,
+/// not the one sway knows, and the headless session (`open`) holds only the app the run started,
+/// so every window in it is the app's.
 fn ours() -> Vec<Node> {
     fn walk(node: &Value, out: &mut Vec<Node>) {
-        if node["pid"].as_u64() == Some(u64::from(std::process::id())) {
+        let pid = node["pid"].as_u64();
+        let own = u64::from(std::process::id());
+        if pid.is_some_and(|pid| pid == own || browser::flatpak::in_flatpak()) {
             let (rect, window) = (&node["rect"], &node["window_rect"]);
             out.push(Node {
                 id: node["id"].as_i64().unwrap_or(-1),
