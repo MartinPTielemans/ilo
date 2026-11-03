@@ -167,10 +167,10 @@ index 0000000000..846d17431f
 +}
 diff --git a/crates/gpui_linux/src/linux/overlay.rs b/crates/gpui_linux/src/linux/overlay.rs
 new file mode 100644
-index 0000000000..550c32d49b
+index 0000000000..97e735cf8f
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/overlay.rs
-@@ -0,0 +1,1030 @@
+@@ -0,0 +1,1035 @@
 +//! An embedder's overlays: windows GPUI opened with `show: false` that the embedder shows over its
 +//! own window, as a browser shows its command bar over its pages. Under Wayland one is a subsurface
 +//! of the embedder's surface, on X11 a window of its own over the embedder's. One shown
@@ -1046,16 +1046,17 @@ index 0000000000..550c32d49b
 +    });
 +}
 +
-+/// The overlay but `view` that takes the keys in an op still to run.
++/// The overlay but `view` that takes the keys in an op still to run, and that op's place among
++/// them.
 +#[cfg(feature = "x11")]
-+fn next_to_take_keys(view: usize) -> Option<usize> {
++fn next_to_take_keys(view: usize) -> Option<(usize, usize)> {
 +    OPS.with_borrow(|ops| {
-+        ops.iter().find_map(|op| match op {
++        ops.iter().enumerate().find_map(|(at, op)| match op {
 +            Op::Show { view: next, keyboard: true, .. }
 +            | Op::Keyboard { view: next, keyboard: true }
 +                if *next != view =>
 +            {
-+                Some(*next)
++                Some((*next, at))
 +            }
 +            _ => None,
 +        })
@@ -1156,12 +1157,16 @@ index 0000000000..550c32d49b
 +                    // opens, takes them from this one, to give back where this one had them from.
 +                    // Given back in between, wlroots 0.17's Xwayland would put the input focus on
 +                    // that window's top-level once the next overlay had it, as it does each time
-+                    // the focus comes into a top-level, and the next one would close.
++                    // the focus comes into a top-level, and the next one would close. This one
++                    // hides once the next has them: unmapped with the input focus, it would leave
++                    // it to the root window, which openbox gives to the top-level, and that could
++                    // come after the next one had it too.
 +                    if from != x11rb::NONE
-+                        && let Some(next) = next_to_take_keys(view)
++                        && let Some((next, at)) = next_to_take_keys(view)
 +                    {
 +                        focus_from(next, from);
-+                        x11.hide_overlay(view as _, x11rb::NONE).log_err();
++                        let op = Op::Hide { view, keyboard: false, hidden: Box::new(|| {}) };
++                        OPS.with_borrow_mut(|ops| ops.insert(at + 1, op));
 +                        return;
 +                    }
 +                    // The user left the overlay that had the keys before, such as a find bar under

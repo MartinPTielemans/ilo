@@ -100,6 +100,8 @@ mod tests {
         fn restart(&self, _: &mut App) {
             self.asked.borrow_mut().push("restart");
         }
+
+        fn follow(&self, _: updates::Track, _: &mut App) {}
     }
 
     fn shell(cx: &mut TestAppContext) -> Entity<Shell> {

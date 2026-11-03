@@ -69,6 +69,8 @@ pub(super) struct Recorder {
     pub(super) checked_for_updates: Cell<usize>,
     /// The import finds no browser on the machine.
     pub(super) no_browsers: Cell<bool>,
+    /// The browser the import reads and adds to, when a test gives one.
+    pub(super) import: RefCell<Option<std::rc::Rc<dyn crate::import::Host>>>,
     /// The window is full screen, as Linux's window manager says, for `window_full_screen`.
     pub(super) full_screen: Cell<bool>,
     /// The opt-ins' switches, as `crash_reports` and `agents` answer, None for one not offered.
@@ -169,6 +171,8 @@ pub(super) struct Recorder {
     /// button does.
     pub(super) undo_toasts: RefCell<Vec<String>>,
     pub(super) undo_toast: RefCell<Option<Rc<dyn Fn(&mut App)>>>,
+    /// How many times a toast offering the undo was taken down.
+    pub(super) undo_toasts_hidden: Cell<usize>,
     /// The label of the last toast's button other than Undo, and what it runs, its words in
     /// `toasts`.
     pub(super) toast_run: RefCell<Option<(&'static str, Rc<dyn Fn(&mut App)>)>>,
@@ -887,6 +891,9 @@ impl Browser for Recorder {
     // The import's made-up Arc, so the first launch has a browser to import from, unless a test
     // says there's none.
     fn import_host(&self) -> std::rc::Rc<dyn crate::import::Host> {
+        if let Some(host) = self.import.borrow().clone() {
+            return host;
+        }
         let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/src/import/fixture");
         let home = if self.no_browsers.get() { "/nonexistent" } else { fixture };
         let os = crate::import::sources::Os::Mac;
@@ -1054,6 +1061,7 @@ impl Browser for Recorder {
 
     fn hide_undo_toast(&self, _: &mut App) {
         self.undo_toast.borrow_mut().take();
+        self.undo_toasts_hidden.set(self.undo_toasts_hidden.get() + 1);
     }
 
     fn in_front(&self) -> bool {

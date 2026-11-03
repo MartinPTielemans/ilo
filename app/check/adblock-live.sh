@@ -38,7 +38,6 @@ send click $page_point
 if [ "$active" != 1 ]; then
   exec 3>&-
   quit
-  kill "$server"
   echo "skip: adblock-live. Browser wasn't the active app, so the page didn't get its keys."
   exit 0
 fi

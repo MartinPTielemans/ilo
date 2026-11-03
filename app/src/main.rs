@@ -478,9 +478,15 @@ mod platform {
         pub fn host_updated_by_store() -> bool;
         #[cfg(not(target_os = "linux"))]
         pub fn host_start_updater(
-            quit: extern "C" fn(),
+            restart: extern "C" fn(),
             changed: extern "C" fn(stage: c_int, version: *const c_char),
         );
+        #[cfg(not(target_os = "linux"))]
+        pub fn host_nightly_build() -> bool;
+        #[cfg(not(target_os = "linux"))]
+        pub fn host_nightly_feed() -> bool;
+        #[cfg(not(target_os = "linux"))]
+        pub fn host_follow_nightly(nightly: bool);
         #[cfg(not(target_os = "linux"))]
         pub fn host_check_for_updates();
         #[cfg(not(target_os = "linux"))]
@@ -488,9 +494,13 @@ mod platform {
         #[cfg(not(target_os = "linux"))]
         pub fn host_install_update();
         #[cfg(not(target_os = "linux"))]
+        pub fn host_relaunch_into_update() -> bool;
+        #[cfg(not(target_os = "linux"))]
         pub fn host_finish_update();
-        #[cfg(target_os = "macos")]
+        #[cfg(not(target_os = "linux"))]
         pub fn host_take_update_notes(notes: extern "C" fn(url: *const c_char));
+        #[cfg(target_os = "windows")]
+        pub fn host_take_install(installed: extern "C" fn(build: u64, own: u64) -> bool);
     }
 
     /// Where host_start_updater's `changed` says the update stands (host.h's HOST_UPDATE_*).
@@ -3379,9 +3389,7 @@ impl Browser for Engine {
     }
 
     fn restart(&self, cx: &mut App) {
-        // As Quit does: once the shell that asked is done, and before Chromium's posted quit.
-        cx.defer(save_launch_picture);
-        unsafe { bc::bc_restart() };
+        restart_browser(cx);
     }
 
     fn playready_needs(&self) -> shell::PlayReady {
@@ -4273,7 +4281,7 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
     // The rules name the Spaces by their places, so they're read once the Spaces are back.
     link_rules_host::read();
     let links = LAUNCH_LINKS.take().unwrap_or_default();
-    let notes = UPDATE_NOTES.take();
+    let notes = UPDATE_NOTES.take().or_else(first_launch_notes);
     match std::env::var("BROWSER_URL") {
         Ok(url) => open_tab(window, &url),
         Err(_) if !restored && links.is_empty() && notes.is_none() => {
@@ -4298,6 +4306,28 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
     }
     open_links_in(window, &links);
     restored
+}
+
+/// The release notes of the update this launch is the first of, where the Mac's main hasn't kept
+/// them before Chromium starts: taken with the first window, so a second launch, which hands its
+/// links to the browser running and exits, never takes them.
+fn first_launch_notes() -> Option<String> {
+    #[cfg(target_os = "windows")]
+    unsafe { platform::host_take_update_notes(keep_update_notes) };
+    // On Linux, where an update can come from outside ilo, a version newer than the profile's
+    // last. Only a release's, the Flatpak: a dev build's moves on under the checks' profiles.
+    #[cfg(target_os = "linux")]
+    if cfg!(feature = "prod") {
+        let file = std::path::PathBuf::from(profile_dir()).join("last-version");
+        return updates::first_launch_notes(&file, browser::build_info::VERSION);
+    }
+    UPDATE_NOTES.take()
+}
+
+#[cfg(not(target_os = "linux"))]
+extern "C" fn keep_update_notes(url: *const c_char) {
+    let url = unsafe { CStr::from_ptr(url) }.to_string_lossy().into_owned();
+    UPDATE_NOTES.set(Some(url));
 }
 
 /// Logs where the window is, for check.sh.
@@ -4947,7 +4977,18 @@ fn finish_opening(
         offer::tab_shown(id, selected, cx);
     }
     let children: Vec<AnyWindowHandle> = [
-        find_bar::open(id, ui_view, cx),
+        find_bar::open(
+            id,
+            ui_view,
+            {
+                let shell = shell.downgrade();
+                move |cx, right, top, width| {
+                    let shell = shell.upgrade()?;
+                    Some(shell.read(cx).at_page_corner(right, top, width))
+                }
+            },
+            cx,
+        ),
         prompt.map(Into::into),
         reveal::open(shell.clone(), ui_view, cx),
     ]
@@ -5412,12 +5453,34 @@ fn start_updates(cx: &mut App) {
     .detach();
     #[cfg(not(target_os = "linux"))]
     {
-        // Restart to Update on Windows, whose installer runs once the browser has gone, which needs
-        // no asking.
-        extern "C" fn quit() {
-            quit_because("the updater's install");
+        // A nightly, or a release, and where the build carries a nightly feed, the builds the user
+        // chose, else this one's: the updater reads that feed from its first check.
+        let built = match unsafe { platform::host_nightly_build() } {
+            true => updates::Track::Nightly,
+            false => updates::Track::Release,
+        };
+        let own = updater == updates::Updater::Own;
+        let followed = (own && unsafe { platform::host_nightly_feed() })
+            .then(|| followed_track().unwrap_or(built));
+        updates::tracks(built, followed, cx);
+        unsafe { platform::host_follow_nightly(followed == Some(updates::Track::Nightly)) };
+        // Restart to Update, whose update installs once the restart goes ahead (quit_going_ahead).
+        extern "C" fn restart() {
+            restart_because("the updater's install");
         }
-        unsafe { platform::host_start_updater(quit, update_changed) };
+        // An installer that failed after the last quit left this launch the old build (#1459).
+        #[cfg(target_os = "windows")]
+        {
+            extern "C" fn installed(build: u64, own: u64) -> bool {
+                let went_in = updates::went_in(build, own);
+                if !went_in {
+                    update_app_later(updates::didnt_install);
+                }
+                went_in
+            }
+            unsafe { platform::host_take_install(installed) };
+        }
+        unsafe { platform::host_start_updater(restart, update_changed) };
     }
     #[cfg(target_os = "linux")]
     if updates_available() {
@@ -5431,9 +5494,10 @@ fn start_updates(cx: &mut App) {
                 }
             };
             log!("browser: updater started");
-            let restarting = portal.clone();
+            let relaunching = portal.clone();
             let retries = cx.update(|cx| {
-                flatpak::on_restart(move |cx| restart_into_newest(restarting.clone(), cx), cx);
+                flatpak::on_restart(|_| restart_because("the restart into the newest build"), cx);
+                flatpak::on_relaunch(move || relaunch_into_newest(&relaunching), cx);
                 flatpak::changed(flatpak::State::Current, cx);
                 flatpak::retries(cx)
             });
@@ -5444,6 +5508,22 @@ fn start_updates(cx: &mut App) {
             .await;
         })
         .detach();
+    }
+}
+
+/// Where the builds the user chose in Settings › About are kept: "nightly" or "release", for the
+/// app, not a profile, as its updates are. Without it, the updater takes this build's own.
+#[cfg(not(target_os = "linux"))]
+fn followed_track_path() -> String {
+    format!("{}/update-track", profile_dir())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn followed_track() -> Option<updates::Track> {
+    match std::fs::read_to_string(followed_track_path()).ok()?.trim() {
+        "nightly" => Some(updates::Track::Nightly),
+        "release" => Some(updates::Track::Release),
+        _ => None,
     }
 }
 
@@ -5500,6 +5580,24 @@ impl updates::Host for SystemUpdater {
         #[cfg(target_os = "linux")]
         flatpak::restart(cx);
     }
+
+    /// Kept for the next launch, which reads it before the updater's first check. Linux offers no
+    /// choice: a Flatpak updates only the branch it's installed from.
+    fn follow(&self, track: updates::Track, _: &mut App) {
+        #[cfg(not(target_os = "linux"))]
+        {
+            let name = match track {
+                updates::Track::Nightly => "nightly",
+                updates::Track::Release => "release",
+            };
+            if let Err(error) = std::fs::write(followed_track_path(), name) {
+                log!("browser: the update track wasn't kept: {error}");
+            }
+            unsafe { platform::host_follow_nightly(track == updates::Track::Nightly) };
+        }
+        #[cfg(target_os = "linux")]
+        let _ = track;
+    }
 }
 
 /// Sparkle or Windows's updater says where the update stands, and the version it's of, if it says.
@@ -5524,15 +5622,18 @@ extern "C" fn update_changed(stage: c_int, version: *const c_char) {
     update_app_later(move |cx| updates::changed(stage, cx));
 }
 
-/// Starts the build Flatpak installed, once this one has let go of the profile, and quits.
+/// Has the portal start the build Flatpak installed once this one has let go of the profile, as
+/// the restart into it goes ahead: true once the portal has.
 #[cfg(target_os = "linux")]
-fn restart_into_newest(portal: flatpak::Portal, cx: &mut App) {
+fn relaunch_into_newest(portal: &flatpak::Portal) -> bool {
     let lock = std::path::Path::new(&profile_dir()).join("SingletonLock");
-    cx.spawn(async move |_| match portal.restart(&lock).await {
-        Ok(()) => quit_because("the restart into the newest build"),
-        Err(error) => log!("browser: no restart: {error}"),
-    })
-    .detach();
+    match flatpak::start_newest(portal, &lock, flatpak::SPAWN) {
+        Ok(()) => true,
+        Err(error) => {
+            log!("browser: no relaunch: {error}");
+            false
+        }
+    }
 }
 
 /// The menu bar: Arc's menus, with the commands the browser has, what `bar` says of the key
@@ -5859,6 +5960,31 @@ fn quit_because(why: &str) {
     unsafe { bc::bc_quit() };
 }
 
+/// Restarts the browser, saying what asked, as quit_because does.
+fn restart_because(why: &str) {
+    log!("browser: restart for {why}");
+    unsafe { bc::bc_restart() };
+}
+
+/// The quit goes ahead, and nothing can stop it now. A restart with an update ready relaunches
+/// into the update, which installs first, rather than Chrome starting this build again. Only now,
+/// so a quit a page stopped leaves nothing armed for the next (#1459).
+unsafe extern "C" fn quit_going_ahead(_: *mut c_void, restarting: bool) -> bool {
+    log!("browser: quit going ahead{}", if restarting { ", restarting" } else { "" });
+    restarting && relaunch_into_update()
+}
+
+fn relaunch_into_update() -> bool {
+    #[cfg(not(target_os = "linux"))]
+    return unsafe { platform::host_relaunch_into_update() };
+    #[cfg(target_os = "linux")]
+    {
+        let mut relaunched = false;
+        update_app(|cx| relaunched = flatpak::relaunch(cx));
+        relaunched
+    }
+}
+
 unsafe extern "C" fn private_session_ended(_: *mut c_void, profile: bc::bc_id) {
     // check.sh reads this line.
     log!("browser: private session ended {profile}");
@@ -6134,6 +6260,14 @@ unsafe extern "C" fn stopping(_: *mut c_void) {
             agents.update(cx, |agents, cx| agents.end_tasks(cx));
         }
     });
+}
+
+/// Quits and starts again, bringing back the windows and their Spaces: the protected-media note's
+/// and Settings' way to load Google's Widevine module.
+fn restart_browser(cx: &mut App) {
+    // As Quit does: once the view that asked is done, and before Chromium's posted quit.
+    cx.defer(save_launch_picture);
+    unsafe { bc::bc_restart() };
 }
 
 // The next launch's first window opens where the regular window in front is, showing its sidebar
@@ -7673,6 +7807,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         passwords_imported: Some(passwords_imported),
         open_links: Some(open_links),
         launched_again: Some(launched_again),
+        quit_going_ahead: Some(quit_going_ahead),
         agent_activity: Some(agent_activity),
         #[cfg(target_os = "linux")]
         window_resized: Some(window_resized),
@@ -7723,11 +7858,7 @@ fn main() {
     }
     // The first launch of an update opens its release notes, over the Spaces it brings back. Only
     // a build that carries Sparkle keeps them, and check.sh's links run, for its own build.
-    extern "C" fn update_notes(url: *const c_char) {
-        let url = unsafe { CStr::from_ptr(url) }.to_string_lossy().into_owned();
-        UPDATE_NOTES.set(Some(url));
-    }
-    unsafe { platform::host_take_update_notes(update_notes) };
+    unsafe { platform::host_take_update_notes(keep_update_notes) };
     let (args, host) = switches_and_host(std::env::args().collect());
     let mut argv: Vec<*const c_char> = args.iter().map(|arg| arg.as_ptr()).collect();
     let code = unsafe { bc::bc_main(argv.len() as c_int, argv.as_mut_ptr(), &host) };

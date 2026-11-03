@@ -139,7 +139,8 @@ fn voiceover_says_the_toast_as_it_comes(cx: &mut TestAppContext) {
     assert_eq!(toast.value(), Some("Space deleted! Use ⌘Z to undo."));
 }
 
-/// The Undo a toast offers goes with the undo, however it was done, but another toast stays.
+/// The Undo a toast offers goes with the undo, however it was done, as does a toast naming ⌘Z,
+/// but another toast stays.
 #[gpui::test]
 fn an_undo_toast_goes_once_the_undo_is_done_some_other_way(cx: &mut TestAppContext) {
     let host = open_toast(cx);
@@ -151,10 +152,17 @@ fn an_undo_toast_goes_once_the_undo_is_done_some_other_way(cx: &mut TestAppConte
     assert_eq!(host.0.take(), ["clicks false"]);
     assert_eq!(after(cx, &host, LEAVE), ["hide"]);
 
-    show_deleted(cx);
+    let undo = crate::shell::keystroke_label("cmd-z");
+    cx.update(|cx| show("Space deleted! Use", Some((&undo, "to undo.")), TIME, cx));
     host.0.take();
     cx.update(|cx| hide_undo(cx));
-    assert!(after(cx, &host, 4.9).is_empty(), "Space deleted! stays its five seconds");
+    cx.run_until_parked();
+    assert_eq!(after(cx, &host, LEAVE), ["hide"], "Space deleted! goes with its ⌘Z");
+
+    cx.update(|cx| show("Tab Pinned", None, TIME, cx));
+    host.0.take();
+    cx.update(|cx| hide_undo(cx));
+    assert!(after(cx, &host, 4.9).is_empty(), "another toast stays its five seconds");
 }
 
 #[gpui::test]
