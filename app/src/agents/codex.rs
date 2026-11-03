@@ -40,12 +40,13 @@ struct Inner {
 }
 
 /// Starts the server: initialize, which `read` follows with the thread and the first turn.
-pub fn begin(
-    stdin: &Mutex<Option<ChildStdin>>,
-    state: &State,
-    first: &str,
-) -> std::io::Result<()> {
-    state.inner.lock().unwrap().waiting.push_back(first.to_string());
+pub fn begin(stdin: &Mutex<Option<ChildStdin>>, state: &State, first: &str) -> std::io::Result<()> {
+    state
+        .inner
+        .lock()
+        .unwrap()
+        .waiting
+        .push_back(first.to_string());
     write_line(
         stdin,
         &json!({
@@ -123,11 +124,16 @@ pub fn read(
     }
     if let Some(id) = id.and_then(Value::as_u64) {
         if let Some(error) = message.get("error") {
-            let text = error.get("message").and_then(Value::as_str).unwrap_or_default();
+            let text = error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             inner.starting = false;
             return vec![match id {
                 INITIALIZE | THREAD => Out::Gone(text.to_string()),
-                _ => Out::Ended(Some(Failure::Other(super::runner::plain_failure("Codex", text)))),
+                _ => Out::Ended(Some(Failure::Other(super::runner::plain_failure(
+                    "Codex", text,
+                )))),
             }];
         }
         match id {
@@ -139,8 +145,10 @@ pub fn read(
                 );
             }
             THREAD => {
-                inner.thread =
-                    message.pointer("/result/thread/id").and_then(Value::as_str).map(String::from);
+                inner.thread = message
+                    .pointer("/result/thread/id")
+                    .and_then(Value::as_str)
+                    .map(String::from);
                 _ = next_turn(stdin, &mut inner);
             }
             id if id > TURNS => {
@@ -157,7 +165,10 @@ pub fn read(
     match method.unwrap_or_default() {
         "turn/started" => {
             inner.starting = false;
-            inner.turn = params.pointer("/turn/id").and_then(Value::as_str).map(String::from);
+            inner.turn = params
+                .pointer("/turn/id")
+                .and_then(Value::as_str)
+                .map(String::from);
             Vec::new()
         }
         "item/started" => {
@@ -174,14 +185,25 @@ pub fn read(
                     vec![Out::Said(text.to_string())]
                 }
                 (Some("reasoning"), _) => {
-                    let took = inner.thinking.take().map(|started| started.elapsed()).unwrap_or_default();
+                    let took = inner
+                        .thinking
+                        .take()
+                        .map(|started| started.elapsed())
+                        .unwrap_or_default();
                     // Its summary, else its whole reasoning, as the model gives either.
                     let parts = |name: &str| -> String {
-                        let parts = item.get(name).and_then(Value::as_array).into_iter().flatten();
-                        let parts: Vec<&str> = parts.filter_map(Value::as_str).map(str::trim).collect();
+                        let parts = item
+                            .get(name)
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten();
+                        let parts: Vec<&str> =
+                            parts.filter_map(Value::as_str).map(str::trim).collect();
                         parts.join("\n\n").trim().to_string()
                     };
-                    let text = Some(parts("summary")).filter(|text| !text.is_empty()).unwrap_or_else(|| parts("content"));
+                    let text = Some(parts("summary"))
+                        .filter(|text| !text.is_empty())
+                        .unwrap_or_else(|| parts("content"));
                     match text.is_empty() {
                         true => Vec::new(),
                         false => vec![Out::Thought { text, took }],
@@ -195,7 +217,9 @@ pub fn read(
             let full = ["primary", "secondary"].into_iter().filter_map(|window| {
                 let window = limits.get(window)?;
                 let used = window.get("usedPercent").and_then(Value::as_f64)?;
-                (used >= 100.).then(|| window.get("resetsAt").and_then(Value::as_u64)).flatten()
+                (used >= 100.)
+                    .then(|| window.get("resetsAt").and_then(Value::as_u64))
+                    .flatten()
             });
             inner.resets = full.max();
             Vec::new()
@@ -233,14 +257,21 @@ pub fn read(
 fn codex_failure(error: &Value, resets: Option<u64>) -> Failure {
     let info = error.get("codexErrorInfo");
     let kind = info
-        .and_then(|info| info.as_str().map(String::from).or_else(|| info.as_object()?.keys().next().cloned()))
+        .and_then(|info| {
+            info.as_str()
+                .map(String::from)
+                .or_else(|| info.as_object()?.keys().next().cloned())
+        })
         .unwrap_or_default();
     match kind.as_str() {
         "usageLimitExceeded" | "rateLimitExceeded" => Failure::Limit(resets),
         "unauthorized" => Failure::SignedOut,
         _ => Failure::Other(super::runner::plain_failure(
             "Codex",
-            error.get("message").and_then(Value::as_str).unwrap_or_default(),
+            error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
         )),
     }
 }
@@ -279,16 +310,25 @@ pub fn thread_params(launch: &Launch) -> Value {
     // Otherwise the prompt lists the skills in the user's Codex home.
     config.insert("skills.include_instructions".into(), json!(false));
     for server in user_servers() {
-        let bare = server.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
-        let key = if bare { server } else { format!("\"{server}\"") };
+        let bare = server
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        let key = if bare {
+            server
+        } else {
+            format!("\"{server}\"")
+        };
         config.insert(format!("mcp_servers.{key}.enabled"), json!(false));
     }
     let mut env = Map::new();
     env.insert(super::bridge::TOKEN.into(), json!(launch.server.token));
     // Under approvalPolicy never Codex refuses an MCP call it would ask about; the browser asks
     // the user itself, so each tool is approved by name (the server-wide default doesn't reach it).
-    let tools: Map<String, Value> =
-        launch.tools.iter().map(|tool| (tool.clone(), json!({ "approval_mode": "approve" }))).collect();
+    let tools: Map<String, Value> = launch
+        .tools
+        .iter()
+        .map(|tool| (tool.clone(), json!({ "approval_mode": "approve" })))
+        .collect();
     config.insert(
         format!("mcp_servers.{SERVER}"),
         json!({
@@ -356,7 +396,10 @@ fn user_servers() -> Vec<String> {
 pub fn servers_in(text: &str) -> Vec<String> {
     let mut names: Vec<String> = (text.lines())
         .filter_map(|line| {
-            let table = line.trim().strip_prefix("[mcp_servers.")?.strip_suffix(']')?;
+            let table = line
+                .trim()
+                .strip_prefix("[mcp_servers.")?
+                .strip_suffix(']')?;
             let name = match table.strip_prefix('"') {
                 Some(quoted) => quoted.split('"').next()?,
                 None => table.split('.').next()?,

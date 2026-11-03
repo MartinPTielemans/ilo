@@ -332,7 +332,15 @@ fn shared() -> Value {
 }
 
 /// The actions run_steps takes: those of the tools that act in a tab, not a screenshot, and wait.
-pub const STEPS: [&str; 7] = ["navigate", "snapshot", "click", "type", "press_key", "scroll", "wait"];
+pub const STEPS: [&str; 7] = [
+    "navigate",
+    "snapshot",
+    "click",
+    "type",
+    "press_key",
+    "scroll",
+    "wait",
+];
 /// The steps one run_steps takes at most.
 pub const MAX_STEPS: usize = 20;
 /// How long a wait step waits for its text, in seconds, unless it says, and at most.
@@ -429,11 +437,31 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
     // Each step's verb in its three tenses, and what it acts on.
     let (now, done, failed, on) = match did.tool.as_str() {
         "open_tab" | "navigate" => ("Opening", "Opened", "Couldn't open", site("a page")),
-        "back" => ("Going back on", "Went back on", "Couldn't go back on", site("the page")),
-        "forward" => ("Going forward on", "Went forward on", "Couldn't go forward on", site("the page")),
+        "back" => (
+            "Going back on",
+            "Went back on",
+            "Couldn't go back on",
+            site("the page"),
+        ),
+        "forward" => (
+            "Going forward on",
+            "Went forward on",
+            "Couldn't go forward on",
+            site("the page"),
+        ),
         "read_page" | "snapshot" => ("Reading", "Read", "Couldn't read", site("the page")),
-        "screenshot" => ("Looking at", "Looked at", "Couldn't look at", site("the page")),
-        "click" => ("Clicking", "Clicked", "Couldn't click", target("on the page")),
+        "screenshot" => (
+            "Looking at",
+            "Looked at",
+            "Couldn't look at",
+            site("the page"),
+        ),
+        "click" => (
+            "Clicking",
+            "Clicked",
+            "Couldn't click",
+            target("on the page"),
+        ),
         "type" => {
             let into = target("a field");
             return match (tense, did.text.is_empty()) {
@@ -453,12 +481,27 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             ("Scrolling", "Scrolled", "Couldn't scroll", to)
         }
         "wait" => match did.target.starts_with('“') {
-            true => ("Waiting for", "Waited for", "Didn't see", target("the page")),
+            true => (
+                "Waiting for",
+                "Waited for",
+                "Didn't see",
+                target("the page"),
+            ),
             false => ("Waiting", "Waited", "Couldn't wait", target("")),
         },
-        "list_tabs" => ("Looking over", "Looked over", "Couldn't look over", "its tabs".to_string()),
+        "list_tabs" => (
+            "Looking over",
+            "Looked over",
+            "Couldn't look over",
+            "its tabs".to_string(),
+        ),
         "close_tab" => ("Closing", "Closed", "Couldn't close", site("a tab")),
-        "hand_off" => ("Handing you", "Handed you", "Couldn't hand you", site("a tab")),
+        "hand_off" => (
+            "Handing you",
+            "Handed you",
+            "Couldn't hand you",
+            site("a tab"),
+        ),
         "ask_for_tab" => {
             let tab = site("a tab");
             return match tense {
@@ -485,12 +528,17 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
 /// A turn's same step on `pages` tabs, as one line: "Opened 10 pages", "Clicked “Closed” on 10
 /// pages".
 pub fn group_title(did: &Did, pages: usize, tense: Tense) -> String {
-    let on = |what: &str| Did { site: format!("{pages} {what}"), ..did.clone() };
+    let on = |what: &str| Did {
+        site: format!("{pages} {what}"),
+        ..did.clone()
+    };
     match did.tool.as_str() {
         "open_tab" | "navigate" | "back" | "forward" | "read_page" | "snapshot" | "screenshot" => {
             step_title(&on("pages"), tense)
         }
-        "scroll" if matches!(did.target.as_str(), "up" | "down" | "") => step_title(&on("pages"), tense),
+        "scroll" if matches!(did.target.as_str(), "up" | "down" | "") => {
+            step_title(&on("pages"), tense)
+        }
         "close_tab" | "hand_off" | "ask_for_tab" => step_title(&on("tabs"), tense),
         _ => format!("{} on {pages} pages", step_title(did, tense)),
     }
@@ -519,10 +567,15 @@ pub fn reason(error: &str) -> String {
     let error = error.to_lowercase();
     let has = |words: &[&str]| words.iter().any(|word| error.contains(word));
     // An HTTP error's status, as "HTTP 504" or "status 504" says it.
-    let words: Vec<&str> = error.split(|char: char| !char.is_ascii_alphanumeric()).collect();
+    let words: Vec<&str> = error
+        .split(|char: char| !char.is_ascii_alphanumeric())
+        .collect();
     let status = words.windows(2).find_map(|pair| {
         let [before, code] = pair else { return None };
-        let status = code.len() == 3 && code.parse::<u16>().is_ok_and(|code| (400..600).contains(&code));
+        let status = code.len() == 3
+            && code
+                .parse::<u16>()
+                .is_ok_and(|code| (400..600).contains(&code));
         (matches!(*before, "http" | "status" | "error") && status).then_some(*code)
     });
     let reason = if has(&["stopped you", "turned agents off", "connection closed"]) {
@@ -535,7 +588,13 @@ pub fn reason(error: &str) -> String {
         "password field"
     } else if has(&["http or https", "only http and https"]) {
         "not a web page"
-    } else if has(&["there's no element", "no tab", "isn't open", "not found", "404"]) {
+    } else if has(&[
+        "there's no element",
+        "no tab",
+        "isn't open",
+        "not found",
+        "404",
+    ]) {
         "not found"
     } else if has(&["timed out", "timeout", "took too long"]) {
         "timed out"
@@ -545,7 +604,12 @@ pub fn reason(error: &str) -> String {
         code
     } else if has(&["didn't show"]) {
         "didn't show"
-    } else if has(&["user's already", "user has", "user doesn't have", "took it over"]) {
+    } else if has(&[
+        "user's already",
+        "user has",
+        "user doesn't have",
+        "took it over",
+    ]) {
         "it's yours"
     } else {
         ""
