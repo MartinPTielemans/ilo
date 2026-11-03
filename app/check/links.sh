@@ -14,8 +14,9 @@
 # with a private window in front, in the regular window, which comes to the front. Settings › Links
 # makes rules: a link whose URL holds a rule's text, or is it exactly, opens in the rule's Space, or
 # Little ilo, the first rule that matches winning, a drag reorders them, everything else goes to
-# the Space picked, and − takes a rule away; the rules are kept for the launches after. Settings › General
-# says the browser isn't the default, as a dev build never is: on the Mac it declares no links
+# the Space picked, and the trash takes a rule away, which ⌘Z brings back until Settings closes;
+# the rules are kept for the launches after. Settings › General says the browser isn't the
+# default, as a dev build never is: on the Mac it declares no links
 # (build.sh), and making it the default asks in a system dialog the driver can't answer; on Linux
 # the desktop's defaults name no dev build. A link that launches the browser opens over the Spaces
 # it brings back, before the UI comes out from under the launch picture, or with no rules, in Little
@@ -402,12 +403,18 @@ if [ "$driven" = 1 ]; then
   send choose work
   expect "$(rules_drawn "$exact, URL contains \"work\" → work" work)" "everything else's pop-up didn't set its Space"
   open_link "?else" "$second" "$window"
-  # − takes the first rule away.
+  # The trash takes the first rule away, ⌘Z brings it back to its place, and the trash again.
   send menu Settings…
   expect '^browser: settings shown Links$' "Settings… didn't show Settings on its Links tab"
   settings_drew Links
   send clickkey 597 129
-  expect "$(rules_drawn 'URL contains "work" → work' work)" "− didn't take the rule away"
+  expect "$(rules_drawn 'URL contains "work" → work' work)" "the trash didn't take the rule away"
+  send key z cmd
+  expect "$(rules_drawn "$exact, URL contains \"work\" → work" work)" \
+    "⌘Z didn't bring the rule the trash took back to its place"
+  ../tools/window-screenshot.sh "$pid" "$out/links-rule-back.png" || fail "no window to capture"
+  send clickkey 597 129
+  expect "$(rules_drawn 'URL contains "work" → work' work)" "the trash didn't take the rule away again"
   # A rule to Little ilo opens its links in one, for the Space in front: the second, the last link
   # to the window having shown it.
   post clickkey 500 129
@@ -420,10 +427,13 @@ if [ "$driven" = 1 ]; then
   open_little_link "?work-little" "$second"
   expect "^browser: link rule 0 sends ${site}?work-little to little ilo\$" \
     "the rule didn't send its link to Little ilo"
-  # Back to the second Space, for the launch after.
+  # Back to the second Space, for the launch after. Settings closed since the trash, so ⌘Z has
+  # nothing of it to bring back.
   send menu Settings…
   expect '^browser: settings shown Links$' "Settings… didn't show Settings on its Links tab"
   settings_drew Links
+  send key z cmd
+  none_since '^browser: link rules drawn' || fail "⌘Z brought back a rule after Settings closed"
   post clickkey 500 129
   expect '^browser: menu shown [^,]*, work, Little ilo (checked)$' \
     "the rule's Space pop-up didn't check Little ilo"
@@ -641,7 +651,7 @@ fi
 if [ "$driven" = 1 ]; then
   [ -z "$again" ] ||
     echo "ok: a launch with no link while the window is minimized brings it back and to the front."
-  echo "ok: links from another app open once, in Little ilo by default, the same link again bringing its window back, and sent to the Space in front as new tabs in the front window's Space and load there, in the user's Space when an agent's is shown, and in the regular window, brought to the front, over a private one; Settings says the browser isn't the default. Settings › Links' rules send a link whose URL holds a rule's text, or is it exactly, to the rule's Space or Little ilo, the first that matches winning, a drag reorders them, everything else goes to the Space picked, − takes a rule away, and the rules come back with the launch. Windows: $out/links-little.png, $out/links-settings.png, $out/links-rules-empty.png, $out/links-rules.png"
+  echo "ok: links from another app open once, in Little ilo by default, the same link again bringing its window back, and sent to the Space in front as new tabs in the front window's Space and load there, in the user's Space when an agent's is shown, and in the regular window, brought to the front, over a private one; Settings says the browser isn't the default. Settings › Links' rules send a link whose URL holds a rule's text, or is it exactly, to the rule's Space or Little ilo, the first that matches winning, a drag reorders them, everything else goes to the Space picked, the trash takes a rule away and ⌘Z brings it back until Settings closes, and the rules come back with the launch. Windows: $out/links-little.png, $out/links-settings.png, $out/links-rules-empty.png, $out/links-rules.png, $out/links-rule-back.png"
 else
   echo "ok: a link from another app opens once, in Little ilo by default, and loads there."
   echo "skip: the launch with no link while the window is minimized, the agent's Space, the private window, Settings and the link rules. Browser wasn't the active app, so the page ignored the click."
