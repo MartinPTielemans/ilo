@@ -7833,6 +7833,7 @@ fn main() {
 unsafe extern "C" fn window_resized(_: *mut c_void, window: bc::bc_id, width: f64, height: f64) {
     if let Some(ui_view) = ui_view_of(window) {
         gpui_linux::resize_embedded(ui_view, width as f32, height as f32);
+        frames::sized(ui_view, [width, height]);
     }
 }
 
