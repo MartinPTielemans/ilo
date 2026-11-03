@@ -1001,7 +1001,10 @@ mod tests {
         let height = shell.read_with(cx, |shell, _| f32::from(shell.viewport.height));
         move_to(cx, 24., height - 25.);
         wait(cx, RECENT_WAIT);
-        wait(cx, Duration::from_secs_f32(RECENT_FADE));
+        wait(
+            cx,
+            Duration::from_secs_f32(RECENT_STAGGER_IN + RECENT_FADE_IN),
+        );
         assert_eq!(rows(&shell, cx).0.len(), 2);
 
         let row = point(px(120.), px(height - 50. - 28.));
