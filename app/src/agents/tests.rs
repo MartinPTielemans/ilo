@@ -1651,6 +1651,76 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
     }
 }
 
+/// Agents never read or fill a login, address or card the profile has (principle 3). No tool, a
+/// task's included, takes one as an argument. A snapshot of a page Chrome filled them into names
+/// its fields but gives none of their values, even where the tree carries them, though the core
+/// already leaves them out (agent_page.cc's AgentTree, as page_text.cc does for read_page). And
+/// typing into its password field is refused before the core hears of it.
+#[gpui::test]
+fn agents_never_get_a_login_address_or_card(cx: &mut TestAppContext) {
+    // The arguments in a tool list's schemas, at any depth, such as a step's in run_steps.
+    fn arguments(value: &Value, names: &mut Vec<String>) {
+        match value {
+            Value::Object(object) => {
+                if let Some(Value::Object(properties)) = object.get("properties") {
+                    names.extend(properties.keys().cloned());
+                }
+                object.values().for_each(|each| arguments(each, names));
+            }
+            Value::Array(array) => array.iter().for_each(|each| arguments(each, names)),
+            _ => {}
+        }
+    }
+    let mut names = Vec::new();
+    arguments(&tools::list("claude-code"), &mut names);
+    arguments(&tools::list("task-1"), &mut names);
+    assert!(names.iter().any(|name| name == "url"), "no arguments found: {names:?}");
+    let secrets = ["password", "cookie", "credential", "autofill", "card", "address", "login"];
+    for name in &names {
+        let lower = name.to_lowercase();
+        assert!(!secrets.iter().any(|secret| lower.contains(secret)), "a tool takes {name}");
+    }
+
+    // A checkout page Chrome filled in: each field with its value as Chromium's tree has it.
+    let values = ["ada@example.test", "hunter2", "1 Check Street", "4111 1111 1111 1111"];
+    let field = |id: &str, name: &str, backend: i64, value: &str| {
+        let text = json!({ "type": "string", "value": value });
+        json!({ "nodeId": id, "role": { "value": "textbox" }, "name": { "value": name },
+                "backendDOMNodeId": backend, "value": text,
+                "properties": [{ "name": "valuetext", "value": text }] })
+    };
+    let mut password = field("3", "Password", 41, values[1]);
+    password["password"] = json!(true);
+    let tree = json!([
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Checkout" },
+          "childIds": ["2", "3", "4", "5"] },
+        field("2", "Email", 31, values[0]),
+        password,
+        field("4", "Street address", 51, values[2]),
+        field("5", "Card number", 61, values[3]),
+    ]);
+    let (agents, browser, _) = connected(cx);
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    let outline = page_done(&agents, &browser, answer, tree.to_string(), cx).text;
+    let fields = [
+        "- textbox \"Email\" [e1]",
+        "- textbox \"Password\" [e2] (password: off limits)",
+        "- textbox \"Street address\" [e3]",
+        "- textbox \"Card number\" [e4]",
+    ];
+    for line in fields {
+        assert!(outline.contains(line), "{outline}");
+    }
+    for value in values {
+        assert!(!outline.contains(value), "the snapshot gave {value}: {outline}");
+    }
+
+    let pages = browser.pages.borrow().len();
+    let typing = json!({ "tab": 20, "ref": "e2", "text": values[1] });
+    assert!(call(&agents, "claude-code", "type", typing, cx).recv().unwrap().error);
+    assert_eq!(browser.pages.borrow().len(), pages, "the password reached the core");
+}
+
 /// Agent tasks: a task is an agent of its own, `task-<n>`, with a hidden Space in the profile it
 /// was asked from, and a card that says what it does.
 mod tasks {
