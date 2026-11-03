@@ -8,17 +8,29 @@ use gpui::{
 /// `child`, painted at `factor` its size about `origin`, in the window's coordinates. It's laid
 /// out and hit where it would be at full size.
 pub fn scaled(child: impl IntoElement, factor: f32, origin: Point<Pixels>) -> Scaled {
-    Scaled { child: child.into_any_element(), factor, origin: Origin::At(origin) }
+    Scaled {
+        child: child.into_any_element(),
+        factor,
+        origin: Origin::At(origin),
+    }
 }
 
 /// `child`, painted at `factor` its size about the middle of its top edge.
 pub fn scaled_from_top(child: impl IntoElement, factor: f32) -> Scaled {
-    Scaled { child: child.into_any_element(), factor, origin: Origin::Top }
+    Scaled {
+        child: child.into_any_element(),
+        factor,
+        origin: Origin::Top,
+    }
 }
 
 /// `child`, painted at `factor` its size about its middle.
 pub fn scaled_from_middle(child: impl IntoElement, factor: f32) -> Scaled {
-    Scaled { child: child.into_any_element(), factor, origin: Origin::Middle }
+    Scaled {
+        child: child.into_any_element(),
+        factor,
+        origin: Origin::Middle,
+    }
 }
 
 pub struct Scaled {

@@ -31,7 +31,14 @@ fn little(cx: &mut TestAppContext, url: &str) -> (Entity<Shell>, Rc<Recorder>) {
     shell.update(cx, |shell, cx| {
         shell.set_tabs(9, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
         shell.set_selected(10, cx);
-        shell.set_page(10, Page { url: url.to_string().into(), ..Page::default() }, cx);
+        shell.set_page(
+            10,
+            Page {
+                url: url.to_string().into(),
+                ..Page::default()
+            },
+            cx,
+        );
     });
     host.take();
     (shell, host)
@@ -80,13 +87,24 @@ fn command_w_closes_the_window_not_the_tab(cx: &mut TestAppContext) {
 fn an_unused_escape_closes_it_unless_the_page_is_loading(cx: &mut TestAppContext) {
     let (shell, host) = little(cx, "https://example.com/");
     shell.update(cx, |shell, cx| {
-        let page = Page { url: "https://example.com/".into(), loading: true, ..Page::default() };
+        let page = Page {
+            url: "https://example.com/".into(),
+            loading: true,
+            ..Page::default()
+        };
         shell.set_page(10, page, cx);
     });
     // Escape stops the load first.
     assert!(!shell.update(cx, |shell, cx| shell.escape_unused(cx)));
     shell.update(cx, |shell, cx| {
-        shell.set_page(10, Page { url: "https://example.com/".into(), ..Page::default() }, cx)
+        shell.set_page(
+            10,
+            Page {
+                url: "https://example.com/".into(),
+                ..Page::default()
+            },
+            cx,
+        )
     });
     run(&shell, cx, Command::Stop, "page");
     assert_eq!(host.take(), ["close window"]);
@@ -113,7 +131,9 @@ fn the_sidebar_spaces_and_split_view_are_left_out(cx: &mut TestAppContext) {
         Command::NewTab,
         Command::ReopenClosedTab,
     ] {
-        shell.read_with(cx, |shell, _| assert!(!shell.offers(command), "{command:?}"));
+        shell.read_with(cx, |shell, _| {
+            assert!(!shell.offers(command), "{command:?}")
+        });
         run(&shell, cx, command, "ui");
     }
     assert!(host.take().is_empty());
@@ -123,7 +143,9 @@ fn the_sidebar_spaces_and_split_view_are_left_out(cx: &mut TestAppContext) {
 #[gpui::test]
 fn command_o_moves_the_page_to_its_space_in_the_main_window(cx: &mut TestAppContext) {
     let (shell, host) = little(cx, "https://example.com/");
-    shell.read_with(cx, |shell, _| assert!(shell.offers(Command::OpenInMainWindow)));
+    shell.read_with(cx, |shell, _| {
+        assert!(shell.offers(Command::OpenInMainWindow))
+    });
     run(&shell, cx, Command::OpenInMainWindow, "ui");
     assert_eq!(host.take(), ["open in main window 10 1"]);
 }
@@ -133,7 +155,9 @@ fn open_in_main_window_is_little_ilos_alone(cx: &mut TestAppContext) {
     let host = Rc::new(Recorder::default());
     let main = main_window(cx, &host);
     host.take();
-    main.read_with(cx, |shell, _| assert!(!shell.offers(Command::OpenInMainWindow)));
+    main.read_with(cx, |shell, _| {
+        assert!(!shell.offers(Command::OpenInMainWindow))
+    });
     run(&main, cx, Command::OpenInMainWindow, "ui");
     assert!(host.take().is_empty());
 }
@@ -155,9 +179,15 @@ fn a_new_little_window_is_for_the_space_it_came_from(cx: &mut TestAppContext) {
 #[test]
 fn its_keys_are_option_command_n_and_command_o() {
     let keys = crate::shell::UserKeys::default();
-    assert_eq!(keys.command_for("alt-cmd-n", true), Some(Command::NewLittleWindow));
+    assert_eq!(
+        keys.command_for("alt-cmd-n", true),
+        Some(Command::NewLittleWindow)
+    );
     assert_eq!(keys.command_for("cmd-o", true), None);
-    assert_eq!(keys.command_for("cmd-o", false), Some(Command::OpenInMainWindow));
+    assert_eq!(
+        keys.command_for("cmd-o", false),
+        Some(Command::OpenInMainWindow)
+    );
 }
 
 /// A left press on a sidebar row of the main window, with `modifiers`, as the row's handler gets it.
@@ -180,7 +210,10 @@ fn press_row(
 /// ⌥ and ⌘, which is Control off the Mac, as the host's platform has them.
 fn option_command(cx: &mut TestAppContext) -> gpui::Modifiers {
     let command = cx.read(gpui::Modifiers::secondary_key);
-    gpui::Modifiers { alt: true, ..command }
+    gpui::Modifiers {
+        alt: true,
+        ..command
+    }
 }
 
 /// ⌥⌘-click on a Today tab's row opens that tab in a Little ilo window (Arc), and on a pinned
@@ -195,15 +228,27 @@ fn option_command_click_on_a_today_tab_opens_it_in_little_ilo(cx: &mut TestAppCo
     });
     host.take();
     let alt_cmd = option_command(cx);
-    assert!(!press_row(&main, 4, alt_cmd, cx), "a pinned tab keeps its place");
-    let alt = gpui::Modifiers { alt: true, ..Default::default() };
+    assert!(
+        !press_row(&main, 4, alt_cmd, cx),
+        "a pinned tab keeps its place"
+    );
+    let alt = gpui::Modifiers {
+        alt: true,
+        ..Default::default()
+    };
     assert!(!press_row(&main, 6, alt, cx));
-    let alt_shift_cmd = gpui::Modifiers { shift: true, ..alt_cmd };
+    let alt_shift_cmd = gpui::Modifiers {
+        shift: true,
+        ..alt_cmd
+    };
     assert!(!press_row(&main, 6, alt_shift_cmd, cx));
     assert!(host.take().is_empty());
     assert!(press_row(&main, 6, alt_cmd, cx));
     // After the hover cards it closes.
-    assert_eq!(host.take().last().map(String::as_str), Some("open tab in little 6"));
+    assert_eq!(
+        host.take().last().map(String::as_str),
+        Some("open tab in little 6")
+    );
 }
 
 /// Off the Mac ⌘ is Control, so ⌃⌥-click opens the tab in Little ilo there, and ⌥ with Super,
@@ -211,7 +256,10 @@ fn option_command_click_on_a_today_tab_opens_it_in_little_ilo(cx: &mut TestAppCo
 #[gpui::test]
 fn off_the_mac_option_control_click_opens_little_ilo(cx: &mut TestAppContext) {
     let info = cx.read(|cx| cx.platform_info());
-    cx.set_platform_info(gpui::PlatformInfo { os: gpui::OperatingSystem::Linux, ..info });
+    cx.set_platform_info(gpui::PlatformInfo {
+        os: gpui::OperatingSystem::Linux,
+        ..info
+    });
     let host = Rc::new(Recorder::default());
     let main = main_window(cx, &host);
     main.update(cx, |shell, cx| {
@@ -219,11 +267,22 @@ fn off_the_mac_option_control_click_opens_little_ilo(cx: &mut TestAppContext) {
         shell.set_selected(5, cx);
     });
     host.take();
-    let alt_super = gpui::Modifiers { alt: true, platform: true, ..Default::default() };
+    let alt_super = gpui::Modifiers {
+        alt: true,
+        platform: true,
+        ..Default::default()
+    };
     assert!(!press_row(&main, 6, alt_super, cx));
-    let alt_control = gpui::Modifiers { alt: true, control: true, ..Default::default() };
+    let alt_control = gpui::Modifiers {
+        alt: true,
+        control: true,
+        ..Default::default()
+    };
     assert!(press_row(&main, 6, alt_control, cx));
-    assert_eq!(host.take().last().map(String::as_str), Some("open tab in little 6"));
+    assert_eq!(
+        host.take().last().map(String::as_str),
+        Some("open tab in little 6")
+    );
 }
 
 /// A Little ilo window has no sidebar rows of its own to send, and an agent's Space keeps its tabs.
@@ -237,7 +296,15 @@ fn option_command_click_is_the_users_spaces_alone(cx: &mut TestAppContext) {
         shell.set_spaces(
             vec![
                 (1, "One".into(), None, 1, "".into(), "".into(), "".into()),
-                (3, "Agent".into(), None, 1, "".into(), "claude".into(), "".into()),
+                (
+                    3,
+                    "Agent".into(),
+                    None,
+                    1,
+                    "".into(),
+                    "claude".into(),
+                    "".into(),
+                ),
             ],
             cx,
         );
@@ -258,13 +325,19 @@ fn its_bar_picks_the_pages_profile_once_there_are_two(cx: &mut TestAppContext) {
 
     let host = Rc::new(Recorder::default());
     let browser = host.clone();
-    let (shell, cx) =
-        cx.add_window_view(|_, cx| Shell::little_window(browser, 9, 1, 1, None, cx));
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::little_window(browser, 9, 1, 1, None, cx));
     shell.update(cx, |shell, cx| {
         shell.set_tabs(9, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
         shell.set_selected(10, cx);
         let url = "https://example.com/".into();
-        shell.set_page(10, Page { url, ..Page::default() }, cx);
+        shell.set_page(
+            10,
+            Page {
+                url,
+                ..Page::default()
+            },
+            cx,
+        );
         shell.set_profiles(vec![(1, "Default".into())], cx);
     });
     cx.run_until_parked();
@@ -275,7 +348,10 @@ fn its_bar_picks_the_pages_profile_once_there_are_two(cx: &mut TestAppContext) {
         cx.run_until_parked();
     };
     click(cx);
-    assert!(host.menus.borrow().is_empty(), "a profile menu with one profile");
+    assert!(
+        host.menus.borrow().is_empty(),
+        "a profile menu with one profile"
+    );
 
     shell.update(cx, |shell, cx| {
         shell.set_profiles(vec![(1, "Default".into()), (5, "Work".into())], cx)
@@ -286,11 +362,22 @@ fn its_bar_picks_the_pages_profile_once_there_are_two(cx: &mut TestAppContext) {
     let menu = host.menus.borrow().last().cloned().unwrap_or_default();
     assert_eq!(menu, [("Default".into(), true), ("Work".into(), true)]);
     // It hangs from its plate's left edge, 4 under the header's 32 pt plate.
-    assert_eq!(host.menu_at.get(), Some(point(picker.x - px(16.), px(7.5 + 32. + 4.))));
-    let checked: Vec<bool> = host.entries.borrow().iter().map(|entry| entry.checked).collect();
+    assert_eq!(
+        host.menu_at.get(),
+        Some(point(picker.x - px(16.), px(7.5 + 32. + 4.)))
+    );
+    let checked: Vec<bool> = host
+        .entries
+        .borrow()
+        .iter()
+        .map(|entry| entry.checked)
+        .collect();
     assert_eq!(checked, [true, false]);
     cx.update(|_, cx| host.choose("Work", cx));
-    assert_eq!(host.take().last().map(String::as_str), Some("little profile 5 https://example.com/"));
+    assert_eq!(
+        host.take().last().map(String::as_str),
+        Some("little profile 5 https://example.com/")
+    );
 }
 
 /// A Little ilo window knows the profiles the window it opened from does, so its bar has the
@@ -313,7 +400,14 @@ fn its_bar_has_the_picker_from_the_start(cx: &mut TestAppContext) {
         shell.set_tabs(9, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
         shell.set_selected(10, cx);
         let url = "https://example.com/".into();
-        shell.set_page(10, Page { url, ..Page::default() }, cx);
+        shell.set_page(
+            10,
+            Page {
+                url,
+                ..Page::default()
+            },
+            cx,
+        );
     });
     cx.run_until_parked();
     let picker = shell.read_with(cx, |shell, cx| shell.little_end(cx).profile);
@@ -352,15 +446,30 @@ fn its_bar_is_the_headers_row(cx: &mut TestAppContext) {
         shell.set_tabs(9, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
         shell.set_selected(10, cx);
         let url = "https://example.com/".into();
-        shell.set_page(10, Page { url, ..Page::default() }, cx);
+        shell.set_page(
+            10,
+            Page {
+                url,
+                ..Page::default()
+            },
+            cx,
+        );
     });
     cx.run_until_parked();
     let width = cx.update(|window, _| f32::from(window.viewport_size().width));
-    let (end, words) = shell.read_with(cx, |shell, cx| (shell.little_end(cx), shell.little_open_words(cx)));
+    let (end, words) = shell.read_with(cx, |shell, cx| {
+        (shell.little_end(cx), shell.little_open_words(cx))
+    });
     assert_eq!(words, ("Open in One".into(), Some("⌘O".into())));
     let x = |at: gpui::Pixels| f32::from(at);
-    assert_eq!((x(end.chevron.left()), x(end.chevron.right())), (width - 32., width - 4.));
-    assert_eq!((x(end.line), x(end.words.right())), (width - 33., width - 33.));
+    assert_eq!(
+        (x(end.chevron.left()), x(end.chevron.right())),
+        (width - 32., width - 4.)
+    );
+    assert_eq!(
+        (x(end.line), x(end.words.right())),
+        (width - 33., width - 33.)
+    );
     assert_eq!(x(end.copy.x), x(end.words.left()) - 2. - 16.);
     // The header's row: its plates 7.5 from the top, 32 tall.
     let row = 7.5 + 16.;
@@ -368,7 +477,10 @@ fn its_bar_is_the_headers_row(cx: &mut TestAppContext) {
         host.take();
         cx.simulate_mouse_move(point(px(x), px(row)), None, Modifiers::none());
         cx.run_until_parked();
-        host.take().into_iter().filter(|call| call.starts_with("tooltip")).collect::<Vec<_>>()
+        host.take()
+            .into_iter()
+            .filter(|call| call.starts_with("tooltip"))
+            .collect::<Vec<_>>()
     };
     let click = |cx: &mut VisualTestContext, x: f32| {
         host.take();
@@ -382,8 +494,17 @@ fn its_bar_is_the_headers_row(cx: &mut TestAppContext) {
     assert!(click(cx, x(end.copy.x)).contains(&"copy https://example.com/".to_string()));
     assert!(click(cx, words_middle).contains(&"open in main window 10 1".to_string()));
     click(cx, 77. + 16.);
-    let field = host.command_bars.borrow().last().copied().flatten().expect("no field");
-    assert_eq!((f32::from(field.origin.x), f32::from(field.origin.y)), (77., 7.5));
+    let field = host
+        .command_bars
+        .borrow()
+        .last()
+        .copied()
+        .flatten()
+        .expect("no field");
+    assert_eq!(
+        (f32::from(field.origin.x), f32::from(field.origin.y)),
+        (77., 7.5)
+    );
     assert!(f32::from(field.right()) < x(end.copy.x) - 16.);
 }
 
@@ -403,7 +524,15 @@ fn its_chevron_lists_the_users_spaces_to_send_the_page_to(cx: &mut TestAppContex
             main.set_spaces(
                 vec![
                     (1, "One".into(), Some(7), 1, "".into(), "".into(), "".into()),
-                    (3, "Agent".into(), None, 1, "".into(), "claude".into(), "".into()),
+                    (
+                        3,
+                        "Agent".into(),
+                        None,
+                        1,
+                        "".into(),
+                        "claude".into(),
+                        "".into(),
+                    ),
                     (2, "Two".into(), None, 1, "".into(), "".into(), "".into()),
                     (4, "Work".into(), None, 5, "".into(), "".into(), "".into()),
                 ],
@@ -418,20 +547,37 @@ fn its_chevron_lists_the_users_spaces_to_send_the_page_to(cx: &mut TestAppContex
         shell.set_tabs(9, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
         shell.set_selected(10, cx);
         let url = "https://example.com/".into();
-        shell.set_page(10, Page { url, ..Page::default() }, cx);
+        shell.set_page(
+            10,
+            Page {
+                url,
+                ..Page::default()
+            },
+            cx,
+        );
     });
     cx.run_until_parked();
     let end = shell.read_with(cx, |shell, cx| shell.little_end(cx));
     host.take();
     cx.simulate_click(end.chevron.center(), Modifiers::none());
     cx.run_until_parked();
-    assert!(host.take().contains(&"spaces menu 1 One, 2 Two, 4 Work".to_string()));
+    assert!(
+        host.take()
+            .contains(&"spaces menu 1 One, 2 Two, 4 Work".to_string())
+    );
     let menu = host.spaces_menus.borrow().last().copied().expect("no menu");
     // Its right edge 8 in from the window's, as every overlay's is, which is 4 inside the chevron's.
     let at = (menu.origin, menu.size.width, end.chevron.right());
     let width = shell.read_with(cx, |shell, _| shell.viewport.width);
     let right = width - px(8.);
-    assert_eq!(at, (point(right - px(240.), px(7.5 + 32. + 4.)), px(240.), width - px(4.)));
+    assert_eq!(
+        at,
+        (
+            point(right - px(240.), px(7.5 + 32. + 4.)),
+            px(240.),
+            width - px(4.)
+        )
+    );
 
     // A Space renamed is named so the next time.
     shell.update(cx, |shell, cx| {
@@ -445,11 +591,17 @@ fn its_chevron_lists_the_users_spaces_to_send_the_page_to(cx: &mut TestAppContex
     });
     cx.simulate_click(end.chevron.center(), Modifiers::none());
     cx.run_until_parked();
-    assert!(host.take().contains(&"spaces menu 1 One, 2 Deux".to_string()));
+    assert!(
+        host.take()
+            .contains(&"spaces menu 1 One, 2 Deux".to_string())
+    );
 
     // The bar's row runs Move to Space, which here sends the page there.
     run(&shell, cx, Command::MoveToSpace(2), "command bar");
-    assert_eq!(host.take().last().map(String::as_str), Some("open in main window 10 2"));
+    assert_eq!(
+        host.take().last().map(String::as_str),
+        Some("open in main window 10 2")
+    );
     // Another profile's Space, once there's one again, asks first.
     shell.update(cx, |shell, cx| {
         shell.set_spaces(
@@ -462,11 +614,19 @@ fn its_chevron_lists_the_users_spaces_to_send_the_page_to(cx: &mut TestAppContex
     });
     host.warn_profiles.set(true);
     run(&shell, cx, Command::MoveToSpace(4), "command bar");
-    assert!(!host.take().iter().any(|call| call.starts_with("open in main window")));
+    assert!(
+        !host
+            .take()
+            .iter()
+            .any(|call| call.starts_with("open in main window"))
+    );
     let (message, _, confirmed) = host.confirming.borrow_mut().take().expect("no warning");
     assert_eq!(message, "Move this tab to the “Job” profile?");
     cx.update(|_, cx| confirmed(cx));
-    assert_eq!(host.take().last().map(String::as_str), Some("open in main window 10 4"));
+    assert_eq!(
+        host.take().last().map(String::as_str),
+        Some("open in main window 10 4")
+    );
 }
 
 /// ⌘L and ⌘T open the command bar inside the window, on its page, 500 wide and centred across it,
@@ -476,13 +636,19 @@ fn its_chevron_lists_the_users_spaces_to_send_the_page_to(cx: &mut TestAppContex
 fn its_keys_open_the_command_bar_inside_it(cx: &mut TestAppContext) {
     let host = Rc::new(Recorder::default());
     let browser = host.clone();
-    let (shell, cx) =
-        cx.add_window_view(|_, cx| Shell::little_window(browser, 9, 1, 1, None, cx));
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::little_window(browser, 9, 1, 1, None, cx));
     shell.update(cx, |shell, cx| {
         shell.set_tabs(9, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
         shell.set_selected(10, cx);
         let url = "https://example.com/".into();
-        shell.set_page(10, Page { url, ..Page::default() }, cx);
+        shell.set_page(
+            10,
+            Page {
+                url,
+                ..Page::default()
+            },
+            cx,
+        );
     });
     cx.run_until_parked();
     let size = cx.update(|window, _| window.viewport_size());
@@ -490,16 +656,39 @@ fn its_keys_open_the_command_bar_inside_it(cx: &mut TestAppContext) {
     for command in [Command::EditUrl, Command::NewTab] {
         host.take();
         shell.update(cx, |shell, cx| shell.run(command, "ui", cx));
-        let bar = host.bars_in.borrow_mut().pop().expect("no bar inside the window");
+        let bar = host
+            .bars_in
+            .borrow_mut()
+            .pop()
+            .expect("no bar inside the window");
         let bar_width = 500f32.min(width);
-        let at = (f32::from(bar.origin.x), f32::from(bar.origin.y), f32::from(bar.size.width));
-        assert_eq!(at, ((width - bar_width) / 2., height * 0.333_333, bar_width));
+        let at = (
+            f32::from(bar.origin.x),
+            f32::from(bar.origin.y),
+            f32::from(bar.size.width),
+        );
+        assert_eq!(
+            at,
+            ((width - bar_width) / 2., height * 0.333_333, bar_width)
+        );
         assert_eq!(host.bar_edits.borrow_mut().pop(), Some(Some(10)));
-        assert!(host.command_bars.borrow().is_empty(), "{command:?} opened over the title");
+        assert!(
+            host.command_bars.borrow().is_empty(),
+            "{command:?} opened over the title"
+        );
     }
-    shell.update(cx, |shell, cx| shell.run(Command::EditUrl, "little bar", cx));
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::EditUrl, "little bar", cx)
+    });
     assert!(host.bars_in.borrow().is_empty());
-    assert!(host.command_bars.borrow().last().copied().flatten().is_some());
+    assert!(
+        host.command_bars
+            .borrow()
+            .last()
+            .copied()
+            .flatten()
+            .is_some()
+    );
 }
 
 #[gpui::test]
@@ -511,8 +700,17 @@ fn it_grows_in_from_its_first_frame_on_screen_once(cx: &mut TestAppContext) {
         Shell::little_window(browser, 9, 1, 1, Some(&main), cx)
     });
     cx.run_until_parked();
-    let drawn = |host: &Recorder| host.take().iter().filter(|call| *call == "little drawn").count();
-    assert_eq!(drawn(&host), 1, "its first frame on screen didn't start its opening");
+    let drawn = |host: &Recorder| {
+        host.take()
+            .iter()
+            .filter(|call| *call == "little drawn")
+            .count()
+    };
+    assert_eq!(
+        drawn(&host),
+        1,
+        "its first frame on screen didn't start its opening"
+    );
     // Drawn again, it has grown already.
     shell.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();

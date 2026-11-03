@@ -133,7 +133,10 @@ impl Server {
         let accepting = thread::Builder::new()
             .name("agents-server".into())
             .spawn(move || accept(listener, accepting))?;
-        Ok(Server { shared, accepting: Some(accepting) })
+        Ok(Server {
+            shared,
+            accepting: Some(accepting),
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -411,7 +414,10 @@ impl<'a> Answering<'a> {
         scope: &'scope thread::Scope<'scope, 'env>,
     ) -> bool {
         let mut queue = self.queue.lock().unwrap();
-        queue.waiting.push_back(Waiting { lanes: lanes(&line), line });
+        queue.waiting.push_back(Waiting {
+            lanes: lanes(&line),
+            line,
+        });
         if queue.waiting.len() > queue.idle && queue.threads < MAX_AT_ONCE {
             let spawned = thread::Builder::new()
                 .name("agents-answers".into())
@@ -476,8 +482,10 @@ fn lanes(line: &str) -> Vec<Lane> {
         return vec![Lane::InOrder];
     }
     let tool = (message.pointer("/params/name").and_then(Value::as_str)).unwrap_or_default();
-    let tab = (message.pointer("/params/arguments/tab").and_then(Value::as_u64))
-        .filter(|tab| *tab != 0);
+    let tab = (message
+        .pointer("/params/arguments/tab")
+        .and_then(Value::as_u64))
+    .filter(|tab| *tab != 0);
     let own = match (tool, tab) {
         ("open_tab", _) => None,
         (_, Some(tab)) => Some(Lane::Tab(tab)),

@@ -8,8 +8,8 @@
 //! header's, and the favicon stands where the header's first button does.
 
 use gpui::{
-    App, Bounds, Context, Entity, FontWeight, MouseButton, Pixels, Point, SharedString, Window, div,
-    point, prelude::*, px, relative, size, svg,
+    App, Bounds, Context, Entity, FontWeight, MouseButton, Pixels, Point, SharedString, Window,
+    div, point, prelude::*, px, relative, size, svg,
 };
 
 use super::{
@@ -27,8 +27,8 @@ use crate::tokens::command_bar::{LITTLE_DOWN, LITTLE_WIDTH, ROW_HEIGHT};
 use crate::tokens::shell::{
     FAVICON_DRAWN, LITTLE_BAR, LITTLE_CHEVRON, LITTLE_CHEVRON_GLYPH, LITTLE_COPY_GAP, LITTLE_GLYPH,
     LITTLE_OPEN, LITTLE_OPEN_GAP, LITTLE_OPEN_KEY, LITTLE_OPEN_MAX, LITTLE_OPEN_PAD,
-    LITTLE_SPACES_BELOW, LITTLE_SPACES_EDGE, LITTLE_SPACES_WIDTH, LITTLE_SPLIT, LITTLE_SPLIT_LINE, NAV_SIZE, NAV_TOP,
-    SIDEBAR_BUTTON_X,
+    LITTLE_SPACES_BELOW, LITTLE_SPACES_EDGE, LITTLE_SPACES_WIDTH, LITTLE_SPLIT, LITTLE_SPLIT_LINE,
+    NAV_SIZE, NAV_TOP, SIDEBAR_BUTTON_X,
 };
 use crate::tokens::text;
 use crate::tooltip::text_width;
@@ -100,7 +100,11 @@ impl Shell {
                 .collect();
             from.spaces.iter().find(|each| each.id == home).cloned()
         });
-        shell.little = Some(Little { home, spaces, drawn: false });
+        shell.little = Some(Little {
+            home,
+            spaces,
+            drawn: false,
+        });
         shell.spaces = vec![Space {
             id: space,
             name: SharedString::default(),
@@ -148,15 +152,15 @@ impl Shell {
         let Some(home) = self.little() else {
             return;
         };
-        let users = (spaces.iter()).filter(|(.., agent, _)| agent.is_empty()).map(
-            |(id, name, color, profile, _, _, theme)| Elsewhere {
+        let users = (spaces.iter())
+            .filter(|(.., agent, _)| agent.is_empty())
+            .map(|(id, name, color, profile, _, _, theme)| Elsewhere {
                 id: *id,
                 name: name.clone(),
                 profile: *profile,
                 color: *color,
                 theme: Theme::parse(theme),
-            },
-        );
+            });
         if let Some(little) = self.little.as_mut() {
             little.spaces = users.collect();
         }
@@ -166,7 +170,11 @@ impl Shell {
             return;
         };
         let theme = Theme::parse(&theme);
-        if self.spaces.first().is_some_and(|own| (own.color, own.theme) != (color, theme)) {
+        if self
+            .spaces
+            .first()
+            .is_some_and(|own| (own.color, own.theme) != (color, theme))
+        {
             // check.sh reads this line, as the main window's "themed space".
             let text = theme.map_or("none".to_string(), |theme| theme.to_text());
             log!("browser: little window for {home} looks {text}");
@@ -197,7 +205,9 @@ impl Shell {
         event: &gpui::MouseDownEvent,
         cx: &mut Context<Self>,
     ) -> bool {
-        let users = self.shown_space().is_some_and(|space| space.agent.is_empty());
+        let users = self
+            .shown_space()
+            .is_some_and(|space| space.agent.is_empty());
         // ⌘ is Control off the Mac, where the platform key is Super.
         let takes = event.modifiers.alt && event.modifiers.secondary(cx) && !event.modifiers.shift;
         if !takes || !users || self.private || self.little.is_some() || self.is_folder(tab) {
@@ -286,7 +296,10 @@ impl Shell {
             })
             .collect();
         let end = self.little_end(cx);
-        let right = end.chevron.right().min(self.viewport.width - px(LITTLE_SPACES_EDGE));
+        let right = end
+            .chevron
+            .right()
+            .min(self.viewport.width - px(LITTLE_SPACES_EDGE));
         let width = px(LITTLE_SPACES_WIDTH).min(right);
         let top = end.chevron.bottom() + px(LITTLE_SPACES_BELOW);
         let at = Bounds::new(point(right - width, top), size(width, px(ROW_HEIGHT)));
@@ -295,8 +308,14 @@ impl Shell {
 
     /// Open in <Space>'s words: Open in and its home Space's name, and the key ⌘O is now.
     pub(super) fn little_open_words(&self, cx: &App) -> (SharedString, Option<SharedString>) {
-        let name = self.spaces.first().map(|own| own.name.clone()).unwrap_or_default();
-        let key = super::user_keys(cx).label(Command::OpenInMainWindow).map(Into::into);
+        let name = self
+            .spaces
+            .first()
+            .map(|own| own.name.clone())
+            .unwrap_or_default();
+        let key = super::user_keys(cx)
+            .label(Command::OpenInMainWindow)
+            .map(Into::into);
         (format!("Open in {name}").into(), key)
     }
 
@@ -308,29 +327,40 @@ impl Shell {
     pub(super) fn little_end(&self, cx: &App) -> BarEnd {
         let right = self.viewport.width - px(WINDOW_BUTTONS[0].0 - NAV_SIZE / 2.);
         let top = px(NAV_TOP);
-        let plate = |left: Pixels, width: f32| Bounds::new(point(left, top), size(px(width), px(NAV_SIZE)));
+        let plate =
+            |left: Pixels, width: f32| Bounds::new(point(left, top), size(px(width), px(NAV_SIZE)));
         let chevron = plate(right - px(LITTLE_CHEVRON), LITTLE_CHEVRON);
         let line = chevron.left() - px(1.);
         let (words, key) = self.little_open_words(cx);
         let system = gpui::WindowTextSystem::new(cx.text_system().clone());
         let measured = text_width(&words, text::BODY, FontWeight::MEDIUM, &system)
-            + key.map_or(0., |key| LITTLE_OPEN_GAP + text_width(&key, text::BODY, FontWeight::NORMAL, &system));
+            + key.map_or(0., |key| {
+                LITTLE_OPEN_GAP + text_width(&key, text::BODY, FontWeight::NORMAL, &system)
+            });
         let width = (2. * LITTLE_OPEN_PAD + measured).min(LITTLE_OPEN_MAX);
         let words = plate(line - px(width), width);
         let middle = px(NAV_TOP + NAV_SIZE / 2.);
         let copy = point(words.left() - px(LITTLE_COPY_GAP + NAV_SIZE / 2.), middle);
         let profile = point(copy.x - px(PITCH), middle);
-        BarEnd { chevron, line, words, copy, profile }
+        BarEnd {
+            chevron,
+            line,
+            words,
+            copy,
+            profile,
+        }
     }
 
     /// The profiles the bar's picker offers, each with whether the window's page is in it, or
     /// None with only one, when there's nothing to pick.
     fn little_profiles(&self) -> Option<Vec<(u64, SharedString, bool)>> {
         let own = self.spaces.first()?.profile;
-        let profiles = self.profiles.iter().map(|(id, name)| (*id, name.clone(), *id == own));
+        let profiles = self
+            .profiles
+            .iter()
+            .map(|(id, name)| (*id, name.clone(), *id == own));
         Some(profiles.collect()).filter(|profiles: &Vec<_>| profiles.len() > 1)
     }
-
 
     /// The profile picker's menu, hanging from its button: the profiles, the page's checked. One
     /// picked opens the page in it and is kept for its site (Arc's Little Arc).
@@ -343,7 +373,10 @@ impl Shell {
             .collect();
         // From its plate's left edge, 4 under it.
         let plate = self.little_end(cx).profile;
-        let at = point(plate.x - px(NAV_SIZE / 2.), plate.y + px(NAV_SIZE / 2. + 4.));
+        let at = point(
+            plate.x - px(NAV_SIZE / 2.),
+            plate.y + px(NAV_SIZE / 2. + 4.),
+        );
         let shell = cx.weak_entity();
         self.browser.context_menu(
             entries,
@@ -373,7 +406,10 @@ impl Shell {
             return card;
         }
         let top = px(LITTLE_BAR);
-        Bounds::new(point(card.origin.x, top), size(card.size.width, card.bottom() - top))
+        Bounds::new(
+            point(card.origin.x, top),
+            size(card.size.width, card.bottom() - top),
+        )
     }
 
     /// Where the bar's title goes, which a click opens the command bar over, as the URL field's
@@ -381,7 +417,11 @@ impl Shell {
     /// buttons, a plate's height on the header's line.
     fn little_title_bounds(&self, cx: &App) -> Bounds<Pixels> {
         let end = self.little_end(cx);
-        let first = if self.little_profiles().is_some() { end.profile } else { end.copy };
+        let first = if self.little_profiles().is_some() {
+            end.profile
+        } else {
+            end.copy
+        };
         let right = first.x - px(NAV_SIZE / 2. + GAP);
         Bounds::new(
             point(px(SIDEBAR_BUTTON_X), px(NAV_TOP)),
@@ -401,7 +441,10 @@ impl Shell {
         let width = px(LITTLE_WIDTH).min(self.viewport.width);
         let left = (self.viewport.width - width) / 2.;
         let top = self.viewport.height * LITTLE_DOWN;
-        Bounds::new(point(left, top), size(width, px(crate::tokens::command_bar::HEIGHT)))
+        Bounds::new(
+            point(left, top),
+            size(width, px(crate::tokens::command_bar::HEIGHT)),
+        )
     }
 
     /// The bar, over the window's tint: the page's favicon, host and title, then the profile
@@ -495,14 +538,24 @@ impl Shell {
                 None => button,
             }
         };
-        let copy = button("little-copy", end.copy, Some(Command::CopyUrl), "Copy URL", cx)
-            .on_click(cx.listener(|shell, _, _, cx| shell.copy_url_from_button(cx)))
-            .child(self.swaps.glyph(
-                Swapped::CopyUrl,
-                if self.url_copied.is_some() { CHECK } else { LINK },
-                LITTLE_GLYPH,
-                glyph,
-            ));
+        let copy = button(
+            "little-copy",
+            end.copy,
+            Some(Command::CopyUrl),
+            "Copy URL",
+            cx,
+        )
+        .on_click(cx.listener(|shell, _, _, cx| shell.copy_url_from_button(cx)))
+        .child(self.swaps.glyph(
+            Swapped::CopyUrl,
+            if self.url_copied.is_some() {
+                CHECK
+            } else {
+                LINK
+            },
+            LITTLE_GLYPH,
+            glyph,
+        ));
         // Open in <Space> ⌘O | ⌄: one plate of the header's, split by a line, each half its own
         // hover. Its words name the Space and the key, so it needs no tooltip.
         let half = |id: &'static str, bounds: Bounds<Pixels>| {
@@ -520,26 +573,30 @@ impl Shell {
                 .hover(|style| style.bg(self.palette.plate(NAV_HOVERED)))
         };
         let (words, key) = self.little_open_words(cx);
-        let open = half("little-open", end.words)
-            .when(self.a11y, |button| button.button_named(words.clone()))
-            .px(px(LITTLE_OPEN_PAD))
-            .gap(px(LITTLE_OPEN_GAP))
-            .rounded_l(px(NAV_RADIUS))
-            .text_size(px(text::BODY))
-            .on_click(cx.listener(|shell, _, _, cx| {
-                shell.run(Command::OpenInMainWindow, "little bar", cx)
-            }))
-            .child(
-                div()
-                    .min_w(px(0.))
-                    .truncate()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(self.palette.text(LITTLE_OPEN))
-                    .child(words),
-            )
-            .children(key.map(|key| {
-                div().flex_none().text_color(self.palette.text(LITTLE_OPEN_KEY)).child(key)
-            }));
+        let open =
+            half("little-open", end.words)
+                .when(self.a11y, |button| button.button_named(words.clone()))
+                .px(px(LITTLE_OPEN_PAD))
+                .gap(px(LITTLE_OPEN_GAP))
+                .rounded_l(px(NAV_RADIUS))
+                .text_size(px(text::BODY))
+                .on_click(cx.listener(|shell, _, _, cx| {
+                    shell.run(Command::OpenInMainWindow, "little bar", cx)
+                }))
+                .child(
+                    div()
+                        .min_w(px(0.))
+                        .truncate()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(self.palette.text(LITTLE_OPEN))
+                        .child(words),
+                )
+                .children(key.map(|key| {
+                    div()
+                        .flex_none()
+                        .text_color(self.palette.text(LITTLE_OPEN_KEY))
+                        .child(key)
+                }));
         let line = div()
             .absolute()
             .left(end.line)
@@ -548,7 +605,9 @@ impl Shell {
             .h(px(LITTLE_SPLIT))
             .bg(self.palette.plate(LITTLE_SPLIT_LINE));
         let spaces = half("little-spaces", end.chevron)
-            .when(self.a11y, |button| button.button_named("Open in Another Space"))
+            .when(self.a11y, |button| {
+                button.button_named("Open in Another Space")
+            })
             .rounded_r(px(NAV_RADIUS))
             .on_click(cx.listener(|shell, _, _, cx| shell.little_spaces_menu(cx)))
             .child(
@@ -562,10 +621,27 @@ impl Shell {
         let profile = self.little_profiles().map(|_| {
             button("little-profile", end.profile, None, "Profile", cx)
                 .on_click(cx.listener(|shell, _, _, cx| shell.little_profile_menu(cx)))
-                .child(svg().path("icons/user.svg").size(px(LITTLE_GLYPH)).text_color(glyph))
+                .child(
+                    svg()
+                        .path("icons/user.svg")
+                        .size(px(LITTLE_GLYPH))
+                        .text_color(glyph),
+                )
         });
-        let bar = div().absolute().top_0().left_0().right_0().h(px(LITTLE_BAR));
-        Some(bar.child(title).children(profile).child(copy).child(open).child(line).child(spaces))
+        let bar = div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .h(px(LITTLE_BAR));
+        Some(
+            bar.child(title)
+                .children(profile)
+                .child(copy)
+                .child(open)
+                .child(line)
+                .child(spaces),
+        )
     }
 }
 

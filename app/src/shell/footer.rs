@@ -3,9 +3,10 @@
 use gpui::{Context, MouseButton, MouseDownEvent, Role, div, prelude::*, px, svg};
 
 use super::{
-    FOOTER_HEIGHT, NAV, NAV_GLYPH, NAV_HOVERED, NAV_RADIUS, NAV_SIZE, PLUS_INSET, SPACE_CLEAR, SPACE_GLYPH, SPACE_HEIGHT, SPACE_HOVERED, SPACE_ICON_SWITCHER, SPACE_LEAST, SPACE_OTHER, SPACE_PITCH,
-    SPACE_SHOWN, SPACE_SHOWN_LEAST, SPACE_SWATCH, SPACE_SWATCH_HOVERED, SPACE_SWATCH_SHOWN, SWITCHER_INSET, Shell,
-    access::Accessible,
+    FOOTER_HEIGHT, NAV, NAV_GLYPH, NAV_HOVERED, NAV_RADIUS, NAV_SIZE, PLUS_INSET, SPACE_CLEAR,
+    SPACE_GLYPH, SPACE_HEIGHT, SPACE_HOVERED, SPACE_ICON_SWITCHER, SPACE_LEAST, SPACE_OTHER,
+    SPACE_PITCH, SPACE_SHOWN, SPACE_SHOWN_LEAST, SPACE_SWATCH, SPACE_SWATCH_HOVERED,
+    SPACE_SWATCH_SHOWN, SWITCHER_INSET, Shell, access::Accessible,
 };
 use crate::space_icon::{GLYPHS, SpaceIcon};
 
@@ -26,13 +27,23 @@ pub(super) fn space_cells(span: f32, count: usize, shown: usize) -> Vec<f32> {
         return vec![even.min(SPACE_PITCH); count];
     }
     let others = half((span - SPACE_SHOWN_LEAST).max(0.) / (count - 1) as f32);
-    (0..count).map(|index| if index == shown { SPACE_SHOWN_LEAST } else { others }).collect()
+    (0..count)
+        .map(|index| {
+            if index == shown {
+                SPACE_SHOWN_LEAST
+            } else {
+                others
+            }
+        })
+        .collect()
 }
 
 /// How big an item's ink `size` across draws in a cell `cell` wide: its own size, or less to keep
 /// clear of the items beside it, but never under the least, or the cell less a point below that.
 pub(super) fn squeezed(size: f32, cell: f32) -> f32 {
-    size.min(cell - SPACE_CLEAR).max(SPACE_LEAST.min(cell - 1.)).max(0.)
+    size.min(cell - SPACE_CLEAR)
+        .max(SPACE_LEAST.min(cell - 1.))
+        .max(0.)
 }
 
 /// How strong a Space's icon draws in the switcher, as its dot would: the Space shown at full
@@ -90,15 +101,22 @@ impl Shell {
                 )
                 .child(match SpaceIcon::parse(&space.icon) {
                     SpaceIcon::Dot => {
-                        let size = if shown { SPACE_SWATCH_SHOWN } else { SPACE_SWATCH };
+                        let size = if shown {
+                            SPACE_SWATCH_SHOWN
+                        } else {
+                            SPACE_SWATCH
+                        };
                         // Under the pointer it grows as far again past its squeezed size.
                         let room = cell + SPACE_SWATCH_HOVERED - SPACE_SWATCH;
                         let hovered = squeezed(SPACE_SWATCH_HOVERED, room);
-                        (self.palette_of(id).swatch.draw(squeezed(size, cell), &behind))
-                            .when(!shown, |swatch| {
-                                swatch.group_hover("space", |style| style.size(px(hovered)))
-                            })
-                            .into_any_element()
+                        (self
+                            .palette_of(id)
+                            .swatch
+                            .draw(squeezed(size, cell), &behind))
+                        .when(!shown, |swatch| {
+                            swatch.group_hover("space", |style| style.size(px(hovered)))
+                        })
+                        .into_any_element()
                     }
                     // The Space shown's in its accent, as its dot is in its colour, or the ink
                     // without one; the others' in the dots' greys.
@@ -132,7 +150,9 @@ impl Shell {
         Some(
             div()
                 .id("switcher")
-                .when(self.a11y, |switcher| switcher.role(Role::TabList).aria_label("Spaces"))
+                .when(self.a11y, |switcher| {
+                    switcher.role(Role::TabList).aria_label("Spaces")
+                })
                 .absolute()
                 .left(px(SWITCHER_INSET))
                 .w(px(span))
@@ -149,7 +169,8 @@ impl Shell {
         div()
             .id("plus")
             .when(self.a11y, |plus| {
-                plus.button_named("New Space, Folder or Note").pressed_by_mouse_down(true, false)
+                plus.button_named("New Space, Folder or Note")
+                    .pressed_by_mouse_down(true, false)
             })
             .absolute()
             .right(px(PLUS_INSET))
@@ -167,7 +188,12 @@ impl Shell {
                     shell.plus_menu(event.position, cx)
                 }),
             )
-            .child(svg().path("icons/nav-plus.svg").size(px(NAV_GLYPH)).text_color(self.palette.glyph(NAV)))
+            .child(
+                svg()
+                    .path("icons/nav-plus.svg")
+                    .size(px(NAV_GLYPH))
+                    .text_color(self.palette.glyph(NAV)),
+            )
     }
 }
 
@@ -187,13 +213,20 @@ mod tests {
             let cells = space_cells(span, count, 4);
             assert_eq!(cells.len(), count);
             assert_eq!(cells[4], 22., "the Space shown with {count}");
-            let shared = cells.iter().enumerate().all(|(i, &cell)| i == 4 || cell == others);
+            let shared = cells
+                .iter()
+                .enumerate()
+                .all(|(i, &cell)| i == 4 || cell == others);
             assert!(shared, "{count}: {cells:?}");
             // Never more than a point over the span, which the switcher centres.
             assert!(cells.iter().sum::<f32>() <= span + 1., "{count}: {cells:?}");
         }
         // Without the Space shown among them, as while a new Space's form shows, all share alike.
-        assert!(space_cells(span, 22, usize::MAX).iter().all(|&cell| cell == 9.));
+        assert!(
+            space_cells(span, 22, usize::MAX)
+                .iter()
+                .all(|&cell| cell == 9.)
+        );
         assert!(space_cells(span, 0, 0).is_empty());
         assert_eq!(space_cells(span, 1, 0), vec![34.]);
     }
@@ -219,9 +252,15 @@ mod tests {
         assert_eq!(icon_opacity(true, false), 1.);
         assert_eq!(icon_opacity(true, true), 1.);
         let others = icon_opacity(false, false);
-        assert!((others - 0.35 / 0.6).abs() < 0.02, "the others are at {others}");
+        assert!(
+            (others - 0.35 / 0.6).abs() < 0.02,
+            "the others are at {others}"
+        );
         let hovered = icon_opacity(false, true);
-        assert!((hovered - 0.5 / 0.6).abs() < 0.02, "a hovered one is at {hovered}");
+        assert!(
+            (hovered - 0.5 / 0.6).abs() < 0.02,
+            "a hovered one is at {hovered}"
+        );
         assert!(others < hovered && hovered < 1.);
     }
 }
