@@ -923,13 +923,13 @@ expect "^browser: theme picker for $first\$" "Edit Theme Color… didn't open th
 expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
 expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
 recorded
-# From the menu it has no arrow, its card 12.5 inside the sidebar's edge and the window's top, as
-# Arc 1.171's window there is 382 × 534 round its 357 × 509 card (#1400). Its window keeps the
-# arrow's 13 left of the card, so it starts half a point short of the edge. Linux and Windows put
-# it on a whole point or a fraction off, so a point either way passes.
+# From the menu it has no arrow, its card 14 inside the sidebar's edge and the window's top, as
+# Arc 1.171's is inside its 382 × 534 window there (#1400). Its window keeps the arrow's 13 left of
+# the card, so it starts a point past the edge. Linux and Windows put it on a whole point or a
+# fraction off, so a point either way passes.
 at=$(grep '^browser: theme picker at' "$log" | tail -1 | cut -d' ' -f5-)
 edge=$(grep '^browser: sidebar width ' "$log" | tail -1 | cut -d' ' -f4)
-echo "$at" | awk -v edge="${edge:-228}" '{ x = $1 - (edge - 0.5); y = $2 - 12.5 }
+echo "$at" | awk -v edge="${edge:-228}" '{ x = $1 - (edge + 1); y = $2 - 14 }
   END { exit !(x * x <= 1 && y * y <= 1 && $3 == 370 && $4 == 509) }' ||
   fail "Edit Theme Color… opened the theme picker at $at, not against the sidebar's edge at the top"
 send clickkey "$(swatch_x 7)" $swatch_y

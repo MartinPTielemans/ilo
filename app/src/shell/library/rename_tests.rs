@@ -301,8 +301,8 @@ fn a_card_s_field_stays_lit_while_its_picker_shows_and_escape_then_closes_the_li
 
 /// The command bar's Edit Theme…, Arc's, is the first command "theme" finds, and opens the theme
 /// picker for the Space shown, as its menu's Edit Theme Color… does, once the Library has gone:
-/// with its card 12.5 inside the sidebar's edge and the window's top, Arc 1.171's window there
-/// being 382 × 534 round its 357 × 509 card.
+/// with its card 14 inside the sidebar's edge and the window's top, as Arc 1.171's is inside its
+/// window there.
 #[gpui::test]
 fn edit_theme_in_the_command_bar_opens_the_theme_picker(cx: &mut TestAppContext) {
     let keys = crate::shell::UserKeys::default();
@@ -324,7 +324,7 @@ fn edit_theme_in_the_command_bar_opens_the_theme_picker(cx: &mut TestAppContext)
     let edge = shell.read_with(cx, |shell, _| shell.width());
     let arrow = crate::tokens::theme_picker::ARROW;
     let card = themes.borrow().last().map(|&(left, top)| (left + arrow, top));
-    assert_eq!(card, Some((edge + 12.5, 12.5)), "not against the sidebar's edge at the top");
+    assert_eq!(card, Some((edge + 14., 14.)), "not against the sidebar's edge at the top");
 }
 
 /// Whether each card's field was last drawn with its plate, dashes and brush, by Space.
