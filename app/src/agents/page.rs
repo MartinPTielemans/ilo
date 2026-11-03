@@ -10,28 +10,69 @@ use super::TabInfo;
 
 /// Roles an agent can act on, each given a ref.
 const INTERACTIVE: &[&str] = &[
-    "button", "link", "textbox", "searchbox", "combobox", "checkbox", "radio", "switch", "slider",
-    "spinbutton", "listbox", "option", "menuitem", "menuitemcheckbox", "menuitemradio", "tab",
+    "button",
+    "link",
+    "textbox",
+    "searchbox",
+    "combobox",
+    "checkbox",
+    "radio",
+    "switch",
+    "slider",
+    "spinbutton",
+    "listbox",
+    "option",
+    "menuitem",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "tab",
     "treeitem",
 ];
 /// Wrappers that only add nesting, whose children are outlined a level up.
 const FLATTEN: &[&str] = &[
-    "none", "generic", "presentation", "LayoutTable", "LayoutTableRow", "LayoutTableCell",
-    "InlineTextBox", "RootWebArea",
+    "none",
+    "generic",
+    "presentation",
+    "LayoutTable",
+    "LayoutTableRow",
+    "LayoutTableCell",
+    "InlineTextBox",
+    "RootWebArea",
 ];
 /// Landmarks worth a line without a name.
 const LANDMARKS: &[&str] = &[
-    "form", "dialog", "alertdialog", "alert", "navigation", "main", "banner", "search",
+    "form",
+    "dialog",
+    "alertdialog",
+    "alert",
+    "navigation",
+    "main",
+    "banner",
+    "search",
     "contentinfo",
 ];
-const STATES: &[&str] = &["checked", "selected", "expanded", "disabled", "required", "level"];
+const STATES: &[&str] = &[
+    "checked", "selected", "expanded", "disabled", "required", "level",
+];
 /// The outline's bytes at most, as a long page would fill the agent's context.
 pub const MAX_OUTLINE: usize = 30_000;
 
 /// The keys press_key presses, as the core knows them.
 pub const KEYS: &[&str] = &[
-    "Enter", "Tab", "Escape", "Backspace", "Delete", "Space", "ArrowUp", "ArrowDown", "ArrowLeft",
-    "ArrowRight", "PageUp", "PageDown", "Home", "End",
+    "Enter",
+    "Tab",
+    "Escape",
+    "Backspace",
+    "Delete",
+    "Space",
+    "ArrowUp",
+    "ArrowDown",
+    "ArrowLeft",
+    "ArrowRight",
+    "PageUp",
+    "PageDown",
+    "Home",
+    "End",
 ];
 
 /// An element of a page an agent may act on, by its ref.
@@ -206,7 +247,11 @@ impl Outline {
             return self.with_notes(format!("{}\n\nNothing in the outline changed.", self.head));
         }
         let changes = parts.join("\n\n");
-        let whole: usize = self.lines.iter().map(|line| 2 * line.depth + line.text.len() + 1).sum();
+        let whole: usize = self
+            .lines
+            .iter()
+            .map(|line| 2 * line.depth + line.text.len() + 1)
+            .sum();
         if 2 * changes.len() > whole {
             return self.text();
         }
@@ -274,7 +319,9 @@ fn same_lines(old: &[Line], new: &[Line]) -> Option<Vec<Option<usize>>> {
         .collect();
     for (at, line) in new.iter().enumerate() {
         if was[at].is_none() {
-            was[at] = line.element.and_then(|element| by_ref.get(&element).copied());
+            was[at] = line
+                .element
+                .and_then(|element| by_ref.get(&element).copied());
         }
     }
     Some(was)
@@ -291,10 +338,16 @@ fn runs(lines: &[Line], pick: impl Fn(usize) -> bool) -> String {
         }
         let run = (at..lines.len()).take_while(|&at| pick(at)).count();
         let lines = &lines[at..at + run];
-        let outermost = lines.iter().map(|line| line.depth).min().unwrap_or_default();
-        text.extend(lines.iter().map(|line| {
-            format!("{}{}", "  ".repeat(line.depth - outermost), line.text)
-        }));
+        let outermost = lines
+            .iter()
+            .map(|line| line.depth)
+            .min()
+            .unwrap_or_default();
+        text.extend(
+            lines
+                .iter()
+                .map(|line| format!("{}{}", "  ".repeat(line.depth - outermost), line.text)),
+        );
         at += run;
     }
     text.join("\n")
@@ -317,7 +370,11 @@ impl Walk<'_> {
         }
         // Its indent and line break too.
         self.size += 2 * depth + text.len() + 1;
-        self.lines.push(Line { depth, text, element });
+        self.lines.push(Line {
+            depth,
+            text,
+            element,
+        });
     }
 
     fn node(&mut self, node: &Value, depth: usize, parent_name: &str, levels: usize) {
@@ -325,7 +382,10 @@ impl Walk<'_> {
         if levels > 200 || self.size > MAX_OUTLINE {
             return;
         }
-        let ignored = node.get("ignored").and_then(Value::as_bool).unwrap_or(false);
+        let ignored = node
+            .get("ignored")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let role = role(node);
         let name = name(node);
         let lower = name.to_lowercase();
@@ -350,7 +410,10 @@ impl Walk<'_> {
             }
             let backend = node.get("backendDOMNodeId").and_then(Value::as_i64);
             if let (true, Some(backend)) = (INTERACTIVE.contains(&role), backend) {
-                let password = node.get("password").and_then(Value::as_bool).unwrap_or(false);
+                let password = node
+                    .get("password")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 let element = Element {
                     node: backend,
                     role: role.into(),
@@ -365,7 +428,12 @@ impl Walk<'_> {
                     line.push_str(" (password: off limits)");
                 }
             }
-            for property in node.get("properties").and_then(Value::as_array).into_iter().flatten() {
+            for property in node
+                .get("properties")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
                 let Some(state) = property.get("name").and_then(Value::as_str) else {
                     continue;
                 };
@@ -396,12 +464,17 @@ impl Walk<'_> {
 }
 
 fn role(node: &Value) -> &str {
-    node.pointer("/role/value").and_then(Value::as_str).unwrap_or_default()
+    node.pointer("/role/value")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
 }
 
 /// The node's name, its runs of white space one space.
 fn name(node: &Value) -> String {
-    let name = node.pointer("/name/value").and_then(Value::as_str).unwrap_or_default();
+    let name = node
+        .pointer("/name/value")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     name.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -415,19 +488,54 @@ pub fn clip(text: &str, chars: usize) -> String {
 
 /// Words that pay or order, as a button's name has them.
 const PAYMENT: &[&str] = &[
-    "pay", "buy", "purchase", "checkout", "check out", "place order", "place your order",
-    "submit order", "order now", "subscribe", "donate", "transfer",
+    "pay",
+    "buy",
+    "purchase",
+    "checkout",
+    "check out",
+    "place order",
+    "place your order",
+    "submit order",
+    "order now",
+    "subscribe",
+    "donate",
+    "transfer",
 ];
 /// Words that send, as a button's name has them.
-const SEND: &[&str] = &["send", "submit", "post", "publish", "reply", "tweet", "comment"];
+const SEND: &[&str] = &[
+    "send", "submit", "post", "publish", "reply", "tweet", "comment",
+];
 const MESSAGING: &[&str] = &[
-    "mail.google.com", "outlook.live.com", "outlook.office.com", "slack.com", "discord.com",
-    "x.com", "twitter.com", "linkedin.com", "facebook.com", "messenger.com", "instagram.com",
-    "whatsapp.com", "web.telegram.org", "reddit.com",
+    "mail.google.com",
+    "outlook.live.com",
+    "outlook.office.com",
+    "slack.com",
+    "discord.com",
+    "x.com",
+    "twitter.com",
+    "linkedin.com",
+    "facebook.com",
+    "messenger.com",
+    "instagram.com",
+    "whatsapp.com",
+    "web.telegram.org",
+    "reddit.com",
 ];
 const BANKS: &[&str] = &[
-    "chase", "wellsfargo", "bankofamerica", "citi", "capitalone", "schwab", "fidelity", "vanguard",
-    "paypal", "venmo", "revolut", "wise", "monzo", "coinbase",
+    "chase",
+    "wellsfargo",
+    "bankofamerica",
+    "citi",
+    "capitalone",
+    "schwab",
+    "fidelity",
+    "vanguard",
+    "paypal",
+    "venmo",
+    "revolut",
+    "wise",
+    "monzo",
+    "coinbase",
 ];
 
 /// Why acting on the element named `label` on `host` asks the user first, if it does: it looks
@@ -548,7 +656,12 @@ mod tests {
             node("24", "link", "Basket", &[]),
             node("3", "heading", "Linen shirt", &[]),
             node("4", "paragraph", "", &["41"]),
-            node("41", "StaticText", "Light linen, cut loose, for long summer days.", &[]),
+            node(
+                "41",
+                "StaticText",
+                "Light linen, cut loose, for long summer days.",
+                &[],
+            ),
             node("5", "combobox", "Size", if open { &["7"] } else { &[] }),
             node("6", "button", "Add to basket", &[]),
             node("7", "listbox", "Size", &["71", "72"]),
@@ -556,7 +669,8 @@ mod tests {
             node("72", "option", "M", &[]),
         ];
         for node in &mut nodes {
-            node["backendDOMNodeId"] = json!(node["nodeId"].as_str().unwrap().parse::<i64>().unwrap());
+            node["backendDOMNodeId"] =
+                json!(node["nodeId"].as_str().unwrap().parse::<i64>().unwrap());
         }
         if open {
             nodes[9]["properties"] = json!([{ "name": "expanded", "value": { "value": true } }]);
@@ -588,13 +702,19 @@ mod tests {
                  Gone:\n- listbox \"Size\" [e7]\n  - option \"S\" [e8]\n  - option \"M\" [e9]"
             )
         );
-        assert_eq!(open.since(&open), format!("{head}Nothing in the outline changed."));
+        assert_eq!(
+            open.since(&open),
+            format!("{head}Nothing in the outline changed.")
+        );
 
         // Elements in another order are the same elements.
         let mut moved = shop(false);
         moved[1]["childIds"] = json!(["21", "23", "22", "24"]);
         let moved = outline(&tab(), &moved, &mut refs, None);
-        assert_eq!(moved.since(&closed), format!("{head}Nothing in the outline changed."));
+        assert_eq!(
+            moved.since(&closed),
+            format!("{head}Nothing in the outline changed.")
+        );
         // Text is the same line by its text, in order.
         let mut text = shop(false);
         text[8]["name"]["value"] = json!("Heavy linen.");
@@ -610,16 +730,26 @@ mod tests {
     fn a_new_page_or_a_new_outline_is_whole() {
         let mut refs = Refs::default();
         let closed = outline(&tab(), &shop(false), &mut refs, None);
-        let basket = TabInfo { url: "https://shop.example/basket".into(), ..tab() };
+        let basket = TabInfo {
+            url: "https://shop.example/basket".into(),
+            ..tab()
+        };
         let elsewhere = outline(&basket, &shop(false), &mut refs, None);
         assert_eq!(elsewhere.since(&closed), elsewhere.text());
         let mut reloaded = shop(false);
         reloaded[0]["backendDOMNodeId"] = json!(100);
         let reloaded = outline(&tab(), &reloaded, &mut refs, None);
         assert_eq!(reloaded.since(&closed), reloaded.text());
-        let reviews = TabInfo { url: "https://shop.example/#reviews".into(), ..tab() };
+        let reviews = TabInfo {
+            url: "https://shop.example/#reviews".into(),
+            ..tab()
+        };
         let reviews = outline(&reviews, &shop(false), &mut refs, None);
-        assert!(reviews.since(&closed).ends_with("Nothing in the outline changed."));
+        assert!(
+            reviews
+                .since(&closed)
+                .ends_with("Nothing in the outline changed.")
+        );
 
         let mut thanks = shop(false);
         thanks[0]["childIds"] = json!(["3"]);
@@ -650,7 +780,10 @@ mod tests {
         let ids: Vec<String> = (2..5000).map(|id| id.to_string()).collect();
         let children: Vec<&str> = ids.iter().map(String::as_str).collect();
         let mut nodes = vec![node("1", "RootWebArea", "Long", &children)];
-        nodes.extend(ids.iter().map(|id| node(id, "paragraph", &format!("Paragraph {id}"), &[])));
+        nodes.extend(
+            ids.iter()
+                .map(|id| node(id, "paragraph", &format!("Paragraph {id}"), &[])),
+        );
         let outline = outline(&tab(), &nodes, &mut Refs::default(), None).text();
         assert!(outline.len() < MAX_OUTLINE + 1000);
         assert!(outline.ends_with("read_page has all of the page's text."));

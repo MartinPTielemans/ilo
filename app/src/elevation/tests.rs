@@ -57,11 +57,17 @@ fn gpui_and_the_host_draw_a_level_the_same_size() {
 fn a_higher_level_reaches_further() {
     let reach: Vec<Reach> = LEVELS.map(Level::reach).to_vec();
     for pair in reach.windows(2) {
-        assert!(pair[0].sides < pair[1].sides && pair[0].below < pair[1].below, "{reach:?}");
+        assert!(
+            pair[0].sides < pair[1].sides && pair[0].below < pair[1].below,
+            "{reach:?}"
+        );
     }
     // The drop moves it down: further below, less above.
     for reach in reach {
-        assert!(reach.below > reach.sides && reach.above < reach.sides, "{reach:?}");
+        assert!(
+            reach.below > reach.sides && reach.above < reach.sides,
+            "{reach:?}"
+        );
     }
 }
 
@@ -69,7 +75,10 @@ fn a_higher_level_reaches_further() {
 /// visible at its end leaves a straight cut in it (the zoom HUD's, at the bottom, was 3 % dark).
 #[test]
 fn a_shadow_fades_out_inside_the_margin_of_the_window_that_draws_it() {
-    use crate::{tokens::zoom_hud, zoom_hud::{MARGIN, WINDOW_HEIGHT, WINDOW_WIDTH}};
+    use crate::{
+        tokens::zoom_hud,
+        zoom_hud::{MARGIN, WINDOW_HEIGHT, WINDOW_WIDTH},
+    };
 
     let popover = Level::Popover.reach();
     // The tooltip's and the link target's windows are the plate and this much on every side.
@@ -77,11 +86,19 @@ fn a_shadow_fades_out_inside_the_margin_of_the_window_that_draws_it() {
     // The zoom HUD's window holds its pill at the top right, and the window's width is the widest
     // pill with the margin on both sides.
     assert!(WINDOW_WIDTH >= 2. * MARGIN + 80., "room for \"500%\"");
-    let hud = [MARGIN, MARGIN, WINDOW_HEIGHT - MARGIN - zoom_hud::HEIGHT, MARGIN];
+    let hud = [
+        MARGIN,
+        MARGIN,
+        WINDOW_HEIGHT - MARGIN - zoom_hud::HEIGHT,
+        MARGIN,
+    ];
     for (name, [top, right, bottom, left]) in margins.into_iter().chain([("zoom HUD", hud)]) {
         assert!(top >= popover.above, "{name}: {top} above, {popover:?}");
         assert!(right >= popover.sides, "{name}: {right} right, {popover:?}");
-        assert!(bottom >= popover.below, "{name}: {bottom} below, {popover:?}");
+        assert!(
+            bottom >= popover.below,
+            "{name}: {bottom} below, {popover:?}"
+        );
         assert!(left >= popover.sides, "{name}: {left} left, {popover:?}");
     }
 }

@@ -22,9 +22,15 @@ fn register(cx: &mut App) {
     }
     cx.set_global(Registered);
     let start = Instant::now();
-    match cx.text_system().add_fonts(vec![Cow::Borrowed(OUTFIT_MEDIUM)]) {
+    match cx
+        .text_system()
+        .add_fonts(vec![Cow::Borrowed(OUTFIT_MEDIUM)])
+    {
         // check.sh reads this line, for what the face costs the screen that first shows it.
-        Ok(()) => log!("browser: display face in {:.1} ms", start.elapsed().as_secs_f64() * 1000.),
+        Ok(()) => log!(
+            "browser: display face in {:.1} ms",
+            start.elapsed().as_secs_f64() * 1000.
+        ),
         Err(error) => log!("couldn't register the display face: {error}"),
     }
 }
@@ -52,4 +58,3 @@ pub(super) fn cap_top(size: f32, line: f32) -> f32 {
     let (ascent, descent, cap) = (size, 0.26 * size, 0.7 * size);
     (line - ascent - descent) / 2. + ascent - cap
 }
-

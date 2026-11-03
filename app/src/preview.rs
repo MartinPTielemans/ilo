@@ -18,8 +18,8 @@ use browser::import::sources::{Os, Roots};
 use browser::link_preview;
 use browser::log;
 use browser::menu;
-use browser::settings_card::Card;
 use browser::palette::{self, Palette, Tone};
+use browser::settings_card::Card;
 use browser::shell::{
     self, Archived, BarTab, Browser, Command, Download, DownloadAction, DownloadState, Folders,
     Match, MediaAction, MenuBar, MenuEntry, Page, Shell, SpaceEntry, Split, Trouble, WindowButton,

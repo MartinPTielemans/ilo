@@ -12,7 +12,11 @@ const WORK: u64 = 1;
 const HOME: u64 = 2;
 
 fn rule(condition: Condition, text: &str, space: u64) -> Rule {
-    Rule { condition, text: text.to_string(), space }
+    Rule {
+        condition,
+        text: text.to_string(),
+        space,
+    }
 }
 
 /// The first rule a link meets sends it to its Space: a URL holding the text, whatever its case,
@@ -31,14 +35,32 @@ fn rules_send_links_to_their_spaces() {
         otherwise: 0,
     };
     let spaces = [WORK, HOME];
-    assert_eq!(rules.route("https://mail.work.example/inbox", &spaces), (WORK, Some(1)));
-    assert_eq!(rules.route("https://home.example/", &spaces), (HOME, Some(2)));
+    assert_eq!(
+        rules.route("https://mail.work.example/inbox", &spaces),
+        (WORK, Some(1))
+    );
+    assert_eq!(
+        rules.route("https://home.example/", &spaces),
+        (HOME, Some(2))
+    );
     // Not exactly it, so the rule after it, as its Space 9 is gone.
-    assert_eq!(rules.route("https://www.home.example/", &spaces), (WORK, Some(4)));
+    assert_eq!(
+        rules.route("https://www.home.example/", &spaces),
+        (WORK, Some(4))
+    );
     assert_eq!(rules.route("https://news.example/", &spaces), (0, None));
-    let otherwise = Rules { otherwise: HOME, ..rules.clone() };
-    assert_eq!(otherwise.route("https://news.example/", &spaces), (HOME, None));
-    let gone = Rules { otherwise: 9, ..rules };
+    let otherwise = Rules {
+        otherwise: HOME,
+        ..rules.clone()
+    };
+    assert_eq!(
+        otherwise.route("https://news.example/", &spaces),
+        (HOME, None)
+    );
+    let gone = Rules {
+        otherwise: 9,
+        ..rules
+    };
     assert_eq!(gone.route("https://news.example/", &spaces), (0, None));
 }
 
@@ -54,12 +76,27 @@ fn a_rule_sends_a_previews_link_to_another_space() {
         otherwise: HOME,
     };
     let spaces = [WORK, HOME];
-    assert_eq!(rules.preview_route("https://work.example/doc", &spaces, HOME), Some((WORK, 0)));
+    assert_eq!(
+        rules.preview_route("https://work.example/doc", &spaces, HOME),
+        Some((WORK, 0))
+    );
     // Its rule's Space is the one shown, so it stays in the preview, and the next rule isn't tried.
-    assert_eq!(rules.preview_route("https://work.example/home.example", &spaces, WORK), None);
-    assert_eq!(rules.preview_route("https://news.example/", &spaces, WORK), None);
-    let gone = Rules { rules: vec![rule(Condition::Contains, "work", 9)], otherwise: 0 };
-    assert_eq!(gone.preview_route("https://work.example/", &spaces, HOME), None);
+    assert_eq!(
+        rules.preview_route("https://work.example/home.example", &spaces, WORK),
+        None
+    );
+    assert_eq!(
+        rules.preview_route("https://news.example/", &spaces, WORK),
+        None
+    );
+    let gone = Rules {
+        rules: vec![rule(Condition::Contains, "work", 9)],
+        otherwise: 0,
+    };
+    assert_eq!(
+        gone.preview_route("https://work.example/", &spaces, HOME),
+        None
+    );
 }
 
 /// The file keeps each rule's Space by its place among the user's Spaces, which come back in
@@ -92,7 +129,10 @@ fn the_file_keeps_spaces_by_their_place() {
             otherwise: 17,
         }
     );
-    assert_eq!(Rules::parse("rule\tnear\t1\tx\nnonsense\n", &[15]), Rules::default());
+    assert_eq!(
+        Rules::parse("rule\tnear\t1\tx\nnonsense\n", &[15]),
+        Rules::default()
+    );
 }
 
 #[derive(Default)]
@@ -130,7 +170,9 @@ impl Host for Recorder {
             })
             .collect();
         let (x, y) = (f32::from(at.x), f32::from(at.y));
-        self.menus.borrow_mut().push(format!("{x} {y}: {}", items.join(", ")));
+        self.menus
+            .borrow_mut()
+            .push(format!("{x} {y}: {}", items.join(", ")));
         let answer = self.answer.get();
         cx.defer(move |cx| picked(answer, cx));
     }
@@ -183,7 +225,11 @@ fn row_y(index: usize) -> f32 {
 fn text_at(view: &Entity<LinkRulesView>, which: Popup, cx: &mut VisualTestContext) -> (f32, f32) {
     view.read_with(cx, |view, _| {
         let texts = view.popup_texts.borrow();
-        let at = texts.iter().find(|&&(each, _)| each == which).expect("drawn").1;
+        let at = texts
+            .iter()
+            .find(|&&(each, _)| each == which)
+            .expect("drawn")
+            .1;
         (f32::from(at.x), f32::from(at.y))
     })
 }
@@ -200,21 +246,36 @@ fn otherwise(view: &Entity<LinkRulesView>, cx: &mut VisualTestContext) -> (f32, 
 fn plus_adds_a_rule_whose_field_takes_the_typing(cx: &mut TestAppContext) {
     let (host, cx) = tab(Rules::default(), cx);
     // Under the empty group's one row, 4 in.
-    click(cx, (ADD_X + CONTROL_HEIGHT / 2., ROW_HEIGHT + BUTTONS_TOP + CONTROL_HEIGHT / 2.));
+    click(
+        cx,
+        (
+            ADD_X + CONTROL_HEIGHT / 2.,
+            ROW_HEIGHT + BUTTONS_TOP + CONTROL_HEIGHT / 2.,
+        ),
+    );
     assert_eq!(
         host.rules(),
-        Rules { rules: vec![rule(Condition::Contains, "", WORK)], otherwise: LITTLE }
+        Rules {
+            rules: vec![rule(Condition::Contains, "", WORK)],
+            otherwise: LITTLE
+        }
     );
     cx.simulate_input("work.example");
     cx.run_until_parked();
-    assert_eq!(host.rules().rules, [rule(Condition::Contains, "work.example", WORK)]);
+    assert_eq!(
+        host.rules().rules,
+        [rule(Condition::Contains, "work.example", WORK)]
+    );
 }
 
 /// A rule's pop-ups open on its condition and Space, checked, and set what's picked; a Space's
 /// offers Little ilo after the Spaces, and Everything else's the Space in front first.
 #[gpui::test]
 fn pop_ups_set_a_rules_condition_and_space(cx: &mut TestAppContext) {
-    let rules = Rules { rules: vec![rule(Condition::Contains, "work", WORK)], otherwise: 0 };
+    let rules = Rules {
+        rules: vec![rule(Condition::Contains, "work", WORK)],
+        otherwise: 0,
+    };
     let (host, view, cx) = tab_view(rules, cx);
     host.answer.set(Some(1));
     click(cx, (CONDITION_X, row_y(0)));
@@ -225,8 +286,14 @@ fn pop_ups_set_a_rules_condition_and_space(cx: &mut TestAppContext) {
     // Each menu puts the chosen item's text on its button's: a rule's 10 into its pop-ups, 8
     // under the row's top, and Everything else's at its row's end.
     let (otherwise_x, otherwise_y) = text_at(&view, Popup::Otherwise, cx);
-    assert_eq!(otherwise_x, BOX_WIDTH - ROW_X - RULE_SPACE + CONTROL_PADDING);
-    assert!(otherwise_y > RULE_ROW + BUTTONS_TOP + CONTROL_HEIGHT + GROUP_GAP, "{otherwise_y}");
+    assert_eq!(
+        otherwise_x,
+        BOX_WIDTH - ROW_X - RULE_SPACE + CONTROL_PADDING
+    );
+    assert!(
+        otherwise_y > RULE_ROW + BUTTONS_TOP + CONTROL_HEIGHT + GROUP_GAP,
+        "{otherwise_y}"
+    );
     assert_eq!(
         host.menus.take(),
         [
@@ -247,7 +314,10 @@ fn pop_ups_set_a_rules_condition_and_space(cx: &mut TestAppContext) {
     );
     assert_eq!(
         host.rules(),
-        Rules { rules: vec![rule(Condition::Is, "work", HOME)], otherwise: HOME }
+        Rules {
+            rules: vec![rule(Condition::Is, "work", HOME)],
+            otherwise: HOME
+        }
     );
 }
 
@@ -269,7 +339,11 @@ fn a_drag_reorders_the_rules_and_the_trash_removes_one(cx: &mut TestAppContext) 
     cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
     cx.run_until_parked();
     let texts = |host: &Recorder| -> Vec<String> {
-        host.rules().rules.into_iter().map(|rule| rule.text).collect()
+        host.rules()
+            .rules
+            .into_iter()
+            .map(|rule| rule.text)
+            .collect()
     };
     assert_eq!(texts(&host), ["home", "work"]);
     click(cx, (REMOVE_X, row_y(0)));
@@ -295,7 +369,11 @@ fn undo_brings_back_a_rule_the_trash_took_until_settings_closes(cx: &mut TestApp
         done
     };
     let texts = |host: &Recorder| -> Vec<String> {
-        host.rules().rules.into_iter().map(|rule| rule.text).collect()
+        host.rules()
+            .rules
+            .into_iter()
+            .map(|rule| rule.text)
+            .collect()
     };
     // The empty rule goes, then the two others, the first each time.
     click(cx, (REMOVE_X, row_y(2)));
@@ -310,7 +388,10 @@ fn undo_brings_back_a_rule_the_trash_took_until_settings_closes(cx: &mut TestApp
     assert!(!undo(cx), "⌘Z brought back the empty rule");
     // The fields hold their texts again.
     let fields = view.read_with(cx, |view, cx| {
-        view.fields.iter().map(|field| field.read(cx).text().to_string()).collect::<Vec<_>>()
+        view.fields
+            .iter()
+            .map(|field| field.read(cx).text().to_string())
+            .collect::<Vec<_>>()
     });
     assert_eq!(fields, ["work", "https://home.example/"]);
     // Settings closed: what the trash takes from then on stays gone.
@@ -324,7 +405,10 @@ fn undo_brings_back_a_rule_the_trash_took_until_settings_closes(cx: &mut TestApp
 #[test]
 fn the_rules_read_with_their_spaces_names() {
     let rules = Rules {
-        rules: vec![rule(Condition::Contains, "work", WORK), rule(Condition::Is, "x", 9)],
+        rules: vec![
+            rule(Condition::Contains, "work", WORK),
+            rule(Condition::Is, "x", 9),
+        ],
         otherwise: 0,
     };
     let spaces = [(WORK, SharedString::from("Work"))];
@@ -342,15 +426,27 @@ fn the_rules_read_with_their_spaces_names() {
 fn little_ilo_is_the_default_and_a_rules_place() {
     let spaces = [WORK, HOME];
     let rules = Rules::default();
-    assert_eq!(rules.route("https://news.example/", &spaces), (LITTLE, None));
+    assert_eq!(
+        rules.route("https://news.example/", &spaces),
+        (LITTLE, None)
+    );
     assert_eq!(rules.to_text(&spaces), "");
     assert_eq!(Rules::parse("", &spaces), rules);
     let names = [(WORK, SharedString::from("Work"))];
     assert_eq!(rules.describe(&names), "none; everything else Little ilo");
-    let little = Rules { rules: vec![rule(Condition::Contains, "doc", LITTLE)], otherwise: 0 };
-    assert_eq!(little.route("https://doc.example/", &spaces), (LITTLE, Some(0)));
+    let little = Rules {
+        rules: vec![rule(Condition::Contains, "doc", LITTLE)],
+        otherwise: 0,
+    };
+    assert_eq!(
+        little.route("https://doc.example/", &spaces),
+        (LITTLE, Some(0))
+    );
     assert_eq!(little.route("https://news.example/", &spaces), (0, None));
-    assert_eq!(little.preview_route("https://doc.example/", &spaces, WORK), None);
+    assert_eq!(
+        little.preview_route("https://doc.example/", &spaces, WORK),
+        None
+    );
     let text = little.to_text(&spaces);
     assert_eq!(text, "rule\tcontains\tLittle ilo\tdoc\notherwise\t-\n");
     assert_eq!(Rules::parse(&text, &[15, 17]), little);
@@ -360,20 +456,32 @@ fn little_ilo_is_the_default_and_a_rules_place() {
 /// the Space in front takes Everything else back from it.
 #[gpui::test]
 fn the_pop_ups_pick_little_ilo_and_back(cx: &mut TestAppContext) {
-    let rules = Rules { rules: vec![rule(Condition::Contains, "work", WORK)], otherwise: LITTLE };
+    let rules = Rules {
+        rules: vec![rule(Condition::Contains, "work", WORK)],
+        otherwise: LITTLE,
+    };
     let (host, view, cx) = tab_view(rules, cx);
     host.answer.set(Some(2));
     click(cx, (SPACE_X, row_y(0)));
     let otherwise = otherwise(&view, cx);
     host.answer.set(Some(0));
     click(cx, otherwise);
-    let picked = Rules { rules: vec![rule(Condition::Contains, "work", LITTLE)], otherwise: 0 };
+    let picked = Rules {
+        rules: vec![rule(Condition::Contains, "work", LITTLE)],
+        otherwise: 0,
+    };
     assert_eq!(host.rules(), picked);
     host.answer.set(Some(3));
     click(cx, otherwise);
     let menus = host.menus.take();
     let ends = |menu: usize, items: &str| menus[menu].ends_with(&format!(": {items}"));
-    assert!(ends(1, "The Space in Front, Work, Home, Little ilo (checked)"), "{menus:?}");
-    assert!(ends(2, "The Space in Front (checked), Work, Home, Little ilo"), "{menus:?}");
+    assert!(
+        ends(1, "The Space in Front, Work, Home, Little ilo (checked)"),
+        "{menus:?}"
+    );
+    assert!(
+        ends(2, "The Space in Front (checked), Work, Home, Little ilo"),
+        "{menus:?}"
+    );
     assert_eq!(host.rules().otherwise, LITTLE);
 }
