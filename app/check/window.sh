@@ -169,16 +169,11 @@ check_layout "at launch"
 check_buttons "at launch"
 
 # A page shows black until its first frame while websites are told the appearance is dark, and
-# white while it's light, as Arc's does, following View › Appearance as it changes; its tab is
-# loading from the start. The page's w opens one whose server never answers, so it never commits,
-# and its URL, which a page asked for, stays hidden until it does.
+# white while it's light, as Arc's does, with View › Appearance on each in turn; its tab is loading
+# from the start. The page's w opens one whose server never answers, so it never commits, and its
+# URL, which a page asked for, stays hidden until it does. A page already waiting as the appearance
+# changes keeps its colour on the Mac until it draws, so each colour gets a page opened after it.
 first=$(today)
-send click $page_point
-send key w
-expect "^browser: tab [0-9]* opened by $first in the foreground\$" "the page didn't open a tab"
-tab=$(grep '^browser: tab [0-9]* opened by' "$log" | tail -1 | cut -d' ' -f3)
-expect "^browser: page $tab back 0 forward 0 loading 1 \$" \
-  "a tab opened to a page that hasn't come doesn't say it's loading"
 # Whether the colour "r g b" is black, or white with $2 light, as near as the capture keeps them.
 unpainted() {
   set -- $1 $2
@@ -193,6 +188,12 @@ for scheme in light dark; do
   [ $scheme = light ] || item=Dark hex=000000
   send menu "Appearance › $item"
   expect "^browser: appearance $scheme\$" "View › Appearance › $item didn't change the appearance"
+  send click $page_point
+  send key w
+  expect "^browser: tab [0-9]* opened by $first in the foreground\$" "the page didn't open a tab"
+  tab=$(grep '^browser: tab [0-9]* opened by' "$log" | tail -1 | cut -d' ' -f3)
+  expect "^browser: page $tab back 0 forward 0 loading 1 \$" \
+    "a tab opened to a page that hasn't come doesn't say it's loading"
   for _ in $(seq 20); do
     ../tools/window-screenshot.sh "$pid" "$out/before-paint-$scheme.png" ||
       fail "no window to capture"
@@ -204,12 +205,12 @@ for scheme in light dark; do
   [ "$(grep '^browser: page color ' "$log" | tail -1)" = "browser: page color $hex" ] ||
     fail "with View › Appearance › $item, the core wasn't given #$hex for a page not yet drawn"
   unpainted_seen="$unpainted_seen $scheme $seen,"
+  send key w cmd
+  expect_tabs "$first" "$first" "after closing the tab of the page that hasn't come"
 done
 send menu "Appearance › Automatic"
 expect '^browser: appearance automatic$' \
   "View › Appearance › Automatic didn't give back the system's appearance"
-send key w cmd
-expect_tabs "$first" "$first" "after closing the tab of the page that hasn't come"
 send click $page_point
 
 # 300 trackpad events of 10 points, 8 ms apart. X11's events carry no distance, so the Linux driver
@@ -728,6 +729,8 @@ for site_name in example.org example.com; do
   expect '^browser: command bar shown$' "⌘T with the sidebar hidden didn't open the command bar"
   send type $site_name
   send key return
+  # The plate is told once, at the first toast's rest: the second keeps it where it is.
+  [ "$site_name" = example.org ] && toast_step=$step
   expect "^browser: today [0-9][0-9]* $before\$" \
     "the tab for $site_name didn't open at the top of Today"
   expect '^browser: toast shown New Tab Created \[show\]$' \
@@ -744,7 +747,7 @@ recorded
 # A click 20 in from the plate's left, on its words, as there's no chip. The plate is logged in the
 # toast's window, whose width comes after it, at the content's right.
 expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]* in [0-9]* [0-9]*$' \
-  "the new tab's toast didn't tell where its plate is"
+  "the new tab's toast didn't tell where its plate is" "$toast_step"
 set -- $(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //; s/ in / /')
 send layout
 content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
