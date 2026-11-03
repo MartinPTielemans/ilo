@@ -1604,7 +1604,8 @@ fn main() {
                 let glyphs = std::env::var_os("PREVIEW_SPACE_ICONS").is_some();
                 // PREVIEW_SPACES=<count> makes that many, those past the two named by number, for
                 // a switcher and a Library's Spaces that run out of room.
-                let count = std::env::var("PREVIEW_SPACES").ok().and_then(|count| count.parse().ok());
+                let count = std::env::var("PREVIEW_SPACES").ok();
+                let count = count.and_then(|count| count.parse().ok());
                 let count: usize = count.unwrap_or(SPACES.len()).max(SPACES.len());
                 let named = (0..count).map(|index| match SPACES.get(index) {
                     Some(&(name, color)) => (name.to_string(), color),
