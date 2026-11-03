@@ -120,8 +120,11 @@ source_set("mini_player_place") {
     "mini_player_place.h",
   ]
 
-  # Its header's geometry is its callers' too.
-  public_deps = [ "//ui/gfx/geometry" ]
+  # Its header's geometry is its callers' too, and the geometry's headers need base's.
+  public_deps = [
+    "//base",
+    "//ui/gfx/geometry",
+  ]
 }
 
 # Which sidebar backups Arc's schedule keeps, apart so browser_core_unittests tests the rule
