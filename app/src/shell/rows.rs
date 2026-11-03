@@ -8,8 +8,9 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, Bounds, ClickEvent, Context, Div, MouseButton, MouseDownEvent, Pixels, Radians,
-    Role, SharedString, Transformation, Window, canvas, div, prelude::*, px, rgb, svg,
+    AnyElement, App, Bounds, ClickEvent, Context, Div, MouseButton, MouseDownEvent, MouseMoveEvent,
+    Pixels, Radians, Role, SharedString, Transformation, Window, canvas, div, prelude::*, px, rgb,
+    svg,
 };
 
 use super::{
@@ -44,6 +45,8 @@ pub(super) const CLEAR_TIP: &str = "Clear unpinned tabs in this space";
 pub(super) const REMOVE_TIP: &str = "Remove Tab";
 /// The remove button's glyph, in the icon picker's trash's style.
 const REMOVE: &str = "icons/trash.svg";
+/// What a split row's ✕ or − shows while ⌥ is held over it: a click separates its tabs.
+const SEPARATE: &str = "icons/ungroup.svg";
 /// The close button's glyphs, its two bars crossed or level, drawn rather than a file.
 pub(super) const CLOSE: &str = "close";
 pub(super) const UNLOAD: &str = "unload";
@@ -467,11 +470,18 @@ impl Shell {
     }
 
     /// The button that closes `tabs`, which shows under the pointer at a row's end: − on a pinned
-    /// row, which unloads them and keeps the row, else ✕.
+    /// row, which unloads them and keeps the row, else ✕. On a split's, ⌥ held turns it to
+    /// separate, which takes the tabs out of the split and closes none, as Arc's ⌥-click does.
     fn close_button(&self, tabs: Vec<u64>, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
-        let angle = if self.close_glyph(tabs[0]) == UNLOAD { 0. } else { 45. };
+        let row = tabs[0];
+        let angle = if self.close_glyph(row) == UNLOAD { 0. } else { 45. };
+        let split = tabs.len() > 1;
+        let glyph = match self.on_split_close == Some((row, true)) {
+            true => SEPARATE.into(),
+            false => super::assets::bars_path(angle),
+        };
         div()
-            .id(("close", tabs[0]))
+            .id(("close", row))
             .flex_none()
             .ml(px(4.))
             .mr(px(CLOSE_RIGHT))
@@ -484,19 +494,49 @@ impl Shell {
             // The bars as one glyph, so they don't darken where they cross (assets::bars).
             .child(
                 svg()
-                    .path(super::assets::bars_path(angle))
+                    .path(glyph)
                     .flex_none()
                     .size(px(CLOSE_GLYPH))
                     .text_color(self.palette.text(SECONDARY)),
             )
+            .when(split, |button| {
+                button
+                    .on_mouse_move(cx.listener(|shell, event: &MouseMoveEvent, _, cx| {
+                        shell.alt_on_close(event.modifiers.alt, cx)
+                    }))
+                    .on_hover(cx.listener(move |shell, hovered: &bool, window, cx| {
+                        // Off it, only its own: the pointer may be on another's already.
+                        if *hovered || shell.on_split_close.is_some_and(|(on, _)| on == row) {
+                            shell.on_split_close = hovered.then(|| (row, window.modifiers().alt));
+                            cx.notify();
+                        }
+                    }))
+            })
             // Not the row's press, which would show the tab before closing it.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             // A pinned tab closed unloads, which the core does for the same call.
-            .on_click(cx.listener(move |shell, _, _, cx| {
+            .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
                 cx.stop_propagation();
+                if split && event.modifiers().alt {
+                    log!("browser: command separate-split via sidebar");
+                    shell.on_split_close = None;
+                    // From the right, so the pages keep their order in the list.
+                    for &tab in tabs[1..].iter().rev() {
+                        shell.separate_tab(tab, cx);
+                    }
+                    return;
+                }
                 log!("browser: command close-tab via sidebar");
-                shell.close_row(tabs[0], cx);
+                shell.close_row(row, cx);
             }))
+    }
+
+    /// ⌥ is held, or not: a split row's ✕ or − under the pointer shows separate while it is.
+    pub(super) fn alt_on_close(&mut self, alt: bool, cx: &mut Context<Self>) {
+        if let Some((_, held)) = self.on_split_close.as_mut().filter(|(_, held)| *held != alt) {
+            *held = alt;
+            cx.notify();
+        }
     }
 
     /// Closes the row whose first tab is `row`, as its ✕ or − does. A pinned row keeps its place
@@ -2066,6 +2106,53 @@ mod tests {
         cx.run_until_parked();
         let (_, edits) = option_click(cx, 2, 40.);
         assert_eq!(edits, ["separate 3"], "the press on the second segment takes its tab out");
+    }
+
+    /// ⌥ held over a split row's ✕ turns it to separate, as Arc's does: the glyph follows the key
+    /// as the pointer moves or GPUI hears it, a click with ⌥ takes every tab out of the split from
+    /// the right and closes none, and without ⌥ the ✕ closes them. A tab's own ✕ never turns.
+    #[gpui::test]
+    fn option_on_a_split_rows_close_separates_it(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx, Vec::new(), vec![2, 3, 4, 5], 5);
+        shell.update(cx, |shell, cx| {
+            let split = crate::shell::Split { tabs: vec![2, 3, 4], ..Default::default() };
+            shell.set_tabs(1, Vec::new(), vec![2, 3, 4, 5], vec![split], Folders::default(), cx)
+        });
+        cx.run_until_parked();
+        let option = Modifiers { alt: true, ..Default::default() };
+        let (x, y) = close_button(&shell, cx, 2);
+        let at = point(px(x), px(y));
+        let shown =
+            |cx: &mut VisualTestContext| shell.read_with(cx, |shell, _| shell.on_split_close);
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(shown(cx), Some((2, false)));
+        cx.simulate_mouse_move(at + point(px(1.), px(0.)), None, option);
+        cx.run_until_parked();
+        assert_eq!(shown(cx), Some((2, true)), "⌥ held as the pointer moves");
+        // GPUI hears the keys while it has the keyboard, as in a field of the sidebar's.
+        cx.update(|window, cx| window.focus(&shell.read(cx).focus_handle.clone(), cx));
+        cx.simulate_modifiers_change(Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(shown(cx), Some((2, false)), "⌥ let go, heard by GPUI");
+        cx.simulate_modifiers_change(option);
+        cx.run_until_parked();
+        assert_eq!(shown(cx), Some((2, true)));
+
+        host.take();
+        host.take_edits();
+        cx.simulate_mouse_down(at, MouseButton::Left, option);
+        cx.simulate_mouse_up(at, MouseButton::Left, option);
+        cx.run_until_parked();
+        assert_eq!(host.take_edits(), ["separate 4", "separate 3"]);
+        assert!(!host.take().iter().any(|call| call.starts_with("close")));
+
+        let own = close_button(&shell, cx, 5);
+        move_to(cx, own);
+        assert_eq!(shown(cx), None, "a tab's own ✕ never turns");
+        cx.simulate_mouse_move(point(px(x), px(y + 300.)), None, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(shown(cx), None);
     }
 
     /// A row dragged onto a page shown alone finds a target at each of the card's edges, and let go

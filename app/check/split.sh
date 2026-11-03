@@ -648,6 +648,16 @@ expect "^browser: today $rows\$" "⌘Z didn't put the rested tab back in its row
 send key z cmd shift
 expect '^browser: command redo via \(ui\|page\)$' "⇧⌘Z didn't redo the split"
 expect "^browser: splits $onto+$dragged\$" "⇧⌘Z didn't join the tab again: \"$(splits)\""
+# ⌥-click on the split row's ✕ takes its tabs out of the split and closes neither, as Arc's does,
+# and ⌘Z joins them again.
+close="202 $(row "$(row_of "$onto")" | cut -d' ' -f2)"
+send move $close
+send click $close alt
+expect '^browser: command separate-split via sidebar$' "⌥-click on the split's ✕ didn't reach it"
+expect '^browser: splits $' "⌥-click on the split row's ✕ didn't separate it: \"$(splits)\""
+expect "^browser: today .*$onto $dragged" "⌥-click on the split row's ✕ lost a tab: \"$(today)\""
+send key z cmd
+expect "^browser: splits $onto+$dragged\$" "⌘Z didn't join what ⌥✕ separated: \"$(splits)\""
 # ⌥-click on a split's row takes the tab under it out, and on another tab's row joins that tab to
 # the page shown, on its right, as Arc's does.
 send click $(row "$(row_of "$onto")") alt
