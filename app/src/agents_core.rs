@@ -197,6 +197,29 @@ impl Browser for Core {
     fn give(&self, tab: u64, space: u64, _: &mut App) -> bool {
         unsafe { bc::bc_tab_give_to_agent(tab, space) }
     }
+
+    fn make_task_space(&self, agent: &str, agent_name: &str, like: u64, cx: &mut App) -> u64 {
+        let space = self.make_agent_space(agent, agent_name, cx);
+        let profile = unsafe { bc::bc_space_profile(like) };
+        if space != 0 && profile != 0 && !unsafe { bc::bc_space_set_profile(space, profile) } {
+            browser::log!("browser: task space {space} couldn't take profile {profile}");
+        }
+        space
+    }
+
+    fn delete_space(&self, space: u64, _: &mut App) {
+        unsafe { bc::bc_space_delete(space) };
+    }
+
+    fn task_spaces(&self) -> Vec<u64> {
+        (ids(bc::bc_spaces).into_iter())
+            .filter(|&space| agents::is_task(&name(bc::bc_space_agent, space)))
+            .collect()
+    }
+
+    fn move_tab(&self, tab: u64, space: u64, _: &mut App) {
+        unsafe { bc::bc_tab_move_to_space(tab, space) }
+    }
 }
 
 /// The tabs `copy` copies of `space`, as bc_space_today does.
@@ -223,12 +246,19 @@ pub fn start(cx: &mut App) {
         return;
     }
     let socket = agents::address(std::path::Path::new(&crate::profile_dir()));
-    // Beside the browser's executable: in the app bundle, or beside Chromium's on Linux.
-    let exe = std::env::current_exe().unwrap_or_default();
-    let bridge = agents::bridge::launch(
-        &exe.with_file_name(agents::bridge::NAME),
-        agents::bridge::flatpak_id().as_deref(),
-    );
+    // Beside the browser's executable: in the app bundle, or beside Chromium's on Linux and
+    // Windows, but in a copy the Store updates, whose folder moves with each update, its alias.
+    #[allow(unused_mut)]
+    let mut bridge = std::env::current_exe()
+        .unwrap_or_default()
+        .with_file_name(agents::bridge::NAME);
+    #[cfg(target_os = "windows")]
+    if crate::updated_by_store()
+        && let Ok(local) = std::env::var("LOCALAPPDATA")
+    {
+        bridge = agents::bridge::store_alias(&local);
+    }
+    let bridge = agents::bridge::launch(&bridge, agents::bridge::flatpak_id().as_deref());
     let made = Agents::new(
         Rc::new(Core),
         Arc::new(agents::System),
@@ -236,12 +266,24 @@ pub fn start(cx: &mut App) {
         socket,
         bridge,
     );
-    let made = cx.new(|_| made);
+    let made = cx.new(|cx| {
+        let mut made = made;
+        // A run before that ended without quitting left its tasks' Spaces.
+        made.end_old_tasks(cx);
+        made
+    });
     cx.set_global(GlobalAgents(made.clone()));
     // The bar in an agent's Space follows what it does, and what the user holds from it.
     cx.observe(&made, |agents, cx| {
         let status = agents.read(cx).status();
-        crate::update_shells_in(cx, |shell, cx| shell.set_agent_status(status.clone(), cx));
+        // Each card is compared with the last, so a window redraws only for a task that changed.
+        let cards = agents.read(cx).shown_cards(cx);
+        let archived = agents.read(cx).archived_tasks(cx);
+        let shells: Vec<_> = WINDOWS
+            .with_borrow(|windows| windows.iter().map(|window| window.shell.clone()).collect());
+        let conversation = |agent: &str, cx: &App| agents.read(cx).conversation(agent, cx);
+        browser::shell::send_agents(status, cards, archived, conversation, &shells, cx);
+        browser::command_bar::task_agents_changed(cx);
     })
     .detach();
     cx.spawn(async move |cx| {

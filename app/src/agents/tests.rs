@@ -38,6 +38,9 @@ struct Made {
     checked: RefCell<Vec<String>>,
     /// The app, which the core asks about the key press_key presses from inside bc_agent_page.
     app: RefCell<Option<gpui::AsyncApp>>,
+    /// The tasks' Spaces made, and the Spaces deleted.
+    task_spaces: RefCell<Vec<u64>>,
+    deleted: RefCell<Vec<u64>>,
 }
 
 impl Made {
@@ -195,6 +198,36 @@ impl Browser for Made {
         self.held.borrow_mut().remove(&tab);
         true
     }
+
+    /// A task's Space is 100 and up, in the order they're made, in the profile of `like`.
+    fn make_task_space(&self, agent: &str, name: &str, like: u64, _: &mut App) -> u64 {
+        let space = 100 + self.task_spaces.borrow().len() as u64;
+        self.made.borrow_mut().push((agent.into(), format!("{name} like {like}")));
+        self.agent_spaces.borrow_mut().insert(agent.into(), space);
+        self.task_spaces.borrow_mut().push(space);
+        space
+    }
+
+    fn delete_space(&self, space: u64, _: &mut App) {
+        self.deleted.borrow_mut().push(space);
+        self.agent_spaces.borrow_mut().retain(|_, each| *each != space);
+        self.tabs.borrow_mut().retain(|tab| tab.1 != space);
+    }
+
+    fn task_spaces(&self) -> Vec<u64> {
+        let deleted = self.deleted.borrow();
+        (self.task_spaces.borrow().iter()).filter(|space| !deleted.contains(space)).copied().collect()
+    }
+
+    /// As the core's: to the top of the Space's Today, which is first in `tabs`.
+    fn move_tab(&self, tab: u64, space: u64, _: &mut App) {
+        let mut tabs = self.tabs.borrow_mut();
+        if let Some(at) = tabs.iter().position(|each| each.0 == tab) {
+            let mut moved = tabs.remove(at);
+            moved.1 = space;
+            tabs.insert(0, moved);
+        }
+    }
 }
 
 /// The clients' configs as Connect and Disconnect left them.
@@ -227,6 +260,11 @@ impl Clients for Configs {
 
     fn found(&self, client: Client) -> bool {
         client == Client::Other || self.found.lock().unwrap().contains(&client)
+    }
+
+    /// The tests never run a CLI of this computer's: none is found.
+    fn look_for_task_cli(&self, _: crate::agents::runner::Cli) -> crate::agents::ready::Found {
+        crate::agents::ready::Found { ready: crate::agents::ready::Ready::NotFound, ..Default::default() }
     }
 }
 
@@ -276,10 +314,12 @@ fn call(
 ) -> mpsc::Receiver<ToolResult> {
     let (reply, answer) = mpsc::channel();
     let call = Call {
+        id: 0,
         agent: agent.into(),
         tool: tool.into(),
         arguments,
         reply,
+        at: std::time::Instant::now(),
     };
     agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
     answer
@@ -1412,7 +1452,7 @@ const CORE_ALLOWS: [&str; 13] = [
 /// so a tool or action that could reach them fails here until it's added on purpose, with its rule.
 #[gpui::test]
 fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
-    let listed = tools::list();
+    let listed = tools::list("claude-code");
     let names: Vec<&str> = (listed.as_array().unwrap().iter())
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
@@ -1480,5 +1520,947 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
     let page_actions = ["snapshot", "read_page", "click", "type", "press_key", "scroll"];
     for action in page_actions.into_iter().chain(["screenshot", "back", "hand_off", "close_tab"]) {
         assert!(checked.contains(action), "{action} didn't ask the core: {checked:?}");
+    }
+}
+
+/// Agent tasks: a task is an agent of its own, `task-<n>`, with a hidden Space in the profile it
+/// was asked from, and a card that says what it does.
+mod tasks {
+    use super::*;
+    use crate::agents::ready::{Found, Ready};
+    use crate::agents::runner::{self, Cli, Failure, Out};
+    use crate::agents::task::{AskedOn, Dot, State, TaskAction};
+
+    /// A stand-in for `claude` that keeps what it's sent beside itself, and never answers.
+    #[cfg(unix)]
+    fn fake_cli(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ilo-tasks-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let program = dir.join("claude");
+        std::fs::write(&program, "#!/bin/sh\nexec cat > \"$0.in\"\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        program
+    }
+
+    /// Agents on, with Claude signed in at `program`, and the user's Space 1.
+    fn ready(program: Option<PathBuf>, cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>) {
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let agents = agents(&browser, &configs, None, cx);
+        agents.update(cx, |agents, cx| {
+            agents.set_on(true, cx);
+            let found = Found { ready: Ready::SignedIn, program, ..Default::default() };
+            agents.tasks.found.insert(Cli::Claude, found);
+            agents.tasks.default = Some(Cli::Claude);
+        });
+        (agents, browser)
+    }
+
+    fn page() -> Option<AskedOn> {
+        Some(AskedOn {
+            url: "https://en.wikipedia.org/wiki/Arc_(web_browser)".into(),
+            title: "Arc (web browser)".into(),
+        })
+    }
+
+    fn start(agents: &Entity<Agents>, asked: &str, cx: &mut TestAppContext) -> String {
+        agents
+            .update(cx, |agents, cx| agents.start_task(Cli::Claude, asked, page(), 1, cx))
+            .expect("started")
+    }
+
+    fn card_of(agents: &Entity<Agents>, cx: &mut TestAppContext) -> crate::agents::task::Card {
+        agents.read_with(cx, |agents, cx| agents.cards(1, cx).remove(0))
+    }
+
+    fn said(agents: &Entity<Agents>, agent: &str, out: Out, cx: &mut TestAppContext) {
+        let event = runner::Event { agent: agent.into(), out };
+        agents.update(cx, |agents, cx| agents.task_said(event, cx));
+    }
+
+    #[cfg(unix)]
+    #[gpui::test]
+    fn a_task_runs_its_cli_with_the_ask_and_the_pages_address_alone(cx: &mut TestAppContext) {
+        let program = fake_cli("first");
+        let (agents, browser) = ready(Some(program.clone()), cx);
+        let agent = start(&agents, "Find a flight to Lisbon", cx);
+        assert_eq!(agent, "task-1");
+        // Its Space is the agent's own, in the profile of the Space it was asked in.
+        assert_eq!(browser.made.borrow().last().unwrap(), &("task-1".to_string(), "Claude like 1".to_string()));
+        let token = agents.read_with(cx, |agents, _| agents.task("task-1").unwrap().token().to_string());
+        assert_eq!(agents.read_with(cx, |agents, _| agents.tokens.lock().unwrap().get(&token).cloned()), Some(agent.clone()));
+        // The fake CLI has the first message once it reads it.
+        let input = program.with_extension("in");
+        let mut sent = String::new();
+        for _ in 0..200 {
+            sent = std::fs::read_to_string(&input).unwrap_or_default();
+            if !sent.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let message: Value = serde_json::from_str(sent.lines().next().unwrap()).unwrap();
+        assert_eq!(message["type"], json!("user"));
+        let text = message["message"]["content"].as_str().unwrap();
+        assert!(text.starts_with("Find a flight to Lisbon"));
+        assert!(text.contains("“Arc (web browser)”, https://en.wikipedia.org/wiki/Arc_(web_browser)"));
+        let card = card_of(&agents, cx);
+        assert_eq!((card.title.as_ref(), card.status.as_ref(), card.dot), ("Find a flight to Lisbon", "Thinking", Dot::Working));
+        // Dropped, its CLI ends and its Space goes.
+        agents.update(cx, |agents, cx| agents.end_tasks(cx));
+        assert_eq!(*browser.deleted.borrow(), vec![100]);
+        assert!(agents.read_with(cx, |agents, _| agents.tokens.lock().unwrap().is_empty() || !agents.tokens.lock().unwrap().contains_key(&token)));
+    }
+
+    #[gpui::test]
+    fn a_cli_not_installed_says_how_to_install_it(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        start(&agents, "Find a flight", cx);
+        let card = card_of(&agents, cx);
+        assert_eq!(card.status.as_ref(), "Claude isn't installed.");
+        assert_eq!(card.command, Some("npm install -g @anthropic-ai/claude-code"));
+        assert_eq!(card.dot, Dot::Ended);
+    }
+
+    #[gpui::test]
+    fn the_task_tools_are_a_tasks_alone(cx: &mut TestAppContext) {
+        let names = tools::names("task-1");
+        for tool in ["title", "ask", "finish", "open_tab", "hand_off"] {
+            assert!(names.iter().any(|name| name == tool), "{tool}");
+        }
+        assert!(!tools::names("claude-code").iter().any(|name| name == "finish"));
+        let (agents, _, _) = connected(cx);
+        let answer = call(&agents, "claude-code", "title", json!({ "text": "Flights" }), cx);
+        assert_eq!(answer.recv().unwrap(), ToolResult::error("There's no tool title."));
+        // A task that isn't one the user asked can't call anything.
+        let answer = call(&agents, "task-9", "list_tabs", json!({}), cx);
+        assert_eq!(answer.recv().unwrap(), ToolResult::error("This agent isn't connected."));
+    }
+
+    #[gpui::test]
+    fn title_ask_and_finish_show_on_the_card_and_in_the_log(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Find a flight to Lisbon", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        let answer = call(&agents, &agent, "title", json!({ "text": "Flights to Lisbon" }), cx);
+        assert!(!answer.recv().unwrap().error);
+        let asked = call(&agents, &agent, "ask", json!({ "question": "Which day?", "answers": ["Friday", "Saturday"] }), cx);
+        let card = card_of(&agents, cx);
+        assert_eq!(card.title.as_ref(), "Flights to Lisbon");
+        assert_eq!((card.status.as_ref(), card.dot), ("Which day?", Dot::Waiting));
+        assert_eq!(card.answers, vec![SharedString::from("Friday"), SharedString::from("Saturday")]);
+        assert!(asked.try_recv().is_err(), "ask waits for the user");
+        agents.update(cx, |agents, cx| agents.answer_task(&agent, "Saturday", cx));
+        assert_eq!(asked.recv().unwrap(), ToolResult::text("The user answered: Saturday"));
+        assert_eq!(card_of(&agents, cx).dot, Dot::Working);
+        browser.tabs.borrow_mut().push((30, 100, "Checkout", "https://shop.example/checkout"));
+        let done = call(&agents, &agent, "finish", json!({ "result": "Found a flight for €80.", "summary": "€80 flight, Saturday", "tabs": [30] }), cx);
+        assert!(!done.recv().unwrap().error);
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.dot), ("€80 flight, Saturday", Dot::Done));
+        assert_eq!(card.open, vec![(30, "shop.example".into())]);
+        let actions: Vec<String> = log(&agents, &agent, cx).into_iter().map(|(action, _, _)| action).collect();
+        assert_eq!(actions, ["finish", "answered", "ask", "title"], "newest first");
+        // The core's auto-archive taking its page leaves the card saying where it went.
+        let kept = browser.tabs.borrow_mut().pop().unwrap();
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.open), ("Its page went to the Archive", Vec::new()));
+        browser.tabs.borrow_mut().push(kept);
+        // Open <site> moves the tab to the user's Space.
+        let shown = agents.update(cx, |agents, cx| agents.open_result(&agent, None, cx));
+        assert_eq!(shown, Some(30), "it shows");
+        assert!(browser.tabs.borrow().contains(&(30, 1, "Checkout", "https://shop.example/checkout")));
+        assert_eq!(card_of(&agents, cx).open, Vec::new());
+    }
+
+    /// Finish can leave the user several pages, each once in the agent's order. Open moves them
+    /// all to the top of the Space it was asked in, in that order, the first to show; the strip's
+    /// Open moves the page shown alone, and the card counts what's left.
+    #[gpui::test]
+    fn finish_leaves_several_pages_and_open_moves_them_in_order(cx: &mut TestAppContext) {
+        use crate::agents::task::open_label;
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Tickets for two museums and a garden", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        browser.tabs.borrow_mut().extend([
+            (30, 100, "Tickets", "https://gulbenkian.pt/tickets"),
+            (31, 100, "Visit", "https://www.maat.pt/en/visit"),
+            (32, 100, "Garden", "https://estufafria.pt/"),
+        ]);
+        let finish = json!({ "result": "Tickets for all three.", "tabs": [31, 30, 31, 32] });
+        assert!(!call(&agents, &agent, "finish", finish, cx).recv().unwrap().error);
+        let card = card_of(&agents, cx);
+        let sites: Vec<_> = card.open.iter().map(|(tab, site)| (*tab, site.as_ref())).collect();
+        assert_eq!(sites, [(31, "maat.pt"), (30, "gulbenkian.pt"), (32, "estufafria.pt")]);
+        assert_eq!(open_label(&card.open).as_deref(), Some("Open 3 pages"));
+        assert_eq!(log(&agents, &agent, cx)[0].1, "3 pages", "the activity log's site");
+        // The strip's Open, on 30.
+        let (shown, _) = agents.update(cx, |agents, cx| agents.task_action(&agent, TaskAction::OpenTab(30), cx));
+        assert_eq!(shown, Some(30));
+        assert_eq!(open_label(&card_of(&agents, cx).open).as_deref(), Some("Open 2 pages"));
+        // The card's, the rest.
+        let (shown, _) = agents.update(cx, |agents, cx| agents.task_action(&agent, TaskAction::Open, cx));
+        assert_eq!(shown, Some(31), "the first shows");
+        let home: Vec<u64> = (browser.tabs.borrow().iter()).filter(|tab| tab.1 == 1 && tab.0 >= 30).map(|tab| tab.0).collect();
+        assert_eq!(home, [31, 32, 30], "at the top of its Today, in the agent's order, over the one opened before");
+        assert_eq!(card_of(&agents, cx).open, Vec::new());
+        // One page's chip names its site.
+        assert_eq!(open_label(&[(30, "gulbenkian.pt".into())]).as_deref(), Some("Open gulbenkian.pt"));
+    }
+
+    /// Finish leaves ten pages at most, and only the task's own, and says so when it's asked more,
+    /// or when its result has its other arguments written into it.
+    #[gpui::test]
+    fn finish_refuses_eleven_pages_a_page_not_its_own_or_a_garbled_result(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Every museum in Lisbon", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        browser.tabs.borrow_mut().extend((30..41).map(|tab| (tab, 100, "Tickets", "https://museum.example/tickets")));
+        let eleven: Vec<u64> = (30..41).collect();
+        let refused = call(&agents, &agent, "finish", json!({ "result": "Eleven museums.", "tabs": eleven }), cx);
+        let limit = "tabs takes 10 tabs at most: leave the user the 10 that matter most.";
+        assert_eq!(refused.recv().unwrap(), ToolResult::error(limit));
+        browser.tabs.borrow_mut().push((50, 1, "Yours", "https://example.com/"));
+        let refused = call(&agents, &agent, "finish", json!({ "result": "Two museums.", "tabs": [30, 50] }), cx);
+        let theirs = "Tab 50 isn't one of yours: give the ids of tabs in your Space, from list_tabs.";
+        assert_eq!(refused.recv().unwrap(), ToolResult::error(theirs));
+        // A result with its other arguments written into it, as Haiku wrote one, calls again.
+        let garbled = "MAAT opens at 10:00.</result>\n<parameter name=\"summary\">MAAT 10–19h";
+        let refused = call(&agents, &agent, "finish", json!({ "result": garbled }), cx);
+        assert_eq!(refused.recv().unwrap(), ToolResult::error(crate::agents::task::FINISH_AGAIN));
+        assert_eq!(card_of(&agents, cx).dot, Dot::Working, "it goes on");
+    }
+
+    /// The card has an ask's question alone, and the conversation what the user needs to know to
+    /// answer over it.
+    #[gpui::test]
+    fn an_asks_card_has_its_question_and_the_conversation_its_context(cx: &mut TestAppContext) {
+        use crate::agents::task::Line;
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Tickets for a museum on Saturday", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        let ask = json!({
+            "question": "Which would you rather visit?",
+            "context": "Gulbenkian opens at 10:00 and MAAT at 11:00.",
+            "answers": ["Gulbenkian", "MAAT"],
+        });
+        let _asked = call(&agents, &agent, "ask", ask, cx);
+        assert_eq!(card_of(&agents, cx).status.as_ref(), "Which would you rather visit?");
+        let conversation = agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+        let said = Line::Said("Gulbenkian opens at 10:00 and MAAT at 11:00.\n\nWhich would you rather visit?".into());
+        assert!(conversation.lines.contains(&said), "{:?}", conversation.lines);
+    }
+
+    /// An agent that puts it all in the question has the last sentence that asks on the card.
+    #[test]
+    fn a_long_ask_has_its_last_question_on_the_card() {
+        use crate::agents::task::card_question;
+        let cases = [
+            (
+                "Gulbenkian opens at 10:00 and MAAT at 11:00. Which would you rather visit? Both sell tickets online.",
+                "Which would you rather visit?",
+            ),
+            ("MAAT is by the river, i.e. in Belém. Is that too far?", "Is that too far?"),
+            ("Would you rather see MAAT, i.e. the one in Belém?", "Would you rather see MAAT, i.e. the one in Belém?"),
+            ("Two are open:\n- Gulbenkian\n- MAAT\nWhich one?", "Which one?"),
+            ("Pick one of the two.", "Pick one of the two."),
+        ];
+        for (asked, card) in cases {
+            assert_eq!(card_question(asked), card, "{asked}");
+        }
+    }
+
+    /// Finish's result is the answer: the same words written just before it show once, and what
+    /// the CLI writes after it doesn't show. Its summary is the card's line, whole: the card's
+    /// ellipsis is the only cut.
+    #[gpui::test]
+    fn finishs_result_is_the_answer_and_its_summary_is_whole(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "When does MAAT open?", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        said(&agents, &agent, Out::Said("MAAT opens at 11:00 on Saturday.".into()), cx);
+        let summary = "MAAT, Saturday from 11:00 to 19:00";
+        let finish = json!({ "result": "MAAT opens at 11:00 on Saturday.", "summary": summary });
+        assert!(!call(&agents, &agent, "finish", finish, cx).recv().unwrap().error);
+        said(&agents, &agent, Out::Said("Done: MAAT opens at 11:00 on Saturday.".into()), cx);
+        let conversation = agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+        let shown = format!("{:?}", conversation.lines);
+        assert_eq!(shown.matches("MAAT opens at 11:00 on Saturday.").count(), 1, "{shown}");
+        assert_eq!(card_of(&agents, cx).status.as_ref(), summary);
+    }
+
+    /// What Claude writes shows as it comes, under the trace under way, and once whole, still
+    /// once; a tool call takes it into the trace, where it showed.
+    #[gpui::test]
+    fn what_the_agent_writes_shows_as_it_comes_until_a_call_takes_it_in(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, TraceItem};
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "What's on at MAAT?", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        let shown = |cx: &mut TestAppContext| agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+        said(&agents, &agent, Out::Thought { text: "Look at its page.".into(), took: Duration::from_secs(1) }, cx);
+        said(&agents, &agent, Out::Writing(String::new()), cx);
+        said(&agents, &agent, Out::Writing("Two".into()), cx);
+        let conversation = shown(cx);
+        assert!(conversation.writing);
+        assert!(
+            matches!(&conversation.lines[..], [Line::Trace(trace), Line::Said(text)] if trace.running && text == "Two"),
+            "{:?}",
+            conversation.lines
+        );
+        said(&agents, &agent, Out::Writing("Two shows".into()), cx);
+        said(&agents, &agent, Out::Said("Two shows".into()), cx);
+        let conversation = shown(cx);
+        assert!(!conversation.writing, "it's whole");
+        assert_eq!(format!("{:?}", conversation.lines).matches("Two shows").count(), 1, "{:?}", conversation.lines);
+        assert_eq!(conversation.lines.last(), Some(&Line::Said("Two shows".into())));
+
+        said(&agents, &agent, Out::Calling, cx);
+        let lines = shown(cx).lines;
+        let said_in = |trace: &crate::agents::task::Trace| trace.items.contains(&TraceItem::Said("Two shows".into()));
+        assert!(matches!(&lines[..], [Line::Trace(trace)] if said_in(trace)), "{lines:?}");
+    }
+
+    /// A turn the user sends says Thinking at once, under their message and on the card, before
+    /// the CLI says anything; the agent's first step or message takes its place, and its result
+    /// folds it. Nothing waits on the CLI once it has answered.
+    #[cfg(unix)]
+    #[gpui::test]
+    fn a_sent_turn_thinks_until_the_agent_answers(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, NO_ANSWER};
+        let (agents, _) = ready(Some(fake_cli("thinking")), cx);
+        let agent = start(&agents, "What is my name?", cx);
+        let lines = |cx: &mut TestAppContext| agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap().lines);
+        let waiting = |cx: &mut TestAppContext| agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().waiting.is_some());
+        assert_eq!(lines(cx), [Line::Thinking { key: 0, failed: None }], "Run ↩ shows nothing");
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.dot), ("Thinking", Dot::Working));
+        assert!(waiting(cx), "nothing ends a CLI that never answers");
+
+        // Its first step takes the line's place, as a trace under way.
+        said(&agents, &agent, Out::Thought { text: "The user asks their name.".into(), took: Duration::from_secs(2) }, cx);
+        assert!(matches!(&lines(cx)[..], [Line::Trace(trace)] if trace.running && trace.steps() == 1), "{:?}", lines(cx));
+        assert!(!waiting(cx), "a timer is out once it answered");
+        said(&agents, &agent, Out::Said("I don't know your name.".into()), cx);
+        said(&agents, &agent, Out::Ended(None), cx);
+        assert_eq!(card_of(&agents, cx).dot, Dot::Done);
+
+        // A reply: Thinking again at once, under it, and the card's glyph goes back to working.
+        agents.update(cx, |agents, cx| agents.reply(&agent, "It's Ada.", cx));
+        let shown = lines(cx);
+        assert_eq!(shown[shown.len() - 2..], [Line::You("It's Ada.".into()), Line::Thinking { key: 1, failed: None }]);
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.dot), ("Thinking", Dot::Working));
+        // Its result folds it: the answer shows in its place.
+        said(&agents, &agent, Out::Said("Nice to meet you, Ada.".into()), cx);
+        said(&agents, &agent, Out::Ended(None), cx);
+        assert_eq!(lines(cx).last(), Some(&Line::Said("Nice to meet you, Ada.".into())));
+        assert!(!waiting(cx));
+        cx.executor().advance_clock(NO_ANSWER * 2);
+        cx.run_until_parked();
+        assert_eq!(card_of(&agents, cx).dot, Dot::Done, "a timer ended a task that had answered");
+        // Its CLI ends with the test's app, not before: ended here, the thread that reads it would
+        // wake the test's scheduler, which takes that for a test that isn't deterministic.
+    }
+
+    /// A CLI that never answers, or goes before it does, never leaves Thinking going: the line
+    /// says why the agent couldn't start, and the card why it stopped. A CLI that ends is a
+    /// thread's news, which a test's clock can't wait for, so the task here has none.
+    #[gpui::test]
+    fn a_turn_the_cli_never_answers_says_why(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, NO_ANSWER};
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "What is my name?", cx);
+        // As though its CLI started, and says nothing.
+        agents.update(cx, |agents, cx| {
+            agents.task_mut(&agent).unwrap().state = State::Working;
+            agents.wait_for_answer(&agent, cx);
+        });
+        let last = |cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap().lines.pop().unwrap())
+        };
+        cx.executor().advance_clock(NO_ANSWER - Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(last(cx), Line::Thinking { key: 0, failed: None }, "it gave up early");
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(last(cx), Line::Thinking { key: 0, failed: Some("Claude didn't answer".into()) });
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.dot), ("Claude didn't answer.", Dot::Ended));
+        assert!(agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().waiting.is_none()));
+
+        // A reply that can't start its CLI says why under it.
+        agents.update(cx, |agents, cx| agents.reply(&agent, "Are you there?", cx));
+        assert_eq!(last(cx), Line::Thinking { key: 0, failed: Some("Claude isn't installed".into()) });
+        // A CLI that goes before it answers says so.
+        agents.update(cx, |agents, cx| {
+            agents.task_mut(&agent).unwrap().state = State::Working;
+            agents.wait_for_answer(&agent, cx);
+        });
+        assert_eq!(last(cx), Line::Thinking { key: 0, failed: None });
+        said(&agents, &agent, Out::Gone(String::new()), cx);
+        assert_eq!(last(cx), Line::Thinking { key: 0, failed: Some("Claude stopped working".into()) });
+        assert!(agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().waiting.is_none()));
+    }
+
+    #[gpui::test]
+    fn a_long_answer_or_many_ask_in_the_conversation(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Plan a trip", cx);
+        let _asked = call(&agents, &agent, "ask", json!({
+            "question": "Where to?", "answers": ["Lisbon", "Porto", "Faro", "Madeira"],
+        }), cx);
+        assert!(card_of(&agents, cx).answers.is_empty());
+        // A reply answers it.
+        agents.update(cx, |agents, cx| agents.reply(&agent, "Porto", cx));
+        assert_eq!(_asked.recv().unwrap(), ToolResult::text("The user answered: Porto"));
+    }
+
+    #[gpui::test]
+    fn a_confirmation_or_a_handoff_waits_on_the_card(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Check my balance", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        let _opening = call(&agents, &agent, "open_tab", json!({ "url": "https://www.chase.com/" }), cx);
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.dot), ("Waiting for your OK", Dot::Waiting));
+        let question = card.question.expect("asked on the card");
+        assert_eq!((question.agent.as_ref(), question.from.as_ref()), ("Claude", "task-1"));
+        agents.update(cx, |agents, cx| agents.answer(question.id, Answer::Never, cx));
+        browser.tabs.borrow_mut().push((31, 100, "Sign in", "https://example.com/login"));
+        let _handed = call(&agents, &agent, "hand_off", json!({ "reason": "Sign in, please.", "tab": 31 }), cx);
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.dot), ("Waiting for you", Dot::Waiting));
+        assert_eq!(card.question.and_then(|question| question.handoff), Some(31));
+    }
+
+    /// An agent's calls on several tabs go at once (#1476), so its prompts can come together: they
+    /// show one at a time, in the order they came, the confirmation after the ask waiting for it.
+    #[gpui::test]
+    fn an_agents_prompts_show_one_at_a_time_in_turn(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Move the ten cases to Closed", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        let ask = json!({ "question": "Close all ten?", "answers": ["Yes", "No"] });
+        let asked = call(&agents, &agent, "ask", ask, cx);
+        let bank = json!({ "url": "https://www.chase.com/" });
+        let _opening = call(&agents, &agent, "open_tab", bank, cx);
+        let card = card_of(&agents, cx);
+        assert!(card.asks && card.question.is_none(), "the confirmation went first");
+        assert_eq!((card.status.as_ref(), card.answers.len()), ("Close all ten?", 2));
+        assert_eq!(*browser.asked.borrow(), None, "a window asked out of turn");
+        agents.update(cx, |agents, cx| agents.answer_task(&agent, "Yes", cx));
+        assert!(!asked.recv().unwrap().error);
+        let question = browser.asked.borrow().clone().expect("the confirmation never asked");
+        assert_eq!(question.from.as_ref(), agent);
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.asks), ("Waiting for your OK", false));
+    }
+
+    #[gpui::test]
+    fn limits_and_signing_out_say_what_to_do(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Find a flight", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        said(&agents, &agent, Out::Ended(Some(Failure::Limit(None))), cx);
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.retry), ("Claude hit its usage limit", true));
+        assert!(!card.finished(), "Retry waits for the reset");
+        let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 3600;
+        said(&agents, &agent, Out::Ended(Some(Failure::Limit(Some(at)))), cx);
+        let resets = crate::agents::local_time(at);
+        assert_eq!(card_of(&agents, cx).status.to_string(), format!("Limit resets at {resets}"));
+        let listed = agents.read_with(cx, |agents, _| agents.ask_agents());
+        assert_eq!(listed[0].resets.as_deref(), Some(resets.as_str()));
+        said(&agents, &agent, Out::Ended(Some(Failure::SignedOut)), cx);
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.command), ("Claude isn't signed in.", Some("claude auth login")));
+    }
+
+    #[gpui::test]
+    fn a_stopped_task_says_stopped_once_its_turn_ends(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Find a flight", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        agents.update(cx, |agents, cx| agents.stop_task(&agent, cx));
+        let interrupted = Failure::Other("Claude ran into an error.".into());
+        said(&agents, &agent, Out::Ended(Some(interrupted)), cx);
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.dot), ("Stopped", Dot::Ended));
+    }
+
+    /// Calls `tool` as the server does, which stamps when it started and, once answered, when it
+    /// ended: by `page` from the core, if it goes to one.
+    fn traced(
+        agents: &Entity<Agents>,
+        browser: &Made,
+        agent: &str,
+        tool: &str,
+        arguments: Value,
+        page: Option<String>,
+        cx: &mut TestAppContext,
+    ) -> ToolResult {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let (reply, answer) = mpsc::channel();
+        let at = std::time::Instant::now();
+        let call = Call { id, agent: agent.into(), tool: tool.into(), arguments, reply, at };
+        agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
+        let result = match page {
+            Some(text) => page_done(agents, browser, answer, text, cx),
+            None => answer.recv().unwrap(),
+        };
+        let error = result.error.then(|| result.text.clone());
+        let at = std::time::Instant::now();
+        let answered = Event::Answered { agent: agent.into(), id, at, error, image: result.image.clone() };
+        agents.update(cx, |agents, cx| agents.handle(answered, cx));
+        result
+    }
+
+    /// A task's calls are its conversation's trace, each titled by what it did and opening to what
+    /// it saw or why it failed. What it typed shows, but never what it typed into a password
+    /// field, though the field refused it.
+    #[gpui::test]
+    fn a_tasks_calls_are_its_trace_and_never_show_a_password(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, Opens, TraceItem};
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Use the coupon", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        browser.tabs.borrow_mut().push((30, 100, "Shop", "https://shop.example/basket"));
+        traced(&agents, &browser, &agent, "snapshot", json!({ "tab": 30 }), Some(shop_tree()), cx);
+        let coupon = json!({ "tab": 30, "ref": "e1", "text": "SPRING10" });
+        traced(&agents, &browser, &agent, "type", coupon, Some(shop_tree()), cx);
+        let password = json!({ "tab": 30, "ref": "e2", "text": "hunter2" });
+        assert!(traced(&agents, &browser, &agent, "type", password, None, cx).error);
+        traced(&agents, &browser, &agent, "screenshot", json!({ "tab": 30 }), Some("/9j/4AAQ".into()), cx);
+
+        let conversation = agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+        let [Line::Trace(trace)] = conversation.lines.as_slice() else { panic!("{:?}", conversation.lines) };
+        assert!(trace.running, "it's still at work");
+        let steps: Vec<_> = (trace.items.iter())
+            .filter_map(|item| match item {
+                TraceItem::Step(step) => Some(step),
+                TraceItem::Said(_) => None,
+            })
+            .collect();
+        let titles: Vec<_> = steps.iter().map(|step| (step.title.as_ref(), step.description.as_ref(), step.failed)).collect();
+        assert_eq!(
+            titles,
+            [
+                ("Read shop.example", "", false),
+                ("Typed “SPRING10” in “Coupon”", "", false),
+                ("Couldn't type in “Password”", "password field", true),
+                ("Looked at shop.example", "", false),
+            ]
+        );
+        assert!(matches!(&steps[2].opens, Opens::Text(why) if why.starts_with("Password fields are off limits")));
+        assert!(matches!(steps[3].opens, Opens::Picture(_)));
+        let card = card_of(&agents, cx);
+        assert_eq!(card.status.as_ref(), "Looked at shop.example", "the card says the step it's on");
+        assert!(!format!("{conversation:?}{card:?}").contains("hunter2"), "the password showed");
+        let log = format!("{:?}", log(&agents, &agent, cx));
+        assert!(!log.contains("hunter2"), "the password reached the activity log");
+    }
+
+    /// An open's line titles its site alone and opens to its whole address.
+    #[gpui::test]
+    fn an_open_line_titles_its_site_and_opens_to_its_address(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, Opens, TraceItem};
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "When does MAAT open?", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        let url = "https://www.maat.pt/en/visit?lang=en";
+        traced(&agents, &browser, &agent, "open_tab", json!({ "url": url }), Some(shop_tree()), cx);
+        let conversation = agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+        let [Line::Trace(trace)] = conversation.lines.as_slice() else { panic!("{:?}", conversation.lines) };
+        let [TraceItem::Step(step)] = trace.items.as_slice() else { panic!("{:?}", trace.items) };
+        assert_eq!((step.title.as_ref(), step.description.as_ref()), ("Opened maat.pt", ""));
+        assert!(matches!(&step.opens, Opens::Text(text) if text == url), "{:?}", step.opens);
+    }
+
+    /// A failed step says why when its error gives a reason, and nothing when it doesn't, as its
+    /// title already says it couldn't. A failed open opens to its address over the error.
+    #[test]
+    fn a_failed_step_says_why_only_when_it_knows() {
+        use crate::agents::task::{Line, Opens, TraceItem, Traced, fold};
+        let reasons = [
+            ("The tab couldn't open.", ""),
+            ("Timed out waiting for the page.", "timed out"),
+            ("The page answered HTTP 504.", "504"),
+            ("Tab 30 isn't an http or https page.", "not a web page"),
+            ("The page is still loading.", "still loading"),
+            ("There's no element e12 on the page.", "not found"),
+        ];
+        for (error, reason) in reasons {
+            assert_eq!(tools::reason(error), reason, "{error}");
+        }
+        let now = std::time::Instant::now();
+        let url = "https://www.maat.pt/en/visit";
+        let failed = Traced {
+            call: 1,
+            did: tools::Did { tool: "open_tab".into(), site: "maat.pt".into(), text: url.into(), ..Default::default() },
+            after: 0,
+            started: now,
+            ended: Some(now),
+            error: Some("Timed out waiting for the page.".into()),
+            picture: None,
+        };
+        let lines = fold(&[], &[failed], true, false, None);
+        let [Line::Trace(trace)] = lines.as_slice() else { panic!("{lines:?}") };
+        let [TraceItem::Step(step)] = trace.items.as_slice() else { panic!("{:?}", trace.items) };
+        assert_eq!((step.title.as_ref(), step.description.as_ref(), step.failed), ("Couldn't open maat.pt", "timed out", true));
+        let opens = format!("{url}\nTimed out waiting for the page.");
+        assert!(matches!(&step.opens, Opens::Text(text) if *text == opens), "{:?}", step.opens);
+    }
+
+    /// A step says what it did in the tense it's in: under way, done or failed. A field's text
+    /// shows only with the field's name, and a wait says what it waited for or how long.
+    #[test]
+    fn each_step_says_what_it_did_in_its_tense() {
+        use crate::agents::tools::{Did, Tense, step_title};
+        let did = |tool: &str, site: &str, target: &str, text: &str| Did {
+            tool: tool.into(),
+            site: site.into(),
+            target: target.into(),
+            text: text.into(),
+            ..Default::default()
+        };
+        let titles = [
+            (did("open_tab", "gulbenkian.pt", "", ""), Tense::Now, "Opening gulbenkian.pt"),
+            (did("navigate", "maat.pt", "", ""), Tense::Done, "Opened maat.pt"),
+            (did("open_tab", "maat.pt/en/visit", "", ""), Tense::Failed, "Couldn't open maat.pt/en/visit"),
+            (did("back", "maat.pt", "", ""), Tense::Done, "Went back on maat.pt"),
+            (did("read_page", "maat.pt", "", ""), Tense::Now, "Reading maat.pt"),
+            (did("snapshot", "maat.pt", "", ""), Tense::Done, "Read maat.pt"),
+            (did("screenshot", "maat.pt", "", ""), Tense::Done, "Looked at maat.pt"),
+            (did("click", "gulbenkian.pt", "“Reabertura do Museu”", ""), Tense::Done, "Clicked “Reabertura do Museu”"),
+            (did("type", "", "“Search”", "Lisbon"), Tense::Done, "Typed “Lisbon” in “Search”"),
+            (did("type", "", "“Search”", ""), Tense::Now, "Typing in “Search”"),
+            (did("press_key", "", "Enter", ""), Tense::Done, "Pressed Enter"),
+            (did("scroll", "maat.pt", "down", ""), Tense::Done, "Scrolled down on maat.pt"),
+            (did("scroll", "maat.pt", "“Opening hours”", ""), Tense::Now, "Scrolling to “Opening hours”"),
+            (did("wait", "", "2s", ""), Tense::Done, "Waited 2s"),
+            (did("wait", "", "“Tickets”", ""), Tense::Failed, "Didn't see “Tickets”"),
+            (did("list_tabs", "", "", ""), Tense::Done, "Looked over its tabs"),
+            (did("close_tab", "maat.pt", "", ""), Tense::Done, "Closed maat.pt"),
+            (did("ask", "", "", ""), Tense::Done, "Asked you"),
+            (did("thought", "", "", ""), Tense::Now, "Thinking"),
+            (did("thought", "", "", ""), Tense::Done, "Thought"),
+        ];
+        for (did, tense, title) in titles {
+            assert_eq!(step_title(&did, tense), title, "{did:?} {tense:?}");
+        }
+    }
+
+    /// The stretch under way is an open trace with what the agent said along the way in it; its
+    /// turn's message folds it to how long it worked, from its first step to that message.
+    #[test]
+    fn a_stretch_folds_when_its_turns_message_comes() {
+        use crate::agents::task::{Line, Message, TraceItem, Traced, Who, fold};
+        let start = std::time::Instant::now();
+        let at = |seconds: u64| start + Duration::from_secs(seconds);
+        let message = |who, text: &str, seconds| Message { who, text: text.to_string().into(), at: at(seconds) };
+        let step = |tool: &str, after, started, ended: Option<u64>| Traced {
+            call: 1,
+            did: tools::Did { tool: tool.into(), site: "maat.pt".into(), ..Default::default() },
+            after,
+            started: at(started),
+            ended: ended.map(at),
+            error: None,
+            picture: None,
+        };
+        let mut messages = vec![message(Who::User, "Museum hours", 0)];
+        let mut trace = vec![step("open_tab", 1, 1, Some(3))];
+        messages.push(message(Who::Agent, "Looking at MAAT first.", 3));
+        trace.push(step("read_page", 2, 4, None));
+
+        let lines = fold(&messages, &trace, false, true, None);
+        let [Line::You(_), Line::Trace(working)] = lines.as_slice() else { panic!("{lines:?}") };
+        assert!(working.running);
+        assert_eq!(working.summary(), ("Working".into(), "2 steps".into()));
+        assert!(matches!(&working.items[1], TraceItem::Said(said) if said == "Looking at MAAT first."));
+        let TraceItem::Step(last) = &working.items[2] else { panic!() };
+        assert!(last.running, "the step under way shimmers");
+
+        trace[1].ended = Some(at(6));
+        messages.push(message(Who::Agent, "MAAT opens at 10:00.", 41));
+        let lines = fold(&messages, &trace, true, false, None);
+        let [Line::You(_), Line::Trace(worked), Line::Said(said)] = lines.as_slice() else { panic!("{lines:?}") };
+        assert!(!worked.running);
+        assert_eq!(worked.summary(), ("Worked for 40s".into(), "2 steps".into()));
+        assert_eq!(said.as_ref(), "MAAT opens at 10:00.");
+        assert_eq!(worked.key, working.key, "the user's opening of it carries across its end");
+        assert!(worked.items.iter().all(|item| !matches!(item, TraceItem::Step(step) if step.running)));
+    }
+
+    /// A reply leaves the turn before it as it was, its answer and how long it worked, as the
+    /// next turn gets under way.
+    #[test]
+    fn a_reply_leaves_the_turn_before_it_as_it_was() {
+        use crate::agents::task::{Line, Message, Traced, Who, fold};
+        let start = std::time::Instant::now();
+        let at = |seconds: u64| start + Duration::from_secs(seconds);
+        let message = |who, text: &str, seconds| Message { who, text: text.to_string().into(), at: at(seconds) };
+        let trace = vec![Traced {
+            call: 1,
+            did: tools::Did { tool: "open_tab".into(), site: "maat.pt".into(), ..Default::default() },
+            after: 1,
+            started: at(1),
+            ended: Some(at(3)),
+            error: None,
+            picture: None,
+        }];
+        let mut messages = vec![message(Who::User, "Museum hours", 0), message(Who::Result, "MAAT opens at 10:00.", 5)];
+        let before = fold(&messages, &trace, true, false, None);
+        messages.push(message(Who::User, "And on Sunday?", 9));
+        let lines = fold(&messages, &trace, false, true, None);
+        assert_eq!(lines[..before.len()], before[..], "{lines:?}");
+        assert_eq!(lines.last(), Some(&Line::You("And on Sunday?".into())));
+    }
+
+    /// A turn's same step on ten tabs is one line with how many, which opens to each tab's line by
+    /// its address, whether the agent's calls came at once, interleaved, or one after another.
+    /// Each tab's steps still read in their order (#1476).
+    #[test]
+    fn a_turns_same_step_on_many_tabs_is_one_line() {
+        use crate::agents::task::{Line, Message, Opens, TraceItem, Traced, Who, fold};
+        let start = std::time::Instant::now();
+        let at = |seconds: u64| start + Duration::from_secs(seconds);
+        let step = |tool: &str, tab: u64, target: &str, seconds: u64| Traced {
+            call: 1,
+            did: tools::Did {
+                tool: tool.into(),
+                site: "cases.example".into(),
+                target: target.into(),
+                // A page it opens makes its tab.
+                tab: (tool != "open_tab").then_some(tab),
+                page: format!("cases.example/{tab}"),
+                ..Default::default()
+            },
+            after: 1,
+            started: at(seconds),
+            ended: Some(at(seconds + 1)),
+            error: None,
+            picture: None,
+        };
+        let messages = [Message { who: Who::User, text: "Close cases 1 to 10".into(), at: at(0) }];
+        let lines = |trace: &[Traced]| {
+            let lines = fold(&messages, trace, false, true, None);
+            let [Line::You(_), Line::Trace(trace)] = lines.as_slice() else { panic!("{lines:?}") };
+            (trace.items.iter())
+                .map(|item| match item {
+                    TraceItem::Step(step) => step.clone(),
+                    TraceItem::Said(said) => panic!("{said}"),
+                })
+                .collect::<Vec<_>>()
+        };
+        let titles = |trace: &[Traced]| {
+            (lines(trace).iter())
+                .map(|step| (step.title.to_string(), step.description.to_string()))
+                .collect::<Vec<_>>()
+        };
+        let mut trace: Vec<Traced> = (1..=10).map(|tab| step("open_tab", tab, "", 1)).collect();
+        // A wait then a read on each tab, whose steps come as each tab gets to them.
+        for tab in 1..=10 {
+            trace.push(step("wait", tab, "“Ready”", 3));
+            if tab > 1 {
+                trace.push(step("snapshot", tab - 1, "", 4));
+            }
+        }
+        trace.push(step("snapshot", 10, "", 4));
+        trace.extend((1..=10).map(|tab| step("click", tab, "“Closed”", 6)));
+        trace.last_mut().unwrap().ended = None;
+        let owned = |pairs: &[(&str, &str)]| {
+            (pairs.iter())
+                .map(|(title, description)| (title.to_string(), description.to_string()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            titles(&trace),
+            owned(&[
+                ("Opened 10 pages", "1s"),
+                ("Waited for “Ready” on 10 pages", ""),
+                ("Read 10 pages", "1s"),
+                ("Clicking “Closed” on 10 pages", "9 of 10"),
+            ])
+        );
+        let clicks = lines(&trace).pop().unwrap();
+        assert!(clicks.running, "the step under way shimmers");
+        let Opens::Steps(tabs) = &clicks.opens else { panic!("{:?}", clicks.opens) };
+        let addresses: Vec<String> = tabs.iter().map(|tab| tab.title.to_string()).collect();
+        assert_eq!(addresses, (1..=10).map(|tab| format!("cases.example/{tab}")).collect::<Vec<_>>());
+
+        // One tab's click failed: the line says how many, and the tab's says why.
+        let last = trace.last_mut().unwrap();
+        (last.ended, last.error) = (Some(at(7)), Some("There's no element e7 on the page.".into()));
+        let clicks = lines(&trace).pop().unwrap();
+        let said = (clicks.title.as_ref(), clicks.description.as_ref());
+        assert_eq!(said, ("Clicked “Closed” on 10 pages", "1 failed"));
+        let Opens::Steps(tabs) = &clicks.opens else { panic!() };
+        assert!(clicks.failed && tabs[9].failed && !tabs[8].failed);
+        assert_eq!(tabs[9].description.as_ref(), "not found");
+
+        // One after another, a step that came on a tab since a line began starts a line of its
+        // own, so tab 1's second click reads after its wait.
+        let trace = [
+            step("click", 1, "“Save”", 10),
+            step("wait", 1, "“Saved”", 11),
+            step("click", 2, "“Save”", 12),
+            step("wait", 2, "“Saved”", 13),
+            step("click", 1, "“Save”", 14),
+        ];
+        assert_eq!(
+            titles(&trace),
+            owned(&[
+                ("Clicked “Save” on 2 pages", "3s"),
+                ("Waited for “Saved” on 2 pages", ""),
+                ("Clicked “Save”", "1s"),
+            ])
+        );
+    }
+
+    #[gpui::test]
+    fn a_turn_ending_without_finish_is_done(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "What's on today?", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        said(&agents, &agent, Out::Said("## Today\n\n**Three meetings**, the first at 9.".into()), cx);
+        said(&agents, &agent, Out::Ended(None), cx);
+        let card = card_of(&agents, cx);
+        // The tick says it's done, so the line says what the result does.
+        assert_eq!((card.status.as_ref(), card.dot), ("Today", Dot::Done));
+        assert!(card.finished());
+    }
+
+    #[gpui::test]
+    fn stop_ends_it_and_refuses_what_waits(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Check my balance", cx);
+        agents.update(cx, |agents, _| agents.task_mut(&agent).unwrap().state = State::Working);
+        let opening = call(&agents, &agent, "open_tab", json!({ "url": "https://www.chase.com/" }), cx);
+        agents.update(cx, |agents, cx| agents.stop_task(&agent, cx));
+        assert_eq!(opening.recv().unwrap(), ToolResult::error(STOPPED));
+        let card = card_of(&agents, cx);
+        assert_eq!((card.status.as_ref(), card.question), ("Stopped", None));
+        // Its turn ending after the stop leaves it stopped.
+        said(&agents, &agent, Out::Ended(None), cx);
+        assert_eq!(card_of(&agents, cx).status.as_ref(), "Stopped");
+    }
+
+    #[gpui::test]
+    fn dismissed_tasks_come_back(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        let first = start(&agents, "One", cx);
+        let second = start(&agents, "Two", cx);
+        agents.update(cx, |agents, cx| {
+            agents.task_mut(&first).unwrap().state = State::Done { result: "Did one.".into(), summary: None, tabs: Vec::new() };
+            agents.task_mut(&second).unwrap().state = State::Working;
+            let _ = cx;
+        });
+        let titles = |agents: &Entity<Agents>, cx: &mut TestAppContext| -> Vec<String> {
+            agents.read_with(cx, |agents, cx| agents.cards(1, cx).into_iter().map(|card| card.title.to_string()).collect())
+        };
+        assert_eq!(titles(&agents, cx), ["Two", "One"], "newest on top");
+        agents.update(cx, |agents, cx| agents.dismiss_task(&first, cx));
+        assert_eq!(titles(&agents, cx), ["Two"]);
+        agents.update(cx, |agents, cx| agents.dismiss_task(&second, cx));
+        assert!(titles(&agents, cx).is_empty());
+        assert_eq!(agents.update(cx, |agents, cx| agents.restore_task(None, cx)), Some(second.clone()));
+        assert_eq!(agents.update(cx, |agents, cx| agents.restore_task(None, cx)), Some(first.clone()));
+        assert_eq!(titles(&agents, cx), ["Two", "One"]);
+        // Past the last few dismissed, a task goes for good, with its Space.
+        for each in 0..11 {
+            let agent = start(&agents, &format!("Task {each}"), cx);
+            agents.update(cx, |agents, cx| agents.dismiss_task(&agent, cx));
+        }
+        assert_eq!(*browser.deleted.borrow(), vec![102]);
+    }
+
+    /// The Archive lists the dismissed tasks, the last to leave the foot first, each with how it
+    /// ended and when. Delete from Archive takes one out of the list and out of ⇧⌘T's reach, and
+    /// ⌘Z's Undelete puts it back.
+    #[gpui::test]
+    fn the_archive_lists_dismissed_tasks_until_one_is_deleted(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let first = start(&agents, "One", cx);
+        let second = start(&agents, "Two", cx);
+        let ended = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        agents.update(cx, |agents, _| {
+            let task = agents.task_mut(&first).unwrap();
+            task.state = State::Done { result: "Did one.".into(), summary: None, tabs: Vec::new() };
+            task.ended = Some(ended);
+            agents.task_mut(&second).unwrap().state = State::Working;
+        });
+        agents.update(cx, |agents, cx| agents.dismiss_task(&first, cx));
+        agents.update(cx, |agents, cx| agents.dismiss_task(&second, cx));
+        let listed = |agents: &Entity<Agents>, cx: &mut TestAppContext| -> Vec<(String, String, Dot)> {
+            agents.read_with(cx, |agents, cx| {
+                let tasks = agents.archived_tasks(cx).into_iter();
+                tasks.map(|task| (task.agent.to_string(), task.about.to_string(), task.dot)).collect()
+            })
+        };
+        let now = listed(&agents, cx);
+        assert_eq!(now.iter().map(|(agent, ..)| agent.clone()).collect::<Vec<_>>(), [second.clone(), first.clone()]);
+        let at = crate::agents::local_time(1_700_000_000);
+        assert_eq!(now[1], (first.clone(), format!("Claude · Done {at}"), Dot::Done));
+        // Dismissed while it worked, it stopped then.
+        assert!(now[0].1.starts_with("Claude · Stopped "), "{}", now[0].1);
+        assert_eq!(now[0].2, Dot::Ended);
+
+        agents.update(cx, |agents, cx| agents.task_action(&second, TaskAction::Delete, cx));
+        assert_eq!(listed(&agents, cx).len(), 1);
+        assert_eq!(agents.update(cx, |agents, cx| agents.restore_task(None, cx)), Some(first.clone()));
+        assert_eq!(agents.update(cx, |agents, cx| agents.restore_task(None, cx)), None, "⇧⌘T brought back a deleted task");
+        agents.update(cx, |agents, cx| agents.task_action(&second, TaskAction::Undelete, cx));
+        assert_eq!(listed(&agents, cx).len(), 1);
+        assert_eq!(agents.update(cx, |agents, cx| agents.restore_task(None, cx)), Some(second.clone()));
+        assert!(listed(&agents, cx).is_empty());
+    }
+
+    #[gpui::test]
+    fn the_spaces_a_run_before_left_go_at_launch(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        browser.task_spaces.borrow_mut().extend([100, 101]);
+        agents.update(cx, |agents, cx| agents.end_old_tasks(cx));
+        assert_eq!(*browser.deleted.borrow(), vec![100, 101]);
+    }
+
+    #[gpui::test]
+    fn ask_lists_the_signed_in_with_the_default_first(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        agents.update(cx, |agents, cx| {
+            let found = Found { ready: Ready::SignedIn, ..Default::default() };
+            agents.tasks.found.insert(Cli::Codex, found);
+            agents.set_default_task_agent(Cli::Codex, cx);
+        });
+        let listed: Vec<Cli> = agents.read_with(cx, |agents, _| agents.ask_agents().into_iter().map(|agent| agent.cli).collect());
+        assert_eq!(listed, [Cli::Codex, Cli::Claude]);
+        agents.update(cx, |agents, cx| {
+            agents.tasks.found.get_mut(&Cli::Codex).unwrap().ready = Ready::SignedOut;
+            agents.set_on(false, cx);
+        });
+        assert!(agents.read_with(cx, |agents, _| agents.ask_agents()).is_empty(), "off lists none");
+    }
+
+    #[gpui::test]
+    fn the_default_and_models_are_saved(cx: &mut TestAppContext) {
+        let folder = std::env::temp_dir().join(format!("ilo-task-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("Agents");
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let agents = agents(&browser, &configs, Some(path.clone()), cx);
+        agents.update(cx, |agents, cx| {
+            agents.set_default_task_agent(Cli::Codex, cx);
+            agents.set_task_model(Cli::Claude, "haiku", cx);
+        });
+        let again = super::agents(&browser, &configs, Some(path.clone()), cx);
+        let saved = std::fs::read_to_string(&path).unwrap();
+        again.update(cx, |agents, cx| agents.load(&saved, cx));
+        again.read_with(cx, |agents, _| {
+            assert_eq!(agents.tasks.default, Some(Cli::Codex));
+            assert_eq!(agents.task_model(Cli::Claude), "haiku");
+            assert_eq!(agents.task_model(Cli::Codex), "");
+        });
+        std::fs::remove_dir_all(folder).unwrap();
     }
 }

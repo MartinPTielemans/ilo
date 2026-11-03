@@ -51,10 +51,18 @@ pub extern "C" fn host_add_menu_window(
 }
 
 /// The menu's window takes the pointer on its `panels`, from its top left, and lets it through to
-/// the browser window in their shadows' room round them, where a press is outside the menu.
-pub(crate) fn take_pointer_on(panels: &[Bounds<Pixels>]) {
-    if let Some(menu) = MENU.get() {
-        gpui_linux::set_overlay_pointer(menu.view, Some(panels));
+/// the browser window in their shadows' room round them, where a press is outside the menu. Where
+/// overlays can't blend, it's also cut to them, as the room round them would show black (#1479).
+pub(crate) fn set_panels(panels: &[Bounds<Pixels>]) {
+    let Some(menu) = MENU.get() else { return };
+    gpui_linux::set_overlay_pointer(menu.view, Some(panels));
+    if !gpui_linux::overlays_blend() {
+        let square = |panel: &Bounds<Pixels>| {
+            let (left, top) = (f32::from(panel.left()), f32::from(panel.top()));
+            let (right, bottom) = (f32::from(panel.right()), f32::from(panel.bottom()));
+            vec![(left, top, 0.), (right, top, 0.), (right, bottom, 0.), (left, bottom, 0.)]
+        };
+        gpui_linux::set_overlay_outlines(menu.view, &panels.iter().map(square).collect::<Vec<_>>());
     }
 }
 

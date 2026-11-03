@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 
 use browser::account::{self, Account};
 use browser::agents::{self, Agents, Client};
+use browser::agents::ready::Ready;
+use browser::agents::runner::Cli;
 use browser::build_info;
 use browser::default_browser::{self, DefaultBrowser, Os};
 use browser::dialog;
@@ -401,6 +403,10 @@ enum Popup {
     ProfileArchiveAfter(u64),
     /// A profile's New Documents.
     Notes(u64),
+    /// Run tasks on, in the Agents tab.
+    TaskAgent,
+    /// The model a CLI runs tasks with.
+    TaskModel(Cli),
 }
 
 pub struct Settings {
@@ -698,6 +704,12 @@ fn off_sites() -> Vec<OffSite> {
 fn profiles() -> Vec<Profile> {
     let in_space = |space| unsafe { bc::bc_space_profile(space) };
     let spaces: Vec<u64> = crate::ids(bc::bc_spaces).into_iter().map(in_space).collect();
+    // A task's Space is never listed as a Space, so its profile's count leaves it out, though it
+    // keeps the profile from being deleted.
+    let listed = crate::ids(bc::bc_spaces).into_iter().filter(|&space| {
+        !agents::is_task(&crate::name(bc::bc_space_agent, space))
+    });
+    let listed: Vec<u64> = listed.map(in_space).collect();
     let users = crate::ids(bc::bc_spaces).into_iter().filter(|&space| {
         crate::name(bc::bc_space_agent, space).is_empty()
     });
@@ -710,7 +722,7 @@ fn profiles() -> Vec<Profile> {
             Profile {
                 id,
                 name: crate::name(bc::bc_profile_name, id),
-                spaces: count,
+                spaces: listed.iter().filter(|&&each| each == id).count(),
                 deletable: index > 0 && count == 0 && !favorites.contains(&id),
                 users_space: users.contains(&id),
             }
@@ -873,7 +885,10 @@ fn show_now(cx: &mut App) {
 /// Looks again for the agent clients on this computer, as the Agents tab shows.
 fn look_for_clients(cx: &mut App) {
     if let Some(agents) = agents::global(cx) {
-        agents.update(cx, |agents, cx| agents.look_for_clients(cx));
+        agents.update(cx, |agents, cx| {
+            agents.look_for_clients(cx);
+            agents.look_for_task_agents(cx);
+        });
     }
 }
 
@@ -2166,18 +2181,30 @@ impl Settings {
                 let grants = self.grants(agents, client, cx);
                 let entries: Vec<gpui::Div> = (model.activity(client.id()).take(ACTIVITY_SHOWN))
                     .map(|entry| {
-                        let what = agents::tools::describe(&entry.action);
+                        // Each entry in the words a task's trace says its steps in.
+                        let title = |entry: &agents::Activity| {
+                            let did = agents::tools::Did {
+                                tool: entry.action.to_string(),
+                                site: entry.site.to_string(),
+                                ..Default::default()
+                            };
+                            let tense = match entry.refused.is_empty() {
+                                true => agents::tools::Tense::Done,
+                                false => agents::tools::Tense::Failed,
+                            };
+                            agents::tools::step_title(&did, tense)
+                        };
+                        let what = title(entry);
                         let refused = (entry.steps.iter().map(|step| &step.refused))
                             .find(|refused| !refused.is_empty())
                             .unwrap_or(&entry.refused);
-                        let steps = (entry.steps.iter())
-                            .map(|step| agents::tools::describe(&step.action));
+                        let steps = entry.steps.iter().map(title);
                         let detail: SharedString = if !refused.is_empty() {
                             format!("Refused: {refused}").into()
                         } else if !entry.steps.is_empty() {
                             steps.collect::<Vec<_>>().join(" · ").into()
                         } else {
-                            entry.site.clone()
+                            SharedString::default()
                         };
                         let detail = Some(detail).filter(|detail| !detail.is_empty());
                         let ago = div().flex_none().ml(px(PADDING)).text_color(rgb(DETAIL));
@@ -2211,8 +2238,139 @@ impl Settings {
             )
             .child(div().flex_none().ml(px(PADDING)).child(switch))]))
             .child(group(&RowLook::settings(), clients))
+            .child(self.tasks(agents, cx).mt(px(SECTION_GAP - BOX_GAP)))
             .child(activity.mt(px(SECTION_GAP - BOX_GAP)))
             .into_any_element()
+    }
+
+    /// The tasks ⇥ asks in ⌘T: the agent they run on, then each CLI, whether it's installed and
+    /// signed in, with the command that does it to copy, as ilo runs neither, and the model it runs
+    /// tasks with.
+    fn tasks(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> gpui::Div {
+        let model = agents.read(cx);
+        let ready: Vec<Cli> =
+            Cli::ALL.into_iter().filter(|cli| model.found(*cli) == Ready::SignedIn).collect();
+        let default = model.default_task_agent().filter(|cli| ready.contains(cli));
+        let run_on = match default {
+            Some(default) => {
+                let agents = agents.clone();
+                let popup = self.popup(
+                    Popup::TaskAgent,
+                    default.name().into(),
+                    POPUP_WIDTH,
+                    cx.listener(move |settings, _, window, cx| {
+                        settings.choose_task_agent(&agents, window, cx)
+                    }),
+                );
+                let detail = "⇥ in the command bar gives the task to this agent";
+                described(None, "Run tasks on".into(), Some(detail.into())).child(popup)
+            }
+            None => described(
+                None,
+                "Run tasks on".into(),
+                Some("Claude or Codex, once one below is signed in".into()),
+            ),
+        };
+        let rows = Cli::ALL.map(|cli| self.task_agent(agents, cli, cx));
+        let rows = std::iter::once(run_on).chain(rows);
+        div().flex().flex_col().child(header("Tasks")).child(group(&RowLook::settings(), rows))
+    }
+
+    /// A CLI's row: Signed in with its Model pop-up, or what to run in a terminal to install it or
+    /// sign in, with Copy.
+    fn task_agent(&self, agents: &Entity<Agents>, cli: Cli, cx: &mut Context<Self>) -> gpui::Div {
+        let model = agents.read(cx);
+        let (detail, command): (SharedString, _) = match model.found(cli) {
+            Ready::Unknown => ("Looking…".into(), None),
+            Ready::NotFound => (format!("Not found. Install it with {}", cli.install()).into(), Some(cli.install())),
+            Ready::SignedOut => (format!("Not signed in. Run {} in a terminal", cli.sign_in()).into(), Some(cli.sign_in())),
+            Ready::SignedIn => ("Signed in".into(), None),
+        };
+        let row = described(Some((cli.glyph(), CLIENT_TILE)), cli.name().into(), Some(detail));
+        if let Some(command) = command {
+            let copy = button(&RowLook::settings(), ("copy-task-command", cli as usize), "Copy")
+                .ml(px(PADDING))
+                .on_click(move |_, _, cx| {
+                    // check.sh reads this line.
+                    log!("browser: task command copied {command}");
+                    cx.write_to_clipboard(ClipboardItem::new_string(command.to_string()));
+                });
+            return row.child(copy);
+        }
+        if model.found(cli) != Ready::SignedIn {
+            return row;
+        }
+        let chosen = model.task_model(cli).to_string();
+        let models = model.task_models(cli);
+        let label: SharedString = match models.iter().find(|(id, _)| *id == chosen) {
+            Some((_, name)) => name.clone().into(),
+            None if chosen.is_empty() => MenuEntry::label("Default"),
+            None => chosen.clone().into(),
+        };
+        let agents = agents.clone();
+        let popup = self.popup(
+            Popup::TaskModel(cli),
+            label,
+            POPUP_WIDTH,
+            cx.listener(move |settings, _, window, cx| {
+                settings.choose_task_model(&agents, cli, window, cx)
+            }),
+        );
+        row.child(popup.ml(px(PADDING)))
+    }
+
+    /// Opens Run tasks on's menu of the signed-in agents, and makes the one picked the default.
+    fn choose_task_agent(&mut self, agents: &Entity<Agents>, window: &Window, cx: &mut Context<Self>) {
+        let model = agents.read(cx);
+        let ready: Vec<Cli> =
+            Cli::ALL.into_iter().filter(|cli| model.found(*cli) == Ready::SignedIn).collect();
+        let chosen = model.default_task_agent();
+        let items = (ready.iter())
+            .map(|&cli| {
+                let on = Some(cli) == chosen;
+                MenuEntry { checked: on, over: on, ..MenuEntry::named(cli.name(), true) }
+            })
+            .collect();
+        let (settings, agents) = (cx.weak_entity(), agents.clone());
+        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
+            if let Some(&cli) = picked.and_then(|index| ready.get(index)) {
+                // check.sh waits for this line.
+                log!("browser: tasks run on {}", cli.id());
+                agents.update(cx, |agents, cx| agents.set_default_task_agent(cli, cx));
+            }
+            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
+        });
+        self.pop_up(Popup::TaskAgent, items, picked, window, cx);
+    }
+
+    /// Opens a CLI's Model menu: its own default first, then its models.
+    fn choose_task_model(
+        &mut self,
+        agents: &Entity<Agents>,
+        cli: Cli,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let model = agents.read(cx);
+        let chosen = model.task_model(cli).to_string();
+        let mut models = vec![(String::new(), MenuEntry::label("Default").to_string())];
+        models.extend(model.task_models(cli));
+        let items = (models.iter())
+            .map(|(id, name)| {
+                let on = *id == chosen;
+                MenuEntry { checked: on, over: on, ..MenuEntry::named(name.clone(), true) }
+            })
+            .collect();
+        let (settings, agents) = (cx.weak_entity(), agents.clone());
+        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
+            if let Some((id, _)) = picked.and_then(|index| models.get(index)) {
+                // check.sh waits for this line.
+                log!("browser: task model {} {}", cli.id(), if id.is_empty() { "default" } else { id });
+                agents.update(cx, |agents, cx| agents.set_task_model(cli, id, cx));
+            }
+            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
+        });
+        self.pop_up(Popup::TaskModel(cli), items, picked, window, cx);
     }
 
     /// The sites where the user answered the agent for good, each with Revoke, and Revoke All

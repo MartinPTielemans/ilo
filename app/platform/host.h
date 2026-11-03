@@ -260,6 +260,24 @@ void host_hide_overlay(int overlay);
 // Hides the overlay as the user leaving it, as escape does.
 void host_dismiss_overlay(int overlay);
 
+// Hides the overlay by folding it into |x|, |y|, |width| and |height| points from the top left of
+// the content of the browser window it shows over: its drawing fades in |fade| seconds, as its
+// plate, rounded by |radius|, goes there in |duration| on the motion's ease, its fill turning
+// from |from| to |to| (0xRRGGBBAA) and its shadow going. With |fade_only| it only fades where it
+// is, in |fade|. Returns false where the host can't, having hidden it. host_hide_overlay's
+// keyboard rule holds.
+bool host_fold_overlay(int overlay,
+                       double x,
+                       double y,
+                       double width,
+                       double height,
+                       double radius,
+                       uint32_t from,
+                       uint32_t to,
+                       double duration,
+                       double fade,
+                       bool fade_only);
+
 // Gives the overlay the keyboard back if it shows, the user hasn't left it, and the browser window
 // it shows over or no window has it: for the UI, once it finds the overlay's window isn't key.
 // The Mac's alone: Linux's and Windows' hosts close an overlay whose keyboard goes elsewhere.
@@ -736,6 +754,12 @@ enum {
 // the main thread for host_install_update's restart on Windows. Does nothing where
 // host_updates_available is false.
 void host_start_updater(void (*quit)(void), void (*changed)(int stage, const char* version));
+
+// On Windows, before host_start_updater: if a quit since the last launch started installing an
+// update, calls |installed| with the update's build number and this copy's own, once. Where it
+// answers that the update didn't go in, the updater's first check waits its 8 hours, so the app
+// can say so and offer Try Again until the user asks.
+void host_take_install(bool (*installed)(uint64_t build, uint64_t own));
 
 // The app menu's Check for Updates…, which checks now: on the Mac, Sparkle's check, which shows
 // what it finds in Sparkle's window; on Windows, the same quiet check as Settings › About's,

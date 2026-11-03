@@ -44,6 +44,11 @@ plist = { version = "1", default-features = false }
 # tokens. The server itself is the app's own (src/agents/server.rs).
 futures = "0.3"
 getrandom = "0.3"
+# The local time an agent task's limit resets at. GPUI's dependencies bring it already.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# The screenshots a task's trace shows, which the core hands over in base64. GPUI's dependencies
+# bring it already.
+base64 = "0.22"
 
 # The session and the timeout of the shell Connect reads the user's PATH from
 # (src/agents/clients.rs), in the version GPUI's already brings.
