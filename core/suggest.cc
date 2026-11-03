@@ -197,7 +197,7 @@ class PutBack : public history::HistoryDBTask {
       for (const history::VisitRow& visit : page.visits) {
         const auto source = page.sources.find(visit.visit_id);
         backend->AddPage(history::HistoryAddPageArgs(
-            url, visit.visit_time, /*context_id=*/nullptr, /*nav_entry_id=*/0,
+            url, visit.visit_time, history::ContextID(), /*nav_entry_id=*/0,
             /*local_navigation_id=*/std::nullopt, /*referrer=*/GURL(), history::RedirectList(),
             visit.transition, page.row.hidden(),
             source == page.sources.end() ? history::SOURCE_BROWSED : source->second,
