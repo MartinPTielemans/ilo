@@ -1334,7 +1334,7 @@ bool Run(const std::string& line) {
                HoldKeys(0);
                browser_drive_fingers(target.hwnd, at_x, at_y, across, along, event == 0 ? 0 : 1);
              },
-             event + 1 < count ? 8u : static_cast<UINT>(std::max(pause, 0))});
+             event + 1 < count ? 8u : static_cast<UINT>(pause > 0 ? pause : 0)});
       }
       g_steps.push_back({[=] { browser_drive_fingers(target.hwnd, at_x, at_y, 0, 0, 2); }});
       return true;
