@@ -208,7 +208,7 @@ expect '^browser: find bar shown$' "⌘F after the close button didn't open the 
 # left selected. ⌘↑ is the page's own, to its top, and off the Mac that's Home. It ends there, where
 # zooming doesn't scroll it.
 top="key up cmd"
-[ "$(uname)" = Linux ] && top="key home"
+[ "$(uname)" = Darwin ] || top="key home"
 for _ in 1 2 3; do send key backspace; done
 send type far
 expect_find "$first" "open 1 of 1 far" "the find didn't find the text below the fold"

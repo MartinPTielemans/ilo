@@ -482,7 +482,8 @@ UINT VirtualKey(const std::string& key, int* modifiers) {
       {"return", VK_RETURN},  {"escape", VK_ESCAPE}, {"tab", VK_TAB},      {"space", VK_SPACE},
       {"backspace", VK_BACK}, {"delete", VK_DELETE}, {"pageup", VK_PRIOR}, {"pagedown", VK_NEXT},
       {"up", VK_UP},          {"down", VK_DOWN},     {"left", VK_LEFT},    {"right", VK_RIGHT},
-      {"f4", VK_F4},          {"f6", VK_F6},         {"f10", VK_F10},      {"f12", VK_F12}};
+      {"home", VK_HOME},      {"f4", VK_F4},         {"f6", VK_F6},        {"f10", VK_F10},
+      {"f12", VK_F12}};
   for (const auto& [name, vk] : named) {
     if (key == name) {
       return vk;
