@@ -122,20 +122,44 @@ struct Suggestions::Removed : base::RefCountedThreadSafe<Removed> {
 
 namespace {
 
-// Reads what a removal will take out: |pages|, and the pages of each search for a term with an
-// engine's keyword, as Chrome's DeleteMatchingURLsForKeyword finds them. The history service runs it
-// before the removal, which is posted after it.
+// Reads what a removal takes out: |pages|, and the pages of each search for a term with an engine's
+// keyword, as Chrome's DeleteMatchingURLsForKeyword finds them. With |take_out|, takes them out
+// then, as Chrome's providers do. Then |done|. Another task queued ahead of it on the history
+// sequence runs it later than what was posted after it, so what reads before a removal does the
+// removal or has it done.
 class Keep : public history::HistoryDBTask {
  public:
   Keep(scoped_refptr<Suggestions::Removed> removed,
        std::vector<GURL> pages,
-       std::vector<std::pair<history::KeywordID, std::u16string>> searches)
-      : removed_(std::move(removed)), pages_(std::move(pages)), searches_(std::move(searches)) {}
+       std::vector<std::pair<history::KeywordID, std::u16string>> searches,
+       bool take_out,
+       base::OnceClosure done)
+      : removed_(std::move(removed)),
+        pages_(std::move(pages)),
+        searches_(std::move(searches)),
+        take_out_(take_out),
+        done_(std::move(done)) {}
 
   bool RunOnDBThread(history::HistoryBackend* backend, history::HistoryDatabase* db) override {
     if (!db) {
       return true;
     }
+    Read(db);
+    if (take_out_) {
+      if (!pages_.empty()) {
+        backend->DeleteURLs(pages_);
+      }
+      for (const auto& [keyword, term] : searches_) {
+        backend->DeleteMatchingURLsForKeyword(keyword, term);
+      }
+    }
+    return true;
+  }
+
+  void DoneRunOnMainThread() override { std::move(done_).Run(); }
+
+ private:
+  void Read(history::HistoryDatabase* db) {
     std::vector<history::URLID> ids;
     for (const GURL& url : pages_) {
       history::URLRow row;
@@ -168,15 +192,13 @@ class Keep : public history::HistoryDBTask {
       }
       removed_->pages.push_back(std::move(page));
     }
-    return true;
   }
 
-  void DoneRunOnMainThread() override {}
-
- private:
   const scoped_refptr<Suggestions::Removed> removed_;
   const std::vector<GURL> pages_;
   const std::vector<std::pair<history::KeywordID, std::u16string>> searches_;
+  const bool take_out_;
+  base::OnceClosure done_;
 };
 
 // Puts the pages a removal took out back: each visit again, at its time with its transition, so
@@ -243,8 +265,6 @@ void Suggestions::Start(const std::u16string& keyword,
   keyword_ = keyword;
   text_ = text;
   if (text.empty()) {
-    // The bar opening asks for no text, and what it took out of history before stays out.
-    removed_.clear();
     controller_.Stop(AutocompleteStopReason::kClobbered);
     Changed();
     return;
@@ -258,67 +278,116 @@ void Suggestions::Start(const std::u16string& keyword,
   controller_.Start(input);
 }
 
-void Suggestions::Remove(const GURL& url) {
+Suggestions::Removal::Removal() = default;
+Suggestions::Removal::Removal(Removal&&) = default;
+Suggestions::Removal& Suggestions::Removal::operator=(Removal&&) = default;
+Suggestions::Removal::~Removal() = default;
+
+bc_id Suggestions::Remove(const GURL& url) {
   const AutocompleteResult& result = controller_.result();
   auto match = std::ranges::find_if(result, [&](const AutocompleteMatch& match) {
     return match.destination_url == url && match.SupportsDeletion();
   });
-  if (match == result.end()) {
-    return;
+  // Its row stays until Chrome's deletion, which waits for what it takes out to be read.
+  const bool being_taken = std::ranges::any_of(removals_, [&](const auto& removal) {
+    return removal.second.url == url && removal.second.state == Removal::State::kTaking;
+  });
+  if (match == result.end() || being_taken) {
+    return 0;
   }
   // A copy, as removing it changes the result it's in.
   const AutocompleteMatch removing(*match);
+  // What Chrome's deletion takes out, the match's and those of its duplicates: a search's term with
+  // the pages it searched, or a page, as each provider's DeleteMatch does.
+  TemplateURLService* engines = TemplateURLServiceFactory::GetForProfile(profile_);
+  Removal removal;
+  removal.url = url;
+  std::vector<const AutocompleteMatch*> taken = {&removing};
+  for (const AutocompleteMatch& duplicate : removing.duplicate_matches) {
+    taken.push_back(&duplicate);
+  }
+  for (const AutocompleteMatch* taking : taken) {
+    if (!taking->deletable || !taking->provider) {
+      continue;
+    }
+    if (taking->provider->type() != AutocompleteProvider::Type::kSearch) {
+      removal.pages.push_back(taking->destination_url);
+    } else if (const TemplateURL* engine = taking->GetTemplateURL(engines)) {
+      removal.searches.emplace_back(engine->id(), taking->contents);
+    }
+  }
+  static bc_id last = 0;
+  const bc_id id = ++last;
+  // Chrome's deletion once what it takes out has been read, so it's read as it was.
+  base::OnceClosure take_out = base::BindOnce(&Suggestions::TakeOut, weak_factory_.GetWeakPtr(),
+                                              id, removing);
   history::HistoryService* history =
       HistoryServiceFactory::GetForProfile(profile_, ServiceAccessType::EXPLICIT_ACCESS);
   if (history) {
-    // What Chrome's deletion takes out, the match's and those of its duplicates: a search's term
-    // with the pages it searched, or a page, as each provider's DeleteMatch does.
-    TemplateURLService* engines = TemplateURLServiceFactory::GetForProfile(profile_);
-    std::vector<GURL> pages;
-    std::vector<std::pair<history::KeywordID, std::u16string>> searches;
-    std::vector<const AutocompleteMatch*> taken = {&removing};
-    for (const AutocompleteMatch& duplicate : removing.duplicate_matches) {
-      taken.push_back(&duplicate);
-    }
-    for (const AutocompleteMatch* taking : taken) {
-      if (!taking->deletable || !taking->provider) {
-        continue;
-      }
-      if (taking->provider->type() != AutocompleteProvider::Type::kSearch) {
-        pages.push_back(taking->destination_url);
-      } else if (const TemplateURL* engine = taking->GetTemplateURL(engines)) {
-        searches.emplace_back(engine->id(), taking->contents);
-      }
-    }
-    auto removed = base::MakeRefCounted<Removed>();
-    removed_[url] = removed;
-    history->ScheduleDBTask(
-        FROM_HERE, std::make_unique<Keep>(removed, std::move(pages), std::move(searches)),
-        &history_tasks_);
+    removal.removed = base::MakeRefCounted<Removed>();
+    history->ScheduleDBTask(FROM_HERE,
+                            std::make_unique<Keep>(removal.removed, removal.pages, removal.searches,
+                                                   /*take_out=*/false, std::move(take_out)),
+                            &history_tasks_);
   }
-  controller_.DeleteMatch(removing);
+  removals_[id] = std::move(removal);
+  if (removals_.size() > kKept) {
+    removals_.erase(removals_.begin());
+  }
+  if (!history) {
+    std::move(take_out).Run();
+  }
+  return id;
 }
 
-void Suggestions::Restore(const GURL& url) {
-  auto removed = removed_.find(url);
+void Suggestions::TakeOut(bc_id id, const AutocompleteMatch& match) {
+  controller_.DeleteMatch(match);
+  if (auto removal = removals_.find(id); removal != removals_.end()) {
+    removal->second.state = Removal::State::kOut;
+  }
+}
+
+bool Suggestions::Restore(bc_id id) {
+  auto removal = removals_.find(id);
   history::HistoryService* history =
       HistoryServiceFactory::GetForProfile(profile_, ServiceAccessType::EXPLICIT_ACCESS);
-  if (removed == removed_.end() || !history) {
-    return;
+  if (removal == removals_.end() || removal->second.state != Removal::State::kOut ||
+      !removal->second.removed || !history) {
+    return false;
   }
-  // Listed again for what was typed once it's back, as the history service has told the address
-  // bar's indexes by then.
-  base::OnceClosure done = base::BindOnce(
+  removal->second.state = Removal::State::kBack;
+  history->ScheduleDBTask(FROM_HERE, std::make_unique<PutBack>(removal->second.removed, ListAgain()),
+                          &history_tasks_);
+  return true;
+}
+
+bool Suggestions::RemoveAgain(bc_id id) {
+  auto removal = removals_.find(id);
+  history::HistoryService* history =
+      HistoryServiceFactory::GetForProfile(profile_, ServiceAccessType::EXPLICIT_ACCESS);
+  if (removal == removals_.end() || removal->second.state != Removal::State::kBack || !history) {
+    return false;
+  }
+  // Read as it is now, the visits since it came back with it, then taken out in the same task, so
+  // a Restore after it, posted after it, puts back what it read.
+  removal->second.state = Removal::State::kOut;
+  removal->second.removed = base::MakeRefCounted<Removed>();
+  history->ScheduleDBTask(
+      FROM_HERE,
+      std::make_unique<Keep>(removal->second.removed, removal->second.pages,
+                             removal->second.searches, /*take_out=*/true, ListAgain()),
+      &history_tasks_);
+  return true;
+}
+
+base::OnceClosure Suggestions::ListAgain() {
+  return base::BindOnce(
       [](base::WeakPtr<Suggestions> suggestions) {
         if (suggestions && !suggestions->text_.empty()) {
           suggestions->Start(suggestions->keyword_, suggestions->text_, /*complete=*/false);
         }
       },
       weak_factory_.GetWeakPtr());
-  history->ScheduleDBTask(
-      FROM_HERE, std::make_unique<PutBack>(std::move(removed->second), std::move(done)),
-      &history_tasks_);
-  removed_.erase(removed);
 }
 
 void Suggestions::OnResultChanged(AutocompleteController* controller, bool default_match_changed) {

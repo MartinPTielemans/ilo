@@ -957,12 +957,16 @@ fn split_tab(window: bc::bc_id, tab: u64, with: u64, opened: bool, cx: &mut App)
 
 /// `tab`, opened to join a split view in `window`, joined it: that window's ⌘Z closes it.
 fn split_opened(window: bc::bc_id, tab: u64, cx: &mut App) {
-    let shell = WINDOWS.with_borrow(|windows| {
-        windows.iter().find(|each| each.id == window).map(|each| each.shell.clone())
-    });
-    if let Some(shell) = shell {
+    if let Some(shell) = shell_of(window) {
         shell.update(cx, |shell, cx| shell.split_opened(tab, cx)).ok();
     }
+}
+
+/// The shell of browser window `window`, if it's open.
+fn shell_of(window: bc::bc_id) -> Option<WeakEntity<Shell>> {
+    WINDOWS.with_borrow(|windows| {
+        windows.iter().find(|each| each.id == window).map(|each| each.shell.clone())
+    })
 }
 
 /// Opens a tab loading `url` in a split view with `with`, on its right, and shows it in `window`.
@@ -1773,16 +1777,23 @@ impl command_bar::Host for Bar {
         }
     }
 
-    fn remove_suggestion(&self, url: &str) {
-        if let Ok(url) = CString::new(url) {
-            unsafe { bc::bc_window_remove_suggestion(front().0, url.as_ptr()) };
+    fn remove_suggestion(&self, url: &str, cx: &mut App) {
+        let Ok(url) = CString::new(url) else {
+            return;
+        };
+        let window = front().0;
+        let removal = unsafe { bc::bc_window_remove_suggestion(window, url.as_ptr()) };
+        // The bar shows over the window in front, whose ⌘Z puts it back.
+        if let Some(shell) = shell_of(window) {
+            shell.update(cx, |shell, cx| shell.suggestion_removed(removal, cx)).ok();
         }
     }
 
-    fn restore_suggestion(&self, url: &str) {
-        if let Ok(url) = CString::new(url) {
-            unsafe { bc::bc_window_restore_suggestion(front().0, url.as_ptr()) };
-        }
+    fn step_removal(&self, redo: bool, cx: &mut App) -> bool {
+        let Some(shell) = shell_of(front().0) else {
+            return false;
+        };
+        shell.update(cx, |shell, cx| shell.step_suggestion_removal(!redo, cx)).unwrap_or(false)
     }
 
     fn typed_url(&self, text: &str) -> Option<String> {
@@ -2550,6 +2561,17 @@ impl Browser for Engine {
 
     fn undo_archive_remove(&self, removal: u64, _: &mut App) -> usize {
         unsafe { bc::bc_archive_undo_remove(removal) }
+    }
+
+    fn undo_remove_suggestion(&self, removal: u64, _: &mut App) -> bool {
+        // check.sh reads this line.
+        log!("browser: put back removal {removal}");
+        unsafe { bc::bc_window_undo_remove_suggestion(self.window, removal) }
+    }
+
+    fn redo_remove_suggestion(&self, removal: u64, _: &mut App) -> bool {
+        log!("browser: remove again removal {removal}");
+        unsafe { bc::bc_window_redo_remove_suggestion(self.window, removal) }
     }
 
     fn restore_archived(&self, archived: u64, _: &mut App) {

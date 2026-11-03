@@ -667,15 +667,24 @@ expect '^browser: command bar suggestions "example" in ' \
   "the command bar didn't list its rows again after the ✕"
 none_since '^browser: command bar \(go\|switch to tab\|behind\)' || fail "a click on the ✕ took its row too"
 suggestions | grep -q '^https://example.com/' && fail "example.com's row stayed after its ✕"
-# ⌘Z puts it back as it was, its visits with it, and the core lists it again (ours, #1394).
+# The removal is the window's step: ⌘Z in the field puts it back as it was, its visits with it,
+# and the core lists it again, and ⇧⌘Z takes it out again, as the rest of the run has it (#1394).
 send key z cmd
-expect '^browser: command bar puts back https://example.com/$' "⌘Z didn't put example.com back"
+expect '^browser: put back removal [0-9]*$' "⌘Z in the command bar didn't put example.com back"
+expect '^browser: undo done$' "⌘Z in the command bar didn't undo the removal"
 for _ in $(seq 50); do
   suggestions | grep -q '^https://example.com/' && break
   sleep 0.1
 done
 suggestions | grep -q '^https://example.com/' ||
   fail "⌘Z didn't list example.com's row again: $(suggestions | tr '\n' ' ')"
+send key z shift cmd
+expect '^browser: remove again removal [0-9]*$' "⇧⌘Z in the command bar didn't take example.com out again"
+for _ in $(seq 50); do
+  suggestions | grep -q '^https://example.com/' || break
+  sleep 0.1
+done
+suggestions | grep -q '^https://example.com/' && fail "example.com's row stayed after ⇧⌘Z"
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 # ⇧⌘↩ searches for what was typed even when it names a page, as Chrome's does.
@@ -1318,7 +1327,7 @@ chrome_ms=$(echo "$spans" | grep -v incomplete | summary)
 [ -n "$chrome_ms" ] || fail "the trace has no finished tab switches"
 # grep -c finds none in a run where no switch was cut off, and exits 1 then.
 chrome_ms="$chrome_ms, $(echo "$spans" | grep -c incomplete || true) incomplete, not counted"
-echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's ✕ take a page out of history and ⌥⌘⌫ a search typed before, and ⌘Z puts the page back, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row and a space after an engine's keyword search with it alone until ⌫ leaves, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it, by close and ↩ in the command bar, goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, ⌘W shows the tab below or above, an empty Space shows no pane, its window resizes, and on Windows maximizes and restores, and it still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one. ⌘-click and ⇧-click choose three rows, whose menu and ⇧⌘C copy their links in order, and ⌘D pins them, New Folder folders them and ⌘W closes them, each undone by ⌘Z. On Windows the bar, a tooltip and a menu are on screen only while the UI shows them: after Esc, ⌘T again or a click on the page, as the pointer leaves, after Windows shows them again and after their window was minimized."
+echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's ✕ take a page out of history and ⌥⌘⌫ a search typed before, ⌘Z puts the page back and ⇧⌘Z takes it out again, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row and a space after an engine's keyword search with it alone until ⌫ leaves, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it, by close and ↩ in the command bar, goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, ⌘W shows the tab below or above, an empty Space shows no pane, its window resizes, and on Windows maximizes and restores, and it still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one. ⌘-click and ⇧-click choose three rows, whose menu and ⇧⌘C copy their links in order, and ⌘D pins them, New Folder folders them and ⌘W closes them, each undone by ⌘Z. On Windows the bar, a tooltip and a menu are on screen only while the UI shows them: after Esc, ⌘T again or a click on the page, as the pointer leaves, after Windows shows them again and after their window was minimized."
 [ -z "${committed:-}" ] || echo "  On Windows Alt+F4 in the bar closes its window and the bar opens" \
   "over the next one, the bar" \
   "moves with its window and the window's menu closes, and the bar stays open over a page that" \

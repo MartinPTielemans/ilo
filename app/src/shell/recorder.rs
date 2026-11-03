@@ -158,6 +158,8 @@ pub(super) struct Recorder {
     /// What the shell did to tabs, folders and Spaces that ⌘Z puts back, in order, such as
     /// `close 5` and `reopen 5 as 1001`.
     edits: RefCell<Vec<String>>,
+    /// The removals from history the core no longer keeps, as after ten more.
+    pub(super) lost_removals: RefCell<Vec<u64>>,
     /// The id the next tab or folder it makes gets.
     made: Cell<u64>,
     /// The URL each pinned tab or favorite goes back to, and the name each tab was given.
@@ -530,6 +532,22 @@ impl Browser for Recorder {
         };
         self.edit(format!("undo archive remove {removal}"));
         removals.remove(at).1
+    }
+
+    fn undo_remove_suggestion(&self, removal: u64, _: &mut App) -> bool {
+        let kept = !self.lost_removals.borrow().contains(&removal);
+        if kept {
+            self.edit(format!("put back removal {removal}"));
+        }
+        kept
+    }
+
+    fn redo_remove_suggestion(&self, removal: u64, _: &mut App) -> bool {
+        let kept = !self.lost_removals.borrow().contains(&removal);
+        if kept {
+            self.edit(format!("remove again removal {removal}"));
+        }
+        kept
     }
 
     fn restore_archived(&self, _: u64, _: &mut App) {}

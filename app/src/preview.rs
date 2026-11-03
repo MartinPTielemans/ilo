@@ -602,6 +602,14 @@ impl Browser for Fake {
         0
     }
 
+    fn undo_remove_suggestion(&self, _: u64, _: &mut App) -> bool {
+        false
+    }
+
+    fn redo_remove_suggestion(&self, _: u64, _: &mut App) -> bool {
+        false
+    }
+
     // Takes it out of the archive, without opening it.
     fn restore_archived(&self, archived: u64, cx: &mut App) {
         self.archive.borrow_mut().retain(|&(id, ..)| id != archived);
@@ -1354,9 +1362,11 @@ struct PreviewBar;
 
 impl command_bar::Host for PreviewBar {
     fn suggest(&self, _: Option<&str>, _: &str, _: bool) {}
-    fn remove_suggestion(&self, _: &str) {}
+    fn remove_suggestion(&self, _: &str, _: &mut App) {}
 
-    fn restore_suggestion(&self, _: &str) {}
+    fn step_removal(&self, _: bool, _: &mut App) -> bool {
+        false
+    }
     fn typed_url(&self, text: &str) -> Option<String> {
         self.search_url(None, text)
     }

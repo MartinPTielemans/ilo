@@ -1,10 +1,14 @@
 #ifndef BROWSER_CORE_SUGGEST_H_
 #define BROWSER_CORE_SUGGEST_H_
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
@@ -39,17 +43,48 @@ class Suggestions : public AutocompleteController::Observer, public ProfileObser
   void Start(const std::u16string& keyword, const std::u16string& text, bool complete);
 
   // Takes the removable suggestion going to |url| out of the profile's history, and lists the
-  // others again.
-  void Remove(const GURL& url);
+  // others again. Returns the removal's id, for Restore, or 0 if there was none to take out, as
+  // while the last removal of |url| is still being taken out.
+  bc_id Remove(const GURL& url);
 
-  // Puts back what Remove took out for |url| as it was, and lists the suggestions again. Start on no
-  // text forgets what it took out.
-  void Restore(const GURL& url);
+  // Puts back what removal |removal| took out, as it was, and lists the suggestions again. Whether
+  // it could: it's one of the last kKept removals, and out, not back already or still being taken
+  // out.
+  bool Restore(bc_id removal);
 
-  // What Remove took out of the profile's history for a suggestion. Defined where it's used.
+  // Takes out again what Restore put back for |removal|, as the removal did. Whether it could.
+  bool RemoveAgain(bc_id removal);
+
+  // What a removal took out of the profile's history, as it was. Defined where it's used.
   struct Removed;
 
  private:
+  // A removal: the suggestion's URL, what Chrome's deletion took out, the pages and a search's
+  // keyword and term, that as it was, and where it is.
+  struct Removal {
+    enum class State { kTaking, kOut, kBack };
+
+    Removal();
+    Removal(Removal&&);
+    Removal& operator=(Removal&&);
+    ~Removal();
+
+    GURL url;
+    std::vector<GURL> pages;
+    std::vector<std::pair<int64_t, std::u16string>> searches;
+    scoped_refptr<Removed> removed;
+    State state = State::kTaking;
+  };
+
+  // The removals Restore can put back: the window's last ten, as many as Clear keeps.
+  static constexpr size_t kKept = 10;
+
+  // Removal |id|'s deletion, Chrome's for |match|, once what it takes out has been read.
+  void TakeOut(bc_id id, const AutocompleteMatch& match);
+  // Lists the suggestions for the text last asked again, run once the history service has done a
+  // task, as it has told the address bar's indexes by then.
+  base::OnceClosure ListAgain();
+
   // AutocompleteController::Observer:
   void OnResultChanged(AutocompleteController* controller, bool default_match_changed) override;
 
@@ -69,8 +104,9 @@ class Suggestions : public AutocompleteController::Observer, public ProfileObser
   std::u16string keyword_;
   std::u16string text_;
   bool report_posted_ = false;
-  // What Remove took out, by the suggestion's URL, filled on the history database's thread.
-  std::map<GURL, scoped_refptr<Removed>> removed_;
+  // The last kKept removals, by id. Ids are counted across windows, so a window's suggestions made
+  // again for another profile never put back one made for the last.
+  std::map<bc_id, Removal> removals_;
   base::CancelableTaskTracker history_tasks_;
   base::ScopedObservation<AutocompleteController, AutocompleteController::Observer> observation_{
       this};

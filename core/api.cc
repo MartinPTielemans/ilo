@@ -1450,18 +1450,19 @@ void bc_window_suggest(bc_id window_id, const char* keyword, const char* text, b
   }
 }
 
-void bc_window_remove_suggestion(bc_id window_id, const char* url) {
+bc_id bc_window_remove_suggestion(bc_id window_id, const char* url) {
   browser_core::Window* window = browser_core::Window::FromId(window_id);
-  if (window && url) {
-    window->RemoveSuggestion(GURL(url));
-  }
+  return window && url ? window->RemoveSuggestion(GURL(url)) : 0;
 }
 
-void bc_window_restore_suggestion(bc_id window_id, const char* url) {
+bool bc_window_undo_remove_suggestion(bc_id window_id, bc_id removal) {
   browser_core::Window* window = browser_core::Window::FromId(window_id);
-  if (window && url) {
-    window->RestoreSuggestion(GURL(url));
-  }
+  return window && window->UndoRemoveSuggestion(removal);
+}
+
+bool bc_window_redo_remove_suggestion(bc_id window_id, bc_id removal) {
+  browser_core::Window* window = browser_core::Window::FromId(window_id);
+  return window && window->RedoRemoveSuggestion(removal);
 }
 
 bc_id bc_tab_open(bc_id window_id, const char* url, bool when_shown) {

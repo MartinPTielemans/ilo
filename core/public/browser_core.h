@@ -1967,14 +1967,20 @@ BC_EXPORT void bc_window_suggest(bc_id window, const char* keyword, const char* 
 
 // Takes the window's removable suggestion going to |url| out of the profile's history and
 // bookmarks' suggestions, as ⇧⌦ does in Chrome's address bar. Then window_suggestions without it.
-BC_EXPORT void bc_window_remove_suggestion(bc_id window, const char* url);
+// Returns the removal's id, for bc_window_undo_remove_suggestion, or 0 if there was none to take
+// out.
+BC_EXPORT bc_id bc_window_remove_suggestion(bc_id window, const char* url);
 
-// Puts back what bc_window_remove_suggestion took out of the profile's history for |url| in the
-// window, as it was: a page with each of its visits, and so its visit and typed counts, or a search
-// with its term and the pages it searched. Then window_suggestions with it, for the text last
-// asked. What it took out stays out once bc_window_suggest asks for no text, as the command bar does
-// as it opens.
-BC_EXPORT void bc_window_restore_suggestion(bc_id window, const char* url);
+// Puts back what the window's removal |removal| took out of the profile's history, as it was: a
+// page with each of its visits, and so its visit and typed counts, or a search with its term and
+// the pages it searched. Then window_suggestions with it, for the text last asked, if any. Whether
+// it could: false once ten other removals have come after it in the window, while it's back or
+// still being taken out, and once the window's suggestions have been for another profile since.
+BC_EXPORT bool bc_window_undo_remove_suggestion(bc_id window, bc_id removal);
+
+// Takes out again what bc_window_undo_remove_suggestion put back for |removal|, as the removal
+// did, with the visits since. Whether it could, as bc_window_undo_remove_suggestion says.
+BC_EXPORT bool bc_window_redo_remove_suggestion(bc_id window, bc_id removal);
 
 // Opens a tab in the window, loading |url|, in the default profile, at the top of the Today tabs of
 // the Space it shows. It isn't shown until bc_window_select or bc_tab_show. With |when_shown|, an
