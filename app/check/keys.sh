@@ -355,7 +355,7 @@ settings_drew
 send clickkey $(drawn "toolbar Shortcuts")
 expect '^browser: settings tab Shortcuts$' "a click on Shortcuts didn't show its tab"
 settings_drew Shortcuts
-send clickkey 300 120
+send clickkey $(drawn "shortcuts search")
 send type new tab
 # Paste URL as New Tab has the words too, under it.
 expect '^browser: shortcuts search "new tab" finds New Tab, Paste URL as New Tab$' \
@@ -386,7 +386,7 @@ done
 send key a cmd
 send key backspace
 expect '^browser: shortcuts search cleared$' "⌫ didn't clear the search"
-send clickkey 581 203
+send clickkey $(drawn "shortcut new-tab")
 expect '^browser: shortcut recording new-tab$' "a click on New Tab's keys didn't record them"
 send key t cmd ctrl
 # Off the Mac ⌃ presses Alt, as ⌥ does (docs/ux-spec.md › Keyboard).
@@ -463,7 +463,7 @@ settings_drew
 send clickkey $(drawn "toolbar Shortcuts")
 expect '^browser: settings tab Shortcuts$' "a click on Shortcuts didn't show its tab"
 settings_drew Shortcuts
-send clickkey 300 120
+send clickkey $(drawn "shortcuts search")
 send type sidebar
 expect '^browser: shortcuts search "sidebar" finds ' "the search for sidebar didn't end"
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts-sidebar.png" || fail "no window to capture"
@@ -478,7 +478,7 @@ send key a cmd
 send type focus sidebar
 expect '^browser: shortcuts search "focus sidebar" finds Focus Sidebar$' \
   "the search didn't find Focus Sidebar"
-send clickkey 581 203
+send clickkey $(drawn "shortcut new-tab")
 expect '^browser: shortcut recording focus-sidebar$' \
   "a click on Focus Sidebar's keys didn't record them"
 send key k cmd ctrl
@@ -497,14 +497,14 @@ send menu Settings…
 expect '^browser: settings shown Shortcuts$' \
   "Settings… didn't show the Shortcuts tab it showed last"
 settings_drew Shortcuts
-send clickkey 300 120
+send clickkey $(drawn "shortcuts search")
 send key a cmd
 send type focus sidebar
 expect '^browser: shortcuts search "focus sidebar" finds Focus Sidebar$' \
   "the search didn't find Focus Sidebar again"
 # Restore Defaults, under the one row found, where ↺'s place follows its chip's width, which is
 # the key's name's off the Mac. New Tab has its default already.
-send clickkey 126 246
+send clickkey $(drawn "restore shortcuts")
 expect '^browser: shortcuts restored$' "a click on Restore Defaults didn't restore the keys"
 expect '^browser: shortcut focus-sidebar f6$' \
   "Restore Defaults didn't give Focus Sidebar F6 back"
@@ -536,7 +536,7 @@ prefer() {
   send menu Settings…
   expect '^browser: settings shown Shortcuts$' \
     "Settings… didn't show the Shortcuts tab it showed last"
-  send clickkey 300 120
+  send clickkey $(drawn "shortcuts search")
   send key a cmd
   send type find
   expect '^browser: shortcuts search "find" finds \(.*, \)\{0,1\}Find\(, .*\)\{0,1\}$' \
@@ -689,12 +689,12 @@ send menu Settings…
 expect '^browser: settings shown Shortcuts$' \
   "Settings… didn't show the Shortcuts tab it showed last"
 settings_drew Shortcuts
-send clickkey 300 120
+send clickkey $(drawn "shortcuts search")
 send key a cmd
 send type go to space
 expect '^browser: shortcuts search "go to space" finds Go to Space 1, Go to Space 2, ' \
   "the search didn't find Go to Space 1 first"
-send clickkey 581 203
+send clickkey $(drawn "shortcut new-tab")
 expect '^browser: shortcut recording select-space-1$' \
   "a click on Go to Space 1's keys didn't record them"
 send key 1 cmd ctrl
@@ -750,7 +750,7 @@ send menu Settings…
 expect '^browser: settings shown Shortcuts$' \
   "Settings… didn't show the Shortcuts tab it showed last"
 settings_drew Shortcuts
-send clickkey 300 120
+send clickkey $(drawn "shortcuts search")
 send key a cmd
 send type include favorites
 # The row names the keys as its OS does, Ctrl+1–Ctrl+8 off the Mac.
@@ -764,7 +764,7 @@ expect '^browser: favorites numbered off$' "a click on Include Favorites didn't 
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts-favorites.png" || fail "no window to capture"
 # Last Tab Goes to the Ninth Tab makes ⌘9 the ninth tab, counted as ⌘1–⌘8 count (#682). The
 # switch took the keyboard from the search field.
-send clickkey 300 120
+send clickkey $(drawn "shortcuts search")
 send key a cmd
 send type ninth
 expect '^browser: shortcuts search "ninth" finds Last Tab Goes to the Ninth Tab$' \
@@ -795,7 +795,7 @@ send menu Settings…
 expect '^browser: settings shown Shortcuts$' \
   "Settings… didn't show the Shortcuts tab it showed last"
 settings_drew Shortcuts
-send clickkey 126 246
+send clickkey $(drawn "restore shortcuts")
 expect '^browser: shortcuts restored$' "a click on Restore Defaults didn't restore the keys"
 expect "^browser: shortcut select-space-1 $first_key\$" \
   "Restore Defaults didn't give Go to Space 1 ⌃1"

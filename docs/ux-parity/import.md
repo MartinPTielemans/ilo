@@ -4,7 +4,7 @@ Part of the [UX parity checklist](README.md), whose top says what the columns me
 
 | Done | Item | Phase | Target | Source |
 |---|---|---|---|---|
-| [x] | Arc: Spaces → Spaces, profiles → profiles | MVP | yes; Settings › Import | decision 5 |
+| [x] | Arc: Spaces → Spaces, profiles → profiles | MVP | yes; Settings › Import & Export | decision 5 |
 | [x] | Arc: favorites, pinned tabs, custom names | MVP | favorites → favorites; pinned → pinned rows | Dia 1.52 P§20 |
 | [ ] | Arc: themes | MVP | `windowTheme` colours, intensity, noise, texture, appearance, light and dark. Built: colour, count, intensity, noise, the texture as ours, the third colour exactly, Arc's placing of the others, each at its own hue and lightness in the field at the first's saturation, the appearance (`windowAppearance`, else the looks' `translucencyStyle`) and the separate light and dark looks, which `cargo test` reads from the fixture; `./check.sh import`'s `import-personal.png` shows the Personal Space's theme, which the run doesn't assert. Not built: translucency, which needs ours | Arc 1.167 P§20 |
 | [x] | Arc: folders | MVP | ours: folders, nested; split views as their tabs *interim*; measure | ours |

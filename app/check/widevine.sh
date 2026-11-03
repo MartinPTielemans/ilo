@@ -72,14 +72,14 @@ await_long 120 "^browser: widevine state (restart|failed)\$" || fail "the module
 grep -q "^browser: widevine state restart\$" "$log" || fail "the module didn't download"
 [ -n "$(ls "$profile_dir/WidevineCdm" 2>/dev/null)" ] || fail "no module in the profile"
 ../tools/window-screenshot.sh "$pid" "$out/widevine-restart.png" || fail "no window to capture"
-# Settings › Advanced offers the restart too, beside Remove (#1393). A click would start an app
+# Settings › Features offers the restart too, beside Remove (#1393). A click would start an app
 # outside the check, so the run reads that both are drawn and restarts as the note's run does.
 send key , cmd
 expect '^browser: settings shown ' "⌘, didn't show Settings"
 settings_drew
-send clickkey $(drawn "toolbar Advanced")
-expect '^browser: settings tab Advanced$' "a click on Advanced didn't show its tab"
-settings_drew Advanced
+send clickkey $(drawn "toolbar Features")
+expect '^browser: settings tab Features$' "a click on Features didn't show its section"
+settings_drew Features
 drawn "widevine remove" > /dev/null || fail "Settings' Widevine row offered no Remove"
 drawn "widevine restart" > /dev/null || fail "Settings' Widevine row offered no restart"
 ../tools/window-screenshot.sh "$pid" "$out/widevine-settings.png" all || fail "no screen to capture"
