@@ -416,6 +416,33 @@ fn pin_to_space_pins_the_tab_before_it_moves_and_one_undo_puts_it_back_in_today(
     assert_eq!(host.take_edits(), ["space 11 2"]);
 }
 
+/// A tab in a split view moves to a Space with the rest of its split, joined again in its order
+/// and orientation, and one undo brings the split back to its row (Arc 1.171).
+#[gpui::test]
+fn a_split_moves_to_a_space_whole_and_comes_back_whole(cx: &mut TestAppContext) {
+    let split = Split { tabs: vec![10, 11], stacked: true, ..Default::default() };
+    let (shell, host) = window(cx, Vec::new(), vec![12, 10, 11], Folders::default(), vec![split]);
+    host.take();
+    shell.update(cx, |shell, cx| shell.send_to_space(11, 2, false, cx));
+    assert_eq!(host.take_edits(), ["space 10 2", "space 11 2", "split 11 10 false"]);
+    assert!(host.take().contains(&"split stacked 10 true".to_string()));
+    report(&shell, cx, Vec::new(), vec![12]);
+    shell.update(cx, |shell, cx| {
+        let split = Split { tabs: vec![10, 11], stacked: true, ..Default::default() };
+        shell.set_tabs(2, Vec::new(), vec![10, 11], vec![split], Folders::default(), cx)
+    });
+    assert!(undo(&shell, cx));
+    let back = ["space 10 1", "space 11 1", "split 11 10 false", "move 10 false 0 1"];
+    assert_eq!(host.take_edits(), back);
+
+    // Into another profile's Space the core makes each page a new tab, in a row of its own.
+    let split = Split { tabs: vec![10, 11], ..Default::default() };
+    let (shell, host) = window(cx, Vec::new(), vec![10, 11], Folders::default(), vec![split]);
+    shell.update(cx, |shell, cx| shell.send_to_space(10, 3, false, cx));
+    assert_eq!(host.take_edits(), ["space 10 3", "space 11 3"]);
+    assert!(!undo(&shell, cx));
+}
+
 /// New Space… makes the Space right after the one shown, as Arc's does, not after the others.
 #[gpui::test]
 fn a_new_space_goes_right_after_the_space_shown(cx: &mut TestAppContext) {
@@ -1206,6 +1233,21 @@ fn a_removed_pinned_split_comes_back_split_at_its_place(cx: &mut TestAppContext)
     report_lists(&shell, cx, vec![19, 1002, 1001], vec![10], vec![1002, 1001]);
     assert!(redo(&shell, cx));
     assert_eq!(host.take_edits(), ["pinned 1002 false", "close 1002"]);
+}
+
+/// The trash takes the pinned tab out of sight, so the toast offers its Undo, as Remove from
+/// Favorites' does, and its button pins the tab again at its place.
+#[gpui::test]
+fn removing_a_pinned_tab_offers_its_undo(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![19, 20], vec![10], Folders::default(), Vec::new());
+    shell.update(cx, |shell, cx| shell.remove_pinned(20, cx));
+    report(&shell, cx, vec![19], vec![10]);
+    assert_eq!(host.undo_toasts.borrow().as_slice(), ["Tab Removed"]);
+    host.take_edits();
+    let button = host.undo_toast.borrow().clone().expect("the toast offers Undo");
+    cx.update(|cx: &mut App| button(cx));
+    assert_eq!(host.take_edits(), ["reopen 20 as 1001", "move 1001 true 0 1"]);
+    assert!(host.undo_toast.borrow().is_none(), "the offer goes once it's taken");
 }
 
 /// ⇧⌘T after removing a pinned tab pins it again at its place, as ⌘Z does, where the core's

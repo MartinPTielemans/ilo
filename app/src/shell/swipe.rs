@@ -19,7 +19,8 @@ impl Shell {
     /// while a swipe or a settle moves one, it and the page beside it.
     pub(super) fn pages(&self) -> Vec<(u64, f32)> {
         let swipe = self.swipe.as_ref().filter(|swipe| {
-            swipe.across == Some(true) && self.library_swiped(swipe).is_none()
+            let paging = swipe.across == Some(true) && swipe.cards.is_none();
+            paging && self.library_swiped(swipe).is_none()
         });
         let (space, x, beside) = match (swipe, &self.settle) {
             (Some(swipe), _) => (swipe.from, self.swiped_to(swipe), None),
@@ -109,7 +110,7 @@ impl Shell {
 
     /// How far out a swipe has taken the Library (`library_out`), while it moves the Library.
     pub(super) fn library_swiped(&self, swipe: &Swipe) -> Option<f32> {
-        if swipe.across != Some(true) {
+        if swipe.across != Some(true) || swipe.cards.is_some() {
             return None;
         }
         let x = self.swiped_to(swipe);
@@ -133,7 +134,8 @@ impl Shell {
     }
 
     /// Fingers or a wheel over the sidebar. Across it they page between Spaces, and along it they
-    /// scroll the list. Returns whether paging took the event.
+    /// scroll the list. Over the Library's Spaces cards they scroll them across, if they don't
+    /// fit. Returns whether paging, or the cards, took the event.
     fn scroll(&mut self, event: &ScrollEvent, window: &mut Window, cx: &mut Context<Self>) -> bool {
         // The form pages back to the Space it was made from, but not while another Space shows.
         let form_hidden = self.form.is_some() && self.form().is_none();
@@ -142,11 +144,14 @@ impl Shell {
         }
         let delta = match event.delta {
             ScrollDelta::Pixels(delta) => delta.map(f32::from),
-            ScrollDelta::Lines(lines) => return self.wheel(lines, window, cx),
+            ScrollDelta::Lines(lines) => {
+                return self.wheel(lines, f32::from(event.position.x), window, cx);
+            }
         };
         match event.touch_phase {
             TouchPhase::Started => {
                 self.swiped = false;
+                let cards = self.fingers_down(f32::from(event.position.x));
                 self.swipe = Some(Swipe {
                     from: self.space,
                     library: self.library_open || self.library_motion.is_some(),
@@ -156,12 +161,17 @@ impl Shell {
                     nearest: self.space,
                     ready: false,
                     turned: None,
+                    cards,
                 });
             }
             TouchPhase::Ended | TouchPhase::Cancelled => return self.release(window, cx),
             TouchPhase::Moved => {}
         }
         let Some(mut swipe) = self.swipe.take() else {
+            // The momentum after fingers lift from the cards carries them on.
+            if self.coast_cards(delta.x, cx) {
+                return true;
+            }
             // A page swipe's momentum, across, doesn't scroll the list.
             return self.swiped && delta.x.abs() > delta.y.abs();
         };
@@ -173,6 +183,13 @@ impl Shell {
             // The page moves from under what floats over it, and no click outside closes it.
             if across {
                 self.leave_popovers(cx);
+            }
+            // Over the Spaces cards, fingers scroll them, unless the cards are at the end they
+            // push past, where the swipe is the Library's (Arc 1.171).
+            swipe.cards = swipe.cards.filter(|_| across).and_then(|_| self.catch_cards(delta.x));
+            if swipe.cards.is_some() {
+                // check.sh waits for this line.
+                log!("browser: swipe cards");
             }
             // Fingers catch a page, or the Library, that's still settling where it is.
             if across && swipe.library {
@@ -186,7 +203,9 @@ impl Shell {
             }
         }
         let across = swipe.across == Some(true);
-        if across {
+        if across && let Some(cards) = swipe.cards {
+            swipe.cards = Some(self.move_cards(cards, delta.x, cx));
+        } else if across {
             let library_near = |shell: &Self, swipe: &Swipe| {
                 shell.library_swiped(swipe).map(|out| out > 0.5)
             };
@@ -234,6 +253,10 @@ impl Shell {
             return false;
         };
         self.swiped = true;
+        if let Some(cards) = swipe.cards {
+            self.release_cards(cards, cx);
+            return true;
+        }
         let (now, x) = (Instant::now(), self.swiped_to(&swipe));
         let recent = swipe.samples.iter().filter(|&&(at, _)| now - at <= SWIPE_HISTORY);
         let velocity = match (recent.clone().next(), recent.last()) {
@@ -280,10 +303,21 @@ impl Shell {
     }
 
     /// A wheel's ticks across the sidebar page once per burst, then rest. Past the first Space they
-    /// open the Library, and back they close it. Back off the form they cancel it.
-    fn wheel(&mut self, lines: Point<f32>, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    /// open the Library, and back they close it. Back off the form they cancel it. Over the
+    /// Library's Spaces cards at `x`, they scroll them first.
+    fn wheel(
+        &mut self,
+        lines: Point<f32>,
+        x: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if lines.x.abs() <= lines.y.abs() {
             return false;
+        }
+        if self.wheel_cards(lines.x, x, cx) {
+            self.wheel = None;
+            return true;
         }
         let now = Instant::now();
         if self.wheel_paged.is_some_and(|paged| now - paged < WHEEL_REST) {
@@ -389,8 +423,8 @@ impl Shell {
         }
     }
 
-    /// The edge across the sidebar 4 under the favorites, or the URL field without them or while
-    /// they scroll with the list, while the rows go under it (Dia).
+    /// The edge across the sidebar 2 over the rows' top, under the favorites, or the URL field
+    /// without them or while they scroll with the list, while the rows go under it (Dia).
     pub(super) fn scroll_edge_line(&self) -> Option<impl IntoElement + use<>> {
         Some(self.edge_line(self.top_edge.at())?.top(px(self.pages_top() - 2.)))
     }

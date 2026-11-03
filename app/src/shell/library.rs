@@ -775,6 +775,7 @@ impl Shell {
             self.browser.list_captures(cx);
         }
         if section == Section::Spaces {
+            self.reset_cards();
             let (count, width) = (self.spaces.len(), self.section_width(section));
             log!("browser: library spaces {count} wide {width}");
         }
@@ -802,6 +803,9 @@ impl Shell {
         }
         if self.library.is_none() {
             self.library_resize = None;
+        }
+        if self.step_cards() {
+            window.request_animation_frame();
         }
         if let Some((from, start)) = self.library_resize {
             let (t, to) = (start.elapsed().as_secs_f32(), self.section_width(self.section));
@@ -1343,7 +1347,8 @@ impl Shell {
     }
 
     /// The Spaces section: a card for each Space of the window's profile set, in the switcher's
-    /// order, and the + after them, which scroll across together if they don't fit.
+    /// order, and the + after them, which scroll across together if they don't fit (`card_strip`),
+    /// clipped at the Library's edge.
     fn space_cards(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let cards: Vec<_> = self.spaces.iter().map(|space| self.space_card(space, cx)).collect();
         let plus = div()
@@ -1380,10 +1385,13 @@ impl Shell {
             .top_0()
             .bottom_0()
             .right_0()
-            .overflow_x_scroll()
+            .overflow_hidden()
             .child(
                 div()
-                    .h_full()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(-self.cards_at()))
                     .flex()
                     .items_center()
                     .gap(px(CARD_GAP))
@@ -2549,11 +2557,16 @@ fn plus_x(cards: usize) -> f32 {
     card_x(cards.max(1) - 1) + CARD_WIDTH + PLUS_GAP
 }
 
-/// How wide the Spaces section is with `cards` of them in a window `window` wide: to the room
-/// after the +, but leaving the page `SPACES_PAGE`, and never narrower than with one card.
+/// How wide the Spaces section's contents are with `cards` of them: to the room after the +.
+pub(super) fn spaces_content(cards: usize) -> f32 {
+    plus_x(cards) + PLUS_SIZE + PLUS_AFTER
+}
+
+/// How wide the Spaces section is with `cards` of them in a window `window` wide: its contents',
+/// but leaving the page `SPACES_PAGE` however narrow the window, its cards scrolling past that
+/// (Arc 1.171), and always with its column.
 fn spaces_width(cards: usize, window: f32) -> f32 {
-    let width = |cards| plus_x(cards) + PLUS_SIZE + PLUS_AFTER;
-    width(cards).min(window - SPACES_PAGE).max(width(1))
+    spaces_content(cards).min(window - SPACES_PAGE).max(COLUMN_WIDTH)
 }
 
 /// How far, in points, fingers past where the Library opens take it on, its card `out` of its way
@@ -3043,18 +3056,23 @@ mod tests {
     }
 
     /// The Spaces section is as wide as Arc's: 480 with one Space and 1008 with three, the cards
-    /// 264 apart from 140 and the + 33 after the last, until the page beside it would get too
-    /// narrow, and never narrower than with one card.
+    /// 264 apart from 140 and the + 33 after the last. Once they don't fit it leaves the page 56,
+    /// however narrow the window, as Arc 1.171's with 8 Spaces: 1044 at 1100 and 444 at 500.
     #[test]
     fn the_spaces_section_grows_with_its_spaces() {
         assert_eq!(spaces_width(1, 1800.), 480.);
         assert_eq!(spaces_width(3, 1800.), 1008.);
         assert_eq!([card_x(0), card_x(1), card_x(2)], [140., 404., 668.]);
         assert_eq!(plus_x(3), 941.);
-        assert_eq!(spaces_width(10, 1800.), 1400.);
-        assert_eq!(spaces_width(3, 1200.), 800.);
-        assert_eq!(spaces_width(3, 700.), 480.);
         assert_eq!(spaces_width(0, 1800.), 480.);
+        assert_eq!(spaces_width(8, 1100.), 1044.);
+        assert_eq!(spaces_width(8, 500.), 444.);
+        assert_eq!(spaces_width(10, 1800.), 1744.);
+        assert_eq!(spaces_width(3, 1200.), 1008.);
+        assert_eq!(spaces_width(3, 700.), 644.);
+        assert_eq!(spaces_width(1, 500.), 444.);
+        // The column stays, in a window narrower than any.
+        assert_eq!(spaces_width(3, 100.), COLUMN_WIDTH);
     }
 
     /// With three Spaces in Arc's 1800-wide window, the card going from 288 to 1008, the Library

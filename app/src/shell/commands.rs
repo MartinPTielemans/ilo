@@ -15,7 +15,7 @@ use crate::theme::Appearance;
 use crate::build_info::{self, BuildInfo};
 
 use super::{
-    COPIED_TIME, Edit, MAX_PANES, Section, Shell, Space, Swapped, UserKeys, What,
+    COPIED_TIME, Edit, Section, Shell, Space, Swapped, UserKeys, What,
     browser::WindowButton,
     agent_bar, clean_link, drag::dropped_urls, drm_note, extensions, keys, little::little_runs,
     sidebar_keys,
@@ -1045,7 +1045,11 @@ impl Shell {
                     if !self.chosen.is_empty() {
                         self.close_chosen(cx);
                     } else if self.selected != 0 {
-                        self.close_tab(self.selected, false, cx);
+                        // A pinned split's pages all go, and it stays a pinned split, as its −
+                        // does (Arc 1.171).
+                        let tab = self.selected;
+                        let split = self.pinned().contains(&tab) && self.panes(tab).len() > 1;
+                        self.close_tab(tab, split, cx);
                     } else {
                         self.browser.close_window(cx);
                     }
@@ -1191,7 +1195,7 @@ impl Shell {
             Command::NewNote => return self.browser.new_note(self.space, None, cx),
             Command::NewNoteSplit => {
                 let with = self.selected;
-                if with != 0 && self.panes(with).len() < MAX_PANES {
+                if with != 0 && !self.split_full(with, cx) {
                     self.browser.new_note(self.space, Some(with), cx);
                 }
                 return;
@@ -1205,13 +1209,7 @@ impl Shell {
                 }
                 return;
             }
-            Command::SeparateSplit => {
-                // From the right, so the pages keep their order in the list.
-                for &tab in self.panes(self.selected)[1..].iter().rev() {
-                    self.separate_tab(tab, cx);
-                }
-                return;
-            }
+            Command::SeparateSplit => return self.separate_all(self.selected, cx),
             Command::FlipSplit => {
                 for (index, &tab) in self.panes(self.selected).iter().rev().enumerate() {
                     self.browser.move_in_split(tab, index, cx);

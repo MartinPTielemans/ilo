@@ -39,7 +39,7 @@ impl What {
     pub const CLOSE_TAB: What = What::quiet("Close Tab");
     pub const CLOSE_TABS: What = What::said("Close Tabs", "Tabs Closed");
     pub const CLOSE_PREVIEW: What = What::quiet("Close Link Preview");
-    pub const REMOVE_TAB: What = What::quiet(super::rows::REMOVE_TIP);
+    pub const REMOVE_TAB: What = What::said(super::rows::REMOVE_TIP, "Tab Removed");
     pub const DISMISS_TASK: What = What::quiet("Dismiss Task");
     pub const PIN: What = What::quiet("Pin Tab");
     pub const UNPIN: What = What::quiet("Unpin Tab");
@@ -172,6 +172,13 @@ pub(super) enum Edit {
         left: bool,
         stacked: bool,
     },
+    /// Puts a split view, by its tabs in order, at a spot, in another Space too, joined there
+    /// again and stacked if `stacked`, as the core moves a tab to another Space alone.
+    MoveSplit {
+        tabs: Vec<u64>,
+        stacked: bool,
+        spot: Spot,
+    },
     /// Takes a tab out of the split view it joined, with `back`: the `Put` back to its row and
     /// place, or the `Join` back to the split it was in. The tab shown stays shown.
     Unsplit { tab: u64, back: Box<Edit> },
@@ -290,6 +297,12 @@ impl Edit {
             Edit::Unsplit { tab, back } => {
                 id(tab);
                 back.rekey(from, to);
+            }
+            Edit::MoveSplit { tabs, spot, .. } => {
+                ids(tabs);
+                if let At::Pinned { folder, .. } = &mut spot.at {
+                    id(folder);
+                }
             }
             Edit::ReopenPreview(closed) | Edit::ClosePreview(closed) => id(&mut closed.over),
             Edit::RestoreTask(_) | Edit::DismissTask(_) | Edit::UndeleteTask(_) | Edit::DeleteTask(_) => {}
@@ -428,6 +441,21 @@ impl Edit {
                 }
                 shell.browser.split_with(tab, with, left, cx);
                 Some(Edit::Separate(tab))
+            }
+            Edit::MoveSplit { tabs, stacked, spot } => {
+                let first = *tabs.first()?;
+                let now = shell.spot_of(first)?;
+                if now.space != spot.space {
+                    shell.move_split(&tabs, stacked, spot.space, cx);
+                }
+                match spot.at {
+                    At::Pinned { folder, index } => {
+                        shell.browser.move_tab(first, true, folder, index, cx)
+                    }
+                    At::Today(index) => shell.browser.move_tab(first, false, 0, index, cx),
+                    At::Favorite(_) => {}
+                }
+                Some(Edit::MoveSplit { tabs, stacked, spot: now })
             }
             Edit::Separate(tab) => {
                 let join = shell.join_of(tab)?;
@@ -859,9 +887,9 @@ impl Shell {
         self.keep(what, before, cx);
     }
 
-    /// Moves `tab` to `space`, pinning it first if `pin`, which the one undo takes back too, or a
-    /// folder with what's in it. Into another profile's Space it goes as a new tab, which has
-    /// nothing to give back, as the tabs of a folder do.
+    /// Moves `tab` to `space`, pinning it first if `pin`, which the one undo takes back too, with
+    /// the rest of its split view, or a folder with what's in it. Into another profile's Space it
+    /// goes as a new tab, which has nothing to give back, as the tabs of a folder do.
     pub(super) fn send_to_space(
         &mut self,
         tab: u64,
@@ -879,18 +907,48 @@ impl Shell {
             let from = this.spot_of(tab).and_then(|spot| profile(spot.space));
             from.is_some() && from == profile(space)
         };
-        let before = same_profile(self).then(|| self.put_back(tab)).flatten();
+        let same_profile = same_profile(self);
+        let before = same_profile.then(|| self.put_back(tab)).flatten();
         if self.is_folder_anywhere(tab) {
             self.browser.move_folder_to_space(tab, space, cx);
             return self.keep(What::MOVE_FOLDER_TO_SPACE, before, cx);
         }
-        // The core moves a pinned tab pinned, into another profile's Space too.
+        // The core moves a pinned tab pinned, into another profile's Space too, and pins a split
+        // whole.
         let pinned = matches!(self.spot_of(tab).map(|spot| spot.at), Some(At::Pinned { .. }));
         if pin && !pinned {
             self.browser.set_pinned(tab, true, cx);
         }
+        // A split moves whole, as its row does in its Space (Arc).
+        if let Some((tabs, stacked)) = self.split_of(tab) {
+            if !same_profile {
+                // There the core makes each page a new tab, in a row of its own.
+                for &each in &tabs {
+                    self.browser.move_to_space(each, space, cx);
+                }
+                return self.keep(What::MOVE_TO_SPACE, None, cx);
+            }
+            let spot = self.spot_of(tab);
+            let before = spot.map(|spot| Edit::MoveSplit { tabs: tabs.clone(), stacked, spot });
+            self.move_split(&tabs, stacked, space, cx);
+            return self.keep(What::MOVE_TO_SPACE, before, cx);
+        }
         self.browser.move_to_space(tab, space, cx);
         self.keep(What::MOVE_TO_SPACE, before, cx);
+    }
+
+    /// Moves a split view's `tabs` to `space` and joins them again there, in their order and
+    /// orientation, at even sizes.
+    fn move_split(&mut self, tabs: &[u64], stacked: bool, space: u64, cx: &mut Context<Self>) {
+        for &tab in tabs {
+            self.browser.move_to_space(tab, space, cx);
+        }
+        for pair in tabs.windows(2) {
+            self.browser.split_with(pair[1], pair[0], false, cx);
+        }
+        if stacked {
+            self.browser.set_split_stacked(tabs[0], true, cx);
+        }
     }
 
     /// Deletes `folder`, leaving what's in it where it is.
@@ -905,6 +963,14 @@ impl Shell {
         let join = self.join_of(tab);
         self.browser.separate(tab, cx);
         self.keep(What::REMOVE_FROM_SPLIT, join, cx);
+    }
+
+    /// Takes every tab of `tab`'s split view out of it, each a step to undo, from the right, so
+    /// the pages keep their order in the list.
+    pub(super) fn separate_all(&mut self, tab: u64, cx: &mut Context<Self>) {
+        for &each in self.panes(tab)[1..].iter().rev() {
+            self.separate_tab(each, cx);
+        }
     }
 
     /// Puts `tab` in a split view with `with`, at its left end if `left`, else its right end, and
