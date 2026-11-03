@@ -238,7 +238,7 @@ fn the_brush_opens_the_theme_picker_beside_itself(cx: &mut TestAppContext) {
     assert_eq!(shown(cx), (None, Some(1)));
     let height = cx.update(|window, _| f32::from(window.viewport_size().height));
     let end = point(f32::from(brush(0).x) + CARD_BRUSH / 2., f32::from(brush(0).y));
-    let (left, top, _) = theme_picker::placed(end, height);
+    let (left, top, _) = theme_picker::placed(theme_picker::At::Row(end), height);
     assert_eq!(themes.borrow().last().copied(), Some((left, top)), "not beside the brush");
     assert!(library_open(&shell, cx), "the Library closed");
     assert!(host.shown.borrow().is_empty(), "the brush showed the Space");
@@ -300,16 +300,31 @@ fn a_card_s_field_stays_lit_while_its_picker_shows_and_escape_then_closes_the_li
 }
 
 /// The command bar's Edit Theme…, Arc's, is the first command "theme" finds, and opens the theme
-/// picker for the Space shown, as its menu's Edit Theme Color… does, once the Library has gone.
+/// picker for the Space shown, as its menu's Edit Theme Color… does, once the Library has gone:
+/// with its card 12.5 inside the sidebar's edge and the window's top, Arc 1.171's window there
+/// being 382 × 534 round its 357 × 509 card.
 #[gpui::test]
 fn edit_theme_in_the_command_bar_opens_the_theme_picker(cx: &mut TestAppContext) {
     let keys = crate::shell::UserKeys::default();
     let found = crate::shell::find_commands("theme", &keys, |name, _| Some(name));
     assert_eq!(found.first().map(|row| row.command), Some(Command::EditTheme));
+    let (_, themes) = pickers(cx);
     let (shell, cx, _) = library(cx);
     shell.update(cx, |shell, cx| shell.run(Command::EditTheme, "command-bar", cx));
     let pending = shell.read_with(cx, |shell, _| shell.picker_pending.map(|(picker, _)| picker));
     assert_eq!(pending, Some(Pending::Theme(1)));
+    // It waits for the Library to have gone, its motion ended here, and for the name row to draw
+    // where it drew the frame before.
+    shell.update(cx, |shell, _| (shell.library_motion, shell.sidebar_fade) = (None, None));
+    for _ in 0..4 {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+    assert_eq!(shown(cx), (None, Some(1)), "the picker didn't open");
+    let edge = shell.read_with(cx, |shell, _| shell.width());
+    let arrow = crate::tokens::theme_picker::ARROW;
+    let card = themes.borrow().last().map(|&(left, top)| (left + arrow, top));
+    assert_eq!(card, Some((edge + 12.5, 12.5)), "not against the sidebar's edge at the top");
 }
 
 /// Whether each card's field was last drawn with its plate, dashes and brush, by Space.

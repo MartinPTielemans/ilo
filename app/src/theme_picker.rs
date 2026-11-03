@@ -36,6 +36,7 @@ pub const WIDTH: f32 = ARROW + CARD_WIDTH;
 use crate::tokens::theme_picker::RADIUS;
 use crate::tokens::theme_picker::GAP;
 use crate::tokens::theme_picker::MARGIN;
+use crate::tokens::theme_picker::EDGE_INSET;
 use crate::tokens::theme_picker::FIELD_INSET;
 use crate::tokens::theme_picker::FIELD;
 use crate::tokens::theme_picker::FIELD_RADIUS;
@@ -110,7 +111,7 @@ const GLIDE: f32 = 0.2;
 pub trait Host {
     /// Shows the picker's window with its top left at `left`, `top` in browser window `window`,
     /// the one that asked for it, with the keyboard, in the shape of `corners` (x, y and radius,
-    /// clockwise from the arrow's tip, which it grows in from).
+    /// clockwise from the first, which it grows in from).
     fn show(&self, window: u64, left: f32, top: f32, corners: &[(f32, f32, f32)]);
     /// Hides it, and the browser window gets the keyboard back.
     fn hide(&self);
@@ -150,8 +151,8 @@ struct Editing {
     /// The appearance chosen before there's a colour, for the first one to take.
     appearance: Appearance,
     changed: Changed,
-    /// The arrow's tip, down the window.
-    arrow_y: f32,
+    /// The arrow's tip, down the window, if it has one.
+    arrow_y: Option<f32>,
     /// False once it's closing: what it shows stays, for the host's shrink out.
     open: bool,
     drag: Option<Drag>,
@@ -233,39 +234,61 @@ pub fn open_at(
     }
 }
 
-/// The card's corners with the arrow's tip `arrow_y` down the window, from the window's top left,
-/// clockwise from the tip, each with the radius it's rounded by.
-pub fn corners(arrow_y: f32) -> [(f32, f32, f32); 7] {
-    [
-        (0., arrow_y, ARROW_TIP_RADIUS),
-        (ARROW, arrow_y - ARROW, ARROW_FOOT_RADIUS),
+/// Where the picker opens in the browser window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum At {
+    /// Beside a row, its arrow pointing at the middle of the row's right end: the Create a Space
+    /// form's Choose a Theme row, or a Library card's brush.
+    Row(Point<f32>),
+    /// With no arrow, against the sidebar's edge this far across, at the window's top, as Arc
+    /// 1.171's opens from the Space's menu, over the page rather than the sidebar it colours.
+    Edge(f32),
+}
+
+/// The card's corners from the window's top left, each with the radius it's rounded by, clockwise
+/// from where it grows in from: the arrow's tip `arrow_y` down the window, or with no arrow the
+/// card's top left.
+pub fn corners(arrow_y: Option<f32>) -> Vec<(f32, f32, f32)> {
+    let card = [
         (ARROW, 0., RADIUS),
         (WIDTH, 0., RADIUS),
         (WIDTH, HEIGHT, RADIUS),
         (ARROW, HEIGHT, RADIUS),
-        (ARROW, arrow_y + ARROW, ARROW_FOOT_RADIUS),
-    ]
+    ];
+    let Some(arrow_y) = arrow_y else {
+        return card.to_vec();
+    };
+    let mut corners =
+        vec![(0., arrow_y, ARROW_TIP_RADIUS), (ARROW, arrow_y - ARROW, ARROW_FOOT_RADIUS)];
+    corners.extend(card);
+    corners.push((ARROW, arrow_y + ARROW, ARROW_FOOT_RADIUS));
+    corners
 }
 
-/// Where the window goes for its arrow to point at `anchor`, the middle of a row's right end, in a
-/// browser window `height` tall: its top left, and the arrow's tip down it. The card centres on
-/// the arrow, as Arc's does, unless that takes it past the browser window's top or bottom.
-pub fn placed(anchor: Point<f32>, height: f32) -> (f32, f32, f32) {
+/// Where the window goes in a browser window `height` tall: its top left, and the arrow's tip
+/// down it if it has one. Beside a row, the card centres on the arrow, as Arc's does, unless that
+/// takes it past the browser window's top or bottom.
+pub fn placed(at: At, height: f32) -> (f32, f32, Option<f32>) {
+    let anchor = match at {
+        // The window is as wide as the card and its arrow, so it starts that far left of the card.
+        At::Edge(x) => return (x + EDGE_INSET - ARROW, EDGE_INSET, None),
+        At::Row(anchor) => anchor,
+    };
     let top = (anchor.y - HEIGHT / 2.).min(height - MARGIN - HEIGHT).max(MARGIN);
     // The tip keeps clear of the card's rounded corners.
     let reach = RADIUS + ARROW + ARROW_FOOT_RADIUS;
     let arrow_y = (anchor.y - top).clamp(reach, HEIGHT - reach);
-    (anchor.x + GAP - TIP_SHORT, top, arrow_y)
+    (anchor.x + GAP - TIP_SHORT, top, Some(arrow_y))
 }
 
-/// Shows the picker for `space`, which has `theme` or none yet, pointing at `anchor`, the middle
-/// of a row's right end, in browser window `over`, `height` tall. `changed` gets the theme as the
-/// user makes it. A context menu in a window behind another asks for it there.
+/// Shows the picker for `space`, which has `theme` or none yet, `at` its place in browser window
+/// `over`, `height` tall. `changed` gets the theme as the user makes it. A context menu in a
+/// window behind another asks for it there.
 pub fn show(
     over: u64,
     space: u64,
     theme: Option<Theme>,
-    anchor: Point<f32>,
+    at: At,
     height: f32,
     changed: Changed,
     cx: &mut App,
@@ -277,7 +300,7 @@ pub fn show(
         .update(cx, |picker, window, cx| {
             // check.sh reads this line.
             log!("browser: theme picker for {space}");
-            let (left, top, arrow_y) = placed(anchor, height);
+            let (left, top, arrow_y) = placed(at, height);
             picker.editing = Some(Editing {
                 space,
                 theme,

@@ -1821,6 +1821,9 @@ radius = 20.0
 gap = 2.5
 # Kept off the browser window's top and bottom, when the card can't centre on its arrow (ours).
 margin = 8.0
+# From the Space's menu, Arc 1.171's picker is a window 382 × 534 against the sidebar's edge at the
+# browser window's top, with no arrow: the card, 25 smaller each way, this far inside it all round.
+edge-inset = 12.5
 # The square field, 8.5 inside the card's top and sides.
 field-inset = 8.5
 field = 340.0

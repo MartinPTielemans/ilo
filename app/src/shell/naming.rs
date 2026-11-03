@@ -174,8 +174,8 @@ impl Shell {
         self.open_picker(space, Pending::Icon(Subject::Space(space)), cx);
     }
 
-    /// Shows the Space, and the theme picker beside its name row once the row has stopped
-    /// moving: Arc's Edit Theme Color…, whose picker opened from there isn't recorded.
+    /// Shows the Space, and once its name row has stopped moving the theme picker against the
+    /// sidebar's edge at the window's top: Arc 1.171's Edit Theme Color….
     pub(super) fn edit_space_theme(&mut self, space: u64, cx: &mut Context<Self>) {
         self.open_picker(space, Pending::Theme(space), cx);
     }
@@ -230,7 +230,7 @@ impl Shell {
             return;
         };
         let anchor = point(f32::from(brush.right()), f32::from(brush.center().y));
-        self.show_theme_picker(space, anchor, cx);
+        self.show_theme_picker(space, theme_picker::At::Row(anchor), cx);
         self.light_card_while_picking(space, cx);
     }
 
@@ -289,8 +289,9 @@ impl Shell {
     /// Opens the picker asked for once the row it points at has drawn where it drew the frame
     /// before, and the Library has gone, as the sidebar, the Library or a Space's slide may be
     /// moving it. A Space's icon picker points at where its icon goes in the name row, a tab's at
-    /// its favicon, and the theme picker at the name row's end. It gives up if the row doesn't
-    /// settle in two seconds, such as in a full-screen page, which has no sidebar.
+    /// its favicon, and the theme picker waits for the row too, for the sidebar's edge it opens
+    /// against to have settled. It gives up if the row doesn't settle in two seconds, such as in a
+    /// full-screen page, which has no sidebar.
     pub(super) fn open_picker_when_settled(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((picker, asked)) = self.picker_pending else {
             return;
@@ -341,8 +342,7 @@ impl Shell {
             }
             Pending::Icon(subject) => subject,
             Pending::Theme(space) => {
-                let anchor = point(f32::from(row.right()), f32::from(row.center().y));
-                return self.show_theme_picker(space, anchor, cx);
+                return self.show_theme_picker(space, theme_picker::At::Edge(self.width()), cx);
             }
         };
         let shell = cx.weak_entity();

@@ -43,7 +43,7 @@ impl Picker {
         let changed: Changed =
             Rc::new(move |theme, done, _| recorded.themes.borrow_mut().push((theme, done)));
         // From browser window 2, as a context menu in a window behind another asks (#1432).
-        cx.update(|cx| show(2, 7, theme, point(262., 300.), 900., changed, cx));
+        cx.update(|cx| show(2, 7, theme, At::Row(point(262., 300.)), 900., changed, cx));
         let cx = VisualTestContext::from_window(window.into(), cx);
         cx.run_until_parked();
         Picker { cx, window, host }
@@ -167,7 +167,7 @@ fn a_click_before_the_first_frame_still_places_the_colour(cx: &mut TestAppContex
     // One update, so no frame comes between the opening and the click. Through the window rather
     // than its view, which the press updates.
     cx.update(|cx| {
-        show(2, 7, None, point(262., 300.), 900., changed, cx);
+        show(2, 7, None, At::Row(point(262., 300.)), 900., changed, cx);
         cx.update_window(window.into(), |_, window, cx| {
             let down = MouseDownEvent {
                 position: at,
@@ -353,17 +353,32 @@ fn escape_closes_it_and_a_click_outside_leaves_it_closed(cx: &mut TestAppContext
 #[test]
 fn the_card_centres_on_its_arrow_inside_the_window() {
     // Room above and below: centred, the tip at the card's middle.
-    let (left, top, arrow_y) = placed(point(250., 400.), 1000.);
+    let (left, top, arrow_y) = placed(At::Row(point(250., 400.)), 1000.);
     assert!((left - (250. + GAP - TIP_SHORT)).abs() < 0.01);
-    assert_eq!((top, arrow_y), (400. - HEIGHT / 2., HEIGHT / 2.));
+    assert_eq!((top, arrow_y), (400. - HEIGHT / 2., Some(HEIGHT / 2.)));
     // Near the top, the card stays in and the arrow moves up it, clear of the corner.
-    let (_, top, arrow_y) = placed(point(250., 60.), 1000.);
-    assert_eq!((top, arrow_y), (MARGIN, 52.));
-    let (_, top, arrow_y) = placed(point(250., 10.), 1000.);
-    assert_eq!((top, arrow_y), (MARGIN, RADIUS + ARROW + ARROW_FOOT_RADIUS));
+    let (_, top, arrow_y) = placed(At::Row(point(250., 60.)), 1000.);
+    assert_eq!((top, arrow_y), (MARGIN, Some(52.)));
+    let (_, top, arrow_y) = placed(At::Row(point(250., 10.)), 1000.);
+    assert_eq!((top, arrow_y), (MARGIN, Some(RADIUS + ARROW + ARROW_FOOT_RADIUS)));
     // Near the bottom, the same.
-    let (_, top, arrow_y) = placed(point(250., 950.), 1000.);
-    assert_eq!((top, arrow_y), (1000. - MARGIN - HEIGHT, 950. - top));
+    let (_, top, arrow_y) = placed(At::Row(point(250., 950.)), 1000.);
+    assert_eq!((top, arrow_y), (1000. - MARGIN - HEIGHT, Some(950. - top)));
+}
+
+/// From the Space's menu the card has no arrow, and with its window Arc 1.171's, 382 × 534, it
+/// sits against the sidebar's edge at the browser window's top, growing in from its top left.
+#[test]
+fn from_the_menu_the_card_sits_against_the_sidebar_at_the_window_s_top() {
+    let (left, top, arrow_y) = placed(At::Edge(240.), 1000.);
+    assert_eq!(arrow_y, None);
+    let (card_left, card_top) = (left + ARROW, top);
+    assert_eq!((CARD_WIDTH + 2. * EDGE_INSET, HEIGHT + 2. * EDGE_INSET), (382., 534.));
+    assert_eq!((card_left - EDGE_INSET, card_top - EDGE_INSET), (240., 0.));
+    let corners = corners(None);
+    assert_eq!(corners.len(), 4, "the card has an arrow");
+    assert_eq!(corners[0], (ARROW, 0., RADIUS), "it doesn't grow in from its top left");
+    assert!(corners.iter().all(|&(x, _, _)| x >= ARROW), "the card reaches into the arrow's room");
 }
 
 #[test]

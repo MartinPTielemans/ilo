@@ -346,7 +346,7 @@ impl Shell {
         if let Some(space) = self.form().map(|form| form.space) {
             let right = self.width() - FORM_INSET;
             let anchor = point(right, FORM_THEME_TOP + FORM_PLATE_HEIGHT / 2.);
-            self.show_theme_picker(space, anchor, cx);
+            self.show_theme_picker(space, theme_picker::At::Row(anchor), cx);
         }
     }
 }

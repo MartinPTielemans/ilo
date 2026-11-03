@@ -2092,7 +2092,8 @@ impl theme_picker::Host for ThemeHost {
         };
         let shape: Vec<f64> =
             corners.iter().flat_map(|&(x, y, radius)| [x, y, radius].map(f64::from)).collect();
-        // The arrow, which it grows in from, moves along its side to point at what opened it.
+        // It grows in from its first corner: the arrow's tip, which moves along its side to point
+        // at what opened it, or with no arrow the card's top left, against the sidebar.
         let (x, y, _) = corners[0];
         let (left, top, width) = (left.into(), top.into(), theme_picker::WIDTH.into());
         unsafe {
