@@ -623,6 +623,9 @@ pub trait Browser {
     fn import(&self, cx: &mut App);
     /// Opens the Settings window on its Passwords tab, with the logins of `space`'s profile.
     fn passwords(&self, space: u64, cx: &mut App);
+    /// Opens Chrome's autofill dropdown at the field of `tab`'s page that has the keyboard, with
+    /// every login the profile has if `logins`. False while no field of its page has it.
+    fn show_autofill(&self, tab: u64, logins: bool) -> bool;
     /// Opens the Settings window on its Agents tab, which lists what each agent did.
     fn agent_activity(&self, cx: &mut App);
     /// What the user let the agent whose Space is `space` do, for its Space's menu to take back.

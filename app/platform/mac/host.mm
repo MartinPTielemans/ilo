@@ -1299,6 +1299,12 @@ void LogExit() {
 }
 
 void host_watch_finished_launching(void (*finished)(void)) {
+  // AppKit adds the system's AutoFill submenu to the Edit menu, filling a field from Contacts and
+  // the Passwords app; ilo's own fills from the profile with Chrome's dropdown (docs/ux-spec.md ›
+  // Passwords and autofill). AppKit reads this before it first shows a menu.
+  [NSUserDefaults.standardUserDefaults registerDefaults:@{
+    @"NSAutoFillSystemInsertMenuEnabled" : @NO,
+  }];
   // AppKit posts it once.
   [NSNotificationCenter.defaultCenter
       addObserverForName:NSApplicationDidFinishLaunchingNotification

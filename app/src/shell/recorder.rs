@@ -69,6 +69,8 @@ pub(super) struct Recorder {
     pub(super) checked_for_updates: Cell<usize>,
     /// The import finds no browser on the machine.
     pub(super) no_browsers: Cell<bool>,
+    /// A field of the page has the keyboard, as `show_autofill` answers.
+    pub(super) field_focused: Cell<bool>,
     /// The browser the import reads and adds to, when a test gives one.
     pub(super) import: RefCell<Option<std::rc::Rc<dyn crate::import::Host>>>,
     /// The window is full screen, as Linux's window manager says, for `window_full_screen`.
@@ -1239,6 +1241,11 @@ impl Browser for Recorder {
 
     fn passwords(&self, space: u64, _: &mut App) {
         self.record(format!("passwords {space}"));
+    }
+
+    fn show_autofill(&self, tab: u64, logins: bool) -> bool {
+        self.record(format!("autofill {tab} {}", if logins { "logins" } else { "field" }));
+        self.field_focused.get()
     }
 
     fn agent_activity(&self, _: &mut App) {

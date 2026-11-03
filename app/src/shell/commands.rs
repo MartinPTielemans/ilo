@@ -227,6 +227,13 @@ pub enum Command {
     Import,
     /// Opens the Settings window on its Passwords tab, with the Space's profile's logins.
     Passwords,
+    /// Opens Chrome's autofill dropdown at the field of the page that has the keyboard, as a click
+    /// in the field does, or with no field there, Settings › Passwords, as Edit › AutoFill's
+    /// Contact… and Credit Card… do.
+    AutoFill,
+    /// The same, its dropdown with every login the profile has, as Chrome's Select Password and
+    /// Edit › AutoFill › Passwords… do.
+    AutoFillPasswords,
     /// Plays a new profile's first launch again.
     Welcome,
     /// Gives every window this appearance where its Space's theme doesn't choose one, in place of
@@ -883,6 +890,8 @@ impl Command {
             Command::CheckForUpdates => "check-for-updates",
             Command::Import => "import",
             Command::Passwords => "passwords",
+            Command::AutoFill => "autofill",
+            Command::AutoFillPasswords => "autofill-passwords",
             Command::Welcome => "welcome",
             Command::ReportProblem => "report-problem",
             Command::CopyBuildInfo => "copy-build-info",
@@ -1182,6 +1191,14 @@ impl Shell {
             Command::CheckForUpdates => return self.browser.check_for_updates(cx),
             Command::Import => return self.browser.import(cx),
             Command::Passwords => return self.browser.passwords(self.space, cx),
+            Command::AutoFill | Command::AutoFillPasswords => {
+                let logins = command == Command::AutoFillPasswords;
+                let shown = self.selected != 0 && self.browser.show_autofill(self.selected, logins);
+                if !shown {
+                    self.browser.passwords(self.space, cx);
+                }
+                return;
+            }
             Command::Welcome => return self.welcome_again(cx),
             Command::ReportProblem => {
                 let url = BuildInfo::here().issue_url(build_info::NEW_ISSUE);
@@ -1653,6 +1670,8 @@ impl Shell {
             | Command::About
             | Command::Import
             | Command::Passwords
+            | Command::AutoFill
+            | Command::AutoFillPasswords
             | Command::Welcome
             | Command::Appearance(_)
             | Command::RecordTrace

@@ -46,6 +46,8 @@ mod access;
 mod undo_tests;
 #[cfg(test)]
 mod help_tests;
+#[cfg(test)]
+mod autofill_tests;
 mod assets;
 mod browser;
 mod chosen;

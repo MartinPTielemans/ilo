@@ -143,6 +143,8 @@ source_set("browser_core") {
     "auto_archive.h",
     "autofill_data.cc",
     "autofill_data.h",
+    "autofill_menu.cc",
+    "autofill_menu.h",
     "autofill_offer.cc",
     "autofill_offer.h",
     "browser_window_stand_in.cc",

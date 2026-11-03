@@ -951,6 +951,10 @@ impl Browser for Fake {
     fn settings(&self, _: &mut App) {}
 
     fn passwords(&self, _: u64, _: &mut App) {}
+
+    fn show_autofill(&self, _: u64, _: bool) -> bool {
+        false
+    }
     fn agent_activity(&self, _: &mut App) {}
 
     fn agent_permissions(&self, _: u64, _: &App) -> browser::shell::AgentGrants {

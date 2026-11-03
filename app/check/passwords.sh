@@ -15,8 +15,9 @@
 # to the user and Use Strong Password fills it and saves it, with no offer. Last, Settings' Offer
 # to save passwords, switched off, keeps the next login from bringing the offer, and Save and fill
 # addresses switches off and on. A form's address brings Chrome's offer to save it, which return
-# saves, and a card's, which escape declines. Each run has a profile of its own, which no other run
-# or the owner's copy reaches.
+# saves, and a card's, which escape declines. On the Mac, Edit › AutoFill, in place of the system's,
+# opens Chrome's dropdown at the field with the focus, and with none, Settings › Passwords. Each run
+# has a profile of its own, which no other run or the owner's copy reaches.
 
 # The login page, in a new profile, whose passwords start empty, with a DevTools client that sees
 # the eye in its password field (check/cdp.py).
@@ -461,11 +462,65 @@ go_from_bar "${site#http://}card.html"
 expect "^browser: title $tab card\$" "the card page didn't load"
 submit_form 'Ada Lovelace' 4111111111111111 12 2030
 offered_to_save card
-../tools/window-screenshot.sh "$pid" "$out/card-offer.png" || fail "no window to capture"
+../tools/window-screenshot.sh "$pid" "$out/card-offer.png, $out/autofill-menu.png (Mac)" || fail "no window to capture"
 send key escape
 expect "^browser: offer $tab answered NotNow \$" "escape didn't decline the card"
 expect "^browser: offer $tab gone\$" "declining the card left Chrome's offer open"
+
+# Edit › AutoFill, in the Mac's menu bar, the only one: ilo's group after Find, in place of the
+# system's, opens Chrome's dropdown at the field the page's focus is in, as a click in it does, and
+# Passwords… one with every login. With the page's focus off its fields, Settings › Passwords.
+if [ "$(uname)" = Darwin ]; then
+  send menubar Edit
+  edit='^browser: menu bar Edit: '
+  expect "$edit.*, Find › [^,]*, AutoFill › Contact…, AutoFill › Passwords…, AutoFill › Credit Card…" \
+    "Edit lacks ilo's AutoFill after Find: $(grep "$edit" "$log" | tail -1)"
+  [ "$(grep "$edit" "$log" | tail -1 | grep -o 'AutoFill ›' | wc -l)" -eq 3 ] ||
+    fail "Edit has the system's AutoFill too: $(grep "$edit" "$log" | tail -1)"
+  # How many child windows the browser window has, Chrome's dropdown among them.
+  children() {
+    send layout
+    sed -n "/^browser: drive $step: /,\$p" "$log" | grep -c '^browser: layout child' || true
+  }
+  # Waits for the browser window to have more child windows than $shown, or fails with $1.
+  dropdown_shown() {
+    for _ in $(seq 30); do [ "$(children)" -gt "$shown" ] && return; done
+    fail "$1"
+  }
+  # Waits for Chrome's dropdown to close, after escape, or fails with $1.
+  dropdown_gone() {
+    send key escape
+    for _ in $(seq 30); do [ "$(children)" = "$shown" ] && return; done
+    fail "$1"
+  }
+  go_from_bar "${site#http://}address.html"
+  expect "^browser: title $tab address\$" "the address page didn't load for Edit › AutoFill"
+  shown=$(children)
+  send click 600 60
+  dropdown_shown "a click in the address field showed no dropdown"
+  dropdown_gone "escape didn't close the dropdown the click showed"
+  send menu "AutoFill › Contact…"
+  expect "^browser: autofill $tab dropdown\$" "Edit › AutoFill › Contact… didn't find the focused field"
+  dropdown_shown "Edit › AutoFill › Contact… showed no dropdown at the focused field"
+  ../tools/window-screenshot.sh "$pid" "$out/autofill-menu.png" || fail "no window to capture"
+  send key down
+  expect "^browser: title $tab filled\$" "the dropdown Edit › AutoFill showed didn't offer the address"
+  dropdown_gone "escape didn't close the dropdown Edit › AutoFill showed"
+  send menu "AutoFill › Passwords…"
+  expect "^browser: autofill $tab dropdown\$" "Edit › AutoFill › Passwords… didn't find the field"
+  dropdown_shown "Edit › AutoFill › Passwords… showed no dropdown at the focused field"
+  dropdown_gone "escape didn't close the dropdown of logins"
+  # A click below the form takes the page's focus off its fields.
+  send click 600 700
+  send menu "AutoFill › Credit Card…"
+  expect "^browser: autofill $tab no field\$" "Edit › AutoFill found a field after a click off them"
+  expect '^browser: settings [a-z]* Passwords$' \
+    "Edit › AutoFill with no field focused didn't show Settings' Passwords tab"
+  settings_drew Passwords
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings after Edit › AutoFill"
+fi
 exec 3>&- 5>&-
 quit
 rm -rf "$scratch"
-echo "ok: a submitted login offers to save its password in a card 18 from the page's top right, through a resize; another tab closes it, and the key after the host brings it back; Japanese input composes in its username field and return commits it without saving; return saves the username as left, and the login page fills the saved password in, with a key that opens the Site Controls, and Chrome's dropdown fills it in again; the eye shows in the password field once one is typed, never for the one filled in, and goes with the field's focus; a changed password offers to update it, which escape declines; and Never answers on another site, whose Site Controls take it off Never; the first site's Site Controls name its login, All Passwords… lists it in Settings, where Remove asks and Cancel keeps it and Manage Passwords… opens Chrome's password manager page listing it, and the row's Remove asks in the dialog and removes it, which Settings hears; a sign-up form offers Chrome's strong password, which Choose Your Own leaves to the user and Use Strong Password fills in and saves, with no offer; and Settings' Offer to save passwords switched off keeps the next login from bringing an offer, and Save and fill addresses switches off and on; a form's address offers to save it in the card, return saves it and Chrome's dropdown then offers it, and a card's offer declines with escape. Windows: $out/password-offer.png, $out/password-key.png, $out/password-fill.png, $out/password-reveal.png, $out/password-offer-ime.png, $out/password-update.png, $out/site-controls-never.png, $out/site-controls-passwords.png, $out/settings-passwords.png, $out/password-manager.png, $out/password-remove.png, $out/password-generation.png, $out/settings-passwords-off.png, $out/address-offer.png, $out/address-fill.png, $out/card-offer.png"
+echo "ok: a submitted login offers to save its password in a card 18 from the page's top right, through a resize; another tab closes it, and the key after the host brings it back; Japanese input composes in its username field and return commits it without saving; return saves the username as left, and the login page fills the saved password in, with a key that opens the Site Controls, and Chrome's dropdown fills it in again; the eye shows in the password field once one is typed, never for the one filled in, and goes with the field's focus; a changed password offers to update it, which escape declines; and Never answers on another site, whose Site Controls take it off Never; the first site's Site Controls name its login, All Passwords… lists it in Settings, where Remove asks and Cancel keeps it and Manage Passwords… opens Chrome's password manager page listing it, and the row's Remove asks in the dialog and removes it, which Settings hears; a sign-up form offers Chrome's strong password, which Choose Your Own leaves to the user and Use Strong Password fills in and saves, with no offer; and Settings' Offer to save passwords switched off keeps the next login from bringing an offer, and Save and fill addresses switches off and on; a form's address offers to save it in the card, return saves it and Chrome's dropdown then offers it, and a card's offer declines with escape; on the Mac, Edit › AutoFill has ilo's items alone, after Find, whose Contact… and Passwords… open Chrome's dropdown at the focused field, and Credit Card… with none focused opens Settings › Passwords. Windows: $out/password-offer.png, $out/password-key.png, $out/password-fill.png, $out/password-reveal.png, $out/password-offer-ime.png, $out/password-update.png, $out/site-controls-never.png, $out/site-controls-passwords.png, $out/settings-passwords.png, $out/password-manager.png, $out/password-remove.png, $out/password-generation.png, $out/settings-passwords-off.png, $out/address-offer.png, $out/address-fill.png, $out/card-offer.png, $out/autofill-menu.png (Mac)"
