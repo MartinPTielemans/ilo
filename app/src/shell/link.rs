@@ -26,7 +26,12 @@ impl Shell {
     /// The pointer is on the link `target` in `tab`'s page, or has left the link (`None`). Only
     /// the page the window shows has a plate, and not in the page's full screen or over the
     /// Library.
-    pub fn link_target_changed(&mut self, tab: u64, target: Option<Target>, cx: &mut Context<Self>) {
+    pub fn link_target_changed(
+        &mut self,
+        tab: u64,
+        target: Option<Target>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(target) = target else {
             if self.link.as_ref().is_some_and(|link| link.tab == tab) {
                 self.hide_link(cx);
@@ -38,7 +43,10 @@ impl Shell {
         }
         let last = self.link.take();
         // The same link again keeps its plate, and its wait for the whole address.
-        if last.as_ref().is_some_and(|link| link.tab == tab && link.target == target) {
+        if last
+            .as_ref()
+            .is_some_and(|link| link.tab == tab && link.target == target)
+        {
             self.link = last;
             self.show_link(cx);
             return;
@@ -49,11 +57,20 @@ impl Shell {
         let plate = self.link_plate(&target, whole, cx);
         let growing = (!whole && plate.text() != target.text.as_ref()).then(|| {
             cx.spawn(async move |shell, cx| {
-                cx.background_executor().timer(link_target::WHOLE_AFTER).await;
+                cx.background_executor()
+                    .timer(link_target::WHOLE_AFTER)
+                    .await;
                 shell.update(cx, |shell, cx| shell.whole_link(cx)).ok();
             })
         });
-        self.link = Some(Link { tab, target, plate, side, whole, growing });
+        self.link = Some(Link {
+            tab,
+            target,
+            plate,
+            side,
+            whole,
+            growing,
+        });
         self.show_link(cx);
     }
 
@@ -125,6 +142,7 @@ impl Shell {
             return;
         };
         let frame = link_target::place(card, link.plate.width, link.side);
-        self.browser.link_target(Some((link.plate.clone(), frame, link.side)), cx);
+        self.browser
+            .link_target(Some((link.plate.clone(), frame, link.side)), cx);
     }
 }
