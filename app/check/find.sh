@@ -343,17 +343,15 @@ await_views 2 "after JavaScript Console"
 # off already, ↩ runs those words as a script that fails, and the paste reads the same. $1 says
 # where DevTools are, docked or undocked.
 console_keys() {
-  local word=$1-copy
+  local word=$1-copy copied= pasted=
   for _ in $(seq 50); do
     send key a cmd
     send type "$word"
     send key a cmd
     send key c cmd
-    send pasteboard
-    sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q "^browser: pasteboard text $word\$" &&
-      break
+    holds "$word" && copied=1 && break
   done
-  expect "^browser: pasteboard text $word\$" "⌘C in $1 DevTools didn't copy the console's text"
+  [ -n "$copied" ] || fail "⌘C in $1 DevTools didn't copy the console's text"
   send key v cmd
   send key a cmd
   send type "allow pasting"
@@ -366,13 +364,23 @@ console_keys() {
   for _ in $(seq 50); do
     send key a cmd
     send key c cmd
-    send pasteboard
-    logged "^browser: pasteboard text pasted-$word\$" && break
+    holds "pasted-$word" && pasted=1 && break
   done
-  logged "^browser: pasteboard text pasted-$word\$" || {
+  [ -n "$pasted" ] || {
     ../tools/window-screenshot.sh "$pid" "$out/devtools-$1-paste.png" all || true
     fail "⌘V in $1 DevTools didn't paste in the console, see $out/devtools-$1-paste.png"
   }
+}
+# The run's pasteboard holds $1, as the driver reads GPUI's. On Wayland a client hears of the
+# selection only while it has the keyboard, which DevTools' page has here. So there GPUI's reads
+# nothing, and the session's clipboard is read instead (#1575).
+holds() {
+  if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    clipboard_holds "$1"
+  else
+    send pasteboard
+    logged "^browser: pasteboard text $1\$"
+  fi
 }
 keys=$((step + 1))
 console_keys docked
