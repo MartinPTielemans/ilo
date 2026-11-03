@@ -390,12 +390,9 @@ cover_main() {
   rm -f "$out/cover-front"
   case "$(uname)" in
     Darwin)
-      rm -f "$out/cover-in"
-      mkfifo "$out/cover-in"
       # shellcheck disable=SC2086 # the frame's four numbers
-      "$out/cover" "$pid" $main_frame < "$out/cover-in" > "$out/cover.log" 2>&1 &
+      "$out/cover" "$pid" $main_frame < /dev/null > "$out/cover.log" 2>&1 &
       helper=$!
-      exec 4> "$out/cover-in"
       ;;
     Linux)
       # shellcheck disable=SC2086 # the frame's four numbers
@@ -414,10 +411,15 @@ cover_main() {
 # Ends the stand-in, which gives the main window the keyboard back, and drives the main window.
 uncover() {
   case "$(uname)" in
-    Darwin) exec 4>&- ;;
-    Linux) kill "$helper" ;;
+    Darwin | Linux) kill "$helper" 2> /dev/null || true ;;
     *) touch "$out/cover-front" ;;
   esac
+  # Waited for no longer than 5 s: the Mac's runner has no timeout to end a run that hangs.
+  for _ in $(seq 50); do
+    kill -0 "$helper" 2> /dev/null || break
+    sleep 0.1
+  done
+  kill -9 "$helper" 2> /dev/null || true
   wait "$helper" 2> /dev/null || true
   helper=
   await_active 1 "ilo didn't become the active app again once the other app's window went"
