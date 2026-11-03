@@ -1,10 +1,14 @@
 //! The Settings window's boxes of rows and their controls, which the views it shows from the
-//! library, such as the import, draw with too.
+//! library, such as the import, draw with too, and the stops the keyboard goes through them by.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
-use gpui::{Rgba, SharedString, canvas, div, prelude::*, px, rgb, svg};
+use gpui::{
+    App, BorderStyle, Bounds, ElementId, FocusHandle, Pixels, Rgba, ScrollHandle, SharedString,
+    Window, actions, canvas, div, point, prelude::*, px, quad, rgb, svg, transparent_black, white,
+};
 
 use crate::tokens::settings::{
     BOX, BOX_LINE, CHECK_BOX, CHECK_GAP, CHECK_GLYPH, CHECK_RADIUS, CHEVRONS, CONTROL,
@@ -13,7 +17,223 @@ use crate::tokens::settings::{
     ON_HOVERED, ON_LINE, ON_PRESSED, ON_SWITCH_OFF, PADDING, RADIUS, SWITCH_HEIGHT, SWITCH_OFF,
     SWITCH_WIDTH, TEXT, TILE, TILE_GAP, TILE_GLYPH, TILE_GLYPH_COLOR, TILE_RADIUS,
 };
+use crate::tokens::shell::{KEYED, KEYED_RING};
 use crate::tokens::text::SMALL;
+
+#[cfg(test)]
+mod tests;
+
+actions!(settings_rows, [NextStop, PreviousStop, StopDown, StopUp]);
+
+/// Tab and ⇧Tab move the ring round the stops, ↓ and ↑ along them to an end, in `context`, as in
+/// the theme picker and Site Controls. The arrows are a field's own while one has the keyboard.
+pub fn bind_stop_keys(context: &str, cx: &mut App) {
+    let arrows = format!("{context} && !TextInput");
+    cx.bind_keys([
+        gpui::KeyBinding::new("tab", NextStop, Some(context)),
+        gpui::KeyBinding::new("shift-tab", PreviousStop, Some(context)),
+        gpui::KeyBinding::new("down", StopDown, Some(&arrows)),
+        gpui::KeyBinding::new("up", StopUp, Some(&arrows)),
+    ]);
+}
+
+/// Where the keyboard's ring goes on a stop: Focus Sidebar's, `KEYED_RING` in the ink at `KEYED`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Ring {
+    /// Inside a plate with corners of this radius, as on a button.
+    Inside(f32),
+    /// `RING_GAP` round a control with corners of this radius, as round a switch, whose knob a
+    /// ring inside would cover.
+    Around(f32),
+}
+
+/// The ring is this far outside what it goes round, as round a theme's swatch.
+const RING_GAP: f32 = 1.;
+
+/// The controls Tab and the arrows go through in Settings and the views it shows (#1526): each
+/// one's focus handle, kept by its id from frame to frame, which GPUI gives space and return to as
+/// a click, and those drawn last frame in the order drawn, which is the order the keys go in. A
+/// view Settings shows draws into its order (`share`); one shown elsewhere has its own, which no
+/// key moves.
+#[derive(Default)]
+pub struct Stops {
+    handles: RefCell<HashMap<ElementId, FocusHandle>>,
+    shared: Rc<Shared>,
+}
+
+#[derive(Default)]
+struct Shared {
+    drawn: RefCell<Vec<Drawn>>,
+    /// The ring shows from a key that moves it until a press, as the theme picker's does.
+    keyed: Cell<bool>,
+}
+
+/// A stop as last drawn: where, and the area it shows in, which a scrolled list clips it to.
+#[derive(Clone, Debug)]
+pub struct Drawn {
+    pub id: ElementId,
+    pub handle: FocusHandle,
+    pub frame: Bounds<Pixels>,
+    pub shown: Bounds<Pixels>,
+}
+
+impl Stops {
+    /// Stops of another view that join this one's order, with ids of their own.
+    pub fn share(&self) -> Stops {
+        Stops { handles: RefCell::default(), shared: self.shared.clone() }
+    }
+
+    /// The focus handle of the stop `id`.
+    pub fn handle(&self, id: impl Into<ElementId>, cx: &App) -> FocusHandle {
+        let mut handles = self.handles.borrow_mut();
+        handles.entry(id.into()).or_insert_with(|| cx.focus_handle()).clone()
+    }
+
+    /// Starts the order again, as the window renders a frame.
+    pub fn begin(&self) {
+        self.shared.drawn.borrow_mut().clear();
+    }
+
+    pub fn keyed(&self) -> bool {
+        self.shared.keyed.get()
+    }
+
+    /// Takes the ring away, as a press does, or shows it on whatever has the keyboard.
+    pub fn set_keyed(&self, keyed: bool) {
+        self.shared.keyed.set(keyed);
+    }
+
+    /// Gives the keyboard and the ring to the stop after the one that has the keyboard, or the
+    /// one before, not `forward`: round from the last to the first and back with `round`, else
+    /// staying at the end. With none on a stop, the first, or going back the last.
+    pub fn go(
+        &self,
+        forward: bool,
+        round: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Drawn> {
+        let next = {
+            let drawn = self.shared.drawn.borrow();
+            let from = window.focused(cx);
+            let at = from.and_then(|from| drawn.iter().position(|each| each.handle == from));
+            drawn.get(step(at, drawn.len(), forward, round)?).cloned()
+        }?;
+        // check.sh waits for this line.
+        crate::log!("browser: settings keyed {}", next.id);
+        window.focus(&next.handle, cx);
+        self.set_keyed(true);
+        window.refresh();
+        Some(next)
+    }
+
+    /// Fills the relative element it's put in: puts `handle`, as `id`, in the order where it's
+    /// drawn, and draws `ring` there while the keyboard is on it from a key.
+    pub fn mark(
+        &self,
+        id: impl Into<ElementId>,
+        handle: FocusHandle,
+        ring: Ring,
+    ) -> gpui::Canvas<()> {
+        let (id, shared, keyed) = (id.into(), self.shared.clone(), self.shared.clone());
+        let painted = handle.clone();
+        canvas(
+            move |frame, window, _| {
+                let shown = window.content_mask().bounds;
+                let mut drawn = shared.drawn.borrow_mut();
+                drawn.retain(|each| each.handle != handle);
+                drawn.push(Drawn { id, handle, frame, shown });
+            },
+            move |frame, _, window, _| {
+                if !keyed.keyed.get() || !painted.is_focused(window) {
+                    return;
+                }
+                let (bounds, radius) = match ring {
+                    Ring::Inside(radius) => (frame, radius),
+                    Ring::Around(radius) => {
+                        let reach = RING_GAP + KEYED_RING;
+                        (frame.dilate(px(reach)), radius + reach)
+                    }
+                };
+                let ink = white().opacity(KEYED);
+                let (line, solid) = (px(KEYED_RING), BorderStyle::Solid);
+                let ring = quad(bounds, px(radius), transparent_black(), line, ink, solid);
+                window.paint_quad(ring);
+            },
+        )
+        .absolute()
+        .inset_0()
+    }
+}
+
+/// Which of `len` stops the keys move to from the one `at`, as `Stops::go` says.
+pub fn step(at: Option<usize>, len: usize, forward: bool, round: bool) -> Option<usize> {
+    let last = len.checked_sub(1)?;
+    Some(match (at, forward) {
+        (None, true) => 0,
+        (None, false) => last,
+        (Some(at), true) if at >= last => if round { 0 } else { last },
+        (Some(at), true) => at + 1,
+        (Some(0), false) => if round { last } else { 0 },
+        (Some(at), false) => at - 1,
+    })
+}
+
+/// Scrolls `scroll` the least that shows the stop `drawn` whole, with a padding's room round it
+/// for its ring, if it's in that list and a part of it is out of sight.
+pub fn reveal(scroll: &ScrollHandle, drawn: &Drawn) {
+    let view = scroll.bounds();
+    // A stop outside the list, such as Settings' tabs over it, shows in another area.
+    if drawn.shown.top() < view.top() || drawn.shown.bottom() > view.bottom() {
+        return;
+    }
+    let offset = scroll.offset();
+    let y = revealed(offset.y, drawn.frame, view, scroll.max_offset().y);
+    if y != offset.y {
+        scroll.set_offset(point(offset.x, y));
+    }
+}
+
+/// The list's offset, `y` now, down to minus `max`, that shows `frame` in `view` with `PADDING`
+/// round it, the top first where it's taller.
+pub(crate) fn revealed(
+    y: Pixels,
+    frame: Bounds<Pixels>,
+    view: Bounds<Pixels>,
+    max: Pixels,
+) -> Pixels {
+    let room = px(PADDING);
+    let moved = if frame.top() - room < view.top() {
+        y + (view.top() - (frame.top() - room))
+    } else if frame.bottom() + room > view.bottom() {
+        let down = frame.bottom() + room - view.bottom();
+        let up_to = frame.top() - room - view.top();
+        y - down.min(up_to)
+    } else {
+        y
+    };
+    moved.clamp(-max, px(0.))
+}
+
+/// A control the keyboard goes through: Settings' buttons, pop-ups, switches and tabs.
+pub trait Stop: InteractiveElement + ParentElement + Styled + Sized {
+    /// Makes this, by its id, a stop of `stops`, with `ring` while the keyboard is on it. It's
+    /// made relative, to hold the ring.
+    fn stop(mut self, stops: &Stops, ring: Ring, cx: &App) -> Self {
+        let Some(id) = self.interactivity().element_id.clone() else {
+            return self;
+        };
+        let handle = stops.handle(id.clone(), cx);
+        self.track_focus(&handle).relative().child(stops.mark(id, handle, ring))
+    }
+
+    /// A stop ringed inside its plate, as a button's.
+    fn button_stop(self, stops: &Stops, cx: &App) -> Self {
+        self.stop(stops, Ring::Inside(CONTROL_RADIUS), cx)
+    }
+}
+
+impl<E: InteractiveElement + ParentElement + Styled> Stop for E {}
 
 /// Fills the relative element it's put in and logs where that is drawn, its centre in the window,
 /// as "browser: settings `what` at x y", each time it moves, for check.sh to click it there.

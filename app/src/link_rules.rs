@@ -6,11 +6,11 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, Context, Entity, Focusable, MouseButton, Pixels, Point, SharedString, Subscription,
-    Window, div, point, prelude::*, px, svg,
+    App, Context, Entity, Focusable, MouseButton, MouseDownEvent, Pixels, Point, SharedString,
+    Subscription, Window, div, point, prelude::*, px, svg,
 };
 
-use crate::settings_rows::{Look, group, icon_button, popup, row};
+use crate::settings_rows::{Look, Ring, Stop, Stops, group, icon_button, popup, row};
 use crate::shell::MenuEntry;
 use crate::text_input::TextInput;
 use crate::tokens::settings::{
@@ -262,6 +262,8 @@ pub struct LinkRulesView {
     /// The rules the trash took, the last at the end, each with its place, which ⌘Z brings back
     /// until Settings closes. A rule with no text goes without one: there's nothing to lose.
     removed: Vec<(usize, Rule)>,
+    /// Its pop-ups, fields and buttons, stops of Settings' keyboard.
+    stops: Stops,
     _typed: Vec<Subscription>,
 }
 
@@ -275,10 +277,16 @@ impl LinkRulesView {
             focus: None,
             drawn: None,
             removed: Vec::new(),
+            stops: Stops::default(),
             _typed: Vec::new(),
         };
         view.make_fields(cx);
         view
+    }
+
+    /// The view with its controls among `stops`, Settings' own.
+    pub fn with_stops(self, stops: Stops) -> LinkRulesView {
+        LinkRulesView { stops, ..self }
     }
 
     /// A field for each rule, holding its text, whose typing changes the rule.
@@ -453,15 +461,25 @@ impl LinkRulesView {
         label: SharedString,
         width: f32,
         cx: &mut Context<Self>,
-    ) -> gpui::Div {
-        popup(&Look::settings(), label, width, self.choosing == Some(which)).on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |view, _, window, cx| {
-                // A press on a control isn't the start of its row's drag.
-                cx.stop_propagation();
-                view.choose(which, window, cx)
-            }),
-        )
+    ) -> gpui::Stateful<gpui::Div> {
+        popup(&Look::settings(), label, width, self.choosing == Some(which))
+            .id(gpui::SharedString::from(format!("{which:?}")))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _: &MouseDownEvent, window, cx| {
+                    // A press on a control isn't the start of its row's drag.
+                    cx.stop_propagation();
+                    view.choose(which, window, cx)
+                }),
+            )
+            // Space or return opens it with its first item highlighted, as Settings' own do.
+            .on_click(cx.listener(move |view, event: &gpui::ClickEvent, window, cx| {
+                if event.is_keyboard() {
+                    view.choose(which, window, cx);
+                    cx.defer(crate::menu::highlight_first);
+                }
+            }))
+            .button_stop(&self.stops, cx)
     }
 
     fn rule_row(
@@ -483,13 +501,20 @@ impl LinkRulesView {
             .items_center()
             .rounded(px(CONTROL_RADIUS))
             .bg(look.control)
+            .relative()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(self.fields[index].clone());
+            .child(self.fields[index].clone())
+            .child(self.stops.mark(
+                ("link-rule-field", index),
+                self.fields[index].focus_handle(cx),
+                Ring::Inside(CONTROL_RADIUS),
+            ));
         let space =
             self.popup(Popup::Space(index), space_name(rule.space, spaces), POPUP_WIDTH, cx);
         let remove = icon_button(&look, ("remove-link-rule", index), "icons/trash.svg")
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(move |view, _, _, cx| view.remove(index, cx)));
+            .on_click(cx.listener(move |view, _, _, cx| view.remove(index, cx)))
+            .button_stop(&self.stops, cx);
         let label: SharedString = format!("{} {}", rule.condition.title(), rule.text).into();
         let row = div()
             .id(("link-rule", index))
@@ -568,7 +593,8 @@ impl Render for LinkRulesView {
             false => group(&look, rows),
         };
         let add = icon_button(&look, "add-link-rule", "icons/plus.svg")
-            .on_click(cx.listener(|view, _, _, cx| view.add(cx)));
+            .on_click(cx.listener(|view, _, _, cx| view.add(cx)))
+            .button_stop(&self.stops, cx);
         let otherwise = otherwise_name(self.rules.otherwise, &spaces);
         let otherwise = self.popup(Popup::Otherwise, otherwise, POPUP_WIDTH, cx).mr(px(POPUP_END));
         div().child(rules).child(div().mt(px(BUTTONS_TOP)).flex().child(add)).child(

@@ -224,6 +224,51 @@ fn pop_ups_set_a_rules_condition_and_space(cx: &mut TestAppContext) {
     );
 }
 
+/// From the keyboard, Space on a rule's pop-up opens it as a click does, return on the trash takes
+/// the rule away, and the rule's field is a stop of its own that types.
+#[gpui::test]
+fn the_keyboard_opens_the_pop_ups_and_presses_the_trash(cx: &mut TestAppContext) {
+    let rules = Rules { rules: vec![rule(Condition::Contains, "work", WORK)], otherwise: 0 };
+    let (host, view, cx) = tab_view(rules, cx);
+    let handle = |id: gpui::ElementId, cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, cx| view.stops.handle(id, cx))
+    };
+    let condition = handle(SharedString::from(format!("{:?}", Popup::Condition(0))).into(), cx);
+    cx.update(|window, cx| window.focus(&condition, cx));
+    host.answer.set(None);
+    press(cx, "space");
+    let at = menu_at(Popup::Condition(0), 1);
+    assert_eq!(
+        host.menus.take(),
+        [format!(
+            "{} {}: URL contains (checked), URL is equal to",
+            f32::from(at.x),
+            f32::from(at.y)
+        )]
+    );
+    // The field's own handle is its stop, so what's typed with it ringed is the rule's, over its
+    // text, which comes in selected as a Mac field's does.
+    let field = view.read_with(cx, |view, cx| view.fields[0].focus_handle(cx));
+    cx.update(|window, cx| window.focus(&field, cx));
+    cx.simulate_input("home.example");
+    cx.run_until_parked();
+    assert_eq!(host.rules().rules, [rule(Condition::Contains, "home.example", WORK)]);
+    let remove = handle(("remove-link-rule", 0usize).into(), cx);
+    cx.update(|window, cx| window.focus(&remove, cx));
+    press(cx, "enter");
+    assert_eq!(host.rules().rules, []);
+}
+
+/// Presses `key` and lets it go, as GPUI's click from the keyboard is on the release.
+fn press(cx: &mut VisualTestContext, key: &'static str) {
+    cx.simulate_keystrokes(key);
+    let keystroke = gpui::Keystroke::parse(key).unwrap();
+    cx.update(|window, cx| {
+        window.dispatch_event(gpui::PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }), cx);
+    });
+    cx.run_until_parked();
+}
+
 /// A rule's row dragged onto another's takes its place, and the trash takes a rule away.
 #[gpui::test]
 fn a_drag_reorders_the_rules_and_the_trash_removes_one(cx: &mut TestAppContext) {

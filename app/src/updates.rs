@@ -15,8 +15,8 @@ use gpui::{
 };
 
 use crate::palette::NO_THEME_ACCENT;
-use crate::settings_rows::{Look, SLIDE, button, detailed_row, drawn, switch};
-use crate::tokens::settings::PADDING;
+use crate::settings_rows::{Look, Ring, SLIDE, Stop, Stops, button, detailed_row, drawn, switch};
+use crate::tokens::settings::{PADDING, SWITCH_HEIGHT};
 
 /// What updates this copy.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -352,6 +352,8 @@ pub struct VersionRow {
     logged: Rc<RefCell<Vec<String>>>,
     /// Where its button is drawn, for the tests to click.
     drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Its button, a stop of Settings' keyboard.
+    stops: Stops,
     _watch: Subscription,
 }
 
@@ -361,8 +363,14 @@ impl VersionRow {
             version: version.into(),
             logged: Rc::default(),
             drawn: Rc::default(),
+            stops: Stops::default(),
             _watch: observe_view(cx, |_, cx| cx.notify()),
         }
+    }
+
+    /// Its button goes in `stops`' order.
+    pub fn with_stops(self, stops: Stops) -> Self {
+        Self { stops, ..self }
     }
 
     /// Where its button was drawn last, if it has one.
@@ -382,7 +390,7 @@ impl Render for VersionRow {
                 .absolute()
                 .inset_0();
             button(&look, "update", title)
-                .relative()
+                .button_stop(&self.stops, cx)
                 .when(said.is_some(), |button| button.ml(px(PADDING)))
                 .child(drawn(format!("update {}", action.name()), self.logged.clone()))
                 .child(at)
@@ -409,6 +417,8 @@ pub struct NightlyRow {
     drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// When the switch was last clicked, which its knob slides from.
     switched: Option<Instant>,
+    /// Its switch, a stop of Settings' keyboard.
+    stops: Stops,
     _watch: Subscription,
 }
 
@@ -418,8 +428,14 @@ impl NightlyRow {
             logged: Rc::default(),
             drawn: Rc::default(),
             switched: None,
+            stops: Stops::default(),
             _watch: observe_view(cx, |_, cx| cx.notify()),
         }
+    }
+
+    /// Its switch goes in `stops`' order.
+    pub fn with_stops(self, stops: Stops) -> Self {
+        Self { stops, ..self }
     }
 
     /// Where its switch was drawn last.
@@ -449,6 +465,7 @@ impl Render for NightlyRow {
             .child(switch(&Look::settings(), on, slid, rgb(NO_THEME_ACCENT)))
             .child(drawn(format!("switch {NIGHTLY}"), self.logged.clone()))
             .child(at)
+            .stop(&self.stops, Ring::Around(SWITCH_HEIGHT / 2.), cx)
             .on_click(cx.listener(move |row, _, _, cx| {
                 row.switched = Some(Instant::now());
                 follow(if on { Track::Release } else { Track::Nightly }, cx);

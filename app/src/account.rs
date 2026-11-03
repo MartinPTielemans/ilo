@@ -19,11 +19,11 @@ use gpui::{
 };
 
 use crate::dialog::{Question, Return, Tone};
-use crate::settings_rows::{Look, button, group};
+use crate::settings_rows::{Look, Ring, Stop, Stops, button, group};
 use crate::text_input::TextInput;
 use crate::tokens::settings::{
-    BOX_GAP, BUTTONS_TOP, HEADER_GAP, PADDING, PROFILE_ROW, SECTION_GAP, WORD_GAP, WORD_NUMBER,
-    WORDS_COLUMNS,
+    BOX_GAP, BUTTONS_TOP, HEADER_GAP, PADDING, PROFILE_ROW, RADIUS, SECTION_GAP, WORD_GAP,
+    WORD_NUMBER, WORDS_COLUMNS,
 };
 use crate::tokens::text;
 
@@ -199,6 +199,8 @@ pub struct Account {
     /// It's the first launch's step, whose title, line and button say what its signed-out box
     /// would.
     step: bool,
+    /// Its buttons, links and fields, stops of Settings' keyboard.
+    stops: Stops,
 }
 
 impl EventEmitter<AccountEvent> for Account {}
@@ -209,6 +211,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("escape", Leave, Some("AccountField")),
     ]);
 }
+
+/// The corners of the ring round a link's words.
+const LINK_RADIUS: f32 = 2.;
 
 /// Puts `text` on GPUI's clipboard, marked with SECRET_HINT, and takes it off after `kept` if it's
 /// still there, for a host that can't copy a secret itself (Linux).
@@ -330,7 +335,14 @@ impl Account {
             drawn: Rc::default(),
             look: Look::settings(),
             step: false,
+            stops: Stops::default(),
         }
+    }
+
+    /// Its buttons, links and fields go in `stops`' order.
+    pub fn with_stops(mut self, stops: Stops) -> Account {
+        self.stops = stops;
+        self
     }
 
     /// Shows it as the first launch's step, which says what signing in does and has its own Sign In
@@ -630,7 +642,7 @@ impl Account {
     ) -> gpui::Stateful<gpui::Div> {
         let name = name.into();
         button(&self.look, SharedString::from(name.clone()), title)
-            .relative()
+            .button_stop(&self.stops, cx)
             .child(self.place(name))
             .on_click(cx.listener(move |account, _, window, cx| clicked(account, window, cx)))
     }
@@ -647,10 +659,11 @@ impl Account {
         let ink = self.look.ink;
         div()
             .id(name)
-            .relative()
             .hover(move |link| link.text_color(ink))
             .child(title)
             .child(self.place(name.into()))
+            // Round its words, as round a switch.
+            .stop(&self.stops, Ring::Around(LINK_RADIUS), cx)
             .on_click(cx.listener(move |account, _, window, cx| clicked(account, window, cx)))
     }
 
@@ -754,7 +767,12 @@ impl Account {
                         account.leave_field(window, cx)
                     }))
                     .child(self.place("field".into()))
-                    .child(field.input.clone())]),
+                    .child(field.input.clone())
+                    .child(self.stops.mark(
+                        "field",
+                        field.input.focus_handle(cx),
+                        Ring::Inside(RADIUS),
+                    ))]),
             )
             .when(field.refused, |below| {
                 below.child(
