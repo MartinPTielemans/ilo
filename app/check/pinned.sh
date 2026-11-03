@@ -424,7 +424,6 @@ send click $page_point
 if [ "$active" != 1 ]; then
   exec 3>&-
   quit
-  kill "$server"
   echo "skip: the restored pinned tab's way back. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
@@ -650,7 +649,6 @@ send click $page_point
 if [ "$active" != 1 ]; then
   exec 3>&-
   quit
-  kill "$server"
   echo "skip: the restored folder. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
@@ -872,7 +870,6 @@ send click $page_point
 if [ "$active" != 1 ]; then
   exec 3>&-
   quit
-  kill "$server"
   echo "skip: the restored pinned rows. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi

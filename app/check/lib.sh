@@ -577,7 +577,9 @@ start_with_cdp() {
   helper=$!
   exec 5> "$scratch/cdp"
 }
-# Starts the check's web server, in site.sh, unless a run before has. Its pages are at $site.
+# Starts the check's web server, in site.sh, unless a run before has. Its pages are at $site. It
+# serves every run after, so only cleanup stops it: a run that did would leave the next its address
+# and no server (#1369).
 serve() {
   [ -n "${site:-}" ] || . check/site.sh
 }

@@ -76,7 +76,7 @@ constexpr wchar_t kInstallingNotes[] = L"InstallingNotes";
 constexpr size_t kMostFeed = 4 << 20;
 constexpr ULONGLONG kMostInstaller = 1ULL << 30;
 
-void (*g_quit)(void) = nullptr;
+void (*g_restart)(void) = nullptr;
 void (*g_changed)(int stage, const char* version) = nullptr;
 // Wakes the thread to check now.
 HANDLE g_wake = nullptr;
@@ -85,8 +85,8 @@ std::mutex g_said_lock;
 int g_stage = HOST_UPDATE_IDLE;
 std::string g_version;
 // The installer, once verified, held open so nothing can change it until it runs, the build it
-// installs and its release notes, and whether the quit it runs at is Restart to Update's, which
-// relaunches ilo.
+// installs and its release notes, and whether the quit it runs at is a restart that went ahead,
+// which it relaunches ilo after.
 std::atomic<bool> g_ready{false};
 std::wstring g_installer;
 // Whether the checks read the nightly feed (host_follow_nightly).
@@ -542,11 +542,11 @@ void host_follow_nightly(bool nightly) {
   g_nightly = nightly;
 }
 
-void host_start_updater(void (*quit)(void), void (*changed)(int stage, const char* version)) {
+void host_start_updater(void (*restart)(void), void (*changed)(int stage, const char* version)) {
   if (g_wake || !host_updates_available()) {
     return;
   }
-  g_quit = quit;
+  g_restart = restart;
   g_changed = changed;
   ClearFolder(DownloadFolder());
   g_wake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
@@ -589,18 +589,27 @@ void host_check_for_updates_quietly(void) {
   host_check_for_updates();
 }
 
-// Restart to Update: the quit runs the installer, which relaunches ilo once it's in.
+// Restart to Update: the restart's quit runs the installer, which relaunches ilo once it's in.
 void host_install_update(void) {
-  if (!g_ready || !g_quit) {
+  if (!g_ready || !g_restart) {
     return;
   }
   fprintf(stderr, "browser: update installs now\n");
+  g_restart();
+}
+
+// Any restart with an update ready, which the installer relaunches into, as Chrome starting this
+// build again would hold files it replaces.
+bool host_relaunch_into_update(void) {
+  if (!g_ready) {
+    return false;
+  }
   g_relaunch = true;
-  g_quit();
+  return true;
 }
 
 // Chromium is quitting: a ready update installs once this process has gone, silently, as ilo.iss
-// waits for it to, and relaunches ilo if Restart to Update asked. Not as Windows shuts down, which
+// waits for it to, and relaunches ilo after a restart. Not as Windows shuts down, which
 // would stop the installer halfway.
 void host_finish_update(void) {
   if (!g_ready || GetSystemMetrics(SM_SHUTTINGDOWN)) {

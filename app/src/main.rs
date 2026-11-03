@@ -478,7 +478,7 @@ mod platform {
         pub fn host_updated_by_store() -> bool;
         #[cfg(not(target_os = "linux"))]
         pub fn host_start_updater(
-            quit: extern "C" fn(),
+            restart: extern "C" fn(),
             changed: extern "C" fn(stage: c_int, version: *const c_char),
         );
         #[cfg(not(target_os = "linux"))]
@@ -493,6 +493,8 @@ mod platform {
         pub fn host_check_for_updates_quietly();
         #[cfg(not(target_os = "linux"))]
         pub fn host_install_update();
+        #[cfg(not(target_os = "linux"))]
+        pub fn host_relaunch_into_update() -> bool;
         #[cfg(not(target_os = "linux"))]
         pub fn host_finish_update();
         #[cfg(not(target_os = "linux"))]
@@ -4977,7 +4979,18 @@ fn finish_opening(
         offer::tab_shown(id, selected, cx);
     }
     let children: Vec<AnyWindowHandle> = [
-        find_bar::open(id, ui_view, cx),
+        find_bar::open(
+            id,
+            ui_view,
+            {
+                let shell = shell.downgrade();
+                move |cx, right, top, width| {
+                    let shell = shell.upgrade()?;
+                    Some(shell.read(cx).at_page_corner(right, top, width))
+                }
+            },
+            cx,
+        ),
         prompt.map(Into::into),
         reveal::open(shell.clone(), ui_view, cx),
     ]
@@ -5453,10 +5466,9 @@ fn start_updates(cx: &mut App) {
             .then(|| followed_track().unwrap_or(built));
         updates::tracks(built, followed, cx);
         unsafe { platform::host_follow_nightly(followed == Some(updates::Track::Nightly)) };
-        // Restart to Update on Windows, whose installer runs once the browser has gone, which needs
-        // no asking.
-        extern "C" fn quit() {
-            quit_because("the updater's install");
+        // Restart to Update, whose update installs once the restart goes ahead (quit_going_ahead).
+        extern "C" fn restart() {
+            restart_because("the updater's install");
         }
         // An installer that failed after the last quit left this launch the old build (#1459).
         #[cfg(target_os = "windows")]
@@ -5470,7 +5482,7 @@ fn start_updates(cx: &mut App) {
             }
             unsafe { platform::host_take_install(installed) };
         }
-        unsafe { platform::host_start_updater(quit, update_changed) };
+        unsafe { platform::host_start_updater(restart, update_changed) };
     }
     #[cfg(target_os = "linux")]
     if updates_available() {
@@ -5484,9 +5496,10 @@ fn start_updates(cx: &mut App) {
                 }
             };
             log!("browser: updater started");
-            let restarting = portal.clone();
+            let relaunching = portal.clone();
             let retries = cx.update(|cx| {
-                flatpak::on_restart(move |cx| restart_into_newest(restarting.clone(), cx), cx);
+                flatpak::on_restart(|_| restart_because("the restart into the newest build"), cx);
+                flatpak::on_relaunch(move || relaunch_into_newest(&relaunching), cx);
                 flatpak::changed(flatpak::State::Current, cx);
                 flatpak::retries(cx)
             });
@@ -5611,15 +5624,18 @@ extern "C" fn update_changed(stage: c_int, version: *const c_char) {
     update_app_later(move |cx| updates::changed(stage, cx));
 }
 
-/// Starts the build Flatpak installed, once this one has let go of the profile, and quits.
+/// Has the portal start the build Flatpak installed once this one has let go of the profile, as
+/// the restart into it goes ahead: true once the portal has.
 #[cfg(target_os = "linux")]
-fn restart_into_newest(portal: flatpak::Portal, cx: &mut App) {
+fn relaunch_into_newest(portal: &flatpak::Portal) -> bool {
     let lock = std::path::Path::new(&profile_dir()).join("SingletonLock");
-    cx.spawn(async move |_| match portal.restart(&lock).await {
-        Ok(()) => quit_because("the restart into the newest build"),
-        Err(error) => log!("browser: no restart: {error}"),
-    })
-    .detach();
+    match flatpak::start_newest(portal, &lock, flatpak::SPAWN) {
+        Ok(()) => true,
+        Err(error) => {
+            log!("browser: no relaunch: {error}");
+            false
+        }
+    }
 }
 
 /// The menu bar: Arc's menus, with the commands the browser has, what `bar` says of the key
@@ -5944,6 +5960,31 @@ fn quit_because(why: &str) {
     // check.sh reads this line.
     log!("browser: quit for {why}");
     unsafe { bc::bc_quit() };
+}
+
+/// Restarts the browser, saying what asked, as quit_because does.
+fn restart_because(why: &str) {
+    log!("browser: restart for {why}");
+    unsafe { bc::bc_restart() };
+}
+
+/// The quit goes ahead, and nothing can stop it now. A restart with an update ready relaunches
+/// into the update, which installs first, rather than Chrome starting this build again. Only now,
+/// so a quit a page stopped leaves nothing armed for the next (#1459).
+unsafe extern "C" fn quit_going_ahead(_: *mut c_void, restarting: bool) -> bool {
+    log!("browser: quit going ahead{}", if restarting { ", restarting" } else { "" });
+    restarting && relaunch_into_update()
+}
+
+fn relaunch_into_update() -> bool {
+    #[cfg(not(target_os = "linux"))]
+    return unsafe { platform::host_relaunch_into_update() };
+    #[cfg(target_os = "linux")]
+    {
+        let mut relaunched = false;
+        update_app(|cx| relaunched = flatpak::relaunch(cx));
+        relaunched
+    }
 }
 
 unsafe extern "C" fn private_session_ended(_: *mut c_void, profile: bc::bc_id) {
@@ -7760,6 +7801,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         passwords_imported: Some(passwords_imported),
         open_links: Some(open_links),
         launched_again: Some(launched_again),
+        quit_going_ahead: Some(quit_going_ahead),
         agent_activity: Some(agent_activity),
         #[cfg(target_os = "linux")]
         window_resized: Some(window_resized),

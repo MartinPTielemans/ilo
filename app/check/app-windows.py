@@ -6,13 +6,16 @@ one in front alone. `list PID` prints each top-level window of the process, with
 state and whether it's a browser window, minimized (IsIconic) or the one in front
 (GetForegroundWindow). `icon PID ICO` checks that each window of the process the taskbar and
 Alt+Tab show has the .ico's image for its big and small icons, read as the shell reads them, and
-prints them (#1350). `cover PID ilo|away` opens a window of another app in front of the process's
-browser window, over its lower half, with the foreground in ilo's window or in a window away from
-it, says "cover <handle>, foreground <ilo|away|other>" and keeps it until it's ended (#1419).
-Usage: app-windows.py close|list|icon PID [front|ICO] or app-windows.py cover PID ilo|away"""
+prints them (#1350). `cover PID ilo|away [FRONT]` opens a window of another app in front of the
+process's browser window, over its lower half, with the foreground in ilo's window or in a window
+away from it, says "cover <handle>, foreground <ilo|away|other>" and keeps it until it's ended
+(#1419), or with FRONT until that file exists, when it brings the browser window to the front, as
+a click on its taskbar button does, and ends (#1365).
+Usage: app-windows.py close|list|icon PID [front|ICO] or app-windows.py cover PID ilo|away [FRONT]"""
 
 import ctypes
 import ctypes.wintypes as w
+import os
 import sys
 
 # Git Bash's grep reads UTF-8 lines ending in \n alone.
@@ -153,12 +156,13 @@ class WNDCLASSW(ctypes.Structure):
                 ("lpszClassName", w.LPCWSTR)]
 
 
-def cover(pid, foreground):
+def cover(pid, foreground, front_file):
     """Another app's plain window over the lower half of the browser window of process PID, where
     the link target's corner is, with ilo's window under it, and the foreground in ilo's window
     (FOREGROUND "ilo"), as when a window opens over ilo without taking the keyboard, or in a small
     window away from ilo's ("away"), as the user's app on another part of the screen. Returns once
-    the browser's process has ended."""
+    the browser's process has ended, or once FRONT_FILE exists, having brought the browser window
+    to the front, which Windows lets the app with the foreground do."""
     user32.SetProcessDPIAware()
     browser = next((hwnd for hwnd in windows(pid)
                     if holds_ui(hwnd) and user32.IsWindowVisible(hwnd)), None)
@@ -234,8 +238,14 @@ def cover(pid, foreground):
                                         "away" if text(user32.GetWindowTextW, front) == "away"
                                         else "other"), flush=True)
     message = w.MSG()
-    while user32.MsgWaitForMultipleObjects(1, ctypes.byref(browser_process), False, INFINITE,
-                                           QS_ALLINPUT) == 1:
+    WAIT_TIMEOUT = 0x102
+    # Looking for FRONT_FILE every 100 ms, if there's one to look for.
+    while user32.MsgWaitForMultipleObjects(1, ctypes.byref(browser_process), False,
+                                           100 if front_file else INFINITE,
+                                           QS_ALLINPUT) in (1, WAIT_TIMEOUT):
+        if front_file and os.path.exists(front_file):
+            user32.SetForegroundWindow(w.HWND(browser))
+            return
         while user32.PeekMessageW(ctypes.byref(message), None, 0, 0, PM_REMOVE):
             user32.TranslateMessage(ctypes.byref(message))
             user32.DispatchMessageW(ctypes.byref(message))
@@ -245,7 +255,8 @@ def main():
     command = sys.argv[1] if len(sys.argv) > 1 else ""
     front = command == "close" and sys.argv[3:] == ["front"]
     known = ("close", "list", "icon", "cover")
-    if len(sys.argv) != (4 if command in ("icon", "cover") or front else 3) or command not in known:
+    wanted = (4, 5) if command == "cover" else (4,) if command == "icon" or front else (3,)
+    if len(sys.argv) not in wanted or command not in known:
         sys.exit(__doc__.splitlines()[-1])
     pid = int(sys.argv[2])
     if command == "icon":
@@ -253,7 +264,8 @@ def main():
     if command == "cover":
         if sys.argv[3] not in ("ilo", "away"):
             sys.exit(__doc__.splitlines()[-1])
-        cover(pid, sys.argv[3])
+        cover(pid, sys.argv[3], sys.argv[4] if len(sys.argv) == 5 else None)
+        return
     user32.GetForegroundWindow.restype = w.HWND
     foreground = user32.GetForegroundWindow()
     for hwnd in windows(pid):
