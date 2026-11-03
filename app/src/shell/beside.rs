@@ -37,7 +37,10 @@ impl Shell {
         let pages = self.pages();
         match pages.len() {
             0 | 1 => 0.,
-            _ => pages.iter().find(|&&(space, _)| space == self.space).map_or(0., |&(_, x)| x),
+            _ => pages
+                .iter()
+                .find(|&&(space, _)| space == self.space)
+                .map_or(0., |&(_, x)| x),
         }
     }
 
@@ -47,8 +50,19 @@ impl Shell {
         if x == 0. {
             return part.into_any_element();
         }
-        let page = div().absolute().top_0().bottom_0().left(px(x)).w(px(self.width())).child(part);
-        div().absolute().size_full().overflow_hidden().child(page).into_any_element()
+        let page = div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left(px(x))
+            .w(px(self.width()))
+            .child(part);
+        div()
+            .absolute()
+            .size_full()
+            .overflow_hidden()
+            .child(page)
+            .into_any_element()
     }
 
     /// The pages of the Spaces beside the shown one's, while they page: each with its URL field,
@@ -56,7 +70,10 @@ impl Shell {
     /// take no input.
     pub(super) fn beside_pages(&self) -> Vec<gpui::Div> {
         let width = self.width();
-        let pages = self.pages().into_iter().filter(|&(space, _)| space != self.space);
+        let pages = self
+            .pages()
+            .into_iter()
+            .filter(|&(space, _)| space != self.space);
         pages
             .filter_map(|(space, x)| {
                 let space = self.spaces.iter().find(|other| other.id == space)?;
@@ -134,9 +151,7 @@ impl Shell {
             (None, _) if drawn.is_none() => return false,
             (None, _) => self.browser.tooltip(None, cx),
             (Some(AtRest::Tile(tab)), MouseButton::Left) => self.pressed_tile(tab, event, cx),
-            (Some(AtRest::Tile(tab)), MouseButton::Right) => {
-                self.tab_menu(tab, event.position, cx)
-            }
+            (Some(AtRest::Tile(tab)), MouseButton::Right) => self.tab_menu(tab, event.position, cx),
             (Some(AtRest::Field), MouseButton::Left) => self.pressed_bar_target(cx),
             (Some(AtRest::SiteControls), MouseButton::Left) => {
                 self.run(Command::SiteControls, "sidebar", cx)
@@ -173,9 +188,12 @@ impl Shell {
     #[cfg(test)]
     pub(super) fn beside_framed(&self, tab: u64, outset: f32) -> impl IntoElement + use<> {
         let frames = self.beside_frames.clone();
-        canvas(move |bounds, _, _| _ = frames.borrow_mut().insert(tab, bounds), |_, _, _, _| {})
-            .absolute()
-            .inset(px(-outset))
+        canvas(
+            move |bounds, _, _| _ = frames.borrow_mut().insert(tab, bounds),
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset(px(-outset))
     }
 }
 
@@ -204,7 +222,15 @@ mod tests {
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
         shell.update(cx, |shell, cx| {
             let space = |id: u64| {
-                (id, format!("Space {id}").into(), None, id, "".into(), "".into(), "".into())
+                (
+                    id,
+                    format!("Space {id}").into(),
+                    None,
+                    id,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                )
             };
             shell.set_spaces(vec![space(1), space(2)], cx);
             shell.set_favorites(vec![(10, 1), (11, 1), (20, 2)], cx);
@@ -216,7 +242,10 @@ mod tests {
         cx.run_until_parked();
         shell.update(cx, |shell, cx| shell.set_space(1, cx));
         cx.run_until_parked();
-        assert!(shell.read_with(cx, |shell, _| shell.settle.is_some()), "the Space didn't slide");
+        assert!(
+            shell.read_with(cx, |shell, _| shell.settle.is_some()),
+            "the Space didn't slide"
+        );
         host.take();
         (shell, host, cx)
     }
@@ -275,7 +304,10 @@ mod tests {
         let (shell, host, cx) = sliding_back(cx);
         let at = shell.read_with(cx, |shell, _| {
             let [left, top, width] = shell.resting_tiles()[&10];
-            point(left + width / 2., shell.tiles_top() + top + TILE_HEIGHT / 2.)
+            point(
+                left + width / 2.,
+                shell.tiles_top() + top + TILE_HEIGHT / 2.,
+            )
         });
         slide_until(&shell, cx, at, AtRest::Tile(10), Some(AtRest::Tile(11)));
         click_mid_slide(&shell, cx, at);
@@ -291,12 +323,19 @@ mod tests {
     fn a_click_while_spaces_slide_opens_the_url_field_at_rest(cx: &mut TestAppContext) {
         let (shell, host, cx) = sliding_back(cx);
         let at = shell.read_with(cx, |shell, _| {
-            point(shell.width() - PLATE_INSET - 8., URL_FIELD_TOP + URL_FIELD_HEIGHT / 2.)
+            point(
+                shell.width() - PLATE_INSET - 8.,
+                URL_FIELD_TOP + URL_FIELD_HEIGHT / 2.,
+            )
         });
         // The page beside's field takes no input: under the pointer, none of the shown one's is.
         slide_until(&shell, cx, at, AtRest::Field, None);
         host.command_bars.borrow_mut().clear();
         click_mid_slide(&shell, cx, at);
-        assert_eq!(host.command_bars.borrow().len(), 1, "the click mid-slide opened no bar");
+        assert_eq!(
+            host.command_bars.borrow().len(),
+            1,
+            "the click mid-slide opened no bar"
+        );
     }
 }

@@ -12,14 +12,16 @@ use std::{
     fs,
     io::Cursor,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
     sync::{Arc, LazyLock},
     thread,
     time::{Duration, Instant},
 };
 
 use gpui::{DevicePixels, SvgRenderer, SvgSize, size};
-use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, RgbaImage, imageops::FilterType};
+use image::{
+    DynamicImage, ImageDecoder, ImageFormat, ImageReader, RgbaImage, imageops::FilterType,
+};
 
 /// The longest side of a thumbnail, in pixels, as the Mac's.
 const THUMBNAIL: u32 = 96;
@@ -35,7 +37,11 @@ type Done =
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_file_preview(path: *const c_char, id: u64, done: Done) {
-    let path = PathBuf::from(unsafe { CStr::from_ptr(path) }.to_string_lossy().into_owned());
+    let path = PathBuf::from(
+        unsafe { CStr::from_ptr(path) }
+            .to_string_lossy()
+            .into_owned(),
+    );
     let Some(cx) = crate::CX.with_borrow(Clone::clone) else {
         return;
     };
@@ -54,9 +60,14 @@ pub extern "C" fn host_file_preview(path: *const c_char, id: u64, done: Done) {
     cx.foreground_executor()
         .spawn(async move {
             match preview.await {
-                Some(((png, width, height), image)) => {
-                    done(id, png.as_ptr(), png.len(), width.into(), height.into(), image)
-                }
+                Some(((png, width, height), image)) => done(
+                    id,
+                    png.as_ptr(),
+                    png.len(),
+                    width.into(),
+                    height.into(),
+                    image,
+                ),
                 None => done(id, std::ptr::null(), 0, 0., 0., false),
             }
         })
@@ -75,7 +86,9 @@ fn thumbnail(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
         picture = picture.thumbnail(THUMBNAIL, THUMBNAIL);
     }
     let mut png = Vec::new();
-    picture.write_to(&mut Cursor::new(&mut png), ImageFormat::Png).ok()?;
+    picture
+        .write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+        .ok()?;
     Some((png, picture.width(), picture.height()))
 }
 
@@ -106,7 +119,10 @@ async fn icon_theme() -> Option<String> {
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
     ["gtk-4.0", "gtk-3.0"].iter().find_map(|gtk| {
         let settings = ini(&fs::read_to_string(config.join(gtk).join("settings.ini")).ok()?);
-        let theme = settings.get("Settings")?.get("gtk-icon-theme-name")?.trim_matches('"');
+        let theme = settings
+            .get("Settings")?
+            .get("gtk-icon-theme-name")?
+            .trim_matches('"');
         Some(theme.to_string()).filter(|theme| !theme.is_empty())
     })
 }
@@ -152,22 +168,36 @@ fn icon(path: &Path, theme: Option<&str>) -> Option<(Vec<u8>, u32, u32)> {
     let mime = mime_type(path).unwrap_or_else(|| "application/octet-stream".into());
     let themes = themes(theme);
     let file = icon_names(&mime).iter().find_map(|name| {
-        themes.iter().find_map(|theme| in_theme(name, theme)).or_else(|| unthemed(name))
+        themes
+            .iter()
+            .find_map(|theme| in_theme(name, theme))
+            .or_else(|| unthemed(name))
     })?;
     let picture = if file.extension().is_some_and(|e| e == "svg") {
         let parsed = SVG.parse_svg(&fs::read(&file).ok()?).ok()?;
         let side = DevicePixels(ICON as i32);
-        let drawn = SVG.render_parsed(&parsed, SvgSize::ExactSize(size(side, side))).ok()?;
+        let drawn = SVG
+            .render_parsed(&parsed, SvgSize::ExactSize(size(side, side)))
+            .ok()?;
         let mut pixels = drawn.as_bytes(0)?.to_vec();
         // GPUI's are BGRA.
-        pixels.chunks_exact_mut(4).for_each(|pixel| pixel.swap(0, 2));
+        pixels
+            .chunks_exact_mut(4)
+            .for_each(|pixel| pixel.swap(0, 2));
         DynamicImage::ImageRgba8(RgbaImage::from_raw(ICON, ICON, pixels)?)
     } else {
-        let picture = ImageReader::open(&file).ok()?.with_guessed_format().ok()?.decode().ok()?;
+        let picture = ImageReader::open(&file)
+            .ok()?
+            .with_guessed_format()
+            .ok()?
+            .decode()
+            .ok()?;
         picture.resize_exact(ICON, ICON, FilterType::Lanczos3)
     };
     let mut png = Vec::new();
-    picture.write_to(&mut Cursor::new(&mut png), ImageFormat::Png).ok()?;
+    picture
+        .write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+        .ok()?;
     Some((png, ICON, ICON))
 }
 
@@ -177,7 +207,8 @@ fn icon_names(mime: &str) -> Vec<String> {
     let listed = |file: &str| {
         data_dirs().iter().find_map(|dir| {
             let list = fs::read_to_string(dir.join("mime").join(file)).ok()?;
-            list.lines().find_map(|line| Some(line.strip_prefix(mime)?.strip_prefix(':')?.into()))
+            list.lines()
+                .find_map(|line| Some(line.strip_prefix(mime)?.strip_prefix(':')?.into()))
         })
     };
     let kind = mime.split('/').next().unwrap_or("application");
@@ -196,12 +227,20 @@ fn themes(theme: Option<&str>) -> Vec<Theme> {
         }
         seen.push(name.to_string());
         let dirs: Vec<_> = icon_dirs().into_iter().map(|dir| dir.join(name)).collect();
-        let index = dirs.iter().find_map(|dir| fs::read_to_string(dir.join("index.theme")).ok());
+        let index = dirs
+            .iter()
+            .find_map(|dir| fs::read_to_string(dir.join("index.theme")).ok());
         let Some(index) = index.map(|index| ini(&index)) else {
             return;
         };
-        let inherits = index.get("Icon Theme").and_then(|keys| keys.get("Inherits")).cloned();
-        themes.push(Theme { dirs: dirs.into_iter().filter(|dir| dir.is_dir()).collect(), index });
+        let inherits = index
+            .get("Icon Theme")
+            .and_then(|keys| keys.get("Inherits"))
+            .cloned();
+        themes.push(Theme {
+            dirs: dirs.into_iter().filter(|dir| dir.is_dir()).collect(),
+            index,
+        });
         for parent in inherits.unwrap_or_default().split(',').map(str::trim) {
             if !parent.is_empty() {
                 add(parent, seen, themes);
@@ -218,7 +257,9 @@ fn themes(theme: Option<&str>) -> Vec<Theme> {
 /// The directories icon themes are in, the user's first (the icon theme spec).
 fn icon_dirs() -> Vec<PathBuf> {
     let home = env::var_os("HOME").map(|home| PathBuf::from(home).join(".icons"));
-    home.into_iter().chain(data_dirs().into_iter().map(|dir| dir.join("icons"))).collect()
+    home.into_iter()
+        .chain(data_dirs().into_iter().map(|dir| dir.join("icons")))
+        .collect()
 }
 
 /// The file of the icon `name` in `theme`: one drawn at ICON pixels or scalable to it, else the
@@ -242,9 +283,10 @@ fn in_theme(name: &str, theme: &Theme) -> Option<PathBuf> {
         };
         let scale = number("Scale").unwrap_or(1);
         let (min, max) = match keys.get("Type").map(String::as_str) {
-            Some("Scalable") => {
-                (number("MinSize").unwrap_or(size), number("MaxSize").unwrap_or(size))
-            }
+            Some("Scalable") => (
+                number("MinSize").unwrap_or(size),
+                number("MaxSize").unwrap_or(size),
+            ),
             Some("Fixed") => (size, size),
             _ => {
                 let threshold = number("Threshold").unwrap_or(2);
@@ -257,12 +299,19 @@ fn in_theme(name: &str, theme: &Theme) -> Option<PathBuf> {
             _ if max < ICON => (true, ICON - max),
             _ => (false, 0),
         };
-        if best.as_ref().is_some_and(|(nearest, _)| *nearest <= distance) {
+        if best
+            .as_ref()
+            .is_some_and(|(nearest, _)| *nearest <= distance)
+        {
             continue;
         }
         let file = ["png", "svg"].iter().find_map(|extension| {
             let file = format!("{directory}/{name}.{extension}");
-            theme.dirs.iter().map(|dir| dir.join(&file)).find(|file| file.is_file())
+            theme
+                .dirs
+                .iter()
+                .map(|dir| dir.join(&file))
+                .find(|file| file.is_file())
         });
         if let Some(file) = file {
             best = Some((distance, file));
@@ -273,10 +322,14 @@ fn in_theme(name: &str, theme: &Theme) -> Option<PathBuf> {
 
 /// The icon `name` outside any theme, in the icon directories or /usr/share/pixmaps.
 fn unthemed(name: &str) -> Option<PathBuf> {
-    let dirs = icon_dirs().into_iter().chain([PathBuf::from("/usr/share/pixmaps")]);
+    let dirs = icon_dirs()
+        .into_iter()
+        .chain([PathBuf::from("/usr/share/pixmaps")]);
     let dirs: Vec<_> = dirs.collect();
     ["png", "svg"].iter().find_map(|extension| {
-        dirs.iter().map(|dir| dir.join(format!("{name}.{extension}"))).find(|file| file.is_file())
+        dirs.iter()
+            .map(|dir| dir.join(format!("{name}.{extension}")))
+            .find(|file| file.is_file())
     })
 }
 
@@ -285,11 +338,15 @@ fn ini(text: &str) -> Ini {
     let mut sections = Ini::new();
     let mut section = String::new();
     for line in text.lines().map(str::trim) {
-        if let Some(name) = line.strip_prefix('[').and_then(|line| line.strip_suffix(']')) {
+        if let Some(name) = line
+            .strip_prefix('[')
+            .and_then(|line| line.strip_suffix(']'))
+        {
             section = name.to_string();
         } else if let Some((key, value)) = line.split_once('=') {
             let keys = sections.entry(section.clone()).or_default();
-            keys.entry(key.trim().to_string()).or_insert_with(|| value.trim().to_string());
+            keys.entry(key.trim().to_string())
+                .or_insert_with(|| value.trim().to_string());
         }
     }
     sections
@@ -306,7 +363,9 @@ fn data_dirs() -> Vec<PathBuf> {
         .ok()
         .filter(|dirs| !dirs.is_empty())
         .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
-    home.into_iter().chain(shared.split(':').map(PathBuf::from)).collect()
+    home.into_iter()
+        .chain(shared.split(':').map(PathBuf::from))
+        .collect()
 }
 
 /// `path`'s MIME type by its name, as shared-mime-info's globs give it, the heaviest first. Only a
@@ -394,7 +453,7 @@ fn run(exec: &str, input: &Path, out: &Path) -> bool {
     let Some(program) = args.next() else {
         return false;
     };
-    let Ok(mut child) = Command::new(program)
+    let Ok(mut child) = browser::child::command(program)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())

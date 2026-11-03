@@ -21,7 +21,8 @@ impl Host for Recorder {
 
 fn open_hud(cx: &mut TestAppContext) -> Rc<Recorder> {
     let host = Rc::new(Recorder::default());
-    cx.update(|cx| open(host.clone(), cx)).expect("no HUD window");
+    cx.update(|cx| open(host.clone(), cx))
+        .expect("no HUD window");
     host
 }
 
@@ -32,7 +33,8 @@ fn zoom(cx: &mut TestAppContext, tab: u64, percent: i32) {
 
 /// Moves the clock on by `seconds` and returns what the HUD asked of the host meanwhile.
 fn after(cx: &mut TestAppContext, host: &Recorder, seconds: f32) -> Vec<String> {
-    cx.executor().advance_clock(Duration::from_secs_f32(seconds));
+    cx.executor()
+        .advance_clock(Duration::from_secs_f32(seconds));
     cx.run_until_parked();
     host.0.take()
 }
@@ -64,12 +66,30 @@ fn another_tab_takes_it_at_once(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn a_change_dips_to_hide_the_old_percent(_: &mut TestAppContext) {
-    assert_eq!(Pose::arriving(0.), Pose { scale: FROM, opacity: 0. });
-    assert_eq!(Pose::arriving(1.), Pose { scale: 1., opacity: 1. });
+    assert_eq!(
+        Pose::arriving(0.),
+        Pose {
+            scale: FROM,
+            opacity: 0.
+        }
+    );
+    assert_eq!(
+        Pose::arriving(1.),
+        Pose {
+            scale: 1.,
+            opacity: 1.
+        }
+    );
     let settled = Pose::arriving(1.);
     let dipped = settled.changing(DIP);
-    assert!((dipped.scale - DIPPED).abs() < 1e-3 && dipped.text_opacity() < 1e-3, "{dipped:?}");
+    assert!(
+        (dipped.scale - DIPPED).abs() < 1e-3 && dipped.text_opacity() < 1e-3,
+        "{dipped:?}"
+    );
     assert_eq!(settled.changing(DIP + BACK), settled);
     let gone = settled.leaving(LEAVE);
-    assert!((gone.scale - FROM).abs() < 1e-3 && gone.opacity < 1e-3, "{gone:?}");
+    assert!(
+        (gone.scale - FROM).abs() < 1e-3 && gone.opacity < 1e-3,
+        "{gone:?}"
+    );
 }
