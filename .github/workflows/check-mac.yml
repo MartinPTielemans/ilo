@@ -189,8 +189,12 @@ jobs:
       - name: PROBE TCC log
         if: ${{ always() && steps.engine.outputs.found == 'true' }}
         run: |
-          log show --last 40m --style compact --predicate 'subsystem == "com.apple.TCC"' 2>/dev/null | grep -i 'browser\|dev.browser\|ilo' | grep -iE 'service|auth|prompt|request|kTCC' | tail -60 || true
-          sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "SELECT service, client, auth_value, auth_reason FROM access WHERE client LIKE 'dev.browser%'" || true
+          echo "== tccd about us"
+          log show --last 40m --style compact --predicate 'process == "tccd"' 2>/dev/null | grep -E 'dev\.browser|Browser\.app' | grep -vE 'AUTHREQ_SUBJECT' | cut -c1-400 | tail -40 || true
+          echo "== UserNotificationCenter"
+          log show --last 40m --style compact --predicate 'process == "UserNotificationCenter"' 2>/dev/null | cut -c1-400 | tail -40 || true
+          echo "== nehelper and local network"
+          log show --last 40m --style compact --predicate 'process == "nehelper" OR eventMessage CONTAINS[c] "local network"' 2>/dev/null | grep -iE 'browser|local network|privacy' | cut -c1-400 | tail -30 || true
 
       - if: ${{ always() && steps.engine.outputs.found == 'true' }}
         uses: actions/upload-artifact@v4
