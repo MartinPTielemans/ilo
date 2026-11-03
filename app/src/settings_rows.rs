@@ -8,10 +8,10 @@ use gpui::{Rgba, SharedString, canvas, div, prelude::*, px, rgb, svg};
 
 use crate::tokens::settings::{
     BOX, BOX_LINE, CHECK_BOX, CHECK_GAP, CHECK_GLYPH, CHECK_RADIUS, CHEVRONS, CONTROL,
-    CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_PRESSED, CONTROL_RADIUS, DETAIL, KNOB, KNOB_HEIGHT,
-    KNOB_INSET, KNOB_ON, KNOB_WIDTH, LINE_INSET, ON_CONTROL, ON_DETAIL, ON_LINE, ON_PRESSED,
-    ON_SWITCH_OFF, PADDING, RADIUS, SWITCH_HEIGHT, SWITCH_OFF, SWITCH_WIDTH, TEXT, TILE, TILE_GAP,
-    TILE_GLYPH, TILE_GLYPH_COLOR, TILE_RADIUS,
+    CONTROL_HEIGHT, CONTROL_HOVERED, CONTROL_PADDING, CONTROL_PRESSED, CONTROL_RADIUS, DETAIL,
+    KNOB, KNOB_HEIGHT, KNOB_INSET, KNOB_ON, KNOB_WIDTH, LINE_INSET, ON_CONTROL, ON_DETAIL,
+    ON_HOVERED, ON_LINE, ON_PRESSED, ON_SWITCH_OFF, PADDING, RADIUS, SWITCH_HEIGHT, SWITCH_OFF,
+    SWITCH_WIDTH, TEXT, TILE, TILE_GAP, TILE_GLYPH, TILE_GLYPH_COLOR, TILE_RADIUS,
 };
 use crate::tokens::text::SMALL;
 
@@ -52,6 +52,8 @@ pub struct Look {
     /// A row's grey text, under its name or at its end.
     pub detail: Rgba,
     pub control: Rgba,
+    /// A control under the pointer.
+    pub hovered: Rgba,
     pub pressed: Rgba,
     pub switch_off: Rgba,
 }
@@ -64,6 +66,7 @@ impl Look {
             line: rgb(BOX_LINE),
             detail: rgb(DETAIL),
             control: rgb(CONTROL),
+            hovered: rgb(CONTROL_HOVERED),
             pressed: rgb(CONTROL_PRESSED),
             switch_off: rgb(SWITCH_OFF),
         }
@@ -79,6 +82,7 @@ impl Look {
             line: mix(ON_LINE),
             detail: mix(ON_DETAIL),
             control: mix(ON_CONTROL),
+            hovered: mix(ON_HOVERED),
             pressed: mix(ON_PRESSED),
             switch_off: mix(ON_SWITCH_OFF),
         }
@@ -160,7 +164,7 @@ pub fn tile(glyph: &'static str, color: u32) -> gpui::Div {
         )
 }
 
-/// A push button, darker while pressed.
+/// A push button, a step lighter under the pointer and lighter again while pressed.
 pub fn button(
     look: &Look,
     id: impl Into<gpui::ElementId>,
@@ -175,6 +179,10 @@ pub fn button(
         .items_center()
         .rounded(px(CONTROL_RADIUS))
         .bg(look.control)
+        .hover({
+            let hovered = look.hovered;
+            move |button| button.bg(hovered)
+        })
         .active({
             let pressed = look.pressed;
             move |button| button.bg(pressed)
@@ -182,7 +190,7 @@ pub fn button(
         .child(title.into())
 }
 
-/// A square push button with `glyph` on it, such as a list's + and −, darker while pressed.
+/// A square push button with `glyph` on it, such as a list's + and −, lit as a button is.
 pub fn icon_button(
     look: &Look,
     id: impl Into<gpui::ElementId>,
@@ -197,6 +205,10 @@ pub fn icon_button(
         .justify_center()
         .rounded(px(CONTROL_RADIUS))
         .bg(look.control)
+        .hover({
+            let hovered = look.hovered;
+            move |button| button.bg(hovered)
+        })
         .active({
             let pressed = look.pressed;
             move |button| button.bg(pressed)
@@ -204,8 +216,8 @@ pub fn icon_button(
         .child(svg().path(glyph).size(px(TILE_GLYPH)).text_color(look.ink))
 }
 
-/// A pop-up button `width` wide showing `label`, with its chevrons at its end, pressed while its
-/// menu is `open`. It opens on a press, as a pop-up button does, which its caller listens for.
+/// A pop-up button `width` wide showing `label`, with its chevrons at its end, lit as a button is
+/// under the pointer and pressed while its menu is `open`. It opens on a press, as a pop-up button does, which its caller listens for.
 pub fn popup(look: &Look, label: impl Into<SharedString>, width: f32, open: bool) -> gpui::Div {
     div()
         .flex_none()
@@ -218,6 +230,10 @@ pub fn popup(look: &Look, label: impl Into<SharedString>, width: f32, open: bool
         .justify_between()
         .rounded(px(CONTROL_RADIUS))
         .bg(if open { look.pressed } else { look.control })
+        .when(!open, |popup| {
+            let hovered = look.hovered;
+            popup.hover(move |popup| popup.bg(hovered))
+        })
         .child(div().min_w_0().truncate().child(label.into()))
         .child(svg().path("icons/chevrons-up-down.svg").size(px(CHEVRONS)).text_color(look.ink))
 }
