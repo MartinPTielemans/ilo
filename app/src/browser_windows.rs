@@ -302,10 +302,9 @@ pub(crate) unsafe extern "C" fn window_resized(
         gpui_linux::resize_embedded(ui_view, width as f32, height as f32);
         frames::sized(ui_view, [width, height]);
     }
-    // The core tells the size again once the window has gone full screen or maximized, or back,
-    // which a window already its screen's size does at that size, with no resize to ask (#1220).
+    let size = gpui::size(gpui::px(width as f32), gpui::px(height as f32));
     update_app_later(move |cx| {
-        update_window_in(window, cx, |shell, cx| shell.bounds_changed(cx));
+        update_window_in(window, cx, |shell, cx| shell.size_told(size, cx));
     });
 }
 
