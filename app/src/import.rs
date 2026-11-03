@@ -1890,8 +1890,8 @@ impl Render for ImportView {
                         "{} holds your passwords in plain text. Delete it once they're in.",
                         file_name(file)
                     );
-                    frame()
-                        .child(words(&look, why, None).text_color(look.detail))
+                    said_row(why)
+                        .text_color(look.detail)
                         .child(end([delete.into_any_element()]))
                 });
                 let offered = self.offered();
