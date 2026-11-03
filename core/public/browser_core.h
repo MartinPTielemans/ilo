@@ -2695,3 +2695,5 @@ BC_EXPORT void bc_folder_move_to_space(bc_id folder, bc_id space);
 #endif
 
 #endif  // BROWSER_CORE_PUBLIC_BROWSER_CORE_H_
+
+// Scratch only (#1563): a header no published engine has, to show the Mac check failing.
