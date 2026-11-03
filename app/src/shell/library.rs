@@ -624,6 +624,13 @@ impl Shell {
         if done >= 1. { shown } else { from + (shown - from) * done.max(0.) }
     }
 
+    /// Whether a click's fade of the sidebar is still under way, which outlasts the card's motion
+    /// under Reduce Motion.
+    fn sidebar_fading(&self) -> bool {
+        let shown = if self.library_open { 0. } else { 1. };
+        self.clicked_fade().is_some() && self.sidebar_opacity() != shown
+    }
+
     /// The sidebar's size under the Library, about `RECEDE_X` right of its edge: receding with the
     /// card, or full while a click fades it.
     pub(super) fn sidebar_scale(&self) -> f32 {
@@ -694,9 +701,9 @@ impl Shell {
         opacity: Option<f32>,
         cx: &mut Context<Self>,
     ) {
-        let now = Instant::now();
-        self.library_motion = Some((out, speed, now));
-        self.sidebar_fade = opacity.map(|opacity| (opacity, now));
+        // Under Reduce Motion the card is where it goes at once, and the sidebar still fades.
+        self.library_motion = Some((out, speed, crate::motion::start(cx)));
+        self.sidebar_fade = opacity.map(|opacity| (opacity, Instant::now()));
         self.library_open = open;
         if open {
             self.conceal_now(cx);
@@ -745,7 +752,7 @@ impl Shell {
         // Ours: the Library goes to the new section's width on the push's spring, as Arc's
         // isn't recorded.
         if self.library.is_some() && self.section_width(section) != self.library_width() {
-            self.library_resize = Some((self.library_width(), Instant::now()));
+            self.library_resize = Some((self.library_width(), crate::motion::start(cx)));
         }
         self.section = section;
         let placeholder = match section {
@@ -825,7 +832,7 @@ impl Shell {
             }
             return;
         }
-        if self.library_step().is_some() {
+        if self.library_step().is_some() || self.sidebar_fading() {
             window.request_animation_frame();
             return;
         }

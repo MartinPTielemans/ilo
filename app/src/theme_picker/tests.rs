@@ -92,6 +92,19 @@ impl Picker {
     fn calls(&mut self) -> Vec<String> {
         self.host.calls.borrow().clone()
     }
+
+    fn keys(&mut self, keys: &str) {
+        self.cx.simulate_keystrokes(keys);
+        self.cx.run_until_parked();
+    }
+
+    /// What the keyboard's ring is on.
+    fn keyed(&mut self) -> Option<Target> {
+        let picker = self.window.read_with(&self.cx.cx, |picker, _| {
+            picker.editing.as_ref().and_then(|editing| editing.keyed)
+        });
+        picker.unwrap()
+    }
 }
 
 fn close(a: (f32, f32), b: (f32, f32)) -> bool {
@@ -491,4 +504,69 @@ fn a_drag_bumps_once_as_it_reaches_a_stop(cx: &mut TestAppContext) {
     let knob = knob_x(DEFAULT_INTENSITY);
     path(&mut picker, &[(knob, SLIDER_Y), (knob_x(0.5), SLIDER_Y), (knob_x(0.) - 20., SLIDER_Y)]);
     assert_eq!(detents(&picker), 3);
+}
+
+/// Tab goes round the appearance buttons, − and +, the swatches and the wave, left and right go
+/// along each, and space or return presses what's ringed (#1383).
+#[gpui::test]
+fn the_keyboard_goes_round_the_buttons_swatches_and_wave(cx: &mut TestAppContext) {
+    let mut picker = Picker::new(Some(Theme::at(0.5, 0.)), cx);
+    // Nothing ringed, nothing pressed.
+    picker.keys("space right");
+    assert_eq!((picker.keyed(), picker.handed_on()), (None, vec![]));
+    // The appearance chosen first, then along to the next.
+    picker.keys("tab");
+    assert_eq!(picker.keyed(), Some(Target::Appearance(Appearance::Automatic)));
+    picker.keys("right space");
+    assert_eq!(picker.theme().unwrap().appearance, Appearance::Light);
+    // + first, as − doesn't answer with one colour.
+    picker.keys("tab");
+    assert_eq!(picker.keyed(), Some(Target::Add));
+    picker.keys("enter enter enter");
+    assert_eq!(picker.theme().unwrap().count, 3);
+    picker.keys("left space");
+    assert_eq!(picker.theme().unwrap().count, 2);
+    // The swatches from the first, stopping at the last.
+    picker.keys("tab right right right enter");
+    assert_eq!(picker.theme().unwrap().main_color(), SWATCHES[3]);
+    picker.keys(&["right"; 12].join(" "));
+    assert_eq!(picker.keyed(), Some(Target::Swatch(SWATCHES.len() - 1)));
+    // The wave's knob a step at a time, onto the steps.
+    picker.keys("tab left");
+    assert_eq!(picker.keyed(), Some(Target::Intensity));
+    assert!((picker.theme().unwrap().intensity - 0.75).abs() < 1e-4);
+    picker.keys(&["right"; 8].join(" "));
+    assert_eq!(picker.theme().unwrap().intensity, 1.);
+    // Each press that changed something was kept, as a click's is: + twice, not at three.
+    let handed_on = picker.handed_on();
+    assert!(handed_on.len() == 11 && handed_on.iter().all(|&done| done), "{handed_on:?}");
+    // Round to the appearance chosen, and back.
+    picker.keys("tab");
+    assert_eq!(picker.keyed(), Some(Target::Appearance(Appearance::Light)));
+    picker.keys("shift-tab");
+    assert_eq!(picker.keyed(), Some(Target::Intensity));
+    // A click takes the ring away; escape still closes.
+    picker.click(APPEARANCE_X[2], APPEARANCE_Y);
+    assert_eq!(picker.keyed(), None);
+    picker.keys("escape");
+    assert!(!picker.open());
+}
+
+/// Without a colour, tab passes − and + and the wave, which don't answer, and a swatch picked from
+/// the keyboard is the first colour (#1383).
+#[gpui::test]
+fn without_a_colour_the_keyboard_has_the_appearance_and_swatches(cx: &mut TestAppContext) {
+    let mut picker = Picker::new(None, cx);
+    picker.keys("tab right right");
+    assert_eq!(picker.keyed(), Some(Target::Appearance(Appearance::Dark)));
+    picker.keys("space tab");
+    assert_eq!(picker.keyed(), Some(Target::Swatch(0)));
+    picker.keys("tab");
+    assert_eq!(picker.keyed(), Some(Target::Appearance(Appearance::Dark)));
+    picker.keys("shift-tab right enter");
+    let theme = picker.theme().expect("the swatch gave no colour");
+    assert_eq!((theme.main_color(), theme.appearance), (SWATCHES[1], Appearance::Dark));
+    // With it, the wave comes next.
+    picker.keys("tab");
+    assert_eq!(picker.keyed(), Some(Target::Intensity));
 }

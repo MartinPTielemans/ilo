@@ -15,12 +15,13 @@ use gpui::{
     WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, actions, div,
     img, point, prelude::*, px, size, svg,
 };
-use gpui::{Role, accesskit::Live};
+use gpui::{Role, Size, accesskit::Live, canvas};
 
 use crate::{
     palette,
     shell::{self, Match},
     text_input::{self, PasteAndGo, PasteAndSearch, TextInput, without_javascript},
+    tooltip::{Anchor, Tip},
 };
 
 mod calculator;
@@ -88,6 +89,17 @@ const TABS_PLACEHOLDER: &str = "Search Tabs…";
 /// What its input says, and its chip, while it lists only commands (ours).
 const COMMANDS_PLACEHOLDER: &str = "Search Commands…";
 const COMMANDS_CHIP: &str = "Commands";
+
+/// What a history row's remove button is called, to an assistive app and in its tooltip: it takes
+/// the page or search out of the profile's history, not only out of the list.
+const REMOVE_NAME: &str = "Remove from History";
+
+/// The keys the remove button's tooltip names: Arc's ⌥⌘⌫ on the Mac, where most keyboards have no
+/// ⌦ for Chrome's ⇧⌦, and ⇧⌦ off it, its only key there.
+fn remove_keys() -> Vec<SharedString> {
+    let keystroke = if shell::OFF_THE_MAC { "shift-delete" } else { "alt-cmd-backspace" };
+    shell::keystroke_keys(keystroke).into_iter().map(Into::into).collect()
+}
 
 /// One of the core's suggestions for what's typed.
 #[derive(Default)]
@@ -251,7 +263,7 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::TogglePin | Command::PinToSpace(_) => "icons/pin.svg",
         Command::OpenFolder(_) => "icons/folder-open.svg",
         Command::SelectSpace(_) => "icons/layers.svg",
-        Command::MoveToSpace(_) => "icons/arrow-right.svg",
+        Command::MoveToSpace(_) | Command::MoveToFolder(_) => "icons/arrow-right.svg",
         Command::ToggleMute => "icons/volume-2.svg",
         Command::ReopenClosedTab => "icons/undo-2.svg",
         Command::CopyUrl | Command::CopyMarkdownLink => "icons/link.svg",
@@ -402,6 +414,9 @@ pub trait Host {
     );
     /// Opens Settings › Agents, where agents are set up.
     fn set_up_agents(&self, cx: &mut App);
+    /// Shows `tip` hanging from a button at its anchor in the bar's window, over the bar, after the
+    /// tooltip's delay, or ends the tooltip.
+    fn tooltip(&self, tip: Option<(Tip, Anchor)>, cx: &mut App);
 }
 
 /// A search engine's site search, which the bar's searches stay in until the user leaves it, as in
@@ -467,7 +482,13 @@ pub struct CommandBar {
     favicons: HashMap<String, Option<Arc<Image>>>,
     /// The Space's tabs it lists before anything is typed.
     tabs: Vec<shell::BarTab>,
+    /// The pages shown as it opened, whose rows go last, as Arc's bar deranks the current page.
+    shown: Vec<SharedString>,
     scroll: ScrollHandle,
+    /// The row whose remove button the bar asked a tooltip for, until the pointer leaves it, and
+    /// where that button last drew in the bar's window, which the tooltip hangs from.
+    tipped: Option<usize>,
+    remove_frame: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Whether it shows: until it hides or asks the host to go, which on Windows reports it gone
     /// only a message later, or the host reports the user left it. The host closes the window at a
     /// click outside it, before the click reaches the shell, so this stays set until that report.
@@ -586,7 +607,10 @@ pub fn open_at(
                 ask: None,
                 favicons: HashMap::new(),
                 tabs: Vec::new(),
+                shown: Vec::new(),
                 scroll: ScrollHandle::new(),
+                tipped: None,
+                remove_frame: Rc::default(),
                 open: Cell::new(false),
             }
         })
@@ -607,9 +631,10 @@ pub fn open_at(
 /// URL, selected. It suggests nothing for the URL until the text is edited, as Chrome's address
 /// bar, and lists `tabs` again once the text is empty. It shows at once: over `field`, the URL
 /// field's box in the window, when a click on the field opened it, else centred, as Arc's is for
-/// ⌘T and ⌘L.
+/// ⌘T and ⌘L. Rows for the pages `shown` go last.
 pub fn show(
     editing: Option<(u64, SharedString)>,
+    shown: Vec<SharedString>,
     tabs: Vec<shell::BarTab>,
     field: Option<Bounds<Pixels>>,
     cx: &mut App,
@@ -622,7 +647,7 @@ pub fn show(
     log!("browser: command bar tabs {}", ids.join(" "));
     let place = if field.is_some() { "over the URL field" } else { "centred" };
     log!("browser: command bar opens {place}");
-    let Some(host) = reset(target, text, tabs, field.is_some(), cx) else {
+    let Some(host) = reset(target, text, shown, tabs, field.is_some(), cx) else {
         return;
     };
     match field {
@@ -641,7 +666,7 @@ pub fn show_tabs(tabs: Vec<shell::BarTab>, cx: &mut App) {
     let ids: Vec<String> =
         tabs.iter().take(shell::BAR_ROWS).map(|tab| tab.tab.to_string()).collect();
     log!("browser: command bar searches tabs {}", ids.join(" "));
-    if let Some(host) = reset(Target::Tabs, SharedString::default(), tabs, false, cx) {
+    if let Some(host) = reset(Target::Tabs, SharedString::default(), Vec::new(), tabs, false, cx) {
         host.show(true, 0., ABOVE_MIDDLE, WIDTH, RADIUS, Level::Modal);
     }
 }
@@ -651,7 +676,7 @@ pub fn show_tabs(tabs: Vec<shell::BarTab>, cx: &mut App) {
 /// needs to be, and as far down the pane as it opens down the window for a new tab.
 pub fn show_split(with: u64, pane: Bounds<Pixels>, card: Bounds<Pixels>, cx: &mut App) {
     let text = SharedString::default();
-    if let Some(host) = reset(Target::Beside(with), text, Vec::new(), false, cx) {
+    if let Some(host) = reset(Target::Beside(with), text, Vec::new(), Vec::new(), false, cx) {
         let left = pane.center().x - px(WIDTH / 2.);
         let left = left.min(card.right() - px(BESIDE_END + WIDTH)).max(card.left());
         // The card is as far in from the window's bottom as from its top.
@@ -661,11 +686,12 @@ pub fn show_split(with: u64, pane: Bounds<Pixels>, card: Bounds<Pixels>, cx: &mu
     }
 }
 
-/// Puts the bar to `target` with `text` in its input, and `tabs` to list while it's empty, over
-/// the URL field if `over_field`. Returns its host, or none if there's no bar.
+/// Puts the bar to `target` with `text` in its input, the pages `shown`, and `tabs` to list while
+/// it's empty, over the URL field if `over_field`. Returns its host, or none if there's no bar.
 fn reset(
     target: Target,
     text: SharedString,
+    shown: Vec<SharedString>,
     tabs: Vec<shell::BarTab>,
     over_field: bool,
     cx: &mut App,
@@ -675,13 +701,16 @@ fn reset(
         .update(cx, |bar, window, cx| {
             bar.target = target;
             bar.over_field = over_field;
-            // The pointer has been elsewhere since the bar last showed.
+            // The pointer has been elsewhere since the bar last showed, and the host ended the
+            // tooltip over it as it hid.
             bar.hovered = None;
+            bar.tipped = None;
             // Favicons change over time, and a long session shouldn't keep every one it saw. The
             // tabs' are the ones their rows show.
             bar.favicons.clear();
             bar.keep_favicons(&tabs);
             bar.tabs = tabs;
+            bar.shown = shown;
             bar.open.set(true);
             bar.page = text.to_string();
             if !text.is_empty() {
@@ -744,6 +773,8 @@ pub fn space_shown(tabs: Vec<shell::BarTab>, open_tabs: Vec<shell::BarTab>, cx: 
             bar.favicons.clear();
             bar.keep_favicons(&tabs);
             bar.tabs = tabs;
+            // The pages shown were the Space before's.
+            bar.shown.clear();
             // The site search's engine is the profile's, which this one may not have.
             bar.leave_site(window, cx);
             // An ask goes on in the Space shown, whose Today opens its slot.
@@ -906,10 +937,15 @@ pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
                 None if text.is_empty() => bar.tab_rows(),
                 None => {
                     let mut rows = rows;
-                    let open = bar.take_open_tab(&text, &mut rows);
+                    let (open, risen) = bar.take_open_tabs(&text, &mut rows);
                     let mut rows = with_calculation(&text, bar.with_commands(&text, rows, cx));
+                    // The other tabs go right after the core's first row, before its others.
+                    let after = rows.iter().position(|row| row.command.is_none());
+                    let after = after.map_or(rows.len(), |at| at + 1);
+                    rows.splice(after..after, risen);
                     rows.splice(0..0, open);
-                    with_new_document(&text, rows)
+                    let rows = with_new_document(&text, without_repeated_titles(rows));
+                    with_shown_last(rows, &bar.shown)
                 }
             };
             rows.truncate(shell::BAR_ROWS);
@@ -943,16 +979,73 @@ fn names_tab(tab: &shell::BarTab, typed: &str) -> bool {
     if (title.char_indices().filter(word_start)).any(|(at, _)| title[at..].starts_with(typed)) {
         return true;
     }
-    // Only a web page has a site: a data: page's scheme isn't its name.
-    let Some((_, rest)) = tab.url.split_once("://") else {
+    let Some(host) = site_host(&tab.url) else {
         return false;
     };
+    let labels: Vec<&str> = host.split('.').collect();
+    let named = &labels[..labels.len().saturating_sub(1).max(1)];
+    named.iter().flat_map(|label| label.split('-')).any(|word| word.starts_with(typed))
+}
+
+/// The host of `url`, lowercase and without a leading www. None but for a web page: a data:
+/// page's scheme isn't its site.
+fn site_host(url: &str) -> Option<String> {
+    let (_, rest) = url.split_once("://")?;
     let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
     let host = authority.rsplit('@').next().unwrap_or_default();
     let host = host.split(':').next().unwrap_or_default().to_lowercase();
-    let labels: Vec<&str> = host.strip_prefix("www.").unwrap_or(&host).split('.').collect();
-    let named = &labels[..labels.len().saturating_sub(1).max(1)];
-    named.iter().flat_map(|label| label.split('-')).any(|word| word.starts_with(typed))
+    Some(host.strip_prefix("www.").map(str::to_string).unwrap_or(host))
+}
+
+/// The most open tabs that go above the core's rows for what's typed, the first among them, so
+/// some of the profile's pages still show among the five rows (ours).
+const TABS_RISEN: usize = 3;
+
+/// Web apps that give many pages one title, so their history would fill the list with rows that
+/// read alike. Arc's bar keeps one row per title on its list for them, which names these
+/// (`dedupByTitleAndHostList`); the rest of its list isn't known, and notion.com is ours.
+const ONE_TITLE_SITES: [&str; 5] =
+    ["figma.com", "notion.so", "notion.com", "github.com", "zoom.us"];
+
+/// `rows` without the page rows, but the first, where ↩ goes, whose title an open tab's row or
+/// an earlier row has on the same site of ONE_TITLE_SITES. An open tab's row always stays.
+fn without_repeated_titles(rows: Vec<Suggestion>) -> Vec<Suggestion> {
+    let one_title = |row: &Suggestion| {
+        let host = site_host(&row.url)?;
+        let site = ONE_TITLE_SITES.iter().find(|site| {
+            host == **site || host.strip_suffix(**site).is_some_and(|sub| sub.ends_with('.'))
+        })?;
+        Some((*site, row.text.clone()))
+    };
+    let page = |row: &Suggestion| row.command.is_none() && row.result.is_none();
+    let mut seen: Vec<_> =
+        rows.iter().filter(|row| row.tab != 0 && page(row)).filter_map(one_title).collect();
+    let mut kept = Vec::with_capacity(rows.len());
+    for (at, row) in rows.into_iter().enumerate() {
+        match one_title(&row).filter(|_| row.tab == 0 && page(&row)) {
+            Some(title) if at > 0 && seen.contains(&title) => {}
+            Some(title) => {
+                seen.push(title);
+                kept.push(row);
+            }
+            None => kept.push(row),
+        }
+    }
+    kept
+}
+
+/// `rows` with those for the pages `shown`, but the first, where ↩ goes, last, as Arc's bar
+/// deranks the current page: going there would load it again. Another tab's row keeps its place,
+/// since it switches rather than loads.
+fn with_shown_last(rows: Vec<Suggestion>, shown: &[SharedString]) -> Vec<Suggestion> {
+    let mut at = 0;
+    let (mut rows, last): (Vec<_>, Vec<_>) = rows.into_iter().partition(|row| {
+        at += 1;
+        let page = row.command.is_none() && row.result.is_none() && row.tab == 0;
+        at == 1 || !page || !shown.iter().any(|shown| **shown == row.url)
+    });
+    rows.extend(last);
+    rows
 }
 
 /// Puts the row for the .new address `text` names, if it does, in place of the rows going there:
@@ -1484,20 +1577,37 @@ impl CommandBar {
         merged
     }
 
-    /// Takes out of `rows` the open tab that goes first, for its row to go above the rest with
-    /// Switch to Tab, as Arc's bar is first of all a tab switcher (ours: its ranking isn't
-    /// recorded). It's the most recently shown whose title or site has a word that two letters or
-    /// more typed start. Chrome's first row stays when the typing reads as a URL or the row hints a
-    /// site search, and a first row completing to an open tab's page becomes that tab's row.
-    fn take_open_tab(&self, text: &str, rows: &mut Vec<Suggestion>) -> Option<Suggestion> {
+    /// Takes out of `rows` the open tabs that go above the rest with Switch to Tab, as Arc's bar is
+    /// first of all a tab switcher: the one for the top, and those for right after the core's
+    /// first row. They're those whose title or site has a word that two letters or more typed
+    /// start, at most TABS_RISEN: a renamed tab whose own name what's typed starts first, as Arc
+    /// boosts a custom title's start, then the most recently shown (ours: Arc's weights aren't
+    /// recoverable). Chrome's first row stays when the typing reads as a URL or the row hints a
+    /// site search, and a first row completing to an open tab's page becomes that tab's row. An
+    /// address typed that's an open tab's page keeps its row first, where ↩ goes, and the tab's
+    /// comes second, as Arc's does.
+    fn take_open_tabs(
+        &self,
+        text: &str,
+        rows: &mut Vec<Suggestion>,
+    ) -> (Option<Suggestion>, Vec<Suggestion>) {
         let first = rows.first();
         if first.is_some_and(|row| !row.keyword.is_empty()) {
-            return None;
+            return (None, Vec::new());
         }
-        if let Some(first) = first.filter(|row| !row.completion.is_empty()) {
+        let typed = text.trim().to_lowercase();
+        let address = typed.contains(['.', ':', '/']);
+        if let Some(first) = first.filter(|row| !row.completion.is_empty() || address) {
             let at_page = |tab: &&shell::BarTab| *tab.url == *first.url && !self.is_shown(tab.tab);
-            let open = self.tabs.iter().find(at_page)?;
+            let Some(open) = self.tabs.iter().find(at_page) else {
+                return (None, Vec::new());
+            };
             let id = open.tab;
+            if first.completion.is_empty() {
+                log!("browser: command bar puts tab {id} second");
+                rows.retain(|row| row.tab != id);
+                return (None, vec![open.clone().into()]);
+            }
             // check.sh reads this line.
             log!("browser: command bar puts tab {id} first");
             rows[0].tab = id;
@@ -1506,20 +1616,29 @@ impl CommandBar {
                 at += 1;
                 at == 1 || row.tab != id
             });
-            return None;
+            return (None, Vec::new());
         }
-        let typed = text.trim().to_lowercase();
-        if typed.chars().count() < 2 || typed.contains(['.', ':', '/']) {
-            return None;
+        if address || typed.chars().count() < 2 {
+            return (None, Vec::new());
         }
         let named = |tab: &&shell::BarTab| !self.is_shown(tab.tab) && names_tab(tab, &typed);
-        let tab = self.tabs.iter().find(named)?;
-        // check.sh reads this line.
-        log!("browser: command bar puts tab {} first", tab.tab);
-        Some(match rows.iter().position(|row| row.tab == tab.tab) {
-            Some(at) => rows.remove(at),
-            None => tab.clone().into(),
-        })
+        let mut named: Vec<&shell::BarTab> = self.tabs.iter().filter(named).collect();
+        // Stable, so the most recently shown stays first among equals.
+        named.sort_by_key(|tab| !(tab.renamed && tab.title.to_lowercase().starts_with(&typed)));
+        named.truncate(TABS_RISEN);
+        // Each in place of the core's row for it, where the core listed one.
+        let mut risen = named.into_iter().map(|tab| {
+            match rows.iter().position(|row| row.tab == tab.tab) {
+                Some(at) => rows.remove(at),
+                None => tab.clone().into(),
+            }
+        });
+        let first = risen.next();
+        if let Some(first) = &first {
+            // check.sh reads this line.
+            log!("browser: command bar puts tab {} first", first.tab);
+        }
+        (first, risen.collect())
     }
 
     /// Whether `tab` is the one the bar edits or opens beside, which is shown, so never offered.
@@ -1534,6 +1653,15 @@ impl CommandBar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The tooltip names the remove button of a page or search, which goes if another row takes
+        // its place; the same page's comes again with more suggestions.
+        let tipped = |rows: &[Suggestion]| {
+            let row = rows.get(self.tipped?).filter(|row| row.removable)?;
+            Some(row.url.clone())
+        };
+        if self.tipped.is_some() && tipped(&self.rows) != tipped(&rows) {
+            self.end_tip(cx);
+        }
         // The page selected stays selected as more suggestions come for what was asked, and when
         // it's taken out, the row that takes its place is, as in Chrome.
         let selected = self.rows.get(self.selected).filter(|_| text == self.suggested);
@@ -1734,8 +1862,9 @@ impl CommandBar {
     }
 
     /// ⇧⌦, as Chrome's, or ⌥⌘⌫, as Arc's: takes the selected row out of the profile's history.
-    fn remove(&mut self, _: &Remove, _: &mut Window, _: &mut Context<Self>) {
+    fn remove(&mut self, _: &Remove, _: &mut Window, cx: &mut Context<Self>) {
         if self.chosen().is_some() {
+            self.end_tip(cx);
             self.remove_row(self.selected);
         }
     }
@@ -1762,7 +1891,7 @@ impl CommandBar {
         };
         div()
             .id(("remove", index))
-            .when(self.a11y, |button| button.role(Role::Button).aria_label("Remove Suggestion"))
+            .when(self.a11y, |button| button.role(Role::Button).aria_label(REMOVE_NAME))
             .size(px(ICON_BOX))
             .flex_none()
             .ml(px(7.))
@@ -1777,9 +1906,43 @@ impl CommandBar {
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |bar, _, _, cx| {
                 cx.stop_propagation();
+                bar.end_tip(cx);
                 bar.remove_row(index);
             }))
+            // Where it drew, which its tooltip hangs from.
+            .child({
+                let frame = self.remove_frame.clone();
+                canvas(|_, _, _| {}, move |bounds, _, _, _| frame.set(Some(bounds)))
+                    .absolute()
+                    .size_full()
+            })
+            // Its tooltip waits for the pointer to rest, as a tile's does.
+            .on_mouse_move(|_, _, cx| crate::tooltip::moved(cx))
+            .on_hover(cx.listener(move |bar, hovered, window, cx| {
+                bar.hover_remove(index, *hovered, window.viewport_size(), cx);
+            }))
             .into_any_element()
+    }
+
+    /// The pointer has come onto or left row `index`'s remove button, whose tooltip names it and its
+    /// key. It hangs under the button, inside the bar, or above it when the bar has no room below.
+    fn hover_remove(&mut self, index: usize, hovered: bool, window: Size<Pixels>, cx: &mut App) {
+        match self.remove_frame.get().filter(|_| hovered) {
+            Some(frame) => {
+                self.tipped = Some(index);
+                let tip = Tip { text: REMOVE_NAME.into(), keys: remove_keys() };
+                self.host.tooltip(Some((tip, Anchor::under(frame, window))), cx);
+            }
+            None if self.tipped == Some(index) => self.end_tip(cx),
+            None => {}
+        }
+    }
+
+    /// Ends the tooltip of the remove button it asked for one for, if any.
+    fn end_tip(&mut self, cx: &mut App) {
+        if self.tipped.take().is_some() {
+            self.host.tooltip(None, cx);
+        }
     }
 
     /// ⌥↩: goes where ↩ would, in a new tab in a split view with the tab shown, or the tab the
@@ -1907,6 +2070,10 @@ impl CommandBar {
             self.hovered = Some(index);
         } else if self.hovered == Some(index) {
             self.hovered = None;
+        }
+        // The remove button goes with the pointer's row, and its tooltip with it.
+        if self.tipped.is_some_and(|tipped| self.hovered != Some(tipped)) {
+            self.end_tip(cx);
         }
         cx.notify();
     }

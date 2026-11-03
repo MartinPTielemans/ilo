@@ -157,9 +157,11 @@ impl Shell {
         // How far a part has gone, from 0 to 1, if it starts to leave `delay` after Create. It
         // fades and sinks slowly at first, as Arc's do.
         let gone = |delay: f32| left.map_or(0., |left| ((left - delay) / FORM_LEAVE).clamp(0., 1.));
+        let still = crate::motion::still(cx);
         let sinking = |delay: f32| {
             let gone = gone(delay);
-            (1. - gone.powi(3), FORM_SINK * gone * gone)
+            let sink = if still { 0. } else { FORM_SINK * gone * gone };
+            (1. - gone.powi(3), sink)
         };
         let (title_opacity, title_sink) = sinking(FORM_LEAVE_TITLE);
         let (field_opacity, field_sink) = sinking(FORM_LEAVE_FIELD);
