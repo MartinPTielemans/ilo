@@ -1317,6 +1317,11 @@ progress-fill = 0.6
 button-progress-width = 16.0
 button-progress-height = 2.0
 button-progress-bottom = 4.0
+# Arc's: a new download's icon lands in a bin on the footer button, its file's icon this big, its
+# centre right of and above the glyph's, until it leaves.
+bin = 32.0
+bin-right = 9.0
+bin-up = 12.0
 
 [shell.link]
 # The least a plate may be wide, in a card too narrow for the half it is.
@@ -1449,6 +1454,10 @@ preview-radius = 8.0
 # Ours: a row's plate under the pointer, as the Library's rows have one.
 plate-inset = 4.0
 plate-radius = 12.0
+# Arc's: the tab list behind is hidden from this far above the top row, and comes back over the
+# shade's height above that.
+shade-gap = 3.0
+shade = 170.0
 
 [shell.scroller]
 # The list's scroller is Arc 1.170's, AppKit's own: a knob and no track, this far in from the

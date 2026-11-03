@@ -1308,6 +1308,15 @@ impl Browser for Fake {
     // The targets' window is the app's, over the page, which the preview has neither of.
     fn show_drop_targets(&self, _: bool, _: &mut App) {}
 
+    // The preview has no page for the pointer to be over.
+    fn pointer(&self, _: &mut App) -> Option<Point<Pixels>> {
+        None
+    }
+
+    fn over_page_blends(&self) -> bool {
+        true
+    }
+
     fn show_window_buttons(&self, _: bool, _: &mut App) {}
 
     fn press_window_button(&self, _: WindowButton, _: &mut App) {}
