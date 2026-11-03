@@ -473,15 +473,19 @@ void host_hide_toast(void);
 
 // Makes the window of |tooltip_view| the tooltip's, which floats over a browser window as its
 // child when shown, and lets the mouse through and never takes the keyboard. It starts hidden.
-// |away| is called when that window stops being key or the app stops being active, which hide it.
+// |away| is called when that window stops being key or the app stops being active, which hide it,
+// and when the overlay it shows over hides, which hides it at once.
 // The window reaches |margin| points past the plate on every side, for its shadow, which the UI
 // draws; |left| and |top| below are the plate's.
 void host_add_tooltip(void* tooltip_view, double margin, void (*away)(void));
 
 // Shows the tooltip's window as the UI draws it now, fading in over |fade| seconds from where it
 // is, or moves it, with its top left at (|left|, |top|) points in the content of |ui_view|'s
-// window. The UI has placed it inside the window, so the host doesn't clamp it.
-void host_show_tooltip(void* ui_view, double left, double top, double fade);
+// window. The UI has placed it inside the window, so the host doesn't clamp it. With |overlay| not
+// -1, what it names is in that overlay, which shows over |ui_view|'s window, such as a command bar
+// row's button: |left| and |top| are in the overlay's content, and the tooltip goes over it,
+// though an overlay otherwise goes over the tooltip.
+void host_show_tooltip(void* ui_view, int overlay, double left, double top, double fade);
 
 // Fades the tooltip's window out over |fade| seconds, then hides it.
 void host_hide_tooltip(double fade);

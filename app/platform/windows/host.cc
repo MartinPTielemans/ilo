@@ -189,6 +189,7 @@ struct Floating {
 
 void LeaveOverlay(int index);
 void DismissOverlay(int index);
+void TooltipOverlayHiding(int index);
 
 // Whether a mouse button is down, the user's on the device or the driver's in the thread's key
 // state: the user pressing on another window takes the keyboard from the one that had it, which
@@ -955,6 +956,7 @@ bool CloseOverlay(int index) {
   Floating& floating = g_overlays[index];
   ++floating.shows;
   const bool was_shown = floating.shown;
+  TooltipOverlayHiding(index);
   Hide(floating);
   if (was_shown) {
     // check.sh reads this line.
@@ -1107,6 +1109,10 @@ Floating g_capture;
 Floating g_toast;
 Floating g_tooltip;
 double g_tooltip_margin = 0;
+// The overlay holding what the tooltip names, which it shows over, as a command bar row's button,
+// or -1, and what's told as the tooltip goes with it.
+int g_tooltip_overlay = -1;
+void (*g_tooltip_away)(void) = nullptr;
 Floating g_card;
 double g_card_margin = 0;
 Floating g_link_target;
@@ -3374,13 +3380,40 @@ void host_hide_toast(void) {
   Hide(g_toast);
 }
 
-void host_add_tooltip(void* tooltip_view, double margin, void (*)(void)) {
+void host_add_tooltip(void* tooltip_view, double margin, void (*away)(void)) {
   Adopt(g_tooltip, tooltip_view, true, nullptr);
+  g_tooltip_away = away;
   g_tooltip_margin = margin;
 }
 
-void host_show_tooltip(void* ui_view, double left, double top, double fade) {
+void host_show_tooltip(void* ui_view, int overlay, double left, double top, double fade) {
+  // In the overlay, from where it shows in the browser window. Shown, the tooltip goes over the
+  // windows its browser window owns, the overlay among them.
+  if (overlay >= 0) {
+    if (overlay >= int(std::size(g_overlays))) {
+      return;
+    }
+    const Floating& owner = g_overlays[overlay];
+    if (!owner.shown || !owner.place || GetWindow(owner.hwnd, GW_OWNER) != Root(ui_view)) {
+      return;
+    }
+    left += owner.place->first;
+    top += owner.place->second;
+  }
+  g_tooltip_overlay = overlay;
   FadeIn(g_tooltip, ui_view, left - g_tooltip_margin, top - g_tooltip_margin, fade, "tooltip");
+}
+
+// Overlay |index| is closing: the tooltip over it goes at once, not left over the page as it fades.
+void TooltipOverlayHiding(int index) {
+  if (g_tooltip_overlay == index) {
+    g_tooltip_overlay = -1;
+    const bool shown = g_tooltip.hwnd && IsWindowVisible(g_tooltip.hwnd);
+    FadeOut(g_tooltip, 0, [] {});
+    if (shown && g_tooltip_away) {
+      g_tooltip_away();
+    }
+  }
 }
 
 void host_hide_tooltip(double fade) {

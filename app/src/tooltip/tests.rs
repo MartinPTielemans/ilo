@@ -11,8 +11,12 @@ use super::*;
 struct Recorder(RefCell<Vec<String>>);
 
 impl Host for Recorder {
-    fn show(&self, window: u64, left: f32, top: f32) {
-        self.0.borrow_mut().push(format!("show {left} {top} over {window}"));
+    fn show(&self, over: Over, left: f32, top: f32) {
+        let over = match over {
+            Over::Window(window) => window.to_string(),
+            Over::Overlay(overlay) => format!("overlay {overlay}"),
+        };
+        self.0.borrow_mut().push(format!("show {left} {top} over {over}"));
     }
 
     fn hide(&self) {

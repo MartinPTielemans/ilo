@@ -15,12 +15,13 @@ use gpui::{
     WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, actions, div,
     img, point, prelude::*, px, size, svg,
 };
-use gpui::{Role, accesskit::Live};
+use gpui::{Role, Size, accesskit::Live, canvas};
 
 use crate::{
     palette,
     shell::{self, Match},
     text_input::{self, PasteAndGo, PasteAndSearch, TextInput, without_javascript},
+    tooltip::{Anchor, Tip},
 };
 
 mod calculator;
@@ -88,6 +89,17 @@ const TABS_PLACEHOLDER: &str = "Search Tabs…";
 /// What its input says, and its chip, while it lists only commands (ours).
 const COMMANDS_PLACEHOLDER: &str = "Search Commands…";
 const COMMANDS_CHIP: &str = "Commands";
+
+/// What a history row's remove button is called, to an assistive app and in its tooltip: it takes
+/// the page or search out of the profile's history, not only out of the list.
+const REMOVE_NAME: &str = "Remove from History";
+
+/// The keys the remove button's tooltip names: Arc's ⌥⌘⌫ on the Mac, where most keyboards have no
+/// ⌦ for Chrome's ⇧⌦, and ⇧⌦ off it, its only key there.
+fn remove_keys() -> Vec<SharedString> {
+    let keystroke = if shell::OFF_THE_MAC { "shift-delete" } else { "alt-cmd-backspace" };
+    shell::keystroke_keys(keystroke).into_iter().map(Into::into).collect()
+}
 
 /// One of the core's suggestions for what's typed.
 #[derive(Default)]
@@ -402,6 +414,9 @@ pub trait Host {
     );
     /// Opens Settings › Agents, where agents are set up.
     fn set_up_agents(&self, cx: &mut App);
+    /// Shows `tip` hanging from a button at its anchor in the bar's window, over the bar, after the
+    /// tooltip's delay, or ends the tooltip.
+    fn tooltip(&self, tip: Option<(Tip, Anchor)>, cx: &mut App);
 }
 
 /// A search engine's site search, which the bar's searches stay in until the user leaves it, as in
@@ -468,6 +483,10 @@ pub struct CommandBar {
     /// The Space's tabs it lists before anything is typed.
     tabs: Vec<shell::BarTab>,
     scroll: ScrollHandle,
+    /// The row whose remove button the bar asked a tooltip for, until the pointer leaves it, and
+    /// where that button last drew in the bar's window, which the tooltip hangs from.
+    tipped: Option<usize>,
+    remove_frame: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Whether it shows: until it hides or asks the host to go, which on Windows reports it gone
     /// only a message later, or the host reports the user left it. The host closes the window at a
     /// click outside it, before the click reaches the shell, so this stays set until that report.
@@ -587,6 +606,8 @@ pub fn open_at(
                 favicons: HashMap::new(),
                 tabs: Vec::new(),
                 scroll: ScrollHandle::new(),
+                tipped: None,
+                remove_frame: Rc::default(),
                 open: Cell::new(false),
             }
         })
@@ -675,8 +696,10 @@ fn reset(
         .update(cx, |bar, window, cx| {
             bar.target = target;
             bar.over_field = over_field;
-            // The pointer has been elsewhere since the bar last showed.
+            // The pointer has been elsewhere since the bar last showed, and the host ended the
+            // tooltip over it as it hid.
             bar.hovered = None;
+            bar.tipped = None;
             // Favicons change over time, and a long session shouldn't keep every one it saw. The
             // tabs' are the ones their rows show.
             bar.favicons.clear();
@@ -1534,6 +1557,15 @@ impl CommandBar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The tooltip names the remove button of a page or search, which goes if another row takes
+        // its place; the same page's comes again with more suggestions.
+        let tipped = |rows: &[Suggestion]| {
+            let row = rows.get(self.tipped?).filter(|row| row.removable)?;
+            Some(row.url.clone())
+        };
+        if self.tipped.is_some() && tipped(&self.rows) != tipped(&rows) {
+            self.end_tip(cx);
+        }
         // The page selected stays selected as more suggestions come for what was asked, and when
         // it's taken out, the row that takes its place is, as in Chrome.
         let selected = self.rows.get(self.selected).filter(|_| text == self.suggested);
@@ -1734,8 +1766,9 @@ impl CommandBar {
     }
 
     /// ⇧⌦, as Chrome's, or ⌥⌘⌫, as Arc's: takes the selected row out of the profile's history.
-    fn remove(&mut self, _: &Remove, _: &mut Window, _: &mut Context<Self>) {
+    fn remove(&mut self, _: &Remove, _: &mut Window, cx: &mut Context<Self>) {
         if self.chosen().is_some() {
+            self.end_tip(cx);
             self.remove_row(self.selected);
         }
     }
@@ -1761,7 +1794,7 @@ impl CommandBar {
         };
         div()
             .id(("remove", index))
-            .when(self.a11y, |button| button.role(Role::Button).aria_label("Remove Suggestion"))
+            .when(self.a11y, |button| button.role(Role::Button).aria_label(REMOVE_NAME))
             .size(px(ICON_BOX))
             .flex_none()
             .ml(px(7.))
@@ -1776,9 +1809,41 @@ impl CommandBar {
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |bar, _, _, cx| {
                 cx.stop_propagation();
+                bar.end_tip(cx);
                 bar.remove_row(index);
             }))
+            // Where it drew, which its tooltip hangs from.
+            .child({
+                let frame = self.remove_frame.clone();
+                canvas(|_, _, _| {}, move |bounds, _, _, _| frame.set(Some(bounds)))
+                    .absolute()
+                    .size_full()
+            })
+            .on_hover(cx.listener(move |bar, hovered, window, cx| {
+                bar.hover_remove(index, *hovered, window.viewport_size(), cx);
+            }))
             .into_any_element()
+    }
+
+    /// The pointer has come onto or left row `index`'s remove button, whose tooltip names it and its
+    /// key. It hangs under the button, inside the bar, or above it on the last row.
+    fn hover_remove(&mut self, index: usize, hovered: bool, window: Size<Pixels>, cx: &mut App) {
+        match self.remove_frame.get().filter(|_| hovered) {
+            Some(frame) => {
+                self.tipped = Some(index);
+                let tip = Tip { text: REMOVE_NAME.into(), keys: remove_keys() };
+                self.host.tooltip(Some((tip, Anchor::under(frame, window))), cx);
+            }
+            None if self.tipped == Some(index) => self.end_tip(cx),
+            None => {}
+        }
+    }
+
+    /// Ends the tooltip of the remove button it asked for one for, if any.
+    fn end_tip(&mut self, cx: &mut App) {
+        if self.tipped.take().is_some() {
+            self.host.tooltip(None, cx);
+        }
     }
 
     /// ⌥↩: goes where ↩ would, in a new tab in a split view with the tab shown, or the tab the
@@ -1906,6 +1971,10 @@ impl CommandBar {
             self.hovered = Some(index);
         } else if self.hovered == Some(index) {
             self.hovered = None;
+        }
+        // The remove button goes with the pointer's row, and its tooltip with it.
+        if self.tipped.is_some_and(|tipped| self.hovered != Some(tipped)) {
+            self.end_tip(cx);
         }
         cx.notify();
     }

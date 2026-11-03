@@ -1408,6 +1408,8 @@ impl command_bar::Host for PreviewBar {
     fn run_task(&self, _: &str, _: &str, _: Option<(SharedString, SharedString)>, _: &mut App) {}
 
     fn set_up_agents(&self, _: &mut App) {}
+
+    fn tooltip(&self, _: Option<(browser::tooltip::Tip, browser::tooltip::Anchor)>, _: &mut App) {}
 }
 
 /// Opens the command bar at `at`, with the suggestions for what `mode` has typed.

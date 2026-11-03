@@ -306,9 +306,28 @@ pub(crate) fn placed(view: *mut c_void) -> Option<(*mut c_void, Bounds<Pixels>)>
     crate::panels::placed(view).or_else(|| crate::popovers::placed(view))
 }
 
+/// Overlay `overlay`'s view and where it shows in its browser window's content, if it shows, for a
+/// tooltip over it (floats.rs).
+pub(crate) fn shown_at(overlay: c_int) -> Option<(*mut c_void, Bounds<Pixels>)> {
+    with_overlay(overlay, |o| o.shown.as_ref().map(|shown| (o.view, shown.bounds))).flatten()
+}
+
+/// Puts overlay `overlay` where it shows again, if it does, which stacks it and what shows under it
+/// again: its shadow under it, and it under a tooltip that has come over it (floats.rs).
+pub(crate) fn restack(overlay: c_int) {
+    let shown = with_overlay(overlay, |o| {
+        o.shown.as_ref().map(|shown| (o.view, shown.bounds, px(o.radius as f32)))
+    });
+    if let Some(Some((view, bounds, radius))) = shown {
+        gpui_linux::move_overlay(view, bounds, radius);
+    }
+}
+
 /// Hides `overlay` if it shows, and says whether it did. The window has its keyboard back once
 /// the overlay's gone, as the input focus on X11 says who had it.
 fn hide(overlay: c_int) -> bool {
+    // A tooltip over it goes with it, at once, not left over the page as it fades.
+    crate::floats::overlay_hiding(overlay);
     let Some(Some((view, window, shrinks))) = with_overlay(overlay, |o| {
         let shown = o.shown.take()?;
         let shrinks = o.growth.filter(|_| o.shrinks && gpui_linux::overlays_blend());

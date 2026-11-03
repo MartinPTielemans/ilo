@@ -443,6 +443,8 @@ double g_tooltip_left = 0;
 double g_tooltip_top = 0;
 // How far its window reaches past the plate, for the shadow.
 double g_tooltip_margin = 0;
+// The overlay holding what it names, which it shows over, as a command bar row's button, or -1.
+int g_tooltip_overlay = -1;
 unsigned g_tooltip_changes = 0;
 void (*g_tooltip_away)(void);
 
@@ -809,10 +811,12 @@ void PlaceToast() {
             display:NO];
 }
 
-// Where the UI asked, which it has kept inside the browser window: its window is wider than the
-// tooltip it holds, so clamping the window here would move the tooltip off the tile it names.
+// Where the UI asked, which it has kept inside the browser window, or the overlay it shows over:
+// its window is wider than the tooltip it holds, so clamping the window here would move the
+// tooltip off the tile it names.
 void PlaceTooltip() {
-  NSWindow* window = g_tooltip_over->window;
+  Overlay* overlay = OverlayAt(g_tooltip_overlay);
+  NSWindow* window = overlay ? overlay->window : g_tooltip_over->window;
   NSRect content = [window contentRectForFrameRect:window.frame];
   NSSize size = g_tooltip.frame.size;
   [g_tooltip setFrameOrigin:NSMakePoint(NSMinX(content) + g_tooltip_left - g_tooltip_margin,
@@ -2433,6 +2437,13 @@ void host_hide_overlay(int index) {
     return;
   }
   overlay->shown = false;
+  // Its tooltip goes with it, at once, not left over the page as it fades.
+  if (g_tooltip_shown && g_tooltip_overlay == index) {
+    host_hide_tooltip(0);
+    if (g_tooltip_away) {
+      g_tooltip_away();
+    }
+  }
   Browser* browser = overlay->over;
   if (overlay->shrinks && overlay->grows && overlay->window.visible) {
     ShrinkOverlay(*overlay, browser->window);
@@ -3624,18 +3635,23 @@ void FadeTooltip(double alpha, double seconds, void (^done)(void)) {
       completionHandler:done];
 }
 
-void host_show_tooltip(void* ui_view, double left, double top, double fade) {
+void host_show_tooltip(void* ui_view, int overlay, double left, double top, double fade) {
   Browser* browser = BrowserWithView(ui_view);
-  if (!g_tooltip || !browser || !browser->window) {
+  Overlay* owner = overlay >= 0 ? OverlayAt(overlay) : nullptr;
+  if (!g_tooltip || !browser || !browser->window ||
+      (overlay >= 0 && (!owner || !owner->shown || owner->over != browser))) {
     return;
   }
   if (g_tooltip_shown && g_tooltip_over != browser) {
     host_hide_tooltip(0);
   }
+  // Over the browser window again after an overlay, the overlays go back over it.
+  const bool left_overlay = overlay < 0 && g_tooltip_overlay >= 0;
   g_tooltip_left = left;
   g_tooltip_top = top;
   g_tooltip_shown = true;
   g_tooltip_over = browser;
+  g_tooltip_overlay = overlay;
   const unsigned change = ++g_tooltip_changes;
   // After the UI's update that asked, since the window draws here, before it shows or moves, since
   // it keeps the last frame it drew, the last name.
@@ -3645,9 +3661,9 @@ void host_show_tooltip(void* ui_view, double left, double top, double fade) {
     }
     PlaceTooltip();
     {
-      // Where the window really is, from the browser window's content top left, for check.sh to
-      // compare with where the UI asked.
-      NSWindow* over = browser->window;
+      // Where the window really is, from the content top left of the window it shows over, for
+      // check.sh to compare with where the UI asked.
+      NSWindow* over = owner ? owner->window : browser->window;
       NSRect content = [over contentRectForFrameRect:over.frame];
       fprintf(stderr, "browser: tooltip window at %g %g\n",
               NSMinX(g_tooltip.frame) - NSMinX(content) + g_tooltip_margin,
@@ -3656,10 +3672,17 @@ void host_show_tooltip(void* ui_view, double left, double top, double fade) {
     [g_tooltip_view.layer setNeedsDisplay];
     [g_tooltip_view.layer displayIfNeeded];
     // Still fading out over this window, it goes back to full, as Arc's shows in one frame.
-    if (g_tooltip.parentWindow != browser->window) {
+    const bool reparented = g_tooltip.parentWindow != browser->window;
+    if (reparented) {
       [g_tooltip.parentWindow removeChildWindow:g_tooltip];
       g_tooltip.alphaValue = 0;
       AddOver(browser->window, g_tooltip);
+    }
+    // The overlays go over a tooltip from the browser window, but the one holding what it names
+    // goes under it: a sibling child window at the same level, so it's put above that by name.
+    if (owner) {
+      [g_tooltip orderWindow:NSWindowAbove relativeTo:owner->window.windowNumber];
+    } else if (reparented || left_overlay) {
       RaiseOverlays(browser, g_tooltip);
     }
     // Peek's buttons have tooltips, and Peek is a sibling child window at the same level, so the
