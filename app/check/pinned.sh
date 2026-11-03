@@ -706,6 +706,7 @@ expect "^browser: menu shown $(cased 'Rename Folder, Change Icon…, Duplicate')
 send choose "$(cased 'Change Icon…')"
 expect "^browser: icon picker for folder $f on emoji\$" "Change Icon… didn't open the icon picker for the folder"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker under the folder"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 send insert glowing star
 send key return
 expect "^browser: iconed folder $f 🌟\$" "the picker's pick didn't become the folder's icon"
