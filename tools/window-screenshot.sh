@@ -81,7 +81,7 @@ public static class Capture {
   // Windows 11 rounds the corners of a window, 8 points across, unless it fills its screen.
   static readonly bool Rounds = int.Parse((string)Microsoft.Win32.Registry.GetValue(
       "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
-      "CurrentBuildNumber", "0")) >= 22000;
+      "CurrentBuildNumber", "0")) >= 0; // DIAG: round on Server 2022 too
 
   // The shape of the window on screen, from |origin|: what a copy of the screen holds of it.
   static GraphicsPath Shape(IntPtr hwnd, Point origin) {
