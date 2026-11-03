@@ -111,6 +111,7 @@ impl Render for Panel {
             .child(button("Next"))
             .child(button("Done"))
             .children(once)
+            .child(self.stops.keep(self.focus.clone()))
     }
 }
 
@@ -237,4 +238,30 @@ fn the_arrows_stop_at_the_ends(cx: &mut TestAppContext) {
     assert_eq!(keyed(&panel, cx).as_deref(), Some("Back"));
     press(cx, "up");
     assert_eq!(keyed(&panel, cx).as_deref(), Some("Back"));
+}
+
+/// A click on a stop that then goes, as a site's Turn On goes with its row in Privacy, leaves the
+/// keyboard with the panel, so a key bound there, as Settings' ⌘W is, still reaches it (#1593's
+/// adblock red).
+#[gpui::test]
+fn a_stop_that_goes_gives_the_keyboard_back(cx: &mut TestAppContext) {
+    let (panel, cx) = panel(cx);
+    panel.update(cx, |panel, cx| {
+        panel.once.set(true);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let once = panel.read_with(cx, |panel, _| {
+        let drawn = panel.stops.shared.drawn.borrow();
+        let once = drawn.iter().find(|each| each.id.to_string() == "Once");
+        once.unwrap().frame.center()
+    });
+    cx.simulate_click(once, Modifiers::none());
+    cx.run_until_parked();
+    assert!(!panel.read_with(cx, |panel, _| panel.once.get()));
+    assert_eq!(keyed(&panel, cx).as_deref(), Some("panel"));
+    cx.simulate_keystrokes("ctrl-w");
+    cx.run_until_parked();
+    let pressed = panel.read_with(cx, |panel, _| panel.pressed.borrow().clone());
+    assert_eq!(pressed, ["closed"]);
 }

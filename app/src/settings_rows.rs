@@ -73,6 +73,8 @@ struct Shared {
     keyed: Cell<bool>,
     /// The ring's ink: the window's, white on dark and ink on light.
     ink: Cell<Hsla>,
+    /// Every stop ever drawn, to tell one that's gone from the keyboard's other places.
+    marked: RefCell<Vec<FocusHandle>>,
 }
 
 impl Default for Shared {
@@ -81,6 +83,7 @@ impl Default for Shared {
             drawn: RefCell::default(),
             keyed: Cell::new(false),
             ink: Cell::new(white()),
+            marked: RefCell::default(),
         }
     }
 }
@@ -131,6 +134,32 @@ impl Stops {
         self.shared.ink.set(ink);
     }
 
+    /// Put last in the window, after every stop: gives the keyboard to `home` when the stop that
+    /// had it wasn't drawn this frame, as a row's Turn On goes with its row. Else the keyboard
+    /// would be on nothing drawn, and no key bound in the window, ⌘W's included, would reach it.
+    pub fn keep(&self, home: FocusHandle) -> gpui::Canvas<()> {
+        let shared = self.shared.clone();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, cx| {
+                let Some(focused) = window.focused(cx) else {
+                    return;
+                };
+                let gone = shared.marked.borrow().contains(&focused)
+                    && !shared
+                        .drawn
+                        .borrow()
+                        .iter()
+                        .any(|each| each.handle == focused);
+                if gone {
+                    window.focus(&home, cx);
+                }
+            },
+        )
+        .absolute()
+        .size_0()
+    }
+
     /// Gives the keyboard and the ring to the stop after the one that has the keyboard, or the
     /// one before, not `forward`: round from the last to the first and back with `round`, else
     /// staying at the end. With none on a stop, the first, or going back the last.
@@ -168,6 +197,11 @@ impl Stops {
         canvas(
             move |frame, window, _| {
                 let shown = window.content_mask().bounds;
+                let mut marked = shared.marked.borrow_mut();
+                if !marked.contains(&handle) {
+                    marked.push(handle.clone());
+                }
+                drop(marked);
                 let mut drawn = shared.drawn.borrow_mut();
                 drawn.retain(|each| each.handle != handle);
                 drawn.push(Drawn {

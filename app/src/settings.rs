@@ -4118,6 +4118,7 @@ impl Render for Settings {
             .child(card)
             .children(frameless.then(|| close_button(base, self.drawn("close".into()))))
             .children(self.cover(cx))
+            .child(self.stops.keep(self.focus.clone()))
     }
 }
 
