@@ -89,3 +89,4 @@ Read `engine/README.md` before touching the engine's pins or patches. `spikes/` 
 - The portability and performance rules in [CONTRIBUTING.md](CONTRIBUTING.md) apply to every change.
 - Comments say why, in a sentence. The code says what.
 - If a rule here fights the task in front of you, say so loudly and get a human sign-off before breaking it.
+- Scratch only (#1506 proof): this line grows the agent context.
