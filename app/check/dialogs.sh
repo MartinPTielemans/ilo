@@ -3,7 +3,7 @@
 # OK, with what was typed in a prompt, and Esc Cancel, and the page puts the answer in its title.
 # The confirm's Cancel and OK are captured with the pointer on each. An alert goes with its tab
 # and comes back with it. Leaving a page whose beforeunload handler asks says "Leave site?": Esc
-# stays and ↩ leaves. A site's HTTP sign-in asks for a username and password: Esc shows the page
+# stays, and on X11 ⌘L the moment it has closed opens the command bar (#1711), and ↩ leaves. A site's HTTP sign-in asks for a username and password: Esc shows the page
 # the site sends without them, and ↩ signs in, with the password in no log. A link to another app
 # asks first, and ↩ there opens nothing. The pointer on and off a link 20 times shows and hides the
 # link target each time, with the command bar and a tab's menu opened and closed between, and the
@@ -126,6 +126,20 @@ leave
 ../tools/window-screenshot.sh "$pid" "$out/dialog-leave.png" || fail "no window to capture"
 send key escape
 expect "^browser: page $page dialog answered cancel\$" "Esc didn't stay on the page"
+# A key typed as the dialog closes is the page's: ⌘L, sent the moment the X input focus is back in
+# the browser window, opens the command bar, five times over, as the page takes the keyboard as its
+# window becomes active (#1711). X11's driver alone can send a key then.
+if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  for _ in 1 2 3 4 5; do
+    leave
+    post key escape
+    send keyonreturn l cmd
+    expect "^browser: page $page dialog answered cancel\$" "Esc didn't stay on the page" $((step - 1))
+    expect '^browser: command bar shown$' "⌘L as the dialog closed reached no page (#1711)"
+    send key escape
+    expect '^browser: command bar hidden$' "Esc didn't close the command bar"
+  done
+fi
 leave
 send key return
 expect "^browser: page $page dialog answered accept\$" "↩ didn't leave the page"

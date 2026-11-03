@@ -500,6 +500,13 @@ void ShowPageIn(views::Widget*,
   UpdateOcclusion(holder.window);
 }
 
+bool FocusSettledOnActivation() {
+  // AppKit can be part way through moving the keyboard, as when a committing page hides the view
+  // that had it and Chromium makes the window key: a page view focused inside that move believes
+  // it has the keyboard after AppKit has given it elsewhere.
+  return false;
+}
+
 bool PageDialogsInOwnWindow() {
   // A child NSWindow either way.
   return false;

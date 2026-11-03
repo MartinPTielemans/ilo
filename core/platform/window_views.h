@@ -101,6 +101,11 @@ void ShowPageIn(views::Widget* widget,
 // show over the pages, rather than being drawn in the window's own.
 bool PageDialogsInOwnWindow();
 
+// Whether a window's focus has settled by the time the window hears it's active, so the page can
+// take the keyboard then, before the next key the window reads. Where it hasn't, the page takes it
+// from a task posted then.
+bool FocusSettledOnActivation();
+
 // Whether the keyboard in |widget|'s window is the page's: in a page shown, or in nothing, as when
 // the window opens or the page view that had it left the window. Not in DevTools or the side
 // panel.

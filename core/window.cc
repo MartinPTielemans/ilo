@@ -2508,7 +2508,13 @@ void Window::OnWidgetActivationChanged(views::Widget* widget, bool active) {
   // core shows pages outside views. Without this, a page that commits while the window isn't key
   // leaves the keyboard with nothing: Chromium gives none to its new view, and the old one is gone.
   if (active) {
-    FocusPageSoon();
+    // At once where the window's focus has settled by now, so a key read right after the
+    // activation, as one typed as a dialog over the window closes, reaches the page (#1711).
+    if (platform::FocusSettledOnActivation()) {
+      FocusPage();
+    } else {
+      FocusPageSoon();
+    }
     // The session keeps the Space of the window active last.
     if (ToFront(id_)) {
       SessionChanged();
@@ -2684,7 +2690,7 @@ void Window::OverlayTakesKeyboard(bool takes) {
 void Window::FocusPageSoon() {
   // Posted: AppKit can be part way through moving the keyboard, as when a committing page hides the
   // view that had it and Chromium makes the window key. A page view focused inside that move
-  // believes it has the keyboard after AppKit has given it elsewhere.
+  // believes it has the keyboard after AppKit has given it elsewhere (FocusSettledOnActivation).
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&Window::FocusPage, weak_factory_.GetWeakPtr()));
 }
