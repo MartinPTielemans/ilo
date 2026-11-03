@@ -291,7 +291,7 @@ expect "^browser: space $first\$" "the window didn't go with the moved tab"
 expect '^browser: today [0-9][0-9]*$' "the moved tab isn't in the first Space"
 c=$(today)
 expect "^browser: title $c cookie p\$" "the moved tab didn't load with the first profile's cookie"
-post rightclick 100 $(($(row 0 | cut -d' ' -f2) + 47))
+post rightclick 100 $(($(row 0 | cut -d' ' -f2) + 55))
 expect '^browser: menu shown .*, Move to › Space 1 (checked), Move to › work, ' \
   "the moved tab's menu didn't offer its old Space"
 send choose work
