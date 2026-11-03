@@ -27,18 +27,32 @@ fn launch(cli: Cli) -> Launch {
 
 fn read(lines: &[Value]) -> Vec<Out> {
     let mut turn = Turn::default();
-    lines.iter().flat_map(|line| claude_read(line, &mut turn)).collect()
+    lines
+        .iter()
+        .flat_map(|line| claude_read(line, &mut turn))
+        .collect()
 }
 
 #[test]
 fn claude_gets_the_browser_alone() {
     let args = claude_args(&launch(Cli::Claude));
     let after = |flag: &str| {
-        let at = args.iter().position(|arg| arg == flag).unwrap_or_else(|| panic!("no {flag}"));
+        let at = args
+            .iter()
+            .position(|arg| arg == flag)
+            .unwrap_or_else(|| panic!("no {flag}"));
         args[at + 1].clone()
     };
-    for flag in ["-p", "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence"] {
-        assert!(args.iter().any(|arg| arg == flag), "{flag} missing from {args:?}");
+    for flag in [
+        "-p",
+        "--strict-mcp-config",
+        "--disable-slash-commands",
+        "--no-session-persistence",
+    ] {
+        assert!(
+            args.iter().any(|arg| arg == flag),
+            "{flag} missing from {args:?}"
+        );
     }
     assert_eq!(after("--input-format"), "stream-json");
     assert_eq!(after("--output-format"), "stream-json");
@@ -47,7 +61,10 @@ fn claude_gets_the_browser_alone() {
     assert_eq!(after("--permission-mode"), "dontAsk");
     assert_eq!(after("--permission-prompts"), "none");
     assert_eq!(after("--mcp-config"), "/tmp/Tasks/task-1.json");
-    assert_eq!(after("--allowedTools"), "mcp__ilo__open_tab,mcp__ilo__finish");
+    assert_eq!(
+        after("--allowedTools"),
+        "mcp__ilo__open_tab,mcp__ilo__finish"
+    );
     assert_eq!(after("--model"), "haiku");
     assert_eq!(after("--append-system-prompt"), "Work in the browser.");
     // The token never goes on the command line, which other users can read.
@@ -88,35 +105,63 @@ fn claudes_text_is_said_its_thinking_is_a_thought_and_its_tool_calls_are_neither
         ] } }),
         json!({ "type": "result", "subtype": "success", "is_error": false, "result": "Found one." }),
     ]);
-    let Out::Thought { text, .. } = &outs[0] else { panic!("{outs:?}") };
+    let Out::Thought { text, .. } = &outs[0] else {
+        panic!("{outs:?}")
+    };
     assert_eq!(text, "Hmm.");
-    assert_eq!(outs[1..], [Out::Said("Looking for flights.".into()), Out::Calling, Out::Ended(None)]);
+    assert_eq!(
+        outs[1..],
+        [
+            Out::Said("Looking for flights.".into()),
+            Out::Calling,
+            Out::Ended(None)
+        ]
+    );
 }
 
 #[test]
 fn claudes_text_comes_as_it_writes_it_until_it_calls_a_tool() {
     let piece = |event: Value| json!({ "type": "stream_event", "event": event });
-    let delta = |text: &str| piece(json!({ "type": "content_block_delta", "delta": { "type": "text_delta", "text": text } }));
+    let delta = |text: &str| {
+        piece(
+            json!({ "type": "content_block_delta", "delta": { "type": "text_delta", "text": text } }),
+        )
+    };
     let outs = read(&[
         piece(json!({ "type": "message_start", "message": {} })),
-        piece(json!({ "type": "content_block_start", "content_block": { "type": "text", "text": "" } })),
+        piece(
+            json!({ "type": "content_block_start", "content_block": { "type": "text", "text": "" } }),
+        ),
         delta("Two"),
         delta(" shows "),
         json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "Two shows" }] } }),
-        piece(json!({ "type": "content_block_start", "content_block": { "type": "text", "text": "" } })),
+        piece(
+            json!({ "type": "content_block_start", "content_block": { "type": "text", "text": "" } }),
+        ),
         delta("Both"),
-        piece(json!({ "type": "content_block_start", "content_block": { "type": "tool_use", "name": "mcp__ilo__open_tab" } })),
-        piece(json!({ "type": "content_block_delta", "delta": { "type": "input_json_delta", "partial_json": "{" } })),
+        piece(
+            json!({ "type": "content_block_start", "content_block": { "type": "tool_use", "name": "mcp__ilo__open_tab" } }),
+        ),
+        piece(
+            json!({ "type": "content_block_delta", "delta": { "type": "input_json_delta", "partial_json": "{" } }),
+        ),
     ]);
-    assert_eq!(outs, [
-        Out::Writing(String::new()),
-        Out::Writing("Two".into()),
-        Out::Writing("Two shows".into()),
-        Out::Said("Two shows".into()),
-        Out::Writing("Both".into()),
-        Out::Calling,
-    ]);
-    assert!(claude_args(&launch(Cli::Claude)).iter().any(|arg| arg == "--include-partial-messages"));
+    assert_eq!(
+        outs,
+        [
+            Out::Writing(String::new()),
+            Out::Writing("Two".into()),
+            Out::Writing("Two shows".into()),
+            Out::Said("Two shows".into()),
+            Out::Writing("Both".into()),
+            Out::Calling,
+        ]
+    );
+    assert!(
+        claude_args(&launch(Cli::Claude))
+            .iter()
+            .any(|arg| arg == "--include-partial-messages")
+    );
 }
 
 #[test]
@@ -128,7 +173,10 @@ fn a_rejected_rate_limit_ends_the_turn_at_its_limit() {
         } }),
         json!({ "type": "result", "subtype": "success", "is_error": true, "result": "You've hit your limit" }),
     ]);
-    assert_eq!(outs, vec![Out::Ended(Some(Failure::Limit(Some(1_800_000_000))))]);
+    assert_eq!(
+        outs,
+        vec![Out::Ended(Some(Failure::Limit(Some(1_800_000_000))))]
+    );
 }
 
 #[test]
@@ -137,7 +185,10 @@ fn claudes_limit_in_its_result_says_when_it_resets() {
         "type": "result", "subtype": "success", "is_error": true,
         "result": "Claude AI usage limit reached|1800000000",
     })]);
-    assert_eq!(outs, vec![Out::Ended(Some(Failure::Limit(Some(1_800_000_000))))]);
+    assert_eq!(
+        outs,
+        vec![Out::Ended(Some(Failure::Limit(Some(1_800_000_000))))]
+    );
 }
 
 #[test]
@@ -161,35 +212,83 @@ fn a_failure_says_why_in_words_never_a_code() {
     let failed = |subtype: &str, text: &str| {
         ended(json!({ "type": "result", "subtype": subtype, "is_error": true, "result": text }))
     };
-    assert_eq!(ended(json!({ "type": "result", "subtype": "error_max_turns", "is_error": true })), "Claude hit its turn limit.");
-    assert_eq!(failed("error_during_execution", ""), "Claude ran into an error.");
-    assert_eq!(failed("error_during_execution", "error_during_execution"), "Claude ran into an error.");
-    assert_eq!(failed("success", "API Error: 500 {\"type\":\"error\"}"), "Claude ran into an error.");
-    assert_eq!(failed("success", "The page wouldn't load."), "The page wouldn't load.");
+    assert_eq!(
+        ended(json!({ "type": "result", "subtype": "error_max_turns", "is_error": true })),
+        "Claude hit its turn limit."
+    );
+    assert_eq!(
+        failed("error_during_execution", ""),
+        "Claude ran into an error."
+    );
+    assert_eq!(
+        failed("error_during_execution", "error_during_execution"),
+        "Claude ran into an error."
+    );
+    assert_eq!(
+        failed("success", "API Error: 500 {\"type\":\"error\"}"),
+        "Claude ran into an error."
+    );
+    assert_eq!(
+        failed("success", "The page wouldn't load."),
+        "The page wouldn't load."
+    );
 }
 
 #[test]
 fn codex_turns_off_the_users_servers_by_name() {
     let config = "model = \"x\"\n[mcp_servers.linear]\ncommand = \"a\"\n[mcp_servers.linear.env]\n\
                   [mcp_servers.\"my.server\"]\n[mcp_servers.ilo]\n[profiles.fast]\n";
-    assert_eq!(codex::servers_in(config), vec!["linear".to_string(), "my.server".to_string()]);
+    assert_eq!(
+        codex::servers_in(config),
+        vec!["linear".to_string(), "my.server".to_string()]
+    );
 }
 
 #[test]
 fn codexs_thread_has_the_browser_alone() {
     let params = codex::thread_params(&launch(Cli::Codex));
     let config = &params["config"];
-    for feature in ["shell_tool", "unified_exec", "apps", "plugins", "hooks", "memories", "multi_agent"] {
-        assert_eq!(config[format!("features.{feature}")], json!(false), "{feature}");
+    for feature in [
+        "shell_tool",
+        "unified_exec",
+        "apps",
+        "plugins",
+        "hooks",
+        "memories",
+        "multi_agent",
+    ] {
+        assert_eq!(
+            config[format!("features.{feature}")],
+            json!(false),
+            "{feature}"
+        );
     }
     assert_eq!(config["web_search"], json!("disabled"));
     assert_eq!(config["project_doc_max_bytes"], json!(0));
-    assert_eq!(config["mcp_servers.ilo"]["command"], json!("/app/mcp-bridge"));
-    assert_eq!(config["mcp_servers.ilo"]["env"]["BROWSER_AGENT_TOKEN"], json!("secret"));
-    assert_eq!(config["mcp_servers.ilo"]["enabled_tools"], json!(["open_tab", "finish"]));
-    assert_eq!(config["mcp_servers.ilo"]["tools"]["finish"]["approval_mode"], json!("approve"));
-    assert_eq!(config["mcp_servers.ilo"]["omit_tools_from"], json!(["code_mode"]));
-    assert_eq!(config["mcp_servers.ilo"]["supports_parallel_tool_calls"], json!(true));
+    assert_eq!(
+        config["mcp_servers.ilo"]["command"],
+        json!("/app/mcp-bridge")
+    );
+    assert_eq!(
+        config["mcp_servers.ilo"]["env"]["BROWSER_AGENT_TOKEN"],
+        json!("secret")
+    );
+    assert_eq!(
+        config["mcp_servers.ilo"]["enabled_tools"],
+        json!(["open_tab", "finish"])
+    );
+    assert_eq!(
+        config["mcp_servers.ilo"]["tools"]["finish"]["approval_mode"],
+        json!("approve")
+    );
+    assert_eq!(
+        config["mcp_servers.ilo"]["omit_tools_from"],
+        json!(["code_mode"])
+    );
+    assert_eq!(
+        config["mcp_servers.ilo"]["supports_parallel_tool_calls"],
+        json!(true)
+    );
     assert_eq!(config["agents.max_depth"], json!(0));
     assert_eq!(config["skills.include_instructions"], json!(false));
     assert_eq!(params["approvalPolicy"], json!("never"));
@@ -205,39 +304,63 @@ fn codexs_messages_limits_and_failures() {
     let stdin = std::sync::Mutex::new(None);
     let launch = launch(Cli::Codex);
     let read = |line: Value| codex::read(&line, &state, &stdin, &launch);
-    assert_eq!(read(json!({ "id": 2, "result": { "thread": { "id": "t1" } } })), vec![]);
-    assert_eq!(read(json!({ "method": "turn/started", "params": { "turn": { "id": "u1" } } })), vec![]);
     assert_eq!(
-        read(json!({ "method": "item/completed", "params": { "item": { "type": "agentMessage", "text": "On it." } } })),
+        read(json!({ "id": 2, "result": { "thread": { "id": "t1" } } })),
+        vec![]
+    );
+    assert_eq!(
+        read(json!({ "method": "turn/started", "params": { "turn": { "id": "u1" } } })),
+        vec![]
+    );
+    assert_eq!(
+        read(
+            json!({ "method": "item/completed", "params": { "item": { "type": "agentMessage", "text": "On it." } } })
+        ),
         vec![Out::Said("On it.".into())]
     );
-    read(json!({ "method": "account/rateLimits/updated", "params": { "rateLimits": {
+    read(
+        json!({ "method": "account/rateLimits/updated", "params": { "rateLimits": {
         "primary": { "usedPercent": 100, "resetsAt": 1_800_000_000u64 },
         "secondary": { "usedPercent": 40, "resetsAt": 1_900_000_000u64 },
-    } } }));
-    read(json!({ "method": "error", "params": { "willRetry": true, "error": { "message": "retrying" } } }));
-    read(json!({ "method": "error", "params": { "willRetry": false, "error": {
+    } } }),
+    );
+    read(
+        json!({ "method": "error", "params": { "willRetry": true, "error": { "message": "retrying" } } }),
+    );
+    read(
+        json!({ "method": "error", "params": { "willRetry": false, "error": {
         "message": "You've hit your usage limit.", "codexErrorInfo": "usageLimitExceeded",
-    } } }));
+    } } }),
+    );
     assert_eq!(
-        read(json!({ "method": "turn/completed", "params": { "turn": { "id": "u1", "status": "failed" } } })),
+        read(
+            json!({ "method": "turn/completed", "params": { "turn": { "id": "u1", "status": "failed" } } })
+        ),
         vec![Out::Ended(Some(Failure::Limit(Some(1_800_000_000))))]
     );
     assert_eq!(
-        read(json!({ "method": "turn/completed", "params": { "turn": { "id": "u2", "status": "failed",
-            "error": { "message": "no", "codexErrorInfo": "unauthorized" } } } })),
+        read(
+            json!({ "method": "turn/completed", "params": { "turn": { "id": "u2", "status": "failed",
+            "error": { "message": "no", "codexErrorInfo": "unauthorized" } } } })
+        ),
         vec![Out::Ended(Some(Failure::SignedOut))]
     );
     assert_eq!(
-        read(json!({ "method": "turn/completed", "params": { "turn": { "id": "u3", "status": "interrupted" } } })),
+        read(
+            json!({ "method": "turn/completed", "params": { "turn": { "id": "u3", "status": "interrupted" } } })
+        ),
         vec![Out::Ended(None)]
     );
 }
 
 #[test]
 fn claudes_sign_in_status() {
-    assert!(crate::agents::ready::claude_signed_in(r#"{"loggedIn":true,"authMethod":"claude.ai"}"#));
-    assert!(!crate::agents::ready::claude_signed_in(r#"{"loggedIn":false}"#));
+    assert!(crate::agents::ready::claude_signed_in(
+        r#"{"loggedIn":true,"authMethod":"claude.ai"}"#
+    ));
+    assert!(!crate::agents::ready::claude_signed_in(
+        r#"{"loggedIn":false}"#
+    ));
     assert!(!crate::agents::ready::claude_signed_in("Not logged in"));
 }
 
@@ -249,10 +372,15 @@ fn codexs_models_are_kept_without_the_hidden_ones() {
         { "id": "old", "displayName": "Old", "hidden": true },
         { "id": "bare" },
     ], "nextCursor": null } }));
-    let models: Vec<(String, String)> =
-        [("gpt-5-codex", "GPT-5 Codex"), ("bare", "bare")].map(|(id, name)| (id.into(), name.into())).into();
+    let models: Vec<(String, String)> = [("gpt-5-codex", "GPT-5 Codex"), ("bare", "bare")]
+        .map(|(id, name)| (id.into(), name.into()))
+        .into();
     assert_eq!(listed, models);
-    let found = Found { ready: Ready::SignedIn, models, ..Default::default() };
+    let found = Found {
+        ready: Ready::SignedIn,
+        models,
+        ..Default::default()
+    };
     assert_eq!(Found::from_saved(&found.saved()), found, "kept across runs");
 }
 
@@ -264,7 +392,11 @@ fn a_cli_is_found_on_the_path_given() {
     let program = dir.join("claude");
     std::fs::write(&program, "#!/bin/sh\n").unwrap();
     let path = format!("/nonexistent:{}", dir.display());
-    assert_eq!(crate::agents::ready::find("claude", &path), None, "not executable yet");
+    assert_eq!(
+        crate::agents::ready::find("claude", &path),
+        None,
+        "not executable yet"
+    );
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(crate::agents::ready::find("claude", &path), Some(program));
@@ -288,10 +420,20 @@ fn claude_runs_locked_down() {
     (launch.program, launch.path) = (program, found.path);
     launch.dir = dir.join("task");
     launch.config = dir.join("task.json");
-    launch.server = Server { command: "/usr/bin/python3".into(), args: vec!["-I".into(), stub.display().to_string()], token: "t".into() };
+    launch.server = Server {
+        command: "/usr/bin/python3".into(),
+        args: vec!["-I".into(), stub.display().to_string()],
+        token: "t".into(),
+    };
     launch.tools = vec!["probe_echo".into()];
     let (events, mut said) = futures::channel::mpsc::unbounded();
-    let mut process = Process::start(&launch, "task-1", "Call probe_echo with the text hi, then say what it answered.", events).unwrap();
+    let mut process = Process::start(
+        &launch,
+        "task-1",
+        "Call probe_echo with the text hi, then say what it answered.",
+        events,
+    )
+    .unwrap();
     let mut outs = Vec::new();
     while let Some(event) = futures::executor::block_on(futures::StreamExt::next(&mut said)) {
         let ended = matches!(event.out, Out::Ended(_) | Out::Gone(_));
@@ -311,9 +453,20 @@ fn claude_runs_locked_down() {
     drop(process);
     let calls = std::fs::read_to_string(dir.join("calls.log")).unwrap_or_default();
     eprintln!("{outs:#?}\n{calls}");
-    assert!(calls.contains("\"probe_echo\""), "the stub's tool was called");
-    assert!(outs.iter().any(|out| matches!(out, Out::Said(text) if text.contains("echo"))));
-    assert_eq!(outs.iter().filter(|out| matches!(out, Out::Ended(None))).count(), 2);
+    assert!(
+        calls.contains("\"probe_echo\""),
+        "the stub's tool was called"
+    );
+    assert!(
+        outs.iter()
+            .any(|out| matches!(out, Out::Said(text) if text.contains("echo")))
+    );
+    assert_eq!(
+        outs.iter()
+            .filter(|out| matches!(out, Out::Ended(None)))
+            .count(),
+        2
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -336,7 +489,11 @@ fn codex_runs_locked_down() {
     launch.dir = dir.join("task");
     launch.config = dir.join("task.json");
     launch.model = std::env::var("ILO_CODEX_MODEL").ok();
-    launch.server = Server { command: "/usr/bin/python3".into(), args: vec!["-I".into(), stub.display().to_string()], token: "t".into() };
+    launch.server = Server {
+        command: "/usr/bin/python3".into(),
+        args: vec!["-I".into(), stub.display().to_string()],
+        token: "t".into(),
+    };
     launch.tools = vec!["probe_echo".into()];
     let (events, mut said) = futures::channel::mpsc::unbounded();
     let first = "First list the exact names of every tool or function you can call, comma separated. \
@@ -353,9 +510,19 @@ fn codex_runs_locked_down() {
     drop(process);
     let calls = std::fs::read_to_string(dir.join("calls.log")).unwrap_or_default();
     eprintln!("{outs:#?}\n{calls}");
-    assert!(calls.contains("\"probe_echo\""), "the stub's tool was called");
-    assert!(outs.iter().any(|out| matches!(out, Out::Said(text) if text.contains("echo"))));
-    assert!(matches!(outs.last(), Some(Out::Ended(None))), "{:?}", outs.last());
+    assert!(
+        calls.contains("\"probe_echo\""),
+        "the stub's tool was called"
+    );
+    assert!(
+        outs.iter()
+            .any(|out| matches!(out, Out::Said(text) if text.contains("echo")))
+    );
+    assert!(
+        matches!(outs.last(), Some(Out::Ended(None))),
+        "{:?}",
+        outs.last()
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
