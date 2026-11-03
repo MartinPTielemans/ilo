@@ -6,7 +6,7 @@ name: Flatpak update proof
 
 on:
   push:
-    branches: ['test/flatpak-0112-*']
+    branches: ['test/flatpak-0112-*', 'test/flatpak-0113-*']
 
 permissions:
   contents: read

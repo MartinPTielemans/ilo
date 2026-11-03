@@ -9,7 +9,9 @@
 #   4. TO is installed, without WinSparkle's DLL or settings, with the profile kept, and its own
 #      updater finds nothing newer than itself on the same appcast.
 # With own, TO is a release with ilo's own updater, so step 4 checks WinSparkle is gone too.
-# Usage: proof.sh <out directory> <FROM tag> release:<TO tag>|run:<release.yml run id> [own]
+# With from-own, FROM has ilo's own updater as well (0.1.2 on): it checks at launch, downloads and
+# verifies TO, says it's ready, and installs it silently as ilo quits, with no window to click.
+# Usage: proof.sh <out directory> <FROM tag> release:<TO tag>|run:<release.yml run id> [own|from-own]
 set -uo pipefail
 out=$1 from=$2 to=$3 own=${4:-}
 mkdir -p "$out/site" "$out/shots"
@@ -122,8 +124,13 @@ note "1. $from installs"
   fail "$from didn't install"
 was=$(installed_version)
 [ "$was" = "${from#v}" ] || fail "$from installed $was"
-[ -f "$installed/WinSparkle.dll" ] || fail "$from has no WinSparkle.dll"
-ok "$from ($was) installed per user, with WinSparkle"
+if [ "$own" = from-own ]; then
+  [ ! -e "$installed/WinSparkle.dll" ] || fail "$from still has WinSparkle.dll"
+  ok "$from ($was) installed per user, with ilo's own updater"
+else
+  [ -f "$installed/WinSparkle.dll" ] || fail "$from has no WinSparkle.dll"
+  ok "$from ($was) installed per user, with WinSparkle"
+fi
 
 note "2. github.com on 127.0.0.1"
 cat > "$out/tls.cnf" <<'EOF'
@@ -166,6 +173,37 @@ done
 curl -sf --cacert "$out/tls.pem" "$feed" | grep -q "$version" || fail "the feed isn't served"
 ok "github.com is this run's server, with $to's appcast and installer"
 
+if [ "$own" = from-own ]; then
+  note "3. $from launches, and its own updater gets $version ready"
+  reg_ delete 'HKCU\Software\ilo\Updates' /v LastCheck /f > /dev/null 2>&1 || true
+  export BROWSER_URL='data:text/html,<title>Proof tab</title><h1>Proof tab</h1>'
+  export MSYS2_ENV_CONV_EXCL=BROWSER_URL
+  "$installed/chrome.exe" > "$out/from.log" 2>&1 &
+  pid=$!
+  sleep 1
+  winpid=$(cat "/proc/$pid/winpid")
+  await '^browser: updater started' "$out/from.log" 60 || fail "$from's updater didn't start"
+  await "GET ${feed#https://github.com}" "$out/server.log" 120 || fail "$from didn't check at launch"
+  await "^browser: update $version ready" "$out/from.log" 300 ||
+    fail "$from didn't get $version ready: $(grep 'browser: update' "$out/from.log" | tail -3)"
+  grep -q "GET ${url#https://github.com}" "$out/server.log" || fail "$from didn't download $version"
+  screen 3-ready
+  close_ilo
+  pid=
+  await '^browser: update installing as ilo quits' "$out/from.log" 30 ||
+    fail "$from didn't start installing $version as it quit: $(grep 'browser: update' "$out/from.log" | tail -3)"
+  profile=$(find "$(cygpath -u "$LOCALAPPDATA")" -maxdepth 4 -name "Local State" -path "*ilo*" 2>/dev/null | head -1)
+  [ -n "$profile" ] || fail "$from left no profile"
+  echo "profile: $profile"
+  ok "$from's updater downloaded $version, checked its signature, and started its installer as ilo quit"
+  for _ in $(seq 600); do
+    [ "$(installed_version)" = "$version" ] && [ -z "$(ui dump '^Setup - ilo' | head -1)" ] && break
+    sleep 0.5
+  done
+  [ "$(installed_version)" = "$version" ] || fail "$(installed_version) is installed, not $version"
+  [ -z "$(ilo_ids)" ] || fail "the installer relaunched ilo after a plain quit"
+  ok "the installer put $version in silently, without relaunching ilo"
+else
 note "3. $from launches, and WinSparkle offers $version"
 export BROWSER_URL='data:text/html,<title>Proof tab</title><h1>Proof tab</h1>'
 export MSYS2_ENV_CONV_EXCL=BROWSER_URL
@@ -215,6 +253,7 @@ done
 tail -n +$((pressed + 1)) "$out/presses.txt"
 [ "$(installed_version)" = "$version" ] || fail "$(installed_version) is installed, not $version"
 ok "the installer's wizard installed $version"
+fi
 
 note "4. $version"
 sleep 5
@@ -222,7 +261,7 @@ screen 4-after
 close_ilo
 [ -s "$profile" ] || fail "the profile's Local State is gone"
 ok "the profile $from made is kept"
-if [ "$own" != own ]; then
+if [ "$own" != own ] && [ "$own" != from-own ]; then
   ok "$version installed; it still runs WinSparkle, so there's no own updater to check"
   exit 0
 fi
