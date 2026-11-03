@@ -15,7 +15,7 @@ use gpui::{
 
 use super::{
     Closing, Curve, DRAG_START, Drag, Edit, FOLDER_INDENT, HeldRow, LIST_GLIDE, LIST_GLIDE_POWER,
-    ListGlide, NAME_HEIGHT, Opened, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS, PRESS_SCALE,
+    ListGlide, Opened, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS, PRESS_SCALE,
     PRESS_TIME, Place, ROW_HEIGHT, ROW_PITCH, Shape, Shell, Slot, TILE_HEIGHT, TILE_RADIUS, What,
     files, slots,
 };
@@ -411,7 +411,7 @@ impl Shell {
                     let (mut pinned, mut today) = (pinned.clone(), today.clone());
                     let tabs = if in_pinned { &mut pinned } else { &mut today };
                     tabs.insert(index, tab);
-                    let layout = slots(&pinned, &today);
+                    let layout = slots(self.list_head(), &pinned, &today);
                     ((in_pinned, index), layout[&Slot::Tab(tab)], layout)
                 })
                 .collect();
@@ -613,7 +613,8 @@ impl Shell {
             (false, at) => Some(at.map_or(Slot::NewTab, |at| Slot::Tab(today[at]))),
         };
         let layout = self.layout();
-        let below = above.map_or(Some(NAME_HEIGHT), |slot| Some(layout.get(&slot)? + ROW_PITCH))?;
+        let head = self.list_head();
+        let below = above.map_or(Some(head), |slot| Some(layout.get(&slot)? + ROW_PITCH))?;
         Some(below - (ROW_PITCH - ROW_HEIGHT) / 2.)
     }
 

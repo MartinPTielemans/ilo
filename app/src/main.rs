@@ -3238,6 +3238,10 @@ impl Browser for Engine {
         give_host_appearance(appearance);
     }
 
+    fn keep_lone_header(&self, kept: bool, _: &mut App) {
+        settings::save_lone_header(kept);
+    }
+
     fn page_moving(&self, moving: bool, _: &mut App) {
         unsafe { bc::bc_window_page_moving(self.window, moving) };
     }
@@ -5266,6 +5270,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         // The user's keys, before the shortcuts are bound to them.
         settings::read_shortcuts(cx);
         settings::read_appearance(cx);
+        settings::read_lone_header(cx);
         give_host_appearance(shell::app_appearance(cx));
         shell::bind_keys(cx);
         browser::text_input::bind_keys(cx);

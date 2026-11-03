@@ -188,7 +188,7 @@ impl Shell {
 
     /// The tiles in their order: the favorites, with a dragged tab out of its place, and in the
     /// place it would go to among them.
-    fn tile_tabs(&self) -> Vec<u64> {
+    pub(super) fn tile_tabs(&self) -> Vec<u64> {
         let mut tabs = self.favorites.clone();
         if let Some(drag) = self.drag.as_ref().filter(|drag| drag.moving) {
             tabs.retain(|&tab| tab != drag.tab);

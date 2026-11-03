@@ -3240,6 +3240,26 @@ pub fn read_appearance(cx: &mut App) {
     cx.set_global(shell::AppAppearance(Appearance::named(text.trim()).unwrap_or_default()));
 }
 
+/// Where Show Space Header's choice is kept, beside View › Appearance's.
+fn lone_header_path() -> String {
+    format!("{}/Space Header", crate::profile_dir())
+}
+
+/// Reads whether Show Space Header keeps a lone unnamed Space's name row, which it doesn't at
+/// first. check.sh's runs keep it with BROWSER_SPACE_HEADER, as they place their clicks under it.
+pub fn read_lone_header(cx: &mut App) {
+    let text = std::fs::read_to_string(lone_header_path())
+        .or_else(|_| std::env::var("BROWSER_SPACE_HEADER"))
+        .unwrap_or_default();
+    cx.set_global(shell::LoneSpaceHeader(text.trim() == "shown"));
+}
+
+pub fn save_lone_header(kept: bool) {
+    if let Err(error) = std::fs::write(lone_header_path(), if kept { "shown" } else { "hidden" }) {
+        log!("couldn't save the space header: {error}");
+    }
+}
+
 pub fn save_appearance(appearance: Appearance) {
     if let Err(error) = std::fs::write(appearance_path(), appearance.name()) {
         log!("couldn't save the appearance: {error}");

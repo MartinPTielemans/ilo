@@ -39,6 +39,9 @@ set -e
 export BROWSER_DISPLAY="${BROWSER_DISPLAY:-builtin}"
 # Each run starts a new profile, which would play the onboarding first. Only its own run plays it.
 export BROWSER_ONBOARDING=skip
+# The runs place their clicks under the Space's name row, which a lone unnamed Space hides unless
+# Show Space Header keeps it, so theirs is kept; spaces' checks it hiding (#1400).
+export BROWSER_SPACE_HEADER=shown
 cd "$(dirname "$0")"
 if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
   # Under Xvfb, as CI runs it (check-linux.yml): a 1280 by 800 screen, as the sway session's
@@ -223,6 +226,8 @@ for run in ${*:-$runs}; do
   # Rules a run made, as import's from Arc, would send a later run's links to another Space and
   # put their rows under its clicks, so each run starts without them, as it does without Spaces.
   rm -f "$profile_dir/Link rules"
+  # And without Hide Space Header's choice, which spaces' makes and takes back.
+  rm -f "$profile_dir/Space Header"
   # The windows and clear runs keep 127.0.0.1 for Safari's engine, whose pages would then open there
   # in a later run if one failed, and clear the note it closed and the listed host it turned off.
   forget_engine_sites

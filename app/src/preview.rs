@@ -1095,6 +1095,7 @@ impl Browser for Fake {
 
     // The preview keeps nothing for a next launch.
     fn set_appearance(&self, _: Appearance, _: &mut App) {}
+    fn keep_lone_header(&self, _: bool, _: &mut App) {}
 
     fn page_moving(&self, _: bool, _: &mut App) {}
 

@@ -215,6 +215,17 @@ impl Shell {
         let icon = entry.is_some_and(|each| has_icon(&each.icon));
         let theme = entry.is_some_and(|each| each.color.is_some() || each.theme.is_some());
         let mut items = space_menu_head(space, icon, theme);
+        // A lone unnamed Space's name row hides and comes back here (Arc 1.171), its item saying
+        // which it does, wherever the menu shows: its name row, its dot or the sidebar's empty
+        // space, where the way back is while it's hidden.
+        if space == self.space && self.lone_unnamed() {
+            let kept = self.lone_header;
+            let title = if kept { "Hide Space Header" } else { "Show Space Header" };
+            items.push((
+                MenuEntry::new(title, true),
+                Box::new(move |shell, cx| shell.keep_lone_header(!kept, cx)),
+            ));
+        }
         // An agent's Space leads to what the agent did in it, and lists what the user let it do
         // for good, to take back.
         if let Some(each) = entry.filter(|each| !each.agent.is_empty()) {
@@ -1597,6 +1608,8 @@ pub(super) fn remove_icon(tab: u64) -> (MenuEntry, &'static str, MenuAction) {
 
 #[cfg(test)]
 mod empty_space_tests;
+#[cfg(test)]
+mod lone_header_tests;
 
 #[cfg(test)]
 mod tests {
