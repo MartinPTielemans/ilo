@@ -33,8 +33,9 @@ struct Panel {
 
 thread_local! {
     static PANELS: RefCell<Vec<Panel>> = const { RefCell::new(Vec::new()) };
-    /// Each browser window's page's top right corner, from its content's (host_set_pane_corner).
-    static CORNERS: RefCell<Vec<(*mut c_void, f64, f64)>> = const { RefCell::new(Vec::new()) };
+    /// Each browser window's page's left edge and top right corner, from its content's
+    /// (host_set_pane_corner).
+    static CORNERS: RefCell<Vec<(*mut c_void, f64, f64, f64)>> = const { RefCell::new(Vec::new()) };
 }
 
 fn with_panel<R>(matches: impl Fn(&Panel) -> bool, f: impl FnOnce(&mut Panel) -> R) -> Option<R> {
@@ -98,7 +99,14 @@ pub(crate) fn below_find_bar(ui_view: *mut c_void) -> Option<f64> {
 pub(crate) fn page_corner(ui_view: *mut c_void) -> (f64, f64) {
     CORNERS.with_borrow(|corners| {
         (corners.iter().find(|(each, ..)| *each == ui_view))
-            .map_or((0., 0.), |&(_, right, top)| (right, top))
+            .map_or((0., 0.), |&(_, _, right, top)| (right, top))
+    })
+}
+
+/// Where `ui_view`'s window's page starts, from its content's left, where the toast's window does.
+pub(crate) fn page_left(ui_view: *mut c_void) -> f64 {
+    CORNERS.with_borrow(|corners| {
+        (corners.iter().find(|(each, ..)| *each == ui_view)).map_or(0., |&(_, left, ..)| left)
     })
 }
 
@@ -284,10 +292,10 @@ pub extern "C" fn host_hide_offer(ui_view: *mut c_void) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn host_set_pane_corner(ui_view: *mut c_void, right: f64, top: f64) {
+pub extern "C" fn host_set_pane_corner(ui_view: *mut c_void, left: f64, right: f64, top: f64) {
     CORNERS.with_borrow_mut(|corners| {
         corners.retain(|(each, ..)| *each != ui_view);
-        corners.push((ui_view, right, top));
+        corners.push((ui_view, left, right, top));
     });
     place(ui_view);
 }
@@ -307,6 +315,7 @@ pub extern "C" fn host_forget_window(ui_view: *mut c_void) {
     overlays::forget_window(ui_view);
     crate::menu_window::forget_window(ui_view);
     crate::floats::forget_window(ui_view);
+    crate::frames::forget_window(ui_view);
     crate::popovers::forget_window(ui_view);
     crate::link_preview_window::forget_window(ui_view);
     crate::reveal_window::forget_window(ui_view);

@@ -10,8 +10,8 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <url type="homepage">https://ilo.app</url>
-  <url type="vcs-browser">https://github.com/MartinPTielemans/browser</url>
-  <url type="bugtracker">https://github.com/MartinPTielemans/browser/issues</url>
+  <url type="vcs-browser">https://github.com/MartinPTielemans/ilo</url>
+  <url type="bugtracker">https://github.com/MartinPTielemans/ilo/issues</url>
   <description>
     <p>An open-source browser with Spaces, pinned and Today tabs, and a command bar, on
       ungoogled-chromium. It's built to be fast, and to be the browser AI agents work in: an agent
@@ -28,6 +28,11 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
-    <release version="0.1.0" date="2026-10-28"/>
+    <release version="0.1.4" date="2026-11-03"/>
+    <release version="0.1.3" date="2026-11-03"/>
+    <release version="0.1.2" date="2026-11-02"/>
+    <release version="0.1.1" date="2026-11-02"/>
+    <release version="0.1.0" date="2026-11-01"/>
+    <release version="0.0.1" date="2026-10-31"/>
   </releases>
 </component>

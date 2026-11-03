@@ -1,0 +1,89 @@
+Lets the core handle the Mini Player, a video's Picture in Picture window, as Arc's does
+(//browser_core/hooks.h): a scroll moves it, ⌘ or Ctrl with a scroll, or a pinch, sizes it, and a
+double-click goes back to its tab. Chrome makes the window's background a caption, so the OS drags
+it and the window never hears the press; while the core's hook is set it's the window's own, and
+the core moves it as a caption would, through Widget::RunMoveLoop.
+
+--- a/chrome/browser/ui/views/overlay/video_overlay_window_views.cc
++++ b/chrome/browser/ui/views/overlay/video_overlay_window_views.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/ui/views/overlay/video_overlay_window_views.h"
++#include "browser_core/hooks.h"  // nogncheck
+ 
+ #include <memory>
+ #include <string>
+@@ -207,6 +208,11 @@
+ 
+ }  // namespace
+ 
++// browser_core: the core moves, sizes and closes the window on a scroll, a pinch, a drag and a
++// double-click (//browser_core/hooks.h).
++bool (*g_browser_core_mini_player_event)(VideoOverlayWindowViews* window,
++                                         ui::Event* event) = nullptr;
++
+ // OverlayWindow implementation of FrameView.
+ class OverlayWindowFrameView : public views::FrameView {
+   METADATA_HEADER(OverlayWindowFrameView, views::FrameView)
+@@ -260,6 +266,11 @@
+     }
+ 
+     // Allows for dragging and resizing the window.
++    // browser_core: the core moves it itself, since a caption's press never reaches the window
++    // (//browser_core/hooks.h).
++    if (g_browser_core_mini_player_event && window_component == HTNOWHERE) {
++      return HTCLIENT;
++    }
+     return (window_component == HTNOWHERE) ? HTCAPTION : window_component;
+   }
+ #if BUILDFLAG(IS_CHROMEOS)
+@@ -696,6 +707,11 @@
+ 
+   MaybeUpdateMeetsUserInteraction(*event);
+ 
++  // browser_core: last, since the window may be gone after.
++  if (g_browser_core_mini_player_event &&
++      g_browser_core_mini_player_event(this, event)) {
++    return;
++  }
+   views::Widget::OnMouseEvent(event);
+ }
+ 
+@@ -2034,6 +2050,14 @@
+   MaybeUnregisterFrameSinkHierarchy();
+ }
+ 
++void VideoOverlayWindowViews::OnScrollEvent(ui::ScrollEvent* event) {
++  if (g_browser_core_mini_player_event &&
++      g_browser_core_mini_player_event(this, event)) {
++    return;
++  }
++  views::Widget::OnScrollEvent(event);
++}
++
+ void VideoOverlayWindowViews::OnGestureEvent(ui::GestureEvent* event) {
+   MaybeUpdateMeetsUserInteraction(*event);
+ 
+@@ -2041,6 +2065,11 @@
+   // hide the controls.
+   hide_controls_timer_.Reset();
+ 
++  if (g_browser_core_mini_player_event &&
++      g_browser_core_mini_player_event(this, event)) {
++    return;
++  }
++
+   // Use the gesture to show the controls if necessary.
+   if (ShowControlsForGestureIfNecessary(event)) {
+     return;
+--- a/chrome/browser/ui/views/overlay/video_overlay_window_views.h
++++ b/chrome/browser/ui/views/overlay/video_overlay_window_views.h
+@@ -127,6 +127,7 @@
+   void OnKeyEvent(ui::KeyEvent* event) override;
+   void OnMouseEvent(ui::MouseEvent* event) override;
+   void OnGestureEvent(ui::GestureEvent* event) override;
++  void OnScrollEvent(ui::ScrollEvent* event) override;
+ 
+   // display::DisplayObserver:
+   void OnDisplayMetricsChanged(const display::Display& display,

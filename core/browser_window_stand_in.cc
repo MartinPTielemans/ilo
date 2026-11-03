@@ -13,6 +13,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/held_keys.h"
 #include "build/build_config.h"
+#include "browser_core/autofill_offer.h"
 #include "browser_core/host.h"
 #include "browser_core/platform/window_views.h"
 #include "browser_core/side_panel.h"
@@ -152,10 +153,11 @@ autofill::AutofillBubbleBase* NoBubbleShown() {
 }  // namespace
 
 autofill::AutofillBubbleBase* NoAutofillBubbles::ShowSaveCreditCardBubble(
-    content::WebContents*,
-    autofill::SaveCardBubbleController*,
+    content::WebContents* web_contents,
+    autofill::SaveCardBubbleController* controller,
     bool) {
-  return NoBubbleShown();
+  autofill::AutofillBubbleBase* offer = AutofillOffer::ShowCard(web_contents, controller);
+  return offer ? offer : NoBubbleShown();
 }
 autofill::AutofillBubbleBase* NoAutofillBubbles::ShowIbanBubble(content::WebContents*,
                                                                 autofill::IbanBubbleController*,
@@ -180,10 +182,12 @@ autofill::AutofillBubbleBase* NoAutofillBubbles::ShowAutofillAiLocalSaveNotifica
   return NoBubbleShown();
 }
 autofill::AutofillBubbleBase* NoAutofillBubbles::ShowSaveAddressProfileBubble(
-    content::WebContents*,
-    std::unique_ptr<autofill::SaveAddressBubbleController>,
+    content::WebContents* web_contents,
+    std::unique_ptr<autofill::SaveAddressBubbleController> controller,
     bool) {
-  return NoBubbleShown();
+  autofill::AutofillBubbleBase* offer =
+      AutofillOffer::ShowAddress(web_contents, std::move(controller));
+  return offer ? offer : NoBubbleShown();
 }
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
 autofill::AutofillBubbleBase* NoAutofillBubbles::ShowAddressSignInPromo(
@@ -305,6 +309,8 @@ BrowserWindowStandIn::BrowserWindowStandIn(base::WeakPtr<Window> window)
 BrowserWindowStandIn::~BrowserWindowStandIn() {
   // Before the features it uses go, as Chrome's window closes its panel first.
   side_panel_.reset();
+  // While the browser still holds it, as BrowserView lets go of Chrome's first.
+  autofill_bubbles_data_.reset();
   if (browser_) {
     // BrowserWidget does this for Chrome's windows: features may read the window as they go.
     browser_->GetFeatures().TearDownPreBrowserWindowDestruction();
@@ -316,6 +322,9 @@ BrowserWindowStandIn::~BrowserWindowStandIn() {
 
 void BrowserWindowStandIn::SetBrowser(BrowserWindowInterface* browser) {
   browser_ = browser;
+  // Chrome's card and address offers find the handler there, where BrowserView puts Chrome's.
+  autofill_bubbles_data_.reset();
+  autofill_bubbles_data_.emplace(browser->GetUnownedUserDataHost(), autofill_bubbles_);
   location_bar_->set_browser(browser);
   side_panel_ = std::make_unique<SidePanel>(browser);
   if (views::Widget* widget = this->widget()) {
@@ -410,6 +419,14 @@ void BrowserWindowStandIn::Close() {
 }
 
 void BrowserWindowStandIn::Activate() {
+#if BUILDFLAG(IS_WIN)
+  // Chrome asks a window that's active to activate again, as tab restore does for the tab it
+  // brings back, which on Windows focuses the window itself (DesktopNativeWidgetAura::Activate).
+  // That took the keyboard from the UI, and the page shown next took it from the window (#872).
+  if (widget() && widget()->IsActive()) {
+    return;
+  }
+#endif
   if (widget()) {
     widget()->Activate();
   }
@@ -573,9 +590,16 @@ bool BrowserWindowStandIn::HandleKeyboardEvent(const input::NativeWebKeyboardEve
   // A tab's dialog, such as print preview off the Mac, hands on the keys its page doesn't use, and
   // its own keys come first, as in Chrome, where they're the window's: escape closes it rather
   // than stopping the tab's page.
-  if (focus_manager &&
-      focus_manager->IsAcceleratorRegistered(ui::GetAcceleratorFromNativeWebKeyboardEvent(event)) &&
-      unhandled_keyboard_event_handler_.HandleKeyboardEvent(event, focus_manager)) {
+  views::FocusManager* dialog_keys = focus_manager;
+#if BUILDFLAG(IS_WIN)
+  // There the dialog is a window of its own, with its own keys.
+  if (views::Widget* dialog = widget ? platform::PageDialog(widget) : nullptr) {
+    dialog_keys = dialog->GetFocusManager();
+  }
+#endif
+  if (dialog_keys &&
+      dialog_keys->IsAcceleratorRegistered(ui::GetAcceleratorFromNativeWebKeyboardEvent(event)) &&
+      unhandled_keyboard_event_handler_.HandleKeyboardEvent(event, dialog_keys)) {
     return true;
   }
   if (AskApp(Host().tab_key_unhandled, browser_, event)) {
@@ -668,6 +692,23 @@ void BrowserWindowStandIn::EnterFullscreen(const url::Origin& origin,
                                            FullscreenTabParams fullscreen_tab_params) {
   // Chrome's fullscreen controller asks when a page goes full screen in a window that isn't, and
   // back only if the window went for the page. The app hears of the page from its tab.
+#if BUILDFLAG(IS_WIN)
+  // Before the window resizes, which on Windows it does as SetFullscreen is called, ahead of the
+  // page's request returning: the app hears of the page first, as on the Mac and Linux, where the
+  // window resizes later, so it lays the page out once, at the window's new size (#1051).
+  base::WeakPtr<BrowserWindowStandIn> alive = weak_factory_.GetWeakPtr();
+  ExclusiveAccessManager* manager = browser_ ? ExclusiveAccessManager::From(browser_) : nullptr;
+  FullscreenController* controller = manager ? manager->fullscreen_controller() : nullptr;
+  Tab* tab = controller && controller->IsTabFullscreen()
+                 ? Tab::FromWebContents(controller->exclusive_access_tab())
+                 : nullptr;
+  if (tab) {
+    tab->EnteredFullScreen();
+  }
+  if (!alive) {
+    return;
+  }
+#endif
   PutFullscreen(true, fullscreen_tab_params.display_id);
 }
 

@@ -42,6 +42,23 @@ fn offer(kind: Kind, usernames: &[&str]) -> Offer {
         accept: "Save".into(),
         decline: "No Thanks".into(),
         never: (kind == Kind::Save).then(|| "Never".into()),
+        details: Vec::new(),
+    }
+}
+
+/// An offer to save an address or a card, which says what it saves in `details`.
+fn saving(kind: Kind, details: &[&str]) -> Offer {
+    Offer {
+        kind,
+        title: "Save address?".into(),
+        site: "127.0.0.1".into(),
+        username: "".into(),
+        usernames: Vec::new(),
+        password_length: 0,
+        accept: "Save".into(),
+        decline: "No thanks".into(),
+        never: None,
+        details: details.iter().map(|line| line.to_string().into()).collect(),
     }
 }
 
@@ -178,6 +195,24 @@ fn escape_is_not_now(cx: &mut TestAppContext) {
     assert_eq!(prompt.calls(), ["NotNow 1 check@example.test", "hide"]);
 }
 
+/// Save and Not Now name their keys after their words, and each key named answers as its button
+/// does, so what the offer teaches works. Never has no key to name.
+#[gpui::test]
+fn the_key_each_button_names_answers_as_the_button_does(cx: &mut TestAppContext) {
+    let mut prompt = Prompt::new(cx);
+    assert_eq!(key(Answer::Never), None);
+    for answer in [Answer::Accept, Answer::NotNow] {
+        let named = key(answer).expect("Save and Not Now name their keys");
+        prompt.offered(1, Some(offer(Kind::Save, &["check@example.test"])));
+        prompt.calls();
+        prompt.keys(named);
+        assert_eq!(
+            prompt.calls(),
+            [format!("{answer:?} 1 check@example.test"), "hide".into()]
+        );
+    }
+}
+
 #[gpui::test]
 fn never_is_for_a_save_only(cx: &mut TestAppContext) {
     let mut prompt = Prompt::new(cx);
@@ -220,7 +255,9 @@ fn the_picker_puts_the_username_chosen_in_the_field(cx: &mut TestAppContext) {
     prompt.click(WIDTH - INSET - ROW / 2., row_middle);
     let (titles, chosen) = shown.take().expect("the chevron showed no menu");
     assert_eq!(titles, ["check@example.test", "check"]);
-    prompt.cx.update(|window, cx| chosen(1, window, cx));
+    prompt
+        .cx
+        .update(|window, cx| chosen(crate::menu::Closed::Chose(1), window, cx));
     prompt.keys("enter");
     assert_eq!(prompt.calls(), ["Accept 1 check", "hide"]);
 }
@@ -314,4 +351,36 @@ fn the_page_coming_back_brings_its_offer(cx: &mut TestAppContext) {
     prompt.settle();
     prompt.keys("enter");
     assert_eq!(prompt.calls(), ["Accept 1 check@example.test", "hide"]);
+}
+
+/// An address's or a card's offer has no field: the card has the keyboard, so typing goes nowhere,
+/// return saves and escape declines. A login's offer after it has its field back.
+#[gpui::test]
+fn an_address_or_a_card_saves_with_return_and_declines_with_escape(cx: &mut TestAppContext) {
+    let mut prompt = Prompt::new(cx);
+    prompt.calls();
+    let address = [
+        "Ada Lovelace",
+        "1 Check Street",
+        "Springfield, IL 62701",
+        "United States",
+    ];
+    prompt.offered(1, Some(saving(Kind::Address, &address)));
+    assert_eq!(prompt.calls(), ["show"]);
+    prompt.type_text("x");
+    prompt.keys("enter");
+    assert_eq!(prompt.calls(), ["Accept 1 ", "hide"]);
+    prompt.offered(
+        1,
+        Some(saving(Kind::Card, &["Visa ****1111", "Exp: 12/30"])),
+    );
+    prompt.calls();
+    prompt.keys("escape");
+    assert_eq!(prompt.calls(), ["NotNow 1 ", "hide"]);
+    prompt.offered(1, Some(offer(Kind::Save, &["check@example.test"])));
+    prompt.calls();
+    prompt.keys("cmd-a");
+    prompt.type_text("other@example.test");
+    prompt.keys("enter");
+    assert_eq!(prompt.calls(), ["Accept 1 other@example.test", "hide"]);
 }

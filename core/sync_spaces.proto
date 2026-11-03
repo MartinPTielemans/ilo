@@ -1,0 +1,38 @@
+// What ILO_SPACE's specifics hold, in their one bytes field (engine/patches/ours/
+// chromium-sync-spaces-type.patch): one of the user's Spaces, or a pinned tab or folder in one, by
+// its node (space.h). Each is an entity of its own, so a rename, a move or a delete sends only what
+// changed. A Space's Today tabs stay on the device.
+
+syntax = "proto2";
+
+option optimize_for = LITE_RUNTIME;
+
+package browser_core.sync_spaces_pb;
+
+message SpaceEntity {
+  enum Kind {
+    SPACE = 0;
+    PIN = 1;
+    FOLDER = 2;
+  }
+
+  // Its node's id, a lowercase UUID, which is also its client tag.
+  optional string id = 1;
+  optional Kind kind = 2;
+  // A pinned tab's or folder's Space's id.
+  optional string space = 3;
+  // The id of the folder holding a pinned tab or folder, else empty.
+  optional string parent = 4;
+  // Its place among its siblings: a serialized sync_pb.UniquePosition.
+  optional bytes position = 5;
+  // A Space's or folder's name, or the name the user gave a pinned tab.
+  optional string name = 6;
+  // A pinned tab's pinned URL, and its title, which it shows until its page loads.
+  optional string url = 7;
+  optional string title = 8;
+  // A Space's colour, 0xRRGGBB, if it has one.
+  optional uint32 color = 9;
+  // A Space's, folder's or pinned tab's emoji, and a Space's theme.
+  optional string icon = 10;
+  optional string theme = 11;
+}

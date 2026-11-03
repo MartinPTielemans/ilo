@@ -1,5 +1,6 @@
 # Applied in order after ungoogled-chromium's own series. One patch per line, relative to engine/patches/.
-# Sections: helium/ (picks), ardia/ (picks), ours/.
+# Sections: upstream/ (Chromium backports), helium/ (picks), ardia/ (picks), ours/.
+upstream/chromium-xkb-no-state-guard.patch
 ardia/chromium-component-updater-security-only.patch
 ardia/chromium-extension-omaha-attributes.patch
 ours/chromium-core-link.patch
@@ -38,6 +39,7 @@ ours/chromium-core-native-host-fallback.patch
 ours/chromium-crashpad-start.patch
 ours/chromium-crashpad-mac-handler.patch
 ours/chromium-crashpad-mac-async-start.patch
+ours/chromium-crash-keys-no-home.patch
 ours/chromium-windows-product-folder.patch
 ours/chromium-windows-app-names.patch
 ours/chromium-windows-package-app-id.patch
@@ -46,7 +48,17 @@ ours/chromium-core-login-dialog.patch
 ours/chromium-core-external-protocol-dialog.patch
 ours/chromium-core-ad-block.patch
 ours/chromium-core-split-switch.patch
+ours/chromium-sync-service.patch
+ours/chromium-sync-hooks.patch
+ours/chromium-sync-spaces-type.patch
 ours/chromium-core-agent-no-autofill.patch
+ours/chromium-core-mini-player.patch
+ours/chromium-core-activate-tab.patch
+ours/chromium-core-cast-dialog.patch
 ours/chromium-core-page-link-drag.patch
 ours/chromium-center-selection.patch
 ours/chromium-core-alt-click-split.patch
+ours/chromium-core-address-offer.patch
+ours/chromium-core-passkey-sign-in-wording.patch
+ours/chromium-core-frame-shown.patch
+ours/chromium-core-page-bubbles.patch

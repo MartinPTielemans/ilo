@@ -4,15 +4,19 @@
 # the page takes the rectangle dragged at once. Save to
 # Library, the menu's first row, saves it into the profile's Media and says so, and the Library's
 # Media shows it first, opens it in a tab and deletes it from its menu, and then says it is empty
-# in a line that wraps in its list, narrow and wide, light and dark. Escape and a second ⇧⌘2
-# leave capture mode and give the page the keyboard back. File › Capture Full Page copies a
-# picture of the whole long page, past its view.
+# in a line that wraps in its list, narrow and wide, light and dark. On Windows the toast's Save
+# saves it where the system's save dialog is told, and the page has the keyboard back after.
+# Escape and a second ⇧⌘2 leave capture mode and give the page the keyboard back. File › Capture
+# Full Page copies a picture of the whole long page, past its view.
 
 # The line saying the PNG was copied to the run's own pasteboard, and the toast's buttons after it.
 # On Linux check.sh runs in a display of its own, whose clipboard is the run's, and there's no share
-# menu, so the toast has no Share.
+# menu, so the toast has no Share. Windows has its share sheet, and CI's runner a desktop of its own.
 if [ "$(uname)" = Darwin ]; then
   copied='^browser: pasteboard png [0-9]* bytes, private$'
+  buttons='save, share'
+elif windows; then
+  copied='^browser: clipboard png [0-9]* bytes$'
   buttons='save, share'
 else
   copied='^browser: clipboard png [0-9]* bytes$'
@@ -58,12 +62,17 @@ capture_mode() {
 in_page() {
   awk -v x="$1" -v y="$2" -v left="$left" -v top="$top" 'BEGIN { print x + left, y + top }'
 }
+# Moves the pointer onto the box, 200 by 100 at 300, 200 in the page, and waits for it to light,
+# else fails with $1. The pointer leaves the box first. wlroots sends no motion to where the pointer
+# is already, and the last click on the box left it there (#1578).
+light_box() {
+  send move $(in_page 100 100)
+  send move $(in_page 400 250)
+  expect '^browser: capture element at [0-9.]* [0-9.]*: 300 200 200 100$' "$1"
+}
 
 capture_mode page
-# The box is 200 by 100 at 300, 200 in the page.
-send move $(in_page 400 250)
-expect '^browser: capture element at [0-9.]* [0-9.]*: 300 200 200 100$' \
-  "the pointer over the box didn't light it: $(grep '^browser: capture element' "$log" | tail -1)"
+light_box "the pointer over the box didn't light it"
 ../tools/window-screenshot.sh "$pid" "$out/capture-element.png" || fail "no window to capture"
 send click $(in_page 400 250)
 expect '^browser: capture chose 300 200 200 100$' "a click on the box didn't take it"
@@ -89,6 +98,40 @@ expect '^browser: capture hidden$' "capture mode's window didn't hide after Copy
 send state
 in_browser RenderWidgetHostViewCocoa "after Copy"
 
+# Windows: the toast's Save asks where in the system's save dialog and saves the picture there.
+# The dialog's loop runs the UI's tasks, such as the toast's leaving, which crashed the app while
+# the dialog opened inside the click (#1358). Save is the toast's first button: the toast ends 18
+# in from the window's edge, Share 13.5 in from its own and 31 wide, and Save, about 46 wide, 8
+# before it, all 41 down.
+saved_to=
+if windows; then
+  bytes=$(grep -m1 '^browser: clipboard png ' "$log" |
+    sed 's/^browser: clipboard png \([0-9]*\) bytes$/\1/')
+  await '^browser: toast settled$' || fail "Copy's toast didn't settle"
+  send layout
+  width=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
+    sed 's/^browser: layout content \([0-9]*\)x.*/\1/')
+  toast_save="$((width - 18 - 76)) 41"
+  send move $toast_save
+  send click $toast_save
+  expect '^browser: toast button save$' "Save wasn't pressed at $toast_save"
+  expect '^browser: toast hidden$' "the toast didn't leave once its Save was pressed"
+  expect '^browser: capture save panel shown$' "the toast's Save didn't ask where to save"
+  ../tools/window-screenshot.sh "$pid" "$out/capture-save-dialog.png" || fail "no window to capture"
+  picture="$out/capture-saved.png"
+  rm -f "$picture"
+  send savepanel "$(cygpath -aw "$picture")"
+  expect '^browser: save panel answered$' "no save dialog showed for the toast's Save"
+  expect '^browser: capture saved ' "the save dialog didn't save the picture"
+  [ -f "$picture" ] || fail "the save dialog saved the picture elsewhere: $(grep -m1 \
+    '^browser: capture saved ' "$log")"
+  [ "$(wc -c < "$picture" | tr -d ' ')" = "$bytes" ] ||
+    fail "the save dialog saved $(wc -c < "$picture") bytes, not the $bytes copied"
+  send state
+  in_browser RenderWidgetHostViewCocoa "after the save dialog"
+  saved_to=" The toast's Save saved it to $picture, from $out/capture-save-dialog.png."
+fi
+
 # ⇧⌘-drag on the page, as Arc's, starts capture mode dragging and takes the rectangle dragged at
 # once, with the menu at its corner. The page's window keeps the pointer, so the core hands capture
 # mode the drag. The app's lines may come at any of the drag's steps.
@@ -110,9 +153,7 @@ expect '^browser: capture hidden$' "capture mode's window didn't hide after ⇧�
 
 # Save to Library, 37 to 61 down, saves the box's picture without a question and says so.
 capture_mode page
-send move $(in_page 400 250)
-expect '^browser: capture element at [0-9.]* [0-9.]*: 300 200 200 100$' \
-  "the pointer over the box didn't light it the second time"
+light_box "the pointer over the box didn't light it the second time"
 send click $(in_page 400 250)
 expect '^browser: capture chose 300 200 200 100$' "a second click on the box didn't take it"
 send click $(in_page 442 245)
@@ -122,11 +163,16 @@ expect '^browser: toast shown Saved to Library$' "Save to Library didn't say so"
 expect '^browser: saved to library ' "Save to Library didn't save the picture"
 library=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: saved to library ' |
   sed 's/^browser: saved to library //')
-case "$library" in
+# The app names it as its OS does, C:\... on Windows, where the check's paths are Unix ones, and
+# the log lines naming it are matched with its name as itself, since Windows' has backslashes.
+file=$library
+! windows || file=$(cygpath -u "$library")
+named=$(printf '%s\n' "$library" | sed 's/[][\\.*^$]/\\&/g')
+case "$file" in
   "$profile_dir/Media/Capture "*.png) ;;
   *) fail "Save to Library saved to $library, not the profile's Media" ;;
 esac
-[ -s "$library" ] || fail "Save to Library's $library is empty"
+[ -s "$file" ] || fail "Save to Library's $library is empty"
 expect '^browser: toast settled$' "Save to Library's toast didn't settle"
 ../tools/window-screenshot.sh "$pid" "$out/capture-library.png" || fail "no window to capture"
 
@@ -140,7 +186,7 @@ expect '^browser: library shown$' "the Library didn't settle open on Media"
 ../tools/window-screenshot.sh "$pid" "$out/library-media.png" || fail "no window to capture"
 # Rows from 112 + 8 across and 56 + 27 down, the heading over them; tiles 93.7 square.
 send click $((112 + 8 + 47)) $((56 + 27 + 47))
-expect "^browser: open media $library\$" "a click on the capture's tile didn't open it"
+expect "^browser: open media $named\$" "a click on the capture's tile didn't open it"
 expect '^browser: library hidden$' "opening the capture didn't close the Library"
 expect '^browser: loaded [0-9]* file://.*\.png$' "the capture's tab didn't load it"
 media=$(sed -n 's|^browser: loaded \([0-9]*\) file://.*\.png$|\1|p' "$log" | tail -1)
@@ -154,9 +200,9 @@ expect "^browser: menu shown $(cased 'Open, Delete')\$" \
   "a right-click on the capture's tile didn't show its menu"
 ../tools/window-screenshot.sh "$pid" "$out/media-menu.png" || fail "no window to capture"
 send choose Delete
-expect "^browser: delete capture $library\$" "the tile's Delete didn't run"
+expect "^browser: delete capture $named\$" "the tile's Delete didn't run"
 expect '^browser: library captures [0-9]*$' "Media wasn't listed again after Delete"
-[ ! -e "$library" ] || fail "Delete left $library where it was"
+[ ! -e "$file" ] || fail "Delete left $library where it was"
 # Media also tiles the profile's downloaded pictures and videos, and the captures a run that
 # failed kept, which an earlier run can leave in a dev profile (restore's clip.mp4 on a VM). The
 # app clears them, as a user would: Downloads' Clear List takes the downloads off the list and
@@ -257,9 +303,7 @@ tone() {
 capture_look() {
   capture_mode page
   expect "^browser: capture pill drawn $1\$" "capture mode's pill didn't draw in the $1 look"
-  send move $(in_page 400 250)
-  expect '^browser: capture element at [0-9.]* [0-9.]*: 300 200 200 100$' \
-    "the pointer over the box didn't light it in the $1 look"
+  light_box "the pointer over the box didn't light it in the $1 look"
   ../tools/window-screenshot.sh "$pid" "$out/capture-pill-$1.png" || fail "no window to capture"
   send click $(in_page 400 250)
   expect '^browser: capture chose 300 200 200 100$' \
@@ -305,7 +349,7 @@ none_since '^browser: capture started$' || fail "⇧⌘-click on a link started 
 
 exec 3>&-
 quit
-echo "ok: capture. The box's picture is $size, the full page's $full. Media's empty line, in" \
+echo "ok: capture. The box's picture is $size, the full page's $full.$saved_to Media's empty line, in" \
   "lines: ${empty_lines%, }." \
   "Windows: $out/capture-element.png, $out/capture-chosen.png, $out/capture-library.png," \
   "$out/library-media.png, $out/media-menu.png, $out/media-empty-narrow-light.png," \

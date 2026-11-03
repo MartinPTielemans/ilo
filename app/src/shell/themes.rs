@@ -188,7 +188,17 @@ impl Shell {
                 .ok();
         });
         let height = f32::from(self.viewport.height);
-        theme_picker::show(space, theme, anchor, height, changed, cx);
+        // A card showing would stay under the picker, as rows' cards wait while it shows.
+        self.browser.hover_card(crate::hover_card::Hover::Close, cx);
+        theme_picker::show(
+            self.browser.window(),
+            space,
+            theme,
+            anchor,
+            height,
+            changed,
+            cx,
+        );
     }
 
     /// The picker made `theme` for `space`: the window shows it at once, and once the user is

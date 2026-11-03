@@ -16,7 +16,7 @@
 # button hide the sidebar and the window's buttons, and the card takes its place, through a resize;
 # ⌘S brings them back, and the core hears the page moves for each motion and is still after it. The
 # pointer kept at the window's edge brings the hidden sidebar out, and one passing it doesn't. A tab
-# opened with the sidebar hidden says so in a toast, whose Show brings the sidebar back. The
+# opened with the sidebar hidden says so in a toast, and a click on it brings the sidebar back. The
 # sidebar's edge drags its width between 164 and 500, stopping at them, and dragged on past half the
 # narrowest it hides the sidebar, keeping its width; a double-click on it puts the width back. A
 # page that hasn't drawn yet shows the card's colour, not white. In a check VM, the sidebar over grey
@@ -52,6 +52,8 @@ page=$(base64 << 'HTML' | tr -d '\n'
     if (last && time - lastScroll < 20) intervals.push(time - last);
     last = time;
     if (performance.now() - lastScroll < 300) return requestAnimationFrame(frame);
+    // A scroll after the pause, as when the session stalls mid-scroll, counts on from here.
+    measuring = false;
     const sorted = [...intervals].sort((a, b) => a - b);
     const at = q => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))].toFixed(1);
     const fps = Math.round(1000 * intervals.length / intervals.reduce((a, b) => a + b, 0));
@@ -197,7 +199,9 @@ scroll="10 300"
 [ "$(uname)" = Linux ] && scroll="1 25"
 send scroll $page_point $scroll
 expect '^browser: title [0-9]* frames' "scrolling didn't move the page"
-timing=$(grep -m1 '^browser: title [0-9]* frames' "$log" | sed 's/^browser: title [0-9]* //')
+# The page says its count after each pause of 300 ms, so the last is the whole scroll's.
+await '^browser: title [0-9]* frames .* scrolled 3000$' || true
+timing=$(grep '^browser: title [0-9]* frames' "$log" | tail -1 | sed 's/^browser: title [0-9]* //')
 echo "$timing" | grep -q ' scrolled 3000$' || fail "the page didn't scroll by exactly 3000 points: $timing"
 frames=$(echo "$timing" | sed 's/^frames \([0-9]*\) .*/\1/')
 slow=$(echo "$timing" | sed 's/.* slow \([0-9]*\) .*/\1/')
@@ -252,7 +256,9 @@ send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar in full screen"
 # The footer is at the screen's bottom in full screen, so the +'s menu flips up over the pointer.
 post click 204 $((height - 25))
-expect "^browser: menu shown $(cased 'New Space…, New Folder…, New Split View, New Note')\$" "the footer's + in full screen showed no menu"
+plus="New Space…, New Folder…, New Split View, New Note, $(plus_adds)"
+expect "^browser: menu shown $(cased "$plus")\$" \
+  "the footer's + in full screen showed no menu"
 expect '^browser: menu window at ' "the +'s menu in full screen didn't open its window"
 top=$(grep '^browser: menu window at' "$log" | tail -1 | cut -d' ' -f5 | cut -d, -f2)
 [ "$top" -lt $((height - 65)) ] ||
@@ -274,10 +280,12 @@ check_buttons "after full screen"
 # and the transition shows no frame of the other layout.
 resizes=$(page_resizes)
 send key f
+asked=$step
 expect '^browser: page entered full screen$' "the page didn't go full screen"
 expect '^browser: window entered full screen$' "the window didn't go full screen with the page"
 check_layout "with the page full screen" fills
-none_since '^browser: toast shown To exit full screen' ||
+# From the key on, as check_layout sends a command of its own.
+logged "^browser: toast shown $note" "$asked" &&
   fail "a page's full screen showed the window's note on leaving it"
 resized_once "going full screen" "$content"
 ../tools/window-screenshot.sh "$pid" "$out/page-fullscreen.png" || fail "no window to capture"
@@ -606,12 +614,16 @@ check_reveal() {
 send key s cmd
 toggle ui hidden "⌘S before the reveal"
 send move 400 300
-# The pointer has to stay at the edge a moment: one passing it doesn't bring the sidebar out.
+# The pointer has to move a few points up or down at the edge and stay a moment: one jumping
+# there, or passing it, doesn't bring the sidebar out.
+send move 3 300
+none_while '^browser: reveal waits$' || fail "the pointer jumping to the window's edge brought the sidebar out"
 step=$((step + 1))
 passed=$step
-echo "move 3 300" >&3
+echo "move 3 306" >&3
 send move 400 300
 send move 3 300
+send move 3 306
 expect '^browser: reveal shown$' "the pointer at the window's edge didn't bring the sidebar out"
 [ "$(sed -n "/^browser: drive $passed: /,\$p" "$log" | grep -c '^browser: reveal shown$')" = 1 ] ||
   fail "the pointer passing the window's edge brought the sidebar out"
@@ -621,11 +633,18 @@ check_buttons "with the sidebar out" hidden
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-reveal.png" || fail "no window to capture"
 send move 200 300
 send move 250 300
-check_reveal "with the pointer over the sidebar out" shown
-send move 400 300
-expect '^browser: reveal hidden$' "the pointer past the sidebar out didn't send it away"
+if [ "$(uname)" = Linux ]; then
+  # On Linux the pointer over the page is Chromium's, which the shell doesn't hear, so the panel
+  # has no hold zone there and goes as the pointer leaves it (platform/linux/reveal_window.rs).
+  expect '^browser: reveal hidden$' "the pointer leaving the sidebar out didn't send it away"
+else
+  check_reveal "with the pointer in the hold zone past the sidebar out" shown
+  send move 400 300
+  expect '^browser: reveal hidden$' "the pointer past the sidebar out didn't send it away"
+fi
 check_reveal "after the sidebar went away"
 send move 3 300
+send move 3 306
 expect '^browser: reveal shown$' "the pointer at the edge didn't bring the sidebar back out"
 send click 93 24
 toggle sidebar shown "a click on the sidebar button of the sidebar out"
@@ -633,6 +652,7 @@ check_reveal "with the sidebar docked from its sidebar button"
 send key s cmd
 toggle ui hidden "⌘S after docking the sidebar out"
 send move 3 300
+send move 3 306
 expect '^browser: reveal shown$' "the pointer at the edge didn't bring the sidebar out again"
 send key s cmd
 toggle ui shown "⌘S with the sidebar out"
@@ -688,8 +708,8 @@ none_since '^browser: reveal by option$' ||
   fail "⌥ let go after a key with the page focused brought the sidebar out"
 send key s cmd
 toggle page shown "⌘S from the page after ⌥"
-# With the sidebar hidden, a tab opening says so in a toast, as its row isn't seen, and the toast's
-# Show brings the sidebar back.
+# With the sidebar hidden, a tab opening says so in a toast, as its row isn't seen, and its Show
+# brings the sidebar back.
 send key s cmd
 toggle page hidden "⌘S from the page before opening a tab"
 before=$(today)
@@ -698,23 +718,24 @@ expect '^browser: command bar shown$' "⌘T with the sidebar hidden didn't open 
 send type example.org
 send key return
 expect "^browser: today [0-9][0-9]* $before\$" "the tab for example.org didn't open at the top of Today"
-expect '^browser: toast shown Opened in a New Tab \[show\]$' \
+expect '^browser: toast shown New Tab Created \[show\]$' \
   "a tab opened with the sidebar hidden had no toast"
 expect '^browser: toast settled$' "the new tab's toast didn't settle"
 ../tools/window-screenshot.sh "$pid" "$out/new-tab-toast.png" || fail "no window to capture"
-# Show is the toast's last button: its middle is 13.5 in from the plate's right edge, then its 9
-# and half of "Show" in. The plate is logged in the toast's window, 420 wide at the content's right.
-expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]*$' "the new tab's toast didn't tell where its plate is"
-set -- $(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //')
+# A click on Show, the chip at the plate's right end: 13.5 in from it and about 50 wide. The plate is
+# logged in the toast's window, whose width comes after it, at the content's right.
+expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]* in [0-9]* [0-9]*$' \
+  "the new tab's toast didn't tell where its plate is"
+set -- $(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //; s/ in / /')
 send layout
 content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
   sed 's/^browser: layout content \([0-9]*\)x[0-9]*,.*/\1/')
-show="$((content - 420 + $1 + $3 - 38)) $(($2 + $4 / 2))"
+show="$((content - $5 + $1 + $3 - 14 - 25)) $(($2 + $4 / 2))"
 send move $show
 send click $show
-expect '^browser: toast button show$' "Show wasn't pressed at $show"
-expect '^browser: sidebar shown$' "the toast's Show didn't bring the sidebar back"
-check_layout "after the new tab's toast's Show"
+expect '^browser: toast button show$' "a click on the new tab's toast's Show at $show didn't take"
+expect '^browser: sidebar shown$' "the new tab's toast's Show didn't bring the sidebar back"
+check_layout "after a click on the new tab's toast"
 # The sidebar's edge, the 6 pt right of its rows, drags its width between 164 and 500, Arc's, and
 # stops at them. Dragged on past half the narrowest, it hides the sidebar at once, which keeps the
 # width it had, and ⌘S brings it back. A double-click on the edge puts back 228.
@@ -756,7 +777,7 @@ if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
   # faint and known: stops at 0.06 in dark and 0.09 in light, from black at the top to 0.25 · 255
   # at the bottom.
   post rightclick 100 112
-  expect '^browser: menu shown Rename Space' "a right-click on the Space's name showed no menu"
+  expect "^browser: menu shown $(cased 'Change Space Icon…')" "a right-click on the Space's name showed no menu"
   send choose "$(cased 'Edit Theme Color…')"
   expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
   expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
@@ -778,7 +799,7 @@ if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
       expect '^browser: window light true$' "the window didn't turn light with the Mac"
       ../tools/window-screenshot.sh "$pid" "$out/light.png" || fail "no window to capture"
       post rightclick 100 112
-      expect '^browser: menu shown Rename Space' "a right-click on the Space's name showed no menu"
+      expect "^browser: menu shown $(cased 'Change Space Icon…')" "a right-click on the Space's name showed no menu"
       ../tools/window-screenshot.sh "$pid" "$out/light-menu.png" || fail "no window to capture"
       send key escape
       expect '^browser: menu closed$' "escape didn't close the Space's menu"
@@ -840,4 +861,4 @@ fi
 exec 3>&-
 quit
 echo "edge: $edge"
-echo "ok: the page view keeps its margins and the window's buttons stay at Arc's through a resize and full screen, full screen says how to leave and a page's doesn't, a full-screen page takes the window with it and escape or the page leaving brings both back, the page resized once each way, the green button takes a full-screen page out with the window and brings back the sidebar and the card, from where the page's full screen takes the window again, a full-screen window's display going away, in full screen and as it leaves, keeps the window and the page together, and going away as the page takes the window full screen leaves both windowed, the command bar opens in full screen and keeps the keyboard when a page commits under it, then gives it to the new page. Drags on the window's background move it and drags on its controls don't. A double-click on the header $zoom, and one on the empty sidebar opens a new tab. ⌘S from the page and the UI, and the sidebar button, hide the sidebar and the window's buttons, the card takes its place through a resize, and ⌘S brings them back. The pointer kept at the window's edge brings the hidden sidebar out over the page, one passing it doesn't, and the pointer past it sends it away, and the sidebar button and ⌘S dock it from there. ⌥ pressed alone, with the UI or the page focused, brings the hidden sidebar out and sends it away again, and ⌥ held with ⌘ or a key doesn't. A tab opened with the sidebar hidden says so in a toast, whose Show brings the sidebar back. The sidebar's edge drags its width between 164 and 500, hides it dragged on past the narrowest, and a double-click puts it back. A page that hasn't drawn shows the card's colour ($color). Page full screen, ms from the page's request, median of 6 going in, 3 leaving by the page, 3 by escape: going in ${enter_ms}leaving ${exit_ms}by escape ${escape_ms%, }. Scrolling: $timing. Material: $material. Windows: $out/fullscreen-note.png, $out/fullscreen.png, $out/page-fullscreen.png, $out/green-button.png, $out/green-button-again.png, $out/display-gone.png, $out/display-gone-again.png, $out/display-gone-leaving.png, $out/display-gone-leaving-again.png, $out/display-gone-entering.png, $out/display-gone-entering-again.png, $out/sidebar-hidden.png, $out/sidebar-reveal.png, $out/sidebar-option.png, $out/new-tab-toast.png, $out/sidebar-wide.png, $out/sidebar-narrow.png, $out/before-paint.png${light_shots:-}"
+echo "ok: the page view keeps its margins and the window's buttons stay at Arc's through a resize and full screen, full screen says how to leave and a page's doesn't, a full-screen page takes the window with it and escape or the page leaving brings both back, the page resized once each way, the green button takes a full-screen page out with the window and brings back the sidebar and the card, from where the page's full screen takes the window again, a full-screen window's display going away, in full screen and as it leaves, keeps the window and the page together, and going away as the page takes the window full screen leaves both windowed, the command bar opens in full screen and keeps the keyboard when a page commits under it, then gives it to the new page. Drags on the window's background move it and drags on its controls don't. A double-click on the header $zoom, and one on the empty sidebar opens a new tab. ⌘S from the page and the UI, and the sidebar button, hide the sidebar and the window's buttons, the card takes its place through a resize, and ⌘S brings them back. The pointer kept at the window's edge brings the hidden sidebar out over the page, one passing it doesn't, and the pointer past it sends it away, and the sidebar button and ⌘S dock it from there. ⌥ pressed alone, with the UI or the page focused, brings the hidden sidebar out and sends it away again, and ⌥ held with ⌘ or a key doesn't. A tab opened with the sidebar hidden says so in a toast, and a click on it brings the sidebar back. The sidebar's edge drags its width between 164 and 500, hides it dragged on past the narrowest, and a double-click puts it back. A page that hasn't drawn shows the card's colour ($color). Page full screen, ms from the page's request, median of 6 going in, 3 leaving by the page, 3 by escape: going in ${enter_ms}leaving ${exit_ms}by escape ${escape_ms%, }. Scrolling: $timing. Material: $material. Windows: $out/fullscreen-note.png, $out/fullscreen.png, $out/page-fullscreen.png, $out/green-button.png, $out/green-button-again.png, $out/display-gone.png, $out/display-gone-again.png, $out/display-gone-leaving.png, $out/display-gone-leaving-again.png, $out/display-gone-entering.png, $out/display-gone-entering-again.png, $out/sidebar-hidden.png, $out/sidebar-reveal.png, $out/sidebar-option.png, $out/new-tab-toast.png, $out/sidebar-wide.png, $out/sidebar-narrow.png, $out/before-paint.png${light_shots:-}"

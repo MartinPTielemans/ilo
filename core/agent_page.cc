@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <deque>
 #include <functional>
+#include <iterator>
 #include <map>
 #include <string_view>
 #include <utility>
@@ -12,13 +13,17 @@
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "browser_core/host.h"
 #include "browser_core/tab.h"
 #include "build/build_config.h"
+#include "chrome/browser/shell_integration.h"
 #include "components/autofill/content/browser/content_autofill_client.h"
 #include "components/autofill/core/browser/filling/filling_product.h"
 #include "components/autofill/core/browser/suggestions/suggestion_hiding_reason.h"
@@ -324,8 +329,12 @@ void AgentPage::Settle() {
 }
 
 void AgentPage::Click() {
-  Center(base::BindOnce(
-      [](base::WeakPtr<AgentPage> page, std::optional<gfx::RectF> box) {
+  // In the session of the element's frame: DevTools then gives the click to that frame even while
+  // the window's hit-test data lacks it, as in a background tab, where through the main frame's
+  // session the page around the frame took the click (#1175).
+  const int slot = SlotOfElement(job_->element);
+  Locate(base::BindOnce(
+      [](base::WeakPtr<AgentPage> page, int slot, std::optional<gfx::RectF> box) {
         if (!page) {
           return;
         }
@@ -333,34 +342,44 @@ void AgentPage::Click() {
           page->Fail("The element isn't on the page any more, or is hidden. Take a new snapshot.");
           return;
         }
-        page->Point(*box);
-        const std::pair<double, double> at(box->CenterPoint().x(), box->CenterPoint().y());
-        base::WeakPtr<AgentPage> weak = page;
-        page->Mouse("mouseMoved", at,
-                    base::BindOnce(
-                        [](base::WeakPtr<AgentPage> page, std::pair<double, double> at) {
-                          if (!page) {
-                            return;
-                          }
-                          page->Mouse(
-                              "mousePressed", at,
-                              base::BindOnce(
-                                  [](base::WeakPtr<AgentPage> page, std::pair<double, double> at) {
-                                    if (page) {
-                                      page->Mouse("mouseReleased", at,
-                                                  base::BindOnce(&AgentPage::Settle, page));
-                                    }
-                                  },
-                                  page, at));
-                        },
-                        weak, at));
+        // Where that is in the main frame's viewport, for the agent's pointer.
+        page->Offset(
+            slot, *box,
+            base::BindOnce(
+                [](base::WeakPtr<AgentPage> page, int slot, gfx::PointF at,
+                   std::optional<gfx::RectF> shown) {
+                  if (!page) {
+                    return;
+                  }
+                  if (!shown) {
+                    page->Fail(
+                        "The element isn't on the page any more, or is hidden. Take a new "
+                        "snapshot.");
+                    return;
+                  }
+                  page->Point(*shown);
+                  page->ClickAt(slot, at, 0);
+                },
+                page, slot, box->CenterPoint()));
       },
-      weak_factory_.GetWeakPtr()));
+      weak_factory_.GetWeakPtr(), slot));
 }
 
-void AgentPage::Mouse(const char* type, std::pair<double, double> at, base::OnceClosure then) {
-  base::DictValue params =
-      base::DictValue().Set("type", type).Set("x", at.first).Set("y", at.second);
+void AgentPage::ClickAt(int slot, gfx::PointF at, size_t step) {
+  static constexpr const char* kSteps[] = {"mouseMoved", "mousePressed", "mouseReleased"};
+  if (step == std::size(kSteps)) {
+    Settle();
+    return;
+  }
+  Mouse(kSteps[step], at, slot,
+        base::BindOnce(&AgentPage::ClickAt, weak_factory_.GetWeakPtr(), slot, at, step + 1));
+}
+
+void AgentPage::Mouse(const char* type, gfx::PointF at, int slot, base::OnceClosure then) {
+  base::DictValue params = base::DictValue()
+                               .Set("type", type)
+                               .Set("x", static_cast<double>(at.x()))
+                               .Set("y", static_cast<double>(at.y()));
   if (std::string_view(type) != "mouseMoved") {
     params.Set("button", "left");
     params.Set("clickCount", 1);
@@ -377,7 +396,8 @@ void AgentPage::Mouse(const char* type, std::pair<double, double> at, base::Once
              }
              std::move(then).Run();
            },
-           weak_factory_.GetWeakPtr(), std::move(then)));
+           weak_factory_.GetWeakPtr(), std::move(then)),
+       slot);
 }
 
 void AgentPage::Type(bool submit) {
@@ -479,11 +499,12 @@ void AgentPage::PressKey(const std::string& name, base::OnceClosure then) {
     return;
   }
   HideSuggestions();
+  // No nativeVirtualKeyCode, as select-all has none: DevTools then marks the key skip_if_unhandled,
+  // so it goes to the page alone and never to the app's key hooks, ilo's shortcuts or the menus.
   base::DictValue event = base::DictValue()
                               .Set("key", key->name == "Space" ? " " : std::string(key->name))
                               .Set("code", std::string(key->name))
-                              .Set("windowsVirtualKeyCode", key->code)
-                              .Set("nativeVirtualKeyCode", key->code);
+                              .Set("windowsVirtualKeyCode", key->code);
   base::DictValue down = event.Clone().Set("type", key->text.empty() ? "rawKeyDown" : "keyDown");
   if (!key->text.empty()) {
     down.Set("text", std::string(key->text));
@@ -754,6 +775,21 @@ void AgentPage::CheckPasswords(base::ListValue nodes,
 }
 
 void AgentPage::Center(Then then) {
+  Locate(base::BindOnce(
+      [](base::WeakPtr<AgentPage> page, int slot, Then then, std::optional<gfx::RectF> box) {
+        if (!page) {
+          return;
+        }
+        if (!box) {
+          std::move(then).Run(std::nullopt);
+          return;
+        }
+        page->Offset(slot, *box, std::move(then));
+      },
+      weak_factory_.GetWeakPtr(), SlotOfElement(job_->element), std::move(then)));
+}
+
+void AgentPage::Locate(Then then) {
   const int slot = SlotOfElement(job_->element);
   const int element = NodeOfElement(job_->element);
   Send("DOM.getDocument", base::DictValue().Set("depth", 0),
@@ -774,7 +810,7 @@ void AgentPage::Center(Then then) {
                        page->Send(
                            "DOM.getContentQuads", base::DictValue().Set("backendNodeId", element),
                            base::BindOnce(
-                               [](base::WeakPtr<AgentPage> page, int slot, Then then,
+                               [](base::WeakPtr<AgentPage> page, Then then,
                                   const base::DictValue* result) {
                                  if (!page) {
                                    return;
@@ -800,9 +836,9 @@ void AgentPage::Center(Then then) {
                                      static_cast<float>(left), static_cast<float>(top),
                                      static_cast<float>(right - left),
                                      static_cast<float>(bottom - top));
-                                 page->Offset(slot, box, std::move(then));
+                                 std::move(then).Run(box);
                                },
-                               page, slot, std::move(then)),
+                               page, std::move(then)),
                            slot);
                      },
                      page, slot, element, std::move(then)),
@@ -911,10 +947,42 @@ void AgentPage::HideSuggestions() {
   }
 }
 
+// static
+void AgentPage::AppRefused(content::WebContents* contents, const GURL& url) {
+  AgentPage* page = contents ? FromWebContents(contents) : nullptr;
+  if (!page || !page->job_) {
+    return;
+  }
+  page->app_link_ = url;
+  page->app_name_.clear();
+  // As Chrome finds it for its own question, off the UI thread: on Linux it reads desktop files.
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(&shell_integration::GetApplicationNameForScheme, url),
+      base::BindOnce(
+          [](base::WeakPtr<AgentPage> page, const GURL& url, const std::u16string& name) {
+            if (page && page->app_link_ == url) {
+              page->app_name_ = name;
+            }
+          },
+          page->weak_factory_.GetWeakPtr(), url));
+}
+
 void AgentPage::Answer(std::string text, bool error) {
   if (!job_) {
     return;
   }
+  // A link to an app, which the core stopped, is what the action did, whatever the page shows
+  // after (#1443).
+  if (std::optional<GURL> app = std::exchange(app_link_, std::nullopt); app && !error) {
+    const std::string opens = app_name_.empty() ? "an app" : base::UTF16ToUTF8(app_name_);
+    text = base::StrCat({"That link opens ", opens, " (", app->GetScheme(),
+                         ":), outside the browser, and agents can't open apps. ",
+                         "The tab stayed on “", base::UTF16ToUTF8(GetWebContents().GetTitle()),
+                         "”. Ask the user, or use the page's web link if it has one."});
+    error = true;
+  }
+  app_name_.clear();
   const uint64_t request = job_->request;
   job_.reset();
   frames_.clear();

@@ -4,7 +4,8 @@
 # from T3 Code (https://github.com/pingdotgg/t3code, MIT) at commit
 # 570d4b03eef879bd60be3d74444046858c94dacd.
 #
-# Every job here runs on GitHub's runners. The self-hosted engine runner never takes a pull request.
+# Every job here runs on GitHub's runners, except Core on Linux on a push here, which runs on the
+# self-hosted ilo-core runners (core-linux.yml). No self-hosted runner ever takes a pull request.
 name: CI
 
 on:

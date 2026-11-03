@@ -13,9 +13,9 @@ pub enum Level {
     /// Sits on the window: favorite tiles, library cards, pictures of pages.
     Resting,
     /// Opens from something and closes on a click outside: menus, the Site Controls, the toast,
-    /// the zoom HUD, tooltips, the link target, the find bar.
+    /// the zoom HUD, tooltips, the link target, the find bar, the command bar over the URL field.
     Popover,
-    /// Takes the keyboard: the command bar, the dialog, the icon and theme pickers.
+    /// Takes the keyboard: the centred command bar, the dialog, the icon and theme pickers.
     Modal,
 }
 

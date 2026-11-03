@@ -217,15 +217,17 @@ pub fn near(frame: Bounds<Pixels>, x: f32, y: f32) -> bool {
 
 /// What the link target asks of its window.
 pub trait Host {
-    /// Shows the plate's window with its top left at (`left`, `top`) in the browser window, or
-    /// moves it there if it shows. The UI has kept it inside the window.
-    fn show(&self, left: f32, top: f32);
+    /// Shows the plate's window with its top left at (`left`, `top`) in browser window `window`,
+    /// the one whose page has the link, or moves it there if it shows. The UI has kept it inside
+    /// the window.
+    fn show(&self, window: u64, left: f32, top: f32);
     /// Hides it.
     fn hide(&self);
 }
 
 /// The plate that waits for its delay, and where it goes.
 struct Pending {
+    window: u64,
     plate: Plate,
     left: f32,
     top: f32,
@@ -235,8 +237,8 @@ pub struct LinkTarget {
     host: Rc<dyn Host>,
     /// The window's colour, which the plate takes, and the palette its text is drawn in.
     look: Box<dyn Fn(&App) -> (Hsla, Palette)>,
-    /// Whether the plate shows.
-    shown: bool,
+    /// The browser window the plate shows over, if it shows.
+    shown: Option<u64>,
     /// What the window draws, which stays as it fades out after the plate went.
     drawn: Option<Plate>,
     pending: Option<Pending>,
@@ -285,7 +287,7 @@ pub fn open(
         cx.new(|_| LinkTarget {
             host,
             look: Box::new(look),
-            shown: false,
+            shown: None,
             drawn: None,
             pending: None,
             wait: None,
@@ -304,21 +306,27 @@ pub fn open(
     }
 }
 
-/// The pointer is on a link, or the plate's place changed: `plate` shows with its top left at
-/// (`left`, `top`) in the window. After DELAY, one timer that `hide` cancels, or at once if a
-/// plate shows or went less than GRACE ago. A call while the timer runs changes what it shows.
-pub fn show(plate: Plate, left: f32, top: f32, cx: &mut App) {
-    let Some(window) = cx.try_global::<LinkTargetWindow>().map(|target| target.0) else {
+/// The pointer is on a link in a page of browser window `window`, or the plate's place changed:
+/// `plate` shows over that window with its top left at (`left`, `top`) in it. After DELAY, one
+/// timer that `hide` cancels, or at once if a plate shows or went less than GRACE ago. A call while
+/// the timer runs changes what it shows, and where.
+pub fn show(window: u64, plate: Plate, left: f32, top: f32, cx: &mut App) {
+    let Some(target) = cx.try_global::<LinkTargetWindow>().map(|target| target.0) else {
         return;
     };
-    window
+    target
         .update(cx, |target, _, cx| {
-            target.pending = Some(Pending { plate, left, top });
+            target.pending = Some(Pending {
+                window,
+                plate,
+                left,
+                top,
+            });
             let now = cx.background_executor().now();
             let soon = target
                 .went
                 .is_some_and(|went| now.duration_since(went) < GRACE);
-            if target.shown || soon {
+            if target.shown.is_some() || soon {
                 target.wait = None;
                 target.reveal(cx);
             } else if target.wait.is_none() {
@@ -345,18 +353,30 @@ pub fn hide(cx: &mut App) {
     window.update(cx, |target, _, cx| target.hide(cx)).ok();
 }
 
+/// The browser window the plate shows over, whose shell hears the pointer's moves while it shows.
+pub fn over(cx: &App) -> Option<u64> {
+    let window = cx.try_global::<LinkTargetWindow>()?.0;
+    window.read(cx).ok()?.shown
+}
+
 impl LinkTarget {
     fn reveal(&mut self, cx: &mut Context<Self>) {
-        let Some(Pending { plate, left, top }) = self.pending.take() else {
+        let Some(Pending {
+            window,
+            plate,
+            left,
+            top,
+        }) = self.pending.take()
+        else {
             return;
         };
-        if !self.shown {
+        if self.shown.is_none() {
             // check.sh reads this line.
             log!("browser: link target plate {}", plate.text());
         }
-        self.shown = true;
+        self.shown = Some(window);
         self.drawn = Some(plate);
-        self.host.show(left, top);
+        self.host.show(window, left, top);
         cx.notify();
     }
 
@@ -364,8 +384,7 @@ impl LinkTarget {
     fn hide(&mut self, cx: &mut Context<Self>) {
         self.wait = None;
         self.pending = None;
-        if self.shown {
-            self.shown = false;
+        if self.shown.take().is_some() {
             self.went = Some(cx.background_executor().now());
             self.host.hide();
             // check.sh reads this line.
@@ -400,6 +419,8 @@ impl Render for LinkTarget {
         // The rim is its own layer, so the border doesn't shift what the fill's box holds.
         let rim = div()
             .absolute()
+            .top_0()
+            .left_0()
             .size_full()
             .rounded(px(RADIUS))
             .border(px(RIM))

@@ -15,6 +15,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "browser_core/ad_block.h"
+#include "browser_core/address_import.h"
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_page.h"
 #include "browser_core/agent_session.h"
@@ -22,6 +23,7 @@
 #include "browser_core/auto_archive.h"
 #include "browser_core/autofill_data.h"
 #include "browser_core/capture.h"
+#include "browser_core/cast_dialog.h"
 #include "browser_core/clear_site.h"
 #include "browser_core/crash_reports.h"
 #include "browser_core/developer_mode.h"
@@ -40,6 +42,7 @@
 #include "browser_core/notes.h"
 #include "browser_core/page_menu.h"
 #include "browser_core/page_text.h"
+#include "browser_core/autofill_offer.h"
 #include "browser_core/password_offer.h"
 #include "browser_core/passwords.h"
 #include "browser_core/page_dialog.h"
@@ -52,6 +55,7 @@
 #include "browser_core/session.h"
 #include "browser_core/site_controls.h"
 #include "browser_core/space.h"
+#include "browser_core/sync.h"
 #include "browser_core/system_engine.h"
 #include "browser_core/tab.h"
 #include "browser_core/widevine.h"
@@ -227,13 +231,13 @@ void* bc_window_wayland_surface(bc_id id, double* width, double* height) {
 }
 
 void bc_window_ui_takes_keyboard(bc_id id) {
-#if BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
   browser_core::platform::UITakesKeyboard(OpenWidget(id), /*until_page=*/false);
 #endif
 }
 
 void bc_window_ui_holds_keyboard(bc_id id) {
-#if BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
   browser_core::platform::UITakesKeyboard(OpenWidget(id), /*until_page=*/true);
 #endif
 }
@@ -287,7 +291,7 @@ bool bc_window_focus_ring(bc_id id, bc_rect* frame) {
 }
 
 bool bc_window_dialog(bc_id id, bc_rect* frame) {
-#if BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
   views::Widget* widget = OpenWidget(id);
   const std::optional<gfx::Rect> dialog =
       widget ? browser_core::platform::DialogFrame(widget) : std::nullopt;
@@ -310,6 +314,12 @@ size_t bc_window_child_title(bc_id id, char* title, size_t capacity) {
                     title, capacity);
 #else
   return CopyString(std::string(), title, capacity);
+#endif
+}
+
+void bc_answer_clipboard_requests(void) {
+#if BUILDFLAG(IS_LINUX)
+  browser_core::platform::AnswerClipboardRequests();
 #endif
 }
 
@@ -548,7 +558,7 @@ bc_id bc_agent_open_tab(const char* agent, const char* url) {
   // The window showing the agent's Space, or else the first of the user's, for its Browser.
   browser_core::Window* window = nullptr;
   for (browser_core::Window* each : browser_core::Window::All()) {
-    if (!each->off_the_record() && (!window || (space && each->space() == space->id()))) {
+    if (!each->own_space() && (!window || (space && each->space() == space->id()))) {
       window = each;
     }
   }
@@ -633,7 +643,7 @@ bc_id bc_space_profile(bc_id id) {
 bool bc_space_set_profile(bc_id id, bc_id profile) {
   browser_core::Space* space = browser_core::Space::FromId(id);
   const std::string dir = browser_core::ProfileDir(profile);
-  if (!space || space->off_the_record() || dir.empty() || !space->pinned_rows().empty() ||
+  if (!space || space->own() || dir.empty() || !space->pinned_rows().empty() ||
       !space->today().empty()) {
     return false;
   }
@@ -762,6 +772,11 @@ void bc_profile_set_notes_service(bc_id profile_id, const char* service) {
 bool bc_profile_add_history(bc_id profile, const bc_history_page* pages, size_t count) {
   return (pages || !count) &&
          browser_core::AddImportedHistory(LoadedProfile(profile), profile, pages, count);
+}
+
+bool bc_profile_add_addresses(bc_id profile, const bc_address* addresses, size_t count) {
+  return (addresses || !count) &&
+         browser_core::AddImportedAddresses(LoadedProfile(profile), profile, addresses, count);
 }
 
 size_t bc_spaces(bc_id* spaces, size_t capacity) {
@@ -956,6 +971,22 @@ void bc_folder_set_open(bc_id folder, bool open) {
 void bc_folder_move(bc_id folder, bc_id to, size_t index) {
   if (browser_core::Space* space = browser_core::Space::HoldingFolder(folder)) {
     space->Move(folder, /*pinned=*/true, to, index, &PageUrlOf);
+  }
+}
+
+void bc_folder_move_to_space(bc_id folder, bc_id space) {
+  browser_core::Space* from = browser_core::Space::HoldingFolder(folder);
+  const bool agents = from && from->agent();
+  browser_core::Window::MoveFolderToSpace(folder, space);
+  browser_core::Space* to = browser_core::Space::HoldingFolder(folder);
+  if (!agents || !to || to == from || to->agent()) {
+    return;
+  }
+  // Its tabs became the user's, as bc_tab_move_to_space's does.
+  for (bc_id row : to->pinned_rows()) {
+    if (!to->IsFolder(row) && to->Within(row, folder)) {
+      browser_core::FillForUser(row);
+    }
   }
 }
 
@@ -1168,6 +1199,13 @@ bc_id bc_window_undo_delete_space(bc_id window_id, bc_id space) {
   return window ? window->UndoDeleteSpace(space) : 0;
 }
 
+bool bc_window_restore_sidebar(bc_id window_id, double time) {
+  browser_core::Window* window = browser_core::Window::FromId(window_id);
+  return window && browser_core::RestoreSidebar(
+                       *window, base::Time::FromMillisecondsSinceUnixEpoch(
+                                    static_cast<int64_t>(time)));
+}
+
 bc_id bc_window_reopen_closed_tab(bc_id window_id) {
   browser_core::Window* window = browser_core::Window::FromId(window_id);
   return window ? window->ReopenClosedTab() : 0;
@@ -1250,6 +1288,19 @@ void bc_set_archive_after(double seconds) {
     return;
   }
   browser_core::UserSettings().archive_after = base::Seconds(seconds);
+  browser_core::ScheduleAutoArchive();
+  browser_core::SessionChanged();
+}
+
+double bc_little_archive_after(void) {
+  return browser_core::UserSettings().little_archive_after.InSecondsF();
+}
+
+void bc_set_little_archive_after(double seconds) {
+  if (!(seconds > 0)) {
+    return;
+  }
+  browser_core::UserSettings().little_archive_after = base::Seconds(seconds);
   browser_core::ScheduleAutoArchive();
   browser_core::SessionChanged();
 }
@@ -1355,6 +1406,16 @@ bool bc_ad_blocking(void) {
 void bc_set_ad_blocking(bool on) {
   browser_core::UserSettings().ad_blocking = on;
   browser_core::ApplyAdBlocking();
+  browser_core::SessionChanged();
+}
+
+bool bc_auto_picture_in_picture(void) {
+  return browser_core::UserSettings().auto_picture_in_picture;
+}
+
+void bc_set_auto_picture_in_picture(bool on) {
+  browser_core::UserSettings().auto_picture_in_picture = on;
+  browser_core::ApplyAutoPictureInPicture(/*changed=*/true);
   browser_core::SessionChanged();
 }
 
@@ -1697,6 +1758,18 @@ void bc_site_controls_close(void) {
   browser_core::SiteControls::Close();
 }
 
+void bc_tab_cast(bc_id id) {
+  browser_core::CastDialog::Open(id);
+}
+
+void bc_cast_close(void) {
+  browser_core::CastDialog::Close();
+}
+
+void bc_tab_cast_to(bc_id id, const char* device) {
+  browser_core::CastDialog::To(id, device);
+}
+
 void bc_tab_set_site_permission(bc_id id, int type, int value) {
   browser_core::SiteControls::SetPermission(id, type, value);
 }
@@ -1740,6 +1813,9 @@ void bc_tab_show_certificate(bc_id id) {
 }
 
 void bc_tab_answer_offer(bc_id id, int answer, const char* username) {
+  if (browser_core::AutofillOffer::Answer(id, answer)) {
+    return;
+  }
   browser_core::PasswordOffer::Answer(id, answer, username);
 }
 
@@ -1935,6 +2011,18 @@ void bc_tab_set_muted(bc_id id, bool muted) {
   }
 }
 
+void bc_tab_share_instead(bc_id id) {
+  if (browser_core::Tab* tab = browser_core::Tab::Get(id)) {
+    tab->ShareInstead();
+  }
+}
+
+void bc_tab_media(bc_id id, int action) {
+  if (browser_core::Tab* tab = browser_core::Tab::Get(id)) {
+    tab->Media(action);
+  }
+}
+
 void bc_tab_close_below(bc_id id) {
   browser_core::Window::CloseBelow(id);
 }
@@ -1966,7 +2054,7 @@ void bc_tab_close(bc_id id, bool split) {
 size_t bc_windows(bc_id* windows, size_t capacity) {
   // Private windows are the user's alone.
   std::vector<browser_core::Window*> all = browser_core::Window::All();
-  std::erase_if(all, [](const browser_core::Window* each) { return each->off_the_record(); });
+  std::erase_if(all, [](const browser_core::Window* each) { return each->own_space(); });
   for (size_t i = 0; i < all.size() && i < capacity && windows; ++i) {
     windows[i] = all[i]->id();
   }
@@ -1991,8 +2079,24 @@ bc_id bc_tab_window(bc_id tab) {
 bc_id bc_window_open_private(bc_rect bounds, void* ui_view, bc_id profile_id) {
   Profile* profile = LoadedProfile(profile_id);
   browser_core::Window* window =
-      profile ? browser_core::Window::OpenPrivate(ToRect(bounds), ui_view, profile) : nullptr;
+      profile ? browser_core::Window::OpenOwn(ToRect(bounds), ui_view, profile,
+                                              browser_core::Space::Own::kPrivate)
+              : nullptr;
   return window ? window->id() : 0;
+}
+
+bc_id bc_window_open_little(bc_rect bounds, void* ui_view, bc_id profile_id) {
+  Profile* profile = LoadedProfile(profile_id);
+  browser_core::Window* window =
+      profile ? browser_core::Window::OpenOwn(ToRect(bounds), ui_view, profile,
+                                              browser_core::Space::Own::kLittle)
+              : nullptr;
+  return window ? window->id() : 0;
+}
+
+bc_id bc_window_take_tab(bc_id window_id, bc_id tab) {
+  browser_core::Window* window = browser_core::Window::FromId(window_id);
+  return window ? window->TakeTab(tab) : 0;
 }
 
 void bc_window_set_side_panel_frame(bc_id window_id, bc_rect frame) {
@@ -2062,4 +2166,52 @@ void bc_window_toggle_full_screen(bc_id id) {
     widget->SetFullscreen(true);
   }
 #endif
+}
+
+bool bc_sync_set_server(const char* server) {
+  return browser_core::sync::SetServer(server ? server : "");
+}
+
+void bc_sync_sign_in(void) {
+  browser_core::sync::SignIn();
+}
+
+void bc_sync_cancel(void) {
+  browser_core::sync::Cancel();
+}
+
+void bc_sync_sign_out(void) {
+  browser_core::sync::SignOut();
+}
+
+size_t bc_sync_recovery_words(char* words, size_t capacity) {
+  return CopyString(browser_core::sync::RecoveryWords(), words, capacity);
+}
+
+bool bc_sync_enter_recovery_words(const char* words) {
+  return words && browser_core::sync::EnterRecoveryWords(words);
+}
+
+void bc_sync_start_over(void) {
+  browser_core::sync::StartOver();
+}
+
+void bc_sync_request_pairing(void) {
+  browser_core::sync::RequestPairing();
+}
+
+void bc_sync_answer_pairing(const char* id, bool add) {
+  if (id) {
+    browser_core::sync::AnswerPairing(id, add);
+  }
+}
+
+void bc_sync_read_devices(void) {
+  browser_core::sync::ReadDevices();
+}
+
+void bc_sync_remove_device(const char* id) {
+  if (id) {
+    browser_core::sync::RemoveDevice(id);
+  }
 }

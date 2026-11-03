@@ -9,7 +9,8 @@
 # - Dragged on over the sidebar's list, which GPUI's surface hands the embedder
 #   (take_embedder_drops), a line marks its place and the source hears it'd be taken. Let go
 #   there, it opens as a tab.
-# - Text that isn't a web link, let go over the list, isn't taken, and nothing opens.
+# - Text that's a link but not a web link, let go over the list, isn't taken, and nothing opens.
+#   Other text is searched for there.
 # Leaves a capture of the link's line and the logs in build/check/drops/.
 # Needs sway, grim, ImageMagick, jq and cargo, which builds check/drag.
 set -euo pipefail
@@ -100,15 +101,28 @@ if [ "${1:-}" = --steps ]; then
   await '^drag: finished$' 0 "$dlog"
   exec 3>&-
 
-  drag 'text/plain;charset=utf-8' 'just some words'
+  # Text that's a link but not a web link isn't taken, and nothing opens.
+  drag 'text/plain;charset=utf-8' "javascript:document.title='dropped'"
   at=$(mark)
   to 100 300
-  sleep 1
+  hover '^drag: target none$' 0 "$dlog"
   step release
   await '^drag: cancelled$' 0 "$dlog"
   exec 3>&-
+  ! grep -q '^drag: finished$' "$dlog" || fail "the list took a javascript: URL dragged as text"
   ! tail -n "+$((at + 1))" "$LOG" | grep -q '^browser: dropped' ||
     fail "dragged text that isn't a web link opened"
+
+  # Other text, let go over the list, is searched for there, as pinned.sh checks on the Mac.
+  drag 'text/plain;charset=utf-8' 'just some words'
+  at=$(mark)
+  to 100 300
+  hover '^browser: drop line in ' "$at"
+  step release
+  await '^browser: dropped 1 in ' "$at"
+  await '^drag: finished$' 0 "$dlog"
+  exec 3>&-
+  await '^browser: page [0-9]* .* https://duckduckgo.com/?q=just+some+words$' "$at"
   rm "$out/failed"
   exit 0
 fi

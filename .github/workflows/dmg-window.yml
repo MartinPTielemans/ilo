@@ -1,0 +1,93 @@
+# The window the Mac's DMG opens in Finder (tools/dmg.sh), captured in Light and in Dark, with the
+# volume's icon, as the artifact dmg-window. It packs a stand-in app holding the real app's icon,
+# since Finder draws only the bundle's icon and name, so it needs no engine and takes minutes; the
+# signed DMG from release.yml gets its look from the same script. On a push that changes the DMG,
+# and by hand: gh workflow run dmg-window.yml --ref <branch>
+name: DMG window
+
+on:
+  push:
+    branches: ['**']
+    paths: [tools/dmg.sh, tools/dmg/**, app/branding/ilo.icns, app/branding/Assets.car, .github/workflows/dmg-window.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dmg-window-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  window:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: DMG
+        run: |
+          name=$(cat app/branding/name)
+          app=$RUNNER_TEMP/stand-in/$name.app
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp app/branding/Assets.car "app/branding/$name.icns" "$app/Contents/Resources/"
+          printf '#!/bin/sh\n' > "$app/Contents/MacOS/$name"
+          chmod +x "$app/Contents/MacOS/$name"
+          plist=$app/Contents/Info.plist
+          plutil -create xml1 "$plist"
+          plutil -insert CFBundleIdentifier -string "$(cat app/branding/id).dmg-window" "$plist"
+          plutil -insert CFBundleName -string "$name" "$plist"
+          plutil -insert CFBundleExecutable -string "$name" "$plist"
+          plutil -insert CFBundlePackageType -string APPL "$plist"
+          plutil -insert CFBundleIconFile -string "$name" "$plist"
+          plutil -insert CFBundleIconName -string "$name" "$plist"
+          mkdir -p "$RUNNER_TEMP/out"
+          tools/dmg.sh "$app" "$RUNNER_TEMP/out/ilo-mac-arm64.dmg"
+          hdiutil attach "$RUNNER_TEMP/out/ilo-mac-arm64.dmg"
+          ls -la "/Volumes/$name"
+          xattr -px com.apple.FinderInfo "/Volumes/$name"
+          echo "volume=/Volumes/$name" >> "$GITHUB_ENV"
+
+      # The icon Finder shows for the mounted volume, on the desktop and in the sidebar.
+      - name: Volume icon
+        run: |
+          VOLUME=$volume OUT=$RUNNER_TEMP/out/volume-icon.png swift - <<'SWIFT'
+          import AppKit
+          let env = ProcessInfo.processInfo.environment
+          let icon = NSWorkspace.shared.icon(forFile: env["VOLUME"]!)
+          icon.size = NSSize(width: 256, height: 256)
+          let rep = NSBitmapImageRep(data: icon.tiffRepresentation!)!
+          try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: env["OUT"]!))
+          SWIFT
+
+      # Finder alone, restarted in each appearance so the window is its only one, then captured
+      # without the rest of the screen once two captures a second apart agree, as Finder draws the
+      # icons after the window.
+      - name: Window
+        run: |
+          for mode in light dark; do
+            dark=false
+            [ "$mode" = dark ] && dark=true
+            osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $dark"
+            killall Finder || true
+            until pgrep -x Finder > /dev/null; do sleep 0.5; done
+            open "$volume"
+            out=$RUNNER_TEMP/out/window-$mode.png
+            last=
+            for _ in $(seq 40); do
+              sleep 1
+              tools/window-screenshot.sh "$(pgrep -x Finder)" "$out.new" 2> /dev/null || continue
+              if [ -n "$last" ] && cmp -s "$out.new" "$last"; then break; fi
+              mv "$out.new" "$out.last"
+              last=$out.last
+            done
+            mv "$out.new" "$out"
+            rm -f "$out.last"
+            sips -g pixelWidth -g pixelHeight "$out"
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: dmg-window
+          path: ${{ runner.temp }}/out

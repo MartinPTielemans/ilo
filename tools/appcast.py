@@ -1,7 +1,8 @@
 """The appcast's entries for every OS, around generate_appcast, which knows only the Mac's.
 
-Sparkle takes an enclosure marked "macos" or not marked at all, and WinSparkle one marked "windows…"
-or not marked at all, so every Mac enclosure is marked. tools/appcast.sh runs it:
+Sparkle takes an enclosure marked "macos" or not marked at all, and ilo's Windows updater
+(app/platform/windows/updates.cc) only one marked "windows…", so every enclosure is marked.
+tools/appcast.sh runs it:
 
   appcast.py aside APPCAST ASIDE
       Moves the Windows entries to ASIDE, so generate_appcast sees only the Mac's, and prints how
@@ -10,7 +11,11 @@ or not marked at all, so every Mac enclosure is marked. tools/appcast.sh runs it
       Fails unless the Mac's entry for BUILD carries its EdDSA signature.
   appcast.py finish APPCAST ASIDE [--windows URL LENGTH SIGNATURE VERSION BUILD NOTES]
       Marks the Mac enclosures and puts the Windows entries back after them, with a new one for
-      the installer at URL, which replaces one with the same build number.
+      the installer at URL, which replaces one with the same build number. NOTES, the release's
+      changelog entry, may be empty, as a nightly's is.
+  appcast.py nightly APPCAST BUILD KEEP
+      Names BUILD's entries by their version and build, as nightlies share a version, and keeps
+      each OS's newest KEEP builds.
 
 For the updates run (app/check/updates.sh), which never reads the owner's key or feed:
 
@@ -94,8 +99,10 @@ def finish(appcast, aside_path, windows):
         ET.SubElement(item, "pubDate").text = email.utils.formatdate(usegmt=True)
         ET.SubElement(item, s("version")).text = build
         ET.SubElement(item, s("shortVersionString")).text = version
-        # WinSparkle shows HTML, not the Mac's Markdown, so it gets the release's page.
-        ET.SubElement(item, s("releaseNotesLink")).text = notes
+        # The release's changelog entry, for WinSparkle, which a copy from before ilo's own updater
+        # still runs.
+        if notes:
+            ET.SubElement(item, s("releaseNotesLink")).text = notes
         ET.SubElement(item, "enclosure", {
             "url": url,
             s("os"): "windows-x64",
@@ -105,6 +112,25 @@ def finish(appcast, aside_path, windows):
         })
         kept.insert(0, item)
     channel.extend(kept)
+    write(tree, appcast)
+
+
+def nightly(appcast, build, keep):
+    tree = ET.parse(appcast)
+    channel = tree.getroot().find("channel")
+    items = channel.findall("item")
+    for item in items:
+        short = item.find(s("shortVersionString"))
+        if build_of(item) != build or short is None:
+            continue
+        short.text = f"{short.text} ({build})"
+        if item.find("title") is not None:
+            item.find("title").text = short.text
+    newest = {}
+    for item in sorted(items, key=lambda item: int(build_of(item)), reverse=True):
+        newest[os_of(item)] = newest.get(os_of(item), 0) + 1
+        if newest[os_of(item)] > int(keep):
+            channel.remove(item)
     write(tree, appcast)
 
 
@@ -192,6 +218,8 @@ if __name__ == "__main__":
         finish(*args, None)
     elif command == "finish" and len(args) == 9 and args[2] == "--windows":
         finish(args[0], args[1], args[3:])
+    elif command == "nightly" and len(args) == 3:
+        nightly(*args)
     elif command == "key" and len(args) == 1:
         key(*args)
     elif command == "local" and len(args) in (4, 7):

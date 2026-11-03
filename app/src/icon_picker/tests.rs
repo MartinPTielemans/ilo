@@ -20,8 +20,8 @@ impl Recorder {
 }
 
 impl Host for Recorder {
-    fn show(&self, left: f32, top: f32) {
-        self.record(format!("show {left} {top}"));
+    fn show(&self, window: u64, left: f32, top: f32) {
+        self.record(format!("show {left} {top} over {window}"));
     }
 
     fn hide(&self) {
@@ -72,7 +72,8 @@ impl Picker {
         let recorded = host.clone();
         let picked: Picked = Rc::new(move |icon, _| recorded.record(format!("picked {icon:?}")));
         let icon = SharedString::from(icon.to_string());
-        cx.update(|cx| show(subject, icon, point(23., 66.), picked, cx));
+        // From browser window 2, as a context menu in a window behind another asks (#1432).
+        cx.update(|cx| show(2, subject, icon, point(23., 66.), picked, cx));
         let cx = VisualTestContext::from_window(window.into(), cx);
         cx.run_until_parked();
         Picker { cx, window, host }
@@ -156,8 +157,9 @@ fn it_opens_on_the_emoji_tab_for_an_emoji_and_the_icon_tab_otherwise() {
 fn it_hangs_its_card_under_the_icon_with_the_arrow_at_it(cx: &mut TestAppContext) {
     let mut picker = Picker::new("🦊", cx);
     assert_eq!(picker.tab(), Some(Tab::Emoji));
-    // The arrow's tip is 13 in from the window's left, and the card 25 under the icon's middle.
-    assert_eq!(picker.host.0.borrow()[0], "show 10 78");
+    // The arrow's tip is 13 in from the window's left, and the card 25 under the icon's middle,
+    // over the window that asked.
+    assert_eq!(picker.host.0.borrow()[0], "show 10 78 over 2");
 }
 
 #[gpui::test]

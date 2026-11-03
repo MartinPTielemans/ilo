@@ -70,9 +70,9 @@ const SLIDE: f32 = 0.2;
 
 /// What the picker asks of its window.
 pub trait Host {
-    /// Shows the picker's window with its top left at `left`, `top` in the browser window, with
-    /// the keyboard.
-    fn show(&self, left: f32, top: f32);
+    /// Shows the picker's window with its top left at `left`, `top` in browser window `window`,
+    /// the one that asked for it, with the keyboard.
+    fn show(&self, window: u64, left: f32, top: f32);
     /// Hides it, and the browser window gets the keyboard back.
     fn hide(&self);
     /// The emoji picked last have changed: `recents` is what `Recents::to_text` makes of them, for
@@ -251,9 +251,10 @@ pub fn tab_for(icon: &str) -> Tab {
 }
 
 /// Shows the picker for `subject`, which has `icon`, its arrow at `anchor`, the middle of the
-/// icon's slot in the browser window, with the chosen segment in the Space's accent. `picked`
-/// gets the icon the user picks.
+/// icon's slot in browser window `over`, with the chosen segment in the Space's accent. `picked`
+/// gets the icon the user picks. A context menu in a window behind another asks for it there.
 pub fn show(
+    over: u64,
     subject: Subject,
     icon: SharedString,
     anchor: Point<f32>,
@@ -286,7 +287,7 @@ pub fn show(
             picker.show_tab(tab, window, cx);
             picker
                 .host
-                .show(anchor.x - ARROW_X, anchor.y + BELOW_ICON - ARROW);
+                .show(over, anchor.x - ARROW_X, anchor.y + BELOW_ICON - ARROW);
             cx.notify();
         })
         .ok();
@@ -298,6 +299,18 @@ pub fn entity(cx: &App) -> Option<Entity<IconPicker>> {
 }
 
 /// The user left the picker without picking, such as with a click outside it.
+/// The Space it edits is going from under it, as a swipe turns the page: it closes as Esc closes
+/// it, where `dismissed` hears of a close the host has made.
+pub fn leave(cx: &mut App) {
+    if let Some(window) = cx.try_global::<IconPickerWindow>().map(|picker| picker.0) {
+        window
+            .update(cx, |picker, window, cx| {
+                picker.dismiss(&Dismiss, window, cx)
+            })
+            .ok();
+    }
+}
+
 pub fn dismissed(cx: &mut App) {
     if let Some(window) = cx.try_global::<IconPickerWindow>().map(|picker| picker.0) {
         window
@@ -312,9 +325,13 @@ pub fn dismissed(cx: &mut App) {
 /// Whether the picker shows, for a click on the icon it points at to close it rather than open it
 /// again.
 pub fn is_open(cx: &App) -> bool {
-    cx.try_global::<IconPickerWindow>()
-        .and_then(|picker| picker.0.read(cx).ok())
-        .is_some_and(|picker| picker.picking.is_some())
+    open_for(cx).is_some()
+}
+
+/// What the picker shows for, if it shows.
+pub fn open_for(cx: &App) -> Option<Subject> {
+    let picker = cx.try_global::<IconPickerWindow>()?.0.read(cx).ok()?;
+    picker.picking.as_ref().map(|picking| picking.subject)
 }
 
 /// How far right the old tab's content and the new one's are, `progress` (0 to 1) into a switch
@@ -345,7 +362,7 @@ impl IconPicker {
             return;
         };
         if picking.tab != tab {
-            picking.slide = Some((picking.tab, Instant::now()));
+            picking.slide = Some((picking.tab, crate::motion::start(cx)));
         }
         picking.tab = tab;
         picking.tones = false;

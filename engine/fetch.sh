@@ -7,11 +7,14 @@
 # the others. It exits with 2 when no engine fits this checkout, which CI takes for a reason to
 # skip, and 1 on any other failure.
 # `fetch.sh symbols` does the same for the Windows engine's PDBs, which its release has beside it,
-# for crash reports (tools/symbols.sh).
-# Usage: fetch.sh [symbols]
+# for crash reports (tools/symbols.sh). `fetch.sh commit` only prints the commit that engine was
+# built from, without the header's check or a download (tools/mac-nightly.sh).
+# Usage: fetch.sh [symbols|commit]
 set -euo pipefail
 symbols=
 [ "${1:-}" != symbols ] || symbols=1
+only_commit=
+[ "${1:-}" != commit ] || only_commit=1
 cd "$(dirname "$0")"
 
 fail() {
@@ -44,10 +47,14 @@ case $(uname -sm) in
 esac
 
 repo=$(git config -f prebuilt.ini prebuilt.repository)
-# The release's tag is on the commit it was built from. The nearest one in this history wins.
+# A release is named for the commit it was built from, which is ilo's, not the engine repository's,
+# where its tag is. The nearest one in this history wins.
 commit=
 best=
-while read -r tagged _; do
+while read -r _ ref; do
+  case $ref in *"^{}") continue ;; esac
+  tagged=$(git rev-parse -q --verify "${ref#refs/tags/engine-"$platform"-}^{commit}" 2>/dev/null) ||
+    continue
   git merge-base --is-ancestor "$tagged" HEAD 2>/dev/null || continue
   distance=$(git rev-list --count "$tagged..HEAD")
   if [ -z "$best" ] || [ "$distance" -lt "$best" ]; then
@@ -56,7 +63,11 @@ while read -r tagged _; do
   fi
 done < <(git ls-remote --tags "$repo.git" "refs/tags/engine-$platform-*")
 [ -n "$commit" ] ||
-  none "no prebuilt $platform engine was built from this checkout's history. Fetch the history with git fetch --unshallow, or publish one with $publisher."
+  none "no prebuilt $platform engine in $repo was built from this checkout's history. Fetch the history with git fetch --unshallow, or publish one with $publisher."
+if [ -n "$only_commit" ]; then
+  echo "$commit"
+  exit 0
+fi
 url=$repo/releases/download/engine-$platform-${commit:0:12}/$asset
 sha256=$(curl -fsSL "$url.sha256") || none "the release engine-$platform-${commit:0:12} has no $asset yet."
 

@@ -1,0 +1,28 @@
+Lets the core show a tab that asks to be shown (//browser_core/hooks.h), as Picture in Picture's
+way back to its tab does. Chrome makes it its Browser's active tab, which the core's windows don't
+follow, since a window shows its Space's tabs and not its Browser's strip.
+
+--- a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
++++ b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
+@@ -131,6 +131,11 @@
+                                          content::WebContents* source,
+                                          const GURL& url) = nullptr;
+ 
++// browser_core: a tab asking to be shown is shown in the core's window that holds it, in its Space
++// (//browser_core/hooks.h).
++void (*g_browser_core_activate_contents)(content::WebContents* contents) =
++    nullptr;
++
+ namespace {
+ 
+ const extensions::Extension* GetExtensionForOrigin(
+@@ -756,6 +761,9 @@
+     return;
+   }
+   browser_->GetTabStripModel()->ActivateTabAt(index);
++  if (g_browser_core_activate_contents) {
++    g_browser_core_activate_contents(contents);
++  }
+   window_->Activate();
+ }
+ 

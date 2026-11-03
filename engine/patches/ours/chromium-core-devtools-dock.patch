@@ -11,7 +11,7 @@ views, and so no DevtoolsUIController to dock them in.
  
  #include <algorithm>
  #include <memory>
-@@ -137,6 +138,11 @@
+@@ -137,6 +138,13 @@
  using content::GlobalRenderFrameHostId;
  using content::WebContents;
  
@@ -19,21 +19,42 @@ views, and so no DevtoolsUIController to dock them in.
 +bool (*g_browser_core_can_dock_devtools)(BrowserWindowInterface* browser) = nullptr;
 +void (*g_browser_core_update_devtools)(BrowserWindowInterface* browser,
 +                                       content::WebContents* inspected) = nullptr;
++void (*g_browser_core_show_devtools)(BrowserWindowInterface* browser,
++                                     content::WebContents* inspected) = nullptr;
 +
  namespace {
  
  typedef std::vector<DevToolsWindow*> DevToolsWindows;
-@@ -1079,6 +1085,9 @@
+@@ -1075,16 +1083,26 @@
+         FROM_HERE, base::BindOnce(&DevToolsWindow::ActivateInspectedTab,
+                                   weak_factory_.GetWeakPtr()));
+ 
++    // browser_core: the core docks DevTools in its windows, and gives them the
++    // keyboard itself once the page no longer covers them.
++    bool core_docks = false;
      if (auto* devtools_ui_controller =
              DevtoolsUIController::From(inspected_browser)) {
        devtools_ui_controller->UpdateDevtools(inspected_web_contents);
-+    } else if (g_browser_core_update_devtools) {
-+      // browser_core: the core docks DevTools in its windows.
-+      g_browser_core_update_devtools(inspected_browser, inspected_web_contents);
++    } else if (g_browser_core_show_devtools) {
++      g_browser_core_show_devtools(inspected_browser, inspected_web_contents);
++      core_docks = true;
++    }
++    if (!core_docks) {
++      main_web_contents_->SetInitialFocus();
      }
-     main_web_contents_->SetInitialFocus();
+-    main_web_contents_->SetInitialFocus();
      inspected_window->Show();
-@@ -1403,7 +1412,11 @@
+     // On Aura, focusing once is not enough. Do it again.
+     // Note that focusing only here but not before isn't enough either. We just
+     // need to focus twice.
+-    main_web_contents_->SetInitialFocus();
++    if (!core_docks) {
++      main_web_contents_->SetInitialFocus();
++    }
+ 
+     PrefsTabHelper::CreateForWebContents(main_web_contents_);
+     OverrideAndSyncDevToolsRendererPrefs();
+@@ -1402,7 +1420,11 @@
  #endif  // BUILDFLAG(IS_MAC)
      DevtoolsUIController* devtools_ui_controller =
          browser ? DevtoolsUIController::From(browser) : nullptr;

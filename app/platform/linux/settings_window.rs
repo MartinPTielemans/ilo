@@ -7,6 +7,8 @@ thread_local! {
     static SETTINGS: Cell<*mut c_void> = const { Cell::new(std::ptr::null_mut()) };
     static SHOWN: Cell<bool> = const { Cell::new(false) };
     static PLACED: Cell<bool> = const { Cell::new(false) };
+    /// Shown since the Wayland driver last waited for sway to focus it (drive_wayland.rs).
+    static SHOWN_ANEW: Cell<bool> = const { Cell::new(false) };
 }
 
 #[unsafe(no_mangle)]
@@ -28,6 +30,7 @@ pub extern "C" fn host_show_settings() {
     };
     gpui_linux::show_window(view, over);
     SHOWN.set(true);
+    SHOWN_ANEW.set(true);
     // check.sh waits for this line. The window's title is its tab's name, as on the Mac.
     eprintln!("browser: settings shown {}", crate::settings::title());
 }
@@ -36,6 +39,11 @@ pub extern "C" fn host_show_settings() {
 pub(crate) fn shown() -> Option<*mut c_void> {
     let view = SETTINGS.get();
     (SHOWN.get() && !view.is_null()).then_some(view)
+}
+
+/// Whether Settings has shown since this was last asked, for the Wayland driver.
+pub(crate) fn take_shown_anew() -> bool {
+    SHOWN_ANEW.replace(false)
 }
 
 #[unsafe(no_mangle)]

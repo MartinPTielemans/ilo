@@ -39,7 +39,7 @@ pub fn read(path: &Path, picked: &[Kind], since: SystemTime) -> Result<Read, Rea
         } else {
             Vec::new()
         },
-        extensions: Vec::new(),
+        ..Read::default()
     })
 }
 

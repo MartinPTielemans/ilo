@@ -1,15 +1,42 @@
 //! The Settings window's boxes of rows and their controls, which the views it shows from the
 //! library, such as the import, draw with too.
 
-use gpui::{Rgba, SharedString, div, prelude::*, px, rgb, svg};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use gpui::{Rgba, SharedString, canvas, div, prelude::*, px, rgb, svg};
 
 use crate::tokens::settings::{
     BOX, BOX_LINE, CHECK_BOX, CHECK_GAP, CHECK_GLYPH, CHECK_RADIUS, CHEVRONS, CONTROL,
-    CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_PRESSED, CONTROL_RADIUS, DETAIL, KNOB, KNOB_HEIGHT,
-    KNOB_INSET, KNOB_ON, KNOB_WIDTH, LINE_INSET, ON_CONTROL, ON_DETAIL, ON_LINE, ON_PRESSED,
-    ON_SWITCH_OFF, PADDING, RADIUS, SWITCH_HEIGHT, SWITCH_OFF, SWITCH_WIDTH, TEXT, TILE, TILE_GAP,
-    TILE_GLYPH, TILE_GLYPH_COLOR, TILE_RADIUS,
+    CONTROL_HEIGHT, CONTROL_HOVERED, CONTROL_PADDING, CONTROL_PRESSED, CONTROL_RADIUS, DETAIL,
+    KNOB, KNOB_HEIGHT, KNOB_INSET, KNOB_ON, KNOB_WIDTH, LINE_INSET, ON_CONTROL, ON_DETAIL,
+    ON_HOVERED, ON_LINE, ON_PRESSED, ON_SWITCH_OFF, PADDING, RADIUS, SWITCH_HEIGHT, SWITCH_OFF,
+    SWITCH_WIDTH, TEXT, TILE, TILE_GAP, TILE_GLYPH, TILE_GLYPH_COLOR, TILE_RADIUS,
 };
+use crate::tokens::text::SMALL;
+
+/// Fills the relative element it's put in and logs where that is drawn, its centre in the window,
+/// as "browser: settings `what` at x y", each time it moves, for check.sh to click it there.
+/// `logged` holds the lines logged, one a control; emptied, each is logged again where it's drawn.
+pub fn drawn(what: String, logged: Rc<RefCell<Vec<String>>>) -> gpui::Canvas<()> {
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, _, _| {
+            let (x, y) = (f32::from(bounds.center().x), f32::from(bounds.center().y));
+            let line = format!("browser: settings {what} at {x:.0} {y:.0}");
+            let mut logged = logged.borrow_mut();
+            // Once a place: forget where it was drawn before.
+            let at = format!("browser: settings {what} at ");
+            if !logged.contains(&line) {
+                crate::log!("{line}");
+                logged.retain(|each| !each.starts_with(&at));
+                logged.push(line);
+            }
+        },
+    )
+    .absolute()
+    .inset_0()
+}
 
 /// A switch is 36 by 16, with a knob 21 by 13, 1.5 in, that slides across over 150 ms (ours).
 pub const SLIDE: f32 = 0.15;
@@ -25,6 +52,8 @@ pub struct Look {
     /// A row's grey text, under its name or at its end.
     pub detail: Rgba,
     pub control: Rgba,
+    /// A control under the pointer.
+    pub hovered: Rgba,
     pub pressed: Rgba,
     pub switch_off: Rgba,
 }
@@ -37,6 +66,7 @@ impl Look {
             line: rgb(BOX_LINE),
             detail: rgb(DETAIL),
             control: rgb(CONTROL),
+            hovered: rgb(CONTROL_HOVERED),
             pressed: rgb(CONTROL_PRESSED),
             switch_off: rgb(SWITCH_OFF),
         }
@@ -52,6 +82,7 @@ impl Look {
             line: mix(ON_LINE),
             detail: mix(ON_DETAIL),
             control: mix(ON_CONTROL),
+            hovered: mix(ON_HOVERED),
             pressed: mix(ON_PRESSED),
             switch_off: mix(ON_SWITCH_OFF),
         }
@@ -93,6 +124,32 @@ pub fn row(
         .child(div().flex_none().ml(px(PADDING)).child(control))
 }
 
+/// A row with a grey line under its name, and its control, if any, at the right.
+pub fn detailed_row(
+    name: impl Into<SharedString>,
+    detail: impl Into<SharedString>,
+    control: Option<gpui::AnyElement>,
+) -> gpui::Div {
+    div()
+        .px(px(PADDING))
+        .py(px(PADDING))
+        .flex()
+        .items_center()
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(div().truncate().child(name.into()))
+                .child(
+                    div()
+                        .text_size(px(SMALL))
+                        .text_color(rgb(DETAIL))
+                        .child(detail.into()),
+                ),
+        )
+        .children(control.map(|control| div().flex_none().ml(px(PADDING)).child(control)))
+}
+
 /// A row's icon: a white glyph on a tile of colour.
 pub fn tile(glyph: &'static str, color: u32) -> gpui::Div {
     div()
@@ -112,7 +169,7 @@ pub fn tile(glyph: &'static str, color: u32) -> gpui::Div {
         )
 }
 
-/// A push button, darker while pressed.
+/// A push button, a step toward its pressed fill under the pointer, and that fill while pressed.
 pub fn button(
     look: &Look,
     id: impl Into<gpui::ElementId>,
@@ -127,6 +184,10 @@ pub fn button(
         .items_center()
         .rounded(px(CONTROL_RADIUS))
         .bg(look.control)
+        .hover({
+            let hovered = look.hovered;
+            move |button| button.bg(hovered)
+        })
         .active({
             let pressed = look.pressed;
             move |button| button.bg(pressed)
@@ -134,7 +195,7 @@ pub fn button(
         .child(title.into())
 }
 
-/// A square push button with `glyph` on it, such as a list's + and −, darker while pressed.
+/// A square push button with `glyph` on it, such as a list's + and −, lit as a button is.
 pub fn icon_button(
     look: &Look,
     id: impl Into<gpui::ElementId>,
@@ -149,6 +210,10 @@ pub fn icon_button(
         .justify_center()
         .rounded(px(CONTROL_RADIUS))
         .bg(look.control)
+        .hover({
+            let hovered = look.hovered;
+            move |button| button.bg(hovered)
+        })
         .active({
             let pressed = look.pressed;
             move |button| button.bg(pressed)
@@ -156,8 +221,9 @@ pub fn icon_button(
         .child(svg().path(glyph).size(px(TILE_GLYPH)).text_color(look.ink))
 }
 
-/// A pop-up button `width` wide showing `label`, with its chevrons at its end, pressed while its
-/// menu is `open`. It opens on a press, as a pop-up button does, which its caller listens for.
+/// A pop-up button `width` wide showing `label`, with its chevrons at its end, lit as a button is
+/// under the pointer and pressed while its menu is `open`. It opens on a press, as a pop-up
+/// button does, which its caller listens for.
 pub fn popup(look: &Look, label: impl Into<SharedString>, width: f32, open: bool) -> gpui::Div {
     div()
         .flex_none()
@@ -170,6 +236,10 @@ pub fn popup(look: &Look, label: impl Into<SharedString>, width: f32, open: bool
         .justify_between()
         .rounded(px(CONTROL_RADIUS))
         .bg(if open { look.pressed } else { look.control })
+        .when(!open, |popup| {
+            let hovered = look.hovered;
+            popup.hover(move |popup| popup.bg(hovered))
+        })
         .child(div().min_w_0().truncate().child(label.into()))
         .child(
             svg()

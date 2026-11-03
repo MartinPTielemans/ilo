@@ -10,13 +10,15 @@ use crate::dock_dot::QUIET;
 use crate::folder_preview::{self, Ask, Item};
 use crate::hover_card::{Action, Anchor, Card, Event, Hover, Icon, Rest};
 use crate::space_icon::has_icon;
+use crate::{icon_picker, theme_picker};
 
 use super::{PLATE_INSET, Row, Shell, host};
 
 impl Shell {
     /// The pointer came onto `row` or left it: a tab's row or tile rests for its card, and leaving
     /// it lets the card go. Folders, split views' rows and New Tab have none, and none shows while
-    /// a row is dragged or has its menu up.
+    /// a row is dragged or has its menu up, a name field is open, with its menu or not (#1452), or
+    /// the theme or icon picker shows over the sidebar.
     pub(super) fn hover_card(&self, row: Row, hovered: bool, cx: &mut Context<Self>) {
         let Row::Tab(tab) = row else {
             return;
@@ -24,7 +26,9 @@ impl Shell {
         if !hovered {
             return self.browser.hover_card(Hover::Left(tab), cx);
         }
-        let busy = self.dragging().is_some() || self.menu_row.is_some();
+        let picker = theme_picker::is_open(cx) || icon_picker::is_open(cx);
+        let naming = self.renaming.is_some();
+        let busy = self.dragging().is_some() || self.menu_row.is_some() || naming || picker;
         let Some(card) = self.card(tab).filter(|_| !busy) else {
             return;
         };
@@ -33,7 +37,7 @@ impl Shell {
         };
         // A tile's card starts where a row's would, past the sidebar's rows, not over the tiles
         // beside it.
-        let right = self.sidebar_origin.get().x + px(self.width() - PLATE_INSET);
+        let right = self.sidebar_origin.get().x + px(self.rows_width() - PLATE_INSET);
         let row = Bounds::new(
             frame.origin,
             size(right.max(frame.right()) - frame.origin.x, frame.size.height),
@@ -52,8 +56,10 @@ impl Shell {
             row,
             window: self.viewport,
         };
+        let window = self.browser.window();
         self.browser.hover_card(
             Hover::Rest(Rest {
+                window,
                 card,
                 anchor,
                 events,
@@ -102,6 +108,7 @@ impl Shell {
             });
         });
         let rest = folder_preview::Rest {
+            window: self.browser.window(),
             folder,
             name: self.folder_name(folder),
             items,
@@ -165,6 +172,14 @@ impl Shell {
         self.browser.focus_page(cx);
     }
 
+    /// What `tab`'s card shows changed, as its name does when it's renamed: a card that shows or
+    /// waits for it shows it as it is now (#1452).
+    pub(super) fn card_changed(&self, tab: u64, cx: &mut App) {
+        if let Some(card) = self.card(tab) {
+            self.browser.hover_card(Hover::Changed(card), cx);
+        }
+    }
+
     /// What `tab`'s card shows, if it has one.
     pub(super) fn card(&self, tab: u64) -> Option<Card> {
         if tab == 0
@@ -213,11 +228,15 @@ impl Shell {
         if !favorite && self.split_partner(tab).is_some() {
             actions.push(Action::Split);
         }
+        // Chrome offers it on every tab but those the share is from and of.
+        if self.page(tab).share_instead {
+            actions.push(Action::ShareInstead);
+        }
         actions
     }
 
     /// Whether `tab`'s page is on screen in this window, alone or in the split view shown.
-    fn on_screen(&self, tab: u64) -> bool {
+    pub(super) fn on_screen(&self, tab: u64) -> bool {
         self.selected != 0 && !self.new_tab && self.panes(self.selected).contains(&tab)
     }
 
@@ -259,6 +278,7 @@ impl Shell {
                             self.join_split(tab, with, false, false, cx);
                         }
                     }
+                    Action::ShareInstead => self.browser.share_instead(tab, cx),
                 }
             }
         }
@@ -269,6 +289,16 @@ impl Shell {
         self.browser.tooltip(None, cx);
         self.browser.hover_card(Hover::Close, cx);
         self.browser.folder_preview(Ask::Close, cx);
+    }
+
+    /// The page the popovers point into is going, as a swipe or a wheel turns it, which sends no
+    /// click outside them that would close them: they all go, hovers and menus and pickers alike.
+    pub(super) fn leave_popovers(&self, cx: &mut App) {
+        self.end_hovers(cx);
+        crate::menu::dismissed(cx);
+        crate::icon_picker::leave(cx);
+        crate::theme_picker::leave(cx);
+        crate::site_controls::dismissed(cx);
     }
 
     /// The tab shown was `before`'s pages and is now another's: those it hid are pictured once

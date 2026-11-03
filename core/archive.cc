@@ -50,7 +50,8 @@ void Report() {
     tabs.push_back({.id = tab.id,
                     .url = tab.url.spec().c_str(),
                     .title = tab.title.c_str(),
-                    .archived = tab.archived.InMillisecondsFSinceUnixEpochIgnoringNull()});
+                    .archived = tab.archived.InMillisecondsFSinceUnixEpochIgnoringNull(),
+                    .little = tab.little});
   }
   Host().archive_changed(Host().context, tabs.data(), tabs.size());
 }
@@ -95,12 +96,13 @@ void LoadArchive(std::vector<ArchivedTab> archived) {
   }
 }
 
-void Archive(bc_id tab, const GURL& url, const std::string& title) {
+void Archive(bc_id tab, const GURL& url, const std::string& title, bool little) {
   Tabs().insert(Tabs().begin(), {.id = NewId(),
                                  .url = url,
                                  .title = title,
                                  .archived = base::Time::Now(),
-                                 .tab = tab});
+                                 .tab = tab,
+                                 .little = little});
   Prune();
   Changed();
 }

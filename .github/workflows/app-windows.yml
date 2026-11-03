@@ -15,6 +15,12 @@ on:
 permissions:
   contents: read
 
+# A branch's newer push cancels its older run. Main's runs, and pull requests', each get a group of
+# their own, so none is cancelled, or replaced while it waits.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref != 'refs/heads/main' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   test:
     # A pull request from a branch here already ran on its push.

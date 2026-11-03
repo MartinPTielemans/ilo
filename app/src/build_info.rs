@@ -8,7 +8,9 @@ use std::sync::LazyLock;
 pub const NEW_ISSUE: &str = env!("APP_ISSUES");
 /// The site's help and release notes, at a default service URL (branding/site).
 pub const HELP_CENTER: &str = concat!(env!("APP_SITE"), "/help");
-pub const WHATS_NEW: &str = concat!(env!("APP_SITE"), "/whats-new");
+pub const WHATS_NEW: &str = concat!(env!("APP_SITE"), "/changelog");
+/// What ilo sends and keeps, and where, on the same site.
+pub const PRIVACY_POLICY: &str = concat!(env!("APP_SITE"), "/privacy");
 
 /// The details of this copy of the app and the computer it runs on.
 #[derive(Clone, Debug, PartialEq)]
@@ -62,25 +64,26 @@ impl BuildInfo {
     }
 }
 
+/// This copy's version, as the release names it. This crate's: on Linux and Windows src/main.rs
+/// is built in a crate of its own (linux/, windows/), whose version isn't the app's.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// The version Settings › About shows, with the build number build.sh gives a build.
 pub fn version() -> String {
     match option_env!("APP_BUILD") {
-        Some(build) => format!("{} ({build})", env!("CARGO_PKG_VERSION")),
-        None => env!("CARGO_PKG_VERSION").to_owned(),
+        Some(build) => format!("{VERSION} ({build})"),
+        None => VERSION.to_owned(),
     }
 }
 
 /// The engine's version: on the Mac, the name of the folder its framework's current version is in,
-/// as Chromium names it.
+/// as Chromium names it; elsewhere what the engine carries beside chrome (`engine_beside`).
 pub static ENGINE_VERSION: LazyLock<Option<String>> = LazyLock::new(|| {
+    let exe = std::env::current_exe().ok()?;
     if !cfg!(target_os = "macos") {
-        return None;
+        return engine_beside(exe.parent()?);
     }
-    let frameworks = std::env::current_exe()
-        .ok()?
-        .parent()?
-        .parent()?
-        .join("Frameworks");
+    let frameworks = exe.parent()?.parent()?.join("Frameworks");
     std::fs::read_dir(frameworks)
         .ok()?
         .flatten()
@@ -93,6 +96,24 @@ pub static ENGINE_VERSION: LazyLock<Option<String>> = LazyLock::new(|| {
             Some(current.to_str()?.to_owned())
         })
 });
+
+/// The version of the engine in `dir`: Windows's build names a manifest after it, such as
+/// "156.0.8078.47.manifest", and the Linux engine's package writes it in VERSION
+/// (engine/linux/package.sh). An engine packaged before that has neither.
+fn engine_beside(dir: &std::path::Path) -> Option<String> {
+    let version = |text: &str| {
+        let number = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+        let parts: Vec<&str> = text.split('.').collect();
+        (parts.len() == 4 && parts.into_iter().all(number)).then(|| text.to_owned())
+    };
+    if let Ok(text) = std::fs::read_to_string(dir.join("VERSION")) {
+        return version(text.trim());
+    }
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .find_map(|entry| version(entry.file_name().to_str()?.strip_suffix(".manifest")?))
+}
 
 /// `text` for a URL's query: what isn't a letter, a digit or `-._~` as UTF-8 bytes in %XX.
 fn escape(text: &str) -> String {
@@ -141,7 +162,7 @@ fn system() -> String {
 /// The processor's name, else the architecture's.
 fn chip() -> String {
     #[cfg(target_os = "macos")]
-    let name = (std::process::Command::new("/usr/sbin/sysctl")
+    let name = (crate::child::command("/usr/sbin/sysctl")
         .args(["-n", "machdep.cpu.brand_string"])
         .output()
         .ok())
@@ -206,6 +227,25 @@ mod tests {
     #[test]
     fn escapes_what_a_query_cant_hold() {
         assert_eq!(escape("a&b=c/d é"), "a%26b%3Dc%2Fd%20%C3%A9");
+    }
+
+    /// The Linux engine's VERSION and Windows's manifest each name the engine's version; a file
+    /// that isn't one, or an engine with neither, names none.
+    #[test]
+    fn reads_the_engines_version_beside_chrome() {
+        let dir = std::env::temp_dir().join(format!("ilo-engine-version-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = |name: &str, text: &str| std::fs::write(dir.join(name), text).unwrap();
+        file("chrome.exe.manifest", "");
+        assert_eq!(engine_beside(&dir), None);
+        file("156.0.8078.47.manifest", "");
+        assert_eq!(engine_beside(&dir).as_deref(), Some("156.0.8078.47"));
+        file("VERSION", "156.0.8078.48\n");
+        assert_eq!(engine_beside(&dir).as_deref(), Some("156.0.8078.48"));
+        file("VERSION", "MAJOR=156\n");
+        assert_eq!(engine_beside(&dir), None);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

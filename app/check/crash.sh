@@ -2,16 +2,17 @@
 # browser once it has started, Crashpad's handler is up and the profile's Preferences say its
 # session crashed, the handler writes the report, and no Chromium process outlives the crash, the
 # handler included. Nor does one outlive a quit.
-# Nothing goes to the crash collector, check/collector.py, while Send Crash Reports is off, as it is
-# at first: the next launch offers to send that crash's report in a toast, and keeps it. On, the
-# next launch sends the report, the minidump and Sentry's field saying to keep no IP address,
-# without cookies and with no annotation naming the profile's folder or the home, and deletes it
-# once the collector has it. One the collector refuses waits for the next launch, and turning
-# the switch off in Settings › Privacy deletes it, which only the Mac's run clicks so far.
+# A new profile's first launch offers Send Crash Reports at its onboarding's opt-ins step, as the
+# run names a collector, check/collector.py, where a prod build alone names the real one. Left off
+# there with Esc, nothing goes to the collector: the launch after a crash offers to send that
+# crash's report in a toast, and keeps it. Turned on at a new first launch's step, the report goes
+# at once, the minidump and Sentry's field saying to keep no IP address, without cookies and with
+# no annotation naming the profile's folder or the home, and is deleted once the collector has it.
+# One the collector refuses waits for the next launch, and turning the switch off in Settings ›
+# Privacy deletes it, which only the Mac's run clicks so far.
 # On Windows it runs on the folder check/git-bash.sh gives chrome.exe, as only the prod build's
 # lines up by itself.
 
-log="$out/crash.log"
 crashpad="$(dirname "$saved")/Crashpad"
 rm -rf "$crashpad"
 rm -f "$saved" "$launch_frame"
@@ -56,8 +57,10 @@ await_pending() {
   done
   return 1
 }
-# Crashes the browser with the crash test, with $1 as the collector, and waits for the report.
+# Crashes the browser with the crash test, with $1 as the collector, and waits for the report. It
+# logs to its own file, which keeps the first launches' logs.
 crash() {
+  log="$out/crash.log"
   "$browser" --crash-after-start "--crash-upload-url=$1" < /dev/null > "$log" 2>&1 &
   pid=$!
   await '^browser: crash test$' || fail "the app didn't start its crash test"
@@ -91,6 +94,44 @@ launch() {
   exec 3> "$out/drive"
   await_load
 }
+# Launches a new profile, whose saved Spaces are gone, logging to $1, and goes on through its
+# onboarding to the opt-ins step, which offers crash reports as a collector is named. Its import
+# home is empty, so the import never lists this desk's browsers and leaves its step out.
+mkdir -p "$out/crash-home"
+import_home="$PWD/$out/crash-home"
+! windows || import_home=$(cygpath -w "$import_home")
+first_launch() {
+  log=$1
+  step=0
+  rm -f "$saved"
+  BROWSER_DRIVE=1 BROWSER_ONBOARDING=light BROWSER_IMPORT_HOME="$import_home" \
+    "$browser" "--crash-upload-url=$reports" < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await '^browser: onboarding step intro settled$' || fail "the first launch didn't play the intro"
+  steps=$(grep -m1 '^browser: onboarding steps ' "$log" | cut -d' ' -f4-)
+  case "$steps" in
+    *" opt-ins") ;;
+    *) fail "the first launch's steps were '$steps', with no opt-ins step for crash reports" ;;
+  esac
+  for each in $steps; do
+    case $each in
+      intro) send key a && how=key ;;
+      opt-ins) break ;;
+      *) send key escape && how=escape ;;
+    esac
+    expect "^browser: onboarding left $each via $how\$" "Esc didn't leave the first launch's $each"
+  done
+  expect '^browser: onboarding step opt-ins settled$' "the first launch's opt-ins step didn't come"
+}
+
+# The first launch offers crash reports, and Esc goes on with them off.
+first_launch "$out/crash-first.log"
+../tools/window-screenshot.sh "$pid" "$out/crash-opt-ins.png" || fail "no window to capture"
+send key escape
+expect '^browser: onboarding left opt-ins via escape$' "Esc didn't leave the opt-ins step"
+exec 3>&-
+quit
 
 crash "$reports"
 bytes=$(wc -c < "$dump" | tr -d ' ')
@@ -101,24 +142,31 @@ launch "$reports"
 await '^browser: crash report offered$' || fail "the launch after the crash didn't offer its report"
 await "^browser: toast shown $app_name quit unexpectedly\. \[send, don't send\]\$" ||
   fail "the offer's toast didn't show"
+await '^browser: toast settled$' || fail "the offer's toast didn't settle"
 ../tools/window-screenshot.sh "$pid" "$out/crash-offer.png" || fail "no window to capture"
+# Whole, its plate inside the toast's window, as the archive's note is in the restore run (#1462).
+await '^browser: toast plate .* in [0-9]* [0-9]*$' ||
+  fail "the offer's toast didn't say where its plate is"
+plate=$(grep '^browser: toast plate' "$log" | tail -1)
+set -- $(echo "${plate#browser: toast plate }" | sed 's/ in / /')
+[ "$1" -ge 0 ] && [ "$2" -ge 0 ] && [ $(($1 + $3)) -le "$5" ] && [ $(($2 + $4)) -le "$6" ] ||
+  fail "the offer's toast runs past its window, which cuts it: $plate"
 exec 3>&-
 quit
 [ -s "$out/collector.log" ] && fail "a report was sent while Send Crash Reports was off"
 [ "$(pending)" = 1 ] || fail "the report didn't wait while Send Crash Reports was off"
 
-# On, the next launch sends it and deletes it.
-python3 -I -c '
-import json, sys
-with open(sys.argv[1]) as f:
-    session = json.load(f)
-session.setdefault("settings", {})["send_crash_reports"] = True
-with open(sys.argv[1], "w") as f:
-    json.dump(session, f)
-' "$saved" || fail "Send Crash Reports couldn't be turned on in $saved"
-log="$out/crash-on.log"
-launch "$reports"
-await '^browser: crash report sent$' || fail "the report wasn't sent with Send Crash Reports on"
+# Turned on at a new first launch's opt-ins step, it sends the report waiting and deletes it. Their
+# row takes a click on its switch, where the app says it's drawn once the step has come, as
+# onboarding.sh clicks the agents' (#1286).
+first_launch "$out/crash-on.log"
+expect '^browser: onboarding crash-reports at ' "the opt-ins step didn't draw the crash reports' switch"
+send click $(grep '^browser: onboarding crash-reports at ' "$log" | tail -1 | cut -d' ' -f5-6)
+expect '^browser: onboarding crash-reports on$' \
+  "a click on the crash reports' row didn't turn them on"
+await '^browser: crash report sent$' || fail "the report wasn't sent once the step turned them on"
+send key escape
+expect '^browser: onboarding left opt-ins via escape$' "Esc didn't leave the opt-ins step"
 grep -q '^refused' "$out/collector.log" &&
   fail "the collector refused the report: $(cat "$out/collector.log")"
 grep -q "^report [0-9]* /api/1/minidump/?sentry_key=check\$" "$out/collector.log" ||
@@ -137,15 +185,17 @@ send click $page_point
 if [ "$(uname)" = Darwin ] && [ "$active" = 1 ]; then
   send key , cmd
   expect '^browser: settings shown General$' "⌘, didn't show Settings"
-  send clickkey 430 60
+  settings_drew General
+  send clickkey $(drawn "toolbar Privacy")
   expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its tab"
+  settings_drew Privacy
   ../tools/window-screenshot.sh "$pid" "$out/privacy.png" || fail "no window to capture"
   send clickkey 592 133
   expect '^browser: send crash reports off$' "a click on the switch didn't turn crash reports off"
   expect '^browser: crash reports deleted 1$' "turning crash reports off didn't delete the report"
   [ "$(pending)" = 0 ] || fail "the report not sent outlived turning crash reports off"
   turned_off=" Turned off in Settings › Privacy, it deleted that one."
-  windows="$out/crash-offer.png, $out/privacy.png"
+  windows="$out/crash-opt-ins.png, $out/crash-offer.png, $out/privacy.png"
 else
   if [ "$(uname)" = Darwin ]; then
     echo "skip: crash's Settings switch. Browser wasn't the active app."
@@ -153,14 +203,16 @@ else
     echo "skip: crash's Settings switch, whose clicks are where the Mac's Settings has it."
   fi
   turned_off=
-  windows="$out/crash-offer.png"
+  windows="$out/crash-opt-ins.png, $out/crash-offer.png"
 fi
 exec 3>&-
 quit
 kill "$collector" 2>/dev/null || true
 annotations=$(grep -m1 '^annotations ' "$out/collector.log" | cut -d' ' -f2-)
-echo "ok: the crash left a minidump of $bytes bytes, which the next launch offered to send and" \
-  "kept with Send Crash Reports off, and sent with it on, and deleted once the collector had it," \
+echo "ok: a new profile's first launch offered Send Crash Reports at its opt-ins step; left off" \
+  "there, the crash left a minidump of $bytes bytes, which the next launch offered to send and" \
+  "kept, and turned on at a new first launch's step, it was sent and deleted once the collector" \
+  "had it," \
   "with Sentry's field to keep no IP address and annotations naming neither the profile nor the" \
   "home: $annotations." \
   "One the collector refused waited.$turned_off Windows: $windows"

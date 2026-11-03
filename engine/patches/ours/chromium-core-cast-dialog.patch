@@ -1,0 +1,36 @@
+Lets the core give each tab its own Cast dialog (//browser_core/hooks.h), the app's card, in place
+of the Views one. Chrome sets the media router's dialog factory once, here, and a second set fails
+its DCHECK, so the core's goes in Chrome's place rather than after it.
+
+--- a/chrome/browser/ui/views/chrome_browser_main_extra_parts_views.cc
++++ b/chrome/browser/ui/views/chrome_browser_main_extra_parts_views.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/ui/views/chrome_browser_main_extra_parts_views.h"
++#include "browser_core/hooks.h"  // nogncheck
+ 
+ #include <utility>
+ 
+@@ -70,6 +71,11 @@
+ 
+ }  // namespace
+ 
++// browser_core: a tab's Cast dialog is the core's, in place of the Views one
++// (//browser_core/hooks.h).
++media_router::MediaRouterDialogController* (*g_browser_core_cast_dialog)(
++    content::WebContents* web_contents) = nullptr;
++
+ ChromeBrowserMainExtraPartsViews::ChromeBrowserMainExtraPartsViews() {
+   DCHECK(!g_main_parts_views);
+   g_main_parts_views = this;
+@@ -126,7 +132,9 @@
+     ui_devtools::ServerHolder::GetInstance()->CreateUiDevTools(output_dir);
+   }
+ 
++  // browser_core: the core's in place of the Views dialog, as the factory is set once.
+   media_router::MediaRouterDialogController::SetGetOrCreate(
++      g_browser_core_cast_dialog ? base::BindRepeating(g_browser_core_cast_dialog) :
+       base::BindRepeating([](content::WebContents* web_contents) {
+         DCHECK(web_contents);
+         media_router::MediaRouterDialogController* controller = nullptr;

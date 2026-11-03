@@ -1,0 +1,26 @@
+Crash reports name only the locale pak's file, not its folder. On Windows Chromium keeps the full
+path of the last pak it found and missed in crash keys, and ilo installed for one user is in
+their home, so every report would carry their account's name.
+
+--- a/ui/base/resource/resource_bundle.cc
++++ b/ui/base/resource/resource_bundle.cc
+@@ -420,7 +420,8 @@ bool ResourceBundle::LocaleDataPakExists(const base::i18n::LanguageTag& locale,
+   if (attributes != INVALID_FILE_ATTRIBUTES) {
+     static auto* const found_path_key = base::debug::AllocateCrashKeyString(
+         "LocaleDataPakExists-found_path", base::debug::CrashKeySize::Size256);
+-    base::debug::SetCrashKeyString(found_path_key, path.AsUTF8Unsafe());
++    // browser_core: the file's name alone, since its folder can be in the user's home.
++    base::debug::SetCrashKeyString(found_path_key, path.BaseName().AsUTF8Unsafe());
+     static auto* const found_attrs_key = base::debug::AllocateCrashKeyString(
+         "LocaleDataPakExists-found_attrs", base::debug::CrashKeySize::Size32);
+     base::debug::SetCrashKeyString(found_attrs_key,
+@@ -437,7 +438,8 @@ bool ResourceBundle::LocaleDataPakExists(const base::i18n::LanguageTag& locale,
+   const auto error = ::GetLastError();
+   static auto* const not_found_path_key = base::debug::AllocateCrashKeyString(
+       "LocaleDataPakExists-not_found_path", base::debug::CrashKeySize::Size256);
+-  base::debug::SetCrashKeyString(not_found_path_key, path.AsUTF8Unsafe());
++  // browser_core: the file's name alone, since its folder can be in the user's home.
++  base::debug::SetCrashKeyString(not_found_path_key, path.BaseName().AsUTF8Unsafe());
+   static auto* const not_found_error_key = base::debug::AllocateCrashKeyString(
+       "LocaleDataPakExists-not_found_error", base::debug::CrashKeySize::Size32);
+   base::debug::SetCrashKeyString(not_found_error_key,

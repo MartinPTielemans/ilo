@@ -22,6 +22,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "the preview's made-up Space colour",
     ),
     (
+        "preview.rs",
+        "const MORE_COLORS",
+        "the preview's made-up Space colours",
+    ),
+    (
         "shell/dock_dot.rs",
         "0x8655BF",
         "a test's made-up Space colour",

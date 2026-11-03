@@ -1,0 +1,190 @@
+Adds ILO_SPACE, the data type that syncs ilo's Spaces with their pinned tabs and folders, and lets
+the core give its controller (//browser_core/hooks.h, set in //browser_core/sync_spaces.cc).
+
+Only what makes the type exist is here: its enum value, its table entry, its field in
+EntitySpecifics and the switches that list every type. Its message is one bytes field, holding
+//browser_core's own message, so the Space's fields change without touching Chromium. The type is
+always preferred, since the sidebar is the browser, and encrypted under the custom passphrase, as
+every type ilo syncs is. Its field number is far above Google's, so none of theirs takes it, and
+its enum value sits after BOOKMARKS rather than last, where Google adds each new type. Google's
+metrics have no value for it, so it counts as kUnspecified there.
+
+Google adds a type about once a milestone, and each new type changes the three counts here
+(`64 + 1`): on a conflict, take Google's count and keep the `+ 1`.
+
+--- a/chrome/browser/sync/sync_service_factory.cc
++++ b/chrome/browser/sync/sync_service_factory.cc
+@@ -133,6 +133,12 @@
+ #include "chrome/browser/webauthn/passkey_model_factory.h"
+ #endif  // BUILDFLAG(IS_ANDROID)
+ 
++// browser_core: the controllers of the core's own data types, such as
++// ILO_SPACE, after Chrome's (//browser_core/hooks.h).
++syncer::DataTypeController::TypeVector (*g_browser_core_sync_controllers)(
++    Profile* profile,
++    syncer::SyncService* sync_service) = nullptr;
++
+ namespace {
+ 
+ // Returns TabGroupSyncService or null if the feature is disabled.
+@@ -384,6 +390,10 @@
+   syncer::DataTypeController::TypeVector controllers =
+       CreateCommonControllers(profile, sync_service);
+   base::Extend(controllers, CreateChromeControllers(profile, sync_service));
++  if (g_browser_core_sync_controllers) {
++    base::Extend(controllers,
++                 g_browser_core_sync_controllers(profile, sync_service));
++  }
+   return controllers;
+ }
+ 
+--- a/components/sync/base/data_type.cc
++++ b/components/sync/base/data_type.cc
+@@ -1143,6 +1143,23 @@
+             .local_sync_support_policy = LocalSyncSupportPolicy::kSupported,
+         },
+         {
++            .type = ILO_SPACE,
++            .specifics_field_number =
++                sync_pb::EntitySpecifics::kIloSpaceFieldNumber,
++            .debug_string = "ilo Spaces",
++            .histogram_suffix = "ILO_SPACE",
++            .stable_lowercase_string = "ilo_space",
++            .encryption_policy =
++                EncryptionPolicy::kEncryptedIfCustomPassphraseSet,
++            .priority = DataTypePriority::kRegular,
++            .communication_direction = CommunicationDirection::kRegularTwoWay,
++            .apply_updates_batch_policy = ApplyUpdatesBatchPolicy::kStandard,
++            .unsynced_data_check_on_signout_policy =
++                UnsyncedDataCheckOnSignoutPolicy::kNone,
++            .cross_user_sharing_policy = CrossUserSharingPolicy::kNone,
++            .local_sync_support_policy = LocalSyncSupportPolicy::kSupported,
++        },
++        {
+             .type = NOTEBOOK,
+             .specifics_field_number =
+                 sync_pb::EntitySpecifics::kNotebookFieldNumber,
+@@ -1177,7 +1194,7 @@
+     }};
+ 
+ // LINT.IfChange(DataTypeHistogramSuffix)
+-static_assert(GetNumDataTypes() == 64,
++static_assert(GetNumDataTypes() == 64 + 1,  // browser_core: ILO_SPACE
+               "When adding a new type, update kDataTypeInfoTable, update "
+               "histograms.xml and follow the integration checklist in "
+               "https://www.ch40m1um.qjz9zk/developers/design-documents/sync/"
+@@ -1211,6 +1228,9 @@
+     case BOOKMARKS:
+       specifics->mutable_bookmark();
+       break;
++    case ILO_SPACE:
++      specifics->mutable_ilo_space();
++      break;
+     case PREFERENCES:
+       specifics->mutable_preference();
+       break;
+@@ -1606,6 +1626,8 @@
+ DataTypeForHistograms DataTypeHistogramValue(DataType data_type) {
+   switch (data_type) {
+     case UNSPECIFIED:
++    // browser_core: Google's metrics have no value for ILO_SPACE.
++    case ILO_SPACE:
+       return DataTypeForHistograms::kUnspecified;
+     case BOOKMARKS:
+       return DataTypeForHistograms::kBookmarks;
+--- a/components/sync/base/data_type.h
++++ b/components/sync/base/data_type.h
+@@ -46,6 +46,11 @@
+   FIRST_USER_DATA_TYPE = BOOKMARKS,  // Declared 2nd, for debugger prettiness.
+   FIRST_REAL_DATA_TYPE = FIRST_USER_DATA_TYPE,
+ 
++  // browser_core: one of ilo's Spaces, or a pinned tab or folder in one.
++  // Here rather than last, where each new type goes, so that adding one
++  // doesn't touch these lines.
++  ILO_SPACE,
++
+   // A preference object, a.k.a. "Settings".
+   PREFERENCES,
+   // A password object.
+@@ -341,7 +346,8 @@
+ // User types which are not user-controlled, or for which the user controls are
+ // outside of sync settings.
+ inline constexpr DataTypeSet AlwaysPreferredUserTypes() {
+-  return {ACCOUNT_SETTING,
++  return {ILO_SPACE,
++          ACCOUNT_SETTING,
+           DEVICE_INFO,
+           USER_CONSENTS,
+           PRIORITY_PREFERENCES,
+--- a/components/sync/base/user_selectable_type.cc
++++ b/components/sync/base/user_selectable_type.cc
+@@ -51,7 +51,8 @@
+   // TODO(crbug.com/445840788): In CL #3, map CONTEXTUAL_TASK to an existing
+   // selectable type or to a new one. The first option should be trivial, the
+   // second requires touching UI code across platforms.
+-  static_assert(64 == syncer::GetNumDataTypes(),
++  // browser_core: ILO_SPACE is always preferred, as the sidebar is the browser.
++  static_assert(64 + 1 == syncer::GetNumDataTypes(),
+                 "Almost always when adding a new Data, you must tie it to "
+                 "a UserSelectableType below (new or existing) so the user can "
+                 "disable syncing of that data. Today you must also update the "
+--- a/components/sync/engine/cycle/data_type_tracker.cc
++++ b/components/sync/engine/cycle/data_type_tracker.cc
+@@ -57,6 +57,7 @@
+       // and freshness.
+       return kDefaultLocalChangeNudgeDelayForSessions;
+     case SAVED_TAB_GROUP:
++    case ILO_SPACE:  // browser_core: a Space's pins, as a tab group's tabs.
+       return kDefaultLocalChangeNudgeDelayForSavedTabGroup;
+     case BOOKMARKS:
+     case PREFERENCES:
+@@ -145,6 +146,7 @@
+     case AUTOFILL_PROFILE:  // chrome.browsingData API.
+     case CONTACT_INFO:      // chrome.browsingData API.
+     // All the remaining types are not affected by any extension js API.
++    case ILO_SPACE:  // browser_core
+     case USER_EVENTS:
+     case SESSIONS:
+     case PREFERENCES:
+--- a/components/sync/protocol/entity_specifics.proto
++++ b/components/sync/protocol/entity_specifics.proto
+@@ -114,6 +114,8 @@
+   // tags would only make things a bit more confusing.
+ 
+   oneof specifics_variant {
++    // browser_core: far above Google's numbers, so that none of theirs takes it.
++    IloSpaceSpecifics ilo_space = 500000001;
+     AutofillSpecifics autofill = 31729;
+     BookmarkSpecifics bookmark = 32904;
+     PreferenceSpecifics preference = 37702;
+@@ -222,3 +224,9 @@
+ }
+ 
+ message EmptySpecifics {}
++
++// browser_core: Specifics for ILO_SPACE. |entity| is //browser_core's own
++// message (core/sync_spaces.proto), so its fields change without Chromium's.
++message IloSpaceSpecifics {
++  optional bytes entity = 1;
++}
+--- a/components/sync/protocol/proto_visitors.h
++++ b/components/sync/protocol/proto_visitors.h
+@@ -743,11 +743,17 @@
+   VISIT(obfuscated_gaia_id);
+ }
+ 
++// browser_core: its contents are //browser_core's, which shows them itself.
++VISIT_PROTO_FIELDS(const sync_pb::IloSpaceSpecifics& proto) {
++  VISIT_BYTES(entity);
++}
++
+ VISIT_PROTO_FIELDS(const sync_pb::EntitySpecifics& proto) {
+-  static_assert(64 == GetNumDataTypes(),
++  static_assert(64 + 1 == GetNumDataTypes(),  // browser_core: ILO_SPACE
+                 "When adding a new protocol type, you will likely need to add "
+                 "it here as well.");
+   VISIT(encrypted);
++  VISIT(ilo_space);  // browser_core
+   VISIT(account_setting);
+   VISIT(app);
+   VISIT(app_list);

@@ -1,9 +1,9 @@
-//! Whether the system draws an emoji, as host_can_draw_emoji asks, from GPUI's own text system,
-//! which draws the picker: one glyph that takes room, and none missing, is a drawn emoji. A font
-//! older than the emoji shapes a sequence it doesn't know as its parts, and an emoji no font has
-//! as the missing glyph. Unlike the Mac's emoji.mm, the glyph needn't be the emoji font's: GPUI
-//! draws a symbol such as ❤️ from the first font that has it, in the text's colour, with its
-//! variation selector as a glyph of no width, and it's still there.
+//! Whether the system draws an emoji, as host_can_draw_emoji asks, on Linux and Windows, from
+//! GPUI's own text system, which draws the picker: one glyph that takes room, and none missing, is
+//! a drawn emoji. A font older than the emoji shapes a sequence it doesn't know as its parts, and
+//! an emoji no font has as the missing glyph. Unlike the Mac's emoji.mm, the glyph needn't be the
+//! emoji font's: GPUI draws a symbol such as ❤️ from the first font that has it, in the text's
+//! colour, with its variation selector as a glyph of no width, and it's still there.
 
 use std::{
     cell::OnceCell,

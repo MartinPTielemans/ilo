@@ -315,7 +315,7 @@ fn the_wait_for_the_profile_runs_the_build_with_its_arguments() {
         })
     };
     let started = std::time::Instant::now();
-    let out = std::process::Command::new("/bin/sh")
+    let out = crate::child::command("/bin/sh")
         .args([
             "-c",
             RESTART,
@@ -340,7 +340,7 @@ fn the_wait_for_the_profile_runs_the_build_with_its_arguments() {
 struct DialogWindow;
 
 impl crate::dialog::Host for DialogWindow {
-    fn show(&self, _: Option<gpui::Bounds<gpui::Pixels>>) {}
+    fn show(&self, _: Option<u64>, _: Option<gpui::Bounds<gpui::Pixels>>) {}
     fn hide(&self) {}
 }
 
@@ -368,28 +368,67 @@ fn asking(cx: &mut gpui::TestAppContext) -> bool {
     cx.update(|cx| crate::dialog::asking(cx))
 }
 
-// Installing asks nothing; the build being in offers the restart, whose Restart starts it.
+// Installing asks nothing, and nor does the build being in: Restart to Update at the sidebar's
+// foot says it's ready, as on the Mac and Windows, and its restart starts it.
 #[gpui::test]
-fn a_build_installed_offers_a_restart_into_it(cx: &mut gpui::TestAppContext) {
+fn a_build_installed_asks_nothing_and_restarts_when_told(cx: &mut gpui::TestAppContext) {
     let restarts = updating(cx);
     cx.update(|cx| changed(State::Installing, cx));
     assert!(!asking(cx), "nothing to restart into yet");
     cx.update(|cx| changed(State::Ready, cx));
-    assert!(asking(cx), "no offer to restart");
-    assert!(choose("Restart", cx));
+    assert!(!asking(cx), "a dialog for a build that's in");
+    assert!(
+        cx.update(|cx| crate::updates::ready(cx)),
+        "nothing says it's ready"
+    );
+    cx.update(restart);
     assert_eq!(restarts.get(), 1);
-    assert!(!asking(cx));
 }
 
-// Later leaves the build for the next launch, and Check for Updates… offers the restart again.
+// Restart only asks for the restart. The newest build starts once the restart goes ahead, so a
+// quit a page stops leaves nothing to start at the next quit, which isn't a restart (#1459).
 #[gpui::test]
-fn later_leaves_the_restart_to_check_for_updates(cx: &mut gpui::TestAppContext) {
+fn the_newest_build_starts_only_as_the_restart_goes_ahead(cx: &mut gpui::TestAppContext) {
+    let restarts = updating(cx);
+    let starts = std::rc::Rc::new(std::cell::Cell::new(0));
+    let counted = starts.clone();
+    let start = move || {
+        counted.set(counted.get() + 1);
+        true
+    };
+    cx.update(|cx| on_relaunch(start, cx));
+    cx.update(|cx| changed(State::Installing, cx));
+    assert!(
+        !cx.update(relaunch),
+        "a restart went ahead into a build that isn't in"
+    );
+    cx.update(|cx| changed(State::Ready, cx));
+    cx.update(restart);
+    // A page asked to stay, and the user tried again.
+    cx.update(restart);
+    assert_eq!(
+        (restarts.get(), starts.get()),
+        (2, 0),
+        "the new build started before the quit"
+    );
+    assert!(
+        cx.update(relaunch),
+        "the restart that went ahead didn't start the new build"
+    );
+    assert_eq!(starts.get(), 1);
+}
+
+// Check for Updates… called once a build is in, as the app calls Restart to Update in its place,
+// still offers the restart.
+#[gpui::test]
+fn check_for_updates_offers_the_restart_once_a_build_is_in(cx: &mut gpui::TestAppContext) {
     let restarts = updating(cx);
     cx.update(|cx| changed(State::Ready, cx));
+    cx.update(check);
+    assert!(asking(cx), "Check for Updates… didn't offer the restart");
     assert!(choose("Later", cx));
     assert_eq!(restarts.get(), 0);
     cx.update(check);
-    assert!(asking(cx), "Check for Updates… didn't offer the restart");
     assert!(choose("Restart", cx));
     assert_eq!(restarts.get(), 1);
 }
@@ -446,7 +485,7 @@ fn what_check_for_updates_says() {
     let looking = format!("{name} looks for one every half hour while it’s open.");
     assert_eq!(said(None), ["No update yet", &looking, "", "OK"]);
     assert_eq!(said(Some(&State::Current)), said(None));
-    let installing = "It will offer to restart once the new version is in.";
+    let installing = "Restart to Update shows in the sidebar once the new version is in.";
     let updating = format!("{name} is updating");
     assert_eq!(
         said(Some(&State::Installing)),

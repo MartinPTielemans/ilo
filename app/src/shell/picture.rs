@@ -118,9 +118,9 @@ struct Move {
 
 impl Move {
     /// From the card's size to REST, as the page goes.
-    fn step_back() -> Self {
+    fn step_back(cx: &gpui::App) -> Self {
         Self {
-            start: Instant::now(),
+            start: crate::motion::start(cx),
             from: 1.,
             to: REST,
             duration: STEP_BACK,
@@ -182,7 +182,7 @@ impl Shell {
             tab,
             request: 0,
             pending: false,
-            motion: image.is_some().then(Move::step_back),
+            motion: image.is_some().then(|| Move::step_back(cx)),
             image,
             drawn: false,
             taken: false,
@@ -250,6 +250,10 @@ impl Shell {
         image: Option<PagePicture>,
         cx: &mut Context<Self>,
     ) {
+        if self.talk_pictured(request, &image, cx) || self.task_pictured(request, image.clone(), cx)
+        {
+            return;
+        }
         let window = self.browser.window();
         let Some(picture) = self
             .picture
@@ -266,7 +270,7 @@ impl Shell {
         // The page steps back as it goes, the first time; a fresh picture of it replaces the old
         // where it is.
         if picture.image.is_none() {
-            picture.motion = Some(Move::step_back());
+            picture.motion = Some(Move::step_back(cx));
         }
         if let Some(old) = picture.image.replace(image) {
             self.stale_pictures.push(old.image);

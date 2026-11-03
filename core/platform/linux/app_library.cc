@@ -17,7 +17,10 @@ const bc_host* LoadApp(const std::vector<std::string>& given,
   // than at its first call. It finds the API in chrome, which exports it (chrome.map).
   void* app = dlopen(path.value().c_str(), RTLD_NOW | RTLD_LOCAL);
   if (!app) {
-    LOG(ERROR) << dlerror();
+    // Read before LOG, whose timestamp calls localtime_r, which Chromium's libc interceptor
+    // answers with a dlsym of localtime64_r that fails on x86-64 and replaces this error.
+    const std::string error = dlerror();
+    LOG(ERROR) << error;
     return nullptr;
   }
   auto entry = reinterpret_cast<bc_app_entry>(dlsym(app, BC_APP_ENTRY));

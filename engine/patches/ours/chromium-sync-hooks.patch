@@ -1,0 +1,300 @@
+Hooks for syncing with the browser's own account and relay, in place of Google's sign-in and FCM
+(//browser_core/hooks.h, set in //browser_core/sync.cc).
+
+SyncAuthManager takes the account to sync and its access tokens from the core when it sets
+g_browser_core_sync_account and g_browser_core_sync_token: the account, already marked as not
+managed, since Google's managed-status finder would wait for an account it doesn't know, and each
+token, answered later through the same AccessTokenFetched a Google token takes, so expiry and the
+server's 401 ask the core again. g_browser_core_sync_account_watch gives the core the call that
+IdentityManager's events would make, for when the user signs in or out.
+SyncInvalidationsServiceFactory takes the core's service, which hears from the relay, when it sets
+g_browser_core_sync_invalidations.
+SyncServiceImpl gives the engine the core's server when it sets g_browser_core_sync_url, read as
+each engine starts, so a server the user names takes effect at their next sign-in, without a
+restart, where --sync-url is read once. The service starts with it too, for its report that sync
+stopped and its device statistics, which would otherwise go to Chromium's default, Google's.
+DataTypeWorker asks the core, through g_browser_core_sync_hold_commit, whether a type's changes
+wait to commit, so nothing of a type Chromium can encrypt goes up until the account's passphrase
+encrypts it, which the server doesn't hold, and not the keystore key it does; and once the
+passphrase's types are encrypted it nudges, since the passphrase's other changes came first. It
+gives each commit to g_browser_core_sync_commit as it leaves, for the core to trim what the server
+needn't see, such as the device's name, and to stop a commit that isn't ciphertext only.
+GetClientTag gives a password's client tag, its site and username, to
+g_browser_core_sync_password_tag, so the hash the server sees is keyed with the account's secret.
+
+--- a/components/sync/service/sync_auth_manager.h
++++ b/components/sync/service/sync_auth_manager.h
+@@ -257,6 +257,8 @@
+   // Pending request for an access token. Non-null iff there is a request
+   // ongoing.
+   std::unique_ptr<signin::AccessTokenFetcher> ongoing_access_token_fetch_;
++  // browser_core: the core has yet to answer a request for a token.
++  bool browser_core_token_pending_ = false;
+ 
+   // If RequestAccessToken fails with transient error then retry requesting
+   // access token with exponential backoff.
+@@ -277,6 +279,9 @@
+   std::vector<base::OnceCallback<void(signin::AccessTokenInfo)>>
+       access_token_callbacks_;
+ 
++  // browser_core: for the core's account callback, which outlives each token
++  // request that weak_ptr_factory_ invalidates.
++  base::WeakPtrFactory<SyncAuthManager> browser_core_weak_factory_{this};
+   base::WeakPtrFactory<SyncAuthManager> weak_ptr_factory_{this};
+ };
+ 
+--- a/components/sync/service/sync_auth_manager.cc
++++ b/components/sync/service/sync_auth_manager.cc
+@@ -20,6 +20,21 @@
+ #include "google_apis/gaia/gaia_constants.h"
+ #include "google_apis/gaia/google_service_auth_error.h"
+ 
++// browser_core: the account to sync and its access tokens, from the browser's
++// own account service in place of Google's sign-in. Set by the core; null
++// leaves Chrome's. Defined here so Chrome's other targets link without it.
++syncer::SyncAccountInfo (*g_browser_core_sync_account)(
++    const signin::IdentityManager* identity_manager) = nullptr;
++void (*g_browser_core_sync_token)(
++    const signin::IdentityManager* identity_manager,
++    base::OnceCallback<void(GoogleServiceAuthError, signin::AccessTokenInfo)>
++        done) = nullptr;
++// Gives the core a way to say the account changed, which IdentityManager would
++// otherwise tell: a callback that holds no reference once the manager is gone.
++void (*g_browser_core_sync_account_watch)(
++    const signin::IdentityManager* identity_manager,
++    base::RepeatingClosure changed) = nullptr;
++
+ namespace syncer {
+ 
+ namespace {
+@@ -55,6 +70,9 @@
+ 
+ SyncAccountInfo DetermineAccountToUse(
+     const signin::IdentityManager* identity_manager) {
++  if (g_browser_core_sync_account) {
++    return g_browser_core_sync_account(identity_manager);
++  }
+   // TODO(crbug.com/40246339): During signout, it can happen that the primary
+   // account temporarily doesn't have a refresh token (before the account
+   // itself gets removed). As a workaround for crbug.com/1383912 /
+@@ -101,6 +119,12 @@
+     managed_status_finder_.reset();
+     return;
+   }
++  // browser_core: the core's account says itself whether it's managed, and
++  // Google's sign-in can't tell.
++  if (g_browser_core_sync_account) {
++    managed_status_finder_.reset();
++    return;
++  }
+   // If there wasn't an account previously, or the account has changed,
+   // recreate the managed-status finder.
+   if (!managed_status_finder_ ||
+@@ -166,6 +190,13 @@
+ 
+   identity_manager_observation_.Observe(identity_manager_);
+   registered_for_auth_notifications_ = true;
++  if (g_browser_core_sync_account_watch) {
++    g_browser_core_sync_account_watch(
++        identity_manager_,
++        base::BindRepeating(
++            base::IgnoreResult(&SyncAuthManager::UpdateSyncAccountIfNecessary),
++            browser_core_weak_factory_.GetWeakPtr()));
++  }
+ 
+   // Initialize the sync account, without (immediately) notifying the delegate
+   // aka the SyncService. (If the account's managed-ness isn't known yet and
+@@ -303,7 +334,7 @@
+       // error until GAIA succeeds at sending a new token, and we won't request
+       // a new token unless sync reports a token failure. But to be safe, don't
+       // schedule request if this happens.
+-      if (ongoing_access_token_fetch_) {
++      if (ongoing_access_token_fetch_ || browser_core_token_pending_) {
+         // A request is already in flight; nothing further needs to be done at
+         // this point.
+         DCHECK(access_token_info_.token.empty());
+@@ -359,6 +390,7 @@
+   access_token_info_ = signin::AccessTokenInfo();
+   request_access_token_retry_timer_.Stop();
+   ongoing_access_token_fetch_.reset();
++  browser_core_token_pending_ = false;
+   weak_ptr_factory_.InvalidateWeakPtrs();
+   NotifyAccessTokenCallbacks(signin::AccessTokenInfo());
+ }
+@@ -556,7 +588,7 @@
+   DCHECK(connection_open_);
+ 
+   // Only one active request at a time.
+-  if (ongoing_access_token_fetch_) {
++  if (ongoing_access_token_fetch_ || browser_core_token_pending_) {
+     DCHECK(access_token_info_.token.empty());
+     DCHECK(!request_access_token_retry_timer_.IsRunning());
+     return;
+@@ -575,6 +607,14 @@
+   // Finally, kick off a new access token fetch.
+   partial_token_status_.token_request_time = base::Time::Now();
+   partial_token_status_.token_response_time = base::Time();
++  if (g_browser_core_sync_token) {
++    browser_core_token_pending_ = true;
++    g_browser_core_sync_token(
++        identity_manager_,
++        base::BindOnce(&SyncAuthManager::AccessTokenFetched,
++                       weak_ptr_factory_.GetWeakPtr()));
++    return;
++  }
+   ongoing_access_token_fetch_ =
+       identity_manager_->CreateAccessTokenFetcherForAccount(
+           sync_account_.Get().account_info.account_id,
+@@ -589,8 +629,9 @@
+     signin::AccessTokenInfo access_token_info) {
+   DCHECK(registered_for_auth_notifications_);
+ 
+-  DCHECK(ongoing_access_token_fetch_);
++  DCHECK(ongoing_access_token_fetch_ || browser_core_token_pending_);
+   ongoing_access_token_fetch_.reset();
++  browser_core_token_pending_ = false;
+   DCHECK(!request_access_token_retry_timer_.IsRunning());
+ 
+   // Retry without backoff when the request is canceled for the first time. For
+--- a/chrome/browser/sync/sync_invalidations_service_factory.cc
++++ b/chrome/browser/sync/sync_invalidations_service_factory.cc
+@@ -12,6 +12,11 @@
+ #include "components/gcm_driver/instance_id/instance_id_profile_service.h"
+ #include "components/sync/invalidations/sync_invalidations_service_impl.h"
+ 
++// browser_core: the core's own change notifications, from the browser's relay,
++// in place of FCM (//browser_core/hooks.h).
++std::unique_ptr<syncer::SyncInvalidationsService> (
++    *g_browser_core_sync_invalidations)(Profile* profile) = nullptr;
++
+ syncer::SyncInvalidationsService*
+ SyncInvalidationsServiceFactory::GetForProfile(Profile* profile) {
+   return static_cast<syncer::SyncInvalidationsService*>(
+@@ -43,6 +48,10 @@
+     content::BrowserContext* context) const {
+   Profile* profile = Profile::FromBrowserContext(context);
+ 
++  if (g_browser_core_sync_invalidations) {
++    return g_browser_core_sync_invalidations(profile);
++  }
++
+   gcm::GCMDriver* gcm_driver =
+       gcm::GCMProfileServiceFactory::GetForProfile(profile)->driver();
+   instance_id::InstanceIDDriver* instance_id_driver =
+--- a/components/sync/service/sync_service_impl.cc
++++ b/components/sync/service/sync_service_impl.cc
+@@ -85,6 +85,13 @@
+ #include "components/sync/protocol/nigori_specifics.pb.h"
+ #endif  // BUILDFLAG(IS_ANDROID)
+ 
++// browser_core: the server sync talks to, the browser's own account's, which
++// can change while it runs: read as the service starts, for its reports, and
++// as each engine starts. Set by the core, so nothing goes to Chromium's
++// default, Google's; null leaves the command line's. Defined here so Chrome's
++// other targets link without it.
++GURL (*g_browser_core_sync_url)() = nullptr;
++
+ namespace syncer {
+ 
+ namespace {
+@@ -237,7 +244,10 @@
+       channel_(init_params.channel),
+       debug_identifier_(std::move(init_params.debug_identifier)),
+       sync_service_url_(
+-          GetSyncServiceURL(*base::CommandLine::ForCurrentProcess(), channel_)),
++          g_browser_core_sync_url
++              ? g_browser_core_sync_url()
++              : GetSyncServiceURL(*base::CommandLine::ForCurrentProcess(),
++                                  channel_)),
+       crypto_(this, sync_client_->GetTrustedVaultClient()),
+       url_loader_factory_(std::move(init_params.url_loader_factory)),
+       network_connection_tracker_(
+@@ -648,7 +658,9 @@
+   } else {
+     params.engine_components_factory =
+         EngineComponentsFactoryImpl::CreateForServerSync(
+-            EngineSwitchesFromCommandLine(), sync_service_url_,
++            EngineSwitchesFromCommandLine(),
++            g_browser_core_sync_url ? g_browser_core_sync_url()
++                                    : sync_service_url_,
+             base::BindOnce(
+                 create_http_post_provider_factory_override_for_test_.value_or(
+                     create_http_post_provider_factory_),
+--- a/components/sync/engine/data_type_worker.cc
++++ b/components/sync/engine/data_type_worker.cc
+@@ -48,6 +48,14 @@
+ #include "components/sync/protocol/proto_memory_estimations.h"
+ #include "components/sync/protocol/sync_entity.pb.h"
+ 
++// browser_core: whether a type's changes wait to commit, and a last look at each commit before
++// it goes, which may trim it (//browser_core/hooks.h).
++bool (*g_browser_core_sync_hold_commit)(syncer::DataType type,
++                                        bool encrypted,
++                                        syncer::PassphraseType passphrase) = nullptr;
++void (*g_browser_core_sync_commit)(syncer::DataType type,
++                                   syncer::CommitRequestDataList& commit) = nullptr;
++
+ namespace syncer {
+ 
+ namespace {
+@@ -441,6 +449,8 @@
+     // Push the new key name to the processor.
+     SendPendingUpdatesToProcessorIfReady();
+   }
++  // browser_core: a type held until it's encrypted may commit now.
++  NudgeIfReadyToCommit();
+ }
+ 
+ void DataTypeWorker::OnCryptographerChange() {
+@@ -965,6 +975,10 @@
+          (data_type_state_.encryption_key_name() ==
+           cryptographer_->GetDefaultEncryptionKeyName()));
+ 
++  if (g_browser_core_sync_commit) {
++    g_browser_core_sync_commit(type_, response);
++  }
++
+   return std::make_unique<CommitContributionImpl>(
+       type_, data_type_state_.type_context(), std::move(response),
+       base::BindOnce(&DataTypeWorker::OnCommitResponse,
+@@ -1011,6 +1025,10 @@
+ }
+ 
+ bool DataTypeWorker::CanCommitItems() const {
++  if (g_browser_core_sync_hold_commit &&
++      g_browser_core_sync_hold_commit(type_, encryption_enabled_, passphrase_type_)) {
++    return false;
++  }
+   // We can only commit if we've received the initial update response and aren't
+   // blocked by missing encryption keys.
+   return IsInitialSyncAtLeastPartiallyDone(
+--- a/components/password_manager/core/browser/sync/password_proto_utils.cc
++++ b/components/password_manager/core/browser/sync/password_proto_utils.cc
+@@ -17,6 +17,9 @@
+ using autofill::FormData;
+ using autofill::FormFieldData;
+ 
++// browser_core: a password's client tag, from Chromium's (//browser_core/hooks.h).
++std::string (*g_browser_core_sync_password_tag)(const std::string& tag) = nullptr;
++
+ namespace password_manager {
+ 
+ namespace {
+@@ -382,11 +385,12 @@
+ std::string GetClientTag(const sync_pb::PasswordSpecificsData& password_data) {
+   GURL origin(password_data.origin());
+ 
+-  return base::EscapePath(origin.is_valid() ? origin.spec() : "") + "|" +
+-         base::EscapePath(password_data.username_element()) + "|" +
+-         base::EscapePath(password_data.username_value()) + "|" +
+-         base::EscapePath(password_data.password_element()) + "|" +
+-         base::EscapePath(password_data.signon_realm());
++  std::string tag = base::EscapePath(origin.is_valid() ? origin.spec() : "") + "|" +
++                    base::EscapePath(password_data.username_element()) + "|" +
++                    base::EscapePath(password_data.username_value()) + "|" +
++                    base::EscapePath(password_data.password_element()) + "|" +
++                    base::EscapePath(password_data.signon_realm());
++  return g_browser_core_sync_password_tag ? g_browser_core_sync_password_tag(tag) : tag;
+ }
+ 
+ }  // namespace password_manager

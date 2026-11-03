@@ -39,7 +39,7 @@ impl Shell {
         // Half the card at most, so the pointer has room beside it.
         let max = (f32::from(card.size.width) / 2.).clamp(MIN_WIDTH, link_target::WINDOW_WIDTH);
         let system = self
-            .link_system
+            .text_system
             .get_or_insert_with(|| WindowTextSystem::new(cx.text_system().clone()));
         let system: &WindowTextSystem = system;
         let plate = link_target::plate(&target, max, |text| link_target::text_width(text, system));

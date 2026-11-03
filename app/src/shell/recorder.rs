@@ -14,8 +14,8 @@ use gpui::{App, Bounds, Pixels, Point, RenderImage, SharedString, Size, WeakEnti
 use crate::theme::Appearance;
 
 use super::{
-    Answer, BarTab, Browser, DownloadAction, MenuBar, MenuEntry, PageReply, ShownPageDialog,
-    browser::WindowButton,
+    Answer, BarTab, Browser, DownloadAction, MediaAction, MenuBar, MenuEntry, PageReply,
+    ShownPageDialog, browser::WindowButton,
 };
 
 /// What the core shares between its windows, as it keeps them: the Spaces deleted and the archive's
@@ -69,6 +69,8 @@ pub(super) struct Recorder {
     pub(super) checked_for_updates: Cell<usize>,
     /// The import finds no browser on the machine.
     pub(super) no_browsers: Cell<bool>,
+    /// The browser the import reads and adds to, when a test gives one.
+    pub(super) import: RefCell<Option<std::rc::Rc<dyn crate::import::Host>>>,
     /// The window is full screen, as Linux's window manager says, for `window_full_screen`.
     pub(super) full_screen: Cell<bool>,
     /// The opt-ins' switches, as `crash_reports` and `agents` answer, None for one not offered.
@@ -76,8 +78,14 @@ pub(super) struct Recorder {
     pub(super) agents: Cell<Option<bool>>,
     /// The user turned off ⌥ bringing the hidden sidebar out.
     pub(super) option_off: Cell<bool>,
+    /// The user turned link previews off.
+    pub(super) previews_off: Cell<bool>,
+    /// The window's own buttons as the system says it draws them, once their window shows them.
+    pub(super) window_buttons: Cell<Option<super::WindowButtonGeometry>>,
     /// The Spaces it was asked to show, in order.
     pub(super) shown: RefCell<Vec<u64>>,
+    /// The id of the agent each agent's Space belongs to, as `space_agent` answers.
+    pub(super) space_agents: RefCell<HashMap<u64, SharedString>>,
     /// The menus it was asked to show, each item by its title and whether it's enabled.
     pub(super) menus: RefCell<Vec<Vec<(SharedString, bool)>>>,
     /// Where the last menu was asked to show, in the window.
@@ -90,6 +98,8 @@ pub(super) struct Recorder {
     pub(super) menus_in_reveal: RefCell<Vec<bool>>,
     /// What the menu bar was last asked to show, and the window's title.
     pub(super) menu_bar: RefCell<MenuBar>,
+    /// What `confirm` asked last, with what it does if the test confirms it.
+    pub(super) confirming: RefCell<Option<(String, String, Box<dyn FnOnce(&mut App)>)>>,
     pub(super) window_title: RefCell<String>,
     /// Whether it was last asked to draw the window's material light.
     pub(super) window_light: Cell<Option<bool>>,
@@ -109,6 +119,8 @@ pub(super) struct Recorder {
     pub(super) told_action: RefCell<Option<Box<dyn FnOnce(Vec<String>, &mut App)>>>,
     /// The dialog asks something else, so `tell` doesn't ask.
     pub(super) dialog_busy: Cell<bool>,
+    /// It warns before a move to another profile's Space, as `warn_moving_profiles` answers.
+    pub(super) warn_profiles: Cell<bool>,
     /// Each time the shell opened the Site Controls: the tab, and where they hang from.
     pub(super) site_controls: RefCell<Vec<(u64, crate::site_controls::Place)>>,
     /// The ids of the extensions the Site Controls were given to list, each time.
@@ -155,12 +167,17 @@ pub(super) struct Recorder {
     pub(super) names: RefCell<HashMap<u64, String>>,
     /// The words of the toasts with no Undo button it was asked to show.
     pub(super) toasts: RefCell<Vec<String>>,
+    /// The tabs it was asked to close with the rest of their split view.
+    pub(super) split_closes: RefCell<Vec<u64>>,
     /// The words of the toasts with an Undo button it was asked to show, and what the last one's
     /// button does.
     pub(super) undo_toasts: RefCell<Vec<String>>,
     pub(super) undo_toast: RefCell<Option<Rc<dyn Fn(&mut App)>>>,
-    /// What the last toast with a button other than Undo runs, its words in `toasts`.
-    pub(super) toast_run: RefCell<Option<Rc<dyn Fn(&mut App)>>>,
+    /// How many times a toast offering the undo was taken down.
+    pub(super) undo_toasts_hidden: Cell<usize>,
+    /// The label of the last toast's button other than Undo, and what it runs, its words in
+    /// `toasts`.
+    pub(super) toast_run: RefCell<Option<(&'static str, Rc<dyn Fn(&mut App)>)>>,
     /// Another browser window is in front of this one.
     pub(super) behind: Cell<bool>,
     /// The Edit menu's Undo and Redo titles it was last given.
@@ -181,6 +198,10 @@ pub(super) struct Recorder {
     pub(super) agent_permissions: RefCell<super::AgentGrants>,
     /// What the Library button's hover leaves out, none at first, as the core's default.
     hover_kinds_off: Cell<u32>,
+    /// The account's core, as the first launch's account step asks it, in a build that names a
+    /// sync server, which a test says; one that names none at first.
+    pub(super) account: Rc<Account>,
+    pub(super) sync_server: Cell<bool>,
     /// The videos opened that haven't given their first frame yet.
     videos_starting: RefCell<Vec<u64>>,
 }
@@ -236,6 +257,24 @@ impl Recorder {
         );
     }
 
+    /// Chooses the last item titled `title`, for a title that's in two submenus.
+    pub(super) fn choose_last(&self, title: &str, cx: &mut App) {
+        let at = self.menus.borrow().last().and_then(|items| {
+            items
+                .iter()
+                .rposition(|(each, enabled)| each.as_ref() == title && *enabled)
+        });
+        let answer = self
+            .answer
+            .borrow_mut()
+            .take()
+            .expect("a menu to choose from");
+        answer(
+            Some(at.unwrap_or_else(|| panic!("no {title} in the menu"))),
+            cx,
+        );
+    }
+
     /// Closes the last menu without a choice, as Escape or a click outside it does.
     pub(super) fn dismiss(&self, cx: &mut App) {
         let answer = self.answer.borrow_mut().take().expect("a menu to close");
@@ -267,7 +306,10 @@ impl Browser for Recorder {
         self.record(format!("select {tab}"))
     }
 
-    fn close(&self, tab: u64, _: bool, _: &mut App) {
+    fn close(&self, tab: u64, split: bool, _: &mut App) {
+        if split {
+            self.split_closes.borrow_mut().push(tab);
+        }
         self.edit(format!("close {tab}"));
         self.record(format!("close {tab}"))
     }
@@ -285,8 +327,12 @@ impl Browser for Recorder {
         self.edit(format!("space {tab} {space}"));
     }
 
+    fn move_folder_to_space(&self, folder: u64, space: u64, _: &mut App) {
+        self.edit(format!("space folder {folder} {space}"));
+    }
+
     fn warn_moving_profiles(&self, _: &mut App) -> bool {
-        Default::default()
+        self.warn_profiles.get()
     }
 
     fn set_warn_moving_profiles(&self, _: bool, _: &mut App) {}
@@ -315,6 +361,13 @@ impl Browser for Recorder {
     ) -> u64 {
         self.record(format!("open {} {pinned} {folder} {index}", urls.join(" ")));
         Default::default()
+    }
+
+    fn open_behind(&self, urls: &[String], pinned: bool, folder: u64, index: usize, _: &mut App) {
+        self.record(format!(
+            "open behind {} {pinned} {folder} {index}",
+            urls.join(" ")
+        ));
     }
 
     fn create_folder(&self, space: u64, name: &str, folder: u64, index: usize, _: &mut App) -> u64 {
@@ -399,6 +452,26 @@ impl Browser for Recorder {
 
     fn set_muted(&self, _: u64, _: bool, _: &mut App) {}
 
+    fn share_instead(&self, tab: u64, _: &mut App) {
+        self.record(format!("share instead {tab}"));
+    }
+
+    fn media(&self, tab: u64, action: MediaAction, _: &mut App) {
+        self.record(format!("media {tab} {action:?}"));
+    }
+
+    fn cast(&self, tab: u64, _: &mut App) {
+        self.record(format!("cast {tab}"));
+    }
+
+    fn cast_close(&self, _: &mut App) {
+        self.record("cast close".to_owned());
+    }
+
+    fn cast_to(&self, tab: u64, id: SharedString, _: &mut App) {
+        self.record(format!("cast to {tab} {id}"));
+    }
+
     fn clear(&self, _: &mut App) -> u64 {
         let id = self.core.ticket();
         self.edit(format!("clear as {id}"));
@@ -436,16 +509,20 @@ impl Browser for Recorder {
         self.record("reopen closed tab".into());
     }
 
-    fn reopen_preview(
+    fn open_preview(
         &self,
-        closed: &crate::link_preview::Closed,
+        over: u64,
+        url: SharedString,
+        link: Point<Pixels>,
         _: (Bounds<Pixels>, f32),
         _: &mut App,
     ) {
-        self.record(format!(
-            "reopen preview over {} {}",
-            closed.over, closed.url
-        ));
+        let (x, y) = (f32::from(link.x), f32::from(link.y));
+        self.record(format!("open preview over {over} {url} from {x},{y}"));
+    }
+
+    fn link_previews(&self) -> bool {
+        !self.previews_off.get()
     }
 
     fn close_preview(&self, over: u64, _: &mut App) -> bool {
@@ -792,6 +869,14 @@ impl Browser for Recorder {
         Default::default()
     }
 
+    fn space_agent(&self, space: u64) -> SharedString {
+        self.space_agents
+            .borrow()
+            .get(&space)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     // The Space it makes is always 7.
     fn create_space(&self, name: &str, _: u64, after: u64, _: &mut App) -> u64 {
         self.record(format!("create space {name} after {after}"));
@@ -809,6 +894,10 @@ impl Browser for Recorder {
 
     fn set_icon(&self, tab: u64, icon: &str, _: &mut App) {
         self.edit(format!("icon {tab} {icon}"));
+    }
+
+    fn restore_sidebar(&self, time: u64, _: &mut App) {
+        self.record(format!("restore sidebar {time}"));
     }
 
     fn delete_space(&self, space: u64, _: &mut App) -> bool {
@@ -851,9 +940,17 @@ impl Browser for Recorder {
         self.edit(format!("rename profile {profile} {name}"));
     }
 
+    fn account_host(&self) -> Option<Rc<dyn crate::account::Host>> {
+        let account: Rc<dyn crate::account::Host> = self.account.clone();
+        self.sync_server.get().then_some(account)
+    }
+
     // The import's made-up Arc, so the first launch has a browser to import from, unless a test
     // says there's none.
     fn import_host(&self) -> std::rc::Rc<dyn crate::import::Host> {
+        if let Some(host) = self.import.borrow().clone() {
+            return host;
+        }
         let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/src/import/fixture");
         let home = if self.no_browsers.get() {
             "/nonexistent"
@@ -883,12 +980,13 @@ impl Browser for Recorder {
 
     fn confirm(
         &self,
-        _: String,
-        _: String,
+        message: String,
+        detail: String,
         _: &'static str,
-        _: Box<dyn FnOnce(&mut App)>,
+        confirmed: Box<dyn FnOnce(&mut App)>,
         _: &mut App,
     ) {
+        *self.confirming.borrow_mut() = Some((message, detail, confirmed));
     }
 
     fn tell(
@@ -950,9 +1048,13 @@ impl Browser for Recorder {
             .push(if moving { "moving" } else { "still" });
     }
 
-    fn set_pane_corner(&self, _: f32, _: f32, _: &mut App) {}
+    fn set_pane_corner(&self, _: f32, _: f32, _: f32, _: &mut App) {}
 
     fn show_window_buttons(&self, _: bool, _: &mut App) {}
+
+    fn window_button_geometry(&self, _: &mut App) -> Option<super::WindowButtonGeometry> {
+        self.window_buttons.get()
+    }
 
     fn press_window_button(&self, button: WindowButton, _: &mut App) {
         if let WindowButton::Zoom = button {
@@ -995,6 +1097,11 @@ impl Browser for Recorder {
         self.record(format!("copy {text}"))
     }
 
+    /// The host's clipboard holds what was copied last.
+    fn pasted(&self, _: &App) -> Option<String> {
+        self.copied.borrow().last().cloned()
+    }
+
     fn share_services(&self, _: &str) -> Vec<SharedString> {
         self.share_services.borrow().clone()
     }
@@ -1022,6 +1129,8 @@ impl Browser for Recorder {
 
     fn hide_undo_toast(&self, _: &mut App) {
         self.undo_toast.borrow_mut().take();
+        self.undo_toasts_hidden
+            .set(self.undo_toasts_hidden.get() + 1);
     }
 
     fn in_front(&self) -> bool {
@@ -1031,13 +1140,13 @@ impl Browser for Recorder {
     fn toast_button(
         &self,
         text: &str,
-        _: (&'static str, &'static str),
+        (label, _): (&'static str, &'static str),
         run: Rc<dyn Fn(&mut App)>,
         _: Duration,
         _: &mut App,
     ) {
         self.toasts.borrow_mut().push(text.into());
-        *self.toast_run.borrow_mut() = Some(run);
+        *self.toast_run.borrow_mut() = Some((label, run));
     }
 
     fn full_screen_note(&self, shown: bool, _: &mut App) {
@@ -1107,6 +1216,7 @@ impl Browser for Recorder {
     fn command_bar(
         &self,
         editing: Option<(u64, SharedString)>,
+        _: Vec<SharedString>,
         _: Vec<BarTab>,
         field: Option<Bounds<Pixels>>,
         _: &mut App,
@@ -1258,6 +1368,18 @@ impl Browser for Recorder {
         self.record(format!("stop agent {agent}"));
     }
 
+    fn task(&self, agent: SharedString, action: crate::agents::task::TaskAction, _: &mut App) {
+        self.record(format!("task {agent} {action:?}"));
+    }
+
+    fn show_task(&self, agent: SharedString, _: &mut App) {
+        self.record(format!("show task {agent}"));
+    }
+
+    fn task_picture(&self, tab: u64, _: u64, _: &mut App) {
+        self.record(format!("task picture {tab}"));
+    }
+
     fn find_next(&self, _: u64, _: bool, _: &mut App) {}
 
     fn jump_to_selection(&self, _: u64, _: &mut App) {}
@@ -1307,4 +1429,90 @@ impl Browser for Recorder {
     }
 
     fn new_private_window(&self, _: &mut App) {}
+
+    fn new_little_window(&self, home: u64, _: &mut App) {
+        self.record(format!("new little window {home}"))
+    }
+
+    fn open_in_main_window(&self, tab: u64, home: u64, _: &mut App) {
+        self.record(format!("open in main window {tab} {home}"))
+    }
+
+    fn open_tab_in_little(&self, tab: u64, _: &mut App) {
+        self.record(format!("open tab in little {tab}"))
+    }
+
+    fn little_profile(&self, profile: u64, url: &str, _: &mut App) {
+        self.record(format!("little profile {profile} {url}"))
+    }
+}
+
+/// The account's core, recording what the account step asks of it.
+#[derive(Default)]
+pub(super) struct Account {
+    pub(super) calls: RefCell<Vec<String>>,
+}
+
+impl crate::account::Host for Account {
+    fn set_server(&self, server: &str) -> bool {
+        self.calls.borrow_mut().push(format!("server {server}"));
+        true
+    }
+
+    fn sign_in(&self) {
+        self.calls.borrow_mut().push("sign in".into());
+    }
+
+    fn cancel(&self) {
+        self.calls.borrow_mut().push("cancel".into());
+    }
+
+    fn sign_out(&self) {
+        self.calls.borrow_mut().push("sign out".into());
+    }
+
+    fn recovery_words(&self) -> String {
+        self.calls.borrow_mut().push("recovery words".into());
+        "abandon ability able about above absent absorb abstract absurd abuse access accident \
+         account accuse achieve acid acoustic acquire across act action actor actress actual"
+            .into()
+    }
+
+    fn enter_recovery_words(&self, _: &str) -> bool {
+        self.calls.borrow_mut().push("words".into());
+        true
+    }
+
+    fn start_over(&self) {
+        self.calls.borrow_mut().push("start over".into());
+    }
+
+    fn request_pairing(&self) {
+        self.calls.borrow_mut().push("request pairing".into());
+    }
+
+    fn read_devices(&self) {
+        self.calls.borrow_mut().push("read devices".into());
+    }
+
+    fn remove_device(&self, id: &str) {
+        self.calls.borrow_mut().push(format!("remove {id}"));
+    }
+
+    fn copy_secret(&self, _: &str, _: Duration, _: &mut App) {
+        self.calls.borrow_mut().push("copy secret".into());
+    }
+
+    fn confirm(
+        &self,
+        message: String,
+        _: String,
+        _: &'static str,
+        _: crate::dialog::Return,
+        _: Box<dyn FnOnce(&mut App)>,
+        _: &mut gpui::Window,
+        _: &mut App,
+    ) {
+        self.calls.borrow_mut().push(format!("ask {message}"));
+    }
 }

@@ -16,7 +16,8 @@ printf '%s\n' '! Title: Check list' '/listed-ad.js' > "$out/site/lists/check-lis
 python3 -I - "$ublock/assets/assets.json" "${site}lists/check-list.txt" \
   > "$out/site/lists/assets.json" << 'EOF'
 import json, sys
-with open(sys.argv[1]) as f:
+# uBlock Origin's file is UTF-8, which Windows' Python doesn't read by default (#872).
+with open(sys.argv[1], encoding="utf-8") as f:
     assets = json.load(f)
 listed = {}
 for key, entry in assets.items():

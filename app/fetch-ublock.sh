@@ -1,7 +1,8 @@
 #!/bin/bash
 # Downloads the uBlock Origin ublock.ini names, checked against its hash, into .deps/ublock, adds
 # our key to its manifest so its id doesn't depend on where the app is, takes out the timers that
-# wake an idle browser and the reload as it first starts (below), and prints its folder.
+# wake an idle browser and the reload as it first starts, reloads once a page that loaded what it
+# blocks before it was ready (below), and prints its folder.
 # Nothing in the download runs here: it's unzipped into a folder of its own and only read.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -12,16 +13,17 @@ fail() {
 }
 
 # What starts each file this changes, as GPL 3 asks of a changed file.
-changed="// Changed by ilo's app/fetch-ublock.sh: its housekeeping doesn't wake an idle browser, and it doesn't reload as it first starts."
+changed="// Changed by ilo's app/fetch-ublock.sh: its housekeeping doesn't wake an idle browser, it doesn't reload as it first starts, and a page that loaded what it blocks before it was ready reloads once."
 
 # Puts $3, which may be several lines or none, in place of the line $2 of uBlock Origin's file $1,
 # and fails unless that line is there once, so a new release is read again before it ships.
 edit() {
   local file=$dir.part/uBlock0.chromium/$1
   [ "$(grep -cxF -- "$2" "$file")" = 1 ] || fail "$1 no longer has the line: $2"
-  awk -v old="$2" -v new="$3" -v changed="$changed" '
-    NR == 1 && $0 != changed { print changed }
-    $0 == old { if (new != "") print new; next }
+  # Through the environment, as macOS's awk takes no newline in a -v value.
+  old="$2" new="$3" changed="$changed" awk '
+    NR == 1 && $0 != ENVIRON["changed"] { print ENVIRON["changed"] }
+    $0 == ENVIRON["old"] { if (ENVIRON["new"] != "") print ENVIRON["new"]; next }
     { print }' "$file" > "$file.new"
   mv "$file.new" "$file"
 }
@@ -66,13 +68,41 @@ if [ ! -f "$dir/manifest.json" ] || ! grep -qF "\"key\": \"$key\"" "$dir/manifes
   edit js/tab.js '    pageStoreJanitorTimer.on(pageStoreJanitorPeriod);' \
     '    µb.pageStoreJanitorSoon = ( ) => { pageStoreJanitorTimer.on(pageStoreJanitorPeriod); };'
   edit js/tab.js '        super.onClosed(tabId);' \
-    '        super.onClosed(tabId);\n        µb.pageStoreJanitorSoon();'
+    $'        super.onClosed(tabId);\n        µb.pageStoreJanitorSoon();'
   # On Chromium it reloaded itself as it first started in a profile, for Chrome's managed storage,
   # which can be empty then (uBlock-issues#1547). The core gives it its managed settings before it
   # loads, and the reload unloaded it under the first pages, as Chromium then resets every frame's
   # URL loader factories, dropping a subresource they were asking for (#954).
   edit js/start.js "    if ( lastVersionInt === 0 && vAPI.webextFlavor.soup.has('chromium') ) {" \
     '    if ( false ) {'
+  # A page that started before it was ready loaded its ads, as Chromium doesn't hold a request for
+  # an extension that hasn't started, and uBlock Origin starts after the first pages (#744). Once
+  # ready, it goes through what each open page loaded, as the page's resource timing lists it, and
+  # reloads once a page that loaded something it blocks, unless the user has pressed or typed in it.
+  # No page waits for it.
+  IFS= read -r -d '' reload_unready <<'EOF' || true
+            vAPI.net.setSuspendableListener(onBeforeRequest);
+            vAPI.tabs.query({ url: [ 'http://*/*', 'https://*/*' ], discarded: false }).then(tabs => {
+                const types = { script: 'script', img: 'image', image: 'image', css: 'stylesheet', link: 'stylesheet', xmlhttprequest: 'xmlhttprequest', fetch: 'xmlhttprequest', beacon: 'ping', video: 'media', audio: 'media', embed: 'object', object: 'object' };
+                for ( const tab of tabs ) {
+                    vAPI.tabs.executeScript(tab.id, {
+                        code: "[ navigator.userActivation.hasBeenActive, performance.getEntriesByType('resource').map(entry => [ entry.name, entry.initiatorType ]) ]",
+                        runAt: 'document_start',
+                    }).then(([ loaded ]) => {
+                        if ( Array.isArray(loaded) === false || loaded[0] !== false ) { return; }
+                        const pageStore = µb.pageStoreFromTabId(tab.id);
+                        if ( pageStore === null ) { return; }
+                        const blocked = loaded[1].some(([ url, initiator ]) => {
+                            if ( /^https?:/.test(url) === false ) { return false; }
+                            const fctxt = µb.filteringContext.fromWebrequestDetails({ tabId: tab.id, frameId: 0, parentFrameId: -1, type: types[initiator] || 'other', url, method: 'GET', documentUrl: tab.url });
+                            return pageStore.filterRequest(fctxt) === 1;
+                        });
+                        if ( blocked ) { vAPI.tabs.reload(tab.id); }
+                    });
+                }
+            });
+EOF
+  edit js/traffic.js '            vAPI.net.setSuspendableListener(onBeforeRequest);' "$reload_unready"
   mv "$dir.part/uBlock0.chromium" "$dir"
   rm -rf "$dir.part"
   # Earlier versions go.

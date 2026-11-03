@@ -15,9 +15,8 @@
 //   rightclickkey <x> <y>                 a right click in the key window
 //   drag <x> <y> <x2> <y2>                presses at (x, y), moves to (x2, y2) and lets go
 //   dragkey <x> <y> <x2> <y2>             as drag, in the key window, such as Settings
-//   press <x> <y> [cmd] [shift] [alt] [ctrl]
-//                                         presses at (x, y), for a drag in steps, with those
-//                                         modifiers held, as dragto and release take them too
+//   press <x> <y> [cmd] [shift] [alt]     presses at (x, y), for a drag in steps, with those keys
+//                                         held, as dragto and release take them too
 //   rightpress, rightdragto, rightrelease <x> <y>
 //                                         as press, dragto and release, with the right button,
 //                                         as a press-drag-release through a context menu
@@ -124,6 +123,11 @@
 //                                         "browser: menu bar <menu>: <titles>", enabled as
 //                                         AppKit would show them now, written as "menu shown"
 //                                         writes a menu's, and chooses none
+//   dock [<title>]                        chooses the Dock menu's item titled <title>, the menu
+//                                         the Dock icon's right click opens, or with none logs
+//                                         its items, as "browser: dock menu <titles>"
+//   statusitem [click]                    logs whether the menu bar has Little ilo's button,
+//                                         "browser: status item shown" or "none", or clicks it
 //   openmenu <menu>                       opens the main menu's <menu>, the same menu the menu
 //                                         bar opens, near the window's top left, tracked until
 //                                         dismiss or choose closes it. Commands still come in
@@ -137,9 +141,11 @@
 //                                         page, Chromium's or Safari's engine's: letters add to a
 //                                         composition, space converts it to 日本語, return
 //                                         commits it and escape cancels it
-//   window <n>                            drives the n-th browser window opened, from 1, from
+//   window <n> [behind]                   drives the n-th browser window opened, from 1, from
 //                                         now, bringing it to the front with the keyboard as a
-//                                         click on it does, logging "browser: drive window <n>"
+//                                         click on it does, logging "browser: drive window <n>",
+//                                         or with behind leaving it where it is, for the pointer
+//                                         over a window behind another (#1432)
 //   agentspace <agent> <name>             makes a Space named <name> for the agent with the id
 //                                         <agent> and the name <name>, as agent code will once
 //                                         there is some, logging "browser: made space <space> for
@@ -184,6 +190,9 @@
 #include "browser_core.h"
 #include "../host.h"
 #include "menu_window.h"
+
+// host.mm's menu bar button for Little ilo, nil while it's off.
+NSStatusBarButton* HostLittleStatusButton();
 
 // A drag from another app, as AppKit describes it to the view under the pointer: what it carries
 // and where it is.
@@ -271,11 +280,11 @@ const std::map<std::string, unsigned short> kKeyCodes = {
     {"0", 29}, {"-", 27}, {"+", 27}, {"[", 33}, {"]", 30}, {"up", 126}, {"down", 125},
     {"left", 123}, {"right", 124}, {"backspace", 51}, {",", 43}, {"delete", 117},
     {"pageup", 116}, {"pagedown", 121}, {"/", 44}, {"?", 44}, {"=", 24}, {"&", 26}, {"_", 27},
-    {":", 41}, {"@", 19}, {"f12", 111}, {"f10", 109},
+    {":", 41}, {"@", 19}, {"f12", 111}, {"f10", 109}, {"f6", 97},
 };
 // AppKit's characters for the arrows are NSUpArrowFunctionKey to NSRightArrowFunctionKey, and for
-// the others NSDeleteFunctionKey, NSPageUpFunctionKey, NSPageDownFunctionKey, NSF12FunctionKey and
-// NSF10FunctionKey.
+// the others NSDeleteFunctionKey, NSPageUpFunctionKey, NSPageDownFunctionKey, NSF12FunctionKey,
+// NSF10FunctionKey and NSF6FunctionKey.
 const std::map<std::string, std::string> kCharacters = {
     {"return", "\r"},
     {"tab", "\t"},
@@ -291,6 +300,7 @@ const std::map<std::string, std::string> kCharacters = {
     {"pagedown", "\xEF\x9C\xAD"},
     {"f12", "\xEF\x9C\x8F"},
     {"f10", "\xEF\x9C\x8D"},
+    {"f6", "\xEF\x9C\x89"},
 };
 
 // Marks the end of a command's events. AppKit handles events in the order they were posted.
@@ -574,7 +584,7 @@ bool Key(NSWindow* window,
   if (key == "up" || key == "down" || key == "left" || key == "right") {
     flags |= NSEventModifierFlagFunction | NSEventModifierFlagNumericPad;
   } else if (key == "delete" || key == "pageup" || key == "pagedown" || key == "f12" ||
-             key == "f10") {
+             key == "f10" || key == "f6") {
     flags |= NSEventModifierFlagFunction;
   }
   for (NSEventType type : types) {
@@ -1142,9 +1152,15 @@ bool Run(const std::string& line, void (^done)(void)) {
     if (!(words >> number) || number == 0 || !host_browser_window(number - 1)) {
       return false;
     }
+    std::string behind;
+    if (words >> behind && behind != "behind") {
+      return false;
+    }
     g_driven = number - 1;
-    fprintf(stderr, "browser: drive window %zu\n", number);
-    [(__bridge NSWindow*)host_browser_window(g_driven) makeKeyAndOrderFront:nil];
+    fprintf(stderr, "browser: drive window %zu%s\n", number, behind.empty() ? "" : " behind");
+    if (behind.empty()) {
+      [(__bridge NSWindow*)host_browser_window(g_driven) makeKeyAndOrderFront:nil];
+    }
     done();
     return true;
   }
@@ -1204,6 +1220,14 @@ bool Run(const std::string& line, void (^done)(void)) {
       return false;
     }
     NSWindow* target = WindowAt(window, x, y);
+    // A click that another window of the app's takes, such as one AppKit puts over a full-screen
+    // window, says which, since a check's click that does nothing logs nothing else (#1090).
+    if (target != window) {
+      const NSRect frame = target.frame;
+      fprintf(stderr, "browser: drive click went to %s %ld at %.0f,%.0f %.0fx%.0f\n",
+              NSStringFromClass([target class]).UTF8String, (long)target.windowNumber,
+              frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
+    }
     Convert(window, target, &x, &y);
     Click(target, x, y, 1, Modifiers(words));
     done();
@@ -1337,7 +1361,6 @@ bool Run(const std::string& line, void (^done)(void)) {
     NSEventType type = action == "press"    ? NSEventTypeLeftMouseDown
                        : action == "dragto" ? NSEventTypeLeftMouseDragged
                                             : NSEventTypeLeftMouseUp;
-    // With modifiers after the point, as a click's.
     PostMouse(target, type, x, y, 1, Modifiers(words));
     if (action == "release") {
       pressed = nil;
@@ -1684,6 +1707,46 @@ bool Run(const std::string& line, void (^done)(void)) {
     done();
     return true;
   }
+  if (action == "dock") {
+    NSString* title = @(line.substr(std::min(line.size(), action.size() + 1)).c_str());
+    id<NSApplicationDelegate> delegate = NSApp.delegate;
+    NSMenu* menu = [delegate respondsToSelector:@selector(applicationDockMenu:)]
+                       ? [delegate applicationDockMenu:NSApp]
+                       : nil;
+    if (!menu) {
+      return false;
+    }
+    if (title.length) {
+      NSInteger index = [menu indexOfItemWithTitle:title];
+      if (index < 0) {
+        return false;
+      }
+      [menu performActionForItemAtIndex:index];
+    } else {
+      NSMutableArray<NSString*>* titles = [NSMutableArray array];
+      for (NSMenuItem* item in menu.itemArray) {
+        if (!item.separatorItem && !item.hidden) {
+          [titles addObject:item.title];
+        }
+      }
+      fprintf(stderr, "browser: dock menu %s\n", [titles componentsJoinedByString:@", "].UTF8String);
+    }
+    done();
+    return true;
+  }
+  if (action == "statusitem") {
+    NSStatusBarButton* button = HostLittleStatusButton();
+    if (line.size() > action.size()) {
+      if (!button) {
+        return false;
+      }
+      [button performClick:nil];
+    } else {
+      fprintf(stderr, "browser: status item %s\n", button ? "shown" : "none");
+    }
+    done();
+    return true;
+  }
   if (action == "menubar") {
     NSString* title = @(line.substr(std::min(line.size(), action.size() + 1)).c_str());
     NSMenu* menu = [NSApp.mainMenu itemWithTitle:title].submenu;
@@ -1791,7 +1854,10 @@ bool Run(const std::string& line, void (^done)(void)) {
   if (action == "type") {
     std::string text = line.substr(std::min(line.size(), action.size() + 1));
     for (char character : text) {
-      if (!Key(key_window, std::string(1, character), 0)) {
+      // A capital is its letter with shift, as the keyboard types it.
+      const bool capital = character >= 'A' && character <= 'Z';
+      const std::string key(1, capital ? character - 'A' + 'a' : character);
+      if (!Key(key_window, key, capital ? NSEventModifierFlagShift : 0)) {
         return false;
       }
     }

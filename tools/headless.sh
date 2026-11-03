@@ -46,16 +46,16 @@ if [ -z "$run" ]; then
   shift 2
   log=${out%.*}.log
 fi
-for tool in sway grim magick; do
+for tool in sway grim; do
   command -v "$tool" >/dev/null || { echo "Needs sway, grim and ImageMagick: no $tool." >&2; exit 1; }
 done
 # ImageMagick 7's magick, or 6's convert and compare (Ubuntu's).
 if command -v magick >/dev/null; then
   convert=(magick) compare=(magick compare)
-elif command -v compare >/dev/null; then
+elif command -v convert >/dev/null && command -v compare >/dev/null; then
   convert=(convert) compare=(compare)
 else
-  echo "Needs sway, grim and ImageMagick: no magick." >&2; exit 1
+  echo "Needs sway, grim and ImageMagick: no magick, or convert and compare." >&2; exit 1
 fi
 # How many pixels differ between two pictures.
 differ() {
@@ -75,13 +75,15 @@ cleanup() {
 trap cleanup EXIT
 
 # The session tells its children's environment, where the Wayland socket and Xwayland's display
-# are, through a file once it's up.
+# are, through a file once it's up. A window that asks to be activated gets the keyboard, as on
+# GNOME or KDE, where sway's own default only marks it urgent.
 cat >"$dir/config" <<EOF
 output HEADLESS-1 resolution $(awk "BEGIN { printf \"%dx%d\", 1280 * $scale, 800 * $scale }") scale $scale
 xwayland enable
 default_border none
 default_floating_border none
 for_window [all] floating enable
+focus_on_window_activation focus
 exec sh -c 'echo "\$WAYLAND_DISPLAY \$SWAYSOCK \${DISPLAY:-}" > $dir/env'
 EOF
 # The integrated GPU's, not NVIDIA's: Vulkan, which GPUI draws with, finds no adapter that can

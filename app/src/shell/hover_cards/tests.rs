@@ -11,7 +11,9 @@ use gpui::{
 use crate::{
     dock_dot::QUIET,
     hover_card::{Action, Event},
+    icon_picker::{self, Picked, Recents, Subject},
     shell::{Folders, Page, Row, Shell, recorder::Recorder},
+    theme_picker,
 };
 
 /// A drawn shell with the pinned tab 1, the Today tabs 2, 3 and 4, and the favorite 10, showing 2.
@@ -217,6 +219,92 @@ fn a_rows_menu_closes_the_card(cx: &mut TestAppContext) {
     assert!(!host.take().iter().any(|call| call.starts_with("card rest")));
 }
 
+/// No card rests while a name field is open, a tab's or a Space's, its menu up or not, as the card
+/// would keep the name being changed (#1452).
+#[gpui::test]
+fn no_card_rests_while_a_name_field_is_open(cx: &mut TestAppContext) {
+    let (shell, cx, host) = with_tabs(cx);
+    let rests = |cx: &mut VisualTestContext, tab: u64| {
+        shell.update(cx, |shell, cx| shell.hover_card(Row::Tab(tab), true, cx));
+        host.take().iter().any(|call| call.starts_with("card rest"))
+    };
+    shell.update(cx, |shell, cx| shell.rename_tab(3, cx));
+    assert!(!rests(cx, 4), "a tab's name field is open");
+    shell.update_in(cx, |shell, window, cx| shell.cancel_name(window, cx));
+    assert!(rests(cx, 4), "the tab's name field closed");
+    shell.update(cx, |shell, cx| shell.rename_space(1, cx));
+    assert!(!rests(cx, 3), "the Space's name field is open");
+}
+
+/// A tab's new title, the name the core reports it was given or its page's, goes to its card,
+/// which shows it if it's that tab's (#1452); a title that didn't change doesn't.
+#[gpui::test]
+fn a_tab_s_new_name_goes_to_its_card(cx: &mut TestAppContext) {
+    let (shell, cx, host) = with_tabs(cx);
+    rest_on(&shell, cx, &host, 3);
+    let told = |cx: &mut VisualTestContext, title: &str| {
+        shell.update(cx, |shell, cx| {
+            shell.set_title(3, title.to_string().into(), cx)
+        });
+        host.take()
+            .into_iter()
+            .filter(|call| call.starts_with("card changed"))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(told(cx, "Weather"), ["card changed 3 Weather"]);
+    assert!(told(cx, "Weather").is_empty());
+}
+
+/// The pickers' windows, which show nowhere.
+struct NoWhere;
+
+impl theme_picker::Host for NoWhere {
+    fn show(&self, _: u64, _: f32, _: f32, _: &[(f32, f32, f32)]) {}
+
+    fn hide(&self) {}
+
+    fn detent(&self) {}
+}
+
+impl icon_picker::Host for NoWhere {
+    fn show(&self, _: u64, _: f32, _: f32) {}
+
+    fn hide(&self) {}
+
+    fn keep_recents(&self, _: &str) {}
+}
+
+/// The theme picker, as Edit Space opens it beside the sidebar, sends the card showing away, and
+/// none rests while it or the icon picker shows, as the card would be under it (#1071).
+#[gpui::test]
+fn a_picker_closes_the_card(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        theme_picker::open(Rc::new(NoWhere), cx);
+        icon_picker::open(Rc::new(NoWhere), Recents::default(), cx);
+    });
+    let (shell, cx, host) = with_tabs(cx);
+    let rests = |cx: &mut VisualTestContext, tab: u64| {
+        shell.update(cx, |shell, cx| shell.hover_card(Row::Tab(tab), true, cx));
+        host.take().iter().any(|call| call.starts_with("card rest"))
+    };
+    rest_on(&shell, cx, &host, 3);
+    shell.update(cx, |shell, cx| {
+        shell.show_theme_picker(1, point(200., 100.), cx)
+    });
+    assert!(host.take().contains(&"card close".to_string()));
+    assert!(!rests(cx, 4), "the theme picker shows");
+    cx.update(|_, cx| theme_picker::dismissed(cx));
+    assert!(rests(cx, 4), "the theme picker closed");
+
+    shell.update(cx, |_, cx| {
+        let picked: Picked = Rc::new(|_, _| {});
+        icon_picker::show(1, Subject::Tab(3), "".into(), point(0., 0.), picked, cx);
+    });
+    assert!(!rests(cx, 4), "the icon picker shows");
+    cx.update(|_, cx| icon_picker::dismissed(cx));
+    assert!(rests(cx, 4), "the icon picker closed");
+}
+
 /// Each button makes the call the row's menu makes, or for Split, the one its drag onto the page
 /// makes, beside the tab shown.
 #[gpui::test]
@@ -237,6 +325,50 @@ fn the_buttons_make_the_menus_calls(cx: &mut TestAppContext) {
     );
     assert_eq!(act(cx, 10, Action::Unfavorite), ["move 10 false 0 0"]);
     assert_eq!(act(cx, 3, Action::Split), ["split 3 2 false"]);
+}
+
+/// While a page shares another tab, the card of a tab Chrome would offer instead has Share This
+/// Tab Instead, which has the core switch the share to it; the others' cards don't.
+#[gpui::test]
+fn a_tab_to_share_instead_offers_it(cx: &mut TestAppContext) {
+    let (shell, cx, host) = with_tabs(cx);
+    shell.update(cx, |shell, cx| {
+        let page = Page {
+            share_instead: true,
+            ..shell.page(3)
+        };
+        shell.set_page(3, page, cx);
+    });
+    assert_eq!(
+        rest_on(&shell, cx, &host, 4),
+        "card rest 4 pin favorite split picture"
+    );
+    assert_eq!(
+        rest_on(&shell, cx, &host, 3),
+        "card rest 3 pin favorite split share-instead picture"
+    );
+    let rest = host.card.borrow().clone().unwrap();
+    cx.update(|_, cx| (rest.events)(3, Event::Act(Action::ShareInstead), cx));
+    cx.run_until_parked();
+    assert!(host.take().contains(&"share instead 3".to_owned()));
+}
+
+/// The sidebar shown over the page while hidden has the cards it has docked, Split and all.
+#[gpui::test]
+fn a_hidden_sidebars_card_splits(cx: &mut TestAppContext) {
+    let (shell, cx, host) = with_tabs(cx);
+    shell.update(cx, |shell, cx| shell.toggle_sidebar(cx));
+    cx.run_until_parked();
+    assert!(shell.read_with(cx, |shell, _| shell.sidebar_hidden));
+    host.take();
+    assert_eq!(
+        rest_on(&shell, cx, &host, 3),
+        "card rest 3 pin favorite split picture"
+    );
+    let rest = host.card.borrow().clone().unwrap();
+    cx.update(|_, cx| (rest.events)(3, Event::Act(Action::Split), cx));
+    cx.run_until_parked();
+    assert_eq!(host.take_edits(), ["split 3 2 false"]);
 }
 
 /// The tabs a run of switches hides are pictured once it's over, never on a switch; the tab shown

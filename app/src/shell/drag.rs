@@ -4,6 +4,7 @@
 
 use std::{
     collections::HashMap,
+    path::PathBuf,
     time::{Duration, Instant},
 };
 
@@ -13,9 +14,10 @@ use gpui::{
 };
 
 use super::{
-    Closing, Curve, DRAG_START, Drag, FOLDER_INDENT, HeldRow, NAME_HEIGHT, Opened, PLATE_HEIGHT,
-    PLATE_INSET, PLATE_RADIUS, PRESS_SCALE, PRESS_TIME, Place, ROW_HEIGHT, ROW_PITCH, Shape, Shell,
-    Slot, TILE_HEIGHT, TILE_RADIUS, slots,
+    Closing, Curve, DRAG_START, Drag, Edit, FOLDER_INDENT, HeldRow, LIST_GLIDE, LIST_GLIDE_POWER,
+    ListGlide, NAME_HEIGHT, Opened, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS, PRESS_SCALE,
+    PRESS_TIME, Place, ROW_HEIGHT, ROW_PITCH, Shape, Shell, Slot, TILE_HEIGHT, TILE_RADIUS, What,
+    files, slots,
 };
 
 /// The tab that links or files dragged in stand for until they're dropped: none, as the core
@@ -28,20 +30,22 @@ pub(super) const EDGE_WAIT: Duration = Duration::from_millis(500);
 /// How long the pointer rests on the middle half of another tab's row before the dragged tab
 /// would join it in a split view, so passing rows still reorders (ours, interim: Arc's isn't
 /// measured).
-const SPLIT_REST: Duration = Duration::from_millis(400);
+pub(super) const SPLIT_REST: Duration = Duration::from_millis(400);
 
 impl Shell {
     /// Starts the list's rows from where they were in `before` to where they are now: rows still
     /// there slide, a new tab's row is in its place at once with its plate fading in, several new
     /// ones fade in whole, and a closed one fades where it was (docs/ux-spec.md › Tab rows).
-    pub(super) fn move_rows(&mut self, before: HashMap<Slot, f32>, curve: Curve) {
-        let now = Instant::now();
+    /// Under Reduce Motion the rows are in their places at once, a closed one gone with its room,
+    /// and new ones still fade in.
+    pub(super) fn move_rows(&mut self, before: HashMap<Slot, f32>, curve: Curve, cx: &gpui::App) {
+        let (now, moved) = (Instant::now(), crate::motion::start(cx));
         let after = self.layout();
-        let slides = after
+        let slides: Vec<_> = after
             .iter()
             .filter_map(|(&slot, &top)| {
                 let from = before.get(&slot)? + self.slide(slot) - top;
-                (from != 0.).then_some((slot, (from, now, curve)))
+                (from != 0.).then_some((slot, (from, moved, curve)))
             })
             .collect();
         let mut opened = after
@@ -78,11 +82,16 @@ impl Shell {
                     folder: folder.map(|space| space.is_open(tab)),
                     indent: self.depth(tab) as f32 * FOLDER_INDENT,
                     top: top + self.slide(slot),
-                    start: now,
+                    start: moved,
                 });
             }
         }
-        self.slides = slides;
+        // Slides already over stay for the next frame to drop, which says the rows settled: under
+        // Reduce Motion every slide is over at once, and the core's next answer, as a ⌘Z's second
+        // and third tabs come, would otherwise take them before any frame saw them.
+        self.slides
+            .retain(|_, (_, start, curve)| curve.at(start.elapsed().as_secs_f32()).is_none());
+        self.slides.extend(slides);
     }
 
     /// How far a row is drawn from its place: where the pointer has a dragged one, and others while
@@ -124,7 +133,7 @@ impl Shell {
         let row = [
             PLATE_INSET + indent,
             row_top + (ROW_HEIGHT - PLATE_HEIGHT) / 2.,
-            self.width() - 2. * PLATE_INSET - indent,
+            self.rows_width() - 2. * PLATE_INSET - indent,
             PLATE_HEIGHT,
             PLATE_RADIUS,
         ];
@@ -167,13 +176,20 @@ impl Shell {
     /// Scrolls the list the least that shows `tab`'s row whole, if it has one: for a new tab's row,
     /// as Dia's does for a tab opened behind, and for the tab shown, as Chrome's tab strip does.
     pub(super) fn scroll_to_row(&self, tab: u64) {
-        let Some(&top) = self.layout().get(&Slot::Tab(self.row_of(tab))) else {
+        self.scroll_to_slot(Slot::Tab(self.row_of(tab)), &tab.to_string());
+    }
+
+    /// Glides the list the least that shows `slot` whole, if the Space shown has it, from where it
+    /// is or is gliding to. `what` names it in the log.
+    pub(super) fn scroll_to_slot(&self, slot: Slot, what: &str) {
+        let Some(&top) = self.layout().get(&slot) else {
             return;
         };
-        let top = top + self.tiles_room();
+        // In the scrolled part's own place, under the name row that stays put.
+        let top = top + self.tiles_room() - self.fixed_head();
         let height = f32::from(self.list_scroll.bounds().size.height);
-        let offset = self.list_scroll.offset();
-        let scrolled = -f32::from(offset.y);
+        let offset = -f32::from(self.list_scroll.offset().y);
+        let scrolled = self.list_glide.get().map_or(offset, |glide| glide.to);
         let to = if top < scrolled {
             top
         } else if top + ROW_PITCH > scrolled + height {
@@ -184,14 +200,64 @@ impl Shell {
         // Not before the list's first layout.
         if height > 0. {
             // check.sh reads this line.
-            log!("browser: list scrolled to {to} for {tab}");
-            self.list_scroll.set_offset(point(offset.x, px(-to)));
+            log!("browser: list scrolled to {to} for {what}");
+            let glide = ListGlide {
+                start: Instant::now(),
+                from: offset,
+                to,
+                set: offset,
+            };
+            self.list_glide.set(Some(glide));
+        }
+    }
+
+    /// Moves the list on along its glide to a row, which a scroll of the user's ends. Returns
+    /// whether it moved the list.
+    pub(super) fn step_list_glide(&mut self, window: &mut Window) -> bool {
+        let Some(glide) = self.list_glide.get() else {
+            return false;
+        };
+        let offset = self.list_scroll.offset();
+        if (-f32::from(offset.y) - glide.set).abs() > 0.5 {
+            self.list_glide.set(None);
+            return false;
+        }
+        let t = (glide.start.elapsed().as_secs_f32() / LIST_GLIDE).min(1.);
+        let at = glide.from + (glide.to - glide.from) * (1. - (1. - t).powi(LIST_GLIDE_POWER));
+        self.list_scroll.set_offset(point(offset.x, px(-at)));
+        if t < 1. {
+            self.list_glide.set(Some(ListGlide { set: at, ..glide }));
+            window.request_animation_frame();
+        } else {
+            self.list_glide.set(None);
+        }
+        true
+    }
+
+    /// Lands the list's glide at the next frame, as the app's frames have by the time a test
+    /// looks.
+    #[cfg(test)]
+    pub(super) fn land_list_glide(&self) {
+        if let Some(glide) = self.list_glide.get() {
+            let start = Instant::now() - Duration::from_secs_f32(LIST_GLIDE);
+            self.list_glide.set(Some(ListGlide { start, ..glide }));
         }
     }
 
     /// Where `y`, down from the sidebar's top, is in the list, scrolled as it is.
     pub(super) fn list_y(&self, y: f32) -> f32 {
         y - self.drawn_list_top() - f32::from(self.list_scroll.offset().y)
+    }
+
+    /// How much of the list's top stays put while its rows scroll under it: the Space's name row,
+    /// as Arc 1.170's, unless the tiles scroll with the list, which takes the row along.
+    pub(super) fn fixed_head(&self) -> f32 {
+        if self.tiles_scroll() { 0. } else { NAME_HEIGHT }
+    }
+
+    /// Whether `y`, down from the sidebar's top, is on the part of the list's top that stays put.
+    pub(super) fn on_fixed_head(&self, y: f32) -> bool {
+        (0. ..self.fixed_head()).contains(&(y - self.drawn_list_top()))
     }
 
     /// The row the pointer drags, once it has come away.
@@ -204,6 +270,8 @@ impl Shell {
 
     /// The pointer pressed `tab`'s row at `position`, which may start a drag.
     pub(super) fn press_row(&mut self, tab: u64, position: Point<Pixels>) {
+        // A press on the row is past the click its − took, so its remove button needn't wait.
+        self.remove_held = None;
         let pinned = self.pinned().contains(&tab);
         let (pinned_rows, today_rows) = self.rows();
         let rows = if pinned { pinned_rows } else { today_rows };
@@ -304,7 +372,29 @@ impl Shell {
             held: false,
             space: self.space,
             edge: None,
+            alt_click: false,
         });
+    }
+
+    /// An ⌥ press on `tab`'s row at `position`: a drag, if it moves, else ⌥-click's split once
+    /// it's let go. Where the row can't be dragged, the split is at once, as it was.
+    pub(super) fn alt_press_list_row(
+        &mut self,
+        tab: u64,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        self.end_hovers(cx);
+        self.press_row(tab, position);
+        if let Some(drag) = self
+            .drag
+            .as_mut()
+            .filter(|drag| drag.tab == tab && !drag.moving)
+        {
+            drag.alt_click = true;
+        } else if !self.alt_press_row(tab, cx) {
+            self.show_row(tab, cx);
+        }
     }
 
     /// The pointer pressing a row or a tile moved to `position`. Past DRAG_START the tab comes away
@@ -325,6 +415,10 @@ impl Shell {
         if !drag.moving && !incoming && moved.x.abs().max(moved.y.abs()) < px(DRAG_START) {
             return;
         }
+        let pointer = in_sidebar(position, drag.origin);
+        // Ahead of the page's targets, which take the drag: one that crossed the edge to get over
+        // the page is no longer held there (#1466).
+        self.watch_edge(pointer.x, cx);
         if !incoming && self.drag_over_page(position, cx) {
             return;
         }
@@ -334,7 +428,6 @@ impl Shell {
         let (tab, to, grab, span, kept_depth) =
             (drag.tab, drag.to, drag.grab, drag.span, drag.depth);
         let (from, from_depth) = (drag.from, drag.from_depth);
-        let pointer = in_sidebar(position, drag.origin);
         // Rows in, from where it was, by how far the pointer has gone right. Links dragged in go
         // in as far as the row under them.
         let moved_in = (pointer.x - in_sidebar(drag.press, drag.origin).x) / FOLDER_INDENT;
@@ -346,9 +439,9 @@ impl Shell {
         let (pinned, today) = self.rows();
         let (pinned, today): (Vec<u64>, Vec<u64>) = (others(pinned), others(today));
         let favorites = self.favorites.iter().filter(|&&other| other != tab).count();
-        let folder = self.is_folder(tab);
+        // Its own Space's, which may not be the one shown.
+        let folder = self.is_folder_anywhere(tab);
         let away = drag.space != self.space;
-        self.watch_edge(pointer.x, cx);
         // A favorite stays one in an agent's Space, which it can't move into.
         let kept = self.favorites.contains(&tab) && self.agents_space_shown();
         // Past the most, a row stays one.
@@ -415,10 +508,12 @@ impl Shell {
             (place, span, line.filter(|_| !stays))
         };
         // Rested on another tab's row, it would join it, so the gap it would go to stays where it
-        // was. Off the row's middle, it no longer would, and reordering carries on.
-        let middle = (!incoming && !over_favorites)
-            .then(|| self.split_onto(tab, pointer.y))
-            .flatten();
+        // was. Off the row's middle, it no longer would, and reordering carries on. Held at an
+        // edge that pages, it's going to another Space, so it rests on no row there, whose wait is
+        // the shorter (#1089).
+        let paging = self.drag.as_ref().is_some_and(|drag| drag.edge.is_some());
+        let rests = !incoming && !over_favorites && !paging;
+        let middle = rests.then(|| self.split_onto(tab, pointer.y)).flatten();
         let resting = self
             .drag
             .as_ref()
@@ -438,7 +533,8 @@ impl Shell {
             }
         }
         let was_onto = self.drag.as_ref().and_then(|drag| drag.onto);
-        let onto = was_onto.filter(|&row| middle == Some(row));
+        let onto = was_onto.filter(|&(row, _)| middle == Some(row));
+        let onto = onto.map(|(row, _)| (row, self.left_half(row, pointer.x)));
         let (place, line) = if onto.is_some() {
             (to, None)
         } else {
@@ -451,11 +547,15 @@ impl Shell {
             drag.depth = depth;
             drag.line = line;
             drag.onto = onto;
-            drag.shape.turn(over_favorites, Instant::now());
+            drag.shape.turn(over_favorites, crate::motion::start(cx));
         }
-        if onto != was_onto {
-            // check.sh waits for this line.
-            log!("browser: drop onto none");
+        match onto {
+            // check.sh waits for these lines.
+            Some((row, left)) if onto != was_onto => {
+                log!("browser: drop onto {row} {}", side(left))
+            }
+            None if was_onto.is_some() => log!("browser: drop onto none"),
+            _ => {}
         }
         // Links dragged in have no place before their first, which they didn't pass a row to get.
         let entered = incoming && to == Place::List(false, usize::MAX);
@@ -479,26 +579,26 @@ impl Shell {
             if let Some(drag) = &mut self.drag {
                 drag.to = place;
             }
-            self.move_tiles(tiles, Curve::Room);
+            self.move_tiles(tiles, Curve::Room, cx);
         }
         cx.notify();
     }
 
     /// Whether a dragged tab at `x` across the sidebar is held at its left or right edge, where it
     /// pages to the user's Space on that side once it has waited there, as Arc's does. Only a tab
-    /// Move to takes: not a favorite, a folder, a split view or links dragged in.
+    /// Move to takes: not a favorite, a folder, a split view or links dragged in. Past the right
+    /// edge it's over the page, which isn't the edge.
     fn watch_edge(&mut self, x: f32, cx: &mut Context<Self>) {
         let width = self.width();
-        let side = (x < EDGE)
-            .then_some(false)
-            .or((x > width - EDGE).then_some(true));
+        let right = x > width - EDGE && x <= width;
+        let side = (x < EDGE).then_some(false).or(right.then_some(true));
         let Some(drag) = &self.drag else {
             return;
         };
         let tab = drag.tab;
+        // A folder goes whole, with what's in it (#1353).
         let movable = !drag.incoming
             && !self.favorites.contains(&tab)
-            && !self.is_folder(tab)
             && self.panes(tab).len() == 1
             && !self.private;
         let side = side.filter(|_| movable && self.edge_space(side == Some(true)).is_some());
@@ -565,6 +665,8 @@ impl Shell {
     /// joins it in a split view.
     fn rested_onto(&mut self, row: u64, cx: &mut Context<Self>) {
         let resting = |drag: &&mut Drag| drag.resting.as_ref().is_some_and(|rest| rest.0 == row);
+        let x = self.drag.as_ref().map_or(0., |drag| drag.pointer.x);
+        let left = self.left_half(row, x);
         let Some(drag) = self
             .drag
             .as_mut()
@@ -573,19 +675,27 @@ impl Shell {
         else {
             return;
         };
-        drag.onto = Some(row);
+        drag.onto = Some((row, left));
         drag.line = None;
         // check.sh waits for this line.
-        log!("browser: drop onto {row}");
+        log!("browser: drop onto {row} {}", side(left));
         self.drag_detent(cx);
         cx.notify();
+    }
+
+    /// Whether `x` across the sidebar is on the left half of `row`'s plate, where a tab rested on
+    /// it would join it on the left, before a split's first page, as Arc's does
+    /// (`SidebarDropTargetRegion`).
+    fn left_half(&self, row: u64, x: f32) -> bool {
+        let left = PLATE_INSET + self.depth(row) as f32 * FOLDER_INDENT;
+        x < (left + self.rows_width() - PLATE_INSET) / 2.
     }
 
     /// The tab whose row's middle half is at `y` down the sidebar, which a dragged `tab` would join
     /// in a split view, as Arc's does: a tab alone onto a tab's row, or a split's with room, and
     /// not a folder's.
     fn split_onto(&self, tab: u64, y: f32) -> Option<u64> {
-        if self.is_folder(tab) || self.panes(tab).len() > 1 {
+        if self.is_folder_anywhere(tab) || self.panes(tab).len() > 1 {
             return None;
         }
         let y = self.list_y(y);
@@ -628,6 +738,12 @@ impl Shell {
     /// The pointer let go of a pressed row or tile. A dragged tab goes where it would, and the rows
     /// and tiles settle once the browser has moved it.
     pub(super) fn drop_row(&mut self, cx: &mut Context<Self>) {
+        self.drop_row_with(false, cx);
+    }
+
+    /// `drop_row`, with ⌥ held or not as it's let go: a row dragged from the list and let go there
+    /// with ⌥ held leaves a copy of its tab where it's let go and goes back, as Arc's does.
+    pub(super) fn drop_row_with(&mut self, alt: bool, cx: &mut Context<Self>) {
         if let Some(held) = self.held_row.as_mut().filter(|held| held.let_go.is_none()) {
             held.let_go = Some(Instant::now());
             cx.notify();
@@ -639,7 +755,13 @@ impl Shell {
             return;
         };
         if !drag.moving {
+            let alt_click = drag.alt_click.then_some(drag.tab);
             self.drag = None;
+            if let Some(tab) = alt_click
+                && !self.alt_press_row(tab, cx)
+            {
+                self.show_row(tab, cx);
+            }
             return;
         }
         self.dragged = true;
@@ -662,17 +784,28 @@ impl Shell {
             cx.notify();
             return;
         }
-        if let Some(with) = drag.onto {
+        if let Some((with, left)) = drag.onto {
             // check.sh waits for this line.
             log!("browser: dragged {tab} onto {with}");
-            self.settle_drag();
-            self.join_split(tab, with, false, false, cx);
+            self.settle_drag(cx);
+            self.join_split(tab, with, left, false, cx);
             cx.notify();
             return;
         }
+        let listed = matches!((drag.from, to), (Place::List(..), Place::List(..)));
+        if alt && listed && self.panes(tab).len() == 1 && !self.is_folder(tab) {
+            self.settle_drag(cx);
+            self.putting_back = true;
+            self.drop_copy(tab, to, drag_depth, cx);
+            cx.notify();
+            return;
+        }
+        let Some(drag) = self.drag.as_mut() else {
+            return;
+        };
         let favorite = matches!(to, Place::Favorite(_));
         if drag.to == drag.from && (favorite || drag.depth == drag.from_depth) {
-            self.settle_drag();
+            self.settle_drag(cx);
             self.putting_back = true;
         } else {
             drag.dropped = true;
@@ -685,7 +818,7 @@ impl Shell {
                 Place::List(true, gap) => {
                     let (rows, _) = self.rows();
                     let rows: Vec<u64> = rows.into_iter().filter(|&row| row != tab).collect();
-                    let (folder, index) = self.pinned_place(&rows, gap, drag_depth, tab);
+                    let (folder, index) = self.pinned_place(&rows, gap, drag_depth, tab, false);
                     // check.sh waits for these lines.
                     match folder {
                         0 => log!("browser: dragged {tab} to pinned {gap}"),
@@ -744,7 +877,7 @@ impl Shell {
             .as_ref()
             .is_some_and(|drag| drag.incoming && !drag.dropped)
         {
-            self.settle_drag();
+            self.settle_drag(cx);
             cx.notify();
         }
     }
@@ -766,7 +899,7 @@ impl Shell {
         let (pinned, today) = self.rows();
         let (in_pinned, folder, index) = match drag.to {
             Place::List(true, gap) => {
-                let (folder, index) = self.pinned_place(&pinned, gap, drag.depth, INCOMING);
+                let (folder, index) = self.pinned_place(&pinned, gap, drag.depth, INCOMING, false);
                 (true, folder, index)
             }
             // The browser counts tabs, and the rows above may be split views.
@@ -788,7 +921,25 @@ impl Shell {
             (true, 0) => log!("browser: dropped {count} in pinned {index}"),
             (true, _) => log!("browser: dropped {count} in folder {folder} {index}"),
         }
-        let tab = self.browser.open_at(urls, in_pinned, folder, index, cx);
+        // A folder from the desktop comes in as one of the sidebar's folders, after what else
+        // was dropped with it in the pinned tabs, else at their bottom, as folders are only there.
+        let (folders, urls): (Vec<&String>, Vec<&String>) = urls
+            .iter()
+            .partition(|url| files::folder_path(url).is_some());
+        let urls: Vec<String> = urls.into_iter().cloned().collect();
+        let folders: Vec<PathBuf> = folders
+            .into_iter()
+            .filter_map(|url| files::file_path(url))
+            .collect();
+        let tab = match urls.is_empty() {
+            true => 0,
+            false => self.browser.open_at(&urls, in_pinned, folder, index, cx),
+        };
+        let made = !folders.is_empty();
+        match in_pinned {
+            true => self.add_folders(folders, folder, index + urls.len(), cx),
+            false => self.add_folders(folders, 0, usize::MAX, cx),
+        }
         match self.drag.as_mut().filter(|_| tab != 0) {
             // The first one's row lands from where the pointer let go, once the browser reports
             // the lists it made.
@@ -796,10 +947,10 @@ impl Shell {
                 drag.tab = tab;
                 drag.dropped = true;
             }
-            None => self.settle_drag(),
+            None => self.settle_drag(cx),
         }
         cx.notify();
-        tab != 0
+        tab != 0 || made
     }
 
     /// The depths a row dropped at `gap` in the pinned rows `rows`, which leave out `dragged`, may
@@ -823,10 +974,50 @@ impl Shell {
         Some((low, high.max(low)))
     }
 
+    /// Where a copy of `tab`, a row dragged from the list with ⌥ held, goes once let go at `to`,
+    /// `depth` folders in: the browser makes it, which shows it, as Duplicate does, and puts it
+    /// there, counting `tab`, which stays where it was. One step for ⌘Z, which closes it.
+    fn drop_copy(&mut self, tab: u64, to: Place, depth: usize, cx: &mut Context<Self>) {
+        let (pinned_rows, today_rows) = self.rows();
+        let (pinned, folder, index) = match to {
+            Place::List(true, gap) => {
+                let rows: Vec<u64> = pinned_rows.into_iter().filter(|&row| row != tab).collect();
+                let (folder, index) = self.pinned_place(&rows, gap, depth, tab, true);
+                (true, folder, index)
+            }
+            Place::List(false, gap) => {
+                let before = today_rows
+                    .iter()
+                    .filter(|&&row| row != tab)
+                    .nth(gap)
+                    .copied();
+                let above = today_rows.iter().take_while(|&&row| Some(row) != before);
+                (false, 0, above.map(|&row| self.panes(row).len()).sum())
+            }
+            Place::Favorite(_) => return,
+        };
+        let copy = self.browser.duplicate(tab, cx);
+        if copy == 0 {
+            return;
+        }
+        // check.sh waits for this line.
+        let list = if pinned { "pinned" } else { "today" };
+        log!("browser: dragged {tab} copy {copy} to {list} {folder} {index}");
+        self.browser.move_tab(copy, pinned, folder, index, cx);
+        self.keep(What::DUPLICATE, Some(Edit::Close(vec![copy])), cx);
+    }
+
     /// Where a row dropped at `gap` in the pinned rows `rows`, without `dragged`, at `depth`
     /// goes: the folder, else 0, and its index among what's directly in that, counted as the
-    /// browser counts, without `dragged`.
-    fn pinned_place(&self, rows: &[u64], gap: usize, depth: usize, dragged: u64) -> (u64, usize) {
+    /// browser counts, without `dragged` unless it's a `copy` of it that goes.
+    fn pinned_place(
+        &self,
+        rows: &[u64],
+        gap: usize,
+        depth: usize,
+        dragged: u64,
+        copy: bool,
+    ) -> (u64, usize) {
         let Some(space) = self.shown_space() else {
             return (0, gap);
         };
@@ -845,7 +1036,11 @@ impl Shell {
             .get(gap)
             .copied()
             .filter(|&row| space.folder_of(row) == folder);
-        let panes = space.panes(dragged);
+        let panes = if copy {
+            Vec::new()
+        } else {
+            space.panes(dragged)
+        };
         let index = space
             .pinned
             .iter()
@@ -866,7 +1061,12 @@ impl Shell {
         }
         // The release that ends the drag isn't a click.
         self.dragged = true;
-        self.settle_drag();
+        let back = self
+            .drag
+            .as_ref()
+            .and_then(|drag| drag.over_page.as_ref()?.back());
+        self.settle_drag(cx);
+        self.show_back(back, cx);
         self.putting_back = true;
         cx.notify();
         true
@@ -874,18 +1074,19 @@ impl Shell {
 
     /// Ends a drag that moves nothing in the browser: the rows and tiles settle from where they're
     /// drawn.
-    pub(super) fn settle_drag(&mut self) {
+    pub(super) fn settle_drag(&mut self, cx: &gpui::App) {
         let tiles = self.drawn();
-        self.move_rows(self.layout(), Curve::Slide);
+        self.move_rows(self.layout(), Curve::Slide, cx);
         self.drag = None;
         self.retip = true;
-        self.move_tiles(tiles, Curve::Slide);
+        self.move_tiles(tiles, Curve::Slide, cx);
     }
 
-    /// The browser reported its favorites, or else the Space shown's lists. A drag still held ends,
-    /// since the lists changed under it. A dragged tab let go lands once it's where it was dropped:
-    /// moved in one list, once that list comes, and between them, once it's in the one and out of
-    /// the other. Returns whether the drag ended.
+    /// The browser reported its favorites, or else the Space shown's lists. A row still held whose
+    /// tab is still in its list goes on from where it is now, as when its own press opened or
+    /// closed a folder (#1118); any other drag still held goes back. A dragged tab let go lands once
+    /// it's where it was dropped: moved in one list, once that list comes, and between them, once
+    /// it's in the one and out of the other. Returns whether the drag ended.
     pub(super) fn end_drag(&mut self, favorites: bool) -> bool {
         let Some(drag) = &self.drag else {
             return false;
@@ -893,6 +1094,19 @@ impl Shell {
         // One paged to another Space is held over lists it isn't in.
         if !drag.dropped && drag.space != self.space {
             return false;
+        }
+        if !drag.dropped {
+            let moving = drag.moving;
+            if !favorites && self.carry_drag() {
+                return false;
+            }
+            // The rows have already slid from where they're drawn, the dragged one home with them;
+            // the release that ends the drag isn't a click.
+            self.dragged |= moving;
+            self.putting_back |= moving;
+            self.drag = None;
+            self.retip = true;
+            return true;
         }
         let tab = drag.tab;
         let in_favorites = self.favorites.contains(&tab);
@@ -905,12 +1119,48 @@ impl Shell {
             (_, Place::Favorite(_)) => in_favorites && !in_space,
             (_, Place::List(..)) => in_space && !in_favorites,
         };
-        if drag.dropped && !landed {
+        if !landed {
             return false;
         }
         self.drag = None;
         self.retip = true;
         true
+    }
+
+    /// The lists changed under a row still held in them: it goes on from its row's place in the
+    /// new ones, if its tab is still in the list it came from. Returns whether it does.
+    fn carry_drag(&mut self) -> bool {
+        let Some((tab, Place::List(in_pinned, _))) =
+            self.drag.as_ref().map(|drag| (drag.tab, drag.from))
+        else {
+            return false;
+        };
+        let (pinned, today) = self.rows();
+        let rows = if in_pinned { pinned } else { today };
+        let (Some(index), Some(&top)) = (
+            rows.iter().position(|&row| row == tab),
+            self.layout().get(&Slot::Tab(tab)),
+        ) else {
+            return false;
+        };
+        let depth = self.depth(tab);
+        let Some(drag) = &mut self.drag else {
+            return false;
+        };
+        drag.from = Place::List(in_pinned, index);
+        drag.from_depth = depth;
+        drag.top = top;
+        if !drag.moving {
+            (drag.to, drag.depth) = (drag.from, depth);
+        }
+        true
+    }
+
+    /// Where the pointer holding a drag is in the window, for its place to be found again.
+    pub(super) fn drag_position(&self) -> Option<Point<Pixels>> {
+        let held = |drag: &&Drag| drag.moving && !drag.dropped && drag.space == self.space;
+        let drag = self.drag.as_ref().filter(held)?;
+        Some(drag.origin + point(px(drag.pointer.x), px(drag.pointer.y)))
     }
 
     /// Where the sidebar's top-left corner is in the window a press is in, heard before the row or
@@ -948,7 +1198,10 @@ impl Shell {
                 });
                 window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
                     if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
-                        shell.update(cx, |shell, cx| shell.drop_row(cx)).ok();
+                        let alt = event.modifiers.alt;
+                        shell
+                            .update(cx, |shell, cx| shell.drop_row_with(alt, cx))
+                            .ok();
                     }
                 });
             },
@@ -1024,6 +1277,9 @@ pub(in crate::shell) mod detents;
 mod drop_line;
 
 #[cfg(test)]
+mod copy;
+
+#[cfg(test)]
 mod to_space;
 
 #[cfg(test)]
@@ -1058,4 +1314,9 @@ mod tests {
         ];
         assert_eq!(dropped_urls(dragged, search), opened);
     }
+}
+
+/// The side of a row a tab rested on would join it, as check.sh reads it.
+fn side(left: bool) -> &'static str {
+    if left { "left" } else { "right" }
 }

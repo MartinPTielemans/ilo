@@ -59,14 +59,21 @@ class Space {
                        bc_id id = 0,
                        std::optional<Agent> agent = std::nullopt,
                        size_t at = SIZE_MAX);
-  // A private window's Space, its tabs in the off-the-record profile of the profile in the
-  // directory |profile|. It holds Today tabs alone, and isn't among All(), so it's never saved,
-  // archived or listed with the Spaces. It goes with its window.
-  static Space* CreateOffTheRecord(std::string profile);
+  // What a window's own Space is for.
+  enum class Own {
+    // A private window's: its tabs in the profile's off-the-record profile.
+    kPrivate,
+    // A Little ilo window's (Arc's Little Arc): its tabs in the profile itself.
+    kLittle,
+  };
+  // A window's own Space, its tabs in the profile in the directory |profile|, or for a private
+  // window in its off-the-record profile. It holds Today tabs alone, and isn't among All(), so
+  // it's never saved, archived or listed with the Spaces. It goes with its window.
+  static Space* CreateOwn(std::string profile, Own own);
   // Deletes the Space, which windows no longer show.
   static void Delete(bc_id id);
   static Space* FromId(bc_id id);
-  // Every Space but the private windows', in the order they were made.
+  // Every Space but the windows' own, in the switcher's order, which sync's places set.
   static std::vector<Space*> All();
   // The Space holding |tab|, pinned or in Today, if any.
   static Space* Holding(bc_id tab);
@@ -86,14 +93,24 @@ class Space {
   // The emoji the user gave it to show in place of its dot and before its name, or empty.
   const std::string& icon() const { return icon_; }
   const std::string& theme() const { return theme_; }
+  // Whether it was ever given a name or icon other than those it was made with, which keeps a
+  // device's only Space when sync first brings the account's (space_default.h). A colour or theme,
+  // as onboarding gives the first Space, is setup and doesn't count.
+  bool touched() const { return touched_; }
+  // Puts back what the session saved of touched().
+  void SetTouched(bool touched) { touched_ = touched; }
   // The directory of the profile its tabs open in, which its favorites are in (decision 5).
   const std::string& profile() const { return profile_; }
   // The agent it belongs to, or none for the user's own.
   const std::optional<Agent>& agent() const { return agent_; }
-  // Whether it's a private window's (CreateOffTheRecord), whose tabs open in that profile's
-  // off-the-record profile instead.
-  bool off_the_record() const { return off_the_record_; }
-  // The Space's node. A private window's has none.
+  // Whether it's a window's own (CreateOwn), which no other window shows.
+  bool own() const { return own_.has_value(); }
+  // Whether it's a private window's, whose tabs open in that profile's off-the-record profile
+  // instead.
+  bool off_the_record() const { return own_ == Own::kPrivate; }
+  // Whether it's a Little ilo window's.
+  bool little() const { return own_ == Own::kLittle; }
+  // The Space's node. A window's own has none.
   const Node& node() const { return node_; }
   // The pinned tab's or folder's |id|'s node, or null if it isn't one of the Space's.
   const Node* NodeOf(bc_id id) const;
@@ -116,6 +133,8 @@ class Space {
   bool IsFolder(bc_id id) const { return folders_.contains(id); }
   // The folder holding the pinned tab or folder |id|, else 0.
   bc_id FolderOf(bc_id id) const;
+  // Whether |id| is |folder| or inside it.
+  bool Within(bc_id id, bc_id folder) const;
   // A folder's name, its icon, empty for none, and whether it shows what's in it.
   std::string FolderName(bc_id folder) const;
   std::string FolderIcon(bc_id folder) const;
@@ -178,6 +197,12 @@ class Space {
   void SetPinnedOpen(bool open);
   // Deletes |folder|, leaving what was in it where it was, in the folder that held it.
   void DeleteFolder(bc_id folder);
+  // Takes |folder| from |from|, with what's in it in its order, to the bottom of the pinned tabs:
+  // the folders with their names, icons and whether they're open, each tab with its pinned URL and
+  // its split. |copies| maps each of |from|'s tabs that goes to another profile to the new one
+  // standing in for it here. Each is a new node here, as a tab moved to another Space is. Does
+  // nothing for a folder |from| hasn't, or into a window's own Space.
+  void TakeFolder(Space& from, bc_id folder, const std::map<bc_id, bc_id>& copies);
 
   // Puts |tab| in a split view with |with|, at its left end if |left|, else its right end, making
   // one if |with| is in none. |tab| leaves any split it was in, and goes before or after the split
@@ -248,8 +273,6 @@ class Space {
   void PlaceRows();
   // The same for the Spaces.
   static void PlaceSpaces();
-  // Whether |id| is |folder| or inside it.
-  bool Within(bc_id id, bc_id folder) const;
   // Past the end of the rows of |folder|, else of the pinned list, in |pinned_|.
   size_t EndOf(bc_id folder) const;
   // Where in |pinned_| what goes at |index| in |folder| goes, counted as Move counts.
@@ -263,7 +286,8 @@ class Space {
   std::string icon_;
   std::string theme_;
   std::string profile_;
-  bool off_the_record_ = false;
+  bool touched_ = false;
+  std::optional<Own> own_;
   Node node_;
   // Pinned tabs and folders.
   std::vector<bc_id> pinned_;

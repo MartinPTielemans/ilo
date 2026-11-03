@@ -19,7 +19,7 @@ cased() {
       sub(/,$/, "", noun)
       sub(/…$/, "", noun)
       if (word ~ /^“/) quoted = 1
-      keep = first || quoted || noun ~ /^[A-Z][A-Z]+$/ || noun == "Space" || noun == "Spaces" || noun == "Library" || noun == "Markdown"
+      keep = first || quoted || noun ~ /^[A-Z][A-Z]+s?$/ || noun == "Space" || noun == "Spaces" || noun == "Library" || noun == "Markdown"
       printf "%s%s", (i > 1 ? " " : ""), (keep ? word : tolower(word))
       if (word ~ /”/) quoted = 0
       first = word ~ /,$/ || word == "›"
@@ -35,8 +35,8 @@ themed=$(cased "$colors, Remove Theme Color")
 swatch_y=380
 swatch_x() { echo "$1" | awk '{ print 13 + 60.5 + 29.5 * $1 }'; }
 # Its profiles, in the one the check starts with, for a Space with tabs and an empty one.
-profile=$(cased "Profile › Default (checked), Profile › New Profile (disabled)")
-empty_profile=$(cased "Profile › Default (checked), Profile › New Profile")
+profile=$(cased "Set Profile › Default (checked), Set Profile › New Profile (disabled)")
+empty_profile=$(cased "Set Profile › Default (checked), Set Profile › New Profile")
 # The product's name, which the app's menus and alerts use, and the dev build's id.
 app_name=$(cat branding/name)
 app_id=dev.browser.app
@@ -54,12 +54,18 @@ cleanup() {
   [ -z "${collector:-}" ] || kill "$collector" 2>/dev/null || true
   [ -z "${stuck:-}" ] || kill "$stuck" 2>/dev/null || true
   [ -z "${helper:-}" ] || kill "$helper" 2>/dev/null || true
+  [ -z "${ilo_server:-}" ] || kill "$ilo_server" 2>/dev/null || true
+  [ -z "${tls:-}" ] || kill "$tls" 2>/dev/null || true
+  # The other copies of the app a run started, as sync-devices' devices.
+  [ -z "${others:-}" ] || kill $others 2>/dev/null || true
   # The access run's session and AT-SPI buses.
   [ -z "${buses:-}" ] || kill $buses 2>/dev/null || true
   # A run's temp dir, such as the updates run's with its key.
   [ -z "${scratch:-}" ] || rm -rf "$scratch"
   # A check VM that a run turned light or dark goes back to the appearance it had.
   [ -z "${dark_mode:-}" ] || appearance "$dark_mode" || true
+  # So does one whose Dock and menu bar a run hid.
+  [ -z "${bars:-}" ] || show_bars || true
   # A crash's minidump goes with the run's captures, once Crashpad's handler has written it.
   for _ in $(seq 60); do
     ls "$profile_dir"/Crashpad/new/*.dmp > /dev/null 2>&1 || break
@@ -87,6 +93,10 @@ cleanup() {
 fail() {
   echo "FAIL: $1" >&2
   grep -v '^$' "$log" | tail -5 >&2
+  # What the window showed, for a failure the log doesn't explain, as on CI.
+  if [ -n "${pid:-}" ] && [ -n "${out:-}" ] && kill -0 "$pid" 2>/dev/null; then
+    ../tools/window-screenshot.sh "$pid" "$out/failed.png" > /dev/null 2>&1 || true
+  fi
   exit 1
 }
 # The app ended by itself.
@@ -108,15 +118,26 @@ await_load() {
   await '^browser: load' || fail "the page didn't finish loading"
   grep -q '^browser: loaded' "$log" || fail "the page didn't load"
 }
+# The last quit stage the core logged (main_delegate.cc), or that it logged none.
+stage() {
+  grep '^browser: quit: ' "$log" | tail -1 | cut -c16- | grep . || echo "none"
+}
 # Waits up to $1 seconds (10) for the app to exit and checks that no Chromium process outlives it.
 # On the Mac, sample records the app's last 2 s before the limit in hang.txt, with what it said in
 # hang-sample.txt: started after the limit, it found no app to attach to when the app went just
 # then (#960).
 exited() {
+  # The driver's pipe goes with the app, so the next launch's is a new one: under Git Bash a native
+  # app opening it while the last writer is still open reads that writer's pipe, which ends as
+  # `exec 3>` replaces it, and the relaunched app never gets a command.
+  exec 3>&-
   ticks=$((${1:-10} * 2))
   sampler=
+  stopping=
   for tick in $(seq "$ticks"); do
     kill -0 "$pid" 2>/dev/null || break
+    # The tick Chromium said it was stopping, so a slow end says how long its rest took (#959).
+    [ -n "$stopping" ] || ! grep -q '^browser: stopping$' "$log" || stopping=$tick
     if [ "$tick" = $((ticks - 3)) ] && [ "$(uname)" = Darwin ]; then
       sample "$pid" 2 -file "$out/hang.txt" > "$out/hang-sample.txt" 2>&1 &
       sampler=$!
@@ -142,6 +163,10 @@ exited() {
       ! windows || python3 -I check/app-windows.py list "$(cat "/proc/$pid/winpid")" \
         > "$out/hang.txt" 2>&1 || true
     fi
+    # The stage it stopped at, as the sample shows only where it was once the check gave up (#959).
+    if [ -n "$stopping" ]; then
+      why="$why; after stopping, its last stage was $(stage)"
+    fi
     if [ -s "$out/hang.txt" ]; then
       fail "$why. Where it was: $out/hang.txt"
     elif [ -n "$sampler" ]; then
@@ -150,6 +175,11 @@ exited() {
     fail "$why"
   fi
   wait "$pid" || fail "the app exited with status $?"
+  # A quit in time but slow says so, with its last stage: #959's bar is 2 s after stopping, to the
+  # half second the ticks see. It doesn't fail the run, as the bar is new.
+  if [ -n "$stopping" ] && [ $((tick - stopping)) -gt 4 ]; then
+    echo "slow quit: the app ended $(((tick - stopping) * 500)) ms after stopping, its last stage $(stage)"
+  fi
   for _ in $(seq 10); do
     pgrep -f "$procs" > /dev/null || break
     sleep 0.5
@@ -182,6 +212,31 @@ quit_app() {
 # Turns the Mac's appearance dark (true) or light (false), as System Settings › Appearance does.
 appearance() {
   osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $1"
+}
+# Hides the Dock and, for the apps launched after, the menu bar, as System Settings › Desktop &
+# Dock and Control Center do, keeping what they were in $bars for show_bars.
+hide_bars() {
+  bars="$(defaults read com.apple.dock autohide 2>/dev/null || echo none)"
+  bars="$bars $(defaults read -g _HIHideMenuBar 2>/dev/null || echo none)"
+  defaults write com.apple.dock autohide -bool true
+  defaults write -g _HIHideMenuBar -bool true
+  killall Dock 2>/dev/null || true
+}
+# Puts the Dock and the menu bar back as hide_bars found them.
+show_bars() {
+  set -- $bars
+  bars=
+  case $1 in
+    none) defaults delete com.apple.dock autohide ;;
+    1) defaults write com.apple.dock autohide -bool true ;;
+    *) defaults write com.apple.dock autohide -bool false ;;
+  esac
+  case $2 in
+    none) defaults delete -g _HIHideMenuBar ;;
+    1) defaults write -g _HIHideMenuBar -bool true ;;
+    *) defaults write -g _HIHideMenuBar -bool false ;;
+  esac
+  killall Dock 2>/dev/null || true
 }
 quit() {
   quit_app
@@ -248,6 +303,11 @@ logged() {
 exited_without() {
   [ -z "${pid:-}" ] || kill -0 "$pid" 2>/dev/null || logged "$1" "${3:-}" || fail "the app exited: $2"
 }
+# Settings has drawn its tab $1, or whichever it shows, since the last command, on showing or on a
+# change of tab: until it has, a click in it finds nothing to land on (#1101, #1133).
+settings_drew() {
+  expect "^browser: settings drew ${1:-.*}\$" "Settings didn't draw ${1:-its tab}"
+}
 # Where Settings last drew its control $1, "x y" for clickkey, once it has: it logs each place it
 # draws one ("browser: settings $1 at x y").
 drawn() {
@@ -265,6 +325,13 @@ none_since() {
 # what a timer of the app's did after, which on Windows send's own greps can outlast.
 none_while() {
   ! sed -n "/^browser: drive $step: /,/^browser: drive $step done/p" "$log" | grep -q "$1"
+}
+# Kills the app's pages' renderers, as macOS kills one under memory pressure. Not an extension's,
+# which is a renderer too and whose death shows Chromium's balloon saying the extension crashed.
+kill_pages() {
+  renderers=$(ps -Ao pid=,args= | grep -e "$procs.*--type=rendere[r]" |
+    grep -v -e '--extension-process' | awk '{ print $1 }')
+  [ -n "$renderers" ] && kill -KILL $renderers
 }
 # Where Settings' close button is, in $close: AppKit's on the Mac, else where Settings drew its own,
 # which on Windows is in the top right corner.
@@ -316,15 +383,29 @@ record() {
   recorder=$!
   for _ in $(seq 300); do
     grep -q '^recording$' "$out/$1-record.log" && return 0
-    kill -0 "$recorder" 2> /dev/null ||
-      fail "the window's recording didn't start: $(tail -1 "$out/$1-record.log")"
+    if ! kill -0 "$recorder" 2> /dev/null; then
+      unrecorded || fail "the window's recording didn't start: $(tail -1 "$out/$1-record.log")"
+      return 0
+    fi
     sleep 0.1
   done
   fail "the window's recording didn't start in 30 s"
 }
 recorded() {
   [ -n "$recording" ] || return 0
-  wait "$recorder" || fail "the window's recording didn't finish: $(tail -1 "${recording%.mp4}-record.log")"
+  wait "$recorder" && return 0
+  unrecorded || fail "the window's recording didn't finish: $(tail -1 "${recording%.mp4}-record.log")"
+}
+# GitHub's hosted Mac starts a recording and never gets its first frame, ReplayKit's -5822 (#1108),
+# so there the run goes on without it, saying so. Anywhere else a failed recording fails the run.
+unrecorded() {
+  said=$(tail -1 "${recording%.mp4}-record.log")
+  case "${GITHUB_ACTIONS:-}: $said" in
+  true:*Code=-5822*) ;;
+  *) return 1 ;;
+  esac
+  echo "skip: recording $(basename "$recording" .mp4), as the hosted Mac's recording got no first frame: $said"
+  recording=""
 }
 # The driver's clicks come with no move, and one in the sidebar tells it the pointer is there, so
 # where the sidebar last saw the pointer depends on the steps before. This moves it to the page and
@@ -347,13 +428,15 @@ expect_tabs() {
   expect "^browser: today $1\$" "$3: Today is \"$(today)\", not \"$1\""
   expect "^browser: selected $2\( in .*\)\{0,1\}\$" "$3: tab $2 isn't shown"
 }
-# Opens a tab from the command bar, to https://$1.
+# Opens a tab from the command bar, to https://$1. The scheme is typed: a bare host goes to http
+# and Chrome's HTTPS-Upgrades takes it to https, falling back to http when the runner's https is
+# slow or fails (#1261), and the runs that follow expect https. history checks the upgrade itself.
 open_from_bar() {
   before=$(today)
   send key t cmd
   expect '^browser: command bar shown$' "⌘T didn't open the command bar"
   expect '^browser: new tab plate 1$' "⌘T didn't give New Tab the selected plate"
-  send type "$1"
+  send type "https://$1"
   send key return
   expect "^browser: today [0-9][0-9]*${before:+ $before}\$" "the tab for $1 didn't open at the top of Today"
   tab=$(today | cut -d' ' -f1)
@@ -447,6 +530,15 @@ expect_lists() {
   expect "^browser: pinned $1\$" "$3: the pinned tabs are \"$(pinned)\", not \"$1\""
   expect "^browser: today $2\$" "$3: Today is \"$(today)\", not \"$2\""
 }
+# What the footer's + menu ends with to add from the desktop: one item where the system's open
+# panel picks files and folders together, the Mac's, else one for each.
+plus_adds() {
+  if [ "$(uname)" = Darwin ]; then
+    echo 'Add File or Folder…'
+  else
+    echo 'Add Files…, Add Folder…'
+  fi
+}
 # The centre of pinned row $1, counting from 0, under the Space's name, and of the ✕ it shows
 # under the pointer.
 pinned_row() {
@@ -478,15 +570,69 @@ with open(sys.argv[1], "w") as f:
 ' "$prefs" || fail "the profile's sites for Safari's engine couldn't be reset"
 }
 
-# Starts the check's web server, in site.sh, unless a run before has. Its pages are at $site.
+# Starts the app on the page $1 with the profile $2 and the arguments after $3, and check/cdp.py
+# attached to the page whose address ends in $3, or with $3 empty to none until its attach command,
+# logging to $log and $cdp_log, with the driver on fd 3 and cdp.py's commands on fd 5, through fifos
+# in $scratch. Sets $pid and $helper.
+start_with_cdp() {
+  cdp_url=$1 cdp_profile=$2 cdp_page=$3
+  shift 3
+  mkfifo "$scratch/cdp"
+  if windows; then
+    # Chrome on Windows takes its DevTools pipe as handles, which Git Bash can't give it, so
+    # DevTools listens on a loopback port instead, which the browser says on its standard error. A
+    # native program can't read Git Bash's fifo, so cat passes cdp.py its commands, and the page is
+    # named without its slash, which Git Bash would make a path of Git's own.
+    BROWSER_DRIVE=1 BROWSER_URL="$cdp_url" BROWSER_PROFILE_DIR="$cdp_profile" \
+      "$browser" --remote-debugging-port=0 "$@" < "$out/drive" > "$log" 2>&1 &
+    pid=$!
+    exec 3> "$out/drive"
+    await '^DevTools listening on ws://' || fail "DevTools didn't say where it listens"
+    socket=$(grep -m1 '^DevTools listening on ws://' "$log" | cut -d' ' -f4 | tr -d '\r')
+    cat "$scratch/cdp" | python3 -I -u check/cdp.py --socket "$socket" "${cdp_page#/}" \
+      > "$cdp_log" 2>&1 &
+  else
+    mkfifo "$scratch/to-browser" "$scratch/from-browser"
+    # Each end of a pipe waits for the other to open, in this order: the driver's, the browser's
+    # DevTools pipe, then cdp.py's input.
+    BROWSER_DRIVE=1 BROWSER_URL="$cdp_url" BROWSER_PROFILE_DIR="$cdp_profile" \
+      "$browser" --remote-debugging-pipe "$@" < "$out/drive" 3< "$scratch/to-browser" \
+      4> "$scratch/from-browser" > "$log" 2>&1 &
+    pid=$!
+    python3 -I -u check/cdp.py "$scratch/to-browser" "$scratch/from-browser" "$cdp_page" \
+      < "$scratch/cdp" > "$cdp_log" 2>&1 &
+    exec 3> "$out/drive"
+  fi
+  helper=$!
+  exec 5> "$scratch/cdp"
+}
+# Starts the check's web server, in site.sh, unless a run before has. Its pages are at $site. It
+# serves every run after, so only cleanup stops it: a run that did would leave the next its address
+# and no server (#1369).
 serve() {
   [ -n "${site:-}" ] || . check/site.sh
+}
+# Of the addresses on stdin, one a line, those of Google's servers, with ungoogled-chromium's
+# substitutes for its domains, but the security components' updates that engine/README.md › What
+# reaches Google lets through and every user's browser makes, the first a minute after launch: the
+# update check, and CRLSet's, PKI Metadata's and the SSL error assistant's downloads, over https,
+# from the hosts it names. A profile that has a component already gets its update as a diff, at
+# diffgen-puffin/<id>/<hash>.
+google_asked() {
+  hosts='\(dl\.google\.com\|[a-z0-9.-]*\.gvt1\.com\|www\.google\.com/dl\)'
+  ids='\(hfnkpimlhhgieaddgfemjhofmfblmnib\|efniojlnjndmcbiieegkicadnoecjjef\)'
+  grep -i '^[a-z]*://[^/]*\(google\|gstatic\|gvt1\|9oo91e\|qjz9zk\)' |
+    grep -v -e '^https://update\.googleapis\.com/service/update2/json\(?[^/]*\)\{0,1\}$' \
+      -e "^https://$hosts/.*/${ids}_[0-9.]*_[a-z0-9_]*\.crx3\$" \
+      -e "^https://$hosts/.*/diffgen-puffin/$ids/[0-9a-f]*\$" \
+      -e "^https://$hosts/.*/[0-9.]*_all_sslErrorAssistant\.crx3\$" || true
 }
 # Waits up to 3 s for the clipboard to hold the text $1, off the Mac, where a run's clipboard is its
 # headless session's, which wl-paste reads, Xwayland's too, as sway hands it over. The Mac's
 # pasteboard is the run's own, which nothing else reads, so it passes there, as under Xvfb.
 clipboard_holds() {
   case "${BROWSER_HEADLESS:-xvfb}" in xvfb) return 0 ;; esac
+  command -v wl-paste > /dev/null || fail "reading the clipboard needs wl-clipboard's wl-paste"
   for _ in $(seq 30); do
     [ "$(WAYLAND_DISPLAY="$BROWSER_HEADLESS" wl-paste -n 2>/dev/null)" = "$1" ] && return 0
     sleep 0.1

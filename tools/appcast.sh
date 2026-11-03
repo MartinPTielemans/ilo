@@ -2,11 +2,13 @@
 # Makes the DMG tools/release.sh made, and the Windows installer --windows names, the update every
 # copy of ilo checks for: an entry in the appcast for each, with its release notes and signed with
 # the owner's EdDSA key in their Keychain, in app/build/release/appcast/appcast.xml. Sparkle reads
-# the Mac's and WinSparkle the Windows one (tools/appcast.py). The installer is built from the
-# DMG's commit, so the two have one build number. With --publish, both go up as the GitHub release
-# v<version>, and the appcast to the release the feed (app/branding/update-feed) is served from.
-# The notes are Markdown, shown in the Mac's alert; WinSparkle shows the release's page, which the
-# Mac's first launch of the update opens.
+# the Mac's and ilo's Windows updater the Windows one (tools/appcast.py). The installer is built
+# from the DMG's commit, so the two have one build number. With --publish, both go up as the GitHub
+# release v<version>, and the appcast to the release the feed (app/branding/update-feed) is served
+# from.
+# The notes are Markdown, shown in the Mac's alert. The release's entry in the site's changelog,
+# /changelog#<version> on app/branding/site, is what the Mac's first launch of the update opens and
+# what a Windows copy still on WinSparkle shows.
 #
 # Once, on the owner's Mac, before the first release, with Sparkle from app/setup.sh:
 #   app/.deps/Sparkle/bin/generate_keys --account ilo                      # the key, in the Keychain
@@ -22,12 +24,16 @@
 # With --local, it makes the updates run's appcast instead (app/check/updates.sh), in DIR, which is
 # served at URL: one update past APP, its notes notes.md, signed with the run's own key in KEYFILE,
 # or informational, which Sparkle shows and never downloads. It never reads the owner's key or feed.
-# Usage: tools/appcast.sh notes.md [--windows installer.exe] [--publish]
+# With --nightly TAG, it makes the next state of the feed release TAG serves instead, for
+# release.yml's nightly mode: each package named by its build, as one release holds several, beside
+# the appcast in the same folder, which keeps each OS's newest three. A nightly's notes are in the
+# appcast, with no changelog entry to open.
+# Usage: tools/appcast.sh notes.md [--windows installer.exe] [--publish | --nightly TAG]
 #        tools/appcast.sh notes.md --local APP DIR URL KEYFILE [--informational]
 set -euo pipefail
 tools="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$tools/../app" && pwd)"
-usage="usage: tools/appcast.sh notes.md [--windows installer.exe] [--publish]
+usage="usage: tools/appcast.sh notes.md [--windows installer.exe] [--publish | --nightly TAG]
        tools/appcast.sh notes.md --local APP DIR URL KEYFILE [--informational]"
 notes=${1:?$usage}
 shift
@@ -54,13 +60,16 @@ if [ "${1:-}" = --local ]; then
 fi
 windows=
 publish=
+nightly=
 while [ $# -gt 0 ]; do
   case $1 in
     --windows) windows=${2:?$usage} && shift 2 ;;
     --publish) publish=1 && shift ;;
+    --nightly) nightly=${2:?$usage} && shift 2 ;;
     *) echo "$usage" >&2 && exit 2 ;;
   esac
 done
+[ -z "$publish" ] || [ -z "$nightly" ] || { echo "$usage" >&2; exit 2; }
 name=$(cat "$root/branding/name")
 out=$root/build/release
 app=$out/$name.app
@@ -72,12 +81,27 @@ repo=${feed%%/releases/*}
 slug=${repo#https://github.com/}
 feed_tag=${feed#"$repo"/releases/download/}
 feed_tag=${feed_tag%%/*}
+if [ -n "$nightly" ]; then
+  feed_tag=$nightly
+  feed=$repo/releases/download/$feed_tag/appcast.xml
+fi
 
 [ -f "$dmg" ] || { echo "No $dmg. Make it with tools/release.sh." >&2; exit 1; }
 [ -z "$windows" ] || [ -f "$windows" ] || { echo "No $windows." >&2; exit 1; }
 [ -x "$bin/generate_appcast" ] || { echo "No Sparkle in app/.deps. Run app/setup.sh." >&2; exit 1; }
 version=$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")
 build=$(plutil -extract CFBundleVersion raw "$app/Contents/Info.plist")
+# The release's entry in the site's changelog, which names each entry by its version. A nightly's
+# packages are beside its appcast, and named by their build.
+notes_url=$(cat "$root/branding/site")/changelog#$version
+prefix=$repo/releases/download/v$version/
+archive=$name.dmg
+if [ -n "$nightly" ]; then
+  notes_url=
+  prefix=$repo/releases/download/$feed_tag/
+  archive=$name-mac-arm64-$build.dmg
+  installer=$name-windows-x64-setup-$build.exe
+fi
 # An update signed with another key than the one the app carries is one it refuses.
 # With UPDATE_PRIVATE_KEY, generate_appcast leaves an update whose app carries another key unsigned,
 # which the check after it catches.
@@ -101,8 +125,8 @@ private_key() { [ -z "${UPDATE_PRIVATE_KEY:-}" ] || printf '%s\n' "$UPDATE_PRIVA
 work=$out/appcast
 rm -rf "$work"
 mkdir "$work"
-cp "$dmg" "$work/"
-cp "$notes" "$work/$name.md"
+cp "$dmg" "$work/$archive"
+cp "$notes" "$work/${archive%.dmg}.md"
 # generate_appcast sees only the Mac's entries, as it would take the Windows ones for its own.
 aside=$out/appcast-windows.xml
 before=0
@@ -115,8 +139,8 @@ case $(curl -sSL -w '%{http_code}' -o "$work/appcast.xml" "$feed") in
   *) echo "Couldn't fetch $feed." >&2 && exit 1 ;;
 esac
 private_key | "$bin/generate_appcast" "${signing[@]}" \
-  --download-url-prefix "$repo/releases/download/v$version/" \
-  --full-release-notes-url "$repo/releases/tag/v$version" \
+  --download-url-prefix "$prefix" \
+  ${notes_url:+--full-release-notes-url "$notes_url"} \
   --embed-release-notes --maximum-deltas 0 \
   -o "$work/appcast.xml" "$work"
 after=$(grep -c '<item>' "$work/appcast.xml")
@@ -127,12 +151,17 @@ fi
 if [ -n "$windows" ]; then
   signature=$(private_key | "$bin/sign_update" "${signing[@]}" -p "$windows")
   python3 -I "$tools/appcast.py" finish "$work/appcast.xml" "$aside" --windows \
-    "$repo/releases/download/v$version/$(basename "$windows")" "$(wc -c < "$windows" | tr -d ' ')" \
-    "$signature" "$version" "$build" "$repo/releases/tag/v$version"
+    "$prefix${installer:-$(basename "$windows")}" "$(wc -c < "$windows" | tr -d ' ')" \
+    "$signature" "$version" "$build" "$notes_url"
 else
   python3 -I "$tools/appcast.py" finish "$work/appcast.xml" "$aside"
 fi
 rm "$aside"
+if [ -n "$nightly" ]; then
+  python3 -I "$tools/appcast.py" nightly "$work/appcast.xml" "$build" 3
+  rm "$work/${archive%.dmg}.md"
+  [ -z "$windows" ] || cp "$windows" "$work/$installer"
+fi
 echo "$work/appcast.xml"
 [ -n "$publish" ] || exit 0
 

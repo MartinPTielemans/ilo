@@ -61,7 +61,7 @@ bc_id TabAt(const GURL& url, const Window& window, bc_id shown, const TemplateUR
   // Selecting a favorite of another profile shows a Space of that profile, as selecting a tab of
   // another Space does.
   std::vector<bc_id> favorites = Favorites::All();
-  if (window.off_the_record()) {
+  if (window.own_space()) {
     Space* own = Space::FromId(window.space());
     spaces = own ? std::vector<Space*>{own} : std::vector<Space*>();
     favorites.clear();

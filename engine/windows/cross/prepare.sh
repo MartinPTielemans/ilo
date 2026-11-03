@@ -7,9 +7,10 @@
 # Rust; here the tools are portablelinux's (Google's Linux clang and Rust, and the patches it needs
 # for the host), so the Windows patches that only serve its host or its toolchain are left out.
 # Microsoft's compiler, linker and SDK come from the zip in $ILO_WIN_TOOLCHAIN (engine/README.md,
-# Windows). Then links the core in as //browser_core and applies our series. Prints the tree's
-# path. build.sh builds from it, and .github/workflows/engine-windows-cross.yml keeps one on its
-# runner. Needs about 40 GB, and as much again while a new version comes in.
+# Windows). Then links the core in as //browser_core, applies our series and puts ilo's icon in
+# Chromium's place (tree.sh). Prints the tree's path. build.sh builds from it, and
+# .github/workflows/engine-windows-cross.yml keeps one on its runner. Needs about 40 GB, and as much
+# again while a new version comes in.
 #
 # As in linux/prepare.sh, a new tag is prepared whole in <work>/next and copied over the tree by
 # content, so the next build recompiles only what changed.
@@ -171,6 +172,7 @@ if [ "$(cat "$src/.windows-tags" 2>/dev/null)" != "$tags" ]; then
   target_tools "$_src_dir"
   remove_agent_instructions "$_src_dir"
   apply_series "$_src_dir"
+  windows_icons "$_src_dir"
   echo "$tags" >"$_src_dir/.windows-tags"
   if [ -d "$src" ]; then
     rsync -rlpD --checksum --delete --exclude=/out/ "$_src_dir/" "$src/"
@@ -186,6 +188,7 @@ _out_dir=$src/out/Default
 target_tools "$src"
 remove_agent_instructions "$src"
 apply_series "$src"
+windows_icons "$src"
 # Rewritten only when they change, as a newer args.gn makes ninja run gn again.
 args=$(mktemp -d)
 trap 'rm -rf "$args"' EXIT

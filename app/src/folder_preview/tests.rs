@@ -11,10 +11,10 @@ use super::*;
 struct Recorder(RefCell<Vec<String>>);
 
 impl Host for Recorder {
-    fn show(&self, left: f32, top: f32, height: f32) {
+    fn show(&self, window: u64, left: f32, top: f32, height: f32) {
         self.0
             .borrow_mut()
-            .push(format!("show {left} {top} {height}"));
+            .push(format!("show {left} {top} {height} over {window}"));
     }
 
     fn hide(&self) {
@@ -56,6 +56,7 @@ fn rest(folder: u64, chose: &Rc<RefCell<Vec<u64>>>) -> Rest {
     };
     let chose = chose.clone();
     Rest {
+        window: 1,
         folder,
         name: "Reading".into(),
         items,
@@ -90,7 +91,15 @@ const OFF: Point<Pixels> = point(px(-100.), px(-100.));
 
 impl Preview {
     fn rest_on(&self, folder: u64, cx: &mut TestAppContext) {
-        let rest = rest(folder, &self.chose);
+        self.rest_in(1, folder, cx);
+    }
+
+    /// The pointer rests on `folder`'s row in the sidebar of browser window `window`.
+    fn rest_in(&self, window: u64, folder: u64, cx: &mut TestAppContext) {
+        let rest = Rest {
+            window,
+            ..rest(folder, &self.chose)
+        };
         cx.update(|cx| ask(Ask::Rest(rest), cx));
         cx.run_until_parked();
     }
@@ -137,11 +146,15 @@ impl Preview {
     }
 }
 
-/// Where the host is told the preview of `folder`, with `count` tabs, goes.
+/// Where the host is told the preview of `folder`, with `count` tabs, goes, in browser window 1.
 fn shown_at(folder: u64, count: usize) -> String {
+    shown_in(1, folder, count)
+}
+
+fn shown_in(window: u64, folder: u64, count: usize) -> String {
     let height = height(count);
     let (left, top) = place(row(folder), height);
-    format!("show {left} {top} {height}")
+    format!("show {left} {top} {height} over {window}")
 }
 
 #[gpui::test]
@@ -206,6 +219,18 @@ fn the_next_folder_s_preview_takes_its_place_at_once(cx: &mut TestAppContext) {
         preview.after(LEAVE * 2, cx).is_empty(),
         "leaving the first doesn't end the second"
     );
+}
+
+#[gpui::test]
+fn it_shows_over_the_window_whose_row_the_pointer_rests_on(cx: &mut TestAppContext) {
+    let preview = open_preview(cx);
+    // A window behind another still hears the pointer, so its folder's preview shows over it
+    // (#1432), and the next folder's, in the window in front, over that one.
+    preview.rest_in(2, 2, cx);
+    assert_eq!(preview.after(DWELL, cx), [shown_in(2, 2, 1)]);
+    preview.ask(Ask::Left(2), cx);
+    preview.rest_in(1, 1, cx);
+    assert_eq!(preview.after(Duration::ZERO, cx), [shown_in(1, 1, 3)]);
 }
 
 #[gpui::test]
