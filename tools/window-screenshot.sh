@@ -39,6 +39,49 @@ public static class Capture {
   [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
   [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr hwnd, IntPtr dc, uint flags);
   [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out RECT rect, int size);
+  [StructLayout(LayoutKind.Sequential)] struct POINT { public int X, Y; }
+  [StructLayout(LayoutKind.Sequential)] struct BITMAPINFOHEADER {
+    public int biSize, biWidth, biHeight; public short biPlanes, biBitCount;
+    public int biCompression, biSizeImage, biXPelsPerMeter, biYPelsPerMeter, biClrUsed, biClrImportant;
+  }
+  [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr dc);
+  [DllImport("gdi32.dll")] static extern IntPtr CreateDIBSection(IntPtr dc, ref BITMAPINFOHEADER info, uint usage, out IntPtr bits, IntPtr section, uint offset);
+  [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
+  [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr obj);
+  [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr dc);
+  [DllImport("gdi32.dll")] static extern bool GdiFlush();
+  [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr hwnd, out RECT rect);
+  [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr hwnd, ref POINT p);
+  [DllImport("user32.dll")] static extern int GetClassName(IntPtr hwnd, System.Text.StringBuilder name, int size);
+
+  // DIAG: PrintWindow into a 32-bit DIB section, which keeps the alpha it writes.
+  static Bitmap Print(IntPtr hwnd, int width, int height, uint flags, System.Text.StringBuilder log) {
+    var info = new BITMAPINFOHEADER();
+    info.biSize = 40; info.biWidth = width; info.biHeight = -height; info.biPlanes = 1; info.biBitCount = 32;
+    IntPtr bits;
+    var dc = CreateCompatibleDC(IntPtr.Zero);
+    var dib = CreateDIBSection(dc, ref info, 0, out bits, IntPtr.Zero, 0);
+    var old = SelectObject(dc, dib);
+    var ok = PrintWindow(hwnd, dc, flags);
+    GdiFlush();
+    var raw = new byte[width * height * 4];
+    Marshal.Copy(bits, raw, 0, raw.Length);
+    SelectObject(dc, old); DeleteObject(dib); DeleteDC(dc);
+    long clear = 0, opaque = 0, part = 0, clearBlack = 0;
+    for (int i = 3; i < raw.Length; i += 4) {
+      if (raw[i] == 0) { clear++; if (raw[i-1] == 0 && raw[i-2] == 0 && raw[i-3] == 0) clearBlack++; }
+      else if (raw[i] == 255) opaque++; else part++;
+    }
+    var name = new System.Text.StringBuilder(256);
+    GetClassName(hwnd, name, 256);
+    log.AppendLine("flags " + flags + " " + name + " " + width + "x" + height + " ok " + ok + " alpha0 " + clear + " (black " + clearBlack + ") alpha255 " + opaque + " partial " + part);
+    var image = new Bitmap(width, height, PixelFormat.Format32bppPArgb);
+    var data = image.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
+    for (int y = 0; y < height; y++)
+      Marshal.Copy(raw, y * width * 4, new IntPtr(data.Scan0.ToInt64() + (long)y * data.Stride), width * 4);
+    image.UnlockBits(data);
+    return image;
+  }
 
   static Rectangle Bounds(IntPtr hwnd) {
     RECT r;
@@ -76,33 +119,50 @@ public static class Capture {
     // The window as it shows, without the clear borders it resizes by, in both ways of capturing.
     var area = Shown(mains[0]);
     if (all) mains.ForEach(w => area = Rectangle.Union(area, Shown(w)));
-    if (screen) {
-      using (var image = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb)) {
-        using (var graphics = Graphics.FromImage(image))
-          graphics.CopyFromScreen(area.Location, Point.Empty, area.Size);
-        image.Save(path, ImageFormat.Png);
-      }
-      return null;
-    }
-    using (var image = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb))
-    using (var graphics = Graphics.FromImage(image)) {
-      for (int i = windows.Count - 1; i >= 0; i--) {
-        var top = windows[i];
-        while (GetWindow(top, GW_OWNER) != IntPtr.Zero) top = GetWindow(top, GW_OWNER);
-        if (!(all ? mains.Contains(top) : top == mains[0])) continue;
-        var bounds = Bounds(windows[i]);
-        using (var window = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb)) {
-          using (var g = Graphics.FromImage(window)) {
-            var dc = g.GetHdc();
-            // PW_RENDERFULLCONTENT, without which a window Chromium composites draws black.
-            PrintWindow(windows[i], dc, 2);
-            g.ReleaseHdc(dc);
-          }
-          graphics.DrawImageUnscaled(window, bounds.X - area.X, bounds.Y - area.Y);
-        }
-      }
+    // DIAG (#1257, #1262): the screen as Windows composes it, and PrintWindow three ways beside it.
+    using (var image = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb)) {
+      using (var graphics = Graphics.FromImage(image))
+        graphics.CopyFromScreen(area.Location, Point.Empty, area.Size);
       image.Save(path, ImageFormat.Png);
     }
+    var stem = path.Substring(0, path.Length - 4);
+    var log = new System.Text.StringBuilder();
+    log.AppendLine("area " + area + " main " + Bounds(mains[0]) + " shown " + Shown(mains[0]));
+    foreach (var mode in new uint[] { 0, 2, 3 }) {
+      using (var image = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb))
+      using (var graphics = Graphics.FromImage(image)) {
+        for (int i = windows.Count - 1; i >= 0; i--) {
+          var top = windows[i];
+          while (GetWindow(top, GW_OWNER) != IntPtr.Zero) top = GetWindow(top, GW_OWNER);
+          if (!(all ? mains.Contains(top) : top == mains[0])) continue;
+          var bounds = Bounds(windows[i]);
+          if (mode == 0) {
+            using (var window = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb)) {
+              using (var g = Graphics.FromImage(window)) {
+                var dc = g.GetHdc();
+                PrintWindow(windows[i], dc, 2);
+                g.ReleaseHdc(dc);
+              }
+              graphics.DrawImageUnscaled(window, bounds.X - area.X, bounds.Y - area.Y);
+            }
+            continue;
+          }
+          if (mode == 3) {
+            RECT client;
+            GetClientRect(windows[i], out client);
+            var origin = new POINT();
+            ClientToScreen(windows[i], ref origin);
+            log.AppendLine("client " + origin.X + "," + origin.Y + " " + client.Right + "x" + client.Bottom + " window " + bounds);
+            bounds = new Rectangle(origin.X, origin.Y, client.Right, client.Bottom);
+          }
+          if (bounds.Width <= 0 || bounds.Height <= 0) continue;
+          using (var window = Print(windows[i], bounds.Width, bounds.Height, mode, log))
+            graphics.DrawImageUnscaled(window, bounds.X - area.X, bounds.Y - area.Y);
+        }
+        image.Save(stem + (mode == 0 ? ".pw.png" : mode == 2 ? ".dib.png" : ".dib3.png"), ImageFormat.Png);
+      }
+    }
+    System.IO.File.WriteAllText(stem + ".txt", log.ToString());
     return null;
   }
 }
