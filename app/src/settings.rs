@@ -1429,7 +1429,7 @@ impl Settings {
                 // check.sh waits for this line.
                 log!("browser: {name} {}", if on { "off" } else { "on" });
                 set(!on, cx);
-                settings.switched = Some((name, crate::motion::start(cx)));
+                settings.switched = Some((name, browser::motion::start(cx)));
                 cx.notify();
             }))
             .relative()
