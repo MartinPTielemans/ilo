@@ -6,8 +6,8 @@ use std::rc::Rc;
 use gpui::{Entity, TestAppContext, VisualTestContext, point, px, size};
 
 use super::*;
-use crate::theme::DEFAULT_INTENSITY;
 use crate::shell::recorder::Recorder;
+use crate::theme::DEFAULT_INTENSITY;
 
 const BLUE: u32 = 0x3d81f9;
 
@@ -30,7 +30,15 @@ fn shell(
 /// Space 1 as the core reports it, with `color` and `theme`.
 fn entry(color: Option<u32>, theme: Option<Theme>) -> crate::shell::SpaceEntry {
     let text = theme.map_or(String::new(), |theme| theme.to_text());
-    (1, "Space".into(), color, 1, "".into(), "".into(), text.into())
+    (
+        1,
+        "Space".into(),
+        color,
+        1,
+        "".into(),
+        "".into(),
+        text.into(),
+    )
 }
 
 fn rgb_of(color: Rgba) -> u32 {
@@ -45,7 +53,9 @@ fn a_theme_of_one_colour_at_its_start_looks_as_the_colour_alone(cx: &mut TestApp
     let before: Vec<_> = alone.update(cx, |shell, _| {
         [0., 0.5, 1.].map(|y| shell.window_fill_at(y)).to_vec()
     });
-    alone.update(cx, |shell, cx| shell.set_spaces(vec![entry(Some(color), Some(theme))], cx));
+    alone.update(cx, |shell, cx| {
+        shell.set_spaces(vec![entry(Some(color), Some(theme))], cx)
+    });
     let after: Vec<_> = alone.update(cx, |shell, _| {
         [0., 0.5, 1.].map(|y| shell.window_fill_at(y)).to_vec()
     });
@@ -55,7 +65,9 @@ fn a_theme_of_one_colour_at_its_start_looks_as_the_colour_alone(cx: &mut TestApp
 #[gpui::test]
 fn two_colours_go_from_the_top_left_to_the_second_along_the_diagonal(cx: &mut TestAppContext) {
     let theme = Theme::at(0.6, 0.).with_count(2);
-    let [main, second] = theme.colors()[..] else { panic!("two colours") };
+    let [main, second] = theme.colors()[..] else {
+        panic!("two colours")
+    };
     let (shell, cx) = shell(Some(main), Some(theme), cx);
     shell.update(cx, |shell, _| {
         assert_eq!(rgb_of(shell.theme_color_at(&theme, 1., 0., 0.)), main);
@@ -63,13 +75,22 @@ fn two_colours_go_from_the_top_left_to_the_second_along_the_diagonal(cx: &mut Te
         // The right edge is the second colour from three quarters of the way down the diagonal.
         let (width, height) = (1800., 1130.);
         let y = (SECOND_AT * (width + height) - width) / height;
-        assert_eq!(rgb_of(shell.theme_color_at(&theme, 1., 1., y + 0.01)), second);
-        assert_ne!(rgb_of(shell.theme_color_at(&theme, 1., 1., y - 0.2)), second);
+        assert_eq!(
+            rgb_of(shell.theme_color_at(&theme, 1., 1., y + 0.01)),
+            second
+        );
+        assert_ne!(
+            rgb_of(shell.theme_color_at(&theme, 1., 1., y - 0.2)),
+            second
+        );
         // A third comes in down the window.
         let three = theme.with_count(3);
         let third = three.colors()[2];
         let bottom_left = shell.theme_color_at(&three, 1., 0., 1.);
-        assert_eq!(rgb_of(bottom_left), rgb_of(theme::mix_oklab(rgb(main), rgb(third), 1.)));
+        assert_eq!(
+            rgb_of(bottom_left),
+            rgb_of(theme::mix_oklab(rgb(main), rgb(third), 1.))
+        );
     });
 }
 
@@ -81,7 +102,14 @@ fn intensity_washes_the_colours_out(cx: &mut TestAppContext) {
     shell.update(cx, |shell, _| {
         let alpha = |intensity| {
             let theme = Theme { intensity, ..theme };
-            shell.theme_color_at(&theme, Palette::of(Some(&theme), Tone::Dark).layer_alpha, 0.5, 0.5).a
+            shell
+                .theme_color_at(
+                    &theme,
+                    Palette::of(Some(&theme), Tone::Dark).layer_alpha,
+                    0.5,
+                    0.5,
+                )
+                .a
         };
         assert!(alpha(0.) < alpha(0.24) && alpha(0.24) < alpha(DEFAULT_INTENSITY));
         assert!(alpha(DEFAULT_INTENSITY) < alpha(1.));
@@ -100,7 +128,10 @@ fn the_picker_s_theme_shows_at_once_and_gives_way_to_the_kept_one(cx: &mut TestA
         assert_eq!(shell.theme_of(1), Some(made));
         shell.set_spaces(vec![entry(Some(made.main_color()), Some(made))], cx);
         assert_eq!(shell.theme_preview, None);
-        assert_eq!(shell.theme_of(1).map(|theme| theme.to_text()), Some(made.to_text()));
+        assert_eq!(
+            shell.theme_of(1).map(|theme| theme.to_text()),
+            Some(made.to_text())
+        );
     });
 }
 
@@ -127,7 +158,11 @@ fn remove_theme_color_takes_the_space_back_to_the_accent(cx: &mut TestAppContext
     });
     let titles = host.menus.borrow().last().cloned().unwrap_or_default();
     assert!(titles.iter().any(|(title, _)| title == "Edit Theme Color…"));
-    assert!(!titles.iter().any(|(title, _)| title == "Remove Theme Color"));
+    assert!(
+        !titles
+            .iter()
+            .any(|(title, _)| title == "Remove Theme Color")
+    );
 }
 
 /// ilo's menu takes the window's look: light where the Space's theme makes it light, dark where
@@ -140,7 +175,10 @@ fn the_menu_takes_the_windows_look(cx: &mut TestAppContext) {
     let host = Rc::new(Recorder::default());
     let browser = host.clone();
     let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
-    let themed = |appearance| Theme { appearance, ..Theme::at(0.5, 0.) };
+    let themed = |appearance| Theme {
+        appearance,
+        ..Theme::at(0.5, 0.)
+    };
     let shown = [
         (Appearance::Light, None, Tone::Light),
         (Appearance::Dark, None, Tone::Dark),
@@ -156,18 +194,39 @@ fn the_menu_takes_the_windows_look(cx: &mut TestAppContext) {
         });
         // The system's appearance is read as the window draws.
         cx.run_until_parked();
-        shell.update(cx, |shell, cx| shell.space_menu(1, point(px(100.), px(112.)), cx));
+        shell.update(cx, |shell, cx| {
+            shell.space_menu(1, point(px(100.), px(112.)), cx)
+        });
     }
     let looks = host.menu_looks.borrow();
     let tones = shown.map(|(_, _, tone)| tone);
-    assert_eq!(looks.iter().map(|look| look.light).collect::<Vec<_>>(), tones.map(|tone| tone == Tone::Light));
-    let accents = shown.map(|(appearance, _, tone)| Highlight::of(&Palette::of(Some(&themed(appearance)), tone)));
-    assert_eq!(looks.iter().map(|look| look.highlight).collect::<Vec<_>>(), accents);
-    assert_ne!(accents[0].fill, accents[1].fill, "the light look's accent is the dark one's");
-    assert_ne!(accents[1].fill, Highlight::of(&Palette::default()).fill, "the theme's accent is ilo green");
+    assert_eq!(
+        looks.iter().map(|look| look.light).collect::<Vec<_>>(),
+        tones.map(|tone| tone == Tone::Light)
+    );
+    let accents = shown
+        .map(|(appearance, _, tone)| Highlight::of(&Palette::of(Some(&themed(appearance)), tone)));
+    assert_eq!(
+        looks.iter().map(|look| look.highlight).collect::<Vec<_>>(),
+        accents
+    );
+    assert_ne!(
+        accents[0].fill, accents[1].fill,
+        "the light look's accent is the dark one's"
+    );
+    assert_ne!(
+        accents[1].fill,
+        Highlight::of(&Palette::default()).fill,
+        "the theme's accent is ilo green"
+    );
     let entries = host.entries.borrow();
-    let [.., line, delete] = &entries[..] else { panic!("no menu") };
-    assert_eq!((line.title.as_ref(), delete.title.as_ref()), ("", "Delete Space"));
+    let [.., line, delete] = &entries[..] else {
+        panic!("no menu")
+    };
+    assert_eq!(
+        (line.title.as_ref(), delete.title.as_ref()),
+        ("", "Delete Space")
+    );
     assert!(delete.destructive && line.parent.is_none());
 }
 
@@ -183,17 +242,31 @@ fn capture_mode_follows_the_windows_look(cx: &mut TestAppContext) {
     for (system, theme, shown) in [
         (Tone::Dark, None, false),
         (Tone::Light, None, true),
-        (Tone::Light, Some(Theme { appearance: Appearance::Dark, ..Theme::at(0.5, 0.) }), false),
+        (
+            Tone::Light,
+            Some(Theme {
+                appearance: Appearance::Dark,
+                ..Theme::at(0.5, 0.)
+            }),
+            false,
+        ),
         (Tone::Light, None, true),
     ] {
         shell.update(cx, |shell, cx| {
             shell.force_tone(Some(system));
-            shell.set_spaces(vec![entry(theme.map(|theme| theme.main_color()), theme)], cx);
+            shell.set_spaces(
+                vec![entry(theme.map(|theme| theme.main_color()), theme)],
+                cx,
+            );
             shell.set_space(1, cx);
         });
         // The system's appearance is read as the window draws.
         cx.run_until_parked();
-        assert_eq!(light(), Some(shown), "with the system {system:?} and the theme {theme:?}");
+        assert_eq!(
+            light(),
+            Some(shown),
+            "with the system {system:?} and the theme {theme:?}"
+        );
     }
 }
 
@@ -218,11 +291,20 @@ fn the_apps_appearance_stands_in_for_the_systems(cx: &mut TestAppContext) {
         shell.read_with(cx, |shell, _| shell.palette.tone)
     };
     let system = tone(cx);
-    for (appearance, shown) in
-        [(Appearance::Dark, Tone::Dark), (Appearance::Light, Tone::Light), (Appearance::Automatic, system)]
-    {
-        shell.update(cx, |shell, cx| shell.run(Command::Appearance(appearance), "ui", cx));
-        assert_eq!(tone(cx), shown, "{appearance:?} drew the window {:?}", tone(cx));
+    for (appearance, shown) in [
+        (Appearance::Dark, Tone::Dark),
+        (Appearance::Light, Tone::Light),
+        (Appearance::Automatic, system),
+    ] {
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::Appearance(appearance), "ui", cx)
+        });
+        assert_eq!(
+            tone(cx),
+            shown,
+            "{appearance:?} drew the window {:?}",
+            tone(cx)
+        );
         assert_eq!(host.appearance.get(), Some(appearance));
         assert_eq!(host.menu_bar.borrow().appearance, appearance);
         let offered = cx.update(|_, cx| bar_commands("appearance", cx));
@@ -233,12 +315,19 @@ fn the_apps_appearance_stands_in_for_the_systems(cx: &mut TestAppContext) {
             .collect();
         assert_eq!(offered, others);
     }
-    let light = Theme { appearance: Appearance::Light, ..Theme::at(0.5, 0.) };
+    let light = Theme {
+        appearance: Appearance::Light,
+        ..Theme::at(0.5, 0.)
+    };
     shell.update(cx, |shell, cx| {
         shell.run(Command::Appearance(Appearance::Dark), "ui", cx);
         shell.set_spaces(vec![entry(Some(light.main_color()), Some(light))], cx);
     });
-    assert_eq!(tone(cx), Tone::Light, "a theme's own appearance gave way to the app's");
+    assert_eq!(
+        tone(cx),
+        Tone::Light,
+        "a theme's own appearance gave way to the app's"
+    );
 }
 
 /// The shell with Space 1 as `entry` has it, on a host that records what it asks of the core.
@@ -296,7 +385,10 @@ fn a_picked_theme_undoes_to_the_accent_and_redoes(cx: &mut TestAppContext) {
 fn a_drag_in_the_picker_undoes_as_one_step(cx: &mut TestAppContext) {
     let before = Theme::at(0.5, 0.).with_count(2);
     let (shell, host, cx) = recorded(Some(before.main_color()), Some(before), cx);
-    let frames = [0.2, 0.3, 0.4].map(|intensity| Theme { intensity, ..before });
+    let frames = [0.2, 0.3, 0.4].map(|intensity| Theme {
+        intensity,
+        ..before
+    });
     shell.update(cx, |shell, cx| {
         for frame in frames {
             shell.theme_changed(1, frame, false, cx);
@@ -318,7 +410,9 @@ fn a_drag_in_the_picker_undoes_as_one_step(cx: &mut TestAppContext) {
 fn remove_theme_color_undoes(cx: &mut TestAppContext) {
     let theme = Theme::at(0.5, 0.).with_count(3);
     let (shell, host, cx) = recorded(Some(theme.main_color()), Some(theme), cx);
-    shell.update(cx, |shell, cx| shell.space_menu(1, point(px(100.), px(112.)), cx));
+    shell.update(cx, |shell, cx| {
+        shell.space_menu(1, point(px(100.), px(112.)), cx)
+    });
     cx.update(|_, cx| host.choose("Remove Theme Color", cx));
     assert_eq!(host.take_edits(), gives(None));
     shell.update(cx, |shell, cx| {
@@ -347,10 +441,20 @@ fn shader_t(angle: f32, side: f32, start: f32, end: f32, point: (f32, f32)) -> f
 fn the_diagonal_is_drawn_where_it_is_taken_for_what_covers_it() {
     for (width, height) in [(1800., 1130.), (800., 1200.), (1000., 1000.)] {
         let (side, start, end) = diagonal_stops(width, height);
-        for (x, y) in [(0., 0.), (0.2, 0.7), (0.5, 0.5), (0.9, 0.1), (1., 1.), (0.6, 0.3)] {
+        for (x, y) in [
+            (0., 0.),
+            (0.2, 0.7),
+            (0.5, 0.5),
+            (0.9, 0.1),
+            (1., 1.),
+            (0.6, 0.3),
+        ] {
             let drawn = shader_t(135., side, start, end, (x * width, y * height));
             let taken = (theme::diagonal(x, y, width, height) / SECOND_AT).min(1.);
-            assert!((drawn - taken).abs() < 1e-4, "{width}×{height} at {x}, {y}: {drawn} {taken}");
+            assert!(
+                (drawn - taken).abs() < 1e-4,
+                "{width}×{height} at {x}, {y}: {drawn} {taken}"
+            );
         }
     }
 }

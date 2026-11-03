@@ -14,8 +14,24 @@ fn shell_with_agent(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>) {
     shell.update(cx, |shell, cx| {
         shell.set_spaces(
             vec![
-                (1, "Space 1".into(), None, 0, "".into(), "".into(), "".into()),
-                (2, "Research".into(), None, 0, "".into(), "Claude Code".into(), "".into()),
+                (
+                    1,
+                    "Space 1".into(),
+                    None,
+                    0,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                ),
+                (
+                    2,
+                    "Research".into(),
+                    None,
+                    0,
+                    "".into(),
+                    "Claude Code".into(),
+                    "".into(),
+                ),
             ],
             cx,
         );
@@ -34,12 +50,16 @@ fn tab_menu(
     cx: &mut TestAppContext,
     tab: u64,
 ) -> Vec<(SharedString, bool)> {
-    shell.update(cx, |shell, cx| shell.tab_menu(tab, point(px(100.), px(200.)), cx));
+    shell.update(cx, |shell, cx| {
+        shell.tab_menu(tab, point(px(100.), px(200.)), cx)
+    });
     host.menus.borrow().last().cloned().unwrap_or_default()
 }
 
 fn item(menu: &[(SharedString, bool)], title: &str) -> Option<bool> {
-    menu.iter().find(|(each, _)| each == title).map(|&(_, enabled)| enabled)
+    menu.iter()
+        .find(|(each, _)| each == title)
+        .map(|&(_, enabled)| enabled)
 }
 
 /// The Spaces menu lists the agent's Space among the user's, ⌃2 shows it as it does any second
@@ -67,9 +87,33 @@ fn the_users_tab_moves_into_an_agents_space_only_as_a_gift(cx: &mut TestAppConte
     shell.update(cx, |shell, cx| {
         shell.set_spaces(
             vec![
-                (1, "Space 1".into(), None, 0, "".into(), "".into(), "".into()),
-                (2, "Research".into(), None, 0, "".into(), "Claude Code".into(), "".into()),
-                (3, "Elsewhere".into(), None, 1, "".into(), "Codex".into(), "".into()),
+                (
+                    1,
+                    "Space 1".into(),
+                    None,
+                    0,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                ),
+                (
+                    2,
+                    "Research".into(),
+                    None,
+                    0,
+                    "".into(),
+                    "Claude Code".into(),
+                    "".into(),
+                ),
+                (
+                    3,
+                    "Elsewhere".into(),
+                    None,
+                    1,
+                    "".into(),
+                    "Codex".into(),
+                    "".into(),
+                ),
             ],
             cx,
         );
@@ -81,7 +125,10 @@ fn the_users_tab_moves_into_an_agents_space_only_as_a_gift(cx: &mut TestAppConte
     host.take();
     cx.update(|cx| host.choose("Research", cx));
     assert_eq!(host.take(), ["give 10 to 2"]);
-    assert_eq!(item(&tab_menu(&shell, &host, cx, 30), "Remove from Favorites"), Some(true));
+    assert_eq!(
+        item(&tab_menu(&shell, &host, cx, 30), "Remove from Favorites"),
+        Some(true)
+    );
     assert_eq!(item(&tab_menu(&shell, &host, cx, 30), "Research"), None);
     shell.update(cx, |shell, cx| shell.set_space(2, cx));
     let menu = tab_menu(&shell, &host, cx, 20);
@@ -89,7 +136,10 @@ fn the_users_tab_moves_into_an_agents_space_only_as_a_gift(cx: &mut TestAppConte
     assert_eq!(item(&menu, "Research"), None);
     assert_eq!(item(&menu, "Elsewhere"), None);
     assert_eq!(item(&menu, "Space 1"), Some(true));
-    assert_eq!(item(&tab_menu(&shell, &host, cx, 30), "Remove from Favorites"), Some(false));
+    assert_eq!(
+        item(&tab_menu(&shell, &host, cx, 30), "Remove from Favorites"),
+        Some(false)
+    );
 }
 
 /// An agent is at work in the tab the activity log last let it act in, which its row's label
@@ -99,21 +149,41 @@ fn the_users_tab_moves_into_an_agents_space_only_as_a_gift(cx: &mut TestAppConte
 fn an_agents_row_says_its_at_work_where_it_last_acted(cx: &mut TestAppContext) {
     let (shell, _) = shell_with_agent(cx);
     let at_work = |shell: &Entity<Shell>, cx: &mut TestAppContext, tab| {
-        shell.update(cx, |shell, _| shell.tab_label(tab).ends_with(", agent working"))
+        shell.update(cx, |shell, _| {
+            shell.tab_label(tab).ends_with(", agent working")
+        })
     };
     shell.update(cx, |shell, cx| {
-        shell.set_tabs(2, Vec::new(), vec![20, 21], Vec::new(), Folders::default(), cx);
+        shell.set_tabs(
+            2,
+            Vec::new(),
+            vec![20, 21],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
         shell.set_space(2, cx);
     });
     assert!(!at_work(&shell, cx, 20));
-    shell.update(cx, |shell, cx| shell.agent_acted("claude-code".into(), 20, cx));
+    shell.update(cx, |shell, cx| {
+        shell.agent_acted("claude-code".into(), 20, cx)
+    });
     assert!(at_work(&shell, cx, 20));
-    shell.update(cx, |shell, cx| shell.agent_acted("claude-code".into(), 21, cx));
+    shell.update(cx, |shell, cx| {
+        shell.agent_acted("claude-code".into(), 21, cx)
+    });
     assert!(!at_work(&shell, cx, 20));
     assert!(at_work(&shell, cx, 21));
 
     shell.update(cx, |shell, cx| {
-        shell.set_tabs(1, Vec::new(), vec![10, 21], Vec::new(), Folders::default(), cx);
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            vec![10, 21],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
         shell.set_tabs(2, Vec::new(), vec![20], Vec::new(), Folders::default(), cx);
     });
     assert!(!at_work(&shell, cx, 21));
@@ -129,7 +199,9 @@ fn an_agents_row_says_its_at_work_where_it_last_acted(cx: &mut TestAppContext) {
 fn an_agents_row_stops_saying_its_at_work_once_its_session_ends(cx: &mut TestAppContext) {
     let (shell, _) = shell_with_agent(cx);
     let at_work = |shell: &Entity<Shell>, cx: &mut TestAppContext, tab| {
-        shell.update(cx, |shell, _| shell.tab_label(tab).ends_with(", agent working"))
+        shell.update(cx, |shell, _| {
+            shell.tab_label(tab).ends_with(", agent working")
+        })
     };
     let acted = |shell: &Entity<Shell>, cx: &mut TestAppContext, agent: &'static str, tab| {
         shell.update(cx, |shell, cx| shell.agent_acted(agent.into(), tab, cx))
@@ -140,22 +212,59 @@ fn an_agents_row_stops_saying_its_at_work_once_its_session_ends(cx: &mut TestApp
     shell.update(cx, |shell, cx| {
         shell.set_spaces(
             vec![
-                (1, "Space 1".into(), None, 0, "".into(), "".into(), "".into()),
-                (2, "Research".into(), None, 0, "".into(), "Claude Code".into(), "".into()),
-                (3, "Errands".into(), None, 0, "".into(), "Codex".into(), "".into()),
+                (
+                    1,
+                    "Space 1".into(),
+                    None,
+                    0,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                ),
+                (
+                    2,
+                    "Research".into(),
+                    None,
+                    0,
+                    "".into(),
+                    "Claude Code".into(),
+                    "".into(),
+                ),
+                (
+                    3,
+                    "Errands".into(),
+                    None,
+                    0,
+                    "".into(),
+                    "Codex".into(),
+                    "".into(),
+                ),
             ],
             cx,
         );
-        shell.set_tabs(2, Vec::new(), vec![20, 21], Vec::new(), Folders::default(), cx);
+        shell.set_tabs(
+            2,
+            Vec::new(),
+            vec![20, 21],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
         shell.set_tabs(3, Vec::new(), vec![40], Vec::new(), Folders::default(), cx);
         shell.set_space(2, cx);
     });
     acted(&shell, cx, "claude-code", 20);
     acted(&shell, cx, "codex", 40);
     ended(&shell, cx, "codex", 20);
-    assert!(at_work(&shell, cx, 20), "another agent's end isn't this one's");
+    assert!(
+        at_work(&shell, cx, 20),
+        "another agent's end isn't this one's"
+    );
     ended(&shell, cx, "claude-code", 21);
-    assert!(at_work(&shell, cx, 20), "an end in another tab isn't this one's");
+    assert!(
+        at_work(&shell, cx, 20),
+        "an end in another tab isn't this one's"
+    );
     ended(&shell, cx, "claude-code", 20);
     assert!(!at_work(&shell, cx, 20));
     shell.update(cx, |shell, cx| shell.set_space(3, cx));
@@ -211,7 +320,9 @@ fn an_agents_space_menu_shows_its_activity(cx: &mut TestAppContext) {
 fn an_agents_space_menu_lists_its_permissions_to_revoke(cx: &mut TestAppContext) {
     let (shell, host) = shell_with_agent(cx);
     let menu = |cx: &mut TestAppContext| {
-        shell.update(cx, |shell, cx| shell.space_menu(2, point(px(100.), px(200.)), cx));
+        shell.update(cx, |shell, cx| {
+            shell.space_menu(2, point(px(100.), px(200.)), cx)
+        });
         host.menus.borrow().last().cloned().unwrap_or_default()
     };
     let menu_now = menu(cx);
@@ -220,8 +331,15 @@ fn an_agents_space_menu_lists_its_permissions_to_revoke(cx: &mut TestAppContext)
     cx.update(|cx| host.dismiss(cx));
 
     assert_eq!(item(&menu_now, "Take Back All Tabs"), Some(false));
-    let sites = vec![("bank.example".into(), false), ("shop.example".into(), true)];
-    *host.agent_permissions.borrow_mut() = AgentGrants { sites, connected: true, tabs: true };
+    let sites = vec![
+        ("bank.example".into(), false),
+        ("shop.example".into(), true),
+    ];
+    *host.agent_permissions.borrow_mut() = AgentGrants {
+        sites,
+        connected: true,
+        tabs: true,
+    };
     let menu_now = menu(cx);
     assert_eq!(item(&menu_now, "Revoke Permission"), Some(true));
     assert_eq!(item(&menu_now, "Never on bank.example"), Some(true));
@@ -241,7 +359,11 @@ fn an_agents_space_menu_lists_its_permissions_to_revoke(cx: &mut TestAppContext)
     assert_eq!(host.take(), ["take back agent 2"]);
 
     let sites = vec![("shop.example".into(), true)];
-    *host.agent_permissions.borrow_mut() = AgentGrants { sites, connected: true, tabs: true };
+    *host.agent_permissions.borrow_mut() = AgentGrants {
+        sites,
+        connected: true,
+        tabs: true,
+    };
     assert_eq!(item(&menu(cx), "All Sites"), None, "one site had All Sites");
 }
 
@@ -260,7 +382,14 @@ fn the_agents_pointer_shows_where_it_acts_in_the_page_shown(cx: &mut TestAppCont
     };
     assert!(!point_at(&shell, cx, 20), "the user's Space is shown");
     shell.update(cx, |shell, cx| {
-        shell.set_tabs(2, Vec::new(), vec![20, 21], Vec::new(), Folders::default(), cx);
+        shell.set_tabs(
+            2,
+            Vec::new(),
+            vec![20, 21],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
         shell.set_space(2, cx);
         shell.set_selected(20, cx);
     });

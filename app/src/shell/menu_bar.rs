@@ -56,7 +56,11 @@ pub struct ProfileChoice {
 impl MenuBar {
     /// View's item for ⌘S, by what it does now, as Arc's.
     pub fn sidebar_title(&self) -> &'static str {
-        if self.sidebar_hidden { "Show Sidebar" } else { "Hide Sidebar" }
+        if self.sidebar_hidden {
+            "Show Sidebar"
+        } else {
+            "Hide Sidebar"
+        }
     }
 
     /// Tabs' item for ⌘D, by the tab shown, as Arc's, which names both with none shown.
@@ -80,7 +84,8 @@ impl MenuBar {
     /// View › Developer's item for the page's Developer Mode, by what it would do, as the command
     /// bar names it. None leaves it out, as Arc's shows only with a page.
     pub fn developer_mode_title(&self) -> Option<&'static str> {
-        self.developer_mode.map(super::commands::developer_mode_title)
+        self.developer_mode
+            .map(super::commands::developer_mode_title)
     }
 
     /// Help › Troubleshooting's item for the trace, by what it would do, as the command bar names
@@ -110,7 +115,9 @@ impl Shell {
             extensions,
             sidebar_hidden: self.sidebar_hidden,
             pinned,
-            pinned_shut: self.shown_space().is_some_and(|space| space.folders.pinned_shut),
+            pinned_shut: self
+                .shown_space()
+                .is_some_and(|space| space.folders.pinned_shut),
             pinned_offered: self.offers(Command::CollapsePinned)
                 || self.offers(Command::ExpandPinned),
             developer_mode: self.developer_mode(self.selected),
@@ -154,7 +161,10 @@ impl Shell {
     /// Control by it; the window doesn't draw it.
     pub fn update_title(&mut self, cx: &mut Context<Self>) {
         let title = match self.selected {
-            0 => self.shown_space().map(|space| space.name.clone()).unwrap_or_default(),
+            0 => self
+                .shown_space()
+                .map(|space| space.name.clone())
+                .unwrap_or_default(),
             tab => self.title(tab),
         };
         if title != self.window_title {
@@ -186,9 +196,17 @@ mod tests {
         assert_eq!(host.menu_bar.borrow().pin_title(), "Unpin Tab");
         shell.update(cx, |shell, cx| shell.run(Command::ToggleSidebar, "ui", cx));
         assert_eq!(host.menu_bar.borrow().sidebar_title(), "Show Sidebar");
-        assert_eq!(host.menu_bar.borrow().pinned_item().1, Command::CollapsePinned);
-        let shut = Folders { pinned_shut: true, ..Folders::default() };
-        shell.update(cx, |shell, cx| shell.set_tabs(1, vec![1], vec![10], Vec::new(), shut, cx));
+        assert_eq!(
+            host.menu_bar.borrow().pinned_item().1,
+            Command::CollapsePinned
+        );
+        let shut = Folders {
+            pinned_shut: true,
+            ..Folders::default()
+        };
+        shell.update(cx, |shell, cx| {
+            shell.set_tabs(1, vec![1], vec![10], Vec::new(), shut, cx)
+        });
         let item = host.menu_bar.borrow().pinned_item();
         assert_eq!(item, ("Expand Pinned Tabs", Command::ExpandPinned));
     }
@@ -199,7 +217,11 @@ mod tests {
     fn the_menu_bar_pins_a_loading_page(cx: &mut TestAppContext) {
         let (shell, host) = shell_with(cx, &[1], &[10], Folders::default());
         cx.update(crate::shell::bind_keys);
-        let loading = Page { url: "https://example.com/".into(), loading: true, ..Page::default() };
+        let loading = Page {
+            url: "https://example.com/".into(),
+            loading: true,
+            ..Page::default()
+        };
         shell.update(cx, |shell, cx| {
             shell.set_selected(10, cx);
             shell.set_page(10, loading, cx);
@@ -209,7 +231,14 @@ mod tests {
         cx.update(|cx| cx.dispatch_action(&crate::shell::Run(Command::TogglePin)));
         assert_eq!(host.take_edits(), ["pinned 10 true"]);
         shell.update(cx, |shell, cx| {
-            shell.set_tabs(1, vec![1, 10], Vec::new(), Vec::new(), Folders::default(), cx)
+            shell.set_tabs(
+                1,
+                vec![1, 10],
+                Vec::new(),
+                Vec::new(),
+                Folders::default(),
+                cx,
+            )
         });
         assert_eq!(host.menu_bar.borrow().pin_title(), "Unpin Tab");
         cx.update(|cx| cx.dispatch_action(&crate::shell::Run(Command::TogglePin)));
@@ -229,11 +258,17 @@ mod tests {
             developer_mode,
             ..Page::default()
         };
-        shell.update(cx, |shell, cx| shell.set_page(10, page("http://localhost:3000/", true), cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_page(10, page("http://localhost:3000/", true), cx)
+        });
         assert_eq!(title(), Some("Turn off Developer Mode for this site"));
-        shell.update(cx, |shell, cx| shell.set_page(10, page("http://localhost:3000/", false), cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_page(10, page("http://localhost:3000/", false), cx)
+        });
         assert_eq!(title(), Some("Turn on Developer Mode for this site"));
-        shell.update(cx, |shell, cx| shell.set_page(10, page("chrome://settings/", false), cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_page(10, page("chrome://settings/", false), cx)
+        });
         assert_eq!(title(), None);
     }
 
@@ -265,12 +300,25 @@ mod tests {
             enabled,
             checked,
         };
-        let full = vec![choice(0, "Default", true, true), choice(5, "Work", false, false)];
+        let full = vec![
+            choice(0, "Default", true, true),
+            choice(5, "Work", false, false),
+        ];
         assert_eq!(host.menu_bar.borrow().profiles, Some((full, false)));
         shell.update(cx, |shell, cx| {
-            shell.set_tabs(1, Vec::new(), Vec::new(), Vec::new(), Folders::default(), cx)
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Folders::default(),
+                cx,
+            )
         });
-        let empty = vec![choice(0, "Default", true, true), choice(5, "Work", true, false)];
+        let empty = vec![
+            choice(0, "Default", true, true),
+            choice(5, "Work", true, false),
+        ];
         assert_eq!(host.menu_bar.borrow().profiles, Some((empty, true)));
     }
 }

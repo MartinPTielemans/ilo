@@ -48,7 +48,12 @@ pub(crate) fn attach(window: &mut Window, hwnd: *mut c_void) {
     FADING.with_borrow_mut(|fading| fading.push((hwnd, handle, None)));
     window.set_root_look(Some(Box::new(move || {
         let (opacity, moving) = now(hwnd);
-        RootLook { scale: 1., origin: point(px(0.), px(0.)), opacity, moving }
+        RootLook {
+            scale: 1.,
+            origin: point(px(0.), px(0.)),
+            opacity,
+            moving,
+        }
     })));
 }
 
@@ -58,7 +63,12 @@ pub(crate) fn attach(window: &mut Window, hwnd: *mut c_void) {
 pub extern "C" fn browser_fade(hwnd: *mut c_void, from: f64, to: f64, seconds: f64) {
     let hwnd = hwnd as usize;
     let from = if from < 0. { now(hwnd).0 } else { from as f32 };
-    let fade = Fade { from, to: to as f32, seconds: seconds as f32, started: Instant::now() };
+    let fade = Fade {
+        from,
+        to: to as f32,
+        seconds: seconds as f32,
+        started: Instant::now(),
+    };
     let handle = FADING.with_borrow_mut(|fading| {
         let (.., handle, last) = fading.iter_mut().find(|(each, ..)| *each == hwnd)?;
         *last = Some(fade);
