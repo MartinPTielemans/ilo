@@ -7,8 +7,9 @@
 # cut to their shapes, while no other app's window is in front of them there. Otherwise it draws
 # each of the process's windows itself with PrintWindow, in their order on screen, so nothing of
 # another app's can get into the picture. PrintWindow draws what DirectComposition leaves
-# see-through, as an overlay's margin, black (#1257), and the caption Windows would give the
-# browser window under the UI (#1262), so it's the way out, not the way in, and says so.
+# see-through, as an overlay's margin, black (#1257), so it's the way out, not the way in, and says
+# so. A browser window it draws by its UI's and pages' windows, as one of the whole window has its
+# frame paint Windows' caption under the UI, on screen too (#1262).
 # On Linux it captures the private session tools/headless.sh --run starts, or check.sh's Xvfb,
 # which hold nothing but the app, and refuses outside one rather than capture the owner's screen.
 # Usage: tools/window-screenshot.sh <pid> <output.png> [all]
@@ -39,6 +40,7 @@ public static class Capture {
   [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
   [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
   [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr hwnd, IntPtr dc, uint flags);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string name, string title);
   [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out RECT rect, int size);
   [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
   [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr hwnd);
@@ -103,6 +105,35 @@ public static class Capture {
     return path;
   }
 
+  // Draws |hwnd| into |graphics|, whose top left is |origin| on screen. A browser window, which
+  // holds the UI in a BrowserUI window, is drawn by its child windows, the UI and the pages, back to
+  // front: a PrintWindow of the browser window has its frame repaint, and the theme paints the
+  // caption the style gives it there, under the UI, on screen too (#1262).
+  static void Print(IntPtr hwnd, Graphics graphics, Point origin) {
+    if (FindWindowEx(hwnd, IntPtr.Zero, "BrowserUI", null) == IntPtr.Zero) {
+      Draw(hwnd, graphics, origin);
+      return;
+    }
+    const uint GW_HWNDLAST = 1, GW_HWNDPREV = 3, GW_CHILD = 5;
+    for (var child = GetWindow(GetWindow(hwnd, GW_CHILD), GW_HWNDLAST); child != IntPtr.Zero;
+         child = GetWindow(child, GW_HWNDPREV))
+      if (IsWindowVisible(child)) Draw(child, graphics, origin);
+  }
+
+  static void Draw(IntPtr hwnd, Graphics graphics, Point origin) {
+    var bounds = Bounds(hwnd);
+    if (bounds.Width <= 0 || bounds.Height <= 0) return;
+    using (var window = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb)) {
+      using (var g = Graphics.FromImage(window)) {
+        var dc = g.GetHdc();
+        // PW_RENDERFULLCONTENT, without which a window Chromium or GPUI composites draws black.
+        PrintWindow(hwnd, dc, 2);
+        g.ReleaseHdc(dc);
+      }
+      graphics.DrawImageUnscaled(window, bounds.X - origin.X, bounds.Y - origin.Y);
+    }
+  }
+
   public static string Run(uint pid, string path, bool all) {
     // Rects in pixels, as PrintWindow draws.
     SetProcessDPIAware();
@@ -146,24 +177,14 @@ public static class Capture {
       return null;
     }
     Console.Error.WriteLine("A window of another app is in front of the app, so the capture " +
-        "draws its windows with PrintWindow, which draws the clear margins of overlays black " +
-        "and a caption under the UI.");
+        "draws its windows with PrintWindow, which draws the clear margins of overlays black.");
     using (var image = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb))
     using (var graphics = Graphics.FromImage(image)) {
       for (int i = windows.Count - 1; i >= 0; i--) {
         var top = windows[i];
         while (GetWindow(top, GW_OWNER) != IntPtr.Zero) top = GetWindow(top, GW_OWNER);
         if (!(all ? mains.Contains(top) : top == mains[0])) continue;
-        var bounds = Bounds(windows[i]);
-        using (var window = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb)) {
-          using (var g = Graphics.FromImage(window)) {
-            var dc = g.GetHdc();
-            // PW_RENDERFULLCONTENT, without which a window Chromium composites draws black.
-            PrintWindow(windows[i], dc, 2);
-            g.ReleaseHdc(dc);
-          }
-          graphics.DrawImageUnscaled(window, bounds.X - area.X, bounds.Y - area.Y);
-        }
+        Print(windows[i], graphics, area.Location);
       }
       image.Save(path, ImageFormat.Png);
     }
