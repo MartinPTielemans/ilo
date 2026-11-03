@@ -20,7 +20,8 @@ use gpui::{
 use super::{
     Command, DRAG_START, Edit, FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FOOTER_HEIGHT, FORM_TEXT,
     MenuEntry, NAV, NAV_RADIUS, NAV_SIZE, Naming, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS,
-    SECONDARY, SEGMENT_FAVICON_X, SPACE_SWATCH_SHOWN, Shell, Space, UNSELECTED_TITLE, What,
+    SECONDARY, SEGMENT_FAVICON_X, SPACE_SWATCH_SHOWN, Shell, Space, UNSELECTED_TITLE,
+    URL_BUTTON_GLYPH, URL_BUTTON_SIZE, What,
     access::Accessible,
     clean_link, dashed_square,
     display_face::{cap_top, display_text},
@@ -121,6 +122,7 @@ use crate::tokens::shell::library::PLUS_SIZE;
 use crate::tokens::shell::library::SPACES_INSET;
 use crate::tokens::shell::library::SPACES_LEFT;
 use crate::tokens::shell::library::SPACES_PAGE;
+use crate::tokens::shell::library::{CARD_MORE_X, CARD_MORE_Y};
 
 use crate::tokens::shell::library::SEARCH_GLYPH;
 use crate::tokens::shell::library::SEARCH_GLYPH_X;
@@ -660,6 +662,13 @@ impl Shell {
         }
     }
 
+    /// Whether a click's fade of the sidebar is still under way, which outlasts the card's motion
+    /// under Reduce Motion.
+    fn sidebar_fading(&self) -> bool {
+        let shown = if self.library_open { 0. } else { 1. };
+        self.clicked_fade().is_some() && self.sidebar_opacity() != shown
+    }
+
     /// The sidebar's size under the Library, about `RECEDE_X` right of its edge: receding with the
     /// card, or full while a click fades it.
     pub(super) fn sidebar_scale(&self) -> f32 {
@@ -730,9 +739,9 @@ impl Shell {
         opacity: Option<f32>,
         cx: &mut Context<Self>,
     ) {
-        let now = Instant::now();
-        self.library_motion = Some((out, speed, now));
-        self.sidebar_fade = opacity.map(|opacity| (opacity, now));
+        // Under Reduce Motion the card is where it goes at once, and the sidebar still fades.
+        self.library_motion = Some((out, speed, crate::motion::start(cx)));
+        self.sidebar_fade = opacity.map(|opacity| (opacity, Instant::now()));
         self.library_open = open;
         if open {
             self.conceal_now(cx);
@@ -756,6 +765,13 @@ impl Shell {
         self.show_section(section, cx);
     }
 
+    /// Manage Spaces… in a Space's menu: the Library on its Spaces, left there if it shows them.
+    pub(super) fn manage_spaces(&mut self, cx: &mut Context<Self>) {
+        if !(self.library_open && self.section == Section::Spaces) {
+            self.view_section(Section::Spaces, cx);
+        }
+    }
+
     /// Opens the Library on its Spaces, for the preview, which has no pointer to pick it with.
     pub fn show_spaces(&mut self, cx: &mut Context<Self>) {
         self.view_section(Section::Spaces, cx);
@@ -774,7 +790,7 @@ impl Shell {
         // Ours: the Library goes to the new section's width on the push's spring, as Arc's
         // isn't recorded.
         if self.library.is_some() && self.section_width(section) != self.library_width() {
-            self.library_resize = Some((self.library_width(), Instant::now()));
+            self.library_resize = Some((self.library_width(), crate::motion::start(cx)));
         }
         self.section = section;
         let placeholder = match section {
@@ -857,7 +873,7 @@ impl Shell {
             }
             return;
         }
-        if self.library_step().is_some() {
+        if self.library_step().is_some() || self.sidebar_fading() {
             window.request_animation_frame();
             return;
         }
@@ -1551,6 +1567,39 @@ impl Shell {
             }
         });
         let field = self.card_field(space, &palette, window_at(0.), cx);
+        // The ••• at the card's foot (Arc) opens the Space's menu, as the sidebar's does, with the
+        // pointer on the card. Its press stops there, so the card sees no click to pick the Space.
+        let half = URL_BUTTON_SIZE / 2.;
+        let more = div()
+            .id(("space-card-more", id))
+            .absolute()
+            .right(px(CARD_MORE_X - half))
+            .bottom(px(CARD_MORE_Y - half))
+            .size(px(URL_BUTTON_SIZE))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(NAV_RADIUS))
+            .opacity(0.)
+            .group_hover("space-card", |style| style.opacity(1.))
+            .hover(|style| style.bg(palette.plate(STATE_HOVERED)))
+            .when(self.a11y, |more| {
+                more.button_named("Edit Space")
+                    .pressed_by_mouse_down(true, false)
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    shell.space_menu(id, event.position, cx)
+                }),
+            )
+            .child(
+                svg()
+                    .path("icons/ellipsis.svg")
+                    .size(px(URL_BUTTON_GLYPH))
+                    .text_color(palette.glyph(NAV)),
+            );
         div()
             .id(("space-card", id))
             .flex_none()
@@ -1594,6 +1643,7 @@ impl Shell {
             )
             .child(field)
             .child(div().children(rows))
+            .child(more)
     }
 
     /// The field across the top of a Space's card (Arc): its icon in a dashed slot, which the icon
@@ -2976,7 +3026,7 @@ mod tests {
         cx.run_until_parked();
         let titles = host.menus.borrow().last().cloned().unwrap_or_default();
         assert!(
-            titles.iter().any(|(title, _)| title == "Rename Space"),
+            titles.iter().any(|(title, _)| title == "Rename Space…"),
             "no Space menu"
         );
         assert!(

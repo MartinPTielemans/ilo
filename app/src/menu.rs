@@ -894,6 +894,7 @@ pub(crate) fn described_held(entries: &[MenuEntry], alt: bool) -> String {
             (true, false) => format!("{title} (globe)"),
         };
         match (entry.enabled, entry.checked) {
+            _ if entry.header => format!("{title} (header)"),
             (false, _) => format!("{title} (disabled)"),
             (true, true) => format!("{title} (checked)"),
             (true, false) => title,
@@ -1467,6 +1468,7 @@ impl ContextMenu {
             false => (highlight.fill, highlight.label),
         };
         let label: Hsla = match (lit, entry.enabled, entry.destructive) {
+            _ if entry.header => rgba(palette.secondary).into(),
             (true, ..) => on_fill.into(),
             (false, false, _) => rgba(palette.disabled).into(),
             (false, true, true) => rgba(palette.destructive).into(),
@@ -1542,7 +1544,9 @@ impl ContextMenu {
         };
         let a11y = self.a11y;
         let name = entry.title.clone();
-        let (enabled, checked, keys) = (entry.enabled, entry.checked, shortcut.clone());
+        let enabled = entry.enabled || entry.header;
+        let (checked, keys) = (entry.checked, shortcut.clone());
+        let header = entry.header;
         let radio = checked && level != 0;
         // Where it stands among the level's items, as VoiceOver says it: "3 of 11".
         let titled = |items: &[usize]| {
@@ -1582,11 +1586,17 @@ impl ContextMenu {
                     .min_w_0()
                     .truncate()
                     .text_color(label)
+                    .when(entry.header, |title| {
+                        title
+                            .text_size(px(HEADER_TEXT))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                    })
                     .child(entry.title.clone()),
             )
             .children(trailing)
             .when(a11y, |row| {
                 let role = match (checked, radio) {
+                    _ if header => Role::Heading,
                     (true, true) => Role::MenuItemRadio,
                     (true, false) => Role::MenuItemCheckBox,
                     _ => Role::MenuItem,

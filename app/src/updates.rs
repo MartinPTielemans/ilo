@@ -515,7 +515,7 @@ impl Render for NightlyRow {
             .child(drawn(format!("switch {NIGHTLY}"), self.logged.clone()))
             .child(at)
             .on_click(cx.listener(move |row, _, _, cx| {
-                row.switched = Some(Instant::now());
+                row.switched = Some(crate::motion::start(cx));
                 follow(if on { Track::Release } else { Track::Nightly }, cx);
                 cx.notify();
             }));
