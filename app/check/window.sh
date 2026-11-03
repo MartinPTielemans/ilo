@@ -611,6 +611,15 @@ check_reveal() {
   done
   fail "$1: the reveal's window is at ${child:-none}, not ${expected:-none}"
 }
+# reveal_at_edge <what> [from]: the pointer comes onto the window's edge and moves along it, and the
+# sidebar comes out, which is looked for from the first move, or from command <from>: the wait the
+# pointer starts at the edge can be over before the next move is sent.
+reveal_at_edge() {
+  local from=${2:-$((step + 1))}
+  send move 3 300
+  send move 3 306
+  expect '^browser: reveal shown$' "$1" "$from"
+}
 send key s cmd
 toggle ui hidden "⌘S before the reveal"
 send move 400 300
@@ -622,11 +631,17 @@ step=$((step + 1))
 passed=$step
 echo "move 3 306" >&3
 send move 400 300
-send move 3 300
-send move 3 306
-expect '^browser: reveal shown$' "the pointer at the window's edge didn't bring the sidebar out"
-[ "$(sed -n "/^browser: drive $passed: /,\$p" "$log" | grep -c '^browser: reveal shown$')" = 1 ] ||
-  fail "the pointer passing the window's edge brought the sidebar out"
+if [ "$(uname)" = Linux ]; then
+  # On Linux the shell hears neither the pointer over the page nor, under X11, its leaving for the
+  # page, so the pass brings the sidebar out once its wait is up, which may be before the pointer
+  # is back at the edge: the line is looked for from the pass on.
+  echo "skip: the pointer passing the window's edge, whose leaving for the page Linux's shell doesn't hear."
+  reveal_at_edge "the pointer at the window's edge didn't bring the sidebar out" "$passed"
+else
+  reveal_at_edge "the pointer at the window's edge didn't bring the sidebar out"
+  [ "$(sed -n "/^browser: drive $passed: /,\$p" "$log" | grep -c '^browser: reveal shown$')" = 1 ] ||
+    fail "the pointer passing the window's edge brought the sidebar out"
+fi
 check_reveal "with the sidebar out" shown
 check_layout "with the sidebar out" inset
 check_buttons "with the sidebar out" hidden
@@ -643,17 +658,13 @@ else
   expect '^browser: reveal hidden$' "the pointer past the sidebar out didn't send it away"
 fi
 check_reveal "after the sidebar went away"
-send move 3 300
-send move 3 306
-expect '^browser: reveal shown$' "the pointer at the edge didn't bring the sidebar back out"
+reveal_at_edge "the pointer at the edge didn't bring the sidebar back out"
 send click 93 24
 toggle sidebar shown "a click on the sidebar button of the sidebar out"
 check_reveal "with the sidebar docked from its sidebar button"
 send key s cmd
 toggle ui hidden "⌘S after docking the sidebar out"
-send move 3 300
-send move 3 306
-expect '^browser: reveal shown$' "the pointer at the edge didn't bring the sidebar out again"
+reveal_at_edge "the pointer at the edge didn't bring the sidebar out again"
 send key s cmd
 toggle ui shown "⌘S with the sidebar out"
 check_reveal "with the sidebar docked by ⌘S"
