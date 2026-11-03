@@ -26,13 +26,14 @@
 //! drive.mm's scripted input method does, in the UI's fields alone, as a page's input method is
 //! Chromium's, and it can't compose in a page. dragover and dragdrop are XDND's source, as
 //! another app's drag is, to the browser window's top-level window or its proxy, and wait for its
-//! answer. The others, such as swipe and displays, the driver can't do yet, and says so as drive.mm
-//! does. pip, which drive.mm doesn't have yet, finds a video's Picture in Picture window, the Mini
-//! Player, and logs "browser: pip at <x> <y> <width> <height>" as it is and each time it moves or
-//! resizes, then "browser: pip gone", or "browser: pip none" without one. pip doubleclick, pip
-//! wheel, and pip press, dragto and release work in it, at points from its top-left corner as the
-//! command finds it, or as it was at the press. pip press, dragto and release alone move the
-//! display's pointer, through XTest, onto the Mini Player only, and the release puts it back.
+//! answer. swipe is Wayland's alone, as X11 sends no touchpad's phases. The others, such as
+//! displays, the driver can't do yet, and says so as drive.mm does. pip, which drive.mm doesn't
+//! have yet, finds a video's Picture in Picture window, the Mini Player, and logs "browser: pip at
+//! <x> <y> <width> <height>" as it is and each time it moves or resizes, then "browser: pip gone",
+//! or "browser: pip none" without one. pip doubleclick, pip wheel, and pip press, dragto and
+//! release work in it, at points from its top-left corner as the command finds it, or as it was
+//! at the press. pip press, dragto and release alone move the display's pointer, through XTest,
+//! onto the Mini Player only, and the release puts it back.
 //!
 //! It logs as drive.mm does: "browser: drive <n>: <command>" as command n arrives, "browser: drive
 //! <n>: can't do that" for one it can't, and "browser: drive <n> done, key <window>, focus <view>,
@@ -112,6 +113,10 @@ pub fn start() {
                 if !run(&line) {
                     log!("browser: drive {n}: can't do that");
                 }
+                if let Some(rest) = LATER.take() {
+                    rest(Box::new(move || settle(n)));
+                    return;
+                }
                 let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
                 match (ACTIVATING.take(), RESIZING.take()) {
                     (Some(window), _) => await_focus(n, window, until),
@@ -135,8 +140,14 @@ fn idle(task: Box<dyn FnOnce() + Send>) {
     unsafe { g_idle_add(run, Box::into_raw(Box::new(task)) as *mut c_void) };
 }
 
+/// Has the command running go on after it returns, with `rest`, which gets what reports the
+/// command done, to call once it has finished, as one that ends at once is.
+pub(super) fn go_on(rest: Box<dyn FnOnce(Box<dyn FnOnce()>)>) {
+    LATER.set(Some(rest));
+}
+
 /// Runs `task` on the main thread `ms` from now, from a task already on it.
-fn after(ms: u32, task: Box<dyn FnOnce()>) {
+pub(super) fn after(ms: u32, task: Box<dyn FnOnce()>) {
     extern "C" fn run(data: *mut c_void) -> c_int {
         // SAFETY: the box `after` leaked, which runs once.
         let task = unsafe { Box::from_raw(data as *mut Box<dyn FnOnce()>) };
@@ -169,7 +180,7 @@ fn settle(n: u64) {
                 watch_zoom(browser.window);
             }
             let (key, focus, active) = keyboard();
-            let marked = input_focus().and_then(gpui_linux::marked_range);
+            let marked = Field::with_keys().and_then(Field::marked);
             let marked = marked.map_or("none".into(), |at| format!("{},{}", at.start, at.len()));
             log!(
                 "browser: drive {n} done, key {key}, focus {focus}, active {}, marked {marked}",
@@ -231,6 +242,9 @@ thread_local! {
     /// The UI's view of the browser window the resize command asked a size of, in points, which
     /// it's done once the UI has.
     static RESIZING: Cell<Option<(usize, f64, f64)>> = const { Cell::new(None) };
+    /// The rest of a command that goes on after it returns, as a swipe that rests before the
+    /// fingers lift (drive_wayland.rs), which reports it done (go_on).
+    static LATER: Cell<Option<Box<dyn FnOnce(Box<dyn FnOnce()>)>>> = const { Cell::new(None) };
     /// The window a press went to, which gets the drag's events until the release, as the X
     /// server's grab of the pointer does.
     static PRESSED: Cell<Option<Target>> = const { Cell::new(None) };
@@ -851,28 +865,67 @@ fn input_focus() -> Option<xproto::Window> {
     Some(x.0.get_input_focus().ok()?.reply().ok()?.focus)
 }
 
+/// The UI's field the scripted input method composes in: GPUI's in the X window with the input
+/// focus, or under Wayland in the browser window's surface while its UI or an overlay over it has
+/// the keys, which the compositor gives the surface.
+#[derive(Clone, Copy)]
+enum Field {
+    X(xproto::Window),
+    Wayland(*mut c_void),
+}
+
+impl Field {
+    fn with_keys() -> Option<Field> {
+        match crate::drive_wayland::on() {
+            true => crate::drive_wayland::ime_surface().map(Field::Wayland),
+            false => input_focus().map(Field::X),
+        }
+    }
+
+    fn compose(self, text: &str, selected: Option<std::ops::Range<usize>>) -> bool {
+        match self {
+            Field::X(window) => gpui_linux::drive_compose(window, text, selected),
+            Field::Wayland(surface) => gpui_linux::drive_compose_in(surface, text, selected),
+        }
+    }
+
+    fn commit(self, text: &str) -> bool {
+        match self {
+            Field::X(window) => gpui_linux::drive_commit(window, text),
+            Field::Wayland(surface) => gpui_linux::drive_commit_in(surface, text),
+        }
+    }
+
+    fn marked(self) -> Option<std::ops::Range<usize>> {
+        match self {
+            Field::X(window) => gpui_linux::marked_range(window),
+            Field::Wayland(surface) => gpui_linux::marked_range_in(surface),
+        }
+    }
+}
+
 /// Handles `key` as drive.mm's scripted input method does, with the calls a Japanese one makes in
 /// the UI's field with the keys: letters compose, space converts them all, return commits and
 /// escape cancels. Returns false for a key it leaves to the window, as one with a shortcut's
 /// modifiers, and None for one it would compose in a page, whose input method is Chromium's,
 /// which the driver can't type through: as plain keys it would pass for a composition.
-fn ime_key(key: &str, state: u16) -> Option<bool> {
+pub(super) fn ime_key(key: &str, state: u16) -> Option<bool> {
     let shortcut = u16::from(KeyButMask::CONTROL | KeyButMask::MOD1);
     let letter = key.len() == 1 && key.bytes().all(|b| b.is_ascii_lowercase());
     let composing = COMPOSITION.with_borrow(Option::is_some);
     if !IME_ON.get() || (state | FLAGS.get()) & shortcut != 0 || !(composing || letter) {
         return Some(false);
     }
-    let focus = input_focus()?;
+    let field = Field::with_keys()?;
     let composition = COMPOSITION.take();
     let mark = |text: &str, selected: std::ops::Range<usize>| {
-        let handled = gpui_linux::drive_compose(focus, text, Some(selected));
+        let handled = field.compose(text, Some(selected));
         COMPOSITION.set(Some(text.to_string()));
         handled
     };
     let handled = match key {
-        "return" => gpui_linux::drive_commit(focus, composition.as_deref().unwrap_or_default()),
-        "escape" => gpui_linux::drive_compose(focus, "", None),
+        "return" => field.commit(composition.as_deref().unwrap_or_default()),
+        "escape" => field.compose("", None),
         // As a real one does, the conversion is selected whole.
         "space" => mark("日本語", 0..3),
         _ if letter => {
