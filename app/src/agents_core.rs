@@ -155,6 +155,7 @@ impl Browser for Core {
             PageAction::Back => bc::BC_AGENT_PAGE_BACK,
             PageAction::Forward => bc::BC_AGENT_PAGE_FORWARD,
             PageAction::Screenshot => bc::BC_AGENT_PAGE_SCREENSHOT,
+            PageAction::Select => bc::BC_AGENT_PAGE_SELECT,
         };
         // A NUL can't reach the page, so text with one goes without what follows it.
         let text = text.split('\0').next().unwrap_or_default();

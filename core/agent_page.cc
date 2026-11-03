@@ -8,12 +8,15 @@
 #include <utility>
 #include <vector>
 
+#include "base/containers/adapters.h"
 #include "base/containers/span.h"
 #include "base/functional/bind.h"
+#include "base/i18n/case_conversion.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "browser_core/host.h"
@@ -22,13 +25,18 @@
 #include "components/autofill/content/browser/content_autofill_client.h"
 #include "components/autofill/core/browser/filling/filling_product.h"
 #include "components/autofill/core/browser/suggestions/suggestion_hiding_reason.h"
+#include "content/public/browser/browser_accessibility_state.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/scoped_accessibility_mode.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
+#include "ui/accessibility/ax_action_data.h"
+#include "ui/accessibility/ax_enums.mojom.h"
+#include "ui/accessibility/ax_mode.h"
 #include "ui/gfx/geometry/size.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -91,6 +99,37 @@ bool IsField(const base::DictValue& node) {
     }
   }
   return false;
+}
+
+// A node's name, as the page shows it, its runs of spaces one.
+std::string NameOf(const base::DictValue& node) {
+  const std::string* name = node.FindStringByDottedPath("name.value");
+  return name ? base::CollapseWhitespaceASCII(*name, /*trim_sequences_with_line_breaks=*/true)
+              : std::string();
+}
+
+// A name as it compares in any case, as "Open" and "OPEN" do.
+std::u16string Folded(std::string_view name) {
+  return base::i18n::FoldCase(base::UTF8ToUTF16(name));
+}
+
+// Whether the node has the boolean |property|, such as "selected", and it's true.
+bool Has(const base::DictValue& node, std::string_view property) {
+  if (const base::ListValue* properties = node.FindList("properties")) {
+    for (const base::Value& each : *properties) {
+      const base::DictValue* dict = each.GetIfDict();
+      const std::string* name = dict ? dict->FindString("name") : nullptr;
+      if (name && *name == property) {
+        return dict->FindBoolByDottedPath("value.value").value_or(false);
+      }
+    }
+  }
+  return false;
+}
+
+bool IsRole(const base::DictValue& node, std::string_view role) {
+  const std::string* value = node.FindStringByDottedPath("role.value");
+  return value && *value == role;
 }
 
 // An element's id: the slot of the session its frame is in, above its DOM node's id there, as each
@@ -298,6 +337,15 @@ void AgentPage::Run() {
     case BC_AGENT_PAGE_SCREENSHOT:
       Screenshot();
       return;
+    case BC_AGENT_PAGE_SELECT:
+      if (!job_->element || job_->text.empty()) {
+        Fail("Choosing needs an element and an option.");
+        return;
+      }
+      field_ = job_->element;
+      choosing_ = Choosing::kOptions;
+      Snapshot();
+      return;
   }
   Fail("There's no such action.");
 }
@@ -356,6 +404,253 @@ void AgentPage::Click() {
                         weak, at));
       },
       weak_factory_.GetWeakPtr()));
+}
+
+void AgentPage::Choose(const base::ListValue& nodes, const std::vector<std::string>& frames) {
+  const std::string want =
+      base::CollapseWhitespaceASCII(job_->text, /*trim_sequences_with_line_breaks=*/true);
+  if (want.empty()) {
+    Fail("Choosing needs an element and an option.");
+    return;
+  }
+  std::map<std::string, const base::DictValue*> by_id;
+  std::map<int64_t, std::string> of_element;
+  for (const base::Value& node : nodes) {
+    const base::DictValue* dict = node.GetIfDict();
+    const std::string* id = dict ? dict->FindString("nodeId") : nullptr;
+    if (!id) {
+      continue;
+    }
+    by_id[*id] = dict;
+    const std::optional<int64_t> element = ElementOf(*dict);
+    if (element && !dict->FindBool("ignored").value_or(false)) {
+      of_element.emplace(*element, *id);
+    }
+  }
+  const auto field = of_element.find(field_);
+  if (field == of_element.end()) {
+    Fail("The element isn't on the page any more, or is hidden. Take a new snapshot.");
+    return;
+  }
+  // The options to choose from, in the page's order: those in the element, those in what it says
+  // it controls, as a combobox does its list, and once it's clicked, those that showed then. A
+  // select's are in a popup the page doesn't draw while it's closed, so they count hidden too.
+  struct Option {
+    const base::DictValue* node;
+    bool native;
+  };
+  std::vector<Option> options;
+  std::set<std::string> walked;
+  const auto walk = [&](const std::string& root) {
+    std::vector<std::pair<std::string, bool>> steps = {{root, false}};
+    while (!steps.empty()) {
+      auto [id, native] = std::move(steps.back());
+      steps.pop_back();
+      const auto found = by_id.find(id);
+      if (found == by_id.end() || !walked.insert(id).second) {
+        continue;
+      }
+      const base::DictValue& node = *found->second;
+      native = native || IsRole(node, "MenuListPopup");
+      if (IsRole(node, "option") && (native || !node.FindBool("ignored").value_or(false))) {
+        options.push_back({&node, native});
+      }
+      if (const base::ListValue* children = node.FindList("childIds")) {
+        for (const base::Value& child : base::Reversed(*children)) {
+          if (const std::string* each = child.GetIfString()) {
+            steps.emplace_back(*each, native);
+          }
+        }
+      }
+    }
+  };
+  walk(field->second);
+  if (const base::ListValue* properties = by_id[field->second]->FindList("properties")) {
+    for (const base::Value& property : *properties) {
+      const base::DictValue* dict = property.GetIfDict();
+      const std::string* name = dict ? dict->FindString("name") : nullptr;
+      const base::ListValue* related =
+          name && *name == "controls" ? dict->FindListByDottedPath("value.relatedNodes") : nullptr;
+      if (!related) {
+        continue;
+      }
+      for (const base::Value& each : *related) {
+        const std::optional<int> node =
+            each.is_dict() ? each.GetDict().FindInt("backendDOMNodeId") : std::nullopt;
+        const auto controlled =
+            node ? of_element.find(ElementId(SlotOfElement(field_), *node)) : of_element.end();
+        if (controlled != of_element.end()) {
+          walk(controlled->second);
+        }
+      }
+    }
+  }
+  // Options on screen, in the tree's order, with their elements.
+  const auto each_shown = [&nodes](auto then) {
+    for (const base::Value& node : nodes) {
+      const base::DictValue* dict = node.GetIfDict();
+      const std::string* id = dict ? dict->FindString("nodeId") : nullptr;
+      const std::optional<int64_t> element = dict ? ElementOf(*dict) : std::nullopt;
+      if (id && element && IsRole(*dict, "option") && !dict->FindBool("ignored").value_or(false)) {
+        then(*id, *dict, *element);
+      }
+    }
+  };
+  if (choosing_ == Choosing::kOpened) {
+    each_shown([&](const std::string& id, const base::DictValue& node, int64_t element) {
+      if (!shown_.contains(element) && walked.insert(id).second) {
+        options.push_back({&node, false});
+      }
+    });
+  }
+  if (options.empty()) {
+    if (choosing_ == Choosing::kOpened) {
+      Fail("Clicking the element showed no options. Take a new snapshot to see what it did.");
+      return;
+    }
+    // Those hidden now that show then count as the element's, as a list it shows does.
+    each_shown([this](const std::string&, const base::DictValue&, int64_t element) {
+      shown_.insert(element);
+    });
+    choosing_ = Choosing::kOpened;
+    Click();
+    return;
+  }
+  std::vector<const Option*> exact;
+  std::vector<const Option*> folded;
+  for (const Option& option : options) {
+    const std::string name = NameOf(*option.node);
+    if (name == want) {
+      exact.push_back(&option);
+    } else if (Folded(name) == Folded(want)) {
+      folded.push_back(&option);
+    }
+  }
+  const std::vector<const Option*>& matches = exact.empty() ? folded : exact;
+  if (matches.size() != 1) {
+    constexpr size_t kListed = 50;
+    std::string why = matches.empty() ? "There's no option “" + want + "” there."
+                                      : "Several options are named “" + want + "”.";
+    why += " Its options are ";
+    for (size_t each = 0; each < options.size() && each < kListed; ++each) {
+      std::string name;
+      base::TruncateUTF8ToByteSize(NameOf(*options[each].node), 80, &name);
+      why += (each ? ", “" : "“") + name + "”";
+    }
+    if (options.size() > kListed) {
+      why += " and " + base::NumberToString(options.size() - kListed) + " more";
+    }
+    why += ".";
+    if (choosing_ == Choosing::kOpened) {
+      why += " Clicking the element showed them, so they may still be open.";
+    }
+    Fail(std::move(why));
+    return;
+  }
+  const Option& option = *matches.front();
+  if (Has(*option.node, "disabled")) {
+    Fail("The option “" + want + "” is disabled.");
+    return;
+  }
+  chosen_ = ElementOf(*option.node).value_or(0);
+  chosen_name_ = NameOf(*option.node);
+  choosing_ = Choosing::kChosen;
+  if (option.native) {
+    // A frame's nodes have its index in the snapshot's list before theirs, as "2:41".
+    const std::string* id = option.node->FindString("nodeId");
+    const size_t colon = id ? id->find(':') : std::string::npos;
+    size_t frame = 0;
+    if (colon != std::string::npos && !base::StringToSizeT(id->substr(0, colon), &frame)) {
+      frame = frames.size();
+    }
+    ChooseNative(frames, frame, *option.node);
+    return;
+  }
+  if (!chosen_) {
+    Fail("The option “" + want + "” can't be clicked. Take a new snapshot.");
+    return;
+  }
+  job_->element = chosen_;
+  Click();
+}
+
+void AgentPage::ChooseNative(const std::vector<std::string>& frames,
+                             size_t frame,
+                             const base::DictValue& option) {
+  // The action toggles an option, so choosing the one a select holds would clear it. It's left
+  // as it is, and the answer reads as it would had it been chosen.
+  if (Has(option, "selected")) {
+    Settle();
+    return;
+  }
+  content::RenderFrameHost* host = nullptr;
+  if (frame == 0) {
+    host = GetWebContents().GetPrimaryMainFrame();
+  } else if (frame < frames.size()) {
+    GetWebContents().GetPrimaryMainFrame()->ForEachRenderFrameHost(
+        [&host, &id = frames[frame]](content::RenderFrameHost* each) {
+          if (each->GetDevToolsFrameToken().ToString() == id) {
+            host = each;
+          }
+        });
+  }
+  // DevTools gives a node's accessibility id, after its frame's index.
+  const std::string* id = option.FindString("nodeId");
+  const size_t colon = id ? id->rfind(':') : std::string::npos;
+  int node = 0;
+  if (!host || !IsWebFrame(host) || !id ||
+      !base::StringToInt(colon == std::string::npos ? *id : id->substr(colon + 1), &node)) {
+    Fail("The element isn't on the page any more. Take a new snapshot.");
+    return;
+  }
+  if (!accessibility_) {
+    accessibility_ =
+        content::BrowserAccessibilityState::GetInstance()->CreateScopedModeForWebContents(
+            &GetWebContents(), ui::AXMode::kWebContents);
+  }
+  ui::AXActionData action;
+  action.action = ax::mojom::Action::kDoDefault;
+  action.target_tree_id = host->GetAXTreeID();
+  action.target_node_id = node;
+  host->AccessibilityPerformAction(action);
+  Settle();
+}
+
+bool AgentPage::Shows(const base::ListValue& nodes) {
+  const std::u16string chosen = Folded(chosen_name_);
+  for (const base::Value& node : nodes) {
+    const base::DictValue* dict = node.GetIfDict();
+    const std::optional<int64_t> element = dict ? ElementOf(*dict) : std::nullopt;
+    if (!element || chosen.empty()) {
+      continue;
+    }
+    if (*element == chosen_ && Has(*dict, "selected")) {
+      return true;
+    }
+    if (*element != field_) {
+      continue;
+    }
+    // What a field holds is never told: only whether it's the option the agent chose. A
+    // dropdown's button may show it as its name instead.
+    const std::string* value = dict->FindStringByDottedPath("value.value");
+    const std::string held =
+        value ? base::CollapseWhitespaceASCII(*value, /*trim_sequences_with_line_breaks=*/true)
+              : std::string();
+    if (Folded(held) == chosen || Folded(NameOf(*dict)) == chosen) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void AgentPage::EndChoosing() {
+  choosing_ = Choosing::kNo;
+  shown_.clear();
+  field_ = 0;
+  chosen_ = 0;
+  chosen_name_.clear();
+  shows_ = false;
+  accessibility_.reset();
 }
 
 void AgentPage::Mouse(const char* type, std::pair<double, double> at, base::OnceClosure then) {
@@ -667,6 +962,17 @@ void AgentPage::StitchTree(size_t next) {
         nodes.Append(std::move(node));
       }
     }
+    if (choosing_ == Choosing::kOptions || choosing_ == Choosing::kOpened) {
+      std::vector<std::string> ids;
+      for (const Frame& frame : frames) {
+        ids.push_back(frame.id);
+      }
+      Choose(nodes, ids);
+      return;
+    }
+    if (choosing_ == Choosing::kChosen) {
+      shows_ = Shows(nodes);
+    }
     // Its text fields, each checked for whether it's for a password.
     std::vector<int64_t> fields;
     for (const base::Value& node : nodes) {
@@ -723,10 +1029,14 @@ void AgentPage::CheckPasswords(base::ListValue nodes,
                                std::vector<int64_t> fields,
                                std::set<int64_t> passwords) {
   if (fields.empty()) {
+    base::DictValue tree;
+    tree.Set("nodes", AgentTree(std::move(nodes), passwords));
+    if (choosing_ == Choosing::kChosen && shows_) {
+      tree.Set("chosen", chosen_name_);
+    }
     // The ids of elements in frames of their own are doubles, written as the integers they are.
-    std::optional<std::string> json =
-        base::WriteJsonWithOptions(base::Value(AgentTree(std::move(nodes), passwords)),
-                                   base::JSONWriter::OPTIONS_OMIT_DOUBLE_TYPE_PRESERVATION);
+    std::optional<std::string> json = base::WriteJsonWithOptions(
+        base::Value(std::move(tree)), base::JSONWriter::OPTIONS_OMIT_DOUBLE_TYPE_PRESERVATION);
     if (json) {
       Answer(std::move(*json), /*error=*/false);
     } else {
@@ -919,6 +1229,7 @@ void AgentPage::Answer(std::string text, bool error) {
   const uint64_t request = job_->request;
   job_.reset();
   frames_.clear();
+  EndChoosing();
   wait_.Stop();
   loaded_.Reset();
   // Posted, so the app never hears inside its own bc_agent_page.
@@ -953,6 +1264,7 @@ void AgentPage::LetGo() {
   wait_.Stop();
   rest_.Stop();
   loaded_.Reset();
+  EndChoosing();
   drawing_.RunAndReset();
   Detach();
 }

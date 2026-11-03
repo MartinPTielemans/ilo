@@ -397,6 +397,63 @@ painted(() => document.title = "fields");
     *) fail "reading the frames page answered: $read" ;;
   esac
 
+  # select chooses an option by its text: in a select through the option's own action, and in a
+  # dropdown of the page's own by clicking it open and then the option. A miss chooses nothing and
+  # names the options.
+  printf '%s' '<script src="painted.js"></script>
+<label for=status>Status</label>
+<select id=status><option>Open<option>Pending<option>Closed</select>
+<span id=priority-label>Priority</span>
+<div id=pick role=combobox tabindex=0 aria-labelledby=priority-label aria-controls=list
+  aria-expanded=false>Low</div>
+<ul id=list role=listbox aria-label=Priorities hidden>
+<li role=option>Low<li role=option>High<li role=option>Urgent
+</ul>
+<script>
+const field = document.getElementById("status");
+field.onchange = () => document.title = "status " + field.value;
+const show = open => { list.hidden = !open; pick.ariaExpanded = open; };
+pick.onclick = () => show(list.hidden);
+list.onclick = event => {
+  pick.textContent = event.target.textContent;
+  show(false);
+  document.title = "priority " + pick.textContent;
+};
+painted(() => document.title = "choose");
+</script>' > "$out/site/choose.html"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/choose.html\"}")
+  choose_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$choose_tab" ] || fail "opening the choosing page answered: $opened"
+  await_log "^browser: title $choose_tab choose\$" "the choosing page didn't paint"
+  outline=$(call snapshot "{\"tab\":$choose_tab}")
+  printf '%s\n' "$outline" > "$out/mcp-choose.txt"
+  status=$(ref_of combobox Status)
+  priority=$(ref_of combobox Priority)
+  [ -n "$status" ] && [ -n "$priority" ] ||
+    fail "the choosing page's fields had the refs '$status' and '$priority'"
+  chose=$(call select "{\"tab\":$choose_tab,\"ref\":\"$status\",\"option\":\"closed\"}")
+  case "$chose" in
+    "The combobox “Status” now holds “Closed”."*) ;;
+    *) fail "choosing in the select answered: $chose" ;;
+  esac
+  await_log "^browser: title $choose_tab status Closed\$" \
+    "choosing in the select didn't reach the page"
+  await_log "^browser: agent activity mcp-client $choose_tab select_option\$" \
+    "choosing an option didn't reach the activity log"
+  chose=$(call select "{\"tab\":$choose_tab,\"ref\":\"$priority\",\"option\":\"High\"}")
+  case "$chose" in
+    "The combobox “Priority” now holds “High”."*) ;;
+    *) fail "choosing in the page's dropdown answered: $chose" ;;
+  esac
+  await_log "^browser: title $choose_tab priority High\$" \
+    "choosing in the dropdown didn't reach the page"
+  missed=$(call select "{\"tab\":$choose_tab,\"ref\":\"$status\",\"option\":\"Missing\"}")
+  options="Its options are “Open”, “Pending”, “Closed”."
+  [ "$missed" = "error: There's no option “Missing” there. $options" ] ||
+    fail "choosing an option the select hasn't answered: $missed"
+  last=$(sed -n "s/^browser: title $choose_tab //p" "$log" | tail -1)
+  [ "$last" = "priority High" ] || fail "a missed option changed the page, to $last"
+
   # Its keys go to the page alone: type with submit and press_key's Enter submit the form, Tab
   # moves the keyboard to the next field, and Escape reaches the page. Escape the page doesn't keep
   # is ilo's Stop while a page loads, and the agent's runs no shortcut of ilo's: the page goes on

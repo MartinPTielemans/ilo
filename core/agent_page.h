@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -25,6 +26,7 @@
 namespace content {
 class DevToolsAgentHost;
 class RenderFrameHost;
+class ScopedAccessibilityMode;
 }  // namespace content
 
 namespace browser_core {
@@ -76,6 +78,9 @@ class AgentPage : public content::WebContentsObserver,
     std::string frame;
     std::string session;
   };
+  // How far a SELECT has got: reading the element's options, reading those clicking it showed, or
+  // reading the tree after choosing one.
+  enum class Choosing { kNo, kOptions, kOpened, kChosen };
 
   explicit AgentPage(content::WebContents* contents);
 
@@ -91,6 +96,17 @@ class AgentPage : public content::WebContentsObserver,
   void Settle();
 
   void Click();
+  // Chooses the job's option among those in |nodes|, the whole tree, whose frames' DevTools ids
+  // |frames| has in order, or clicks the element to show them, or fails with the options there are.
+  void Choose(const base::ListValue& nodes, const std::vector<std::string>& frames);
+  // Chooses a select's |option|, the node in the frame |frames| has at |frame|, through its
+  // accessibility action, as a screen reader does.
+  void ChooseNative(const std::vector<std::string>& frames,
+                    size_t frame,
+                    const base::DictValue& option);
+  // Whether the field in |nodes| shows the option the job chose.
+  bool Shows(const base::ListValue& nodes);
+  void EndChoosing();
   void Mouse(const char* type, std::pair<double, double> at, base::OnceClosure then);
   void Type(bool submit);
   void Focus(int64_t element, bool submit);
@@ -163,6 +179,19 @@ class AgentPage : public content::WebContentsObserver,
   std::vector<Target> targets_;
   // The frames the snapshot running reads.
   std::vector<Frame> frames_;
+  Choosing choosing_ = Choosing::kNo;
+  // The options the page had before a SELECT clicked its element, so that those that show after
+  // are the element's, wherever the page puts them.
+  std::set<int64_t> shown_;
+  // The element a SELECT chooses in, and the option it chose, with its name.
+  int64_t field_ = 0;
+  int64_t chosen_ = 0;
+  std::string chosen_name_;
+  // Whether the field shows it, for the answer.
+  bool shows_ = false;
+  // The page's renderer takes accessibility actions only while it serves the accessibility tree,
+  // which a SELECT turns on for its tab until it answers.
+  std::unique_ptr<content::ScopedAccessibilityMode> accessibility_;
   // Keeps the page drawing while it's hidden, for the agent's input and screenshots.
   base::ScopedClosureRunner drawing_;
   base::WeakPtrFactory<AgentPage> weak_factory_{this};

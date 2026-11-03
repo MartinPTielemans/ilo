@@ -1289,6 +1289,10 @@ impl Agents {
                     did.text = typed;
                 }
             }
+            "select" => {
+                did.target = element.as_ref().map(named).unwrap_or_default();
+                did.text = page::clip(&string("option"), tools::TYPED_SHOWN);
+            }
             "press_key" => did.target = string("key"),
             "scroll" => {
                 did.target = match &element {

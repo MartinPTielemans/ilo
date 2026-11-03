@@ -962,7 +962,8 @@ typedef struct bc_host {
   void (*tab_text)(void* context, bc_id tab, uint64_t request, const char* text);
   // The answer to bc_agent_page's |request| for |tab|: with |error|, |text| says why it couldn't,
   // for the agent; else a screenshot's JPEG in base64, or for every other action the page's
-  // accessibility tree, DevTools' Accessibility.getFullAXTree nodes as a JSON array.
+  // accessibility tree as a JSON object: DevTools' Accessibility.getFullAXTree nodes in "nodes",
+  // and after SELECT, "chosen": the name of the option it chose, if the field then shows it.
   void (*agent_page_done)(void* context, bc_id tab, uint64_t request, const char* text, bool error);
   // The element bc_agent_page's |request| for |tab| is about to click or type in, scrolled into
   // view: its box in points from the top-left of the tab's page view, for the agent's pointer.
@@ -1307,6 +1308,12 @@ BC_EXPORT size_t bc_agent_list_tabs(const char* agent, bc_id* tabs, size_t capac
 #define BC_AGENT_PAGE_FORWARD 8
 // A JPEG of what the page's view shows.
 #define BC_AGENT_PAGE_SCREENSHOT 9
+// Chooses the option named |text| in the element, a select or a dropdown: the option with that
+// name, else the one whose name is it in another case. A select's option is chosen through the
+// accessibility tree's own action, with no popup, and the element of a dropdown whose options
+// don't show is clicked to show them, then the option is clicked. With no such option or several,
+// it chooses none and fails with the options' names. What the field held is never told.
+#define BC_AGENT_PAGE_SELECT 11
 
 // Does |action|, a BC_AGENT_PAGE_ value, in |tab| for the agent with the id |agent|, to |element|,
 // a backendDOMNodeId from the tree, or 0, with |text| as the action says, else null. Then

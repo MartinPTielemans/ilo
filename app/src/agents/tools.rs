@@ -14,8 +14,9 @@ pub const INSTRUCTIONS: &str = concat!(
      their focus. You can only see and use the tabs in your Space, never the user's, and never \
      passwords, cookies or autofill.\n\n\
      Open a page with open_tab, then click, type, press_key and scroll by ref (like e12), using \
-     the outline each action answers with. A ref stays the element's while its page does. Use \
-     read_page for a long page's text and screenshot when the layout matters.\n\n\
+     the outline each action answers with. A ref stays the element's while its page does. Choose \
+     in a select or a dropdown with select, by the option's text. Use read_page for a long page's \
+     text and screenshot when the layout matters.\n\n\
      Payments, orders, sending messages and banks' sites ask the user first. If they say no, \
      don't try again. You can never type into a password field: a sign-in, a 2FA prompt or a \
      CAPTCHA is the user's to do, so hand the tab to them with hand_off. The user can take a tab \
@@ -236,6 +237,21 @@ fn shared() -> Value {
             "annotations": acts,
         },
         {
+            "name": "select",
+            "title": "Select",
+            "description": "Choose an option in a select or a dropdown by its ref and the option's text: the option with that name, else the one with it in another case. A dropdown whose options don't show is opened first. With no such option, or several, it chooses none and answers with the options there are. Answers with the page's outline.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "ref": element,
+                    "option": { "type": "string", "description": "The option's text, as the outline or the page shows it." },
+                    "tab": tab,
+                },
+                "required": ["ref", "option"],
+            },
+            "annotations": acts,
+        },
+        {
             "name": "press_key",
             "title": "Press key",
             "description": "Press a key in a tab, in the element that has the keyboard. Answers with the page's outline.",
@@ -285,6 +301,7 @@ fn shared() -> Value {
                                 "ref": element,
                                 "text": { "type": "string" },
                                 "submit": { "type": "boolean" },
+                                "option": { "type": "string" },
                                 "key": { "type": "string", "enum": page::KEYS },
                                 "url": { "type": "string" },
                                 "direction": { "type": "string", "enum": ["down", "up"] },
@@ -292,7 +309,7 @@ fn shared() -> Value {
                             },
                             "required": ["action"],
                         },
-                        "description": "Each step is an action and what that tool takes: click and scroll a ref, type a ref and text, press_key a key, navigate a url. wait waits for text to show in the page, up to seconds (5 if not given), or without text, waits the seconds.",
+                        "description": "Each step is an action and what that tool takes: click and scroll a ref, type a ref and text, select a ref and an option, press_key a key, navigate a url. wait waits for text to show in the page, up to seconds (5 if not given), or without text, waits the seconds.",
                     },
                     "tab": tab,
                 },
@@ -332,7 +349,8 @@ fn shared() -> Value {
 }
 
 /// The actions run_steps takes: those of the tools that act in a tab, not a screenshot, and wait.
-pub const STEPS: [&str; 7] = ["navigate", "snapshot", "click", "type", "press_key", "scroll", "wait"];
+pub const STEPS: [&str; 8] =
+    ["navigate", "snapshot", "click", "type", "select", "press_key", "scroll", "wait"];
 /// The steps one run_steps takes at most.
 pub const MAX_STEPS: usize = 20;
 /// How long a wait step waits for its text, in seconds, unless it says, and at most.
@@ -444,6 +462,17 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
                 (Tense::Failed, _) => format!("Couldn't type in {into}"),
             };
         }
+        "select" => {
+            let into = target("a list");
+            return match (tense, did.text.is_empty()) {
+                (Tense::Now, true) => format!("Choosing in {into}"),
+                (Tense::Now, false) => format!("Choosing “{}” in {into}", did.text),
+                (Tense::Done, true) => format!("Chose in {into}"),
+                (Tense::Done, false) => format!("Chose “{}” in {into}", did.text),
+                (Tense::Failed, true) => format!("Couldn't choose in {into}"),
+                (Tense::Failed, false) => format!("Couldn't choose “{}” in {into}", did.text),
+            };
+        }
         "press_key" => ("Pressing", "Pressed", "Couldn't press", target("a key")),
         "scroll" => {
             let to = match did.target.as_str() {
@@ -502,6 +531,7 @@ pub fn step_glyph(tool: &str) -> &'static str {
         "read_page" | "snapshot" => "icons/text-align-start.svg",
         "click" => "icons/mouse-pointer-2.svg",
         "type" => "icons/type.svg",
+        "select" => "icons/chevrons-up-down.svg",
         "press_key" => "icons/keyboard.svg",
         "scroll" => "icons/arrow-down.svg",
         "screenshot" => "icons/eye.svg",
@@ -535,7 +565,14 @@ pub fn reason(error: &str) -> String {
         "password field"
     } else if has(&["http or https", "only http and https"]) {
         "not a web page"
-    } else if has(&["there's no element", "no tab", "isn't open", "not found", "404"]) {
+    } else if has(&[
+        "there's no element",
+        "there's no option",
+        "no tab",
+        "isn't open",
+        "not found",
+        "404",
+    ]) {
         "not found"
     } else if has(&["timed out", "timeout", "took too long"]) {
         "timed out"
@@ -565,6 +602,7 @@ pub fn describe(action: &str) -> &'static str {
         "snapshot" => "Looked at the page",
         "click" => "Clicked",
         "type" => "Typed",
+        "select_option" => "Chose an option",
         "press_key" => "Pressed a key",
         "scroll" => "Scrolled",
         "screenshot" => "Took a screenshot",

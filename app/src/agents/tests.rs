@@ -787,7 +787,7 @@ fn the_switch_and_the_agents_come_back(cx: &mut TestAppContext) {
 /// The tree the core gives for tab 20's page: a heading, a field, a password field and a button
 /// that orders.
 fn shop_tree() -> String {
-    json!([
+    json!({ "nodes": [
         { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" },
           "childIds": ["2", "3", "4", "5"] },
         { "nodeId": "2", "role": { "value": "heading" }, "name": { "value": "Basket" } },
@@ -797,7 +797,7 @@ fn shop_tree() -> String {
           "backendDOMNodeId": 41, "password": true },
         { "nodeId": "5", "role": { "value": "button" }, "name": { "value": "Place order" },
           "backendDOMNodeId": 51 },
-    ])
+    ]})
     .to_string()
 }
 
@@ -888,6 +888,90 @@ fn an_agent_opens_a_page_and_acts_by_ref(cx: &mut TestAppContext) {
     let request = browser.pages.borrow().last().unwrap().1;
     agents.update(cx, |agents, cx| agents.page_done(request, "It's gone.".into(), true, cx));
     assert_eq!(answer.recv().unwrap(), ToolResult::error("It's gone."));
+}
+
+/// select chooses an option in a field by the option's text: the core gets the field's node and
+/// the text, and the answer says what the field holds now, as the core names the option, or that
+/// it doesn't show it. It asks the core as select_option, is a run's step, and asks the user first
+/// as a click would.
+#[gpui::test]
+fn an_agent_chooses_an_option_by_its_text(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let form = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Ticket" },
+          "childIds": ["2", "3"] },
+        { "nodeId": "2", "role": { "value": "combobox" }, "name": { "value": "Status" },
+          "backendDOMNodeId": 61 },
+        { "nodeId": "3", "role": { "value": "combobox" }, "name": { "value": "Payment" },
+          "backendDOMNodeId": 71 },
+    ]});
+    let answered = |chosen: Option<&str>| {
+        let mut tree = form.clone();
+        if let Some(option) = chosen {
+            tree["chosen"] = json!(option);
+        }
+        tree.to_string()
+    };
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    let outline = page_done(&agents, &browser, answer, form.to_string(), cx).text;
+    assert!(outline.contains("- combobox \"Status\" [e1]"), "{outline}");
+
+    // The core matches in any case, and names the option as the page does.
+    let choose = json!({ "tab": 20, "ref": "e1", "option": " closed " });
+    let answer = call(&agents, "claude-code", "select", choose, cx);
+    let (tab, _, action, element, text) = browser.pages.borrow().last().cloned().unwrap();
+    assert_eq!((tab, action, element, text.as_str()), (20, PageAction::Select, 61, "closed"));
+    let held = page_done(&agents, &browser, answer, answered(Some("Closed")), cx);
+    assert!(
+        held.text.starts_with("The combobox “Status” now holds “Closed”.\n\nTab 20"),
+        "{}",
+        held.text
+    );
+    assert_eq!(log(&agents, "claude-code", cx)[0].0, "select_option");
+
+    let choose = json!({ "tab": 20, "ref": "e1", "option": "51" });
+    let answer = call(&agents, "claude-code", "select", choose, cx);
+    let missed = page_done(&agents, &browser, answer, answered(None), cx);
+    assert!(
+        missed.text.starts_with(
+            "Chose “51” in the combobox “Status”. It doesn't show it as chosen, so the page may \
+             have changed it back.\n\nTab 20"
+        ),
+        "{}",
+        missed.text
+    );
+
+    let pages = browser.pages.borrow().len();
+    for wrong in [
+        json!({ "tab": 20, "ref": "e1" }),
+        json!({ "tab": 20, "ref": "e1", "option": "  " }),
+        json!({ "tab": 20, "option": "51" }),
+    ] {
+        let refused = call(&agents, "claude-code", "select", wrong, cx).recv().unwrap();
+        assert_eq!(refused, ToolResult::error("select needs a ref and an option."));
+    }
+    assert_eq!(browser.pages.borrow().len(), pages, "a select without its option reached the core");
+
+    let step = json!({ "action": "select", "ref": "e1", "option": "51" });
+    let steps = json!({ "tab": 20, "steps": [step] });
+    let run = call(&agents, "claude-code", "run_steps", steps, cx);
+    let (_, request, action, ..) = browser.pages.borrow().last().cloned().unwrap();
+    assert_eq!(action, PageAction::Select);
+    agents.update(cx, |agents, cx| agents.page_done(request, answered(Some("51")), false, cx));
+    let ran = run.recv().unwrap();
+    assert!(
+        ran.text.starts_with("Ran 1 steps.\n1. The combobox “Status” now holds “51”.\n\nTab 20"),
+        "{}",
+        ran.text
+    );
+
+    let pages = browser.pages.borrow().len();
+    let paying = json!({ "tab": 20, "ref": "e2", "option": "Pay now" });
+    let _answer = call(&agents, "claude-code", "select", paying, cx);
+    let question = browser.asked.borrow().clone().expect("choosing to pay didn't ask");
+    assert_eq!(question.what, "choose “Pay now” in “Payment” on example.com");
+    assert_eq!(question.why, "It looks like a payment or an order.");
+    assert_eq!(browser.pages.borrow().len(), pages, "it chose before the user answered");
 }
 
 /// An agent can't act on the user's tabs, type into a password field or open a page that isn't
@@ -1371,11 +1455,11 @@ fn a_wait_step_waits_for_its_text_in_the_page(cx: &mut TestAppContext) {
         agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
     };
     let looks = || browser.pages.borrow().len();
-    let thanks = json!([
+    let thanks = json!({ "nodes": [
         { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" },
           "childIds": ["2"] },
         { "nodeId": "2", "role": { "value": "heading" }, "name": { "value": "Thanks for your order" } },
-    ])
+    ]})
     .to_string();
     for wrong in [json!({}), json!({ "seconds": 31 }), json!({ "text": "Thanks", "seconds": 0 })] {
         let mut step = json!({ "action": "wait" });
@@ -1467,6 +1551,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "read_page",
             "click",
             "type",
+            "select",
             "press_key",
             "scroll",
             "screenshot",
@@ -1489,6 +1574,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         ("read_page", tab(json!({}))),
         ("click", tab(json!({ "ref": "e1" }))),
         ("type", tab(json!({ "ref": "e1", "text": "SAVE10" }))),
+        ("select", tab(json!({ "ref": "e1", "option": "Express" }))),
         ("press_key", tab(json!({ "key": "Tab" }))),
         ("scroll", tab(json!({}))),
         ("screenshot", tab(json!({}))),
@@ -1517,7 +1603,8 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
     for action in &checked {
         assert!(CORE_ALLOWS.contains(&action.as_str()), "{action} isn't the core's to allow");
     }
-    let page_actions = ["snapshot", "read_page", "click", "type", "press_key", "scroll"];
+    let page_actions =
+        ["snapshot", "read_page", "click", "type", "select_option", "press_key", "scroll"];
     for action in page_actions.into_iter().chain(["screenshot", "back", "hand_off", "close_tab"]) {
         assert!(checked.contains(action), "{action} didn't ask the core: {checked:?}");
     }

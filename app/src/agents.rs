@@ -81,6 +81,7 @@ pub enum PageAction {
     Back,
     Forward,
     Screenshot,
+    Select,
 }
 
 /// What an agent asks the user's leave for, as the card in each window asks it.
@@ -296,6 +297,8 @@ struct Act {
     text: String,
     /// What the answer says it did, before the outline.
     note: String,
+    /// The field it chooses in, as its answer names it: "combobox “Status”".
+    field: String,
     /// What it would do, as a question has it.
     what: String,
     reply: mpsc::Sender<ToolResult>,
@@ -308,6 +311,7 @@ struct Acting {
     /// The element it acts on, or 0.
     element: i64,
     note: String,
+    field: String,
     reply: mpsc::Sender<ToolResult>,
 }
 
@@ -900,6 +904,7 @@ impl Agents {
                     element: 0,
                     text: String::new(),
                     note: String::new(),
+                    field: String::new(),
                     reply,
                 };
                 if !is_web(&act.url) {
@@ -908,7 +913,8 @@ impl Agents {
                 let risk = page::opening_risk(&host);
                 self.check(act, host, risk, cx);
             }
-            "navigate" | "snapshot" | "click" | "type" | "press_key" | "scroll" | "screenshot" => {
+            "navigate" | "snapshot" | "click" | "type" | "select" | "press_key" | "scroll"
+            | "screenshot" => {
                 let tab = match tools::tab_argument(&arguments) {
                     Ok(Some(tab)) => tab,
                     Ok(None) => match self.default_tab(&agent, cx) {
@@ -1179,7 +1185,8 @@ impl Agents {
         let request = self.next_request;
         self.next_request += 1;
         let note = String::new();
-        let acting = Acting { agent: agent.into(), tab, element: 0, note, reply };
+        let acting =
+            Acting { agent: agent.into(), tab, element: 0, note, field: String::new(), reply };
         self.acting.insert(request, acting);
         self.act_in_page(agent, tab, request, PageAction::Snapshot, 0, "");
     }
@@ -1427,6 +1434,7 @@ impl Agents {
             element: element.as_ref().map_or(0, |element| element.node),
             text: String::new(),
             note: String::new(),
+            field: String::new(),
             what: String::new(),
             reply,
         };
@@ -1491,6 +1499,25 @@ impl Agents {
                 act.what = format!("send “{}” on {host}", page::clip(&text, 60));
                 act.text = text;
                 risk = submit.then(|| page::risk(&host, "send")).flatten();
+            }
+            "select" => {
+                let option = string("option").unwrap_or_default().trim().to_string();
+                let Some(element) = element.as_ref().filter(|_| !option.is_empty()) else {
+                    _ = act.reply.send(ToolResult::error("select needs a ref and an option."));
+                    return;
+                };
+                act.action = "select_option";
+                act.page = PageAction::Select;
+                act.field = match element.name.is_empty() {
+                    true => element.role.clone(),
+                    false => format!("{} {}", element.role, label(element)),
+                };
+                let chose = format!("“{}”", page::clip(&option, 60));
+                act.note = format!("Chose {chose} in the {}.", act.field);
+                act.what = format!("choose {chose} in {} on {host}", label(element));
+                // As a click on the field or the option would.
+                risk = page::risk(&host, &element.name).or_else(|| page::risk(&host, &option));
+                act.text = option;
             }
             "press_key" => {
                 let key = string("key").unwrap_or_default();
@@ -1717,6 +1744,7 @@ impl Agents {
             element,
             text,
             mut note,
+            field,
             reply,
             ..
         } = act;
@@ -1744,7 +1772,7 @@ impl Agents {
         }
         let request = self.next_request;
         self.next_request += 1;
-        let acting = Acting { agent: agent.clone(), tab, element, note, reply };
+        let acting = Acting { agent: agent.clone(), tab, element, note, field, reply };
         self.acting.insert(request, acting);
         self.act_in_page(&agent, tab, request, page, element, &text);
     }
@@ -1759,20 +1787,29 @@ impl Agents {
     /// The core's answer to the action `request`: with `error`, why it couldn't; else a
     /// screenshot's JPEG in base64, or the nodes of the page's tree, which the answer outlines.
     pub fn page_done(&mut self, request: u64, text: String, error: bool, cx: &mut Context<Self>) {
-        let Some(Acting { tab, note, reply, .. }) = self.acting.remove(&request) else {
+        let Some(Acting { tab, mut note, field, reply, .. }) = self.acting.remove(&request) else {
             return;
         };
         if error {
             _ = reply.send(ToolResult::error(text));
             return self.advance(cx);
         }
-        if !text.starts_with('[') {
+        if !text.starts_with('{') {
             _ = reply.send(ToolResult::image(text));
             return;
         }
-        let nodes: Vec<Value> = serde_json::from_str(&text).unwrap_or_default();
+        let tree: Value = serde_json::from_str(&text).unwrap_or_default();
+        let nodes = tree["nodes"].as_array().map(Vec::as_slice).unwrap_or_default();
+        // A choice answers with what the field holds once it shows the option, as the core
+        // names it, and else says the page may have undone it.
+        if !field.is_empty() {
+            note = match tree["chosen"].as_str() {
+                Some(option) => format!("The {field} now holds “{}”.", page::clip(option, 60)),
+                None => format!("{note} {UNSHOWN}"),
+            };
+        }
         let info = self.browser.tab(tab, cx);
-        let outline = page::outline(&info, &nodes, self.refs.entry(tab).or_default());
+        let outline = page::outline(&info, nodes, self.refs.entry(tab).or_default());
         _ = reply.send(ToolResult::text(match note.is_empty() {
             true => outline,
             false => format!("{note}\n\n{outline}"),
@@ -1989,6 +2026,8 @@ const WEB_ONLY: &str = "Agents may open only http and https pages.";
 /// Why an agent can't type into a password field.
 const PASSWORDS: &str = "Password fields are off limits to agents: signing in is the user's to do. \
     Hand them the tab with hand_off.";
+/// What a choice adds when its field doesn't show the option after.
+const UNSHOWN: &str = "It doesn't show it as chosen, so the page may have changed it back.";
 /// What the user reads in the bar of a tab whose page asked for their passkey.
 const PASSKEY: &str = "The page asks for your passkey. Sign in, then hand the tab back.";
 

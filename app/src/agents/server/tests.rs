@@ -221,6 +221,7 @@ fn the_server_answers_what_needs_no_browser() {
             "read_page",
             "click",
             "type",
+            "select",
             "press_key",
             "scroll",
             "screenshot",
