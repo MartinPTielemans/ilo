@@ -407,6 +407,15 @@ together() {
 windowed_again() {
   check_layout "after the page's display went away $1"
   check_buttons "after the page's display went away $1"
+  # As the window's way out ends, macOS can make another app active, and the app takes it back
+  # (host.mm). The sidebar's material is the active window's only once it has.
+  for _ in $(seq 30); do
+    [ "$active" = 1 ] && break
+    sleep 0.1
+    send state
+  done
+  [ "$active" = 1 ] ||
+    fail "Browser wasn't the active app again after the page's display went away $1, so its window isn't key"
   ../tools/window-screenshot.sh "$pid" "$out/$2.png" || fail "no window to capture"
   sidebar_back "$out/$2.png" ||
     fail "after the page's display went away $1 the sidebar is $sidebar_now, not $sidebar: the page still covers it"
