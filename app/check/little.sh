@@ -443,10 +443,11 @@ give_way() {
     expect "^browser: title $page ready\$" "the Little ilo window's page didn't draw ($1)"
   fi
   # The stand-in opens once the Little ilo window has, which takes the foreground as it opens, and
-  # the Little ilo window then comes back in front of it.
+  # the Little ilo window then comes back in front of it. On Windows the stand-in opens behind it,
+  # and driving it would put the app's other windows right behind it, over the stand-in.
   cover_main
   await_cover "the other app's window didn't open in front of the main window ($1)"
-  send window "$number"
+  case "$(uname)" in Darwin | Linux) send window "$number" ;; esac
   send window "$number" behind
   send stack
   [ "$(stack)" = driven ] ||
