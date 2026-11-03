@@ -624,8 +624,9 @@ row_of() {
     esac
   done
 }
-# A tab dragged onto another's row and rested 0.4 s on its middle half joins it on its right, the
-# drop line going (ours: Arc wasn't recorded doing it).
+# A tab dragged onto another's row and rested 0.4 s on its middle half joins it on the half the
+# pointer is on, as Arc's does, the drop line going and the row showing the split it would make
+# (ours: Arc's preview wasn't recorded).
 bar_command separate-split "Separate All Tabs" "separate all"
 expect '^browser: splits $' "Separate All Tabs didn't end the stacked split: \"$(splits)\""
 open_from_bar example.net
@@ -633,11 +634,17 @@ f=$tab
 onto=$(today | cut -d' ' -f2)
 dragged=$(today | cut -d' ' -f3)
 rows=$(today)
+y1=$(row 1 | cut -d' ' -f2)
 send press $(row 2)
 send dragto 110 $(row 2 | cut -d' ' -f2)
-send dragto $(row 1)
-expect "^browser: drop onto $onto\$" "a tab rested on another's row didn't take it as the drop"
-send release $(row 1)
+send dragto 60 $y1
+expect "^browser: drop onto $onto left\$" \
+  "a tab rested on a row's left half didn't take it as the drop"
+send dragto 170 $y1
+expect "^browser: drop onto $onto right\$" \
+  "the rested tab didn't follow the pointer to the row's right"
+../tools/window-screenshot.sh "$pid" "$out/split-onto.png" || fail "no window to capture"
+send release 170 $y1
 expect "^browser: dragged $dragged onto $onto\$" "the tab let go on another's row didn't join it"
 expect "^browser: splits $onto+$dragged\$" "the rested tab isn't on the right of a split: \"$(splits)\""
 # ⌘Z takes the tab back out to its row, the page shown still shown, and ⇧⌘Z joins it again.

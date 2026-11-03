@@ -36,6 +36,7 @@ use crate::{
     icon_picker::{self, Subject},
     palette::Palette,
     space_icon::has_icon,
+    tokens::shell::DROP_SLOT_INSET,
     tooltip::{Anchor, Tip},
 };
 
@@ -187,10 +188,13 @@ impl Shell {
             Row::Tab(tab) => (("tab", tab), Slot::Tab(tab)),
         };
         let folder = matches!(row, Row::Tab(tab) if self.is_folder_anywhere(tab));
-        // Full for a dragged row's ghost, which the pointer holds, and none for the others then.
+        // Full for a dragged row's ghost, which the pointer holds, and for the row it has rested
+        // on, and none for the others then.
         let dragging = self.dragging();
+        let onto = self.drag.as_ref().and_then(|drag| drag.onto);
+        let onto = onto.is_some_and(|(tab, _)| row == Row::Tab(tab));
         let hover = match dragging {
-            Some(_) => ghost.then_some(1.),
+            Some(_) => (ghost || onto).then_some(1.),
             None => self.hover_fill(row),
         };
         // A new tab's plate fades in, and rows that come together fade in whole.
@@ -325,7 +329,7 @@ impl Shell {
         let onto = self.drag.as_ref().and_then(|drag| drag.onto);
         if self.pointer_row() == Some(row)
             || self.menu_row.is_some_and(|tab| row == Row::Tab(tab))
-            || onto.is_some_and(|tab| row == Row::Tab(tab))
+            || onto.is_some_and(|(tab, _)| row == Row::Tab(tab))
         {
             return Some(1.);
         }
@@ -404,8 +408,12 @@ impl Shell {
             return self.folder_row(tab, ghost, cx).into_any_element();
         }
         let panes = self.panes(tab);
-        match panes.len() > 1 {
-            true => self.split_row(panes, ghost, cx).into_any_element(),
+        // Rested on, a row shows the split view it would make, the dragged tab on its side.
+        let drop = self.drag.as_ref().filter(|_| !ghost).and_then(|drag| {
+            drag.onto.filter(|&(row, _)| row == tab).map(|(_, left)| (drag.tab, left))
+        });
+        match panes.len() > 1 || drop.is_some() {
+            true => self.split_row(panes, drop, ghost, cx).into_any_element(),
             false => self.single_row(tab, ghost, cx).into_any_element(),
         }
     }
@@ -886,16 +894,18 @@ impl Shell {
     }
 
     /// A split view's row, for its first tab: a segment per tab, left to right. A press on one
-    /// shows the split with its page focused, and the close button closes them all.
+    /// shows the split with its page focused, and the close button closes them all. With a tab
+    /// `drop`ped on it, the row of one tab or more shows that tab's slot on its left or right.
     fn split_row(
         &self,
         panes: Vec<u64>,
+        drop: Option<(u64, bool)>,
         ghost: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let first = panes[0];
         let row_selected = self.selected_row() == Row::Tab(first);
-        let hovered = self.pointer_row() == Some(Row::Tab(first));
+        let hovered = self.pointer_row() == Some(Row::Tab(first)) && drop.is_none();
         // A pinned tab closed already has nothing to close.
         let pinned = self.pinned().contains(&first);
         let closable = panes.iter().any(|&tab| !(self.page(tab).unloaded && pinned));
@@ -909,15 +919,21 @@ impl Shell {
             }
             None => {
                 let close = hovered.then(|| self.row_button(panes.clone(), closable, cx)).flatten();
-                let width = self.segment_width(self.depth(first), panes.len());
-                let segments: Vec<_> = panes
+                let count = panes.len() + usize::from(drop.is_some());
+                let width = self.segment_width(self.depth(first), count);
+                let slot = drop.map(|(_, left)| if left { 0 } else { panes.len() });
+                let mut segments: Vec<_> = panes
                     .iter()
                     .enumerate()
                     .map(|(index, &tab)| {
                         let focused = row_selected && tab == self.selected;
-                        self.split_segment(tab, width, index == 0, focused, cx)
+                        let leads = index == 0 && slot != Some(0);
+                        self.split_segment(tab, width, leads, focused, cx).into_any_element()
                     })
                     .collect();
+                if let Some(((tab, _), slot)) = drop.zip(slot) {
+                    segments.insert(slot, self.drop_slot(tab, width, slot == 0));
+                }
                 split_plate(segments).children(close)
             }
         };
@@ -934,6 +950,25 @@ impl Shell {
                 cx.listener(move |shell, _, _, cx| shell.middle_press(first, closable, cx)),
             )
         })
+    }
+
+    /// The slot `tab`, dragged onto a row, would take in the split view it would make: its segment,
+    /// faint, on a plate inset in its place, so the row reads as the split before it's let go.
+    fn drop_slot(&self, tab: u64, width: f32, first: bool) -> AnyElement {
+        // The first segment starts inside the split plate's padding, and the slot from its edge.
+        let padding = FAVICON_X - PLATE_INSET - SEGMENT_FAVICON_X;
+        let left = if first { DROP_SLOT_INSET - padding } else { DROP_SLOT_INSET };
+        let fill = div()
+            .absolute()
+            .top(px(DROP_SLOT_INSET))
+            .bottom(px(DROP_SLOT_INSET))
+            .left(px(left))
+            .right(px(DROP_SLOT_INSET))
+            .rounded(px(PLATE_RADIUS - DROP_SLOT_INSET))
+            .bg(self.palette.plate(HOVERED));
+        let segment = self.segment(&self.palette, tab, width, first, false).opacity(SECONDARY);
+        let slot = div().relative().flex_1().min_w_0().h_full().flex();
+        slot.child(fill).child(segment).into_any_element()
     }
 
     /// A middle press on the row whose first tab is `row` closes it as its ✕ or − does, on the
@@ -2066,9 +2101,15 @@ mod tests {
         });
         cx.run_until_parked();
         drag_and_rest(cx, 500);
-        assert_eq!(onto(&shell, cx), Some((Some(2), None)));
+        // The pointer is on the row's left half, where the tab would join it on the left.
+        assert_eq!(onto(&shell, cx), Some((Some((2, true)), None)));
         assert_eq!(shell.read_with(cx, |shell, _| shell.hover_fill(Row::Tab(2))), Some(1.));
-        cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+        // Across the plate's middle, it would join on the right, with no second wait.
+        let right = point(px(x - 40.), to.y);
+        cx.simulate_mouse_move(right, MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(onto(&shell, cx), Some((Some((2, false)), None)));
+        cx.simulate_mouse_up(right, MouseButton::Left, Modifiers::none());
         cx.run_until_parked();
         assert_eq!(host.moves.get(), 1, "a rest doesn't reorder");
         assert_eq!(host.take_edits(), ["split 4 2 false"]);

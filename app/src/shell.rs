@@ -842,9 +842,10 @@ struct Drag {
     /// go to, unless that's where it was. The rows stay where they are until it's let go.
     line: Option<f32>,
     /// The tab whose row's middle the pointer is on, and the wait for it to rest there, after which
-    /// it's the tab the dragged one would join in a split view, as Arc's, in place of a gap.
+    /// it's the tab the dragged one would join in a split view, as Arc's, in place of a gap, on its
+    /// left if the pointer is on the row's left half.
     resting: Option<(u64, Task<()>)>,
-    onto: Option<u64>,
+    onto: Option<(u64, bool)>,
     /// Let go, until the browser reports the lists it made.
     dropped: bool,
     /// Over the page, where it can join the page shown in a split view.
@@ -3855,8 +3856,10 @@ impl Shell {
         });
         let line = over_list.and_then(|drag| Some(self.drop_line(drag.line?, drag.depth, room)));
         let dragged = over_list.filter(|drag| !drag.incoming);
-        // Mid-turn into or out of a tile, it's drawn over the sidebar instead.
-        let dragged = dragged.filter(|drag| drag.shape.start.is_none()).map(|drag| {
+        // Mid-turn into or out of a tile, it's drawn over the sidebar instead, and rested on a
+        // row, it's in that row's slot for it.
+        let dragged = dragged.filter(|drag| drag.shape.start.is_none() && drag.onto.is_none());
+        let dragged = dragged.map(|drag| {
             let row = self.tab_row(drag.tab, true, cx);
             let top = room + self.drag_at(drag);
             let ghost = div().id("ghost").absolute().top(px(top)).left_0();
