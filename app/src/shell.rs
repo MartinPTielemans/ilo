@@ -113,6 +113,7 @@ mod tile_theme;
 mod trace;
 mod trouble;
 mod undo;
+mod update_sign;
 
 pub use assets::Assets;
 pub use browser::{
