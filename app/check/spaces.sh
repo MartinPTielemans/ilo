@@ -1130,23 +1130,25 @@ last_title=$(grep "^browser: title $a " "$log" | tail -1 | cut -d' ' -f4-)
 [ "${last_title%% *}" = visible ] ||
   expect "^browser: title $a visible " "a click on the page's row didn't show it"
 ran_hidden "the page shown by its row had run frames while hidden, other than its picture's"
-# Linux has no hiding an app, and the run's sway session keeps its focused window from minimizing.
-# Windows' driver can't hide the app, and a minimized window's page isn't hidden there yet (#1582).
+# Linux and Windows have no hiding an app, and the run's sway session keeps its focused window from
+# minimizing.
 if [ "$(uname)" = Linux ]; then
   echo "skip: a minimized window and a hidden app, which sway and Linux have no way to make."
-elif windows; then
-  echo "skip: a minimized window and a hidden app: Windows doesn't hide a minimized window's page yet (#1582)."
 else
   send minimize
   expect "^browser: title $a hidden\$" "the page in the minimized window isn't hidden"
   send minimize
   expect "^browser: title $a visible 0\$" \
     "the page isn't visible after the window came back, or ran frames while minimized"
-  send hide
-  expect "^browser: title $a hidden\$" "the page isn't hidden while the app is"
-  send hide
-  expect "^browser: title $a visible 0\$" \
-    "the page isn't visible after the app came back, or ran frames while hidden"
+  if windows; then
+    echo "skip: a hidden app, which Windows has no way to make."
+  else
+    send hide
+    expect "^browser: title $a hidden\$" "the page isn't hidden while the app is"
+    send hide
+    expect "^browser: title $a visible 0\$" \
+      "the page isn't visible after the app came back, or ran frames while hidden"
+  fi
 fi
 exec 3>&-
 quit
