@@ -46,3 +46,35 @@ fn close_tab_closes_the_tab_and_not_the_window_when_one_is_selected(cx: &mut Tes
     shell.update(cx, |shell, cx| shell.run(Command::CloseTab, "ui", cx));
     assert_eq!(host.take(), ["close 10"]);
 }
+
+/// ⌘W in a pinned split closes every page of it, which stays a pinned split, as its − does;
+/// in a Today split it closes only the page focused (Arc 1.171).
+#[gpui::test]
+fn close_tab_closes_a_pinned_split_whole_and_a_today_splits_page(cx: &mut TestAppContext) {
+    let (shell, host) = window_with_a_tab(cx);
+    shell.update(cx, |shell, cx| {
+        let split = |tabs: Vec<u64>| crate::shell::Split {
+            tabs,
+            ..Default::default()
+        };
+        let splits = vec![split(vec![10, 11]), split(vec![12, 13])];
+        shell.set_tabs(
+            1,
+            vec![10, 11],
+            vec![12, 13],
+            splits,
+            Folders::default(),
+            cx,
+        );
+        shell.set_selected(11, cx);
+    });
+    host.take();
+    shell.update(cx, |shell, cx| shell.run(Command::CloseTab, "ui", cx));
+    assert_eq!(host.take(), ["close 11"]);
+    assert_eq!(host.split_closes.take(), [11]);
+    shell.update(cx, |shell, cx| shell.set_selected(13, cx));
+    host.take();
+    shell.update(cx, |shell, cx| shell.run(Command::CloseTab, "ui", cx));
+    assert_eq!(host.take(), ["close 13"]);
+    assert!(host.split_closes.take().is_empty());
+}

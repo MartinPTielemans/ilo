@@ -29,6 +29,10 @@ thread_local! {
     static X: RefCell<Option<Rc<(RustConnection, xproto::Window)>>> = const { RefCell::new(None) };
     /// Whether the browser windows are X11's, once one has said.
     static ON_X11: Cell<Option<bool>> = const { Cell::new(None) };
+    /// Under Wayland, each browser window's size as last seen, by its UI's view. The core has
+    /// closed a window by the time the app hears so (window_closed), and the app then keeps its
+    /// size for the next launch's window or the next Little ilo window.
+    static SIZES: RefCell<Vec<(*mut c_void, [f64; 2])>> = const { RefCell::new(Vec::new()) };
 }
 
 fn server() -> Option<Rc<(RustConnection, xproto::Window)>> {
@@ -59,6 +63,22 @@ fn wayland_size(id: bc::bc_id) -> Option<[f64; 2]> {
     (!surface.is_null()).then_some([width, height])
 }
 
+/// Keeps `size` as the size of the window of `ui_view` under Wayland, as frame finds it or the
+/// core resizes the window (window_resized).
+pub(crate) fn sized(ui_view: *mut c_void, size: [f64; 2]) {
+    SIZES.with_borrow_mut(
+        |sizes| match sizes.iter_mut().find(|(each, _)| *each == ui_view) {
+            Some((_, kept)) => *kept = size,
+            None => sizes.push((ui_view, size)),
+        },
+    );
+}
+
+/// Forgets the window of `ui_view`, closed (host_forget_window).
+pub(crate) fn forget_window(ui_view: *mut c_void) {
+    SIZES.with_borrow_mut(|sizes| sizes.retain(|(each, _)| *each != ui_view));
+}
+
 /// Whether the browser windows are X11's: None before the first window, when nothing has said
 /// which Chromium went to, and a connection could start a compositor's Xwayland.
 fn on_x11() -> Option<bool> {
@@ -71,10 +91,21 @@ fn on_x11() -> Option<bool> {
 }
 
 /// The browser window's frame in points from the screen's top left, as the core keeps it. Under
-/// Wayland its size alone, at 0, 0. On X11 a window closing, the last of them, still has its own.
+/// Wayland its size alone, at 0, 0, and closing, the size it had last. On X11 a window closing, the
+/// last of them, still has its own.
 fn frame(ui_view: *mut c_void) -> Option<[f64; 4]> {
     if let Some([width, height]) = window_of(ui_view).and_then(wayland_size) {
+        sized(ui_view, [width, height]);
         return Some([0., 0., width, height]);
+    }
+    if on_x11() == Some(false) {
+        let size = SIZES.with_borrow(|sizes| {
+            sizes
+                .iter()
+                .find(|(each, _)| *each == ui_view)
+                .map(|&(_, size)| size)
+        });
+        return size.map(|[width, height]| [0., 0., width, height]);
     }
     // Under Wayland the view is a surface, which as an X id could name another client's window.
     (on_x11() == Some(true)).then_some(())?;

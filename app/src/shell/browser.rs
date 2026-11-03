@@ -553,10 +553,12 @@ pub trait Browser {
         cx: &mut App,
     );
     /// Opens the command bar for a new tab or on `editing`'s URL, with `tabs` to list before
-    /// anything is typed: over `field`, the URL field's box in the window, else centred over it.
+    /// anything is typed, and the pages `shown`, whose rows go last: over `field`, the URL field's
+    /// box in the window, else centred over it.
     fn command_bar(
         &self,
         editing: Option<(u64, SharedString)>,
+        shown: Vec<SharedString>,
         tabs: Vec<BarTab>,
         field: Option<Bounds<Pixels>>,
         cx: &mut App,
@@ -566,6 +568,7 @@ pub trait Browser {
     fn command_bar_in(
         &self,
         editing: Option<(u64, SharedString)>,
+        shown: Vec<SharedString>,
         tabs: Vec<BarTab>,
         bar: Bounds<Pixels>,
         cx: &mut App,

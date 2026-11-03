@@ -1,7 +1,7 @@
 //! The favorites' tiles over the list, which scroll with it once they're taller than
 //! 40 % of the window (docs/ux-spec.md › Favorites).
 
-use std::{collections::HashMap, rc::Rc, time::Instant};
+use std::{collections::HashMap, rc::Rc};
 
 use gpui::{
     Context, Hsla, MouseButton, MouseDownEvent, Role, canvas, div, hsla, img, prelude::*, px, rgba,
@@ -15,9 +15,9 @@ use crate::tooltip::{self, Anchor, Tip};
 use super::{
     Curve, DEVELOPER_TILE, FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X, FOLDER_TITLE_X, FOOTER_HEIGHT,
     HAIRLINE, HOVERED, LIST_TOP, PLATE_INSET, Place, Row, SECONDARY, SLEEPING_FAVICON, Shell, Slot,
-    Space, TALL_FAVORITES, TILE, TILE_GAP, TILE_HEIGHT, TILE_HOVERED, TILE_MARK, TILE_MARK_INSET,
-    TILE_MIN, TILE_RADIUS, TILE_RING, TILE_UNTHEMED, TILE_UNTHEMED_LIGHT, TITLE_END_INSET,
-    TITLE_GAP, TURN_TITLE_FADE, TileTheme, access::Accessible, developer_outline,
+    Space, TALL_FAVORITES, TILE, TILE_COLUMNS, TILE_GAP, TILE_HEIGHT, TILE_HOVERED, TILE_MARK,
+    TILE_MARK_INSET, TILE_MIN, TILE_RADIUS, TILE_RING, TILE_UNTHEMED, TILE_UNTHEMED_LIGHT,
+    TITLE_END_INSET, TITLE_GAP, TURN_TITLE_FADE, TileTheme, access::Accessible, developer_outline,
     rows::capture_glyph, tile_theme::RING_WIDTH, title,
 };
 use crate::palette::{Palette, Tone};
@@ -220,21 +220,22 @@ impl Shell {
         tabs
     }
 
-    /// Where `count` tiles go, down from the favorites' top: each one's left, top and width. A row
-    /// has as many as fit, each as wide as the others, and fewer tiles share it.
+    /// Where `count` tiles go, down from the favorites' top: each one's left, top and width, as
+    /// Arc 1.171 lays them out. The widest a row gets is the most tiles, up to TILE_COLUMNS, that
+    /// keep each TILE_MIN wide; then it takes the fewest that need no more rows, so 5 go 3 + 2
+    /// rather than 4 + 1. Every tile is as wide, a short last row starting on the left, and a
+    /// tile's left edge is on the half point.
     pub(super) fn tile_places(&self, count: usize) -> Vec<[f32; 3]> {
         let room = self.width() - 2. * PLATE_INSET + TILE_GAP;
-        let fit = (room / (TILE_MIN + TILE_GAP)).floor().max(1.) as usize;
-        let columns = fit.min(count).max(1);
+        let fit = ((room / (TILE_MIN + TILE_GAP)).floor() as usize).clamp(1, TILE_COLUMNS as usize);
+        let widest = fit.min(count).max(1);
+        let columns = count.max(1).div_ceil(count.max(1).div_ceil(widest));
         let width = room / columns as f32 - TILE_GAP;
         (0..count)
             .map(|index| {
                 let (column, row) = ((index % columns) as f32, (index / columns) as f32);
-                [
-                    PLATE_INSET + column * (width + TILE_GAP),
-                    row * (TILE_HEIGHT + TILE_GAP),
-                    width,
-                ]
+                let left = ((PLATE_INSET + column * (width + TILE_GAP)) * 2.).round() / 2.;
+                [left, row * (TILE_HEIGHT + TILE_GAP), width]
             })
             .collect()
     }
@@ -282,11 +283,17 @@ impl Shell {
     }
 
     /// Starts the tiles and the list's top from where they were drawn `before` to their places.
-    pub(super) fn move_tiles(&mut self, before: (HashMap<u64, [f32; 3]>, f32), curve: Curve) {
-        let now = Instant::now();
+    /// Under Reduce Motion they're in their places at once.
+    pub(super) fn move_tiles(
+        &mut self,
+        before: (HashMap<u64, [f32; 3]>, f32),
+        curve: Curve,
+        cx: &gpui::App,
+    ) {
+        let now = crate::motion::start(cx);
         let tabs = self.tile_tabs();
         let places = self.tile_places(tabs.len());
-        self.tile_slides = tabs
+        let slides: Vec<_> = tabs
             .into_iter()
             .zip(places)
             .filter_map(|(tab, place)| {
@@ -295,6 +302,12 @@ impl Shell {
                 (from != [0.; 3]).then_some((tab, (from, now, curve)))
             })
             .collect();
+        // As the rows' (move_rows): slides over stay for the next frame to say the tiles settled.
+        let over = |(_, start, curve): &([f32; 3], std::time::Instant, Curve)| {
+            curve.at(start.elapsed().as_secs_f32()).is_none()
+        };
+        self.tile_slides.retain(|_, slide| over(slide));
+        self.tile_slides.extend(slides);
         let from = before.1 - self.list_top();
         self.list_slide = (from != 0.).then_some((from, now, curve));
     }

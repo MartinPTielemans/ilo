@@ -255,3 +255,64 @@ fn the_favorites_take_no_more_than_the_most(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| shell.favorite_tab(100, 3, cx));
     assert_eq!(host.take_edits(), ["favorite 100 3"]);
 }
+
+/// The tiles take Arc 1.171's rows: the most columns, up to 4, that keep a tile 47 wide, then the
+/// fewest that need no more rows, a short last row on the left. The widths and counts are the
+/// ones the outside Arc measurement read from its accessibility tree.
+#[gpui::test]
+fn the_tiles_take_arcs_rows(cx: &mut TestAppContext) {
+    let (shell, cx, _) = with_tiles(cx);
+    let rows = |width: f32, count: usize, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, _| shell.sidebar_width = width);
+        let places = shell.read_with(cx, |shell, _| shell.tile_places(count));
+        let mut rows: Vec<usize> = Vec::new();
+        let mut top = None;
+        for [_, place_top, _] in &places {
+            match top == Some(*place_top) {
+                true => *rows.last_mut().unwrap() += 1,
+                false => rows.push(1),
+            }
+            top = Some(*place_top);
+        }
+        rows
+    };
+    for (count, want) in [
+        (1, vec![1]),
+        (2, vec![2]),
+        (3, vec![3]),
+        (4, vec![4]),
+        (5, vec![3, 2]),
+        (6, vec![3, 3]),
+        (7, vec![4, 3]),
+        (8, vec![4, 4]),
+        (9, vec![3, 3, 3]),
+    ] {
+        assert_eq!(rows(347., count, cx), want, "{count} at 347");
+    }
+    for (width, count, want) in [
+        (230., 4, vec![4]),
+        (227., 4, vec![2, 2]),
+        (200., 3, vec![3]),
+        (200., 4, vec![2, 2]),
+        (200., 5, vec![3, 2]),
+        (140., 3, vec![2, 1]),
+        (100., 2, vec![1, 1]),
+    ] {
+        assert_eq!(rows(width, count, cx), want, "{count} at {width}");
+    }
+
+    // A tile keeps its width on a short last row, and its left edge is on the half point.
+    shell.update(cx, |shell, _| shell.sidebar_width = 228.);
+    let places = shell.read_with(cx, |shell, _| shell.tile_places(5));
+    assert!(
+        places.iter().all(|place| place[2] == places[0][2]),
+        "{places:?}"
+    );
+    assert_eq!(places[3][0], places[0][0]);
+    assert!(
+        places.iter().all(|place| (place[0] * 2.).fract() == 0.),
+        "{places:?}"
+    );
+    assert_eq!(places[1][1] - places[0][1], 0.);
+    assert_eq!(places[3][1], TILE_HEIGHT + crate::shell::TILE_GAP);
+}

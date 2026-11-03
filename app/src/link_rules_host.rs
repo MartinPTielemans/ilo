@@ -109,11 +109,20 @@ impl Host for CoreLinkRules {
         &self,
         items: Vec<MenuEntry>,
         at: Point<Pixels>,
+        light: bool,
         window: &Window,
         picked: Box<dyn FnOnce(Option<usize>, &mut App)>,
         cx: &mut App,
     ) {
         let picked = browser::menu::picked(picked);
-        crate::show_menu(ns_view(window), items, at, false, Look::dark(), picked, cx);
+        crate::show_menu(
+            ns_view(window),
+            items,
+            at,
+            false,
+            Look::plain(light),
+            picked,
+            cx,
+        );
     }
 }

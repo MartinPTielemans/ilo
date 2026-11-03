@@ -44,11 +44,14 @@ struct DockedDevTools {
 
 // A page to show, at |frame| from the top-left of the window's content, with its DevTools if
 // they're docked, and |color|, 0xRRGGBB, under it where it hasn't drawn, as the app's card is.
+// |widget| is the view of its main frame, whose first frame on screen ends a switch to it, or null
+// for a page in the system's engine.
 struct Pane {
   gfx::NativeView page;
   gfx::Rect frame;
   std::optional<DockedDevTools> devtools;
   std::optional<uint32_t> color;
+  content::RenderWidgetHostView* widget = nullptr;
 };
 
 // An extension's side panel page, at |frame| like a pane's. The app draws its header above it, so
@@ -61,7 +64,8 @@ struct SidePanelPage {
 // Shows |panes| in place of the pages shown, with corners of |corner_radius|, and |side_panel| in
 // place of the side panel shown. With more than one pane, as in a split view, the one at |focused|
 // has a ring of |ring_color|, 0xRRGGBB, inside its edge. No panes shows no page. While |widget|
-// isn't visible, the pages stay hidden.
+// isn't visible, the pages stay hidden. On the Mac, the pages a switch replaces stay over the ones
+// it shows until those have drawn, as a page shown again shows nothing until then.
 void ShowPages(views::Widget* widget,
                base::span<const Pane> panes,
                double corner_radius,

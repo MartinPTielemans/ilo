@@ -555,6 +555,7 @@ impl Shell {
             },
             LITTLE_GLYPH,
             glyph,
+            cx,
         ));
         // Open in <Space> ⌘O | ⌄: one plate of the header's, split by a line, each half its own
         // hover. Its words name the Space and the key, so it needs no tooltip.

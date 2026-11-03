@@ -9,6 +9,7 @@ use gpui::{
 };
 
 use crate::shell::{Command, Folders, Shell, recorder::Recorder};
+use crate::tokens::shell::library::LIBRARY_WIDTH;
 
 /// Spaces 1 and 2, with tabs 10 and 20, Space 1 shown.
 fn two_spaces(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>) {
@@ -214,6 +215,72 @@ fn a_page_leaving_as_its_window_starts_out_waits_for_the_resize(cx: &mut TestApp
 
     // From there, the page's full screen takes the window again.
     page_takes_the_window(&shell, cx);
+}
+
+/// AppKit takes the window into full screen or out at the size it has, as for one already its
+/// screen's size, such as one filling a notched Mac's screen below its menu bar, the Dock hidden,
+/// and says so once it's there.
+fn window_goes_in_place(full_screen: bool, shell: &Entity<Shell>, cx: &mut VisualTestContext) {
+    cx.update(|window, _| {
+        if window.is_fullscreen() != full_screen {
+            window.toggle_fullscreen();
+        }
+    });
+    shell.update(cx, |shell, cx| shell.set_full_screen(full_screen, cx));
+}
+
+#[gpui::test]
+fn a_window_that_keeps_its_size_lays_the_page_out_once_there(cx: &mut TestAppContext) {
+    let (shell, _, cx) = window(cx);
+    page_goes(true, &shell, cx);
+    assert_eq!(
+        page(&shell, cx),
+        None,
+        "the page moved before the window went full screen"
+    );
+    window_goes_in_place(true, &shell, cx);
+    assert_eq!(page(&shell, cx), Some("fills"));
+    page_goes(false, &shell, cx);
+    assert_eq!(
+        page(&shell, cx),
+        None,
+        "the page moved before the window left full screen"
+    );
+    window_goes_in_place(false, &shell, cx);
+    assert_eq!(page(&shell, cx), Some("at the sidebar"));
+
+    // So the Library, open, has the page beside it rather than over its list (#1633).
+    let viewport = cx.update(|window, _| window.viewport_size());
+    let left = shell.update(cx, |shell, cx| {
+        shell.set_library(true, cx);
+        // At rest.
+        shell.library_motion = None;
+        shell
+            .window_page_frame(viewport)
+            .map(|(frame, _)| frame.origin.x)
+    });
+    assert_eq!(left, Some(px(LIBRARY_WIDTH)));
+}
+
+// AppKit's order: on Linux and Windows the shell hears the window is there with its resize.
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn a_page_leaving_before_its_window_is_there_waits_for_the_resize(cx: &mut TestAppContext) {
+    let (shell, _, cx) = window(cx);
+    page_goes(true, &shell, cx);
+    window_goes(true, cx);
+    assert_eq!(page(&shell, cx), Some("fills"));
+    // Out again before AppKit says the window is full screen: its saying so doesn't end the hold
+    // for the way back, so the page is laid out once, windowed.
+    page_goes(false, &shell, cx);
+    shell.update(cx, |shell, cx| shell.set_full_screen(true, cx));
+    assert_eq!(
+        page(&shell, cx),
+        None,
+        "the page moved before the window's resize"
+    );
+    window_goes(false, cx);
+    assert_eq!(page(&shell, cx), Some("at the sidebar"));
 }
 
 #[gpui::test]
