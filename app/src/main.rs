@@ -482,6 +482,12 @@ mod platform {
             changed: extern "C" fn(stage: c_int, version: *const c_char),
         );
         #[cfg(not(target_os = "linux"))]
+        pub fn host_nightly_build() -> bool;
+        #[cfg(not(target_os = "linux"))]
+        pub fn host_nightly_feed() -> bool;
+        #[cfg(not(target_os = "linux"))]
+        pub fn host_follow_nightly(nightly: bool);
+        #[cfg(not(target_os = "linux"))]
         pub fn host_check_for_updates();
         #[cfg(not(target_os = "linux"))]
         pub fn host_check_for_updates_quietly();
@@ -5414,6 +5420,17 @@ fn start_updates(cx: &mut App) {
     .detach();
     #[cfg(not(target_os = "linux"))]
     {
+        // A nightly, or a release, and where the build carries a nightly feed, the builds the user
+        // chose, else this one's: the updater reads that feed from its first check.
+        let built = match unsafe { platform::host_nightly_build() } {
+            true => updates::Track::Nightly,
+            false => updates::Track::Release,
+        };
+        let own = updater == updates::Updater::Own;
+        let followed = (own && unsafe { platform::host_nightly_feed() })
+            .then(|| followed_track().unwrap_or(built));
+        updates::tracks(built, followed, cx);
+        unsafe { platform::host_follow_nightly(followed == Some(updates::Track::Nightly)) };
         // Restart to Update on Windows, whose installer runs once the browser has gone, which needs
         // no asking.
         extern "C" fn quit() {
@@ -5458,6 +5475,22 @@ fn start_updates(cx: &mut App) {
             .await;
         })
         .detach();
+    }
+}
+
+/// Where the builds the user chose in Settings › About are kept: "nightly" or "release", for the
+/// app, not a profile, as its updates are. Without it, the updater takes this build's own.
+#[cfg(not(target_os = "linux"))]
+fn followed_track_path() -> String {
+    format!("{}/update-track", profile_dir())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn followed_track() -> Option<updates::Track> {
+    match std::fs::read_to_string(followed_track_path()).ok()?.trim() {
+        "nightly" => Some(updates::Track::Nightly),
+        "release" => Some(updates::Track::Release),
+        _ => None,
     }
 }
 
@@ -5513,6 +5546,24 @@ impl updates::Host for SystemUpdater {
         }
         #[cfg(target_os = "linux")]
         flatpak::restart(cx);
+    }
+
+    /// Kept for the next launch, which reads it before the updater's first check. Linux offers no
+    /// choice: a Flatpak updates only the branch it's installed from.
+    fn follow(&self, track: updates::Track, _: &mut App) {
+        #[cfg(not(target_os = "linux"))]
+        {
+            let name = match track {
+                updates::Track::Nightly => "nightly",
+                updates::Track::Release => "release",
+            };
+            if let Err(error) = std::fs::write(followed_track_path(), name) {
+                log!("browser: the update track wasn't kept: {error}");
+            }
+            unsafe { platform::host_follow_nightly(track == updates::Track::Nightly) };
+        }
+        #[cfg(target_os = "linux")]
+        let _ = track;
     }
 }
 

@@ -2,17 +2,20 @@
 //! the Mac, WinSparkle on Windows, Flatpak's portal on Linux. Settings › About's version row says
 //! it in plain words and finishes it, and Check for Updates… reads Restart to Update once one is
 //! ready. There's no updater here: each OS's own says what happened, through its delegate or
-//! callbacks, and this keeps what it last said and asks it to check or to restart.
+//! callbacks, and this keeps what it last said and asks it to check or to restart. Where the build
+//! carries a nightly feed beside its own, About's next row chooses which of the two it reads.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::time::Instant;
 
 use gpui::{
     App, Bounds, Context, Global, Pixels, SharedString, Subscription, Window, canvas, div,
-    prelude::*, px,
+    prelude::*, px, rgb,
 };
 
-use crate::settings_rows::{Look, button, detailed_row, drawn};
+use crate::palette::NO_THEME_ACCENT;
+use crate::settings_rows::{Look, SLIDE, button, detailed_row, drawn, switch};
 use crate::tokens::settings::PADDING;
 
 /// What updates this copy.
@@ -25,6 +28,14 @@ pub enum Updater {
     Store,
     /// ilo's own: Sparkle, WinSparkle or Flatpak's portal.
     Own,
+}
+
+/// The builds a copy is of, or takes: the releases, or each night's build of main, ahead of them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Track {
+    #[default]
+    Release,
+    Nightly,
 }
 
 /// Where the update stands, as the updater last said.
@@ -88,6 +99,8 @@ pub trait Host {
     fn check(&self, cx: &mut App);
     /// Installs the update that's ready and relaunches into it.
     fn restart(&self, cx: &mut App);
+    /// Has the updater read `track`'s feed from its next check on, and keeps the choice.
+    fn follow(&self, track: Track, cx: &mut App);
 }
 
 #[derive(Default)]
@@ -95,6 +108,11 @@ struct Updates {
     updater: Updater,
     stage: Stage,
     host: Option<Rc<dyn Host>>,
+    /// The builds this one is of.
+    built: Track,
+    /// The builds the updater takes, where the build carries a nightly feed beside its own, so
+    /// About offers the choice.
+    followed: Option<Track>,
 }
 
 impl Global for Updates {}
@@ -104,6 +122,64 @@ pub fn start(updater: Updater, host: Rc<dyn Host>, cx: &mut App) {
     let updates = cx.default_global::<Updates>();
     updates.updater = updater;
     updates.host = Some(host);
+}
+
+/// This build is one of `built`'s, and where it carries a nightly feed, its updater takes
+/// `followed`'s builds.
+pub fn tracks(built: Track, followed: Option<Track>, cx: &mut App) {
+    let updates = cx.default_global::<Updates>();
+    updates.built = built;
+    updates.followed = followed;
+}
+
+/// The builds this one is of, which About's first row names.
+pub fn built(cx: &App) -> Track {
+    cx.try_global::<Updates>().map(|updates| updates.built).unwrap_or_default()
+}
+
+/// The builds the updater takes, where About offers the choice: a copy that updates itself and
+/// carries a nightly feed.
+pub fn followed(cx: &App) -> Option<Track> {
+    let updates = cx.try_global::<Updates>()?;
+    if updates.updater != Updater::Own {
+        return None;
+    }
+    updates.followed
+}
+
+/// Has the updater take `track`'s builds, which on a nightly checks for one at once. Never an
+/// older build: each updater installs only a build numbered above the one running, so a nightly
+/// turned off keeps its build until a release passes it.
+pub fn follow(track: Track, cx: &mut App) {
+    if followed(cx).is_none_or(|followed| followed == track) {
+        return;
+    }
+    let updates = cx.default_global::<Updates>();
+    updates.followed = Some(track);
+    let host = updates.host.clone();
+    // check.sh waits for this line, as it does for Settings' other switches.
+    let on = if track == Track::Nightly { "on" } else { "off" };
+    crate::log!("browser: {NIGHTLY} {on}");
+    let Some(host) = host else {
+        return;
+    };
+    host.follow(track, cx);
+    if track == Track::Nightly {
+        host.check(cx);
+    }
+}
+
+/// The nightly switch's name in the log and where it's drawn.
+const NIGHTLY: &str = "nightly builds";
+
+/// What the nightly row says under its name: what a nightly is, or, turned off on one, that this
+/// build stays until a release is newer.
+pub fn nightly_words(built: Track, followed: Track) -> &'static str {
+    if built == Track::Nightly && followed == Track::Release {
+        concat!(env!("APP_NAME"), " keeps this build until a release is newer.")
+    } else {
+        concat!("Each night’s build of ", env!("APP_NAME"), ", ahead of the next release.")
+    }
 }
 
 /// The updater says the update is at `stage`. A ready update stays ready until it's installed or
@@ -299,6 +375,66 @@ impl Render for VersionRow {
                 .into_any_element()
         });
         detailed_row(env!("APP_NAME"), self.version.clone(), control)
+    }
+}
+
+/// Settings › About's second row, where the build carries a nightly feed: Get nightly builds, a
+/// line on what that means here, and its switch.
+pub struct NightlyRow {
+    /// Where its switch is drawn, logged for check.sh to click.
+    logged: Rc<RefCell<Vec<String>>>,
+    /// Where its switch is drawn, for the tests to click.
+    drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// When the switch was last clicked, which its knob slides from.
+    switched: Option<Instant>,
+    _watch: Subscription,
+}
+
+impl NightlyRow {
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        Self {
+            logged: Rc::default(),
+            drawn: Rc::default(),
+            switched: None,
+            _watch: observe_view(cx, |_, cx| cx.notify()),
+        }
+    }
+
+    /// Where its switch was drawn last.
+    pub fn switch_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.drawn.get()
+    }
+}
+
+impl Render for NightlyRow {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.drawn.set(None);
+        let Some(followed) = followed(cx) else {
+            return div().into_any_element();
+        };
+        let on = followed == Track::Nightly;
+        let slid = self.switched.map_or(1., |at| (at.elapsed().as_secs_f32() / SLIDE).min(1.));
+        if slid < 1. {
+            window.request_animation_frame();
+        }
+        let drawn_at = self.drawn.clone();
+        let at = canvas(|_, _, _| {}, move |bounds, _, _, _| drawn_at.set(Some(bounds)))
+            .absolute()
+            .inset_0();
+        let control = div()
+            .id(NIGHTLY)
+            .relative()
+            .child(switch(&Look::settings(), on, slid, rgb(NO_THEME_ACCENT)))
+            .child(drawn(format!("switch {NIGHTLY}"), self.logged.clone()))
+            .child(at)
+            .on_click(cx.listener(move |row, _, _, cx| {
+                row.switched = Some(Instant::now());
+                follow(if on { Track::Release } else { Track::Nightly }, cx);
+                cx.notify();
+            }));
+        let words = nightly_words(built(cx), followed);
+        let control = Some(control.into_any_element());
+        detailed_row("Get nightly builds", words, control).into_any_element()
     }
 }
 
