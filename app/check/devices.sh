@@ -20,6 +20,9 @@ exec 3> "$out/drive"
 await_load
 await '^browser: title [0-9]* ready$' || fail "the devices test page didn't draw"
 page=$(grep '^browser: title [0-9]* ready$' "$log" | tail -1 | cut -d' ' -f3)
+# The page can draw before its load ends, and a click before then may never reach it.
+await "^browser: page $page back 0 forward 0 loading 0 ${site}devices.html\$" ||
+  fail "the devices test page didn't finish loading"
 # A click on the page asks for the next device.
 ask() {
   send click $page_point
