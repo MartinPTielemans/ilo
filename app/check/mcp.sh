@@ -401,8 +401,9 @@ painted(() => document.title = "fields");
   # Frames nested deeper are the page's too, whatever their sites and whenever they come (#1444).
   # A frame of another site holds one of a third site and one of the page's own, each in a process
   # of its own, and a frame the page fills once the agent asks, as a site posts a document into its
-  # editor's frame, comes in too. All are in the outline and the text, each where the page has it.
-  # The answers are kept before any is judged, so a run that fails shows them all.
+  # editor's frame, comes in too. All are in the outline and the text, each where the page has it,
+  # and a helper frame with nothing in it, named as Office names its own, isn't. The answers are
+  # kept before any is judged, so a run that fails shows them all.
   printf '%s' '<p>Deep text</p>
 <button onclick="document.body.append(&quot;deep clicked&quot;)">Deep button</button>
 <script src="painted.js"></script><script>painted(() => top.postMessage("deep", "*"));</script>' \
@@ -411,8 +412,11 @@ painted(() => document.title = "fields");
 <script>painted(() => top.postMessage("back", "*"));</script>' > "$out/site/back.html"
   printf '%s' '<p>Late text</p><script src="painted.js"></script>
 <script>painted(() => top.postMessage("late", "*"));</script>' > "$out/site/late.html"
+  printf '%s' '<!doctype html>' > "$out/site/helper.html"
   printf '%s' "<p>Outer text</p><iframe src=http://deep.localhost:$port/deep.html></iframe>
-<iframe src=http://localhost:$port/back.html></iframe>" > "$out/site/outer.html"
+<iframe src=http://localhost:$port/back.html></iframe>
+<iframe title='Not intended for user action' src=http://deep.localhost:$port/helper.html></iframe>" \
+    > "$out/site/outer.html"
   printf '%s' "<title>loading</title><p>Nested top text</p>
 <iframe src=http://127.0.0.1:$port/outer.html></iframe><iframe name=late></iframe>
 <form target=late action=http://127.0.0.1:$port/late.html></form>
@@ -437,6 +441,7 @@ addEventListener('message', (event) => {
   read=$(call read_page "{\"tab\":$nested_tab}")
   printf '%s\n' "$read" > "$out/mcp-nested-text.txt"
   case "$nested" in
+    *"Not intended for user action"*) fail "the empty helper frame was outlined: $nested" ;;
     *"Nested top text"*"Outer text"*"Deep text"*"Deep button"*"Back text"*) ;;
     *) fail "the page with nested frames was outlined as: $nested" ;;
   esac
