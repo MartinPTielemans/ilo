@@ -119,7 +119,7 @@ fn voiceover_reads_the_question_and_its_buttons(cx: &mut TestAppContext) {
         found.unwrap_or_else(|| panic!("no {role:?} called {label}")).clone()
     };
     let (_, alert) = find(Role::AlertDialog, "Delete “Work”?");
-    assert_eq!(alert.description(), Some("Its 3 tabs close too."));
+    assert_eq!(alert.description(), Some("Its 3 tabs go with it. ⌘Z brings them back."));
     assert_eq!(tree.focus, find(Role::AlertDialog, "Delete “Work”?").0);
     find(Role::Button, "Cancel");
     let (delete, _) = find(Role::Button, "Delete");
