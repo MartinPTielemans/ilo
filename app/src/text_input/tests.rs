@@ -138,3 +138,72 @@ fn cmd_and_option_backspace_delete_back_to_the_start_and_a_word(cx: &mut TestApp
     assert_eq!(keys("alt-backspace", cx), composing);
     assert!(input.read_with(cx, |input, _| input.composing()));
 }
+
+/// A window showing a field 120 wide that fades its edges, focused.
+struct Narrow(Entity<TextInput>);
+
+impl Render for Narrow {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().w(px(120.)).child(self.0.clone())
+    }
+}
+
+/// A long ask in ⌘T scrolls to keep the caret in view, clear of the fade over an edge with more
+/// text past it, and Home brings its start back.
+#[gpui::test]
+fn a_long_text_scrolls_to_keep_the_caret_in_view(cx: &mut TestAppContext) {
+    cx.update(bind_keys);
+    let (shows, cx) = cx.add_window_view(|window, cx| {
+        let input = cx.new(|cx| {
+            let mut input = TextInput::new("Ask Claude…", cx);
+            input.set_fade(px(24.), hsla(0., 0., 1., 1.));
+            input
+        });
+        window.focus(&input.focus_handle(cx), cx);
+        Narrow(input)
+    });
+    let input = cx.read(|cx| shows.read(cx).0.clone());
+    let typed = "find the museum in Lisbon with the most azulejos and buy two tickets";
+    cx.simulate_input(typed);
+    cx.run_until_parked();
+    // Where the caret is, against the field.
+    let caret = |cx: &mut VisualTestContext| {
+        input.update_in(cx, |input, window, cx| {
+            let field = input.last_bounds.expect("drawn");
+            let at = input.cursor_offset();
+            let caret = input.bounds_for_range(at..at, field, window, cx).expect("a caret");
+            (caret.left() - field.left(), field.size.width, input.scroll)
+        })
+    };
+    let (x, width, scroll) = caret(cx);
+    assert!(scroll > px(0.), "the line didn't scroll");
+    assert!(x > px(0.) && x + CARET <= width, "the caret is at {x:?} of {width:?}");
+
+    cx.simulate_keystrokes("home");
+    cx.run_until_parked();
+    assert_eq!(caret(cx), (px(0.), width, px(0.)), "the start is back");
+    // Moving within what shows leaves the line where it is, and past the fade at the end scrolls.
+    cx.simulate_keystrokes("right right");
+    cx.run_until_parked();
+    assert_eq!(caret(cx).2, px(0.));
+    for _ in 0..typed.len() / 2 {
+        cx.simulate_keystrokes("right");
+    }
+    cx.run_until_parked();
+    let (x, width, scroll) = caret(cx);
+    assert!(scroll > px(0.), "the line didn't follow the caret");
+    assert!(x <= width - px(24.) - CARET + px(0.5), "the caret is under the fade, at {x:?}");
+}
+
+/// The line moves only as far as it must: a caret already in view leaves it, one past an edge
+/// brings it just clear of that edge's fade, and it never scrolls past the text's end.
+#[test]
+fn a_line_scrolls_no_further_than_it_must() {
+    let (width, fade) = (px(100.), px(24.));
+    assert_eq!(scrolled(px(0.), px(50.), px(80.), width, fade), px(0.), "it fits");
+    assert_eq!(scrolled(px(0.), px(50.), px(300.), width, fade), px(0.), "in view");
+    assert_eq!(scrolled(px(0.), px(90.), px(300.), width, fade), px(16.));
+    assert_eq!(scrolled(px(16.), px(300.), px(300.), width, fade), px(202.), "at the end");
+    assert_eq!(scrolled(px(202.), px(150.), px(300.), width, fade), px(126.));
+    assert_eq!(scrolled(px(202.), px(150.), px(120.), width, fade), px(22.), "text deleted");
+}

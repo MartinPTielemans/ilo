@@ -113,11 +113,11 @@ Space* Space::Create(std::string name, bc_id id, std::optional<Agent> agent, siz
 }
 
 // static
-Space* Space::CreateOffTheRecord(std::string profile) {
+Space* Space::CreateOwn(std::string profile, Own own) {
   const bc_id id = NewId();
   Space* space = new Space(id, std::string(), std::nullopt);
   space->profile_ = std::move(profile);
-  space->off_the_record_ = true;
+  space->own_ = own;
   Spaces()[id] = base::WrapUnique(space);
   return space;
 }
@@ -128,8 +128,8 @@ void Space::Delete(bc_id id) {
   if (it == Spaces().end()) {
     return;
   }
-  // The Spaces listed don't change with a private window's.
-  const bool listed = !it->second->off_the_record_;
+  // The Spaces listed don't change with a window's own.
+  const bool listed = !it->second->own();
   Spaces().erase(it);
   if (listed) {
     std::erase(SpaceOrder(), id);
@@ -203,8 +203,21 @@ const Space::Node* Space::NodeOf(bc_id id) const {
 
 void Space::RestoreNodes(const Node& space, const std::map<bc_id, Node>& rows) {
   if (space.id.is_valid()) {
+    const bool moved = !node_.position.Equals(space.position);
     node_ = space;
+    // The order follows the places sync gives, as the other devices have them, so a place that
+    // came from one is kept here rather than made again and sent back.
+    if (moved) {
+      std::ranges::stable_sort(SpaceOrder(), [](bc_id a, bc_id b) {
+        const syncer::UniquePosition &at = FromId(a)->node_.position,
+                                     &bt = FromId(b)->node_.position;
+        return at.IsValid() && (!bt.IsValid() || at.LessThan(bt));
+      });
+    }
     PlaceSpaces();
+    if (moved) {
+      ReportSpacesChanged();
+    }
   }
   for (const auto& [id, node] : rows) {
     if (node.id.is_valid() && nodes_.contains(id)) {
@@ -247,6 +260,7 @@ std::vector<bc_id> Space::Panes(bc_id tab) const {
 }
 
 void Space::SetName(std::string name) {
+  touched_ |= name != name_;
   name_ = std::move(name);
   ReportSpacesChanged();
 }
@@ -257,6 +271,7 @@ void Space::SetColor(std::optional<uint32_t> color) {
 }
 
 void Space::SetIcon(std::string icon) {
+  touched_ |= icon != icon_;
   icon_ = std::move(icon);
   ReportSpacesChanged();
 }
@@ -326,7 +341,7 @@ void Space::SetPinnedUrl(bc_id tab, GURL url) {
 }
 
 void Space::Pin(bc_id tab, base::FunctionRef<GURL(bc_id)> url_of) {
-  if (!std::ranges::contains(today_, tab) || off_the_record_) {
+  if (!std::ranges::contains(today_, tab) || own()) {
     return;
   }
   for (bc_id pane : Panes(tab)) {
@@ -359,7 +374,7 @@ void Space::Move(bc_id tab,
                  base::FunctionRef<GURL(bc_id)> url_of) {
   const bool is_folder = IsFolder(tab);
   if ((!Has(tab) && !is_folder) || (is_folder && !pinned) || (folder && !IsFolder(folder)) ||
-      (pinned && off_the_record_) || (is_folder && Within(folder, tab))) {
+      (pinned && own()) || (is_folder && Within(folder, tab))) {
     return;
   }
   const bool was_pinned = IsPinned(tab) || is_folder;
@@ -410,7 +425,7 @@ void Space::Remove(bc_id tab) {
 }
 
 bc_id Space::AddFolder(std::string name, bc_id folder, size_t index) {
-  if (off_the_record_) {
+  if (own()) {
     return 0;
   }
   if (!IsFolder(folder)) {
@@ -469,6 +484,54 @@ void Space::DeleteFolder(bc_id folder) {
   folders_.erase(folder);
   std::erase(pinned_, folder);
   ReportChanged();
+}
+
+void Space::TakeFolder(Space& from, bc_id folder, const std::map<bc_id, bc_id>& copies) {
+  if (&from == this || !from.IsFolder(folder) || own()) {
+    return;
+  }
+  const auto here = [&](bc_id row) {
+    auto copy = copies.find(row);
+    return copy == copies.end() ? row : copy->second;
+  };
+  const size_t end = from.EndOf(folder);
+  auto first = std::ranges::find(from.pinned_, folder);
+  const std::vector<bc_id> rows(first, from.pinned_.begin() + end);
+  from.pinned_.erase(first, from.pinned_.begin() + end);
+  for (bc_id row : rows) {
+    if (row != folder) {
+      folder_of_[here(row)] = from.FolderOf(row);
+    }
+    from.folder_of_.erase(row);
+    if (auto entry = from.folders_.extract(row)) {
+      folders_[row] = std::move(entry.mapped());
+    } else {
+      if (auto url = from.pinned_urls_.extract(row)) {
+        pinned_urls_[here(row)] = std::move(url.mapped());
+      }
+      from.ForgetOpener(row);
+    }
+    pinned_.push_back(here(row));
+  }
+  // A split sits whole in one folder, so each with a tab here comes whole.
+  const std::set<bc_id> taken(rows.begin(), rows.end());
+  for (auto split = from.splits_.begin(); split != from.splits_.end();) {
+    if (!std::ranges::all_of(split->tabs, [&](bc_id tab) { return taken.contains(tab); })) {
+      ++split;
+      continue;
+    }
+    SplitView view = std::move(*split);
+    split = from.splits_.erase(split);
+    std::ranges::transform(view.tabs, view.tabs.begin(), here);
+    view.expanded = here(view.expanded);
+    splits_.push_back(std::move(view));
+  }
+  for (bc_id row : rows) {
+    from.LeaveSplit(row);
+  }
+  // This Space first, so the app never hears of a tab in neither.
+  ReportChanged();
+  from.ReportChanged();
 }
 
 bool Space::Split(bc_id tab, bc_id with, GURL url, bool left) {

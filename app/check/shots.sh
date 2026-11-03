@@ -68,7 +68,7 @@ pin
 open_tab en.wikipedia.org/wiki/Web_browser
 wiki=$tab
 pin
-open_tab github.com/MartinPTielemans/browser
+open_tab github.com/MartinPTielemans/ilo
 pin
 open_tab "en.wikipedia.org/wiki/Chromium_(web_browser)"
 open_tab ilobrowser.com/ilo

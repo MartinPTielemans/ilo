@@ -57,16 +57,19 @@ in_find_bar() {
 expect_find() {
   expect "^browser: find $1 $2\$" "$3: $(grep "^browser: find $1 " "$log" | tail -1)"
 }
-# The find bar is 300 points wide and 32 high, 20 from the window's top right corner. Sets $content
-# to the window's width.
+# The find bar is 300 points wide and 32 high, 20 from the window's top right corner, one of the
+# windows over the page, which in full screen can also be its toast. Sets $content to the window's
+# width.
 check_find_bar() {
   send layout
-  child=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout child' |
-    sed 's/^browser: layout child //')
+  children=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
+    sed -n 's/^browser: layout child //p' | tr '\n' ';')
   content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
     sed 's/^browser: layout content \([0-9]*\)x.*/\1/')
-  [ "$child" = "$((content - 320)),20 300x32" ] ||
-    fail "$1: the find bar is at ${child:-nowhere} in a window $content wide"
+  case ";$children" in
+  *";$((content - 320)),20 300x32;"*) ;;
+  *) fail "$1: no find bar among the windows over the page (${children:-none}), $content wide" ;;
+  esac
 }
 
 # What's typed right after ⌘F, with no wait, lands in the bar, though the page has ⌘F first: the
@@ -95,8 +98,22 @@ expect_find "$first" "open 1 of 3 apple" "⌘G in the find bar didn't go on, rou
 check_find_bar "after ⌘F"
 ../tools/window-screenshot.sh "$pid" "$out/find.png" || fail "no window to capture"
 
+# The pointer resting on next names it and its key in the tooltip, hung off its glyph as the
+# header's buttons' are, and the click on it ends the tooltip. The bar is 20 in from the page's
+# corner, and the button 2 under its top and 28 tall, so its middle is at 36 and the tooltip's
+# top 7 under that, at 43.
+send move $((content - 320 + 252)) 36
+next_keys=⌘G
+[ "$(uname)" = Darwin ] || next_keys=Ctrl+G
+expect "^browser: tooltip shown Next $next_keys\$" \
+  "resting on the find bar's next didn't show Next and $next_keys"
+expect '^browser: tooltip at [0-9.]* 43 ' "the find bar's tooltip didn't hang off its next's glyph"
+expect '^browser: tooltip window shown$' "the find bar's next's tooltip didn't fade in"
+../tools/window-screenshot.sh "$pid" "$out/find-tooltip.png" || fail "no window to capture"
+
 # The bar's next and previous go through the matches. Arc's are 28 pt at 212 and 238 in the bar.
 send click $((content - 320 + 252)) 36
+expect '^browser: tooltip hidden$' "a click on the find bar's next didn't end its tooltip"
 expect_find "$first" "open 2 of 3 apple" \
   "a click on the find bar's next didn't go to the next match"
 send click $((content - 320 + 226)) 36
@@ -243,9 +260,9 @@ send key 1 cmd
 expect "^browser: selected $second" "⌘1 didn't show the second tab"
 # It shrinks out over 70 ms, as Arc's does on a tab switch, so it's gone well before its 5 s are up,
 # which would take it anyway.
-gone() { sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: zoom hud hidden$'; }
-for _ in $(seq 20); do gone && break; sleep 0.1; done
-gone || fail "the zoom HUD stayed over the tab shown in place of the one zoomed"
+hud_gone() { sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: zoom hud hidden$'; }
+for _ in $(seq 20); do hud_gone && break; sleep 0.1; done
+hud_gone || fail "the zoom HUD stayed over the tab shown in place of the one zoomed"
 send key 2 cmd
 expect "^browser: selected $first" "⌘2 didn't show the first tab again"
 send key 0 cmd
@@ -521,4 +538,4 @@ quit_by_key
 await '^browser: command quit via ' || fail "⌘Q didn't quit"
 exited
 dock right
-echo "ok: ⌘F opens the find bar from the page with the keyboard, what's typed right after it lands there, typing finds with \"n/m\", return, shift-return, ⌘G and ⇧⌘G and the bar's arrows go through the matches, from the bar and the page, a text the page doesn't have shows NOT FOUND, Japanese input finds once committed, the bar keeps its place through a resize and full screen, each tab keeps its own find, escape and the close button close it and another page closes it. ⌘J and Jump to Selection scroll the page back to the match a find left selected. ⌘0, ⌘- and the View menu zoom the page, and the HUD shows the zoom for a moment, under the find bar, and goes when another tab shows. ⌥⌘I and the View menu dock DevTools in the card beside the page, through a resize and per tab, where ⌘A, ⌘C and ⌘V are the console's, F12 closes them and the page gets the keyboard back, and View Source opens a tab under the page. Open Task Manager shows Chrome's, which ⌘W closes, keeping the tab. Record a Trace records until the toast's Stop, and saves Chromium's trace where the save panel picks. Undocked DevTools open in a window of their own, where ⌘C copies and ⌘V pastes, and ⌥⌘I from the page brings them to the front. Windows: $out/find.png, $out/find-not-found.png, $out/find-fullscreen.png, $out/zoom.png, $out/devtools.png, $out/task-manager.png, $out/trace.png, $out/devtools-undocked.png"
+echo "ok: ⌘F opens the find bar from the page with the keyboard, what's typed right after it lands there, typing finds with \"n/m\", return, shift-return, ⌘G and ⇧⌘G and the bar's arrows go through the matches, from the bar and the page, a text the page doesn't have shows NOT FOUND, Japanese input finds once committed, the bar keeps its place through a resize and full screen, each tab keeps its own find, escape and the close button close it and another page closes it. The pointer resting on next names it and its key in a tooltip hung off its glyph, which the click ends. ⌘J and Jump to Selection scroll the page back to the match a find left selected. ⌘0, ⌘- and the View menu zoom the page, and the HUD shows the zoom for a moment, under the find bar, and goes when another tab shows. ⌥⌘I and the View menu dock DevTools in the card beside the page, through a resize and per tab, where ⌘A, ⌘C and ⌘V are the console's, F12 closes them and the page gets the keyboard back, and View Source opens a tab under the page. Open Task Manager shows Chrome's, which ⌘W closes, keeping the tab. Record a Trace records until the toast's Stop, and saves Chromium's trace where the save panel picks. Undocked DevTools open in a window of their own, where ⌘C copies and ⌘V pastes, and ⌥⌘I from the page brings them to the front. Windows: $out/find.png, $out/find-tooltip.png, $out/find-not-found.png, $out/find-fullscreen.png, $out/zoom.png, $out/devtools.png, $out/task-manager.png, $out/trace.png, $out/devtools-undocked.png"

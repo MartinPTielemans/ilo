@@ -590,9 +590,16 @@ bool BrowserWindowStandIn::HandleKeyboardEvent(const input::NativeWebKeyboardEve
   // A tab's dialog, such as print preview off the Mac, hands on the keys its page doesn't use, and
   // its own keys come first, as in Chrome, where they're the window's: escape closes it rather
   // than stopping the tab's page.
-  if (focus_manager &&
-      focus_manager->IsAcceleratorRegistered(ui::GetAcceleratorFromNativeWebKeyboardEvent(event)) &&
-      unhandled_keyboard_event_handler_.HandleKeyboardEvent(event, focus_manager)) {
+  views::FocusManager* dialog_keys = focus_manager;
+#if BUILDFLAG(IS_WIN)
+  // There the dialog is a window of its own, with its own keys.
+  if (views::Widget* dialog = widget ? platform::PageDialog(widget) : nullptr) {
+    dialog_keys = dialog->GetFocusManager();
+  }
+#endif
+  if (dialog_keys &&
+      dialog_keys->IsAcceleratorRegistered(ui::GetAcceleratorFromNativeWebKeyboardEvent(event)) &&
+      unhandled_keyboard_event_handler_.HandleKeyboardEvent(event, dialog_keys)) {
     return true;
   }
   if (AskApp(Host().tab_key_unhandled, browser_, event)) {

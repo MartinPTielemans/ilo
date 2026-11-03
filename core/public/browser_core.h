@@ -177,6 +177,9 @@ typedef struct bc_archived_tab {
   const char* title;
   // When it closed, in milliseconds since the Unix epoch.
   double archived;
+  // Whether it closed in a Little ilo window, by its window closing or auto-archive, as the
+  // Library's filter picks them out (Arc's Little Arc filter).
+  bool little;
 } bc_archived_tab;
 
 // One of an extension's keyboard commands that has a key, as Chrome's Keyboard Shortcuts page
@@ -541,8 +544,98 @@ typedef struct bc_page_menu_item {
 #define BC_LINK_DRAG_LEFT 1
 #define BC_LINK_DRAG_DROP 2
 
+// Where the browser's account is, in sync_changed. The account is one ilo server's, the browser's
+// and not a profile's: it syncs the Spaces, and the bookmarks, passwords and open tabs of the
+// profile the core started with. Other profiles keep theirs on the device.
+// Signed out: bc_sync_sign_in starts.
+#define BC_SYNC_SIGNED_OUT 0
+// The sign-in window is open, or the core is getting the account's tokens with what it returned.
+#define BC_SYNC_SIGNING_IN 1
+// Signed in to an account whose data no device has a secret for yet, so this is its first device:
+// bc_sync_recovery_words makes the secret and turns sync on.
+#define BC_SYNC_FIRST_DEVICE 2
+// Signed in to an account another device holds the secret of, which this one hasn't got: it gets
+// it with bc_sync_request_pairing or bc_sync_enter_recovery_words, and can't read what's synced
+// until then.
+#define BC_SYNC_NEEDS_SECRET 3
+// It asked the account's other devices for the secret (bc_sync_request_pairing), and waits for one
+// to add it.
+#define BC_SYNC_PAIRING 4
+// Syncing.
+#define BC_SYNC_ON 5
+
+// Why the account's last step didn't go as asked, in sync_changed, for the app to say. It stays
+// until the next step the user takes.
+#define BC_SYNC_PROBLEM_NONE 0
+// The recovery words are words of the list, with their checksum, but not this account's.
+#define BC_SYNC_PROBLEM_WRONG_WORDS 1
+// The other device answered Not me, or cancelled.
+#define BC_SYNC_PROBLEM_DECLINED 2
+// No device added this one in the pairing's 5 minutes, or the one that answered went away.
+#define BC_SYNC_PROBLEM_EXPIRED 3
+// This device was removed from the account on another (bc_sync_remove_device), or the server
+// signed it out, so it's signed out now.
+#define BC_SYNC_PROBLEM_REMOVED 4
+// The server couldn't be reached, or refused, as when the account asked for too many pairings in
+// an hour. The step can be tried again.
+#define BC_SYNC_PROBLEM_SERVER 5
+
+// The browser's account, as Settings shows it. Strings are UTF-8.
+typedef struct bc_sync_state {
+  // A BC_SYNC_ value.
+  int status;
+  // A BC_SYNC_PROBLEM_ value.
+  int problem;
+  // The server the browser signs in to, such as "https://sync.example.org": the build's own,
+  // from its branding, until bc_sync_set_server gives another.
+  const char* server;
+  // The server is the build's own, which the app names by its own name.
+  bool default_server;
+  // The account's email while signed in, else "".
+  const char* email;
+  // With BC_SYNC_PAIRING, the match code once a device has answered: 6 digits, which that device
+  // shows too. Else "".
+  const char* code;
+} bc_sync_state;
+
+// Another device asks this one, through the server, to add it to the account, in
+// sync_pairing_asked.
+typedef struct bc_sync_pairing {
+  // Answer it with this, in bc_sync_answer_pairing.
+  const char* id;
+  // The device's name and system, as it gives them, such as "Pixel 9" and "Android". Shown, never
+  // trusted: the code is what the user checks.
+  const char* name;
+  const char* os;
+  // The match code, 6 digits, which the asking device shows too.
+  const char* code;
+  // When it asked, and when it signed in to the account, by the server's word rather than its
+  // own: milliseconds since the Unix epoch, 0 from a server that doesn't say.
+  double asked_at;
+  double signed_in_at;
+} bc_sync_pairing;
+
+// One of the account's devices, as Settings lists them.
+typedef struct bc_sync_device {
+  // For bc_sync_remove_device.
+  const char* id;
+  // As the device gave them when it signed in, such as "MacBook Air" and "macOS".
+  const char* name;
+  const char* os;
+  // It's this one.
+  bool current;
+} bc_sync_device;
+
 // What the app gives the core when it starts Chromium. Any callback may be null, and a string it's
 // passed lasts only for the call.
+// A backup of a profile's sidebar: its Spaces, with their folders and tabs, and its favorites.
+typedef struct bc_sidebar_backup {
+  // When it was taken, in milliseconds since 1970.
+  double time;
+  // When, as the user's locale writes a weekday, date and time, UTF-8.
+  const char* label;
+} bc_sidebar_backup;
+
 typedef struct bc_host {
   // Passed back to every callback.
   void* context;
@@ -703,6 +796,16 @@ typedef struct bc_host {
                            const char* url,
                            bc_id profile,
                            bool private_window);
+  // The user ⌥⌘-clicked a link to |url| in a page of |window|, a regular window or a Little ilo
+  // window: open it in a new Little ilo window for |profile| (bc_window_open_little), as Arc's
+  // Little Arc does. A private window's link opens beside its page instead, as ⌥-click's does. The
+  // user's alone: agents' clicks hold no keys.
+  void (*window_open_little)(void* context, bc_id window, const char* url, bc_id profile);
+  // bc_window_reopen_closed_tab in |window| found the tab closed last was a Little ilo window's:
+  // open a new Little ilo window for |profile| (bc_window_open_little) and reopen |closed| there
+  // with bc_window_reopen_tab, as Arc's ⇧⌘T reopens one in Little Arc with its history. The
+  // user's alone: agents get no Little ilo window.
+  void (*window_reopen_little)(void* context, bc_id window, bc_id closed, bc_id profile);
   // The page of |tab|, the tab |window| has selected, went to another window, which shows it live,
   // and |window| shows no page; or |tab| is 0, and |window| shows a page again, or has selected
   // another tab. Once for each change. window_selected doesn't say it: the tab stays selected.
@@ -888,6 +991,45 @@ typedef struct bc_host {
   // On Linux under X11: ⌥ was pressed and let go alone, with no other key or click while it was
   // down, as the page in |window| had the keyboard. GPUI hears only the UI's keys there.
   void (*window_option_tapped)(void* context, bc_id window);
+  // bc_profile_add_addresses added |added| addresses to |profile|'s, once for each call that
+  // returned true, in order.
+  void (*addresses_added)(void* context, bc_id profile, size_t added);
+  // The browser's account changed, or was first read, once the browser has started. The user's
+  // alone: agents hear none.
+  void (*sync_changed)(void* context, const bc_sync_state* state);
+  // Another device asks to be added to the account: ask the user over the front window whether
+  // to, showing its code, and answer with bc_sync_answer_pairing. It comes only once the core has
+  // the code, after it answered the request with this device's key, which it does while one of the
+  // browser's windows is active, or once one becomes so, so the device the user is at takes it. It
+  // comes again with |pairing| null when the request ends unanswered: it expired, the asking device
+  // cancelled, or another device took it. One at a time. The user's alone: agents hear none.
+  void (*sync_pairing_asked)(void* context, const bc_sync_pairing* pairing);
+  // The account's devices, after bc_sync_read_devices, and again after bc_sync_remove_device:
+  // |count| of them, this one first. The user's alone: agents hear none.
+  void (*sync_devices_changed)(void* context, const bc_sync_device* devices, size_t count);
+  // The backups of the profile's sidebar, newest first, once the core has listed them after
+  // launch, and after each backup and restore (bc_window_restore_sidebar). Only the user's: an
+  // agent's Space isn't backed up, and agents can't restore one.
+  void (*sidebar_backups_changed)(void* context,
+                                  bc_id profile,
+                                  const bc_sidebar_backup* backups,
+                                  size_t count);
+  // The user asked for |url|, a web link in the tab's page, in a link preview: they ⇧-clicked it,
+  // which Chrome opens in a new window, or chose BC_PAGE_MENU_PREVIEW_LINK in its page menu. |x|,
+  // |y| is where, in points from the top-left of the page's view. Return true to open it in one
+  // with bc_tab_open_preview after this call returns, whatever tab it's in; false leaves a ⇧-click
+  // to go as it would have. The user's alone, as a preview takes the window's keyboard.
+  bool (*tab_link_to_preview)(void* context, bc_id tab, const char* url, double x, double y);
+  // The user launched the browser again while it ran, with no link it opens: from the Start menu,
+  // the taskbar or a shortcut on Windows, or the desktop's launcher on Linux. Bring the regular
+  // window in front forward, restoring it if it's minimized (host_activate). The Mac's Dock and a
+  // second `open` reopen the app instead, which Chrome answers by bringing its windows forward.
+  void (*launched_again)(void* context);
+  // A quit goes ahead: every window has closed, every page let it, and nothing can stop it now.
+  // |restarting| if it's bc_restart's. A quit that was stopped, as by a page that asked to stay,
+  // takes its restart with it, so a later quit isn't one. Return true to start the browser again
+  // yourself, as an update that installs first does, and the core doesn't.
+  bool (*quit_going_ahead)(void* context, bool restarting);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -1306,6 +1448,27 @@ typedef struct bc_history_page {
 // nothing. Then history_added, with how many it added. The core copies what it needs.
 BC_EXPORT bool bc_profile_add_history(bc_id profile, const bc_history_page* pages, size_t count);
 
+// A field of another browser's saved address, for bc_profile_add_addresses, as a Chromium-based
+// browser's Web Data keeps it: Chromium's FieldType and VerificationStatus numbers, and the value,
+// UTF-8.
+typedef struct bc_address_field {
+  int32_t type;
+  const char* value;
+  int32_t status;
+} bc_address_field;
+
+typedef struct bc_address {
+  const bc_address_field* fields;
+  size_t count;
+} bc_address;
+
+// Adds |count| of another browser's saved addresses to the loaded profile's, once they've loaded,
+// and returns whether it will: not to a private profile, one that hasn't loaded or one whose user
+// turned addresses off. A field of a type or status Chromium doesn't keep is left out, and an
+// address the profile has, or one with nothing in it, is skipped, so importing the same addresses
+// again adds nothing. Then addresses_added, with how many it added. The core copies what it needs.
+BC_EXPORT bool bc_profile_add_addresses(bc_id profile, const bc_address* addresses, size_t count);
+
 // Copies up to |capacity| of the Spaces into |spaces|, in order, and returns how many there are.
 BC_EXPORT size_t bc_spaces(bc_id* spaces, size_t capacity);
 
@@ -1568,16 +1731,31 @@ BC_EXPORT size_t bc_window_undo_clear(bc_id window, bc_id clear);
 // Space, or 0 if it can't: it is back, or 25 others were deleted since.
 BC_EXPORT bc_id bc_window_undo_delete_space(bc_id window, bc_id space);
 
+// Brings back the sidebar of the profile of the Space the window shows from its backup taken at
+// |time| (sidebar_backups_changed), and returns whether it will: not in a private window or an
+// agent's Space. The sidebar as it is becomes a backup first, so another call can undo it. Its
+// Spaces take the place of the profile's, as bc_space_delete deletes them, and the window shows
+// the one it showed, if the backup has it, else the backup's first. Under BC_FAVORITES_PROFILE
+// the profile's favorites are the backup's too. Agents' Spaces and other profiles' stay. Then
+// spaces_changed and sidebar_backups_changed, or only the latter if the backup can't be read.
+// The user's alone: agents work in their own Spaces, and get no tool for this.
+BC_EXPORT bool bc_window_restore_sidebar(bc_id window, double time);
+
 // Reopens the Today tab closed last, in any window, with its history: at its place in its Space's
 // Today tabs, else at the top of the Space the window shows. One closed from a split view goes back
 // to its place in it, if a tab of the split is open and it has room. The window shows it, and its
 // Space, and it leaves the archive.
-// Tabs that close with their window or as the browser quits come back at the next launch instead.
+// Tabs that close with their window or as the browser quits come back at the next launch instead,
+// but a Little ilo window's, which closes into the archive with its window. When the tab closed
+// last was a Little ilo window's, it comes back in a new one: this returns 0, and
+// window_reopen_little follows. A private window reopens none.
 // Returns the tab, or 0 if none is closed.
 BC_EXPORT bc_id bc_window_reopen_closed_tab(bc_id window);
 
 // As bc_window_reopen_closed_tab for the Today tab that had the id |closed| when it closed, rather
-// than the one closed last, so a tab closed before another can come back first. It doesn't show
+// than the one closed last, so a tab closed before another can come back first. A Little ilo
+// window's tab comes back only in a Little ilo window with no tab yet (window_reopen_little), and
+// the window shows it; a regular window's only in a regular window. It doesn't show
 // the tab: the one shown stays, so several can come back behind it, and the caller shows the one
 // that was shown when it closed. Returns the new tab's id, which is not |closed|, or 0 if that tab
 // isn't among those that reopen: it came back already, or 25 others closed since.
@@ -1651,6 +1829,14 @@ BC_EXPORT size_t bc_archive_undo_remove(bc_id removal);
 BC_EXPORT double bc_archive_after(void);
 BC_EXPORT void bc_set_archive_after(double seconds);
 
+// How long, in seconds, a Little ilo window that isn't the active window stays open before it
+// closes into the archive, with its tab, as Arc's Little Arc windows do: 6 hours, else the time
+// the user chose in Settings › General. Counted on the wall clock from when it stopped being the
+// active window, through sleep. One whose page plays sound waits another interval. The core keeps
+// it with the Spaces. The user's alone: agents get no Little ilo window.
+BC_EXPORT double bc_little_archive_after(void);
+BC_EXPORT void bc_set_little_archive_after(double seconds);
+
 // Whether to show the note that auto-archive took Today tabs: from the first time it takes some
 // until the user dismisses it with bc_dismiss_archive_note, after which it never shows again, as
 // the core keeps that with the Spaces. Each change comes with archive_note_changed.
@@ -1677,8 +1863,9 @@ BC_EXPORT void bc_set_warn_before_quitting(bool warn);
 // and bc_window_restore.
 BC_EXPORT bool bc_restore_windows(void);
 BC_EXPORT void bc_set_restore_windows(bool restore);
-// Whether a link to another site clicked in a pinned tab or a favorite opens in a link preview
-// (bc_tab_open_preview), as the user chose. The core keeps it with the Spaces.
+// Whether the user has link previews (bc_tab_open_preview) on: a link to another site clicked in a
+// pinned tab or a favorite opens in one, and a link the user asks for in one opens there
+// (tab_link_to_preview). The core keeps it with the Spaces.
 BC_EXPORT bool bc_link_previews(void);
 BC_EXPORT void bc_set_link_previews(bool previews);
 // Whether ⌥ pressed and let go alone brings the hidden sidebar out over the page, as the user
@@ -1805,8 +1992,9 @@ BC_EXPORT size_t bc_search_url(bc_id window,
                                size_t capacity);
 
 // Link previews: a page over the window, from a link the user clicked in a pinned tab or a
-// favorite, which the user closes or keeps as a tab. The user's: agents get none, as a preview takes
-// the window's keyboard. An agent's links open in its own Space, as the page asks.
+// favorite, or asked for in one, which the user closes or keeps as a tab. The user's: agents get
+// none, as a preview takes the window's keyboard. An agent's links open in its own Space, as the
+// page asks.
 
 // Opens |url| in a tab in no Space, in |opener|'s window and profile, loading it at once as the link
 // in |opener|'s page would have, for the app to show with bc_tab_show_in. bc_tab_close closes it,
@@ -2343,6 +2531,24 @@ BC_EXPORT void bc_window_show_space_empty(bc_id window, bc_id space);
 // 0 if |profile| isn't loaded or Chromium is quitting. The user's alone: agents get none.
 BC_EXPORT bc_id bc_window_open_private(bc_rect bounds, void* ui_view, bc_id profile);
 
+// Opens a Little ilo window at |bounds|, as bc_window_open does: Arc's Little Arc, a small window
+// for one page, from ⌥⌘N or a link ⌥⌘-clicked (window_open_little). It shows a Space of its own in
+// |profile|, which no other window shows, holds Today tabs alone and is never saved or listed by
+// bc_spaces, reported by window_space_shown, and no page until one opens. bc_tab_move_to_space
+// moves its tab to one of the user's Spaces, and bc_window_select then shows it live in the window
+// that selects it; the Little ilo window shows no page after. Closing it closes its tabs, which no
+// archive or ⇧⌘T brings back. Returns 0 if |profile| isn't loaded or Chromium is quitting. The
+// user's alone, as a private window is: bc_windows leaves it out, and agents get none.
+BC_EXPORT bc_id bc_window_open_little(bc_rect bounds, void* ui_view, bc_id profile);
+
+// Moves |tab|, a Today tab of one of the user's Spaces, into the Little ilo window |window|'s own
+// Space while that holds no tab, and shows its page there live, with its history, as ⌥⌘-click on
+// a sidebar tab does (Arc). A window that showed it shows what its Space would once the tab
+// closed. Not a pinned tab or a favorite, one in a split view, an agent's, a private window's or
+// another profile's: returns 0 for those, else |tab|. The user's alone: agents get none, as they
+// get no Little ilo window.
+BC_EXPORT bc_id bc_window_take_tab(bc_id window, bc_id tab);
+
 // Extensions' side panels. Each profile's tabs have their own, as each Chrome window does: one for
 // every tab, or one for a tab that its extension gave it, which shows only while that tab does. An
 // extension opens its panel with sidePanel.open() or from its action, and the user does with
@@ -2387,6 +2593,77 @@ BC_EXPORT bool bc_window_is_full_screen(bc_id window);
 // full-screen key does on Linux, for the test driver, and on Windows, which has none, for Escape
 // too. On Linux bc_window_toggle_maximized takes it out as Escape asks.
 BC_EXPORT void bc_window_toggle_full_screen(bc_id window);
+// The browser's account, which keeps the Spaces and the first profile's bookmarks, passwords and
+// open tabs the same on each of its devices, through an ilo server (ilo-server's docs/protocol.md).
+// The server stores what's synced encrypted with the account's secret, which only devices hold: the
+// first device makes it and shows it once as 24 recovery words, and a new device gets it from one
+// that has it, by pairing, or from the words. The core signs in, keeps the tokens and the secret,
+// and syncs. The app sees neither, only the words when the user asks for them. Each step comes back
+// in sync_changed. All of it is the user's alone: agents get no account or sync calls, as the
+// account holds the user's passwords and its secret reads them, and the sign-in window is no tab an
+// agent can act in.
+
+// Signs in to |server| from now on, such as "https://sync.example.org", or to the build's own if it's
+// empty, signing out first if signed in, and returns whether it will: only to https, or to http on
+// a loopback address, for a server on the machine. Then sync_changed.
+BC_EXPORT bool bc_sync_set_server(const char* server);
+
+// Opens the server's sign-in page in a small window of the core's over the front window: the page
+// alone, the server's host in its title, in a session of its own that keeps nothing in the user's
+// profiles. Once the user has signed in, the core catches where the page sends it, closes the
+// window and gets the account's tokens; the user closing the window cancels. Only while signed out.
+// Then sync_changed, BC_SYNC_SIGNING_IN, then BC_SYNC_FIRST_DEVICE or BC_SYNC_NEEDS_SECRET, or
+// BC_SYNC_SIGNED_OUT again, with BC_SYNC_PROBLEM_SERVER if it failed.
+BC_EXPORT void bc_sync_sign_in(void);
+
+// Stops what the account waits for: the sign-in window closes, back to BC_SYNC_SIGNED_OUT, or the
+// pairing request is taken back from the other devices, back to BC_SYNC_NEEDS_SECRET. Then
+// sync_changed.
+BC_EXPORT void bc_sync_cancel(void);
+
+// Signs this device out: the server forgets it, and the core its tokens and the secret. What synced
+// stays on the device, and nothing more syncs. Then sync_changed.
+BC_EXPORT void bc_sync_sign_out(void);
+
+// Copies the account's recovery words into |words| as bc_space_name does: its secret as 24 words of
+// BIP-39's English list, lowercase, one space between them (protocol.md, The account secret). With
+// BC_SYNC_FIRST_DEVICE it makes the secret first and turns sync on, then sync_changed with
+// BC_SYNC_ON; with BC_SYNC_ON it copies the secret's. Else it copies nothing and returns 0.
+BC_EXPORT size_t bc_sync_recovery_words(char* words, size_t capacity);
+
+// Gets the secret from recovery words the user typed, with BC_SYNC_NEEDS_SECRET, or BC_SYNC_PAIRING,
+// whose request it takes back. Returns false, doing nothing, unless |words| are 24 words of the list
+// with their checksum, in any case and spacing. Then sync_changed, with BC_SYNC_ON once they open
+// the account's data, or BC_SYNC_NEEDS_SECRET with BC_SYNC_PROBLEM_WRONG_WORDS.
+BC_EXPORT bool bc_sync_enter_recovery_words(const char* words);
+
+// Starts the account over for a user with neither another device nor the recovery words, with
+// BC_SYNC_NEEDS_SECRET, or BC_SYNC_PAIRING, whose request it takes back: it deletes everything the
+// account keeps on the server, its synced data and the devices it knows (Chromium's
+// ClearServerData), and makes this the account's first device again. What this device has stays,
+// and syncs up again under the new secret. Then sync_changed, with BC_SYNC_FIRST_DEVICE, whose
+// bc_sync_recovery_words makes the new secret and its words, or with the status it had and
+// BC_SYNC_PROBLEM_SERVER if the server couldn't do it. Does nothing in any other status.
+BC_EXPORT void bc_sync_start_over(void);
+
+// Asks the account's other devices, through the server, to add this one, with BC_SYNC_NEEDS_SECRET:
+// it sends a commitment to a key made for it, with this device's name and system (protocol.md,
+// Pairing). Then sync_changed with BC_SYNC_PAIRING, again with its code once a device answers, then
+// BC_SYNC_ON once that device adds it, or BC_SYNC_NEEDS_SECRET with BC_SYNC_PROBLEM_DECLINED,
+// BC_SYNC_PROBLEM_EXPIRED or BC_SYNC_PROBLEM_SERVER.
+BC_EXPORT void bc_sync_request_pairing(void);
+
+// Answers the request sync_pairing_asked asked about last, |id|: |add| seals the secret to the
+// asking device, and else the core declines it, which that device says.
+BC_EXPORT void bc_sync_answer_pairing(const char* id, bool add);
+
+// Asks the server for the account's devices, while signed in. Then sync_devices_changed.
+BC_EXPORT void bc_sync_read_devices(void);
+
+// Signs the device |id| out of the account, one other than this, which bc_sync_sign_out signs out.
+// It keeps what synced, and syncs again only once it signs in and gets the secret. Then
+// sync_devices_changed.
+BC_EXPORT void bc_sync_remove_device(const char* id);
 
 // On Linux, the title of the window of Chromium's own with the keys in |window|
 // (bc_window_keyboard_in_child), such as a tab's dialog, copied into |title| as bc_space_name does,
@@ -2398,6 +2675,20 @@ BC_EXPORT size_t bc_window_child_title(bc_id window, char* title, size_t capacit
 // own read of the clipboard waits, as the owner it asks can be Chromium, which answers on the UI's
 // thread.
 BC_EXPORT void bc_answer_clipboard_requests(void);
+
+// Moves the folder, with the folders and pinned tabs in it, to the bottom of |space|'s pinned tabs,
+// as bc_tab_move_to_space moves a pinned tab: the folders keep their names, icons and whether
+// they're open, and the tabs their order, pinned URLs, split views and pages. A window showing one
+// of its tabs shows |space| with it. Into another profile's Space each tab goes as a new one, as
+// bc_tab_move_to_space says, and the old ones close. Never into an agent's Space or a window's
+// own. Then space_changed for both Spaces, and window_space_shown and window_selected for a window
+// that went with it.
+BC_EXPORT void bc_folder_move_to_space(bc_id folder, bc_id space);
+
+// The command of Open Link in Peek, which the core adds to a page menu after Open Link in New Tab
+// for a web link (tab_page_menu): the app leaves it out while it opens no link preview there, and
+// chosen, the core asks tab_link_to_preview. Negative, as Chrome's commands are all positive.
+#define BC_PAGE_MENU_PREVIEW_LINK (-1)
 
 #ifdef __cplusplus
 }

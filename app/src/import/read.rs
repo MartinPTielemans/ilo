@@ -3,13 +3,13 @@
 //! one the browser keeps open.
 //!
 //! A browser without Spaces gets one here for each of its profiles, named after the browser, whose
-//! pinned tabs and folders are its bookmarks.
+//! pinned tabs and folders are its bookmarks and whose Today tabs are the tabs it had open.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::extensions::Extension;
-use super::found::{Found, FromProfile, Node, Page, Space};
+use super::found::{Address, Found, FromProfile, Node, Page, Space, Tab};
 use super::sources::{Family, Profile, Source};
 use super::{chromium, firefox, safari};
 
@@ -28,9 +28,13 @@ pub enum Kind {
     /// Arc's favorites.
     Favorites,
     Bookmarks,
+    /// The tabs a Chromium-based browser had open in its last session.
+    OpenTabs,
     /// Safari's Reading List, as a folder beside its bookmarks.
     ReadingList,
     History,
+    /// A Chromium-based browser's saved addresses, never its cards.
+    Addresses,
     /// A Chromium browser's Web Store extensions, listed to add from the store, never installed.
     Extensions,
 }
@@ -41,6 +45,8 @@ impl Kind {
             Kind::Spaces => "Spaces, with their pinned tabs, folders and link rules",
             Kind::Favorites => "Favorites",
             Kind::Bookmarks => "Bookmarks, as a Space's pinned tabs",
+            Kind::OpenTabs => "Open tabs, as that Space's Today tabs",
+            Kind::Addresses => "Addresses",
             Kind::ReadingList => "Reading List, as a folder in that Space",
             Kind::History => "History",
             Kind::Extensions => "Extensions, to add from the Chrome Web Store",
@@ -91,12 +97,18 @@ impl From<String> for ReadError {
 /// and the extensions of Chromium's family, which Firefox's and Safari's aren't.
 pub fn kinds(source: &Source) -> &'static [Kind] {
     if source.arc_sidebar().is_some() {
-        &[Kind::Spaces, Kind::Favorites, Kind::History, Kind::Extensions]
+        &[Kind::Spaces, Kind::Favorites, Kind::History, Kind::Addresses, Kind::Extensions]
     } else {
         match source.browser.family {
             Family::Safari => &[Kind::Bookmarks, Kind::ReadingList, Kind::History],
             Family::Firefox => &[Kind::Bookmarks, Kind::History],
-            Family::Chromium => &[Kind::Bookmarks, Kind::History, Kind::Extensions],
+            Family::Chromium => &[
+                Kind::Bookmarks,
+                Kind::OpenTabs,
+                Kind::History,
+                Kind::Addresses,
+                Kind::Extensions,
+            ],
         }
     }
 }
@@ -147,7 +159,7 @@ pub fn read(source: &Source, picked: &[Kind], now: SystemTime) -> Result<Found, 
             Family::Safari => safari::read(&profile.path, picked, since)?,
         };
         let from = from(profile);
-        if !read.pinned.is_empty() {
+        if !read.pinned.is_empty() || !read.today.is_empty() {
             found.spaces.push(Space {
                 // One Space for the browser, or one for each of its profiles, by its name.
                 name: if source.profiles.len() == 1 {
@@ -159,10 +171,14 @@ pub fn read(source: &Source, picked: &[Kind], now: SystemTime) -> Result<Found, 
                 icon: String::new(),
                 theme: None,
                 pinned: read.pinned,
+                today: read.today,
             });
         }
         if !read.pages.is_empty() {
-            found.history.push((from, read.pages));
+            found.history.push((from.clone(), read.pages));
+        }
+        if !read.addresses.is_empty() {
+            found.addresses.push((from, read.addresses));
         }
         for extension in read.extensions {
             match found.extensions.iter_mut().find(|each| each.id == extension.id) {
@@ -224,7 +240,9 @@ pub fn leave_out(found: &mut Found, left_out: &[String], family: Family) {
 #[derive(Default)]
 pub struct Read {
     pub pinned: Vec<Node>,
+    pub today: Vec<Tab>,
     pub pages: Vec<Page>,
+    pub addresses: Vec<Address>,
     pub extensions: Vec<Extension>,
 }
 

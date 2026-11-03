@@ -176,6 +176,21 @@ fn escape_is_not_now(cx: &mut TestAppContext) {
     assert_eq!(prompt.calls(), ["NotNow 1 check@example.test", "hide"]);
 }
 
+/// Save and Not Now name their keys after their words, and each key named answers as its button
+/// does, so what the offer teaches works. Never has no key to name.
+#[gpui::test]
+fn the_key_each_button_names_answers_as_the_button_does(cx: &mut TestAppContext) {
+    let mut prompt = Prompt::new(cx);
+    assert_eq!(key(Answer::Never), None);
+    for answer in [Answer::Accept, Answer::NotNow] {
+        let named = key(answer).expect("Save and Not Now name their keys");
+        prompt.offered(1, Some(offer(Kind::Save, &["check@example.test"])));
+        prompt.calls();
+        prompt.keys(named);
+        assert_eq!(prompt.calls(), [format!("{answer:?} 1 check@example.test"), "hide".into()]);
+    }
+}
+
 #[gpui::test]
 fn never_is_for_a_save_only(cx: &mut TestAppContext) {
     let mut prompt = Prompt::new(cx);
@@ -218,7 +233,7 @@ fn the_picker_puts_the_username_chosen_in_the_field(cx: &mut TestAppContext) {
     prompt.click(WIDTH - INSET - ROW / 2., row_middle);
     let (titles, chosen) = shown.take().expect("the chevron showed no menu");
     assert_eq!(titles, ["check@example.test", "check"]);
-    prompt.cx.update(|window, cx| chosen(1, window, cx));
+    prompt.cx.update(|window, cx| chosen(crate::menu::Closed::Chose(1), window, cx));
     prompt.keys("enter");
     assert_eq!(prompt.calls(), ["Accept 1 check", "hide"]);
 }

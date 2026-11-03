@@ -242,11 +242,14 @@ send menu "Pin to URL Field › Check Popup"
 expect "^browser: unpin extension $popup\$" "Pin to URL Field › Check Popup didn't unpin it"
 expect '^browser: extension actions $' "unpinning the last action left it in the URL field"
 # Their keys, as Chrome gave them: those the extensions suggested, as no one set any. Off the Mac
-# Alt is ⌃ in the Mac's names (docs/ux-spec.md › Keyboard).
+# Alt is ⌃ in the Mac's names (docs/ux-spec.md › Keyboard), so Alt+Shift+O is pressed as ⌃⇧O:
+# Windows' driver presses ⌥ as Ctrl+Alt, which no extension's Alt key is.
 if [ "$(uname)" = Darwin ]; then
   popup_key="p alt shift" popup_named=alt-shift-p popup_said=⌥⇧P third_named=cmd-j
+  panel_key="k alt shift"
 else
-  popup_key="o alt shift" popup_named=ctrl-shift-o popup_said=Alt+Shift+O third_named=ctrl-shift-j
+  popup_key="o ctrl shift" popup_named=ctrl-shift-o popup_said=Alt+Shift+O third_named=ctrl-shift-j
+  panel_key="k ctrl shift"
 fi
 grep -q "^browser: extension keys $clicked hello=shift-cmd-y suggested\$" "$log" &&
   grep -q "^browser: extension keys $popup _execute_action=$popup_named suggested\$" "$log" &&
@@ -271,7 +274,11 @@ expect "^browser: extension command $clicked hello ran via ui\$" \
   "⇧⌘Y with the UI focused didn't run Check Clicked's command"
 expect "^browser: loaded [0-9]* chrome-extension://$clicked/command.html\$" \
   "Check Clicked didn't hear its command from the UI"
-# An action's key runs it as a click on its button does, its popup with the keyboard.
+# An action's key runs it as a click on its button does, its popup with the keyboard. The command
+# opened its page in a new tab, which can take the keyboard as it commits, so the UI takes it back,
+# from the sidebar under its last row: that tab's row moved the others down onto $sidebar_point.
+send click $(row "$(today | wc -w)")
+in_browser AccessKitSubclassOfGPUIView "after a click on the sidebar"
 send key $popup_key
 expect "^browser: extension command $popup _execute_action ran via ui\$" \
   "$popup_said with the UI focused didn't run Check Popup's action"
@@ -441,9 +448,9 @@ EOF
 # The header's ✕ is its last button, 30 square, 3 in from the card's corner.
 send click $((px + pw - 18)) $((py + 18))
 expect '^browser: side panel none$' "the header's ✕ didn't close the side panel"
-# ⌥⇧K opens the panel for this tab alone, which goes on a switch to a tab without one and comes
-# back with its tab.
-send key k alt shift
+# ⌥⇧K, Alt+Shift+K off the Mac, opens the panel for this tab alone, which goes on a switch to a tab
+# without one and comes back with its tab.
+send key $panel_key
 expect "^browser: extension command $panel tab ran via " "⌥⇧K didn't run Check Panel's command"
 expect "^browser: side panel $panel the tab panel\$" "⌥⇧K didn't open the tab's side panel"
 other=$(today | tr ' ' '\n' | grep -v "^$first\$" | head -1)
@@ -512,10 +519,27 @@ await_load
 await "^browser: extensions menu [a-p]* $ublock\$" ||
   fail "the Extensions menu didn't list Check Native"
 native=$(grep -m1 "^browser: extensions menu [a-p]* $ublock\$" "$log" | cut -d' ' -f4)
-# The host allows only the extension, whose id comes from its folder.
+# The host allows only the extension, whose id comes from its folder. Windows runs a host that isn't
+# an .exe through cmd, so there it's a .bat that runs the script with Git Bash.
+host="$home/host.sh"
+if windows; then
+  printf '@"%s" "%s"\r\n' "$(cygpath -w "$(command -v bash)")" "$(app_path "$home/host.sh")" \
+    > "$home/host.bat"
+  host=$(app_path "$home/host.bat")
+fi
 printf '{"name": "dev.browser.check", "description": "Check", "path": "%s", "type": "stdio",
- "allowed_origins": ["chrome-extension://%s/"]}\n' "$home/host.sh" "$native" \
+ "allowed_origins": ["chrome-extension://%s/"]}\n' "$host" "$native" \
   > "$host_dir/dev.browser.check.json"
+# Windows finds other browsers' hosts in the registry, not in folders (native_hosts_win.cc): the
+# user's key of Edge's names the manifest, until the run ends.
+if windows; then
+  edge_host='HKCU\Software\Microsoft\Edge\NativeMessagingHosts\dev.browser.check'
+  forget_host() { MSYS2_ARG_CONV_EXCL='*' reg delete "$edge_host" /f > /dev/null 2>&1 || true; }
+  trap 'cleanup; forget_host' EXIT
+  MSYS2_ARG_CONV_EXCL='*' reg add "$edge_host" /ve /t REG_SZ /f \
+    /d "$(cygpath -w "$host_dir/dev.browser.check.json")" > /dev/null ||
+    fail "couldn't register the host under Edge's key"
+fi
 # As Check Clicked's, the script's listener comes once it has run.
 heard='^browser: native host dev.browser.check from '
 for _ in $(seq 10); do
@@ -530,7 +554,9 @@ grep -q '^browser: native host lookup dev.browser.check$' "$log" ||
   fail "the browser never looked past its own folders for the host: $(grep -o \
     'chrome-extension://[^ ]*unanswered[^ ]*' "$log" | sort -u | tr '\n' ' ')"
 none_since "$heard" && fail "the browser didn't find the host in Chrome Beta's folder"
-grep -qxF "browser: native host dev.browser.check from $host_dir" "$log" ||
+found=$host_dir
+! windows || found=$(cygpath -w "$host_dir")
+grep -qxF "browser: native host dev.browser.check from $found" "$log" ||
   fail "the host came from another folder: $(grep "$heard" "$log")"
 await "^browser: loaded [0-9]* chrome-extension://$native/answered.html\$" ||
   fail "Check Native didn't hear the host's answer: $(grep -o 'chrome-extension://[^ ]*' "$log" |
@@ -539,7 +565,11 @@ await "^browser: loaded [0-9]* chrome-extension://$native/answered.html\$" ||
 quit_by_key
 await '^browser: command quit via ' || fail "⌘Q didn't quit"
 exited
-echo "ok: an extension reaches a native messaging host that only Chrome Beta's folder has, and hears its answer. Window: $out/native-host.png"
+if windows; then
+  forget_host
+  trap cleanup EXIT
+fi
+echo "ok: an extension reaches a native messaging host that only Chrome Beta's folder has, or on Windows only Edge's key, and hears its answer. Window: $out/native-host.png"
 
 # An extension's .crx from the served page, which Chrome installs from off the Web Store with
 # ungoogled-chromium's flag, asking first. It's added in a profile of the launch's own, which the
@@ -588,7 +618,7 @@ with open(crx, "wb") as f:
 print("".join(chr(ord("a") + int(c, 16)) for c in crx_id.hex()))
 ' "$crx/source" "$out/site/check.crx") || fail "couldn't make the check's .crx"
 printf '{"download": {"default_directory": "%s", "prompt_for_download": false}}' \
-  "$PWD/$out/downloads" > "$crx/profile/Default/Preferences"
+  "$(native_path "$PWD/$out/downloads" | sed 's/\\/\\\\/g')" > "$crx/profile/Default/Preferences"
 log="$out/install.log"
 step=0
 BROWSER_DRIVE=1 BROWSER_URL="$site" BROWSER_PROFILE_DIR="$crx/profile" \

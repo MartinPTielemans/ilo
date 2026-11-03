@@ -73,8 +73,9 @@ public static class Capture {
     // The largest window, as a process also has windows nobody sees.
     mains.Sort((a, b) => (Bounds(b).Width * Bounds(b).Height).CompareTo(
         Bounds(a).Width * Bounds(a).Height));
-    var area = screen ? Shown(mains[0]) : Bounds(mains[0]);
-    if (all) mains.ForEach(w => area = Rectangle.Union(area, screen ? Shown(w) : Bounds(w)));
+    // The window as it shows, without the clear borders it resizes by, in both ways of capturing.
+    var area = Shown(mains[0]);
+    if (all) mains.ForEach(w => area = Rectangle.Union(area, Shown(w)));
     if (screen) {
       using (var image = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb)) {
         using (var graphics = Graphics.FromImage(image))

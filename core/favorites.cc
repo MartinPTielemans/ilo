@@ -106,10 +106,10 @@ void Insert(State& state, bc_id tab, size_t index) {
   state.tabs.insert(at, tab);
 }
 
-// The window active last that isn't a private one, which makes the tabs.
+// The window active last without a Space of its own, which makes the tabs.
 Window* AnyWindow() {
   for (Window* window : Window::All()) {
-    if (!window->off_the_record()) {
+    if (!window->own_space()) {
       return window;
     }
   }
@@ -516,8 +516,8 @@ std::vector<bc_id> Favorites::OwnedBy(bc_id space) {
 // static
 bool Favorites::ShownIn(bc_id tab, const Space& space) {
   auto it = Get().favs.find(tab);
-  // A private window's Space shows none, as its tabs are never saved.
-  if (it == Get().favs.end() || it->second.doomed || space.off_the_record()) {
+  // A window's own Space shows none, as its tabs are never saved.
+  if (it == Get().favs.end() || it->second.doomed || space.own()) {
     return false;
   }
   // Under Each Space an agent's Space shows none, as no favorite belongs to it.

@@ -99,14 +99,22 @@ pub(super) struct OverPage {
     /// along its split's. For each, whether the tab is over it, since when, and how far it had
     /// grown toward its size under the tab then.
     targets: Vec<(Edge, bool, Instant, f32)>,
+    /// The dragged tab, where its press showed it in place of the page it would join, which shows
+    /// under the targets instead: it shows again once they go without it let go on one.
+    back: Option<u64>,
 }
 
 impl OverPage {
-    fn new(with: u64, edges: Vec<Edge>, pointer: Point<Pixels>) -> Self {
+    fn new(with: u64, edges: Vec<Edge>, pointer: Point<Pixels>, back: Option<u64>) -> Self {
         log!("browser: drop targets for {with}");
         let since = Instant::now();
         let targets = edges.into_iter().map(|edge| (edge, false, since, 0.)).collect();
-        OverPage { with, since, pointer, targets }
+        OverPage { with, since, pointer, targets, back }
+    }
+
+    /// The dragged tab to show again once the targets go without it let go on one.
+    pub(super) fn back(&self) -> Option<u64> {
+        self.back
     }
 
     /// The target the tab is over.
@@ -115,9 +123,9 @@ impl OverPage {
     }
 
     /// The pointer is at `position` over `card`: a target it's in grows toward it, and the one it
-    /// was under shrinks once it leaves it.
-    fn point(&mut self, card: Bounds<Pixels>, position: Point<Pixels>) {
-        let (edge, now) = (self.edge(), Instant::now());
+    /// was under shrinks once it leaves it, from `now` (`motion::start`).
+    fn point(&mut self, card: Bounds<Pixels>, position: Point<Pixels>, now: Instant) {
+        let edge = self.edge();
         self.pointer = position;
         for target in &mut self.targets {
             let (at, under, since, from) = *target;
@@ -203,21 +211,29 @@ impl Shell {
             Place::List(..) | Place::Favorite(_) => None,
         };
         let Some(with) = with.filter(|_| position.x > card.left() + px(TARGET_TRIGGER)) else {
-            if let Some(drag) = self.drag.as_mut().filter(|drag| drag.over_page.is_some()) {
-                drag.over_page = None;
+            if let Some(over) = self.drag.as_mut().and_then(|drag| drag.over_page.take()) {
                 // check.sh reads this line.
                 log!("browser: drop targets gone");
+                self.show_back(over.back(), cx);
                 cx.notify();
             }
             return false;
         };
         let edges = self.edges_for(with);
+        // The page under the targets is the one the tab would join, so where the press showed the
+        // tab in its place, that page shows again while they're up (#1467).
+        let coming = drag.over_page.is_none();
+        let back = (coming && !self.panes(self.tab_asked()).contains(&with)).then_some(tab);
+        if back.is_some() {
+            self.select(with, cx);
+        }
         let Some(drag) = &mut self.drag else {
             return false;
         };
         drag.moving = true;
-        let over = drag.over_page.get_or_insert_with(|| OverPage::new(with, edges, position));
-        over.point(card, position);
+        let over =
+            drag.over_page.get_or_insert_with(|| OverPage::new(with, edges, position, back));
+        over.point(card, position, crate::motion::start(cx));
         cx.notify();
         true
     }
@@ -262,14 +278,14 @@ impl Shell {
         let card = self.page_frame(self.viewport).0;
         let with = self.selected;
         if self.link_over.as_ref().is_none_or(|link| link.over.with != with) {
-            let over = OverPage::new(with, self.edges_for(with), position);
+            let over = OverPage::new(with, self.edges_for(with), position, None);
             self.link_over = Some(LinkOver { url: url.to_string(), over });
         }
         let Some(link) = &mut self.link_over else {
             return false;
         };
         link.url = url.to_string();
-        link.over.point(card, position);
+        link.over.point(card, position, crate::motion::start(cx));
         cx.notify();
         link.over.edge().is_some()
     }
@@ -315,17 +331,27 @@ impl Shell {
         let Some(over) = &drag.over_page else {
             return false;
         };
-        let (tab, with, edge) = (drag.tab, over.with, over.edge());
+        let (tab, with, edge, back) = (drag.tab, over.with, over.edge(), over.back());
         let alone = self.panes(with).len() == 1;
         // The release that ends the drag isn't a click.
         self.dragged = true;
-        self.settle_drag();
-        if let Some(edge) = edge {
+        self.settle_drag(cx);
+        match edge {
             // A page alone has every target, and the top and bottom ones stack its new split.
-            self.join_split(tab, with, edge.first(), alone && edge.stacked(), cx);
+            Some(edge) => self.join_split(tab, with, edge.first(), alone && edge.stacked(), cx),
+            None => self.show_back(back, cx),
         }
         cx.notify();
         true
+    }
+
+    /// Shows the dragged tab `back` again, as its press did, once the targets that showed the page
+    /// it would join have gone without it let go on one.
+    pub(super) fn show_back(&mut self, back: Option<u64>, cx: &mut Context<Self>) {
+        if let Some(tab) = back {
+            self.select(tab, cx);
+            self.browser.focus_page(cx);
+        }
     }
 
     /// What the window over the page draws while a dragged tab is over it: the targets, clipped to
@@ -622,7 +648,8 @@ mod tests {
     use gpui::{Bounds, Entity, Pixels, Point, TestAppContext, point, px, size};
 
     use super::{Edge, grown_at, target_bounds};
-    use crate::shell::{Folders, Shell, Split, drag::detents::shell_with, recorder::Recorder};
+    use crate::shell::drag::detents::{X, drag_to, press, shell_with};
+    use crate::shell::{Folders, Shell, Split, recorder::Recorder};
 
     /// A Space whose Today holds 10, 11 and 12, with 10 shown alone in a window 1200 by 800.
     fn shown_alone(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>, Bounds<Pixels>) {
@@ -685,5 +712,87 @@ mod tests {
         let left = point(px(30.), middle.y);
         assert!(!shell.update(cx, |shell, cx| shell.link_over_page(10, left, url, cx)));
         assert!(shell.read_with(cx, |shell, _| shell.link_over.is_none()), "a full split has none");
+    }
+
+    /// A tab's row pressed, which shows it at once, and the drag it becomes: `reported` once the
+    /// core has said it's shown. Returns where the row was pressed, down its middle.
+    fn press_to_drag(
+        shell: &Entity<Shell>,
+        cx: &mut TestAppContext,
+        tab: u64,
+        reported: bool,
+    ) -> f32 {
+        shell.update(cx, |shell, cx| shell.show_row(tab, cx));
+        if reported {
+            shell.update(cx, |shell, cx| shell.set_selected(tab, cx));
+        }
+        let y = press(shell, cx, tab);
+        drag_to(shell, cx, X, y + 10.);
+        y
+    }
+
+    /// A tab its press showed in place of the page alone, dragged out over the page: the page it
+    /// would join shows under the targets, whether or not the core has shown the tab yet, and the
+    /// tab shows again once they go, back over the sidebar or let go off them. Let go on one, it
+    /// joins the page shown under them (#1467).
+    #[gpui::test]
+    fn the_page_under_the_targets_is_the_one_the_tab_joins(cx: &mut TestAppContext) {
+        let (shell, host, card) = shown_alone(cx);
+        let right = target_bounds(card, Edge::Right, grown_at(Edge::Right)).center();
+        let to = |cx: &mut TestAppContext, at: Point<Pixels>| {
+            drag_to(&shell, cx, f32::from(at.x), f32::from(at.y))
+        };
+        let y = press_to_drag(&shell, cx, 11, true);
+        host.take();
+        to(cx, right);
+        assert_eq!(host.take(), ["select 10"], "the page it joins didn't show under the targets");
+        shell.update(cx, |shell, cx| shell.set_selected(10, cx));
+        drag_to(&shell, cx, X, y);
+        assert_eq!(host.take(), ["select 11", "focus page"], "back over the sidebar");
+        shell.update(cx, |shell, cx| shell.set_selected(11, cx));
+        to(cx, right);
+        assert_eq!(host.take(), ["select 10"]);
+        shell.update(cx, |shell, cx| shell.set_selected(10, cx));
+        host.take_edits();
+        shell.update(cx, |shell, cx| shell.drop_row(cx));
+        assert_eq!(host.take_edits(), ["split 11 10 false"]);
+        assert!(host.take().is_empty(), "the tab let go on a target showed alone");
+
+        // Over the page before the core has shown the tab pressed, and let go off the targets.
+        let (shell, host, card) = shown_alone(cx);
+        press_to_drag(&shell, cx, 12, false);
+        host.take();
+        let middle = card.center();
+        drag_to(&shell, cx, f32::from(middle.x), f32::from(middle.y));
+        assert_eq!(host.take(), ["select 10"], "the press's switch under way showed the tab");
+        shell.update(cx, |shell, cx| shell.drop_row(cx));
+        assert_eq!(host.take(), ["select 12", "focus page"], "let go off the targets");
+        assert!(host.take_edits().is_empty());
+        // Escape over them puts the tab back too.
+        press_to_drag(&shell, cx, 11, true);
+        drag_to(&shell, cx, f32::from(middle.x), f32::from(middle.y));
+        host.take();
+        assert!(shell.update(cx, |shell, cx| shell.cancel_drag(cx)));
+        assert_eq!(host.take(), ["select 11", "focus page"], "escape over the targets");
+    }
+
+    /// The tab shown dragged over its own page splits with the one used before it (Dia), which
+    /// shows under the targets too.
+    #[gpui::test]
+    fn the_tab_shown_dragged_over_its_page_shows_the_one_before_it(cx: &mut TestAppContext) {
+        let (shell, host, card) = shown_alone(cx);
+        shell.update(cx, |shell, cx| {
+            shell.set_selected(12, cx);
+            shell.set_selected(10, cx);
+        });
+        press_to_drag(&shell, cx, 10, true);
+        host.take();
+        let left = target_bounds(card, Edge::Left, grown_at(Edge::Left)).center();
+        drag_to(&shell, cx, f32::from(left.x), f32::from(left.y));
+        assert_eq!(host.take(), ["select 12"]);
+        shell.update(cx, |shell, cx| shell.set_selected(12, cx));
+        host.take_edits();
+        shell.update(cx, |shell, cx| shell.drop_row(cx));
+        assert_eq!(host.take_edits(), ["split 10 12 true"]);
     }
 }

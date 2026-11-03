@@ -24,6 +24,32 @@ for choice in $other $system $other automatic; do
   expect "^browser: title [0-9]* scheme $scheme\$" \
     "View › Appearance › $item didn't make the page's prefers-color-scheme $scheme"
 done
+# On Windows the UI draws Windows' own window buttons (#1244), captured in each appearance at rest,
+# with the pointer on maximize, which the frame answers for (Snap layouts) and passes on to the UI,
+# and with it on close.
+buttons=
+if windows; then
+  for scheme in light dark; do
+    item=Light
+    [ $scheme = light ] || item=Dark
+    send menu "Appearance › $item"
+    expect "^browser: appearance $scheme\$" "View › Appearance › $item didn't change the appearance"
+    send move $page_point
+    ../tools/window-screenshot.sh "$pid" "$out/window-buttons-$scheme.png" ||
+      fail "no window to capture"
+    send move 43 24
+    expect '^browser: window button Zoom hovered$' "the pointer on maximize didn't reach its button"
+    ../tools/window-screenshot.sh "$pid" "$out/window-buttons-$scheme-maximize.png" ||
+      fail "no window to capture"
+    send move 66 24
+    expect '^browser: window button Close hovered$' "the pointer on close didn't reach its button"
+    ../tools/window-screenshot.sh "$pid" "$out/window-buttons-$scheme-close.png" ||
+      fail "no window to capture"
+  done
+  send move $page_point
+  send menu "Appearance › Automatic"
+  buttons="; Windows' window buttons in $out/window-buttons-*.png"
+fi
 exec 3>&-
 quit
-echo "ok: View › Appearance gives the page its choice as prefers-color-scheme as it changes, and Automatic the system's ($system)"
+echo "ok: View › Appearance gives the page its choice as prefers-color-scheme as it changes, and Automatic the system's ($system)$buttons"

@@ -1,5 +1,10 @@
 # The core compiles on Linux (AGENTS.md, Hit every surface: Platforms). See engine/check-linux.sh.
 # ci.yml calls it when a change touches the core or the engine (.github/scripts/ci-changes.cjs).
+#
+# A push here builds on the self-hosted ilo-core runners. They keep the prepared tree in
+# $ILO_CORE_WORK, so a run redoes only what changed; on GitHub's runners each run prepares it from
+# scratch. A pull request, and a fork's own push, stays on GitHub's runners: a self-hosted runner
+# never runs a pull request's code, and a fork has no ilo-core runner.
 name: Core on Linux
 
 on:
@@ -10,20 +15,24 @@ permissions:
 
 jobs:
   compile:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.event_name == 'pull_request' || github.repository != 'MartinPTielemans/ilo') && 'ubuntu-24.04' || fromJSON('["self-hosted","linux","x64","ilo-core"]') }}
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
+      # The ilo-core runners have the tools below installed at fixed paths, which the kept tree links to.
+
       # Dawn's code generators need the Go its go.mod names, newer than Ubuntu's.
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      - if: runner.environment == 'github-hosted'
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26'
           cache: false
 
       - name: Install tools
+        if: runner.environment == 'github-hosted'
         run: |
           sudo apt-get update -q
           sudo apt-get install -yq gperf clang-format ninja-build
@@ -31,9 +40,10 @@ jobs:
 
       # The tree takes about 40 GB. The runner's second disk has more room than its first.
       - name: Make room
+        if: runner.environment == 'github-hosted'
         run: |
           df -h / /mnt
           sudo mkdir /mnt/work
           sudo chown "$USER" /mnt/work
 
-      - run: engine/check-linux.sh /mnt/work
+      - run: engine/check-linux.sh "${ILO_CORE_WORK:-/mnt/work}"

@@ -52,35 +52,7 @@ requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
   step=0
   scratch=$(mktemp -d)
   mkdir "$scratch/profile"
-  mkfifo "$scratch/cdp"
-  if windows; then
-    # Chrome on Windows takes its DevTools pipe as handles, which Git Bash can't give it, so
-    # DevTools listens on a loopback port instead, which the browser says on its standard error. A
-    # native program can't read Git Bash's fifo, so cat passes cdp.py its commands, and the page is
-    # named without its slash, which Git Bash would make a path of Git's own.
-    BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$scratch/profile" \
-      "$browser" --remote-debugging-port=0 < "$out/drive" > "$log" 2>&1 &
-    pid=$!
-    exec 3> "$out/drive"
-    await '^DevTools listening on ws://' || fail "DevTools didn't say where it listens"
-    socket=$(grep -m1 '^DevTools listening on ws://' "$log" | cut -d' ' -f4 | tr -d '\r')
-    cat "$scratch/cdp" | python3 -I -u check/cdp.py --socket "$socket" passkey.html \
-      > "$cdp_log" 2>&1 &
-    helper=$!
-  else
-    mkfifo "$scratch/to-browser" "$scratch/from-browser"
-    # Each end of a pipe waits for the other to open, in this order: the driver's, the browser's
-    # DevTools pipe, then cdp.py's input.
-    BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$scratch/profile" \
-      "$browser" --remote-debugging-pipe < "$out/drive" 3< "$scratch/to-browser" \
-      4> "$scratch/from-browser" > "$log" 2>&1 &
-    pid=$!
-    python3 -I -u check/cdp.py "$scratch/to-browser" "$scratch/from-browser" /passkey.html \
-      < "$scratch/cdp" > "$cdp_log" 2>&1 &
-    helper=$!
-    exec 3> "$out/drive"
-  fi
-  exec 5> "$scratch/cdp"
+  start_with_cdp "$page" "$scratch/profile" /passkey.html
   echo authenticator >&5
   await_load
   tab=$(today | cut -d' ' -f1)
@@ -183,8 +155,12 @@ requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
       ../tools/window-screenshot.sh "$pid" "$out/passkeys-dialog.png" ||
         fail "no window to capture"
       dialog= view=
-      echo "skip: passkeys' dialog placement. On Linux Chrome draws the dialog in its own window," \
-        "where the X server can't find it."
+      if windows; then
+        echo "skip: passkeys' dialog placement. Only the Mac's run measures it so far."
+      else
+        echo "skip: passkeys' dialog placement. On Linux Chrome draws the dialog in its own window," \
+          "where the X server can't find it."
+      fi
     fi
     # Where the dialog can't be seen, escape goes again until it's up and closes it: the page does
     # nothing with one.

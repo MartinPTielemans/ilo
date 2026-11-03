@@ -4,9 +4,13 @@
 # Linux), never the Mac's own browsers; Esc or Skip goes on from a step, the colour step's Return
 # gives the first Space the swatch picked, and the last step leaves the flow for the first Space's
 # welcome with the command bar up and a line under it. The default browser's step shows only while
-# ilo isn't the default, and the opt-ins' only once the build offers one; both are only ever
-# skipped, so the run changes neither the Mac's default browser nor a switch. Help › Welcome to ilo
-# plays it again, in the window while it shows no page and in a new window while it shows one. A
+# ilo isn't the default, and is skipped everywhere but a Linux CI VM, where its button makes ilo
+# the default for a moment, so the run never changes a desk's. The opt-ins' shows always, with
+# the agents' switch, as every build has their server, and the dark pass turns it on in its new
+# profile and sees the server start. The account's comes between the colour and the opt-ins while
+# the build names a sync server (branding/sync-server), and Esc leaves it signed out: the run never
+# signs in to the hosted server, as sync-account signs in on a server of its own. Help › Welcome to
+# ilo plays it again, in the window while it shows no page and in a new window while it shows one. A
 # launch that brings Spaces back never starts it. Every other run sets BROWSER_ONBOARDING=skip
 # (check.sh); this one sets the appearance instead.
 
@@ -38,12 +42,15 @@ fi
 capture_step() {
   ../tools/window-screenshot.sh "$pid" "$out/onboarding-$1.png" || fail "no window to capture"
 }
-# Launches a new profile, whose saved Spaces are gone, in appearance $1, and reads the steps it
-# shows into $steps.
+# The account's step, while the build names a server to sign in to.
+account=
+[ ! -s branding/sync-server ] || account="account "
+# Launches a new profile, whose saved Spaces are gone and which isn't signed in, in appearance $1,
+# and reads the steps it shows into $steps.
 launch_new() {
   log="$out/onboarding-$1.log"
   step=0
-  rm -f "$saved"
+  rm -f "$saved" "$profile_dir/Account"
   BROWSER_IMPORT_HOME="$import_home" BROWSER_DRIVE=1 BROWSER_ONBOARDING=$1 \
     "$browser" < "$out/drive" > "$log" 2>&1 &
   pid=$!
@@ -51,8 +58,8 @@ launch_new() {
   await '^browser: onboarding step intro settled$' || fail "$1: the intro didn't draw"
   steps=$(grep -m1 '^browser: onboarding steps ' "$log" | cut -d' ' -f4-)
   case "$steps" in
-    "intro import "*color | "intro import "*"color opt-ins") ;;
-    *) fail "$1: the steps were '$steps', not the intro, the import, then the rest" ;;
+    "intro import "*"color ${account}opt-ins") ;;
+    *) fail "$1: the steps were '$steps', not the intro, the import, the rest, ${account}the opt-ins" ;;
   esac
 }
 
@@ -164,9 +171,50 @@ case " $steps " in
   *" default-browser "*)
     expect '^browser: onboarding step default-browser settled$' "dark: the default browser's step didn't come"
     capture_step dark-default-browser
-    send key escape
-    expect '^browser: onboarding left default-browser via escape$' \
-      "dark: Esc didn't leave the default browser's step"
+    # Only a Linux CI VM, where no one browses, lets Return make ilo the default: xdg-settings
+    # reads it back, and the VM's own lists of defaults come back after, for the replay's steps.
+    # xdg-settings takes a desktop entry only for a program it can run, so this one runs the build.
+    if [ "$(uname)" = Linux ] && [ -n "${GITHUB_ACTIONS:-}" ] && command -v xdg-settings > /dev/null
+    then
+      apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+      lists="${XDG_CONFIG_HOME:-$HOME/.config}/mimeapps.list $apps/mimeapps.list"
+      at=0
+      for list in $lists; do
+        at=$((at + 1))
+        rm -f "$out/mimeapps-$at.list"
+        [ ! -f "$list" ] || cp "$list" "$out/mimeapps-$at.list"
+      done
+      entry="$apps/$(cat branding/id).desktop"
+      mkdir -p "$apps"
+      printf '[Desktop Entry]\nType=Application\nName=%s\nExec=%s %%U\n' "$app_name" "$browser" \
+        > "$entry"
+      send key return
+      expect '^browser: onboarding left default-browser via return$' \
+        "dark: Return didn't leave the default browser's step"
+      for _ in $(seq 50); do
+        made=$(xdg-settings get default-web-browser 2> /dev/null || true)
+        [ "$made" = "${entry##*/}" ] && break
+        sleep 0.1
+      done
+      [ "$made" = "${entry##*/}" ] ||
+        fail "dark: the default browser's button left the default '$made', not ${entry##*/}"
+      at=0
+      for list in $lists; do
+        at=$((at + 1))
+        if [ -f "$out/mimeapps-$at.list" ]; then
+          mv "$out/mimeapps-$at.list" "$list"
+        else
+          rm -f "$list"
+        fi
+      done
+      rm -f "$entry"
+    else
+      send key escape
+      expect '^browser: onboarding left default-browser via escape$' \
+        "dark: Esc didn't leave the default browser's step"
+      [ "$(uname)" != Linux ] || [ -z "${GITHUB_ACTIONS:-}" ] ||
+        echo "skip: onboarding's default browser button. The VM has no xdg-settings."
+    fi
     ;;
 esac
 expect '^browser: onboarding step color settled$' "dark: the colour step didn't come"
@@ -175,14 +223,23 @@ capture_step dark-color
 send key return
 expect '^browser: onboarding picked color f0eae5$' "dark: → and Return didn't pick the first swatch"
 expect '^browser: onboarding left color via return$' "dark: Return didn't leave the colour step"
-case " $steps " in
-  *" opt-ins "*)
-    expect '^browser: onboarding step opt-ins settled$' "dark: the opt-ins step didn't come"
-    capture_step dark-opt-ins
-    send key escape
-    expect '^browser: onboarding left opt-ins via escape$' "dark: Esc didn't leave the opt-ins step"
-    ;;
-esac
+if [ -n "$account" ]; then
+  expect '^browser: onboarding step account settled$' "dark: the account step didn't come"
+  capture_step dark-account
+  send key escape
+  expect '^browser: onboarding left account via escape$' "dark: Esc didn't leave the account step"
+  ! grep -q '^browser: onboarding sign in via ' "$log" || fail "dark: Esc at the account step signed in"
+fi
+expect '^browser: onboarding step opt-ins settled$' "dark: the opt-ins step didn't come"
+capture_step dark-opt-ins
+# The agents' row takes a click on its switch, where the app says it's drawn once the step has
+# come, the second row of two with a crash collector and the only one without (#1286).
+expect '^browser: onboarding agents at ' "dark: the opt-ins step didn't draw the agents' switch"
+send click $(grep '^browser: onboarding agents at ' "$log" | tail -1 | cut -d' ' -f5-6)
+expect '^browser: onboarding agents on$' "dark: a click on the agents' row didn't turn them on"
+expect '^browser: agents server on ' "dark: the agents' switch didn't start their server"
+send key escape
+expect '^browser: onboarding left opt-ins via escape$' "dark: Esc didn't leave the opt-ins step"
 expect '^browser: onboarding done$' "dark: the flow didn't end after its last step"
 expect '^browser: command bar shown$' "dark: the command bar didn't come up after the flow"
 capture_step dark-in
@@ -232,4 +289,4 @@ expect '^browser: command bar shown$' "the replay in its own window didn't end w
 exec 3>&-
 quit
 
-echo "ok: a new profile's first launch plays the intro, which goes on by itself or at a key, then the import of the fixture's $found, the default browser's step while ilo isn't the default, the colour and the opt-ins the build offers, each left by Esc or Skip and the colour kept by Return, for the welcome with the command bar up, in light and dark; Help › Welcome to $app_name plays it again, in a new window over a page; a launch that brings Spaces back doesn't. Captures: $out/onboarding-*.png, and the replayed intro's motion in $out/onboarding-intro.mp4"
+echo "ok: a new profile's first launch plays the intro, which goes on by itself or at a key, then the import of the fixture's $found, the default browser's step while ilo isn't the default, the colour, the account while the build names a sync server and the opt-ins, each left by Esc or Skip and the colour kept by Return, for the welcome with the command bar up, in light and dark; Help › Welcome to $app_name plays it again, in a new window over a page; a launch that brings Spaces back doesn't. Captures: $out/onboarding-*.png, and the replayed intro's motion in $out/onboarding-intro.mp4"

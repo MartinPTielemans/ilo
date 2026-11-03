@@ -1,14 +1,21 @@
-"""The passkeys and passwords runs' DevTools client (check/passkeys.sh, check/passwords.sh), over
-the pipe --remote-debugging-pipe gives the browser: the browser reads from IN and writes to OUT,
-each message JSON ending in NUL. Or, with --socket, over the WebSocket at URL that
---remote-debugging-port has the browser listen on: on Windows the pipe is handles, which Git Bash
-can't give the browser.
+"""The passkeys, passwords and sync-account runs' DevTools client (check/passkeys.sh,
+check/passwords.sh, check/sync-account.sh), over the pipe --remote-debugging-pipe gives the
+browser: the browser reads from IN and writes to OUT, each message JSON ending in NUL. Or, with
+--socket, over the WebSocket at URL that --remote-debugging-port has the browser listen on: on
+Windows the pipe is handles, which Git Bash can't give the browser.
 
-It attaches to the page whose address ends in PAGE, logging "cdp: attached", then takes a command
-a line on its standard input:
-  authenticator   gives the page a virtual authenticator, through DevTools' WebAuthn domain, with
+It attaches to the page whose address ends in PAGE, if one is named, logging "cdp: attached", then
+takes a command a line on its standard input:
+  attach PREFIX   attaches to the page opened last at an address starting with PREFIX, once there
+                  is one, in place of the page before, logging "cdp: attached": a page that opens
+                  after the browser, such as the sync sign-in window's
+  authenticator [quiet]
+                  gives the page a virtual authenticator, through DevTools' WebAuthn domain, with
                   the browser's own passkey dialogs: a USB security key that keeps passkeys,
-                  verifies its user and is touched for each request. It logs
+                  verifies its user and is touched for each request. It holds the passkeys the
+                  run's authenticators before it took, as a key carried from one window to the
+                  next. Quiet, it has none of the dialogs, so Chrome picks a passkey the page
+                  didn't name itself, where its dialog asks which, even of one. It logs
                     cdp: authenticator ready
                     cdp: credential added | credential asserted   as the page registers, signs in
   presence 0|1    stops or starts the key's touches, then logs "cdp: presence 0|1"
@@ -16,12 +23,13 @@ a line on its standard input:
                   password field with the id ID shows, from the field's user-agent shadow tree,
                   which the page's script can't see
   shows PREFIX TEXT
-                  logs "cdp: shows yes|no|none": whether the first page at an address starting
-                  with PREFIX has TEXT in a text node or an attribute, shadow trees included, or
-                  none for no such page, such as Chrome's password manager page, a WebUI page
+                  logs "cdp: shows yes|no|none": whether the page opened last at an address
+                  starting with PREFIX has TEXT in a text node or an attribute, shadow trees
+                  included, or none for no such page, such as Chrome's password manager page, a
+                  WebUI page
 The domains are for the checks alone. Agents never get DevTools: it runs any script in any page.
 
-Usage: cdp.py IN OUT PAGE | cdp.py --socket URL PAGE
+Usage: cdp.py IN OUT [PAGE] | cdp.py --socket URL [PAGE]
 """
 
 import base64
@@ -32,7 +40,7 @@ import struct
 import sys
 import threading
 
-page = sys.argv[3]
+page = sys.argv[3] if len(sys.argv) > 3 else ""
 if sys.argv[1] == "--socket":
     # ws://127.0.0.1:PORT/devtools/browser/ID, as the browser says it listens.
     address, _, path = sys.argv[2].removeprefix("ws://").partition("/")
@@ -106,6 +114,8 @@ replies = {}
 answered = threading.Condition(lock)
 events = []
 sent = 0
+# The passkeys the run's authenticators took, by their ids.
+passkeys = {}
 
 
 def log(line):
@@ -137,6 +147,11 @@ def read():
                 replies[message["id"]] = message
             else:
                 events.append(message)
+                if message["method"] in ("WebAuthn.credentialAdded",
+                                         "WebAuthn.credentialAsserted"):
+                    # With its private key and count, for the authenticators after.
+                    credential = message["params"]["credential"]
+                    passkeys[credential["credentialId"]] = credential
                 if message["method"] == "WebAuthn.credentialAdded":
                     log("credential added")
                 elif message["method"] == "WebAuthn.credentialAsserted":
@@ -152,23 +167,38 @@ threading.Thread(target=read, daemon=True).start()
 call("Target.setDiscoverTargets", {"discover": True})
 
 
-def page_target(wanted=lambda url: url.endswith(page)):
+def page_target(wanted):
+    """The page open now and opened last whose address WANTED takes, or None."""
+    pages = {}
     for event in events:
         if event is None:
             raise SystemExit("cdp: the browser closed the pipe")
         if event["method"] in ("Target.targetCreated", "Target.targetInfoChanged"):
             info = event["params"]["targetInfo"]
-            if info["type"] == "page" and wanted(info["url"]):
-                return info["targetId"]
-    return None
+            # A page outside a tab, as the sync sign-in window's, may be "other" before it's in
+            # its view (ChromeDevToolsManagerDelegate::GetTargetType).
+            if info["type"] in ("page", "other"):
+                pages[info["targetId"]] = info["url"]
+        elif event["method"] == "Target.targetDestroyed":
+            pages.pop(event["params"]["targetId"], None)
+    found = [target for target, url in pages.items() if wanted(url)]
+    return found[-1] if found else None
 
 
-with answered:
-    answered.wait_for(page_target)
-    target = page_target()
-session = call("Target.attachToTarget", {"targetId": target, "flatten": True})["sessionId"]
-log("attached")
-authenticator = None
+def attach(wanted):
+    """Attaches to the page page_target finds with WANTED, once there is one."""
+    global attached, session, authenticator
+    with answered:
+        answered.wait_for(lambda: page_target(wanted))
+        attached = page_target(wanted)
+    session = call("Target.attachToTarget", {"targetId": attached, "flatten": True})["sessionId"]
+    authenticator = None
+    log("attached")
+
+
+attached = session = authenticator = None
+if page:
+    attach(lambda url: url.endswith(page))
 # Sessions on the other pages shows looked in, by their targets.
 sessions = {}
 
@@ -208,9 +238,11 @@ def shows(prefix, text):
         target = page_target(lambda url: url.startswith(prefix))
     if not target:
         return "none"
+    if target == attached:
+        sessions[target] = session
     if target not in sessions:
-        attached = call("Target.attachToTarget", {"targetId": target, "flatten": True})
-        sessions[target] = attached["sessionId"]
+        sessions[target] = call("Target.attachToTarget",
+                                {"targetId": target, "flatten": True})["sessionId"]
     root = call("DOM.getDocument", {"depth": -1, "pierce": True}, sessions[target])["root"]
     found = find(root, lambda node: text in node.get("nodeValue", "")
                  or any(text in value for value in attributes(node).values()))
@@ -219,8 +251,14 @@ def shows(prefix, text):
 
 for line in sys.stdin:
     words = line.split()
-    if words == ["authenticator"] and not authenticator:
-        call("WebAuthn.enable", {"enableUI": True}, session)
+    if words[:1] == ["attach"] and len(words) == 2:
+        attach(lambda url: url.startswith(words[1]))
+    elif (words[:1] == ["authenticator"] and words[1:] in ([], ["quiet"]) and session
+          and not authenticator):
+        # The run's passkeys before this key, which may take its own as soon as it's there.
+        with answered:
+            carried = list(passkeys.values())
+        call("WebAuthn.enable", {"enableUI": words[1:] != ["quiet"]}, session)
         authenticator = call("WebAuthn.addVirtualAuthenticator", {"options": {
             "protocol": "ctap2",
             "transport": "usb",
@@ -229,6 +267,9 @@ for line in sys.stdin:
             "isUserVerified": True,
             "automaticPresenceSimulation": True,
         }}, session)["authenticatorId"]
+        for credential in carried:
+            call("WebAuthn.addCredential",
+                 {"authenticatorId": authenticator, "credential": credential}, session)
         log("authenticator ready")
     elif words[:1] == ["presence"] and words[1:] in (["0"], ["1"]) and authenticator:
         call("WebAuthn.setAutomaticPresenceSimulation",

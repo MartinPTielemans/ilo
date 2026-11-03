@@ -1,19 +1,22 @@
 //! The MCP server: JSON-RPC a message a line, as MCP's stdio transport has it, on a Unix socket in
 //! the profile directory that only the user can open (decision 8), or on Windows a named pipe only
 //! they can open (pipe.rs). An MCP client launches the bridge (`bridge.rs`), which hands over the
-//! agent's token as its first line, then carries the client's stdio to the socket and back. A thread waits in `accept`, and one for each connection
-//! waits in `read`, so an idle server wakes nothing. The threads answer what needs no browser
-//! themselves, and send the rest to the UI thread as events.
+//! agent's token as its first line, then carries the client's stdio to the socket and back. A
+//! thread waits in `accept`, and one for each connection waits in `read`, so an idle server wakes
+//! nothing. The threads answer what needs no browser themselves, and send the rest to the UI
+//! thread as events. A connection's calls on different tabs are answered at once and a tab's in
+//! order, so a turn's step across ten tabs takes about as long as one (#1476).
 //!
 //! There's no TCP port, so no web page and no other user's process can reach it. The token says
 //! which agent a connection is, and once the user disconnects the agent its connections close.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
+use std::time::Instant;
 
 use futures::channel::mpsc::UnboundedSender;
 use serde_json::{Value, json};
@@ -168,7 +171,7 @@ impl Drop for Server {
         let _wake = connect(&self.shared.path);
         #[cfg(windows)]
         if let Some(accepting) = self.accepting.take() {
-            _ = accepting.join();
+            pipe::wait_for(accepting);
         }
         for (_, connection) in self.shared.connections.lock().unwrap().drain() {
             connection.close();
@@ -287,32 +290,18 @@ fn serve(stream: Stream, number: u64, shared: &Shared) {
     if writeln!(writer, "{}", json!({ "ok": true })).is_err() {
         return;
     }
-    // Its messages are answered on a thread of their own, so this one reads on while a call waits
-    // on the user, and a client that closes its end then ends its session, which drops what waits
-    // for it (`Event::Bye`). The answering thread's end closes the connection.
+    // Its messages are answered on threads of their own, so this one reads on while calls wait on
+    // pages or the user, and a client that closes its end then ends its session, which drops what
+    // waits for it (`Event::Bye`). The last answering thread's end closes the connection.
+    let answering = Answering {
+        shared,
+        number,
+        agent: agent.clone(),
+        writer: Mutex::new(writer),
+        queue: Mutex::default(),
+        changed: Condvar::new(),
+    };
     thread::scope(|scope| {
-        let (requests, next) = mpsc::channel::<String>();
-        let answering = thread::Builder::new()
-            .name("agents-answers".into())
-            .spawn_scoped(scope, {
-                let agent = agent.clone();
-                move || {
-                    for line in next {
-                        let Some(answer) = message(shared, number, &agent, &line) else {
-                            continue;
-                        };
-                        if writeln!(writer, "{answer}")
-                            .and_then(|()| writer.flush())
-                            .is_err()
-                        {
-                            return;
-                        }
-                    }
-                }
-            });
-        if answering.is_err() {
-            return;
-        }
         while let Some(line) = read_line(&mut reader) {
             // A token the user has since disconnected, or a browser that stopped, answers no more.
             if shared.stopped.load(Ordering::SeqCst)
@@ -323,13 +312,179 @@ fn serve(stream: Stream, number: u64, shared: &Shared) {
             if line == END {
                 break;
             }
-            if !line.trim().is_empty() && requests.send(line).is_err() {
+            if !line.trim().is_empty() && !answering.queue_up(line, scope) {
                 break;
             }
         }
-        drop(requests);
+        answering.close();
         end(shared, number);
     });
+}
+
+/// Messages a connection answers at once, at most: a turn's calls across ten tabs, with room.
+const MAX_AT_ONCE: usize = 16;
+
+/// What a message waits for before it's answered. Calls on one tab keep their order, and those on
+/// different tabs go at once, so a page that's slow to load holds only its own tab's calls. A
+/// turn's tabs open at once. What asks the user asks one at a time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Lane {
+    /// Messages with no tab of their own, in the order they came: initialize, tools/list, a task's
+    /// title and finish, and an action with no tab, which acts in the tab used last.
+    InOrder,
+    /// One tab's calls, in the order they came.
+    Tab(u64),
+    /// ask, hand_off and ask_for_tab: one prompt at a time, the others waiting their turn.
+    Asks,
+}
+
+impl Lane {
+    /// Whether two messages in these lanes wait for each other. One with no tab acts in the tab
+    /// used last, which may be any, so it waits for every tab's calls before it, and they for it.
+    fn meets(self, other: Lane) -> bool {
+        self == other
+            || matches!(
+                (self, other),
+                (Lane::InOrder, Lane::Tab(_)) | (Lane::Tab(_), Lane::InOrder)
+            )
+    }
+}
+
+/// A message read and not yet answered, with the lanes it holds while it's answered: none for
+/// open_tab, which waits only for room.
+struct Waiting {
+    line: String,
+    lanes: Vec<Lane>,
+}
+
+/// A connection's messages between reading and answering.
+#[derive(Default)]
+struct Queue {
+    waiting: std::collections::VecDeque<Waiting>,
+    /// The lanes of the messages being answered.
+    busy: HashSet<Lane>,
+    answering: usize,
+    /// The most answered at once since the connection last had none, for the log.
+    most: usize,
+    /// The threads answering, and those waiting for a message they can take.
+    threads: usize,
+    idle: usize,
+    closed: bool,
+}
+
+impl Queue {
+    /// The first message whose lanes are free, its lanes taken. A message waiting holds its lanes
+    /// for those behind it, so each lane keeps its order.
+    fn take(&mut self) -> Option<Waiting> {
+        let mut held: Vec<Lane> = self.busy.iter().copied().collect();
+        let at = self.waiting.iter().position(|waiting| {
+            let meets = |lane: &Lane| held.iter().any(|each| lane.meets(*each));
+            let free = !waiting.lanes.iter().any(meets);
+            held.extend(waiting.lanes.iter().copied());
+            free
+        })?;
+        let taken = self.waiting.remove(at)?;
+        self.busy.extend(taken.lanes.iter().copied());
+        self.answering += 1;
+        self.most = self.most.max(self.answering);
+        Some(taken)
+    }
+}
+
+/// A connection's answering: its messages, the threads that answer them, and its writer, which
+/// each answer has whole.
+struct Answering<'a> {
+    shared: &'a Shared,
+    number: u64,
+    agent: String,
+    writer: Mutex<Stream>,
+    queue: Mutex<Queue>,
+    changed: Condvar,
+}
+
+impl<'a> Answering<'a> {
+    /// Queues a message, with a thread for it while there's room for one and the free ones have
+    /// messages enough. Whether the connection can go on.
+    fn queue_up<'scope, 'env>(
+        &'scope self,
+        line: String,
+        scope: &'scope thread::Scope<'scope, 'env>,
+    ) -> bool {
+        let mut queue = self.queue.lock().unwrap();
+        queue.waiting.push_back(Waiting { lanes: lanes(&line), line });
+        if queue.waiting.len() > queue.idle && queue.threads < MAX_AT_ONCE {
+            let spawned = thread::Builder::new()
+                .name("agents-answers".into())
+                .spawn_scoped(scope, || self.answer());
+            match spawned {
+                Ok(_) => queue.threads += 1,
+                Err(_) if queue.threads == 0 => return false,
+                Err(_) => {}
+            }
+        }
+        self.changed.notify_all();
+        true
+    }
+
+    /// Answers what it can take until the connection has closed and nothing waits.
+    fn answer(&self) {
+        let mut queue = self.queue.lock().unwrap();
+        loop {
+            if let Some(taken) = queue.take() {
+                drop(queue);
+                if let Some(answer) = message(self.shared, self.number, &self.agent, &taken.line) {
+                    let mut writer = self.writer.lock().unwrap();
+                    _ = writeln!(writer, "{answer}").and_then(|()| writer.flush());
+                }
+                queue = self.queue.lock().unwrap();
+                for lane in &taken.lanes {
+                    queue.busy.remove(lane);
+                }
+                queue.answering -= 1;
+                if queue.answering == 0 {
+                    if queue.most > 1 {
+                        // check.sh reads this line.
+                        let (agent, most) = (&self.agent, queue.most);
+                        log!("browser: agent {agent} answered {most} calls at once");
+                    }
+                    queue.most = 0;
+                }
+                self.changed.notify_all();
+                continue;
+            }
+            if queue.closed && queue.waiting.is_empty() {
+                return;
+            }
+            queue.idle += 1;
+            queue = self.changed.wait(queue).unwrap();
+            queue.idle -= 1;
+        }
+    }
+
+    /// The connection read its last: what it read is still answered, the calls among it failing
+    /// as the connection has closed.
+    fn close(&self) {
+        self.queue.lock().unwrap().closed = true;
+        self.changed.notify_all();
+    }
+}
+
+/// The lanes a message holds while it's answered.
+fn lanes(line: &str) -> Vec<Lane> {
+    let message = serde_json::from_str::<Value>(line).unwrap_or_default();
+    if message.get("method").and_then(Value::as_str) != Some("tools/call") {
+        return vec![Lane::InOrder];
+    }
+    let tool = (message.pointer("/params/name").and_then(Value::as_str)).unwrap_or_default();
+    let tab = (message.pointer("/params/arguments/tab").and_then(Value::as_u64))
+        .filter(|tab| *tab != 0);
+    let own = match (tool, tab) {
+        ("open_tab", _) => None,
+        (_, Some(tab)) => Some(Lane::Tab(tab)),
+        (_, None) => Some(Lane::InOrder),
+    };
+    let asks = matches!(tool, "ask" | "hand_off" | "ask_for_tab").then_some(Lane::Asks);
+    own.into_iter().chain(asks).collect()
 }
 
 impl Shared {
@@ -369,7 +524,7 @@ fn message(shared: &Shared, number: u64, agent: &str, line: &str) -> Option<Valu
     let result = match method {
         "initialize" => initialize(shared, number, agent, &params),
         "ping" => json!({}),
-        "tools/list" => json!({ "tools": tools::list() }),
+        "tools/list" => json!({ "tools": tools::list(agent) }),
         "tools/call" => {
             let name = params
                 .get("name")
@@ -411,14 +566,21 @@ fn initialize(shared: &Shared, number: u64, agent: &str, params: &Value) -> Valu
     })
 }
 
-/// Runs a tool on the UI thread, and waits for its answer.
+/// Each call's number, for the UI to match its answer to it.
+static NEXT_CALL: AtomicU64 = AtomicU64::new(1);
+
+/// Runs a tool on the UI thread, and waits for its answer, which the UI then hears too: a task's
+/// trace times each step by when its call came and was answered here.
 fn call(shared: &Shared, number: u64, agent: &str, tool: &str, arguments: Value) -> ToolResult {
     let (reply, answer) = mpsc::channel();
+    let id = NEXT_CALL.fetch_add(1, Ordering::Relaxed);
     let call = Call {
+        id,
         agent: agent.into(),
         tool: tool.into(),
         arguments,
         reply,
+        at: Instant::now(),
     };
     // Sent while the connection is open, under the lock `end` closes it with, so that the UI
     // hears no call of a session after its agent's bye.
@@ -432,9 +594,17 @@ fn call(shared: &Shared, number: u64, agent: &str, tool: &str, arguments: Value)
         }
     }
     // The UI drops the call unanswered when the user turns agents off or disconnects the agent.
-    answer
+    let result = answer
         .recv()
-        .unwrap_or_else(|_| ToolResult::error("The browser has turned agents off."))
+        .unwrap_or_else(|_| ToolResult::error("The browser has turned agents off."));
+    _ = shared.events.unbounded_send(Event::Answered {
+        agent: agent.into(),
+        id,
+        at: Instant::now(),
+        error: result.error.then(|| result.text.clone()),
+        image: result.image.clone(),
+    });
+    result
 }
 
 /// The connection closed. The agent's last session ending tells the UI it's gone.

@@ -1,19 +1,20 @@
 # The browser on Linux, run and checked by app/check.sh (AGENTS.md, Verifying) under Xvfb and
 # openbox, on X11, or by hand in a headless sway session on its Xwayland, then in that session on
 # Wayland, and by app/check/drops.sh under Wayland, on the Linux engine built from this commit's
-# core: the safety net for what the Mac and Linux share. Main's pushes and runs by hand only, on
-# GitHub's hosted runners: never a pull request, and never the self-hosted runner, which builds the
-# engine. It never builds an engine: it takes the newest engine-linux release in this commit's
+# core: the safety net for what the Mac and Linux share. It runs on main each night and by hand,
+# which the integrator does on main after each merge train (#871), on GitHub's hosted runners: never
+# a pull request, and never the self-hosted runner, which builds the engine. It never builds an engine: it takes the newest engine-linux release in this commit's
 # history (engine/fetch.sh), and a commit whose core/public/browser_core.h no published engine has
 # is skipped, as nothing can run it. Every run in app/check/ shows in X11's summary: passed,
 # failed, or skipped and why, with the lines a run that passed skipped; Wayland's lists those it
-# did. Failures fail the job, which nothing waits on yet.
+# did. A failure on main opens an issue, which the next run that passes closes
+# (.github/scripts/main-check.sh).
 name: Check on Linux
 
 on:
-  push:
-    branches: [main]
-    paths-ignore: ['**/*.md', docs/**]
+  # 03:23 UTC, before Windows' and the Mac's, which wait for their nightly engines.
+  schedule:
+    - cron: '23 3 * * *'
   workflow_dispatch:
     inputs:
       runs:
@@ -29,17 +30,43 @@ on:
 
 concurrency:
   group: check-linux-${{ github.ref }}
-  # Main's run in progress finishes, and while it runs a newer merge's pending run replaces the
-  # older pending one; a branch's newer push cancels its older run.
+  # Main's run in progress finishes, and while it runs a newer dispatch's or the night's pending run
+  # replaces the older pending one; a branch's newer dispatch cancels its older run.
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
 
 jobs:
+  # Whether to check this commit: a scheduled run, in ilo itself and not a fork, checks only a commit
+  # no run has checked yet; a dispatched one always does.
+  gate:
+    if: github.event_name != 'schedule' || github.repository == 'MartinPTielemans/ilo'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      check: ${{ github.event_name != 'schedule' || steps.seen.outputs.seen != 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+      - id: seen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/main-check.sh seen
+
   check:
+    needs: gate
+    if: needs.gate.outputs.check == 'true'
+    # Named apart when it does other runs than the default ones, so it's no verdict on the commit.
+    name: ${{ (inputs.runs != '' || inputs.session == 'sway' || inputs.session == 'wayland') && 'check (runs asked for)' || 'check' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    outputs:
+      found: ${{ steps.engine.outputs.found }}
     defaults:
       run:
         working-directory: app
@@ -49,9 +76,9 @@ jobs:
         tabs window find agents spaces crash profiles private quit mcp appearance access history
         load preview import adblock adblock-lists passkeys onboarding links relaunch split
         extensions capture popup pinned about windows dialogs trouble cards passwords updates
-        restore favorites keys clear media store adblock-live widevine
+        restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices little
       # The runs that pass on Wayland so far, in the headless sway session.
-      WAYLAND_RUNS: tabs
+      WAYLAND_RUNS: tabs private
       # The runs that don't apply to Linux, a line each with why, which the summary gives. They're
       # skipped even when named.
       LINUX_SKIPS: |
@@ -95,7 +122,7 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -yq libclang-dev libfontconfig-dev libwayland-dev \
             libx11-xcb-dev libxkbcommon-x11-dev libvulkan1 mesa-vulkan-drivers libegl1 \
-            libgl1-mesa-dri xvfb xauth openbox imagemagick xdotool ffmpeg sway grim xwayland \
+            libgl1-mesa-dri xvfb xauth openbox imagemagick xdotool xclip ffmpeg sway grim xwayland \
             dbus-daemon at-spi2-core fcitx5 libxkbcommon-tools wl-clipboard
           rustup update stable --no-self-update
           mkdir -p "$RUNNER_TEMP/bin"
@@ -126,8 +153,32 @@ jobs:
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: ./setup.sh && ./build.sh
 
+      # The sync-account and sync-devices runs sign in to an ilo-server of their own, on SQLite
+      # with a throwaway account, never the hosted one: built from the server's repo at the commit
+      # ilo's sync was last checked against.
+      - id: server
+        if: ${{ steps.engine.outputs.found == 'true' && (inputs.runs == '' || inputs.runs == 'all' || contains(format(' {0} ', inputs.runs), ' sync-account ') || contains(format(' {0} ', inputs.runs), ' sync-devices ')) }}
+        uses: actions/checkout@v4
+        with:
+          repository: MartinPTielemans/ilo-server
+          ref: 882f2736e5a3b228543ae33b821aeeb52f80426d
+          path: app/.deps/ilo-server
+
+      - if: ${{ steps.server.outcome == 'success' }}
+        uses: actions/cache@v4
+        with:
+          path: app/.deps/ilo-server/target
+          key: ilo-server-882f2736e5a3b228543ae33b821aeeb52f80426d
+
+      - if: ${{ steps.server.outcome == 'success' }}
+        working-directory: app/.deps/ilo-server
+        run: |
+          cargo build --release --locked
+          echo "ILO_SERVER=$PWD/target/release/ilo-server" >> "$GITHUB_ENV"
+
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
-      - if: ${{ steps.engine.outputs.found == 'true' }}
+      - name: Runs
+        if: ${{ steps.engine.outputs.found == 'true' }}
         env:
           RUNS: ${{ inputs.runs }}
           SESSION: ${{ inputs.session || 'xvfb' }}
@@ -264,3 +315,25 @@ jobs:
           name: check-linux
           path: ${{ runner.temp }}/check
           if-no-files-found: ignore
+
+  # The default runs' verdict on main, the night's or a train's, keeps the workflow's issue: a
+  # dispatched run reports too, as its pass is the only one the night won't repeat on that commit.
+  report:
+    needs: [gate, check]
+    if: ${{ always() && needs.gate.outputs.check == 'true' && github.ref == 'refs/heads/main' && github.repository == 'MartinPTielemans/ilo' && inputs.runs == '' && inputs.session != 'sway' && inputs.session != 'wayland' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.check.result }}
+          FOUND: ${{ needs.check.outputs.found }}
+        run: .github/scripts/main-check.sh report "$RESULT" "$FOUND"

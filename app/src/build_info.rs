@@ -8,7 +8,7 @@ use std::sync::LazyLock;
 pub const NEW_ISSUE: &str = env!("APP_ISSUES");
 /// The site's help and release notes, at a default service URL (branding/site).
 pub const HELP_CENTER: &str = concat!(env!("APP_SITE"), "/help");
-pub const WHATS_NEW: &str = concat!(env!("APP_SITE"), "/whats-new");
+pub const WHATS_NEW: &str = concat!(env!("APP_SITE"), "/changelog");
 /// What ilo sends and keeps, and where, on the same site.
 pub const PRIVACY_POLICY: &str = concat!(env!("APP_SITE"), "/privacy");
 
@@ -58,11 +58,15 @@ impl BuildInfo {
     }
 }
 
+/// This copy's version, as the release names it. This crate's: on Linux and Windows src/main.rs
+/// is built in a crate of its own (linux/, windows/), whose version isn't the app's.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// The version Settings › About shows, with the build number build.sh gives a build.
 pub fn version() -> String {
     match option_env!("APP_BUILD") {
-        Some(build) => format!("{} ({build})", env!("CARGO_PKG_VERSION")),
-        None => env!("CARGO_PKG_VERSION").to_owned(),
+        Some(build) => format!("{VERSION} ({build})"),
+        None => VERSION.to_owned(),
     }
 }
 

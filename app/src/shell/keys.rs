@@ -1146,7 +1146,7 @@ mod tests {
         let mut user = UserKeys::default();
         user.set(Command::EditUrl, keys(&["cmd-k"])).unwrap();
         user.set(Command::ToggleSidebar, vec![]).unwrap();
-        user.set(Command::NewFolder, keys(&["alt-cmd-n"])).unwrap();
+        user.set(Command::NewFolder, keys(&["alt-cmd-o"])).unwrap();
         assert_eq!(UserKeys::parse(&user.to_text()), user);
         user.set_favorites_numbered(false);
         assert_eq!(UserKeys::parse(&user.to_text()), user);

@@ -24,7 +24,7 @@ use gpui::{
 };
 
 use crate::{
-    elevation::Level as Elevation,
+    elevation::{Level as Elevation, Reach},
     shell::{MenuEntry, Shell, keystroke_label},
     text_input::FieldMenu,
 };
@@ -123,10 +123,18 @@ impl Look {
 pub trait Host {
     /// Puts the menu's window over the browser window it's for at `frame` in that window's
     /// content, as it draws now, with the keyboard. `panels` are its levels' panels in it, from its
-    /// top left, open or not: the rest is their shadows' room, which a click goes through.
+    /// top left, open or not: the rest is their shadows' room, which a click goes through. Where
+    /// the window can't blend, they're only the open ones, which it shows alone, and it's shown
+    /// again as a submenu opens or closes.
     fn show(&self, frame: Bounds<Pixels>, panels: &[Bounds<Pixels>]);
     /// Takes it away, and gives the keyboard back to what had it.
     fn hide(&self);
+    /// Whether the window blends with what's under it. One that can't, on X11 with no compositor,
+    /// shows its clear pixels black (#1479), so there the panels are opaque and square with no
+    /// shadow, and the window holds them alone.
+    fn blends(&self) -> bool {
+        true
+    }
 }
 
 /// A menu to show.
@@ -137,8 +145,38 @@ pub struct Request {
     /// Where it may go, in the same terms: the screen's work area.
     pub area: Bounds<Pixels>,
     pub look: Look,
-    /// Called once it closes, with the index of the item chosen, if any.
-    pub chosen: Box<dyn FnOnce(Option<usize>, &mut App)>,
+    /// Called once it closes, with how it closed.
+    pub chosen: Chosen,
+}
+
+pub type Chosen = Box<dyn FnOnce(Closed, &mut App)>;
+
+/// How a menu closed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Closed {
+    /// With the item at this index chosen.
+    Chose(usize),
+    /// With a press outside it, at this point in the browser window's content.
+    PressedAt(Point<Pixels>),
+    /// With the user gone to another window or app, or its browser window changed under it.
+    Left,
+    /// With its keys, a shortcut, a scroll outside it or another menu taking its place.
+    Otherwise,
+}
+
+impl Closed {
+    /// The item chosen, if one was.
+    pub fn chosen(self) -> Option<usize> {
+        match self {
+            Closed::Chose(item) => Some(item),
+            _ => None,
+        }
+    }
+}
+
+/// `chosen` as a menu's answer, for whoever hears only which item was chosen.
+pub fn picked(chosen: impl FnOnce(Option<usize>, &mut App) + 'static) -> Chosen {
+    Box::new(move |closed: Closed, cx: &mut App| chosen(closed.chosen(), cx))
 }
 
 /// One level of the menu, the root or a submenu, placed.
@@ -174,6 +212,28 @@ impl Layout {
     fn level_of(&self, entry: usize) -> Option<usize> {
         self.levels.iter().position(|level| level.parent == Some(entry))
     }
+
+    /// As laid out for a window that can't blend: each panel out to whole points, since a pixel its
+    /// edge only partly covers would show black, and the window just round them, with no shadows.
+    pub(crate) fn opaque(mut self) -> Layout {
+        for level in &mut self.levels {
+            let (origin, end) = (level.bounds.origin, level.bounds.bottom_right());
+            level.bounds = Bounds::from_corners(origin.map(|at| at.floor()), end.map(|at| at.ceil()));
+        }
+        self.frame = framed(&self.levels, Reach { above: 0., below: 0., sides: 0. });
+        self
+    }
+}
+
+/// The window round the panels of `levels` and the `reach` of their shadows, out to whole points.
+/// A window put at a fraction of one lands on a pixel, so each pointer move reached the menu twice,
+/// a quarter point apart, and the second left the safe triangle.
+fn framed(levels: &[Level], reach: Reach) -> Bounds<Pixels> {
+    let union = (levels.iter().skip(1)).fold(levels[0].bounds, |all, level| all.union(&level.bounds));
+    Bounds::from_corners(
+        (union.origin - point(px(reach.sides), px(reach.above))).map(|at| at.floor()),
+        (union.bottom_right() + point(px(reach.sides), px(reach.below))).map(|at| at.ceil()),
+    )
 }
 
 /// How wide a level's panel is for titles and shortcuts `width_of` measures, between the
@@ -270,15 +330,7 @@ pub(crate) fn lay_out(
         let bounds = Bounds::new(origin, gpui::size(px(size.0), px(size.1)));
         levels.push(Level { parent, items, bounds, tops, checks });
     }
-    // The window's room around the panels for their shadow, out to whole points. A window put at
-    // a fraction of one lands on a pixel, so each pointer move reached the menu twice, a quarter
-    // point apart, and the second left the safe triangle.
-    let reach = Elevation::Popover.reach();
-    let union = (levels.iter().skip(1)).fold(levels[0].bounds, |all, level| all.union(&level.bounds));
-    let frame = Bounds::from_corners(
-        (union.origin - point(px(reach.sides), px(reach.above))).map(|at| at.floor()),
-        (union.bottom_right() + point(px(reach.sides), px(reach.below))).map(|at| at.ceil()),
-    );
+    let frame = framed(&levels, Elevation::Popover.reach());
     Layout { levels, frame }
 }
 
@@ -404,6 +456,11 @@ impl Tracking {
             typed: String::new(),
             typed_at: None,
         }
+    }
+
+    /// The items whose submenus are open, the outermost first.
+    fn open_submenus(&self) -> Vec<usize> {
+        self.open[1..].iter().filter_map(|open| self.layout.levels[open.level].parent).collect()
     }
 
     fn selectable(&self, entry: usize) -> bool {
@@ -702,6 +759,7 @@ pub(crate) fn described_held(entries: &[MenuEntry], alt: bool) -> String {
             (true, false) => format!("{title} (globe)"),
         };
         match (entry.enabled, entry.checked) {
+            _ if entry.header => format!("{title} (header)"),
             (false, _) => format!("{title} (disabled)"),
             (true, true) => format!("{title} (checked)"),
             (true, false) => title,
@@ -766,7 +824,7 @@ struct Shown {
     look: Look,
     /// Where its window's top left is in the browser window's content.
     origin: Point<Pixels>,
-    chosen: Option<Box<dyn FnOnce(Option<usize>, &mut App)>>,
+    chosen: Option<Chosen>,
     /// The highlighted item the log last named, and the items whose submenus it said were open.
     logged: Option<usize>,
     logged_open: Vec<usize>,
@@ -774,6 +832,26 @@ struct Shown {
     alt: bool,
     /// Whether it has drawn on screen, and with ⌥ held, which the log says as it changes.
     drawn: Option<bool>,
+    /// The items whose submenus it has drawn open since they last opened, which the log says.
+    drawn_open: Vec<usize>,
+    /// Whether its window blends with what's under it (`Host::blends`).
+    blends: bool,
+}
+
+impl Shown {
+    /// The panels the host's window holds, from its top left: every level's where it blends,
+    /// else only those open, which it shows alone.
+    fn panels(&self) -> Vec<Bounds<Pixels>> {
+        let layout = &self.tracking.layout;
+        let at = |level: usize| {
+            let bounds = layout.levels[level].bounds;
+            Bounds::new(bounds.origin - layout.frame.origin, bounds.size)
+        };
+        match self.blends {
+            true => (0..layout.levels.len()).map(at).collect(),
+            false => self.tracking.open.iter().map(|open| at(open.level)).collect(),
+        }
+    }
 }
 
 /// The menu's window's view.
@@ -864,21 +942,20 @@ pub fn show(request: Request, cx: &mut App) {
         .unwrap_or(false);
     update(cx, |menu, window, cx| {
         let Some(request) = request.take() else { return };
-        menu.close(None, cx);
+        menu.close(Closed::Otherwise, cx);
         let system = window.text_system().clone();
         let width_of = |text: &str| {
             let text = SharedString::from(text.to_string());
             crate::tooltip::text_width(&text, TEXT, gpui::FontWeight::NORMAL, &system)
         };
         let layout = lay_out_over(&request.items, request.at, request.area, &width_of);
+        let blends = menu.host.blends();
+        let layout = if blends { layout } else { layout.opaque() };
         // check.sh waits for this line before it chooses.
         log!("browser: menu shown {}", described(&request.items));
         let frame = layout.frame;
-        let panels: Vec<_> = (layout.levels.iter())
-            .map(|level| Bounds::new(level.bounds.origin - frame.origin, level.bounds.size))
-            .collect();
         let origin = menu.fixed.unwrap_or(frame.origin);
-        menu.shown = Some(Shown {
+        let shown = Shown {
             tracking: Tracking::new(request.items, layout, request.at),
             look: request.look,
             origin,
@@ -887,7 +964,11 @@ pub fn show(request: Request, cx: &mut App) {
             logged_open: Vec::new(),
             alt,
             drawn: None,
-        });
+            drawn_open: Vec::new(),
+            blends,
+        };
+        let panels = shown.panels();
+        menu.shown = Some(shown);
         window.focus(&menu.focus, cx);
         // After a hide that `close` asked for, so the new menu stays.
         let host = menu.host.clone();
@@ -904,7 +985,7 @@ pub fn highlight_first(cx: &mut App) {
         if shown.tracking.open[0].highlight.is_none() {
             let outcome = shown.tracking.key(Key::First, Instant::now());
             menu.outcome(outcome, cx);
-            menu.log_highlight();
+            menu.changed(cx);
         }
     });
 }
@@ -926,7 +1007,7 @@ pub fn pointer(event: Pointer, at: Point<Pixels>, cx: &mut App) -> bool {
     let mut taken = false;
     update(cx, |menu, _, cx| {
         taken = menu.pointer(event, at, cx);
-        menu.log_highlight();
+        menu.changed(cx);
     });
     taken
 }
@@ -934,7 +1015,7 @@ pub fn pointer(event: Pointer, at: Point<Pixels>, cx: &mut App) -> bool {
 /// The user left the menu without choosing: another window or app, or the browser window
 /// resizing, moving or going full screen.
 pub fn dismissed(cx: &mut App) {
-    update(cx, |menu, _, cx| menu.close(None, cx));
+    update(cx, |menu, _, cx| menu.close(Closed::Left, cx));
 }
 
 /// Chooses the enabled item titled `title`, as the driver does. Returns whether there was one.
@@ -944,7 +1025,7 @@ pub fn choose(title: &str, cx: &mut App) -> bool {
         let found = menu.shown.as_ref().and_then(|shown| shown.tracking.find(title));
         if let Some(item) = found {
             chosen = true;
-            menu.close(Some(item), cx);
+            menu.close(Closed::Chose(item), cx);
         }
     });
     chosen
@@ -955,8 +1036,8 @@ pub fn choose(title: &str, cx: &mut App) -> bool {
 pub type ShowOver = dyn Fn(AnyWindowHandle, Request, &mut App);
 
 /// Text fields' menus (`FieldMenu`) in ilo's menu, over the field's window, in its Space's look in a
-/// browser window and dark elsewhere, once the update that asked is over. The item chosen runs in
-/// the field's window, which has the keyboard back by then, as the menu gives it back as it closes.
+/// browser window and dark elsewhere, once the update that asked is over. The field hears in its
+/// window how the menu closed, which has the keyboard back by then unless the user left.
 pub fn field_menu(show: Rc<ShowOver>) -> FieldMenu {
     FieldMenu(Rc::new(move |items, at, from_keys, window, chosen, cx| {
         let handle = window.window_handle();
@@ -969,10 +1050,8 @@ pub fn field_menu(show: Rc<ShowOver>) -> FieldMenu {
                 return;
             };
             let items = (items.into_iter()).map(|(title, enabled)| MenuEntry::named(title, enabled)).collect();
-            let chosen = Box::new(move |index: Option<usize>, cx: &mut App| {
-                if let Some(index) = index {
-                    cx.update_window(handle, |_, window, cx| chosen(index, window, cx)).ok();
-                }
+            let chosen = Box::new(move |closed: Closed, cx: &mut App| {
+                cx.update_window(handle, |_, window, cx| chosen(closed, window, cx)).ok();
             });
             show(handle, Request { items, at, area: Bounds::default(), look, chosen }, cx);
             if from_keys {
@@ -983,20 +1062,25 @@ pub fn field_menu(show: Rc<ShowOver>) -> FieldMenu {
 }
 
 impl ContextMenu {
-    /// Closes the menu, if it shows, and says which item was chosen once the update is over.
-    fn close(&mut self, chosen: Option<usize>, cx: &mut Context<Self>) {
+    /// Closes the menu, if it shows, and says how once the update is over.
+    fn close(&mut self, closed: Closed, cx: &mut Context<Self>) {
         let Some(mut shown) = self.shown.take() else { return };
-        let chosen = chosen.map(|item| as_held(&shown.tracking.entries, item, shown.alt));
+        let closed = match closed {
+            Closed::Chose(item) => Closed::Chose(as_held(&shown.tracking.entries, item, shown.alt)),
+            closed => closed,
+        };
         self._rest = None;
         let host = self.host.clone();
         cx.defer(move |_| host.hide());
         // check.sh reads this line.
-        match chosen {
-            Some(item) => log!("browser: menu chose {}", shown.tracking.entries[item].title),
-            None => log!("browser: menu closed"),
+        match closed {
+            Closed::Chose(item) => {
+                log!("browser: menu chose {}", shown.tracking.entries[item].title)
+            }
+            _ => log!("browser: menu closed"),
         }
         if let Some(answer) = shown.chosen.take() {
-            cx.defer(move |cx| answer(chosen, cx));
+            cx.defer(move |cx| answer(closed, cx));
         }
         cx.notify();
     }
@@ -1004,8 +1088,8 @@ impl ContextMenu {
     fn outcome(&mut self, outcome: Outcome, cx: &mut Context<Self>) {
         match outcome {
             Outcome::Stay => cx.notify(),
-            Outcome::Pick(item) => self.close(Some(item), cx),
-            Outcome::Close => self.close(None, cx),
+            Outcome::Pick(item) => self.close(Closed::Chose(item), cx),
+            Outcome::Close => self.close(Closed::Otherwise, cx),
         }
     }
 
@@ -1033,7 +1117,7 @@ impl ContextMenu {
                 }
                 // A click outside closes the menu and goes no further; a right-click goes on, to
                 // open the menu of what it's on.
-                self.close(None, cx);
+                self.close(Closed::PressedAt(at), cx);
                 event == Pointer::Pressed
             }
             Pointer::Released => {
@@ -1045,7 +1129,7 @@ impl ContextMenu {
                 if tracking.hit(at) != Hit::Outside {
                     return true;
                 }
-                self.close(None, cx);
+                self.close(Closed::Otherwise, cx);
                 false
             }
         }
@@ -1059,7 +1143,7 @@ impl ContextMenu {
             menu.update(cx, |menu, cx| {
                 if let Some(shown) = menu.shown.as_mut() {
                     shown.tracking.rested(Instant::now());
-                    menu.log_highlight();
+                    menu.changed(cx);
                     cx.notify();
                 }
             })
@@ -1072,23 +1156,27 @@ impl ContextMenu {
         let modifiers = event.keystroke.modifiers;
         // A shortcut closes the menu, as the menu shows them but doesn't run them.
         if modifiers.platform || modifiers.control {
-            return self.close(None, cx);
+            return self.close(Closed::Otherwise, cx);
         }
         if let Some(key) = key_of(event) {
             let outcome = shown.tracking.key(key, Instant::now());
             self.outcome(outcome, cx);
-            self.log_highlight();
+            self.changed(cx);
         }
     }
 
-    /// Logs the highlight as it moves, with its row in the browser window's content, for check.sh
-    /// to follow the keys and the pointer: the deepest level's, else the row whose submenu shows.
-    /// And each submenu as it opens, with its panel, and as it closes.
-    fn log_highlight(&mut self) {
+    /// Follows what the keys and the pointer did. Logs the highlight as it moves, with its row in
+    /// the browser window's content, for check.sh to follow them: the deepest level's, else the
+    /// row whose submenu shows. And each submenu as it opens, with its panel, and as it closes,
+    /// when a window that can't blend is shown again with the panels open now.
+    fn changed(&mut self, cx: &mut Context<Self>) {
         let Some(shown) = self.shown.as_mut() else { return };
         let tracking = &shown.tracking;
-        let open: Vec<usize> =
-            tracking.open[1..].iter().filter_map(|open| tracking.layout.levels[open.level].parent).collect();
+        let open = tracking.open_submenus();
+        if !shown.blends && open != shown.logged_open {
+            let (host, frame, panels) = (self.host.clone(), tracking.layout.frame, shown.panels());
+            cx.defer(move |_| host.show(frame, &panels));
+        }
         let kept = open.iter().zip(&shown.logged_open).take_while(|(a, b)| a == b).count();
         for &closed in shown.logged_open[kept..].iter().rev() {
             log!("browser: menu submenu {} hidden", tracking.entries[closed].title);
@@ -1154,6 +1242,7 @@ impl ContextMenu {
             false => (highlight.fill, highlight.label),
         };
         let label: Hsla = match (lit, entry.enabled, entry.destructive) {
+            _ if entry.header => rgba(palette.secondary).into(),
             (true, ..) => on_fill.into(),
             (false, false, _) => rgba(palette.disabled).into(),
             (false, true, true) => rgba(palette.destructive).into(),
@@ -1214,7 +1303,9 @@ impl ContextMenu {
         };
         let a11y = self.a11y;
         let name = entry.title.clone();
-        let (enabled, checked, keys) = (entry.enabled, entry.checked, shortcut.clone());
+        let enabled = entry.enabled || entry.header;
+        let (checked, keys) = (entry.checked, shortcut.clone());
+        let header = entry.header;
         let radio = checked && level != 0;
         // Where it stands among the level's items, as VoiceOver says it: "3 of 11".
         let titled = |items: &[usize]| items.iter().filter(|&&i| !tracking.entries[i].title.is_empty()).count();
@@ -1235,10 +1326,21 @@ impl ContextMenu {
             .children(check)
             .children(swatch)
             .children(favicon)
-            .child(div().flex_1().min_w_0().truncate().text_color(label).child(entry.title.clone()))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(label)
+                    .when(entry.header, |title| {
+                        title.text_size(px(HEADER_TEXT)).font_weight(gpui::FontWeight::SEMIBOLD)
+                    })
+                    .child(entry.title.clone()),
+            )
             .children(trailing)
             .when(a11y, |row| {
                 let role = match (checked, radio) {
+                    _ if header => Role::Heading,
                     (true, true) => Role::MenuItemRadio,
                     (true, false) => Role::MenuItemCheckBox,
                     _ => Role::MenuItem,
@@ -1283,11 +1385,11 @@ impl ContextMenu {
             .top(at.y)
             .w(level.bounds.size.width)
             .h(level.bounds.size.height)
-            .rounded(px(RADIUS))
+            // Where the window can't blend, a round corner or a shadow would show black.
+            .when(shown.blends, |panel| panel.rounded(px(RADIUS)).shadow(Elevation::Popover.shadow()))
             .bg(rgba(palette.fill))
             .border_1()
             .border_color(rgba(palette.rim))
-            .shadow(Elevation::Popover.shadow())
             .text_size(px(TEXT))
             .children(rows)
             // The root level's rows go under the window's own node, which has the keyboard.
@@ -1338,6 +1440,16 @@ impl Render for ContextMenu {
                 false => window.request_animation_frame(),
             }
         }
+        // check.sh waits for these lines to capture a submenu.
+        if let Some(shown) = self.shown.as_mut()
+            && window.is_visible()
+        {
+            let open = shown.tracking.open_submenus();
+            for &opened in open.iter().filter(|opened| !shown.drawn_open.contains(opened)) {
+                log!("browser: menu submenu {} drawn", shown.tracking.entries[opened].title);
+            }
+            shown.drawn_open = open;
+        }
         let Some(shown) = self.shown.as_ref() else { return root };
         let panels: Vec<_> = (0..shown.tracking.open.len()).map(|depth| self.panel(shown, depth)).collect();
         // On a platform whose host doesn't see the pointer first (Linux, the preview), the
@@ -1345,7 +1457,7 @@ impl Render for ContextMenu {
         let on = |event: Pointer| {
             cx.listener(move |menu: &mut Self, at: &Point<Pixels>, _: &mut Window, cx: &mut Context<Self>| {
                 menu.pointer(event, *at, cx);
-                menu.log_highlight();
+                menu.changed(cx);
             })
         };
         let (moved, pressed, right) = (on(Pointer::Moved), on(Pointer::Pressed), on(Pointer::RightPressed));

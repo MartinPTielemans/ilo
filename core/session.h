@@ -83,6 +83,8 @@ struct SavedSpace {
   std::string icon;
   // The theme the UI gave it, if any.
   std::string theme;
+  // Space::touched(), which a session saved before Spaces had it can't say, so it was.
+  bool touched = true;
   // Its profile's directory, or empty for the profile the core started with.
   std::string profile;
   // The agent it belongs to, or none for the user's own, as every Space saved before agents had
@@ -151,6 +153,9 @@ bool RestoreSavedWindow(Window& window, size_t index);
 struct Settings {
   // How long a Today tab no window shows waits before it goes in the archive.
   base::TimeDelta archive_after = base::Hours(12);
+  // How long a Little ilo window that isn't active waits before it closes into the archive (Arc's
+  // default).
+  base::TimeDelta little_archive_after = base::Hours(6);
   // Whether the app taps the trackpad at its detents.
   bool haptics = true;
   // Whether the app asks before the user's Quit quits.
@@ -193,6 +198,18 @@ Settings& UserSettings();
 // Puts the favorites and Spaces the last launch saved in |window|, which shows what the front
 // window showed (RestoreSavedWindow), unless there are Spaces already. Returns whether it did.
 bool RestoreSession(Window& window);
+
+// The sidebar's backups, as Arc's Help › Restore Data has them, but each profile's apart, in its
+// own directory: its Spaces and favorites, as the session file keeps them. One is taken as the
+// Spaces are saved anyway, if the profile's newest is an hour old, so nothing wakes an idle
+// browser for it. Arc's schedule keeps ten from today, then one a day for ten days, one a week to
+// a month back and one a month to a year back. The app hears of each profile's through
+// sidebar_backups_changed.
+
+// Brings back the sidebar of the profile of the Space |window| shows from its backup taken at
+// |time|, once the sidebar as it is has become a backup too, so this can be undone the same way.
+// Returns whether it will: not in a private window or an agent's Space.
+bool RestoreSidebar(Window& window, base::Time time);
 
 }  // namespace browser_core
 

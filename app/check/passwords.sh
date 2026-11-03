@@ -26,17 +26,7 @@ cdp_log="$out/passwords-cdp.log"
 step=0
 passwords_profile="$PWD/$out/passwords-profile"
 scratch=$(mktemp -d)
-mkfifo "$scratch/to-browser" "$scratch/from-browser" "$scratch/cdp"
-# Each end of a pipe waits for the other to open, in this order: the driver's, the browser's
-# DevTools pipe, then cdp.py's input.
-BROWSER_DRIVE=1 BROWSER_URL="${site}login.html" BROWSER_PROFILE_DIR="$passwords_profile" \
-  "$browser" --remote-debugging-pipe < "$out/drive" 3< "$scratch/to-browser" \
-  4> "$scratch/from-browser" > "$log" 2>&1 &
-pid=$!
-python3 -I -u check/cdp.py "$scratch/to-browser" "$scratch/from-browser" /login.html \
-  < "$scratch/cdp" > "$cdp_log" 2>&1 &
-exec 3> "$out/drive"
-exec 5> "$scratch/cdp"
+start_with_cdp "${site}login.html" "$passwords_profile" /login.html
 await_load
 await '^browser: title [0-9]* login$' || fail "the login page didn't draw"
 tab=$(today)
@@ -59,7 +49,6 @@ send click 600 60
 if [ "$active" != 1 ]; then
   exec 3>&- 5>&-
   quit
-  kill "$server"
   echo "skip: passwords. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
@@ -287,10 +276,10 @@ expect "^browser: passwords [0-9]*: 127.0.0.1:$port check@example.test\$" \
   "Settings didn't list the saved login alone: $(grep '^browser: passwords ' "$log" | tail -1)"
 ../tools/window-screenshot.sh "$pid" "$out/settings-passwords.png" || fail "no window to capture"
 post clickkey $(drawn "remove login 0")
-# Settings asks in an alert, and off the Mac, which has none, in its dialog, where escape cancels.
-# The dialog covers Settings, taking its keys, until it has gone.
+# Settings asks in an alert, the Mac's or Windows' task dialog, and on Linux, which has none, in its
+# dialog, where escape cancels. The dialog covers Settings, taking its keys, until it has gone.
 asks=alert
-[ "$(uname)" = Darwin ] || asks=dialog
+[ "$(uname)" = Linux ] && asks=dialog
 expect "^browser: $asks shown Remove the password for “check@example.test” on 127.0.0.1:$port?\$" \
   "Remove in Settings didn't ask first"
 if [ "$asks" = dialog ]; then

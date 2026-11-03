@@ -24,12 +24,11 @@ const RUNS_EVERYTHING = [
   /^\.github\/actions\/ci-changes\//,
 ];
 
-// Nothing a job builds reads these, nor Markdown anywhere. Spikes and the prototype stand alone
-// (AGENTS.md), and tools/ holds scripts for working on the repo.
+// Nothing a job builds reads these, nor Markdown anywhere. Spikes stand alone (AGENTS.md), and
+// tools/ holds scripts for working on the repo.
 const INERT = [
   /^docs\//,
   /^(LICENSE|NOTICE|\.gitignore)$/,
-  /^prototypes\//,
   /^spikes\//,
   /^tools\//,
   /^\.github\/(ISSUE_TEMPLATE|triage)\//,

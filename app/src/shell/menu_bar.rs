@@ -30,6 +30,18 @@ pub struct MenuBar {
     pub profiles: Option<(Vec<ProfileChoice>, bool)>,
     /// View › Appearance's choice, which it checks.
     pub appearance: Appearance,
+    /// Help › Restore Earlier Sidebar: the backups of the shown Space's profile's sidebar, newest
+    /// first. None in a private window or an agent's Space.
+    pub sidebar_backups: Vec<SidebarBackup>,
+}
+
+/// A backup of a profile's sidebar, as the core lists it.
+#[derive(Clone, PartialEq, Debug)]
+pub struct SidebarBackup {
+    /// When it was taken, in milliseconds since 1970.
+    pub time: u64,
+    /// When, as the user's locale writes it.
+    pub label: SharedString,
 }
 
 /// A profile a Space can be in, as its menus list it.
@@ -105,6 +117,11 @@ impl Shell {
             tracing: trace::recording(cx),
             profiles: self.profile_choices(self.space).filter(|_| !self.private),
             appearance: self.app_appearance,
+            sidebar_backups: (self.shown_space())
+                .filter(|space| !self.private && space.agent.is_empty())
+                .and_then(|space| self.sidebar_backups.get(&space.profile))
+                .cloned()
+                .unwrap_or_default(),
         }
     }
 
@@ -174,6 +191,29 @@ mod tests {
         shell.update(cx, |shell, cx| shell.set_tabs(1, vec![1], vec![10], Vec::new(), shut, cx));
         let item = host.menu_bar.borrow().pinned_item();
         assert_eq!(item, ("Expand Pinned Tabs", Command::ExpandPinned));
+    }
+
+    /// Tabs › Pin Tab pins the tab shown while its page loads, as the menu sends it to the shell
+    /// whatever the page is doing (#1289).
+    #[gpui::test]
+    fn the_menu_bar_pins_a_loading_page(cx: &mut TestAppContext) {
+        let (shell, host) = shell_with(cx, &[1], &[10], Folders::default());
+        cx.update(crate::shell::bind_keys);
+        let loading = Page { url: "https://example.com/".into(), loading: true, ..Page::default() };
+        shell.update(cx, |shell, cx| {
+            shell.set_selected(10, cx);
+            shell.set_page(10, loading, cx);
+        });
+        assert_eq!(host.menu_bar.borrow().pin_title(), "Pin Tab");
+        host.take_edits();
+        cx.update(|cx| cx.dispatch_action(&crate::shell::Run(Command::TogglePin)));
+        assert_eq!(host.take_edits(), ["pinned 10 true"]);
+        shell.update(cx, |shell, cx| {
+            shell.set_tabs(1, vec![1, 10], Vec::new(), Vec::new(), Folders::default(), cx)
+        });
+        assert_eq!(host.menu_bar.borrow().pin_title(), "Unpin Tab");
+        cx.update(|cx| cx.dispatch_action(&crate::shell::Run(Command::TogglePin)));
+        assert_eq!(host.take_edits(), ["pinned 10 false"]);
     }
 
     /// View › Developer turns the page's Developer Mode the other way, named by what it would do,

@@ -39,6 +39,8 @@ impl What {
     pub const CLOSE_TAB: What = What::quiet("Close Tab");
     pub const CLOSE_TABS: What = What::said("Close Tabs", "Tabs Closed");
     pub const CLOSE_PREVIEW: What = What::quiet("Close Link Preview");
+    pub const REMOVE_TAB: What = What::said(super::rows::REMOVE_TIP, "Tab Removed");
+    pub const DISMISS_TASK: What = What::quiet("Dismiss Task");
     pub const PIN: What = What::quiet("Pin Tab");
     pub const UNPIN: What = What::quiet("Unpin Tab");
     pub const PIN_TABS: What = What::quiet("Pin Tabs");
@@ -51,10 +53,12 @@ impl What {
     pub const DUPLICATE: What = What::quiet("Duplicate");
     pub const MOVE_FAVORITE: What = What::quiet("Move Favorite");
     pub const MOVE_TO_SPACE: What = What::said("Move to Space", "Tab Moved to Space");
+    pub const MOVE_FOLDER_TO_SPACE: What = What::said("Move to Space", "Folder Moved to Space");
     pub const DELETE_FOLDER: What = What::said("Delete Folder", "Folder Deleted");
     pub const REMOVE_FROM_SPLIT: What = What::quiet("Remove from Split");
     pub const SPLIT: What = What::quiet("Split View");
-    pub const CHANGE_ORIENTATION: What = What::quiet("Change Orientation");
+    pub const CONVERT_VERTICAL: What = What::quiet("Convert to Vertical Split View");
+    pub const CONVERT_HORIZONTAL: What = What::quiet("Convert to Horizontal Split View");
     pub const RENAME_TAB: What = What::quiet("Rename Tab");
     pub const RENAME_FOLDER: What = What::quiet("Rename Folder");
     pub const RENAME_SPACE: What = What::quiet("Rename Space");
@@ -132,10 +136,17 @@ pub(super) enum Value {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Edit {
     /// Reopens closed Today tabs, by the ids they had, behind the tab shown, and shows `show`, the
-    /// one that was shown when they closed, if it's among them.
+    /// one that was shown when they closed, if it's among them. They're in the reverse of the
+    /// order they closed in: the core puts each back where it was then, and a split's pane only
+    /// beside one still open as it closed, which the one reopened before it has become (#1361).
     Reopen { tabs: Vec<u64>, show: Option<u64> },
-    /// Closes Today tabs.
+    /// Closes Today tabs, last first, so the Reopen it returns has them in that order.
     Close(Vec<u64>),
+    /// Reopens the tabs of a pinned row the user removed, by the ids they had, each with the URL it
+    /// went back to, and pins the row again at `spot`.
+    Repin { tabs: Vec<(u64, String)>, spot: Spot },
+    /// Removes a pinned row from the pinned tabs, as its remove button does.
+    Remove(u64),
     /// Puts a tab, a favorite or a folder at a spot, and a pinned tab's or favorite's URL back.
     Put {
         tab: u64,
@@ -161,6 +172,13 @@ pub(super) enum Edit {
         with: u64,
         left: bool,
         stacked: bool,
+    },
+    /// Puts a split view, by its tabs in order, at a spot, in another Space too, joined there
+    /// again and stacked if `stacked`, as the core moves a tab to another Space alone.
+    MoveSplit {
+        tabs: Vec<u64>,
+        stacked: bool,
+        spot: Spot,
     },
     /// Takes a tab out of the split view it joined, with `back`: the `Put` back to its row and
     /// place, or the `Join` back to the split it was in. The tab shown stays shown.
@@ -193,6 +211,12 @@ pub(super) enum Edit {
     ReopenPreview(Closed),
     /// Closes the link preview over the tab, which Redo does.
     ClosePreview(Closed),
+    /// Brings back the agent task ✕ dismissed, by its agent's id (Agent task).
+    RestoreTask(SharedString),
+    DismissTask(SharedString),
+    /// Puts back in the Archive the task Delete from Archive took out, which Redo deletes again.
+    UndeleteTask(SharedString),
+    DeleteTask(SharedString),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -243,6 +267,13 @@ impl Edit {
                 show.iter_mut().for_each(|each| id_of(each, from, to));
             }
             Edit::Close(tabs) => ids(tabs),
+            Edit::Repin { tabs, spot } => {
+                tabs.iter_mut().for_each(|(each, _)| id_of(each, from, to));
+                if let At::Pinned { folder, .. } = &mut spot.at {
+                    id(folder);
+                }
+            }
+            Edit::Remove(tab) => id(tab),
             Edit::Put { tab, spot, .. } => {
                 id(tab);
                 if let At::Pinned { folder, .. } = &mut spot.at {
@@ -268,7 +299,14 @@ impl Edit {
                 id(tab);
                 back.rekey(from, to);
             }
+            Edit::MoveSplit { tabs, spot, .. } => {
+                ids(tabs);
+                if let At::Pinned { folder, .. } = &mut spot.at {
+                    id(folder);
+                }
+            }
             Edit::ReopenPreview(closed) | Edit::ClosePreview(closed) => id(&mut closed.over),
+            Edit::RestoreTask(_) | Edit::DismissTask(_) | Edit::UndeleteTask(_) | Edit::DeleteTask(_) => {}
             Edit::Set(prop, _) => match prop {
                 Prop::TabName(each)
                 | Prop::TabIcon(each)
@@ -287,15 +325,16 @@ impl Edit {
         }
     }
 
-    /// Where a part of a `Many` step goes among the others: a folder made again first, the
-    /// moves down each list, and a folder deleted last.
+    /// Where a part of a `Many` step goes among the others: a folder made again and a tab taken
+    /// out of its split first, the moves down each list, and a folder deleted and a tab joining a
+    /// split last, so it joins the row where the moves put it.
     fn order(&self) -> (u8, usize) {
         match self {
-            Edit::Restore(_) => (0, 0),
+            Edit::Restore(_) | Edit::Unsplit { .. } => (0, 0),
             Edit::Put { spot, .. } => match spot.at {
                 At::Favorite(index) | At::Pinned { index, .. } | At::Today(index) => (1, index),
             },
-            Edit::Delete(_) => (2, 0),
+            Edit::Delete(_) | Edit::Split { .. } => (2, 0),
             _ => (1, 0),
         }
     }
@@ -303,6 +342,22 @@ impl Edit {
     /// Does the step, and returns the one that undoes it.
     fn apply(self, shell: &mut Shell, cx: &mut Context<Shell>) -> Option<Edit> {
         match self {
+            Edit::RestoreTask(agent) => {
+                shell.browser.task(agent.clone(), crate::agents::task::TaskAction::Restore, cx);
+                Some(Edit::DismissTask(agent))
+            }
+            Edit::DismissTask(agent) => {
+                shell.browser.task(agent.clone(), crate::agents::task::TaskAction::Dismiss, cx);
+                Some(Edit::RestoreTask(agent))
+            }
+            Edit::UndeleteTask(agent) => {
+                shell.browser.task(agent.clone(), crate::agents::task::TaskAction::Undelete, cx);
+                Some(Edit::DeleteTask(agent))
+            }
+            Edit::DeleteTask(agent) => {
+                shell.browser.task(agent.clone(), crate::agents::task::TaskAction::Delete, cx);
+                Some(Edit::UndeleteTask(agent))
+            }
             Edit::Reopen { tabs: closed, show } => {
                 let mut tabs = Vec::new();
                 let mut shown = None;
@@ -325,10 +380,38 @@ impl Edit {
             Edit::Close(tabs) => {
                 let tabs: Vec<u64> = tabs.into_iter().filter(|&tab| shell.has_tab(tab)).collect();
                 let show = shell.shown_among(&tabs);
-                for &tab in &tabs {
+                for &tab in tabs.iter().rev() {
                     shell.browser.close(tab, false, cx);
                 }
                 (!tabs.is_empty()).then_some(Edit::Reopen { tabs, show })
+            }
+            Edit::Repin { tabs: closed, spot } => {
+                let At::Pinned { folder, index } = spot.at else {
+                    return None;
+                };
+                // Last first: each pane left the split as it closed, so only the one before the
+                // last names a tab of it, and the core puts each back beside the one it names,
+                // which the one reopened before it has become. They come back at the top of
+                // Today, where they closed.
+                let mut tabs = Vec::new();
+                for (old, url) in closed.into_iter().rev() {
+                    let new = shell.browser.reopen_tab(old, cx);
+                    if new != 0 {
+                        shell.history.rekey(old, new);
+                        tabs.push((new, url));
+                    }
+                }
+                let &(first, _) = tabs.last()?;
+                shell.browser.move_tab(first, true, folder, index, cx);
+                for (tab, url) in tabs.iter().filter(|(_, url)| !url.is_empty()) {
+                    shell.browser.set_pinned_url(*tab, url, cx);
+                }
+                Some(Edit::Remove(first))
+            }
+            Edit::Remove(tab) => {
+                let back = shell.repin_of(tab)?;
+                shell.unpin_and_close(tab, cx);
+                Some(back)
             }
             Edit::Put { tab, spot, url } => {
                 let now = shell.spot_of(tab)?;
@@ -359,6 +442,21 @@ impl Edit {
                 }
                 shell.browser.split_with(tab, with, left, cx);
                 Some(Edit::Separate(tab))
+            }
+            Edit::MoveSplit { tabs, stacked, spot } => {
+                let first = *tabs.first()?;
+                let now = shell.spot_of(first)?;
+                if now.space != spot.space {
+                    shell.move_split(&tabs, stacked, spot.space, cx);
+                }
+                match spot.at {
+                    At::Pinned { folder, index } => {
+                        shell.browser.move_tab(first, true, folder, index, cx)
+                    }
+                    At::Today(index) => shell.browser.move_tab(first, false, 0, index, cx),
+                    At::Favorite(_) => {}
+                }
+                Some(Edit::MoveSplit { tabs, stacked, spot: now })
             }
             Edit::Separate(tab) => {
                 let join = shell.join_of(tab)?;
@@ -491,8 +589,10 @@ impl Shell {
             return;
         };
         // ⇧⌘T reopens what closed last: a tab closed since comes before the preview.
-        if matches!(edit, Edit::Reopen { .. } | Edit::UndoClear { .. }) {
+        if matches!(edit, Edit::Reopen { .. } | Edit::Repin { .. } | Edit::UndoClear { .. }) {
             self.closed_preview = None;
+            self.closed_pinned = None;
+            self.closed_task = None;
         }
         self.history.redo.clear();
         self.history.undo.push(Entry { what, edit });
@@ -584,6 +684,7 @@ impl Shell {
             return;
         }
         self.closed_preview = Some(closed.clone());
+        self.closed_pinned = None;
         if !undone {
             self.keep(What::CLOSE_PREVIEW, Some(Edit::ReopenPreview(closed)), cx);
         }
@@ -604,13 +705,17 @@ impl Shell {
         self.closed_preview = None;
         // check.sh waits for this line.
         log!("browser: link preview reopened over {} via {via}", closed.over);
-        self.browser.reopen_preview(closed, page, cx);
+        self.browser.open_preview(closed.over, closed.url.clone(), closed.link, page, cx);
         true
     }
 
     /// ⇧⌘T: the link preview the user closed, if no tab has closed since, else the tab closed
     /// last. ⌘Z then has nothing of the preview's to reopen.
     pub(super) fn reopen_closed(&mut self, cx: &mut Context<Self>) {
+        // The task dismissed last, unless a tab has closed since (Agent task).
+        if let Some((agent, _)) = self.closed_task.take() {
+            return self.bring_back_task(agent, cx);
+        }
         if let Some(closed) = self.closed_preview.clone()
             && self.reopen_preview(&closed, "reopen-closed-tab", cx)
         {
@@ -620,21 +725,53 @@ impl Shell {
             return;
         }
         self.closed_preview = None;
+        // Unless ⌘Z has put it back already, which takes its step off the history.
+        if let Some(back) = self.closed_pinned.take() {
+            let kept = self.history.undo.len();
+            self.history.undo.retain(|entry| entry.edit != back);
+            if self.history.undo.len() < kept && back.apply(self, cx).is_some() {
+                self.send_edit_titles(false, cx);
+                return;
+            }
+        }
         self.browser.reopen_closed_tab(cx);
+    }
+
+    /// Brings the dismissed task `agent` back, by ⇧⌘T or from the Archive, which takes its
+    /// dismissal off the history, as it has nothing left to undo.
+    pub(super) fn bring_back_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+        if self.closed_task.as_ref().is_some_and(|(closed, _)| *closed == agent) {
+            self.closed_task = None;
+        }
+        let restore = Edit::RestoreTask(agent.clone());
+        self.history.undo.retain(|entry| entry.edit != restore);
+        self.browser.task(agent, crate::agents::task::TaskAction::Restore, cx);
+        self.send_edit_titles(false, cx);
     }
 
     // What the user did, each remembered with how to take it back. The calls to the browser are
     // the ones the user's gestures made before, so there's no second path to keep in step.
 
     /// Closes `tab` (and its split's rest, if `split`), a Today tab as ⌘Z reopens at its place.
-    /// A pinned tab or a favorite keeps its row, and only its page goes.
+    /// A pinned tab or a favorite keeps its row, and only its page goes: a pinned tab's pane leaves
+    /// its split, which ⌘Z and ⇧⌘T put it back in, as they would a Today tab's.
     pub(super) fn close_tab(&mut self, tab: u64, split: bool, cx: &mut Context<Self>) {
         let closing = self
             .spot_of(tab)
             .filter(|spot| matches!(spot.at, At::Today(_)));
+        if closing.is_none()
+            && !split
+            && let Some(join) = self.join_of(tab)
+        {
+            self.browser.close(tab, false, cx);
+            self.closed_preview = None;
+            self.closed_pinned = (!self.private).then(|| join.clone());
+            return self.keep(What::CLOSE_TAB, Some(join), cx);
+        }
+        // The core closes a split's panes in their order, so they reopen last first.
         let tabs = match (closing, split) {
             (None, _) => Vec::new(),
-            (Some(_), true) => self.panes(tab),
+            (Some(_), true) => self.panes(tab).into_iter().rev().collect(),
             (Some(_), false) => vec![tab],
         };
         let show = self.shown_among(&tabs);
@@ -645,6 +782,38 @@ impl Shell {
             What::CLOSE_TAB
         };
         self.keep(what, (!tabs.is_empty()).then_some(Edit::Reopen { tabs, show }), cx);
+    }
+
+    /// Removes the pinned row whose first tab is `tab` from the pinned tabs, with its split, as
+    /// its remove button does. It goes to the archive, as unpinning and closing it would, and not
+    /// into Today; ⌘Z and ⇧⌘T pin it again at its place.
+    pub(super) fn remove_pinned(&mut self, tab: u64, cx: &mut Context<Self>) {
+        let Some(back) = self.repin_of(tab) else {
+            return;
+        };
+        self.unpin_and_close(tab, cx);
+        self.keep(What::REMOVE_TAB, Some(back.clone()), cx);
+        self.closed_pinned = (!self.private).then_some(back);
+    }
+
+    /// The core has no call that removes a pinned tab, so it's the two the other way takes: Unpin,
+    /// which puts the row at the top of Today, and closing it there.
+    fn unpin_and_close(&mut self, tab: u64, cx: &mut Context<Self>) {
+        self.browser.set_pinned(tab, false, cx);
+        self.browser.close(tab, true, cx);
+    }
+
+    /// The step that pins the row whose first tab is `tab` again where it is, once it's removed.
+    fn repin_of(&self, tab: u64) -> Option<Edit> {
+        if self.is_folder_anywhere(tab) {
+            return None;
+        }
+        let spot = self.spot_of(tab).filter(|spot| matches!(spot.at, At::Pinned { .. }))?;
+        let space = self.spaces.iter().find(|space| space.id == spot.space)?;
+        let tabs = (space.panes(tab).into_iter())
+            .map(|pane| (pane, self.browser.pinned_url(pane)))
+            .collect();
+        Some(Edit::Repin { tabs, spot })
     }
 
     /// Closes the Today tabs below `tab`.
@@ -719,8 +888,9 @@ impl Shell {
         self.keep(what, before, cx);
     }
 
-    /// Moves `tab` to `space`, pinning it first if `pin`, which the one undo takes back too. Into
-    /// another profile's Space it goes as a new tab, which has nothing to give back.
+    /// Moves `tab` to `space`, pinning it first if `pin`, which the one undo takes back too, with
+    /// the rest of its split view, or a folder with what's in it. Into another profile's Space it
+    /// goes as a new tab, which has nothing to give back, as the tabs of a folder do.
     pub(super) fn send_to_space(
         &mut self,
         tab: u64,
@@ -738,14 +908,48 @@ impl Shell {
             let from = this.spot_of(tab).and_then(|spot| profile(spot.space));
             from.is_some() && from == profile(space)
         };
-        let before = same_profile(self).then(|| self.put_back(tab)).flatten();
-        // The core moves a pinned tab pinned, into another profile's Space too.
+        let same_profile = same_profile(self);
+        let before = same_profile.then(|| self.put_back(tab)).flatten();
+        if self.is_folder_anywhere(tab) {
+            self.browser.move_folder_to_space(tab, space, cx);
+            return self.keep(What::MOVE_FOLDER_TO_SPACE, before, cx);
+        }
+        // The core moves a pinned tab pinned, into another profile's Space too, and pins a split
+        // whole.
         let pinned = matches!(self.spot_of(tab).map(|spot| spot.at), Some(At::Pinned { .. }));
         if pin && !pinned {
             self.browser.set_pinned(tab, true, cx);
         }
+        // A split moves whole, as its row does in its Space (Arc).
+        if let Some((tabs, stacked)) = self.split_of(tab) {
+            if !same_profile {
+                // There the core makes each page a new tab, in a row of its own.
+                for &each in &tabs {
+                    self.browser.move_to_space(each, space, cx);
+                }
+                return self.keep(What::MOVE_TO_SPACE, None, cx);
+            }
+            let spot = self.spot_of(tab);
+            let before = spot.map(|spot| Edit::MoveSplit { tabs: tabs.clone(), stacked, spot });
+            self.move_split(&tabs, stacked, space, cx);
+            return self.keep(What::MOVE_TO_SPACE, before, cx);
+        }
         self.browser.move_to_space(tab, space, cx);
         self.keep(What::MOVE_TO_SPACE, before, cx);
+    }
+
+    /// Moves a split view's `tabs` to `space` and joins them again there, in their order and
+    /// orientation, at even sizes.
+    fn move_split(&mut self, tabs: &[u64], stacked: bool, space: u64, cx: &mut Context<Self>) {
+        for &tab in tabs {
+            self.browser.move_to_space(tab, space, cx);
+        }
+        for pair in tabs.windows(2) {
+            self.browser.split_with(pair[1], pair[0], false, cx);
+        }
+        if stacked {
+            self.browser.set_split_stacked(tabs[0], true, cx);
+        }
     }
 
     /// Deletes `folder`, leaving what's in it where it is.
@@ -762,6 +966,14 @@ impl Shell {
         self.keep(What::REMOVE_FROM_SPLIT, join, cx);
     }
 
+    /// Takes every tab of `tab`'s split view out of it, each a step to undo, from the right, so
+    /// the pages keep their order in the list.
+    pub(super) fn separate_all(&mut self, tab: u64, cx: &mut Context<Self>) {
+        for &each in self.panes(tab)[1..].iter().rev() {
+            self.separate_tab(each, cx);
+        }
+    }
+
     /// Puts `tab` in a split view with `with`, at its left end if `left`, else its right end, and
     /// stacks the split if `stacked`: one step, which ⌘Z takes back to where `tab` was.
     pub(super) fn join_split(
@@ -772,6 +984,9 @@ impl Shell {
         stacked: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.favorites.contains(&with) {
+            return self.join_favorite(tab, with, left, stacked, cx);
+        }
         self.keep_split(tab, with, cx);
         self.browser.split_with(tab, with, left, cx);
         if stacked {
@@ -779,10 +994,71 @@ impl Shell {
         }
     }
 
-    /// `tab` is joining `with` in a split view, which ⌘Z takes it back out of.
+    /// `tab` joins `favorite`, which no Space holds, so a split view of them is made of a copy of
+    /// the favorite at the top of the shown Space's Today, as Arc's is. A pinned tab or a favorite
+    /// joins as a copy too, leaving both in their places, and a Today tab moves into the split, as
+    /// it does to join any other. ⌘Z closes the copies and puts a Today tab back in its place.
+    fn join_favorite(
+        &mut self,
+        tab: u64,
+        favorite: u64,
+        left: bool,
+        stacked: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let kept = self.favorites.contains(&tab) || self.pinned().contains(&tab);
+        let back = if kept { None } else { self.put_back(tab) };
+        // The copies show as they open, so the favorite's last, which the window then shows.
+        let joining = if kept { self.browser.duplicate(tab, cx) } else { tab };
+        let copy = self.browser.duplicate(favorite, cx);
+        if joining == 0 || copy == 0 {
+            return;
+        }
+        self.browser.split_with(joining, copy, left, cx);
+        if stacked {
+            self.browser.set_split_stacked(copy, true, cx);
+        }
+        // The copies close first, the favorite's last so the joining one's goes back beside it on
+        // Redo, and then the Today tab, alone again, goes back to its place.
+        let close = Edit::Close(if kept { vec![copy, joining] } else { vec![copy] });
+        let undo = match back {
+            Some(back) => Edit::Many(vec![close, back]),
+            None => close,
+        };
+        self.keep(What::SPLIT, Some(undo), cx);
+    }
+
+    /// `tab` is joining `with` in a split view, which ⌘Z takes it back out of. A pinned tab
+    /// joining a Today tab's split takes the split into its place in the pinned tabs first, as the
+    /// core moves a tab into its partner's list, so the pin is never lost to a split; the one step
+    /// undoes both.
     pub(super) fn keep_split(&mut self, tab: u64, with: u64, cx: &mut Context<Self>) {
         let undo = self.unsplit_of(tab, with);
+        let pinned = match undo {
+            Some(_) => self.pin_beside(tab, with, cx),
+            None => None,
+        };
+        let undo = match (undo, pinned) {
+            (Some(undo), Some(unpin)) => Some(Edit::Many(vec![undo, unpin])),
+            (undo, _) => undo,
+        };
         self.keep(What::SPLIT, undo, cx);
+    }
+
+    /// Pins `with`'s row, a Today tab or split, at its page in pinned `tab`'s place, for `tab` to
+    /// join it there. The step that puts it back, or None where `tab` isn't pinned or `with` isn't
+    /// a Today tab of its Space.
+    fn pin_beside(&mut self, tab: u64, with: u64, cx: &mut Context<Self>) -> Option<Edit> {
+        let (at, from) = (self.spot_of(tab)?, self.spot_of(with)?);
+        let (At::Pinned { folder, index }, At::Today(_)) = (at.at, from.at) else {
+            return None;
+        };
+        if at.space != from.space {
+            return None;
+        }
+        let back = self.put_back(with)?;
+        self.browser.move_tab(with, true, folder, index, cx);
+        Some(back)
     }
 
     /// `tab`, opened to join a split view, joined it: ⌘Z closes it.
@@ -794,7 +1070,8 @@ impl Shell {
     pub(super) fn stack_split(&mut self, tab: u64, stacked: bool, cx: &mut Context<Self>) {
         let undo = self.split_of(tab).map(|(_, now)| Edit::Stack { tab, stacked: now });
         self.browser.set_split_stacked(tab, stacked, cx);
-        self.keep(What::CHANGE_ORIENTATION, undo, cx);
+        let what = if stacked { What::CONVERT_VERTICAL } else { What::CONVERT_HORIZONTAL };
+        self.keep(what, undo, cx);
     }
 
     /// Gives a name, an icon or a colour its new value, remembering the old, unless it's the same.
@@ -828,10 +1105,24 @@ impl Shell {
         self.keep(What::DELETE_ARCHIVED, edit, cx);
     }
 
-    /// Empties the archive.
+    /// Empties the archive: its tabs, and the tasks it lists, which leave it as Delete from Archive
+    /// takes one. One ⌘Z brings both back.
     pub(super) fn empty_archive(&mut self, cx: &mut Context<Self>) {
         let removal = self.browser.clear_archive(cx);
-        let edit = (removal != 0).then_some(Edit::UndoArchive { removal, id: None });
+        let tabs = (removal != 0).then_some(Edit::UndoArchive { removal, id: None });
+        let tasks: Vec<SharedString> = self.archived_tasks.iter().map(|task| task.agent.clone()).collect();
+        if self.closed_task.as_ref().is_some_and(|(closed, _)| tasks.contains(closed)) {
+            self.closed_task = None;
+        }
+        for agent in &tasks {
+            log!("browser: remove archived task {agent}");
+            self.browser.task(agent.clone(), crate::agents::task::TaskAction::Delete, cx);
+        }
+        let mut edits: Vec<Edit> = tabs.into_iter().chain(tasks.into_iter().map(Edit::UndeleteTask)).collect();
+        let edit = match edits.len() {
+            0 | 1 => edits.pop(),
+            _ => Some(Edit::Many(edits)),
+        };
         self.keep(What::CLEAR_ARCHIVE, edit, cx);
     }
 
@@ -869,7 +1160,10 @@ impl Shell {
     fn put(&mut self, tab: u64, now: &Spot, spot: &Spot, cx: &mut Context<Self>) {
         let favorite = |at: At| matches!(at, At::Favorite(_));
         if now.space != spot.space && !favorite(now.at) && !favorite(spot.at) {
-            self.browser.move_to_space(tab, spot.space, cx);
+            match self.is_folder_anywhere(tab) {
+                true => self.browser.move_folder_to_space(tab, spot.space, cx),
+                false => self.browser.move_to_space(tab, spot.space, cx),
+            }
         }
         match spot.at {
             At::Favorite(index) => self.browser.move_to_favorites(tab, index, cx),
@@ -931,7 +1225,7 @@ impl Shell {
         made
     }
 
-    fn is_folder_anywhere(&self, row: u64) -> bool {
+    pub(super) fn is_folder_anywhere(&self, row: u64) -> bool {
         self.spaces.iter().any(|space| space.is_folder(row))
     }
 

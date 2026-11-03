@@ -16,7 +16,7 @@ Ambitious ideas, simple systems, software that feels obvious. Do not preserve co
 ## Glossary
 
 - **Space** and **profile** are different things (decision 5). A Space is a tab container: pinned tabs, Today tabs, a color. A profile holds cookies, history, logins and extensions. Several Spaces share one profile.
-- **Agent** means an external AI client (Claude Code, Codex, any MCP client) driving the browser through its built-in MCP server. It works in its own **Agent Space**. It's not an assistant inside the browser, and it's not you.
+- **Agent** means an AI client driving the browser through its built-in MCP server: one from outside (Claude Code, Codex, any MCP client), working in its own **Agent Space**, or the user's own `claude` or `codex` CLI that ilo runs for a task they asked from ⌘T. It's never an assistant of ilo's own, and it's not you.
 - **Handoff**: the agent's tab pauses at a sign-in, 2FA or CAPTCHA, and the user does that step.
 - **Engine**: Chromium built as Chrome's framework, from ungoogled-chromium plus `engine/series`. **Core**: our portable C++ inside Chromium (`//browser_core`), with each native window holding a Chrome `Browser` per profile. **UI**: GPUI, calling the core through the plain C API in `core/public/browser_core.h`, since the app and Chromium build with different C++ standard libraries. **Platform layer**: the only per-OS code.
 
@@ -45,7 +45,7 @@ The most common defect is a change that works on the path you tested and is miss
 - **Platforms.** Mac ships first, but the core compiles on Linux (`engine/check-linux.sh`) and per-OS code stays in the platform layer. A PR touching it (`app/platform/`, `host.h`) or what the OS draws (window material, overlay corners and shadows, window controls, key routing, IME, scaling) shows before and after on each OS.
 - **Hot paths.** A change to tab switch, new tab, the command bar or launch comes with before-and-after numbers against the performance gate.
 - **The look.** A visual change goes through `app/design/tokens.toml`, and the design file follows with `tools/design-sync.md`.
-- **Docs.** A changed decision means rewriting its entry in `docs/decisions.md`. A phase that changes state updates the status table in `README.md`.
+- **Docs.** A changed decision means rewriting its entry in `docs/decisions.md`. A phase that changes state updates `docs/roadmap.md`.
 - **Reverse states.** If you added a way in, add the way out and the way to see it. A one-way door is a bug: a permission an agent can be granted needs a revoke and a place where it's listed.
 
 ## Dev
@@ -82,7 +82,7 @@ The most common defect is a change that works on the path you tested and is miss
 
 ## Where code lives
 
-`README.md`'s layout table lists the folders. Read `engine/README.md` before touching the engine's pins or patches. `prototypes/arcish/agent.js` is frozen, kept as the reference for agents' tools and rules; new work goes into the real stack. `spikes/` holds one experiment per open question: when one works, rewrite what it proved into the real tree, and nothing outside `spikes/` depends on it.
+Read `engine/README.md` before touching the engine's pins or patches. `spikes/` holds one experiment per open question: when one works, rewrite what it proved into the real tree, and nothing outside `spikes/` depends on it.
 
 ## Taste
 

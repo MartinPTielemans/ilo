@@ -3,13 +3,14 @@
 # Each run's file in check/ says what it checks. ./check.sh tabs spaces does only those runs, in
 # that order, and ./check.sh all of them:
 #   load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear
-#   split favorites cards extensions adblock adblock-lists windows private capture media
+#   split favorites cards extensions adblock adblock-lists windows private little capture media
 #   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp
-#   appearance about
+#   appearance about sync sync-account sync-devices switch-frames
 # The store run installs from Google's Web Store, adblock-live blocks Google's ad servers with
 # uBlock Origin's own lists and widevine, Linux's alone, downloads Google's Widevine module, so they
 # need the network and run only when named: ./check.sh store.
-# Updates runs only when named too, until it passes on the Mac. So does keychain, which uses the
+# Updates runs only when named too, until it passes on the Mac, and so does nightly, which builds a
+# check copy of its own (build.sh updates), on the Mac and Windows. So does keychain, which uses the
 # real Keychain, on the prod build and only in a check VM. Shots takes the Store's pictures from
 # pages on the internet, so it runs only when named too.
 # Every run but load and crash needs Browser to be the active app, and window, find and updates
@@ -66,15 +67,24 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
   exec ../tools/headless.sh --x11 --run ./check.sh "$@"
 fi
 runs="load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear"
-runs="$runs split favorites cards extensions adblock adblock-lists windows private capture media"
+runs="$runs split favorites cards extensions adblock adblock-lists windows private little capture media"
 runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp"
-runs="$runs appearance about"
-named="store adblock-live widevine updates keychain shots"
+runs="$runs appearance about sync sync-account sync-devices switch-frames"
+named="store adblock-live widevine updates nightly keychain shots"
 for run in "$@"; do
   case " $runs $named " in
     *" $run "*) ;;
     *) echo "FAIL: there's no run $run. The runs: $runs $named" >&2; exit 1 ;;
   esac
+done
+# A file sourced with a syntax error ends the check where it stands, with the status of the EXIT
+# trap's last command, 0 under the Mac's sh, and the runs after it never start (#1267). So each
+# file the check sources is parsed before any run starts.
+for file in lib site ilo-server ${*:-$runs}; do
+  why=$(sh -n "check/$file.sh" 2>&1) || {
+    echo "FAIL: check/$file.sh doesn't parse: $why" >&2
+    exit 1
+  }
 done
 out=build/check
 windows() {
@@ -86,6 +96,12 @@ windows() {
 # resolves a relative path against its own folder, not the directory it started in (#997).
 app_path() {
   if windows; then cygpath -m "$1"; else printf '%s\n' "$1"; fi
+}
+# The absolute path $1 as Windows names it, with backslashes, for a download folder: Chrome moves
+# each download into it with the Shell's IFileOperation, which takes no D:/a/..., so every download
+# failed (#872).
+native_path() {
+  if windows; then cygpath -w "$1"; else printf '%s\n' "$1"; fi
 }
 # The app, what runs it, the pattern that finds its processes, Chromium's helpers too, and its dev
 # profile.
@@ -152,7 +168,7 @@ defaults.pop("auto_picture_in_picture", None)
 prefs.get("browser_core", {}).pop("developer_mode", None)
 with open(sys.argv[1], "w") as f:
     json.dump(prefs, f)
-' "$prefs" "$PWD/$out/downloads"
+' "$prefs" "$(native_path "$PWD/$out/downloads")"
 python3 -I -c '
 import json, os, sys
 if not os.path.exists(sys.argv[1]):
@@ -210,5 +226,7 @@ for run in ${*:-$runs}; do
   # The windows and clear runs keep 127.0.0.1 for Safari's engine, whose pages would then open there
   # in a later run if one failed, and clear the note it closed and the listed host it turned off.
   forget_engine_sites
+  # Every run is sourced into this one shell, so a helper a run defines under a lib.sh name would
+  # replace lib.sh's for the runs after it.
   . "check/$run.sh"
 done

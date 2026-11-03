@@ -164,8 +164,9 @@ fn closing_the_tabs_below_brings_back_the_top_one_first(cx: &mut TestAppContext)
     undo(&shell, cx);
     assert_eq!(host.take_edits(), ["reopen 3 as 1001", "reopen 4 as 1002"]);
     report(&shell, cx, Vec::new(), vec![1, 2, 1001, 1002]);
+    // Redone, they close bottom up again, so each keeps its place for the next ⌘Z.
     redo(&shell, cx);
-    assert_eq!(host.take_edits(), ["close 1001", "close 1002"]);
+    assert_eq!(host.take_edits(), ["close 1002", "close 1001"]);
 }
 
 #[gpui::test]
@@ -191,13 +192,24 @@ fn closing_a_split_brings_all_its_tabs_back(cx: &mut TestAppContext) {
         vec![split],
     );
     shell.update(cx, |shell, cx| shell.close_tab(10, true, cx));
-    // Both panes closed: the core keeps each with its partner, so each comes back.
+    // The core closes 10 and then 11, and keeps only 10 beside 11, which was still open: 11 has to
+    // be back for 10 to rejoin it (#1361).
     assert_eq!(host.take_edits(), ["close 10"]);
     report(&shell, cx, Vec::new(), vec![12]);
     undo(&shell, cx);
     assert_eq!(
         host.take_edits(),
-        ["reopen 10 as 1001", "reopen 11 as 1002"]
+        ["reopen 11 as 1001", "reopen 10 as 1002"]
+    );
+    // Redone, 1001 closes beside 1002, which closes last and so reopens first.
+    report(&shell, cx, Vec::new(), vec![1002, 1001, 12]);
+    redo(&shell, cx);
+    assert_eq!(host.take_edits(), ["close 1002", "close 1001"]);
+    report(&shell, cx, Vec::new(), vec![12]);
+    undo(&shell, cx);
+    assert_eq!(
+        host.take_edits(),
+        ["reopen 1001 as 1003", "reopen 1002 as 1004"]
     );
 }
 
@@ -402,6 +414,33 @@ fn pin_to_space_pins_the_tab_before_it_moves_and_one_undo_puts_it_back_in_today(
     let (shell, host) = window(cx, vec![11], vec![10], Folders::default(), Vec::new());
     shell.update(cx, |shell, cx| shell.send_to_space(11, 2, true, cx));
     assert_eq!(host.take_edits(), ["space 11 2"]);
+}
+
+/// A tab in a split view moves to a Space with the rest of its split, joined again in its order
+/// and orientation, and one undo brings the split back to its row (Arc 1.171).
+#[gpui::test]
+fn a_split_moves_to_a_space_whole_and_comes_back_whole(cx: &mut TestAppContext) {
+    let split = Split { tabs: vec![10, 11], stacked: true, ..Default::default() };
+    let (shell, host) = window(cx, Vec::new(), vec![12, 10, 11], Folders::default(), vec![split]);
+    host.take();
+    shell.update(cx, |shell, cx| shell.send_to_space(11, 2, false, cx));
+    assert_eq!(host.take_edits(), ["space 10 2", "space 11 2", "split 11 10 false"]);
+    assert!(host.take().contains(&"split stacked 10 true".to_string()));
+    report(&shell, cx, Vec::new(), vec![12]);
+    shell.update(cx, |shell, cx| {
+        let split = Split { tabs: vec![10, 11], stacked: true, ..Default::default() };
+        shell.set_tabs(2, Vec::new(), vec![10, 11], vec![split], Folders::default(), cx)
+    });
+    assert!(undo(&shell, cx));
+    let back = ["space 10 1", "space 11 1", "split 11 10 false", "move 10 false 0 1"];
+    assert_eq!(host.take_edits(), back);
+
+    // Into another profile's Space the core makes each page a new tab, in a row of its own.
+    let split = Split { tabs: vec![10, 11], ..Default::default() };
+    let (shell, host) = window(cx, Vec::new(), vec![10, 11], Folders::default(), vec![split]);
+    shell.update(cx, |shell, cx| shell.send_to_space(10, 3, false, cx));
+    assert_eq!(host.take_edits(), ["space 10 3", "space 11 3"]);
+    assert!(!undo(&shell, cx));
 }
 
 /// New Space… makes the Space right after the one shown, as Arc's does, not after the others.
@@ -645,7 +684,7 @@ fn a_change_of_orientation_is_its_own_step(cx: &mut TestAppContext) {
     let (shell, host) = window(cx, Vec::new(), vec![10, 11], Folders::default(), vec![split]);
     shell.update(cx, |shell, cx| shell.stack_split(10, true, cx));
     assert!(host.take().contains(&"split stacked 10 true".to_string()));
-    assert_eq!(titles(&shell, cx).0, Some("Change Orientation"));
+    assert_eq!(titles(&shell, cx).0, Some("Convert to Vertical Split View"));
     report_split(&shell, cx, vec![10, 11], vec![10, 11], true);
     assert!(undo(&shell, cx));
     assert!(host.take().contains(&"split stacked 10 false".to_string()));
@@ -795,6 +834,47 @@ fn clearing_and_deleting_a_space_are_undone_and_done_again(cx: &mut TestAppConte
     assert_eq!(host.take_edits(), ["delete space 2"]);
 }
 
+/// Deleting a Space with tabs asks first, in words that say its tabs go with it and name the ⌘Z
+/// that brings them back, as it does, since "close" would make the delete sound final.
+#[gpui::test]
+fn the_delete_space_dialog_names_the_undo(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![10], vec![11, 12], Folders::default(), Vec::new());
+    shell.update(cx, |shell, cx| shell.delete_space(1, cx));
+    let (message, detail, confirmed) = host.confirming.take().expect("it didn't ask");
+    let key = crate::shell::keystroke_label("cmd-z");
+    assert_eq!(message, "Delete “One”?");
+    assert_eq!(detail, format!("Its 3 tabs go with it. {key} brings them back."));
+    cx.update(confirmed);
+    assert_eq!(host.take_edits(), ["delete space 1"]);
+    undo(&shell, cx);
+    assert_eq!(host.take_edits(), ["undo delete space 1"]);
+
+    let (shell, host) = plain(cx, vec![11]);
+    shell.update(cx, |shell, cx| shell.delete_space(1, cx));
+    let (_, detail, _) = host.confirming.take().expect("it didn't ask");
+    assert_eq!(detail, format!("Its tab goes with it. {key} brings it back."));
+}
+
+/// "Space deleted! Use ⌘Z to undo." goes with the ⌘Z it names, so it can't prompt a second one,
+/// which would undo the edit before, and with the next edit, which ⌘Z would undo instead.
+#[gpui::test]
+fn the_space_deleted_toast_goes_with_its_undo(cx: &mut TestAppContext) {
+    let (shell, host) = plain(cx, vec![10, 11]);
+    shell.update(cx, |shell, cx| shell.delete_space_now(2, cx));
+    assert_eq!(host.toasts.borrow().as_slice(), ["Space deleted! Use"]);
+    assert_eq!(host.undo_toasts_hidden.get(), 0);
+    undo(&shell, cx);
+    assert_eq!(host.take_edits(), ["delete space 2", "undo delete space 2"]);
+    assert_eq!(host.undo_toasts_hidden.get(), 1);
+    // Nothing offers it now, so a second ⌘Z leaves the toasts alone.
+    undo(&shell, cx);
+    assert_eq!(host.undo_toasts_hidden.get(), 1);
+
+    shell.update(cx, |shell, cx| shell.delete_space_now(2, cx));
+    shell.update(cx, |shell, cx| shell.close_tab(11, false, cx));
+    assert_eq!(host.undo_toasts_hidden.get(), 2);
+}
+
 #[gpui::test]
 fn the_archives_delete_and_clear_are_undone_and_done_again(cx: &mut TestAppContext) {
     let (shell, host) = plain(cx, vec![10]);
@@ -826,6 +906,7 @@ fn archived(id: u64) -> Archived {
         url: "https://a.example/".into(),
         title: "A".into(),
         archived: 0.,
+        little: false,
     }
 }
 
@@ -1044,4 +1125,356 @@ fn a_folders_icon_goes_back_to_what_it_was(cx: &mut TestAppContext) {
     assert_eq!(titles(&shell, cx).0, Some("Change Icon"));
     undo(&shell, cx);
     assert_eq!(host.take_edits(), ["folder icon 5 📚"]);
+}
+
+/// The core reports the first Space's lists with one split view.
+fn report_lists(
+    shell: &Entity<Shell>,
+    cx: &mut TestAppContext,
+    pinned: Vec<u64>,
+    today: Vec<u64>,
+    split: Vec<u64>,
+) {
+    let splits = vec![Split {
+        tabs: split,
+        ..Default::default()
+    }];
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(1, pinned, today, splits, Folders::default(), cx)
+    });
+}
+
+/// ⌃⇧- on a pinned tab's pane asks the core to close it, which only takes it out of the split
+/// unloaded, as ⌘W keeps a pinned tab's row; ⇧⌘T then puts it back in its pane, pinned, and
+/// doesn't reopen an archived tab instead (#1289).
+#[gpui::test]
+fn closing_a_pinned_tabs_pane_keeps_it_pinned_and_reopening_puts_it_back(
+    cx: &mut TestAppContext,
+) {
+    let split = Split {
+        tabs: vec![20, 21],
+        ..Default::default()
+    };
+    let (shell, host) = window(cx, vec![20, 21], vec![10], Folders::default(), vec![split]);
+    shell.update(cx, |shell, cx| shell.set_selected(20, cx));
+    host.take();
+    shell.update(cx, |shell, cx| shell.run(Command::CloseSplitPane, "ui", cx));
+    assert_eq!(host.take_edits(), ["close 20"]);
+    assert_eq!(titles(&shell, cx).0, Some("Close Tab"));
+    // The core separated it after the split's last tab, unloaded, and showed the one beside it.
+    report(&shell, cx, vec![21, 20], vec![10]);
+    shell.update(cx, |shell, cx| shell.set_selected(21, cx));
+    host.take();
+
+    shell.update(cx, |shell, cx| shell.run(Command::ReopenClosedTab, "ui", cx));
+    assert_eq!(host.take_edits(), ["split 20 21 true"]);
+    assert!(!host.take().contains(&"reopen closed tab".to_string()));
+    // Reopened, it's no longer a close for ⌘Z to undo, and the next ⇧⌘T is the core's.
+    assert_eq!(titles(&shell, cx).0, None);
+    report_lists(&shell, cx, vec![20, 21], vec![10], vec![20, 21]);
+    shell.update(cx, |shell, cx| shell.run(Command::ReopenClosedTab, "ui", cx));
+    assert!(host.take_edits().is_empty());
+    assert!(host.take().contains(&"reopen closed tab".to_string()));
+}
+
+/// ⌘Z after closing a pinned tab's pane puts it back in its pane too, and then ⇧⌘T has no pane
+/// left to put back, so it asks the core for the tab closed last.
+#[gpui::test]
+fn undoing_a_pinned_panes_close_rejoins_it_once(cx: &mut TestAppContext) {
+    let split = Split {
+        tabs: vec![20, 21],
+        ..Default::default()
+    };
+    let (shell, host) = window(cx, vec![20, 21], vec![10], Folders::default(), vec![split]);
+    shell.update(cx, |shell, cx| shell.set_selected(21, cx));
+    shell.update(cx, |shell, cx| shell.run(Command::CloseSplitPane, "ui", cx));
+    assert_eq!(host.take_edits(), ["close 21"]);
+    report(&shell, cx, vec![20, 21], vec![10]);
+    assert!(undo(&shell, cx));
+    assert_eq!(host.take_edits(), ["split 21 20 false"]);
+    report_lists(&shell, cx, vec![20, 21], vec![10], vec![20, 21]);
+    host.take();
+    shell.update(cx, |shell, cx| shell.run(Command::ReopenClosedTab, "ui", cx));
+    assert!(host.take_edits().is_empty());
+    assert!(host.take().contains(&"reopen closed tab".to_string()));
+}
+
+/// Removing an unloaded pinned split view's row takes its tabs out together, and ⌘Z pins them again
+/// at their place, each with its pinned URL, reopening the last first, as the core puts each back
+/// beside the one its close named; ⇧⌘Z removes them again.
+#[gpui::test]
+fn a_removed_pinned_split_comes_back_split_at_its_place(cx: &mut TestAppContext) {
+    let split = Split {
+        tabs: vec![20, 21],
+        ..Default::default()
+    };
+    let (shell, host) = window(cx, vec![19, 20, 21], vec![10], Folders::default(), vec![split]);
+    shell.update(cx, |shell, cx| shell.set_selected(10, cx));
+    host.pinned_urls.borrow_mut().extend([
+        (20, "https://a.example/".to_string()),
+        (21, "https://b.example/".to_string()),
+    ]);
+    shell.update(cx, |shell, cx| shell.remove_pinned(20, cx));
+    assert_eq!(host.take_edits(), ["pinned 20 false", "close 20"]);
+    report(&shell, cx, vec![19], vec![10]);
+
+    host.pinned_urls.borrow_mut().clear();
+    assert!(undo(&shell, cx));
+    assert_eq!(
+        host.take_edits(),
+        [
+            "reopen 21 as 1001",
+            "reopen 20 as 1002",
+            "move 1002 true 0 1",
+            "pinned url 1001 https://b.example/",
+            "pinned url 1002 https://a.example/",
+        ]
+    );
+    report_lists(&shell, cx, vec![19, 1002, 1001], vec![10], vec![1002, 1001]);
+    assert!(redo(&shell, cx));
+    assert_eq!(host.take_edits(), ["pinned 1002 false", "close 1002"]);
+}
+
+/// The trash takes the pinned tab out of sight, so the toast offers its Undo, as Remove from
+/// Favorites' does, and its button pins the tab again at its place.
+#[gpui::test]
+fn removing_a_pinned_tab_offers_its_undo(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![19, 20], vec![10], Folders::default(), Vec::new());
+    shell.update(cx, |shell, cx| shell.remove_pinned(20, cx));
+    report(&shell, cx, vec![19], vec![10]);
+    assert_eq!(host.undo_toasts.borrow().as_slice(), ["Tab Removed"]);
+    host.take_edits();
+    let button = host.undo_toast.borrow().clone().expect("the toast offers Undo");
+    cx.update(|cx: &mut App| button(cx));
+    assert_eq!(host.take_edits(), ["reopen 20 as 1001", "move 1001 true 0 1"]);
+    assert!(host.undo_toast.borrow().is_none(), "the offer goes once it's taken");
+}
+
+/// ⇧⌘T after removing a pinned tab pins it again at its place, as ⌘Z does, where the core's
+/// reopen would put it in Today; then ⌘Z has nothing of it to undo, and the next ⇧⌘T is the
+/// core's.
+#[gpui::test]
+fn reopening_a_removed_pinned_tab_pins_it_again(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![19, 20], vec![10], Folders::default(), Vec::new());
+    shell.update(cx, |shell, cx| shell.remove_pinned(20, cx));
+    report(&shell, cx, vec![19], vec![10]);
+    host.take();
+    host.take_edits();
+    shell.update(cx, |shell, cx| shell.run(Command::ReopenClosedTab, "ui", cx));
+    assert_eq!(host.take_edits(), ["reopen 20 as 1001", "move 1001 true 0 1"]);
+    assert!(!host.take().contains(&"reopen closed tab".to_string()));
+    assert_eq!(titles(&shell, cx).0, None);
+    report(&shell, cx, vec![19, 1001], vec![10]);
+    shell.update(cx, |shell, cx| shell.run(Command::ReopenClosedTab, "ui", cx));
+    assert!(host.take().contains(&"reopen closed tab".to_string()));
+}
+
+/// Only a pinned row has the step: a Today tab or a folder isn't removed.
+#[gpui::test]
+fn only_a_pinned_tab_is_removed(cx: &mut TestAppContext) {
+    let folders = Folders {
+        folders: HashMap::from([(5, ("Reading".into(), true))]),
+        parents: HashMap::from([(6, 5)]),
+        ..Default::default()
+    };
+    let (shell, host) = window(cx, vec![5, 6], vec![10], folders, Vec::new());
+    host.take_edits();
+    shell.update(cx, |shell, cx| {
+        shell.remove_pinned(10, cx);
+        shell.remove_pinned(5, cx);
+    });
+    assert!(host.take_edits().is_empty());
+    assert_eq!(titles(&shell, cx).0, None);
+}
+
+/// ⌃⇧- on a Today tab's pane closes the tab, into the archive, which ⌘Z reopens at its place, and
+/// ⇧⌘T asks the core for, which puts it back in its split.
+#[gpui::test]
+fn closing_a_today_tabs_pane_closes_the_tab(cx: &mut TestAppContext) {
+    let split = Split {
+        tabs: vec![10, 11],
+        ..Default::default()
+    };
+    let (shell, host) = window(cx, Vec::new(), vec![10, 11, 12], Folders::default(), vec![split]);
+    shell.update(cx, |shell, cx| shell.set_selected(11, cx));
+    host.take();
+    shell.update(cx, |shell, cx| shell.run(Command::CloseSplitPane, "ui", cx));
+    assert_eq!(host.take_edits(), ["close 11"]);
+    report(&shell, cx, Vec::new(), vec![10, 12]);
+    host.take();
+    shell.update(cx, |shell, cx| shell.run(Command::ReopenClosedTab, "ui", cx));
+    assert!(host.take().contains(&"reopen closed tab".to_string()));
+    assert!(host.take_edits().is_empty());
+}
+
+/// A pinned tab ⌥-clicked onto a Today page takes that page into its place in the pinned tabs,
+/// pinned, before joining it, so the split is pinned and the tab keeps its pin and place, where
+/// the core alone would move it into Today. One ⌘Z puts both back, and ⇧⌘Z does both again.
+#[gpui::test]
+fn a_pinned_tab_joining_a_today_tab_keeps_its_pin(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![20, 21], vec![10], Folders::default(), Vec::new());
+    shell.update(cx, |shell, cx| shell.set_selected(10, cx));
+    host.take();
+    assert!(shell.update(cx, |shell, cx| shell.alt_press_row(21, cx)));
+    assert_eq!(host.take_edits(), ["move 10 true 0 1", "split 21 10 false"]);
+    assert_eq!(titles(&shell, cx).0, Some("Split View"));
+    report_lists(&shell, cx, vec![20, 10, 21], Vec::new(), vec![10, 21]);
+
+    assert!(undo(&shell, cx));
+    assert_eq!(
+        host.take_edits(),
+        ["separate 21", "move 21 true 0 1", "move 10 false 0 0"]
+    );
+    report(&shell, cx, vec![20, 21], vec![10]);
+    assert!(redo(&shell, cx));
+    assert_eq!(host.take_edits(), ["move 10 true 0 1", "split 21 10 false"]);
+}
+
+/// A Today tab joining a pinned tab's split is the core's to pin, and a Today tab joining another
+/// moves nothing first.
+#[gpui::test]
+fn only_a_pinned_tab_joining_today_moves_a_row_first(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![20], vec![10, 11], Folders::default(), Vec::new());
+    shell.update(cx, |shell, cx| shell.join_split(10, 20, false, false, cx));
+    assert_eq!(host.take_edits(), ["split 10 20 false"]);
+    report_lists(&shell, cx, vec![20, 10], vec![11], vec![20, 10]);
+    shell.update(cx, |shell, cx| shell.join_split(11, 10, false, false, cx));
+    assert_eq!(host.take_edits(), ["split 11 10 false"]);
+}
+
+/// A tab joining a favorite joins a copy of it at the top of Today, as Arc's does: a pinned tab as
+/// a copy too, both originals staying, and a Today tab moved. ⌘Z closes the copies and puts the
+/// Today tab back in its place.
+#[gpui::test]
+fn a_tab_joining_a_favorite_joins_its_copy_in_today(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![20], vec![10, 11], Folders::default(), Vec::new());
+    shell.update(cx, |shell, cx| shell.set_favorites(vec![(30, 1)], cx));
+    let copies = |calls: &[String]| {
+        calls.iter().filter(|call| call.starts_with("duplicate")).cloned().collect::<Vec<_>>()
+    };
+    host.take();
+
+    shell.update(cx, |shell, cx| shell.join_split(20, 30, false, false, cx));
+    assert_eq!(copies(&host.take()), ["duplicate 20", "duplicate 30"], "the favorite's shows last");
+    assert_eq!(host.take_edits(), ["split 1001 1002 false"]);
+    assert_eq!(titles(&shell, cx), (Some("Split View"), None));
+    report_lists(&shell, cx, vec![20], vec![1002, 1001, 10, 11], vec![1002, 1001]);
+    assert!(undo(&shell, cx));
+    assert_eq!(host.take_edits(), ["close 1001", "close 1002"], "the pinned tab stays");
+
+    report(&shell, cx, vec![20], vec![10, 11]);
+    shell.update(cx, |shell, cx| shell.join_split(11, 30, true, true, cx));
+    let calls = host.take();
+    assert_eq!(copies(&calls), ["duplicate 30"], "a Today tab moves");
+    assert!(calls.contains(&"split stacked 1003 true".to_string()));
+    assert_eq!(host.take_edits(), ["split 11 1003 true"]);
+    report_lists(&shell, cx, vec![20], vec![11, 1003, 10], vec![11, 1003]);
+    assert!(undo(&shell, cx));
+    assert_eq!(host.take_edits(), ["close 1003", "move 11 false 0 1"]);
+}
+
+/// One's pinned 4, then the folder Reading holding 6 and the closed folder Old, which holds 8.
+fn reading() -> Folders {
+    Folders {
+        folders: HashMap::from([(5, ("Reading".into(), true)), (7, ("Old".into(), false))]),
+        parents: HashMap::from([(6, 5), (7, 5), (8, 7)]),
+        ..Default::default()
+    }
+}
+
+fn folder_menu(shell: &Entity<Shell>, cx: &mut TestAppContext, folder: u64) {
+    let at = gpui::point(gpui::px(100.), gpui::px(200.));
+    shell.update(cx, |shell, cx| shell.tab_menu(folder, at, cx));
+}
+
+/// A folder's Move to Space › another Space of its profile moves it whole, which the core reports
+/// in that Space, and ⌘Z puts it back at its place in its own, ⇧⌘Z moving it again (#1353).
+#[gpui::test]
+fn a_folder_moved_to_another_space_is_put_back_by_undo(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![4, 5, 6, 7, 8], vec![9], reading(), Vec::new());
+    folder_menu(&shell, cx, 5);
+    host.take_edits();
+    cx.update(|cx| host.choose("Two", cx));
+    assert_eq!(host.take_edits(), ["space folder 5 2"]);
+    assert_eq!(host.undo_toasts.borrow().as_slice(), ["Folder Moved to Space"]);
+    assert_eq!(titles(&shell, cx).0, Some("Move to Space"));
+    let two = |shell: &Entity<Shell>, cx: &mut TestAppContext, pinned: Vec<u64>, folders| {
+        shell.update(cx, |shell, cx| shell.set_tabs(2, pinned, Vec::new(), Vec::new(), folders, cx))
+    };
+    report(&shell, cx, vec![4], vec![9]);
+    two(&shell, cx, vec![10, 5, 6, 7, 8], reading());
+
+    assert!(undo(&shell, cx));
+    assert_eq!(host.take_edits(), ["space folder 5 1", "move folder 5 0 1"]);
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(1, vec![4, 5, 6, 7, 8], vec![9], Vec::new(), reading(), cx)
+    });
+    two(&shell, cx, vec![10], Folders::default());
+    // Done again, it goes back under Two's pinned tab.
+    assert!(redo(&shell, cx));
+    assert_eq!(host.take_edits(), ["space folder 5 2", "move folder 5 0 1"]);
+}
+
+/// Into another profile's Space a folder goes as a tab's Move to Space takes one: asked first,
+/// its tabs there as new ones that load again, with nothing for ⌘Z to give back.
+#[gpui::test]
+fn a_folder_moved_to_another_profile_is_asked_first_and_not_undone(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![4, 5, 6, 7, 8], vec![9], reading(), Vec::new());
+    host.warn_profiles.set(true);
+    shell.update(cx, |shell, cx| {
+        shell.set_profiles(vec![(1, "Personal".into()), (2, "Work".into())], cx)
+    });
+    folder_menu(&shell, cx, 5);
+    host.take_edits();
+    cx.update(|cx| host.choose("Three", cx));
+    assert!(host.take_edits().is_empty(), "moved before it asked");
+    let (message, detail, moved) = host.confirming.take().expect("an action to confirm");
+    assert_eq!(
+        format!("{message} {detail}"),
+        "Move this folder to the “Work” profile? Its pages load again there, without this \
+         profile's cookies and logins, so a site may ask you to sign in."
+    );
+    cx.update(|cx| moved(cx));
+    assert_eq!(host.take_edits(), ["space folder 5 3"]);
+    assert!(!undo(&shell, cx));
+}
+
+/// A chosen folder moves from the command bar as from its menu: its Move to rows are the Spaces of
+/// its profile, with no Pin to, and it goes whole, a row chosen in it going with it, as one step.
+#[gpui::test]
+fn the_command_bar_moves_a_chosen_folder_to_another_space(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![4, 5, 6, 7, 8], vec![9], reading(), Vec::new());
+    shell.update(cx, |shell, cx| {
+        shell.set_selected(9, cx);
+        shell.choose_row(5, cx);
+        shell.choose_row(6, cx);
+        // The tab shown, chosen with the first, lets go.
+        shell.choose_row(9, cx);
+    });
+    let found = |typed: &str, cx: &mut TestAppContext| {
+        shell.read_with(cx, |shell, _| {
+            let keys = crate::shell::UserKeys::default();
+            let rows = shell.named_bar_rows();
+            let rows = crate::shell::with_named_rows(Vec::new(), typed, &rows, &keys);
+            rows.into_iter().map(|row| (row.name.to_string(), row.command)).collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(
+        found("two", cx),
+        [
+            ("Focus Two".to_string(), Command::SelectSpace(1)),
+            ("Move to Two".to_string(), Command::MoveToSpace(2)),
+        ]
+    );
+    assert_eq!(found("three", cx), [("Focus Three".to_string(), Command::SelectSpace(2))]);
+    host.take_edits();
+    shell.update(cx, |shell, cx| shell.run(Command::MoveToSpace(2), "command-bar", cx));
+    assert_eq!(host.take_edits(), ["space folder 5 2"]);
+    assert!(shell.read_with(cx, |shell, _| shell.chosen.is_empty()));
+    report(&shell, cx, vec![4], vec![9]);
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(2, vec![5, 6, 7, 8], Vec::new(), Vec::new(), reading(), cx)
+    });
+    assert!(undo(&shell, cx));
+    assert_eq!(host.take_edits(), ["space folder 5 1", "move folder 5 0 1"]);
 }

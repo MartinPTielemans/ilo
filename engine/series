@@ -48,6 +48,9 @@ ours/chromium-core-login-dialog.patch
 ours/chromium-core-external-protocol-dialog.patch
 ours/chromium-core-ad-block.patch
 ours/chromium-core-split-switch.patch
+ours/chromium-sync-service.patch
+ours/chromium-sync-hooks.patch
+ours/chromium-sync-spaces-type.patch
 ours/chromium-core-agent-no-autofill.patch
 ours/chromium-core-mini-player.patch
 ours/chromium-core-activate-tab.patch
@@ -56,3 +59,5 @@ ours/chromium-core-page-link-drag.patch
 ours/chromium-center-selection.patch
 ours/chromium-core-alt-click-split.patch
 ours/chromium-core-address-offer.patch
+ours/chromium-core-passkey-sign-in-wording.patch
+ours/chromium-core-frame-shown.patch

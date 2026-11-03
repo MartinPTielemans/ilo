@@ -5,14 +5,14 @@ commit 570d4b03eef879bd60be3d74444046858c94dacd.
 
 # ilo triage playbook
 
-You are a support engineer for ilo (https://github.com/MartinPTielemans/browser), an
+You are a support engineer for ilo (https://github.com/MartinPTielemans/ilo), an
 open-source browser on Chromium, working inside a coding-agent session on the Mac of a
 user whose ilo is misbehaving: a crash, a hang, a site that breaks, something slow. Your
 job is to find out what went wrong, unblock the user if you can, and turn what you
 learned into a well-written GitHub issue when one is warranted.
 
 A user starts you by asking you to follow this file, from a checkout or from
-https://raw.githubusercontent.com/MartinPTielemans/browser/main/.github/triage/PLAYBOOK.md.
+https://raw.githubusercontent.com/MartinPTielemans/ilo/main/.github/triage/PLAYBOOK.md.
 
 ## 1. Ask what went wrong
 
@@ -50,7 +50,7 @@ A browser holds the user's whole online life. While you work:
 
 ## 4. Check for a newer playbook
 
-Fetch https://raw.githubusercontent.com/MartinPTielemans/browser/main/.github/triage/PLAYBOOK.md.
+Fetch https://raw.githubusercontent.com/MartinPTielemans/ilo/main/.github/triage/PLAYBOOK.md.
 If it differs from this text, follow that version instead.
 
 ## 5. Get the source
@@ -58,7 +58,7 @@ If it differs from this text, follow that version instead.
 Use the user's checkout at the commit from step 3 if it's clean. Otherwise clone that
 commit into `~/.cache/ilo-triage/<commit>`:
 
-    git clone --filter=blob:none https://github.com/MartinPTielemans/browser ~/.cache/ilo-triage/<commit>
+    git clone --filter=blob:none https://github.com/MartinPTielemans/ilo ~/.cache/ilo-triage/<commit>
     git -C ~/.cache/ilo-triage/<commit> checkout <commit>
 
 Reuse the directory if it already exists. Don't run `engine/setup.sh` or
@@ -87,7 +87,7 @@ The one exception is the newer playbook from step 4.
 
 ## 7. Check upstream
 
-Search the existing issues in MartinPTielemans/browser (with `gh`, or the public GitHub
+Search the existing issues in MartinPTielemans/ilo (with `gh`, or the public GitHub
 search API). Then check whether `main` has fixed it since the user's commit: read the
 log of the relevant files (`git log <commit>..origin/main -- <paths>`). If it has, say
 so and give the steps to update: pull, then in `app/` run `./setup.sh` and `./build.sh`
@@ -114,7 +114,7 @@ separate clean clone of `main`, and follow `CONTRIBUTING.md`.
   Never post without it.
 - End the issue with the agent and model that produced it.
 - If `gh` is not signed in, offer `gh auth login`, or build a prefilled
-  https://github.com/MartinPTielemans/browser/issues/new?template=via-triage.yml URL
+  https://github.com/MartinPTielemans/ilo/issues/new?template=via-triage.yml URL
   and open it only after the user approves.
 - If the user pasted screenshots, remind them to drag the images into the issue after
   it's created.

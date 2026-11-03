@@ -17,7 +17,8 @@ use super::{PLATE_INSET, Row, Shell, host};
 impl Shell {
     /// The pointer came onto `row` or left it: a tab's row or tile rests for its card, and leaving
     /// it lets the card go. Folders, split views' rows and New Tab have none, and none shows while
-    /// a row is dragged or has its menu up, or the theme or icon picker shows over the sidebar.
+    /// a row is dragged or has its menu up, a name field is open, with its menu or not (#1452), or
+    /// the theme or icon picker shows over the sidebar.
     pub(super) fn hover_card(&self, row: Row, hovered: bool, cx: &mut Context<Self>) {
         let Row::Tab(tab) = row else {
             return;
@@ -26,7 +27,8 @@ impl Shell {
             return self.browser.hover_card(Hover::Left(tab), cx);
         }
         let picker = theme_picker::is_open(cx) || icon_picker::is_open(cx);
-        let busy = self.dragging().is_some() || self.menu_row.is_some() || picker;
+        let naming = self.renaming.is_some();
+        let busy = self.dragging().is_some() || self.menu_row.is_some() || naming || picker;
         let Some(card) = self.card(tab).filter(|_| !busy) else {
             return;
         };
@@ -46,7 +48,8 @@ impl Shell {
             });
         });
         let anchor = Anchor { row, window: self.viewport };
-        self.browser.hover_card(Hover::Rest(Rest { card, anchor, events }), cx);
+        let window = self.browser.window();
+        self.browser.hover_card(Hover::Rest(Rest { window, card, anchor, events }), cx);
     }
 
     /// The pointer came onto `row` or left it: a closed folder's row rests for its preview of the
@@ -87,6 +90,7 @@ impl Shell {
             });
         });
         let rest = folder_preview::Rest {
+            window: self.browser.window(),
             folder,
             name: self.folder_name(folder),
             items,
@@ -137,6 +141,14 @@ impl Shell {
         log!("browser: command select via folder preview");
         self.select(tab, cx);
         self.browser.focus_page(cx);
+    }
+
+    /// What `tab`'s card shows changed, as its name does when it's renamed: a card that shows or
+    /// waits for it shows it as it is now (#1452).
+    pub(super) fn card_changed(&self, tab: u64, cx: &mut App) {
+        if let Some(card) = self.card(tab) {
+            self.browser.hover_card(Hover::Changed(card), cx);
+        }
     }
 
     /// What `tab`'s card shows, if it has one.

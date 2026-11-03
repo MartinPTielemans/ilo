@@ -295,7 +295,7 @@ mini_player() {
   expect '^browser: settings drew ' "Settings didn't draw"
   # Settings opens at the tab it last showed.
   if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Advanced$'; then
-    send clickkey 519 60
+    send clickkey $(drawn "toolbar Advanced")
     expect '^browser: settings tab Advanced$' "a click on Advanced didn't show its tab"
     settings_drew Advanced
   fi

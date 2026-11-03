@@ -69,13 +69,15 @@ void OverlayTakesKeyboard(views::Widget* widget, bool takes);
 // caret at |caret|, in DIPs from the window's top left, or none is (bc_window_ui_text_input).
 void SetUITextInput(views::Widget* widget, std::optional<gfx::Rect> caret);
 
-// The frame of a tab's dialog, such as print preview, shown in |widget|'s window, from its content's
-// top-left, if one shows (bc_window_dialog). In window_views.cc.
-std::optional<gfx::Rect> DialogFrame(views::Widget* widget);
-
 // Answers on X11 the clipboard requests in Chromium's queue, and nothing else in it
 // (bc_answer_clipboard_requests). In window_views.cc.
 void AnswerClipboardRequests();
+
+// From now on, on X11, a bubble of Chrome's on a page's Picture in Picture window, such as its
+// automatic picture-in-picture prompt, is a window of its own, as it is on Wayland, not a child
+// clipped to the Picture in Picture window, which Chrome would then grow to hold it (#1161). In
+// window_views.cc.
+void FloatPictureInPictureBubbles();
 
 }  // namespace browser_core::platform
 

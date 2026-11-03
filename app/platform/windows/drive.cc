@@ -11,28 +11,40 @@
 // clickkey, doubleclickkey, rightclickkey, drag, dragkey, press, dragto, release, rightpress,
 // rightdragto, rightrelease, move, key, keydown, keyup, flags, type, insert, scroll, swipe, wheel,
 // resize, place, minimize, window, order, layout, state, title, pasteboard, front, menu, menubar,
-// choose, dismiss, agentspace, agentmayact, agentrelease, agentdisconnect, takeback and age. The Mac's modifiers are
-// pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl with Alt, but Ctrl for
-// ⌃Tab, and alt with both. A trackpad's scrolls and swipes are wheel messages with the pixels in
-// their deltas, as a precision touchpad sends them. choose and dismiss work on ilo's menu and the
-// alerts host_ask shows. dragover, dragdrop and dragleave hand a drag from another app, a shell
-// data object carrying what Explorer or a browser would, straight to the drop target Windows would
-// pick, the UI's; one over a page or an overlay, whose targets are Chromium's and GPUI's, logs as
-// unsupported. ime on types as drive.mm's scripted input method does, in the UI's fields alone, as
-// Linux's driver does. fullscreen puts the window full screen or takes it out through the core, as
-// Linux's driver does. The others, pageswipe, displays, hide, backdrop and openmenu, Windows has
-// nothing the driver can stand in for yet: each logs "browser: drive: unsupported
-// <command>" before drive.mm's "can't do that", so a run fails at once.
+// choose, dismiss, agentspace, agentmayact, agentrelease, agentdisconnect, takeback and age, and
+// Windows' own maximize, which the Mac's has no command for, and placement, which logs the window's
+// maximized state and the frame it un-maximizes to as Windows keeps them; overlays, which lists the
+// windows on screen over the app's browser windows; stack, which lists every app's windows over the
+// driven one, front first; and reshow, which shows those of the UI's that are hidden again, as
+// Windows does. window <n> behind drives a window without bringing it forward, as drive.mm's does.
+// The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl
+// with Alt, but Ctrl for ⌃Tab, and alt with both. A click's or a drag's are held as a Windows user
+// holds them, cmd with Ctrl and alt with Alt. A trackpad's scrolls and swipes are wheel messages
+// with the pixels in their deltas, as a precision touchpad sends them, going the way drive.mm's go.
+// choose and dismiss work on ilo's menu and the alerts host_ask shows. savepanel <path> picks
+// <path> in the dialog host_save_png shows, as drive.mm's does in the Mac's save panel, logging
+// "browser: save panel answered", or "browser: no save panel" if none shows. dragover, dragdrop and
+// dragleave hand a drag from another app, a shell data object carrying what Explorer or a browser
+// would, straight to the drop target Windows would pick, the UI's; one over a page or an overlay,
+// whose targets are Chromium's and GPUI's, logs as unsupported. ime on types as drive.mm's scripted
+// input method does, in the UI's fields alone, as Linux's driver does. fullscreen puts the window
+// full screen or takes it out through the core, as Linux's driver does. The others, pageswipe,
+// displays, hide, backdrop and openmenu, Windows has nothing the driver can stand in for yet: each
+// logs "browser: drive: unsupported <command>" before drive.mm's "can't do that", so a run fails at
+// once.
 //
 // It logs as drive.mm does: "browser: drive <n>: <command>" as command n arrives, and "browser:
 // drive <n> done, key <window>, focus <view>, active <0|1>, marked <none|start,length>" once
 // Chromium and GPUI have handled its messages, with what the UI's field with the keys has marked.
-// The window and view are named as AppKit's classes are on the Mac, so the runs read one vocabulary: key is BrowserCoreNSWindow for a browser window and GPUIPanel for
-// an overlay, and focus RenderWidgetHostViewCocoa for a page, AccessKitSubclassOfGPUIView for the
-// UI and GPUIView for an overlay. Active is whether one of the app's windows is in front.
+// The window and view are named as AppKit's classes are on the Mac, so the runs read one
+// vocabulary: key is BrowserCoreNSWindow for a browser window, GPUIPanel for an overlay and
+// GPUIWindow for another window of the UI's, such as Settings, and focus RenderWidgetHostViewCocoa
+// for a page, AccessKitSubclassOfGPUIView for the UI and GPUIView for an overlay. Active is whether
+// one of the app's windows is in front.
 
 #include <windows.h>
 
+#include <dwmapi.h>
 #include <shlobj.h>
 
 #include <algorithm>
@@ -59,6 +71,8 @@ bool host_menu_window_dismiss(void);
 bool host_drive_pointer(unsigned message, long x, long y);
 bool host_drive_key(unsigned vk, long lparam);
 uint64_t host_browser_window_id(size_t index);
+const char* host_floating_name(void* hwnd);
+bool host_save_dialog_answer(const char* path);
 // The app's (src/main.rs), on GPUI's window |hwnd|, for the scripted input method.
 bool browser_drive_compose(void* hwnd, const char* text, size_t start, size_t end, bool selected);
 bool browser_drive_commit(void* hwnd, const char* text);
@@ -316,6 +330,18 @@ void Move(const Target& target, int modifiers, UINT buttons) {
   if (host_drive_pointer(WM_MOUSEMOVE, target.screen.x, target.screen.y)) {
     return;
   }
+  // Over the frame, as over the UI's maximize button (host.cc's FrameHit), Windows sends the
+  // window a non-client move, with what's there and the point on the screen. Entered, so the leave
+  // Windows sends it at once, for the desktop's pointer, is dropped.
+  if (Ours(target.hwnd)) {
+    const LPARAM screen = MAKELPARAM(target.screen.x, target.screen.y);
+    const LRESULT hit = SendMessageW(target.hwnd, WM_NCHITTEST, 0, screen);
+    if (hit != HTCLIENT && hit != HTTRANSPARENT && hit != HTNOWHERE) {
+      Enter(target);
+      PostMessageW(target.hwnd, WM_NCMOUSEMOVE, hit, screen);
+      return;
+    }
+  }
   Enter(target);
   if (g_posted_moves.size() == 64) {
     g_posted_moves.pop_front();
@@ -436,13 +462,24 @@ int Modifiers(std::istringstream& words, const std::string& key = "") {
   return modifiers;
 }
 
+// The Mac's modifiers named in |words| for a click or a drag, as the page and the UI read a click's
+// here: cmd with Ctrl and alt with Alt, so ⌥-click is Alt+click and ⌥⌘-click Ctrl+Alt+click.
+int PointerModifiers(std::istringstream& words) {
+  int modifiers = 0;
+  std::string word;
+  while (words >> word) {
+    modifiers |= word == "cmd" ? kCtrl : word == "shift" ? kShift : word == "alt" ? kAlt : 0;
+  }
+  return modifiers;
+}
+
 // The virtual key of drive.mm's |key|, and the modifiers this keyboard types it with, or 0.
 UINT VirtualKey(const std::string& key, int* modifiers) {
   static const std::pair<const char*, UINT> named[] = {
       {"return", VK_RETURN},  {"escape", VK_ESCAPE}, {"tab", VK_TAB},      {"space", VK_SPACE},
       {"backspace", VK_BACK}, {"delete", VK_DELETE}, {"pageup", VK_PRIOR}, {"pagedown", VK_NEXT},
       {"up", VK_UP},          {"down", VK_DOWN},     {"left", VK_LEFT},    {"right", VK_RIGHT},
-      {"f4", VK_F4},          {"f10", VK_F10},       {"f12", VK_F12}};
+      {"f4", VK_F4},          {"f6", VK_F6},         {"f10", VK_F10},      {"f12", VK_F12}};
   for (const auto& [name, vk] : named) {
     if (key == name) {
       return vk;
@@ -585,6 +622,10 @@ void LogLayout(HWND root) {
   char part[160];
   snprintf(part, sizeof part, "browser: layout content %.0fx%.0f", width, height);
   line += part;
+  // The page with the keyboard, as drive.mm finds the WebContentsViewCocoa its first responder is
+  // in: the pane whose window has the focus, or holds the one that has it.
+  const HWND focus = GetFocus();
+  std::string keyboard = "none";
   // Back to front, as AppKit lists a view's subviews: GPUI's view, then the pages over it. Frames
   // as the Mac's are, from the content's bottom-left corner.
   for (HWND child = GetWindow(GetWindow(root, GW_CHILD), GW_HWNDLAST); child;
@@ -601,10 +642,13 @@ void LogLayout(HWND root) {
     RECT rect;
     GetWindowRect(child, &rect);
     MapWindowPoints(HWND_DESKTOP, root, reinterpret_cast<POINT*>(&rect), 2);
-    snprintf(part, sizeof part, ", %s %.0f,%.0f %.0fx%.0f", name, rect.left / scale,
+    snprintf(part, sizeof part, "%.0f,%.0f %.0fx%.0f", rect.left / scale,
              (client.bottom - rect.bottom) / scale, (rect.right - rect.left) / scale,
              (rect.bottom - rect.top) / scale);
-    line += part;
+    line += std::string(", ") + name + " " + part;
+    if (IsChromium(child) && focus && (focus == child || IsChild(child, focus))) {
+      keyboard = part;
+    }
     // As the Mac's driver gives a page view's rounded layer.
     if (const double radius = IsChromium(child) ? CornerRadius(child, scale) : 0; radius > 0) {
       snprintf(part, sizeof part, " radius %.0f", radius);
@@ -613,6 +657,16 @@ void LogLayout(HWND root) {
   }
   // Windows' own title bar has the window's buttons.
   line += "\nbrowser: layout buttons hidden hidden hidden";
+  // A tab's dialog, such as print preview, as the core gives it: inside the border and shadow
+  // Chromium draws in its window, as the Mac's driver gives a sheet's frame.
+  bc_rect dialog{};
+  const bool has_dialog = bc_window_dialog(host_browser_window_id(g_driven), &dialog);
+  if (has_dialog) {
+    snprintf(part, sizeof part, "\nbrowser: layout child %.0f,%.0f %.0fx%.0f", dialog.x, dialog.y,
+             dialog.width, dialog.height);
+    line += part;
+  }
+  line += "\nbrowser: layout keyboard " + keyboard;
   // The overlays over it, such as the find bar: from the content's top-left corner, and their size.
   POINT origin{0, 0};
   ClientToScreen(root, &origin);
@@ -622,9 +676,15 @@ void LogLayout(HWND root) {
     }
     RECT rect;
     GetWindowRect(top, &rect);
-    snprintf(part, sizeof part, "\nbrowser: layout child %.0f,%.0f %.0fx%.0f",
-             (rect.left - origin.x) / scale, (rect.top - origin.y) / scale,
-             (rect.right - rect.left) / scale, (rect.bottom - rect.top) / scale);
+    const double x = (rect.left - origin.x) / scale, y = (rect.top - origin.y) / scale;
+    const double across = (rect.right - rect.left) / scale;
+    const double down = (rect.bottom - rect.top) / scale;
+    // The dialog's own window, listed above.
+    if (has_dialog && IsChromium(top) && x <= dialog.x && y <= dialog.y &&
+        x + across >= dialog.x + dialog.width && y + down >= dialog.y + dialog.height) {
+      continue;
+    }
+    snprintf(part, sizeof part, "\nbrowser: layout child %.0f,%.0f %.0fx%.0f", x, y, across, down);
     line += part;
   }
   // Full screen, as Chrome's is on Windows: no title bar, over its whole display.
@@ -709,7 +769,9 @@ std::string KeyName(HWND key) {
     return "BrowserCoreNSWindow";
   }
   if (IsGpui(key)) {
-    return "GPUIPanel";
+    // An overlay is shown owned by its browser window; Settings is a window of its own, as on the
+    // Mac, where it's an NSWindow and an overlay an NSPanel.
+    return GetWindow(key, GW_OWNER) ? "GPUIPanel" : "GPUIWindow";
   }
   // Chrome's own windows, such as its dialogs, are views' on the Mac too.
   if (IsChromium(key)) {
@@ -930,7 +992,7 @@ bool Run(const std::string& line) {
       "dragleave",     "press",          "dragto",      "release",     "rightpress",
       "rightdragto",   "rightrelease",   "move",        "scroll",      "swipe",
       "wheel",         "keydown",        "keyup",       "type",        "ime",
-      "insert",        "choose",         "dismiss"};
+      "insert",        "choose",         "dismiss",     "savepanel"};
   for (const char* input : kInput) {
     if (action == input) {
       g_steps.push_back({[] { LetGoKeyCtrl(); }});
@@ -986,8 +1048,16 @@ bool Run(const std::string& line) {
     if (!(words >> number) || number == 0 || !Browser(number - 1)) {
       return false;
     }
+    std::string behind;
+    if (words >> behind && behind != "behind") {
+      return false;
+    }
     g_driven = number - 1;
-    fprintf(stderr, "browser: drive window %zu\n", number);
+    fprintf(stderr, "browser: drive window %zu%s\n", number, behind.empty() ? "" : " behind");
+    // With behind, it stays where it is, for the pointer over a window behind another (#1432).
+    if (!behind.empty()) {
+      return true;
+    }
     // In front of the app's other browser windows with the keyboard, as a click on it does, but
     // never over another app's.
     HWND root = Driven();
@@ -1018,8 +1088,114 @@ bool Run(const std::string& line) {
     ShowWindow(root, IsIconic(root) ? SW_SHOWNOACTIVATE : SW_SHOWMINNOACTIVE);
     return true;
   }
+  // The windows the app has over its browser windows that are on screen, by their own visibility:
+  // its overlays, its menu and Chromium's bubbles, each owned by its browser window.
+  if (action == "overlays") {
+    std::string shown;
+    for (HWND top = GetTopWindow(nullptr); top; top = GetWindow(top, GW_HWNDNEXT)) {
+      if (Ours(top) && GetWindow(top, GW_OWNER) && IsWindowVisible(top)) {
+        RECT rect;
+        GetWindowRect(top, &rect);
+        const double scale = Scale(top);
+        char text[160];
+        snprintf(text, sizeof text, "%s%s %.0fx%.0f at %.0f,%.0f", shown.empty() ? "" : ", ",
+                 Utf8(ClassOf(top)).c_str(), (rect.right - rect.left) / scale,
+                 (rect.bottom - rect.top) / scale, rect.left / scale, rect.top / scale);
+        shown += text;
+      }
+    }
+    fprintf(stderr, "browser: overlays shown %s\n", shown.empty() ? "none" : shown.c_str());
+    return true;
+  }
+  // The windows on screen over the driven browser window, front first, down to it, by Windows' own
+  // z-order (#1419): the host's floating windows by their names, another of the app's by what front
+  // calls it, and another app's as "other" and its title. Cloaked ones aren't on screen.
+  if (action == "stack") {
+    HWND root = Driven();
+    if (!root) {
+      return false;
+    }
+    RECT over;
+    GetWindowRect(root, &over);
+    std::string stack;
+    for (HWND top = GetTopWindow(nullptr); top; top = GetWindow(top, GW_HWNDNEXT)) {
+      RECT rect, both;
+      DWORD cloaked = 0;
+      DwmGetWindowAttribute(top, DWMWA_CLOAKED, &cloaked, sizeof cloaked);
+      if (top != root && (!IsWindowVisible(top) || cloaked || !GetWindowRect(top, &rect) ||
+                          !IntersectRect(&both, &rect, &over))) {
+        continue;
+      }
+      std::string name;
+      if (top == root) {
+        name = "driven";
+      } else if (!Ours(top)) {
+        // Without WM_GETTEXT, which would wait on the window's thread.
+        wchar_t title[128] = L"";
+        InternalGetWindowText(top, title, static_cast<int>(std::size(title)));
+        name = "other " + Utf8(title);
+      } else if (const char* floating = host_floating_name(top)) {
+        name = floating;
+      } else {
+        name = Describe(top);
+      }
+      stack += (stack.empty() ? "" : ", ") + name;
+      if (top == root) {
+        break;
+      }
+    }
+    fprintf(stderr, "browser: stack %s\n", stack.c_str());
+    return true;
+  }
+  // Shows each of the UI's windows over a browser window that's hidden, as Windows shows those a
+  // window owns as it comes back from minimized: none the UI has closed may come back (#1346).
+  if (action == "reshow") {
+    std::vector<HWND> hidden;
+    for (HWND top = GetTopWindow(nullptr); top; top = GetWindow(top, GW_HWNDNEXT)) {
+      if (Ours(top) && IsGpui(top) && GetWindow(top, GW_OWNER) && !IsWindowVisible(top)) {
+        hidden.push_back(top);
+      }
+    }
+    for (HWND hwnd : hidden) {
+      ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    }
+    fprintf(stderr, "browser: reshown %zu\n", hidden.size());
+    return true;
+  }
   if (!Driven()) {
     return false;
+  }
+  // Windows' system command, as the title bar's button and Win+↑ send it: it maximizes the window,
+  // or restores it once maximized, through DefWindowProc, as the resize that crashed did (#1340).
+  if (action == "maximize") {
+    HWND root = Driven();
+    g_steps.push_back({[root] {
+      PostMessageW(root, WM_SYSCOMMAND, IsZoomed(root) ? SC_RESTORE : SC_MAXIMIZE, 0);
+    }});
+    return true;
+  }
+  // The driven window's state and the frame it un-maximizes to, as Windows keeps them, in
+  // LogFrame's terms: "browser: placement <maximized|minimized|normal> <x> <y> <width> <height>".
+  if (action == "placement") {
+    HWND root = Driven();
+    WINDOWPLACEMENT placement{sizeof placement};
+    if (!root || !GetWindowPlacement(root, &placement)) {
+      return false;
+    }
+    // Windows keeps the frame from the work area's corner, not the screen's.
+    MONITORINFO monitor{sizeof monitor};
+    GetMonitorInfoW(MonitorFromWindow(root, MONITOR_DEFAULTTONEAREST), &monitor);
+    RECT normal = placement.rcNormalPosition;
+    OffsetRect(&normal, monitor.rcWork.left - monitor.rcMonitor.left,
+               monitor.rcWork.top - monitor.rcMonitor.top);
+    const char* state = placement.showCmd == SW_SHOWMAXIMIZED   ? "maximized"
+                        : placement.showCmd == SW_SHOWMINIMIZED ? "minimized"
+                                                                : "normal";
+    const double scale = Scale(root);
+    fprintf(stderr, "browser: placement %s %.0f %.0f %.0f %.0f\n", state, normal.left / scale,
+            normal.top / scale, (normal.right - normal.left) / scale,
+            (normal.bottom - normal.top) / scale);
+    return true;
   }
   if (action == "click" || action == "rightclick" || action == "middleclick" ||
       action == "doubleclick" || action == "clickkey" || action == "rightclickkey" ||
@@ -1036,7 +1212,8 @@ bool Run(const std::string& line) {
     const UINT button = action.rfind("right", 0) == 0    ? MK_RBUTTON
                         : action.rfind("middle", 0) == 0 ? MK_MBUTTON
                                                          : MK_LBUTTON;
-    AddClick(target, button, in_key ? 0 : Modifiers(words), action.rfind("double", 0) == 0);
+    AddClick(target, button, in_key ? 0 : PointerModifiers(words),
+             action.rfind("double", 0) == 0);
     return true;
   }
   if (action == "drag") {
@@ -1080,7 +1257,7 @@ bool Run(const std::string& line) {
     const std::string step = right ? action.substr(5) : action;
     const UINT button = right ? MK_RBUTTON : MK_LBUTTON;
     // The keys named after the point, such as ⌥ for a drag that drops a copy.
-    const int keys = Modifiers(words);
+    const int keys = PointerModifiers(words);
     if (step == "press") {
       Target target;
       if (!TargetAt(x, y, &target)) {
@@ -1138,9 +1315,11 @@ bool Run(const std::string& line) {
     if (count < 1 || !TargetAt(x, y, &target)) {
       return false;
     }
-    // A mouse's tick is a notch; a trackpad's points, content moving up for scrolling down.
-    const int across = action == "wheel" ? static_cast<int>(dx * WHEEL_DELTA)
-                                         : static_cast<int>(std::lround(dx * 1.2));
+    // A mouse's tick is a notch; a trackpad's points, content moving up for scrolling down. Across,
+    // drive.mm's dx moves the content right, where Windows' positive delta scrolls right, so
+    // content moves left: a positive dx goes back a Space, as on the Mac.
+    const int across = action == "wheel" ? static_cast<int>(-dx * WHEEL_DELTA)
+                                         : static_cast<int>(std::lround(-dx * 1.2));
     const int along = static_cast<int>(std::lround(-dy * 1.2));
     g_steps.push_back({[=] { Move(target, 0, 0); }});
     for (int event = 0; event < count; event++) {
@@ -1218,9 +1397,13 @@ bool Run(const std::string& line) {
     return true;
   }
   if (action == "front") {
+    // As other apps list windows, such as WebRTC's window capture, which T3 Code's uses: an owned
+    // window, as each overlay is, isn't one unless it has the taskbar's style.
     HWND first = nullptr;
     for (HWND top = GetTopWindow(nullptr); top && !first; top = GetWindow(top, GW_HWNDNEXT)) {
-      first = Ours(top) && IsWindowVisible(top) ? top : nullptr;
+      const bool listed = !GetWindow(top, GW_OWNER) ||
+                          (GetWindowLongPtrW(top, GWL_EXSTYLE) & WS_EX_APPWINDOW);
+      first = Ours(top) && IsWindowVisible(top) && listed ? top : nullptr;
     }
     const std::string key = Describe(GetActiveWindow());
     fprintf(stderr, "browser: front %s, main %s, key %s, ax focused %s, ax main %s\n",
@@ -1236,6 +1419,11 @@ bool Run(const std::string& line) {
   }
   if (action == "dismiss") {
     return host_menu_window_dismiss();
+  }
+  if (action == "savepanel") {
+    fprintf(stderr, host_save_dialog_answer(rest.c_str()) ? "browser: save panel answered\n"
+                                                          : "browser: no save panel\n");
+    return true;
   }
   if (action == "agentspace") {
     std::string agent, name;

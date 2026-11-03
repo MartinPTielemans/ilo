@@ -1,11 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400">
   <!-- The DMG's Finder window, in points. tools/dmg/layout.py centres the ilo icon at (176, 170)
-       and Applications at (464, 170), 128 pt, and Finder writes their labels under them, black in
-       Light and white in Dark. So the ground is the ilo green at the brightness where both read at
-       4.6:1. tools/dmg/render.sh renders it. -->
-  <rect width="640" height="400" fill="#13874B"/>
+       and Applications at (464, 170), 128 pt, and Finder writes their labels under them in dark
+       text in Light and Dark alike. So the ground is pale, ilo green at 12% on Paper, where the
+       labels read at over 7:1, and the green itself is the arrow and the land.
+       tools/dmg/render.sh renders it. -->
+  <rect width="640" height="400" fill="#D8E6D6"/>
   <!-- A still of the land ilobrowser.com's hero draws (ilo-site, src/ascii.ts), in 8 by 14 cells. -->
-  <g font-family="Inter" font-size="11" fill="#FFFFFF" fill-opacity="0.16" text-anchor="middle">
+  <g font-family="Inter" font-size="11" fill="#0E9F55" text-anchor="middle">
     <text x="60 84 100 108 116 140 148 172 204 236 244 364 380 412 428 436 444 452 460 492 500 508 516 524 532 556 564 572 588 596 604 612" y="347">...:.....:::.:.......::.:.......</text>
     <text x="12 20 28 36 44 52 60 76 100 108 116 124 132 140 148 156 164 172 180 188 204 212 220 228 236 244 252 260 268 276 284 292 300 308 316 324 332 340 348 356 364 372 380 388 396 404 412 420 428 436 444 452 460 468 476 484 492 500 516 524 532 540 548 556 564 572 580 588 596 604 612 620 628 636" y="361">:.::....::-::::.-:::-.::..=::..::-:.::-.::::::-:::-:-.::-:...:..::::.::.:.</text>
     <text x="4 12 20 28 36 44 52 60 68 76 84 92 100 108 116 124 140 148 156 164 172 180 188 196 204 212 220 244 252 260 268 276 284 292 300 308 316 324 332 340 348 356 364 372 380 388 396 404 412 420 428 436 444 452 460 468 476 484 492 500 508 516 524 532 540 548 556 564 572 580 588 596 604 612 620 628 636" y="375">::..::--.-..:.:-.:-:.=:=---.:..:.::-::-:-=--------.::.--:::-:-:---.-.:---:--:</text>
@@ -13,9 +14,9 @@
     <text x="4 12 20 28 36 44 52 60 68 76 84 92 100 108 116 124 132 140 148 156 164 172 180 188 196 204 212 220 228 236 244 252 260 268 276 284 292 300 308 316 324 332 340 348 356 364 372 380 388 396 404 412 420 428 436 444 452 460 468 476 484 492 500 508 516 524 532 540 548 556 564 572 580 588 596 604 612 620 628 636" y="403">::::=-+-::=-:----=+=+-:...::.=.--::---:==++-+=++::.+++*+===+--:-===-=-:-----+=+=</text>
   </g>
   <!-- From ilo to Applications. -->
-  <g fill="none" stroke="#FFFFFF" stroke-opacity="0.9" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+  <g fill="none" stroke="#0B8045" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
     <path d="M268 170 H372"/>
     <path d="M361 159 L372 170 L361 181"/>
   </g>
-  <text x="320" y="302" font-family="Inter" font-weight="500" font-size="13" fill="#FFFFFF" fill-opacity="0.92" text-anchor="middle">Drag ilo into Applications</text>
+  <text x="320" y="302" font-family="Inter" font-weight="500" font-size="13" fill="#16140F" fill-opacity="0.75" text-anchor="middle">Drag ilo into Applications</text>
 </svg>

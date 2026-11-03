@@ -10,7 +10,7 @@ privately all the same, and don't disclose them until a fix has had a fair chanc
 earn a reward. We take the fix with the Chromium release that carries it.
 
 **It's ilo's own.** Report it through
-[GitHub's private vulnerability reporting](https://github.com/MartinPTielemans/browser/security/advisories/new).
+[GitHub's private vulnerability reporting](https://github.com/MartinPTielemans/ilo/security/advisories/new).
 Never in a public issue, pull request or discussion. ilo's own is:
 
 - **The core**, our C++ in Chromium's browser process (`core/`), which runs outside the sandbox.
@@ -43,6 +43,6 @@ that credits you, unless you'd rather not be named, once the fix is on `main`.
 
 The time between a Chrome security release and the same fixes in ilo is the number that matters
 most for a Chromium browser. We track it, and set a goal for it once Chromium's point releases reach
-ilo automatically ([#299](https://github.com/MartinPTielemans/browser/issues/299)); until that path
+ilo automatically ([#299](https://github.com/MartinPTielemans/ilo/issues/299)); until that path
 exists, a number would be a promise we can't keep. ilo has no updater yet, so a build from source has
 the fixes once it's pulled and rebuilt.

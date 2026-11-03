@@ -2,7 +2,8 @@
 # Spaces: their names, colours and icons, their tabs with each tab's history, the tab each showed
 # and the Space it showed, and the sidebar's width. Only a tab shown loads; the others show their
 # titles and favicons. A tab named with a double-click on its row, where escape cancels, keeps its
-# name over its page's title, and Rename… in its menu with no name gives the title back. An
+# name over its page's title, a click in the page keeps the name typed, and Rename… in its menu with
+# no name gives the title back. An
 # emoji picked in the icon picker that Change Icon… hangs under its favicon takes the favicon's
 # place until Remove Icon, and a Japanese conversion in the picker's search isn't a pick. A Space's
 # icon, picked in its icon picker, comes back too. A tab closed before the quit stays closed,
@@ -55,14 +56,22 @@ send click $page_point
 if [ "$active" != 1 ]; then
   exec 3>&-
   quit
-  kill "$server"
   echo "skip: restoring Spaces. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
 # The page's downloads go in the check's folder, and ⇧⌘J from the page opens the Library on
 # Downloads, which lists them. The slow one runs until the quit.
+in_browser RenderWidgetHostViewCocoa "after a click on the page, before \"d\" downloads"
 send type d
-expect '^browser: download [0-9]* done notes.txt$' "the page's download didn't finish"
+# Run after store, the download didn't start on the Mac VM, and nothing said why.
+for _ in $(seq 100); do
+  logged '^browser: download [0-9]* done notes.txt$' && break
+  sleep 0.1
+done
+logged '^browser: download [0-9]* done notes.txt$' ||
+  fail "the page's download didn't finish. Its lines: \
+$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -i 'download' | tr '\n' ';'). \
+The folder: $(ls -A "$out/downloads" | tr '\n' ' ')"
 [ -f "$out/downloads/notes.txt" ] || fail "the download isn't in the check's folder"
 # On the Mac it carries macOS's quarantine flag, naming the app that downloaded it, so Gatekeeper
 # checks it the first time it opens (#685). Chromium's quarantine service sets it.
@@ -128,8 +137,8 @@ expect '^browser: today [0-9][0-9]*$' "the tab for example.com didn't open in th
 e=$(today)
 expect "^browser: loaded $e https://example.com/\$" "example.com didn't load in the new Space's tab"
 post rightclick 100 112
-expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $colors, $profile, \
-Export as Markdown…, Delete Space")\$" \
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
+New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the Space's menu didn't offer its theme"
 # The theme picker's pink swatch, and + for a second colour, which a relaunch brings back.
 send choose "$(cased 'Edit Theme Color…')"
@@ -148,9 +157,9 @@ expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
 # Change Icon… in the Space's menu gives it an emoji from the icon picker's Emoji tab, found by a
 # search and picked with ↩, which a relaunch brings back.
 post rightclick 100 112
-expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $themed, $profile, \
-Export as Markdown…, Delete Space")\$" "the Space's menu didn't offer Change Icon…"
-send choose "$(cased 'Change Icon…')"
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
+New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" "the Space's menu didn't offer Change Icon…"
+send choose "$(cased 'Change Space Icon…')"
 expect "^browser: icon picker for $second on icon\$" "Change Icon… didn't open the icon picker"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker"
 # Emoji, the left half of Emoji | Icon at the picker's top.
@@ -288,10 +297,19 @@ send click $page_point
 if [ "$active" != 1 ]; then
   exec 3>&-
   quit
-  kill "$server"
   echo "skip: restored history. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
+# A click in the page ends the tab's field and keeps the name typed, as one elsewhere in the
+# sidebar does, though only the host sees the page take the keyboard (#1414).
+send doubleclick $(row 0)
+expect "^browser: rename tab $c\$" \
+  "a double-click on the row didn't rename the tab after the relaunch"
+send type clicked
+send click $page_point
+expect '^browser: name field left$' "a click in the page left the tab's field open"
+expect "^browser: title $c clicked\$" "a click in the page didn't keep the name typed"
+../tools/window-screenshot.sh "$pid" "$out/rename-click-away.png" || fail "no window to capture"
 # Rename… in its menu, with the name taken out, gives the tab back its page's title.
 post rightclick $(row 0)
 menu=$(cased "Copy Link$share, Change Icon…, Remove Icon, Rename…, Mute (disabled), Add Split View, Duplicate, Add to Folder › New Folder, Move to › [^,]* (checked), Move to › reading list, Move to › New Space…, Archive Tab, Archive Tabs Below")
@@ -583,6 +601,14 @@ grep -c "^browser: toast shown $note \[view archive, dismiss\]\$" "$log" | grep 
   fail "the auto-archive's note didn't show once: $(grep '^browser: toast shown' "$log")"
 await '^browser: toast settled$' || fail "the auto-archive's note didn't settle"
 ../tools/window-screenshot.sh "$pid" "$out/archive-note.png" || fail "no window to capture"
+# It shows whole: its plate, where the app laid it out, lies inside the toast's window, which cut
+# its left end off where its words were wider than the window, as in Inter (#1462).
+await '^browser: toast plate .* in [0-9]* [0-9]*$' ||
+  fail "the auto-archive's note didn't say where its plate is"
+plate=$(grep '^browser: toast plate' "$log" | tail -1)
+set -- $(echo "${plate#browser: toast plate }" | sed 's/ in / /')
+[ "$1" -ge 0 ] && [ "$2" -ge 0 ] && [ $(($1 + $3)) -le "$5" ] && [ $(($2 + $4)) -le "$6" ] ||
+  fail "the auto-archive's note runs past its window, which cuts it: $plate"
 send layout
 content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
   sed 's/^browser: layout content \([0-9]*x[0-9]*\),.*/\1/')
@@ -607,10 +633,11 @@ grep -q '^browser: toast shown Tabs unseen' "$log" && fail "the answered note ca
 quit
 
 # A tab put back that no window shows has no page, as the core logs, until it's first shown, when
-# its page loads scrolled where it was.
+# its page loads scrolled where it was. Its onkeydown returns nothing, since one returning false
+# cancels the key, and the page would keep every shortcut it gets first, as ⌘L.
 long='data:text/html,<title>top</title><div style="height:5000px"></div>
 <script>onscroll = () => document.title = "scrolled " + Math.round(scrollY);
-onkeydown = (e) => e.key == "f" && document.documentElement.requestFullscreen();</script>'
+onkeydown = (e) => { if (e.key == "f") document.documentElement.requestFullscreen(); };</script>'
 log="$out/unloaded-a.log"
 step=0
 rm -f "$saved" "$launch_frame"
@@ -657,6 +684,64 @@ exec 3>&-
 quit
 grep -q '"fullscreen": *true' "$saved" &&
   fail "the window was saved full screen for the page that was full screen at the quit"
+
+# Help › Restore Earlier Sidebar brings back the profile's sidebar from a backup, which the core
+# takes as it saves the Spaces, in the profile's directory. The sidebar it replaces becomes the
+# newest backup, which brings it back in turn. Without the run's earlier backups, the first one
+# taken is this launch's sidebar.
+backups="$(dirname "$saved")/Default/Sidebar Backups"
+rm -rf "$backups"
+log="$out/sidebar-backups.log"
+step=0
+BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await '^browser: restored in ' || fail "the launch for sidebar backups didn't restore the Spaces"
+await '^browser: sidebar backups of Default: 1$' || fail "saving the Spaces took no backup"
+ls "$backups"/*.json > /dev/null 2>&1 || fail "the backup isn't in the profile's directory"
+await '^browser: newest sidebar backup ' || fail "Help wasn't given the backup"
+backed_up=$(today | wc -w | tr -d " ")
+# A page of the check's own site, so not open_from_bar, which types a bare host.
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send type "${site}notes.txt"
+send key return
+expect "^browser: loaded [0-9]* ${site}notes.txt\$" "the tab opened after the backup didn't load ${site}notes.txt"
+expect "^browser: today [0-9 ]*\$" "the tab opened after the backup isn't in Today"
+await_today() {
+  for _ in $(seq 100); do
+    [ "$(today | wc -w | tr -d " ")" = "$1" ] && return 0
+    sleep 0.1
+  done
+  fail "$2: Today is \"$(today)\""
+}
+await_today $((backed_up + 1)) "the tab opened after the backup isn't in Today"
+# By the newest's label, as the menu names it. Off the Mac there's no menu bar, so the way in is
+# the command bar's Restore Earlier Sidebar…, which lists the backups in ilo's menu, newest first.
+restore_newest() {
+  label=$(grep '^browser: newest sidebar backup ' "$log" | tail -1 | cut -d' ' -f6-)
+  if [ "$(uname)" = Darwin ]; then
+    send menu "Restore Earlier Sidebar › $label"
+  else
+    bar_command restore-earlier-sidebar "Restore Earlier Sidebar…" "restore earlier"
+    expect "^browser: menu shown $label" "$1's list didn't start with the newest backup, $label"
+    send choose "$label"
+  fi
+  expect "^browser: dialog shown Restore the sidebar from " "$1 didn't ask first"
+  expect '^browser: dialog settled$' "$1's dialog didn't settle"
+  send key return
+  expect '^browser: dialog confirmed$' "return didn't choose Restore"
+  expect '^browser: sidebar of Default restored, [1-9][0-9]* Spaces$' "$1 didn't restore the sidebar"
+  expect "^browser: sidebar backups of Default: $2\$" "$1 didn't keep the sidebar it replaced"
+}
+restore_newest "Restore Earlier Sidebar" 2
+await_today "$backed_up" "the backup's sidebar came back with the tab opened after it"
+../tools/window-screenshot.sh "$pid" "$out/sidebar-restored.png" || fail "no window to capture"
+# The sidebar replaced is the newest backup, so restoring it undoes the restore.
+restore_newest "Restoring the sidebar replaced" 3
+await_today $((backed_up + 1)) "restoring the sidebar replaced didn't bring back the tab"
+exec 3>&-
+quit
 # With Restore windows from last session turned off in Settings › Advanced, a launch opens one
 # window showing no page, as ⌘N's does: the Space comes back with its pinned tab, and its Today tab
 # goes in the archive. The second window doesn't come back (#684).
@@ -676,7 +761,7 @@ expect '^browser: window opened [0-9]*$' "⌘N didn't open a second window"
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
 settings_drew
-send clickkey 519 60
+send clickkey $(drawn "toolbar Advanced")
 expect '^browser: settings tab Advanced$' "a click on Advanced didn't show its tab"
 settings_drew Advanced
 # Where Settings drew the switch, as the Mini Player's row above it moves it.
@@ -704,6 +789,6 @@ grep -q '^browser: loaded ' "$log" && fail "a page loaded at a launch with Resto
 [ "$(grep -c '^browser: window opened ' "$log")" = 1 ] ||
   fail "the second window came back with Restore windows off"
 quit
-echo "ok: after ⌘Q and after closing the window, the Spaces come back with their names, themes, icons, tabs, history and the tab each showed, in the Space shown last, with the sidebar's width; only tabs shown load, the others show their titles and favicons, a tab renamed with a double-click keeps its name over its page's title until Rename… takes it out, Change Icon… hangs the icon picker under its favicon, and the emoji picked there keeps the favicon's place until Remove Icon, and a closed tab stays closed, in the archive, from which it reopens at its page. Back and Forward on a restored tab walk its saved history, and a window that quit full screen comes back so, unless a page took it there. A page's downloads are listed in the Library's Downloads, which ⇧⌘J opens, and a new one's icon flies into the Library button, though none of those a relaunch reads does. With one running, ⌘Q asks first, Continue Downloading shows Downloads and Quit cancels it, and after the relaunch Remove from List and Clear List take them off and keep their files. Resting on the Library button shows the newest finished downloads, until the pointer leaves them, and its right-click menu picks the kinds it lists, and Media plays a video downloaded in its tile while the Library shows it, and a row's menu is the Library row's. A SIGTERM keeps a tab opened just before it. Today tabs no window shows go in the archive after the interval, counted across a quit, and the tab shown stays; the first ones bring a note, until View Archive answers it, opening Archived Tabs, and none after that ($out/archive-note.png). A tab put back unshown has no page until it's shown, when it loads scrolled where it was. With Restore windows from last session off, a launch opens one window with no page, the pinned tab back and the Today tab in the archive. Window: $out/fresh-window.png"
+echo "ok: after ⌘Q and after closing the window, the Spaces come back with their names, themes, icons, tabs, history and the tab each showed, in the Space shown last, with the sidebar's width; only tabs shown load, the others show their titles and favicons, a tab renamed with a double-click keeps its name over its page's title until Rename… takes it out, Change Icon… hangs the icon picker under its favicon, and the emoji picked there keeps the favicon's place until Remove Icon, and a closed tab stays closed, in the archive, from which it reopens at its page. Back and Forward on a restored tab walk its saved history, and a window that quit full screen comes back so, unless a page took it there. A page's downloads are listed in the Library's Downloads, which ⇧⌘J opens, and a new one's icon flies into the Library button, though none of those a relaunch reads does. With one running, ⌘Q asks first, Continue Downloading shows Downloads and Quit cancels it, and after the relaunch Remove from List and Clear List take them off and keep their files. Resting on the Library button shows the newest finished downloads, until the pointer leaves them, and its right-click menu picks the kinds it lists, and Media plays a video downloaded in its tile while the Library shows it, and a row's menu is the Library row's. A SIGTERM keeps a tab opened just before it. Today tabs no window shows go in the archive after the interval, counted across a quit, and the tab shown stays; the first ones bring a note, until View Archive answers it, opening Archived Tabs, and none after that ($out/archive-note.png). A tab put back unshown has no page until it's shown, when it loads scrolled where it was. With Restore windows from last session off, a launch opens one window with no page, the pinned tab back and the Today tab in the archive. Help › Restore Earlier Sidebar asks, then brings back a backup's sidebar, and the sidebar it replaced is the newest backup, which undoes it. Windows: $out/sidebar-restored.png, $out/fresh-window.png"
 echo "  Restore, 3 tabs in 2 Spaces: ${restore_ms}ms. Windows: $out/restored.png, $out/tab-icon-picker.png, $out/unloaded-scrolled.png,"
 echo "  $out/recent-downloads.png, $out/library-button-menu.png, $out/media-video.png"

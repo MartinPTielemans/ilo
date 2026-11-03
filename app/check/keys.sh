@@ -199,6 +199,9 @@ composed=日本語
 if [ "$(uname)" = Linux ]; then
   echo "skip: composing in a page: the Linux driver types plain keys there; check/ime.sh covers it with a real input method."
   composed=
+elif windows; then
+  echo "skip: composing in a page: the Windows driver's input method composes in the UI's fields alone, and nothing covers a page's yet."
+  composed=
 else
   send ime on
   send type nihongo
@@ -251,6 +254,8 @@ for shortcut in t l; do
 done
 if [ "$(uname)" = Linux ]; then
   echo "skip: composing right after ⌘L: the Linux driver types plain keys in a page."
+elif windows; then
+  echo "skip: composing right after ⌘L: the Windows driver composes in the UI's fields alone, not in a page."
 else
   send ime on
   typed_after l nihongo
@@ -344,7 +349,7 @@ in_browser RenderWidgetHostViewCocoa "after the history tab closed"
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
 settings_drew
-send clickkey 401 60
+send clickkey $(drawn "toolbar Shortcuts")
 expect '^browser: settings tab Shortcuts$' "a click on Shortcuts didn't show its tab"
 settings_drew Shortcuts
 send clickkey 300 120
@@ -383,9 +388,7 @@ expect '^browser: shortcut recording new-tab$' "a click on New Tab's keys didn't
 send key t cmd ctrl
 # Off the Mac ⌃ presses Alt, as ⌥ does (docs/ux-spec.md › Keyboard).
 new_tab_key=ctrl-cmd-t
-if [ "$(uname)" = Linux ]; then
-  new_tab_key=alt-cmd-t
-fi
+[ "$(uname)" = Darwin ] || new_tab_key=alt-cmd-t
 expect "^browser: shortcut new-tab $new_tab_key\$" "⌃⌘T didn't become New Tab's key"
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts.png" || fail "no window to capture"
 send key w cmd
@@ -420,7 +423,10 @@ send menu Settings…
 expect '^browser: settings shown Shortcuts$' \
   "Settings… didn't show the Shortcuts tab it showed last"
 settings_drew Shortcuts
-send clickkey 537 203
+# Where the app drew it: its place depends on how wide the keys' chip beside it is, ⌃⌘T on the Mac
+# and Ctrl+Alt+T elsewhere.
+restore=$(drawn "restore new-tab") || fail "Settings didn't draw New Tab's ↺"
+send clickkey $restore
 expect '^browser: shortcut new-tab cmd-t$' "↺ didn't give New Tab ⌘T back"
 # The app menu's About opens Settings on its About tab: the version, the engine's and the credits.
 # Settings has the keyboard from the click on ↺, so the menu's command runs inside its window's
@@ -451,14 +457,14 @@ in_browser RenderWidgetHostViewCocoa "after the command bar closed"
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
 settings_drew
-send clickkey 401 60
+send clickkey $(drawn "toolbar Shortcuts")
 expect '^browser: settings tab Shortcuts$' "a click on Shortcuts didn't show its tab"
 settings_drew Shortcuts
 send clickkey 300 120
 send type sidebar
 expect '^browser: shortcuts search "sidebar" finds ' "the search for sidebar didn't end"
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts-sidebar.png" || fail "no window to capture"
-found='Reveal Tab in Sidebar, Focus Sidebar, Show/Hide Sidebar'
+found='Reveal Tab in Sidebar, Focus Sidebar, Show/Hide Sidebar, Restore Earlier Sidebar'
 grep -q "^browser: shortcuts search \"sidebar\" finds $found\$" "$log" ||
   fail "the search didn't find the sidebar's commands: $(grep '"sidebar" finds' "$log" | tail -1)"
 send key a cmd
@@ -474,9 +480,7 @@ expect '^browser: shortcut recording focus-sidebar$' \
   "a click on Focus Sidebar's keys didn't record them"
 send key k cmd ctrl
 sidebar_key=ctrl-cmd-k
-if [ "$(uname)" = Linux ]; then
-  sidebar_key=alt-cmd-k
-fi
+[ "$(uname)" = Darwin ] || sidebar_key=alt-cmd-k
 expect "^browser: shortcut focus-sidebar $sidebar_key\$" "⌃⌘K didn't become Focus Sidebar's key"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -695,9 +699,7 @@ send key 1 cmd ctrl
 # keymap gives back is named as the Mac's on each.
 space_key=ctrl-cmd-1
 first_key=ctrl-1
-if [ "$(uname)" = Linux ]; then
-  space_key=alt-cmd-1
-fi
+[ "$(uname)" = Darwin ] || space_key=alt-cmd-1
 expect "^browser: shortcut select-space-1 $space_key\$" "⌃⌘1 didn't become Go to Space 1's key"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"

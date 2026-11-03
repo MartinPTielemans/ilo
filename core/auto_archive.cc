@@ -36,6 +36,8 @@ namespace {
 
 // For the app's check, which can't wait 12 hours. It wins over the user's settings.
 constexpr char kArchiveAfterSwitch[] = "archive-tabs-after";
+// As kArchiveAfterSwitch, for Little ilo windows, which wait 6 hours.
+constexpr char kLittleArchiveAfterSwitch[] = "archive-little-after";
 
 // The profile's own time, in seconds, which it takes from Settings' default the first time the
 // core uses it once the Spaces are read.
@@ -65,18 +67,36 @@ class PrefsFactory : public ProfileKeyedServiceFactory {
 // Whether the Spaces, and with them the default, have been read.
 bool g_default_read = false;
 
+// The seconds the switch |name| gives, if it gives a positive number.
+std::optional<base::TimeDelta> Given(const char* name) {
+  int seconds = 0;
+  const std::string value = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(name);
+  if (base::StringToInt(value, &seconds) && seconds > 0) {
+    return base::Seconds(seconds);
+  }
+  return std::nullopt;
+}
+
 // |space|'s time: its profile's own, or for one not loaded, the profile its tabs open in.
 base::TimeDelta ArchiveAfter(const Space& space) {
-  static const std::optional<base::TimeDelta> given = []() -> std::optional<base::TimeDelta> {
-    int seconds = 0;
-    const std::string value =
-        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(kArchiveAfterSwitch);
-    if (base::StringToInt(value, &seconds) && seconds > 0) {
-      return base::Seconds(seconds);
-    }
-    return std::nullopt;
-  }();
+  static const std::optional<base::TimeDelta> given = Given(kArchiveAfterSwitch);
   return given.value_or(ProfileArchiveAfter(ProfileFor(space.profile())));
+}
+
+// How long a Little ilo window that isn't active stays open (bc_little_archive_after).
+base::TimeDelta LittleArchiveAfter() {
+  static const std::optional<base::TimeDelta> given = Given(kLittleArchiveAfterSwitch);
+  return given.value_or(UserSettings().little_archive_after);
+}
+
+// Each Little ilo window that isn't the active window, nor closing, with when it's due.
+void ForEachUnusedLittle(base::FunctionRef<void(Window*, base::Time)> each) {
+  const base::TimeDelta after = LittleArchiveAfter();
+  for (Window* window : Window::All()) {
+    if (window->little() && !window->active() && !window->closing()) {
+      each(window, window->inactive_since() + after);
+    }
+  }
 }
 
 base::WallClockTimer& Timer() {
@@ -130,6 +150,25 @@ void ArchiveDue() {
   for (bc_id id : due) {
     Window::CloseTab(id);
   }
+  // A Little ilo window closes into the archive with its tab (KeepClosed), as Arc's Little Arc
+  // windows do, but for one whose page plays sound, which waits another interval.
+  std::vector<bc_id> little;
+  ForEachUnusedLittle([&](Window* window, base::Time at) {
+    if (at > now) {
+      return;
+    }
+    content::WebContents* page = Tab::FromId(window->selected());
+    if (page && page->IsCurrentlyAudible()) {
+      window->set_inactive_since(now);
+    } else {
+      little.push_back(window->id());
+    }
+  });
+  for (bc_id id : little) {
+    if (Window* window = Window::FromId(id)) {
+      window->Close();
+    }
+  }
   if (!due.empty() && !g_archived) {
     g_archived = true;
     if (!UserSettings().archive_noted) {
@@ -146,6 +185,7 @@ void Schedule() {
     const base::Time due = tab->last_seen() + after;
     next = next ? std::min(*next, due) : due;
   });
+  ForEachUnusedLittle([&](Window*, base::Time due) { next = next ? std::min(*next, due) : due; });
   if (next) {
     Timer().Start(FROM_HERE, *next, base::BindOnce(&ArchiveDue));
   } else {

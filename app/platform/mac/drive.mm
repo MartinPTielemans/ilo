@@ -123,6 +123,11 @@
 //                                         "browser: menu bar <menu>: <titles>", enabled as
 //                                         AppKit would show them now, written as "menu shown"
 //                                         writes a menu's, and chooses none
+//   dock [<title>]                        chooses the Dock menu's item titled <title>, the menu
+//                                         the Dock icon's right click opens, or with none logs
+//                                         its items, as "browser: dock menu <titles>"
+//   statusitem [click]                    logs whether the menu bar has Little ilo's button,
+//                                         "browser: status item shown" or "none", or clicks it
 //   openmenu <menu>                       opens the main menu's <menu>, the same menu the menu
 //                                         bar opens, near the window's top left, tracked until
 //                                         dismiss or choose closes it. Commands still come in
@@ -136,9 +141,11 @@
 //                                         page, Chromium's or Safari's engine's: letters add to a
 //                                         composition, space converts it to 日本語, return
 //                                         commits it and escape cancels it
-//   window <n>                            drives the n-th browser window opened, from 1, from
+//   window <n> [behind]                   drives the n-th browser window opened, from 1, from
 //                                         now, bringing it to the front with the keyboard as a
-//                                         click on it does, logging "browser: drive window <n>"
+//                                         click on it does, logging "browser: drive window <n>",
+//                                         or with behind leaving it where it is, for the pointer
+//                                         over a window behind another (#1432)
 //   agentspace <agent> <name>             makes a Space named <name> for the agent with the id
 //                                         <agent> and the name <name>, as agent code will once
 //                                         there is some, logging "browser: made space <space> for
@@ -183,6 +190,9 @@
 #include "browser_core.h"
 #include "../host.h"
 #include "menu_window.h"
+
+// host.mm's menu bar button for Little ilo, nil while it's off.
+NSStatusBarButton* HostLittleStatusButton();
 
 // A drag from another app, as AppKit describes it to the view under the pointer: what it carries
 // and where it is.
@@ -1142,9 +1152,15 @@ bool Run(const std::string& line, void (^done)(void)) {
     if (!(words >> number) || number == 0 || !host_browser_window(number - 1)) {
       return false;
     }
+    std::string behind;
+    if (words >> behind && behind != "behind") {
+      return false;
+    }
     g_driven = number - 1;
-    fprintf(stderr, "browser: drive window %zu\n", number);
-    [(__bridge NSWindow*)host_browser_window(g_driven) makeKeyAndOrderFront:nil];
+    fprintf(stderr, "browser: drive window %zu%s\n", number, behind.empty() ? "" : " behind");
+    if (behind.empty()) {
+      [(__bridge NSWindow*)host_browser_window(g_driven) makeKeyAndOrderFront:nil];
+    }
     done();
     return true;
   }
@@ -1204,6 +1220,14 @@ bool Run(const std::string& line, void (^done)(void)) {
       return false;
     }
     NSWindow* target = WindowAt(window, x, y);
+    // A click that another window of the app's takes, such as one AppKit puts over a full-screen
+    // window, says which, since a check's click that does nothing logs nothing else (#1090).
+    if (target != window) {
+      const NSRect frame = target.frame;
+      fprintf(stderr, "browser: drive click went to %s %ld at %.0f,%.0f %.0fx%.0f\n",
+              NSStringFromClass([target class]).UTF8String, (long)target.windowNumber,
+              frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
+    }
     Convert(window, target, &x, &y);
     Click(target, x, y, 1, Modifiers(words));
     done();
@@ -1680,6 +1704,46 @@ bool Run(const std::string& line, void (^done)(void)) {
                           atLocation:NSMakePoint(40, NSHeight(view.bounds) - 40)
                               inView:view];
     });
+    done();
+    return true;
+  }
+  if (action == "dock") {
+    NSString* title = @(line.substr(std::min(line.size(), action.size() + 1)).c_str());
+    id<NSApplicationDelegate> delegate = NSApp.delegate;
+    NSMenu* menu = [delegate respondsToSelector:@selector(applicationDockMenu:)]
+                       ? [delegate applicationDockMenu:NSApp]
+                       : nil;
+    if (!menu) {
+      return false;
+    }
+    if (title.length) {
+      NSInteger index = [menu indexOfItemWithTitle:title];
+      if (index < 0) {
+        return false;
+      }
+      [menu performActionForItemAtIndex:index];
+    } else {
+      NSMutableArray<NSString*>* titles = [NSMutableArray array];
+      for (NSMenuItem* item in menu.itemArray) {
+        if (!item.separatorItem && !item.hidden) {
+          [titles addObject:item.title];
+        }
+      }
+      fprintf(stderr, "browser: dock menu %s\n", [titles componentsJoinedByString:@", "].UTF8String);
+    }
+    done();
+    return true;
+  }
+  if (action == "statusitem") {
+    NSStatusBarButton* button = HostLittleStatusButton();
+    if (line.size() > action.size()) {
+      if (!button) {
+        return false;
+      }
+      [button performClick:nil];
+    } else {
+      fprintf(stderr, "browser: status item %s\n", button ? "shown" : "none");
+    }
     done();
     return true;
   }

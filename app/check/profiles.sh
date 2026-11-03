@@ -8,7 +8,8 @@
 # menu then shows, and makes and deletes one. Each profile there has its own search engine, which
 # the command bar searches with in its Spaces, its own archive time, its own download folder, which
 # its Space's downloads go in, and Clear… for its browsing data, as ⇧⌘⌫ opens it for the Space
-# shown. Deleting the Space leaves its profile unused, and Delete in the menu deletes it once the
+# shown. Little ilo's bar picks the other profile for its page, which is kept for the site.
+# Deleting the Space leaves its profile unused, and Delete in the menu deletes it once the
 # user confirms.
 
 # The cookie page's title says whether it finds its cookie, p, never a value, since the app logs
@@ -38,7 +39,7 @@ onkeydown = e => {
 cookie_page="$(echo "$site" | sed 's/127\.0\.0\.1/localhost/')profile.html"
 log="$out/profiles.log"
 step=0
-rm -f "$saved" "$launch_frame"
+rm -f "$saved" "$launch_frame" "$(dirname "$saved")/Little ilo profiles"
 BROWSER_DRIVE=1 BROWSER_URL="$cookie_page" "$browser" \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
@@ -118,17 +119,17 @@ expect '^browser: space form gone$' "the form didn't leave after return"
 name_point="100 112"
 tiled_name="100 159"
 post rightclick $name_point
-expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $themed, Profile › Default, \
-Profile › Profile 2 (checked), Profile › New Profile, Export as Markdown…, Delete Space")\$" \
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, Set Profile › Default, \
+Set Profile › Profile 2 (checked), Set Profile › New Profile, New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the empty Space's menu didn't offer its profiles"
 ../tools/window-screenshot.sh "$pid" "$out/profile-menu.png" || fail "no window to capture"
 send choose Default
 expect "^browser: profiled space $second $default\$" "Default didn't take the Space back"
 expect "^browser: favorites $a\$" "the first profile's favorite didn't show in its Space again"
 post rightclick $tiled_name
-expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $themed, Profile › Default (checked), \
-Profile › Profile 2, Profile › New Profile, Profile › Delete “Profile 2”, \
-Export as Markdown…, Delete Space")\$" \
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, Set Profile › Default (checked), \
+Set Profile › Profile 2, Set Profile › New Profile, Set Profile › Delete “Profile 2”, \
+New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the menu didn't offer the unused profile back"
 send choose Profile 2
 expect "^browser: profiled space $second $work\$" "Profile 2 didn't take the Space again"
@@ -158,8 +159,12 @@ expect "^browser: title $b cookie none\$" \
 # Held partway back, the first profile's Space comes in beside this one's whole: its URL field
 # with the tab it would show, its favorite and its rows at its offset, as this one's go out. X11
 # sends a touchpad's scrolling with no start or end, so two fingers never page there (#554).
+# Windows' touchpad comes through DirectManipulation, which the driver can't stand in for: its
+# wheel messages reach GPUI as a mouse wheel's lines, with no fingers to hold partway.
 if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
   echo "skip: two fingers held partway between two profiles' Spaces: X11 sends no touch phases (#554)."
+elif windows; then
+  echo "skip: two fingers held partway between two profiles' Spaces: the Windows driver can't send a touchpad's."
 else
   post swipe 110 500 10 0 10 1500
   await '^browser: swipe across$' || fail "two fingers across the sidebar didn't page"
@@ -170,9 +175,9 @@ else
 fi
 # Its menu, with a tab, can't change its profile.
 post rightclick $name_point
-expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $themed, Profile › Default (disabled), \
-Profile › Profile 2 (checked), Profile › New Profile (disabled), \
-Export as Markdown…, Delete Space")\$" \
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, Set Profile › Default (disabled), \
+Set Profile › Profile 2 (checked), Set Profile › New Profile (disabled), \
+New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the menu of a Space with a tab offered another profile"
 send choose Profile 2
 none_since '^browser: profiled space' || fail "choosing its own profile changed the Space's"
@@ -197,13 +202,52 @@ expect "^browser: settled space $first\$" "the first Space's page didn't settle"
 send click $page_point
 send key r cmd
 expect "^browser: title $a cookie p\$" "the first profile's cookie went"
+# Little ilo's bar, with two profiles, has a profile picker, whose other profile opens the page in a
+# Little ilo window of its own, without the first profile's cookie, and is kept for the site.
+send key n cmd alt
+expect "^browser: little window opened [0-9]* profile $default home $first\$" \
+  "⌥⌘N didn't open a Little ilo window in the first profile"
+little=$(grep '^browser: little window opened ' "$log" | tail -1 | cut -d' ' -f5)
+# A new window goes in front of the others, so it logs no "key window"; the page ⌘L loads below
+# being the one this window reopens shows it's key.
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the Little ilo window's command bar"
+send insert "$cookie_page"
+send key return
+expect "^browser: loaded [0-9]* $cookie_page\$" "the cookie page didn't load in the Little ilo window"
+# The width the Little ilo window draws at, the window last drawn at a new size: Windows' frame
+# takes in the borders it resizes by, 8 a side, which draw nothing.
+width=$(grep '^browser: drawn at ' "$log" | tail -1 | sed 's/^browser: drawn at \([0-9.]*\)x.*/\1/')
+# The picker is the third of the bar's header plates from its end: the last one's middle is 20 in
+# from the right edge, and each is 34 before the next (little.rs).
+post clickkey $(awk -v width="$width" 'BEGIN { print width - 20 - 2 * 34 }') 24
+expect "^browser: menu shown $(cased 'Default (checked), Profile 2')\$" \
+  "Little ilo's profile picker didn't list the profiles, the page's checked"
+../tools/window-screenshot.sh "$pid" "$out/little-profile.png" all || fail "no window to capture"
+send choose Profile 2
+expect "^browser: little profile $work via bar\$" "picking Profile 2 didn't reach the app"
+expect "^browser: little window $little reopened $cookie_page in profile $work as [0-9]*\$" \
+  "picking Profile 2 didn't reopen the page in it"
+moved=$(sed -n "s|^browser: little window $little reopened .* as \([0-9]*\)\$|\1|p" "$log" | tail -1)
+expect "^browser: window closed $little\$" "the first profile's Little ilo window stayed open"
+expect "^browser: little window opened $moved profile $work home $second\$" \
+  "the new Little ilo window isn't in Profile 2, for its Space"
+expect "^browser: title [0-9]* cookie none\$" "the page in Profile 2 saw the first profile's cookie"
+grep -q "^localhost	Profile 2\$" "$(dirname "$saved")/Little ilo profiles" ||
+  fail "Profile 2 wasn't kept for the site: $(cat "$(dirname "$saved")/Little ilo profiles" 2>&1)"
+# New too, so ⌘W closing it shows it's key.
+send key w cmd
+expect "^browser: window closed $moved\$" "the Profile 2 Little ilo window didn't come to the front: ⌘W didn't close it"
+send window 1
 exec 3>&-
 quit
 
 # Launched again, each Space is in its profile, and each tab loads in its own.
 log="$out/profiles-restored.log"
 step=0
-work_downloads="$PWD/$out/work-downloads"
+# The folder as Windows names it, D:\a\..., which Chrome can move downloads into (#872), and
+# which the app logs as given.
+work_downloads="$(native_path "$PWD/$out/work-downloads")"
 mkdir -p "$work_downloads"
 rm -f "$work_downloads/profile.txt"
 BROWSER_DOWNLOAD_FOLDER="$work_downloads" BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
@@ -226,7 +270,9 @@ await "^browser: title $a cookie p\$" ||
   fail "the favorite came back without its profile's cookie"
 send click $page_point
 send key 2 ctrl
-expect "^browser: space $second in " "⌃2 didn't show the second Space"
+expect "^browser: space $second in " "⌃2 after the relaunch didn't show the second Space"
+# The right-click below would land where the Space's rows aren't yet while its page slides in.
+expect "^browser: settled space $second\$" "the second Space's page didn't settle"
 expect '^browser: favorites $' "the second Space showed the first profile's favorite"
 b=$(today)
 expect "^browser: title $b cookie none\$" "the second Space's tab came back in the first profile"
@@ -247,7 +293,7 @@ expect "^browser: space $first\$" "the window didn't go with the moved tab"
 expect '^browser: today [0-9][0-9]*$' "the moved tab isn't in the first Space"
 c=$(today)
 expect "^browser: title $c cookie p\$" "the moved tab didn't load with the first profile's cookie"
-post rightclick 100 $(($(row 0 | cut -d' ' -f2) + 47))
+post rightclick 100 $(($(row 0 | cut -d' ' -f2) + 55))
 expect '^browser: menu shown .*, Move to › Space 1 (checked), Move to › work, ' \
   "the moved tab's menu didn't offer its old Space"
 send choose work
@@ -300,7 +346,7 @@ expect "^browser: menu shown $(cased 'Back to Favorite URL, ')" "⌘Z put the fa
 send choose "$(cased 'Back to Favorite URL')"
 expect "^browser: title $a cookie p\$" "Back to Favorite URL didn't load the favorite's URL"
 send key 2 ctrl
-expect "^browser: space $second in " "⌃2 didn't show the second Space"
+expect "^browser: space $second in " "⌃2 after Back to Favorite URL didn't show the second Space"
 expect '^browser: favorites [0-9][0-9]*$' "⌘Z didn't bring back the favorite's twin"
 twin=$(grep '^browser: favorites' "$log" | tail -1 | cut -d' ' -f3)
 [ "$twin" != "$a" ] || fail "the other profile's Space shows the first profile's favorite itself"
@@ -358,13 +404,13 @@ expect "^browser: today $d\$" "⌘W didn't close Clear browsing data: Today is \
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
 settings_drew
-send clickkey 218 60
+send clickkey $(drawn "toolbar Profiles")
 expect '^browser: settings tab Profiles$' "a click on Profiles didn't show its tab"
 settings_drew Profiles
 at=$(drawn "download folder $work") || fail "Settings didn't draw the second profile's Change…"
 ../tools/window-screenshot.sh "$pid" "$out/settings-profile-boxes.png" || fail "no window to capture"
 send clickkey $at
-expect "^browser: download folder of profile $work $work_downloads set\$" \
+expect "^browser: download folder of profile $work $(printf '%s\n' "$work_downloads" | sed 's/[][\\.*^$]/\\&/g') set\$" \
   "Change… didn't set the second profile's download folder: $(grep '^browser: download folder' "$log" | tail -1)"
 # Each profile picks its search engine and archive time, the first keeping its own.
 post clickkey $(drawn "search engine $work")
@@ -388,15 +434,16 @@ expect '^browser: menu shown 12 hours (default), 24 hours, 7 days (checked), 30 
 send key escape
 expect '^browser: menu closed$' "escape didn't close the second profile's times"
 ../tools/window-screenshot.sh "$pid" "$out/settings-profile-settings.png" || fail "no window to capture"
-# A double-click on a name puts it in a field, where escape leaves it and return keeps a new one.
-send doubleclickkey $(drawn "profile $work")
-expect "^browser: rename profile $work\$" "a double-click on Profile 2 didn't put it in a field"
+# Rename, or a double-click on a name, puts it in a field, where escape leaves it and return
+# keeps a new one.
+send clickkey $(drawn "rename profile $work")
+expect "^browser: rename profile $work\$" "Rename on Profile 2 didn't put its name in a field"
 send type personal
 send key escape
 expect '^browser: rename cancelled$' "escape didn't cancel the renaming"
 none_since '^browser: renamed profile' || fail "escape renamed the profile"
 send doubleclickkey $(drawn "profile $work")
-expect "^browser: rename profile $work\$" "the second double-click didn't put it in a field"
+expect "^browser: rename profile $work\$" "a double-click on Profile 2 didn't put it in a field"
 send type personal
 send key return
 expect "^browser: renamed profile $work personal\$" "return didn't rename the profile"
@@ -459,7 +506,7 @@ expect '^browser: command bar go https://duckduckgo\.com/?q=ilo' \
   "the first profile's Space didn't search with DuckDuckGo: $(grep '^browser: command bar go' "$log" | tail -1)"
 send key w cmd
 send key 2 ctrl
-expect "^browser: space $second in " "⌃2 didn't show the second Space"
+expect "^browser: space $second in " "⌃2 after ⌘W closed the first Space's search didn't show the second Space"
 expect "^browser: settled space $second\$" "the second Space's page didn't settle"
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
@@ -478,7 +525,7 @@ expect '^browser: download [0-9]* done profile.txt$' "the second profile's page 
 # Deleted, the Space leaves its profile unused, which the first Space's menu then deletes, once the
 # user confirms.
 post rightclick $name_point
-expect "^browser: menu shown Rename Space, " \
+expect "^browser: menu shown $(cased 'Change Space Icon…'), " \
   "a right-click on the Space's name didn't show its menu"
 post choose Delete Space
 expect '^browser: dialog settled$' "Delete Space didn't ask first"
@@ -487,9 +534,9 @@ expect "^browser: spaces $first\$" "Delete didn't delete the second Space"
 expect "^browser: space $first\( in .*\)\{0,1\}\$" "deleting the second Space didn't show the first"
 expect "^browser: settled space $first\$" "the first Space's page didn't settle"
 post rightclick $tiled_name
-expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $colors, Profile › Default (checked), \
-Profile › personal, Profile › New Profile, Profile › Delete “personal”, \
-Export as Markdown…, Delete Space (disabled)")\$" \
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, Set Profile › Default (checked), \
+Set Profile › personal, Set Profile › New Profile, Set Profile › Delete “personal”, \
+New Folder…, Export as Markdown…, Manage Spaces…, Delete Space (disabled)")\$" \
   "the menu didn't offer to delete the unused profile by the name Settings gave it"
 post choose Delete “personal”
 expect '^browser: dialog shown Delete “personal”?$' "Delete didn't ask before deleting the profile"
@@ -499,4 +546,4 @@ send key return
 expect "^browser: removed profile $work personal\$" "the profile wasn't deleted"
 exec 3>&-
 quit
-echo "ok: the New Space form's Profile row makes a profile and puts the Space in it, where its tabs open without the first profile's cookie, from a command bar that followed it from the first profile's Space too, and its Choose a Theme row colours it; an empty Space's menu moves it between profiles, and a Space with tabs keeps its profile; held partway between two profiles' Spaces, each page has its own URL field and favorites; a new Space is in the profile of the Space it's made from; favorites show only in their profile's Spaces; after a relaunch each Space is in its profile and each tab loads in it; a tab moved to another profile's Space loads there with its cookies, after a warning only the first time; in Every Space a favorite has a twin in the other profile, which goes with it when it’s removed, comes back with ⌘Z, and goes back to the favorite’s URL in its own profile, and stays the other profile’s own favorite after; ⇧⌘⌫ opens Clear browsing data in the Space shown; Settings › Profiles sets the second profile's download folder, which its page downloads into, its search engine, which the command bar then searches with in its Space while the first's keeps DuckDuckGo, and its archive time, leaving the first's, opens Clear browsing data for the first in its Space, renames a profile on a double-click, which the Space menu shows, and makes one, named with Japanese input, and deletes it once the user confirms; a profile nothing is in is deleted from the menu once the user confirms. Windows: $out/profile-popup.png, $out/profile-form.png, $out/profile-made.png, $out/profile-menu.png, $out/profile-space.png, $out/profile-swipe.png, $out/profile-move.png, $out/clear-browsing-data.png, $out/settings-profile-boxes.png, $out/settings-profile-settings.png, $out/settings-profile-name.png, $out/settings-profiles.png, $out/profile-delete.png"
+echo "ok: the New Space form's Profile row makes a profile and puts the Space in it, where its tabs open without the first profile's cookie, from a command bar that followed it from the first profile's Space too, and its Choose a Theme row colours it; an empty Space's menu moves it between profiles, and a Space with tabs keeps its profile; held partway between two profiles' Spaces, each page has its own URL field and favorites; a new Space is in the profile of the Space it's made from; favorites show only in their profile's Spaces; after a relaunch each Space is in its profile and each tab loads in it; a tab moved to another profile's Space loads there with its cookies, after a warning only the first time; in Every Space a favorite has a twin in the other profile, which goes with it when it’s removed, comes back with ⌘Z, and goes back to the favorite’s URL in its own profile, and stays the other profile’s own favorite after; ⇧⌘⌫ opens Clear browsing data in the Space shown; Settings › Profiles sets the second profile's download folder, which its page downloads into, its search engine, which the command bar then searches with in its Space while the first's keeps DuckDuckGo, and its archive time, leaving the first's, opens Clear browsing data for the first in its Space, renames a profile on a double-click, which the Space menu shows, and makes one, named with Japanese input, and deletes it once the user confirms; a profile nothing is in is deleted from the menu once the user confirms; Little ilo's bar reopens its page in the other profile, without the first's cookie, and keeps that profile for the site. Windows: $out/profile-popup.png, $out/little-profile.png, $out/profile-form.png, $out/profile-made.png, $out/profile-menu.png, $out/profile-space.png, $out/profile-swipe.png, $out/profile-move.png, $out/clear-browsing-data.png, $out/settings-profile-boxes.png, $out/settings-profile-settings.png, $out/settings-profile-name.png, $out/settings-profiles.png, $out/profile-delete.png"

@@ -40,6 +40,7 @@ pub const HEIGHT: f32 = INSET * 2.
     + BUTTON_HEIGHT;
 pub const RIGHT: f32 = shell::CARD_INSET + 8.;
 pub const TOP: f32 = shell::CARD_INSET + 8.;
+use crate::menu::Closed;
 use crate::tokens::offer::INSET;
 use crate::tokens::offer::RADIUS;
 use crate::tokens::offer::TITLE_LINE;
@@ -54,6 +55,8 @@ use crate::tokens::offer::BUTTONS_TOP;
 use crate::tokens::offer::BUTTON_HEIGHT;
 use crate::tokens::offer::BUTTON_X;
 use crate::tokens::offer::BUTTON_GAP;
+use crate::tokens::offer::KEY_GAP;
+use crate::tokens::offer::KEY;
 use crate::tokens::offer::PLATE_RADIUS;
 use crate::tokens::offer::TITLE;
 use crate::tokens::offer::DETAIL;
@@ -370,12 +373,35 @@ impl OfferPrompt {
         let items = offer.usernames.iter().map(|username| (username.clone(), true)).collect();
         let input = self.input.clone();
         let usernames = offer.usernames;
-        let chosen = Box::new(move |index: usize, window: &mut Window, cx: &mut App| {
-            if let Some(username) = usernames.get(index) {
+        let chosen = Box::new(move |closed: Closed, window: &mut Window, cx: &mut App| {
+            if let Some(username) = closed.chosen().and_then(|index| usernames.get(index)) {
                 input.update(cx, |input, cx| input.reset(username.clone(), window, cx));
             }
         });
         menu(items, field_bottom_left(), false, window, chosen, cx);
+    }
+}
+
+/// The key that answers as the button for `answer` does, which the button names after its words,
+/// so the keyboard's way is learned where it's used.
+fn key(answer: Answer) -> Option<&'static str> {
+    match answer {
+        Answer::Accept => Some("enter"),
+        Answer::NotNow => Some("escape"),
+        Answer::Never => None,
+    }
+}
+
+/// How a button names `key`: ↩ as the dialog's glyph, which every OS's face can draw, and escape
+/// as onboarding's Skip writes it.
+fn key_mark(key: &str, color: Hsla) -> gpui::AnyElement {
+    match key {
+        "enter" => svg()
+            .path("icons/corner-down-left.svg")
+            .size(px(GLYPH))
+            .text_color(color)
+            .into_any_element(),
+        _ => div().text_color(color).child("esc").into_any_element(),
     }
 }
 
@@ -399,10 +425,13 @@ impl Render for OfferPrompt {
         });
         // Save or Update stands out in the Space's accent, as a dialog's action does.
         let button = |id: &'static str, label: SharedString, answer: Answer, default: bool| {
-            let (rest, hovered, pressed) = if default {
-                (palette.accent.into(), palette.accent_hovered(), palette.accent_pressed())
+            let (rest, hovered, pressed, text) = if default {
+                let label = Hsla::from(palette.accent_label);
+                (palette.accent.into(), palette.accent_hovered(), palette.accent_pressed(), label)
             } else {
-                (palette.plate(PLATE), palette.state(PLATE, STATE_HOVERED), palette.state(PLATE, STATE_PRESSED))
+                let hovered = palette.state(PLATE, STATE_HOVERED);
+                let pressed = palette.state(PLATE, STATE_PRESSED);
+                (palette.plate(PLATE), hovered, pressed, palette.text(TITLE))
             };
             div()
                 .id(id)
@@ -411,13 +440,15 @@ impl Render for OfferPrompt {
                 .px(px(BUTTON_X))
                 .flex()
                 .items_center()
+                .gap(px(KEY_GAP))
                 .rounded(px(PLATE_RADIUS))
                 .bg(rest)
-                .when(default, |button| button.text_color(palette.accent_label))
+                .text_color(text)
                 .hover(move |style| style.bg(hovered))
                 .active(move |style| style.bg(pressed))
                 .font_weight(FontWeight::MEDIUM)
                 .child(label)
+                .children(key(answer).map(|key| key_mark(key, text.opacity(KEY))))
                 .on_click(cx.listener(move |prompt, _, _, cx| prompt.answer(answer, cx)))
         };
         let row = || {

@@ -15,12 +15,13 @@ use gpui::{
     WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, actions, div,
     img, point, prelude::*, px, size, svg,
 };
-use gpui::{Role, accesskit::Live};
+use gpui::{Role, Size, accesskit::Live, canvas};
 
 use crate::{
     palette,
     shell::{self, Match},
     text_input::{self, PasteAndGo, PasteAndSearch, TextInput, without_javascript},
+    tooltip::{Anchor, Tip},
 };
 
 mod calculator;
@@ -55,7 +56,7 @@ use crate::tokens::command_bar::INPUT_TEXT;
 use crate::tokens::command_bar::INPUT_ICON_X;
 use crate::tokens::command_bar::INPUT_TEXT_X;
 use crate::tokens::command_bar::HINT_END;
-use crate::tokens::command_bar::HINT_GAP;
+use crate::tokens::command_bar::{FIELD_FADE, HINT_GAP};
 pub use crate::tokens::command_bar::RADIUS;
 pub use crate::tokens::command_bar::ABOVE_MIDDLE;
 pub use crate::tokens::command_bar::FIELD_WIDTH;
@@ -64,6 +65,9 @@ pub use crate::tokens::command_bar::FIELD_RADIUS;
 /// There the input's row is a row tall, with no line under it, and its icon and text sit in
 /// the rows' icon and title columns.
 const FIELD_INPUT: f32 = ROW_HEIGHT;
+/// There it hangs from the field as the Site Controls do. The modal shadow, 24 down at a 64 blur,
+/// fell mostly below a panel only 50 tall, a grey bar under it over a light page (#1306).
+const FIELD_LEVEL: Level = Level::Popover;
 use crate::tokens::command_bar::FIELD_INPUT_TEXT;
 use crate::tokens::command_bar::BESIDE_END;
 use crate::elevation::Level;
@@ -86,6 +90,17 @@ const TABS_PLACEHOLDER: &str = "Search Tabs…";
 const COMMANDS_PLACEHOLDER: &str = "Search Commands…";
 const COMMANDS_CHIP: &str = "Commands";
 
+/// What a history row's remove button is called, to an assistive app and in its tooltip: it takes
+/// the page or search out of the profile's history, not only out of the list.
+const REMOVE_NAME: &str = "Remove from History";
+
+/// The keys the remove button's tooltip names: Arc's ⌥⌘⌫ on the Mac, where most keyboards have no
+/// ⌦ for Chrome's ⇧⌦, and ⇧⌦ off it, its only key there.
+fn remove_keys() -> Vec<SharedString> {
+    let keystroke = if shell::OFF_THE_MAC { "shift-delete" } else { "alt-cmd-backspace" };
+    shell::keystroke_keys(keystroke).into_iter().map(Into::into).collect()
+}
+
 /// One of the core's suggestions for what's typed.
 #[derive(Default)]
 pub struct Suggestion {
@@ -97,7 +112,7 @@ pub struct Suggestion {
     pub tab: u64,
     /// What completes the text typed to this row, for the first row only.
     pub completion: String,
-    /// Whether ⇧⌦, ⌥⌘⌫ or its ✕ can take it out of the profile's history: a page visited or a
+    /// Whether ⇧⌦, ⌥⌘⌫ or its trash can take it out of the profile's history: a page visited or a
     /// search typed before, never one of the well-known sites or the search for what's typed.
     pub removable: bool,
     /// The browser command the row runs instead, and its shortcut.
@@ -113,6 +128,69 @@ pub struct Suggestion {
     /// A .new address typed, whose new document ↩ opens in a new tab even from a tab's URL, as
     /// it's a document of its own rather than the page edited.
     pub new_document: bool,
+    /// While the bar asks an agent (Agent task): the agent the row runs the task on, or the row
+    /// that sets agents up.
+    pub task: Option<TaskRow>,
+}
+
+/// A row of ⌘T's ask (Agent task).
+#[derive(Clone, Debug, PartialEq)]
+pub enum TaskRow {
+    /// The agent with this id, its glyph, the model it runs on unless it's its own default, and
+    /// when its plan's limit resets, if it's at it, which dims it.
+    Agent {
+        id: SharedString,
+        glyph: &'static str,
+        model: Option<SharedString>,
+        resets: Option<SharedString>,
+    },
+    /// No agent is ready: Settings › Agents.
+    SetUp,
+}
+
+impl TaskRow {
+    /// What the row says at its end: when its limit resets, or else its model.
+    fn end(&self) -> Option<SharedString> {
+        match self {
+            TaskRow::Agent { resets: Some(resets), .. } => Some(format!("Limit resets {resets}").into()),
+            TaskRow::Agent { model, .. } => model.clone(),
+            TaskRow::SetUp => None,
+        }
+    }
+}
+
+/// An agent ⌘T's ask lists (Agent task).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TaskAgent {
+    pub id: SharedString,
+    pub name: SharedString,
+    /// Its glyph, Settings › Agents' own.
+    pub glyph: &'static str,
+    /// The model it runs tasks on, by name, or None for its own default.
+    pub model: Option<SharedString>,
+    /// When its plan's limit resets, if it's at it.
+    pub resets: Option<SharedString>,
+}
+
+/// What ⌘T's ask offers, as the browser last learned it: the agents signed in, the default first,
+/// and whether it has learned which are yet.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TaskAgents {
+    pub agents: Vec<TaskAgent>,
+    pub known: bool,
+}
+
+/// What the row that sets agents up says.
+const SET_UP: &str = "Set up Claude or Codex";
+/// The widest the chip before the input grows, as a page's title can be long, and its favicon's
+/// size, as the chip's text is the rows' body size.
+const CHIP_MAX: f32 = 180.;
+const CHIP_FAVICON: f32 = 12.;
+
+/// A task ⇥ is making of what's typed: the page that goes with it, as its address and title, which
+/// ⌫ at the field's start takes off.
+struct Ask {
+    page: Option<(SharedString, SharedString)>,
 }
 
 /// What a row's icon stands for.
@@ -136,6 +214,11 @@ enum Icon {
 const COMMAND_GLYPH: &str = "icons/command.svg";
 
 impl Suggestion {
+    /// Whether it's an agent at its plan's limit, which runs no task until the limit resets.
+    fn at_limit(&self) -> bool {
+        matches!(&self.task, Some(TaskRow::Agent { resets: Some(_), .. }))
+    }
+
     fn kind(&self) -> Kind {
         match (&self.command, &self.result, self.search) {
             (Some(_), _, _) => Kind::Command,
@@ -148,6 +231,12 @@ impl Suggestion {
     /// Arc's: a page only in the profile's history has a clock, and an open tab or a well-known
     /// site its favicon. Each command has its own glyph.
     fn icon(&self) -> Icon {
+        match &self.task {
+            // Its CLI's terminal: an agent is named in words, never by its maker's logo or colour.
+            Some(TaskRow::Agent { glyph, .. }) => return Icon::Glyph(glyph),
+            Some(TaskRow::SetUp) => return Icon::Glyph("icons/settings.svg"),
+            None => {}
+        }
         match self.kind() {
             Kind::Page if self.tab == 0 && self.removable => Icon::Glyph("icons/clock.svg"),
             Kind::Page => Icon::Favicon,
@@ -222,6 +311,7 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::WhatsNew => "icons/megaphone.svg",
         Command::PrivacyPolicy => "icons/shield.svg",
         Command::ReportProblem => "icons/flag.svg",
+        Command::RestoreEarlierSidebar => "icons/rotate-ccw-clock.svg",
         Command::CopyBuildInfo => "icons/copy.svg",
         _ => COMMAND_GLYPH,
     }
@@ -284,17 +374,49 @@ pub trait Host {
     fn open_split(&self, url: &str, with: u64, cx: &mut App);
     /// Copies `text`, a sum's result, and says so.
     fn copy(&self, text: &str, cx: &mut App);
-    /// Shows the bar's window, `width` wide and its corners rounded by `radius`, with the keyboard:
-    /// centred across the browser window with its top `top` above the window's middle, else at
-    /// `left` and `top` in it.
-    fn show(&self, centered: bool, left: f32, top: f32, width: f32, radius: f32);
+    /// Shows the bar's window, `width` wide, its corners rounded by `radius` and shadowed as
+    /// `level` is, with the keyboard: centred across the browser window with its top `top` above
+    /// the window's middle, else at `left` and `top` in it.
+    fn show(&self, centered: bool, left: f32, top: f32, width: f32, radius: f32, level: Level);
     fn set_height(&self, height: f32);
     /// Hides the bar's window once the user has chosen something in it.
     fn hide(&self);
     /// Hides the bar's window as the user leaves it without choosing anything.
     fn dismiss(&self);
+    /// Gives the bar's window the keyboard back, which it found it hasn't while it shows, unless
+    /// the user left it, which the host knows first.
+    fn take_keyboard(&self);
     /// The browser's commands that match `text` and do something now, best first.
     fn commands(&self, text: &str, cx: &App) -> Vec<shell::BarCommand>;
+    /// The agents ⇥ asks a task of, as the browser last learned, or None while tasks are off,
+    /// which leaves ⇥ as it was (Agent task). It only reads: nothing about tasks runs while the
+    /// bar opens or takes keys.
+    fn task_agents(&self, cx: &App) -> Option<TaskAgents>;
+    /// Whether the bar shows over a private window, which offers no tasks, as agents get no path
+    /// into private windows.
+    fn over_private(&self) -> bool;
+    /// The ask shows, or no longer does: Today opens an empty slot at its top for the card, or
+    /// closes it. As it first shows in a run, the browser learns again which agents are ready, in
+    /// the background, which `task_agents_changed` reports.
+    fn asking(&self, shown: bool, cx: &mut App);
+    /// The page the user is on, if it's a web page: its address and title, all of it that goes
+    /// with an ask, as the agent never gets the user's tab.
+    fn task_page(&self, cx: &App) -> Option<(SharedString, SharedString)>;
+    /// Starts `asked` as a task on the agent `agent`, with `page`, from the Space the bar shows
+    /// over, and hides the bar by folding it into the ask's slot, which its card takes, or where
+    /// the window shows no slot, as `hide` does.
+    fn run_task(
+        &self,
+        agent: &str,
+        asked: &str,
+        page: Option<(SharedString, SharedString)>,
+        cx: &mut App,
+    );
+    /// Opens Settings › Agents, where agents are set up.
+    fn set_up_agents(&self, cx: &mut App);
+    /// Shows `tip` hanging from a button at its anchor in the bar's window, over the bar, after the
+    /// tooltip's delay, or ends the tooltip.
+    fn tooltip(&self, tip: Option<(Tip, Anchor)>, cx: &mut App);
 }
 
 /// A search engine's site search, which the bar's searches stay in until the user leaves it, as in
@@ -339,7 +461,7 @@ pub struct CommandBar {
     selected: usize,
     /// The row under the pointer, which keeps its plate as the keys move the selection (Arc).
     hovered: Option<usize>,
-    /// The row whose ✕ was last drawn, and its page, for check.sh's line as it draws.
+    /// The row whose trash was last drawn, and its page, for check.sh's line as it draws.
     remove_drawn: Option<(usize, String)>,
     /// Whether an assistive app reads the bar's window, so its rows say what they are.
     a11y: bool,
@@ -352,14 +474,22 @@ pub struct CommandBar {
     /// While it lists only commands, as after Tab in an empty field or "/ " typed (Arc), what
     /// leaving puts back before what's typed: nothing after Tab, "/ " after "/ ".
     commands: Option<&'static str>,
+    /// The agents ⇥ asks, as last learned, read as the bar opens and as they change.
+    task_agents: Option<TaskAgents>,
+    /// While ⇥ makes what's typed a task (Agent task).
+    ask: Option<Ask>,
     /// The rows' favicons by page, asked for as they first show. None until one comes.
     favicons: HashMap<String, Option<Arc<Image>>>,
     /// The Space's tabs it lists before anything is typed.
     tabs: Vec<shell::BarTab>,
     scroll: ScrollHandle,
-    /// Whether it shows, until it hides or the host reports a click outside it. The host closes
-    /// the window at that click's press, before the click reaches the shell, so this stays set
-    /// until the report, which comes after.
+    /// The row whose remove button the bar asked a tooltip for, until the pointer leaves it, and
+    /// where that button last drew in the bar's window, which the tooltip hangs from.
+    tipped: Option<usize>,
+    remove_frame: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Whether it shows: until it hides or asks the host to go, which on Windows reports it gone
+    /// only a message later, or the host reports the user left it. The host closes the window at a
+    /// click outside it, before the click reaches the shell, so this stays set until that report.
     open: Cell<bool>,
 }
 
@@ -444,6 +574,14 @@ pub fn open_at(
                 bar.edited(window, cx)
             })
             .detach();
+            cx.observe_window_activation(window, |bar: &mut CommandBar, window, cx| {
+                bar.activation_changed(window, cx)
+            })
+            .detach();
+            text_input::on_leave(&input.focus_handle(cx), window, cx, |bar, window, cx| {
+                bar.keep_focus(window, cx)
+            })
+            .detach();
             CommandBar {
                 host,
                 input,
@@ -463,9 +601,13 @@ pub fn open_at(
                 page: String::new(),
                 site: None,
                 commands: None,
+                task_agents: None,
+                ask: None,
                 favicons: HashMap::new(),
                 tabs: Vec::new(),
                 scroll: ScrollHandle::new(),
+                tipped: None,
+                remove_frame: Rc::default(),
                 open: Cell::new(false),
             }
         })
@@ -507,9 +649,9 @@ pub fn show(
     match field {
         Some(field) => {
             let top = f32::from(field.top()) - FIELD_ABOVE;
-            host.show(false, field.left().into(), top, FIELD_WIDTH, FIELD_RADIUS);
+            host.show(false, field.left().into(), top, FIELD_WIDTH, FIELD_RADIUS, FIELD_LEVEL);
         }
-        None => host.show(true, 0., ABOVE_MIDDLE, WIDTH, RADIUS),
+        None => host.show(true, 0., ABOVE_MIDDLE, WIDTH, RADIUS, Level::Modal),
     }
 }
 
@@ -521,7 +663,7 @@ pub fn show_tabs(tabs: Vec<shell::BarTab>, cx: &mut App) {
         tabs.iter().take(shell::BAR_ROWS).map(|tab| tab.tab.to_string()).collect();
     log!("browser: command bar searches tabs {}", ids.join(" "));
     if let Some(host) = reset(Target::Tabs, SharedString::default(), tabs, false, cx) {
-        host.show(true, 0., ABOVE_MIDDLE, WIDTH, RADIUS);
+        host.show(true, 0., ABOVE_MIDDLE, WIDTH, RADIUS, Level::Modal);
     }
 }
 
@@ -536,7 +678,7 @@ pub fn show_split(with: u64, pane: Bounds<Pixels>, card: Bounds<Pixels>, cx: &mu
         // The card is as far in from the window's bottom as from its top.
         let window = f32::from(card.top() + card.bottom());
         let top = centered_top(window) + f32::from(pane.top() - card.top());
-        host.show(false, left.into(), top, WIDTH, RADIUS);
+        host.show(false, left.into(), top, WIDTH, RADIUS, Level::Modal);
     }
 }
 
@@ -554,8 +696,10 @@ fn reset(
         .update(cx, |bar, window, cx| {
             bar.target = target;
             bar.over_field = over_field;
-            // The pointer has been elsewhere since the bar last showed.
+            // The pointer has been elsewhere since the bar last showed, and the host ended the
+            // tooltip over it as it hid.
             bar.hovered = None;
+            bar.tipped = None;
             // Favicons change over time, and a long session shouldn't keep every one it saw. The
             // tabs' are the ones their rows show.
             bar.favicons.clear();
@@ -569,6 +713,9 @@ fn reset(
             }
             bar.site_left(cx);
             bar.commands = None;
+            bar.end_ask(cx);
+            // What the browser last learned, read in memory: nothing about tasks runs as it opens.
+            bar.task_agents = bar.learned_agents(cx);
             let placeholder = match target {
                 Target::Tabs => TABS_PLACEHOLDER,
                 _ => PLACEHOLDER_TEXT,
@@ -584,6 +731,7 @@ fn reset(
             let rows = if text.is_empty() { bar.tab_rows() } else { Vec::new() };
             bar.set_rows(String::new(), rows, window, cx);
             bar.input.update(cx, |input, cx| input.reset(text, window, cx));
+            bar.keep_focus(window, cx);
             // The last query's suggestions are of no use now.
             bar.host.suggest(None, "", false);
             bar.host.clone()
@@ -608,6 +756,7 @@ pub fn space_shown(tabs: Vec<shell::BarTab>, open_tabs: Vec<shell::BarTab>, cx: 
             }
             if let Target::Beside(_) = bar.target {
                 // The shell is in an update, which its dismissal would update again.
+                bar.open.set(false);
                 let host = bar.host.clone();
                 cx.defer(move |_| host.dismiss());
                 return false;
@@ -620,6 +769,12 @@ pub fn space_shown(tabs: Vec<shell::BarTab>, open_tabs: Vec<shell::BarTab>, cx: 
             bar.tabs = tabs;
             // The site search's engine is the profile's, which this one may not have.
             bar.leave_site(window, cx);
+            // An ask goes on in the Space shown, whose Today opens its slot.
+            if bar.ask.is_some() {
+                let host = bar.host.clone();
+                cx.defer(move |cx| host.asking(true, cx));
+                return matches!(bar.target, Target::NewTab);
+            }
             let mut text = bar.input.read(cx).text().to_string();
             if let Target::Tab(_) = bar.target {
                 bar.target = Target::NewTab;
@@ -653,8 +808,37 @@ pub fn space_shown(tabs: Vec<shell::BarTab>, open_tabs: Vec<shell::BarTab>, cx: 
 /// The user left the bar with a click outside it, or Esc.
 pub fn dismissed(cx: &mut App) {
     if let Some(window) = cx.try_global::<CommandBarWindow>().map(|bar| bar.0) {
-        window.update(cx, |bar, _, _| bar.open.set(false)).ok();
+        window
+            .update(cx, |bar, _, cx| {
+                bar.open.set(false);
+                bar.end_ask(cx);
+            })
+            .ok();
     }
+}
+
+/// What the browser knows of the agents ⇥ asks has changed, as after it learned which are ready:
+/// an ask that shows lists them again.
+pub fn task_agents_changed(cx: &mut App) {
+    let Some(window) = cx.try_global::<CommandBarWindow>().map(|bar| bar.0) else {
+        return;
+    };
+    window
+        .update(cx, |bar, window, cx| {
+            if !bar.open.get() {
+                return;
+            }
+            let agents = bar.learned_agents(cx);
+            if agents == bar.task_agents {
+                return;
+            }
+            bar.task_agents = agents;
+            if bar.ask.is_some() {
+                bar.list_agents(window, cx);
+            }
+            cx.notify();
+        })
+        .ok();
 }
 
 /// Whether the bar shows, for a click on what opens it to close it rather than open it again: the
@@ -710,8 +894,11 @@ pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
     window
         .update(cx, |bar, window, cx| {
             // Older text's come after the bar has asked about newer, and Search Tabs asks for none.
-            // The commands-only list asks for none either.
-            if text != bar.request() || matches!(bar.target, Target::Tabs) || bar.commands.is_some()
+            // The commands-only list asks for none either, nor does an ask.
+            if text != bar.request()
+                || matches!(bar.target, Target::Tabs)
+                || bar.commands.is_some()
+                || bar.ask.is_some()
             {
                 return;
             }
@@ -850,6 +1037,11 @@ impl CommandBar {
         }
         if self.commands.is_some() {
             return self.list_commands(text, window, cx);
+        }
+        // What an ask types is the task, which nothing suggests for.
+        if self.ask.is_some() {
+            self.asked = text;
+            return cx.notify();
         }
         // Chrome completes only typing at the end: not a deletion, a paste, or with the caret
         // elsewhere, and not in a site search.
@@ -1041,7 +1233,8 @@ impl CommandBar {
     }
 
     /// Tab: enters the site search the selected row hints, keeping what was typed after its first
-    /// word, the keyword, as Chrome does. Else it selects the next row.
+    /// word, the keyword, as Chrome does. Else, with tasks on, it makes what's typed a task for an
+    /// agent (Agent task), and else it selects the next row.
     /// In an empty field, it lists only the commands, as Arc's does.
     fn enter_site_or_next(&mut self, _: &EnterSite, window: &mut Window, cx: &mut Context<Self>) {
         let empty = self.input.read(cx).text().is_empty();
@@ -1049,43 +1242,189 @@ impl CommandBar {
             return self.enter_commands("", window, cx);
         }
         let hint = self.chosen().filter(|row| !row.keyword.is_empty() && self.site.is_none());
-        let Some((keyword, name)) = hint.map(|row| (row.keyword.clone(), row.site.clone())) else {
-            return self.select_next(true, window, cx);
-        };
-        let typed = self.typed(cx);
-        let query = typed.split_once(char::is_whitespace).map_or("", |(_, rest)| rest.trim_start());
-        self.enter_site(keyword, name, query.to_string(), true, window, cx);
+        if let Some((keyword, name)) = hint.map(|row| (row.keyword.clone(), row.site.clone())) {
+            let typed = self.typed(cx);
+            let query =
+                typed.split_once(char::is_whitespace).map_or("", |(_, rest)| rest.trim_start());
+            return self.enter_site(keyword, name, query.to_string(), true, window, cx);
+        }
+        if self.may_ask(cx) {
+            return self.enter_ask(window, cx);
+        }
+        self.select_next(true, window, cx);
     }
 
-    /// ⇧Tab: leaves the site search or the commands-only list, else selects the row before.
+    /// ⇧Tab: leaves the site search, the commands-only list or the ask, else selects the row
+    /// before.
     fn leave_site_or_previous(
         &mut self,
         _: &LeaveSite,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.leave_site(window, cx) && !self.leave_commands(window, cx) {
+        if !self.leave_site(window, cx)
+            && !self.leave_commands(window, cx)
+            && !self.leave_ask(window, cx)
+        {
             self.select_next(false, window, cx);
         }
     }
 
     /// ⌫, ⌘⌫ or ⌥⌫ with the caret at the start of a site search's input, or the commands-only
-    /// list's, leaves it.
+    /// list's, leaves it. In an ask it takes the page's chip off first, then leaves.
     fn leave_at_start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.input.read(cx).selection() == (0..0)
-            && (self.leave_site(window, cx) || self.leave_commands(window, cx))
+        if self.input.read(cx).selection() != (0..0) {
+            return;
+        }
+        if let Some(ask) = self.ask.as_mut().filter(|ask| ask.page.is_some()) {
+            // check.sh reads this line.
+            log!("browser: command bar ask without its page");
+            ask.page = None;
+            cx.notify();
+            return cx.stop_propagation();
+        }
+        if self.leave_site(window, cx) || self.leave_commands(window, cx) || self.leave_ask(window, cx)
         {
             cx.stop_propagation();
         }
     }
 
+    /// The agents ⇥ asks, as the browser last learned, or None, as while tasks are off, over a
+    /// private window, so nothing of tasks shows there.
+    fn learned_agents(&self, cx: &App) -> Option<TaskAgents> {
+        (!self.host.over_private()).then(|| self.host.task_agents(cx)).flatten()
+    }
+
+    /// Whether ⇥ makes what's typed a task: tasks are on, and the bar opens a page, outside a site
+    /// search and the commands-only list.
+    fn may_ask(&self, cx: &App) -> bool {
+        self.task_agents.is_some()
+            && self.lists_commands()
+            && self.site.is_none()
+            && self.commands.is_none()
+            && self.ask.is_none()
+            && !self.typed(cx).is_empty()
+    }
+
+    /// Whether the input's end says Ask ⇥: ⇥ makes a task, and an agent is ready, or the browser
+    /// hasn't learned yet. With none ready, ⇥ offers to set one up, and nothing else of tasks shows.
+    fn offers_ask(&self, cx: &App) -> bool {
+        let ready = self.task_agents.as_ref().is_some_and(|agents| {
+            !agents.known || !agents.agents.is_empty()
+        });
+        ready && self.may_ask(cx)
+    }
+
+    /// ⇥: what's typed becomes a task, with the page the user is on as a chip before it, and the
+    /// rows become the agents.
+    fn enter_ask(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // check.sh reads this line.
+        log!("browser: command bar asks an agent");
+        let typed = self.typed(cx);
+        let page = self.host.task_page(cx);
+        if let Some((url, _)) = &page
+            && !self.favicons.contains_key(url.as_ref())
+        {
+            self.favicons.insert(url.to_string(), None);
+            self.host.page_favicon(url);
+        }
+        self.ask = Some(Ask { page });
+        self.completion.clear();
+        self.asked = typed.clone();
+        let caret = typed.len();
+        self.input.update(cx, |input, cx| input.set_text(typed.into(), caret, window, cx));
+        self.host.asking(true, cx);
+        self.list_agents(window, cx);
+    }
+
+    /// Lists the agents the ask may run on: those signed in, the default first and selected unless
+    /// it's at its limit; or the row that sets one up; or none while the browser learns which.
+    fn list_agents(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let agents = self.task_agents.clone().unwrap_or_default();
+        let rows: Vec<Suggestion> = match (agents.known, agents.agents.is_empty()) {
+            (_, false) => (agents.agents.into_iter())
+                .map(|agent| Suggestion {
+                    text: agent.name,
+                    task: Some(TaskRow::Agent {
+                        id: agent.id,
+                        glyph: agent.glyph,
+                        model: agent.model,
+                        resets: agent.resets,
+                    }),
+                    ..Suggestion::default()
+                })
+                .collect(),
+            (true, true) => vec![Suggestion {
+                text: SET_UP.into(),
+                task: Some(TaskRow::SetUp),
+                ..Suggestion::default()
+            }],
+            (false, true) => Vec::new(),
+        };
+        // check.sh reads this line.
+        let names: Vec<&str> = rows.iter().map(|row| row.text.as_ref()).collect();
+        log!("browser: command bar agents: {}", names.join(", "));
+        let first = rows.iter().position(|row| !row.at_limit()).unwrap_or(0);
+        self.set_rows(String::new(), rows, window, cx);
+        self.selected = first;
+        self.suggested = self.asked.clone();
+    }
+
+    /// Leaves the ask, if the bar is in one: what was typed stays, and its suggestions come again.
+    /// Returns whether it was in one.
+    fn leave_ask(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.end_ask(cx) {
+            return false;
+        }
+        // check.sh reads this line.
+        log!("browser: command bar leaves the ask");
+        let text = self.input.read(cx).text().to_string();
+        self.ask_for(text, window, cx);
+        true
+    }
+
+    /// Ends the ask, if there is one, and closes Today's slot. Returns whether there was one.
+    fn end_ask(&mut self, cx: &mut App) -> bool {
+        if self.ask.take().is_none() {
+            return false;
+        }
+        self.host.asking(false, cx);
+        true
+    }
+
+    /// ↩ in an ask: closes the bar, then runs the task on the agent selected, whose card takes the
+    /// slot; or opens Settings › Agents from its row.
+    fn run_ask(&mut self, index: usize, cx: &mut App) {
+        let Some(ask) = self.ask.as_ref() else { return };
+        let page = ask.page.clone();
+        let asked = self.input.read(cx).text().trim().to_string();
+        match self.rows.get(index).and_then(|row| row.task.clone()) {
+            Some(TaskRow::Agent { id, resets: None, .. }) if !asked.is_empty() => {
+                // check.sh reads this line.
+                log!("browser: command bar runs a task on {id}");
+                // The host folds the bar into the slot its card fills, so the slot doesn't close
+                // first, and the bar doesn't hide on its own.
+                self.ask = None;
+                self.open.set(false);
+                self.host.run_task(&id, &asked, page, cx);
+            }
+            Some(TaskRow::SetUp) => {
+                log!("browser: command bar sets up agents");
+                self.close();
+                self.host.set_up_agents(cx);
+            }
+            _ => {}
+        }
+    }
+
     /// Where ↩ goes for `text` before its suggestions come: the page it names, else a search for
     /// it, or in a site search, a search with that site's engine.
-    /// None for Search Tabs, which goes nowhere but its tabs, and the commands-only list, which
-    /// runs only its commands.
+    /// None for Search Tabs, which goes nowhere but its tabs, the commands-only list, which runs
+    /// only its commands, and an ask, which goes only to an agent.
     fn typed_url(&self, text: &str) -> Option<String> {
         match &self.site {
             _ if matches!(self.target, Target::Tabs) || self.commands.is_some() => None,
+            _ if self.ask.is_some() => None,
             Some(site) => self.host.search_url(Some(&site.keyword), text),
             None => self.host.typed_url(text),
         }
@@ -1218,6 +1557,15 @@ impl CommandBar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The tooltip names the remove button of a page or search, which goes if another row takes
+        // its place; the same page's comes again with more suggestions.
+        let tipped = |rows: &[Suggestion]| {
+            let row = rows.get(self.tipped?).filter(|row| row.removable)?;
+            Some(row.url.clone())
+        };
+        if self.tipped.is_some() && tipped(&self.rows) != tipped(&rows) {
+            self.end_tip(cx);
+        }
         // The page selected stays selected as more suggestions come for what was asked, and when
         // it's taken out, the row that takes its place is, as in Chrome.
         let selected = self.rows.get(self.selected).filter(|_| text == self.suggested);
@@ -1246,7 +1594,9 @@ impl CommandBar {
     /// The row ↩ takes, once there are rows for what's typed. A completion comes from the first
     /// row, even before the rows for the last key arrive.
     fn chosen(&self) -> Option<&Suggestion> {
-        let current = self.suggested == self.asked || !self.completion.is_empty();
+        // An ask's rows are the agents, whatever is typed.
+        let current =
+            self.ask.is_some() || self.suggested == self.asked || !self.completion.is_empty();
         self.rows.get(self.selected).filter(|_| current)
     }
 
@@ -1260,6 +1610,10 @@ impl CommandBar {
     }
 
     fn go(&mut self, _: &Go, _: &mut Window, cx: &mut Context<Self>) {
+        // A task isn't logged: it's the user's words.
+        if self.ask.is_some() {
+            return self.run_ask(self.selected, cx);
+        }
         let text = self.input.read(cx).text().trim().to_string();
         if !text.is_empty() {
             // check.sh reads these lines.
@@ -1298,7 +1652,7 @@ impl CommandBar {
     /// Paste and Search: searches for the clipboard's text, even if it names a page, as ⇧⌘↩
     /// does for what's typed.
     fn paste_and_search(&mut self, _: &PasteAndSearch, _: &mut Window, cx: &mut Context<Self>) {
-        if matches!(self.target, Target::Tabs) || self.commands.is_some() {
+        if matches!(self.target, Target::Tabs) || self.commands.is_some() || self.ask.is_some() {
             return;
         }
         let site = self.site.as_ref().map(|site| site.keyword.as_str());
@@ -1329,12 +1683,12 @@ impl CommandBar {
         }
     }
 
-    /// Whether ↩'s row is a command or a sum, or the bar is over a new pane or for Search Tabs,
-    /// where the keys that open a page elsewhere take what ↩ takes.
+    /// Whether ↩'s row is a command or a sum, or the bar is over a new pane, for Search Tabs or in
+    /// an ask, where the keys that open a page elsewhere take what ↩ takes.
     fn takes_in_place(&self) -> bool {
         let command =
             self.chosen().is_some_and(|row| row.command.is_some() || row.result.is_some());
-        command || matches!(self.target, Target::Beside(_) | Target::Tabs)
+        command || self.ask.is_some() || matches!(self.target, Target::Beside(_) | Target::Tabs)
     }
 
     /// The page ↩ goes to: its row's, a tab's row's too, else the one what's typed names.
@@ -1371,7 +1725,7 @@ impl CommandBar {
     fn dot_com(&self, cx: &App) -> Option<String> {
         let typed = self.typed(cx);
         let word = !typed.is_empty() && typed.chars().all(|c| c.is_alphanumeric() || c == '-');
-        let word = word && self.site.is_none() && self.commands.is_none();
+        let word = word && self.site.is_none() && self.commands.is_none() && self.ask.is_none();
         let word = word && !matches!(self.target, Target::Tabs);
         word.then(|| self.host.typed_url(&format!("www.{typed}.com"))).flatten()
     }
@@ -1401,7 +1755,7 @@ impl CommandBar {
     /// ⇧⌘↩: searches for what was typed, even if it names a page, where ↩ goes (Dia). Search Tabs
     /// searches only its tabs.
     fn search(&mut self, _: &Search, _: &mut Window, cx: &mut Context<Self>) {
-        if matches!(self.target, Target::Tabs) || self.commands.is_some() {
+        if matches!(self.target, Target::Tabs) || self.commands.is_some() || self.ask.is_some() {
             return;
         }
         let typed = self.typed(cx);
@@ -1412,8 +1766,9 @@ impl CommandBar {
     }
 
     /// ⇧⌦, as Chrome's, or ⌥⌘⌫, as Arc's: takes the selected row out of the profile's history.
-    fn remove(&mut self, _: &Remove, _: &mut Window, _: &mut Context<Self>) {
+    fn remove(&mut self, _: &Remove, _: &mut Window, cx: &mut Context<Self>) {
         if self.chosen().is_some() {
+            self.end_tip(cx);
             self.remove_row(self.selected);
         }
     }
@@ -1429,8 +1784,9 @@ impl CommandBar {
         self.host.remove_suggestion(&row.url);
     }
 
-    /// The ✕ a row from history shows under the pointer, as Arc's does, which takes it out. It's
-    /// the arrow's tile, so the two read as one kind.
+    /// The trash a row from history shows under the pointer, where Arc's has a ✕, which takes it
+    /// out: ✕ closes and trash removes (ux-principles, the owner, #1394). It's the arrow's tile, so
+    /// the two read as one kind.
     fn remove_button(&self, index: usize, selected: bool, cx: &mut Context<Self>) -> AnyElement {
         let palette = palette::current(cx);
         let (tile, color) = match selected {
@@ -1439,7 +1795,7 @@ impl CommandBar {
         };
         div()
             .id(("remove", index))
-            .when(self.a11y, |button| button.role(Role::Button).aria_label("Remove Suggestion"))
+            .when(self.a11y, |button| button.role(Role::Button).aria_label(REMOVE_NAME))
             .size(px(ICON_BOX))
             .flex_none()
             .ml(px(7.))
@@ -1449,20 +1805,59 @@ impl CommandBar {
             .justify_center()
             .rounded(px(CHIP_RADIUS))
             .bg(tile)
-            .child(svg().path("icons/x.svg").size(px(14.)).text_color(color))
-            // The click is the ✕'s, not the row's under it.
+            .child(svg().path("icons/trash.svg").size(px(14.)).text_color(color))
+            // The click is the trash's, not the row's under it.
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |bar, _, _, cx| {
                 cx.stop_propagation();
+                bar.end_tip(cx);
                 bar.remove_row(index);
+            }))
+            // Where it drew, which its tooltip hangs from.
+            .child({
+                let frame = self.remove_frame.clone();
+                canvas(|_, _, _| {}, move |bounds, _, _, _| frame.set(Some(bounds)))
+                    .absolute()
+                    .size_full()
+            })
+            // Its tooltip waits for the pointer to rest, as a tile's does.
+            .on_mouse_move(|_, _, cx| crate::tooltip::moved(cx))
+            .on_hover(cx.listener(move |bar, hovered, window, cx| {
+                bar.hover_remove(index, *hovered, window.viewport_size(), cx);
             }))
             .into_any_element()
     }
 
+    /// The pointer has come onto or left row `index`'s remove button, whose tooltip names it and its
+    /// key. It hangs under the button, inside the bar, or above it when the bar has no room below.
+    fn hover_remove(&mut self, index: usize, hovered: bool, window: Size<Pixels>, cx: &mut App) {
+        match self.remove_frame.get().filter(|_| hovered) {
+            Some(frame) => {
+                self.tipped = Some(index);
+                let tip = Tip { text: REMOVE_NAME.into(), keys: remove_keys() };
+                self.host.tooltip(Some((tip, Anchor::under(frame, window))), cx);
+            }
+            None if self.tipped == Some(index) => self.end_tip(cx),
+            None => {}
+        }
+    }
+
+    /// Ends the tooltip of the remove button it asked for one for, if any.
+    fn end_tip(&mut self, cx: &mut App) {
+        if self.tipped.take().is_some() {
+            self.host.tooltip(None, cx);
+        }
+    }
+
     /// ⌥↩: goes where ↩ would, in a new tab in a split view with the tab shown, or the tab the
-    /// bar edits, on its right (Arc). For Search Tabs it's ↩.
+    /// bar edits, on its right (Arc). For Search Tabs and an ask it's ↩.
     fn go_beside(&mut self, _: &GoBeside, window: &mut Window, cx: &mut Context<Self>) {
+        if self.ask.is_some() {
+            return self.go(&Go, window, cx);
+        }
         let with = match self.target {
+            // A task's page stays in its Space, so it never goes into a split of the user's.
+            Target::Tab(tab) if shell::task_page_shown(tab, cx) => 0,
             Target::Tab(tab) | Target::Beside(tab) => tab,
             Target::NewTab => shell::shown_tab(cx),
             Target::Tabs => 0,
@@ -1490,6 +1885,9 @@ impl CommandBar {
         let Some(row) = self.rows.get(index) else {
             return;
         };
+        if row.task.is_some() {
+            return self.run_ask(index, cx);
+        }
         if let Some(result) = &row.result {
             // check.sh reads this line.
             log!("browser: command bar copies {result}");
@@ -1577,6 +1975,10 @@ impl CommandBar {
         } else if self.hovered == Some(index) {
             self.hovered = None;
         }
+        // The remove button goes with the pointer's row, and its tooltip with it.
+        if self.tipped.is_some_and(|tipped| self.hovered != Some(tipped)) {
+            self.end_tip(cx);
+        }
         cx.notify();
     }
 
@@ -1584,6 +1986,32 @@ impl CommandBar {
     fn close(&self) {
         self.open.set(false);
         self.host.hide();
+    }
+
+    /// While it shows, the keys are the bar's until the user leaves it (#1314). Chromium makes its
+    /// window key by itself, such as when a page commits, which the host undoes as it's told; if
+    /// the bar finds its window isn't key anyway, it asks for the keyboard back.
+    fn activation_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.open.get() {
+            return;
+        }
+        if window.is_window_active() {
+            self.keep_focus(window, cx);
+        } else {
+            self.host.take_keyboard();
+        }
+    }
+
+    /// Gives the field the focus back while the bar shows: without it, GPUI hands the field no
+    /// input method's text, and the bar shows deaf. Nothing else in its window takes the focus,
+    /// but an assistive app can.
+    fn keep_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let field = self.input.focus_handle(cx);
+        if self.open.get() && !field.is_focused(window) {
+            let from = if window.focused(cx).is_some() { "another view" } else { "nothing" };
+            log!("browser: command bar's field takes the focus back from {from}");
+            window.focus(&field, cx);
+        }
     }
 
     /// ⌘T or ⌘L, which open the bar, close it again, as Arc's do, whichever opened it. The browser's
@@ -1594,12 +2022,18 @@ impl CommandBar {
         }
         // check.sh reads this line.
         log!("browser: command bar closes again on {}", run.0.name());
+        self.open.set(false);
+        self.end_ask(cx);
         self.host.dismiss();
     }
 
-    /// Esc leaves the site search or the commands-only list first, then the bar.
+    /// Esc leaves the site search, the commands-only list or the ask first, then the bar.
     fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.leave_site(window, cx) && !self.leave_commands(window, cx) {
+        if !self.leave_site(window, cx)
+            && !self.leave_commands(window, cx)
+            && !self.leave_ask(window, cx)
+        {
+            self.open.set(false);
             self.host.dismiss();
         }
     }
@@ -1653,8 +2087,15 @@ impl CommandBar {
         }
     }
 
-    /// What the chip before the input names: the site search's engine, or the commands-only list.
+    /// What the chip before the input names: the site search's engine, the commands-only list, or
+    /// in an ask, the page that goes with it.
     fn mode_name(&self) -> Option<SharedString> {
+        if let Some(ask) = &self.ask {
+            return ask.page.as_ref().map(|(url, title)| match title.is_empty() {
+                true => SharedString::from(crate::agents::site(url)),
+                false => title.clone(),
+            });
+        }
         match (&self.site, self.commands) {
             (Some(site), _) => Some(site.name.clone()),
             (None, Some(_)) => Some(COMMANDS_CHIP.into()),
@@ -1663,9 +2104,15 @@ impl CommandBar {
     }
 
     /// "Search <site>" and the Tab key, at the input's end, while the row ↩ takes hints a site
-    /// search.
+    /// search; "Ask" and ⇥ where ⇥ would make what's typed a task; "Run" and ↩ in the ask.
     fn site_hint(&self, cx: &App) -> Option<impl IntoElement + use<>> {
-        let row = self.chosen().filter(|row| self.site.is_none() && !row.keyword.is_empty())?;
+        let site = self.chosen().filter(|row| self.site.is_none() && !row.keyword.is_empty());
+        let (said, key) = match site {
+            Some(row) => (format!("Search {}", row.site), "Tab"),
+            None if self.ask.is_some() => ("Run".to_string(), "↩"),
+            None if self.offers_ask(cx) => ("Ask".to_string(), "⇥"),
+            None => return None,
+        };
         let palette = palette::current(cx);
         let key = div()
             .h(px(ICON_BOX))
@@ -1675,7 +2122,7 @@ impl CommandBar {
             .rounded(px(CHIP_RADIUS))
             .bg(palette.plate(CHIP))
             .text_color(palette.on_overlay(TITLE))
-            .child("Tab");
+            .child(key);
         Some(
             div()
                 .flex_none()
@@ -1684,7 +2131,7 @@ impl CommandBar {
                 .items_center()
                 .gap(px(9.))
                 .text_size(px(text::BODY))
-                .child(div().text_color(palette.on_overlay(DIM)).child(format!("Search {}", row.site)))
+                .child(div().text_color(palette.on_overlay(DIM)).child(said))
                 .child(key),
         )
     }
@@ -1724,6 +2171,8 @@ impl CommandBar {
             true => (label, label.opacity(SELECTED_DIM)),
             false => (palette.on_overlay(TITLE), palette.on_overlay(DIM)),
         };
+        // An agent at its limit reads as the rows' details do, as it runs nothing now.
+        let title = if row.at_limit() { dim } else { title };
         // The icon sits on a tile of the accent's label in the selected row, and a command's on a
         // faint one in the rest.
         let glyph = match selected {
@@ -1828,6 +2277,10 @@ impl CommandBar {
             .when_some(row.shortcut.clone(), |line, shortcut| {
                 line.child(div().flex_1()).child(chip(shortcut))
             })
+            // An agent's row ends with its model, or when its limit resets if it's at it.
+            .when_some(row.task.as_ref().and_then(TaskRow::end), |line, said| {
+                line.child(div().flex_1()).child(div().flex_none().text_color(dim).child(said))
+            })
             // Under the pointer, the selected row too, as Arc's.
             .when(row.removable && self.hovered == Some(index), |line| {
                 line.when(row.tab == 0, |line| line.child(div().flex_1()))
@@ -1905,7 +2358,8 @@ impl Render for CommandBar {
         let palette = palette::current(cx);
         // The placeholder and the accent follow the Space's, which may have changed since it opened.
         self.input.update(cx, |input, _| {
-            input.set_colors(palette.on_overlay(PLACEHOLDER), palette.accent.into(), palette.selection())
+            input.set_colors(palette.on_overlay(PLACEHOLDER), palette.accent.into(), palette.selection());
+            input.set_fade(px(FIELD_FADE), palette.overlay.into());
         });
         // The browser's shortcuts work here too, below the bar's own keys.
         div().key_context(shell::KEY_CONTEXT).size_full().font_family(crate::face::UI).child(
@@ -1966,15 +2420,24 @@ impl Render for CommandBar {
                         .line_height(px(23.))
                         .child(self.input_icon(cx))
                         .when_some(self.mode_name(), |line, name| {
+                            let page = self.ask.as_ref().and_then(|ask| ask.page.as_ref());
+                            let favicon = page.map(|(url, _)| {
+                                self.favicon(url, CHIP_FAVICON, palette.ink.into())
+                            });
                             line.child(
                                 div()
                                     .flex_none()
+                                    .max_w(px(CHIP_MAX))
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(5.))
                                     .px(px(6.))
                                     .py(px(2.))
                                     .rounded(px(CHIP_RADIUS))
                                     .bg(palette.plate(CHIP))
                                     .text_size(px(text::BODY))
-                                    .child(name),
+                                    .children(favicon)
+                                    .child(div().min_w_0().truncate().child(name)),
                             )
                         })
                         .child(div().flex_1().min_w_0().child(self.input.clone()))
