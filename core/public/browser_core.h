@@ -1242,9 +1242,9 @@ BC_EXPORT size_t bc_space_agent_name(bc_id space, char* name, size_t capacity);
 
 // Whether the agent with the id |agent| may do |action| to |tab|: only if |action| is one agents
 // may do, the tab is in that agent's own Space, and Chromium shows its page, not the system's
-// engine, where the browser can't keep an agent's rules. Agents may back, click, close_tab,
-// forward, hand_off, navigate, press_key, read_page, screenshot, scroll, select_option, snapshot
-// and type; ad_blocking, devtools, passwords, profile_settings (a profile's search engine, archive
+// engine, where the browser can't keep an agent's rules. Agents may add_to_split, back, click,
+// close_tab, forward, hand_off, list_split, navigate, press_key, read_page, screenshot, scroll,
+// select_option, separate_tab, snapshot, split_tabs and type; ad_blocking, devtools, passwords, profile_settings (a profile's search engine, archive
 // timing, download folder, offers to save and saved data, and Clear Browsing Data) and any other
 // action are refused. Agent code calls it once for each call an agent makes on a tab, before
 // acting. If refused, copies why into |reason| as bc_space_name does, else an empty string. Either

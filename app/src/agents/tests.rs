@@ -41,6 +41,8 @@ struct Made {
     /// The tasks' Spaces made, and the Spaces deleted.
     task_spaces: RefCell<Vec<u64>>,
     deleted: RefCell<Vec<u64>>,
+    /// The split views, each its tabs left to right.
+    splits: RefCell<Vec<Vec<u64>>>,
 }
 
 impl Made {
@@ -188,6 +190,44 @@ impl Browser for Made {
 
     fn close_tab(&self, tab: u64, _: &mut App) {
         self.tabs.borrow_mut().retain(|each| each.0 != tab);
+    }
+
+    fn split(&self, tab: u64, _: &App) -> Vec<u64> {
+        let splits = self.splits.borrow();
+        match splits.iter().find(|split| split.contains(&tab)) {
+            Some(split) => split.clone(),
+            None => vec![tab],
+        }
+    }
+
+    // As the core does: three tabs at most, of one Space, the tab leaving any split it was in.
+    fn split_with(&self, tab: u64, with: u64, cx: &mut App) -> bool {
+        let space = |tab| {
+            self.tabs
+                .borrow()
+                .iter()
+                .find(|each| each.0 == tab)
+                .map(|each| each.1)
+        };
+        let joined = self.split(with, cx);
+        if joined.len() >= tools::SPLIT_TABS || space(tab) != space(with) {
+            return false;
+        }
+        self.separate(tab, cx);
+        let mut splits = self.splits.borrow_mut();
+        match splits.iter_mut().find(|split| split.contains(&with)) {
+            Some(split) => split.push(tab),
+            None => splits.push(vec![with, tab]),
+        }
+        true
+    }
+
+    fn separate(&self, tab: u64, _: &mut App) {
+        let mut splits = self.splits.borrow_mut();
+        splits
+            .iter_mut()
+            .for_each(|split| split.retain(|&each| each != tab));
+        splits.retain(|split| split.len() > 1);
     }
 
     // As the core does: only a tab of the user's, into an agent's Space.
@@ -1824,6 +1864,68 @@ fn an_agent_closes_only_its_own_tabs(cx: &mut TestAppContext) {
     assert_eq!(tools::describe(&entry.0), "Closed a tab");
 }
 
+/// An agent puts tabs of its own in a split view, adds one, lists it and separates one, each
+/// checked by the core and in the log; a tab of the user's is refused, and nothing changes.
+#[gpui::test]
+fn an_agent_splits_only_its_own_tabs(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    (browser.tabs.borrow_mut()).extend([
+        (21, 2, "Shop", "https://shop.example/"),
+        (22, 2, "Docs", "https://docs.example/"),
+    ]);
+    let answer = |tool: &str, arguments: Value, cx: &mut TestAppContext| {
+        call(&agents, "claude-code", tool, arguments, cx)
+            .recv()
+            .unwrap()
+    };
+
+    let refused = answer("split_tabs", json!({ "tabs": [20, 10] }), cx);
+    assert!(refused.error);
+    assert_eq!(refused.text, "The tab isn't in the agent's own Space.");
+    assert!(browser.splits.borrow().is_empty());
+    let entry = log(&agents, "claude-code", cx).remove(0);
+    assert_eq!(entry.0, "split_tabs");
+    assert_eq!(entry.2, "The tab isn't in the agent's own Space.");
+    let refused = answer("add_to_split", json!({ "tab": 10, "split": 20 }), cx);
+    assert_eq!(refused.text, "The tab isn't in the agent's own Space.");
+    let wrong = answer("split_tabs", json!({ "tabs": [20, 20] }), cx);
+    assert!(wrong.error && wrong.text.starts_with("tabs is two or three"));
+
+    let split = answer("split_tabs", json!({ "tabs": [20, 21] }), cx);
+    assert_eq!(split.text, "Tab 20's split view, left to right: 20, 21.");
+    let added = answer("add_to_split", json!({ "tab": 22, "split": 21 }), cx);
+    assert_eq!(
+        added.text,
+        "Tab 22's split view, left to right: 20, 21, 22."
+    );
+    assert_eq!(*browser.splits.borrow(), [vec![20, 21, 22]]);
+    let listed = answer("list_split", json!({ "tab": 21 }), cx);
+    assert_eq!(
+        listed.text,
+        "Tab 21's split view, left to right: 20, 21, 22."
+    );
+    let separated = answer("separate_tab", json!({ "tab": 21 }), cx);
+    assert_eq!(separated.text, "Tab 21 is out of its split view.");
+    let listed = answer("list_split", json!({ "tab": 21 }), cx);
+    assert_eq!(listed.text, "Tab 21 is in no split view.");
+    let alone = answer("separate_tab", json!({ "tab": 21 }), cx);
+    assert!(alone.error && alone.text == "Tab 21 is in no split view.");
+
+    let logged: Vec<_> = (log(&agents, "claude-code", cx).into_iter())
+        .filter(|entry| entry.2.is_empty())
+        .map(|entry| entry.0)
+        .collect();
+    for tool in ["split_tabs", "add_to_split", "list_split", "separate_tab"] {
+        assert!(
+            logged.iter().any(|each| each == tool),
+            "{tool} isn't in {logged:?}"
+        );
+        assert_ne!(tools::describe(tool), "Acted");
+    }
+    let checked = browser.checked.borrow();
+    assert!(checked.iter().any(|each| each == "separate_tab"));
+}
+
 /// Take Back All Tabs, in the agent's Space's menu, takes over each tab there the user doesn't
 /// hold, which the agent is refused until the user hands it back.
 #[gpui::test]
@@ -2018,19 +2120,23 @@ fn a_wait_step_waits_for_its_text_in_the_page(cx: &mut TestAppContext) {
 
 /// The actions the core lets an agent take in its tabs, agent_session.cc's RefusedAction: each a
 /// thing the user does in a page, or handing the tab to them.
-const CORE_ALLOWS: [&str; 13] = [
+const CORE_ALLOWS: [&str; 17] = [
+    "add_to_split",
     "back",
     "click",
     "close_tab",
     "forward",
     "hand_off",
+    "list_split",
     "navigate",
     "press_key",
     "read_page",
     "screenshot",
     "scroll",
     "select_option",
+    "separate_tab",
     "snapshot",
+    "split_tabs",
     "type",
 ];
 
@@ -2049,6 +2155,10 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "list_tabs",
             "open_tab",
             "close_tab",
+            "split_tabs",
+            "add_to_split",
+            "separate_tab",
+            "list_split",
             "navigate",
             "snapshot",
             "read_page",
@@ -2091,6 +2201,10 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         ),
         ("hand_off", tab(json!({ "reason": "Sign in" }))),
         ("ask_for_tab", tab(json!({ "reason": "To go on" }))),
+        ("split_tabs", json!({ "tabs": [20, 30] })),
+        ("add_to_split", json!({ "tab": 30, "split": 20 })),
+        ("list_split", tab(json!({}))),
+        ("separate_tab", tab(json!({}))),
         ("close_tab", json!({ "tab": 30 })),
     ];
     for (tool, arguments) in calls {

@@ -207,6 +207,21 @@ impl Browser for Core {
         unsafe { bc::bc_tab_close(tab, false) };
     }
 
+    fn split(&self, tab: u64, _: &App) -> Vec<u64> {
+        let mut split = [0; agents::tools::SPLIT_TABS];
+        let count = unsafe { bc::bc_tab_split(tab, split.as_mut_ptr(), split.len()) };
+        split[..count.min(split.len())].to_vec()
+    }
+
+    // Unlike the UI's, an agent's split isn't shown: its tabs never take the user's window.
+    fn split_with(&self, tab: u64, with: u64, _: &mut App) -> bool {
+        unsafe { bc::bc_tab_split_with(tab, with, false) }
+    }
+
+    fn separate(&self, tab: u64, _: &mut App) {
+        unsafe { bc::bc_tab_separate(tab) };
+    }
+
     fn give(&self, tab: u64, space: u64, _: &mut App) -> bool {
         unsafe { bc::bc_tab_give_to_agent(tab, space) }
     }
