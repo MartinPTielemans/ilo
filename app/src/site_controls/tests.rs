@@ -840,3 +840,55 @@ fn each_permission_has_its_glyph(_: &mut TestAppContext) {
     // A type Chrome adds later.
     assert_eq!(glyph_for("something-new"), "icons/settings.svg");
 }
+
+/// VoiceOver reads each part of the panel by what it does (#1381): the tiles and the footer as
+/// buttons by their tooltips' names, the headings as headings, ad blocking as a switch, a row with
+/// a menu as a button that says its state and opens one, and a row a policy sets as dimmed. Its
+/// press on a row does what a click does, and its menu key on an extension gives the tile's menu.
+#[gpui::test]
+fn voiceover_reads_the_panel(cx: &mut TestAppContext) {
+    use gpui::accesskit::{Action, HasPopup, Node, NodeId, Role, Toggled};
+    let site = Site { ad_blocking: Some(true), ..site() };
+    let mut panel = Panel::new(cx, site);
+    panel.cx.simulate_a11y_activation();
+    panel.cx.run_until_parked();
+    let tree = panel.cx.a11y_tree().expect("GPUI built a tree");
+    let find = |role: Role, label: &str| -> (NodeId, Node) {
+        let found = tree.nodes.iter().find(|(_, node)| {
+            node.role() == role && node.label() == Some(label)
+        });
+        found.unwrap_or_else(|| panic!("no {role:?} called {label}")).clone()
+    };
+    for tile in ["Share", "Capture a Portion of This Page", "Capture Full Page", "Add Extension"] {
+        find(Role::Button, tile);
+    }
+    let (notes, _) = find(Role::Button, "Notes");
+    find(Role::Heading, "Extensions");
+    find(Role::Heading, "Settings");
+    let (blocking, node) = find(Role::Switch, "Block ads and trackers");
+    assert_eq!(node.toggled(), Some(Toggled::True));
+    let (location, node) = find(Role::Button, "Location, Ask");
+    assert_eq!(node.has_popup(), Some(HasPopup::Menu));
+    assert!(!node.is_disabled());
+    let (_, javascript) = find(Role::Button, "JavaScript, Allowed");
+    assert!(javascript.is_disabled());
+    find(Role::Button, "Reset permissions");
+    let (_, lock) = find(Role::Button, "Secure");
+    assert!(!lock.is_disabled());
+    let (_, more) = find(Role::Button, "More");
+    assert_eq!(more.has_popup(), Some(HasPopup::Menu));
+
+    panel.cx.simulate_a11y_action(blocking, Action::Click);
+    panel.cx.run_until_parked();
+    assert!(panel.calls().contains(&format!("ad blocking {TAB} false")));
+    let menu = |panel: &mut Panel| {
+        let calls = panel.host.calls.take();
+        calls.into_iter().find(|call| call.starts_with("menu ")).unwrap_or_default()
+    };
+    panel.cx.simulate_a11y_action(location, Action::Click);
+    panel.cx.run_until_parked();
+    assert!(menu(&mut panel).contains("Allow"), "Location's menu");
+    panel.cx.simulate_a11y_action(notes, Action::ShowContextMenu);
+    panel.cx.run_until_parked();
+    assert!(!menu(&mut panel).is_empty(), "the extension's menu");
+}

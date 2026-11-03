@@ -20,7 +20,8 @@ use gpui::{
     AnyElement, App, Bounds, BoxShadow, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
     Global, Hsla, Image, KeyBinding, MouseButton, Pixels, Point, SharedString, Stateful, Task,
     TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
-    WindowOptions, actions, canvas, div, img, point, prelude::*, px, rgb, rgba, size, svg,
+    WindowOptions, accesskit::{Role, Toggled}, actions, canvas, div, img, point, prelude::*, px,
+    rgb, rgba, size, svg,
 };
 
 use crate::{
@@ -924,7 +925,11 @@ fn shadow(color: Hsla, y: f32, blur: f32, spread: f32) -> BoxShadow {
 
 impl Render for Dialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The window holds the card alone, so VoiceOver reads it as the alert it is, and the
+        // focus GPUI reports is on it as the dialog comes.
+        let a11y = window.is_a11y_active();
         let root = div()
+            .id("dialog-window")
             .key_context("Dialog")
             .track_focus(&self.focus)
             .size_full()
@@ -986,6 +991,7 @@ impl Render for Dialog {
             .text_color(palette.on_overlay(CANCEL_TEXT))
             .relative()
             .child(button_frame("cancel", asked))
+            .when(a11y, |button| button.role(Role::Button).aria_label(question.cancel.clone()))
             .on_hover(cx.listener(|dialog, hovered, _, cx| dialog.hover("cancel", *hovered, cx)))
             .on_click(cx.listener(|dialog, _, _, cx| dialog.answer(Answer::Cancel, cx))));
         // A text-only button in Cancel's look, its label as far in from each side.
@@ -1004,6 +1010,7 @@ impl Render for Dialog {
                 .hover(move |style| style.bg(palette.plate(CANCEL_HOVERED)))
                 .active(move |style| style.bg(palette.state(CANCEL_FILL, STATE_PRESSED)))
                 .text_color(palette.on_overlay(CANCEL_TEXT))
+                .when(a11y, |button| button.role(Role::Button).aria_label(label.clone()))
                 .child(label)
                 .relative()
                 .child(button_frame("also", asked))
@@ -1053,6 +1060,7 @@ impl Render for Dialog {
             .text_color(label)
             .relative()
             .child(button_frame("confirm", asked))
+            .when(a11y, |button| button.role(Role::Button).aria_label(question.action.clone()))
             .on_hover(cx.listener(|dialog, hovered, _, cx| dialog.hover("confirm", *hovered, cx)))
             .on_mouse_down(
                 MouseButton::Left,
@@ -1151,6 +1159,10 @@ impl Render for Dialog {
                             )
                         }),
                 )
+                .when(a11y, |row| {
+                    let toggled = if checked { Toggled::True } else { Toggled::False };
+                    row.role(Role::CheckBox).aria_label(check.clone()).aria_toggled(toggled)
+                })
                 .child(check)
                 .on_click(cx.listener(|dialog, _, _, cx| dialog.toggle_check(cx)))
         });
@@ -1209,6 +1221,12 @@ impl Render for Dialog {
                     ),
             );
         let radius = asked.over.map_or(0., |(_, radius)| radius);
+        let root = root.when(a11y, |root| {
+            let root = root.role(Role::AlertDialog).aria_label(question.message.clone());
+            root.when(!question.detail.is_empty(), |root| {
+                root.aria_description(question.detail.clone())
+            })
+        });
         root.on_action(cx.listener(|dialog, _: &Confirm, _, cx| dialog.confirm(cx)))
             .on_action(cx.listener(|dialog, _: &Cancel, _, cx| dialog.answer(Answer::Cancel, cx)))
             .on_action(

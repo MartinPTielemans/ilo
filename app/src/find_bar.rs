@@ -15,7 +15,9 @@ use browser::{
 use gpui::{
     AnyWindowHandle, App, Bounds, Context, Entity, Focusable, FontWeight, Global, KeyBinding,
     SharedString, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
-    WindowKind, WindowOptions, actions, div, point, prelude::*, px, rgb, rgba, size, svg,
+    WindowKind, WindowOptions,
+    accesskit::{Live, Role},
+    actions, div, point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{bc, platform};
@@ -341,10 +343,24 @@ impl FindBar {
         })
     }
 
-    /// A 28 pt button with `icon`, which dims while it can't be used.
-    fn button(id: &'static str, icon: &'static str, enabled: bool) -> gpui::Stateful<gpui::Div> {
+    /// A 28 pt button with `icon`, which dims while it can't be used, and which an assistive app
+    /// reads as `name`, if it's asked for the tree.
+    fn button(
+        id: &'static str,
+        icon: &'static str,
+        name: &'static str,
+        enabled: bool,
+        a11y: bool,
+    ) -> gpui::Stateful<gpui::Div> {
         div()
             .id(id)
+            .when(a11y, |button| {
+                button.role(Role::Button).aria_label(name).a11y_synthetic_children(move |builder| {
+                    if !enabled {
+                        builder.parent_node().set_disabled();
+                    }
+                })
+            })
             .flex_none()
             .size(px(BUTTON))
             .flex()
@@ -365,7 +381,8 @@ impl FindBar {
 }
 
 impl Render for FindBar {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let a11y = window.is_a11y_active();
         let found = self.found();
         // Arc's count, "1/12", and its previous and next, or "NOT FOUND" in their place.
         let (status, matches) = match found {
@@ -380,16 +397,31 @@ impl Render for FindBar {
         );
         let enabled = matches.is_some();
         let not_found = found.is_some() && !enabled;
-        let previous = Self::button("previous", "icons/chevron-up.svg", enabled)
+        let previous = Self::button("previous", "icons/chevron-up.svg", "Find Previous", enabled, a11y)
             .when(enabled, |button| {
                 button.on_click(cx.listener(|bar, _, _, cx| bar.find_next(false, cx)))
             });
-        let next = Self::button("next", "icons/chevron-down.svg", enabled)
+        let next = Self::button("next", "icons/chevron-down.svg", "Find Next", enabled, a11y)
             .ml(px(-ARROW_OVERLAP))
             .when(enabled, |button| {
                 button.on_click(cx.listener(|bar, _, _, cx| bar.find_next(true, cx)))
             });
+        // What it says, said as it changes after what's typed, wherever VoiceOver's cursor is:
+        // "1 of 12" rather than its slash, and "not found" rather than its capitals.
+        let said = match found {
+            Some((_, 0)) => "Not found".to_string(),
+            Some((selected, matches)) => format!("{selected} of {matches}"),
+            None => String::new(),
+        };
         let status = div()
+            .id("matches")
+            .when(a11y, |status| {
+                status
+                    .role(Role::Status)
+                    .aria_label("Matches")
+                    .aria_value(said)
+                    .a11y_synthetic_children(|builder| builder.parent_node().set_live(Live::Polite))
+            })
             .flex_none()
             .mr(px(COUNT_GAP))
             .when(not_found, |status| {
@@ -407,7 +439,7 @@ impl Render for FindBar {
             .flex()
             .justify_center()
             .child(div().w(px(1.)).h_full().bg(rgba(DIVIDER)));
-        let close = Self::button("close", "icons/x.svg", true)
+        let close = Self::button("close", "icons/x.svg", "Close Find Bar", true, a11y)
             .on_click(cx.listener(|bar, _, window, cx| bar.close(&Close, window, cx)));
         let search = div()
             .flex_none()

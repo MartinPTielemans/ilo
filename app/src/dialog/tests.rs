@@ -102,6 +102,30 @@ fn a_click_around_the_card_cancels(cx: &mut TestAppContext) {
     assert_eq!(dialog.calls(), ["hide"]);
 }
 
+/// VoiceOver reads the card as an alert by its question, with its detail after, and its buttons
+/// by their labels, and its press on one answers as a click does (#1381).
+#[gpui::test]
+fn voiceover_reads_the_question_and_its_buttons(cx: &mut TestAppContext) {
+    use gpui::accesskit::{Action, Role};
+    let mut dialog = Asking::new(cx);
+    dialog.cx.simulate_a11y_activation();
+    dialog.cx.run_until_parked();
+    let tree = dialog.cx.a11y_tree().expect("GPUI built a tree");
+    let find = |role: Role, label: &str| {
+        let found = tree.nodes.iter().find(|(_, node)| {
+            node.role() == role && node.label() == Some(label)
+        });
+        found.unwrap_or_else(|| panic!("no {role:?} called {label}")).clone()
+    };
+    let (_, alert) = find(Role::AlertDialog, "Delete “Work”?");
+    assert_eq!(alert.description(), Some("Its 3 tabs close too."));
+    assert_eq!(tree.focus, find(Role::AlertDialog, "Delete “Work”?").0);
+    find(Role::Button, "Cancel");
+    let (delete, _) = find(Role::Button, "Delete");
+    dialog.cx.simulate_a11y_action(delete, Action::Click);
+    assert_eq!(dialog.calls(), ["show", "hide", "delete"]);
+}
+
 #[gpui::test]
 fn an_ask_while_one_shows_is_dropped(cx: &mut TestAppContext) {
     let mut dialog = Asking::new(cx);

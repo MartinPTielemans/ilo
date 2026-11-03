@@ -16,8 +16,9 @@ use std::{
 use gpui::{
     App, Bounds, ClickEvent, Context, FocusHandle, Global, Image, KeyBinding, MouseButton,
     MouseDownEvent, PathBuilder, Pixels, Point, SharedString, Size, Task, TitlebarOptions, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, actions,
-    canvas, div, img, linear_color_stop, linear_gradient, point, prelude::*, px, size, svg,
+    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
+    accesskit::{HasPopup, Role, Toggled},
+    actions, canvas, div, img, linear_color_stop, linear_gradient, point, prelude::*, px, size, svg,
 };
 
 use crate::{
@@ -621,6 +622,8 @@ pub struct SiteControls {
     host: Rc<dyn Host>,
     focus: FocusHandle,
     open: Option<Open>,
+    /// An assistive app asks for the tree, so the panel names what it draws.
+    a11y: bool,
 }
 
 struct SiteControlsWindow(WindowHandle<SiteControls>);
@@ -660,7 +663,7 @@ pub fn open_at(
         ..Default::default()
     };
     let window = cx.open_window(options, |_, cx| {
-        cx.new(|cx| SiteControls { host, focus: cx.focus_handle(), open: None })
+        cx.new(|cx| SiteControls { host, focus: cx.focus_handle(), open: None, a11y: false })
     });
     match window {
         Ok(window) => {
@@ -846,6 +849,39 @@ fn more_items() -> Vec<(MenuEntry, Option<Run>)> {
         (MenuEntry::line(), None),
         item("All Site Settings…", Run::SiteSettings),
     ]
+}
+
+/// What an assistive app reads of a control: a button called `name`, which says it opens a menu
+/// with `menu` and is dimmed without `enabled`, and whose right-click menu it lists with
+/// `context_menu`.
+fn button_named<E: StatefulInteractiveElement>(
+    element: E,
+    name: impl Into<SharedString>,
+    (menu, enabled, context_menu): (bool, bool, bool),
+) -> E {
+    element.role(Role::Button).aria_label(name).a11y_synthetic_children(move |builder| {
+        let node = builder.parent_node();
+        if menu {
+            node.set_has_popup(HasPopup::Menu);
+        }
+        if !enabled {
+            node.set_disabled();
+        }
+        if context_menu {
+            node.add_action(gpui::accesskit::Action::ShowContextMenu);
+        }
+    })
+}
+
+/// A Settings row that turns its setting on or off, read as a switch called `name`.
+fn switch_named<E: StatefulInteractiveElement>(element: E, name: &'static str, on: bool) -> E {
+    let toggled = if on { Toggled::True } else { Toggled::False };
+    element.role(Role::Switch).aria_label(name).aria_toggled(toggled)
+}
+
+/// A row's name and its state, as VoiceOver reads a tab's row: "Location, Ask".
+fn said(name: &str, state: &str) -> String {
+    format!("{name}, {state}")
 }
 
 impl SiteControls {
@@ -1135,6 +1171,7 @@ impl SiteControls {
         let palette = palette::current(cx);
         div()
             .id(tile.name)
+            .when(self.a11y, |plate| button_named(plate, tile.label, (false, true, false)))
             .absolute()
             .left(frame.origin.x)
             .top(frame.origin.y)
@@ -1197,6 +1234,9 @@ impl SiteControls {
                 let (id, title) = (extension.id.clone(), extension.title.clone());
                 let tile = open.in_window(frame);
                 element
+                    .when(self.a11y, |plate| {
+                        button_named(plate, title.clone(), (false, true, true))
+                    })
                     .on_hover(cx.listener(move |panel, hovered: &bool, _, cx| {
                         panel.tooltip(title.clone(), frame, *hovered, cx)
                     }))
@@ -1219,7 +1259,8 @@ impl SiteControls {
             .collect();
         let (plus, frame) = plate("add-extension".into(), open.extensions.len());
         tiles.push(
-            plus.on_hover(cx.listener(move |panel, hovered: &bool, _, cx| {
+            plus.when(self.a11y, |plus| button_named(plus, "Add Extension", (false, true, false)))
+                .on_hover(cx.listener(move |panel, hovered: &bool, _, cx| {
                 panel.tooltip("Add Extension".into(), frame, *hovered, cx)
             }))
             .on_click(cx.listener(|panel, _, _, cx| {
@@ -1262,6 +1303,7 @@ impl SiteControls {
         let palette = palette::current(cx);
         div()
             .id(SharedString::from(format!("heading-{}", title.to_lowercase())))
+            .when(self.a11y, |row| row.role(Role::Heading).aria_label(title))
             .absolute()
             .left_0()
             .top(px(top))
@@ -1281,6 +1323,7 @@ impl SiteControls {
                 row.child(
                     text(link_cap, LINK_SIZE)
                         .id(SharedString::from(format!("link-{name}")))
+                        .when(self.a11y, |text| button_named(text, link, (false, true, false)))
                         .right(px(PADDING))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(palette.on_overlay(LINK))
@@ -1376,7 +1419,11 @@ impl SiteControls {
             permission.name.clone(),
             Some(permission.state.clone()),
         );
-        match permission.choices.is_empty() {
+        // A row a policy sets takes no click, so it reads as dimmed.
+        let managed = permission.choices.is_empty();
+        let name = said(&permission.name, &permission.state);
+        let row = row.when(self.a11y, |row| button_named(row, name, (!managed, !managed, false)));
+        match managed {
             true => row.opacity(MANAGED_OPACITY).into_any_element(),
             false => {
                 let permission = permission.clone();
@@ -1396,6 +1443,9 @@ impl SiteControls {
         let palette = palette::current(cx);
         let button = div()
             .id("site-lock")
+            .when(self.a11y, |button| {
+                button_named(button, lock_label(site), (false, site.certificate, false))
+            })
             .absolute()
             .left(px(PADDING))
             .top(px(y))
@@ -1441,6 +1491,7 @@ impl SiteControls {
             });
         let more = div()
             .id("site-more")
+            .when(self.a11y, |more| button_named(more, "More", (true, true, false)))
             .absolute()
             .left(px(WIDTH - PADDING - FOOTER))
             .top(px(y))
@@ -1464,6 +1515,8 @@ impl SiteControls {
 
 impl Render for SiteControls {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.a11y = window.is_a11y_active();
+        let a11y = self.a11y;
         let root = div()
             .key_context("SiteControls")
             .track_focus(&self.focus)
@@ -1561,6 +1614,8 @@ impl Render for SiteControls {
                     ENGINE_NAME.into(),
                     Some(state.into()),
                 );
+                let name = said(ENGINE_NAME, state);
+                let row = row.when(a11y, |row| button_named(row, name, (true, true, false)));
                 let row = row.on_click(cx.listener(move |panel, event: &ClickEvent, _, cx| {
                     panel.choose_engine(on, event.position(), cx)
                 }));
@@ -1570,10 +1625,11 @@ impl Render for SiteControls {
             // Before the permissions, as the row a page that doesn't work needs.
             if let Some(on) = site.ad_blocking {
                 let state = if on { "On" } else { "Off for this site" };
-                let name = "Block ads and trackers".into();
+                const NAME: &str = "Block ads and trackers";
                 let state = Some(state.into());
-                let row =
-                    Self::row(&palette, "site-ad-blocking".into(), y, AD_BLOCKING, on, name, state);
+                let id = "site-ad-blocking".into();
+                let row = Self::row(&palette, id, y, AD_BLOCKING, on, NAME.into(), state);
+                let row = row.when(a11y, |row| switch_named(row, NAME, on));
                 let row = row.on_click(
                     cx.listener(move |panel, _, _, cx| panel.toggle_ad_blocking(!on, cx)),
                 );
@@ -1584,6 +1640,7 @@ impl Render for SiteControls {
                 let state = Some(if on { "On" } else { "Off" }.into());
                 let (id, name) = ("site-developer-mode".into(), DEVELOPER_MODE_NAME.into());
                 let row = Self::row(&palette, id, y, DEVELOPER_MODE, on, name, state);
+                let row = row.when(a11y, |row| switch_named(row, DEVELOPER_MODE_NAME, on));
                 let row = row.on_click(
                     cx.listener(move |panel, _, _, cx| panel.toggle_developer_mode(!on, cx)),
                 );
@@ -1593,8 +1650,10 @@ impl Render for SiteControls {
             let logins = passwords::state(&site.logins);
             if let Some((state, on)) = logins {
                 let name = PASSWORDS_NAME.into();
+                let said = said(PASSWORDS_NAME, &state);
                 let row =
                     Self::row(&palette, "site-passwords".into(), y, PASSWORDS, on, name, Some(state));
+                let row = row.when(a11y, |row| button_named(row, said, (true, true, false)));
                 let logins = site.logins.clone();
                 let row = row.on_click(cx.listener(move |panel, event: &ClickEvent, _, cx| {
                     panel.choose_login(logins.clone(), event.position(), cx)
@@ -1607,8 +1666,9 @@ impl Render for SiteControls {
                 y += ROW_PITCH;
             }
             if let Some(label) = site.reset.clone() {
-                let row =
-                    Self::row(&palette, "site-permissions-reset".into(), y, RESET, false, label, None);
+                let id = "site-permissions-reset".into();
+                let row = Self::row(&palette, id, y, RESET, false, label.clone(), None);
+                let row = row.when(a11y, |row| button_named(row, label, (false, true, false)));
                 let row = row.on_click(cx.listener(|panel, _, _, cx| panel.reset(cx)));
                 rows.push(row.into_any_element());
             }

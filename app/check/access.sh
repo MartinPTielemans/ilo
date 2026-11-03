@@ -3,6 +3,7 @@
 # keyboard in a text field called "Search or Enter URL", lists its suggestions with the first
 # selected, and ↓ selects the next; ⇧F10 opens its field's menu on the first item. A tab's menu is
 # the app's window in front and a menu of menu items and separators, whose Move to opens a submenu.
+# ⌘F's find bar names its buttons and reads its count as Matches, a status that says it politely.
 # It reads the tree from outside, as an assistive app does: on the Mac through tools/ax-tree.sh,
 # which needs this terminal to have the Accessibility permission, on Linux as Orca does, over
 # AT-SPI through tools/atspi-tree.sh, which needs dbus-daemon and at-spi2-core, and on Windows as
@@ -187,9 +188,28 @@ else
     send key escape
     send key escape
     expect '^browser: menu closed$' "escape didn't close the tab's menu"
+
+    # The find bar's buttons say what they do, and its count is the status Matches.
+    found="$out/access-find.txt"
+    if windows; then
+      # check/find.sh, which drives the find bar, isn't one of Windows' runs yet.
+      echo "find bar: not read on Windows, where the find run isn't tried yet" > "$found"
+    else
+      send click $page_point
+      send key f cmd
+      send type VoiceOver
+      expect '^browser: find bar drew "VoiceOver" 1/1$' "⌘F and typing didn't find VoiceOver on the page"
+      read_tree '"Find Next"' > "$found"
+      grep -q ' "Matches"' "$found" || fail "the find bar's count isn't called Matches: $found"
+      for name in "Find Previous" "Find Next" "Close Find Bar"; do
+        grep -q " $button \"$name\"" "$found" || fail "the find bar's $name isn't a button: $found"
+      done
+      send key escape
+      expect "^browser: find $a closed\$" "escape didn't close the find bar"
+    fi
     exec 3>&-
     quit
-    echo "ok: $screen_reader reads the Space's name as a heading, the tab shown as the selected tab Docs in Today after New Tab, ⌘T's bar as a text field with its suggestions in a list whose selection ↓ moves, ⇧F10's field menu on its first item, and the tab's menu, in front, as a menu with its items, separators and a submenu → opens. Trees: $tree, $bar, $moved, $menu, $submenu, $windows"
+    echo "ok: $screen_reader reads the Space's name as a heading, the tab shown as the selected tab Docs in Today after New Tab, ⌘T's bar as a text field with its suggestions in a list whose selection ↓ moves, ⇧F10's field menu on its first item, the tab's menu, in front, as a menu with its items, separators and a submenu → opens, and the find bar's named buttons and its Matches. Trees: $tree, $bar, $moved, $menu, $submenu, $windows, $found"
   fi
 fi
 # The run's buses go with it.

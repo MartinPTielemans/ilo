@@ -37,6 +37,18 @@ pub const TONES: [SkinTone; 6] = [
     SkinTone::Dark,
 ];
 
+/// What an assistive app calls `tone`, as the system's emoji picker does.
+pub fn tone_name(tone: SkinTone) -> &'static str {
+    match tone {
+        SkinTone::Light => "Light",
+        SkinTone::MediumLight => "Medium Light",
+        SkinTone::Medium => "Medium",
+        SkinTone::MediumDark => "Medium Dark",
+        SkinTone::Dark => "Dark",
+        _ => "Default",
+    }
+}
+
 /// The hand the tone button shows for `tone`.
 pub fn hand(tone: SkinTone) -> &'static str {
     let hand = emojis::get("✋").expect("✋ is in the table");

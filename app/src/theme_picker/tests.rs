@@ -478,3 +478,84 @@ fn a_drag_bumps_once_as_it_reaches_a_stop(cx: &mut TestAppContext) {
     path(&mut picker, &[(knob, SLIDER_Y), (knob_x(0.5), SLIDER_Y), (knob_x(0.) - 20., SLIDER_Y)]);
     assert_eq!(detents(&picker), 3);
 }
+
+/// The node with `role` named `label` in what the picker last told VoiceOver.
+fn named(picker: &mut Picker, role: Role, label: &str) -> (gpui::accesskit::NodeId, gpui::accesskit::Node) {
+    let tree = picker.cx.a11y_tree().expect("no accessibility tree");
+    let found = tree.nodes.iter().find(|(_, node)| node.role() == role && node.label() == Some(label));
+    found.cloned().unwrap_or_else(|| panic!("no {role:?} named {label}"))
+}
+
+#[gpui::test]
+fn voiceover_reads_the_picker_and_moves_its_sliders(cx: &mut TestAppContext) {
+    let theme = Theme { intensity: 0.4, grain: 0.3, ..Theme::at(0.5, 0.).with_count(2) };
+    let mut picker = Picker::new(Some(theme), cx);
+    picker.cx.simulate_a11y_activation();
+    picker.cx.run_until_parked();
+    named(&mut picker, Role::Dialog, "Space Theme");
+    named(&mut picker, Role::Group, "Colors, 2");
+    let (_, automatic) = named(&mut picker, Role::RadioButton, "Automatic");
+    assert_eq!(automatic.toggled(), Some(Toggled::True));
+    let (dark, _) = named(&mut picker, Role::RadioButton, "Dark");
+    let (_, intensity) = named(&mut picker, Role::Slider, "Intensity");
+    assert_eq!(intensity.numeric_value(), Some(40.));
+    let (_, grain) = named(&mut picker, Role::Slider, "Grain");
+    assert_eq!(grain.numeric_value(), Some(30.));
+
+    // Its press is a click where the plate is drawn.
+    picker.cx.simulate_a11y_action(dark, Action::Click);
+    picker.cx.run_until_parked();
+    assert_eq!(picker.theme().unwrap().appearance, Appearance::Dark);
+    let (add, _) = named(&mut picker, Role::Button, "Add Color");
+    picker.cx.simulate_a11y_action(add, Action::Click);
+    picker.cx.run_until_parked();
+    assert_eq!(picker.theme().unwrap().count, 3);
+    named(&mut picker, Role::Group, "Colors, 3");
+    let (_, add) = named(&mut picker, Role::Button, "Add Color");
+    assert!(add.is_disabled(), "+ at three colours");
+    let (slate, _) = named(&mut picker, Role::Button, "Slate");
+    picker.cx.simulate_a11y_action(slate, Action::Click);
+    picker.cx.run_until_parked();
+    assert_eq!(picker.theme().unwrap().main_color(), SWATCHES[8]);
+
+    // Increment and decrement move to the next tenth and stop at the ends, each move kept.
+    picker.handed_on();
+    let (intensity, _) = named(&mut picker, Role::Slider, "Intensity");
+    picker.cx.simulate_a11y_action(intensity, Action::Increment);
+    picker.cx.run_until_parked();
+    assert!((picker.theme().unwrap().intensity - 0.5).abs() < 0.001);
+    let (grain, _) = named(&mut picker, Role::Slider, "Grain");
+    for _ in 0..4 {
+        picker.cx.simulate_a11y_action(grain, Action::Decrement);
+        picker.cx.run_until_parked();
+    }
+    assert_eq!(picker.theme().unwrap().grain, 0.);
+    assert_eq!(picker.handed_on(), vec![true, true, true, true]);
+    let (_, grain) = named(&mut picker, Role::Slider, "Grain");
+    assert_eq!(grain.numeric_value(), Some(0.));
+}
+
+#[gpui::test]
+fn voiceover_places_the_first_colour_from_the_empty_field(cx: &mut TestAppContext) {
+    let mut picker = Picker::new(None, cx);
+    picker.cx.simulate_a11y_activation();
+    picker.cx.run_until_parked();
+    let (field, node) = named(&mut picker, Role::Group, "Colors, none");
+    assert_eq!(node.description(), Some(HINT));
+    let (_, intensity) = named(&mut picker, Role::Slider, "Intensity");
+    assert!(intensity.is_disabled(), "the wave without a colour");
+    picker.cx.simulate_a11y_action(field, Action::Click);
+    picker.cx.run_until_parked();
+    let theme = picker.theme().expect("no colour placed");
+    assert_eq!(theme.count, 1);
+    named(&mut picker, Role::Group, "Colors, 1");
+}
+
+#[test]
+fn every_swatch_has_its_own_name() {
+    let names = SWATCHES.map(swatch_name);
+    assert_eq!(
+        names,
+        ["White", "Pink", "Purple", "Red", "Orange", "Yellow", "Green", "Blue", "Slate"]
+    );
+}

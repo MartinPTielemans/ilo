@@ -971,4 +971,37 @@ mod tests {
         held_swipe(&shell, window, -10., 10);
         assert!(host.shown.borrow().is_empty());
     }
+
+    /// Past the last Space, VoiceOver hears the New Space circle come out, and when letting go
+    /// makes the Space, as the trackpad's click says it.
+    #[gpui::test]
+    fn voiceover_hears_when_letting_go_makes_a_space(cx: &mut TestAppContext) {
+        use gpui::accesskit::{Live, Role};
+        let (shell, _, cx) = three_spaces(cx, 3);
+        cx.simulate_a11y_activation();
+        let circle = |cx: &mut VisualTestContext| {
+            cx.run_until_parked();
+            let tree = cx.a11y_tree().expect("GPUI built a tree");
+            let found = tree.nodes.into_iter().find(|(_, node)| {
+                node.role() == Role::Status && node.label() == Some("New Space")
+            });
+            found.map(|(_, node)| (node.value().map(str::to_owned), node.live()))
+        };
+        assert_eq!(circle(cx), None, "a circle before the fingers");
+        shell.update_in(cx, |shell, window, cx| fingers(shell, -8., false, window, cx));
+        let pulling = Some((Some("Pull further to make one".to_owned()), Some(Live::Polite)));
+        assert_eq!(circle(cx), pulling);
+        // On, without letting go, against the page's rubber band.
+        shell.update_in(cx, |shell, window, cx| {
+            let on = -2. * shell.width() / SWIPE_TRACKING;
+            let moved = ScrollEvent {
+                delta: ScrollDelta::Pixels(point(px(on), px(0.))),
+                touch_phase: TouchPhase::Moved,
+                ..Default::default()
+            };
+            shell.scroll(&moved, window, cx);
+        });
+        let ready = Some((Some("Let go to make it".to_owned()), Some(Live::Polite)));
+        assert_eq!(circle(cx), ready);
+    }
 }

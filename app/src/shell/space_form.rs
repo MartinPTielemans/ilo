@@ -5,8 +5,9 @@ use crate::tokens::text;
 use std::time::Instant;
 
 use gpui::{
-    AnyElement, Context, FontWeight, MouseButton, MouseDownEvent, Pixels, Point, Window, div, point,
-    prelude::*, px, svg,
+    AnyElement, Context, FontWeight, MouseButton, MouseDownEvent, Pixels, Point, Window,
+    accesskit::{Action, HasPopup, Role},
+    div, point, prelude::*, px, svg,
 };
 
 use super::{
@@ -18,6 +19,7 @@ use super::{
     FORM_THEME_TOP, FORM_TITLE_HEIGHT, FORM_TITLE_TOP, HOVERED, Naming, SECONDARY, Shell,
     SpaceForm,
 };
+use super::access::Accessible;
 use crate::{text_input::TextInput, theme_picker};
 
 impl Shell {
@@ -177,7 +179,10 @@ impl Shell {
                 .rounded(px(FORM_RADIUS))
                 .block_mouse_except_scroll()
         };
+        let a11y = self.a11y && left.is_none();
         let title = div()
+            .id("space-form-title")
+            .when(a11y, |title| title.role(Role::Heading).aria_label("New Space"))
             .absolute()
             .top(px(FORM_TITLE_TOP + title_sink))
             .opacity(title_opacity)
@@ -237,7 +242,7 @@ impl Shell {
             .bg(self.palette.plate(FORM_PILL))
             .text_size(px(text::SMALL))
             .font_weight(FontWeight::SEMIBOLD)
-            .child(profile)
+            .child(profile.clone())
             .child(
                 svg()
                     .path("icons/chevron-down.svg")
@@ -252,12 +257,24 @@ impl Shell {
         let menu = |show: fn(&mut Self, Point<Pixels>, &mut Context<Self>)| {
             cx.listener(move |shell, event: &MouseDownEvent, _, cx| show(shell, event.position, cx))
         };
+        // A row VoiceOver presses as a click does, which opens `popup`.
+        let popup_named = |row: gpui::Stateful<gpui::Div>, name: String, popup: HasPopup| {
+            row.when(a11y, |row| {
+                row.button_named(name).a11y_synthetic_children(move |builder| {
+                    let node = builder.parent_node();
+                    node.add_action(Action::Click);
+                    node.set_has_popup(popup);
+                })
+            })
+        };
         // Under the pointer a row takes the list's hover fill, while a press still shows its menu.
         let profile_row = match naming {
             Some(field) => row("space-profile", FORM_PROFILE_TOP, "icons/user.svg", field),
             None => {
                 let label = "Profile".into_any_element();
-                row("space-profile", FORM_PROFILE_TOP, "icons/user.svg", label)
+                let said = format!("Profile, {profile}");
+                let row = row("space-profile", FORM_PROFILE_TOP, "icons/user.svg", label);
+                popup_named(row, said, HasPopup::Menu)
                     .child(pill)
                     .when(left.is_none(), |row| {
                         row.hover(|style| style.bg(self.palette.plate(HOVERED)))
@@ -266,7 +283,8 @@ impl Shell {
             }
         };
         let theme_label = "Choose a Theme".into_any_element();
-        let theme_row = row("space-theme", FORM_THEME_TOP, "icons/paintbrush.svg", theme_label)
+        let theme_row = row("space-theme", FORM_THEME_TOP, "icons/paintbrush.svg", theme_label);
+        let theme_row = popup_named(theme_row, "Choose a Theme".into(), HasPopup::Dialog)
             .when(left.is_none(), |row| {
                 row.hover(|style| style.bg(self.palette.plate(HOVERED)))
                     .on_mouse_down(MouseButton::Left, menu(Self::form_theme_picker))
@@ -280,6 +298,12 @@ impl Shell {
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(self.palette.accent_label)
             .child("Create Space")
+            // Unnamed, it's dimmed and its press does nothing, so VoiceOver says it's off.
+            .when(a11y, |button| {
+                button.button_named("Create Space").when(!named, |button| {
+                    button.a11y_synthetic_children(|builder| builder.parent_node().set_disabled())
+                })
+            })
             .on_click(cx.listener(|shell, _, window, cx| shell.create_space(window, cx)));
         let cancel = div()
             .absolute()
@@ -292,6 +316,7 @@ impl Shell {
             .child(
                 div()
                     .id("cancel-space")
+                    .when(a11y, |button| button.button_named("Cancel"))
                     .h_full()
                     .flex()
                     .items_center()
@@ -306,6 +331,8 @@ impl Shell {
                     .on_click(cx.listener(|shell, _, window, cx| shell.cancel_space(window, cx))),
             );
         div()
+            .id("space-form")
+            .when(a11y, |form| form.role(Role::Form).aria_label("New Space"))
             .key_context("SpaceForm")
             .on_action(cx.listener(|shell, _: &CreateSpace, window, cx| {
                 shell.create_space(window, cx)
@@ -355,7 +382,10 @@ impl Shell {
 mod tests {
     use std::rc::Rc;
 
-    use gpui::{Entity, TestAppContext, VisualTestContext};
+    use gpui::{
+        Entity, TestAppContext, VisualTestContext,
+        accesskit::{Action, HasPopup, Node, NodeId, Role},
+    };
 
     use crate::shell::{Command, Shell, SpaceEntry, recorder::Recorder};
 
@@ -485,5 +515,57 @@ mod tests {
         let create = host.told_action.borrow_mut().take().expect("its action");
         cx.update(|_, cx| create(vec![String::new()], cx));
         assert_eq!(host.take_edits(), ["create profile Profile 2", "space 1 profile 9"]);
+    }
+
+    /// The node with `role` named `label` in what the window last told VoiceOver.
+    fn named(cx: &mut VisualTestContext, role: Role, label: &str) -> (NodeId, Node) {
+        let tree = cx.a11y_tree().expect("GPUI built a tree");
+        let found = tree.nodes.into_iter().find(|(_, node)| {
+            node.role() == role && node.label() == Some(label)
+        });
+        found.unwrap_or_else(|| panic!("no {role:?} called {label}"))
+    }
+
+    /// VoiceOver reads the form as a form called New Space, its rows as buttons that say what they
+    /// open, and Create Space as off until there's a name. Its presses do what clicks do.
+    #[gpui::test]
+    fn voiceover_reads_the_form_and_presses_its_rows(cx: &mut TestAppContext) {
+        let (shell, cx, host) = form(cx);
+        // As the page slides in, its presses land where it's drawn when it's done.
+        shell.update(cx, |shell, cx| {
+            shell.settle = None;
+            cx.notify();
+        });
+        cx.simulate_a11y_activation();
+        cx.run_until_parked();
+        named(cx, Role::Form, "New Space");
+        named(cx, Role::Heading, "New Space");
+        named(cx, Role::TextInput, "Space name");
+        let (_, theme) = named(cx, Role::Button, "Choose a Theme");
+        assert_eq!(theme.has_popup(), Some(HasPopup::Dialog));
+        named(cx, Role::Button, "Cancel");
+        let (create, node) = named(cx, Role::Button, "Create Space");
+        assert!(!node.is_disabled(), "Create Space with a name");
+        let (profile, node) = named(cx, Role::Button, "Profile, Default");
+        assert_eq!(node.has_popup(), Some(HasPopup::Menu));
+        cx.simulate_a11y_action(profile, Action::Click);
+        cx.run_until_parked();
+        let menu = host.menus.borrow().last().cloned().expect("no menu for the Profile row");
+        assert!(menu.iter().any(|(title, _)| title == "Default"), "{menu:?}");
+
+        cx.simulate_a11y_action(create, Action::Click);
+        cx.run_until_parked();
+        assert_eq!(host.take_edits(), ["rename space 7 Trips"]);
+        assert!(shell.read_with(cx, |shell, _| shell.form.is_none()), "the form stayed");
+    }
+
+    #[gpui::test]
+    fn without_a_name_voiceover_hears_create_space_is_off(cx: &mut TestAppContext) {
+        let (_, cx, _) = form(cx);
+        cx.simulate_keystrokes("cmd-a backspace");
+        cx.simulate_a11y_activation();
+        cx.run_until_parked();
+        let (_, create) = named(cx, Role::Button, "Create Space");
+        assert!(create.is_disabled(), "Create Space without a name");
     }
 }
