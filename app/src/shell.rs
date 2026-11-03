@@ -3202,7 +3202,12 @@ impl Shell {
                 });
                 window.on_mouse_event(move |_: &MouseExitEvent, phase, _, cx| {
                     if phase == DispatchPhase::Capture {
-                        shell.update(cx, |shell, cx| shell.sidebar_hover(false, cx)).ok();
+                        shell
+                            .update(cx, |shell, cx| {
+                                shell.pointer_left();
+                                shell.sidebar_hover(false, cx)
+                            })
+                            .ok();
                     }
                 });
             },

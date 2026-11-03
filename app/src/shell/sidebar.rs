@@ -504,6 +504,16 @@ impl Shell {
         self.pointer_at(x, cx);
     }
 
+    /// The pointer left the browser window's own view, onto the page or another window, so a wait
+    /// at the edge ends as one the pointer passed. On Linux and Windows the page is Chromium's
+    /// window, whose moves the shell doesn't hear, so its leave is how the shell knows.
+    pub(super) fn pointer_left(&mut self) {
+        if !self.revealed {
+            self.reveal_wait = None;
+            self.reveal_strip = None;
+        }
+    }
+
     /// The pointer is at `x` in the browser window: kept at its left edge it brings the hidden
     /// sidebar out over the page, and more than the hold zone past the panel's edge, and off a
     /// row's hover card, it sends it away, and the card with it.
@@ -1141,5 +1151,23 @@ mod tests {
         assert!(!to(&shell, 400., 304., cx), "the pointer over the page brought it out");
         assert!(!to(&shell, 2., 200., cx), "a jump back into the edge brought it out");
         assert!(to(&shell, 2., 196., cx), "a few points up the edge didn't bring it out");
+    }
+
+    /// A pointer that moves down the edge and goes on onto the page, which on Linux and Windows
+    /// is a window the shell doesn't hear the pointer in, leaves the sidebar hidden.
+    #[gpui::test]
+    fn a_pointer_leaving_the_edge_for_the_page_leaves_the_sidebar_hidden(cx: &mut TestAppContext) {
+        let (shell, _) = shell_with(cx, &[], &[1], Default::default());
+        shell.update(cx, |shell, cx| {
+            shell.sidebar_hidden = true;
+            shell.pointer_over(point(px(1.), px(300.)), cx);
+            shell.pointer_over(point(px(1.), px(306.)), cx);
+            shell.pointer_left();
+        });
+        cx.executor().advance_clock(super::REVEAL_WAIT * 2);
+        assert!(
+            !shell.read_with(cx, |shell, _| shell.revealed),
+            "the pointer gone onto the page brought the sidebar out"
+        );
     }
 }

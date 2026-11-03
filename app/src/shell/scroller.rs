@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 use gpui::{App, Context, Global, Task, Window, div, prelude::*, px};
 
 use crate::tokens::shell::scroller::{
-    EDGE, END, FADE, GUTTER, HOLD, KNOB, KNOB_ALPHA, KNOB_INSET, KNOB_MIN, KNOB_SHOWN,
-    KNOB_SHOWN_ALPHA,
+    EDGE, END, GUTTER, KNOB, KNOB_ALPHA, KNOB_INSET, KNOB_MIN, KNOB_SHOWN, KNOB_SHOWN_ALPHA,
+    motion::{FADE, HOLD},
 };
 
 use super::Shell;
@@ -41,6 +41,8 @@ pub(super) struct Scroller {
     moved: Option<Instant>,
     /// Wakes the window once the knob has held long enough to fade.
     wake: Option<Task<()>>,
+    /// Whether the legacy knob was drawn, as it is while the list overflows.
+    legacy_shown: bool,
 }
 
 impl Shell {
@@ -71,6 +73,13 @@ impl Shell {
     /// overlay knob for the user's scrolls only).
     pub(super) fn step_scroller(&mut self, to: f32, glided: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.legacy_scroller = self.scroll_bars_shown(cx);
+        let legacy_shown = self.legacy_scroller && self.list_overflows();
+        if legacy_shown != self.scroller.legacy_shown {
+            self.scroller.legacy_shown = legacy_shown;
+            // check.sh reads these lines.
+            let shown = if legacy_shown { "shown" } else { "hidden" };
+            crate::log!("browser: legacy scroller {shown}");
+        }
         if (to - self.scroller.at).abs() > 0.5 {
             self.scroller.at = to;
             if !glided && !self.legacy_scroller {

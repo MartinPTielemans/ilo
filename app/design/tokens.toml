@@ -1414,9 +1414,13 @@ knob-shown-alpha = 0.5
 gutter = 8.0
 end = 3.0
 knob-inset = 1.0
-# Ours, *interim* (Arc's aren't measured): the shortest knob, and how long the overlay knob stays
-# after the last scroll and then fades.
+# Ours, *interim* (Arc's isn't measured): the shortest knob.
 knob-min = 18.0
+
+[shell.scroller.motion]
+# Seconds: the design file has no motion, so tools/design-sync.md leaves this table out. Ours,
+# *interim* (Arc's aren't measured): how long the overlay knob stays after the last scroll, and
+# then fades.
 hold = 0.8
 fade = 0.25
 
