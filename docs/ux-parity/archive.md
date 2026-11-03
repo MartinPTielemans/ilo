@@ -10,7 +10,7 @@ Part of the [UX parity checklist](README.md), whose top says what the columns me
 | [x] | Reopen closed tab ⇧⌘T | MVP | back in its place with its name, icon, mute and back/forward, and a split's tab back in its split. Pinned tabs don't close | Dia P§2 |
 | [x] | Auto-archive | MVP | a Today tab unseen for 12 hours goes in the archive, counted across a quit | Arc 1.170.0 settings |
 | [ ] | The first auto-archive's note | MVP | ours: the toast "Tabs unseen for 12 hours went to the archive." with View Archive and ×, no timer, once answered never again. To tick: `./check.sh restore`'s `archive-note.png`, and its later launch with no note | Arc help centre |
-| [x] | Auto-archive's other intervals | MVP | 12 hours (default), 24 hours, 7 days, 30 days, per profile in Settings › Profiles (Archive timing per profile); Settings › General's is new profiles', kept with the Spaces | Arc 1.170.0 bin |
+| [x] | Auto-archive's other intervals | MVP | 12 hours (default), 24 hours, 7 days, 30 days, per profile in Settings › Tabs & Sidebar (Archive timing per profile); a new profile starts at 12 hours | Arc 1.170.0 bin |
 | [x] | ⌘W on a Today tab | MVP | Archive Tab: the tab goes in the archive | Arc 1.170.0 menus |
 | [x] | Library | MVP | slides in from its width to the left as it pushes the card to 417 at its width, on spring 0.245 s / ζ 0.92; the sidebar fades out in 33 ms, and back in over 130 ms from 80 ms; column of sections, back button; ⇧⌘L, View Library, footer button | Arc 1.170.0 cap, ax, rec; Arc 1.x video |
 | [x] | Archived Tabs | MVP | search on the buttons' row, day headings, rows 56 apart with favicon, title and host; a click reopens the tab | Arc 1.170.0 cap, ax |

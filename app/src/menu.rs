@@ -114,8 +114,13 @@ impl Default for Look {
 impl Look {
     /// The dark panel with no theme's accent, for a window that isn't a Space's, such as Settings.
     pub fn dark() -> Self {
+        Look::plain(false)
+    }
+
+    /// The panel with no theme's accent, light or dark as its window is, as Settings' pop-ups'.
+    pub fn plain(light: bool) -> Self {
         Look {
-            light: false,
+            light,
             highlight: Highlight::of(&crate::palette::Palette::default()),
         }
     }
