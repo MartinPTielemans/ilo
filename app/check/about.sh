@@ -65,3 +65,7 @@ quit
 [ -n "$engine_version" ] || echo "skip: about's engine version. This engine was packaged before" \
   "it carried one (engine/linux/package.sh)."
 echo "ok: About ilo showed About$engine_version_said, and its rows' Open loaded$loaded in tabs.$minimized Windows: $out/about.png, $out/about-opened.png"
+proof="$(
+  # it's #415's case, an apostrophe in a comment inside $( )
+  echo x
+)"
