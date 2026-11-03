@@ -338,8 +338,9 @@ library_to "swipe $swipe_point 12 0 10" swipe shown
 post swipe $swipe_point 60 0 10 1500
 expect '^browser: library past its end$' "fingers past the Library's end didn't reach it"
 ../tools/window-screenshot.sh "$pid" "$out/library-end.png" || fail "no window to capture"
-column=$(pixel "$out/library-end.png" $(echo "6 / ${content%x*}" | bc -l) 0.85)
-beside=$(pixel "$out/library-end.png" $(echo "200 / ${content%x*}" | bc -l) 0.85)
+# awk, as Git Bash on Windows has no bc.
+column=$(pixel "$out/library-end.png" "$(awk "BEGIN { print 6 / ${content%x*} }")" 0.85)
+beside=$(pixel "$out/library-end.png" "$(awk "BEGIN { print 200 / ${content%x*} }")" 0.85)
 brighter "$column" "$beside" ||
   fail "past its end the Library's column left the window's edge: $column at it, $beside beside"
 await "^browser: drive $step done" || fail "the driver didn't finish the swipe"
