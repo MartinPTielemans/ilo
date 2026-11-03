@@ -228,9 +228,14 @@ const TURN_TITLE_FADE: f32 = 0.5;
 // Folder close).
 const FOLD_OPEN: f32 = 0.2;
 const FOLD_CLOSE_OMEGA: f32 = 25.;
-// The edge under the favorites fades in once the list scrolls past its top and out back there, on
-// Dia's Scroll edge curve (docs/ux-spec.md › Motion).
-const SCROLL_EDGE_FADE: f32 = 0.1;
+// The edge under the favorites fades in once the list scrolls past its top and out back there, and
+// the one at its foot while rows are hidden under it, as long as Arc's take, on Dia's Scroll edge
+// curve (docs/ux-spec.md › Motion).
+const SCROLL_EDGE_FADE: f32 = 0.25;
+// The list glides to a row it scrolls to, most of the way in its first frame and still at the end,
+// as Arc's (docs/ux-spec.md › Tab rows).
+const LIST_GLIDE: f32 = 0.22;
+const LIST_GLIDE_POWER: i32 = 18;
 // Clear and the URL field's button fade in as the pointer comes onto the sidebar and out as it
 // leaves, on the scroll edge's curve. Arc's fade isn't recorded (docs/ux-spec.md › Clear divider).
 const TOOLS_FADE: f32 = 0.15;
@@ -254,13 +259,13 @@ const WHEEL_REST: Duration = Duration::from_millis(250);
 
 use crate::tokens::shell::NAV_TOP;
 use crate::tokens::shell::SIDEBAR_BUTTON_X;
-use crate::tokens::shell::BACK_X;
-use crate::tokens::shell::FORWARD_X;
-use crate::tokens::shell::RELOAD_X;
+use crate::tokens::shell::FULL_SCREEN_SIDEBAR_BUTTON_X;
+use crate::tokens::shell::NAV_TRAIL;
+use crate::tokens::shell::NAV_PITCH;
+use crate::tokens::shell::NAV_AFTER_SIDEBAR;
 use crate::tokens::shell::NAV_SIZE;
 use crate::tokens::shell::NAV_RADIUS;
 use crate::tokens::shell::NAV_GLYPH;
-use crate::tokens::shell::NAV_END;
 
 use crate::tokens::shell::URL_FIELD_TOP;
 use crate::tokens::shell::URL_FIELD_HEIGHT;
@@ -305,6 +310,7 @@ use crate::tokens::shell::ICON_PLACEHOLDER_LINE;
 const ICON_PLACEHOLDER_DASH: (f32, f32) = (4., 2.);
 use crate::tokens::shell::ICON_PLACEHOLDER_COLOR;
 const SPACE_ICON_TEXT: f32 = EMOJI_SIZE;
+use crate::tokens::shell::LIST_TRAIL;
 use crate::tokens::shell::SPACE_GLYPH;
 use crate::tokens::shell::ROW_PITCH;
 use crate::tokens::shell::ROW_HEIGHT;
@@ -718,6 +724,15 @@ enum Slot {
     NewTab,
 }
 
+/// The list on its way to a row, from `from` down its top at `start` to `to`, last set at `set`.
+#[derive(Clone, Copy)]
+struct ListGlide {
+    start: Instant,
+    from: f32,
+    to: f32,
+    set: f32,
+}
+
 /// Tabs' rows new in the list, fading in since `start`: a new tab's plate, or whole rows when
 /// several come at once, as after Undo.
 struct Opened {
@@ -1079,10 +1094,14 @@ pub struct Shell {
     fields_drawn: Rc<RefCell<HashMap<u64, bool>>>,
     /// Where the Library's empty line was last laid out, for its log line.
     empty_drawn: Rc<RefCell<String>>,
-    /// Whether the list is past its top, and the edge under the favorites' fade since it last
-    /// went past or back, from how far in it was then.
-    scrolled: bool,
-    scroll_edge_fade: Option<(Instant, f32)>,
+    /// The line under the favorites, shown while the list is past its top, and the one at its
+    /// foot, while rows are hidden under it.
+    top_edge: swipe::EdgeLine,
+    foot_edge: swipe::EdgeLine,
+    /// What the list was last laid out from: the window's size and where the list starts and ends.
+    list_measured: (Size<Pixels>, f32, f32),
+    /// The list's glide to a row it scrolls to, if it's on its way.
+    list_glide: Cell<Option<ListGlide>>,
     /// The edge the selected tab's marker was last drawn at, true for the top, and its frame in
     /// the window (`shown_marker`).
     marker_drawn: Cell<Option<(bool, Bounds<Pixels>)>>,
@@ -1527,8 +1546,10 @@ impl Shell {
             card_press_closes: false,
             fields_drawn: Rc::default(),
             empty_drawn: Rc::default(),
-            scrolled: false,
-            scroll_edge_fade: None,
+            top_edge: Default::default(),
+            foot_edge: Default::default(),
+            list_measured: Default::default(),
+            list_glide: Cell::new(None),
             marker_drawn: Cell::new(None),
             caret_drawn: Rc::default(),
             keyed: None,
@@ -1955,6 +1976,35 @@ impl Shell {
 
     pub fn selected(&self) -> u64 {
         self.selected
+    }
+
+    /// Where something placed `right` and `top` in from the focused page's top right corner and
+    /// `width` wide has its top left in the window, as the host places the find bar, and the
+    /// window's size: for a tooltip hanging from a button in it.
+    pub fn at_page_corner(
+        &self,
+        right: f32,
+        top: f32,
+        width: f32,
+    ) -> (Point<Pixels>, Size<Pixels>) {
+        let (_, page_right, page_top) = self.focused_pane_corner();
+        let left = f32::from(self.viewport.width) - page_right - right - width;
+        (point(px(left), px(page_top + top)), self.viewport)
+    }
+
+    /// The focused page's left edge, and how far its right and top edges are in from the card's,
+    /// as the host takes them.
+    fn focused_pane_corner(&self) -> (f32, f32, f32) {
+        let (frame, _) = self.page_frame(self.viewport);
+        let panes = self.panes(self.selected);
+        let focused = panes.iter().position(|&pane| pane == self.selected).unwrap_or(0);
+        let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
+        let pane = pane_frames(frame, panes.len(), stacked, &shares)[focused];
+        (
+            f32::from(pane.left()),
+            f32::from(frame.right() - pane.right()),
+            f32::from(pane.top() - frame.top()),
+        )
     }
 
     /// Whether the window shows `tab`'s page: the tab shown, or a page beside it in its split view.
@@ -2522,12 +2572,16 @@ impl Shell {
         }
     }
 
-    /// Gives "New Tab" the selected plate while ⌘T's command bar is open, or gives it back.
+    /// Gives "New Tab" the selected plate while ⌘T's command bar is open, scrolling the list to
+    /// its row as Arc's does, or gives it back.
     fn set_new_tab(&mut self, new_tab: bool, cx: &mut Context<Self>) {
         if self.new_tab != new_tab {
             self.new_tab = new_tab;
             // check.sh reads this line.
             log!("browser: new tab plate {}", new_tab as u8);
+            if new_tab {
+                self.scroll_to_slot(Slot::NewTab, "new tab");
+            }
             cx.notify();
         }
     }
@@ -2820,7 +2874,8 @@ impl Shell {
         }
     }
 
-    /// Deletes the Space, asking first if it has tabs, which close with it.
+    /// Deletes the Space, asking first if it has tabs, which go with it: its Today tabs to the
+    /// archive, its pinned tabs with the Space, and ⌘Z brings them all back.
     fn delete_space(&mut self, space: u64, cx: &mut Context<Self>) {
         let Some(found) = self.spaces.iter().find(|each| each.id == space) else {
             return;
@@ -2831,12 +2886,13 @@ impl Shell {
             return;
         }
         let shell = cx.weak_entity();
+        let undo = keystroke_label("cmd-z");
         self.browser.confirm(
             format!("Delete “{}”?", found.name),
             if tabs == 1 {
-                "Its tab closes too.".into()
+                format!("Its tab goes with it. {undo} brings it back.")
             } else {
-                format!("Its {tabs} tabs close too.")
+                format!("Its {tabs} tabs go with it. {undo} brings them back.")
             },
             "Delete",
             Box::new(move |cx| {
@@ -2852,6 +2908,8 @@ impl Shell {
             self.keep(What::DELETE_SPACE, Some(Edit::UndoDeleteSpace(space)), cx);
             let undo = keystroke_label("cmd-z");
             self.browser.toast("Space deleted! Use", Some((&undo, "to undo.")), DELETED_TIME, cx);
+            // It offers the undo by its key, and goes as an Undo button's toast does.
+            self.undo_offered = true;
         }
     }
 
@@ -2928,12 +2986,21 @@ impl Shell {
         if self.task_select(tab, cx) {
             return;
         }
-        // The tab selected whose page another window shows is taken from it by selecting it again.
-        if tab == self.selected && !self.pictured(tab) && !core_away {
+        // The tab selected whose page another window shows is taken from it by selecting it again,
+        // and so is one while another's switch is under way, which would show that one.
+        if self.tab_asked() == tab && !self.pictured(tab) && !core_away {
             return;
         }
         self.switching = Some((Switch::Tab(tab), Instant::now()));
         self.browser.select(tab, cx);
+    }
+
+    /// The tab the window shows once the switch under way, if one is, has shown it.
+    fn tab_asked(&self) -> u64 {
+        match self.switching {
+            Some((Switch::Tab(tab), _)) => tab,
+            _ => self.selected,
+        }
     }
 
     /// A double-click on the window's background: in the sidebar below the rows it opens a new tab
@@ -3366,16 +3433,7 @@ impl Render for Shell {
         }
         // The find bar, the zoom HUD and the toast sit at the focused page's corner, and the
         // toast's window spans that page.
-        let (frame, _) = self.page_frame(self.viewport);
-        let panes = self.panes(self.selected);
-        let focused = panes.iter().position(|&pane| pane == self.selected).unwrap_or(0);
-        let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
-        let pane = pane_frames(frame, panes.len(), stacked, &shares)[focused];
-        let pane_corner = (
-            f32::from(pane.left()),
-            f32::from(frame.right() - pane.right()),
-            f32::from(pane.top() - frame.top()),
-        );
+        let pane_corner = self.focused_pane_corner();
         if self.pane_corner != pane_corner {
             self.pane_corner = pane_corner;
             let (left, right, top) = pane_corner;
@@ -3466,6 +3524,8 @@ impl Render for Shell {
                     shell.browser.start_window_move(cx);
                 }
                 shell.pointer_at(event.position.x.into(), cx);
+                // A tooltip shows once the pointer rests (tooltip.rs).
+                crate::tooltip::moved(cx);
             }))
             .on_scroll(cx.listener(|shell, _, _, cx| shell.end_hovers(cx)))
             .on_mouse_up(
@@ -3568,6 +3628,7 @@ impl Shell {
                 sidebar
                     .child(self.with_page(self.url_field(cx)))
                     .children(self.scroll_edge_line().map(|line| self.with_page(line)))
+                    .children(self.foot_edge_line().map(|line| self.with_page(line)))
                     .child(self.space_pages(cx))
                     // Over the pages, which they scroll with when they're tall.
                     .children(self.tiles(cx).map(|tiles| self.with_page(tiles)))
@@ -3816,6 +3877,7 @@ impl Shell {
             .when(!under.is_empty(), |list| {
                 list.child(div().flex_none().flex().flex_col().overflow_hidden().children(under))
             })
+            .child(div().flex_none().h(px(LIST_TRAIL)))
             .children(line)
             .children(dragged)
             .child(self.drag_listeners(cx))

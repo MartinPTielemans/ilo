@@ -189,7 +189,7 @@ none_since '^browser: loaded' || fail "closing a pinned tab loaded another"
 
 # Under the pointer, an unloaded pinned row has the remove button in its −'s place, which its
 # tooltip names. A click takes the tab out of the pinned tabs, not into Today, without loading or
-# showing it, and ⌘Z pins it again at its place (#1349).
+# showing it, and offers Undo in a toast (#1376), and ⌘Z pins it again at its place (#1349).
 # The button comes with the row's hover, and the pointer's next move finds it, as a hand's does.
 send move $(pinned_row 1)
 send move $(pinned_row 0)
@@ -202,7 +202,9 @@ expect '^browser: tooltip window shown$' "the remove button's tooltip didn't fad
 send click $(pinned_close 0)
 expect '^browser: command remove-tab via sidebar$' "a click on the remove button didn't run Remove Tab"
 expect "^browser: tab $c closed\$" "the remove button didn't close the pinned tab"
+expect '^browser: toast shown Tab Removed \[undo\]$' "removing a pinned tab didn't offer Undo"
 expect_lists "$a" " *" "after removing a pinned tab"
+../tools/window-screenshot.sh "$pid" "$out/pinned-removed.png" || fail "no window to capture"
 none_since '^browser: loaded' || fail "removing an unloaded pinned tab loaded it"
 none_since '^browser: selected' || fail "removing a pinned tab changed the tab shown"
 send key z cmd
@@ -424,7 +426,6 @@ send click $page_point
 if [ "$active" != 1 ]; then
   exec 3>&-
   quit
-  kill "$server"
   echo "skip: the restored pinned tab's way back. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
@@ -650,7 +651,6 @@ send click $page_point
 if [ "$active" != 1 ]; then
   exec 3>&-
   quit
-  kill "$server"
   echo "skip: the restored folder. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
@@ -862,7 +862,6 @@ send click $page_point
 if [ "$active" != 1 ]; then
   exec 3>&-
   quit
-  kill "$server"
   echo "skip: the restored pinned rows. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
@@ -935,4 +934,4 @@ expect "^browser: selected $added\$" "the added file's tab didn't show"
 expect "^browser: loaded $added file:///.*/Notes/A.txt\$" "the added file didn't load in its tab"
 exec 3>&-
 quit
-echo "ok: ⌘D pins and unpins from the page and the UI, and ⌘1–⌘9 count pinned tabs first. A middle-click on a row closes its tab as its ✕ or − does. Dragging a row moves its tab in the pinned tabs, pins it and unpins it, without showing it, and escape puts it back. ⌘W and − unload a pinned tab, shown or not, and keep its row, showing the top Today tab, else a pinned tab still loaded, else no page, and an unloaded pinned tab loads once shown. An unloaded pinned row's remove button, named by its tooltip, takes the tab out of the pinned tabs without loading it and not into Today, and ⌘Z pins it again at its place, while a second click on the − that unloaded it shows the tab. Away from its pinned URL, ⌘↩ from the page and the UI, and a click on its favicon, go back there. Pinned tabs come back pinned, unloaded and at their page, still away. New Folder makes a folder its field names, a drag right and left takes a tab in and out of it, a folder drags as a row, a click closes and opens it, and the command bar finds Collapse All Folders, which closes it, and Expand All Folders, which opens it. Resting on it closed previews its tab, and typing the tab's title in the preview's search and ↩ show it, the folder kept closed. It comes back closed, a double-click renames it, its menu's Copy All Links is Copy All Links as Markdown with ⌥ held, which copies them, Change Icon… gives it an emoji and offers Remove Icon after, and Delete Folder leaves its tab in place. A link and a file dragged onto the list open as tabs where they're let go, Today or pinned, and show, text that isn't a link opens a search for it there, and a link that isn't a web link doesn't open. Delete Folder offers Undo, ⌘Z remakes the folder around its tab and ⇧⌘Z deletes it again. Settings' Export… writes the folder and its pinned tab as Markdown links. ⌥-click on a pinned tab's link opens a pinned split. Away from its pinned URL, Pinned URL › Replace Pinned URL with Current and Edit… change the pinned URL, which ⌘Z and ⇧⌘Z undo and redo, and ⌘-click on its favicon goes back after opening the page in a new tab. The chevron after the Space's name collapses the pinned rows, which ⌘1 then skips, Expand Pinned Tabs and Collapse Pinned Tabs in the command bar and the View menu bring them back and fold them, and they come back collapsed. Focus Sidebar from the command bar and the View menu rings the tab shown's row, ↑ and ↓ move the ring past the collapsed rows, return shows its tab with the page holding the keyboard, and a key in the page and escape end it. A folder from the desktop dropped on the list becomes an open folder of its folder, closed, and its files' tabs, none shown, a file's row dragged onto the page starts the system's drag of its file, and the +'s Add File or Folder… opens a file at the top of Today. Windows: $out/pinned-close.png, $out/pinned-remove.png, $out/pinned-remove-undone.png, $out/pinned-split.png, $out/pinned-url-menu.png, $out/pinned-url-edit.png, $out/pinned-kept-page.png, $out/drag.png, $out/pinned.png, $out/pinned-unloaded.png, $out/pinned-away.png, $out/pinned-restored.png, $out/folder.png, $out/folder-preview.png, $out/folder-preview-search.png, $out/folder-restored.png, $out/export.png, $out/folder-menu.png, $out/folder-menu-option.png, $out/folder-icon.png, $out/folder-motion.mp4, $out/drop-before.png, $out/drop-line.png, $out/dropped.png, $out/dropped-text.png, $out/command-bar-commands.png, $out/pinned-caret.png, $out/pinned-collapsed.png, $out/sidebar-keyed.png, $out/sidebar-keyed-down.png, $out/pinned-expanded.png, $out/dropped-folder.png, $out/plus-add.png"
+echo "ok: ⌘D pins and unpins from the page and the UI, and ⌘1–⌘9 count pinned tabs first. A middle-click on a row closes its tab as its ✕ or − does. Dragging a row moves its tab in the pinned tabs, pins it and unpins it, without showing it, and escape puts it back. ⌘W and − unload a pinned tab, shown or not, and keep its row, showing the top Today tab, else a pinned tab still loaded, else no page, and an unloaded pinned tab loads once shown. An unloaded pinned row's remove button, named by its tooltip, takes the tab out of the pinned tabs without loading it and not into Today, offering Undo in a toast, and ⌘Z pins it again at its place, while a second click on the − that unloaded it shows the tab. Away from its pinned URL, ⌘↩ from the page and the UI, and a click on its favicon, go back there. Pinned tabs come back pinned, unloaded and at their page, still away. New Folder makes a folder its field names, a drag right and left takes a tab in and out of it, a folder drags as a row, a click closes and opens it, and the command bar finds Collapse All Folders, which closes it, and Expand All Folders, which opens it. Resting on it closed previews its tab, and typing the tab's title in the preview's search and ↩ show it, the folder kept closed. It comes back closed, a double-click renames it, its menu's Copy All Links is Copy All Links as Markdown with ⌥ held, which copies them, Change Icon… gives it an emoji and offers Remove Icon after, and Delete Folder leaves its tab in place. A link and a file dragged onto the list open as tabs where they're let go, Today or pinned, and show, text that isn't a link opens a search for it there, and a link that isn't a web link doesn't open. Delete Folder offers Undo, ⌘Z remakes the folder around its tab and ⇧⌘Z deletes it again. Settings' Export… writes the folder and its pinned tab as Markdown links. ⌥-click on a pinned tab's link opens a pinned split. Away from its pinned URL, Pinned URL › Replace Pinned URL with Current and Edit… change the pinned URL, which ⌘Z and ⇧⌘Z undo and redo, and ⌘-click on its favicon goes back after opening the page in a new tab. The chevron after the Space's name collapses the pinned rows, which ⌘1 then skips, Expand Pinned Tabs and Collapse Pinned Tabs in the command bar and the View menu bring them back and fold them, and they come back collapsed. Focus Sidebar from the command bar and the View menu rings the tab shown's row, ↑ and ↓ move the ring past the collapsed rows, return shows its tab with the page holding the keyboard, and a key in the page and escape end it. A folder from the desktop dropped on the list becomes an open folder of its folder, closed, and its files' tabs, none shown, a file's row dragged onto the page starts the system's drag of its file, and the +'s Add File or Folder… opens a file at the top of Today. Windows: $out/pinned-close.png, $out/pinned-remove.png, $out/pinned-removed.png, $out/pinned-remove-undone.png, $out/pinned-split.png, $out/pinned-url-menu.png, $out/pinned-url-edit.png, $out/pinned-kept-page.png, $out/drag.png, $out/pinned.png, $out/pinned-unloaded.png, $out/pinned-away.png, $out/pinned-restored.png, $out/folder.png, $out/folder-preview.png, $out/folder-preview-search.png, $out/folder-restored.png, $out/export.png, $out/folder-menu.png, $out/folder-menu-option.png, $out/folder-icon.png, $out/folder-motion.mp4, $out/drop-before.png, $out/drop-line.png, $out/dropped.png, $out/dropped-text.png, $out/command-bar-commands.png, $out/pinned-caret.png, $out/pinned-collapsed.png, $out/sidebar-keyed.png, $out/sidebar-keyed-down.png, $out/pinned-expanded.png, $out/dropped-folder.png, $out/plus-add.png"

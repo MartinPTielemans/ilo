@@ -1770,6 +1770,7 @@ fn rows_on_a_hosts_ground_mix_its_ink() {
         (mixed.line, settings.line),
         (mixed.detail, settings.detail),
         (mixed.control, settings.control),
+        (mixed.hovered, settings.hovered),
         (mixed.pressed, settings.pressed),
         (mixed.switch_off, settings.switch_off),
     ] {
@@ -1777,6 +1778,19 @@ fn rows_on_a_hosts_ground_mix_its_ink() {
     }
     let light = Look::on(gpui::rgb(0xffffff), gpui::rgb(0x000000));
     assert!(light.line.r < 1. && light.control.r > light.detail.r);
+}
+
+/// A control under the pointer is a quiet step toward pressed and short of it, on Settings' dark
+/// boxes and on a light ground alike, so it shows it can be clicked and a press still shows more.
+#[test]
+fn a_control_under_the_pointer_is_a_step_short_of_pressed() {
+    let light = |color: gpui::Rgba| color.r + color.g + color.b;
+    let dark = Look::settings();
+    assert!(light(dark.control) < light(dark.hovered) && light(dark.hovered) < light(dark.pressed));
+    let paper = Look::on(gpui::rgb(0xffffff), gpui::rgb(0x000000));
+    assert!(
+        light(paper.control) > light(paper.hovered) && light(paper.hovered) > light(paper.pressed)
+    );
 }
 
 /// Firefox's default profile is the one its install section names, as Firefox starts with it,
@@ -2789,5 +2803,72 @@ fn a_bookmarks_file_comes_in_once(cx: &mut TestAppContext) {
         said(cx),
         "Couldn't import notes.html: it isn't a bookmarks file a browser exported."
     );
+    fs::remove_dir_all(file.parent().unwrap()).unwrap();
+}
+
+/// The end of an import from Settings offers the favorites it worked out from the history, each
+/// ticked; a click unticks one, Add Favorites adds those ticked to the first Space and says so, and
+/// the offer ends. A passwords file's end, after, offers none.
+#[gpui::test]
+fn the_end_of_an_import_offers_its_favorites(cx: &mut TestAppContext) {
+    let made = chrome("chrome-offer", &[("Default", "Me")], SystemTime::now());
+    let browser = Rc::new(Browser::new(Some(Roots::under(&made, Os::Linux))));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    let import = |cx: &mut TestAppContext| {
+        view.update(cx, |view, cx| {
+            view.pick(0, cx);
+            view.import(cx);
+        });
+        cx.run_until_parked();
+        cx.update(|cx| browser.added(cx));
+    };
+    let ticked = |cx: &mut TestAppContext| {
+        view.read_with(cx, |view, _| view.ticked().into_iter().map(|tab| tab.url).collect::<Vec<_>>())
+    };
+    let said = |cx: &mut TestAppContext| {
+        view.read_with(cx, |view, _| match &view.step {
+            super::Step::Done(said) => said.to_string(),
+            _ => panic!("still importing"),
+        })
+    };
+    import(cx);
+    assert_eq!(ticked(cx), ["https://example.com/"]);
+    view.update(cx, |view, cx| view.toggle_favorite("https://example.com/", cx));
+    assert!(ticked(cx).is_empty());
+    view.update(cx, |view, cx| view.add_ticked(cx));
+    assert!(browser.state.borrow().favorites.is_empty(), "none ticked, none added");
+    view.update(cx, |view, cx| view.toggle_favorite("https://example.com/", cx));
+    view.update(cx, |view, cx| view.add_ticked(cx));
+    let favorites: Vec<(u64, String)> = (browser.state.borrow().favorites.iter())
+        .map(|(profile, tab)| (*profile, tab.url.clone()))
+        .collect();
+    assert_eq!(favorites, [(1, "https://example.com/".to_string())]);
+    assert_eq!(
+        said(cx),
+        "1 Space, 3 pinned tabs, 1 open tab, 2 pages of history and 1 address came in from \
+         Chrome. 1 favorite added."
+    );
+    view.read_with(cx, |view, _| assert_eq!(view.suggested(), Some(&[][..])));
+
+    // An offer left with Done isn't made again at a passwords file's end.
+    view.update(cx, |view, cx| view.done(cx));
+    browser.state.borrow_mut().favorites.clear();
+    import(cx);
+    assert_eq!(ticked(cx), ["https://example.com/"]);
+    view.update(cx, |view, cx| view.done(cx));
+    let file = write(home("offer-passwords").join("Chrome Passwords.csv"), PASSWORDS);
+    *browser.passwords_file.borrow_mut() = Some(file.clone());
+    view.update(cx, |view, cx| view.choose_passwords(cx));
+    cx.run_until_parked();
+    let passwords = Passwords::Imported {
+        imported: 3,
+        conflicted: 0,
+        skipped: 0,
+    };
+    cx.update(|cx| browser.imported(passwords, cx));
+    view.read_with(cx, |view, _| assert_eq!(view.suggested(), None));
+    assert!(ticked(cx).is_empty());
+    fs::remove_dir_all(made).unwrap();
     fs::remove_dir_all(file.parent().unwrap()).unwrap();
 }

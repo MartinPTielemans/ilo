@@ -513,9 +513,9 @@ impl Shell {
                 self.browser.make_default_browser(cx)
             }
             (Step::Favorites, _) => {
-                let ticked = self.favorites_ticked(cx);
-                if let Some(importing) = self.importing.as_ref().filter(|_| !ticked.is_empty()) {
-                    importing.view.read(cx).add_favorites(self.space, &ticked);
+                let (ticked, space) = (self.favorites_ticked(cx), self.space);
+                if let Some(importing) = self.importing.as_ref() {
+                    importing.view.update(cx, |view, _| view.add_offered(space, &ticked));
                 }
             }
             (Step::Color, Some(picked)) => {

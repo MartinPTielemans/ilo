@@ -77,6 +77,15 @@ for run in "$@"; do
     *) echo "FAIL: there's no run $run. The runs: $runs $named" >&2; exit 1 ;;
   esac
 done
+# A file sourced with a syntax error ends the check where it stands, with the status of the EXIT
+# trap's last command, 0 under the Mac's sh, and the runs after it never start (#1267). So each
+# file the check sources is parsed before any run starts.
+for file in lib site ilo-server ${*:-$runs}; do
+  why=$(sh -n "check/$file.sh" 2>&1) || {
+    echo "FAIL: check/$file.sh doesn't parse: $why" >&2
+    exit 1
+  }
+done
 out=build/check
 windows() {
   case "$(uname)" in MINGW* | MSYS*) return 0 ;; esac

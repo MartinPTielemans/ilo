@@ -39,7 +39,7 @@ impl What {
     pub const CLOSE_TAB: What = What::quiet("Close Tab");
     pub const CLOSE_TABS: What = What::said("Close Tabs", "Tabs Closed");
     pub const CLOSE_PREVIEW: What = What::quiet("Close Link Preview");
-    pub const REMOVE_TAB: What = What::quiet(super::rows::REMOVE_TIP);
+    pub const REMOVE_TAB: What = What::said(super::rows::REMOVE_TIP, "Tab Removed");
     pub const DISMISS_TASK: What = What::quiet("Dismiss Task");
     pub const PIN: What = What::quiet("Pin Tab");
     pub const UNPIN: What = What::quiet("Unpin Tab");
@@ -135,9 +135,11 @@ pub(super) enum Value {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Edit {
     /// Reopens closed Today tabs, by the ids they had, behind the tab shown, and shows `show`, the
-    /// one that was shown when they closed, if it's among them.
+    /// one that was shown when they closed, if it's among them. They're in the reverse of the
+    /// order they closed in: the core puts each back where it was then, and a split's pane only
+    /// beside one still open as it closed, which the one reopened before it has become (#1361).
     Reopen { tabs: Vec<u64>, show: Option<u64> },
-    /// Closes Today tabs.
+    /// Closes Today tabs, last first, so the Reopen it returns has them in that order.
     Close(Vec<u64>),
     /// Reopens the tabs of a pinned row the user removed, by the ids they had, each with the URL it
     /// went back to, and pins the row again at `spot`.
@@ -364,7 +366,7 @@ impl Edit {
             Edit::Close(tabs) => {
                 let tabs: Vec<u64> = tabs.into_iter().filter(|&tab| shell.has_tab(tab)).collect();
                 let show = shell.shown_among(&tabs);
-                for &tab in &tabs {
+                for &tab in tabs.iter().rev() {
                     shell.browser.close(tab, false, cx);
                 }
                 (!tabs.is_empty()).then_some(Edit::Reopen { tabs, show })
@@ -737,9 +739,10 @@ impl Shell {
             self.closed_pinned = (!self.private).then(|| join.clone());
             return self.keep(What::CLOSE_TAB, Some(join), cx);
         }
+        // The core closes a split's panes in their order, so they reopen last first.
         let tabs = match (closing, split) {
             (None, _) => Vec::new(),
-            (Some(_), true) => self.panes(tab),
+            (Some(_), true) => self.panes(tab).into_iter().rev().collect(),
             (Some(_), false) => vec![tab],
         };
         let show = self.shown_among(&tabs);

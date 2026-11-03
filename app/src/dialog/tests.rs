@@ -40,7 +40,8 @@ impl Asking {
         let deleted = host.clone();
         cx.update(|cx| {
             let delete = Box::new(move |_: &mut App| deleted.0.borrow_mut().push("delete".into()));
-            let (message, detail) = ("Delete “Work”?".into(), "Its 3 tabs close too.".into());
+            let detail = "Its 3 tabs go with it. ⌘Z brings them back.".into();
+            let (message, detail) = ("Delete “Work”?".into(), detail);
             ask(None, message, detail, "Delete", delete, cx);
         });
         let cx = VisualTestContext::from_window(window.into(), cx);
@@ -71,6 +72,14 @@ impl Asking {
 fn escape_cancels(cx: &mut TestAppContext) {
     let mut dialog = Asking::new(cx);
     dialog.keys("escape");
+    assert_eq!(dialog.calls(), ["show", "hide"]);
+}
+
+#[gpui::test]
+fn asked_to_close_it_cancels_and_its_window_stays(cx: &mut TestAppContext) {
+    let mut dialog = Asking::new(cx);
+    // As Windows asks for Alt+F4 (#1362).
+    assert!(!dialog.cx.simulate_close(), "the dialog's window let itself be closed");
     assert_eq!(dialog.calls(), ["show", "hide"]);
 }
 
