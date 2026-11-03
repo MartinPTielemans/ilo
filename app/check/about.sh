@@ -66,6 +66,6 @@ quit
   "it carried one (engine/linux/package.sh)."
 echo "ok: About ilo showed About$engine_version_said, and its rows' Open loaded$loaded in tabs.$minimized Windows: $out/about.png, $out/about-opened.png"
 proof="$(
-  # it's #415's case, an apostrophe in a comment inside $( )
+  # it's the case that stopped the Mac run for #415
   echo x
 )"
