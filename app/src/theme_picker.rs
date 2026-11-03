@@ -459,7 +459,7 @@ impl ThemePicker {
         let Some(target) = target(x, y, editing.theme.as_ref()) else {
             return;
         };
-        let now = Instant::now();
+        let now = crate::motion::start(cx);
         match (target, editing.theme) {
             (Target::Appearance(appearance), theme) => {
                 editing.appearance = appearance;
@@ -557,7 +557,7 @@ impl ThemePicker {
             return;
         };
         if let Drag::Handle(index, ..) = drag {
-            editing.press = Some((index, Instant::now(), false));
+            editing.press = Some((index, crate::motion::start(cx), false));
         }
         self.changed(true, cx);
     }
@@ -857,7 +857,7 @@ impl Render for ThemePicker {
                     let (hx, hy) = editing.handle(index, &theme);
                     let color = (theme.third.filter(|_| index == 2))
                         .unwrap_or_else(|| theme::color_at(hx, hy, theme.saturation));
-                    let size = handle_size(index) * editing.growth(index);
+                    let size = handle_size(index) * crate::motion::scale(editing.growth(index), cx);
                     let ring = if index == 0 { MAIN_RING } else { HANDLE_RING };
                     let (mx, my) = (FIELD / 2. * (1. + hx), FIELD / 2. * (1. + hy));
                     field = field.child(

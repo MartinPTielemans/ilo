@@ -1484,7 +1484,7 @@ impl Render for SiteControls {
             open.shown = Some(Instant::now());
         }
         let progress = open.progress();
-        let scale = FROM_SCALE + (1. - FROM_SCALE) * progress;
+        let scale = crate::motion::scale(FROM_SCALE + (1. - FROM_SCALE) * progress, cx);
         let origin = open.origin();
         let moving = open.moving();
         let settling = !moving && !open.settled;

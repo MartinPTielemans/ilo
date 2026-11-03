@@ -289,8 +289,9 @@ impl Shell {
         let velocity = if velocity * from < 0. { velocity } else { 0. };
         let cancel = space != swipe.from && self.form().is_some();
         let beside = cancel.then_some(swipe.from);
-        self.settle =
-            Some(Settle { space, beside, from, velocity, start: now, next_door: false });
+        // The fingers' speed carries on, unless Reduce Motion has the pages land where they go.
+        let start = crate::motion::start(cx);
+        self.settle = Some(Settle { space, beside, from, velocity, start, next_door: false });
         if cancel {
             self.form_going = self.close_form(window, cx);
         } else if space != self.space {
@@ -815,6 +816,58 @@ mod tests {
             let halfway = start + Duration::from_millis(145);
             assert!(crossing(shell, halfway), "a click: the sidebar {}", shell.sidebar_opacity_at(halfway));
         });
+    }
+
+    /// Under Reduce Motion the Library doesn't push the page aside or the sidebar back: it's open
+    /// from its first frame and closed from its first, while the sidebar under it still fades
+    /// (#1380).
+    #[gpui::test]
+    fn under_reduce_motion_the_library_comes_and_goes_at_once_and_the_sidebar_fades(
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, _, cx) = three_spaces(cx, 1);
+        shell.update(cx, |shell, cx| {
+            shell.set_library(true, cx);
+            assert!(shell.library_out() < 0.5, "the Library pushed out at once with motion on");
+            shell.close_library_now();
+            cx.set_reduce_motion(true);
+            shell.set_library(true, cx);
+            assert_eq!((shell.library_out(), shell.sidebar_scale()), (1., 1.));
+            // The sidebar has faded out under it.
+            shell.sidebar_fade = shell.sidebar_fade.map(|(from, start)| (from, start - Duration::from_secs(1)));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        shell.update(cx, |shell, cx| {
+            shell.set_library(false, cx);
+            assert_eq!((shell.library_out(), shell.sidebar_scale()), (0., 1.));
+            assert!(shell.sidebar_opacity() < 1., "the sidebar came back without its fade");
+            cx.notify();
+        });
+        // A frame, which ends the card's motion but not the sidebar's fade.
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, _| {
+            assert!(shell.sidebar_fade.is_some(), "the sidebar's fade ended with the card's motion");
+        });
+    }
+
+    /// Under Reduce Motion the pages still follow the fingers, and once they lift they're where
+    /// they land, without a spring (#1380).
+    #[gpui::test]
+    fn under_reduce_motion_a_swipe_follows_the_fingers_and_lands_without_a_spring(
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, host, cx) = three_spaces(cx, 2);
+        shell.update_in(cx, |shell, window, cx| {
+            cx.set_reduce_motion(true);
+            fingers(shell, 0.3 * shell.width(), false, window, cx);
+            let pages = shell.pages();
+            assert!(pages[0].1 > 0. && pages.len() == 2, "the pages didn't follow the fingers: {pages:?}");
+            fingers(shell, 0.6 * shell.width(), true, window, cx);
+            assert!(shell.settle.is_some(), "the pages didn't settle");
+            assert_eq!(shell.pages(), [(1, 0.)]);
+        });
+        assert_eq!(*host.shown.borrow(), [1]);
     }
 
     /// Back off the form, the URL field and the favorites are drawn from the first frame, at the

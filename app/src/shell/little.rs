@@ -352,6 +352,7 @@ impl Shell {
                 if self.url_copied.is_some() { CHECK } else { LINK },
                 LITTLE_GLYPH,
                 glyph,
+                cx,
             ));
         let main = button("little-main", 0, Some(Command::OpenInMainWindow), "Open in Main Window", cx)
             .on_click(cx.listener(|shell, _, _, cx| {

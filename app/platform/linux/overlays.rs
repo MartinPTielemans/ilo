@@ -10,7 +10,7 @@
 //! shortcut: no blur under them.
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     ffi::{c_int, c_void},
     time::Instant,
 };
@@ -57,6 +57,18 @@ thread_local! {
         const { RefCell::new([None, None, None, None]) };
     /// The app's overlays that have each browser window's keyboard, by their views.
     static LENT: RefCell<Vec<(bc::bc_id, usize)>> = const { RefCell::new(Vec::new()) };
+    /// Reduce Motion, under which they grow and shrink no more, and only fade.
+    static STILL: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The size an overlay grows from and shrinks to: its own under Reduce Motion.
+fn shrunk() -> f32 {
+    if STILL.get() { 1. } else { SHRUNK }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn host_set_overlays_still(still: bool) {
+    STILL.set(still);
 }
 
 /// The overlay of `view` takes the keyboard of `window`, or gives it back. The core lends it while
@@ -204,7 +216,7 @@ pub extern "C" fn host_show_overlay(
     if shrinking {
         gpui_linux::set_overlay_pointer(view, None);
     }
-    let scale = Track { from: SHRUNK, to: 1., seconds: GROW, curve: GROW_CURVE };
+    let scale = Track { from: shrunk(), to: 1., seconds: GROW, curve: GROW_CURVE };
     if let Some(origin) = grows {
         let opacity = Track { from: 0., to: 1., seconds: GROW_FADE, curve: LINEAR };
         motion::start(view, Motion { scale, origin, opacity });
@@ -327,7 +339,7 @@ fn hide(overlay: c_int) -> bool {
     gpui_linux::set_overlay_pointer(view, Some(&[]));
     gpui_linux::set_overlay_keyboard(view, false, left_overlay);
     lend_keyboard(window, view, false);
-    let scale = Track { from: 1., to: SHRUNK, seconds: SHRINK, curve: motion::EASE_IN };
+    let scale = Track { from: 1., to: shrunk(), seconds: SHRINK, curve: motion::EASE_IN };
     let opacity = Track { from: 1., to: 0., seconds: SHRINK, curve: motion::EASE_IN };
     motion::start(view, Motion { scale, origin, opacity });
     let opacity = Track { from: 1., to: 0., seconds: SHRINK, curve: LINEAR };
