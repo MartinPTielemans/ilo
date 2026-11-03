@@ -2384,6 +2384,13 @@ void host_show_overlay(int index,
       [overlay->window.parentWindow removeChildWindow:overlay->window];
     }
     overlay->window.ignoresMouseEvents = NO;
+    // Shown again while it faded from a fold.
+    [NSAnimationContext
+        runAnimationGroup:^(NSAnimationContext* context) {
+          context.duration = 0;
+          overlay->window.animator.alphaValue = 1;
+        }
+        completionHandler:nil];
     AddOver(window, overlay->window);
     if (overlay->grows) {
       GrowOverlay(*overlay);
@@ -2450,6 +2457,157 @@ void host_dismiss_overlay(int index) {
       dismissed();
     });
   }
+}
+
+// The window the folds fly in, over the browser window's content, which clicks go through.
+NSWindow* g_fold_window = nil;
+// The layer they fly in, whose points go down from the top left, as the UI's do. AppKit keeps the
+// geometry of a view's own layer, so a flip set there doesn't hold.
+CALayer* g_fold_layer = nil;
+int g_folds_flying = 0;
+
+static CGColorRef FoldColor(uint32_t rgba) {
+  return CGColorCreateSRGB(((rgba >> 24) & 0xff) / 255.0, ((rgba >> 16) & 0xff) / 255.0,
+                           ((rgba >> 8) & 0xff) / 255.0, (rgba & 0xff) / 255.0);
+}
+
+bool host_fold_overlay(int index,
+                       double x,
+                       double y,
+                       double width,
+                       double height,
+                       double radius,
+                       uint32_t from,
+                       uint32_t to,
+                       double duration,
+                       double fade,
+                       bool fade_only) {
+  Overlay* overlay = OverlayAt(index);
+  if (!overlay || !overlay->shown) {
+    return false;
+  }
+  Browser* browser = overlay->over;
+  NSWindow* parent = browser->window;
+  NSWindow* window = overlay->window;
+  if (!parent || !window.visible) {
+    host_hide_overlay(index);
+    return false;
+  }
+  const NSRect content = [parent contentRectForFrameRect:parent.frame];
+  const NSRect bar = window.frame;
+  overlay->shown = false;
+  if (!fade_only) {
+    if (!g_fold_window) {
+      g_fold_window = [[NSWindow alloc] initWithContentRect:NSZeroRect
+                                                  styleMask:NSWindowStyleMaskBorderless
+                                                    backing:NSBackingStoreBuffered
+                                                      defer:NO];
+      g_fold_window.releasedWhenClosed = NO;
+      g_fold_window.opaque = NO;
+      g_fold_window.backgroundColor = NSColor.clearColor;
+      g_fold_window.hasShadow = NO;
+      g_fold_window.ignoresMouseEvents = YES;
+      g_fold_window.excludedFromWindowsMenu = YES;
+      g_fold_window.contentView.wantsLayer = YES;
+      g_fold_layer = [CALayer layer];
+      g_fold_layer.geometryFlipped = YES;
+      [g_fold_window.contentView.layer addSublayer:g_fold_layer];
+    }
+    if (g_fold_window.parentWindow != parent) {
+      [g_fold_window.parentWindow removeChildWindow:g_fold_window];
+      [g_fold_window setFrame:content display:NO];
+      AddOver(parent, g_fold_window);
+    } else if (!NSEqualRects(g_fold_window.frame, content)) {
+      [g_fold_window setFrame:content display:NO];
+    }
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    g_fold_layer.frame = g_fold_window.contentView.bounds;
+    [CATransaction commit];
+    [g_fold_window orderFront:nil];
+    // The bar stays over its plate as its drawing fades, so the plate shows through it.
+    [window orderWindow:NSWindowAbove relativeTo:g_fold_window.windowNumber];
+    const CGRect start = CGRectMake(NSMinX(bar) - NSMinX(content), NSMaxY(content) - NSMaxY(bar),
+                                    NSWidth(bar), NSHeight(bar));
+    const CGRect end = CGRectMake(x, y, width, height);
+    CALayer* plate = [CALayer layer];
+    CGColorRef start_fill = FoldColor(from);
+    CGColorRef end_fill = FoldColor(to);
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    plate.frame = start;
+    plate.cornerRadius = overlay->radius;
+    plate.cornerCurve = kCACornerCurveContinuous;
+    plate.backgroundColor = start_fill;
+    // The bar's shadow, which the plate takes as the bar's own window of it goes.
+    plate.shadowColor = NSColor.blackColor.CGColor;
+    plate.shadowOpacity = overlay->shadow_opacity;
+    plate.shadowRadius = overlay->shadow_radius;
+    plate.shadowOffset = CGSizeMake(0, overlay->shadow_drop);
+    [g_fold_layer addSublayer:plate];
+    [CATransaction commit];
+    overlay->shadow.alphaValue = 0;
+    g_folds_flying++;
+    [CATransaction begin];
+    [CATransaction setCompletionBlock:^{
+      [plate removeFromSuperlayer];
+      if (--g_folds_flying == 0) {
+        [g_fold_window.parentWindow removeChildWindow:g_fold_window];
+        [g_fold_window orderOut:nil];
+      }
+      // check.sh reads this line.
+      fprintf(stderr, "browser: %s folded\n", overlay->name);
+    }];
+    NSDictionary<NSString*, id>* to_values = @{
+      @"position" : [NSValue valueWithPoint:NSMakePoint(CGRectGetMidX(end), CGRectGetMidY(end))],
+      @"bounds" : [NSValue valueWithRect:NSMakeRect(0, 0, width, height)],
+      @"cornerRadius" : @(radius),
+      @"backgroundColor" : (__bridge id)end_fill,
+      @"shadowOpacity" : @0,
+    };
+    NSMutableArray<CAAnimation*>* animations = [NSMutableArray array];
+    for (NSString* key in to_values) {
+      CABasicAnimation* animation = [CABasicAnimation animationWithKeyPath:key];
+      animation.toValue = to_values[key];
+      [animations addObject:animation];
+    }
+    CAAnimationGroup* group = [CAAnimationGroup animation];
+    group.animations = animations;
+    group.duration = duration;
+    group.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.2:0.8:0.2:1];
+    // Held at its end until it goes, so it doesn't jump back for a frame.
+    group.fillMode = kCAFillModeForwards;
+    group.removedOnCompletion = NO;
+    [plate addAnimation:group forKey:@"fold"];
+    [CATransaction commit];
+    // check.sh reads this line.
+    fprintf(stderr, "browser: %s folds to %g %g %g %g\n", overlay->name, x, y, width, height);
+    CGColorRelease(start_fill);
+    CGColorRelease(end_fill);
+  }
+  // Its drawing fades where it is, and the clicks go through it meanwhile.
+  window.ignoresMouseEvents = YES;
+  Overlay* folding = overlay;
+  [NSAnimationContext
+      runAnimationGroup:^(NSAnimationContext* context) {
+        context.duration = fade;
+        window.animator.alphaValue = 0;
+        if (fade_only) {
+          folding->shadow.animator.alphaValue = 0;
+        }
+      }
+      completionHandler:^{
+        if (folding->shown && folding->window.parentWindow) {
+          return;
+        }
+        [window.parentWindow removeChildWindow:window];
+        [window orderOut:nil];
+        window.alphaValue = 1;
+        window.ignoresMouseEvents = NO;
+      }];
+  [KeyWindowOver(browser) makeKeyWindow];
+  fprintf(stderr, "browser: %s hidden\n", overlay->name);
+  return true;
 }
 
 void host_take_overlay_keyboard(int index) {

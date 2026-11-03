@@ -152,6 +152,37 @@ fn a_rows_menu_closes_the_card(cx: &mut TestAppContext) {
     assert!(!host.take().iter().any(|call| call.starts_with("card rest")));
 }
 
+/// No card rests while a name field is open, a tab's or a Space's, its menu up or not, as the card
+/// would keep the name being changed (#1452).
+#[gpui::test]
+fn no_card_rests_while_a_name_field_is_open(cx: &mut TestAppContext) {
+    let (shell, cx, host) = with_tabs(cx);
+    let rests = |cx: &mut VisualTestContext, tab: u64| {
+        shell.update(cx, |shell, cx| shell.hover_card(Row::Tab(tab), true, cx));
+        host.take().iter().any(|call| call.starts_with("card rest"))
+    };
+    shell.update(cx, |shell, cx| shell.rename_tab(3, cx));
+    assert!(!rests(cx, 4), "a tab's name field is open");
+    shell.update_in(cx, |shell, window, cx| shell.cancel_name(window, cx));
+    assert!(rests(cx, 4), "the tab's name field closed");
+    shell.update(cx, |shell, cx| shell.rename_space(1, cx));
+    assert!(!rests(cx, 3), "the Space's name field is open");
+}
+
+/// A tab's new title, the name the core reports it was given or its page's, goes to its card,
+/// which shows it if it's that tab's (#1452); a title that didn't change doesn't.
+#[gpui::test]
+fn a_tab_s_new_name_goes_to_its_card(cx: &mut TestAppContext) {
+    let (shell, cx, host) = with_tabs(cx);
+    rest_on(&shell, cx, &host, 3);
+    let told = |cx: &mut VisualTestContext, title: &str| {
+        shell.update(cx, |shell, cx| shell.set_title(3, title.to_string().into(), cx));
+        host.take().into_iter().filter(|call| call.starts_with("card changed")).collect::<Vec<_>>()
+    };
+    assert_eq!(told(cx, "Weather"), ["card changed 3 Weather"]);
+    assert!(told(cx, "Weather").is_empty());
+}
+
 /// The pickers' windows, which show nowhere.
 struct NoWhere;
 

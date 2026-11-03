@@ -20,7 +20,8 @@ use gpui::{
 
 use super::{
     access::Accessible,
-    Command, DRAG_START, FAVICON_X, FOLDER_INDENT, FOOTER_HEIGHT, FORM_TEXT, MenuEntry, NAV,
+    Command, DRAG_START, Edit, FAVICON_SIZE, FAVICON_X, What,
+    task_cards::number as task_number, FOLDER_INDENT, FOOTER_HEIGHT, FORM_TEXT, MenuEntry, NAV,
     NAV_RADIUS, NAV_SIZE, PLATE_INSET, SECONDARY, SEGMENT_FAVICON_X, Shell, Space, UNSELECTED_TITLE,
     clean_link, divider_box, favicon, file_url, folder_icon, host, SPACE_SWATCH_SHOWN,
     dashed_square,
@@ -38,12 +39,14 @@ use crate::{
     tooltip::{Anchor, Tip},
 };
 use crate::tokens::shell::EMOJI_SIZE;
+use crate::agents::task::{ArchivedTask, TaskAction};
+use crate::tokens::shell::task::GLYPH as TASK_GLYPH;
 
 use crate::tokens::shell::library::LIBRARY_WIDTH;
 /// The push, on Arc's measured spring (1 run, rms 1.0 pt). The Library comes with it from its own
 /// width to the left, so they meet as they stop.
-const LIBRARY_RESPONSE: f32 = 0.245;
-const LIBRARY_DAMPING: f32 = 0.92;
+pub(super) const LIBRARY_RESPONSE: f32 = 0.245;
+pub(super) const LIBRARY_DAMPING: f32 = 0.92;
 /// Opened or closed by a click, the sidebar under the Library fades out in 2 frames at 60 fps as
 /// it comes, and back in over 130 ms from 80 ms after it starts to go (Arc on video, 2 opens and 2
 /// closes).
@@ -385,9 +388,32 @@ pub(super) struct Library {
     query: String,
     items: Vec<Item>,
     list: ListState,
-    /// Whether Archived Tabs lists only Little ilo's, the Filter button's choice.
-    little_only: bool,
+    /// What Archived Tabs lists, the Filter button's choice.
+    only: Only,
     _search: Subscription,
+}
+
+/// What Archived Tabs lists, as its Filter button's menu offers.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) enum Only {
+    #[default]
+    All,
+    /// The tabs Little ilo windows closed (Arc).
+    Little,
+    /// The tasks dismissed from the sidebar's foot.
+    Tasks,
+}
+
+impl Only {
+    const MENU: [Only; 3] = [Only::All, Only::Little, Only::Tasks];
+
+    fn label(self) -> &'static str {
+        match self {
+            Only::All => "All",
+            Only::Little => "Little ilo",
+            Only::Tasks => "Tasks",
+        }
+    }
 }
 
 /// A line of the section's list.
@@ -396,6 +422,8 @@ enum Item {
     Heading(&'static str),
     /// The archived tab at this index of `Shell::archive`.
     Tab(usize),
+    /// The task at this index of `Shell::archived_tasks`.
+    Task(usize),
     /// The download at this index of `Shell::downloads`.
     Download(usize),
     /// A row of Media's tiles, from its left.
@@ -417,9 +445,30 @@ const FIELD: &str = "space-field";
 impl Shell {
     /// The archive changed, all of it, newest first.
     pub fn set_archive(&mut self, archive: Vec<Archived>, cx: &mut Context<Self>) {
+        // A tab closed since a task was dismissed is what ⇧⌘T reopens: the core's to reopen, as
+        // the archive is its list of what closed, a task's pages too.
+        let newest = archive.first().map_or(0., |tab| tab.archived);
+        if self.closed_task.as_ref().is_some_and(|(_, at)| newest >= *at) {
+            self.closed_task = None;
+        }
         self.archive = archive;
         let archive = &self.archive;
         self.page_favicons.retain(|url, _| archive.iter().any(|tab| tab.url == *url));
+        if self.section == Section::Archive {
+            self.filter(true, cx);
+        }
+    }
+
+    /// The tasks in the Archive changed, all of them, the last to leave the foot first. A private
+    /// window, which offers no tasks, lists none.
+    pub fn set_archived_tasks(&mut self, mut tasks: Vec<ArchivedTask>, cx: &mut Context<Self>) {
+        if self.private {
+            tasks.clear();
+        }
+        if tasks == self.archived_tasks {
+            return;
+        }
+        self.archived_tasks = tasks;
         if self.section == Section::Archive {
             self.filter(true, cx);
         }
@@ -710,7 +759,7 @@ impl Shell {
             query: String::new(),
             items: Vec::new(),
             list: ListState::new(0, ListAlignment::Top, px(ARCHIVE_OVERDRAW)),
-            little_only: false,
+            only: Only::All,
             _search: observe,
         });
         // check.sh waits for these lines.
@@ -791,15 +840,28 @@ impl Shell {
             return;
         }
         let found = |text: &SharedString| text.to_lowercase().contains(&query);
-        let little_only = library.little_only && self.archive.iter().any(|tab| tab.little);
+        let filtered = self.archive.iter().any(|tab| tab.little) || !self.archived_tasks.is_empty();
+        let only = if filtered { library.only } else { Only::All };
         // Each with the time it's listed by, newest first.
         let found: Vec<(Item, f64)> = match self.section {
             Section::Spaces => Vec::new(),
-            Section::Archive => (self.archive.iter().enumerate())
-                .filter(|(_, tab)| !little_only || tab.little)
-                .filter(|(_, tab)| query.is_empty() || found(&tab.title) || found(&tab.url))
-                .map(|(index, tab)| (Item::Tab(index), tab.archived))
-                .collect(),
+            Section::Archive => {
+                let tabs = (self.archive.iter().enumerate())
+                    .filter(|(_, tab)| match only {
+                        Only::All => true,
+                        Only::Little => tab.little,
+                        Only::Tasks => false,
+                    })
+                    .filter(|(_, tab)| query.is_empty() || found(&tab.title) || found(&tab.url))
+                    .map(|(index, tab)| (Item::Tab(index), tab.archived));
+                let tasks = (self.archived_tasks.iter().enumerate())
+                    .filter(|_| matches!(only, Only::All | Only::Tasks))
+                    .filter(|(_, task)| query.is_empty() || found(&task.title) || found(&task.asked))
+                    .map(|(index, task)| (Item::Task(index), task.left));
+                let mut listed: Vec<_> = tabs.chain(tasks).collect();
+                listed.sort_by(|a, b| b.1.total_cmp(&a.1));
+                listed
+            }
             Section::Downloads => (self.downloads.iter().enumerate())
                 .filter(|(_, each)| query.is_empty() || found(&each.name) || found(&each.url))
                 .map(|(index, download)| (Item::Download(index), download.started))
@@ -858,23 +920,87 @@ impl Shell {
         self.set_library(false, cx);
     }
 
-    /// Whether Archived Tabs has the Filter button: while the archive holds a Little ilo tab, as
-    /// it's the one filter there is.
+    /// The task `agent` comes back from the Archive, as ⇧⌘T brings it: its card to the foot, with
+    /// its conversation open, and the Library closes.
+    fn restore_archived_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+        // check.sh waits for this line.
+        log!("browser: restore archived task {agent}");
+        self.show_restored = Some(agent.clone());
+        self.bring_back_task(agent, cx);
+        self.set_library(false, cx);
+    }
+
+    /// Delete from Archive on a task: it leaves the Archive and ⇧⌘T's reach, a step of the
+    /// window's ⌘Z history, as a tab's Delete from Archive is.
+    fn delete_archived_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+        // check.sh waits for this line.
+        log!("browser: remove archived task {agent}");
+        if self.closed_task.as_ref().is_some_and(|(closed, _)| *closed == agent) {
+            self.closed_task = None;
+        }
+        self.browser.task(agent.clone(), TaskAction::Delete, cx);
+        self.keep(What::DELETE_ARCHIVED, Some(Edit::UndeleteTask(agent)), cx);
+    }
+
+    /// Whether Archived Tabs has the Filter button: while the archive holds a Little ilo tab or a
+    /// task, which are what it picks out.
     fn archive_filtered(&self) -> bool {
-        self.section == Section::Archive && self.archive.iter().any(|tab| tab.little)
+        self.section == Section::Archive
+            && (self.archive.iter().any(|tab| tab.little) || !self.archived_tasks.is_empty())
     }
 
-    /// Whether the list shows only Little ilo's tabs.
-    fn little_only(&self) -> bool {
-        self.archive_filtered() && self.library.as_ref().is_some_and(|library| library.little_only)
+    /// What the list shows, the Filter button's choice while it has the button.
+    fn archive_only(&self) -> Only {
+        match self.archive_filtered() {
+            true => self.library.as_ref().map_or(Only::All, |library| library.only),
+            false => Only::All,
+        }
     }
 
-    /// The Filter button's menu: All Tabs, or Little ilo's alone, the one shown checked.
+    /// The Filter button's menu: All, Little ilo's tabs or the tasks alone, the one shown checked.
     fn archive_filter_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let little = self.little_only();
+        let only = self.archive_only();
+        let entries = (Only::MENU.iter())
+            .map(|each| MenuEntry::new(each.label(), true).checked(*each == only))
+            .collect();
+        let shell = cx.weak_entity();
+        self.browser.context_menu(
+            entries,
+            position,
+            false,
+            self.menu_look(),
+            Box::new(move |chosen, cx| {
+                if let Some(&only) = chosen.and_then(|chosen| Only::MENU.get(chosen)) {
+                    shell.update(cx, |shell, cx| shell.filter_archive(only, cx)).ok();
+                }
+            }),
+            cx,
+        );
+    }
+
+    /// Lists only Little ilo's archived tabs, only the tasks, or all of them again.
+    fn filter_archive(&mut self, only: Only, cx: &mut Context<Self>) {
+        let Some(library) = &mut self.library else {
+            return;
+        };
+        library.only = only;
+        // check.sh waits for this line.
+        let name = match only {
+            Only::All => "all",
+            Only::Little => "little",
+            Only::Tasks => "tasks",
+        };
+        log!("browser: archive filter {name}");
+        self.filter(true, cx);
+    }
+
+    /// The menu a right-click on a task's row shows: its conversation, as a click opens it, or
+    /// out of the Archive.
+    fn archived_task_menu(&mut self, agent: SharedString, position: Point<Pixels>, cx: &mut Context<Self>) {
         let entries = vec![
-            MenuEntry::new("All Tabs", true).checked(!little),
-            MenuEntry::new("Little ilo", true).checked(little),
+            MenuEntry::new("Open Conversation", true),
+            MenuEntry::line(),
+            MenuEntry::new("Delete from Archive", true).destructive(),
         ];
         let shell = cx.weak_entity();
         self.browser.context_menu(
@@ -883,23 +1009,16 @@ impl Shell {
             false,
             self.menu_look(),
             Box::new(move |chosen, cx| {
-                if let Some(chosen) = chosen {
-                    shell.update(cx, |shell, cx| shell.filter_little(chosen == 1, cx)).ok();
-                }
+                shell
+                    .update(cx, |shell, cx| match chosen {
+                        Some(0) => shell.restore_archived_task(agent.clone(), cx),
+                        Some(2) => shell.delete_archived_task(agent.clone(), cx),
+                        _ => {}
+                    })
+                    .ok();
             }),
             cx,
         );
-    }
-
-    /// Lists only Little ilo's archived tabs, or all of them again.
-    fn filter_little(&mut self, little: bool, cx: &mut Context<Self>) {
-        let Some(library) = &mut self.library else {
-            return;
-        };
-        library.little_only = little;
-        // check.sh waits for this line.
-        log!("browser: archive filter {}", if little { "little" } else { "all" });
-        self.filter(true, cx);
     }
 
     /// The menu a right-click on an archived tab's row shows: reopen it, copy its URL, or take it
@@ -942,7 +1061,8 @@ impl Shell {
     /// The menu a right-click on the Archived Tabs section shows, Clear Archive as Arc's has it,
     /// which asks first as the Archive menu's does.
     fn archive_section_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let entries = vec![MenuEntry::new("Clear Archive", !self.archive.is_empty())];
+        let full = !self.archive.is_empty() || !self.archived_tasks.is_empty();
+        let entries = vec![MenuEntry::new("Clear Archive", full)];
         let shell = cx.weak_entity();
         self.browser.context_menu(
             entries,
@@ -958,10 +1078,10 @@ impl Shell {
         );
     }
 
-    /// Empties the archive, once the user says so.
+    /// Empties the archive, its tabs and the tasks it lists, once the user says so.
     pub(super) fn clear_archive(&mut self, cx: &mut Context<Self>) {
-        let count = self.archive.len();
-        if count == 0 {
+        let (tabs, tasks) = (self.archive.len(), self.archived_tasks.len());
+        if tabs + tasks == 0 {
             return;
         }
         let shell = cx.weak_entity();
@@ -969,9 +1089,20 @@ impl Shell {
             "Clear the archive?".into(),
             {
                 let undo = keystroke_label("cmd-z");
-                match count {
-                    1 => format!("Its tab leaves the archive. {undo} brings it back."),
-                    _ => format!("Its {count} tabs leave the archive. {undo} brings them back."),
+                let some = |count: usize, what: &str| match count {
+                    1 => format!("1 {what}"),
+                    _ => format!("{count} {what}s"),
+                };
+                match (tabs, tasks) {
+                    (1, 0) => format!("Its tab leaves the archive. {undo} brings it back."),
+                    (0, 1) => format!("Its task leaves the archive. {undo} brings it back."),
+                    (_, 0) => format!("Its {tabs} tabs leave the archive. {undo} brings them back."),
+                    (0, _) => format!("Its {tasks} tasks leave the archive. {undo} brings them back."),
+                    _ => format!(
+                        "Its {} and {} leave the archive. {undo} brings them back.",
+                        some(tabs, "tab"),
+                        some(tasks, "task")
+                    ),
                 }
             },
             "Clear Archive",
@@ -980,6 +1111,23 @@ impl Shell {
             }),
             cx,
         );
+    }
+
+    /// The line a section's list holds while it has nothing to list: what fills it, or with a
+    /// search, that nothing matches.
+    fn empty_line(&self, section: Section, unsearched: bool) -> &'static str {
+        let tasks = self.archive_only() == Only::Tasks;
+        match (section, unsearched) {
+            (Section::Spaces, _) => "",
+            (Section::Archive, true) if tasks => "Finished tasks stay here until ilo quits.",
+            (Section::Archive, false) if tasks => "No tasks match.",
+            (Section::Archive, true) => "Closed Today tabs stay here for 30 days.",
+            (Section::Archive, false) => "No archived tabs match.",
+            (Section::Downloads, true) => "Files you download show here.",
+            (Section::Downloads, false) => "No downloads match.",
+            (Section::Media, true) => "Saved captures and downloaded media show here.",
+            (Section::Media, false) => "No media match.",
+        }
     }
 
     /// The Library, where the sidebar was.
@@ -1092,7 +1240,10 @@ impl Shell {
             )
             .child(library.search.clone());
         let filter = filtered.then(|| {
-            let label = if self.little_only() { "Little ilo" } else { "Filter" };
+            let label = match self.archive_only() {
+                Only::All => "Filter",
+                only => only.label(),
+            };
             div()
                 .id("library-filter")
                 .absolute()
@@ -1117,15 +1268,7 @@ impl Shell {
         });
         let spaces = self.section == Section::Spaces;
         let archive = if library.items.is_empty() {
-            let empty = match (self.section, library.query.is_empty()) {
-                (Section::Spaces, _) => "",
-                (Section::Archive, true) => "Closed Today tabs stay here for 30 days.",
-                (Section::Archive, false) => "No archived tabs match.",
-                (Section::Downloads, true) => "Files you download show here.",
-                (Section::Downloads, false) => "No downloads match.",
-                (Section::Media, true) => "Saved captures and downloaded media show here.",
-                (Section::Media, false) => "No media match.",
-            };
+            let empty = self.empty_line(self.section, library.query.is_empty());
             // A block, not a flex row, whose text would keep its one line's width past the list's
             // edges: it wraps in the list's width, centred.
             let line = StyledText::new(empty);
@@ -1596,6 +1739,7 @@ impl Shell {
                     .into_any_element();
             }
             Item::Tab(tab) => tab,
+            Item::Task(task) => return self.archived_task_item(task, cx),
             Item::Download(download) => return self.download_item(download, cx),
             Item::Media(row) => return self.media_row(row, window, cx),
         };
@@ -1652,6 +1796,66 @@ impl Shell {
                             .pr(px(12.))
                             .child(text_line(title, text::BODY, 17., self.palette.text(UNSELECTED_TITLE)))
                             .child(text_line(host, text::SMALL, 15., self.palette.text(SECONDARY))),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// A task's line in the archive, as a tab's: its card's mark in the favicon's place, its title
+    /// over its CLI, how it ended and when. A click brings its card back with its conversation
+    /// open, and a right-click shows its menu.
+    fn archived_task_item(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(task) = self.archived_tasks.get(index) else {
+            return div().into_any_element();
+        };
+        let agent = task.agent.clone();
+        let title = if task.title.is_empty() { task.asked.clone() } else { task.title.clone() };
+        let mark = self.status_mark(task.dot);
+        let menu_agent = agent.clone();
+        div()
+            .h(px(ARCHIVED_PITCH))
+            .pl(px(ARCHIVED_LEFT))
+            .pr(px(ARCHIVED_RIGHT))
+            .py(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
+            .child(
+                div()
+                    .id(("archived-task", task_number(&agent)))
+                    .size_full()
+                    .relative()
+                    .rounded(px(ARCHIVED_RADIUS))
+                    .block_mouse_except_scroll()
+                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+                    .on_click(cx.listener(move |shell, _, _, cx| {
+                        shell.restore_archived_task(agent.clone(), cx)
+                    }))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
+                            shell.archived_task_menu(menu_agent.clone(), event.position, cx)
+                        }),
+                    )
+                    // Centred where a favicon is.
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(ARCHIVED_FAVICON_X + (FAVICON_SIZE - TASK_GLYPH) / 2.))
+                            .top_0()
+                            .bottom_0()
+                            .flex()
+                            .items_center()
+                            .child(mark),
+                    )
+                    .child(
+                        div()
+                            .size_full()
+                            .flex()
+                            .flex_col()
+                            .justify_center()
+                            .pl(px(ARCHIVED_TEXT_X))
+                            .pr(px(12.))
+                            .child(text_line(title, text::BODY, 17., self.palette.text(UNSELECTED_TITLE)))
+                            .child(text_line(task.about.clone(), text::SMALL, 15., self.palette.text(SECONDARY))),
                     ),
             )
             .into_any_element()
@@ -2249,7 +2453,15 @@ impl Shell {
                     shell.hover_kinds_menu(event.position, cx)
                 }),
             )
-            .child(svg().path("icons/archive.svg").size(px(16.)).text_color(self.palette.glyph(NAV)))
+            // A task's card folding into it bumps its glyph as it lands.
+            .child({
+                let (scale, alpha) = self.archive_glyph(std::time::Instant::now());
+                svg()
+                    .path("icons/archive.svg")
+                    .size(px(16.))
+                    .text_color(self.palette.glyph(alpha))
+                    .when(scale != 1., |glyph| glyph.with_transformation(gpui::Transformation::scale(gpui::size(scale, scale))))
+            })
             .when_some(progress, |button, done| {
                 button.child(
                     div()
@@ -2394,6 +2606,8 @@ pub(super) fn of(received: i64, total: i64) -> String {
 mod drag_tests;
 #[cfg(test)]
 mod rename_tests;
+#[cfg(test)]
+mod task_tests;
 
 #[cfg(test)]
 mod tests {
@@ -2617,15 +2831,15 @@ mod tests {
         cx.run_until_parked();
         click(cx);
         let menu = host.menus.borrow().last().cloned().unwrap_or_default();
-        assert_eq!(menu, [("All Tabs".into(), true), ("Little ilo".into(), true)]);
-        assert_eq!(host.entries.borrow().iter().map(|e| e.checked).collect::<Vec<_>>(), [true, false]);
+        assert_eq!(menu, [("All".into(), true), ("Little ilo".into(), true), ("Tasks".into(), true)]);
+        assert_eq!(host.entries.borrow().iter().map(|e| e.checked).collect::<Vec<_>>(), [true, false, false]);
         cx.update(|_, cx| host.choose("Little ilo", cx));
         cx.run_until_parked();
         assert_eq!(tabs(cx), [2]);
 
         click(cx);
-        assert_eq!(host.entries.borrow().iter().map(|e| e.checked).collect::<Vec<_>>(), [false, true]);
-        cx.update(|_, cx| host.choose("All Tabs", cx));
+        assert_eq!(host.entries.borrow().iter().map(|e| e.checked).collect::<Vec<_>>(), [false, true, false]);
+        cx.update(|_, cx| host.choose("All", cx));
         cx.run_until_parked();
         assert_eq!(tabs(cx), [1, 2, 3]);
     }

@@ -2739,6 +2739,22 @@ void host_dismiss_overlay(int overlay) {
   DismissOverlay(overlay);
 }
 
+// Not yet: the bar hides where it is and the card comes in.
+bool host_fold_overlay(int overlay,
+                       double,
+                       double,
+                       double,
+                       double,
+                       double,
+                       uint32_t,
+                       uint32_t,
+                       double,
+                       double,
+                       bool) {
+  CloseOverlay(overlay);
+  return false;
+}
+
 void host_hold_keys(void) {
   HoldKeys(nullptr);
 }

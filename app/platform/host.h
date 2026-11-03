@@ -260,6 +260,24 @@ void host_hide_overlay(int overlay);
 // Hides the overlay as the user leaving it, as escape does.
 void host_dismiss_overlay(int overlay);
 
+// Hides the overlay by folding it into |x|, |y|, |width| and |height| points from the top left of
+// the content of the browser window it shows over: its drawing fades in |fade| seconds, as its
+// plate, rounded by |radius|, goes there in |duration| on the motion's ease, its fill turning
+// from |from| to |to| (0xRRGGBBAA) and its shadow going. With |fade_only| it only fades where it
+// is, in |fade|. Returns false where the host can't, having hidden it. host_hide_overlay's
+// keyboard rule holds.
+bool host_fold_overlay(int overlay,
+                       double x,
+                       double y,
+                       double width,
+                       double height,
+                       double radius,
+                       uint32_t from,
+                       uint32_t to,
+                       double duration,
+                       double fade,
+                       bool fade_only);
+
 // Gives the overlay the keyboard back if it shows, the user hasn't left it, and the browser window
 // it shows over or no window has it: for the UI, once it finds the overlay's window isn't key.
 // The Mac's alone: Linux's and Windows' hosts close an overlay whose keyboard goes elsewhere.
@@ -710,6 +728,19 @@ bool host_updates_available(void);
 // Whether the Microsoft Store updates this copy: on Windows, an MSIX from it.
 bool host_updated_by_store(void);
 
+// Whether this build is a nightly, each night's build of main (APP_TRACK=nightly at build time),
+// rather than a release.
+bool host_nightly_build(void);
+
+// Whether this build's updater can take nightly builds instead of its own: it updates itself and
+// carries a nightly feed beside its feed (branding/update-feed-nightly).
+bool host_nightly_feed(void);
+
+// Has the updater read the nightly feed, or with false its own, from its next check on: before
+// host_start_updater, from its first. Either way it installs only a build numbered above the one
+// running, so a nightly that goes back to its own feed keeps its build until a release passes it.
+void host_follow_nightly(bool nightly);
+
 // Where host_start_updater's |changed| says the update stands, for Settings › About's row and
 // Restart to Update at the sidebar's foot.
 enum {
@@ -736,6 +767,12 @@ enum {
 // the main thread once Restart to Update, or on the Mac Sparkle's own Install and Relaunch, wants
 // the browser to restart (bc_restart). Does nothing where host_updates_available is false.
 void host_start_updater(void (*restart)(void), void (*changed)(int stage, const char* version));
+
+// On Windows, before host_start_updater: if a quit since the last launch started installing an
+// update, calls |installed| with the update's build number and this copy's own, once. Where it
+// answers that the update didn't go in, the updater's first check waits its 8 hours, so the app
+// can say so and offer Try Again until the user asks.
+void host_take_install(bool (*installed)(uint64_t build, uint64_t own));
 
 // The app menu's Check for Updates…, which checks now: on the Mac, Sparkle's check, which shows
 // what it finds in Sparkle's window; on Windows, the same quiet check as Settings › About's,
@@ -765,7 +802,9 @@ bool host_relaunch_into_update(void);
 // On the Mac, nothing: Sparkle installs on quit by itself.
 void host_finish_update(void);
 
-// On the Mac: calls |notes| with the release notes' URL of the update this launch is the first of, once.
+// On the Mac and Windows: calls |notes| with the release notes' URL of the update this launch is
+// the first of, once, as the updater kept them when it installed it. Windows' are kept with the
+// build host_take_install reads, so they're taken before it.
 void host_take_update_notes(void (*notes)(const char* url));
 
 // For the test driver: presses the button titled |title| in the alert shown. False if none shows.

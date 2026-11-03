@@ -40,6 +40,7 @@ impl What {
     pub const CLOSE_TABS: What = What::said("Close Tabs", "Tabs Closed");
     pub const CLOSE_PREVIEW: What = What::quiet("Close Link Preview");
     pub const REMOVE_TAB: What = What::quiet(super::rows::REMOVE_TIP);
+    pub const DISMISS_TASK: What = What::quiet("Dismiss Task");
     pub const PIN: What = What::quiet("Pin Tab");
     pub const UNPIN: What = What::quiet("Unpin Tab");
     pub const PIN_TABS: What = What::quiet("Pin Tabs");
@@ -134,9 +135,11 @@ pub(super) enum Value {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Edit {
     /// Reopens closed Today tabs, by the ids they had, behind the tab shown, and shows `show`, the
-    /// one that was shown when they closed, if it's among them.
+    /// one that was shown when they closed, if it's among them. They're in the reverse of the
+    /// order they closed in: the core puts each back where it was then, and a split's pane only
+    /// beside one still open as it closed, which the one reopened before it has become (#1361).
     Reopen { tabs: Vec<u64>, show: Option<u64> },
-    /// Closes Today tabs.
+    /// Closes Today tabs, last first, so the Reopen it returns has them in that order.
     Close(Vec<u64>),
     /// Reopens the tabs of a pinned row the user removed, by the ids they had, each with the URL it
     /// went back to, and pins the row again at `spot`.
@@ -200,6 +203,12 @@ pub(super) enum Edit {
     ReopenPreview(Closed),
     /// Closes the link preview over the tab, which Redo does.
     ClosePreview(Closed),
+    /// Brings back the agent task ✕ dismissed, by its agent's id (Agent task).
+    RestoreTask(SharedString),
+    DismissTask(SharedString),
+    /// Puts back in the Archive the task Delete from Archive took out, which Redo deletes again.
+    UndeleteTask(SharedString),
+    DeleteTask(SharedString),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -283,6 +292,7 @@ impl Edit {
                 back.rekey(from, to);
             }
             Edit::ReopenPreview(closed) | Edit::ClosePreview(closed) => id(&mut closed.over),
+            Edit::RestoreTask(_) | Edit::DismissTask(_) | Edit::UndeleteTask(_) | Edit::DeleteTask(_) => {}
             Edit::Set(prop, _) => match prop {
                 Prop::TabName(each)
                 | Prop::TabIcon(each)
@@ -318,6 +328,22 @@ impl Edit {
     /// Does the step, and returns the one that undoes it.
     fn apply(self, shell: &mut Shell, cx: &mut Context<Shell>) -> Option<Edit> {
         match self {
+            Edit::RestoreTask(agent) => {
+                shell.browser.task(agent.clone(), crate::agents::task::TaskAction::Restore, cx);
+                Some(Edit::DismissTask(agent))
+            }
+            Edit::DismissTask(agent) => {
+                shell.browser.task(agent.clone(), crate::agents::task::TaskAction::Dismiss, cx);
+                Some(Edit::RestoreTask(agent))
+            }
+            Edit::UndeleteTask(agent) => {
+                shell.browser.task(agent.clone(), crate::agents::task::TaskAction::Undelete, cx);
+                Some(Edit::DeleteTask(agent))
+            }
+            Edit::DeleteTask(agent) => {
+                shell.browser.task(agent.clone(), crate::agents::task::TaskAction::Delete, cx);
+                Some(Edit::UndeleteTask(agent))
+            }
             Edit::Reopen { tabs: closed, show } => {
                 let mut tabs = Vec::new();
                 let mut shown = None;
@@ -340,7 +366,7 @@ impl Edit {
             Edit::Close(tabs) => {
                 let tabs: Vec<u64> = tabs.into_iter().filter(|&tab| shell.has_tab(tab)).collect();
                 let show = shell.shown_among(&tabs);
-                for &tab in &tabs {
+                for &tab in tabs.iter().rev() {
                     shell.browser.close(tab, false, cx);
                 }
                 (!tabs.is_empty()).then_some(Edit::Reopen { tabs, show })
@@ -537,6 +563,7 @@ impl Shell {
         if matches!(edit, Edit::Reopen { .. } | Edit::Repin { .. } | Edit::UndoClear { .. }) {
             self.closed_preview = None;
             self.closed_pinned = None;
+            self.closed_task = None;
         }
         self.history.redo.clear();
         self.history.undo.push(Entry { what, edit });
@@ -656,6 +683,10 @@ impl Shell {
     /// ⇧⌘T: the link preview the user closed, if no tab has closed since, else the tab closed
     /// last. ⌘Z then has nothing of the preview's to reopen.
     pub(super) fn reopen_closed(&mut self, cx: &mut Context<Self>) {
+        // The task dismissed last, unless a tab has closed since (Agent task).
+        if let Some((agent, _)) = self.closed_task.take() {
+            return self.bring_back_task(agent, cx);
+        }
         if let Some(closed) = self.closed_preview.clone()
             && self.reopen_preview(&closed, "reopen-closed-tab", cx)
         {
@@ -677,6 +708,18 @@ impl Shell {
         self.browser.reopen_closed_tab(cx);
     }
 
+    /// Brings the dismissed task `agent` back, by ⇧⌘T or from the Archive, which takes its
+    /// dismissal off the history, as it has nothing left to undo.
+    pub(super) fn bring_back_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+        if self.closed_task.as_ref().is_some_and(|(closed, _)| *closed == agent) {
+            self.closed_task = None;
+        }
+        let restore = Edit::RestoreTask(agent.clone());
+        self.history.undo.retain(|entry| entry.edit != restore);
+        self.browser.task(agent, crate::agents::task::TaskAction::Restore, cx);
+        self.send_edit_titles(false, cx);
+    }
+
     // What the user did, each remembered with how to take it back. The calls to the browser are
     // the ones the user's gestures made before, so there's no second path to keep in step.
 
@@ -696,9 +739,10 @@ impl Shell {
             self.closed_pinned = (!self.private).then(|| join.clone());
             return self.keep(What::CLOSE_TAB, Some(join), cx);
         }
+        // The core closes a split's panes in their order, so they reopen last first.
         let tabs = match (closing, split) {
             (None, _) => Vec::new(),
-            (Some(_), true) => self.panes(tab),
+            (Some(_), true) => self.panes(tab).into_iter().rev().collect(),
             (Some(_), false) => vec![tab],
         };
         let show = self.shown_among(&tabs);
@@ -956,10 +1000,24 @@ impl Shell {
         self.keep(What::DELETE_ARCHIVED, edit, cx);
     }
 
-    /// Empties the archive.
+    /// Empties the archive: its tabs, and the tasks it lists, which leave it as Delete from Archive
+    /// takes one. One ⌘Z brings both back.
     pub(super) fn empty_archive(&mut self, cx: &mut Context<Self>) {
         let removal = self.browser.clear_archive(cx);
-        let edit = (removal != 0).then_some(Edit::UndoArchive { removal, id: None });
+        let tabs = (removal != 0).then_some(Edit::UndoArchive { removal, id: None });
+        let tasks: Vec<SharedString> = self.archived_tasks.iter().map(|task| task.agent.clone()).collect();
+        if self.closed_task.as_ref().is_some_and(|(closed, _)| tasks.contains(closed)) {
+            self.closed_task = None;
+        }
+        for agent in &tasks {
+            log!("browser: remove archived task {agent}");
+            self.browser.task(agent.clone(), crate::agents::task::TaskAction::Delete, cx);
+        }
+        let mut edits: Vec<Edit> = tabs.into_iter().chain(tasks.into_iter().map(Edit::UndeleteTask)).collect();
+        let edit = match edits.len() {
+            0 | 1 => edits.pop(),
+            _ => Some(Edit::Many(edits)),
+        };
         self.keep(What::CLEAR_ARCHIVE, edit, cx);
     }
 

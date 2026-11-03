@@ -406,3 +406,127 @@ fn the_bridge_carries_a_clients_stdio() {
     let off = bridge::run(&path, TOKEN, Cursor::new(Vec::new()), Output::default());
     assert!(off.unwrap_err().contains("agents on"));
 }
+
+/// The UI's next call, past what else it hears, or None if none comes in a second.
+fn next_call(handed: &mut UnboundedReceiver<Event>) -> Option<Call> {
+    call_within(handed, 1000)
+}
+
+/// Whether no call reaches the UI in a while, as one that waits its turn doesn't.
+fn no_call(handed: &mut UnboundedReceiver<Event>) -> bool {
+    call_within(handed, 100).is_none()
+}
+
+fn call_within(handed: &mut UnboundedReceiver<Event>, milliseconds: u64) -> Option<Call> {
+    let until = Instant::now() + std::time::Duration::from_millis(milliseconds);
+    while Instant::now() < until {
+        match handed.try_recv() {
+            Ok(Event::Call(call)) => return Some(call),
+            Ok(_) => {}
+            Err(_) => thread::sleep(std::time::Duration::from_millis(5)),
+        }
+    }
+    None
+}
+
+/// A connection's session, its client sending calls and reading answers on threads of its own.
+fn session(
+    server: &Server,
+    handed: &mut UnboundedReceiver<Event>,
+) -> (Stream, mpsc::Receiver<Value>) {
+    let mut client = Client::connect(server);
+    client.initialize();
+    assert!(matches!(next(handed), Some(Event::Hello { .. })));
+    let (answered, answers) = mpsc::channel();
+    let writer = client.writer.try_clone().unwrap();
+    thread::spawn(move || {
+        while let Some(answer) = client.read() {
+            _ = answered.send(answer);
+        }
+    });
+    (writer, answers)
+}
+
+fn send_call(writer: &mut Stream, id: u64, tool: &str, arguments: Value) {
+    let call = json!({
+        "jsonrpc": "2.0", "id": id, "method": "tools/call",
+        "params": { "name": tool, "arguments": arguments },
+    });
+    writeln!(writer, "{call}").unwrap();
+}
+
+fn answered(answers: &mpsc::Receiver<Value>) -> Value {
+    answers.recv_timeout(std::time::Duration::from_secs(1)).expect("an answer")["id"].clone()
+}
+
+/// A page slow to answer holds only its own tab: the call on the next tab reaches the UI and is
+/// answered while the first still waits, each answer by its call's id (#1476).
+#[test]
+fn a_slow_call_on_one_tab_holds_no_other_tab() {
+    let (server, _, mut handed) = server();
+    let (mut writer, answers) = session(&server, &mut handed);
+    send_call(&mut writer, 2, "click", json!({ "tab": 1, "ref": "e1" }));
+    send_call(&mut writer, 3, "click", json!({ "tab": 2, "ref": "e1" }));
+    let slow = next_call(&mut handed).expect("tab 1's call");
+    let quick = next_call(&mut handed).expect("tab 2's call waited for tab 1's");
+    let tabs = (slow.arguments["tab"].clone(), quick.arguments["tab"].clone());
+    assert_eq!(tabs, (json!(1), json!(2)));
+    quick.reply.send(ToolResult::text("Clicked.")).unwrap();
+    assert_eq!(answered(&answers), 3);
+    slow.reply.send(ToolResult::text("Clicked.")).unwrap();
+    assert_eq!(answered(&answers), 2);
+}
+
+/// One tab's calls go in the order they came, the next waiting for the one before it, and a call
+/// with no tab, which acts in the tab used last, waits for the tabs' calls before it.
+#[test]
+fn a_tabs_calls_keep_their_order() {
+    let (server, _, mut handed) = server();
+    let (mut writer, answers) = session(&server, &mut handed);
+    send_call(&mut writer, 2, "click", json!({ "tab": 1, "ref": "e1" }));
+    send_call(&mut writer, 3, "type", json!({ "tab": 1, "ref": "e2", "text": "Closed" }));
+    send_call(&mut writer, 4, "press_key", json!({ "key": "Enter" }));
+    let first = next_call(&mut handed).expect("the first call");
+    assert_eq!(first.tool, "click");
+    assert!(no_call(&mut handed), "a call went before the one ahead of it");
+    first.reply.send(ToolResult::text("Clicked.")).unwrap();
+    assert_eq!(answered(&answers), 2);
+    let second = next_call(&mut handed).expect("the second call");
+    assert_eq!(second.tool, "type");
+    assert!(no_call(&mut handed), "the call with no tab went before tab 1's");
+    second.reply.send(ToolResult::text("Typed.")).unwrap();
+    assert_eq!(answered(&answers), 3);
+    let last = next_call(&mut handed).expect("the call with no tab");
+    assert_eq!(last.tool, "press_key");
+}
+
+/// What asks the user asks one at a time, the next waiting its turn, while calls on other tabs go
+/// on; and a turn's tabs open at once.
+#[test]
+fn asks_come_one_at_a_time() {
+    let (server, _, mut handed) = server();
+    let (mut writer, answers) = session(&server, &mut handed);
+    send_call(&mut writer, 2, "hand_off", json!({ "tab": 1, "reason": "Sign in" }));
+    send_call(&mut writer, 3, "hand_off", json!({ "tab": 2, "reason": "Sign in" }));
+    send_call(&mut writer, 4, "click", json!({ "tab": 3, "ref": "e1" }));
+    let asking = next_call(&mut handed).expect("the first hand_off");
+    assert_eq!(asking.arguments["tab"], 1);
+    let click = next_call(&mut handed).expect("tab 3's call waited for the ask");
+    assert_eq!(click.tool, "click");
+    assert!(no_call(&mut handed), "two asks at once");
+    click.reply.send(ToolResult::text("Clicked.")).unwrap();
+    assert_eq!(answered(&answers), 4);
+    asking.reply.send(ToolResult::text("Done.")).unwrap();
+    assert_eq!(answered(&answers), 2);
+    let next_ask = next_call(&mut handed).expect("the second hand_off");
+    assert_eq!(next_ask.arguments["tab"], 2);
+    next_ask.reply.send(ToolResult::text("Done.")).unwrap();
+    assert_eq!(answered(&answers), 3);
+
+    for id in 5..15 {
+        let url = format!("case-{id}.example");
+        send_call(&mut writer, id, "open_tab", json!({ "url": url }));
+    }
+    let opening: Vec<Call> = (5..15).filter_map(|_| next_call(&mut handed)).collect();
+    assert_eq!(opening.len(), 10, "a turn's tabs opened one after another");
+}

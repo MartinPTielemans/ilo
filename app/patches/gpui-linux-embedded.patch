@@ -23,10 +23,10 @@ index a91818acd0..5ab4a515da 100644
  # WARNING: If you change this, you must also publish a new version of zed-xim to crates.io
  xim = { git = "https://github.com/zed-industries/xim-rs.git", rev = "16f35a2c881b815a2b6cdfd6687988e84f8447d8", features = [
 diff --git a/crates/gpui_linux/src/gpui_linux.rs b/crates/gpui_linux/src/gpui_linux.rs
-index a5390e77f8..eea63d4493 100644
+index a5390e77f8..9622143976 100644
 --- a/crates/gpui_linux/src/gpui_linux.rs
 +++ b/crates/gpui_linux/src/gpui_linux.rs
-@@ -1,4 +1,21 @@
+@@ -1,4 +1,22 @@
  #![cfg(any(target_os = "linux", target_os = "freebsd"))]
  mod linux;
  
@@ -42,7 +42,8 @@ index a5390e77f8..eea63d4493 100644
 +    give_held_keys, hide_overlay, hide_window, hold_keys, leave_overlay,
 +    linux_platform, move_overlay, new_host_window, overlay_size, overlays_blend,
 +    set_overlay_keyboard,
-+    set_overlay_menu, set_overlay_outline, set_overlay_panel, set_overlay_pointer, set_overlay_under,
++    set_overlay_menu, set_overlay_outline, set_overlay_outlines, set_overlay_panel,
++    set_overlay_pointer, set_overlay_under,
 +    show_overlay, show_window, shown_keyboard_overlay, start_file_drag, sync_display,
 +    take_overlay_keyboard, watch_control,
 +    take_embedder_drops, watch_alt_taps, watch_embedder_swipes, watch_pointer_over,
@@ -50,7 +51,7 @@ index a5390e77f8..eea63d4493 100644
 +#[cfg(feature = "wayland")]
 +pub use linux::{commit_embedded, compose_embedded, open_next_window_in_surface, resize_embedded};
 diff --git a/crates/gpui_linux/src/linux.rs b/crates/gpui_linux/src/linux.rs
-index e4da54b52b..6aa06e57a2 100644
+index e4da54b52b..278fe19d60 100644
 --- a/crates/gpui_linux/src/linux.rs
 +++ b/crates/gpui_linux/src/linux.rs
 @@ -1,7 +1,9 @@
@@ -63,7 +64,7 @@ index e4da54b52b..6aa06e57a2 100644
  mod platform;
  mod system_notifications;
  #[cfg(any(feature = "wayland", feature = "x11"))]
-@@ -15,14 +17,48 @@ mod x11;
+@@ -15,14 +17,49 @@ mod x11;
  mod xdg_desktop_portal;
  
  pub use dispatcher::*;
@@ -87,8 +88,9 @@ index e4da54b52b..6aa06e57a2 100644
 +pub use overlay::{
 +    Corner, embedder_size, give_held_keys, hide_overlay, hide_window, hold_keys, leave_overlay,
 +    move_overlay, overlay_size, overlays_blend,
-+    set_overlay_keyboard, set_overlay_menu, set_overlay_outline, set_overlay_panel,
-+    set_overlay_pointer, set_overlay_under, show_overlay, show_window, shown_keyboard_overlay,
++    set_overlay_keyboard, set_overlay_menu, set_overlay_outline, set_overlay_outlines,
++    set_overlay_panel, set_overlay_pointer, set_overlay_under, show_overlay, show_window,
++    shown_keyboard_overlay,
 +    sync_display,
 +    take_overlay_keyboard, watch_alt_taps, watch_control, watch_pointer_over,
 +};
@@ -165,10 +167,10 @@ index 0000000000..846d17431f
 +}
 diff --git a/crates/gpui_linux/src/linux/overlay.rs b/crates/gpui_linux/src/linux/overlay.rs
 new file mode 100644
-index 0000000000..f4a2a52c1a
+index 0000000000..97e735cf8f
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/overlay.rs
-@@ -0,0 +1,1024 @@
+@@ -0,0 +1,1035 @@
 +//! An embedder's overlays: windows GPUI opened with `show: false` that the embedder shows over its
 +//! own window, as a browser shows its command bar over its pages. Under Wayland one is a subsurface
 +//! of the embedder's surface, on X11 a window of its own over the embedder's. One shown
@@ -271,8 +273,8 @@ index 0000000000..f4a2a52c1a
 +    static LET_GO: RefCell<Vec<(usize, u32)>> = const { RefCell::new(Vec::new()) };
 +    /// On X11, the window each overlay shows over.
 +    static PARENTS: RefCell<Vec<(usize, u32)>> = const { RefCell::new(Vec::new()) };
-+    /// The outlines overlays have that aren't rounded rectangles (`set_overlay_outline`).
-+    static OUTLINES: RefCell<Vec<(usize, Vec<Corner>)>> = const { RefCell::new(Vec::new()) };
++    /// The outlines overlays have that aren't rounded rectangles (`set_overlay_outlines`).
++    static OUTLINES: RefCell<Vec<(usize, Vec<Vec<Corner>>)>> = const { RefCell::new(Vec::new()) };
 +    /// The menus (`set_overlay_menu`).
 +    static MENUS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
 +    /// The panels (`set_overlay_panel`), with what a press in each runs.
@@ -384,10 +386,16 @@ index 0000000000..f4a2a52c1a
 +/// show or move on, for one that isn't a rounded rectangle, such as a popover with an arrow. What
 +/// GPUI draws outside it shows on X11, which can't blend a child window with what's under it.
 +pub fn set_overlay_outline(view: *mut c_void, corners: &[Corner]) {
++    set_overlay_outlines(view, &[corners.to_vec()]);
++}
++
++/// Gives the overlay `view` the outline of all the `polygons` together, as `set_overlay_outline`
++/// gives it one's, for one that shows several shapes, such as a menu with its submenu beside it.
++pub fn set_overlay_outlines(view: *mut c_void, polygons: &[Vec<Corner>]) {
 +    let view = view as usize;
 +    OUTLINES.with_borrow_mut(|all| {
 +        all.retain(|(each, _)| *each != view);
-+        all.push((view, corners.to_vec()));
++        all.push((view, polygons.to_vec()));
 +    });
 +}
 +
@@ -483,22 +491,22 @@ index 0000000000..f4a2a52c1a
 +    })
 +}
 +
-+/// The outline of the overlay `view` at `bounds`: its own, else its rounded rectangle.
++/// The outline of the overlay `view` at `bounds`, as polygons: its own, else its rounded rectangle.
 +#[allow(dead_code)]
-+fn outline(view: usize, bounds: Bounds<Pixels>, radius: Pixels) -> Vec<Corner> {
++fn outline(view: usize, bounds: Bounds<Pixels>, radius: Pixels) -> Vec<Vec<Corner>> {
 +    let own = OUTLINES.with_borrow(|all| {
-+        let (_, corners) = all.iter().find(|(each, _)| *each == view)?;
-+        Some(corners.clone())
++        let (_, polygons) = all.iter().find(|(each, _)| *each == view)?;
++        Some(polygons.clone())
 +    });
 +    own.unwrap_or_else(|| {
 +        let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
 +        let radius = f32::from(radius).min(width / 2.).min(height / 2.);
-+        vec![
++        vec![vec![
 +            (0., 0., radius),
 +            (width, 0., radius),
 +            (width, height, radius),
 +            (0., height, radius),
-+        ]
++        ]]
 +    })
 +}
 +
@@ -1038,16 +1046,17 @@ index 0000000000..f4a2a52c1a
 +    });
 +}
 +
-+/// The overlay but `view` that takes the keys in an op still to run.
++/// The overlay but `view` that takes the keys in an op still to run, and that op's place among
++/// them.
 +#[cfg(feature = "x11")]
-+fn next_to_take_keys(view: usize) -> Option<usize> {
++fn next_to_take_keys(view: usize) -> Option<(usize, usize)> {
 +    OPS.with_borrow(|ops| {
-+        ops.iter().find_map(|op| match op {
++        ops.iter().enumerate().find_map(|(at, op)| match op {
 +            Op::Show { view: next, keyboard: true, .. }
 +            | Op::Keyboard { view: next, keyboard: true }
 +                if *next != view =>
 +            {
-+                Some(*next)
++                Some((*next, at))
 +            }
 +            _ => None,
 +        })
@@ -1148,12 +1157,16 @@ index 0000000000..f4a2a52c1a
 +                    // opens, takes them from this one, to give back where this one had them from.
 +                    // Given back in between, wlroots 0.17's Xwayland would put the input focus on
 +                    // that window's top-level once the next overlay had it, as it does each time
-+                    // the focus comes into a top-level, and the next one would close.
++                    // the focus comes into a top-level, and the next one would close. This one
++                    // hides once the next has them: unmapped with the input focus, it would leave
++                    // it to the root window, which openbox gives to the top-level, and that could
++                    // come after the next one had it too.
 +                    if from != x11rb::NONE
-+                        && let Some(next) = next_to_take_keys(view)
++                        && let Some((next, at)) = next_to_take_keys(view)
 +                    {
 +                        focus_from(next, from);
-+                        x11.hide_overlay(view as _, x11rb::NONE).log_err();
++                        let op = Op::Hide { view, keyboard: false, hidden: Box::new(|| {}) };
++                        OPS.with_borrow_mut(|ops| ops.insert(at + 1, op));
 +                        return;
 +                    }
 +                    // The user left the overlay that had the keys before, such as a find bar under
@@ -3787,7 +3800,7 @@ index f9b9727330..6d0cfcaabb 100644
  pub(crate) use window::*;
  pub(crate) use xim_handler::*;
 diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
-index e21f019c64..34416f5a1d 100644
+index e21f019c64..b7d7bf1182 100644
 --- a/crates/gpui_linux/src/linux/x11/client.rs
 +++ b/crates/gpui_linux/src/linux/x11/client.rs
 @@ -3,6 +3,7 @@ use ashpd::WindowIdentifier;
@@ -4501,7 +4514,7 @@ index e21f019c64..34416f5a1d 100644
          self.loop_handle
              .insert_source(calloop::timer::Timer::immediate(), {
                  let this = self.this.clone();
-@@ -2087,6 +2549,464 @@ impl X11ClientState {
+@@ -2087,6 +2549,469 @@ impl X11ClientState {
              .expect("Failed to initialize window refresh timer")
      }
  
@@ -4615,7 +4628,7 @@ index e21f019c64..34416f5a1d 100644
 +        view: xproto::Window,
 +        parent: xproto::Window,
 +        bounds: Bounds<Pixels>,
-+        outline: &[crate::linux::overlay::Corner],
++        outline: &[Vec<crate::linux::overlay::Corner>],
 +        keyboard: bool,
 +        panel: bool,
 +    ) -> anyhow::Result<xproto::Window> {
@@ -4673,7 +4686,7 @@ index e21f019c64..34416f5a1d 100644
 +        view: xproto::Window,
 +        parent: xproto::Window,
 +        bounds: Bounds<Pixels>,
-+        outline: &[crate::linux::overlay::Corner],
++        outline: &[Vec<crate::linux::overlay::Corner>],
 +        panel: bool,
 +    ) -> anyhow::Result<()> {
 +        let xcb = &self.xcb_connection;
@@ -4706,10 +4719,15 @@ index e21f019c64..34416f5a1d 100644
 +        xcb.configure_window(view, &place)?;
 +        // In its outline by its own shape: with the pixels its edges touch where a compositor
 +        // blends them, else those its edges mostly cover, which the X server draws opaque.
-+        let outline: Vec<_> = (outline.iter())
-+            .map(|&(x, y, radius)| (x * scale, y * scale, radius * scale))
-+            .collect();
 +        let blended = self.compositor_present && !panel;
++        let rows: Vec<_> = (outline.iter())
++            .flat_map(|polygon| {
++                let polygon: Vec<_> = (polygon.iter())
++                    .map(|&(x, y, radius)| (x * scale, y * scale, radius * scale))
++                    .collect();
++                outline_rows(&polygon, height as i16, blended)
++            })
++            .collect();
 +        xcb.shape_rectangles(
 +            shape::SO::SET,
 +            shape::SK::BOUNDING,
@@ -4717,7 +4735,7 @@ index e21f019c64..34416f5a1d 100644
 +            view,
 +            0,
 +            0,
-+            &outline_rows(&outline, height as i16, blended),
++            &rows,
 +        )?;
 +        xcb.flush()?;
 +        Ok(())
@@ -4966,7 +4984,7 @@ index e21f019c64..34416f5a1d 100644
      fn get_cursor_icon(&mut self, style: CursorStyle) -> Option<xproto::Cursor> {
          if let Some(cursor) = self.cursor_cache.get(&style) {
              return *cursor;
-@@ -2246,10 +3166,54 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
+@@ -2246,10 +3171,54 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
      window.set_visibility(visibility);
  }
  
@@ -5021,7 +5039,7 @@ index e21f019c64..34416f5a1d 100644
  fn detect_compositor_gpu(
      xcb_connection: &XCBConnection,
      screen: &xproto::Screen,
-@@ -2273,73 +3237,27 @@ fn detect_compositor_gpu(
+@@ -2273,73 +3242,27 @@ fn detect_compositor_gpu(
      crate::linux::compositor_gpu_hint_from_dev_t(metadata.rdev())
  }
  
@@ -5114,7 +5132,7 @@ index e21f019c64..34416f5a1d 100644
  }
  
  fn check_gtk_frame_extents_supported(
-@@ -2465,6 +3383,20 @@ fn current_pointer_device_states(
+@@ -2465,6 +3388,20 @@ fn current_pointer_device_states(
      )
      .log_err()?;
  
@@ -5135,7 +5153,7 @@ index e21f019c64..34416f5a1d 100644
      let mut pointer_device_states = BTreeMap::new();
      pointer_device_states.extend(
          devices_query_result
-@@ -2498,6 +3430,8 @@ fn current_pointer_device_states(
+@@ -2498,6 +3435,8 @@ fn current_pointer_device_states(
                          PointerDeviceState {
                              horizontal: horizontal.unwrap_or_else(Default::default),
                              vertical: vertical.unwrap_or_else(Default::default),
@@ -5144,7 +5162,7 @@ index e21f019c64..34416f5a1d 100644
                          },
                      ))
                  }
-@@ -2539,10 +3473,12 @@ fn reset_pointer_device_scroll_positions(pointer: &mut PointerDeviceState) {
+@@ -2539,10 +3478,12 @@ fn reset_pointer_device_scroll_positions(pointer: &mut PointerDeviceState) {
  }
  
  /// Returns the scroll delta for a smooth scrolling motion event, or `None` if no scroll data is present.
@@ -5158,7 +5176,7 @@ index e21f019c64..34416f5a1d 100644
      let delta_x = get_axis_scroll_delta_and_update_state(event, &mut pointer.horizontal);
      let delta_y = get_axis_scroll_delta_and_update_state(event, &mut pointer.vertical);
      if delta_x.is_some() || delta_y.is_some() {
-@@ -2555,13 +3491,13 @@ fn get_scroll_delta_and_update_state(
+@@ -2555,13 +3496,13 @@ fn get_scroll_delta_and_update_state(
  fn get_axis_scroll_delta_and_update_state(
      event: &xinput::MotionEvent,
      axis: &mut ScrollAxisState,
@@ -5175,7 +5193,7 @@ index e21f019c64..34416f5a1d 100644
          axis.scroll_value = Some(new_scroll);
          delta_scroll
      } else {
-@@ -2570,6 +3506,35 @@ fn get_axis_scroll_delta_and_update_state(
+@@ -2570,6 +3511,35 @@ fn get_axis_scroll_delta_and_update_state(
      }
  }
  
@@ -5211,7 +5229,7 @@ index e21f019c64..34416f5a1d 100644
  fn make_scroll_wheel_event(
      position: Point<Pixels>,
      scroll_delta: Point<f32>,
-@@ -2620,6 +3585,11 @@ fn get_scale_factor(
+@@ -2620,6 +3590,11 @@ fn get_scale_factor(
      resource_database: &Database,
      screen_index: usize,
  ) -> f32 {
@@ -5223,7 +5241,7 @@ index e21f019c64..34416f5a1d 100644
      let env_dpi = std::env::var(GPUI_X11_SCALE_FACTOR_ENV)
          .ok()
          .map(|var| {
-@@ -2898,6 +3868,130 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
+@@ -2898,6 +3873,130 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
  mod tests {
      use super::*;
  
@@ -5354,7 +5372,7 @@ index e21f019c64..34416f5a1d 100644
      fn test_keymap(layouts: &str) -> xkbc::Keymap {
          test_keymap_with_variant(layouts, "")
      }
-@@ -3213,3 +4307,101 @@ mod tests {
+@@ -3213,3 +4312,101 @@ mod tests {
          assert_eq!(key_event_state.key_get_utf8(space), " ");
      }
  }

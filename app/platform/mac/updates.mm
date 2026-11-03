@@ -194,6 +194,15 @@ bool SignedLikeThisApp(NSURL* app) {
   return alike;
 }
 
+// Whether the updater reads the nightly feed (host_follow_nightly).
+bool g_follow_nightly = false;
+
+// The nightly feed the build carries, if it carries one.
+NSString* NightlyFeed() {
+  id feed = [NSBundle.mainBundle objectForInfoDictionaryKey:@"NightlyFeedURL"];
+  return [feed isKindOfClass:NSString.class] && [feed length] ? feed : nil;
+}
+
 }  // namespace
 
 // Sparkle's delegate, for both its updater and its alerts.
@@ -316,6 +325,15 @@ bool SignedLikeThisApp(NSURL* app) {
 - (void)tell:(int)stage item:(SUAppcastItem*)item {
   _stage = stage;
   if (self.changed) self.changed(stage, (item.displayVersionString ?: @"").UTF8String);
+}
+
+// The feed each check reads: the nightly one while the user takes nightly builds, else
+// Info.plist's, which nil leaves Sparkle to read. The log names it for the nightly run.
+- (NSString*)feedURLStringForUpdater:(SPUUpdater*)updater {
+  NSString* nightly = g_follow_nightly ? NightlyFeed() : nil;
+  NSString* feed = nightly ?: [NSBundle.mainBundle objectForInfoDictionaryKey:@"SUFeedURL"];
+  Log([NSString stringWithFormat:@"update feed %@", feed]);
+  return nightly;
 }
 
 // Before each check, Sparkle's own every 8 hours too.
@@ -585,6 +603,20 @@ bool host_updates_available(void) {
 
 bool host_updated_by_store(void) {
   return false;
+}
+
+// build.sh marks a nightly's Info.plist.
+bool host_nightly_build(void) {
+  return [[NSBundle.mainBundle objectForInfoDictionaryKey:@"NightlyBuild"] boolValue];
+}
+
+bool host_nightly_feed(void) {
+  return host_updates_available() && NightlyFeed();
+}
+
+// Sparkle asks for the feed at each check (feedURLStringForUpdater:).
+void host_follow_nightly(bool nightly) {
+  g_follow_nightly = nightly;
 }
 
 void host_start_updater(void (*restart)(void), void (*changed)(int stage, const char* version)) {

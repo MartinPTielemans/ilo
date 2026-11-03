@@ -5,7 +5,7 @@
 //! of its own, beside the browser's, so it never starts Chromium.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
@@ -19,6 +19,18 @@ pub const NAME: &str = if cfg!(windows) {
 } else {
     "mcp-bridge"
 };
+
+/// The bridge in a copy from the Microsoft Store: the alias its manifest declares
+/// (platform/windows/package/AppxManifest.xml), which Windows keeps in the user's WindowsApps
+/// folder under `local_app_data`. The package's own folder is named for its version, so a client
+/// given the bridge's path there broke with each Store update (#1442).
+pub fn store_alias(local_app_data: &str) -> PathBuf {
+    format!(
+        r"{local_app_data}\Microsoft\WindowsApps\{}-mcp-bridge.exe",
+        env!("APP_NAME")
+    )
+    .into()
+}
 
 /// What a client runs to reach the server through the bridge at `bridge`, before the socket. In
 /// a Flatpak, the app with id `flatpak`, the bridge is a path in the sandbox, which a client on the
@@ -124,5 +136,25 @@ mod launch_tests {
         let info = "[Application]\nname=app.ilo.browser\nruntime=runtime/org.freedesktop.Platform/x86_64/25.08\n\n[Instance]\nname=other\n";
         assert_eq!(flatpak_name(info).as_deref(), Some("app.ilo.browser"));
         assert_eq!(flatpak_name("[Instance]\nname=other\n"), None);
+    }
+
+    /// A Store copy's clients run the alias the MSIX's manifest declares for the bridge, in the
+    /// folder Windows keeps aliases in, not a path in the package's versioned folder.
+    #[test]
+    fn a_store_copy_names_the_alias_its_manifest_declares() {
+        let manifest = include_str!("../../platform/windows/package/AppxManifest.xml");
+        let declared = manifest
+            .split("<uap5:ExecutionAlias Alias=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .expect("the manifest declares an alias for the bridge")
+            .replace("@NAME@", env!("APP_NAME"));
+        assert!(manifest.contains(r#"Executable="mcp-bridge.exe""#));
+        assert_eq!(
+            store_alias(r"C:\Users\someone\AppData\Local"),
+            PathBuf::from(format!(
+                r"C:\Users\someone\AppData\Local\Microsoft\WindowsApps\{declared}"
+            ))
+        );
     }
 }

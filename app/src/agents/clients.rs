@@ -85,6 +85,10 @@ pub trait Clients: Send + Sync {
     fn disconnect(&self, client: Client, name: &str) -> Result<(), String>;
     /// Whether the client is on this computer, for Settings › Agents to list it. Other is always.
     fn found(&self, client: Client) -> bool;
+    /// Whether a CLI that runs agent tasks is on this computer and signed in, which runs it.
+    fn look_for_task_cli(&self, cli: super::runner::Cli) -> super::ready::Found {
+        super::ready::look(cli)
+    }
 }
 
 /// The configs in the user's home.
@@ -140,7 +144,7 @@ impl Clients for System {
     }
 }
 
-fn home() -> PathBuf {
+pub fn home() -> PathBuf {
     let home = std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" });
     PathBuf::from(home.unwrap_or_default())
 }
@@ -422,7 +426,7 @@ fn registry_path(user: bool) -> Option<String> {
     Some(text.trim_end_matches('\0').to_string())
 }
 
-fn codex_config() -> PathBuf {
+pub fn codex_config() -> PathBuf {
     let home = std::env::var("CODEX_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| home().join(".codex"));

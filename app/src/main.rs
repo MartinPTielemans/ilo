@@ -244,6 +244,19 @@ mod platform {
         pub fn host_hide_overlay(overlay: c_int);
         pub fn host_can_draw_emoji(emoji: *const c_char) -> bool;
         pub fn host_dismiss_overlay(overlay: c_int);
+        pub fn host_fold_overlay(
+            overlay: c_int,
+            x: f64,
+            y: f64,
+            width: f64,
+            height: f64,
+            radius: f64,
+            from: u32,
+            to: u32,
+            duration: f64,
+            fade: f64,
+            fade_only: bool,
+        ) -> bool;
         #[cfg(target_os = "macos")]
         pub fn host_take_overlay_keyboard(overlay: c_int);
         pub fn host_hold_keys();
@@ -469,6 +482,12 @@ mod platform {
             changed: extern "C" fn(stage: c_int, version: *const c_char),
         );
         #[cfg(not(target_os = "linux"))]
+        pub fn host_nightly_build() -> bool;
+        #[cfg(not(target_os = "linux"))]
+        pub fn host_nightly_feed() -> bool;
+        #[cfg(not(target_os = "linux"))]
+        pub fn host_follow_nightly(nightly: bool);
+        #[cfg(not(target_os = "linux"))]
         pub fn host_check_for_updates();
         #[cfg(not(target_os = "linux"))]
         pub fn host_check_for_updates_quietly();
@@ -478,8 +497,10 @@ mod platform {
         pub fn host_relaunch_into_update() -> bool;
         #[cfg(not(target_os = "linux"))]
         pub fn host_finish_update();
-        #[cfg(target_os = "macos")]
+        #[cfg(not(target_os = "linux"))]
         pub fn host_take_update_notes(notes: extern "C" fn(url: *const c_char));
+        #[cfg(target_os = "windows")]
+        pub fn host_take_install(installed: extern "C" fn(build: u64, own: u64) -> bool);
     }
 
     /// Where host_start_updater's `changed` says the update stands (host.h's HOST_UPDATE_*).
@@ -559,6 +580,8 @@ thread_local! {
     // The links other apps sent before the first window had brought back the Spaces, which they
     // open over; None after.
     static LAUNCH_LINKS: RefCell<Option<Vec<String>>> = const { RefCell::new(Some(Vec::new())) };
+    // The release notes of the update this launch is the first of, which the first window opens.
+    static UPDATE_NOTES: RefCell<Option<String>> = const { RefCell::new(None) };
     // The account as the core last said, which it says first as it starts, before GPUI has: the
     // first window hands it to Settings.
     static SYNC_STATE: RefCell<Option<account::State>> = const { RefCell::new(None) };
@@ -1166,7 +1189,7 @@ impl menu::Host for MenuHost {
     fn show(&self, frame: Bounds<Pixels>, panels: &[Bounds<Pixels>]) {
         // Linux's window takes the pointer on the panels alone, as its host can shape it.
         #[cfg(target_os = "linux")]
-        menu_window::take_pointer_on(panels);
+        menu_window::set_panels(panels);
         #[cfg(not(target_os = "linux"))]
         let _ = panels;
         let (ui_view, in_reveal) = MENU_OVER.get();
@@ -1177,6 +1200,11 @@ impl menu::Host for MenuHost {
 
     fn hide(&self) {
         unsafe { platform::host_hide_menu_window() };
+    }
+
+    #[cfg(target_os = "linux")]
+    fn blends(&self) -> bool {
+        gpui_linux::overlays_blend()
     }
 }
 
@@ -1866,6 +1894,119 @@ impl command_bar::Host for Bar {
     fn commands(&self, text: &str, cx: &App) -> Vec<shell::BarCommand> {
         shell::bar_commands(text, cx)
     }
+
+    fn task_agents(&self, cx: &App) -> Option<command_bar::TaskAgents> {
+        let agents = browser::agents::global(cx)?;
+        let agents = agents.read(cx);
+        if !agents.is_on() {
+            return None;
+        }
+        let listed = (agents.ask_agents().into_iter()).map(|agent| command_bar::TaskAgent {
+            id: agent.cli.id().into(),
+            name: agent.cli.name().into(),
+            glyph: agent.cli.glyph(),
+            model: agents.task_model_name(agent.cli),
+            resets: agent.resets,
+        });
+        Some(command_bar::TaskAgents { agents: listed.collect(), known: agents.task_agents_known() })
+    }
+
+    fn over_private(&self) -> bool {
+        WINDOWS.with_borrow(|windows| windows.first().is_some_and(|window| window.private))
+    }
+
+    fn asking(&self, shown: bool, cx: &mut App) {
+        if shown {
+            agents_core::update(|agents, cx| agents.task_ask_shown(cx));
+            // Only the window the bar shows over opens one.
+            let front = front().0;
+            let shells: Vec<_> = WINDOWS.with_borrow(|windows| {
+                windows.iter().map(|window| (window.id == front, window.shell.clone())).collect()
+            });
+            for (shown, shell) in shells {
+                shell.update(cx, |shell, cx| shell.set_ask_slot(shown, cx)).ok();
+            }
+        } else {
+            update_shells_in(cx, |shell, cx| shell.set_ask_slot(false, cx));
+        }
+    }
+
+    fn task_page(&self, cx: &App) -> Option<(SharedString, SharedString)> {
+        let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
+        let shell = shell?.upgrade()?;
+        let shell = shell.read(cx);
+        let tab = shell::shown_tab(cx);
+        let url = shell.page(tab).url;
+        let web = url.starts_with("https://") || url.starts_with("http://");
+        web.then(|| (url.into(), shell.title(tab).into()))
+    }
+
+    fn run_task(
+        &self,
+        agent: &str,
+        asked: &str,
+        page: Option<(SharedString, SharedString)>,
+        cx: &mut App,
+    ) {
+        let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
+            return;
+        };
+        let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
+        let home = shell.and_then(|shell| shell.upgrade()).map_or(0, |shell| shell.read(cx).space());
+        let asked = asked.to_string();
+        let page = page.map(|(url, title)| browser::agents::task::AskedOn { url, title });
+        // The bar folds into the slot at the foot that its task's card takes, where the window
+        // shows one; elsewhere it hides, and the card fades in.
+        let window = front().0;
+        let still = cx.reduce_motion();
+        let from = rgba_u32(browser::palette::current(cx).overlay);
+        let folded = match update_window_in(window, cx, |shell, _| shell.fold_target()).flatten() {
+            Some((to, radius, fill)) => {
+                use browser::tokens::shell::task::motion::{CROSSFADE, FOLD, FOLD_FADE};
+                let fade = if still { CROSSFADE } else { FOLD_FADE };
+                unsafe {
+                    platform::host_fold_overlay(
+                        COMMAND_BAR,
+                        f32::from(to.origin.x).into(),
+                        f32::from(to.origin.y).into(),
+                        f32::from(to.size.width).into(),
+                        f32::from(to.size.height).into(),
+                        radius.into(),
+                        from,
+                        rgba_u32(fill.into()),
+                        FOLD.into(),
+                        fade.into(),
+                        still,
+                    )
+                }
+            }
+            None => {
+                unsafe { platform::host_hide_overlay(COMMAND_BAR) };
+                false
+            }
+        };
+        // The bar has closed on no tab, so New Tab gives back the plate ⌘T gave it.
+        update_window_in(window, cx, |shell, cx| {
+            shell.command_bar_dismissed(cx);
+            shell.fold_started(folded, cx);
+        });
+        agents_core::update(move |agents, cx| {
+            // The card takes the slot as it comes; one that didn't start leaves it empty.
+            if agents.start_task(cli, &asked, page, home, cx).is_none() {
+                update_shells_in(cx, |shell, cx| shell.set_ask_slot(false, cx));
+            }
+        });
+    }
+
+    fn set_up_agents(&self, cx: &mut App) {
+        settings::show_agents(cx);
+    }
+}
+
+/// `color` as the host takes a colour, 0xRRGGBBAA.
+fn rgba_u32(color: gpui::Rgba) -> u32 {
+    let byte = |value: f32| (value.clamp(0., 1.) * 255.).round() as u32;
+    byte(color.r) << 24 | byte(color.g) << 16 | byte(color.b) << 8 | byte(color.a)
 }
 
 /// The user left the command bar without choosing anything in it.
@@ -2585,7 +2726,34 @@ impl Browser for Engine {
     }
 
     fn stop_agent(&self, agent: SharedString, _: &mut App) {
-        agents_core::update(move |agents, cx| agents.stop_agent(&agent, cx));
+        // A task's Stop, from its page's strip too, ends its turn as well as what it's doing.
+        agents_core::update(move |agents, cx| match browser::agents::is_task(&agent) {
+            true => agents.stop_task(&agent, cx),
+            false => agents.stop_agent(&agent, cx),
+        });
+    }
+
+    fn task(&self, agent: SharedString, action: browser::agents::task::TaskAction, _: &mut App) {
+        let window = self.window;
+        agents_core::update(move |agents, cx| {
+            let (opened, _) = agents.task_action(&agent, action, cx);
+            // Open shows the tab it moved into the user's Space, in the window it was opened from.
+            if let Some(tab) = opened {
+                unsafe { bc::bc_window_select(window, tab) };
+            }
+        });
+    }
+
+    fn show_task(&self, _: SharedString, _: &mut App) {
+        // The Agents send a window its conversation as it changes; this sends it now.
+        agents_core::update(|_, cx| cx.notify());
+    }
+
+    fn task_picture(&self, tab: u64, request: u64, _: &mut App) {
+        // At twice the picture's size, for a Retina screen.
+        let width = (2. * browser::tokens::shell::conversation::PICTURE_WIDTH) as i32;
+        let height = (2. * browser::tokens::shell::conversation::PICTURE_HEIGHT) as i32;
+        unsafe { bc::bc_tab_picture(tab, request, width, height) };
     }
 
     fn disconnect_agent(&self, space: u64, _: &mut App) {
@@ -2912,6 +3080,10 @@ impl Browser for Engine {
 
     fn space_tab(&self, space: u64) -> u64 {
         unsafe { bc::bc_window_space_tab(self.window, space) }
+    }
+
+    fn space_agent(&self, space: u64) -> SharedString {
+        name(bc::bc_space_agent, space)
     }
 
     fn create_space(&self, name: &str, profile: u64, after: u64, _: &mut App) -> u64 {
@@ -4089,12 +4261,13 @@ fn open_saved_windows(cx: &mut App) {
 }
 
 /// Shows the Spaces as the user left them in `window`, else a first Space, and says whether it
-/// brought them back. A page given in BROWSER_URL, and the links from other apps that launched the
-/// browser, open on top either way, in this window, the one in front. With nothing to bring back
-/// and nothing to open, it's a new profile's first run: `shell` plays the onboarding, then shows
-/// the welcome on the empty card. This is its only way in at launch, so a launch that brings Spaces
-/// back never reads more than `restored` for it. check.sh sets BROWSER_ONBOARDING to "skip" for
-/// every run but the onboarding run's, which sets "light" or "dark".
+/// brought them back. A page given in BROWSER_URL, an update's notes, and the links from other apps
+/// that launched the browser, open on top either way, in this window, the one in front, the links
+/// where Settings › Links sends them. With nothing to bring back and nothing to open, it's a new
+/// profile's first run: `shell` plays the onboarding, then shows the welcome on the empty card. This
+/// is its only way in at launch, so a launch that brings Spaces back never reads more than
+/// `restored` for it. check.sh sets BROWSER_ONBOARDING to "skip" for every run but the onboarding
+/// run's, which sets "light" or "dark".
 fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -> bool {
     let start = Instant::now();
     let restored = unsafe { bc::bc_window_restore(window) };
@@ -4110,9 +4283,10 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
     // The rules name the Spaces by their places, so they're read once the Spaces are back.
     link_rules_host::read();
     let links = LAUNCH_LINKS.take().unwrap_or_default();
+    let notes = UPDATE_NOTES.take().or_else(first_launch_notes);
     match std::env::var("BROWSER_URL") {
         Ok(url) => open_tab(window, &url),
-        Err(_) if !restored && links.is_empty() => {
+        Err(_) if !restored && links.is_empty() && notes.is_none() => {
             let onboarding = std::env::var("BROWSER_ONBOARDING").ok();
             shell
                 .update(cx, |shell, _, cx| {
@@ -4125,8 +4299,37 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
         }
         Err(_) => {}
     }
+    // An update's notes are ilo's own page, What's New, so they open here as the command's does,
+    // whatever Settings › Links says of links from other apps (#1484), and the links over them.
+    if let Some(url) = notes {
+        let (window, tab, space) = open_link_in(window, &url, 0);
+        // check.sh reads this line.
+        log!("browser: update notes {url}: tab {tab} in space {space} of window {window}");
+    }
     open_links_in(window, &links);
     restored
+}
+
+/// The release notes of the update this launch is the first of, where the Mac's main hasn't kept
+/// them before Chromium starts: taken with the first window, so a second launch, which hands its
+/// links to the browser running and exits, never takes them.
+fn first_launch_notes() -> Option<String> {
+    #[cfg(target_os = "windows")]
+    unsafe { platform::host_take_update_notes(keep_update_notes) };
+    // On Linux, where an update can come from outside ilo, a version newer than the profile's
+    // last. Only a release's, the Flatpak: a dev build's moves on under the checks' profiles.
+    #[cfg(target_os = "linux")]
+    if cfg!(feature = "prod") {
+        let file = std::path::PathBuf::from(profile_dir()).join("last-version");
+        return updates::first_launch_notes(&file, browser::build_info::VERSION);
+    }
+    UPDATE_NOTES.take()
+}
+
+#[cfg(not(target_os = "linux"))]
+extern "C" fn keep_update_notes(url: *const c_char) {
+    let url = unsafe { CStr::from_ptr(url) }.to_string_lossy().into_owned();
+    UPDATE_NOTES.set(Some(url));
 }
 
 /// Logs where the window is, for check.sh.
@@ -5241,9 +5444,32 @@ fn start_updates(cx: &mut App) {
     .detach();
     #[cfg(not(target_os = "linux"))]
     {
+        // A nightly, or a release, and where the build carries a nightly feed, the builds the user
+        // chose, else this one's: the updater reads that feed from its first check.
+        let built = match unsafe { platform::host_nightly_build() } {
+            true => updates::Track::Nightly,
+            false => updates::Track::Release,
+        };
+        let own = updater == updates::Updater::Own;
+        let followed = (own && unsafe { platform::host_nightly_feed() })
+            .then(|| followed_track().unwrap_or(built));
+        updates::tracks(built, followed, cx);
+        unsafe { platform::host_follow_nightly(followed == Some(updates::Track::Nightly)) };
         // Restart to Update, whose update installs once the restart goes ahead (quit_going_ahead).
         extern "C" fn restart() {
             restart_because("the updater's install");
+        }
+        // An installer that failed after the last quit left this launch the old build (#1459).
+        #[cfg(target_os = "windows")]
+        {
+            extern "C" fn installed(build: u64, own: u64) -> bool {
+                let went_in = updates::went_in(build, own);
+                if !went_in {
+                    update_app_later(updates::didnt_install);
+                }
+                went_in
+            }
+            unsafe { platform::host_take_install(installed) };
         }
         unsafe { platform::host_start_updater(restart, update_changed) };
     }
@@ -5273,6 +5499,22 @@ fn start_updates(cx: &mut App) {
             .await;
         })
         .detach();
+    }
+}
+
+/// Where the builds the user chose in Settings › About are kept: "nightly" or "release", for the
+/// app, not a profile, as its updates are. Without it, the updater takes this build's own.
+#[cfg(not(target_os = "linux"))]
+fn followed_track_path() -> String {
+    format!("{}/update-track", profile_dir())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn followed_track() -> Option<updates::Track> {
+    match std::fs::read_to_string(followed_track_path()).ok()?.trim() {
+        "nightly" => Some(updates::Track::Nightly),
+        "release" => Some(updates::Track::Release),
+        _ => None,
     }
 }
 
@@ -5328,6 +5570,24 @@ impl updates::Host for SystemUpdater {
         }
         #[cfg(target_os = "linux")]
         flatpak::restart(cx);
+    }
+
+    /// Kept for the next launch, which reads it before the updater's first check. Linux offers no
+    /// choice: a Flatpak updates only the branch it's installed from.
+    fn follow(&self, track: updates::Track, _: &mut App) {
+        #[cfg(not(target_os = "linux"))]
+        {
+            let name = match track {
+                updates::Track::Nightly => "nightly",
+                updates::Track::Release => "release",
+            };
+            if let Err(error) = std::fs::write(followed_track_path(), name) {
+                log!("browser: the update track wasn't kept: {error}");
+            }
+            unsafe { platform::host_follow_nightly(track == updates::Track::Nightly) };
+        }
+        #[cfg(target_os = "linux")]
+        let _ = track;
     }
 }
 
@@ -5983,6 +6243,14 @@ unsafe extern "C" fn stopping(_: *mut c_void) {
     };
     // The recovery words a Copy put on the clipboard don't outlast the app (settings.rs).
     unsafe { platform::host_forget_secret() };
+    // Tasks live for the run: their CLIs stop and their Spaces go while the core still answers,
+    // on every way out, the Dock's Quit and logging out included. A crash leaves them for the
+    // next launch.
+    update_app(|cx| {
+        if let Some(agents) = browser::agents::global(cx) {
+            agents.update(cx, |agents, cx| agents.end_tasks(cx));
+        }
+    });
 }
 
 // The next launch's first window opens where the regular window in front is, showing its sidebar
@@ -7570,13 +7838,10 @@ fn main() {
         if !unsafe { platform::host_keep_keychain_key() } {
             return;
         }
-        // The first launch of an update opens its release notes, over the Spaces it brings back.
-        extern "C" fn update_notes(url: *const c_char) {
-            let url = unsafe { CStr::from_ptr(url) }.to_string_lossy().into_owned();
-            LAUNCH_LINKS.with_borrow_mut(|links| links.as_mut().map(|links| links.push(url)));
-        }
-        unsafe { platform::host_take_update_notes(update_notes) };
     }
+    // The first launch of an update opens its release notes, over the Spaces it brings back. Only
+    // a build that carries Sparkle keeps them, and check.sh's links run, for its own build.
+    unsafe { platform::host_take_update_notes(keep_update_notes) };
     let (args, host) = switches_and_host(std::env::args().collect());
     let mut argv: Vec<*const c_char> = args.iter().map(|arg| arg.as_ptr()).collect();
     let code = unsafe { bc::bc_main(argv.len() as c_int, argv.as_mut_ptr(), &host) };

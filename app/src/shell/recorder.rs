@@ -69,6 +69,8 @@ pub(super) struct Recorder {
     pub(super) checked_for_updates: Cell<usize>,
     /// The import finds no browser on the machine.
     pub(super) no_browsers: Cell<bool>,
+    /// The browser the import reads and adds to, when a test gives one.
+    pub(super) import: RefCell<Option<std::rc::Rc<dyn crate::import::Host>>>,
     /// The window is full screen, as Linux's window manager says, for `window_full_screen`.
     pub(super) full_screen: Cell<bool>,
     /// The opt-ins' switches, as `crash_reports` and `agents` answer, None for one not offered.
@@ -82,6 +84,8 @@ pub(super) struct Recorder {
     pub(super) window_buttons: Cell<Option<super::WindowButtonGeometry>>,
     /// The Spaces it was asked to show, in order.
     pub(super) shown: RefCell<Vec<u64>>,
+    /// The id of the agent each agent's Space belongs to, as `space_agent` answers.
+    pub(super) space_agents: RefCell<HashMap<u64, SharedString>>,
     /// The menus it was asked to show, each item by its title and whether it's enabled.
     pub(super) menus: RefCell<Vec<Vec<(SharedString, bool)>>>,
     /// Where the last menu was asked to show, in the window.
@@ -809,6 +813,10 @@ impl Browser for Recorder {
         Default::default()
     }
 
+    fn space_agent(&self, space: u64) -> SharedString {
+        self.space_agents.borrow().get(&space).cloned().unwrap_or_default()
+    }
+
     // The Space it makes is always 7.
     fn create_space(&self, name: &str, _: u64, after: u64, _: &mut App) -> u64 {
         self.record(format!("create space {name} after {after}"));
@@ -880,6 +888,9 @@ impl Browser for Recorder {
     // The import's made-up Arc, so the first launch has a browser to import from, unless a test
     // says there's none.
     fn import_host(&self) -> std::rc::Rc<dyn crate::import::Host> {
+        if let Some(host) = self.import.borrow().clone() {
+            return host;
+        }
         let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/src/import/fixture");
         let home = if self.no_browsers.get() { "/nonexistent" } else { fixture };
         let os = crate::import::sources::Os::Mac;
@@ -1256,6 +1267,18 @@ impl Browser for Recorder {
 
     fn stop_agent(&self, agent: SharedString, _: &mut App) {
         self.record(format!("stop agent {agent}"));
+    }
+
+    fn task(&self, agent: SharedString, action: crate::agents::task::TaskAction, _: &mut App) {
+        self.record(format!("task {agent} {action:?}"));
+    }
+
+    fn show_task(&self, agent: SharedString, _: &mut App) {
+        self.record(format!("show task {agent}"));
+    }
+
+    fn task_picture(&self, tab: u64, _: u64, _: &mut App) {
+        self.record(format!("task picture {tab}"));
     }
 
     fn find_next(&self, _: u64, _: bool, _: &mut App) {}
