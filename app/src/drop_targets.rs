@@ -47,7 +47,9 @@ pub fn open(cx: &mut App) {
         ..Default::default()
     };
     let window = cx.open_window(options, |_, cx| {
-        cx.new(|_| DropTargets { shell: WeakEntity::new_invalid() })
+        cx.new(|_| DropTargets {
+            shell: WeakEntity::new_invalid(),
+        })
     });
     match window {
         Ok(window) => {
@@ -63,7 +65,10 @@ pub fn open(cx: &mut App) {
 /// Shows the targets' window over the browser window whose UI draws in `ui_view`, drawing it
 /// again for the drag's move, or hides it.
 pub fn show(shown: bool, ui_view: *mut c_void, cx: &mut App) {
-    let Some(window) = cx.try_global::<DropTargetsWindow>().map(|targets| targets.0) else {
+    let Some(window) = cx
+        .try_global::<DropTargetsWindow>()
+        .map(|targets| targets.0)
+    else {
         return;
     };
     if shown {

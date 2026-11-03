@@ -79,11 +79,15 @@ impl Shell {
             f32::from(element.size.height)
         );
         let going = cx.spawn(async move |shell, cx| {
-            cx.background_executor().timer(Duration::from_secs_f32(GLIDE + HOLD)).await;
+            cx.background_executor()
+                .timer(Duration::from_secs_f32(GLIDE + HOLD))
+                .await;
             if shell.update(cx, |_, cx| cx.notify()).is_err() {
                 return;
             }
-            cx.background_executor().timer(Duration::from_secs_f32(FADE)).await;
+            cx.background_executor()
+                .timer(Duration::from_secs_f32(FADE))
+                .await;
             shell
                 .update(cx, |shell, cx| {
                     shell.agent_pointer = None;
@@ -93,7 +97,14 @@ impl Shell {
                 .ok();
         });
         let since = Instant::now();
-        self.agent_pointer = Some(AgentPointer { tab, tag, from, element, since, _going: going });
+        self.agent_pointer = Some(AgentPointer {
+            tab,
+            tag,
+            from,
+            element,
+            since,
+            _going: going,
+        });
         cx.notify();
     }
 
@@ -127,7 +138,9 @@ impl Shell {
         let panes = self.panes(self.selected);
         let index = panes.iter().position(|&pane| pane == tab)?;
         let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
-        pane_frames(frame, panes.len(), stacked, &shares).get(index).copied()
+        pane_frames(frame, panes.len(), stacked, &shares)
+            .get(index)
+            .copied()
     }
 
     fn agent_pointer_drawn(&self, window: &mut Window, cx: &App) -> Option<AnyElement> {
@@ -136,14 +149,21 @@ impl Shell {
         }
         let pointer = self.agent_pointer.as_ref()?;
         let pane = self.pane_of(pointer.tab)?;
-        let name = self.agent_page().map(|(space, _)| space.agent.clone()).unwrap_or_default();
+        let name = self
+            .agent_page()
+            .map(|(space, _)| space.agent.clone())
+            .unwrap_or_default();
         let t = pointer.since.elapsed().as_secs_f32();
         let still = cx.reduce_motion();
         // Frames only while it moves: the glide, the ring coming in and the fade.
         if t < GLIDE + RING_IN || t > GLIDE + HOLD {
             window.request_animation_frame();
         }
-        let ring_in = if still { 1. } else { ((t - GLIDE) / RING_IN).clamp(0., 1.) };
+        let ring_in = if still {
+            1.
+        } else {
+            ((t - GLIDE) / RING_IN).clamp(0., 1.)
+        };
         let shown = 1. - ((t - GLIDE - HOLD) / FADE).clamp(0., 1.);
         let tip = pointer.tip(t, still);
         let ring = pointer.element.dilate(px(RING_OUTSET));
@@ -189,10 +209,16 @@ impl Shell {
                     .opacity(ring_in),
             )
             .child(
-                chip(pointer.tag.clone(), TAG_SIZE, TAG_HEIGHT, TAG_INSET, TAG_RADIUS)
-                    .left(ring.left())
-                    .top(tag_top)
-                    .opacity(ring_in),
+                chip(
+                    pointer.tag.clone(),
+                    TAG_SIZE,
+                    TAG_HEIGHT,
+                    TAG_INSET,
+                    TAG_RADIUS,
+                )
+                .left(ring.left())
+                .top(tag_top)
+                .opacity(ring_in),
             )
             .child(
                 svg()
@@ -205,9 +231,15 @@ impl Shell {
             )
             .when(!name.is_empty(), |page| {
                 page.child(
-                    chip(name, LABEL_SIZE, LABEL_HEIGHT, LABEL_INSET, LABEL_HEIGHT / 2.)
-                        .left(tip.x + pointer_box * 0.75)
-                        .top(tip.y + pointer_box * 0.75),
+                    chip(
+                        name,
+                        LABEL_SIZE,
+                        LABEL_HEIGHT,
+                        LABEL_INSET,
+                        LABEL_HEIGHT / 2.,
+                    )
+                    .left(tip.x + pointer_box * 0.75)
+                    .top(tip.y + pointer_box * 0.75),
                 )
             });
         Some(page.into_any_element())

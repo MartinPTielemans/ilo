@@ -60,13 +60,21 @@ impl Shell {
     pub(super) fn fly_new_download(&mut self, downloads: &[Download], cx: &mut Context<Self>) {
         let first = !std::mem::replace(&mut self.downloads_read, true);
         let new = new_download(&self.downloads_seen, first, downloads);
-        self.downloads_seen.extend(downloads.iter().map(|each| each.id));
+        self.downloads_seen
+            .extend(downloads.iter().map(|each| each.id));
         let Some(id) = new.filter(|_| self.flight_shown()) else {
             return;
         };
         // A later download takes the place of one still flying, and of its bin.
         let from = self.flight_launch(cx);
-        self.flight = Some(Flight { id, from, start: None, landed: false, leave: None, wake: None });
+        self.flight = Some(Flight {
+            id,
+            from,
+            start: None,
+            landed: false,
+            leave: None,
+            wake: None,
+        });
         if !self.download_icons.contains_key(&id) {
             self.download_icons.insert(id, None);
             self.browser.download_icon(id, cx);
@@ -82,11 +90,17 @@ impl Shell {
     /// Arc's leaves from the window's edge with the pointer outside; or the page's middle where the
     /// host can't say where the pointer is.
     fn flight_launch(&self, cx: &mut App) -> (f32, f32) {
-        let (width, height) = (f32::from(self.viewport.width), f32::from(self.viewport.height));
+        let (width, height) = (
+            f32::from(self.viewport.width),
+            f32::from(self.viewport.height),
+        );
         let edge = FLIGHT_FROM / 2.;
         let inside = |at: f32, length: f32| at.clamp(edge, (length - edge).max(edge));
         match self.browser.pointer(cx) {
-            Some(at) => (inside(f32::from(at.x), width), inside(f32::from(at.y), height)),
+            Some(at) => (
+                inside(f32::from(at.x), width),
+                inside(f32::from(at.y), height),
+            ),
             None => {
                 let middle = self.page_frame(self.viewport).0.center();
                 (f32::from(middle.x), f32::from(middle.y))
@@ -97,7 +111,10 @@ impl Shell {
     /// The bin's centre in the window, right of and above the Library button's glyph.
     fn bin_center(&self) -> (f32, f32) {
         let height = f32::from(self.viewport.height);
-        (LIBRARY_BACK_INSET + NAV_SIZE / 2. + BIN_RIGHT, height - FOOTER_HEIGHT / 2. - BIN_UP)
+        (
+            LIBRARY_BACK_INSET + NAV_SIZE / 2. + BIN_RIGHT,
+            height - FOOTER_HEIGHT / 2. - BIN_UP,
+        )
     }
 
     /// Whether the icon is on its way, which the window over the page draws.
@@ -163,7 +180,11 @@ impl Shell {
 
     /// The icon on its way, drawn in the window over the page, so it crosses the page and the
     /// sidebar alike.
-    pub(super) fn download_flight_drawn(&self, window: &mut Window, cx: &App) -> Option<AnyElement> {
+    pub(super) fn download_flight_drawn(
+        &self,
+        window: &mut Window,
+        cx: &App,
+    ) -> Option<AnyElement> {
         let flight = self.flight.as_ref()?;
         let t = (cx.background_executor().now() - flight.start?).as_secs_f32();
         let place = flight_place(t, flight.from, self.bin_center())?;
@@ -186,7 +207,9 @@ impl Shell {
         let flight = self.flight.as_ref()?;
         let now = cx.background_executor().now();
         let start = flight.start?;
-        let leave = flight.leave.unwrap_or(start + Duration::from_secs_f32(FLIGHT + BIN_STAY));
+        let leave = flight
+            .leave
+            .unwrap_or(start + Duration::from_secs_f32(FLIGHT + BIN_STAY));
         let opacity = 1. - (now.saturating_duration_since(leave).as_secs_f32() / BIN_FADE).min(1.);
         let down = crate::motion::offset(bin_drop((now - start).as_secs_f32()), cx);
         let (x, y) = self.bin_center();
@@ -281,7 +304,9 @@ mod tests {
 
     /// The icon's place at each hundredth of a second of its flight.
     fn path(from: (f32, f32), to: (f32, f32)) -> Vec<Place> {
-        (0..110).map(|step| flight_place(step as f32 / 100., from, to).unwrap()).collect()
+        (0..110)
+            .map(|step| flight_place(step as f32 / 100., from, to).unwrap())
+            .collect()
     }
 
     fn download(id: u64, state: DownloadState) -> Download {
@@ -310,9 +335,16 @@ mod tests {
         let seen = HashSet::from([1, 2]);
         let report = [download(2, Running), download(1, Done)];
         assert_eq!(new_download(&seen, false, &report), None);
-        assert_eq!(new_download(&seen, false, &[download(3, Done), download(2, Paused)]), None);
+        assert_eq!(
+            new_download(&seen, false, &[download(3, Done), download(2, Paused)]),
+            None
+        );
         // Several new at once fly once, as the newest, which comes first.
-        let report = [download(5, Running), download(4, Running), download(2, Running)];
+        let report = [
+            download(5, Running),
+            download(4, Running),
+            download(2, Running),
+        ];
         assert_eq!(new_download(&seen, false, &report), Some(5));
     }
 
@@ -322,16 +354,28 @@ mod tests {
     fn the_icon_arcs_from_the_pointer_into_the_bin() {
         let (from, to) = ((640., 250.), (33., 763.));
         let start = flight_place(0., from, to).unwrap();
-        assert_eq!((start.x, start.y, start.size, start.opacity), (640., 250., 32., 0.));
+        assert_eq!(
+            (start.x, start.y, start.size, start.opacity),
+            (640., 250., 32., 0.)
+        );
         let places = path(from, to);
         let apex = places.iter().min_by(|a, b| a.y.total_cmp(&b.y)).unwrap();
         assert!((apex.y - (250. - FLIGHT_APEX)).abs() < 0.5, "{apex:?}");
-        assert!((apex.size - 48.).abs() < 1.5 && apex.opacity > 0.95, "{apex:?}");
+        assert!(
+            (apex.size - 48.).abs() < 1.5 && apex.opacity > 0.95,
+            "{apex:?}"
+        );
         for pair in places.windows(2) {
-            assert!((pair[0].x - pair[1].x - (640. - 33.) / 110.).abs() < 0.01, "steady across");
+            assert!(
+                (pair[0].x - pair[1].x - (640. - 33.) / 110.).abs() < 0.01,
+                "steady across"
+            );
         }
         let landing = flight_place(FLIGHT - 1e-4, from, to).unwrap();
-        assert!((landing.x - 33.).abs() < 0.5 && (landing.y - 763.).abs() < 0.5, "{landing:?}");
+        assert!(
+            (landing.x - 33.).abs() < 0.5 && (landing.y - 763.).abs() < 0.5,
+            "{landing:?}"
+        );
         assert!((landing.size - 10.).abs() < 0.1 && landing.opacity == 1.);
         assert_eq!(flight_place(FLIGHT, from, to), None);
     }
@@ -341,10 +385,16 @@ mod tests {
     #[test]
     fn the_icon_lands_from_under_the_bin_too() {
         let (from, to) = ((300., 790.), (33., 763.));
-        let apex = path(from, to).iter().map(|place| place.y).fold(f32::MAX, f32::min);
+        let apex = path(from, to)
+            .iter()
+            .map(|place| place.y)
+            .fold(f32::MAX, f32::min);
         assert!((apex - 700.).abs() < 0.5, "{apex}");
         let landing = flight_place(FLIGHT - 1e-4, from, to).unwrap();
-        assert!((landing.x - 33.).abs() < 0.5 && (landing.y - 763.).abs() < 0.5, "{landing:?}");
+        assert!(
+            (landing.x - 33.).abs() < 0.5 && (landing.y - 763.).abs() < 0.5,
+            "{landing:?}"
+        );
     }
 
     fn window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
@@ -364,7 +414,8 @@ mod tests {
 
     /// Moves the test's clock on by `seconds` and draws a frame, which steps the flight.
     fn after(seconds: f32, shell: &Entity<Shell>, cx: &mut VisualTestContext) {
-        cx.executor().advance_clock(Duration::from_secs_f32(seconds));
+        cx.executor()
+            .advance_clock(Duration::from_secs_f32(seconds));
         shell.update(cx, |_, cx| cx.notify());
         cx.run_until_parked();
     }
@@ -384,10 +435,15 @@ mod tests {
     fn a_download_flies_from_the_pointer_and_rests_in_the_bin(cx: &mut TestAppContext) {
         let (shell, cx, host) = window(cx);
         host.pointer.set(Some(point(px(5000.), px(300.))));
-        shell.update(cx, |shell, cx| shell.set_downloads(vec![download(7, DownloadState::Running)], cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_downloads(vec![download(7, DownloadState::Running)], cx)
+        });
         after(0., &shell, cx);
         let (from, width) = shell.read_with(cx, |shell, _| {
-            (shell.flight.as_ref().unwrap().from, f32::from(shell.viewport.width))
+            (
+                shell.flight.as_ref().unwrap().from,
+                f32::from(shell.viewport.width),
+            )
         });
         assert_eq!(from, (width - 16., 300.));
         assert_eq!(shown(&shell, cx), (true, true));
@@ -396,7 +452,10 @@ mod tests {
         after(BIN_STAY - 0.01, &shell, cx);
         assert_eq!(shown(&shell, cx), (false, true));
         after(0.02 + BIN_FADE, &shell, cx);
-        assert!(shell.read_with(cx, |shell, _| shell.flight.is_none()), "the bin has left");
+        assert!(
+            shell.read_with(cx, |shell, _| shell.flight.is_none()),
+            "the bin has left"
+        );
     }
 
     /// With no pointer to leave from, the icon leaves from the page's middle. The recent downloads
@@ -404,11 +463,16 @@ mod tests {
     #[gpui::test]
     fn the_bin_leaves_as_the_list_or_the_library_opens(cx: &mut TestAppContext) {
         let (shell, cx, _) = window(cx);
-        shell.update(cx, |shell, cx| shell.set_downloads(vec![download(7, DownloadState::Running)], cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_downloads(vec![download(7, DownloadState::Running)], cx)
+        });
         after(0., &shell, cx);
         let (from, middle) = shell.read_with(cx, |shell, _| {
             let middle = shell.page_frame(shell.viewport).0.center();
-            (shell.flight.as_ref().unwrap().from, (f32::from(middle.x), f32::from(middle.y)))
+            (
+                shell.flight.as_ref().unwrap().from,
+                (f32::from(middle.x), f32::from(middle.y)),
+            )
         });
         assert_eq!(from, middle);
         after(FLIGHT + 1., &shell, cx);
@@ -420,13 +484,19 @@ mod tests {
         assert!(shell.read_with(cx, |shell, _| shell.flight.is_none()));
 
         cx.simulate_mouse_move(point(px(400.), px(300.)), None, Modifiers::none());
-        let report = vec![download(8, DownloadState::Running), download(7, DownloadState::Done)];
+        let report = vec![
+            download(8, DownloadState::Running),
+            download(7, DownloadState::Done),
+        ];
         shell.update(cx, |shell, cx| shell.set_downloads(report, cx));
         after(FLIGHT + 1., &shell, cx);
         assert_eq!(shown(&shell, cx), (false, true));
         cx.simulate_click(point(px(24.), px(height - 25.)), Modifiers::none());
         after(0., &shell, cx);
-        assert!(shell.read_with(cx, |shell, _| shell.flight.is_none()), "the Library takes it");
+        assert!(
+            shell.read_with(cx, |shell, _| shell.flight.is_none()),
+            "the Library takes it"
+        );
     }
 
     /// Under Reduce Motion, and where the window over the page would cover the page, the icon
@@ -437,10 +507,13 @@ mod tests {
             let (shell, cx, host) = window(cx);
             cx.update(|_, cx| cx.set_reduce_motion(reduced));
             host.over_page_opaque.set(!reduced);
-            shell.update(cx, |shell, cx| shell.set_downloads(vec![download(7, DownloadState::Running)], cx));
+            shell.update(cx, |shell, cx| {
+                shell.set_downloads(vec![download(7, DownloadState::Running)], cx)
+            });
             after(0., &shell, cx);
             assert_eq!(shown(&shell, cx), (false, true), "reduced {reduced}");
-            let drawn = cx.update(|window, cx| shell.read(cx).download_flight_drawn(window, cx).is_none());
+            let drawn =
+                cx.update(|window, cx| shell.read(cx).download_flight_drawn(window, cx).is_none());
             assert!(drawn, "nothing over the page, reduced {reduced}");
         }
     }

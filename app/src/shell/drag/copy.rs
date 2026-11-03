@@ -32,7 +32,14 @@ fn a_row_let_go_with_alt_held_leaves_a_copy(cx: &mut TestAppContext) {
     assert_eq!(host.take_edits(), [format!("move {copy} false 0 3")]);
     // ⌘Z closes the copy once the core has reported it.
     shell.update(cx, |shell, cx| {
-        shell.set_tabs(1, Vec::new(), vec![1, 2, 3, copy, 4], Vec::new(), Folders::default(), cx)
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            vec![1, 2, 3, copy, 4],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        )
     });
     shell.update(cx, |shell, cx| shell.undo(cx));
     assert_eq!(host.take_edits(), [format!("close {copy}")]);
@@ -41,7 +48,11 @@ fn a_row_let_go_with_alt_held_leaves_a_copy(cx: &mut TestAppContext) {
     let y = alt_press(&shell, cx, 1);
     drag_to(&shell, cx, X, y + 2. * ROW_PITCH + 5.);
     shell.update(cx, |shell, cx| shell.drop_row_with(false, cx));
-    assert_eq!(host.take_edits(), ["move 1 false 0 2"], "⌥ let go before the drop still copied");
+    assert_eq!(
+        host.take_edits(),
+        ["move 1 false 0 2"],
+        "⌥ let go before the drop still copied"
+    );
 }
 
 /// Into the pinned tabs, the copy's place counts the pinned tab it's a copy of, which stays.
@@ -64,8 +75,14 @@ fn an_alt_press_let_go_in_place_splits(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| shell.set_selected(1, cx));
     host.take_edits();
     alt_press(&shell, cx, 2);
-    assert!(host.take_edits().is_empty(), "the ⌥ press split before it was let go");
+    assert!(
+        host.take_edits().is_empty(),
+        "the ⌥ press split before it was let go"
+    );
     shell.update(cx, |shell, cx| shell.drop_row_with(false, cx));
     let edits = host.take_edits();
-    assert!(edits.iter().any(|edit| edit.starts_with("split 2 1")), "{edits:?}");
+    assert!(
+        edits.iter().any(|edit| edit.starts_with("split 2 1")),
+        "{edits:?}"
+    );
 }

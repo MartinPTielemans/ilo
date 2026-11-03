@@ -13,7 +13,8 @@ use gpui::{
 };
 
 use super::{
-    Download, DownloadState, FOOTER_HEIGHT, LIST_TOP, MenuEntry, NAV_SIZE, SECONDARY, Section, Shell,
+    Download, DownloadState, FOOTER_HEIGHT, LIST_TOP, MenuEntry, NAV_SIZE, SECONDARY, Section,
+    Shell,
     library::{capture_id, is_video, of},
 };
 use crate::palette::{STATE_HOVERED, STATE_PRESSED};
@@ -58,30 +59,31 @@ const RECENT_FADE_OUT: f32 = 0.13;
 /// Arc's: four rows 56 apart, a 40 pt column at 8 for an image's preview 40 wide or the file's
 /// icon 26 wide, and the name at 61 over its age.
 const RECENT_COUNT: usize = 4;
-use crate::tokens::shell::recent_downloads::RECENT_PITCH;
-use crate::tokens::shell::recent_downloads::COLUMN_X;
-use crate::tokens::shell::recent_downloads::COLUMN;
-use crate::tokens::shell::recent_downloads::ICON;
-use crate::tokens::shell::recent_downloads::TEXT_X;
-use crate::tokens::shell::recent_downloads::TEXT_END;
-use crate::tokens::shell::recent_downloads::NAME;
-use crate::tokens::shell::recent_downloads::NAME_SIZE;
-use crate::tokens::shell::recent_downloads::NAME_LINE;
-use crate::tokens::shell::recent_downloads::AGE_SIZE;
 use crate::tokens::shell::recent_downloads::AGE_LINE;
-use crate::tokens::shell::recent_downloads::PREVIEW_HEIGHT;
-use crate::tokens::shell::recent_downloads::PREVIEW_RADIUS;
+use crate::tokens::shell::recent_downloads::AGE_SIZE;
+use crate::tokens::shell::recent_downloads::COLUMN;
+use crate::tokens::shell::recent_downloads::COLUMN_X;
+use crate::tokens::shell::recent_downloads::ICON;
+use crate::tokens::shell::recent_downloads::NAME;
+use crate::tokens::shell::recent_downloads::NAME_LINE;
+use crate::tokens::shell::recent_downloads::NAME_SIZE;
 use crate::tokens::shell::recent_downloads::PLATE_INSET;
 use crate::tokens::shell::recent_downloads::PLATE_RADIUS;
+use crate::tokens::shell::recent_downloads::PREVIEW_HEIGHT;
+use crate::tokens::shell::recent_downloads::PREVIEW_RADIUS;
+use crate::tokens::shell::recent_downloads::RECENT_PITCH;
 use crate::tokens::shell::recent_downloads::SHADE;
 use crate::tokens::shell::recent_downloads::SHADE_GAP;
+use crate::tokens::shell::recent_downloads::TEXT_END;
+use crate::tokens::shell::recent_downloads::TEXT_X;
 
 const MINUTE: f64 = 60_000.;
 const HOUR: f64 = 60. * MINUTE;
 const DAY: f64 = 24. * HOUR;
 const WEEK: f64 = 7. * DAY;
-const MONTHS: [&str; 12] =
-    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 
 /// What `Browser::file_preview` found for a file: an image's thumbnail, else its icon, `width` by
 /// `height` pixels.
@@ -130,11 +132,20 @@ fn row_opacity(going: bool, index: usize, from: f32, t: f32) -> f32 {
     let index = index as f32;
     match going {
         false => {
-            let start = if from == 0. { index * RECENT_STAGGER_IN } else { 0. };
+            let start = if from == 0. {
+                index * RECENT_STAGGER_IN
+            } else {
+                0.
+            };
             (from + (t - start).max(0.) / RECENT_FADE_IN).min(1.)
         }
         true => {
-            let start = RECENT_LINGER + if from == 1. { index * RECENT_STAGGER_OUT } else { 0. };
+            let start = RECENT_LINGER
+                + if from == 1. {
+                    index * RECENT_STAGGER_OUT
+                } else {
+                    0.
+                };
             (from - (t - start).max(0.) / RECENT_FADE_OUT).max(0.)
         }
     }
@@ -211,7 +222,9 @@ fn civil(days: i64) -> (i64, u32, u32) {
 }
 
 fn now() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0., |since| since.as_secs_f64() * 1e3)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0., |since| since.as_secs_f64() * 1e3)
 }
 
 impl Shell {
@@ -249,7 +262,8 @@ impl Shell {
             position,
             in_reveal,
             Box::new(move |chosen, shell, cx| {
-                let Some((_, _, bit)) = chosen.and_then(|at| rows.get(at).copied().flatten()) else {
+                let Some((_, _, bit)) = chosen.and_then(|at| rows.get(at).copied().flatten())
+                else {
                     return;
                 };
                 let kinds = shell.browser.hover_kinds(cx) ^ bit;
@@ -353,8 +367,10 @@ impl Shell {
     /// no file to look at yet.
     fn ask_download_previews(&mut self, cx: &mut Context<Self>) {
         let path = |id: u64| match self.downloads.iter().find(|each| each.id == id) {
-            Some(each) => (each.state == DownloadState::Done && !each.held && !each.path.is_empty())
-                .then(|| each.path.clone()),
+            Some(each) => {
+                (each.state == DownloadState::Done && !each.held && !each.path.is_empty())
+                    .then(|| each.path.clone())
+            }
             None => (self.captures.iter())
                 .find(|each| capture_id(&each.path) == id)
                 .map(|each| each.path.clone()),
@@ -410,7 +426,9 @@ impl Shell {
     /// moves on.
     fn recent_row_opacities(&self, now: Instant) -> Vec<f32> {
         let recent = &self.recent_downloads;
-        let t = recent.fade.map_or(0., |fade| now.saturating_duration_since(fade).as_secs_f32());
+        let t = recent
+            .fade
+            .map_or(0., |fade| now.saturating_duration_since(fade).as_secs_f32());
         let row = |index| row_opacity(recent.going, index, recent.from(index), t);
         (0..recent.rows.len()).map(row).collect()
     }
@@ -422,8 +440,9 @@ impl Shell {
         }
         let files = self.recent_files(cx);
         let recent = &mut self.recent_downloads;
-        let kept: Vec<_> =
-            (recent.rows.iter()).map(|(id, _)| files.iter().any(|(file, _)| file == id)).collect();
+        let kept: Vec<_> = (recent.rows.iter())
+            .map(|(id, _)| files.iter().any(|(file, _)| file == id))
+            .collect();
         let mut keeps = kept.iter();
         recent.rows.retain(|_| keeps.next() == Some(&true));
         let mut keeps = kept.iter();
@@ -463,7 +482,11 @@ impl Shell {
         let now = cx.background_executor().now();
         self.recent_downloads.fade.get_or_insert(now);
         let end = if self.recent_downloads.going { 0. } else { 1. };
-        if self.recent_row_opacities(now).iter().any(|&opacity| opacity != end) {
+        if self
+            .recent_row_opacities(now)
+            .iter()
+            .any(|&opacity| opacity != end)
+        {
             window.request_animation_frame();
             return;
         }
@@ -567,8 +590,8 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let download = self.downloads.iter().find(|each| each.id == id);
-        let capture = (self.captures.iter())
-            .find(|each| download.is_none() && capture_id(&each.path) == id);
+        let capture =
+            (self.captures.iter()).find(|each| download.is_none() && capture_id(&each.path) == id);
         let name = match (download, capture) {
             (Some(download), _) => download.name.clone(),
             (None, Some(capture)) => capture.name.clone(),
@@ -677,7 +700,12 @@ impl Shell {
                     .child(line(name, NAME_SIZE, NAME_LINE, NAME))
                     .child(line(detail, AGE_SIZE, AGE_LINE, SECONDARY)),
             );
-        let row = div().flex_none().relative().h(px(RECENT_PITCH)).opacity(opacity).child(row);
+        let row = div()
+            .flex_none()
+            .relative()
+            .h(px(RECENT_PITCH))
+            .opacity(opacity)
+            .child(row);
         row.into_any_element()
     }
 }
@@ -705,7 +733,11 @@ mod tests {
         let now = 1_790_000_000_000.;
         let ago = |by: f64| age(now - by, now, now - 3. * HOUR);
         assert_eq!(ago(10_000.), "just now");
-        assert_eq!(ago(-5_000.), "just now", "a clock that went back isn't the future");
+        assert_eq!(
+            ago(-5_000.),
+            "just now",
+            "a clock that went back isn't the future"
+        );
         assert_eq!(ago(MINUTE), "1 minute ago");
         assert_eq!(ago(59. * MINUTE), "59 minutes ago");
         assert_eq!(ago(HOUR), "1 hour ago");
@@ -770,7 +802,11 @@ mod tests {
     fn rows(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> (Vec<(u64, String)>, bool) {
         shell.read_with(cx, |shell, _| {
             let recent = &shell.recent_downloads;
-            let rows = recent.rows.iter().map(|(id, age)| (*id, age.to_string())).collect();
+            let rows = recent
+                .rows
+                .iter()
+                .map(|(id, age)| (*id, age.to_string()))
+                .collect();
             (rows, recent.going)
         })
     }
@@ -784,7 +820,11 @@ mod tests {
         picture.name = "picture.png".into();
         let path = "/media/Capture.png";
         let name = "Capture.png".into();
-        let capture = Captured { path: path.into(), name, saved: now() - MINUTE };
+        let capture = Captured {
+            path: path.into(),
+            name,
+            saved: now() - MINUTE,
+        };
         shell.update(cx, |shell, cx| {
             shell.set_downloads(vec![picture, done(1, DAY)], cx);
             shell.set_captures(vec![capture], cx);
@@ -808,7 +848,11 @@ mod tests {
         let listed = |cx: &mut VisualTestContext| {
             move_to(cx, 24., height - 25.);
             wait(cx, RECENT_WAIT);
-            let ids = rows(&shell, cx).0.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
+            let ids = rows(&shell, cx)
+                .0
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>();
             move_to(cx, 400., 300.);
             wait(cx, RECENT_WAIT);
             ids
@@ -864,7 +908,10 @@ mod tests {
         // The Library's captures are listed again as the wait starts.
         let asked = ["list captures", "file preview 5", "file preview 4"];
         let calls = host.take();
-        assert!(calls.iter().any(|call| call == "tooltip View Library ⇧⌘L"), "{calls:?}");
+        assert!(
+            calls.iter().any(|call| call == "tooltip View Library ⇧⌘L"),
+            "{calls:?}"
+        );
         let previews: Vec<_> = calls.iter().filter(|c| !c.starts_with("tooltip")).collect();
         assert_eq!(previews, asked);
 
@@ -872,15 +919,30 @@ mod tests {
         move_to(cx, 24., height - 45.);
         move_to(cx, 120., height - 50. - 28.);
         move_to(cx, 120., height - 50. - 3. * 56. - 28.);
-        assert_eq!(rows(&shell, cx), (shown.clone(), false), "the rows keep them");
+        assert_eq!(
+            rows(&shell, cx),
+            (shown.clone(), false),
+            "the rows keep them"
+        );
 
         // Their fade in ends on the test's clock, which stands still from here, so they're still
         // going when the pointer comes back however long the machine takes.
-        wait(cx, Duration::from_secs_f32(3. * RECENT_STAGGER_IN + RECENT_FADE_IN));
+        wait(
+            cx,
+            Duration::from_secs_f32(3. * RECENT_STAGGER_IN + RECENT_FADE_IN),
+        );
         move_to(cx, 120., 200.);
-        assert_eq!(rows(&shell, cx), (shown.clone(), true), "they go with the pointer on neither");
+        assert_eq!(
+            rows(&shell, cx),
+            (shown.clone(), true),
+            "they go with the pointer on neither"
+        );
         move_to(cx, button.0, button.1);
-        assert_eq!(rows(&shell, cx), (shown.clone(), false), "the button brings them back");
+        assert_eq!(
+            rows(&shell, cx),
+            (shown.clone(), false),
+            "the button brings them back"
+        );
 
         // The running one finishing keeps its row and gets its preview.
         host.take();
@@ -890,7 +952,10 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(rows(&shell, cx), (shown.clone(), false));
         let calls = host.take();
-        let previews: Vec<_> = calls.iter().filter(|c| c.starts_with("file preview")).collect();
+        let previews: Vec<_> = calls
+            .iter()
+            .filter(|c| c.starts_with("file preview"))
+            .collect();
         assert_eq!(previews, ["file preview 9"]);
         let mut running = shell.read_with(cx, |shell, _| shell.downloads.clone());
         running[0].state = DownloadState::Running;
@@ -902,13 +967,21 @@ mod tests {
         move_to(cx, button.0, button.1);
         wait(cx, RECENT_WAIT);
         assert_eq!(rows(&shell, cx).0.len(), 4);
-        assert!(host.take().iter().all(|call| !call.starts_with("file preview")));
+        assert!(
+            host.take()
+                .iter()
+                .all(|call| !call.starts_with("file preview"))
+        );
 
         cx.simulate_click(point(px(button.0), px(button.1)), Modifiers::none());
         cx.run_until_parked();
-        assert!(rows(&shell, cx).0.is_empty(), "the Library takes them away at once");
-        let (open, archive) =
-            shell.read_with(cx, |shell, _| (shell.library_open, shell.section == Section::Archive));
+        assert!(
+            rows(&shell, cx).0.is_empty(),
+            "the Library takes them away at once"
+        );
+        let (open, archive) = shell.read_with(cx, |shell, _| {
+            (shell.library_open, shell.section == Section::Archive)
+        });
         assert!(open && archive, "a click opens the Library where it was");
     }
 
@@ -922,21 +995,33 @@ mod tests {
         assert_eq!(row_opacity(false, 0, 0., 0.), 0.);
         assert!(close(row_opacity(false, 0, 0., 0.09), 0.5));
         assert_eq!(row_opacity(false, 3, 0., 3. * RECENT_STAGGER_IN), 0.);
-        assert!(close(row_opacity(false, 3, 0., 3. * RECENT_STAGGER_IN + 0.09), 0.5));
-        assert_eq!(row_opacity(false, 3, 0., 3. * RECENT_STAGGER_IN + RECENT_FADE_IN + 1e-4), 1.);
+        assert!(close(
+            row_opacity(false, 3, 0., 3. * RECENT_STAGGER_IN + 0.09),
+            0.5
+        ));
+        assert_eq!(
+            row_opacity(false, 3, 0., 3. * RECENT_STAGGER_IN + RECENT_FADE_IN + 1e-4),
+            1.
+        );
         assert_eq!(row_drop(0.), 5.);
         assert!(row_drop(0.5) > 0. && row_drop(0.5) < 0.2);
         assert_eq!(row_drop(2. / 3.), 0.);
 
         assert_eq!(row_opacity(true, 0, 1., RECENT_LINGER), 1.);
-        assert!(close(row_opacity(true, 0, 1., RECENT_LINGER + RECENT_FADE_OUT / 2.), 0.5));
+        assert!(close(
+            row_opacity(true, 0, 1., RECENT_LINGER + RECENT_FADE_OUT / 2.),
+            0.5
+        ));
         let top = RECENT_LINGER + 3. * RECENT_STAGGER_OUT;
         assert!(close(top - RECENT_LINGER, 0.05));
         assert_eq!(row_opacity(true, 3, 1., top), 1.);
         assert_eq!(row_opacity(true, 3, 1., top + RECENT_FADE_OUT + 1e-4), 0.);
         // Turned at half: back in over half the fade, and out after the linger alone.
         assert!(close(row_opacity(false, 3, 0.5, RECENT_FADE_IN / 4.), 0.75));
-        assert!(close(row_opacity(true, 3, 0.5, RECENT_LINGER + RECENT_FADE_OUT / 4.), 0.25));
+        assert!(close(
+            row_opacity(true, 3, 0.5, RECENT_LINGER + RECENT_FADE_OUT / 4.),
+            0.25
+        ));
     }
 
     /// A pointer passing over the button leaves no rows. A download running alone shows as one, and
@@ -951,14 +1036,23 @@ mod tests {
         wait(cx, RECENT_WAIT / 2);
         move_to(cx, 300., 200.);
         wait(cx, RECENT_WAIT * 2);
-        assert!(rows(&shell, cx).0.is_empty(), "passing over the button shows nothing");
+        assert!(
+            rows(&shell, cx).0.is_empty(),
+            "passing over the button shows nothing"
+        );
 
         let mut running = done(2, 0.);
         running.state = DownloadState::Running;
-        shell.update(cx, |shell, cx| shell.set_downloads(vec![running.clone()], cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_downloads(vec![running.clone()], cx)
+        });
         move_to(cx, 24., height - 25.);
         wait(cx, RECENT_WAIT * 2);
-        assert_eq!(rows(&shell, cx).0, [(2, "just now".to_string())], "a running one shows");
+        assert_eq!(
+            rows(&shell, cx).0,
+            [(2, "just now".to_string())],
+            "a running one shows"
+        );
 
         move_to(cx, 300., 200.);
         wait(cx, RECENT_WAIT * 2);
@@ -967,12 +1061,20 @@ mod tests {
         shell.update(cx, |shell, cx| shell.set_downloads(vec![running], cx));
         move_to(cx, 24., height - 25.);
         wait(cx, RECENT_WAIT * 2);
-        assert_eq!(rows(&shell, cx).0, [(2, "just now".to_string())], "a held one shows");
+        assert_eq!(
+            rows(&shell, cx).0,
+            [(2, "just now".to_string())],
+            "a held one shows"
+        );
         move_to(cx, 24., height - 45.);
         cx.simulate_click(point(px(120.), px(height - 50. - 28.)), Modifiers::none());
         cx.run_until_parked();
         let menu = host.menus.borrow().last().cloned().unwrap_or_default();
-        let titles: Vec<_> = menu.iter().take(2).map(|(title, _)| title.to_string()).collect();
+        let titles: Vec<_> = menu
+            .iter()
+            .take(2)
+            .map(|(title, _)| title.to_string())
+            .collect();
         assert_eq!(titles, ["Keep", "Delete"]);
     }
 }
