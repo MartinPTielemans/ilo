@@ -704,6 +704,11 @@ check-glyph = 12.0
 check-tick = 0xffffff
 disclosure-gap = 4.0
 disclosure-glyph = 12.0
+# Ours (#1673): the import's numbered steps, such as Full Disk Access's, each number on a circle
+# of the control's fill, and the dot before a line that waits, or before an Arc Space's name in the
+# colour of its theme.
+step = 20.0
+dot = 7.0
 # The views Settings shows from the library, Sync and Import, put a heading 8 over a group and 20
 # under the one before, and their groups 10 apart.
 header-gap = 7.0

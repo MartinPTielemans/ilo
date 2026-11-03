@@ -11,8 +11,9 @@
 # with a login's password changed says it conflicted and kept the saved one. Settings' Passwords
 # tab lists what came in, and the app menu's Import from Other Browsers… shows Import again. With
 # the sidebar hidden, Arc's Spaces say so in a toast. Each step is captured, and the list and the
-# first browser's choices, under Import › its name with Import in the accent, at Settings' first
-# size and its least, dark and light; Esc goes back from the choices to the list. Arc has no Linux
+# first browser's choices, read as it's picked and each kind counted, under Import › its name with
+# Import in the accent, at Settings' first size and its least, dark and light; Esc goes back from
+# the choices to the list. Arc has no Linux
 # build, so off the Mac the fixture's Arc isn't found, its steps are left out, and Chrome and Firefox
 # are where Linux keeps them.
 
@@ -204,12 +205,21 @@ settings_shots() {
   settings_at 820 660
 }
 settings_shots list
-# The first browser's choices, under the heading Import › its name, with Import in the accent;
-# Esc goes back to the list.
-if [ -n "$arc" ]; then first_found=Arc; else first_found=Chrome; fi
+# The first browser's choices, under the heading Import › its name, with Import in the accent,
+# read as it's picked: each kind with how much of it comes, Arc's Spaces by name, the passwords'
+# row and the profiles it goes into. Esc goes back to the list.
+if [ -n "$arc" ]; then
+  first_found=Arc
+  counts='spaces: 2, pinned: 6, folders: 2, link_rules: 3, favorites: 3, bookmarks: 0, bookmark_folders: 0, open_tabs: 0, reading_list: 0, pages: 0, addresses: 0, extensions: 0'
+else
+  first_found=Chrome
+  counts='spaces: 0, pinned: 0, folders: 0, link_rules: 0, favorites: 0, bookmarks: 3, bookmark_folders: 1, open_tabs: 2, reading_list: 0, pages: 2, addresses: 1, extensions: 0'
+fi
 send clickkey $(drawn "import-from $first_found")
 expect "^browser: import pick $first_found\$" "Import… on $first_found's row didn't show its choices"
 expect '^browser: import drawn pick$' "$first_found's choices didn't draw"
+expect "^browser: import read $first_found: Tally { $counts }\$" \
+  "picking $first_found didn't read it: $(grep '^browser: import read' "$log" | tail -1)"
 settings_shots choose
 send key escape
 expect '^browser: import escape$' "Esc in $first_found's choices didn't reach the import"
