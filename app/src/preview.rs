@@ -2601,7 +2601,7 @@ struct AccountPage {
 impl gpui::Render for AccountPage {
     fn render(
         &mut self,
-        _: &mut gpui::Window,
+        window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
         use browser::palette::PAPER;
@@ -2619,6 +2619,7 @@ impl gpui::Render for AccountPage {
             Rc::default(),
             Rc::new(|_, _, _| {}),
             Rc::new(|_, _| {}),
+            window.is_a11y_active(),
         );
         let colors = Colors {
             line: look.line,
