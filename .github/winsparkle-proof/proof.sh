@@ -86,8 +86,10 @@ case $to in
     ;;
   run:*)
     gh run download "${to#run:}" -R "$repo" -n windows -D "$out/to-windows" &&
-      gh run download "${to#run:}" -R "$repo" -n mac -D "$out/to-mac" ||
-      fail "run ${to#run:} has no windows or mac artifact"
+      gh run download "${to#run:}" -R "$repo" -n mac -D "$out/to-mac" &&
+      { [ -f "$out/to-mac/appcast.xml" ] ||
+        gh run download "${to#run:}" -R "$repo" -n appcast -D "$out/to-mac"; } ||
+      fail "run ${to#run:} has no windows, mac or appcast artifact"
     mkdir -p "$out/to"
     cp "$out/to-mac/appcast.xml" "$out/to-windows/ilo-windows-x64-setup.exe" "$out/to/" ||
       fail "run ${to#run:}'s artifacts have no appcast.xml or ilo-windows-x64-setup.exe"
