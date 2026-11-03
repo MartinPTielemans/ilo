@@ -57,6 +57,7 @@ const SUBPOINTS: f64 = 100.;
 const RUN_COMMAND: u32 = 0;
 const GET_OUTPUTS: u32 = 3;
 const GET_TREE: u32 = 4;
+const GET_INPUTS: u32 = 100;
 
 struct Session {
     queue: EventQueue<State>,
@@ -97,6 +98,8 @@ thread_local! {
     /// The modifiers flags holds, and those the last key went with, as drive.rs keeps them.
     static FLAGS: Cell<u16> = const { Cell::new(0) };
     static KEY_FLAGS: Cell<u16> = const { Cell::new(0) };
+    /// Whether the key held since the last key's events has been held to a repeat (`repeat`).
+    static REPEATED: Cell<bool> = const { Cell::new(false) };
     /// The last press: when, where in sway's layout, and its button.
     static LAST_CLICK: Cell<Option<(Instant, f64, f64, u32)>> = const { Cell::new(None) };
 }
@@ -633,6 +636,7 @@ fn keycode(keysym: u32) -> Option<(u32, bool)> {
 /// Sends `key`'s presses and releases, `kinds` true for a press, with the modifiers `state`.
 fn key_events(key: &str, state: u16, kinds: &[bool]) -> Option<()> {
     let (code, shift) = keycode(drive::keysym(key)?)?;
+    REPEATED.set(false);
     let state = state | FLAGS.get();
     KEY_FLAGS.set(state & (CONTROL | ALT | SHIFT));
     hold(state | if shift { SHIFT } else { 0 })?;
@@ -642,6 +646,34 @@ fn key_events(key: &str, state: u16, kinds: &[bool]) -> Option<()> {
         }
     })?;
     hold(held())
+}
+
+/// A held key's repeat. A Wayland client repeats a key itself, at the rate the compositor gives
+/// after its delay, so the key stays down until the client's next repeat, and is done then. A
+/// second press of a key that's down would reach the app as a press (#1571).
+fn repeat(key: &str) -> Option<()> {
+    drive::keysym(key)?;
+    let (delay, rate) = repeat_info();
+    let interval = 1000 / rate.max(1);
+    let wait = if REPEATED.replace(true) { 0 } else { delay } + interval + interval / 2;
+    drive::go_on(Box::new(move |done| drive::after(wait, done)));
+    Some(())
+}
+
+/// sway's keyboard repeat, as its delay and rate in ms and per second: its defaults unless a
+/// keyboard says.
+fn repeat_info() -> (u32, u32) {
+    let number = |value: &Value| value.as_u64().and_then(|n| u32::try_from(n).ok());
+    sway(GET_INPUTS, "")
+        .and_then(|inputs| {
+            inputs.as_array()?.iter().find_map(|input| {
+                Some((
+                    number(&input["repeat_delay"])?,
+                    number(&input["repeat_rate"])?,
+                ))
+            })
+        })
+        .unwrap_or((600, 25))
 }
 
 /// The surface where drive.rs's scripted input method composes, as the compositor's would:
@@ -957,7 +989,13 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
             }
             Some(())
         })(),
-        "keydown" => (|| key_events(words.next()?, 0, &[true]))(),
+        "keydown" => (|| {
+            let key = words.next()?;
+            match words.next() {
+                Some("repeat") => repeat(key),
+                _ => key_events(key, 0, &[true]),
+            }
+        })(),
         "keyup" => (|| key_events(words.next()?, 0, &[false]))(),
         "type" => rest.chars().try_for_each(|c| key(&c.to_string(), 0)),
         "insert" => insert(rest),
