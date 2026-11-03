@@ -285,17 +285,20 @@ expect "^browser: loaded $n ${site}notes.txt\$" "the link didn't load in the pan
 # The outline comes as the rows are drawn.
 expect '^browser: outline ' "the pinned split's row wasn't drawn"
 ../tools/window-screenshot.sh "$pid" "$out/pinned-split.png" || fail "no window to capture"
-bar_command separate-split "Separate All Pages" "separate all"
-expect '^browser: splits $' "Separate All Pages didn't end the pinned split"
-expect "^browser: panes $n\$" "Separate All Pages didn't leave the focused pane's tab shown alone"
+bar_command separate-split "Separate All Tabs" "separate all"
+expect '^browser: splits $' "Separate All Tabs didn't end the pinned split"
+expect "^browser: panes $n\$" "Separate All Tabs didn't leave the focused pane's tab shown alone"
 # A split made by dragging inside Pinned stays pinned too, as Arc's: the pane's tab, a pinned row
-# of its own now, rested on the pinned tab's row joins it there, and ⌘Z takes it back to its row.
-expect_lists "$c $n" "$a" "after Separate All Pages on the pinned split"
+# of its own now, rested on the pinned tab's row's right half joins it there on the right, and ⌘Z
+# takes it back to its row.
+expect_lists "$c $n" "$a" "after Separate All Tabs on the pinned split"
+y0=$(pinned_row 0 | cut -d' ' -f2)
 send press $(pinned_row 1)
 send dragto 110 $(pinned_row 1 | cut -d' ' -f2)
-send dragto $(pinned_row 0)
-expect "^browser: drop onto $c\$" "a pinned tab rested on another pinned tab's row didn't take it as the drop"
-send release $(pinned_row 0)
+send dragto 170 $y0
+expect "^browser: drop onto $c right\$" \
+  "a pinned tab rested on a pinned row didn't take it as the drop"
+send release 170 $y0
 expect "^browser: dragged $n onto $c\$" "the pinned tab let go on another pinned tab's row didn't join it"
 expect "^browser: splits $c+$n\$" "the pinned tabs dragged together aren't a split: $(grep '^browser: splits' "$log" | tail -1)"
 expect_lists "$c $n" "$a" "after dragging a pinned tab onto another inside Pinned"

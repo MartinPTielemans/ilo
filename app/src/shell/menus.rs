@@ -1140,10 +1140,7 @@ impl Shell {
         let pinned = self.pinned().contains(&tab);
         // Arc's closed split is a pinned one with none of its pages loaded.
         let closed = pinned && panes.iter().all(|&pane| self.page(pane).unloaded);
-        let orientation = match self.stacked(tab) {
-            true => "Convert to Horizontal Split View",
-            false => "Convert to Vertical Split View",
-        };
+        let orientation = super::commands::orientation_title(self.stacked(tab));
         let mut items: Vec<(MenuEntry, &'static str, MenuAction)> = vec![
             (
                 MenuEntry::new("Separate All Tabs", true),
