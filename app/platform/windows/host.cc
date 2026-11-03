@@ -1696,11 +1696,6 @@ class FileDropSource : public IDropSource {
     return refs;
   }
   HRESULT STDMETHODCALLTYPE QueryContinueDrag(BOOL escape, DWORD keys) override {
-    // DIAG(#1561)
-    if (keys != diag_keys_) {
-      diag_keys_ = keys;
-      fprintf(stderr, "browser: diag query continue keys %lu escape %d\n", keys, escape);
-    }
     if (escape || (keys & MK_RBUTTON)) {
       return DRAGDROP_S_CANCEL;
     }
@@ -1709,19 +1704,12 @@ class FileDropSource : public IDropSource {
     }
     return S_OK;
   }
-  HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD effect) override {
-    // DIAG(#1561)
-    if (!diag_fed_) {
-      diag_fed_ = true;
-      fprintf(stderr, "browser: diag feedback %lu\n", effect);
-    }
+  HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD) override {
     return DRAGDROP_S_USEDEFAULTCURSORS;
   }
 
  private:
   ULONG refs_ = 1;
-  DWORD diag_keys_ = 0xffff;
-  bool diag_fed_ = false;
 };
 
 // The shell's own data object for the file at |path|, so a drag carries it as Explorer does, with
@@ -3894,13 +3882,7 @@ bool host_drag_file(const char* path, void (*ended)(bool)) {
     source.Attach(new FileDropSource());
     // On the UI thread GPUI has made an OLE apartment, as Explorer's drag is.
     DWORD effect = DROPEFFECT_NONE;
-    POINT diag_at{};
-    GetCursorPos(&diag_at);
-    fprintf(stderr, "browser: diag DoDragDrop from %ld %ld over %p\n", diag_at.x, diag_at.y,
-            static_cast<void*>(WindowFromPoint(diag_at)));
     const HRESULT dropped = DoDragDrop(data.Get(), source.Get(), DROPEFFECT_COPY, &effect);
-    fprintf(stderr, "browser: diag DoDragDrop returned %lx effect %lu\n",
-            static_cast<unsigned long>(dropped), effect);
     if (ended) {
       ended(dropped == DRAGDROP_S_DROP && effect != DROPEFFECT_NONE);
     }
