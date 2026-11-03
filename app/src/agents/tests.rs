@@ -1747,6 +1747,7 @@ mod tasks {
 
     /// At a quit with no window left, its CLI ends and its token with it, and its Space stays for
     /// the next launch to delete, as the core can't then (#1676).
+    #[cfg(unix)]
     #[gpui::test]
     fn a_task_ended_with_no_window_left_keeps_its_space(cx: &mut TestAppContext) {
         let (agents, browser) = ready(Some(fake_cli("first")), cx);
