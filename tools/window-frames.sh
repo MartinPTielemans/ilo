@@ -4,8 +4,10 @@
 # top-left, is one flat colour: as the page area is while no page shows in it (#1438). A recording
 # compresses away what it would need to tell, and the hosted Mac's records nothing (#1108).
 # Prints "capturing" once the first picture can be taken, then a line a picture:
-#   <seconds since 1970, as it was taken> flat|page <luma range> <mean red> <mean green> <mean blue>
-# and keeps the first ten flat pictures in <flat-dir>, named for their time.
+#   <asked> <got> flat|page <luma range> <mean red> <mean green> <mean blue>
+# with the seconds since 1970 as it was asked for and as it came back: it shows the window at some
+# moment between, which on the Mac spans 25 ms or more. It keeps the first ten flat pictures in
+# <flat-dir>, named for when they were asked for.
 # On the Mac it takes them as tools/window-screenshot.sh does. On Linux it reads check.sh's Xvfb,
 # which holds nothing but the app, and refuses outside it; on Windows it copies the screen where
 # the window is, only on a CI runner, whose desktop holds nothing but the app.
@@ -68,6 +70,7 @@ public static class Frames {
       while (DateTime.UtcNow < end && !File.Exists(stop)) {
         double at = (DateTime.UtcNow - epoch).TotalSeconds;
         graphics.CopyFromScreen(main.X + x, main.Y + y, 0, 0, new Size(w, h));
+        double got = (DateTime.UtcNow - epoch).TotalSeconds;
         BitmapData data = bitmap.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppRgb);
         if (bytes == null) bytes = new byte[data.Stride * h];
         Marshal.Copy(data.Scan0, bytes, 0, bytes.Length);
@@ -86,8 +89,8 @@ public static class Frames {
           }
         }
         bool isFlat = high - low < flat;
-        Console.WriteLine(string.Format(CultureInfo.InvariantCulture, "{0:F3} {1} {2} {3} {4} {5}",
-          at, isFlat ? "flat" : "page", high - low, red / n, green / n, blue / n));
+        Console.WriteLine(string.Format(CultureInfo.InvariantCulture, "{0:F3} {1:F3} {2} {3} {4} {5} {6}",
+          at, got, isFlat ? "flat" : "page", high - low, red / n, green / n, blue / n));
         Console.Out.Flush();
         if (isFlat && saved < 10) {
           saved++;
@@ -161,6 +164,7 @@ end, saved = time.time() + seconds, 0
 while time.time() < end and not os.path.exists(stop):
     at = time.time()
     image = x11.XGetImage(display, root, left + x, top + y, w, h, 0xffffffff, 2)  # ZPixmap
+    got = time.time()
     if not image:
         continue
     line, depth = image.contents.bytes_per_line, image.contents.bits_per_pixel
@@ -177,8 +181,8 @@ while time.time() < end and not os.path.exists(stop):
             low, high = min(low, luma), max(high, luma)
             red, green, blue, n = red + r, green + g, blue + b, n + 1
     is_flat = high - low < flat
-    print("%.3f %s %d %d %d %d" % (at, "flat" if is_flat else "page", high - low, red // n,
-                                   green // n, blue // n), flush=True)
+    print("%.3f %.3f %s %d %d %d %d" % (at, got, "flat" if is_flat else "page", high - low,
+                                         red // n, green // n, blue // n), flush=True)
     if is_flat and saved < 10:
         saved += 1
         rows = []
@@ -233,6 +237,7 @@ while Date() < end && !FileManager.default.fileExists(atPath: stop) {
   let at = Date().timeIntervalSince1970
   let shot: CGImage? = try? await SCScreenshotManager.captureImage(contentFilter: filter,
     configuration: config)
+  let got = Date().timeIntervalSince1970
   guard let image = shot else { continue }
   let context = CGContext(data: &pixels, width: w, height: h, bitsPerComponent: 8,
     bytesPerRow: w * 4, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
@@ -249,8 +254,8 @@ while Date() < end && !FileManager.default.fileExists(atPath: stop) {
     }
   }
   let flat = high - low < flatRange
-  print(String(format: "%.3f %@ %ld %ld %ld %ld", at, flat ? "flat" : "page", high - low, r / n,
-    g / n, b / n))
+  print(String(format: "%.3f %.3f %@ %ld %ld %ld %ld", at, got, flat ? "flat" : "page",
+    high - low, r / n, g / n, b / n))
   fflush(stdout)
   if flat && saved < 10 {
     saved += 1
