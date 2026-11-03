@@ -1,0 +1,118 @@
+Lets the core keep the page a switch leaves over the one it shows until that one has drawn (issue
+#1438). On the Mac, a page shown again gets a new compositor, and its view shows only its
+background colour until that compositor's first frame, 60 to 230 ms on GitHub's hosted Mac, so the
+window showed no page partway through every tab and Space switch. A hook only: the core decides
+what stays, through content::CallWhenFrameShown.
+
+diff --color -ruN a/content/browser/renderer_host/render_widget_host_view_mac.h b/content/browser/renderer_host/render_widget_host_view_mac.h
+--- a/content/browser/renderer_host/render_widget_host_view_mac.h
++++ b/content/browser/renderer_host/render_widget_host_view_mac.h
+@@ -12,6 +12,7 @@
+ #include <string_view>
+ #include <vector>
+ 
++#include "base/functional/callback.h"
+ #include "base/gtest_prod_util.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/scoped_refptr.h"
+@@ -339,6 +340,9 @@
+   BrowserCompositorMac* BrowserCompositor() const {
+     return browser_compositor_.get();
+   }
++  // browser_core: runs |shown| once the view next puts a frame on screen, as
++  // content::CallWhenFrameShown says.
++  void CallWhenFrameShown(base::OnceClosure shown);
+ 
+   MouseWheelPhaseHandler mouse_wheel_phase_handler_;
+ 
+@@ -685,6 +689,9 @@
+   // applied until the swap completes (see comments in
+   // AcceleratedWidgetCALayerParamsUpdated).
+   SkColor last_frame_root_background_color_ = SK_ColorTRANSPARENT;
++
++  // browser_core: run as the next frame reaches the NSView (CallWhenFrameShown).
++  std::vector<base::OnceClosure> frame_shown_callbacks_;
+ 
+   std::unique_ptr<input::CursorManager> cursor_manager_;
+ 
+diff --color -ruN a/content/browser/renderer_host/render_widget_host_view_mac.mm b/content/browser/renderer_host/render_widget_host_view_mac.mm
+--- a/content/browser/renderer_host/render_widget_host_view_mac.mm
++++ b/content/browser/renderer_host/render_widget_host_view_mac.mm
+@@ -56,6 +56,7 @@
+ #include "content/public/browser/browser_context.h"
+ #include "content/public/browser/browser_plugin_guest_manager.h"
+ #include "content/public/browser/render_widget_host.h"
++#include "content/public/browser/frame_shown_mac.h"
+ #include "content/public/browser/stretch_content_on_resize_mac.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/common/page_visibility_state.h"
+@@ -219,8 +220,19 @@
+ 
+   // Update the contents that the NSView is displaying.
+   ns_view_->SetCALayerParams(std::move(ca_layer_params));
++  // browser_core: in the same Core Animation transaction as the frame, so what the callbacks
++  // change on screen changes with it.
++  std::vector<base::OnceClosure> shown;
++  shown.swap(frame_shown_callbacks_);
++  for (base::OnceClosure& callback : shown) {
++    std::move(callback).Run();
++  }
+ }
+ 
++void RenderWidgetHostViewMac::CallWhenFrameShown(base::OnceClosure shown) {
++  frame_shown_callbacks_.push_back(std::move(shown));
++}
++
+ ////////////////////////////////////////////////////////////////////////////////
+ // views::AccessibilityFocusOverrider::Client:
+ id RenderWidgetHostViewMac::GetAccessibilityFocusedUIElement() {
+@@ -2792,6 +2804,14 @@
+   if (compositor && compositor->GetDelegatedFrameHost()) {
+     compositor->GetDelegatedFrameHost()->SetStretchContentOnResize(stretch);
+   }
++}
++
++void CallWhenFrameShown(RenderWidgetHostView* view, base::OnceClosure shown) {
++  if (!view || static_cast<RenderWidgetHostViewBase*>(view)
++                   ->IsRenderWidgetHostViewChildFrame()) {
++    return;
++  }
++  static_cast<RenderWidgetHostViewMac*>(view)->CallWhenFrameShown(std::move(shown));
+ }
+ 
+ }  // namespace content
+diff --color -ruN a/content/public/browser/BUILD.gn b/content/public/browser/BUILD.gn
+--- a/content/public/browser/BUILD.gn
++++ b/content/public/browser/BUILD.gn
+@@ -716,6 +716,7 @@
+       "native_event_processor_mac.h",
+       "native_event_processor_observer_mac.h",
+       "native_event_processor_observer_mac.mm",
++      "frame_shown_mac.h",
+       "remote_cocoa.h",
+       "stretch_content_on_resize_mac.h",
+     ]
+diff --color -ruN a/content/public/browser/frame_shown_mac.h b/content/public/browser/frame_shown_mac.h
+--- /dev/null
++++ b/content/public/browser/frame_shown_mac.h
+@@ -0,0 +1,20 @@
++// browser_core: lets the core keep the page a switch leaves over a view until the view has drawn.
++
++#ifndef CONTENT_PUBLIC_BROWSER_FRAME_SHOWN_MAC_H_
++#define CONTENT_PUBLIC_BROWSER_FRAME_SHOWN_MAC_H_
++
++#include "base/functional/callback_forward.h"
++#include "content/common/content_export.h"
++
++namespace content {
++
++class RenderWidgetHostView;
++
++// Runs |shown| once |view| next puts a frame in its NSView, in the same Core Animation transaction,
++// or never if the view goes first. A view shown again gets a new compositor, and shows nothing
++// until it draws.
++CONTENT_EXPORT void CallWhenFrameShown(RenderWidgetHostView* view, base::OnceClosure shown);
++
++}  // namespace content
++
++#endif  // CONTENT_PUBLIC_BROWSER_FRAME_SHOWN_MAC_H_
