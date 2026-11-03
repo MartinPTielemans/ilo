@@ -2146,11 +2146,6 @@ namespace {
 
 UINT_PTR const kFrame = 3;
 
-// WM_NCUAHDRAWCAPTION and WM_NCUAHDRAWFRAME, which Windows' headers don't name (Chromium's
-// hwnd_message_handler.cc answers them too).
-constexpr UINT kDrawCaption = 0x00AE;
-constexpr UINT kDrawFrame = 0x00AF;
-
 // Whether the UI draws its buttons over the docked sidebar, by browser window
 // (host_show_window_buttons).
 std::map<HWND, bool>& WindowButtonsShown() {
@@ -2235,28 +2230,30 @@ LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
       params->rgrc[0].top = top + (IsZoomed(hwnd) ? TopEdge(hwnd) : 0);
       return result;
     }
-    // Windows' theme draws the caption the window would have, icon and title, where the UI now is,
-    // and nothing paints over it (#1262). It asks the window with these two, undocumented, as the
-    // taskbar button flashes or the caption otherwise needs drawing: there's no caption to draw.
-    case kDrawCaption:
-    case kDrawFrame:
-      if (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CAPTION) {
-        return 0;
-      }
-      break;
-    // These draw the caption too as the activation, title or icon changes, and Chromium answers
-    // them with Windows' own handling. It can't draw while the window isn't visible, so it isn't
-    // for the moment, as Chromium does for a frame it draws itself.
-    case WM_NCACTIVATE:
-    case WM_SETTEXT:
-    case WM_SETICON: {
-      const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-      if (!(style & WS_VISIBLE) || !(style & WS_CAPTION)) {
+    // Windows' theme paints the caption the window's style has, icon and title, where the caption
+    // would be, though WM_NCCALCSIZE gave that strip to the content: into the window's own surface,
+    // under the UI, where it stayed till Chromium next painted there (#1262). PrintWindow's full
+    // content repaints the whole frame so, as the launch picture does when the app goes to the
+    // background. It paints the frame's edges, and nothing over the content.
+    case WM_NCPAINT: {
+      if (!(GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CAPTION)) {
         break;
       }
-      SetWindowLongPtrW(hwnd, GWL_STYLE, style & ~WS_VISIBLE);
-      const LRESULT result = DefSubclassProc(hwnd, message, wparam, lparam);
-      SetWindowLongPtrW(hwnd, GWL_STYLE, GetWindowLongPtrW(hwnd, GWL_STYLE) | WS_VISIBLE);
+      RECT window{}, content{};
+      GetWindowRect(hwnd, &window);
+      GetClientRect(hwnd, &content);
+      MapWindowPoints(hwnd, nullptr, reinterpret_cast<POINT*>(&content), 2);
+      HRGN edges = CreateRectRgnIndirect(&window);
+      HRGN inside = CreateRectRgnIndirect(&content);
+      CombineRgn(edges, edges, inside, RGN_DIFF);
+      // 1 is all of the frame; anything else, the part to paint.
+      if (wparam != 1) {
+        CombineRgn(edges, edges, reinterpret_cast<HRGN>(wparam), RGN_AND);
+      }
+      const LRESULT result =
+          DefSubclassProc(hwnd, message, reinterpret_cast<WPARAM>(edges), lparam);
+      DeleteObject(inside);
+      DeleteObject(edges);
       return result;
     }
     case WM_NCHITTEST:

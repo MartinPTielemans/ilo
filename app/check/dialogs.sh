@@ -314,8 +314,9 @@ if windows; then
   expect '^browser: dialog hidden$' "the page's dialog didn't leave on Alt+F4"
   expect "^browser: title $page confirm false\$" "the page didn't hear Cancel from Alt+F4"
   ask c Confirm after-close
-  # The browser window's activation went and came back with the dialog's window, and behind the
-  # window buttons the sidebar shows as it does further down, not Windows' caption (#1262).
+  # Since the alert in the background, when the app's going to the background took the launch
+  # picture, behind the window buttons the sidebar shows as it does further down, not Windows'
+  # caption (#1262).
   top=$(pixel "$out/dialog-after-close.png" 0.15 0.008)
   below=$(pixel "$out/dialog-after-close.png" 0.15 0.8)
   ! brighter "$top" "$below" ||
