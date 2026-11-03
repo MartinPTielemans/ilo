@@ -1852,6 +1852,7 @@ impl Settings {
                 .child(self.drawn(format!("clear {id}")))
                 .on_click(cx.listener(move |_, _, _, cx| {
                     if crate::clear_browsing_data(id) {
+                        browser::shell::forget_bar_usage(id, cx);
                         hide(cx);
                     }
                 }));

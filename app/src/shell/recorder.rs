@@ -142,6 +142,8 @@ pub(super) struct Recorder {
     /// How many times Site Search Settings opened.
     pub(super) site_search_settings: Cell<usize>,
     pub(super) clear_browsing_data: Cell<usize>,
+    /// Each profile's command bar picks, as the file keeps them.
+    pub(super) bar_picks: RefCell<HashMap<u64, String>>,
     /// The pages `open_page` opened, in order.
     pub(super) opened_pages: RefCell<Vec<String>>,
     /// The text `copy` put on the clipboard, in order.
@@ -867,6 +869,20 @@ impl Browser for Recorder {
     fn clear_browsing_data(&self, _: &mut App) {
         self.clear_browsing_data
             .set(self.clear_browsing_data.get() + 1);
+    }
+
+    fn bar_picks(&self, profile: u64) -> String {
+        self.bar_picks
+            .borrow()
+            .get(&profile)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn set_bar_picks(&self, profile: u64, text: &str) {
+        self.bar_picks
+            .borrow_mut()
+            .insert(profile, text.to_string());
     }
 
     fn close_other_window(&self, _: &mut App) -> bool {

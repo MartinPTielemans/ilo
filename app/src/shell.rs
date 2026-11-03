@@ -34,6 +34,9 @@ mod agent_question;
 #[cfg(test)]
 mod agent_spaces;
 mod assets;
+mod bar_usage;
+#[cfg(test)]
+mod bar_usage_tests;
 mod beside;
 mod browser;
 mod card_strip;
@@ -115,6 +118,7 @@ mod undo;
 mod update_sign;
 
 pub use assets::Assets;
+pub use bar_usage::{forget_bar_usage, picked_in_bar};
 pub use browser::{
     AgentGrants, Browser, Folders, MediaAction, Page, Split, Trouble, WindowButton,
     WindowButtonGeometry,
@@ -2594,6 +2598,7 @@ impl Shell {
             })
         });
         self.crash_cards.retain(|tab, _| open(tab));
+        self.forget_switches(open, cx);
         self.recent.retain(open);
         if let Some(tab) = self
             .renaming
@@ -2667,7 +2672,7 @@ impl Shell {
         self.show_in_space(tab, cx);
         self.scroll_to_row(tab);
         if self.walked.is_none() {
-            self.shown(tab);
+            self.shown(tab, cx);
         }
         self.selected_for_picture(tab, cx);
         self.hid_for_cards(hidden, cx);
@@ -2693,7 +2698,7 @@ impl Shell {
         let new_tab = follows
             && self
                 .browser
-                .command_bar_follows(self.bar_tabs(), self.open_tabs(), cx);
+                .command_bar_follows(self.bar_tabs(cx), self.open_tabs(cx), cx);
         self.set_new_tab(new_tab, cx);
         self.adding_pane = None;
         self.link_tab_changed(cx);
@@ -2791,8 +2796,11 @@ impl Shell {
         }
     }
 
-    fn shown(&mut self, tab: u64) {
+    fn shown(&mut self, tab: u64, cx: &mut App) {
         if tab != 0 {
+            if self.recent.first() != Some(&tab) {
+                self.switched_to(tab, cx);
+            }
             self.recent.retain(|&other| other != tab);
             self.recent.insert(0, tab);
         }
@@ -2800,11 +2808,11 @@ impl Shell {
 
     /// ⌃ went up, which ends a ⌃Tab walk on the tab it shows. A click ends it too, and the core
     /// may report the tab the click showed before this runs, so the walk's tab counts first.
-    pub fn control_released(&mut self, _: &mut Context<Self>) {
+    pub fn control_released(&mut self, cx: &mut Context<Self>) {
         if let Some(walked) = self.walked.take().filter(|tab| self.tabs.contains_key(tab)) {
-            self.shown(walked);
+            self.shown(walked, cx);
         }
-        self.shown(self.selected);
+        self.shown(self.selected, cx);
     }
 
     // The core reports a tab's title, favicon and state whenever Chromium touches them, often with
