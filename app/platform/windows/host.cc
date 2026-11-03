@@ -2096,6 +2096,11 @@ namespace {
 
 UINT_PTR const kFrame = 3;
 
+// WM_NCUAHDRAWCAPTION and WM_NCUAHDRAWFRAME, which Windows' headers don't name (Chromium's
+// hwnd_message_handler.cc answers them too).
+constexpr UINT kDrawCaption = 0x00AE;
+constexpr UINT kDrawFrame = 0x00AF;
+
 // Whether the UI draws its buttons over the docked sidebar, by browser window
 // (host_show_window_buttons).
 std::map<HWND, bool>& WindowButtonsShown() {
@@ -2180,12 +2185,19 @@ LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
       params->rgrc[0].top = top + (IsZoomed(hwnd) ? TopEdge(hwnd) : 0);
       return result;
     }
-    // Answering these, Windows paints the caption the window would have, icon and title, where the
-    // UI now is, and nothing paints over it (#1262): as the activation changes, the frame
-    // repaints, or the title or icon changes. It can't paint while the window isn't visible, so it
-    // isn't for the moment, as Chromium does for a frame it draws itself.
+    // Windows' theme draws the caption the window would have, icon and title, where the UI now is,
+    // and nothing paints over it (#1262). It asks the window with these two, undocumented, as the
+    // taskbar button flashes or the caption otherwise needs drawing: there's no caption to draw.
+    case kDrawCaption:
+    case kDrawFrame:
+      if (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CAPTION) {
+        return 0;
+      }
+      break;
+    // These draw the caption too as the activation, title or icon changes, and Chromium answers
+    // them with Windows' own handling. It can't draw while the window isn't visible, so it isn't
+    // for the moment, as Chromium does for a frame it draws itself.
     case WM_NCACTIVATE:
-    case WM_NCPAINT:
     case WM_SETTEXT:
     case WM_SETICON: {
       const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
