@@ -94,7 +94,9 @@ impl Global for Synced {}
 
 /// The account as the core last said it is, signed out before it has said.
 pub fn synced(cx: &App) -> State {
-    cx.try_global::<Synced>().map(|synced| synced.0.clone()).unwrap_or_default()
+    cx.try_global::<Synced>()
+        .map(|synced| synced.0.clone())
+        .unwrap_or_default()
 }
 
 /// What the view tells the window it's in.
@@ -276,7 +278,10 @@ pub fn pairing_question(pairing: &Pairing) -> Question {
 /// and no more than a name needs.
 fn given(text: &str) -> String {
     const LONGEST: usize = 40;
-    let line: String = text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let line: String = text
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
     let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
     match line.chars().count() > LONGEST {
         true => format!("{}…", line.chars().take(LONGEST - 1).collect::<String>()),
@@ -446,7 +451,10 @@ impl Account {
 
     fn show_words(&mut self, words: String) {
         let words = words.split_whitespace().map(str::to_owned).collect();
-        self.words = Some(Words { words, copied: None });
+        self.words = Some(Words {
+            words,
+            copied: None,
+        });
     }
 
     /// The server as the account names it: the build's own by the app's name, else its host.
@@ -476,7 +484,11 @@ impl Account {
                 .caret_color(self.look.ink)
                 .with_text(server)
         });
-        self.server = Some(Field { input, refused: false, focus: true });
+        self.server = Some(Field {
+            input,
+            refused: false,
+            focus: true,
+        });
         cx.notify();
     }
 
@@ -509,7 +521,11 @@ impl Account {
                 .placeholder_color(self.look.detail)
                 .caret_color(self.look.ink)
         });
-        self.entering = Some(Field { input, refused: false, focus: true });
+        self.entering = Some(Field {
+            input,
+            refused: false,
+            focus: true,
+        });
         cx.notify();
     }
 
@@ -542,7 +558,8 @@ impl Account {
         let Some(words) = &mut self.words else {
             return;
         };
-        self.host.copy_secret(&words.words.join(" "), WORDS_KEPT, cx);
+        self.host
+            .copy_secret(&words.words.join(" "), WORDS_KEPT, cx);
         words.copied = Some(cx.background_executor().now());
         // Once Copied is Copy again, and once the clipboard has let the words go.
         for after in [COPIED, WORDS_KEPT] {
@@ -558,7 +575,10 @@ impl Account {
     /// Signs out, asking first if this is the account's only device, as its words are then the
     /// only way to read what it synced.
     fn sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let alone = self.devices.as_ref().is_some_and(|devices| devices.len() == 1);
+        let alone = self
+            .devices
+            .as_ref()
+            .is_some_and(|devices| devices.len() == 1);
         if !alone || self.state.status != Status::On {
             self.host.sign_out();
             return;
@@ -668,10 +688,10 @@ impl Account {
             },
             |_, _, _, _| {},
         )
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
     }
 
     /// Signed out: what signing in does, and the server it signs in to, which Change… changes. As
@@ -685,11 +705,9 @@ impl Account {
                 account.host.cancel();
                 cx.notify();
             }),
-            false => {
-                self.button("sign-in", "Sign In", cx, |account, window, cx| {
-                    account.sign_in(window, cx)
-                })
-            }
+            false => self.button("sign-in", "Sign In", cx, |account, window, cx| {
+                account.sign_in(window, cx)
+            }),
         };
         let detail = match (signing_in, self.state.problem) {
             (true, _) => Some("Finish in the window that opened."),
@@ -732,14 +750,19 @@ impl Account {
         let boxed = said.is_some();
         div()
             .children(said.map(|said| group(&self.look, [said])))
-            .child(div().when(boxed, |below| below.mt(px(BUTTONS_TOP))).child(server))
+            .child(
+                div()
+                    .when(boxed, |below| below.mt(px(BUTTONS_TOP)))
+                    .child(server),
+            )
     }
 
     /// The field in `field`, and what it says when what was typed wasn't taken.
     fn field(&self, field: &Field, refused: &'static str, cx: &mut Context<Self>) -> gpui::Div {
         div()
-            .child(
-                group(&self.look, [div()
+            .child(group(
+                &self.look,
+                [div()
                     .relative()
                     .px(px(PADDING))
                     .py(px(PADDING))
@@ -750,12 +773,14 @@ impl Account {
                             false => account.keep_words(cx),
                         }
                     }))
-                    .on_action(cx.listener(|account, _: &Leave, window, cx| {
-                        account.leave_field(window, cx)
-                    }))
+                    .on_action(
+                        cx.listener(|account, _: &Leave, window, cx| {
+                            account.leave_field(window, cx)
+                        }),
+                    )
                     .child(self.place("field".into()))
-                    .child(field.input.clone())]),
-            )
+                    .child(field.input.clone())],
+            ))
             .when(field.refused, |below| {
                 below.child(
                     div()
@@ -774,8 +799,12 @@ impl Account {
         let rows = words.words.len().div_ceil(columns);
         // Down each column, as they're written down.
         let column = |c: usize| {
-            div().flex_1().flex().flex_col().gap(px(WORD_GAP)).children(
-                (0..rows).filter_map(|r| {
+            div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .gap(px(WORD_GAP))
+                .children((0..rows).filter_map(|r| {
                     let index = c * rows + r;
                     let word = words.words.get(index)?;
                     Some(
@@ -789,8 +818,7 @@ impl Account {
                             )
                             .child(word.clone()),
                     )
-                }),
-            )
+                }))
         };
         // The executor's clock, which tests move on.
         let now = cx.background_executor().now();
@@ -798,23 +826,36 @@ impl Account {
         let title = if copied { "Copied" } else { "Copy" };
         let copy = self.button("copy", title, cx, |account, _, cx| account.copy_words(cx));
         // Copied says it happened, with a check, until it's Copy again.
-        let check = svg().path("icons/check.svg").ml(px(HEADER_GAP)).size(px(text::BODY));
+        let check = svg()
+            .path("icons/check.svg")
+            .ml(px(HEADER_GAP))
+            .size(px(text::BODY));
         let copy = copy.when(copied, |copy| copy.child(check.text_color(self.look.ink)));
         div()
             .child(header("Your recovery words", true))
-            .child(group(&self.look, [div()
-                .px(px(PADDING))
-                .py(px(PADDING))
-                .flex()
-                .children((0..columns).map(column))]))
+            .child(group(
+                &self.look,
+                [div()
+                    .px(px(PADDING))
+                    .py(px(PADDING))
+                    .flex()
+                    .children((0..columns).map(column))],
+            ))
             .child(note(
                 &self.look,
                 "Save these somewhere safe. You need them only if you lose every device.",
             ))
             // Where a copy went, and that it doesn't stay, while it's there.
-            .when(words.copied.is_some_and(|at| now - at < WORDS_KEPT), |words| {
-                words.child(note(&self.look, COPIED_NOTE).relative().child(self.place("copied".into())))
-            })
+            .when(
+                words.copied.is_some_and(|at| now - at < WORDS_KEPT),
+                |words| {
+                    words.child(
+                        note(&self.look, COPIED_NOTE)
+                            .relative()
+                            .child(self.place("copied".into())),
+                    )
+                },
+            )
             .child(
                 div()
                     .mt(px(BUTTONS_TOP))
@@ -840,10 +881,13 @@ impl Account {
             return div()
                 .child(header("Enter your recovery words", true))
                 .child(self.field(field, refused, cx))
-                .child(note(&self.look, match wrong {
-                    true => problem_text(Problem::WrongWords),
-                    false => "The 24 words you saved when you first turned on sync.",
-                }))
+                .child(note(
+                    &self.look,
+                    match wrong {
+                        true => problem_text(Problem::WrongWords),
+                        false => "The 24 words you saved when you first turned on sync.",
+                    },
+                ))
                 .child(
                     div()
                         .mt(px(BUTTONS_TOP))
@@ -864,19 +908,23 @@ impl Account {
                         .text_size(px(text::SMALL))
                         .text_color(self.look.detail)
                         .child("Lost your devices and words? ")
-                        .child(self.link("start-over", "Start over…", cx, |account, window, cx| {
-                            account.start_over(window, cx)
-                        })),
+                        .child(self.link(
+                            "start-over",
+                            "Start over…",
+                            cx,
+                            |account, window, cx| account.start_over(window, cx),
+                        )),
                 );
         }
         let pairing = self.state.status == Status::Pairing;
-        let waiting = match pairing {
-            true => {
-                let code = match self.state.code.is_empty() {
-                    true => div().text_color(self.look.detail).child("––– –––"),
-                    false => div().child(grouped(&self.state.code)),
-                };
-                lines(
+        let waiting =
+            match pairing {
+                true => {
+                    let code = match self.state.code.is_empty() {
+                        true => div().text_color(self.look.detail).child("––– –––"),
+                        false => div().child(grouped(&self.state.code)),
+                    };
+                    lines(
                     &self.look,
                     format!(
                         "On a device signed in to {}, {} asks to add this one. Add it there if it \
@@ -896,20 +944,22 @@ impl Account {
                         .text_size(px(text::HEADING))
                         .font_weight(FontWeight::SEMIBOLD),
                 )
-            }
-            false => lines(
-                &self.look,
-                self.state.problem.map_or(
-                    "Ask a device already signed in to add this one.",
-                    problem_text,
+                }
+                false => lines(
+                    &self.look,
+                    self.state.problem.map_or(
+                        "Ask a device already signed in to add this one.",
+                        problem_text,
+                    ),
+                    None,
+                    Some(
+                        self.button("ask-again", "Ask Again", cx, |account, _, cx| {
+                            account.ask_again(cx)
+                        })
+                        .into_any_element(),
+                    ),
                 ),
-                None,
-                Some(self.button("ask-again", "Ask Again", cx, |account, _, cx| {
-                    account.ask_again(cx)
-                })
-                .into_any_element()),
-            ),
-        };
+            };
         div()
             .child(header("Approve on another device", true))
             .child(group(&self.look, [waiting]))
@@ -918,12 +968,17 @@ impl Account {
                     .mt(px(BUTTONS_TOP))
                     .flex()
                     .justify_between()
-                    .child(self.button("use-words", "Use Recovery Words Instead", cx, |a, _, cx| {
-                        a.enter_words(cx)
-                    }))
-                    .child(self.button("sign-out", "Sign Out", cx, |account, window, cx| {
-                        account.sign_out(window, cx)
-                    })),
+                    .child(self.button(
+                        "use-words",
+                        "Use Recovery Words Instead",
+                        cx,
+                        |a, _, cx| a.enter_words(cx),
+                    ))
+                    .child(
+                        self.button("sign-out", "Sign Out", cx, |account, window, cx| {
+                            account.sign_out(window, cx)
+                        }),
+                    ),
             )
     }
 
@@ -940,13 +995,17 @@ impl Account {
         );
         let devices = self.devices.iter().flatten().map(|device| {
             let control = match device.current {
-                true => div().text_color(self.look.detail).child("This device").into_any_element(),
+                true => div()
+                    .text_color(self.look.detail)
+                    .child("This device")
+                    .into_any_element(),
                 false => {
                     let id = device.id.clone();
-                    let remove = move |account: &mut Self, _: &mut Window, cx: &mut Context<Self>| {
-                        account.host.remove_device(&id);
-                        cx.notify();
-                    };
+                    let remove =
+                        move |account: &mut Self, _: &mut Window, cx: &mut Context<Self>| {
+                            account.host.remove_device(&id);
+                            cx.notify();
+                        };
                     self.button(format!("remove {}", device.id), "Remove", cx, remove)
                         .into_any_element()
                 }
@@ -1038,9 +1097,16 @@ fn lines(
             .items_center()
             .gap(px(BOX_GAP))
             .child(
-                div().flex_1().min_w_0().child(text.into()).children(detail.map(|detail| {
-                    div().text_size(px(text::SMALL)).text_color(look.detail).child(detail)
-                })),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(text.into())
+                    .children(detail.map(|detail| {
+                        div()
+                            .text_size(px(text::SMALL))
+                            .text_color(look.detail)
+                            .child(detail)
+                    })),
             )
             .children(control.map(|control| div().flex_none().child(control))),
     )
@@ -1065,7 +1131,10 @@ impl Render for Account {
             // Nothing until the core has made the first device's words.
             (None, Status::FirstDevice) => div(),
         };
-        div().track_focus(&self.focus).text_color(self.look.ink).child(content)
+        div()
+            .track_focus(&self.focus)
+            .text_color(self.look.ink)
+            .child(content)
     }
 }
 

@@ -36,15 +36,15 @@ pub use crate::tokens::link_target::NEAR;
 /// Its window, wide enough for the longest address, which elides past it.
 pub use crate::tokens::link_target::WINDOW_WIDTH;
 pub const WINDOW_HEIGHT: f32 = HEIGHT;
+use crate::elevation::{Level, WINDOW_MARGIN};
 use crate::tokens::link_target::PAD_X;
+use crate::tokens::link_target::PRIMARY;
 use crate::tokens::link_target::RADIUS;
 use crate::tokens::link_target::RIM;
-use crate::elevation::{Level, WINDOW_MARGIN};
-use crate::tokens::link_target::TEXT_SIZE;
 /// The address in the secondary text colour, but its site in the primary, so one that differs from
 /// the site it passes for stands out.
 use crate::tokens::link_target::SECONDARY;
-use crate::tokens::link_target::PRIMARY;
+use crate::tokens::link_target::TEXT_SIZE;
 const ELLIPSIS: &str = "…";
 /// A longer tail than the plate could ever show is cut before it's measured: a data: link can be
 /// a megabyte.
@@ -95,7 +95,12 @@ impl Plate {
 
 /// How wide `text` is at the plate's size.
 pub fn text_width(text: &str, system: &WindowTextSystem) -> f32 {
-    tooltip::text_width(&text.to_string().into(), TEXT_SIZE, FontWeight::NORMAL, system)
+    tooltip::text_width(
+        &text.to_string().into(),
+        TEXT_SIZE,
+        FontWeight::NORMAL,
+        system,
+    )
 }
 
 /// `text` cut to `room` wide by `measure`, with an ellipsis where the rest went: `share` of what
@@ -135,7 +140,11 @@ pub fn plate(target: &Target, max: f32, measure: impl Fn(&str) -> f32) -> Plate 
         Some(_) => target.domain.clone(),
         None => 0..0,
     };
-    let (before, site, after) = (&text[..domain.start], &text[domain.clone()], &text[domain.end..]);
+    let (before, site, after) = (
+        &text[..domain.start],
+        &text[domain.clone()],
+        &text[domain.end..],
+    );
     // A tail this long is cut in the middle first, so measuring it stays quick.
     let long;
     let after = match after.chars().count() > LONG {
@@ -144,7 +153,9 @@ pub fn plate(target: &Target, max: f32, measure: impl Fn(&str) -> f32) -> Plate 
             long = format!(
                 "{}{ELLIPSIS}{}",
                 chars[..LONG_HEAD].iter().collect::<String>(),
-                chars[chars.len() - (LONG - LONG_HEAD)..].iter().collect::<String>()
+                chars[chars.len() - (LONG - LONG_HEAD)..]
+                    .iter()
+                    .collect::<String>()
             );
             long.as_str()
         }
@@ -154,14 +165,27 @@ pub fn plate(target: &Target, max: f32, measure: impl Fn(&str) -> f32) -> Plate 
     let (before, site, after) = if head + measure(after) <= room {
         (before.to_string(), site.to_string(), after.to_string())
     } else if head + measure(ELLIPSIS) <= room {
-        (before.to_string(), site.to_string(), fit(after, room - head, 0.5, &measure))
+        (
+            before.to_string(),
+            site.to_string(),
+            fit(after, room - head, 0.5, &measure),
+        )
     } else if measure(site) + measure(ELLIPSIS) <= room {
-        (fit(before, room - measure(site), 0., &measure), site.to_string(), String::new())
+        (
+            fit(before, room - measure(site), 0., &measure),
+            site.to_string(),
+            String::new(),
+        )
     } else {
         (String::new(), fit(site, room, 1., &measure), String::new())
     };
     let width = measure(&format!("{before}{site}{after}")) + 2. * PAD_X;
-    Plate { before: before.into(), site: site.into(), after: after.into(), width: width.min(max) }
+    Plate {
+        before: before.into(),
+        site: site.into(),
+        after: after.into(),
+        width: width.min(max),
+    }
 }
 
 /// The plate's frame in the window, in `side` of the card, which is `card`: `MARGIN` in from the
@@ -172,13 +196,22 @@ pub fn place(card: Bounds<Pixels>, width: f32, side: Side) -> Bounds<Pixels> {
         Side::Right => f32::from(card.right()) - MARGIN - width,
     };
     let top = f32::from(card.bottom()) - MARGIN - HEIGHT;
-    Bounds::new(point(px(left.max(0.)), px(top.max(0.))), size(px(width), px(HEIGHT)))
+    Bounds::new(
+        point(px(left.max(0.)), px(top.max(0.))),
+        size(px(width), px(HEIGHT)),
+    )
 }
 
 /// Whether the pointer at (`x`, `y`) in the window is on `frame` or within `NEAR` of it.
 pub fn near(frame: Bounds<Pixels>, x: f32, y: f32) -> bool {
-    let (left, top) = (f32::from(frame.left()) - NEAR, f32::from(frame.top()) - NEAR);
-    let (right, bottom) = (f32::from(frame.right()) + NEAR, f32::from(frame.bottom()) + NEAR);
+    let (left, top) = (
+        f32::from(frame.left()) - NEAR,
+        f32::from(frame.top()) - NEAR,
+    );
+    let (right, bottom) = (
+        f32::from(frame.right()) + NEAR,
+        f32::from(frame.bottom()) + NEAR,
+    );
     (left..=right).contains(&x) && (top..=bottom).contains(&y)
 }
 
@@ -229,7 +262,10 @@ pub fn open(
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
             point(px(0.), px(0.)),
-            size(px(WINDOW_WIDTH + 2. * WINDOW_MARGIN), px(WINDOW_HEIGHT + 2. * WINDOW_MARGIN)),
+            size(
+                px(WINDOW_WIDTH + 2. * WINDOW_MARGIN),
+                px(WINDOW_HEIGHT + 2. * WINDOW_MARGIN),
+            ),
         ))),
         titlebar: Some(TitlebarOptions {
             title: None,
@@ -280,9 +316,16 @@ pub fn show(window: u64, plate: Plate, left: f32, top: f32, cx: &mut App) {
     };
     target
         .update(cx, |target, _, cx| {
-            target.pending = Some(Pending { window, plate, left, top });
+            target.pending = Some(Pending {
+                window,
+                plate,
+                left,
+                top,
+            });
             let now = cx.background_executor().now();
-            let soon = target.went.is_some_and(|went| now.duration_since(went) < GRACE);
+            let soon = target
+                .went
+                .is_some_and(|went| now.duration_since(went) < GRACE);
             if target.shown.is_some() || soon {
                 target.wait = None;
                 target.reveal(cx);
@@ -318,7 +361,13 @@ pub fn over(cx: &App) -> Option<u64> {
 
 impl LinkTarget {
     fn reveal(&mut self, cx: &mut Context<Self>) {
-        let Some(Pending { window, plate, left, top }) = self.pending.take() else {
+        let Some(Pending {
+            window,
+            plate,
+            left,
+            top,
+        }) = self.pending.take()
+        else {
             return;
         };
         if self.shown.is_none() {
@@ -347,7 +396,10 @@ impl LinkTarget {
 impl Render for LinkTarget {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The plate is inset by the margin, which its shadow draws in.
-        let root = div().size_full().p(px(WINDOW_MARGIN)).font_family(crate::face::UI);
+        let root = div()
+            .size_full()
+            .p(px(WINDOW_MARGIN))
+            .font_family(crate::face::UI);
         let Some(plate) = self.drawn.clone() else {
             return root;
         };

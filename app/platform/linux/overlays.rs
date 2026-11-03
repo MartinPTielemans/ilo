@@ -103,7 +103,12 @@ pub(crate) fn keyboard_lent_to_another(window: bc::bc_id, view: *mut c_void) -> 
 }
 
 /// The overlays by index, as check.sh reads them in the log.
-const NAMES: [&str; 4] = ["command bar", "icon picker", "theme picker", "folder preview"];
+const NAMES: [&str; 4] = [
+    "command bar",
+    "icon picker",
+    "theme picker",
+    "folder preview",
+];
 
 fn with_overlay<R>(overlay: c_int, f: impl FnOnce(&mut Overlay) -> R) -> Option<R> {
     OVERLAYS.with_borrow_mut(|overlays| overlays.get_mut(overlay as usize)?.as_mut().map(f))
@@ -157,7 +162,9 @@ pub extern "C" fn host_set_overlay_shape(overlay: c_int, corners: *const f64, co
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_set_overlay_growth(overlay: c_int, x: f64, y: f64) {
-    with_overlay(overlay, |o| o.growth = Some(point(px(x as f32), px(y as f32))));
+    with_overlay(overlay, |o| {
+        o.growth = Some(point(px(x as f32), px(y as f32)))
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -203,9 +210,18 @@ pub extern "C" fn host_show_overlay(
         );
         let was_shown = o.shown.replace(Shown { window, bounds }).is_some();
         // Where it can't blend, the window the card grows or shrinks in would show opaque around it.
-        let grows = o.growth.filter(|_| !was_shown && gpui_linux::overlays_blend());
+        let grows = o
+            .growth
+            .filter(|_| !was_shown && gpui_linux::overlays_blend());
         let shrinking = o.shrinking.take().is_some();
-        (o.view, px(o.radius as f32), bounds, was_shown, grows, shrinking)
+        (
+            o.view,
+            px(o.radius as f32),
+            bounds,
+            was_shown,
+            grows,
+            shrinking,
+        )
     });
     let Some((view, radius, bounds, was_shown, grows, shrinking)) = shown else {
         return;
@@ -216,15 +232,44 @@ pub extern "C" fn host_show_overlay(
     if shrinking {
         gpui_linux::set_overlay_pointer(view, None);
     }
-    let scale = Track { from: shrunk(), to: 1., seconds: GROW, curve: GROW_CURVE };
+    let scale = Track {
+        from: shrunk(),
+        to: 1.,
+        seconds: GROW,
+        curve: GROW_CURVE,
+    };
     if let Some(origin) = grows {
-        let opacity = Track { from: 0., to: 1., seconds: GROW_FADE, curve: LINEAR };
-        motion::start(view, Motion { scale, origin, opacity });
+        let opacity = Track {
+            from: 0.,
+            to: 1.,
+            seconds: GROW_FADE,
+            curve: LINEAR,
+        };
+        motion::start(
+            view,
+            Motion {
+                scale,
+                origin,
+                opacity,
+            },
+        );
     }
     shadows::show(overlay, ui_view, bounds, f32::from(radius));
     if let Some(origin) = grows {
-        let opacity = Track { from: 0., to: 1., seconds: GROW, curve: LINEAR };
-        shadows::follow(overlay, Motion { scale, origin, opacity });
+        let opacity = Track {
+            from: 0.,
+            to: 1.,
+            seconds: GROW,
+            curve: LINEAR,
+        };
+        shadows::follow(
+            overlay,
+            Motion {
+                scale,
+                origin,
+                opacity,
+            },
+        );
     }
     gpui_linux::show_overlay(view, ui_view, bounds, radius, true, left_overlay);
     let (origin, size) = (bounds.origin, bounds.size);
@@ -305,7 +350,10 @@ pub(crate) fn placed(view: *mut c_void) -> Option<(*mut c_void, Bounds<Pixels>)>
     });
     if let Some((window, bounds)) = overlay {
         let ui_view = crate::WINDOWS.with_borrow(|windows| {
-            windows.iter().find(|each| each.id == window).map(|each| each.ui_view)
+            windows
+                .iter()
+                .find(|each| each.id == window)
+                .map(|each| each.ui_view)
         })?;
         return Some((ui_view, bounds));
     }
@@ -321,14 +369,19 @@ pub(crate) fn placed(view: *mut c_void) -> Option<(*mut c_void, Bounds<Pixels>)>
 /// Overlay `overlay`'s view and where it shows in its browser window's content, if it shows, for a
 /// tooltip over it (floats.rs).
 pub(crate) fn shown_at(overlay: c_int) -> Option<(*mut c_void, Bounds<Pixels>)> {
-    with_overlay(overlay, |o| o.shown.as_ref().map(|shown| (o.view, shown.bounds))).flatten()
+    with_overlay(overlay, |o| {
+        o.shown.as_ref().map(|shown| (o.view, shown.bounds))
+    })
+    .flatten()
 }
 
 /// Puts overlay `overlay` where it shows again, if it does, which stacks it and what shows under it
 /// again: its shadow under it, and it under a tooltip that has come over it (floats.rs).
 pub(crate) fn restack(overlay: c_int) {
     let shown = with_overlay(overlay, |o| {
-        o.shown.as_ref().map(|shown| (o.view, shown.bounds, px(o.radius as f32)))
+        o.shown
+            .as_ref()
+            .map(|shown| (o.view, shown.bounds, px(o.radius as f32)))
     });
     if let Some(Some((view, bounds, radius))) = shown {
         gpui_linux::move_overlay(view, bounds, radius);
@@ -342,7 +395,9 @@ fn hide(overlay: c_int) -> bool {
     crate::floats::overlay_hiding(overlay);
     let Some(Some((view, window, shrinks))) = with_overlay(overlay, |o| {
         let shown = o.shown.take()?;
-        let shrinks = o.growth.filter(|_| o.shrinks && gpui_linux::overlays_blend());
+        let shrinks = o
+            .growth
+            .filter(|_| o.shrinks && gpui_linux::overlays_blend());
         o.shrinking = shrinks.map(|_| Instant::now());
         Some((o.view, shown.window, shrinks.zip(o.shrinking)))
     }) else {
@@ -358,15 +413,46 @@ fn hide(overlay: c_int) -> bool {
     gpui_linux::set_overlay_pointer(view, Some(&[]));
     gpui_linux::set_overlay_keyboard(view, false, left_overlay);
     lend_keyboard(window, view, false);
-    let scale = Track { from: 1., to: shrunk(), seconds: SHRINK, curve: motion::EASE_IN };
-    let opacity = Track { from: 1., to: 0., seconds: SHRINK, curve: motion::EASE_IN };
-    motion::start(view, Motion { scale, origin, opacity });
-    let opacity = Track { from: 1., to: 0., seconds: SHRINK, curve: LINEAR };
-    shadows::follow(overlay, Motion { scale, origin, opacity });
+    let scale = Track {
+        from: 1.,
+        to: shrunk(),
+        seconds: SHRINK,
+        curve: motion::EASE_IN,
+    };
+    let opacity = Track {
+        from: 1.,
+        to: 0.,
+        seconds: SHRINK,
+        curve: motion::EASE_IN,
+    };
+    motion::start(
+        view,
+        Motion {
+            scale,
+            origin,
+            opacity,
+        },
+    );
+    let opacity = Track {
+        from: 1.,
+        to: 0.,
+        seconds: SHRINK,
+        curve: LINEAR,
+    };
+    shadows::follow(
+        overlay,
+        Motion {
+            scale,
+            origin,
+            opacity,
+        },
+    );
     motion::after(SHRINK, move || {
         // Unless it showed again as it shrank.
         let gone = with_overlay(overlay, |o| {
-            o.shrinking.take_if(|shrinking| *shrinking == started).is_some()
+            o.shrinking
+                .take_if(|shrinking| *shrinking == started)
+                .is_some()
         });
         if gone == Some(true) {
             gpui_linux::hide_overlay(view, || {});
@@ -452,13 +538,17 @@ fn dialog_bounds(ui_view: *mut c_void, insets: [f64; 4]) -> Option<(Bounds<Pixel
     let [left, top, right, bottom] = insets.map(|inset| px(inset as f32));
     let bounds = Bounds::new(
         point(left, top),
-        size(
-            content.width - left - right,
-            content.height - top - bottom,
-        ),
+        size(content.width - left - right, content.height - top - bottom),
     );
     let card = insets != [0.; 4];
-    Some((bounds, px(if card { browser::shell::CARD_RADIUS } else { 0. })))
+    Some((
+        bounds,
+        px(if card {
+            browser::shell::CARD_RADIUS
+        } else {
+            0.
+        }),
+    ))
 }
 
 #[unsafe(no_mangle)]
