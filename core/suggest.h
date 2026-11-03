@@ -47,9 +47,9 @@ class Suggestions : public AutocompleteController::Observer, public ProfileObser
   // while the last removal of |url| is still being taken out.
   bc_id Remove(const GURL& url);
 
-  // Puts back what removal |removal| took out, as it was, and lists the suggestions again. Whether
-  // it could: it's one of the last kKept removals, and out, not back already or still being taken
-  // out.
+  // Puts back what removal |removal| took out, as it was, and lists the suggestions again, once
+  // it's out if it's still being taken out. Whether it could: it's one of the last kKept removals,
+  // and not back already.
   bool Restore(bc_id removal);
 
   // Takes out again what Restore put back for |removal|, as the removal did. Whether it could.
@@ -62,7 +62,8 @@ class Suggestions : public AutocompleteController::Observer, public ProfileObser
   // A removal: the suggestion's URL, what Chrome's deletion took out, the pages and a search's
   // keyword and term, that as it was, and where it is.
   struct Removal {
-    enum class State { kTaking, kOut, kBack };
+    // kTakingThenBack is a removal put back while it was still being taken out.
+    enum class State { kTaking, kTakingThenBack, kOut, kBack };
 
     Removal();
     Removal(Removal&&);

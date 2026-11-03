@@ -1968,14 +1968,15 @@ BC_EXPORT void bc_window_suggest(bc_id window, const char* keyword, const char* 
 // Takes the window's removable suggestion going to |url| out of the profile's history and
 // bookmarks' suggestions, as ⇧⌦ does in Chrome's address bar. Then window_suggestions without it.
 // Returns the removal's id, for bc_window_undo_remove_suggestion, or 0 if there was none to take
-// out.
+// out, as while the last removal of |url| is still being taken out.
 BC_EXPORT bc_id bc_window_remove_suggestion(bc_id window, const char* url);
 
 // Puts back what the window's removal |removal| took out of the profile's history, as it was: a
 // page with each of its visits, and so its visit and typed counts, or a search with its term and
-// the pages it searched. Then window_suggestions with it, for the text last asked, if any. Whether
-// it could: false once ten other removals have come after it in the window, while it's back or
-// still being taken out, and once the window's suggestions have been for another profile since.
+// the pages it searched. Then window_suggestions with it, for the text last asked, if any. One
+// still being taken out, as while history loads, comes back once it's out. Whether it could: false
+// while it's back, once ten other removals have come after it in the window, and once the window's
+// suggestions have been for another profile since.
 BC_EXPORT bool bc_window_undo_remove_suggestion(bc_id window, bc_id removal);
 
 // Takes out again what bc_window_undo_remove_suggestion put back for |removal|, as the removal

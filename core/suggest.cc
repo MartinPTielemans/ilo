@@ -290,7 +290,8 @@ bc_id Suggestions::Remove(const GURL& url) {
   });
   // Its row stays until Chrome's deletion, which waits for what it takes out to be read.
   const bool being_taken = std::ranges::any_of(removals_, [&](const auto& removal) {
-    return removal.second.url == url && removal.second.state == Removal::State::kTaking;
+    return removal.second.url == url && (removal.second.state == Removal::State::kTaking ||
+                                         removal.second.state == Removal::State::kTakingThenBack);
   });
   if (match == result.end() || being_taken) {
     return 0;
@@ -342,8 +343,14 @@ bc_id Suggestions::Remove(const GURL& url) {
 
 void Suggestions::TakeOut(bc_id id, const AutocompleteMatch& match) {
   controller_.DeleteMatch(match);
-  if (auto removal = removals_.find(id); removal != removals_.end()) {
-    removal->second.state = Removal::State::kOut;
+  auto removal = removals_.find(id);
+  if (removal == removals_.end()) {
+    return;
+  }
+  const bool back = removal->second.state == Removal::State::kTakingThenBack;
+  removal->second.state = Removal::State::kOut;
+  if (back) {
+    Restore(id);
   }
 }
 
@@ -351,9 +358,20 @@ bool Suggestions::Restore(bc_id id) {
   auto removal = removals_.find(id);
   history::HistoryService* history =
       HistoryServiceFactory::GetForProfile(profile_, ServiceAccessType::EXPLICIT_ACCESS);
-  if (removal == removals_.end() || removal->second.state != Removal::State::kOut ||
-      !removal->second.removed || !history) {
+  if (removal == removals_.end() || !removal->second.removed || !history) {
     return false;
+  }
+  // A ⌘Z before the history service has read it, as while it loads, puts it back once it's out,
+  // since Chrome's deletion is posted only then.
+  switch (removal->second.state) {
+    case Removal::State::kTaking:
+      removal->second.state = Removal::State::kTakingThenBack;
+      return true;
+    case Removal::State::kOut:
+      break;
+    case Removal::State::kTakingThenBack:
+    case Removal::State::kBack:
+      return false;
   }
   removal->second.state = Removal::State::kBack;
   history->ScheduleDBTask(FROM_HERE, std::make_unique<PutBack>(removal->second.removed, ListAgain()),
@@ -365,7 +383,14 @@ bool Suggestions::RemoveAgain(bc_id id) {
   auto removal = removals_.find(id);
   history::HistoryService* history =
       HistoryServiceFactory::GetForProfile(profile_, ServiceAccessType::EXPLICIT_ACCESS);
-  if (removal == removals_.end() || removal->second.state != Removal::State::kBack || !history) {
+  if (removal == removals_.end() || !history) {
+    return false;
+  }
+  if (removal->second.state == Removal::State::kTakingThenBack) {
+    removal->second.state = Removal::State::kTaking;
+    return true;
+  }
+  if (removal->second.state != Removal::State::kBack) {
     return false;
   }
   // Read as it is now, the visits since it came back with it, then taken out in the same task, so
