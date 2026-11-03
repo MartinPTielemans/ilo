@@ -333,6 +333,7 @@ void PasswordOffer::Report(bc_id tab) {
       .accept = accept.c_str(),
       .decline = decline.c_str(),
       .never = never.c_str(),
+      .details = "",
   };
   Host().tab_offer_changed(Host().context, tab, &reported);
 }

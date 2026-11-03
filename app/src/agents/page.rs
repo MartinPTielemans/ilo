@@ -1,6 +1,6 @@
 //! A page as an agent sees it and acts on it: the outline of its accessibility tree, as the core's
 //! bc_agent_page gives it without any field's value, with a ref for each element it can act on,
-//! and which actions ask the user first. prototypes/arcish/agent.js is the reference.
+//! and which actions ask the user first.
 
 use std::collections::HashMap;
 

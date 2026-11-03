@@ -8,9 +8,10 @@ use std::ffi::CString;
 use std::path::{Path, PathBuf};
 
 use browser::import::{Exported, Passwords};
-use browser::import::found::{Page, Tab};
+use browser::import::found::{Address, Page, Tab};
 use browser::import::plan::{Existing, ExistingSpace, Row};
 use browser::import::sources::{Os, Roots};
+use browser::link_rules::{Host as _, Rule};
 use browser::theme::Theme;
 use gpui::{App, PathPromptOptions};
 
@@ -22,6 +23,9 @@ thread_local! {
     /// What waits for history_added, in the order the history went in, which is the order the core
     /// answers in.
     static HISTORY: RefCell<VecDeque<Box<dyn FnOnce(usize, &mut App)>>> =
+        const { RefCell::new(VecDeque::new()) };
+    /// What waits for addresses_added, as HISTORY waits for history_added.
+    static ADDRESSES: RefCell<VecDeque<Box<dyn FnOnce(usize, &mut App)>>> =
         const { RefCell::new(VecDeque::new()) };
     /// What waits for the app to come back to the front, such as an import for Full Disk Access.
     static ACTIVE: RefCell<Vec<Box<dyn FnOnce(&mut App)>>> = const { RefCell::new(Vec::new()) };
@@ -47,6 +51,13 @@ pub fn spaces_changed(cx: &mut App) {
 /// Tells what waited for the history it added that it's in, with how many pages were new.
 pub fn history_added(added: usize, cx: &mut App) {
     if let Some(then) = HISTORY.with_borrow_mut(VecDeque::pop_front) {
+        then(added, cx);
+    }
+}
+
+/// Tells what waited for the addresses it added that they're in, with how many were new.
+pub fn addresses_added(added: usize, cx: &mut App) {
+    if let Some(then) = ADDRESSES.with_borrow_mut(VecDeque::pop_front) {
         then(added, cx);
     }
 }
@@ -144,7 +155,10 @@ impl browser::import::Host for CoreImport {
         }
     }
 
-    fn existing(&self) -> Existing {
+    fn existing(&self, cx: &App) -> Existing {
+        // Every window's shell has every tab's page, as the core tells them all.
+        let shell = crate::shell_with_view(front().1).upgrade();
+        let url = |tab: u64| shell.as_ref().map(|shell| shell.read(cx).page(tab).url.to_string());
         let profiles = ids(bc::bc_profiles)
             .into_iter()
             .map(|profile| (profile, name(bc::bc_profile_name, profile).to_string()))
@@ -163,6 +177,10 @@ impl browser::import::Host for CoreImport {
                     name: name(bc::bc_space_name, space).to_string(),
                     profile: unsafe { bc::bc_space_profile(space) },
                     pinned: rows(&pinned, 0),
+                    today: of_space(bc::bc_space_today, space)
+                        .into_iter()
+                        .filter_map(&url)
+                        .collect(),
                 }
             })
             .collect();
@@ -179,6 +197,7 @@ impl browser::import::Host for CoreImport {
             profiles,
             spaces,
             favorites,
+            link_rules: crate::link_rules_host::CoreLinkRules.rules().rules,
         }
     }
 
@@ -230,6 +249,17 @@ impl browser::import::Host for CoreImport {
         }
     }
 
+    fn add_today(&self, space: u64, tab: &Tab) {
+        open_in(space, &tab.url);
+    }
+
+    fn add_link_rules(&self, rules: &[Rule]) {
+        let host = crate::link_rules_host::CoreLinkRules;
+        let mut all = host.rules();
+        all.rules.extend_from_slice(rules);
+        host.set_rules(&all);
+    }
+
     fn profile_loaded(&self, profile: u64) -> bool {
         ids(bc::bc_profiles).contains(&profile)
     }
@@ -262,6 +292,47 @@ impl browser::import::Host for CoreImport {
         let started = unsafe { bc::bc_profile_add_history(profile, rows.as_ptr(), rows.len()) };
         if started {
             HISTORY.with_borrow_mut(|waiting| waiting.push_back(then));
+        }
+        started
+    }
+
+    fn add_addresses(
+        &self,
+        profile: u64,
+        addresses: &[Address],
+        then: Box<dyn FnOnce(usize, &mut App)>,
+    ) -> bool {
+        // A value holding a nul can't cross; that field is dropped rather than cut short.
+        let values: Vec<Vec<(i32, CString, i32)>> = (addresses.iter())
+            .map(|address| {
+                (address.fields.iter())
+                    .filter_map(|field| {
+                        let value = CString::new(field.value.as_str()).ok()?;
+                        Some((field.kind, value, field.status))
+                    })
+                    .collect()
+            })
+            .collect();
+        let fields: Vec<Vec<bc::bc_address_field>> = (values.iter())
+            .map(|address| {
+                (address.iter())
+                    .map(|(kind, value, status)| bc::bc_address_field {
+                        type_: *kind,
+                        value: value.as_ptr(),
+                        status: *status,
+                    })
+                    .collect()
+            })
+            .collect();
+        let rows: Vec<bc::bc_address> = (fields.iter())
+            .map(|fields| bc::bc_address {
+                fields: fields.as_ptr(),
+                count: fields.len(),
+            })
+            .collect();
+        let started = unsafe { bc::bc_profile_add_addresses(profile, rows.as_ptr(), rows.len()) };
+        if started {
+            ADDRESSES.with_borrow_mut(|waiting| waiting.push_back(then));
         }
         started
     }

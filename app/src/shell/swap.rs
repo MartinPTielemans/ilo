@@ -1,6 +1,6 @@
 //! A glyph changing into another on the same thing, such as reload into stop as the tab's page
 //! starts loading: the old one fades and shrinks as the new one fades and grows in, as Arc's do.
-//! Lucide's check draws itself along its stroke, and a row's ✕ turns into −, as Arc's do.
+//! Lucide's check draws itself along its stroke.
 
 use std::time::{Duration, Instant};
 
@@ -25,8 +25,6 @@ pub(super) enum Swapped {
     CopyUrl,
     /// The arrow before a Space's Clear, while Clear would close its last Today tabs.
     Clear(u64),
-    /// A row's close button, by its first tab: − on the selected pinned row, else ✕.
-    Close(u64),
 }
 
 pub(super) const CHECK: &str = "icons/check.svg";
@@ -34,9 +32,6 @@ pub(super) const LINK: &str = "icons/link.svg";
 pub(super) const ARROW_DOWN: &str = "icons/arrow-down.svg";
 /// No glyph, for one that comes and goes.
 pub(super) const NONE: &str = "";
-/// The close button's ✕ and −, two bars drawn at an angle rather than a file.
-pub(super) const CLOSE: &str = "close";
-pub(super) const UNLOAD: &str = "unload";
 // Both glyphs move from the same moment, linearly, about the glyph's middle: the old one fades
 // out and shrinks to 0.6 over 70 ms, and the new one fades in over 40 ms and grows from 0.8 over
 // 80 (Arc 1.170 rec at 2×, reload into stop and back).
@@ -45,8 +40,6 @@ const LEAVE: f32 = 0.07;
 const COME: f32 = 0.04;
 const SHRUNK: f32 = 0.6;
 const SMALL: f32 = 0.8;
-// The ✕'s bars turn level into − in 110 ms, linearly (Arc 1.170 rec at 2×).
-const TURN: f32 = 0.11;
 // The check draws in 250 ms, ease-in-out (ours), while the link leaves as above.
 const CHECK_DRAW: f32 = 0.25;
 // Lucide's check in its 24 box, from its left end down to its point and up to its right end,
@@ -92,7 +85,7 @@ impl Swaps {
             if (was.from, was.to) == (to, from) {
                 // The glyph coming in leaves from as far as it had come.
                 let left = 1. - arrived(was.to, was.elapsed(now));
-                let back = left * if is_bars(to) { TURN } else { LEAVE };
+                let back = left * LEAVE;
                 start = now.checked_sub(Duration::from_secs_f32(back)).unwrap_or(now);
             }
         }
@@ -171,16 +164,10 @@ impl Swaps {
         let Some(swap) = self.0.iter().find(|swap| swap.what == what && swap.to == path) else {
             return match path {
                 NONE => div().flex_none().size(px(side)).into_any_element(),
-                CLOSE | UNLOAD => bars(bars_angle(path), side, color).into_any_element(),
                 _ => svg().path(path).size(px(side)).text_color(color).into_any_element(),
             };
         };
         let elapsed = swap.elapsed(Instant::now());
-        if is_bars(path) {
-            let (from, to) = (bars_angle(swap.from), bars_angle(path));
-            let angle = from + (to - from) * arrived(path, elapsed);
-            return bars(angle, side, color).into_any_element();
-        }
         let glyph = |path: &'static str, opacity: f32, scale: f32| {
             if path == NONE {
                 return div().into_any_element();
@@ -217,7 +204,6 @@ pub(super) fn folder_glyph(open: bool) -> &'static str {
 fn lasts(to: &'static str) -> f32 {
     match to {
         CHECK => CHECK_DRAW,
-        _ if is_bars(to) => TURN,
         _ => SWAP,
     }
 }
@@ -237,30 +223,13 @@ fn grown(elapsed: f32) -> f32 {
     (elapsed / SWAP).clamp(0., 1.)
 }
 
-/// How far a change to `to` has come, `elapsed` seconds in, 0 to 1: the check drawn, the bars
-/// turned, or another glyph faded in.
+/// How far a change to `to` has come, `elapsed` seconds in, 0 to 1: the check drawn, or another
+/// glyph faded in.
 fn arrived(to: &'static str, elapsed: f32) -> f32 {
     match to {
         CHECK => ease(elapsed / CHECK_DRAW),
-        _ if is_bars(to) => (elapsed / TURN).clamp(0., 1.),
         _ => coming(elapsed),
     }
-}
-
-/// Whether `path` is the close button's, drawn as two bars.
-fn is_bars(path: &'static str) -> bool {
-    matches!(path, CLOSE | UNLOAD)
-}
-
-/// The angle the close button's bars stand at from level, either way: ✕'s 45° or −'s 0.
-fn bars_angle(path: &'static str) -> f32 {
-    if path == UNLOAD { 0. } else { 45. }
-}
-
-/// The close button's bars, `side` square, crossing at its middle `angle` degrees from level
-/// either way, from one glyph so they don't darken where they cross (assets::bars).
-fn bars(angle: f32, side: f32, color: Hsla) -> impl IntoElement {
-    svg().path(super::assets::bars_path(angle)).flex_none().size(px(side)).text_color(color)
 }
 
 /// Ease-in-out, exactly 0 and 1 at its ends, which the curve's search only comes near.
@@ -332,8 +301,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        CLOSE, COME, LEAVE, Page, SWAP, Swapped, Swaps, TURN, UNLOAD, arrived, check_line, coming,
-        grown, leaving,
+        COME, LEAVE, Page, SWAP, Swapped, Swaps, check_line, coming, grown, leaving,
     };
 
     fn near(a: (f32, f32), b: (f32, f32)) -> bool {
@@ -394,7 +362,7 @@ mod tests {
     }
 
     /// Changed back mid-way, a glyph goes back from where it was: the one coming in leaves from
-    /// as far as it had come, and the close button's bars turn back from their angle.
+    /// as far as it had come.
     #[test]
     fn a_change_undone_goes_back_from_where_it_is() {
         let start = Instant::now();
@@ -407,12 +375,5 @@ mod tests {
         assert_eq!((swap.from, swap.to), ("b", "a"));
         let gone = leaving(swap.elapsed(back));
         assert!((1. - gone - came).abs() < 1e-3, "it came {came} and is {} there", 1. - gone);
-
-        swaps.start(Swapped::Close(2), CLOSE, UNLOAD, start);
-        let back = start + Duration::from_secs_f32(TURN * 0.3);
-        swaps.start(Swapped::Close(2), UNLOAD, CLOSE, back);
-        let swap = swaps.0.iter().find(|swap| swap.what == Swapped::Close(2)).unwrap();
-        let turned = arrived(CLOSE, swap.elapsed(back));
-        assert!((turned - 0.7).abs() < 1e-3, "it turned 0.3 of the way and is {turned} back");
     }
 }

@@ -1,17 +1,18 @@
-//! The offer to save a login's password, or to update the one saved, after a page submits it
-//! (docs/ux-spec.md › Passwords and autofill): a card at the top right of the page, in Chrome's
-//! words. GPUI can't draw over the page's native view, so as the find bar is, each browser
-//! window's offer is a window of its own that the host shows over it, as its child. The core keeps
-//! the password; the card shows the username, which the user can edit or pick from the page's other
-//! fields, and the password masked. Showing another tab closes the offer, as it closes Chrome's
-//! bubble, and coming back doesn't bring it back. What it asks of its window and the core goes
-//! through `Host`.
+//! The offer to save a login's password, or to update the one saved, after a page submits it, or
+//! to save the address or the card a page's form submitted (docs/ux-spec.md › Passwords and
+//! autofill): a card at the top right of the page, in Chrome's words. GPUI can't draw over the
+//! page's native view, so as the find bar is, each browser window's offer is a window of its own
+//! that the host shows over it, as its child. The core keeps the password; the card shows the
+//! username, which the user can edit or pick from the page's other fields, and the password masked.
+//! An address's or a card's shows what it saves in the same two rows, to read. Showing another tab
+//! closes the offer, as it closes Chrome's bubble, and coming back doesn't bring it back. What it
+//! asks of its window and the core goes through `Host`.
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use gpui::{
-    App, Bounds, Context, Entity, Focusable, FontWeight, Global, Hsla, KeyBinding, Pixels, Point,
-    SharedString, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
+    App, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight, Global, Hsla, KeyBinding,
+    Pixels, Point, SharedString, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
     WindowHandle, WindowKind, WindowOptions, actions, div, point, prelude::*, px, size,
     svg,
 };
@@ -39,6 +40,7 @@ pub const HEIGHT: f32 = INSET * 2.
     + BUTTON_HEIGHT;
 pub const RIGHT: f32 = shell::CARD_INSET + 8.;
 pub const TOP: f32 = shell::CARD_INSET + 8.;
+use crate::menu::Closed;
 use crate::tokens::offer::INSET;
 use crate::tokens::offer::RADIUS;
 use crate::tokens::offer::TITLE_LINE;
@@ -53,6 +55,8 @@ use crate::tokens::offer::BUTTONS_TOP;
 use crate::tokens::offer::BUTTON_HEIGHT;
 use crate::tokens::offer::BUTTON_X;
 use crate::tokens::offer::BUTTON_GAP;
+use crate::tokens::offer::KEY_GAP;
+use crate::tokens::offer::KEY;
 use crate::tokens::offer::PLATE_RADIUS;
 use crate::tokens::offer::TITLE;
 use crate::tokens::offer::DETAIL;
@@ -68,6 +72,10 @@ pub enum Kind {
     Save,
     /// To update the password saved for it.
     Update,
+    /// To save the address the page's form submitted.
+    Address,
+    /// To save the card the page's form submitted, to this device.
+    Card,
 }
 
 /// An offer from Chrome's password manager, as the core reports it, in Chrome's words.
@@ -88,6 +96,15 @@ pub struct Offer {
     pub decline: SharedString,
     /// None where there's no Never, as for an update.
     pub never: Option<SharedString>,
+    /// An address's or a card's: what it saves, a line each, as Chrome's bubble lists it.
+    pub details: Vec<SharedString>,
+}
+
+impl Offer {
+    /// It saves a password, which the user names in the field.
+    fn of_login(&self) -> bool {
+        matches!(self.kind, Kind::Save | Kind::Update)
+    }
 }
 
 /// The user's answer.
@@ -122,6 +139,8 @@ pub struct OfferPrompt {
     /// The window's colour, which the card takes, and the palette its text is drawn in.
     look: Box<dyn Fn(&App) -> (Hsla, Palette)>,
     input: Entity<TextInput>,
+    /// The card's own, which has the keyboard for an address's or a card's offer, with no field.
+    focus: FocusHandle,
     /// The tab the window shows, whose offer this is.
     tab: u64,
     /// The tab's page shows in another window, which shows the offer, and this one a picture of it.
@@ -179,12 +198,13 @@ pub fn open(
                 .caret_color(look(cx).1.accent)
                 .selection_color(look(cx).1.selection())
         });
-        // The field has the keyboard whenever the window does.
+        // The field has the keyboard whenever the window does, unless the offer has none.
         window.focus(&input.focus_handle(cx), cx);
-        cx.new(|_| OfferPrompt {
+        cx.new(|cx| OfferPrompt {
             host,
             look: Box::new(look),
             input,
+            focus: cx.focus_handle(),
             tab: 0,
             elsewhere: false,
             settling: Settling::default(),
@@ -218,16 +238,21 @@ fn windows(cx: &App) -> Vec<WindowHandle<OfferPrompt>> {
 pub fn changed(tab: u64, offer: Option<Offer>, cx: &mut App) {
     // check.sh reads these lines. They count the page's other fields' values rather than log them,
     // as a check keeps its log, and leave out the password's length, since prod logs to stderr too.
+    // An address's or a card's logs how many lines it has, not what they say.
     match &offer {
-        Some(offer) => log!(
-            "browser: offer {tab} {} {} {}",
-            match offer.kind {
-                Kind::Save => "save",
-                Kind::Update => "update",
-            },
-            offer.username,
-            offer.usernames.len()
-        ),
+        Some(offer) => match offer.kind {
+            Kind::Save | Kind::Update => log!(
+                "browser: offer {tab} {} {} {}",
+                if offer.kind == Kind::Save { "save" } else { "update" },
+                offer.username,
+                offer.usernames.len()
+            ),
+            Kind::Address | Kind::Card => log!(
+                "browser: offer {tab} {} {}",
+                if offer.kind == Kind::Address { "address" } else { "card" },
+                offer.details.len()
+            ),
+        },
         None => log!("browser: offer {tab} gone"),
     }
     OFFERS.with_borrow_mut(|offers| match offer {
@@ -291,6 +316,10 @@ fn show_offer(window: WindowHandle<OfferPrompt>, cx: &mut App) {
         .update(cx, |prompt, window, cx| {
             match prompt.offer().filter(|_| !prompt.elsewhere) {
                 Some(offer) => {
+                    match offer.of_login() {
+                        true => window.focus(&prompt.input.focus_handle(cx), cx),
+                        false => window.focus(&prompt.focus, cx),
+                    }
                     prompt.input.update(cx, |input, cx| input.reset(offer.username, window, cx));
                     prompt.host.show();
                     prompt.settling.start(format!("offer {}", prompt.tab), cx);
@@ -344,12 +373,35 @@ impl OfferPrompt {
         let items = offer.usernames.iter().map(|username| (username.clone(), true)).collect();
         let input = self.input.clone();
         let usernames = offer.usernames;
-        let chosen = Box::new(move |index: usize, window: &mut Window, cx: &mut App| {
-            if let Some(username) = usernames.get(index) {
+        let chosen = Box::new(move |closed: Closed, window: &mut Window, cx: &mut App| {
+            if let Some(username) = closed.chosen().and_then(|index| usernames.get(index)) {
                 input.update(cx, |input, cx| input.reset(username.clone(), window, cx));
             }
         });
         menu(items, field_bottom_left(), false, window, chosen, cx);
+    }
+}
+
+/// The key that answers as the button for `answer` does, which the button names after its words,
+/// so the keyboard's way is learned where it's used.
+fn key(answer: Answer) -> Option<&'static str> {
+    match answer {
+        Answer::Accept => Some("enter"),
+        Answer::NotNow => Some("escape"),
+        Answer::Never => None,
+    }
+}
+
+/// How a button names `key`: ↩ as the dialog's glyph, which every OS's face can draw, and escape
+/// as onboarding's Skip writes it.
+fn key_mark(key: &str, color: Hsla) -> gpui::AnyElement {
+    match key {
+        "enter" => svg()
+            .path("icons/corner-down-left.svg")
+            .size(px(GLYPH))
+            .text_color(color)
+            .into_any_element(),
+        _ => div().text_color(color).child("esc").into_any_element(),
     }
 }
 
@@ -373,10 +425,13 @@ impl Render for OfferPrompt {
         });
         // Save or Update stands out in the Space's accent, as a dialog's action does.
         let button = |id: &'static str, label: SharedString, answer: Answer, default: bool| {
-            let (rest, hovered, pressed) = if default {
-                (palette.accent.into(), palette.accent_hovered(), palette.accent_pressed())
+            let (rest, hovered, pressed, text) = if default {
+                let label = Hsla::from(palette.accent_label);
+                (palette.accent.into(), palette.accent_hovered(), palette.accent_pressed(), label)
             } else {
-                (palette.plate(PLATE), palette.state(PLATE, STATE_HOVERED), palette.state(PLATE, STATE_PRESSED))
+                let hovered = palette.state(PLATE, STATE_HOVERED);
+                let pressed = palette.state(PLATE, STATE_PRESSED);
+                (palette.plate(PLATE), hovered, pressed, palette.text(TITLE))
             };
             div()
                 .id(id)
@@ -385,13 +440,15 @@ impl Render for OfferPrompt {
                 .px(px(BUTTON_X))
                 .flex()
                 .items_center()
+                .gap(px(KEY_GAP))
                 .rounded(px(PLATE_RADIUS))
                 .bg(rest)
-                .when(default, |button| button.text_color(palette.accent_label))
+                .text_color(text)
                 .hover(move |style| style.bg(hovered))
                 .active(move |style| style.bg(pressed))
                 .font_weight(FontWeight::MEDIUM)
                 .child(label)
+                .children(key(answer).map(|key| key_mark(key, text.opacity(KEY))))
                 .on_click(cx.listener(move |prompt, _, _, cx| prompt.answer(answer, cx)))
         };
         let row = || {
@@ -427,6 +484,17 @@ impl Render for OfferPrompt {
             .overflow_hidden()
             .text_color(palette.text(DETAIL))
             .child("•".repeat(offer.password_length));
+        // An address's first line, its name, then the rest on one; a card's name and last digits,
+        // then its expiry.
+        let first = offer.details.first().cloned().unwrap_or_default();
+        let rest: Vec<&str> = offer.details.iter().skip(1).map(|line| line.as_ref()).collect();
+        let line = |text: SharedString| {
+            row().pr(px(FIELD_X)).child(div().flex_1().min_w_0().truncate().child(text))
+        };
+        let (first, second) = match offer.of_login() {
+            true => (username, password),
+            false => (line(first), line(rest.join(", ").into()).text_color(palette.text(DETAIL))),
+        };
         let buttons = div()
             .mt(px(BUTTONS_TOP))
             .flex()
@@ -438,6 +506,7 @@ impl Render for OfferPrompt {
         root.child(
             div()
                 .key_context("Offer")
+                .track_focus(&self.focus)
                 .on_action(cx.listener(Self::accept))
                 .on_action(cx.listener(Self::not_now))
                 .size_full()
@@ -466,8 +535,8 @@ impl Render for OfferPrompt {
                         .truncate()
                         .child(offer.site),
                 )
-                .child(username.mt(px(HEADER_GAP)))
-                .child(password.mt(px(ROW_GAP)))
+                .child(first.mt(px(HEADER_GAP)))
+                .child(second.mt(px(ROW_GAP)))
                 .child(buttons),
         )
     }

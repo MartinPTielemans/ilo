@@ -21,9 +21,9 @@ work=$HOME/.cache/ilo-mac-nightly
 # The checkout whose engine/.deps holds the tree: this one, or the one install named.
 here=$(cd "$(dirname "$0")/.." && pwd)
 checkout=${ILO_CHECKOUT:-$here}
-# The repository comes from this script's own checkout, main's once installed: the integrator's builds
-# leave the engine's checkout on commits whose prebuilt.ini predates it.
-repo=$(git config -f "$here/engine/prebuilt.ini" prebuilt.repository)
+# ilo's repository comes from this script's own checkout, main's once installed: the integrator's
+# builds leave the engine's checkout on commits that may predate app/branding/repository.
+repo=$(cat "$here/app/branding/repository")
 tree=$checkout/engine/.deps/src
 
 fail() {
@@ -115,9 +115,8 @@ run)
   if pgrep -f 'engine/(build|setup)[.]sh|engine-build[.]sh|ninja -C [.]deps/src/out/' >/dev/null; then
     skip "an engine build or setup is running in the tree."
   fi
-  # Main, and only the engine-mac tags, so the checkout gets no one else's.
-  git -C "$work" fetch -q "$repo.git" +refs/heads/main:refs/ilo-nightly/main \
-    '+refs/tags/engine-mac-*:refs/tags/engine-mac-*'
+  # Main alone, so the checkout gets no one else's branches.
+  git -C "$work" fetch -q "$repo.git" +refs/heads/main:refs/ilo-nightly/main
   if [ "$(git -C "$work" rev-parse HEAD)" != "$(git -C "$work" rev-parse refs/ilo-nightly/main)" ]; then
     git -C "$work" checkout -q -f --detach refs/ilo-nightly/main
     [ -e "$work/tools/mac-nightly.sh" ] || fail "main has no tools/mac-nightly.sh yet."
@@ -125,10 +124,11 @@ run)
     ILO_CHECKOUT=$checkout exec /bin/bash "$work/tools/mac-nightly.sh" run
   fi
   main=$(git -C "$work" rev-parse HEAD)
-  released=$(git -C "$work" describe --tags --abbrev=0 --match 'engine-mac-*' HEAD 2>/dev/null || true)
+  # The commit of the newest engine-mac release in main's history, in prebuilt.ini's repository.
+  released=$("$work/engine/fetch.sh" commit 2>/dev/null || true)
   if [ -n "$released" ] && git -C "$work" diff --quiet "$released" HEAD -- core engine \
     ':(exclude)engine/linux' ':(exclude)engine/windows' ':(exclude)*.md'; then
-    skip "main (${main:0:12}) has the core and engine of $released."
+    skip "main (${main:0:12}) has the core and engine of engine-mac-${released:0:12}."
   fi
   # A patch the tree holds that no commit of main ever had is someone's work in progress, which
   # main's series would take out.

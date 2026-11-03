@@ -16,7 +16,7 @@ Ambitious ideas, simple systems, software that feels obvious. Do not preserve co
 ## Glossary
 
 - **Space** and **profile** are different things (decision 5). A Space is a tab container: pinned tabs, Today tabs, a color. A profile holds cookies, history, logins and extensions. Several Spaces share one profile.
-- **Agent** means an external AI client (Claude Code, Codex, any MCP client) driving the browser through its built-in MCP server. It works in its own **Agent Space**. It's not an assistant inside the browser, and it's not you.
+- **Agent** means an AI client driving the browser through its built-in MCP server: one from outside (Claude Code, Codex, any MCP client), working in its own **Agent Space**, or the user's own `claude` or `codex` CLI that ilo runs for a task they asked from ⌘T. It's never an assistant of ilo's own, and it's not you.
 - **Handoff**: the agent's tab pauses at a sign-in, 2FA or CAPTCHA, and the user does that step.
 - **Engine**: Chromium built as Chrome's framework, from ungoogled-chromium plus `engine/series`. **Core**: our portable C++ inside Chromium (`//browser_core`), with each native window holding a Chrome `Browser` per profile. **UI**: GPUI, calling the core through the plain C API in `core/public/browser_core.h`, since the app and Chromium build with different C++ standard libraries. **Platform layer**: the only per-OS code.
 
@@ -37,7 +37,7 @@ Ambitious ideas, simple systems, software that feels obvious. Do not preserve co
 The most common defect is a change that works on the path you tested and is missing everywhere else. Before calling work done, walk this list and say which entries applied.
 
 - **UI and agents.** The UI and agents call one core API (decision 8). A user action with no agent path is half-built, and an agent path needs its permission rule and activity-log entry.
-- **Keyboard with the page focused.** Keys go to whichever has focus, the page or GPUI. AppKit offers ⌘ shortcuts to every view in the window, so our GPUI patch makes GPUI pass on them while the page has the keyboard, and a GPUI key binding alone stops working once the user clicks into a page. Chromium hands the browser's shortcuts back as Chrome does: reserved ones (⌘T, ⌘W, ⌘Q) before the page sees them, the rest only if the page doesn't keep them, as Google Docs keeps ⌘F. The core asks the app about each key through the host's `tab_key_before_page` and `tab_key_unhandled`, for Chromium's pages and Safari's engine's alike. Test with focus in the page and in the UI.
+- **Keyboard with the page focused.** Keys go to whichever has focus, the page or GPUI. AppKit offers ⌘ shortcuts to every view in the window, so our GPUI patch makes GPUI pass them on while the page has the keyboard: a GPUI key binding alone stops working once the user clicks into a page. Chromium hands the browser's shortcuts back as Chrome does: reserved ones (⌘T, ⌘W, ⌘Q) and Prefer ilo ones before the page sees them, the rest if the page doesn't keep them (Docs keeps ⌘F) or on a second press. The core asks the app about each key through `tab_key_before_page` and `tab_key_unhandled`, for both engines' pages. Test with focus in the page and in the UI.
 - **Over the page.** GPUI can't draw over the native page view. The command bar, menus, Peek and anything else that floats over a page is a child window. While one has the keyboard the browser window isn't key, and the page ignores a click that makes its window key, so a click outside the overlay has to close it before the click is dispatched. Chromium makes its window key by itself when a committing page's view replaces the focused one, so an overlay closes only when the user leaves it (a click outside, another window, another app) and otherwise takes the keyboard back. A hidden overlay also keeps the last frame it drew, and GPUI can't draw while it's handling the shortcut that opens one, so the host draws it before putting it on screen. The command bar in `app/` does all three. GPUI draws a window only once AppKit reports it visible, some frames after it's put on screen, so an overlay's motion starts at its first frame with `window.is_visible()`, as the dialog's does, or its start is never seen. Other apps take an app's first window at the normal level, front to back, for its window in front (T3 Code's window capture does), and a child window is ahead of its parent, so the host puts each over the browser window with `AddOver`, a level above it while it's the active app's main window.
 - **Text input.** Japanese IME, in GPUI fields and in pages.
 - **Window states.** Resize and fullscreen.
@@ -45,7 +45,7 @@ The most common defect is a change that works on the path you tested and is miss
 - **Platforms.** Mac ships first, but the core compiles on Linux (`engine/check-linux.sh`) and per-OS code stays in the platform layer. A PR touching it (`app/platform/`, `host.h`) or what the OS draws (window material, overlay corners and shadows, window controls, key routing, IME, scaling) shows before and after on each OS.
 - **Hot paths.** A change to tab switch, new tab, the command bar or launch comes with before-and-after numbers against the performance gate.
 - **The look.** A visual change goes through `app/design/tokens.toml`, and the design file follows with `tools/design-sync.md`.
-- **Docs.** A changed decision means rewriting its entry in `docs/decisions.md`. A phase that changes state updates the status table in `README.md`.
+- **Docs.** A changed decision means rewriting its entry in `docs/decisions.md`. A phase that changes state updates `docs/roadmap.md`.
 - **Reverse states.** If you added a way in, add the way out and the way to see it. A one-way door is a bug: a permission an agent can be granted needs a revoke and a place where it's listed.
 
 ## Dev
@@ -82,7 +82,7 @@ The most common defect is a change that works on the path you tested and is miss
 
 ## Where code lives
 
-`README.md`'s layout table lists the folders. Read `engine/README.md` before touching the engine's pins or patches. `prototypes/arcish/agent.js` is frozen, kept as the reference for agents' tools and rules; new work goes into the real stack. `spikes/` holds one experiment per open question: when one works, rewrite what it proved into the real tree, and nothing outside `spikes/` depends on it.
+Read `engine/README.md` before touching the engine's pins or patches. `spikes/` holds one experiment per open question: when one works, rewrite what it proved into the real tree, and nothing outside `spikes/` depends on it.
 
 ## Taste
 

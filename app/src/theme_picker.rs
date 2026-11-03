@@ -8,7 +8,7 @@
 use std::{cell::OnceCell, f32::consts::TAU, rc::Rc, sync::Arc, time::Instant};
 
 use gpui::{
-    App, Bounds, Context, DispatchPhase, FocusHandle, Focusable, FontWeight, Global, Hsla,
+    App, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable, FontWeight, Global, Hsla,
     KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels,
     Point, RenderImage, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
     WindowHandle, WindowKind, WindowOptions, actions, canvas, div, fill, point, prelude::*, px,
@@ -108,10 +108,10 @@ const GLIDE: f32 = 0.2;
 
 /// What the picker asks of its window.
 pub trait Host {
-    /// Shows the picker's window with its top left at `left`, `top` in the browser window, with
-    /// the keyboard, in the shape of `corners` (x, y and radius, clockwise from the arrow's tip,
-    /// which it grows in from).
-    fn show(&self, left: f32, top: f32, corners: &[(f32, f32, f32)]);
+    /// Shows the picker's window with its top left at `left`, `top` in browser window `window`,
+    /// the one that asked for it, with the keyboard, in the shape of `corners` (x, y and radius,
+    /// clockwise from the arrow's tip, which it grows in from).
+    fn show(&self, window: u64, left: f32, top: f32, corners: &[(f32, f32, f32)]);
     /// Hides it, and the browser window gets the keyboard back.
     fn hide(&self);
     /// A detent on the trackpad, as a drag reaches a stop, if the user has haptics on.
@@ -259,9 +259,10 @@ pub fn placed(anchor: Point<f32>, height: f32) -> (f32, f32, f32) {
 }
 
 /// Shows the picker for `space`, which has `theme` or none yet, pointing at `anchor`, the middle
-/// of a row's right end, in a browser window `height` tall. `changed` gets the theme as the user
-/// makes it.
+/// of a row's right end, in browser window `over`, `height` tall. `changed` gets the theme as the
+/// user makes it. A context menu in a window behind another asks for it there.
 pub fn show(
+    over: u64,
     space: u64,
     theme: Option<Theme>,
     anchor: Point<f32>,
@@ -294,7 +295,7 @@ pub fn show(
                 palette: Palette::of(theme.as_ref(), Tone::Dark),
             });
             window.focus(&picker.focus, cx);
-            picker.host.show(left, top, &corners(arrow_y));
+            picker.host.show(over, left, top, &corners(arrow_y));
             cx.notify();
         })
         .ok();
@@ -307,11 +308,28 @@ pub fn dismissed(cx: &mut App) {
     }
 }
 
+/// The Space it edits is going from under it, as a swipe turns the page: it closes as Esc closes
+/// it, where `dismissed` hears of a close the host has made.
+pub fn leave(cx: &mut App) {
+    if let Some(window) = cx.try_global::<ThemePickerWindow>().map(|picker| picker.0) {
+        window.update(cx, |picker, window, cx| picker.dismiss(&Dismiss, window, cx)).ok();
+    }
+}
+
 /// Whether the picker shows, for a click on what opened it to close it rather than open it again.
 pub fn is_open(cx: &App) -> bool {
-    cx.try_global::<ThemePickerWindow>()
-        .and_then(|picker| picker.0.read(cx).ok())
-        .is_some_and(|picker| picker.editing.as_ref().is_some_and(|editing| editing.open))
+    open_for(cx).is_some()
+}
+
+/// The Space the picker shows for, if it shows.
+pub fn open_for(cx: &App) -> Option<u64> {
+    let picker = cx.try_global::<ThemePickerWindow>()?.0.read(cx).ok()?;
+    picker.editing.as_ref().filter(|editing| editing.open).map(|editing| editing.space)
+}
+
+/// The picker, for the window it opens over to watch whether it still shows.
+pub fn entity(cx: &App) -> Option<Entity<ThemePicker>> {
+    cx.try_global::<ThemePickerWindow>()?.0.entity(cx).ok()
 }
 
 /// What a press at `x`, `y` from the card's top left lands on, with `theme` in the field.

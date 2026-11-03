@@ -91,11 +91,7 @@ if xcrun notarytool history --keychain-profile "$profile" > /dev/null 2>&1; then
   notarized=1
 fi
 
-mkdir "$out/dmg"
-ditto "$app" "$out/dmg/$name.app"
-ln -s /Applications "$out/dmg/Applications"
-hdiutil create -quiet -volname "$name" -srcfolder "$out/dmg" -format UDZO -ov "$dmg"
-rm -rf "$out/dmg"
+"$(dirname "$0")/dmg.sh" "$app" "$dmg"
 codesign --force --sign "$identity" --timestamp "$dmg"
 
 if [ -z "$notarized" ]; then

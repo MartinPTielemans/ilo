@@ -10,8 +10,8 @@ use gpui::{
 };
 
 use super::{
-    CHECK, GAP, Key, Layout, Look, Outcome, PADDING, Pointer, ROW_X, Request, Swatch, Tracking,
-    as_held, described, described_held, key_of, lay_out, lay_out_over,
+    CHECK, Closed, GAP, Key, Layout, Look, Outcome, PADDING, Pointer, ROW_X, Request, Swatch,
+    Tracking, as_held, described, described_held, key_of, lay_out, lay_out_over,
 };
 use crate::elevation::Level as Elevation;
 use crate::shell::MenuEntry;
@@ -233,6 +233,32 @@ fn the_menus_window_sits_on_whole_points_round_its_shadow() {
     }
 }
 
+/// Where the window can't blend, a pixel a panel's edge partly covers would show black, and so
+/// would a shadow's room: each panel goes out to whole points, and the window is just round them.
+#[test]
+fn where_the_window_cant_blend_the_panels_sit_on_whole_points_with_nothing_round_them() {
+    for at in [at(100., 100.), at(1000., 100.), at(100.5, 700.25)] {
+        let menu = lay_out(&tab_menu(), at, area(), &width_of);
+        let opaque = menu.clone().opaque();
+        for (level, was) in opaque.levels.iter().zip(&menu.levels) {
+            let (bounds, was) = (level.bounds, was.bounds);
+            for value in [bounds.left(), bounds.top(), bounds.right(), bounds.bottom()] {
+                assert_eq!(value, value.round(), "{bounds:?} isn't on whole points");
+            }
+            let out = [
+                was.left() - bounds.left(),
+                was.top() - bounds.top(),
+                bounds.right() - was.right(),
+                bounds.bottom() - was.bottom(),
+            ];
+            assert!(out.iter().all(|&by| by >= px(0.) && by < px(1.)), "{bounds:?} from {was:?}");
+        }
+        let levels = &opaque.levels;
+        let union = (levels.iter()).fold(levels[0].bounds, |all, level| all.union(&level.bounds));
+        assert_eq!(opaque.frame, union, "the window is just round the panels");
+    }
+}
+
 #[test]
 fn a_submenu_opens_beside_its_row_and_on_the_left_where_the_right_has_no_room() {
     let menu = lay_out(&tab_menu(), at(100., 100.), area(), &width_of);
@@ -370,6 +396,8 @@ struct Recorder {
     calls: RefCell<Vec<&'static str>>,
     /// Each window the menu asked for, and its panels in it.
     shown: RefCell<Vec<(Bounds<Pixels>, Vec<Bounds<Pixels>>)>>,
+    /// Whether its window can't blend (`Host::blends`).
+    opaque: bool,
 }
 
 impl super::Host for Recorder {
@@ -381,11 +409,15 @@ impl super::Host for Recorder {
     fn hide(&self) {
         self.calls.borrow_mut().push("hide");
     }
+
+    fn blends(&self) -> bool {
+        !self.opaque
+    }
 }
 
-/// Shows the tab menu at (100, 100) and returns what it chose once it closes. Each call is an
-/// update of the app, as the host's calls are, not of the menu's window.
-fn show_menu(cx: &mut VisualTestContext) -> Rc<Cell<Option<Option<usize>>>> {
+/// Shows the tab menu at (100, 100) and returns how it closed once it does. Each call is an update
+/// of the app, as the host's calls are, not of the menu's window.
+fn show_menu(cx: &mut VisualTestContext) -> Rc<Cell<Option<Closed>>> {
     let chosen = Rc::new(Cell::new(None));
     let answer = chosen.clone();
     cx.cx.update(|cx: &mut App| {
@@ -394,7 +426,7 @@ fn show_menu(cx: &mut VisualTestContext) -> Rc<Cell<Option<Option<usize>>>> {
             at: at(100., 100.),
             area: area(),
             look: Look::dark(),
-            chosen: Box::new(move |index, _| answer.set(Some(index))),
+            chosen: Box::new(move |closed, _| answer.set(Some(closed))),
         };
         super::show(request, cx);
     });
@@ -425,6 +457,32 @@ fn the_menu_takes_the_pointer_on_its_panels_and_not_in_their_shadows(cx: &mut Te
     assert!(f32::from(panels[0].origin.x) >= reach.sides && f32::from(panels[0].origin.y) >= reach.above);
 }
 
+/// A window that can't blend, on X11 with no compositor, shows its clear pixels black (#1479), so
+/// it holds the open panels alone, with no room round them, and is shown again with each submenu
+/// that opens or closes.
+#[gpui::test]
+fn where_the_window_cant_blend_it_holds_the_open_panels_alone(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder { opaque: true, ..Recorder::default() });
+    let window = cx.update(|cx| super::open(host.clone(), cx)).expect("no window for the menu");
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+
+    show_menu(cx);
+    let (frame, panels) = host.shown.borrow()[0].clone();
+    assert_eq!(panels, [Bounds::new(at(0., 0.), panels[0].size)], "the tab menu alone, at the corner");
+    assert_eq!(frame.origin, at(100., 100.), "where the menu opened, with no room for a shadow");
+
+    cx.simulate_keystrokes("m right");
+    let (again, panels) = host.shown.borrow().last().unwrap().clone();
+    assert_eq!(again, frame, "the window stays");
+    assert_eq!(panels.len(), 2, "and holds Move to's submenu too: {panels:?}");
+    assert_eq!(panels[0].union(&panels[1]), Bounds::new(at(0., 0.), frame.size), "just round the two");
+
+    cx.simulate_keystrokes("escape");
+    assert_eq!(host.shown.borrow().last().unwrap().1.len(), 1, "Move to's submenu closed");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(*host.calls.borrow(), ["show", "show", "show", "hide"]);
+}
+
 /// The menu in its window, driven the ways the host drives it: keys through the window, pointer
 /// events and the driver's choose and dismiss. Each closes it from inside the menu's update, which
 /// must leave its window alone until the update is over, or drawing it finds the menu held.
@@ -436,7 +494,7 @@ fn the_host_drives_the_menu_and_the_menu_closes_outside_its_update(cx: &mut Test
 
     let chosen = show_menu(cx);
     cx.simulate_keystrokes("m right down enter");
-    assert_eq!(chosen.get(), Some(Some(7)), "Move to › reading list");
+    assert_eq!(chosen.get(), Some(Closed::Chose(7)), "Move to › reading list");
     assert_eq!(*host.calls.borrow(), ["show", "hide"]);
 
     // Press and release on Duplicate, in the window's terms, which start left of the menu and
@@ -452,25 +510,34 @@ fn the_host_drives_the_menu_and_the_menu_closes_outside_its_update(cx: &mut Test
         assert!(super::pointer(Pointer::Released, duplicate, cx));
     });
     cx.run_until_parked();
-    assert_eq!(chosen.get(), Some(Some(4)));
+    assert_eq!(chosen.get(), Some(Closed::Chose(4)));
 
     let chosen = show_menu(cx);
     assert!(cx.cx.update(|cx: &mut App| super::choose("Archive Tab", cx)));
     cx.run_until_parked();
-    assert_eq!(chosen.get(), Some(Some(10)));
+    assert_eq!(chosen.get(), Some(Closed::Chose(10)));
 
     let chosen = show_menu(cx);
     cx.cx.update(|cx: &mut App| super::dismissed(cx));
     cx.run_until_parked();
-    assert_eq!(chosen.get(), Some(None));
+    assert_eq!(chosen.get(), Some(Closed::Left));
+
+    // A press outside it, which it takes, says where it landed in the browser window, so a field
+    // whose menu it was knows whether the user went away from it.
+    let chosen = show_menu(cx);
+    let page = point(px(60.), px(40.));
+    let menu_at = host.shown.borrow().last().expect("no menu shown").0.origin;
+    assert!(cx.cx.update(|cx: &mut App| super::pointer(Pointer::Pressed, page - menu_at, cx)));
+    cx.run_until_parked();
+    assert_eq!(chosen.get(), Some(Closed::PressedAt(page)));
 
     // A menu opened over one that shows takes its place and stays.
     show_menu(cx);
     let chosen = show_menu(cx);
     assert_eq!(host.calls.borrow().last(), Some(&"show"));
     cx.simulate_keystrokes("escape");
-    assert_eq!(chosen.get(), Some(None));
-    assert_eq!(host.calls.borrow().iter().filter(|call| **call == "hide").count(), 6);
+    assert_eq!(chosen.get(), Some(Closed::Otherwise));
+    assert_eq!(host.calls.borrow().iter().filter(|call| **call == "hide").count(), 7);
 }
 
 /// An item's ⌥ alternate takes no row of its own, as AppKit's: holding ⌥ shows it in the item's
@@ -502,7 +569,7 @@ fn holding_option_shows_and_picks_an_items_alternate(cx: &mut TestAppContext) {
                 at: at(100., 100.),
                 area: area(),
                 look: Look::dark(),
-                chosen: Box::new(move |index, _| answer.set(Some(index))),
+                chosen: Box::new(move |closed: Closed, _| answer.set(Some(closed.chosen()))),
             };
             super::show(request, cx);
         });

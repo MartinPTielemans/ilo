@@ -14,7 +14,8 @@
 # ⌘W otherwise shows the tab below, or above at the bottom. Tabs opened behind close to their
 # sibling, then their opener; after a switch to an unrelated tab, a tab opened in front closes to
 # the tab below; and a pinned tab's newest tab opened in front closes back to it, past an older one.
-# Closing the last tab leaves the Space empty, where ⌘T still works. Mute/Unmute Tab mutes a tab,
+# Closing the last tab leaves the Space empty, with no pane, its window resizing, and on Windows
+# maximizing and restoring, with no page, and ⌘T still works there. Mute/Unmute Tab mutes a tab,
 # its row shows a speaker while it plays, crossed out while it's muted, and a click on it unmutes
 # the tab. There ⇧⌦ takes a page out of history, as a click on the ✕ the pointer draws on its row
 # does, and ⌥⌘⌫ a search typed before, ⇧⌘↩ searches for what was typed, ⌘↩ opens it in a tab behind
@@ -30,7 +31,9 @@
 # and Settings' Unload switch turns that off and on. Back right-clicked or held lists the pages
 # back, nearest first, with their favicons, a row picked goes there, and ⌘-clicked it opens the page
 # back in a tab behind. Tabs › Reset all tabs in this Space takes the loaded pinned tabs away from
-# their pinned URLs back there, and leaves an unloaded one. Reports how long switches take.
+# their pinned URLs back there, and leaves an unloaded one. ⌘-click and ⇧-click choose rows,
+# whose menu and ⇧⌘C copy their links, one a line, and ⌘D, New Folder and ⌘W pin, folder and
+# close them all, each one step for ⌘Z. Reports how long switches take.
 
 # A Space's Today tabs. The page opens a tab of its own from its button, the way a link to a new tab
 # does, p in it plays a quiet tone until x, and u has it ask before it's left, or stop asking. The
@@ -276,7 +279,7 @@ expect '^browser: command bar hidden$' "Esc didn't close the command bar"
 # ilo's menu as #324 has it. The keys walk it past the line and the dimmed Mute, and typing selects
 # by a title's start.
 post rightclick $(row 0)
-expect "^browser: menu shown $(cased 'Copy Link, .*, Mute (disabled), .*, Duplicate, Move to › ')" \
+expect "^browser: menu shown $(cased 'Copy Link, .*, Mute (disabled), .*, Duplicate, Add to Folder › New Folder, Move to › ')" \
   "a right-click on the top Today row didn't show its tab's menu"
 expect '^browser: menu window at ' "the menu didn't take the keyboard"
 send key down
@@ -295,6 +298,37 @@ expect '^browser: menu highlights Move to at ' "typing m didn't pass the dimmed 
 send key right
 expect '^browser: menu submenu Move to shown at ' "→ didn't open Move to's submenu"
 expect '^browser: menu highlights Move to › ' "→ didn't highlight the submenu's first item"
+# On Linux the menu is a window over the browser window's. Under X11 with no compositor, as under
+# Xvfb, a window can't blend and shows its clear pixels black, so there the panels are square and
+# opaque with nothing round them (#1479): no corner of the menu or its submenu is black, and nor is
+# the sidebar just left of it, where the shadow's room was.
+if [ "$(uname)" = Linux ]; then
+  expect '^browser: menu submenu Move to drawn$' "Move to's submenu wasn't drawn"
+  set -- $(grep '^browser: menu window at ' "$log" | tail -1 | sed 's/.* at //; s/[,x]/ /g')
+  left=$1 top=$2 bottom=$(($2 + $4))
+  set -- $(grep '^browser: menu submenu Move to shown at ' "$log" | tail -1 | sed 's/.* at //')
+  sub_right=$(($1 + $3 - 2)) sub_bottom=$(($2 + $4 - 2))
+  points="$((left + 1)),$((top + 1)) $(($1 + 2)),$((top + 1)) $((left - 3)),$((top + 12))"
+  points="$points $(($1 + 1)),$(($2 + 1)) $sub_right,$(($2 + 1)) $(($1 + 1)),$sub_bottom $sub_right,$sub_bottom"
+  # The root's bottom is the window's where the submenu ends above it.
+  [ "$sub_bottom" -ge $((bottom - 2)) ] || points="$points $((left + 1)),$((bottom - 2))"
+  # A few captures, as the window takes its new shape as the submenu draws.
+  black=
+  for _ in 1 2 3 4 5; do
+    ../tools/window-screenshot.sh "$pid" "$out/menu.png" || fail "no window to capture"
+    [ "${BROWSER_HEADLESS:-}" = xvfb ] || break
+    size=$(magick identify -format '%w %h' "$out/menu.png")
+    width=${size% *} height=${size#* } black=
+    for point in $points; do
+      x=${point%,*} y=${point#*,}
+      set -- $(pixel "$out/menu.png" "$(awk "BEGIN { print ($x + 0.5) / $width }")" \
+        "$(awk "BEGIN { print ($y + 0.5) / $height }")")
+      [ "$1" -ge 8 ] || [ "$2" -ge 8 ] || [ "$3" -ge 8 ] || black="$black $x,$y"
+    done
+    [ -n "$black" ] || break
+  done
+  [ -z "$black" ] || fail "with no compositor, the menu at $left,$top shows black at$black (#1479)"
+fi
 send key escape
 expect '^browser: menu submenu Move to hidden$' "escape didn't close Move to's submenu"
 none_since '^browser: menu closed$' || fail "escape in the submenu closed the whole menu"
@@ -343,6 +377,21 @@ expect '^browser: menu window at ' "the menu didn't take the keyboard"
 send click $page_point
 expect '^browser: menu closed$' "a click outside didn't close the menu"
 expect '^browser: menu window hidden$' "a click outside left the menu's window up"
+# A right-click elsewhere opens that menu in its place: on the next row, left of the menu, which
+# opens right of the pointer. ↓ shows the new one has the keys, not closed as it opened.
+post rightclick $(row 0)
+expect "^browser: menu shown $(cased 'Copy Link, ')" "a right-click on the top Today row didn't show its menu"
+expect '^browser: menu window at ' "the menu didn't take the keyboard"
+set -- $(row 1)
+post rightclick $(($1 - 60)) $2
+expect "^browser: menu shown $(cased 'Copy Link, ')" \
+  "a right-click on the next row with the menu up didn't show that row's menu"
+expect '^browser: menu window at ' "the next row's menu didn't take the keyboard"
+send key down
+expect "^browser: menu highlights $(cased 'Copy Link') at " \
+  "the next row's menu closed as it opened, or didn't take ↓"
+send key escape
+expect '^browser: menu closed$' "escape didn't close the next row's menu"
 
 # Before anything is typed, the bar lists the Space's other tabs, as Arc's does: those shown most
 # recently first, then the rest, such as favorites never shown.
@@ -401,7 +450,17 @@ send click 290 34
 expect "^browser: tab [0-9]* opened by $a in the foreground\$" "the page's button didn't open a tab"
 d=$(grep '^browser: tab [0-9]* opened by' "$log" | tail -1 | cut -d' ' -f3)
 expect_tabs "$c $b $a $d" "$d" "a tab the page opened"
-send key w cmd
+# Typing close and return in the command bar archives the tab, as Arc's bar lists Archive Tab
+# first for it, and never closes the window (#1374).
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+send type close
+expect '^browser: command bar commands "close": Archive Tab\(,\|$\)' \
+  "the command bar didn't find Archive Tab first for close: $(grep '^browser: command bar commands' "$log" | tail -1)"
+expect '^browser: command bar drew "close"$' "the command bar didn't draw its rows for close"
+../tools/window-screenshot.sh "$pid" "$out/bar-close.png" || fail "no window to capture"
+send key return
+expect '^browser: command close-tab via command bar$' "close and return in the command bar didn't archive the tab"
 expect_tabs "$c $b $a" "$a" "after closing the page's tab"
 
 # A tab unseen for 2 hours lets go of its page as another is shown, keeping its row, and shown
@@ -465,6 +524,7 @@ expect "^$c_page\$" "c's tab came back without its history: $(grep "^browser: pa
 # reached it.
 send menu Settings…
 expect '^browser: settings shown General$' "Settings… didn't show General"
+settings_drew General
 # Where Settings drew the switch, which differs by OS: it logs that once a place.
 await '^browser: settings switch unload idle tabs at ' || fail "Settings didn't draw Unload tabs' switch"
 unload_switch=$(sed -n 's/^browser: settings switch unload idle tabs at //p' "$log" | tail -1)
@@ -480,6 +540,7 @@ expect 'browser: idle tabs checked$' "showing a tab didn't check for tabs unseen
 since $aged | grep -q "browser: tab $c without its page\$" && fail "a tab let go of its page with the switch off"
 send menu Settings…
 expect '^browser: settings shown General$' "Settings… didn't bring Settings back to the front"
+settings_drew General
 send clickkey $unload_switch
 expect '^browser: unload idle tabs on$' "a click on Unload tabs' switch didn't turn it on"
 expect "browser: tab $c without its page\$" "turning the switch on didn't unload the tab unseen 2 hours"
@@ -499,6 +560,7 @@ send state
 if windows; then
   send menu Settings…
   expect '^browser: settings shown General$' "Settings… didn't show General after its close button"
+  settings_drew General
   post key f4 ctrl
   expect '^browser: settings hidden$' "Alt+F4 didn't hide Settings"
   await "^browser: drive $step done" || fail "the driver didn't finish Alt+F4 in Settings"
@@ -530,6 +592,32 @@ expect_tabs "$b" "$b" "after closing the bottom tab"
 send key w cmd
 expect_tabs " *" 0 "after closing the last tab"
 ../tools/window-screenshot.sh "$pid" "$out/empty.png" || fail "no window to capture"
+# The capture shows no pane, as in an empty Space: on Windows a pane is a window of its own, and the
+# closed tab's went on drawing black over the Space (#1343).
+send layout
+none_since '^browser: layout content.*WebContentsViewCocoa' ||
+  fail "a pane stayed over the empty Space: $(grep '^browser: layout content' "$log" | tail -1)"
+# The window resized, maximized and restored with no page after the last tab closed, as after a
+# close with only unloaded tabs left, goes on: on Windows the pane went on laying out the closed
+# tab's freed page at each resize, and the browser crashed (#1340). Maximized by the system command,
+# as by the title bar's button or Win+↑, as in the crash.
+size=$(grep '^browser: layout content' "$log" | tail -1 |
+  sed 's/^browser: layout content \([0-9]*\)x\([0-9]*\),.*/\1 \2/')
+smaller="$((${size% *} - 100)) $((${size#* } - 100))"
+send resize $smaller
+expect "^browser: drawn at ${smaller% *}x${smaller#* }\$" "the window with no page didn't draw at its new size"
+if windows; then
+  send maximize
+  send layout
+  maximized=$(grep '^browser: layout content' "$log" | tail -1 |
+    sed 's/^browser: layout content \([0-9]*\)x\([0-9]*\),.*/\1 \2/')
+  [ "${maximized% *}" -gt "${smaller% *}" ] ||
+    fail "the system command didn't maximize the window with no page: $maximized"
+  send maximize
+  expect "^browser: drawn at ${smaller% *}x${smaller#* }\$" "the window with no page didn't restore"
+fi
+send resize $size
+expect "^browser: drawn at ${size% *}x${size#* }\$" "the window with no page didn't draw back at its size"
 # ⇧⌦ takes a page from history out of the rows.
 send key t cmd
 expect '^browser: command new-tab via ui$' "⌘T in an empty Space didn't reach the UI"
@@ -730,7 +818,7 @@ expect "^browser: today [0-9][0-9]* $rest\$" "the back page's tab didn't open at
 h=$(today | cut -d' ' -f1)
 # A page has drawn, so takes clicks, once its title is its name, and its favicon is in the profile's
 # favicons once the tab has it.
-drawn() {
+page_drawn() {
   expect "^browser: title $h $1\$" "the $1 page didn't draw"
   expect "^browser: favicon $h [0-9]* bytes\$" "the $1 page's tab didn't get its favicon"
 }
@@ -739,10 +827,17 @@ go_on() {
   send click $page_point
   expect "^browser: page $h back 1 forward 0 loading 0 ${site}$1\$" \
     "a click on the page's link didn't go on to $1 in its tab"
+  # A click hits the buttons the window drew last, where back was dimmed as the page before had
+  # nowhere to go back to. Off the Mac that frame can come after the driver's click (#1048, #1179).
+  for _ in $(seq 100); do
+    [ "$(last 'nav back drawn')" = on ] && return
+    sleep 0.1
+  done
+  fail "the header didn't draw back on once the page had gone on to $1"
 }
-drawn back
+page_drawn back
 go_on next.html
-drawn next
+page_drawn next
 go_on notes.txt
 post rightclick $back_button
 expect "^browser: history $h back 2\$" "a right-click on back didn't ask for the pages back"
@@ -755,7 +850,7 @@ expect "^browser: page $h back 0 forward 1 loading 0 ${site}back.html\$" "choosi
 # The page comes back from the back-forward cache, which logs no title or load again.
 expect "^browser: favicon $h [0-9]* bytes\$" "the back page's tab didn't get its favicon"
 go_on next.html
-drawn next
+page_drawn next
 send press $back_button
 expect '^browser: nav back pressed drawn$' "back held didn't draw itself shrunk"
 expect "^browser: history $h back 1\$" "holding back didn't ask for the pages back"
@@ -786,7 +881,7 @@ send release 40 64
 expect '^browser: nav reload at rest drawn$' "reload let go didn't grow back"
 none_since '^browser: command reload via sidebar$' || fail "reload let go off it reloaded"
 go_on next.html
-drawn next
+page_drawn next
 send click $back_button cmd
 expect '^browser: command back in the background via sidebar$' "⌘-click on back didn't reach the UI"
 expect "^browser: today $h [0-9][0-9]* $rest\$" "⌘-click on back didn't add a row under the tab"
@@ -918,6 +1013,262 @@ bar_command site-search-settings "Site Search Settings" "site search"
 expect '^browser: loaded [0-9]* chrome://settings/searchEngines$' \
   "Site Search Settings didn't open Chromium's search engines page: $(grep '^browser: loaded' "$log" | tail -1)"
 ../tools/window-screenshot.sh "$pid" "$out/site-search-settings.png" || fail "no window to capture"
+# ⌘-click and ⇧-click choose several rows, as Arc's do, drawn with the secondary fill. Their menu
+# and ⇧⌘C copy their links, one a line; ⌘D pins them and New Folder folders them, each one step
+# for ⌘Z; ⌘W closes them all, and ⌘Z brings them back. Three pages of the site's, opened from ⌘T.
+for name in one two three; do printf '<title>%s</title>' "$name" > "$out/site/$name.html"; done
+# Opens the site's page $1 from ⌘T at the top of Today, as tab $opened.
+open_site() {
+  was=$(today)
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar for $1"
+  send type "$site$1.html"
+  send key return
+  expect "^browser: today [0-9][0-9]*${was:+ $was}\$" "$1 didn't open at the top of Today"
+  opened=$(today | cut -d' ' -f1)
+  expect "^browser: loaded $opened $site$1.html\$" "$1 didn't load in its tab"
+}
+# The centre of Today's row $1, under the pinned tabs.
+today_row() {
+  set -- $(row "$1")
+  echo "$1 $(($2 + 41 * $(echo $(pinned) | wc -w)))"
+}
+# The links copied last, from the line logged and the two after it.
+copied() {
+  grep -A2 '^browser: copied ' "$log" | tail -3 | sed 's/^browser: copied //'
+}
+open_site one
+a=$opened
+open_site two
+b=$opened
+open_site three
+c=$opened
+rest=$(today | cut -d' ' -f4-)
+shown_pinned=$(pinned)
+send click $(today_row 2) cmd
+expect "^browser: chosen $c $a\$" "⌘-click on a row didn't choose it with the tab shown"
+send click $(today_row 1) shift
+expect "^browser: chosen $c $b $a\$" "⇧-click didn't choose the rows from the one ⌘-clicked through it"
+none_since "^browser: selected " || fail "choosing rows showed another tab"
+../tools/window-screenshot.sh "$pid" "$out/chosen.png" || fail "no window to capture"
+post rightclick $(today_row 1)
+expect "^browser: menu shown $(cased 'Pin Tabs, Add to Folder › New Folder')\(, [^,]*\)*, $(cased 'Copy URLs, Close Tabs')\$" \
+  "a right-click on a chosen row didn't show their menu: $(grep '^browser: menu shown' "$log" | tail -1)"
+../tools/window-screenshot.sh "$pid" "$out/chosen-menu.png" || fail "no window to capture"
+links=$(printf '%sthree.html\n%stwo.html\n%sone.html' "$site" "$site" "$site")
+send choose "$(cased 'Copy URLs')"
+expect "^browser: copied ${site}three.html\$" "Copy URLs didn't copy the chosen rows' links"
+[ "$(copied)" = "$links" ] || fail "Copy URLs copied \"$(copied)\", not the three links in order"
+clipboard_holds "$links" || fail "Copy URLs left the clipboard without the three links"
+send key c cmd shift
+expect "^browser: copied ${site}three.html\$" "⇧⌘C with rows chosen didn't copy their links"
+[ "$(copied)" = "$links" ] || fail "⇧⌘C copied \"$(copied)\", not the chosen rows' links"
+send key d cmd
+expect_lists "$shown_pinned $c $b $a" "$rest" "⌘D with rows chosen"
+send key z cmd
+expect_lists "$shown_pinned" "$c $b $a $rest" "⌘Z after ⌘D on the chosen rows"
+expect '^browser: rows settled$' "the rows didn't settle after ⌘Z"
+# A plain click lets them go, and ⌘-clicks choose them again.
+send click $(today_row 0)
+expect '^browser: chosen $' "a plain click on a row didn't let the chosen rows go"
+send click $(today_row 1) cmd
+send click $(today_row 2) cmd
+expect "^browser: chosen $c $b $a\$" "⌘-clicks didn't choose the rows again"
+post rightclick $(today_row 0)
+expect "^browser: menu shown $(cased 'Pin Tabs, ')" "a right-click on a chosen row didn't show their menu"
+send choose "$(cased 'Add to Folder › New Folder')"
+expect '^browser: rename folder [0-9]*$' "New Folder didn't give the chosen rows' folder its name field"
+f=$(grep '^browser: rename folder' "$log" | tail -1 | cut -d' ' -f4)
+expect "^browser: outline .*$f+\[$c $b $a\]\$" "New Folder didn't pin the chosen rows into it in order"
+expect "^browser: today $rest\$" "New Folder left a chosen row in Today: $(today)"
+send key escape
+send key z cmd
+expect_lists "$shown_pinned" "$c $b $a $rest" "⌘Z after New Folder on the chosen rows"
+expect '^browser: rows settled$' "the rows didn't settle after ⌘Z"
+send click $(today_row 1) cmd
+send click $(today_row 2) cmd
+expect "^browser: chosen $c $b $a\$" "⌘-clicks didn't choose the rows once more"
+send key w cmd
+expect "^browser: today $rest\$" "⌘W with rows chosen didn't close them all: $(today)"
+send key z cmd
+expect "^browser: today [0-9][0-9]* [0-9][0-9]* [0-9][0-9]* $rest\$" \
+  "⌘Z after ⌘W didn't bring the three chosen tabs back: $(today)"
+
+# On Windows a window the UI floats over the page is on screen only while the UI shows it, in
+# whatever order keys, clicks, focus and minimizing come (#1346). Windows shows the windows a
+# browser window owns again as it comes back from minimized, and it brought back the bar, a tooltip
+# and a menu the UI had closed, empty and taking the page's clicks. The driver lists what's over
+# the browser window by each window's own visibility, and its reshow shows the UI's hidden windows
+# again as Windows does.
+if windows; then
+  # What's over the page is none, once a fade out has ended.
+  overlays_none() {
+    for _ in $(seq 20); do
+      send overlays
+      shown=$(grep '^browser: overlays shown ' "$log" | tail -1 | cut -d' ' -f4-)
+      [ "$shown" = none ] && return 0
+      sleep 0.1
+    done
+    fail "$1 left windows over the page: $shown"
+  }
+  # The bar's window goes with the bar, and the plate for New Tab with it.
+  bar_gone() {
+    expect '^browser: command bar hidden$' "$1 left the command bar open"
+    expect '^browser: new tab plate 0$' "$1 left New Tab's plate selected"
+    overlays_none "$1"
+  }
+  # The toast from ⌘Z and the hover card under the pointer go by themselves.
+  away
+  for _ in $(seq 100); do
+    toast=$(grep '^browser: toast \(shown\|hidden\)' "$log" | tail -1)
+    card=$(grep '^browser: hover card \(shown\|hidden\)' "$log" | tail -1)
+    case "$toast $card" in *shown*) sleep 0.1 ;; *) break ;; esac
+  done
+  overlays_none "the steps before"
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+  send key escape
+  bar_gone "Esc right after ⌘T"
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+  send key t cmd
+  bar_gone "⌘T twice"
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+  send click $page_point
+  bar_gone "a click on the page after ⌘T"
+  send move 93 23
+  expect '^browser: tooltip shown Hide Sidebar Ctrl+S$' "resting on the sidebar button didn't show its tooltip"
+  expect '^browser: tooltip window shown$' "the sidebar button's tooltip didn't fade in"
+  away
+  expect '^browser: tooltip hidden$' "the pointer leaving the sidebar button didn't hide its tooltip"
+  overlays_none "the tooltip, once hidden,"
+  post rightclick $(row 0)
+  expect '^browser: menu window at ' "a right-click on the top Today row didn't open its menu's window"
+  send key escape
+  expect '^browser: menu closed$' "escape didn't close the menu"
+  expect '^browser: menu window hidden$' "escape left the menu's window up"
+  overlays_none "the menu, once closed,"
+  send reshow
+  expect '^browser: reshown [1-9][0-9]*$' "the driver found none of the UI's windows hidden to show again"
+  overlays_none "Windows showing the bar's, the tooltip's and the menu's windows again"
+  # Minimized, the window closes its bar and its menu, as the user leaving them, and they stay
+  # closed as it comes back.
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+  send minimize
+  bar_gone "minimizing the window"
+  send minimize
+  overlays_none "the window coming back from minimized after its bar closed"
+  send state
+  if [ "$active" = 1 ]; then
+    post rightclick $(row 0)
+    expect '^browser: menu window at ' "a right-click on the top Today row didn't open its menu's window"
+    send minimize
+    expect '^browser: menu closed$' "minimizing the window left its menu open"
+    expect '^browser: menu window hidden$' "minimizing the window left its menu's window up"
+    send minimize
+    overlays_none "the window coming back from minimized after its menu closed"
+  else
+    echo "skip: a menu in a minimized window, as the app wasn't active once its window came back."
+  fi
+  # Moved with the bar open, the window takes the bar along, over the same place, where it stayed
+  # behind on the screen, and the window's menu closes, as the Mac's do (#1364).
+  # Where each window over the page is, "x,y" in points, in the driver's order, once there's one.
+  overlays_at() {
+    for _ in $(seq 20); do
+      send overlays
+      at=$(grep '^browser: overlays shown ' "$log" | tail -1 | grep -o ' at [0-9-]*,[0-9-]*' |
+        cut -c5- | tr '\n' ' ')
+      [ -n "$at" ] && return 0
+      sleep 0.1
+    done
+    fail "$1"
+  }
+  send order
+  frame=$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)
+  read -r frame_x frame_y frame_width frame_height <<FRAME
+$frame
+FRAME
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+  overlays_at "the command bar's window isn't on screen"
+  bar_before=$at
+  hidden=$(grep -c '^browser: command bar hidden$' "$log" || true)
+  send place $((frame_x + 60)) $((frame_y + 40)) "$frame_width" "$frame_height"
+  overlays_at "the command bar's window left the screen as its window moved"
+  ../tools/window-screenshot.sh "$pid" "$out/command-bar-moved.png" || fail "no window to capture"
+  # Within a point, as each is rounded from pixels.
+  echo "$bar_before" "$at" | awk '{ n = NF / 2; for (i = 1; i <= n; i++) {
+      split($i, a, ","); split($(i + n), b, ",")
+      if ((b[1] - a[1] - 60) ^ 2 > 1 || (b[2] - a[2] - 40) ^ 2 > 1) exit 1 } }' ||
+    fail "moving the window by 60,40 points left the command bar behind: $bar_before, then $at"
+  [ "$(grep -c '^browser: command bar hidden$' "$log")" = "$hidden" ] ||
+    fail "moving the window closed its command bar"
+  send place "$frame_x" "$frame_y" "$frame_width" "$frame_height"
+  send key escape
+  bar_gone "Esc in the command bar after its window moved"
+  post rightclick $(row 0)
+  expect '^browser: menu window at ' "a right-click on the top Today row didn't open its menu's window"
+  send place $((frame_x + 60)) $((frame_y + 40)) "$frame_width" "$frame_height"
+  expect '^browser: menu closed$' "moving the window left its menu open"
+  expect '^browser: menu window hidden$' "moving the window left its menu's window up"
+  send place "$frame_x" "$frame_y" "$frame_width" "$frame_height"
+  overlays_none "the menu, closed as its window moved,"
+  # The bar opened while a page loads in another site's renderer, so its view replaces the one
+  # that had the keyboard as it commits: the bar stays open with the keyboard, as it closes only
+  # when the user leaves it, where it closed as Chromium made its window the active one (#1363).
+  rm -f "$out/site/held.go"
+  before=$(today)
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+  send type "${site}notes.txt"
+  send key return
+  expect "^browser: today [0-9][0-9]*${before:+ $before}\$" "the tab for notes.txt didn't open at the top"
+  committing=$(today | cut -d' ' -f1)
+  expect "^browser: loaded $committing ${site}notes.txt\$" "notes.txt didn't load in its tab"
+  go_from_bar "http://localhost:$port/held"
+  served "localhost:$port/held" "the tab didn't ask for /held on localhost"
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar over the loading page"
+  hidden=$(grep -c '^browser: command bar hidden$' "$log" || true)
+  touch "$out/site/held.go"
+  expect "^browser: loaded $committing http://localhost:$port/held\$" "/held didn't load in its tab"
+  # Twice round the UI thread, for what the commit posted to it to have run.
+  send state
+  send state
+  [ "$(grep -c '^browser: command bar hidden$' "$log")" = "$hidden" ] ||
+    fail "the command bar closed as the page under it committed"
+  [ "$key" = GPUIPanel ] || fail "the command bar hasn't the keyboard after the page committed: $key"
+  if grep -q '^browser: command bar takes the keyboard back from its window$' "$log"; then
+    committed="took the keyboard back from its window"
+  else
+    committed="kept the keyboard"
+  fi
+  send key escape
+  bar_gone "Esc in the command bar after the page under it committed"
+  send key w cmd
+  expect "^browser: tab $committing closed\$" "⌘W didn't close the tab that loaded /held"
+  # Alt+F4 in the bar closes the browser window under it, as in Chrome's address field, and the
+  # bar's window, which every browser window shares, lives on to open over the next one: Ctrl+T
+  # there opens the bar again (#1362). The windows over the page that have no Alt+F4 of the UI's,
+  # such as the dialog, close themselves on it (dialogs.sh).
+  send key n cmd
+  expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
+  second=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar in the second window"
+  post key f4 ctrl
+  await "^browser: drive $step done" || fail "the driver didn't finish Alt+F4 in the command bar"
+  expect '^browser: command close-window via ui$' "Alt+F4 in the command bar didn't reach the UI"
+  expect "^browser: window closed $second\$" "Alt+F4 in the command bar didn't close its window"
+  expect '^browser: command bar hidden$' "the command bar stayed open as its window closed"
+  send window 1
+  send key t cmd
+  expect '^browser: command bar shown$' "Ctrl+T didn't open the command bar after Alt+F4 closed a window"
+  send key escape
+  bar_gone "Esc in the command bar after Alt+F4 closed the window it was over"
+fi
 
 exec 3>&-
 # Chrome writes the trace before it quits, once every process has started tracing or 10 s have
@@ -958,6 +1309,10 @@ chrome_ms=$(echo "$spans" | grep -v incomplete | summary)
 [ -n "$chrome_ms" ] || fail "the trace has no finished tab switches"
 # grep -c finds none in a run where no switch was cut off, and exits 1 then.
 chrome_ms="$chrome_ms, $(echo "$spans" | grep -c incomplete || true) incomplete, not counted"
-echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's ✕ take a page out of history and ⌥⌘⌫ a search typed before, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row and a space after an engine's keyword search with it alone until ⌫ leaves, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, ⌘W shows the tab below or above, an empty Space still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one."
+echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's ✕ take a page out of history and ⌥⌘⌫ a search typed before, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row and a space after an engine's keyword search with it alone until ⌫ leaves, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it, by close and ↩ in the command bar, goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, ⌘W shows the tab below or above, an empty Space shows no pane, its window resizes, and on Windows maximizes and restores, and it still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one. ⌘-click and ⇧-click choose three rows, whose menu and ⇧⌘C copy their links in order, and ⌘D pins them, New Folder folders them and ⌘W closes them, each undone by ⌘Z. On Windows the bar, a tooltip and a menu are on screen only while the UI shows them: after Esc, ⌘T again or a click on the page, as the pointer leaves, after Windows shows them again and after their window was minimized."
+[ -z "${committed:-}" ] || echo "  On Windows Alt+F4 in the bar closes its window and the bar opens" \
+  "over the next one, the bar" \
+  "moves with its window and the window's menu closes, and the bar stays open over a page that" \
+  "commits in another site's renderer and $committed: $out/command-bar-moved.png"
 echo "  Switch to a loaded tab, tab strip to frame shown (Chrome's measure; gate 16 ms): $chrome_ms."
-echo "  Switch, key to the core's report: $app_ms. Windows: $out/muted.png, $out/tabs.png, $out/suggestions.png, $out/completion.png, $out/search-tabs.png, $out/url-field-bar.png, $out/commands-only.png, $out/listed.png, $out/popular.png, $out/site-hint.png, $out/site-search.png, $out/field-menu.png, $out/empty.png, $out/remove-suggestion.png, $out/site-search-settings.png, $out/idle-unloaded.png, $out/back-held.png, $out/back-menu.png, $out/back-behind.png"
+echo "  Switch, key to the core's report: $app_ms. Windows: $out/muted.png, $out/tabs.png, $out/bar-close.png, $out/suggestions.png, $out/completion.png, $out/search-tabs.png, $out/url-field-bar.png, $out/commands-only.png, $out/listed.png, $out/popular.png, $out/site-hint.png, $out/site-search.png, $out/field-menu.png, $out/empty.png, $out/remove-suggestion.png, $out/site-search-settings.png, $out/idle-unloaded.png, $out/back-held.png, $out/back-menu.png, $out/back-behind.png, $out/chosen.png, $out/chosen-menu.png"

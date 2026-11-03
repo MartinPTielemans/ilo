@@ -83,3 +83,45 @@ fn what_is_dragged_in_goes_to_the_gap_nearest_the_pointer(cx: &mut TestAppContex
     // Past the last row's middle, by as much as pinned.sh lets go of its text, under it.
     assert_eq!(place(two + 12.), today(2, Slot::Tab(2)));
 }
+
+/// The press on a folder opens or closes it, and the browser's lists come back while its row is
+/// held: the drag goes on over them and lands where it's let go, whether they come before the row
+/// moves or as it does (#1118).
+#[gpui::test]
+fn a_folder_held_over_the_lists_its_press_changed_lands_where_let_go(cx: &mut TestAppContext) {
+    let folders = |open| Folders { folders: [(10, ("Work".into(), open))].into(), ..Default::default() };
+    for before_moving in [true, false] {
+        let (shell, host) = shell_with(cx, &[10, 8], &[9], folders(true));
+        let y = press(&shell, cx, 10);
+        let report = |cx: &mut TestAppContext| {
+            shell.update(cx, |shell, cx| {
+                shell.set_tabs(1, vec![10, 8], vec![9], Vec::new(), folders(false), cx)
+            })
+        };
+        if before_moving {
+            report(cx);
+        }
+        drag_to(&shell, cx, X, y + ROW_PITCH + 5.);
+        if !before_moving {
+            report(cx);
+        }
+        shell.update(cx, |shell, cx| shell.drop_row(cx));
+        assert_eq!(host.take_edits(), ["move folder 10 0 1"], "the lists before it moved: {before_moving}");
+    }
+}
+
+/// A row held while its tab leaves the lists, closed some other way, goes back, and letting go
+/// moves nothing.
+#[gpui::test]
+fn a_row_held_while_its_tab_goes_goes_back(cx: &mut TestAppContext) {
+    let (shell, host) = shell_with(cx, &[], &[1, 2, 3], Folders::default());
+    let y = press(&shell, cx, 1);
+    drag_to(&shell, cx, X, y + ROW_PITCH + 5.);
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(1, Vec::new(), vec![2, 3], Vec::new(), Folders::default(), cx)
+    });
+    let ended = shell.read_with(cx, |shell, _| (shell.drag.is_none(), shell.putting_back));
+    assert_eq!(ended, (true, true), "the drag ended, putting the row back");
+    shell.update(cx, |shell, cx| shell.drop_row(cx));
+    assert_eq!(host.moves.get(), 0);
+}

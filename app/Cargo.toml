@@ -1,6 +1,6 @@
 [package]
 name = "browser"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2024"
 publish = false
 license = "GPL-3.0-or-later"
@@ -44,6 +44,16 @@ plist = { version = "1", default-features = false }
 # tokens. The server itself is the app's own (src/agents/server.rs).
 futures = "0.3"
 getrandom = "0.3"
+# The local time an agent task's limit resets at. GPUI's dependencies bring it already.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# The screenshots a task's trace shows, which the core hands over in base64. GPUI's dependencies
+# bring it already.
+base64 = "0.22"
+
+# The session and the timeout of the shell Connect reads the user's PATH from
+# (src/agents/clients.rs), in the version GPUI's already brings.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui_macos = { path = ".deps/zed/crates/gpui_macos" }
@@ -51,7 +61,8 @@ gpui_macos = { path = ".deps/zed/crates/gpui_macos" }
 # Windows' GPUI platform, for the window the browser embeds GPUI in.
 [target.'cfg(target_os = "windows")'.dependencies]
 gpui_windows = { path = ".deps/zed/crates/gpui_windows" }
-# The agents' MCP server's named pipe (src/agents/pipe.rs), in the version GPUI's already brings.
+# The agents' MCP server's named pipe (src/agents/pipe.rs), and the PATH Connect finds Claude Code
+# on (src/agents/clients.rs), in the version GPUI's already brings.
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
@@ -59,6 +70,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_IO",
     "Win32_System_Pipes",
+    "Win32_System_Registry",
     "Win32_System_Threading",
 ] }
 
@@ -73,9 +85,9 @@ zbus = { version = "5.13", default-features = false, features = ["async-io"] }
 futures-lite = "2"
 # The wait on the portal's answer (src/flatpak.rs), on the timers zbus already runs on.
 async-io = "2"
-# The driver's keys on X11 (platform/linux/drive.rs) and the windows' frames (frames.rs), as
-# linux/Cargo.toml has it for the library.
-x11rb = { version = "0.13", features = ["xkb", "randr"] }
+# The driver's keys and pointer on X11 (platform/linux/drive.rs) and the windows' frames
+# (frames.rs), as linux/Cargo.toml has it for the library.
+x11rb = { version = "0.13", features = ["xkb", "randr", "xtest"] }
 # The driver's pointer and keyboard in the headless sway session (platform/linux/drive_wayland.rs).
 wayland-client = "0.31"
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }

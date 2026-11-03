@@ -12,7 +12,7 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 
 if [ -z "${SENTRY_AUTH_TOKEN:-}" ]; then
-  echo "symbols: no SENTRY_AUTH_TOKEN (README.md › Releases), so no symbols were uploaded." >&2
+  echo "symbols: no SENTRY_AUTH_TOKEN (docs/releasing.md), so no symbols were uploaded." >&2
   exit 0
 fi
 missing=
@@ -20,7 +20,7 @@ for name in SENTRY_URL SENTRY_ORG SENTRY_PROJECT; do
   [ -n "${!name:-}" ] || missing="$missing $name"
 done
 if [ -n "$missing" ]; then
-  echo "symbols: uploading crash reports' symbols needs$missing as well (README.md › Releases)." >&2
+  echo "symbols: uploading crash reports' symbols needs$missing as well (docs/releasing.md)." >&2
   exit 1
 fi
 if [ -z "$(tr -d '[:space:]' <"$root/app/branding/crash-reports")" ]; then

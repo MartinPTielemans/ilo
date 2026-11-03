@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "defaultDestination": { "littleArc": { "_0": { "mostRecent": {} } } },
+  "rules": [
+    {
+      "id": "R-WORK",
+      "sourceComponents": [{ "id": "R-WORK-URL", "componentType": { "urlMatch": { "_0": { "contains": {} }, "_1": "work.example.com" } } }],
+      "destination": { "space": { "_0": { "specific": { "_0": "S-WORK" } } } }
+    },
+    {
+      "id": "R-HN",
+      "sourceComponents": [{ "id": "R-HN-URL", "componentType": { "urlMatch": { "_0": { "isEqualTo": {} }, "_1": "https://news.ycombinator.com/" } } }],
+      "destination": { "space": { "_0": { "S-PERSONAL": {} } } }
+    },
+    {
+      "id": "R-MEET",
+      "sourceComponents": [{ "id": "R-MEET-URL", "componentType": { "urlMatch": { "_0": { "contains": {} }, "_1": "meet.example.com" } } }],
+      "destination": { "littleArc": { "_0": { "mostRecent": {} } } }
+    },
+    {
+      "id": "R-SLACK",
+      "sourceComponents": [{ "id": "R-SLACK-APP", "componentType": { "application": { "_0": "com.example.chat" } } }],
+      "destination": { "space": { "_0": { "specific": { "_0": "S-WORK" } } } }
+    },
+    {
+      "id": "R-FRONT",
+      "sourceComponents": [{ "id": "R-FRONT-URL", "componentType": { "urlMatch": { "_0": { "contains": {} }, "_1": "front.example.com" } } }],
+      "destination": { "space": { "_0": { "mostRecent": {} } } }
+    },
+    {
+      "id": "R-GONE",
+      "sourceComponents": [{ "id": "R-GONE-URL", "componentType": { "urlMatch": { "_0": { "contains": {} }, "_1": "gone.example.com" } } }],
+      "destination": { "space": { "_0": { "specific": { "_0": "S-GONE" } } } }
+    },
+    {
+      "id": "R-DOCS",
+      "sourceComponents": [{ "id": "R-DOCS-URL", "componentType": { "urlMatch": { "_0": { "exact": {} }, "_1": "https://docs.example.com/" } } }],
+      "destination": { "space": { "_0": { "specific": { "_0": "S-WORK" } } } }
+    }
+  ]
+}

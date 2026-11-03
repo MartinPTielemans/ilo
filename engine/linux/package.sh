@@ -24,6 +24,21 @@ grep -q ' T bc_main$' <<<"$exports" ||
 grep -q ' T wl_display_dispatch_queue_pending$' <<<"$exports" ||
   fail "chrome doesn't export libwayland's client API (chromium-core-wayland.patch, linux_exports)"
 
+# ilo's icon, not Chromium's logo, in each of the paks' logo resources, the windows' icon among them
+# (tree.sh's linux_icons): a size listed twice is in two of them. Linux's 16 has no 200% file, so
+# grit puts the 100% one in chrome_200_percent.pak too (theme_resources.grd falls back to low
+# resolution), beside the 32's 200% file, which is 64.
+here=$(cd "$(dirname "$0")" && pwd)
+ico=$here/../../app/platform/windows/package/Assets/ilo.ico
+while read -r pak sizes; do
+  # shellcheck disable=SC2086 # The sizes are words.
+  python3 -I "$here/../icons.py" pak "$out/$pak" "$ico" $sizes || fail "$pak has Chromium's logo"
+done <<'LOGOS'
+resources.pak 16 24 64 64 128 128 256
+chrome_100_percent.pak 16 32
+chrome_200_percent.pak 16 64
+LOGOS
+
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 mkdir "$stage/Chromium"
@@ -32,6 +47,12 @@ for file in chrome chrome_100_percent.pak chrome_200_percent.pak chrome_crashpad
   v8_context_snapshot.bin vk_swiftshader_icd.json; do
   cp -r "$out/$file" "$stage/Chromium/"
 done
+# Chromium's version, which Settings › About reads beside chrome (app/src/build_info.rs), as
+# Windows's build names a manifest after it.
+version=$(sed -n 's/^\(MAJOR\|MINOR\|BUILD\|PATCH\)=//p' "$1/src/chrome/VERSION" | paste -sd.)
+[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+  fail "src/chrome/VERSION gave no version: $version"
+echo "$version" >"$stage/Chromium/VERSION"
 # Qt's shims, for the system's file dialogs on KDE, where the build made them.
 for file in libqt5_shim.so libqt6_shim.so; do
   [ ! -e "$out/$file" ] || cp "$out/$file" "$stage/Chromium/"

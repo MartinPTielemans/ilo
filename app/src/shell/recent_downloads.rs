@@ -343,7 +343,7 @@ impl Shell {
 
     /// Turns the rows' fade toward going, or coming, from the opacity they're at.
     fn fade_recent_downloads(&mut self, going: bool, cx: &mut Context<Self>) {
-        let opacity = self.recent_downloads_opacity();
+        let opacity = self.recent_downloads_opacity(cx.background_executor().now());
         let recent = &mut self.recent_downloads;
         recent.going = going;
         recent.settled = false;
@@ -353,15 +353,15 @@ impl Shell {
         // From the opacity it's at, as if the fade had started that long ago.
         let done = if going { 1. - opacity } else { opacity };
         let since = Duration::from_secs_f32(done * RECENT_FADE);
-        let now = Instant::now();
+        let now = cx.background_executor().now();
         recent.fade = recent.fade.map(|_| now.checked_sub(since).unwrap_or(now));
         cx.notify();
     }
 
-    /// How opaque the rows draw.
-    fn recent_downloads_opacity(&self) -> f32 {
+    /// How opaque the rows draw, at `now` on the executor's clock, which a test moves on.
+    fn recent_downloads_opacity(&self, now: Instant) -> f32 {
         let recent = &self.recent_downloads;
-        let t = recent.fade.map_or(0., |fade| fade.elapsed().as_secs_f32() / RECENT_FADE);
+        let t = recent.fade.map_or(0., |fade| (now - fade).as_secs_f32() / RECENT_FADE);
         let t = t.clamp(0., 1.);
         if recent.going { 1. - t } else { t }
     }
@@ -402,13 +402,14 @@ impl Shell {
 
     /// Steps the rows' fade for a frame, and once it's done, says so, and lets them go if they
     /// went.
-    pub(super) fn step_recent_downloads(&mut self, window: &mut Window) {
+    pub(super) fn step_recent_downloads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let recent = &mut self.recent_downloads;
         if recent.rows.is_empty() || recent.settled {
             return;
         }
-        let fade = *recent.fade.get_or_insert_with(Instant::now);
-        if fade.elapsed().as_secs_f32() < RECENT_FADE {
+        let now = cx.background_executor().now();
+        let fade = *recent.fade.get_or_insert(now);
+        if (now - fade).as_secs_f32() < RECENT_FADE {
             window.request_animation_frame();
             return;
         }
@@ -448,7 +449,7 @@ impl Shell {
                 .w(px(self.width()))
                 .bottom(px(button_top))
                 .h(px(height + FOOTER_HEIGHT - button_top))
-                .opacity(self.recent_downloads_opacity())
+                .opacity(self.recent_downloads_opacity(cx.background_executor().now()))
                 .when(live, |area| {
                     area.block_mouse_except_scroll().on_hover(cx.listener(
                         |shell, hovered: &bool, window, cx| {
@@ -606,7 +607,7 @@ mod tests {
             library::{Section, capture_id},
             recorder::Recorder,
         },
-        DAY, HOUR, MINUTE, RECENT_WAIT, WEEK, age, now,
+        DAY, HOUR, MINUTE, RECENT_FADE, RECENT_WAIT, WEEK, age, now,
     };
 
     /// Ages count minutes, hours, then yesterday, days and weeks, and past four weeks give the
@@ -733,7 +734,7 @@ mod tests {
         assert_eq!(listed(cx), [2, 1]);
     }
 
-    /// Resting on the Library button for the tooltip's delay shows the four newest downloads, the
+    /// Resting on the Library button for half a second shows the four newest downloads, the
     /// running and held ones with the finished ones, with their ages, and asks for the finished
     /// ones' previews once, and the running one's once it finishes. They stay as the pointer crosses
     /// from the button onto them, go once it's on neither, and come back from going when it's on
@@ -763,7 +764,7 @@ mod tests {
 
         move_to(cx, button.0, button.1);
         wait(cx, RECENT_WAIT - Duration::from_millis(100));
-        assert!(rows(&shell, cx).0.is_empty(), "they wait the tooltip's delay");
+        assert!(rows(&shell, cx).0.is_empty(), "they wait half a second");
         wait(cx, Duration::from_millis(100));
         let shown = vec![
             (9, "just now".to_string()),
@@ -785,6 +786,9 @@ mod tests {
         move_to(cx, 120., height - 50. - 3. * 56. - 28.);
         assert_eq!(rows(&shell, cx), (shown.clone(), false), "the rows keep them");
 
+        // Their fade in ends on the test's clock, which stands still from here, so they're still
+        // going when the pointer comes back however long the machine takes.
+        wait(cx, Duration::from_secs_f32(RECENT_FADE));
         move_to(cx, 120., 200.);
         assert_eq!(rows(&shell, cx), (shown.clone(), true), "they go with the pointer on neither");
         move_to(cx, button.0, button.1);

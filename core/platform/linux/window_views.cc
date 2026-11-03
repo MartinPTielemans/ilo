@@ -24,6 +24,9 @@
 #include "browser_core/platform/linux/ui_text_input.h"
 #include "browser_core/platform/linux/wayland.h"
 #include "browser_core/window.h"
+#include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
+#include "chrome/browser/ui/views/native_widget_factory.h"
+#include "content/public/browser/web_contents.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/aura/client/focus_change_observer.h"
 #include "ui/aura/client/focus_client.h"
@@ -37,6 +40,7 @@
 #include "ui/events/event_handler.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
 #include "ui/gfx/geometry/insets.h"
+#include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
@@ -51,6 +55,7 @@
 #include "ui/base/hit_test.h"
 #include "ui/platform_window/platform_window.h"
 #include "ui/platform_window/wm/wm_move_resize_handler.h"
+#include "ui/views/views_delegate.h"
 #include "ui/views/widget/desktop_aura/desktop_native_widget_aura.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
@@ -485,14 +490,19 @@ class WindowViews : public views::WidgetObserver,
   // the window has it. Taken from another window, as by a window whose page moved out, that
   // window's handling of its focus event, which comes after it has the focus back, would take it
   // back too, and the two would go on without end (#531).
-  void UITakesKeyboard(bool asked = false) {
+  enum class Asked { kNo, kToKeep, kToHold };
+  void UITakesKeyboard(Asked asked = Asked::kNo) {
     // With no page shown, the keys only reach the window's shortcuts through the UI, which holds
     // them for the next page shown, as the Mac's window does. Taken again while it has them, as the
     // window manager focusing the window as it maps has it, it still holds them or keeps them.
     // Asked by the app, as for the New Space form's field, it keeps them, as the Mac's UI view
-    // does once it's the first responder.
-    if (asked) {
+    // does once it's the first responder. Asked to hold them, as the app does as it shows a Space
+    // with no page, the window's first too, it holds them for the next page shown, even with the
+    // page before still in the window, unless it keeps them, as the form's Space shows (#895).
+    if (asked == Asked::kToKeep) {
       ui_holds_for_page_ = false;
+    } else if (asked == Asked::kToHold) {
+      ui_holds_for_page_ = ui_holds_for_page_ || !ui_has_keyboard_;
     } else if (!ui_has_keyboard_) {
       ui_holds_for_page_ =
           std::ranges::none_of(panes_, [](const Slot& slot) { return slot.page; });
@@ -948,9 +958,9 @@ void DetachOthers(aura::Window* holder,
 }  // namespace
 
 views::NativeWidget* NewNativeWidget(views::Widget* widget, base::RepeatingClosure) {
-  // shortcut: keeps the window manager's title bar, where the Mac's UI fills it; draw the app's
-  // own once the header row is ported. The window manager reports a state it has already left
-  // full screen for, as a show state change, so the page leaves with it and nothing runs early.
+  // Framed by none of the window manager's (wayland.cc's SetUpWindow): the app's header draws the
+  // window's buttons and moves it. The window manager reports a state it has already left full
+  // screen for, as a show state change, so the page leaves with it and nothing runs early.
   return new views::DesktopNativeWidgetAura(widget);
 }
 
@@ -1181,8 +1191,9 @@ void KeepKeyboard(views::Widget* widget, base::OnceClosure change) {
   }
 }
 
-void StartMove(views::Widget* widget) {
-  ui::WmMoveResizeHandler* handler = ui::GetWmMoveResizeHandler(*PlatformWindowOf(widget));
+void StartMove(views::Widget* widget, std::optional<gfx::Point> press) {
+  ui::PlatformWindow* platform_window = PlatformWindowOf(widget);
+  ui::WmMoveResizeHandler* handler = ui::GetWmMoveResizeHandler(*platform_window);
   if (!handler) {
     return;
   }
@@ -1190,16 +1201,19 @@ void StartMove(views::Widget* widget) {
   // A compositor takes it from the press, which Chromium heard too (its serial).
   gfx::Point pointer;
   if (!OnWayland()) {
-    if (auto reply = x11::Connection::Get()->QueryPointer({XWindowOf(widget)}).Sync()) {
+    if (press) {
+      pointer = platform_window->GetBoundsInPixels().origin() +
+                gfx::ScaleToRoundedPoint(*press, ScaleOf(widget)).OffsetFromOrigin();
+    } else if (auto reply = x11::Connection::Get()->QueryPointer({XWindowOf(widget)}).Sync()) {
       pointer = gfx::Point(reply->root_x, reply->root_y);
     }
   }
   handler->DispatchHostWindowDragMovement(HTCAPTION, pointer);
 }
 
-void UITakesKeyboard(views::Widget* widget) {
+void UITakesKeyboard(views::Widget* widget, bool until_page) {
   if (WindowViews* views = ViewsOf(widget)) {
-    views->UITakesKeyboard(/*asked=*/true);
+    views->UITakesKeyboard(until_page ? WindowViews::Asked::kToHold : WindowViews::Asked::kToKeep);
   }
 }
 
@@ -1301,6 +1315,53 @@ std::optional<std::pair<gfx::Rect, gfx::Rect>> DevToolsFrames(views::Widget* wid
 
 void StretchOnResize(content::RenderWidgetHostView*, bool) {
   // shortcut: no stretch on Linux; the page shows its last frame unscaled until it redraws.
+}
+
+void AnswerClipboardRequests() {
+  if (OnWayland()) {
+    return;
+  }
+  x11::Connection* connection = x11::Connection::Get();
+  connection->ReadResponses();
+  // The rest wait their turn in the queue: dispatched inside the UI's read, they could call the UI.
+  // Taken out first, as answering one can read more into the queue.
+  std::vector<x11::Event> requests;
+  for (x11::Event& event : connection->events()) {
+    if (event.As<x11::SelectionRequestEvent>()) {
+      requests.push_back(std::move(event));
+      event = x11::Event();
+    }
+  }
+  for (const x11::Event& request : requests) {
+    connection->DispatchEvent(request);
+  }
+  connection->Flush();
+}
+
+void FloatPictureInPictureBubbles() {
+  if (OnWayland()) {
+    return;
+  }
+  // Chrome keeps a bubble on screen, and grows the Picture in Picture window to hold a child one
+  // (PipChildDialogObserverHelper): dragged partly off the screen, the window would jump back on
+  // it, taller, and stay so. A window of its own, the bubble needs no room in it.
+  views::ViewsDelegate::GetInstance()->set_native_widget_factory(base::BindRepeating(
+      [](const views::Widget::InitParams& params,
+         views::internal::NativeWidgetDelegate* delegate) -> views::NativeWidget* {
+        if (params.type != views::Widget::InitParams::TYPE_BUBBLE || !params.parent) {
+          return nullptr;
+        }
+        content::WebContents* floating =
+            PictureInPictureWindowManager::GetInstance()->GetChildWebContents();
+        if (!floating ||
+            views::Widget::GetTopLevelWidgetForNativeView(params.parent) !=
+                views::Widget::GetTopLevelWidgetForNativeView(floating->GetNativeView())) {
+          return nullptr;
+        }
+        // It only reads where the widget goes.
+        return ::CreateNativeWidget(NativeWidgetType::kDesktopNativeWidgetAura,
+                                    const_cast<views::Widget::InitParams*>(&params), delegate);
+      }));
 }
 
 }  // namespace browser_core::platform

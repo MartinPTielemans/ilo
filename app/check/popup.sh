@@ -57,17 +57,17 @@ expect "^browser: today $opener $popup $other\$" "the popup's tab didn't go unde
 expect '^browser: loaded [0-9]* https://example.com/$' "the popup's page didn't load in its tab"
 check_layout "with the popup's tab"
 ../tools/window-screenshot.sh "$pid" "$out/popup.png" || fail "no window to capture"
-# The page's context menu is Chrome's, with Arc's link items, without those Arc's leaves out or
-# whose UI is in Chrome's own window (Copy Link Text, Reading Mode, Lens, QR Code, Cast). It shows
-# in ilo's menu, with its top left at the click. Off the Mac its items are in sentence case, as
-# Chrome's are there.
+# The page's context menu is Chrome's, with Arc's link items and ilo's Open Link in Peek (#1370),
+# without those Arc's leaves out or whose UI is in Chrome's own window (Copy Link Text, Reading
+# Mode, Lens, QR Code, Cast). It shows in ilo's menu, with its top left at the click. Off the Mac
+# its items are in sentence case, as Chrome's are there.
 if windows || [ "$(uname)" = Linux ]; then
   in_tab='Open link in new tab'
-  link_items="$in_tab, Open link in new window, Open link in split view, "
+  link_items="$in_tab, Open link in Peek, Open link in new window, Open link in split view, "
   link_items="${link_items}Open link in incognito window, Save link as…"
 else
   in_tab='Open Link in New Tab'
-  link_items="$in_tab, Open Link in New Window, Open Link in Split View, "
+  link_items="$in_tab, Open Link in Peek, Open Link in New Window, Open Link in Split View, "
   link_items="${link_items}Open Link in Incognito Window, Save Link As…"
 fi
 send key 1 cmd
@@ -201,9 +201,9 @@ expect '^browser: menu shown Back' "the page didn't show its menu again after a 
 menu=$(grep '^browser: menu shown' "$log" | tail -1 | cut -d' ' -f4-)
 # No tab came before it, and none after.
 if windows || [ "$(uname)" = Linux ]; then
-  page_items="Back (disabled), Forward (disabled), Reload, Save as…, Print…, View page source, Inspect"
+  page_items="Back (disabled), Forward (disabled), Reload, Save as…, Print…, Cast…, View page source, Inspect"
 else
-  page_items="Back (disabled), Forward (disabled), Reload, Save As…, Print…, View Page Source, Inspect"
+  page_items="Back (disabled), Forward (disabled), Reload, Save As…, Print…, Cast…, View Page Source, Inspect"
 fi
 [ "$menu" = "$page_items" ] ||
   fail "the page's menu is $menu"
@@ -218,10 +218,12 @@ if [ "$(uname)" = Linux ]; then
 else
   send choose Print…
   print_preview "the page menu's Print…" print.png
-  # ⌘P, as File › Print, with the page's text field focused, as what's typed there shows.
+  # ⌘P, as File › Print, with the page's text field focused, as what's typed there shows. Its last
+  # word stays spelt right, where the field's menu below is opened: a misspelt word's has no Select
+  # All, Language Settings or Writing Direction (Chrome), and Windows checks the spelling.
   send click 300 250
-  send type z
-  expect "^browser: title $opener .*z\$" "typing in the page's text field didn't reach it"
+  send type s
+  expect "^browser: title $opener .*notes\$" "typing in the page's text field didn't reach it"
   ../tools/window-screenshot.sh "$pid" "$out/before-print.png" || fail "no window to capture"
   page_shortcut p print
   print_preview ⌘P print-key.png xy

@@ -5,7 +5,7 @@ use std::{collections::HashMap, rc::Rc, time::Instant};
 
 use gpui::{
     Context, Hsla, MouseButton, MouseDownEvent, Role, canvas, div, hsla, img, prelude::*, px,
-    rgba,
+    rgba, svg,
 };
 
 use crate::elevation::Level;
@@ -17,10 +17,10 @@ use super::{
     access::Accessible,
     Curve, DEVELOPER_TILE, FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X, FOLDER_TITLE_X, FOOTER_HEIGHT, HAIRLINE,
     HOVERED, LIST_TOP,
-    PLATE_INSET, Place, Row, SLEEPING_FAVICON, Shell, Slot, Space, TALL_FAVORITES, TILE,
-    TILE_GAP, TILE_HEIGHT, TILE_HOVERED, TILE_MIN, TILE_RADIUS, TILE_RING,
-    TILE_UNTHEMED, TILE_UNTHEMED_LIGHT, TITLE_END_INSET, TITLE_GAP, TURN_TITLE_FADE, TileTheme, tile_theme::RING_WIDTH,
-    developer_outline, title,
+    PLATE_INSET, Place, Row, SECONDARY, SLEEPING_FAVICON, Shell, Slot, Space, TALL_FAVORITES, TILE,
+    TILE_COLUMNS, TILE_GAP, TILE_HEIGHT, TILE_HOVERED, TILE_MARK, TILE_MARK_INSET, TILE_MIN, TILE_RADIUS,
+    TILE_RING, TILE_UNTHEMED, TILE_UNTHEMED_LIGHT, TITLE_END_INSET, TITLE_GAP, TURN_TITLE_FADE,
+    TileTheme, developer_outline, rows::capture_glyph, tile_theme::RING_WIDTH, title,
 };
 
 /// The most favorites a Space shows, as Arc's 12 a profile. Past it a tab doesn't become one,
@@ -199,17 +199,22 @@ impl Shell {
         tabs
     }
 
-    /// Where `count` tiles go, down from the favorites' top: each one's left, top and width. A row
-    /// has as many as fit, each as wide as the others, and fewer tiles share it.
+    /// Where `count` tiles go, down from the favorites' top: each one's left, top and width, as
+    /// Arc 1.171 lays them out. The widest a row gets is the most tiles, up to TILE_COLUMNS, that
+    /// keep each TILE_MIN wide; then it takes the fewest that need no more rows, so 5 go 3 + 2
+    /// rather than 4 + 1. Every tile is as wide, a short last row starting on the left, and a
+    /// tile's left edge is on the half point.
     pub(super) fn tile_places(&self, count: usize) -> Vec<[f32; 3]> {
         let room = self.width() - 2. * PLATE_INSET + TILE_GAP;
-        let fit = (room / (TILE_MIN + TILE_GAP)).floor().max(1.) as usize;
-        let columns = fit.min(count).max(1);
+        let fit = ((room / (TILE_MIN + TILE_GAP)).floor() as usize).clamp(1, TILE_COLUMNS as usize);
+        let widest = fit.min(count).max(1);
+        let columns = count.max(1).div_ceil(count.max(1).div_ceil(widest));
         let width = room / columns as f32 - TILE_GAP;
         (0..count)
             .map(|index| {
                 let (column, row) = ((index % columns) as f32, (index / columns) as f32);
-                [PLATE_INSET + column * (width + TILE_GAP), row * (TILE_HEIGHT + TILE_GAP), width]
+                let left = ((PLATE_INSET + column * (width + TILE_GAP)) * 2.).round() / 2.;
+                [left, row * (TILE_HEIGHT + TILE_GAP), width]
             })
             .collect()
     }
@@ -471,18 +476,37 @@ impl Shell {
                 tile.child(self.logged_developer_outline(tab, TILE_RADIUS))
             })
             .child(self.framed(tab, if selected { ring_width } else { HAIRLINE }))
+            .children(self.tile_mark(tab))
             .children(self.keyed_ring(tab, TILE_RADIUS))
             .child(self.icon_drawn(tab))
     }
 
-    /// Logs the icon `tab`'s tile draws once it's another than the one it drew, so a capture after
-    /// a change waits for the frame that shows it.
+    /// A favorite's mark in its tile's top right: what its page captures or shares, as its row's,
+    /// else a note while it plays sound (Arc animates musical notes; ours is still, as a song would
+    /// draw every frame).
+    fn tile_mark(&self, tab: u64) -> Option<impl IntoElement + use<>> {
+        let page = self.page(tab);
+        let playing = (page.audible && !page.muted).then_some("icons/eighth-note.svg");
+        let glyph = capture_glyph(&page).or(playing)?;
+        Some(
+            svg()
+                .path(glyph)
+                .absolute()
+                .top(px(TILE_MARK_INSET))
+                .right(px(TILE_MARK_INSET))
+                .size(px(TILE_MARK))
+                .text_color(self.palette.text(SECONDARY)),
+        )
+    }
+
+    /// Logs the icon `tab`'s tile draws once it's another than the one it drew, or first draws one,
+    /// as after a relaunch, so a capture waits for the frame that shows it.
     fn icon_drawn(&self, tab: u64) -> impl IntoElement + use<> {
         let (drawn, icon) = (self.tile_icons_drawn.clone(), self.page(tab).icon);
         canvas(
             move |_, _, _| {
                 let before = drawn.borrow_mut().insert(tab, icon.clone());
-                if before.is_some_and(|before| before != icon) {
+                if before.map_or(!icon.is_empty(), |before| before != icon) {
                     // check.sh reads this line.
                     let icon = if icon.is_empty() { "none" } else { &icon };
                     log!("browser: tile {tab} drawn with icon {icon}");

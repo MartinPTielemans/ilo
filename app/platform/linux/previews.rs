@@ -1,26 +1,31 @@
 //! A downloaded file's preview on Linux, as host_file_preview says: a photo's thumbnail, decoded by
 //! the image crate GPUI decodes with, in the formats it has, and a video's picture, from the
 //! thumbnailer the system has for its type, as a file manager's is (the freedesktop thumbnail
-//! spec). Playing one is left to Chromium's decoder, not GStreamer (#451).
-//!
-//! shortcut: no system icon for other files: those answer with no preview, and the UI shows its
-//! own icon.
+//! spec). Playing one is left to Chromium's decoder, not GStreamer (#451). Any other file shows
+//! its type's icon from the desktop's icon theme, as a file manager's does (the freedesktop icon
+//! theme spec), an SVG drawn by GPUI's renderer.
 
 use std::{
+    collections::HashMap,
     env,
     ffi::{CStr, c_char},
     fs,
     io::Cursor,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::{Arc, LazyLock},
     thread,
     time::{Duration, Instant},
 };
 
-use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
+use gpui::{DevicePixels, SvgRenderer, SvgSize, size};
+use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, RgbaImage, imageops::FilterType};
 
 /// The longest side of a thumbnail, in pixels, as the Mac's.
 const THUMBNAIL: u32 = 96;
+
+/// The side of a file's icon, in pixels, as the Mac's: 26 points on a 2× display.
+const ICON: u32 = 52;
 
 /// How long a thumbnailer has, as a damaged file can keep one decoding.
 const THUMBNAILER_TIME: Duration = Duration::from_secs(10);
@@ -34,16 +39,23 @@ pub extern "C" fn host_file_preview(path: *const c_char, id: u64, done: Done) {
     let Some(cx) = crate::CX.with_borrow(Clone::clone) else {
         return;
     };
-    // A photo's thumbnail reads and decodes its file, which can take a while for a large one, and
-    // a video's waits on its thumbnailer.
-    let thumbnail = cx
-        .background_executor()
-        .spawn(async move { thumbnail(&path).or_else(|| video_thumbnail(&path, id)) });
+    // A photo's thumbnail reads and decodes its file, which can take a while for a large one, a
+    // video's waits on its thumbnailer, and an icon on the portal and the theme's files.
+    let preview = cx.background_executor().spawn(async move {
+        if let Some(thumbnail) = thumbnail(&path).or_else(|| video_thumbnail(&path, id)) {
+            return Some((thumbnail, true));
+        }
+        if !path.exists() {
+            return None;
+        }
+        let theme = icon_theme().await;
+        Some((icon(&path, theme.as_deref())?, false))
+    });
     cx.foreground_executor()
         .spawn(async move {
-            match thumbnail.await {
-                Some((png, width, height)) => {
-                    done(id, png.as_ptr(), png.len(), width.into(), height.into(), true)
+            match preview.await {
+                Some(((png, width, height), image)) => {
+                    done(id, png.as_ptr(), png.len(), width.into(), height.into(), image)
                 }
                 None => done(id, std::ptr::null(), 0, 0., 0., false),
             }
@@ -80,6 +92,207 @@ fn video_thumbnail(path: &Path, id: u64) -> Option<(Vec<u8>, u32, u32)> {
     let picture = ran.then(|| thumbnail(&out)).flatten();
     let _ = fs::remove_file(&out);
     picture
+}
+
+/// The icon theme the desktop's settings portal names, as GPUI reads the cursor's there, else
+/// GTK's settings file's. None leaves GTK's default.
+async fn icon_theme() -> Option<String> {
+    if let Some(theme) = portal_setting("org.gnome.desktop.interface", "icon-theme").await {
+        return Some(theme);
+    }
+    let config = env::var_os("XDG_CONFIG_HOME")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+    ["gtk-4.0", "gtk-3.0"].iter().find_map(|gtk| {
+        let settings = ini(&fs::read_to_string(config.join(gtk).join("settings.ini")).ok()?);
+        let theme = settings.get("Settings")?.get("gtk-icon-theme-name")?.trim_matches('"');
+        Some(theme.to_string()).filter(|theme| !theme.is_empty())
+    })
+}
+
+/// A string the settings portal has for `namespace`'s `key`.
+async fn portal_setting(namespace: &str, key: &str) -> Option<String> {
+    use zbus::zvariant::{OwnedValue, Value};
+    let connection = zbus::Connection::session().await.ok()?;
+    let reply = connection
+        .call_method(
+            Some("org.freedesktop.portal.Desktop"),
+            "/org/freedesktop/portal/desktop",
+            Some("org.freedesktop.portal.Settings"),
+            "Read",
+            &(namespace, key),
+        )
+        .await
+        .ok()?;
+    let value: OwnedValue = reply.body().deserialize().ok()?;
+    // Read wraps the value in a second variant.
+    let value = match &*value {
+        Value::Value(inner) => inner.as_ref(),
+        other => other,
+    };
+    let setting = value.downcast_ref::<&str>().ok()?;
+    Some(setting.to_string()).filter(|setting| !setting.is_empty())
+}
+
+/// An icon theme: the directories it's in and its index.theme's sections.
+struct Theme {
+    dirs: Vec<PathBuf>,
+    index: Ini,
+}
+
+/// An ini file's sections, such as an index.theme's, each its keys' values.
+type Ini = HashMap<String, HashMap<String, String>>;
+
+/// `path`'s type's icon from `theme`, ICON pixels square, as a PNG with its width and height.
+fn icon(path: &Path, theme: Option<&str>) -> Option<(Vec<u8>, u32, u32)> {
+    // Its own, as the app's is borrowed while the UI asks, and one, as a renderer copies the
+    // system's fonts the first time it draws.
+    static SVG: LazyLock<SvgRenderer> = LazyLock::new(|| SvgRenderer::new(Arc::new(())));
+    let mime = mime_type(path).unwrap_or_else(|| "application/octet-stream".into());
+    let themes = themes(theme);
+    let file = icon_names(&mime).iter().find_map(|name| {
+        themes.iter().find_map(|theme| in_theme(name, theme)).or_else(|| unthemed(name))
+    })?;
+    let picture = if file.extension().is_some_and(|e| e == "svg") {
+        let parsed = SVG.parse_svg(&fs::read(&file).ok()?).ok()?;
+        let side = DevicePixels(ICON as i32);
+        let drawn = SVG.render_parsed(&parsed, SvgSize::ExactSize(size(side, side))).ok()?;
+        let mut pixels = drawn.as_bytes(0)?.to_vec();
+        // GPUI's are BGRA.
+        pixels.chunks_exact_mut(4).for_each(|pixel| pixel.swap(0, 2));
+        DynamicImage::ImageRgba8(RgbaImage::from_raw(ICON, ICON, pixels)?)
+    } else {
+        let picture = ImageReader::open(&file).ok()?.with_guessed_format().ok()?.decode().ok()?;
+        picture.resize_exact(ICON, ICON, FilterType::Lanczos3)
+    };
+    let mut png = Vec::new();
+    picture.write_to(&mut Cursor::new(&mut png), ImageFormat::Png).ok()?;
+    Some((png, ICON, ICON))
+}
+
+/// The icons for `mime`, the most particular first, as shared-mime-info names them: its own, then
+/// its generic one, then its kind's.
+fn icon_names(mime: &str) -> Vec<String> {
+    let listed = |file: &str| {
+        data_dirs().iter().find_map(|dir| {
+            let list = fs::read_to_string(dir.join("mime").join(file)).ok()?;
+            list.lines().find_map(|line| Some(line.strip_prefix(mime)?.strip_prefix(':')?.into()))
+        })
+    };
+    let kind = mime.split('/').next().unwrap_or("application");
+    let mut names = vec![listed("icons").unwrap_or_else(|| mime.replace('/', "-"))];
+    names.extend(listed("generic-icons"));
+    names.push(format!("{kind}-x-generic"));
+    names
+}
+
+/// `theme` and the themes it inherits, depth first, then Adwaita and hicolor, which GTK falls back
+/// to, each once.
+fn themes(theme: Option<&str>) -> Vec<Theme> {
+    fn add(name: &str, seen: &mut Vec<String>, themes: &mut Vec<Theme>) {
+        if seen.iter().any(|each| each == name) {
+            return;
+        }
+        seen.push(name.to_string());
+        let dirs: Vec<_> = icon_dirs().into_iter().map(|dir| dir.join(name)).collect();
+        let index = dirs.iter().find_map(|dir| fs::read_to_string(dir.join("index.theme")).ok());
+        let Some(index) = index.map(|index| ini(&index)) else {
+            return;
+        };
+        let inherits = index.get("Icon Theme").and_then(|keys| keys.get("Inherits")).cloned();
+        themes.push(Theme { dirs: dirs.into_iter().filter(|dir| dir.is_dir()).collect(), index });
+        for parent in inherits.unwrap_or_default().split(',').map(str::trim) {
+            if !parent.is_empty() {
+                add(parent, seen, themes);
+            }
+        }
+    }
+    let (mut seen, mut themes) = (Vec::new(), Vec::new());
+    for name in theme.into_iter().chain(["Adwaita", "hicolor"]) {
+        add(name, &mut seen, &mut themes);
+    }
+    themes
+}
+
+/// The directories icon themes are in, the user's first (the icon theme spec).
+fn icon_dirs() -> Vec<PathBuf> {
+    let home = env::var_os("HOME").map(|home| PathBuf::from(home).join(".icons"));
+    home.into_iter().chain(data_dirs().into_iter().map(|dir| dir.join("icons"))).collect()
+}
+
+/// The file of the icon `name` in `theme`: one drawn at ICON pixels or scalable to it, else the
+/// smallest larger, which stays sharp scaled down, else the largest.
+fn in_theme(name: &str, theme: &Theme) -> Option<PathBuf> {
+    let listed = theme.index.get("Icon Theme")?;
+    let directories = ["Directories", "ScaledDirectories"]
+        .iter()
+        .filter_map(|list| listed.get(*list))
+        .flat_map(|list| list.split(','))
+        .map(str::trim);
+    // Nearest first: whether it's smaller, then how many pixels from ICON.
+    let mut best: Option<((bool, u32), PathBuf)> = None;
+    for directory in directories {
+        let Some(keys) = theme.index.get(directory) else {
+            continue;
+        };
+        let number = |key: &str| keys.get(key)?.parse::<u32>().ok();
+        let Some(size) = number("Size") else {
+            continue;
+        };
+        let scale = number("Scale").unwrap_or(1);
+        let (min, max) = match keys.get("Type").map(String::as_str) {
+            Some("Scalable") => {
+                (number("MinSize").unwrap_or(size), number("MaxSize").unwrap_or(size))
+            }
+            Some("Fixed") => (size, size),
+            _ => {
+                let threshold = number("Threshold").unwrap_or(2);
+                (size.saturating_sub(threshold), size + threshold)
+            }
+        };
+        let (min, max) = (min * scale, max * scale);
+        let distance = match () {
+            _ if min > ICON => (false, min - ICON),
+            _ if max < ICON => (true, ICON - max),
+            _ => (false, 0),
+        };
+        if best.as_ref().is_some_and(|(nearest, _)| *nearest <= distance) {
+            continue;
+        }
+        let file = ["png", "svg"].iter().find_map(|extension| {
+            let file = format!("{directory}/{name}.{extension}");
+            theme.dirs.iter().map(|dir| dir.join(&file)).find(|file| file.is_file())
+        });
+        if let Some(file) = file {
+            best = Some((distance, file));
+        }
+    }
+    best.map(|(_, file)| file)
+}
+
+/// The icon `name` outside any theme, in the icon directories or /usr/share/pixmaps.
+fn unthemed(name: &str) -> Option<PathBuf> {
+    let dirs = icon_dirs().into_iter().chain([PathBuf::from("/usr/share/pixmaps")]);
+    let dirs: Vec<_> = dirs.collect();
+    ["png", "svg"].iter().find_map(|extension| {
+        dirs.iter().map(|dir| dir.join(format!("{name}.{extension}"))).find(|file| file.is_file())
+    })
+}
+
+/// `text`'s sections, as an index.theme or GTK's settings.ini has them.
+fn ini(text: &str) -> Ini {
+    let mut sections = Ini::new();
+    let mut section = String::new();
+    for line in text.lines().map(str::trim) {
+        if let Some(name) = line.strip_prefix('[').and_then(|line| line.strip_suffix(']')) {
+            section = name.to_string();
+        } else if let Some((key, value)) = line.split_once('=') {
+            let keys = sections.entry(section.clone()).or_default();
+            keys.entry(key.trim().to_string()).or_insert_with(|| value.trim().to_string());
+        }
+    }
+    sections
 }
 
 /// The directories shared-mime-info and thumbnailers are in, the user's first (the XDG base

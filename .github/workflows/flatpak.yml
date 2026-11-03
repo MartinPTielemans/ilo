@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
-      # engine/fetch.sh finds the engine from the history's tags.
+      # engine/fetch.sh finds the engine by the commits in the history its releases are named for.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0

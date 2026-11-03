@@ -23,6 +23,7 @@
 #include "browser_core/ad_block.h"
 #include "browser_core/agent_autofill.h"
 #include "browser_core/auto_archive.h"
+#include "browser_core/cast_dialog.h"
 #include "browser_core/crash_reports.h"
 #include "browser_core/downloads.h"
 #include "browser_core/developer_mode.h"
@@ -32,6 +33,7 @@
 #include "browser_core/install_question.h"
 #include "browser_core/leave_dialog.h"
 #include "browser_core/link_preview.h"
+#include "browser_core/mini_player.h"
 #include "browser_core/notes.h"
 #include "browser_core/open_app_dialog.h"
 #include "browser_core/page_menu.h"
@@ -43,6 +45,8 @@
 #include "browser_core/search.h"
 #include "browser_core/session.h"
 #include "browser_core/sign_in_dialog.h"
+#include "browser_core/sync.h"
+#include "browser_core/sync_spaces.h"
 #include "browser_core/system_engine.h"
 #include "browser_core/tab.h"
 #include "browser_core/widevine.h"
@@ -64,9 +68,11 @@
 #include "chrome/browser/ui/startup/startup_tab_provider.h"
 #include "chrome/common/chrome_content_client.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/common/profiler/main_thread_stack_sampling_profiler.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view_delegate.h"
 #include "content/public/common/content_features.h"
@@ -78,8 +84,13 @@
 #endif
 #if BUILDFLAG(IS_WIN)
 #include "base/strings/utf_string_conversions.h"
+#include "base/values.h"
+#include "base/win/win_util.h"
+#include "chrome/common/pref_names.h"
+#include "components/prefs/pref_service.h"
 #endif
 #if BUILDFLAG(IS_LINUX)
+#include "browser_core/platform/linux/wayland.h"
 #include "ui/ozone/public/ozone_switches.h"
 #endif
 #if !BUILDFLAG(IS_WIN) && !BUILDFLAG(IS_LINUX)
@@ -93,12 +104,17 @@ namespace {
 
 bc_host g_host;
 
-// The links another app sent, to the app. Only pages and files: Chrome strips its own
+// Whether the app opens |url| from another app. Only pages and files: Chrome strips its own
 // direct-launch scheme first, and any other scheme an app sends is no page to show.
+bool Opens(const GURL& url) {
+  return url.is_valid() && (url.SchemeIsHTTPOrHTTPS() || url.SchemeIsFile());
+}
+
+// The links another app sent, to the app.
 void OpenLinks(const std::vector<GURL>& urls) {
   std::vector<std::string> specs;
   for (const GURL& url : urls) {
-    if (url.is_valid() && (url.SchemeIsHTTPOrHTTPS() || url.SchemeIsFile())) {
+    if (Opens(url)) {
       specs.push_back(url.spec());
     }
   }
@@ -114,22 +130,28 @@ void OpenLinks(const std::vector<GURL>& urls) {
 
 #if !BUILDFLAG(IS_MAC)
 // The links in a launch's command line, read as Chrome reads them: paths relative to |cur_dir|,
-// and "? words" searched with the profile's engine, which needs a profile.
+// and "? words" searched with the profile's engine, which needs a profile. A later launch with none
+// the app opens, as from the Start menu, brings a window forward, as Chrome's would open one: the
+// launch can't go unanswered.
 void OpenCommandLine(const base::CommandLine& command_line,
                      const base::FilePath& cur_dir,
-                     Profile* profile) {
+                     Profile* profile,
+                     bool process_startup) {
   if (!profile) {
     profile = ProfileManager::GetLastUsedProfileIfLoaded();
   }
-  if (!profile) {
-    return;
-  }
   std::vector<GURL> urls;
-  for (const StartupTab& tab :
-       StartupTabProviderImpl().GetCommandLineTabs(command_line, cur_dir, profile)) {
-    urls.push_back(tab.url);
+  if (profile) {
+    for (const StartupTab& tab :
+         StartupTabProviderImpl().GetCommandLineTabs(command_line, cur_dir, profile)) {
+      urls.push_back(tab.url);
+    }
   }
-  OpenLinks(urls);
+  if (std::ranges::any_of(urls, &Opens)) {
+    OpenLinks(urls);
+  } else if (!process_startup && g_host.launched_again) {
+    g_host.launched_again(g_host.context);
+  }
 }
 #endif
 
@@ -155,7 +177,21 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
                    public ProfileObserver {
  public:
   // Chrome has just set its crash keys again, with the switches about:flags added.
-  void PreCreateThreads() override { crash_reports::LeaveOutFolders(); }
+  void PreCreateThreads() override {
+    crash_reports::LeaveOutFolders();
+#if BUILDFLAG(IS_WIN)
+    // A work account whose organisation requires a compliant device signs in only with Windows'
+    // own Microsoft sign-in, which Chromium leaves off unless a policy turns it on (#1345). It's
+    // on by default on a device joined or registered to a work or school directory, and stays off
+    // anywhere else, a home PC signed in with a personal Microsoft account too. The
+    // CloudAPAuthEnabled policy wins either way. Windows' answer is kept, and Chrome asks for it
+    // on this thread anyway as it loads the first profile, unless the device is in a local domain.
+    if (base::win::IsJoinedToAzureAD()) {
+      g_browser_process->local_state()->SetDefaultPrefValue(prefs::kCloudApAuthEnabled,
+                                                            base::Value(1));
+    }
+#endif
+  }
 
   // Before Chrome stops taking factories, as the first profile is made.
   void PreProfileInit() override {
@@ -184,9 +220,13 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
   }
 
   void PostBrowserStart() override {
+#if BUILDFLAG(IS_LINUX)
+    platform::FloatPictureInPictureBubbles();
+#endif
     if (Profile* profile = StartProfile()) {
       UseProfile(profile);
     }
+    sync::Start();
     // Once the Spaces the last launch saved are read, and so once the run loop is running.
     LoadSession(base::BindOnce([] {
       if (g_host.started) {
@@ -201,6 +241,7 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     widevine::Stop();
     FlushSession();
     Window::CloseAll();
+    Tab::StopHearingCaptures();
     ReleaseProfiles();
     if (g_host.stopping) {
       g_host.stopping(g_host.context);
@@ -253,6 +294,14 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     // A remote-debugging switch, with the window Chrome doesn't open at startup, has Chrome hold
     // the browser up until a client closes it over the protocol, so the user's quit never ended.
     ChromeDevToolsManagerDelegate::AllowBrowserToClose();
+    // Chrome clears its restart whenever a quit is stopped, in one place for every way one can be.
+    PrefService* local_state = g_browser_process->local_state();
+    const bool restarting = local_state->GetBoolean(prefs::kRestartLastSessionOnShutdown);
+    if (g_host.quit_going_ahead && g_host.quit_going_ahead(g_host.context, restarting) &&
+        restarting) {
+      fprintf(stderr, "browser: restart taken by the app\n");
+      local_state->ClearPref(prefs::kRestartLastSessionOnShutdown);
+    }
   }
 
   static const char* ShutdownName(browser_shutdown::ShutdownType type) {
@@ -345,8 +394,11 @@ void Install(const bc_host& host) {
   g_host = host;
   g_browser_core_supplies_windows = true;
   g_browser_core_adjust_navigate = &Window::AdjustNavigate;
+  // A tab's Cast dialog is the app's card, in place of the Views dialog.
+  g_browser_core_cast_dialog = &CastDialog::For;
   g_browser_core_can_dock_devtools = &Window::CanDockDevTools;
   g_browser_core_update_devtools = &Window::UpdateDevTools;
+  g_browser_core_show_devtools = &Window::ShowDevTools;
   g_browser_core_trim_page_menu = &Window::TrimPageMenu;
   g_browser_core_show_page_menu = &PageMenu::Show;
   g_browser_core_update_target_url = &Tab::LinkTargetChanged;
@@ -363,10 +415,14 @@ void Install(const bc_host& host) {
   g_browser_core_page_hung = &Tab::PageHung;
   g_browser_core_offline_game = &Tab::GameRunning;
   g_browser_core_split_together = &Window::SplitTogether;
+  g_browser_core_activate_contents = &Window::ActivateContents;
   g_browser_core_find_native_host = &FindNativeHost;
   g_browser_core_login_handler = &SignInDialog::Create;
   g_browser_core_external_protocol_dialog = &OpenAppDialog::Ask;
+  sync::Install();
+  sync_spaces::Install();
   SetUpAdBlock();
+  SetUpMiniPlayer();
   g_browser_core_component_allowed = &widevine::MayUpdate;
   g_browser_core_no_passwords = &IsAgentTab;
   g_browser_core_no_autofill = &IsAgentTab;

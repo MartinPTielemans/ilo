@@ -20,6 +20,7 @@
 #include "chrome/browser/ui/find_bar/find_bar.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "ui/base/accelerators/accelerator.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 #include "ui/views/controls/webview/unhandled_keyboard_event_handler.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_observer.h"
@@ -80,8 +81,8 @@ class NoLocationBar : public LocationBar {
   raw_ptr<BrowserWindowInterface> browser_ = nullptr;
 };
 
-// Autofill's controllers dereference the bubble they're handed, so each offer gets a bubble that
-// shows nothing. The app's own prompts replace it.
+// Autofill's controllers dereference the bubble they're handed, so each offer gets a bubble. A
+// save address or save card offer is the app's (autofill_offer.h); the rest show nothing.
 class NoAutofillBubbles : public autofill::AutofillBubbleHandler {
  public:
   autofill::AutofillBubbleBase* ShowSaveCreditCardBubble(
@@ -374,6 +375,7 @@ class BrowserWindowStandIn : public BrowserWindow,
   // Made with the Browser, in place of the one Chrome's window makes.
   std::unique_ptr<SidePanel> side_panel_;
   NoAutofillBubbles autofill_bubbles_;
+  std::optional<ui::ScopedUnownedUserData<autofill::AutofillBubbleHandler>> autofill_bubbles_data_;
   views::UnhandledKeyboardEventHandler unhandled_keyboard_event_handler_;
   base::ScopedObservation<views::Widget, views::WidgetObserver> widget_observation_{this};
   base::WeakPtrFactory<BrowserWindowStandIn> weak_factory_{this};

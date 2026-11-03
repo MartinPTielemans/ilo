@@ -5,8 +5,10 @@
 //! would, and the core hands the preview the keys it acts on, as on the Mac.
 //!
 //! shortcut: the page doesn't scale with the card's motion, as the Mac's does. It's laid out where
-//! it rests, and shows where the frame the card draws meets that. The preview also stays when the
-//! user goes to another window, where the Mac's closes.
+//! it rests, and shows where the frame the card draws meets that.
+//!
+//! Another browser window or Settings taking the keyboard is the user leaving the preview, as
+//! another window becoming key is on the Mac. Switching apps isn't: the preview stays.
 
 use std::{cell::RefCell, ffi::c_void};
 
@@ -16,6 +18,7 @@ use crate::bc;
 
 struct Preview {
     view: *mut c_void,
+    dismissed: Option<extern "C" fn()>,
     shown: Option<Shown>,
 }
 
@@ -32,8 +35,9 @@ struct Shown {
 }
 
 thread_local! {
-    static PREVIEW: RefCell<Preview> =
-        const { RefCell::new(Preview { view: std::ptr::null_mut(), shown: None }) };
+    static PREVIEW: RefCell<Preview> = const {
+        RefCell::new(Preview { view: std::ptr::null_mut(), dismissed: None, shown: None })
+    };
 }
 
 /// The views of the preview's window while it shows, for the test driver (drive.rs).
@@ -99,9 +103,12 @@ fn left(_: *mut c_void) {}
 #[unsafe(no_mangle)]
 pub extern "C" fn host_add_link_preview(
     view: *mut c_void,
-    _dismissed: extern "C" fn(),
+    dismissed: extern "C" fn(),
 ) -> *mut c_void {
-    PREVIEW.with_borrow_mut(|preview| preview.view = view);
+    PREVIEW.with_borrow_mut(|preview| {
+        preview.view = view;
+        preview.dismissed = Some(dismissed);
+    });
     // The core shows the page in the browser window, under this one, and only needs to know there's
     // a view it goes with.
     view
@@ -159,21 +166,39 @@ pub extern "C" fn host_link_preview_drew(
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn host_release_link_preview() {
-    let released = PREVIEW.with_borrow_mut(|preview| {
-        let shown = preview.shown.as_mut().filter(|shown| !shown.released)?;
+/// Has the preview take no more clicks, if it shows over a window other than `except`'s. Returns
+/// what it shows over, if it did.
+fn release(except: *mut c_void) -> Option<Shown> {
+    let (view, shown) = PREVIEW.with_borrow_mut(|preview| {
+        let shown = (preview.shown.as_mut())
+            .filter(|shown| !shown.released && shown.ui_view != except)?;
         shown.released = true;
         Some((preview.view, *shown))
-    });
-    let Some((view, shown)) = released else {
-        return;
-    };
+    })?;
     place(view, &shown);
-    // The window's page has the keyboard back from the preview's.
-    unsafe { bc::bc_window_focus_page(shown.window) };
     // check.sh reads this line.
     eprintln!("browser: link preview released");
+    Some(shown)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn host_release_link_preview() {
+    if let Some(shown) = release(std::ptr::null_mut()) {
+        // The window's page has the keyboard back from the preview's.
+        unsafe { bc::bc_window_focus_page(shown.window) };
+    }
+}
+
+/// The window of `ui_view`, a browser window or Settings, took the keyboard. If it isn't the one
+/// the preview shows over, the user left the preview for it, and the keys stay there.
+pub(crate) fn took_keyboard(ui_view: *mut c_void) {
+    let dismissed = PREVIEW.with_borrow(|preview| preview.dismissed);
+    if let (Some(dismissed), Some(_)) = (dismissed, release(ui_view))
+        && let Some(cx) = crate::CX.with_borrow(Clone::clone)
+    {
+        // After the event, which the app may be handling.
+        cx.foreground_executor().spawn(async move { dismissed() }).detach();
+    }
 }
 
 #[unsafe(no_mangle)]

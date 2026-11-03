@@ -227,6 +227,15 @@ mod tests {
         assert_eq!(ringed(&shell, cx), (None, None));
     }
 
+    /// F6, Chrome's key for moving the keyboard out of the page, is Focus Sidebar's at first.
+    #[gpui::test]
+    fn f6_focuses_the_sidebar(cx: &mut TestAppContext) {
+        let (shell, cx, _) = window(cx);
+        cx.simulate_keystrokes("f6");
+        cx.run_until_parked();
+        assert_eq!(ringed(&shell, cx), (Some(20), Some(20)));
+    }
+
     /// Escape gives the page the keyboard without showing another tab, and a collapsed Space's
     /// pinned rows are skipped as ⌘1–9 skip them.
     #[gpui::test]

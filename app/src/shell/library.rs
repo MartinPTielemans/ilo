@@ -10,37 +10,43 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, ClickEvent, Context, DispatchPhase, Div, Entity, Focusable, FontWeight, Hsla,
-    Image, ListAlignment, ListState, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ObjectFit, Pixels, Point, RenderImage, SharedString, Stateful, StyledText, Subscription,
-    WeakEntity, Window,
+    AnyElement, ClickEvent, Context, DispatchPhase, Div, Entity, Focusable, FontWeight,
+    HitboxBehavior, Hsla, Image, ListAlignment, ListState, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, RenderImage, SharedString, Stateful,
+    StyledText, Subscription, WeakEntity, Window,
     canvas, div, img, linear_color_stop, linear_gradient, list,
     prelude::*, px, relative, svg,
 };
 
 use super::{
     access::Accessible,
-    Command, DRAG_START, FAVICON_X, FOLDER_INDENT, FOOTER_HEIGHT, FORM_TEXT, MenuEntry, NAV,
+    Command, DRAG_START, Edit, FAVICON_SIZE, FAVICON_X, What,
+    task_cards::number as task_number, FOLDER_INDENT, FOOTER_HEIGHT, FORM_TEXT, MenuEntry, NAV,
     NAV_RADIUS, NAV_SIZE, PLATE_INSET, SECONDARY, SEGMENT_FAVICON_X, Shell, Space, UNSELECTED_TITLE,
-    clean_link, divider_box, favicon, folder_icon, host, SPACE_SWATCH_SHOWN, dashed_square,
+    clean_link, divider_box, favicon, file_url, folder_icon, host, SPACE_SWATCH_SHOWN,
+    dashed_square,
     plate, row_box, space_icon_drawn, spring_to, split_plate, still_clear, title, Naming,
     PLATE_HEIGHT, PLATE_RADIUS, selected_plate,
     header::TipSide, keystroke_label,
     display_face::{cap_top, display_text},
 };
 use crate::{
+    icon_picker::{self, Subject},
     menu::Look,
     palette::Palette,
     text_input::TextInput,
+    theme_picker,
     tooltip::{Anchor, Tip},
 };
 use crate::tokens::shell::EMOJI_SIZE;
+use crate::agents::task::{ArchivedTask, TaskAction};
+use crate::tokens::shell::task::GLYPH as TASK_GLYPH;
 
 use crate::tokens::shell::library::LIBRARY_WIDTH;
 /// The push, on Arc's measured spring (1 run, rms 1.0 pt). The Library comes with it from its own
 /// width to the left, so they meet as they stop.
-const LIBRARY_RESPONSE: f32 = 0.245;
-const LIBRARY_DAMPING: f32 = 0.92;
+pub(super) const LIBRARY_RESPONSE: f32 = 0.245;
+pub(super) const LIBRARY_DAMPING: f32 = 0.92;
 /// Opened or closed by a click, the sidebar under the Library fades out in 2 frames at 60 fps as
 /// it comes, and back in over 130 ms from 80 ms after it starts to go (Arc on video, 2 opens and 2
 /// closes).
@@ -124,6 +130,7 @@ use crate::tokens::shell::library::SEARCH_GLYPH;
 use crate::tokens::shell::library::SEARCH_GLYPH_X;
 use crate::tokens::shell::library::SEARCH_TEXT_X;
 use crate::tokens::shell::library::SEARCH_PLACEHOLDER;
+use crate::tokens::shell::library::{FILTER_GAP, FILTER_WIDTH, FILTER_X};
 
 use crate::tokens::shell::library::ARCHIVE_TOP;
 use crate::tokens::shell::library::ARCHIVE_WIDTH;
@@ -173,6 +180,8 @@ pub struct Archived {
     pub title: SharedString,
     /// When it was archived, in milliseconds since the Unix epoch.
     pub archived: f64,
+    /// Whether it closed in a Little ilo window, which the archive's filter picks out (Arc).
+    pub little: bool,
 }
 
 /// A video a Media tile plays: its file's name, for the log, and the frame it shows, none before
@@ -379,7 +388,32 @@ pub(super) struct Library {
     query: String,
     items: Vec<Item>,
     list: ListState,
+    /// What Archived Tabs lists, the Filter button's choice.
+    only: Only,
     _search: Subscription,
+}
+
+/// What Archived Tabs lists, as its Filter button's menu offers.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) enum Only {
+    #[default]
+    All,
+    /// The tabs Little ilo windows closed (Arc).
+    Little,
+    /// The tasks dismissed from the sidebar's foot.
+    Tasks,
+}
+
+impl Only {
+    const MENU: [Only; 3] = [Only::All, Only::Little, Only::Tasks];
+
+    fn label(self) -> &'static str {
+        match self {
+            Only::All => "All",
+            Only::Little => "Little ilo",
+            Only::Tasks => "Tasks",
+        }
+    }
 }
 
 /// A line of the section's list.
@@ -388,6 +422,8 @@ enum Item {
     Heading(&'static str),
     /// The archived tab at this index of `Shell::archive`.
     Tab(usize),
+    /// The task at this index of `Shell::archived_tasks`.
+    Task(usize),
     /// The download at this index of `Shell::downloads`.
     Download(usize),
     /// A row of Media's tiles, from its left.
@@ -409,9 +445,30 @@ const FIELD: &str = "space-field";
 impl Shell {
     /// The archive changed, all of it, newest first.
     pub fn set_archive(&mut self, archive: Vec<Archived>, cx: &mut Context<Self>) {
+        // A tab closed since a task was dismissed is what ⇧⌘T reopens: the core's to reopen, as
+        // the archive is its list of what closed, a task's pages too.
+        let newest = archive.first().map_or(0., |tab| tab.archived);
+        if self.closed_task.as_ref().is_some_and(|(_, at)| newest >= *at) {
+            self.closed_task = None;
+        }
         self.archive = archive;
         let archive = &self.archive;
         self.page_favicons.retain(|url, _| archive.iter().any(|tab| tab.url == *url));
+        if self.section == Section::Archive {
+            self.filter(true, cx);
+        }
+    }
+
+    /// The tasks in the Archive changed, all of them, the last to leave the foot first. A private
+    /// window, which offers no tasks, lists none.
+    pub fn set_archived_tasks(&mut self, mut tasks: Vec<ArchivedTask>, cx: &mut Context<Self>) {
+        if self.private {
+            tasks.clear();
+        }
+        if tasks == self.archived_tasks {
+            return;
+        }
+        self.archived_tasks = tasks;
         if self.section == Section::Archive {
             self.filter(true, cx);
         }
@@ -582,6 +639,13 @@ impl Shell {
         self.library_out().min(1.)
     }
 
+    /// Where the Library's column is across the window: its width to the left as it comes, and at
+    /// the window's edge from where it opens on, the copy of the window's buttons on it over the
+    /// window's own.
+    pub(super) fn library_column_left(&self) -> f32 {
+        (self.library_edge() - 1.) * self.library_width()
+    }
+
     /// How far, in points, fingers past where the Library opens have taken it on with the card.
     fn library_past(&self) -> f32 {
         match self.clicked_fade() {
@@ -656,6 +720,13 @@ impl Shell {
         self.show_section(section, cx);
     }
 
+    /// Manage Spaces… in a Space's menu: the Library on its Spaces, left there if it shows them.
+    pub(super) fn manage_spaces(&mut self, cx: &mut Context<Self>) {
+        if !(self.library_open && self.section == Section::Spaces) {
+            self.view_section(Section::Spaces, cx);
+        }
+    }
+
     /// Opens the Library on its Spaces, for the preview, which has no pointer to pick it with.
     pub fn show_spaces(&mut self, cx: &mut Context<Self>) {
         self.view_section(Section::Spaces, cx);
@@ -695,6 +766,7 @@ impl Shell {
             query: String::new(),
             items: Vec::new(),
             list: ListState::new(0, ListAlignment::Top, px(ARCHIVE_OVERDRAW)),
+            only: Only::All,
             _search: observe,
         });
         // check.sh waits for these lines.
@@ -703,6 +775,7 @@ impl Shell {
             self.browser.list_captures(cx);
         }
         if section == Section::Spaces {
+            self.reset_cards();
             let (count, width) = (self.spaces.len(), self.section_width(section));
             log!("browser: library spaces {count} wide {width}");
         }
@@ -730,6 +803,9 @@ impl Shell {
         }
         if self.library.is_none() {
             self.library_resize = None;
+        }
+        if self.step_cards() {
+            window.request_animation_frame();
         }
         if let Some((from, start)) = self.library_resize {
             let (t, to) = (start.elapsed().as_secs_f32(), self.section_width(self.section));
@@ -775,13 +851,28 @@ impl Shell {
             return;
         }
         let found = |text: &SharedString| text.to_lowercase().contains(&query);
+        let filtered = self.archive.iter().any(|tab| tab.little) || !self.archived_tasks.is_empty();
+        let only = if filtered { library.only } else { Only::All };
         // Each with the time it's listed by, newest first.
         let found: Vec<(Item, f64)> = match self.section {
             Section::Spaces => Vec::new(),
-            Section::Archive => (self.archive.iter().enumerate())
-                .filter(|(_, tab)| query.is_empty() || found(&tab.title) || found(&tab.url))
-                .map(|(index, tab)| (Item::Tab(index), tab.archived))
-                .collect(),
+            Section::Archive => {
+                let tabs = (self.archive.iter().enumerate())
+                    .filter(|(_, tab)| match only {
+                        Only::All => true,
+                        Only::Little => tab.little,
+                        Only::Tasks => false,
+                    })
+                    .filter(|(_, tab)| query.is_empty() || found(&tab.title) || found(&tab.url))
+                    .map(|(index, tab)| (Item::Tab(index), tab.archived));
+                let tasks = (self.archived_tasks.iter().enumerate())
+                    .filter(|_| matches!(only, Only::All | Only::Tasks))
+                    .filter(|(_, task)| query.is_empty() || found(&task.title) || found(&task.asked))
+                    .map(|(index, task)| (Item::Task(index), task.left));
+                let mut listed: Vec<_> = tabs.chain(tasks).collect();
+                listed.sort_by(|a, b| b.1.total_cmp(&a.1));
+                listed
+            }
             Section::Downloads => (self.downloads.iter().enumerate())
                 .filter(|(_, each)| query.is_empty() || found(&each.name) || found(&each.url))
                 .map(|(index, download)| (Item::Download(index), download.started))
@@ -840,6 +931,107 @@ impl Shell {
         self.set_library(false, cx);
     }
 
+    /// The task `agent` comes back from the Archive, as ⇧⌘T brings it: its card to the foot, with
+    /// its conversation open, and the Library closes.
+    fn restore_archived_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+        // check.sh waits for this line.
+        log!("browser: restore archived task {agent}");
+        self.show_restored = Some(agent.clone());
+        self.bring_back_task(agent, cx);
+        self.set_library(false, cx);
+    }
+
+    /// Delete from Archive on a task: it leaves the Archive and ⇧⌘T's reach, a step of the
+    /// window's ⌘Z history, as a tab's Delete from Archive is.
+    fn delete_archived_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+        // check.sh waits for this line.
+        log!("browser: remove archived task {agent}");
+        if self.closed_task.as_ref().is_some_and(|(closed, _)| *closed == agent) {
+            self.closed_task = None;
+        }
+        self.browser.task(agent.clone(), TaskAction::Delete, cx);
+        self.keep(What::DELETE_ARCHIVED, Some(Edit::UndeleteTask(agent)), cx);
+    }
+
+    /// Whether Archived Tabs has the Filter button: while the archive holds a Little ilo tab or a
+    /// task, which are what it picks out.
+    fn archive_filtered(&self) -> bool {
+        self.section == Section::Archive
+            && (self.archive.iter().any(|tab| tab.little) || !self.archived_tasks.is_empty())
+    }
+
+    /// What the list shows, the Filter button's choice while it has the button.
+    fn archive_only(&self) -> Only {
+        match self.archive_filtered() {
+            true => self.library.as_ref().map_or(Only::All, |library| library.only),
+            false => Only::All,
+        }
+    }
+
+    /// The Filter button's menu: All, Little ilo's tabs or the tasks alone, the one shown checked.
+    fn archive_filter_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let only = self.archive_only();
+        let entries = (Only::MENU.iter())
+            .map(|each| MenuEntry::new(each.label(), true).checked(*each == only))
+            .collect();
+        let shell = cx.weak_entity();
+        self.browser.context_menu(
+            entries,
+            position,
+            false,
+            self.menu_look(),
+            Box::new(move |chosen, cx| {
+                if let Some(&only) = chosen.and_then(|chosen| Only::MENU.get(chosen)) {
+                    shell.update(cx, |shell, cx| shell.filter_archive(only, cx)).ok();
+                }
+            }),
+            cx,
+        );
+    }
+
+    /// Lists only Little ilo's archived tabs, only the tasks, or all of them again.
+    fn filter_archive(&mut self, only: Only, cx: &mut Context<Self>) {
+        let Some(library) = &mut self.library else {
+            return;
+        };
+        library.only = only;
+        // check.sh waits for this line.
+        let name = match only {
+            Only::All => "all",
+            Only::Little => "little",
+            Only::Tasks => "tasks",
+        };
+        log!("browser: archive filter {name}");
+        self.filter(true, cx);
+    }
+
+    /// The menu a right-click on a task's row shows: its conversation, as a click opens it, or
+    /// out of the Archive.
+    fn archived_task_menu(&mut self, agent: SharedString, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let entries = vec![
+            MenuEntry::new("Open Conversation", true),
+            MenuEntry::line(),
+            MenuEntry::new("Delete from Archive", true).destructive(),
+        ];
+        let shell = cx.weak_entity();
+        self.browser.context_menu(
+            entries,
+            position,
+            false,
+            self.menu_look(),
+            Box::new(move |chosen, cx| {
+                shell
+                    .update(cx, |shell, cx| match chosen {
+                        Some(0) => shell.restore_archived_task(agent.clone(), cx),
+                        Some(2) => shell.delete_archived_task(agent.clone(), cx),
+                        _ => {}
+                    })
+                    .ok();
+            }),
+            cx,
+        );
+    }
+
     /// The menu a right-click on an archived tab's row shows: reopen it, copy its URL, or take it
     /// out of the archive.
     fn archived_menu(&mut self, id: u64, position: Point<Pixels>, cx: &mut Context<Self>) {
@@ -880,7 +1072,8 @@ impl Shell {
     /// The menu a right-click on the Archived Tabs section shows, Clear Archive as Arc's has it,
     /// which asks first as the Archive menu's does.
     fn archive_section_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let entries = vec![MenuEntry::new("Clear Archive", !self.archive.is_empty())];
+        let full = !self.archive.is_empty() || !self.archived_tasks.is_empty();
+        let entries = vec![MenuEntry::new("Clear Archive", full)];
         let shell = cx.weak_entity();
         self.browser.context_menu(
             entries,
@@ -896,10 +1089,10 @@ impl Shell {
         );
     }
 
-    /// Empties the archive, once the user says so.
+    /// Empties the archive, its tabs and the tasks it lists, once the user says so.
     pub(super) fn clear_archive(&mut self, cx: &mut Context<Self>) {
-        let count = self.archive.len();
-        if count == 0 {
+        let (tabs, tasks) = (self.archive.len(), self.archived_tasks.len());
+        if tabs + tasks == 0 {
             return;
         }
         let shell = cx.weak_entity();
@@ -907,9 +1100,20 @@ impl Shell {
             "Clear the archive?".into(),
             {
                 let undo = keystroke_label("cmd-z");
-                match count {
-                    1 => format!("Its tab leaves the archive. {undo} brings it back."),
-                    _ => format!("Its {count} tabs leave the archive. {undo} brings them back."),
+                let some = |count: usize, what: &str| match count {
+                    1 => format!("1 {what}"),
+                    _ => format!("{count} {what}s"),
+                };
+                match (tabs, tasks) {
+                    (1, 0) => format!("Its tab leaves the archive. {undo} brings it back."),
+                    (0, 1) => format!("Its task leaves the archive. {undo} brings it back."),
+                    (_, 0) => format!("Its {tabs} tabs leave the archive. {undo} brings them back."),
+                    (0, _) => format!("Its {tasks} tasks leave the archive. {undo} brings them back."),
+                    _ => format!(
+                        "Its {} and {} leave the archive. {undo} brings them back.",
+                        some(tabs, "tab"),
+                        some(tasks, "task")
+                    ),
                 }
             },
             "Clear Archive",
@@ -918,6 +1122,23 @@ impl Shell {
             }),
             cx,
         );
+    }
+
+    /// The line a section's list holds while it has nothing to list: what fills it, or with a
+    /// search, that nothing matches.
+    fn empty_line(&self, section: Section, unsearched: bool) -> &'static str {
+        let tasks = self.archive_only() == Only::Tasks;
+        match (section, unsearched) {
+            (Section::Spaces, _) => "",
+            (Section::Archive, true) if tasks => "Finished tasks stay here until ilo quits.",
+            (Section::Archive, false) if tasks => "No tasks match.",
+            (Section::Archive, true) => "Closed Today tabs stay here for 30 days.",
+            (Section::Archive, false) => "No archived tabs match.",
+            (Section::Downloads, true) => "Files you download show here.",
+            (Section::Downloads, false) => "No downloads match.",
+            (Section::Media, true) => "Saved captures and downloaded media show here.",
+            (Section::Media, false) => "No media match.",
+        }
     }
 
     /// The Library, where the sidebar was.
@@ -992,12 +1213,15 @@ impl Shell {
             .w(px(1.))
             .bg(self.palette.faint(COLUMN_EDGE));
         let search = library.search.clone();
+        // The Filter button takes the field's end, while there's something to filter.
+        let filtered = self.archive_filtered();
+        let field_width = if filtered { FILTER_X - FILTER_GAP - SEARCH_X } else { SEARCH_WIDTH };
         let field = div()
             .id("library-search")
             .absolute()
             .left(px(SEARCH_X))
             .top(px(SEARCH_TOP))
-            .w(px(SEARCH_WIDTH))
+            .w(px(field_width))
             .h(px(SEARCH_HEIGHT))
             .flex()
             .items_center()
@@ -1026,17 +1250,36 @@ impl Shell {
                     .text_color(self.palette.text(SEARCH_PLACEHOLDER)),
             )
             .child(library.search.clone());
+        let filter = filtered.then(|| {
+            let label = match self.archive_only() {
+                Only::All => "Filter",
+                only => only.label(),
+            };
+            div()
+                .id("library-filter")
+                .absolute()
+                .left(px(FILTER_X))
+                .top(px(SEARCH_TOP))
+                .w(px(FILTER_WIDTH))
+                .h(px(SEARCH_HEIGHT))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(SEARCH_RADIUS))
+                .bg(self.palette.plate(LIBRARY_PLATE))
+                .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+                .block_mouse_except_scroll()
+                .text_size(px(text::BODY))
+                .text_color(self.palette.text(FORM_TEXT))
+                .on_click(cx.listener(|shell, event: &ClickEvent, _, cx| {
+                    shell.archive_filter_menu(event.position(), cx)
+                }))
+                .child(label)
+        });
         let spaces = self.section == Section::Spaces;
         let archive = if library.items.is_empty() {
-            let empty = match (self.section, library.query.is_empty()) {
-                (Section::Spaces, _) => "",
-                (Section::Archive, true) => "Closed Today tabs stay here for 30 days.",
-                (Section::Archive, false) => "No archived tabs match.",
-                (Section::Downloads, true) => "Files you download show here.",
-                (Section::Downloads, false) => "No downloads match.",
-                (Section::Media, true) => "Saved captures and downloaded media show here.",
-                (Section::Media, false) => "No media match.",
-            };
+            let empty = self.empty_line(self.section, library.query.is_empty());
             // A block, not a flex row, whose text would keep its one line's width past the list's
             // edges: it wraps in the list's width, centred.
             let line = StyledText::new(empty);
@@ -1078,7 +1321,7 @@ impl Shell {
         let width = self.library_width();
         let panel = div()
             .absolute()
-            .left(px((self.library_edge() - 1.) * width + past))
+            .left(px(self.library_column_left() + past))
             .top_0()
             .bottom_0()
             .w(px(width))
@@ -1090,6 +1333,7 @@ impl Shell {
         }
         panel
             .child(field)
+            .children(filter)
             .child(
                 div()
                     .absolute()
@@ -1103,7 +1347,8 @@ impl Shell {
     }
 
     /// The Spaces section: a card for each Space of the window's profile set, in the switcher's
-    /// order, and the + after them, which scroll across together if they don't fit.
+    /// order, and the + after them, which scroll across together if they don't fit (`card_strip`),
+    /// clipped at the Library's edge.
     fn space_cards(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let cards: Vec<_> = self.spaces.iter().map(|space| self.space_card(space, cx)).collect();
         let plus = div()
@@ -1140,10 +1385,13 @@ impl Shell {
             .top_0()
             .bottom_0()
             .right_0()
-            .overflow_x_scroll()
+            .overflow_hidden()
             .child(
                 div()
-                    .h_full()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(-self.cards_at()))
                     .flex()
                     .items_center()
                     .gap(px(CARD_GAP))
@@ -1250,13 +1498,15 @@ impl Shell {
             .child(div().children(rows))
     }
 
-    /// The field across the top of a Space's card (Arc): its icon in a dashed slot, which opens the
-    /// icon picker, its name, which a click puts in a field there to type over, and the brush, which
-    /// opens the theme picker. `behind` is the card's colour at its top, for the swatch of a Space
-    /// with no icon. At rest it's the icon and the name alone; its plate, the slot's dashes and the
-    /// brush show under the pointer, at once as other hover plates do, and while the name is being
-    /// typed over (#811). They keep their places at rest, so nothing moves as they come. The
-    /// pickers close the Library, so none is open over a card.
+    /// The field across the top of a Space's card (Arc): its icon in a dashed slot, which the icon
+    /// picker hangs from, its name, which a click puts in a field there to type over, and the
+    /// brush, which the theme picker opens beside. `behind` is the card's colour at its top, for
+    /// the swatch of a Space with no icon. At rest it's the icon and the name alone; its plate, the
+    /// slot's dashes and the brush show with the pointer anywhere on the field, the slot and the
+    /// brush too, at once as other hover plates do, and while the name is being typed over (#811)
+    /// or a picker shows for the Space. They keep their places at rest, so nothing moves as they
+    /// come. The pickers open over the Library, which stays open, so several Spaces can be
+    /// changed in a row, as in Arc (#1074).
     fn card_field(
         &self,
         space: &Space,
@@ -1268,7 +1518,7 @@ impl Shell {
         let renaming = self.renaming.as_ref().filter(|renaming| {
             renaming.naming == Naming::Space(id) && renaming.in_library
         });
-        let held = renaming.is_some();
+        let held = renaming.is_some() || self.card_picking(id);
         // A Space without an icon shows its swatch in the icon's place.
         let icon = space_icon_drawn(palette, &space.icon).unwrap_or_else(|| {
             palette.swatch.draw(SPACE_SWATCH_SHOWN, &[behind.to_rgb()]).into_any_element()
@@ -1283,7 +1533,6 @@ impl Shell {
             .items_center()
             .justify_center()
             .text_size(px(EMOJI_SIZE))
-            .block_mouse_except_scroll()
             .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
                 let frame = shell.slot_frames.borrow().get(&id).copied();
                 let tip = frame.filter(|_| *hovered).map(|frame| {
@@ -1293,11 +1542,18 @@ impl Shell {
             }))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|shell, _, _, cx| shell.browser.tooltip(None, cx)),
+                cx.listener(move |shell, _, _, cx| {
+                    shell.browser.tooltip(None, cx);
+                    shell.card_press_closes =
+                        icon_picker::open_for(cx) == Some(Subject::Space(id));
+                }),
             )
+            // The card's click is the Space's, so the slot's stops there, as the brush's does.
             .on_click(cx.listener(move |shell, _, _, cx| {
                 cx.stop_propagation();
-                shell.change_space_icon(id, cx);
+                if !std::mem::take(&mut shell.card_press_closes) {
+                    shell.change_space_icon_in_card(id, cx);
+                }
             }))
             .child(
                 canvas(
@@ -1341,6 +1597,7 @@ impl Shell {
                 }))
                 .child(div().truncate().child(space.name.clone())),
         };
+        let brushes = self.brush_frames.clone();
         let brush = div()
             .id(("space-brush", id))
             .flex_none()
@@ -1348,15 +1605,33 @@ impl Shell {
             .flex()
             .items_center()
             .justify_center()
+            .relative()
             .rounded(px(NAV_RADIUS))
-            .block_mouse_except_scroll()
             .when(!held, |brush| brush.opacity(0.).group_hover(FIELD, |style| style.opacity(1.)))
             .hover(|style| style.bg(palette.plate(STATE_HOVERED)))
             .active(|style| style.bg(palette.plate(STATE_PRESSED)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |shell, _, _, cx| {
+                    shell.card_press_closes = theme_picker::open_for(cx) == Some(id);
+                }),
+            )
             .on_click(cx.listener(move |shell, _, _, cx| {
                 cx.stop_propagation();
-                shell.edit_space_theme(id, cx);
+                if !std::mem::take(&mut shell.card_press_closes) {
+                    shell.edit_space_theme_in_card(id, cx);
+                }
             }))
+            .child(
+                canvas(
+                    move |bounds, _, _| {
+                        brushes.borrow_mut().insert(id, bounds);
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
             .child(
                 svg()
                     .path("icons/paintbrush.svg")
@@ -1366,10 +1641,11 @@ impl Shell {
         let plate = palette.plate(CARD_FIELD_PLATE);
         let drawn = self.fields_drawn.clone();
         // check.sh waits for these lines, logged as the field is drawn with its plate or without.
+        // Hovered as the field's group is: not under a control that blocks the pointer (#1074).
         let log_drawn = canvas(
-            |_, _, _| {},
-            move |bounds, _, window, _| {
-                let shown = held || bounds.contains(&window.mouse_position());
+            |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+            move |_, hitbox, window, _| {
+                let shown = held || hitbox.is_hovered(window);
                 if drawn.borrow_mut().insert(id, shown) != Some(shown) {
                     let state = if shown { "shown" } else { "at rest" };
                     log!("browser: library field {id} {state} drawn");
@@ -1478,6 +1754,7 @@ impl Shell {
                     .into_any_element();
             }
             Item::Tab(tab) => tab,
+            Item::Task(task) => return self.archived_task_item(task, cx),
             Item::Download(download) => return self.download_item(download, cx),
             Item::Media(row) => return self.media_row(row, window, cx),
         };
@@ -1534,6 +1811,66 @@ impl Shell {
                             .pr(px(12.))
                             .child(text_line(title, text::BODY, 17., self.palette.text(UNSELECTED_TITLE)))
                             .child(text_line(host, text::SMALL, 15., self.palette.text(SECONDARY))),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// A task's line in the archive, as a tab's: its card's mark in the favicon's place, its title
+    /// over its CLI, how it ended and when. A click brings its card back with its conversation
+    /// open, and a right-click shows its menu.
+    fn archived_task_item(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(task) = self.archived_tasks.get(index) else {
+            return div().into_any_element();
+        };
+        let agent = task.agent.clone();
+        let title = if task.title.is_empty() { task.asked.clone() } else { task.title.clone() };
+        let mark = self.status_mark(task.dot);
+        let menu_agent = agent.clone();
+        div()
+            .h(px(ARCHIVED_PITCH))
+            .pl(px(ARCHIVED_LEFT))
+            .pr(px(ARCHIVED_RIGHT))
+            .py(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
+            .child(
+                div()
+                    .id(("archived-task", task_number(&agent)))
+                    .size_full()
+                    .relative()
+                    .rounded(px(ARCHIVED_RADIUS))
+                    .block_mouse_except_scroll()
+                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+                    .on_click(cx.listener(move |shell, _, _, cx| {
+                        shell.restore_archived_task(agent.clone(), cx)
+                    }))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
+                            shell.archived_task_menu(menu_agent.clone(), event.position, cx)
+                        }),
+                    )
+                    // Centred where a favicon is.
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(ARCHIVED_FAVICON_X + (FAVICON_SIZE - TASK_GLYPH) / 2.))
+                            .top_0()
+                            .bottom_0()
+                            .flex()
+                            .items_center()
+                            .child(mark),
+                    )
+                    .child(
+                        div()
+                            .size_full()
+                            .flex()
+                            .flex_col()
+                            .justify_center()
+                            .pl(px(ARCHIVED_TEXT_X))
+                            .pr(px(12.))
+                            .child(text_line(title, text::BODY, 17., self.palette.text(UNSELECTED_TITLE)))
+                            .child(text_line(task.about.clone(), text::SMALL, 15., self.palette.text(SECONDARY))),
                     ),
             )
             .into_any_element()
@@ -2131,7 +2468,15 @@ impl Shell {
                     shell.hover_kinds_menu(event.position, cx)
                 }),
             )
-            .child(svg().path("icons/archive.svg").size(px(16.)).text_color(self.palette.glyph(NAV)))
+            // A task's card folding into it bumps its glyph as it lands.
+            .child({
+                let (scale, alpha) = self.archive_glyph(std::time::Instant::now());
+                svg()
+                    .path("icons/archive.svg")
+                    .size(px(16.))
+                    .text_color(self.palette.glyph(alpha))
+                    .when(scale != 1., |glyph| glyph.with_transformation(gpui::Transformation::scale(gpui::size(scale, scale))))
+            })
             .when_some(progress, |button, done| {
                 button.child(
                     div()
@@ -2152,20 +2497,6 @@ impl Shell {
                 )
             })
     }
-}
-
-/// A `file:` URL for `path`, escaping what a URL can't hold as it is.
-fn file_url(path: &str) -> String {
-    let mut url = String::from("file://");
-    for byte in path.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' => {
-                url.push(byte as char)
-            }
-            _ => url.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    url
 }
 
 /// How far the running downloads have got in all, 0 to 1, or none while none runs. A held one,
@@ -2226,11 +2557,16 @@ fn plus_x(cards: usize) -> f32 {
     card_x(cards.max(1) - 1) + CARD_WIDTH + PLUS_GAP
 }
 
-/// How wide the Spaces section is with `cards` of them in a window `window` wide: to the room
-/// after the +, but leaving the page `SPACES_PAGE`, and never narrower than with one card.
+/// How wide the Spaces section's contents are with `cards` of them: to the room after the +.
+pub(super) fn spaces_content(cards: usize) -> f32 {
+    plus_x(cards) + PLUS_SIZE + PLUS_AFTER
+}
+
+/// How wide the Spaces section is with `cards` of them in a window `window` wide: its contents',
+/// but leaving the page `SPACES_PAGE` however narrow the window, its cards scrolling past that
+/// (Arc 1.171), and always with its column.
 fn spaces_width(cards: usize, window: f32) -> f32 {
-    let width = |cards| plus_x(cards) + PLUS_SIZE + PLUS_AFTER;
-    width(cards).min(window - SPACES_PAGE).max(width(1))
+    spaces_content(cards).min(window - SPACES_PAGE).max(COLUMN_WIDTH)
 }
 
 /// How far, in points, fingers past where the Library opens take it on, its card `out` of its way
@@ -2290,12 +2626,15 @@ pub(super) fn of(received: i64, total: i64) -> String {
 mod drag_tests;
 #[cfg(test)]
 mod rename_tests;
+#[cfg(test)]
+mod task_tests;
 
 #[cfg(test)]
 mod tests {
     use super::{
         ARCHIVE_TOP, ARCHIVE_WIDTH, ARCHIVED_LEFT, Archived, CARD_WIDTH, COLUMN_WIDTH, Captured,
-        Download, DownloadAction, DownloadChoice, DownloadState, HEADING_BOTTOM, HEADING_HEIGHT,
+        Download, DownloadAction, DownloadChoice, DownloadState, FILTER_WIDTH, FILTER_X,
+        SEARCH_HEIGHT, SEARCH_TOP, HEADING_BOTTOM, HEADING_HEIGHT,
         HEADING_TOP, HEADING_X, Item, LIBRARY_BAND, Line, MEDIA_GAP, MEDIA_TILE, Medium, SECTION_WIDTH, SECTION_X, Space,
         bar_drawn, card_x, download_menu_items, downloads_progress, library_band, panel_at_rest, past_end,
         plus_x, receded_opacity, spaces_width,
@@ -2394,7 +2733,7 @@ mod tests {
         cx.simulate_mouse_up(card, MouseButton::Right, Modifiers::none());
         cx.run_until_parked();
         let titles = host.menus.borrow().last().cloned().unwrap_or_default();
-        assert!(titles.iter().any(|(title, _)| title == "Rename Space"), "no Space menu");
+        assert!(titles.iter().any(|(title, _)| title == "Rename Space…"), "no Space menu");
         assert!(host.shown.borrow().is_empty(), "the right-click showed the Space");
         assert!(shell.read_with(cx, |shell, _| shell.library_open), "the Library closed");
         cx.update(|_, cx| host.choose("Remove Theme Color", cx));
@@ -2453,10 +2792,76 @@ mod tests {
             host.menus.borrow().last().cloned().unwrap_or_default()
         };
         assert_eq!(menu(cx), [("Clear Archive".into(), false)]);
-        let tab = Archived { id: 7, url: "https://example.org/".into(), title: "".into(), archived: 0. };
+        let tab = Archived {
+            id: 7,
+            url: "https://example.org/".into(),
+            title: "".into(),
+            archived: 0.,
+            little: false,
+        };
         shell.update(cx, |shell, cx| shell.set_archive(vec![tab], cx));
         assert_eq!(menu(cx), [("Clear Archive".into(), true)]);
         assert!(shell.read_with(cx, |shell, _| shell.library_open), "the Library closed");
+    }
+
+    /// Archived Tabs grows a Filter button once a Little ilo window's tab is archived, and its
+    /// menu lists Little ilo's alone, then all again.
+    #[gpui::test]
+    fn the_archive_filters_to_little_ilos_tabs(cx: &mut TestAppContext) {
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        let tab = |id, little| Archived {
+            id,
+            url: format!("https://{id}.example/").into(),
+            title: "".into(),
+            archived: 0.,
+            little,
+        };
+        shell.update(cx, |shell, cx| {
+            shell.section = Section::Archive;
+            shell.set_library(true, cx);
+            shell.library_motion = None;
+            shell.sidebar_fade = None;
+            shell.set_archive(vec![tab(1, false), tab(2, false)], cx);
+        });
+        cx.run_until_parked();
+        let filter = point(px(FILTER_X + FILTER_WIDTH / 2.), px(SEARCH_TOP + SEARCH_HEIGHT / 2.));
+        let click = |cx: &mut gpui::VisualTestContext| {
+            cx.simulate_click(filter, Modifiers::none());
+            cx.run_until_parked();
+        };
+        let tabs = |cx: &mut gpui::VisualTestContext| {
+            shell.read_with(cx, |shell, _| {
+                let items = &shell.library.as_ref().unwrap().items;
+                let ids = items.iter().filter_map(|item| match item {
+                    Item::Tab(index) => Some(shell.archive[*index].id),
+                    _ => None,
+                });
+                ids.collect::<Vec<_>>()
+            })
+        };
+        // No Little ilo tab, no button: the click lands on the field.
+        click(cx);
+        assert!(host.menus.borrow().is_empty(), "a menu with nothing to filter");
+
+        shell.update(cx, |shell, cx| {
+            shell.set_archive(vec![tab(1, false), tab(2, true), tab(3, false)], cx)
+        });
+        cx.run_until_parked();
+        click(cx);
+        let menu = host.menus.borrow().last().cloned().unwrap_or_default();
+        assert_eq!(menu, [("All".into(), true), ("Little ilo".into(), true), ("Tasks".into(), true)]);
+        assert_eq!(host.entries.borrow().iter().map(|e| e.checked).collect::<Vec<_>>(), [true, false, false]);
+        cx.update(|_, cx| host.choose("Little ilo", cx));
+        cx.run_until_parked();
+        assert_eq!(tabs(cx), [2]);
+
+        click(cx);
+        assert_eq!(host.entries.borrow().iter().map(|e| e.checked).collect::<Vec<_>>(), [false, true, false]);
+        cx.update(|_, cx| host.choose("All", cx));
+        cx.run_until_parked();
+        assert_eq!(tabs(cx), [1, 2, 3]);
     }
 
     /// Media tiles the captures and the downloaded images and videos together, newest first, three
@@ -2651,18 +3056,23 @@ mod tests {
     }
 
     /// The Spaces section is as wide as Arc's: 480 with one Space and 1008 with three, the cards
-    /// 264 apart from 140 and the + 33 after the last, until the page beside it would get too
-    /// narrow, and never narrower than with one card.
+    /// 264 apart from 140 and the + 33 after the last. Once they don't fit it leaves the page 56,
+    /// however narrow the window, as Arc 1.171's with 8 Spaces: 1044 at 1100 and 444 at 500.
     #[test]
     fn the_spaces_section_grows_with_its_spaces() {
         assert_eq!(spaces_width(1, 1800.), 480.);
         assert_eq!(spaces_width(3, 1800.), 1008.);
         assert_eq!([card_x(0), card_x(1), card_x(2)], [140., 404., 668.]);
         assert_eq!(plus_x(3), 941.);
-        assert_eq!(spaces_width(10, 1800.), 1400.);
-        assert_eq!(spaces_width(3, 1200.), 800.);
-        assert_eq!(spaces_width(3, 700.), 480.);
         assert_eq!(spaces_width(0, 1800.), 480.);
+        assert_eq!(spaces_width(8, 1100.), 1044.);
+        assert_eq!(spaces_width(8, 500.), 444.);
+        assert_eq!(spaces_width(10, 1800.), 1744.);
+        assert_eq!(spaces_width(3, 1200.), 1008.);
+        assert_eq!(spaces_width(3, 700.), 644.);
+        assert_eq!(spaces_width(1, 500.), 444.);
+        // The column stays, in a window narrower than any.
+        assert_eq!(spaces_width(3, 100.), COLUMN_WIDTH);
     }
 
     /// With three Spaces in Arc's 1800-wide window, the card going from 288 to 1008, the Library

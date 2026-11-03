@@ -11,6 +11,9 @@
 #include "base/files/file_path.h"
 #include "base/functional/callback_forward.h"
 #include "components/permissions/permission_prompt.h"
+#include "components/sync/base/data_type.h"
+#include "components/sync/base/passphrase_enums.h"
+#include "components/sync/engine/commit_and_get_updates_types.h"
 #include "content/public/browser/login_delegate.h"
 #include "content/public/browser/weak_document_ptr.h"
 #include "extensions/browser/extension_install_prompt_client.h"
@@ -27,7 +30,9 @@ class CommandLine;
 }
 
 class BrowserWindowInterface;
+class GoogleServiceAuthError;
 class ExtensionInstallPromptShowParams;
+class VideoOverlayWindowViews;
 class RenderViewContextMenuBase;
 class GURL;
 class LoginHandler;
@@ -44,6 +49,10 @@ namespace extensions {
 class InstallPromptData;
 }
 
+namespace media_router {
+class MediaRouterDialogController;
+}
+
 namespace mojo {
 template <typename ContextType>
 class BinderMapWithContext;
@@ -57,7 +66,20 @@ namespace policy {
 class ConfigurationPolicyProvider;
 }
 
+namespace signin {
+struct AccessTokenInfo;
+class IdentityManager;
+}
+
+namespace syncer {
+class DataTypeController;
+struct SyncAccountInfo;
+class SyncInvalidationsService;
+class SyncService;
+}
+
 namespace ui {
+class Event;
 class SimpleMenuModel;
 }
 
@@ -65,12 +87,23 @@ class SimpleMenuModel;
 // picks the Browser for it.
 extern void (*g_browser_core_adjust_navigate)(NavigateParams& params);
 
+// chrome/browser/ui/views/chrome_browser_main_extra_parts_views.cc: |contents|'s Cast dialog, the
+// core's, which Chrome's page menu Cast…, a page asking to cast and bc_tab_cast show, in place of
+// the Views one. Chrome sets its media router's factory to it once, as the profile starts.
+extern media_router::MediaRouterDialogController* (*g_browser_core_cast_dialog)(
+    content::WebContents* contents);
+
 // chrome/browser/devtools/devtools_window.cc: the core docks DevTools in its windows, which have no
 // DevtoolsUIController. Whether |browser|'s window can, and the call as the docked DevTools of
 // |inspected|, a tab of |browser|, open, lay out again or close.
 extern bool (*g_browser_core_can_dock_devtools)(BrowserWindowInterface* browser);
 extern void (*g_browser_core_update_devtools)(BrowserWindowInterface* browser,
                                               content::WebContents* inspected);
+// The same, as those DevTools show once their frontend has loaded, where Chrome gives them the
+// keyboard: the core does once they're laid out past the page, which covers them until the
+// frontend's first bounds.
+extern void (*g_browser_core_show_devtools)(BrowserWindowInterface* browser,
+                                            content::WebContents* inspected);
 
 // chrome/browser/renderer_context_menu/render_view_context_menu.cc: takes out of a page's context
 // menu the items Arc's leaves out and those |browser|'s window can't do, once Chrome has filled it
@@ -116,12 +149,15 @@ extern void (*g_browser_core_password_prompt)(content::WebContents* contents, bo
 // browser come once it has finished launching, before the app has started.
 extern void (*g_browser_core_open_links)(const std::vector<GURL>& urls);
 // chrome/browser/ui/startup/startup_browser_creator.cc: opens the links in a launch's command line,
-// such as `xdg-open https://…` or a second `chrome <url>` on Linux, in place of Chrome's tabs for
-// them. A second launch's comes through the process singleton; the first launch's before the app
-// has started. |profile| is the launch's, or null.
+// such as `xdg-open https://…` or a second `chrome <url>` on Linux, or a link another app opens on
+// Windows, in place of Chrome's tabs for them, and for a later launch with none, from the Start menu
+// or a shortcut, brings the window in front forward in place of Chrome's new window: Chrome then
+// opens nothing for the launch. A second launch's comes through the process singleton; the first
+// launch's, |process_startup|, before the app has started. |profile| is the launch's, or null.
 extern void (*g_browser_core_open_command_line)(const base::CommandLine& command_line,
                                                 const base::FilePath& cur_dir,
-                                                Profile* profile);
+                                                Profile* profile,
+                                                bool process_startup);
 // chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc: the page of
 // |source|, a tab of |browser|, has the pointer on the link |url|, or on none and |url| is empty.
 // Chrome draws it in a status bubble, which the core's windows don't have.
@@ -181,6 +217,46 @@ extern void (*g_browser_core_load_bundled_extensions)(Profile* profile);
 // The core keeps it for as long as the browser runs.
 extern policy::ConfigurationPolicyProvider* (*g_browser_core_policy_provider)();
 
+// components/sync/service/sync_auth_manager.cc: the account to sync and its access tokens, from the
+// browser's own account in place of Google's sign-in, for the profile |identity_manager| is
+// |profile|'s. |done| runs after the call returns. |changed| is the call to make when the account
+// changes, as IdentityManager's events would, and does nothing once that profile's sync is gone.
+extern syncer::SyncAccountInfo (*g_browser_core_sync_account)(
+    const signin::IdentityManager* identity_manager);
+extern void (*g_browser_core_sync_token)(
+    const signin::IdentityManager* identity_manager,
+    base::OnceCallback<void(GoogleServiceAuthError, signin::AccessTokenInfo)> done);
+extern void (*g_browser_core_sync_account_watch)(const signin::IdentityManager* identity_manager,
+                                                 base::RepeatingClosure changed);
+
+// chrome/browser/sync/sync_invalidations_service_factory.cc: |profile|'s sync change
+// notifications, from the browser's relay in place of FCM.
+extern std::unique_ptr<syncer::SyncInvalidationsService> (*g_browser_core_sync_invalidations)(
+    Profile* profile);
+
+// components/sync/service/sync_service_impl.cc: the server sync talks to, read as the service
+// starts, for its reports, and as each engine starts, in place of --sync-url's, which is read once
+// and is Google's when not given.
+extern GURL (*g_browser_core_sync_url)();
+
+// components/sync/engine/data_type_worker.cc: whether |type|'s changes wait to commit, given
+// whether the type is encrypted and with which passphrase, and a last look at each commit before
+// it goes to the server, which may trim it. Both run on sync's own sequence.
+extern bool (*g_browser_core_sync_hold_commit)(syncer::DataType type,
+                                               bool encrypted,
+                                               syncer::PassphraseType passphrase);
+extern void (*g_browser_core_sync_commit)(syncer::DataType type,
+                                          syncer::CommitRequestDataList& commit);
+
+// components/password_manager/core/browser/sync/password_proto_utils.cc: a password's client tag,
+// from Chromium's, on the password store's sequence.
+extern std::string (*g_browser_core_sync_password_tag)(const std::string& tag);
+
+// chrome/browser/sync/sync_service_factory.cc: the controllers of the core's own data types for
+// |profile|'s sync, such as ILO_SPACE's, after Chrome's.
+extern std::vector<std::unique_ptr<syncer::DataTypeController>> (*g_browser_core_sync_controllers)(
+    Profile* profile,
+    syncer::SyncService* sync_service);
 // components/component_updater/component_updater_service.cc: whether the component updater may
 // check for and download the component |id| as well as the three security components it always
 // does (engine/patches/ardia/chromium-component-updater-security-only.patch): Google's Widevine
@@ -199,5 +275,21 @@ extern bool (*g_browser_core_no_autofill)(content::WebContents* contents);
 // the passkey request of |contents|'s page, which |asks| the user in Chrome's dialog, once it
 // knows how it would show. Not asked of one that shows only in autofill's suggestions.
 extern bool (*g_browser_core_refuse_passkey)(content::WebContents* contents, bool asks);
+
+// chrome/browser/webauthn/chrome_authenticator_request_delegate.cc: whether Chrome's passkey dialog
+// for |contents|'s page, whose profile is off the record, reads as a normal window's, without its
+// Incognito wording. For a profile the core keeps off the record for a page of its own.
+extern bool (*g_browser_core_passkey_normal_wording)(content::WebContents* contents);
+
+// chrome/browser/ui/views/overlay/video_overlay_window_views.cc: a mouse, scroll or gesture event
+// on a video's Picture in Picture window, the Mini Player, before Chrome handles it. Returns true
+// once the core has handled it. While it's set, the window's background isn't a draggable caption,
+// which would keep a double-click from it, and the core moves the window itself.
+extern bool (*g_browser_core_mini_player_event)(VideoOverlayWindowViews* window, ui::Event* event);
+
+// chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc: |contents|
+// asked to be the tab shown, as Picture in Picture's way back to its tab does, once Chrome has made
+// it its Browser's active tab, before it activates the window.
+extern void (*g_browser_core_activate_contents)(content::WebContents* contents);
 
 #endif  // BROWSER_CORE_HOOKS_H_

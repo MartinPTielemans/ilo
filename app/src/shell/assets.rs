@@ -17,7 +17,7 @@ use crate::tokens::shell::assets::BAR_WIDTH;
 use crate::tokens::shell::assets::BARS_BOX;
 
 /// The close button's bars, crossing `angle` degrees from level either way, to the nearest
-/// degree, so the turn between ✕ and − draws a few dozen glyphs at most.
+/// degree: 45 for ✕ and 0 for −.
 pub(super) fn bars_path(angle: f32) -> SharedString {
     format!("{BARS}{}.svg", angle.round() as i32).into()
 }
@@ -59,6 +59,7 @@ const ICONS: &[(&str, &[u8])] = &[
     ("icons/cable.svg", include_bytes!("../../assets/icons/cable.svg")),
     ("icons/calendar-days.svg", include_bytes!("../../assets/icons/calendar-days.svg")),
     ("icons/camera.svg", include_bytes!("../../assets/icons/camera.svg")),
+    ("icons/cast.svg", include_bytes!("../../assets/icons/cast.svg")),
     ("icons/check.svg", include_bytes!("../../assets/icons/check.svg")),
     ("icons/chevron-down.svg", include_bytes!("../../assets/icons/chevron-down.svg")),
     ("icons/chevron-up.svg", include_bytes!("../../assets/icons/chevron-up.svg")),
@@ -66,6 +67,8 @@ const ICONS: &[(&str, &[u8])] = &[
     ("icons/clipboard.svg", include_bytes!("../../assets/icons/clipboard.svg")),
     ("icons/circle-alert.svg", include_bytes!("../../assets/icons/circle-alert.svg")),
     ("icons/circle.svg", include_bytes!("../../assets/icons/circle.svg")),
+    ("icons/circle-fading-arrow-up.svg", include_bytes!("../../assets/icons/circle-fading-arrow-up.svg")),
+    ("icons/circle-question-mark.svg", include_bytes!("../../assets/icons/circle-question-mark.svg")),
     ("icons/clock.svg", include_bytes!("../../assets/icons/clock.svg")),
     ("icons/cloud.svg", include_bytes!("../../assets/icons/cloud.svg")),
     ("icons/columns-2.svg", include_bytes!("../../assets/icons/columns-2.svg")),
@@ -84,6 +87,7 @@ const ICONS: &[(&str, &[u8])] = &[
     ("icons/eighth-note.svg", include_bytes!("../../assets/icons/eighth-note.svg")),
     ("icons/ellipsis.svg", include_bytes!("../../assets/icons/ellipsis.svg")),
     ("icons/external-link.svg", include_bytes!("../../assets/icons/external-link.svg")),
+    ("icons/eye.svg", include_bytes!("../../assets/icons/eye.svg")),
     ("icons/file.svg", include_bytes!("../../assets/icons/file.svg")),
     ("icons/flag.svg", include_bytes!("../../assets/icons/flag.svg")),
     ("icons/flame.svg", include_bytes!("../../assets/icons/flame.svg")),
@@ -140,6 +144,7 @@ const ICONS: &[(&str, &[u8])] = &[
     ("icons/palette.svg", include_bytes!("../../assets/icons/palette.svg")),
     ("icons/panel-left.svg", include_bytes!("../../assets/icons/panel-left.svg")),
     ("icons/paw-print.svg", include_bytes!("../../assets/icons/paw-print.svg")),
+    ("icons/pause.svg", include_bytes!("../../assets/icons/pause.svg")),
     ("icons/pencil.svg", include_bytes!("../../assets/icons/pencil.svg")),
     ("icons/piano.svg", include_bytes!("../../assets/icons/piano.svg")),
     (
@@ -150,6 +155,7 @@ const ICONS: &[(&str, &[u8])] = &[
     ("icons/pizza.svg", include_bytes!("../../assets/icons/pizza.svg")),
     ("icons/plane.svg", include_bytes!("../../assets/icons/plane.svg")),
     ("icons/planet.svg", include_bytes!("../../assets/icons/planet.svg")),
+    ("icons/play.svg", include_bytes!("../../assets/icons/play.svg")),
     ("icons/plus.svg", include_bytes!("../../assets/icons/plus.svg")),
     ("icons/printer.svg", include_bytes!("../../assets/icons/printer.svg")),
     ("icons/puzzle.svg", include_bytes!("../../assets/icons/puzzle.svg")),
@@ -158,6 +164,7 @@ const ICONS: &[(&str, &[u8])] = &[
     ("icons/rotate-ccw.svg", include_bytes!("../../assets/icons/rotate-ccw.svg")),
     ("icons/rotate-cw.svg", include_bytes!("../../assets/icons/rotate-cw.svg")),
     ("icons/save.svg", include_bytes!("../../assets/icons/save.svg")),
+    ("icons/screen-share.svg", include_bytes!("../../assets/icons/screen-share.svg")),
     ("icons/search.svg", include_bytes!("../../assets/icons/search.svg")),
     ("icons/settings.svg", include_bytes!("../../assets/icons/settings.svg")),
     ("icons/shapes.svg", include_bytes!("../../assets/icons/shapes.svg")),
@@ -165,6 +172,7 @@ const ICONS: &[(&str, &[u8])] = &[
     ("icons/share.svg", include_bytes!("../../assets/icons/share.svg")),
     ("icons/shield.svg", include_bytes!("../../assets/icons/shield.svg")),
     ("icons/shopping-basket.svg", include_bytes!("../../assets/icons/shopping-basket.svg")),
+    ("icons/skip-forward.svg", include_bytes!("../../assets/icons/skip-forward.svg")),
     ("icons/skull.svg", include_bytes!("../../assets/icons/skull.svg")),
     ("icons/spaces.svg", include_bytes!("../../assets/icons/spaces.svg")),
     ("icons/sliders-horizontal.svg", include_bytes!("../../assets/icons/sliders-horizontal.svg")),
@@ -181,6 +189,7 @@ const ICONS: &[(&str, &[u8])] = &[
     ("icons/square.svg", include_bytes!("../../assets/icons/square.svg")),
     ("icons/star.svg", include_bytes!("../../assets/icons/star.svg")),
     ("icons/terminal.svg", include_bytes!("../../assets/icons/terminal.svg")),
+    ("icons/text-align-start.svg", include_bytes!("../../assets/icons/text-align-start.svg")),
     ("icons/text-search.svg", include_bytes!("../../assets/icons/text-search.svg")),
     ("icons/thumbs-up.svg", include_bytes!("../../assets/icons/thumbs-up.svg")),
     ("icons/train-front.svg", include_bytes!("../../assets/icons/train-front.svg")),
@@ -188,6 +197,7 @@ const ICONS: &[(&str, &[u8])] = &[
     ("icons/triangle.svg", include_bytes!("../../assets/icons/triangle.svg")),
     ("icons/type.svg", include_bytes!("../../assets/icons/type.svg")),
     ("icons/undo-2.svg", include_bytes!("../../assets/icons/undo-2.svg")),
+    ("icons/ungroup.svg", include_bytes!("../../assets/icons/ungroup.svg")),
     ("icons/usb.svg", include_bytes!("../../assets/icons/usb.svg")),
     ("icons/user.svg", include_bytes!("../../assets/icons/user.svg")),
     ("icons/users.svg", include_bytes!("../../assets/icons/users.svg")),
@@ -201,6 +211,22 @@ const ICONS: &[(&str, &[u8])] = &[
     ("icons/window-maximize.svg", include_bytes!("../../assets/icons/window-maximize.svg")),
     ("icons/window-minimize.svg", include_bytes!("../../assets/icons/window-minimize.svg")),
     ("icons/window-restore.svg", include_bytes!("../../assets/icons/window-restore.svg")),
+    (
+        "icons/window-windows-close.svg",
+        include_bytes!("../../assets/icons/window-windows-close.svg"),
+    ),
+    (
+        "icons/window-windows-maximize.svg",
+        include_bytes!("../../assets/icons/window-windows-maximize.svg"),
+    ),
+    (
+        "icons/window-windows-minimize.svg",
+        include_bytes!("../../assets/icons/window-windows-minimize.svg"),
+    ),
+    (
+        "icons/window-windows-restore.svg",
+        include_bytes!("../../assets/icons/window-windows-restore.svg"),
+    ),
     ("icons/wrench.svg", include_bytes!("../../assets/icons/wrench.svg")),
     ("icons/x.svg", include_bytes!("../../assets/icons/x.svg")),
     ("icons/zap.svg", include_bytes!("../../assets/icons/zap.svg")),
@@ -236,7 +262,7 @@ mod tests {
 
     /// The ✕ crosses its bars, the − lays them on one line, and both are the glyph one path draws.
     #[test]
-    fn the_close_bars_turn_from_a_cross_to_a_line() {
+    fn the_close_bars_cross_for_x_and_lie_level_for_minus() {
         let load = |angle: f32| {
             let svg = Assets.load(&bars_path(angle)).unwrap().unwrap();
             String::from_utf8(svg.into_owned()).unwrap()

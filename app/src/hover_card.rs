@@ -103,10 +103,10 @@ struct Going {
 
 /// What the card asks of its window.
 pub trait Host {
-    /// Shows the card's window with its plate at (`left`, `top`) in the browser window, `width` by
-    /// `height`, or moves it there if it shows. The UI has kept it inside the window. Only the
-    /// plate takes the mouse; the margin round it lets it through.
-    fn show(&self, left: f32, top: f32, width: f32, height: f32);
+    /// Shows the card's window with its plate at (`left`, `top`) in browser window `window`, the
+    /// one whose row it's for, `width` by `height`, or moves it there if it shows. The UI has kept
+    /// it inside the window. Only the plate takes the mouse; the margin round it lets it through.
+    fn show(&self, window: u64, left: f32, top: f32, width: f32, height: f32);
     /// Hides it at once, once the UI has drawn it going.
     fn hide(&self);
 }
@@ -119,6 +119,8 @@ pub enum Action {
     Favorite,
     Unfavorite,
     Split,
+    /// The page sharing another tab shares this one instead.
+    ShareInstead,
 }
 
 impl Action {
@@ -130,6 +132,7 @@ impl Action {
             Action::Favorite => "Add to Favorites",
             Action::Unfavorite => "Remove from Favorites",
             Action::Split => "Open in Split View",
+            Action::ShareInstead => "Share This Tab Instead",
         }
     }
 
@@ -141,6 +144,7 @@ impl Action {
             Action::Favorite => "favorite",
             Action::Unfavorite => "unfavorite",
             Action::Split => "split",
+            Action::ShareInstead => "share-instead",
         }
     }
 
@@ -149,6 +153,7 @@ impl Action {
             Action::Pin | Action::Unpin => "icons/pin.svg",
             Action::Favorite | Action::Unfavorite => "icons/star.svg",
             Action::Split => "icons/columns-2.svg",
+            Action::ShareInstead => "icons/screen-share.svg",
         }
     }
 
@@ -197,9 +202,12 @@ pub enum Event {
     Pointer(bool),
 }
 
-/// The pointer rests on a row: what its card shows, where, and who hears what happens to it.
+/// The pointer rests on a row: in which browser window, what its card shows, where, and who hears
+/// what happens to it.
 #[derive(Clone)]
 pub struct Rest {
+    /// The browser window whose sidebar has the row, which the card shows over (#1432).
+    pub window: u64,
     pub card: Card,
     pub anchor: Anchor,
     pub events: Rc<dyn Fn(u64, Event, &mut App)>,
@@ -212,6 +220,8 @@ pub enum Hover {
     Rest(Rest),
     /// It has left that tab's row.
     Left(u64),
+    /// What a tab's card shows changed, as a rename changes its name.
+    Changed(Card),
     /// A press, a scroll, a drag, a menu, a Space switch or a key ends the card at once.
     Close,
 }
@@ -227,6 +237,7 @@ impl Hover {
                 format!("card rest {} {} {picture}", card.tab, actions.join(" "))
             }
             Hover::Left(tab) => format!("card left {tab}"),
+            Hover::Changed(card) => format!("card changed {} {}", card.tab, card.title),
             Hover::Close => "card close".into(),
         }
     }
@@ -363,11 +374,13 @@ fn update(cx: &mut App, f: impl FnOnce(&mut HoverCard, &mut Context<HoverCard>))
 
 /// What the shell asks: a card for the row the pointer rests on, after DWELL, or at once while
 /// one shows, as the pointer moves from row to row; the pointer leaving that row, which ends it
-/// after LEAVE unless it's onto the card; or the card's end.
+/// after LEAVE unless it's onto the card; what a tab's card shows, as it changes; or the card's
+/// end.
 pub fn hover(hover: Hover, cx: &mut App) {
     update(cx, |card, cx| match hover {
         Hover::Rest(rest) => card.rest(rest, cx),
         Hover::Left(tab) => card.left(tab, cx),
+        Hover::Changed(changed) => card.changed(changed, cx),
         Hover::Close => card.close(cx),
     });
 }
@@ -471,6 +484,19 @@ impl HoverCard {
         }
     }
 
+    /// The tab of the card that shows, or waits for its dwell, changed: it shows it as it is now,
+    /// not as it was when the pointer came onto its row (#1452).
+    fn changed(&mut self, card: Card, cx: &mut Context<Self>) {
+        let tab = card.tab;
+        if let Some(resting) = self.resting.as_mut().filter(|rest| rest.card.tab == tab) {
+            resting.card = card.clone();
+        }
+        if let Some(shown) = self.shown.as_mut().filter(|rest| rest.card.tab == tab) {
+            shown.card = card;
+            self.draw(cx);
+        }
+    }
+
     /// The card goes after LEAVE, unless the pointer comes onto it or another row first.
     fn leave_after(&mut self, cx: &mut Context<Self>) {
         self.wait = Some(cx.spawn(async move |card, cx| {
@@ -533,7 +559,7 @@ impl HoverCard {
         let Some(rest) = &self.shown else {
             return "none";
         };
-        let card = rest.card.clone();
+        let (window, card) = (rest.window, rest.card.clone());
         let picture = card.pictured.then(|| self.pictures.get(&card.tab).cloned()).flatten();
         let height = height(picture_height(card.pictured, picture.as_ref().map(|p| p.size())));
         let (left, top) = place(rest.anchor, height);
@@ -545,7 +571,7 @@ impl HoverCard {
             (None, false) => "none",
         };
         self.drawn = Some(Drawn { card, picture, height });
-        self.host.show(left, top, WIDTH, height);
+        self.host.show(window, left, top, WIDTH, height);
         cx.notify();
         holds
     }
@@ -736,6 +762,8 @@ impl Render for HoverCard {
         // The rim is its own layer, so the border doesn't shift what the fill's box holds.
         let rim = div()
             .absolute()
+            .top_0()
+            .left_0()
             .size_full()
             .rounded(px(RADIUS))
             .border(px(RIM))

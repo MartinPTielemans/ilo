@@ -62,28 +62,51 @@ def line(element, depth, front):
     return " ".join(words)
 
 
+GWL_STYLE, WS_CHILD = -16, 0x40000000
+
+
+def owned(element):
+    """Whether it's a window of its own that UI Automation puts under its owner, as a menu's is."""
+    hwnd = get(element, "NativeWindowHandle")
+    return bool(hwnd) and not ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE) & WS_CHILD
+
+
 def dump():
     """The tree's lines, and why there are none."""
     front = ctypes.windll.user32.GetForegroundWindow() or 0
     lines = []
 
-    def walk(element, depth):
-        lines.append(line(element, depth, front))
-        # A page's tree is Chromium's, and long, as are its windows'.
-        if depth >= 15 or get(element, "ControlType") == uia.UIA_DocumentControlTypeId:
-            return
-        child = walker.GetFirstChildElement(element)
-        while child:
-            if not (get(child, "ClassName") or "").startswith("Chrome_"):
-                walk(child, depth + 1)
-            child = walker.GetNextSiblingElement(child)
+    # A window's lines, after those of the windows it owns: as AT-SPI and AX have them, each window
+    # is at depth 0, and one's owned windows are in front of it.
+    def window(element):
+        mine, theirs = [], []
+
+        def walk(element, depth):
+            mine.append(line(element, depth, front))
+            # A page's tree is Chromium's, and long, as are its windows'.
+            if depth >= 15 or get(element, "ControlType") == uia.UIA_DocumentControlTypeId:
+                return
+            child = walker.GetFirstChildElement(element)
+            while child:
+                if (get(child, "ClassName") or "").startswith("Chrome_"):
+                    pass
+                elif owned(child):
+                    theirs.append(child)
+                else:
+                    walk(child, depth + 1)
+                child = walker.GetNextSiblingElement(child)
+
+        walk(element, 0)
+        for each in theirs:
+            window(each)
+        lines.extend(mine)
 
     try:
         ours = automation.CreatePropertyCondition(uia.UIA_ProcessIdPropertyId, pid)
         # The desktop's children come front to back.
         windows = automation.GetRootElement().FindAll(uia.TreeScope_Children, ours)
         for each in range(windows.Length):
-            walk(windows.GetElement(each), 0)
+            window(windows.GetElement(each))
     except comtypes.COMError as error:
         # Such as an element that went as the tree changed.
         return [], str(error)

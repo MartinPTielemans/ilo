@@ -21,6 +21,8 @@ struct ArchivedTab {
   base::Time archived;
   // The tab it was, while it can still come back with its history, else 0.
   bc_id tab = 0;
+  // Whether it closed in a Little ilo window, as the Library's filter picks them out (Arc).
+  bool little = false;
 };
 
 // All of it, newest first.
@@ -29,8 +31,9 @@ const std::vector<ArchivedTab>& Archived();
 // Puts back what the last launch saved, as the browser starts. Then archive_changed.
 void LoadArchive(std::vector<ArchivedTab> archived);
 
-// Archives |tab|, a Today tab closing at |url|. Then archive_changed.
-void Archive(bc_id tab, const GURL& url, const std::string& title);
+// Archives |tab|, a Today tab closing at |url|, or with |little| a Little ilo window's tab. Then
+// archive_changed.
+void Archive(bc_id tab, const GURL& url, const std::string& title, bool little = false);
 
 // Takes |tab|, a closed tab that has come back, out of the archive. Then archive_changed.
 void Unarchive(bc_id tab);

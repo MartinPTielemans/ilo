@@ -104,7 +104,7 @@ void SetUpWindow(views::Widget::InitParams& params, views::WidgetDelegate& deleg
   // A frame view that draws nothing, in place of GTK's title bar, with Chromium's own frameless
   // resizing: a press in the band at its edges asks the compositor or window manager to resize
   // the window (xdg_toplevel.resize, _NET_WM_MOVERESIZE), and the pointer there takes the edge's
-  // cursor. shortcut: no title bar to move by; the app's header is to take it.
+  // cursor. The app's header moves the window (bc_window_start_move).
   delegate.SetFrameViewFactory(
       base::BindRepeating([](views::Widget* widget) -> std::unique_ptr<views::FrameView> {
         auto frame = std::make_unique<views::NativeFrameView>(widget);

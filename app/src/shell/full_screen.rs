@@ -173,6 +173,22 @@ fn a_page_leaving_as_its_window_starts_out_waits_for_the_resize(cx: &mut TestApp
 }
 
 #[gpui::test]
+fn the_note_waits_to_hear_whether_a_page_took_the_window(cx: &mut TestAppContext) {
+    let (shell, host, cx) = window(cx);
+    notes(&host);
+    window_manager_takes(true, &shell, &host, cx);
+    cx.run_until_parked();
+    assert_eq!(notes(&host), ["full screen note shown"]);
+    window_manager_takes(false, &shell, &host, cx);
+    notes(&host);
+    // Chrome on Windows takes the window full screen for a page before the core says it asked.
+    window_manager_takes(true, &shell, &host, cx);
+    page_goes(true, &shell, cx);
+    cx.run_until_parked();
+    assert!(notes(&host).is_empty(), "a page's full screen showed the window's note");
+}
+
+#[gpui::test]
 fn a_page_whose_window_comes_back_first_goes_to_the_card_with_the_resize(cx: &mut TestAppContext) {
     let (shell, host, cx) = window(cx);
     page_goes(true, &shell, cx);

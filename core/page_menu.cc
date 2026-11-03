@@ -13,6 +13,8 @@
 #include "browser_core/host.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
+#include "build/build_config.h"
+#include "chrome/app/chrome_command_ids.h"
 #include "components/renderer_context_menu/render_view_context_menu_base.h"
 #include "content/public/browser/context_menu_params.h"
 #include "content/public/browser/render_widget_host_view.h"
@@ -44,6 +46,13 @@ struct Row {
   bool checked = false;
 };
 
+// Open Link in Peek's title, in the case of Chrome's own rows on each system.
+#if BUILDFLAG(IS_MAC)
+constexpr char kPreviewLinkTitle[] = "Open Link in Peek";
+#else
+constexpr char kPreviewLinkTitle[] = "Open link in Peek";
+#endif
+
 // A row's title as Chrome's menus show it: without the mnemonic's "&", and with an ellipsis for
 // "...", as on the Mac.
 std::string Title(const std::u16string& label) {
@@ -53,11 +62,13 @@ std::string Title(const std::u16string& label) {
 }
 
 // Adds |model|'s rows that show to |rows|, under the row at |parent| or -1, each submenu's right
-// after the row that opens it, with the model and index each came from in |from|. |model| hears
-// that it shows first, as Chrome's menus tell it, since some fill in their rows then, and goes in
-// |models|. A line goes only between rows, as Chrome's menus draw them.
+// after the row that opens it, with the model and index each came from in |from|, and |peek|, if
+// any, after Open Link in New Tab, from no model. |model| hears that it shows first, as Chrome's
+// menus tell it, since some fill in their rows then, and goes in |models|. A line goes only
+// between rows, as Chrome's menus draw them.
 void AddRows(ui::MenuModel* model,
              int parent,
+             const Row* peek,
              std::vector<Row>& rows,
              std::vector<std::pair<raw_ptr<ui::MenuModel>, size_t>>& from,
              std::vector<raw_ptr<ui::MenuModel>>& models) {
@@ -90,12 +101,16 @@ void AddRows(ui::MenuModel* model,
         .checked = check && model->IsItemCheckedAt(i),
     });
     from.emplace_back(model, i);
+    if (peek && rows.back().command == IDC_CONTENT_CONTEXT_OPENLINKNEWTAB) {
+      rows.push_back(*peek);
+      from.emplace_back(nullptr, 0);
+    }
     ui::MenuModel* submenu = type == ui::MenuModel::TYPE_SUBMENU ||
                                      type == ui::MenuModel::TYPE_ACTIONABLE_SUBMENU
                                  ? model->GetSubmenuModelAt(i)
                                  : nullptr;
     if (submenu) {
-      AddRows(submenu, static_cast<int>(rows.size()) - 1, rows, from, models);
+      AddRows(submenu, static_cast<int>(rows.size()) - 1, nullptr, rows, from, models);
     }
   }
 }
@@ -140,8 +155,16 @@ std::unique_ptr<RenderViewContextMenuBase> PageMenu::Show(
 void PageMenu::Report(bc_id window, double x, double y) {
   // Chrome's menu runners take the model of the menu they own as this, which the core owns.
   auto& model = const_cast<ui::SimpleMenuModel&>(menu_->menu_model());
+  // Open Link in Peek, for a web link: the app decides whether it shows (tab_link_to_preview).
+  const Row peek = {
+      .command = BC_PAGE_MENU_PREVIEW_LINK,
+      .title = kPreviewLinkTitle,
+      .enabled = true,
+  };
+  const bool web_link = menu_->params().link_url.SchemeIsHTTPOrHTTPS();
   std::vector<Row> rows;
-  AddRows(&model, -1, rows, rows_, models_);
+  AddRows(&model, -1, web_link && Host().tab_link_to_preview ? &peek : nullptr, rows, rows_,
+          models_);
   open_ = true;
   std::vector<bc_page_menu_item> items;
   items.reserve(rows.size());
@@ -166,6 +189,12 @@ void PageMenu::Close(bc_id tab, int command) {
 
 void PageMenu::Run(int command) {
   base::WeakPtr<PageMenu> alive = weak_factory_.GetWeakPtr();
+  // Open Link in Peek, from where the menu was asked for, as a ⇧-click is from where it pressed.
+  if (command == BC_PAGE_MENU_PREVIEW_LINK && Host().tab_link_to_preview) {
+    const content::ContextMenuParams& params = menu_->params();
+    Host().tab_link_to_preview(Host().context, tab_, params.link_url.spec().c_str(), params.x,
+                               params.y);
+  }
   // The row runs before the menu hears it closed, as in Chrome's menus: a page's own row goes to
   // the page through the menu, which closing lets go of.
   for (auto [model, index] : rows_) {

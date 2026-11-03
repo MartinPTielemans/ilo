@@ -10,15 +10,18 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use browser::account::{self, Account};
 use browser::import::sources::{Os, Roots};
 use browser::log;
 use browser::shell::{
     self, Archived, BarTab, Browser, Command, Download, DownloadAction, DownloadState,
-    Folders, Match, MenuBar, MenuEntry, Page, Shell, SpaceEntry, Split, Trouble, WindowButton,
+    Folders, Match, MediaAction, MenuBar, MenuEntry, Page, Shell, SpaceEntry, Split, Trouble,
+    WindowButton,
 };
 use browser::command_bar::{self, Suggestion};
 use browser::dialog;
 use browser::icon_picker::{self, Recents};
+use browser::link_preview;
 use browser::menu;
 use browser::palette::{self, Palette, Tone};
 use browser::site_controls::{self, Connection, Permission, Site, Value};
@@ -47,6 +50,8 @@ unsafe extern "C" {
 // Two Spaces, so the switcher shows, the second in Dia's pink. The tabs are in the first, the top
 // two pinned, the second in a folder.
 const SPACES: [(&str, Option<u32>); 2] = [("Space 1", None), ("Reading", Some(0xbf556a))];
+// The colours of the Spaces past those two, in turn, with PREVIEW_SPACES.
+const MORE_COLORS: [u32; 6] = [0x4f7cff, 0x2f9e6e, 0xd98a2b, 0x8a5cd6, 0x2aa3b8, 0xc44f3a];
 const TABS: [(&str, &str); 5] = [
     (
         "Arc (web browser) - Wikipedia",
@@ -254,6 +259,8 @@ impl Fake {
                 url: url.into(),
                 title: title.into(),
                 archived,
+                // Every fourth, so the archive's filter shows (Little ilo).
+                little: id % 4 == 0,
             })
             .collect();
         self.later(cx, move |shell, cx| shell.set_archive(archive, cx));
@@ -349,6 +356,8 @@ impl Browser for Fake {
     // The made-up tabs stay in their Space.
     fn move_to_space(&self, _: u64, _: u64, _: &mut App) {}
 
+    fn move_folder_to_space(&self, _: u64, _: u64, _: &mut App) {}
+
     fn warn_moving_profiles(&self, _: &mut App) -> bool {
         true
     }
@@ -416,6 +425,8 @@ impl Browser for Fake {
     fn open_at(&self, _: &[String], _: bool, _: u64, _: usize, _: &mut App) -> u64 {
         0
     }
+
+    fn open_behind(&self, _: &[String], _: bool, _: u64, _: usize, _: &mut App) {}
 
     fn create_folder(&self, _: u64, name: &str, folder: u64, index: usize, cx: &mut App) -> u64 {
         let id = self.next_id.get();
@@ -553,12 +564,18 @@ impl Browser for Fake {
 
     fn reopen_closed_tab(&self, _: &mut App) {}
 
-    fn reopen_preview(
+    fn open_preview(
         &self,
-        _: &browser::link_preview::Closed,
+        _: u64,
+        _: SharedString,
+        _: Point<Pixels>,
         _: (Bounds<Pixels>, f32),
         _: &mut App,
     ) {
+    }
+
+    fn link_previews(&self) -> bool {
+        true
     }
 
     fn close_preview(&self, _: u64, _: &mut App) -> bool {
@@ -689,6 +706,45 @@ impl Browser for Fake {
             let page = Page { muted, ..shell.page(tab) };
             shell.set_page(tab, page, cx);
         });
+    }
+
+    // The made-up pages share nothing.
+    fn share_instead(&self, _: u64, _: &mut App) {}
+
+    fn media(&self, tab: u64, action: MediaAction, cx: &mut App) {
+        self.later(cx, move |shell, cx| {
+            let media_playing = match action {
+                MediaAction::Play => true,
+                MediaAction::Pause => false,
+                MediaAction::Next => shell.page(tab).media_playing,
+                MediaAction::PictureInPicture => shell.page(tab).media_playing,
+            };
+            // A made-up page floats nothing, but its player's button goes as a real one's would.
+            let media_picture_in_picture = (shell.page(tab).media_picture_in_picture)
+                && action != MediaAction::PictureInPicture;
+            let page = Page { media_playing, media_picture_in_picture, ..shell.page(tab) };
+            shell.set_page(tab, page, cx);
+        });
+    }
+
+    fn cast(&self, tab: u64, cx: &mut App) {
+        self.later(cx, move |shell, cx| {
+            let device = shell::CastDevice {
+                id: "cast:preview".into(),
+                name: "Living Room TV".into(),
+                state: shell::CastState::Available,
+                status: "".into(),
+            };
+            let cast = shell::Cast { header: "Cast tab".into(), devices: vec![device] };
+            shell.set_cast(tab, Some(cast), cx);
+        });
+    }
+
+    fn cast_close(&self, _: &mut App) {}
+
+    // Casting starting closes the dialog, as the core's does.
+    fn cast_to(&self, tab: u64, _: SharedString, cx: &mut App) {
+        self.later(cx, move |shell, cx| shell.set_cast(tab, None, cx));
     }
 
     fn can_use_system_engine(&self) -> bool {
@@ -915,6 +971,13 @@ impl Browser for Fake {
 
     fn stop_agent(&self, _: SharedString, _: &mut App) {}
 
+    fn task(&self, _: SharedString, _: browser::agents::task::TaskAction, _: &mut App) {}
+
+    fn show_task(&self, _: SharedString, _: &mut App) {}
+
+    fn task_picture(&self, _: u64, _: u64, _: &mut App) {}
+
+
     fn shortcuts(&self, _: &mut App) {}
 
     fn about(&self, _: &mut App) {}
@@ -962,6 +1025,8 @@ impl Browser for Fake {
             self.later(cx, move |shell, cx| shell.set_title(tab, name, cx));
         }
     }
+
+    fn restore_sidebar(&self, _: u64, _: &mut App) {}
 
     fn delete_space(&self, space: u64, cx: &mut App) -> bool {
         self.spaces.borrow_mut().retain(|(id, ..)| *id != space);
@@ -1033,7 +1098,7 @@ impl Browser for Fake {
 
     fn page_moving(&self, _: bool, _: &mut App) {}
 
-    fn set_pane_corner(&self, _: f32, _: f32, _: &mut App) {}
+    fn set_pane_corner(&self, _: f32, _: f32, _: f32, _: &mut App) {}
 
     // No command bar here, as for a new tab, and no split views but the made-up one.
     fn command_bar_open(&self, _: &App) -> bool {
@@ -1135,6 +1200,10 @@ impl Browser for Fake {
     // The preview leaves the clipboard alone, and shares nothing.
     fn copy(&self, _: &str, _: &mut App) {}
 
+    fn pasted(&self, _: &App) -> Option<String> {
+        None
+    }
+
     fn share_services(&self, _: &str) -> Vec<SharedString> {
         Vec::new()
     }
@@ -1205,6 +1274,7 @@ impl Browser for Fake {
         let light = std::env::var("PREVIEW_MENU_LOOK").is_ok_and(|look| look == "light");
         let look = menu::Look { light: light || look.light, ..look };
         let area = Bounds::new(point(px(0.), px(0.)), PREVIEW_AREA.get());
+        let chosen = menu::picked(chosen);
         menu::show(menu::Request { items, at, area, look, chosen }, cx);
     }
 
@@ -1235,7 +1305,7 @@ impl Browser for Fake {
             let bounds = Bounds::new(PREVIEW_ORIGIN.get(), PREVIEW_AREA.get());
             dialog::open_at(Rc::new(PreviewDialog), bounds, true, cx);
         }
-        dialog::ask(message, detail, action, confirmed, cx);
+        dialog::ask(None, message, detail, action, confirmed, cx);
     }
 
     fn quit(&self, cx: &mut App) {
@@ -1268,6 +1338,14 @@ impl Browser for Fake {
 
     fn new_private_window(&self, _: &mut App) {}
 
+    fn new_little_window(&self, _: u64, _: &mut App) {}
+
+    fn open_tab_in_little(&self, _: u64, _: &mut App) {}
+
+    fn open_in_main_window(&self, _: u64, _: u64, _: &mut App) {}
+
+    fn little_profile(&self, _: u64, _: &str, _: &mut App) {}
+
     fn close_window(&self, cx: &mut App) {
         cx.quit();
     }
@@ -1298,13 +1376,40 @@ impl command_bar::Host for PreviewBar {
     fn split(&self, _: u64, _: u64, _: &mut App) {}
     fn open_split(&self, _: &str, _: u64, _: &mut App) {}
     fn copy(&self, _: &str, _: &mut App) {}
-    fn show(&self, _: bool, _: f32, _: f32, _: f32, _: f32) {}
+    fn show(&self, _: bool, _: f32, _: f32, _: f32, _: f32, _: browser::elevation::Level) {}
     fn set_height(&self, _: f32) {}
     fn hide(&self) {}
     fn dismiss(&self) {}
+    fn take_keyboard(&self) {}
     fn commands(&self, text: &str, cx: &App) -> Vec<shell::BarCommand> {
         shell::bar_commands(text, cx)
     }
+
+    /// Made up: Claude ready, so ⇥ shows the ask without an agent's CLI.
+    fn task_agents(&self, _: &App) -> Option<command_bar::TaskAgents> {
+        let claude = command_bar::TaskAgent {
+            id: "claude".into(),
+            name: "Claude".into(),
+            glyph: "icons/terminal.svg",
+            model: Some("Haiku".into()),
+            resets: None,
+        };
+        Some(command_bar::TaskAgents { agents: vec![claude], known: true })
+    }
+
+    fn over_private(&self) -> bool {
+        false
+    }
+
+    fn asking(&self, _: bool, _: &mut App) {}
+
+    fn task_page(&self, _: &App) -> Option<(SharedString, SharedString)> {
+        None
+    }
+
+    fn run_task(&self, _: &str, _: &str, _: Option<(SharedString, SharedString)>, _: &mut App) {}
+
+    fn set_up_agents(&self, _: &mut App) {}
 }
 
 /// Opens the command bar at `at`, with the suggestions for what `mode` has typed.
@@ -1454,6 +1559,14 @@ fn main() {
         browser::face::register(cx);
         shell::bind_keys(cx);
         browser::text_input::bind_keys(cx);
+        // PREVIEW_ACCOUNT=signed-out, no-server, words, waiting or signed-in shows Settings ›
+        // Account in that state, alone, no-server's for a build that names no sync server; =approve
+        // shows another device's request over the browser window.
+        let account = std::env::var("PREVIEW_ACCOUNT").ok();
+        if let Some(state) = account.as_deref().filter(|state| *state != "approve") {
+            preview_account(state, cx);
+            return;
+        }
         // PREVIEW_SIZE=<width>x<height> opens the window at that size.
         let (width, height) = std::env::var("PREVIEW_SIZE")
             .ok()
@@ -1489,10 +1602,22 @@ fn main() {
                 // The preview's Spaces and favorites are in its one profile, 0.
                 // PREVIEW_SPACE_ICONS=1 gives them glyphs, for the footer's row of icons.
                 let glyphs = std::env::var_os("PREVIEW_SPACE_ICONS").is_some();
+                // PREVIEW_SPACES=<count> makes that many, those past the two named by number, for
+                // a switcher and a Library's Spaces that run out of room.
+                let count = std::env::var("PREVIEW_SPACES").ok();
+                let count = count.and_then(|count| count.parse().ok());
+                let count: usize = count.unwrap_or(SPACES.len()).max(SPACES.len());
+                let named = (0..count).map(|index| match SPACES.get(index) {
+                    Some(&(name, color)) => (name.to_string(), color),
+                    None => (
+                        format!("Space {}", index + 1),
+                        Some(MORE_COLORS[(index - SPACES.len()) % MORE_COLORS.len()]),
+                    ),
+                });
                 let mut spaces: Vec<SpaceEntry> =
                     (first_space..)
-                        .zip(SPACES)
-                        .zip(["glyph:star", "glyph:leaf"])
+                        .zip(named)
+                        .zip(["glyph:star", "glyph:leaf"].into_iter().cycle())
                         .map(|((id, (name, color)), icon)| {
                             let icon = if glyphs { icon } else { "" };
                             let agent = match agent.is_some() && id == first_space + 1 {
@@ -1506,7 +1631,7 @@ fn main() {
                     spaces[0].2 = Some(theme.main_color());
                     spaces[0].6 = theme.to_text().into();
                 }
-                let first_archived = first_space + SPACES.len() as u64;
+                let first_archived = first_space + count as u64;
                 let archive = (first_archived..)
                     .zip(ARCHIVE)
                     .map(|(id, (title, url, days))| (id, title, url, now() - days * DAY))
@@ -1640,6 +1765,7 @@ fn main() {
                         let question = browser::agents::Question {
                             id: 1,
                             agent: "Claude Code".into(),
+                            from: "claude-code".into(),
                             what: "hand you a tab".into(),
                             why,
                             handoff: Some(reading[3]),
@@ -1731,6 +1857,20 @@ fn main() {
             let at = point(px(left as f32), px(top));
             preview_bar(&mode, at, cx);
         }
+        if account.as_deref() == Some("approve") {
+            if !DIALOG_OPEN.replace(true) {
+                dialog::open_at(Rc::new(PreviewDialog), bounds, true, cx);
+            }
+            let pairing = account::Pairing {
+                id: "2".into(),
+                name: "MacBook Air".into(),
+                os: "macOS".into(),
+                code: "312568".into(),
+                asked: "15:04".into(),
+                signed_in: "2 minutes ago".into(),
+            };
+            dialog::ask_account(account::pairing_question(&pairing), Box::new(|_, _| {}), cx);
+        }
         // PREVIEW_ICON_PICKER=<emoji, or empty> shows the icon picker for a Space with that icon.
         if let Ok(icon) = std::env::var("PREVIEW_ICON_PICKER") {
             let left = x as f32 + 40.;
@@ -1744,7 +1884,7 @@ fn main() {
             {
                 let picked: icon_picker::Picked = Rc::new(|_, _| {});
                 let subject = icon_picker::Subject::Space(1);
-                icon_picker::show(subject, icon.into(), point(0., 0.), picked, cx);
+                icon_picker::show(0, subject, icon.into(), point(0., 0.), picked, cx);
             }
         }
         // PREVIEW_THEME_PICKER=1 shows the theme picker for the first Space, with PREVIEW_THEME's
@@ -1757,7 +1897,7 @@ fn main() {
             if theme_picker::open_at(Rc::new(PreviewPicker), bounds, true, cx).is_some() {
                 let changed: theme_picker::Changed = Rc::new(|_, _, _| {});
                 let anchor = point(0., theme_picker::HEIGHT / 2. + 8.);
-                theme_picker::show(1, preview_theme(), anchor, f32::MAX, changed, cx);
+                theme_picker::show(0, 1, preview_theme(), anchor, f32::MAX, changed, cx);
             }
         }
         // PREVIEW_SITE_CONTROLS=1 opens the Site Controls of the tab shown, once the shell has
@@ -1769,6 +1909,24 @@ fn main() {
                 shell
                     .update(cx, |shell, _, cx| shell.run(Command::SiteControls, "preview", cx))
                     .ok();
+            })
+            .detach();
+        }
+        // PREVIEW_PEEK=1 opens a link of the page shown in Peek, once the shell has laid the page
+        // out, with the shell's page showing through the card, as it does on Linux and Windows.
+        if let Some(shell) = shell_window.filter(|_| std::env::var_os("PREVIEW_PEEK").is_some()) {
+            let peek_bounds = Bounds::new(PREVIEW_ORIGIN.get(), PREVIEW_AREA.get());
+            cx.spawn(async move |cx| {
+                cx.background_executor().timer(Duration::from_millis(500)).await;
+                let Ok(Some(laid)) = shell.update(cx, |shell, _, _| shell.page_laid()) else {
+                    return;
+                };
+                cx.update(|cx| {
+                    link_preview::open_at(Rc::new(PreviewPeek), peek_bounds, true, cx);
+                    let url = "https://en.wikipedia.org/wiki/Hyperlink".into();
+                    let link = laid.0.origin + point(px(160.), px(120.));
+                    link_preview::show(1, 99, 1, url, laid, link, cx);
+                });
             })
             .detach();
         }
@@ -1871,7 +2029,7 @@ impl menu::Host for PreviewMenu {
 struct PreviewPicker;
 
 impl icon_picker::Host for PreviewPicker {
-    fn show(&self, _: f32, _: f32) {}
+    fn show(&self, _: u64, _: f32, _: f32) {}
 
     fn hide(&self) {}
 
@@ -1879,18 +2037,47 @@ impl icon_picker::Host for PreviewPicker {
 }
 
 impl theme_picker::Host for PreviewPicker {
-    fn show(&self, _: f32, _: f32, _: &[(f32, f32, f32)]) {}
+    fn show(&self, _: u64, _: f32, _: f32, _: &[(f32, f32, f32)]) {}
 
     fn hide(&self) {}
 
     fn detent(&self) {}
 }
 
+/// Peek over the preview's window, which it covers. There's no page of its own, so the shell's
+/// shows through its card.
+struct PreviewPeek;
+
+impl link_preview::Host for PreviewPeek {
+    fn place(&self, _: u64, _: Bounds<Pixels>, _: f32) {}
+
+    fn show(&self, _: u64) {}
+
+    fn drew(&self, _: Bounds<Pixels>, _: f32, _: f32) {}
+
+    fn page_under(&self) -> bool {
+        true
+    }
+
+    fn release(&self) {}
+
+    fn hide(&self) {}
+
+    fn close(&self, _: u64) {}
+
+    fn keep(&self, _: u64, _: u64) {}
+
+    fn closed(&self, _: u64, _: link_preview::Closed, _: bool, _: &mut App) {}
+
+    // The tooltip's window is the app's, over the page, which the preview has neither of.
+    fn tooltip(&self, _: Option<(browser::tooltip::Tip, browser::tooltip::Anchor)>, _: &mut App) {}
+}
+
 /// The dialog over the preview's window, which it covers, for its host can't move it.
 struct PreviewDialog;
 
 impl dialog::Host for PreviewDialog {
-    fn show(&self, _: Option<Bounds<Pixels>>) {}
+    fn show(&self, _: Option<u64>, _: Option<Bounds<Pixels>>) {}
 
     fn hide(&self) {}
 }
@@ -1971,5 +2158,131 @@ fn preview_site() -> Site {
         logins: Vec::new(),
         ad_blocking: Some(true),
         developer_mode: Some(false),
+    }
+}
+
+/// Settings › Sync alone, framed as Settings frames a tab, in a window of Settings' size.
+fn preview_account(state: &str, cx: &mut App) {
+    use account::{Device, State, Status};
+    use browser::tokens::settings::{HEIGHT, WIDTH};
+    account::bind_keys(cx);
+    let (mut x, mut y) = (0., 0.);
+    unsafe { host_centered(WIDTH as f64, HEIGHT as f64, &mut x, &mut y) };
+    let bounds = Bounds::new(point(px(x as f32), px(y as f32)), size(px(WIDTH), px(HEIGHT)));
+    let status = match state {
+        "words" => Status::FirstDevice,
+        "waiting" => Status::Pairing,
+        "signed-in" => Status::On,
+        _ => Status::SignedOut,
+    };
+    let no_server = state == "no-server";
+    let state = State {
+        status,
+        problem: None,
+        server: if no_server { "".into() } else { "https://sync.ilo.app".into() },
+        default_server: !no_server,
+        email: "sam@example.com".into(),
+        code: if status == Status::Pairing { "312568".into() } else { "".into() },
+    };
+    let device = |id: &str, name: &str, os: &str, current| Device {
+        id: id.to_string().into(),
+        name: name.to_string().into(),
+        os: os.to_string().into(),
+        current,
+    };
+    let devices = vec![
+        device("1", "Sam's MacBook Pro", "macOS", true),
+        device("2", "MacBook Air", "macOS", false),
+        device("3", "ThinkPad X1", "Linux", false),
+    ];
+    let options =
+        WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() };
+    let opened = cx.open_window(options, |window, cx| {
+        let page = cx.new(|cx| {
+            let dialog = dialog::in_window(Rc::new(PreviewDialog), cx);
+            let host = Rc::new(PreviewAccount { dialog: dialog.clone() });
+            let account = cx.new(|cx| {
+                let mut account = Account::new(host, cx);
+                account.set_state(state, cx);
+                if status == Status::On {
+                    account.set_devices(devices, cx);
+                }
+                account
+            });
+            AccountPage { account, dialog }
+        });
+        window.focus(&page.read(cx).account.focus_handle(cx), cx);
+        page
+    });
+    if let Err(error) = opened {
+        log!("preview: couldn't open the account's window: {error}");
+    }
+}
+
+/// The account's view on Settings' background, in from its sides as Settings' tabs are, with the
+/// dialog it asks in over all of it, as Settings has on Linux.
+struct AccountPage {
+    account: gpui::Entity<Account>,
+    dialog: gpui::Entity<dialog::Dialog>,
+}
+
+impl gpui::Render for AccountPage {
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use browser::tokens::settings::{BACKGROUND, FIRST, SIDE, TEXT};
+        use browser::tokens::text;
+        use gpui::{ParentElement, Styled, div, rgb};
+        div()
+            .relative()
+            .size_full()
+            .bg(rgb(BACKGROUND))
+            .font_family(browser::face::UI)
+            .text_size(px(text::BODY))
+            .text_color(rgb(TEXT))
+            .child(div().px(px(SIDE)).py(px(FIRST)).child(self.account.clone()))
+            .children(dialog::cover(&self.dialog, cx))
+    }
+}
+
+/// A made-up account: its recovery words are made-up words, and it asks nothing of a server. It
+/// asks the user in its window's dialog.
+struct PreviewAccount {
+    dialog: gpui::Entity<dialog::Dialog>,
+}
+
+impl account::Host for PreviewAccount {
+    fn set_server(&self, _: &str) -> bool {
+        true
+    }
+    fn sign_in(&self) {}
+    fn cancel(&self) {}
+    fn sign_out(&self) {}
+    fn recovery_words(&self) -> String {
+        "harbor velvet nominee orbit quarter skill tumble canyon effort glide lunar prize \
+         answer bridge cotton dwarf frozen hollow island jacket kitten ladder mango noble"
+            .into()
+    }
+    fn enter_recovery_words(&self, _: &str) -> bool {
+        true
+    }
+    fn start_over(&self) {}
+    fn request_pairing(&self) {}
+    fn read_devices(&self) {}
+    fn remove_device(&self, _: &str) {}
+    fn copy_secret(&self, _: &str, _: Duration, _: &mut App) {}
+    fn confirm(
+        &self,
+        message: String,
+        detail: String,
+        action: &'static str,
+        on_return: dialog::Return,
+        confirmed: Box<dyn FnOnce(&mut App)>,
+        window: &mut gpui::Window,
+        cx: &mut App,
+    ) {
+        dialog::ask_in(&self.dialog, message, detail, action, on_return, confirmed, window, cx);
     }
 }

@@ -3,14 +3,16 @@
 # Each run's file in check/ says what it checks. ./check.sh tabs spaces does only those runs, in
 # that order, and ./check.sh all of them:
 #   load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear
-#   split favorites cards extensions adblock adblock-lists windows private capture passwords
-#   links preview access trouble dialogs crash import quit onboarding passkeys mcp appearance
-#   about
+#   split favorites cards extensions adblock adblock-lists windows private little capture media
+#   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp
+#   appearance about sync sync-account sync-devices switch-frames
 # The store run installs from Google's Web Store, adblock-live blocks Google's ad servers with
 # uBlock Origin's own lists and widevine, Linux's alone, downloads Google's Widevine module, so they
 # need the network and run only when named: ./check.sh store.
-# Updates runs only when named too, until it passes on the Mac. So does keychain, which uses the
-# real Keychain, on the prod build and only in a check VM.
+# Updates runs only when named too, until it passes on the Mac, and so does nightly, which builds a
+# check copy of its own (build.sh updates), on the Mac and Windows. So does keychain, which uses the
+# real Keychain, on the prod build and only in a check VM. Shots takes the Store's pictures from
+# pages on the internet, so it runs only when named too.
 # Every run but load and crash needs Browser to be the active app, and window, find and updates
 # take it full screen for a moment. Passkeys is the Mac's alone so far. Updates makes
 # build/Updates.app on the Mac, a copy with Sparkle and a feed of its own (build.sh updates), and
@@ -24,7 +26,7 @@
 # each run, since one an earlier run left can lack what a run expects, such as its search engines.
 # On Windows it runs under Git Bash, with python3 on the PATH, on the app the engine's chrome.exe
 # runs from build/Browser. The runs need what the Windows driver (platform/windows/drive.cc) does
-# so far: load, tabs, dialogs and crash.
+# so far: load, tabs, dialogs, crash, about and onboarding.
 # On Linux it runs itself in a headless sway session of its own (tools/headless.sh --run), on its
 # Xwayland, and the app's windows and input then never reach the owner's session. Of the runs,
 # load and history pass there so far; the others stop where they need what Linux hasn't yet, such
@@ -65,15 +67,24 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
   exec ../tools/headless.sh --x11 --run ./check.sh "$@"
 fi
 runs="load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear"
-runs="$runs split favorites cards extensions adblock adblock-lists windows private capture passwords"
-runs="$runs links preview access trouble dialogs crash import quit onboarding passkeys mcp"
-runs="$runs appearance about"
-named="store adblock-live widevine updates keychain"
+runs="$runs split favorites cards extensions adblock adblock-lists windows private little capture media"
+runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp"
+runs="$runs appearance about sync sync-account sync-devices switch-frames"
+named="store adblock-live widevine updates nightly keychain shots"
 for run in "$@"; do
   case " $runs $named " in
     *" $run "*) ;;
     *) echo "FAIL: there's no run $run. The runs: $runs $named" >&2; exit 1 ;;
   esac
+done
+# A file sourced with a syntax error ends the check where it stands, with the status of the EXIT
+# trap's last command, 0 under the Mac's sh, and the runs after it never start (#1267). So each
+# file the check sources is parsed before any run starts.
+for file in lib site ilo-server ${*:-$runs}; do
+  why=$(sh -n "check/$file.sh" 2>&1) || {
+    echo "FAIL: check/$file.sh doesn't parse: $why" >&2
+    exit 1
+  }
 done
 out=build/check
 windows() {
@@ -85,6 +96,12 @@ windows() {
 # resolves a relative path against its own folder, not the directory it started in (#997).
 app_path() {
   if windows; then cygpath -m "$1"; else printf '%s\n' "$1"; fi
+}
+# The absolute path $1 as Windows names it, with backslashes, for a download folder: Chrome moves
+# each download into it with the Shell's IFileOperation, which takes no D:/a/..., so every download
+# failed (#872).
+native_path() {
+  if windows; then cygpath -w "$1"; else printf '%s\n' "$1"; fi
 }
 # The app, what runs it, the pattern that finds its processes, Chromium's helpers too, and its dev
 # profile.
@@ -121,14 +138,17 @@ saved="$profile_dir/Spaces.json"
 # The frame the launch window opens at, which the app keeps next to them. A run that starts without
 # the Spaces starts without it too, so its launch window isn't at the last run's frame.
 launch_frame="$(dirname "$saved")/launch-frame"
-# The mcp run turns agents on with a token of its own, which a failed one left.
-rm -f "$(dirname "$saved")/Agents"
+# The mcp run turns agents on with a token of its own, which a failed one left. The keys run gives
+# Go to Space 1 ⌃⌘1 and leaves the favorites out of ⌘1–⌘8, which a failed one left for the runs after.
+rm -f "$(dirname "$saved")/Agents" "$(dirname "$saved")/Shortcuts"
 # DevTools open where the profile last had them, so an undocked try would leave them in a window.
 # The find run docks them, so they start on the right. The restore run's download goes in the
 # check's own folder, never the user's Downloads. A failed extensions run may have left one of its
 # extensions pinned. The profile keeps the clear run's answers to its sites' questions, and how
 # often it dismissed them, for sites whose ports a later run may get, and a failed clear run may
-# have left localhost out of Developer Mode.
+# have left localhost out of Developer Mode. A failed media run may have left the Mini Player off,
+# which the core keeps as Block for every site's Automatic picture-in-picture and doesn't undo at
+# launch, so no later run's call floated (#1165).
 prefs="$profile_dir/Default/Preferences"
 mkdir -p "$(dirname "$prefs")" "$out/downloads"
 python3 -I -c '
@@ -141,12 +161,25 @@ prefs.setdefault("devtools", {}).setdefault("preferences", {})["currentDockState
 prefs.setdefault("download", {})["default_directory"] = sys.argv[2]
 prefs.setdefault("extensions", {})["pinned_extensions"] = []
 exceptions = prefs.get("profile", {}).get("content_settings", {}).get("exceptions", {})
-for kind in ("window_placement", "permission_autoblocking_data"):
+for kind in ("window_placement", "permission_autoblocking_data", "auto_picture_in_picture"):
     exceptions.pop(kind, None)
+defaults = prefs.get("profile", {}).get("default_content_setting_values", {})
+defaults.pop("auto_picture_in_picture", None)
 prefs.get("browser_core", {}).pop("developer_mode", None)
 with open(sys.argv[1], "w") as f:
     json.dump(prefs, f)
-' "$prefs" "$PWD/$out/downloads"
+' "$prefs" "$(native_path "$PWD/$out/downloads")"
+python3 -I -c '
+import json, os, sys
+if not os.path.exists(sys.argv[1]):
+    sys.exit()
+with open(sys.argv[1]) as f:
+    saved = json.load(f)
+if saved.get("settings", {}).get("auto_picture_in_picture") is False:
+    saved["settings"]["auto_picture_in_picture"] = True
+    with open(sys.argv[1], "w") as f:
+        json.dump(saved, f)
+' "$saved"
 # Each run starts in the one profile, Default: Chrome deletes the others, which a run before made,
 # as import's Work, or a failed run left, at its next launch.
 only_default() {
@@ -187,8 +220,13 @@ check_profile_dir=$profile_dir
 for run in ${*:-$runs}; do
   profile_dir=$check_profile_dir
   only_default
+  # Rules a run made, as import's from Arc, would send a later run's links to another Space and
+  # put their rows under its clicks, so each run starts without them, as it does without Spaces.
+  rm -f "$profile_dir/Link rules"
   # The windows and clear runs keep 127.0.0.1 for Safari's engine, whose pages would then open there
   # in a later run if one failed, and clear the note it closed and the listed host it turned off.
   forget_engine_sites
+  # Every run is sourced into this one shell, so a helper a run defines under a lib.sh name would
+  # replace lib.sh's for the runs after it.
   . "check/$run.sh"
 done

@@ -15,6 +15,10 @@ impl Frame {
         self.width <= 0. || self.height <= 0.
     }
 
+    fn holds(&self, x: f64, y: f64) -> bool {
+        (self.x..self.x + self.width).contains(&x) && (self.y..self.y + self.height).contains(&y)
+    }
+
     fn overlap(&self, other: &Frame) -> f64 {
         let width = (self.x + self.width).min(other.x + other.width) - self.x.max(other.x);
         let height = (self.y + self.height).min(other.y + other.height) - self.y.max(other.y);
@@ -53,6 +57,34 @@ pub fn place(saved: Frame, screens: &[Frame]) -> Option<Frame> {
         width,
         height,
     })
+}
+
+/// Where a Little ilo window opens from `centered`, centred on its screen: a little above the
+/// middle, four tenths of the room over it rather than half, on the screen holding its centre
+/// (ux-spec.md › Little Arc). Unmoved with no screens, as under Wayland, or when the host didn't
+/// centre it, leaving the window manager to place it, as on X11.
+pub fn raised(centered: Frame, screens: &[Frame]) -> Frame {
+    let (x, y) = (centered.x + centered.width / 2., centered.y + centered.height / 2.);
+    let Some(screen) = screens.iter().find(|screen| screen.holds(x, y)) else {
+        return centered;
+    };
+    if (screen.x + screen.width / 2. - x).abs() > 1. {
+        return centered;
+    }
+    let room = (screen.height - centered.height).max(0.);
+    // At whole points: the core makes a frame the whole points around it, so a fractional one
+    // would open a point bigger, and each window after it bigger again, at the last one's size.
+    Frame { x: centered.x.round(), y: (screen.y + room * 0.4).round(), ..centered }
+}
+
+/// Where a Little ilo window of `size` opens on the screen holding `pointer`, as Arc's opens on the
+/// pointer's screen: across its middle, and as `raised` puts it. None off every screen.
+pub fn on_screen_of(pointer: (f64, f64), size: (f64, f64), screens: &[Frame]) -> Option<Frame> {
+    let screen = screens.iter().find(|screen| screen.holds(pointer.0, pointer.1))?;
+    let (width, height) = size;
+    let x = screen.x + (screen.width - width) / 2.;
+    let y = screen.y + (screen.height - height) / 2.;
+    Some(raised(Frame { x, y, width, height }, screens))
 }
 
 #[cfg(test)]
@@ -106,15 +138,64 @@ mod tests {
         assert_eq!(place(saved, &[LAPTOP, DISPLAY]), Some(frame(512., 100., 1000., 600.)));
     }
 
+    /// A maximized window's frame as Windows gives it, 8 pixels past each edge of its work area, is
+    /// placed filling its screen, not dropped for the app's own place (#1422). On a 150% system,
+    /// host_screens' points are pixels over 1.5: a 2880 by 1800 primary and a 3840 by 2160
+    /// monitor to its left, each over a 48-pixel taskbar.
+    #[test]
+    fn a_maximized_frame_past_its_work_area_fills_its_screen() {
+        const PRIMARY: Frame = Frame { x: 0., y: 0., width: 1920., height: 1168. };
+        const LEFT: Frame = Frame { x: -2560., y: 0., width: 2560., height: 1408. };
+        let maximized = frame(-3848. / 1.5, -8. / 1.5, 3856. / 1.5, 2128. / 1.5);
+        assert_eq!(place(maximized, &[PRIMARY, LEFT]), Some(LEFT));
+        // Its monitor unplugged since, on the primary.
+        assert_eq!(place(maximized, &[PRIMARY]), Some(PRIMARY));
+    }
+
     #[test]
     fn a_frame_saved_empty_is_the_apps_to_place() {
         assert_eq!(place(frame(0., 0., 0., 0.), &[LAPTOP]), None);
         assert_eq!(place(frame(0., 0., 0., 0.), &[]), None);
     }
 
+    /// Little ilo opens on the screen the pointer is on, across its middle and four tenths of the
+    /// room down, and off every screen it's left to the screen the windows open on.
+    #[test]
+    fn little_ilo_opens_on_the_pointers_screen() {
+        let on_display = on_screen_of((3000., 700.), (900., 640.), &[LAPTOP, DISPLAY]);
+        assert_eq!(on_display, Some(frame(2342., 25. + 775. * 0.4, 900., 640.)));
+        let on_laptop = on_screen_of((10., 900.), (900., 640.), &[LAPTOP, DISPLAY]);
+        assert_eq!(on_laptop, Some(frame(306., 152., 900., 640.)));
+        assert_eq!(on_screen_of((-50., 700.), (900., 640.), &[LAPTOP, DISPLAY]), None);
+        assert_eq!(on_screen_of((10., 900.), (900., 640.), &[]), None);
+    }
+
     #[test]
     fn with_no_screens_a_frame_stays_as_saved() {
         let saved = frame(10., 10., 800., 600.);
         assert_eq!(place(saved, &[]), Some(saved));
+    }
+
+    #[test]
+    fn a_little_window_opens_a_little_above_the_middle() {
+        // 900 by 640, centred on the laptop: 158.5 of room above and below it, 126.8 above it
+        // raised, to the nearest point.
+        let centered = frame(306., 183.5, 900., 640.);
+        assert_eq!(raised(centered, &[LAPTOP, DISPLAY]), frame(306., 152., 900., 640.));
+        let centered = frame(2342., 412.5, 900., 640.);
+        assert_eq!(raised(centered, &[LAPTOP, DISPLAY]).y, 25. + 775. * 0.4);
+        assert_eq!(raised(centered, &[]), centered);
+        // At the screen's corner, where a host leaves it for the window manager to place.
+        let placed = frame(0., 0., 900., 640.);
+        assert_eq!(raised(placed, &[LAPTOP, DISPLAY]), placed);
+    }
+
+    /// A screen 674 tall under a 31-point menu bar, as the hosted Mac's, where a Little ilo window
+    /// raised to 44.6 down opened 900 by 641, and an odd 1023 wide, which centres it at 61.5 across.
+    #[test]
+    fn a_little_window_opens_at_whole_points() {
+        const SMALL: Frame = Frame { x: 0., y: 31., width: 1023., height: 674. };
+        let opened = on_screen_of((500., 300.), (900., 640.), &[SMALL]);
+        assert_eq!(opened, Some(frame(62., 45., 900., 640.)));
     }
 }

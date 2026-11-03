@@ -4,18 +4,21 @@
 # recompiles only what changed. Microsoft's compiler and SDK come from a zip the owner packaged on a
 # Windows machine, which Microsoft's licence lets no one redistribute: it stays on that machine, in
 # $ILO_ENGINE_ROOT/windows-toolchain, and nothing here uploads it (engine/README.md, Windows). Run
-# by hand, nightly on main, and on main when the pin, the series or the cross build's scripts
+# by hand, each night on main when its core or engine changed since the newest Windows engine
+# (#871), and on main when the pin, the series, the cross build's scripts or ilo's Windows icon
 # change. Not for each core change: that rebuilt it on every merge, on the one runner the Linux
-# engines wait for, so a Windows lane that needs today's core from main dispatches it by hand.
-# Never on branches or pull requests, as the repository is public. engine-windows.yml builds the
-# same engine on GitHub's Windows runners, by hand only.
+# engines wait for, so a Windows lane that needs today's core from main dispatches it by hand. Never
+# on branches or pull requests, as the repository is public. engine-windows.yml builds the same
+# engine on GitHub's Windows runners, by hand only.
 name: Engine on Windows (cross-compiled)
 
 on:
   workflow_dispatch:
-  # Main's core, once a day, at 02:00 UTC.
+  # Main's core, once a day, at 02:00 UTC, when it changed (tools/engine-changed.sh).
   schedule:
     - cron: '0 2 * * *'
+  # Not on a change to this file, so a change to how it builds never starts a build, or replaces
+  # one waiting. These paths, and the core, are the night's inputs (engine-changed.sh).
   push:
     branches: [main]
     paths:
@@ -24,25 +27,53 @@ on:
       - engine/patches/**
       - engine/tree.sh
       - engine/windows/cross/**
-      - .github/workflows/engine-windows-cross.yml
+      - engine/icons.py
+      - app/platform/windows/package/Assets/ilo.ico
 
 # The runner takes one job at a time, so this never builds beside the Linux engine. Of this
-# workflow's waiting runs only the newest is kept. Sharing the Linux engine's group would instead
+# workflow's waiting runs only the newest is kept, but the night has a group of its own, so it never
+# replaces a waiting dispatch, nor one of those it. Sharing the Linux engine's group would instead
 # let each platform's waiting run cancel the other's.
 concurrency:
-  group: ilo-engine-windows
+  group: ilo-engine-windows${{ github.event_name == 'schedule' && '-night' || '' }}
   cancel-in-progress: false
 
 jobs:
+  # On GitHub's runners, so a night with nothing to build never takes the engine's runner. A push or
+  # a dispatch always builds.
+  changes:
+    name: Changes
+    if: github.repository == 'MartinPTielemans/ilo'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+    steps:
+      - if: github.event_name == 'schedule'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: decide
+        run: |
+          status=0
+          if [ "$GITHUB_EVENT_NAME" = schedule ]; then
+            tools/engine-changed.sh windows > "$RUNNER_TEMP/changed" || status=$?
+            tee -a "$GITHUB_STEP_SUMMARY" < "$RUNNER_TEMP/changed"
+          fi
+          if [ "$status" = 3 ]; then echo build=false; else echo build=true; fi >> "$GITHUB_OUTPUT"
+
   build:
-    if: github.repository == 'MartinPTielemans/browser'
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     # Microsoft's toolchain zip stays on the owner's machine, so a second Linux engine runner must
     # never take this job.
     runs-on: [self-hosted, linux, x64, ilo-engine, ilo-engine-windows]
     # As long as the Linux engine's first build, or longer: the first build compiles all of Chrome.
     timeout-minutes: 1440
     permissions:
-      contents: write
+      contents: read
     env:
       # As engine-linux.yml: a job per 3 GB of the job's 22 GB.
       BUILD_JOBS: 7
@@ -56,6 +87,16 @@ jobs:
         with:
           go-version: '1.26'
           cache: false
+      # The engine goes to the repository prebuilt.ini names, with a token for it alone, which is
+      # checked before hours of build.
+      - name: Check the release token
+        env:
+          ENGINE_RELEASE_TOKEN: ${{ secrets.ENGINE_RELEASE_TOKEN }}
+        run: |
+          [ -n "$ENGINE_RELEASE_TOKEN" ] || {
+            echo "::error::No ENGINE_RELEASE_TOKEN secret: a fine-grained token with Contents read and write on $(git config -f engine/prebuilt.ini prebuilt.repository) alone, which the engine is released in."
+            exit 1
+          }
       - name: Prepare
         run: |
           [ -n "${ILO_ENGINE_ROOT:-}" ] || { echo "The runner doesn't set ILO_ENGINE_ROOT."; exit 1; }
@@ -81,18 +122,22 @@ jobs:
       - name: Package
         run: |
           engine/windows/cross/package.sh "$ILO_ENGINE_ROOT/windows" "$RUNNER_TEMP/Chromium-windows-x64.zip"
-      # A release named after the commit, which holds the engine's source. fetch.sh takes the
-      # newest one in the checkout's history whose core API matches the checkout's.
+      # A release in prebuilt.ini's repository, named after the commit, which holds the engine's
+      # source. fetch.sh takes the newest one in the checkout's history whose core API matches.
       - name: Publish
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.ENGINE_RELEASE_TOKEN }}
         run: |
+          repo=$(git config -f engine/prebuilt.ini prebuilt.repository)
+          repo=${repo#https://github.com/}
           tag=engine-windows-${GITHUB_SHA::12}
           tag_ucw=$(git config -f engine/pins.ini ungoogled-chromium-windows.tag)
-          # Never GitHub's Latest, which releases/latest/download/<name> links mean as ilo's own (#804).
-          gh release view "$tag" >/dev/null 2>&1 ||
-            gh release create "$tag" --target "$GITHUB_SHA" --title "Windows engine ${GITHUB_SHA::12}" --latest=false \
-              --notes "The Windows engine (ungoogled-chromium-windows $tag_ucw, x64, cross-compiled) built from $GITHUB_SHA, which holds its source."
-          gh release upload "$tag" --clobber "$RUNNER_TEMP"/Chromium-windows-x64.zip "$RUNNER_TEMP"/Chromium-windows-x64.zip.sha256 \
+          # Never GitHub's Latest, which releases/latest/download/<name> links mean as a release of
+          # its repository's own (#804). The tag is on that repository's main, which hasn't this
+          # commit: the name carries it.
+          gh release view "$tag" -R "$repo" >/dev/null 2>&1 ||
+            gh release create "$tag" -R "$repo" --target main --title "Windows engine ${GITHUB_SHA::12}" --latest=false \
+              --notes "The Windows engine (ungoogled-chromium-windows $tag_ucw, x64, cross-compiled) built from $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA, which holds its source."
+          gh release upload "$tag" -R "$repo" --clobber "$RUNNER_TEMP"/Chromium-windows-x64.zip "$RUNNER_TEMP"/Chromium-windows-x64.zip.sha256 \
             "$RUNNER_TEMP"/Chromium-windows-x64-symbols.zip "$RUNNER_TEMP"/Chromium-windows-x64-symbols.zip.sha256
           rm "$RUNNER_TEMP"/Chromium-windows-x64*.zip*

@@ -22,14 +22,19 @@ void host_centered(double width, double height, double* x, double* y);
 // Puts a window on screen at |x|, |y|, |width| by |height| in host_centered's terms, where the
 // first browser window will open, with the window's material and the sidebar as it was when the
 // app last quit at that size, from |profile_dir|. For the moment between NSApp being made and the
-// browser starting.
+// browser starting. With |maximized|, Windows' alone, it's maximized on that frame's screen, as the
+// first browser window will be (host_maximize_window), without a picture of another size's sidebar.
 void host_show_launch_window(const char* profile_dir, double x, double y, double width,
-                             double height);
+                             double height, bool maximized);
 
 // The visible frames of the screens a window may open on, in host_centered's terms, as x, y,
 // width and height, four to a screen: the main display's first, or with BROWSER_DISPLAY=builtin
 // the Mac's own alone. Copies up to |count| screens into |frames| and returns how many there are.
 size_t host_screens(double* frames, size_t count);
+
+// Where the pointer is, in host_centered's terms, for Little ilo to open on its screen. False where
+// the host doesn't say, as on Linux, whose window manager places windows.
+bool host_pointer(double* x, double* y);
 
 // The frame of the browser window of |ui_view|, in host_centered's terms. False, leaving them be,
 // while it's full screen.
@@ -73,6 +78,12 @@ void host_window_active(void* ui_view, bool active, bool whole_window);
 // "Capture 2026-10-29 at 18.04.12.png".
 void host_capture_name(char* name, size_t capacity);
 
+// The browser window of |ui_view| is Little ilo's, as Arc's Little Arc: each time it comes on
+// screen it comes to the desktop shown rather than taking the user to the one it was on, and opened
+// while a full-screen browser window has that desktop, it opens over it there. Before
+// host_show_window. Off the Mac, where the window manager places windows, nothing.
+void host_set_window_little(void* ui_view);
+
 // Shows the window holding |ui_view| in front, with its title bar over the UI, and makes the
 // app the active one.
 void host_show_window(void* ui_view);
@@ -103,6 +114,26 @@ void host_set_app_appearance(int appearance);
 // takes the user's focus (decision 8).
 void host_activate(void* ui_view);
 
+// Hides the browser window of |ui_view| without closing it, or with |shown| puts it back in front,
+// out of the Dock if it's minimized, as the Dock's Hide All and Show All Little ilo Windows do.
+// Whether it's on screen now: host_window_shown. The user's: agents get none.
+void host_set_window_shown(void* ui_view, bool shown);
+bool host_window_shown(void* ui_view);
+
+// Adds Little ilo's items to the Dock icon's menu, the engine's, after its New Window, as Arc's:
+// New Little ilo Window, then, while one is open, Hide All Little ilo Windows, or Show All Little
+// ilo Windows once they're all hidden. |little| is asked as the menu opens: 0 with no Little ilo
+// window open, 1 with one on screen and 2 with all hidden. |chosen| gets the item picked: 0 New, 1
+// Show All, 2 Hide All. Once the app has finished launching, as the engine's delegate is set then.
+// Off the Mac, which has no Dock menu, nothing.
+void host_add_dock_items(int (*little)(void), void (*chosen)(int item));
+
+// Puts a button in the menu bar whose click calls |clicked|, which opens a Little ilo window, as
+// Arc's optional one does, or with NULL takes it out again. Off until the user turns it on in
+// Settings › General. It draws once and then waits for a click, so an idle browser stays asleep.
+// Off the Mac, nothing, and Settings offers no switch there.
+void host_set_little_status_item(void (*clicked)(void));
+
 // Calls |changed| with the view of each browser window that becomes the key window.
 void host_watch_key_window(void (*changed)(void* ui_view));
 
@@ -118,6 +149,12 @@ void host_watch_swipes(bool (*swiped)(void* ui_view, double x, double y, bool ba
 // let go with no other key, modifier, press or scroll between, the page's keyboard or the UI's.
 void host_watch_option_taps(void (*tapped)(void* ui_view));
 
+// Calls |left| with the view of a browser window whose UI loses the keyboard to its own page,
+// which GPUI doesn't see, so a field in the sidebar ends as it does for a click elsewhere: on the
+// Mac at a press in the page, on Windows as GPUI's window loses the focus, to the page or anything
+// else. Linux's UI hears it itself, through GPUI's patch and the overlays it shows.
+void host_watch_ui_keyboard(void (*left)(void* ui_view));
+
 // Whether a menu is open, the menu bar's or a context menu, and if so calls |apply| once none is,
 // instead of any function an earlier call left waiting. AppKit can crash when the main menu is
 // replaced while it tracks one, and the core's callbacks still come in while it does.
@@ -129,6 +166,14 @@ void host_watch_resigning_active(void (*resigning)(void));
 // Calls |became_active| each time the app becomes the active one, such as back from System
 // Settings.
 void host_watch_active(void (*became_active)(void));
+
+// Whether the system asks apps to reduce motion: the Mac's Reduce Motion, Windows' "Show
+// animations in Windows" turned off. Linux's desktop says so through its settings portal, which
+// platform/linux/reduce_motion.rs reads instead.
+bool host_reduce_motion(void);
+
+// Calls |changed| on the UI thread each time that setting changes.
+void host_watch_reduce_motion(void (*changed)(void));
 
 // Whether the system opens http and https links with this app: whether it's the default browser.
 bool host_is_default_browser(void);
@@ -157,7 +202,8 @@ void host_forget_window(void* ui_view);
 // Gives the |overlay| (or the Site Controls) the shadow its elevation level draws, in Core
 // Animation's terms: a black line round its shape and a black drop shadow, each with an opacity
 // and a blur |radius|, which is half CSS's blur, and the drop shadow falling |shadow_drop| points.
-// The shadow reaches three radii and the drop past the window. Call it before the overlay is added.
+// The shadow reaches three radii and the drop past the window. Call it before the overlay is added,
+// and again before a show that takes another level, as the command bar's over the URL field does.
 void host_set_overlay_elevation(int overlay,
                                 float outline_opacity,
                                 double outline_radius,
@@ -214,6 +260,29 @@ void host_hide_overlay(int overlay);
 // Hides the overlay as the user leaving it, as escape does.
 void host_dismiss_overlay(int overlay);
 
+// Hides the overlay by folding it into |x|, |y|, |width| and |height| points from the top left of
+// the content of the browser window it shows over: its drawing fades in |fade| seconds, as its
+// plate, rounded by |radius|, goes there in |duration| on the motion's ease, its fill turning
+// from |from| to |to| (0xRRGGBBAA) and its shadow going. With |fade_only| it only fades where it
+// is, in |fade|. Returns false where the host can't, having hidden it. host_hide_overlay's
+// keyboard rule holds.
+bool host_fold_overlay(int overlay,
+                       double x,
+                       double y,
+                       double width,
+                       double height,
+                       double radius,
+                       uint32_t from,
+                       uint32_t to,
+                       double duration,
+                       double fade,
+                       bool fade_only);
+
+// Gives the overlay the keyboard back if it shows, the user hasn't left it, and the browser window
+// it shows over or no window has it: for the UI, once it finds the overlay's window isn't key.
+// The Mac's alone: Linux's and Windows' hosts close an overlay whose keyboard goes elsewhere.
+void host_take_overlay_keyboard(int overlay);
+
 // Holds the keys typed from now until the command bar or the find bar takes the keyboard, and then
 // gives them to it: for a shortcut that opens one but reaches the page first, which may keep it.
 // Showing either bar with the keyboard holds them by itself. The core says when the page has
@@ -249,8 +318,9 @@ void host_hide_offer(void* ui_view);
 
 // Moves |ui_view|'s find bar, its offer, and the HUD and the toast over it |right| points further
 // in from the window's right edge and |top| points further down, to the focused page's top right
-// corner when a split view's focused page isn't the top right one.
-void host_set_pane_corner(void* ui_view, double right, double top);
+// corner when a split view's focused page isn't the top right one. The focused page's left edge
+// is |left| points from the window's, where the toast's window starts.
+void host_set_pane_corner(void* ui_view, double left, double right, double top);
 
 // Makes the window of |hud_view| float over a browser window when shown, |right| and |top| points
 // from the top right corner of the window's content, for the zoom HUD, which draws its pill
@@ -365,7 +435,8 @@ void host_hide_capture(void);
 void host_copy_png(const uint8_t* png, size_t size);
 
 // Asks where to save the PNG |png|, |size| bytes long, in a save panel on |ui_view|'s window, named
-// for when it was taken, and saves it there.
+// for when it was taken, and saves it there. It returns at once, before the panel shows, since the
+// UI calls it from an event its panel can't wait in.
 void host_save_png(void* ui_view, const uint8_t* png, size_t size);
 
 // Shares the PNG |png|, |size| bytes long, as a file named for when it was taken: in the system's
@@ -381,7 +452,9 @@ void host_share_png(const uint8_t* png,
                     bool messages);
 
 // Makes the window of |toast_view| the toast's, which floats over a browser window's top right
-// corner when shown, as its child, and lets the mouse through. It starts hidden.
+// corner when shown, as its child, and lets the mouse through. It starts hidden. Shown, it's as
+// wide as the focused page, from that page's left edge to its corner (host_set_pane_corner), and
+// keeps its own height.
 void host_add_toast(void* toast_view);
 
 // The toast takes clicks, while it has buttons, or lets the mouse through to the page. Even then
@@ -452,17 +525,39 @@ void host_hide_link_target(double fade);
 // Gives |view| the keyboard in its window, from the page if the page has it.
 void host_focus(void* view);
 
-// Asks |message| in an alert, with |detail| under it and the |count| |buttons|, the first the
-// default and a "Cancel" one taking escape, and returns the index of the one chosen once it
-// closes.
-int host_ask(const char* message, const char* detail, const char* const* buttons, size_t count);
+// Asks |message| in an alert, with |detail| under it and the |count| |buttons|, a "Cancel" one
+// taking escape, and returns the index of the one chosen once it closes. The first is the default,
+// which return chooses, if |returns|; otherwise only a click chooses it, for one nothing undoes.
+int host_ask(const char* message, const char* detail, const char* const* buttons, size_t count,
+             bool returns);
 
 // Shows the close, minimize and zoom buttons of |ui_view|'s window, or hides them, as Arc does
 // while its sidebar is hidden.
 void host_show_window_buttons(void* ui_view, bool shown);
 
+// The Mac's close, minimize and zoom buttons as AppKit draws them in |ui_view|'s window, for the
+// copies the UI draws in their place: each one's centre across from the window's left edge, their
+// row's centre down from its top, and their circles' diameter. False until a window shows all
+// three out of full screen.
+bool host_window_buttons(void* ui_view, double centres[3], double* y, double* diameter);
+
 // Does what a click on the close (0), minimize (1) or zoom (2) button of |ui_view|'s window does.
 void host_press_window_button(void* ui_view, int button);
+
+#ifdef _WIN32
+// Windows' alone, whose browser window has no title bar for these: moves |ui_view|'s window with
+// the pointer until the button that's down comes up, as a drag on a title bar does, and whether
+// it's maximized. Linux has the core's (bc_window_start_move, bc_window_is_maximized).
+void host_start_window_move(void* ui_view);
+bool host_window_maximized(void* ui_view);
+// While |ui_view|'s window is maximized, or if it closed maximized, the frame it un-maximizes to,
+// in host_window_frame's terms, which leaves a maximized window's be. False, leaving them be,
+// otherwise.
+bool host_window_restored_frame(void* ui_view, double* x, double* y, double* width, double* height);
+// Maximizes |ui_view|'s window on the screen of the frame it has, which it then un-maximizes to, as
+// the first window comes back when it quit maximized.
+void host_maximize_window(void* ui_view);
+#endif
 
 // Makes the window of |reveal_view| the sidebar reveal of |ui_view|'s window, which shows over its
 // left edge without taking the keyboard. It starts hidden. While it shows, |pointer_moved| hears,
@@ -565,6 +660,23 @@ void host_video_close(void* video);
 // Puts |text| on the clipboard. A driven run puts it on a pasteboard of its own instead, so checks
 // never touch the user's clipboard.
 void host_copy(const char* text);
+// Puts |text|, the account's secret, on the clipboard of this device alone, marked for clipboard
+// histories and managers to skip, as a password manager copies a password, and clears it after
+// |seconds| unless something replaced it. A driven run uses host_copy's pasteboard of its own.
+// False, doing nothing, where the clipboard can't be told to keep it to itself, and the app then
+// copies it through GPUI and takes it off after |seconds| itself.
+bool host_copy_secret(const char* text, uint32_t seconds);
+// Clears the secret host_copy_secret put on the clipboard if it's still there, as the app quits
+// before its |seconds| are up.
+void host_forget_secret(void);
+
+// Whether the key event being handled now is the key repeating as it's held, not a press. False
+// where the host can't tell.
+bool host_key_repeated(void);
+
+// Copies the text host_copy's clipboard or pasteboard holds into |text|, |capacity| bytes with its
+// NUL, and returns its whole length in bytes without the NUL, 0 if it holds none.
+size_t host_paste(char* text, size_t capacity);
 
 // Opens |url| in Safari, which plays the protected video the engine can't. A driven run only logs it,
 // so checks never launch Safari.
@@ -597,8 +709,9 @@ void host_share_with(const char* url, const char* title, size_t index);
 // milliseconds since the Unix epoch.
 void host_day_starts(double starts[4]);
 
-// Updates: Sparkle on the Mac (platform/mac/updates.mm), WinSparkle on Windows
-// (platform/windows/updates.cc).
+// Updates: Sparkle on the Mac (platform/mac/updates.mm), ilo's own on Windows
+// (platform/windows/updates.cc), both from the same appcast and key. Linux's are Flatpak's, which
+// the app asks itself.
 
 // On the Mac, before Chromium starts: makes sure Chromium can read its cookie key, "<name> Safe
 // Storage" in the Keychain, when the app's signature is new, as after a move to another signing
@@ -613,16 +726,86 @@ bool host_keep_keychain_key(void);
 // key, and on Windows not an MSIX from the Microsoft Store, which the Store updates.
 bool host_updates_available(void);
 
-// Starts the updater, which checks every 8 hours. On the Mac it downloads an update in the
-// background and installs it when the app quits; on Windows it offers it, and calls |quit| on the
-// main thread once the installer it started waits for the browser to quit. Does nothing where
-// host_updates_available is false.
-void host_start_updater(void (*quit)(void));
+// Whether the Microsoft Store updates this copy: on Windows, an MSIX from it.
+bool host_updated_by_store(void);
 
-// Checks for updates now, showing what it finds: the app menu's Check for Updates….
+// Whether this build is a nightly, each night's build of main (APP_TRACK=nightly at build time),
+// rather than a release.
+bool host_nightly_build(void);
+
+// Whether this build's updater can take nightly builds instead of its own: it updates itself and
+// carries a nightly feed beside its feed (branding/update-feed-nightly).
+bool host_nightly_feed(void);
+
+// Has the updater read the nightly feed, or with false its own, from its next check on: before
+// host_start_updater, from its first. Either way it installs only a build numbered above the one
+// running, so a nightly that goes back to its own feed keeps its build until a release passes it.
+void host_follow_nightly(bool nightly);
+
+// Where host_start_updater's |changed| says the update stands, for Settings › About's row and
+// Restart to Update at the sidebar's foot.
+enum {
+  // A check ended with nothing to say: on the Mac, the user closed Sparkle's window, cancelled
+  // the download or skipped the version.
+  HOST_UPDATE_IDLE = 0,
+  HOST_UPDATE_CHECKING = 1,
+  // No newer version.
+  HOST_UPDATE_CURRENT = 2,
+  // A newer version, which on the Mac Sparkle's own window offers.
+  HOST_UPDATE_FOUND = 3,
+  HOST_UPDATE_DOWNLOADING = 4,
+  // Downloaded and its signature checked, to install when the app quits, or now with
+  // host_install_update.
+  HOST_UPDATE_READY = 5,
+  HOST_UPDATE_FAILED = 6,
+};
+
+// Starts the updater, which checks every 8 hours and downloads a newer version in the background
+// with no window of its own, checks its EdDSA signature against the build's key, and installs it
+// when the app quits. On the Mac that's Sparkle; on Windows, ilo's own, which runs the installer
+// silently once the app has gone (host_finish_update). Calls |changed| on the main thread with a
+// HOST_UPDATE_* each time the update moves on, with the version it's of, else "", and |restart| on
+// the main thread once Restart to Update, or on the Mac Sparkle's own Install and Relaunch, wants
+// the browser to restart (bc_restart). Does nothing where host_updates_available is false.
+void host_start_updater(void (*restart)(void), void (*changed)(int stage, const char* version));
+
+// On Windows, before host_start_updater: if a quit since the last launch started installing an
+// update, calls |installed| with the update's build number and this copy's own, once. Where it
+// answers that the update didn't go in, the updater's first check waits its 8 hours, so the app
+// can say so and offer Try Again until the user asks.
+void host_take_install(bool (*installed)(uint64_t build, uint64_t own));
+
+// The app menu's Check for Updates…, which checks now: on the Mac, Sparkle's check, which shows
+// what it finds in Sparkle's window; on Windows, the same quiet check as Settings › About's,
+// which the app shows there, as the updater has no window.
 void host_check_for_updates(void);
 
-// On the Mac: calls |notes| with the release notes' URL of the update this launch is the first of, once.
+// Settings › About's check, which |changed| follows: on the Mac, Sparkle's check in the
+// background, which downloads an update to install on quit with no window of its own, or while
+// Sparkle shows one, Check for Updates…; on Windows, the updater's check, at once.
+void host_check_for_updates_quietly(void);
+
+// Restart to Update: restarts through host_start_updater's |restart|, to relaunch into the update
+// that's HOST_UPDATE_READY. On the Mac, once macOS has checked the new version as it would at its
+// first launch, or after 15 s. Nothing installs or relaunches before the restart goes ahead
+// (host_relaunch_into_update), so a quit a page stops leaves nothing armed. Nothing if none is
+// ready.
+void host_install_update(void);
+
+// The restart goes ahead (bc_host's quit_going_ahead): the ready update installs as the app quits
+// and relaunches ilo, and this returns true. On the Mac, Sparkle's install, once Restart to Update
+// or Sparkle's Install and Relaunch asked for it; on Windows, the installer's relaunch
+// (host_finish_update). False with none to relaunch into, for the core to start the browser again.
+bool host_relaunch_into_update(void);
+
+// Chromium is quitting. On Windows, a ready update's installer starts, silently, and waits for
+// this process to end before it installs, then relaunches ilo if host_relaunch_into_update asked.
+// On the Mac, nothing: Sparkle installs on quit by itself.
+void host_finish_update(void);
+
+// On the Mac and Windows: calls |notes| with the release notes' URL of the update this launch is
+// the first of, once, as the updater kept them when it installed it. Windows' are kept with the
+// build host_take_install reads, so they're taken before it.
 void host_take_update_notes(void (*notes)(const char* url));
 
 // For the test driver: presses the button titled |title| in the alert shown. False if none shows.
