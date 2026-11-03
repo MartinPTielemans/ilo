@@ -8,6 +8,8 @@ use gpui::{
 use super::*;
 use crate::text_input::TextInput;
 
+actions!(stop_tests, [Close]);
+
 /// Tab and ⇧Tab go round, the arrows stop at the ends, and with none ringed the first key goes to
 /// the first stop, or the last going back.
 #[test]
@@ -53,6 +55,8 @@ struct Panel {
     stops: Stops,
     field: Entity<TextInput>,
     pressed: Rc<RefCell<Vec<&'static str>>>,
+    /// Whether Once shows, which a press on it takes away, as a site's Turn On goes with its row.
+    once: Rc<Cell<bool>>,
 }
 
 impl Render for Panel {
@@ -60,7 +64,7 @@ impl Render for Panel {
         self.stops.begin();
         let button = |name: &'static str| {
             let pressed = self.pressed.clone();
-            button(&Look::settings(), name, name)
+            button(&Look::settings(true), name, name)
                 .button_stop(&self.stops, cx)
                 .on_click(move |_, _, _| pressed.borrow_mut().push(name))
         };
@@ -73,9 +77,18 @@ impl Render for Panel {
                 self.stops
                     .mark("field", handle, Ring::Inside(CONTROL_RADIUS)),
             );
+        let once = self.once.clone();
+        let once = self.once.get().then(|| {
+            super::button(&Look::settings(true), "Once", "Once")
+                .button_stop(&self.stops, cx)
+                .on_click(move |_, _, _| once.set(false))
+        });
         div()
             .key_context("Panel")
             .track_focus(&self.focus)
+            .on_action(
+                cx.listener(|panel, _: &Close, _, _| panel.pressed.borrow_mut().push("closed")),
+            )
             .size_full()
             .on_action(cx.listener(|panel, _: &NextStop, window, cx| {
                 panel.stops.go(true, true, window, cx);
@@ -97,6 +110,7 @@ impl Render for Panel {
             .child(field)
             .child(button("Next"))
             .child(button("Done"))
+            .children(once)
     }
 }
 
@@ -104,12 +118,14 @@ fn panel(cx: &mut TestAppContext) -> (Entity<Panel>, &mut VisualTestContext) {
     cx.update(|cx| {
         crate::text_input::bind_keys(cx);
         bind_stop_keys("Panel", cx);
+        cx.bind_keys([gpui::KeyBinding::new("ctrl-w", Close, Some("Panel"))]);
     });
     let (panel, cx) = cx.add_window_view(|_, cx| Panel {
         focus: cx.focus_handle(),
         stops: Stops::default(),
         field: cx.new(|cx| TextInput::new("Search", cx)),
         pressed: Rc::default(),
+        once: Rc::default(),
     });
     // As Settings' window has the keyboard as it opens.
     cx.update(|window, cx| window.focus(&panel.read(cx).focus.clone(), cx));

@@ -506,7 +506,7 @@ impl ImportView {
         ImportView {
             host,
             skip,
-            look: Look::settings(),
+            look: Look::settings(true),
             sources,
             step: Step::List,
             switched: None,
@@ -725,7 +725,7 @@ impl ImportView {
                 }
                 None => picked.push(kind),
             }
-            self.switched = Some((kind, Instant::now()));
+            self.switched = Some((kind, crate::motion::start(cx)));
             cx.notify();
         }
     }
@@ -1275,7 +1275,7 @@ impl ImportView {
                     let pinned = format!("Pinned in {from}, and here once it's added");
                     detailed(look, extension.name.clone().into(), pinned.into(), add)
                 }
-                false => row(None, extension.name.clone(), add),
+                false => row(extension.name.clone(), add),
             }
         });
         let rows: Vec<gpui::Div> = rows.collect();
@@ -1422,8 +1422,15 @@ impl ImportView {
             let profiles: Vec<&str> = (source.profiles.iter())
                 .map(|profile| profile.name.as_str())
                 .collect();
+            // check.sh clicks each where it's logged, as Settings and the first launch place it.
+            let at = drawn(
+                format!("import-from {}", source.name()),
+                self.drawn_at.clone(),
+            );
             let choose = button(look, ("import-from", index), "Import…")
                 .button_stop(&self.stops, cx)
+                .relative()
+                .child(at)
                 .on_click(cx.listener(move |view, _, _, cx| view.pick(index, cx)));
             detailed(
                 look,
@@ -1446,6 +1453,8 @@ impl ImportView {
         };
         let choose = button(look, "import-passwords", "Choose File…")
             .button_stop(&self.stops, cx)
+            .relative()
+            .child(drawn("import-passwords".into(), self.drawn_at.clone()))
             .on_click(cx.listener(|view, _, _, cx| view.choose_passwords(cx)));
         let row = detailed(
             look,
@@ -1455,6 +1464,8 @@ impl ImportView {
         );
         let choose = button(look, "import-bookmarks", "Choose File…")
             .button_stop(&self.stops, cx)
+            .relative()
+            .child(drawn("import-bookmarks".into(), self.drawn_at.clone()))
             .on_click(cx.listener(|view, _, _, cx| view.choose_bookmarks(cx)));
         let bookmarks = detailed(
             look,
@@ -1492,7 +1503,7 @@ impl ImportView {
                 .on_click(cx.listener(move |view, _, _, cx| view.toggle(kind, cx)))
                 .stop(&self.stops, Ring::Around(SWITCH_HEIGHT / 2.), cx)
                 .child(switch(look, on, slid, rgb(NO_THEME_ACCENT)));
-            row(None, kind.label(), toggle.into_any_element())
+            row(kind.label(), toggle.into_any_element())
         });
         // Drawn before Choose folders, which takes the context too.
         let rows: Vec<gpui::Div> = rows.collect();
@@ -1798,6 +1809,8 @@ impl Render for ImportView {
                 let file = self.passwords_file.as_ref().map(|file| {
                     let delete = button(&look, "import-delete-passwords", "Delete File")
                         .button_stop(&self.stops, cx)
+                        .relative()
+                        .child(drawn("import-delete".into(), self.drawn_at.clone()))
                         .on_click(cx.listener(|view, _, _, cx| view.delete_passwords_file(cx)));
                     let why = format!(
                         "{} holds your passwords in plain text. Delete it once they're in.",

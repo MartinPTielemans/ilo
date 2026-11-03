@@ -75,8 +75,11 @@ pub fn raised(centered: Frame, screens: &[Frame]) -> Frame {
         return centered;
     }
     let room = (screen.height - centered.height).max(0.);
+    // At whole points: the core makes a frame the whole points around it, so a fractional one
+    // would open a point bigger, and each window after it bigger again, at the last one's size.
     Frame {
-        y: screen.y + room * 0.4,
+        x: centered.x.round(),
+        y: (screen.y + room * 0.4).round(),
         ..centered
     }
 }
@@ -216,7 +219,7 @@ mod tests {
         let on_display = on_screen_of((3000., 700.), (900., 640.), &[LAPTOP, DISPLAY]);
         assert_eq!(on_display, Some(frame(2342., 25. + 775. * 0.4, 900., 640.)));
         let on_laptop = on_screen_of((10., 900.), (900., 640.), &[LAPTOP, DISPLAY]);
-        assert_eq!(on_laptop, Some(frame(306., 25. + 317. * 0.4, 900., 640.)));
+        assert_eq!(on_laptop, Some(frame(306., 152., 900., 640.)));
         assert_eq!(
             on_screen_of((-50., 700.), (900., 640.), &[LAPTOP, DISPLAY]),
             None
@@ -232,11 +235,12 @@ mod tests {
 
     #[test]
     fn a_little_window_opens_a_little_above_the_middle() {
-        // 900 by 640, centred on the laptop: 158.5 of room above and below it.
+        // 900 by 640, centred on the laptop: 158.5 of room above and below it, 126.8 above it
+        // raised, to the nearest point.
         let centered = frame(306., 183.5, 900., 640.);
         assert_eq!(
             raised(centered, &[LAPTOP, DISPLAY]),
-            frame(306., 25. + 317. * 0.4, 900., 640.)
+            frame(306., 152., 900., 640.)
         );
         let centered = frame(2342., 412.5, 900., 640.);
         assert_eq!(raised(centered, &[LAPTOP, DISPLAY]).y, 25. + 775. * 0.4);
@@ -244,5 +248,19 @@ mod tests {
         // At the screen's corner, where a host leaves it for the window manager to place.
         let placed = frame(0., 0., 900., 640.);
         assert_eq!(raised(placed, &[LAPTOP, DISPLAY]), placed);
+    }
+
+    /// A screen 674 tall under a 31-point menu bar, as the hosted Mac's, where a Little ilo window
+    /// raised to 44.6 down opened 900 by 641, and an odd 1023 wide, which centres it at 61.5 across.
+    #[test]
+    fn a_little_window_opens_at_whole_points() {
+        const SMALL: Frame = Frame {
+            x: 0.,
+            y: 31.,
+            width: 1023.,
+            height: 674.,
+        };
+        let opened = on_screen_of((500., 300.), (900., 640.), &[SMALL]);
+        assert_eq!(opened, Some(frame(62., 45., 900., 640.)));
     }
 }

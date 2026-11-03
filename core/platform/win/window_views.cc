@@ -562,11 +562,28 @@ class WindowViews : public views::WidgetObserver,
           IsWindowVisible(had)) {
         SetFocus(had);
       }
+    } else if (message == WM_SIZE) {
+      SizeChanged(w_param);
     }
     return false;
   }
 
  private:
+  // Minimizing hides only the window's own aura window, and no page is in it, since each pane is a
+  // window of its own. So the pages went on counting as visible and drawing (#1582). The window's
+  // observers now hear it go out of sight and come back, as Chromium tells them on the Mac and
+  // Linux, and the core hides its pages and shows them again (Window::OnWidgetVisibilityChanged).
+  void SizeChanged(WPARAM kind) {
+    if (kind != SIZE_MINIMIZED && kind != SIZE_RESTORED && kind != SIZE_MAXIMIZED) {
+      return;
+    }
+    const bool minimized = kind == SIZE_MINIMIZED;
+    if (minimized != minimized_) {
+      minimized_ = minimized;
+      widget_->OnNativeWidgetVisibilityChanged(!minimized);
+    }
+  }
+
   raw_ptr<views::Widget> widget_;
   HWND ui_;
   std::vector<Slot> panes_;
@@ -581,6 +598,7 @@ class WindowViews : public views::WidgetObserver,
   // The UI has the keyboard while no page shows, for the next page shown (KeyboardForPage).
   bool ui_holds_for_page_ = false;
   HWND had_keyboard_ = nullptr;
+  bool minimized_ = false;
   // The pages DrawUnseen holds.
   aura::WindowTracker unseen_;
   // The pages and DevTools the slots have held, which Keep watches for their going.
@@ -658,7 +676,9 @@ void ShowPages(views::Widget* widget,
   }
   views->set_corner_radius(corner_radius);
   views->set_held(false);
-  const bool hidden = !widget->IsVisible();
+  // A minimized window still counts as visible to its widget on Windows, so a page laid out while
+  // it's minimized stays hidden too.
+  const bool hidden = !widget->IsVisible() || IsIconic(views->window());
   const gfx::Size size = views->ContentSize();
 
   Staying staying;

@@ -5,7 +5,7 @@
 #   load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear
 #   split favorites cards extensions adblock adblock-lists windows private little capture media
 #   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp
-#   appearance about sync sync-account sync-devices
+#   appearance about sync sync-account sync-devices switch-frames devices filled
 # The store run installs from Google's Web Store, adblock-live blocks Google's ad servers with
 # uBlock Origin's own lists and widevine, Linux's alone, downloads Google's Widevine module, so they
 # need the network and run only when named: ./check.sh store.
@@ -18,7 +18,8 @@
 # build/Updates.app on the Mac, a copy with Sparkle and a feed of its own (build.sh updates), and
 # ilo's Flatpak on Linux, which a repository of the run's own updates (check/updates.sh).
 # In a check VM the check turns the Mac's appearance dark for the runs, which read the window's
-# dark look, and puts back the one it had after.
+# dark look, and puts back the one it had after. Filled hides the VM's Dock and menu bar for its
+# run, and runs only in one.
 # It opens on the Mac's own screen, where there is one, so it doesn't cover what's playing on
 # another; BROWSER_DISPLAY=main opens it on the main display.
 # Leaves window captures and logs in build/check/. Build first with ./build.sh.
@@ -69,7 +70,7 @@ fi
 runs="load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear"
 runs="$runs split favorites cards extensions adblock adblock-lists windows private little capture media"
 runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp"
-runs="$runs appearance about sync sync-account sync-devices"
+runs="$runs appearance about sync sync-account sync-devices switch-frames devices filled"
 named="store adblock-live widevine updates nightly keychain shots"
 for run in "$@"; do
   case " $runs $named " in

@@ -88,7 +88,7 @@ recorded
 # A light theme for the Space: the theme picker's first swatch, then the sun. The card takes the
 # Space's look.
 post rightclick 100 112
-expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $colors, ")" "the Space's menu didn't offer its theme"
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, ")" "the Space's menu didn't offer its theme"
 send choose "$(cased 'Edit Theme Color…')"
 expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
 expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
@@ -123,6 +123,7 @@ send key s cmd
 expect '^browser: sidebar hidden$' "⌘S didn't hide the sidebar for the card over the sidebar out"
 send move 400 300
 send move 3 300
+send move 3 306
 expect '^browser: reveal shown$' "the pointer at the window's edge didn't bring the sidebar out"
 expect '^browser: reveal window shown$' "the sidebar out didn't come on screen"
 send move $(row 1)

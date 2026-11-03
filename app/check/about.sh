@@ -3,10 +3,11 @@
 # It names the engine's Chromium version wherever the engine carries one: the Mac's framework
 # always, and beside chrome Linux's VERSION and Windows's manifest, in engines packaged since. On
 # Windows, first, a click in the page once its window is back from minimized gives it the keyboard.
-# Settings works from the keyboard, opened by ⌘, from the page and from the UI: Tab rings the tab
-# shown, → and ← change tab, Tab goes on to Warn before quitting, which space turns off and on
-# again, and to the archive's pop-up, which space opens on the time chosen, where ↓ goes on to the
-# next and escape closes it, giving Settings back the keyboard, where Tab goes on (#1526).
+# Settings works from the keyboard, opened by ⌘, from the page and from the UI: Tab rings the
+# section shown in the column, ↓ and ↑ change section, Tab goes on through the page, to Ask before
+# quitting, which space turns off and return on again, and ⇧Tab back to the column. In Tabs &
+# Sidebar, Tab goes to the archive's pop-up, which space opens on the time chosen, where ↓ goes on
+# to the next and escape closes it, giving Settings back the keyboard, where Tab goes on (#1526).
 
 engine_version= engine_version_said= minimized=
 [ "$(uname)" != Darwin ] || engine_version=yes
@@ -45,30 +46,45 @@ fi
 send click $page_point
 in_browser RenderWidgetHostViewCocoa "a click on the page didn't give it the keyboard"
 page_shortcut , settings
-expect '^browser: settings shown General$' "⌘, from the page didn't show Settings on its General tab"
+expect '^browser: settings shown General$' "⌘, from the page didn't show Settings on its General section"
 settings_drew General
 send key tab
-expect '^browser: settings keyed General$' "Tab in Settings didn't ring its General tab"
-send key right
-expect '^browser: settings tab Links$' "→ on the General tab didn't show Links"
-expect '^browser: settings keyed Links$' "→ on the General tab didn't ring Links"
-settings_drew Links
-send key left
-expect '^browser: settings tab General$' "← on the Links tab didn't show General"
+expect '^browser: settings keyed General$' "Tab in Settings didn't ring General in its column"
+send key down
+expect '^browser: settings tab Tabs & Sidebar$' "↓ on General didn't show Tabs & Sidebar"
+expect '^browser: settings keyed Tabs & Sidebar$' "↓ on General didn't ring Tabs & Sidebar"
+settings_drew 'Tabs & Sidebar'
+send key up
+expect '^browser: settings tab General$' "↑ on Tabs & Sidebar didn't show General"
 settings_drew General
+# General's first stop is Make Default by its heading, while ilo isn't the default browser.
+send key tab
+expect '^browser: settings keyed \(make-default-browser\|restore windows\)$' \
+  "Tab from the column didn't go on to General's first control"
+back=2
+if [ "$(sed -n 's/^browser: settings keyed //p' "$log" | tail -1)" = make-default-browser ]; then
+  send key tab
+  expect '^browser: settings keyed restore windows$' "Tab from Make Default didn't ring Reopen your windows and tabs"
+  back=3
+fi
 send key tab
 expect '^browser: settings keyed warn before quitting$' \
-  "Tab from the tabs didn't ring Warn before quitting"
+  "Tab didn't go on to Ask before quitting"
 ../tools/window-screenshot.sh "$pid" "$out/settings-keyed.png" all || fail "no window to capture"
 send key space
-expect '^browser: warn before quitting \(on\|off\)$' "space on Warn before quitting didn't turn it"
+expect '^browser: warn before quitting \(on\|off\)$' "space on Ask before quitting didn't turn it"
 turned=$(sed -n 's/^browser: warn before quitting //p' "$log" | tail -1)
 send key return
-expect '^browser: warn before quitting \(on\|off\)$' "return on Warn before quitting didn't turn it back"
+expect '^browser: warn before quitting \(on\|off\)$' "return on Ask before quitting didn't turn it back"
 [ "$(sed -n 's/^browser: warn before quitting //p' "$log" | tail -1)" != "$turned" ] ||
-  fail "return on Warn before quitting turned it $turned again"
+  fail "return on Ask before quitting turned it $turned again"
+for _ in $(seq $back); do send key tab shift; done
+expect '^browser: settings keyed General$' "⇧Tab didn't go back to General in the column"
+send key down
+expect '^browser: settings tab Tabs & Sidebar$' "↓ on General didn't show Tabs & Sidebar again"
+settings_drew 'Tabs & Sidebar'
 send key tab
-expect '^browser: settings keyed ArchiveAfter$' "Tab didn't go on to the archive's pop-up"
+expect '^browser: settings keyed ArchiveAfter([0-9]*)$' "Tab didn't go on to the archive's pop-up"
 send key space
 expect '^browser: menu shown 12 hours' "space on the archive's pop-up didn't open its menu"
 # It opens on the time chosen, as a click's does, and the keys are its: ↓ goes to the one after.
@@ -85,20 +101,20 @@ expect '^browser: settings keyed unload idle tabs$' \
   "with the menu closed, Tab didn't go on from the archive's pop-up"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W with a control ringed didn't hide Settings"
-# And from the UI, where it opens with nothing ringed.
+# And from the UI, where it opens on the section shown last with nothing ringed.
 send click $sidebar_point
 send key , cmd
 expect '^browser: command settings via ui$' "⌘, from the UI didn't run Settings"
-expect '^browser: settings shown General$' "⌘, from the UI didn't show Settings"
-settings_drew General
+expect '^browser: settings shown Tabs & Sidebar$' "⌘, from the UI didn't show Settings on Tabs & Sidebar"
+settings_drew 'Tabs & Sidebar'
 send key tab
-expect '^browser: settings keyed General$' "Tab in Settings opened from the UI didn't ring General"
+expect '^browser: settings keyed Tabs & Sidebar$' "Tab in Settings opened from the UI didn't ring Tabs & Sidebar"
 send key tab
-expect '^browser: settings keyed warn before quitting$' \
-  "Tab in Settings opened from the UI didn't go on to Warn before quitting"
+expect '^browser: settings keyed ArchiveAfter([0-9]*)$' \
+  "Tab in Settings opened from the UI didn't go on to the archive's pop-up"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
-keyed=" Settings went by the keyboard from the page and the UI: Tab, ← and →, space and return on a switch, and space, ↓ and escape on a pop-up."
+keyed=" Settings went by the keyboard from the page and the UI: Tab and ⇧Tab, ↓ and ↑ in its column, space and return on a switch, and space, ↓ and escape on a pop-up."
 loaded=
 for row in licence:LICENSE notices:NOTICE libraries:THIRD-PARTY.txt; do
   id=${row%%:*} file=${row#*:}

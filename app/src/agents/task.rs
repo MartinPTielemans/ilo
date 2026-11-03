@@ -1333,6 +1333,11 @@ impl Agents {
 
     /// The task goes for good: its CLI ends and its Space goes, with its tabs.
     fn drop_task(&mut self, agent: &str, cx: &mut Context<Self>) {
+        self.end_task(agent, true, cx);
+    }
+
+    /// The task goes: its CLI ends, and its Space too with `space`.
+    fn end_task(&mut self, agent: &str, space: bool, cx: &mut Context<Self>) {
         let Some(at) = self.tasks.tasks.iter().position(|task| task.agent == agent) else {
             return;
         };
@@ -1340,15 +1345,17 @@ impl Agents {
         self.forget_waiting(agent, cx);
         self.doing.remove(agent);
         self.tokens_changed();
-        if task.space != 0 {
+        if space && task.space != 0 {
             self.browser.delete_space(task.space, cx);
         }
         self.remove_task_files(agent);
         log!("browser: task {agent} dropped");
     }
 
-    /// At quit: every task goes, with its Space.
-    pub fn end_tasks(&mut self, cx: &mut Context<Self>) {
+    /// At quit: every task goes, and with `spaces` its Space. With no window left, as when the
+    /// last one closed on Windows or Linux, the core can't delete a Space (#1676), and the next
+    /// launch deletes them, as after a crash.
+    pub fn end_tasks(&mut self, spaces: bool, cx: &mut Context<Self>) {
         let agents: Vec<String> = self
             .tasks
             .tasks
@@ -1356,7 +1363,7 @@ impl Agents {
             .map(|task| task.agent.clone())
             .collect();
         for agent in agents {
-            self.drop_task(&agent, cx);
+            self.end_task(&agent, spaces, cx);
         }
     }
 
@@ -1376,6 +1383,7 @@ impl Agents {
         let dir = dir.join("Tasks");
         _ = std::fs::remove_dir_all(dir.join(agent));
         _ = std::fs::remove_file(dir.join(format!("{agent}.json")));
+        _ = std::fs::remove_file(dir.join(format!("{agent}.md")));
     }
 
     /// A task's call, as a step of its trace from when it came. A run's steps are steps of their

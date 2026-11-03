@@ -119,17 +119,17 @@ expect '^browser: space form gone$' "the form didn't leave after return"
 name_point="100 112"
 tiled_name="100 159"
 post rightclick $name_point
-expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $themed, Profile › Default, \
-Profile › Profile 2 (checked), Profile › New Profile, Export as Markdown…, Delete Space")\$" \
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, Set Profile › Default, \
+Set Profile › Profile 2 (checked), Set Profile › New Profile, New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the empty Space's menu didn't offer its profiles"
 ../tools/window-screenshot.sh "$pid" "$out/profile-menu.png" || fail "no window to capture"
 send choose Default
 expect "^browser: profiled space $second $default\$" "Default didn't take the Space back"
 expect "^browser: favorites $a\$" "the first profile's favorite didn't show in its Space again"
 post rightclick $tiled_name
-expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $themed, Profile › Default (checked), \
-Profile › Profile 2, Profile › New Profile, Profile › Delete “Profile 2”, \
-Export as Markdown…, Delete Space")\$" \
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, Set Profile › Default (checked), \
+Set Profile › Profile 2, Set Profile › New Profile, Set Profile › Delete “Profile 2”, \
+New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the menu didn't offer the unused profile back"
 send choose Profile 2
 expect "^browser: profiled space $second $work\$" "Profile 2 didn't take the Space again"
@@ -159,12 +159,8 @@ expect "^browser: title $b cookie none\$" \
 # Held partway back, the first profile's Space comes in beside this one's whole: its URL field
 # with the tab it would show, its favorite and its rows at its offset, as this one's go out. X11
 # sends a touchpad's scrolling with no start or end, so two fingers never page there (#554).
-# Windows' touchpad comes through DirectManipulation, which the driver can't stand in for: its
-# wheel messages reach GPUI as a mouse wheel's lines, with no fingers to hold partway.
 if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
   echo "skip: two fingers held partway between two profiles' Spaces: X11 sends no touch phases (#554)."
-elif windows; then
-  echo "skip: two fingers held partway between two profiles' Spaces: the Windows driver can't send a touchpad's."
 else
   post swipe 110 500 10 0 10 1500
   await '^browser: swipe across$' || fail "two fingers across the sidebar didn't page"
@@ -175,9 +171,9 @@ else
 fi
 # Its menu, with a tab, can't change its profile.
 post rightclick $name_point
-expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $themed, Profile › Default (disabled), \
-Profile › Profile 2 (checked), Profile › New Profile (disabled), \
-Export as Markdown…, Delete Space")\$" \
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, Set Profile › Default (disabled), \
+Set Profile › Profile 2 (checked), Set Profile › New Profile (disabled), \
+New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the menu of a Space with a tab offered another profile"
 send choose Profile 2
 none_since '^browser: profiled space' || fail "choosing its own profile changed the Space's"
@@ -215,10 +211,12 @@ expect '^browser: command bar shown$' "⌘L didn't open the Little ilo window's 
 send insert "$cookie_page"
 send key return
 expect "^browser: loaded [0-9]* $cookie_page\$" "the cookie page didn't load in the Little ilo window"
-width=$(grep "^browser: window $little frame " "$log" | tail -1 | cut -d' ' -f7)
+# The width the Little ilo window draws at, the window last drawn at a new size: Windows' frame
+# takes in the borders it resizes by, 8 a side, which draw nothing.
+width=$(grep '^browser: drawn at ' "$log" | tail -1 | sed 's/^browser: drawn at \([0-9.]*\)x.*/\1/')
 # The picker is the third of the bar's header plates from its end: the last one's middle is 20 in
 # from the right edge, and each is 34 before the next (little.rs).
-post clickkey $((width - 20 - 2 * 34)) 24
+post clickkey $(awk -v width="$width" 'BEGIN { print width - 20 - 2 * 34 }') 24
 expect "^browser: menu shown $(cased 'Default (checked), Profile 2')\$" \
   "Little ilo's profile picker didn't list the profiles, the page's checked"
 ../tools/window-screenshot.sh "$pid" "$out/little-profile.png" all || fail "no window to capture"
@@ -310,11 +308,14 @@ away_page="$(echo "$site" | sed 's/127\.0\.0\.1/localhost/')away.html"
 elsewhere_page="$(echo "$site" | sed 's/127\.0\.0\.1/localhost/')elsewhere.html"
 tile="114 110"
 send menu Settings…
-expect '^browser: settings shown General$' "Settings… didn't show Settings on its General tab"
+expect '^browser: settings shown General$' "Settings… didn't show Settings on its General section"
 settings_drew General
-post clickkey 500 250
+send clickkey $(drawn "toolbar Tabs & Sidebar")
+expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
+settings_drew 'Tabs & Sidebar'
+post clickkey $(drawn favorites)
 expect "^browser: menu shown $(cased "In Every Space, In Each Profile's Spaces (checked), In Each Space")\$" \
-  "a click on Favorites didn't show the choices"
+  "a click on Share favorites didn't show the choices"
 send choose "$(cased 'In Every Space')"
 expect "^browser: favorites scope In Every Space\$" "choosing In Every Space in Settings didn't set it"
 expect '^browser: favorites [0-9][0-9]*$' "the favorite has no twin in the other profile's Space"
@@ -362,11 +363,11 @@ expect "^browser: title $twin cookie none\$" \
 # Back to In Each Profile's Spaces, each profile keeps the site as its own favorite. Removed and
 # closed, the second Space has only its tab again.
 send menu Settings…
-expect '^browser: settings shown ' "Settings… didn't show Settings"
-settings_drew
-post clickkey 500 250
+expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't show Tabs & Sidebar again"
+settings_drew 'Tabs & Sidebar'
+post clickkey $(drawn favorites)
 expect "^browser: menu shown $(cased "In Every Space (checked), In Each Profile's Spaces, In Each Space")\$" \
-  "a click on Favorites didn't show In Every Space chosen"
+  "a click on Share favorites didn't show In Every Space chosen"
 send choose "$(cased "In Each Profile's Spaces")"
 expect "^browser: favorites scope In Each Profile's Spaces\$" \
   "choosing In Each Profile's Spaces in Settings didn't set it"
@@ -395,16 +396,16 @@ expect "^browser: today [0-9]* $d\$" "Clear browsing data didn't open in the Spa
 ../tools/window-screenshot.sh "$pid" "$out/clear-browsing-data.png" || fail "no window to capture"
 send key w cmd
 expect "^browser: today $d\$" "⌘W didn't close Clear browsing data: Today is \"$(today)\""
-# Settings › Profiles keeps a box per profile: its name, then its Search engine, Archive tabs after,
-# Download folder and Browsing data rows, and New Profile under the boxes. Settings logs where it
-# draws each control the run clicks. Change… sends the second profile's downloads to the folder the
-# run named.
+# A profile's own settings sit in the sections they belong to, a row per profile: its search
+# engine and download folder in General, its archive time in Tabs & Sidebar. Settings › Profiles
+# lists the profiles, with New Profile under them. Settings logs where it draws each control the
+# run clicks. Change… sends the second profile's downloads to the folder the run named.
 send menu Settings…
-expect '^browser: settings shown ' "Settings… didn't show Settings"
-settings_drew
-send clickkey $(drawn "toolbar Profiles")
-expect '^browser: settings tab Profiles$' "a click on Profiles didn't show its tab"
-settings_drew Profiles
+expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't show Tabs & Sidebar"
+settings_drew 'Tabs & Sidebar'
+send clickkey $(drawn "toolbar General")
+expect '^browser: settings tab General$' "a click on General didn't show its section"
+settings_drew 'General'
 at=$(drawn "download folder $work") || fail "Settings didn't draw the second profile's Change…"
 ../tools/window-screenshot.sh "$pid" "$out/settings-profile-boxes.png" || fail "no window to capture"
 send clickkey $at
@@ -416,9 +417,12 @@ expect '^browser: menu shown .*DuckDuckGo (checked)' \
   "the second profile's Search engine didn't show the engines, with DuckDuckGo chosen"
 send choose Microsoft Bing
 expect "^browser: profile $work searches with Microsoft Bing\$" "choosing Bing didn't set the second profile's"
+send clickkey $(drawn "toolbar Tabs & Sidebar")
+expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
+settings_drew 'Tabs & Sidebar'
 post clickkey $(drawn "archive $work")
 expect '^browser: menu shown 12 hours (default) (checked), 24 hours, 7 days, 30 days$' \
-  "the second profile's Archive tabs after didn't show the times, with General's 12 hours chosen"
+  "the second profile's Archive Today tabs after didn't show the times, with 12 hours chosen"
 send choose 7 days
 expect "^browser: profile $work archive tabs after 7 days\$" "choosing 7 days didn't set the second profile's"
 post clickkey $(drawn "archive $default")
@@ -432,15 +436,19 @@ expect '^browser: menu shown 12 hours (default), 24 hours, 7 days (checked), 30 
 send key escape
 expect '^browser: menu closed$' "escape didn't close the second profile's times"
 ../tools/window-screenshot.sh "$pid" "$out/settings-profile-settings.png" || fail "no window to capture"
-# A double-click on a name puts it in a field, where escape leaves it and return keeps a new one.
-send doubleclickkey $(drawn "profile $work")
-expect "^browser: rename profile $work\$" "a double-click on Profile 2 didn't put it in a field"
+send clickkey $(drawn "toolbar Profiles")
+expect '^browser: settings tab Profiles$' "a click on Profiles didn't show its section"
+settings_drew 'Profiles'
+# Rename, or a double-click on a name, puts it in a field, where escape leaves it and return
+# keeps a new one.
+send clickkey $(drawn "rename profile $work")
+expect "^browser: rename profile $work\$" "Rename on Profile 2 didn't put its name in a field"
 send type personal
 send key escape
 expect '^browser: rename cancelled$' "escape didn't cancel the renaming"
 none_since '^browser: renamed profile' || fail "escape renamed the profile"
 send doubleclickkey $(drawn "profile $work")
-expect "^browser: rename profile $work\$" "the second double-click didn't put it in a field"
+expect "^browser: rename profile $work\$" "a double-click on Profile 2 didn't put it in a field"
 send type personal
 send key return
 expect "^browser: renamed profile $work personal\$" "return didn't rename the profile"
@@ -484,7 +492,10 @@ post clickkey $(drawn "delete profile $spare")
 expect "^browser: $asks shown Delete “spare 日本語”?\$" "Delete in Settings didn't ask again"
 settings_answer Delete
 expect "^browser: removed profile $spare spare 日本語\$" "Delete in Settings didn't delete it"
-# The first profile's Clear… opens Clear browsing data in its Space, leaving Settings.
+# The first profile's Clear… in Privacy opens Clear browsing data in its Space, leaving Settings.
+send clickkey $(drawn "toolbar Privacy")
+expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"
+settings_drew Privacy
 send clickkey $(drawn "clear $default")
 expect "^browser: clear browsing data of profile $default in space $first\$" \
   "the first profile's Clear… didn't open Clear browsing data in its Space"
@@ -522,7 +533,7 @@ expect '^browser: download [0-9]* done profile.txt$' "the second profile's page 
 # Deleted, the Space leaves its profile unused, which the first Space's menu then deletes, once the
 # user confirms.
 post rightclick $name_point
-expect "^browser: menu shown Rename Space, " \
+expect "^browser: menu shown $(cased 'Change Space Icon…'), " \
   "a right-click on the Space's name didn't show its menu"
 post choose Delete Space
 expect '^browser: dialog settled$' "Delete Space didn't ask first"
@@ -531,9 +542,9 @@ expect "^browser: spaces $first\$" "Delete didn't delete the second Space"
 expect "^browser: space $first\( in .*\)\{0,1\}\$" "deleting the second Space didn't show the first"
 expect "^browser: settled space $first\$" "the first Space's page didn't settle"
 post rightclick $tiled_name
-expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $colors, Profile › Default (checked), \
-Profile › personal, Profile › New Profile, Profile › Delete “personal”, \
-Export as Markdown…, Delete Space (disabled)")\$" \
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, Set Profile › Default (checked), \
+Set Profile › personal, Set Profile › New Profile, Set Profile › Delete “personal”, \
+New Folder…, Export as Markdown…, Manage Spaces…, Delete Space (disabled)")\$" \
   "the menu didn't offer to delete the unused profile by the name Settings gave it"
 post choose Delete “personal”
 expect '^browser: dialog shown Delete “personal”?$' "Delete didn't ask before deleting the profile"

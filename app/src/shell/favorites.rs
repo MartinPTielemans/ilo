@@ -1,7 +1,7 @@
 //! The favorites' tiles over the list, which scroll with it once they're taller than
 //! 40 % of the window (docs/ux-spec.md › Favorites).
 
-use std::{collections::HashMap, rc::Rc, time::Instant};
+use std::{collections::HashMap, rc::Rc};
 
 use gpui::{
     Context, Hsla, MouseButton, MouseDownEvent, Role, canvas, div, hsla, img, prelude::*, px, rgba,
@@ -283,11 +283,17 @@ impl Shell {
     }
 
     /// Starts the tiles and the list's top from where they were drawn `before` to their places.
-    pub(super) fn move_tiles(&mut self, before: (HashMap<u64, [f32; 3]>, f32), curve: Curve) {
-        let now = Instant::now();
+    /// Under Reduce Motion they're in their places at once.
+    pub(super) fn move_tiles(
+        &mut self,
+        before: (HashMap<u64, [f32; 3]>, f32),
+        curve: Curve,
+        cx: &gpui::App,
+    ) {
+        let now = crate::motion::start(cx);
         let tabs = self.tile_tabs();
         let places = self.tile_places(tabs.len());
-        self.tile_slides = tabs
+        let slides: Vec<_> = tabs
             .into_iter()
             .zip(places)
             .filter_map(|(tab, place)| {
@@ -296,6 +302,12 @@ impl Shell {
                 (from != [0.; 3]).then_some((tab, (from, now, curve)))
             })
             .collect();
+        // As the rows' (move_rows): slides over stay for the next frame to say the tiles settled.
+        let over = |(_, start, curve): &([f32; 3], std::time::Instant, Curve)| {
+            curve.at(start.elapsed().as_secs_f32()).is_none()
+        };
+        self.tile_slides.retain(|_, slide| over(slide));
+        self.tile_slides.extend(slides);
         let from = before.1 - self.list_top();
         self.list_slide = (from != 0.).then_some((from, now, curve));
     }

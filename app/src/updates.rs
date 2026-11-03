@@ -16,7 +16,7 @@ use gpui::{
 
 use crate::palette::NO_THEME_ACCENT;
 use crate::settings_rows::{Look, Ring, SLIDE, Stop, Stops, button, detailed_row, drawn, switch};
-use crate::tokens::settings::{PADDING, SWITCH_HEIGHT};
+use crate::tokens::settings::{CONTROL_GAP, SWITCH_HEIGHT};
 
 /// What updates this copy.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -408,6 +408,8 @@ pub struct VersionRow {
     drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Its button, a stop of Settings' keyboard.
     stops: Stops,
+    /// The colours of the window it's in, dark until Settings says.
+    look: Look,
     _watch: Subscription,
 }
 
@@ -418,6 +420,7 @@ impl VersionRow {
             logged: Rc::default(),
             drawn: Rc::default(),
             stops: Stops::default(),
+            look: Look::settings(true),
             _watch: observe_view(cx, |_, cx| cx.notify()),
         }
     }
@@ -425,6 +428,11 @@ impl VersionRow {
     /// Its button goes in `stops`' order.
     pub fn with_stops(self, stops: Stops) -> Self {
         Self { stops, ..self }
+    }
+
+    pub fn set_look(&mut self, look: Look, cx: &mut Context<Self>) {
+        self.look = look;
+        cx.notify();
     }
 
     /// Where its button was drawn last, if it has one.
@@ -436,7 +444,7 @@ impl VersionRow {
 impl Render for VersionRow {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (said, action) = words(updater(cx), &stage(cx));
-        let look = Look::settings();
+        let look = self.look;
         self.drawn.set(None);
         let button = action.map(|(action, title)| {
             let drawn_at = self.drawn.clone();
@@ -448,7 +456,8 @@ impl Render for VersionRow {
             .inset_0();
             button(&look, "update", title)
                 .button_stop(&self.stops, cx)
-                .when(said.is_some(), |button| button.ml(px(PADDING)))
+                .relative()
+                .when(said.is_some(), |button| button.ml(px(CONTROL_GAP)))
                 .child(drawn(
                     format!("update {}", action.name()),
                     self.logged.clone(),
@@ -464,7 +473,7 @@ impl Render for VersionRow {
                 .children(button)
                 .into_any_element()
         });
-        detailed_row(env!("APP_NAME"), self.version.clone(), control)
+        detailed_row(&look, env!("APP_NAME"), self.version.clone(), control)
     }
 }
 
@@ -479,6 +488,8 @@ pub struct NightlyRow {
     switched: Option<Instant>,
     /// Its switch, a stop of Settings' keyboard.
     stops: Stops,
+    /// The colours of the window it's in, dark until Settings says.
+    look: Look,
     _watch: Subscription,
 }
 
@@ -489,6 +500,7 @@ impl NightlyRow {
             drawn: Rc::default(),
             switched: None,
             stops: Stops::default(),
+            look: Look::settings(true),
             _watch: observe_view(cx, |_, cx| cx.notify()),
         }
     }
@@ -496,6 +508,11 @@ impl NightlyRow {
     /// Its switch goes in `stops`' order.
     pub fn with_stops(self, stops: Stops) -> Self {
         Self { stops, ..self }
+    }
+
+    pub fn set_look(&mut self, look: Look, cx: &mut Context<Self>) {
+        self.look = look;
+        cx.notify();
     }
 
     /// Where its switch was drawn last.
@@ -527,18 +544,18 @@ impl Render for NightlyRow {
         let control = div()
             .id(NIGHTLY)
             .relative()
-            .child(switch(&Look::settings(), on, slid, rgb(NO_THEME_ACCENT)))
+            .child(switch(&self.look, on, slid, rgb(NO_THEME_ACCENT)))
             .child(drawn(format!("switch {NIGHTLY}"), self.logged.clone()))
             .child(at)
             .stop(&self.stops, Ring::Around(SWITCH_HEIGHT / 2.), cx)
             .on_click(cx.listener(move |row, _, _, cx| {
-                row.switched = Some(Instant::now());
+                row.switched = Some(crate::motion::start(cx));
                 follow(if on { Track::Release } else { Track::Nightly }, cx);
                 cx.notify();
             }));
         let words = nightly_words(built(cx), followed);
         let control = Some(control.into_any_element());
-        detailed_row("Get nightly builds", words, control).into_any_element()
+        detailed_row(&self.look, "Get nightly builds", words, control).into_any_element()
     }
 }
 
