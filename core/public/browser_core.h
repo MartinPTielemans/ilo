@@ -18,7 +18,8 @@ extern "C" {
 #define BC_EXPORT __attribute__((visibility("default")))
 #endif
 
-// Names a window, a Space or a tab for as long as the process runs; never reused. 0 names nothing.
+// Names a window, a Space or a tab for as long as the process runs; never reused, nor, once the
+// Spaces it saved are read, a tab's id from an earlier launch. 0 names nothing.
 typedef uint64_t bc_id;
 
 // In points. A window's is on the screen, from the top-left of the main display; a tab's is in its
@@ -1247,8 +1248,9 @@ BC_EXPORT size_t bc_space_agent_name(bc_id space, char* name, size_t capacity);
 // and type; ad_blocking, devtools, passwords, profile_settings (a profile's search engine, archive
 // timing, download folder, offers to save and saved data, and Clear Browsing Data) and any other
 // action are refused. Agent code calls it once for each call an agent makes on a tab, before
-// acting. If refused, copies why into |reason| as bc_space_name does, else an empty string. Either
-// way, then agent_activity, for the activity log.
+// acting. If refused, copies why into |reason| as bc_space_name does, else an empty string: for a
+// tab id from before ilo last started, that it restarted. Either way, then agent_activity, for the
+// activity log.
 BC_EXPORT bool bc_agent_may_act(const char* agent,
                                 bc_id tab,
                                 const char* action,
@@ -1278,6 +1280,23 @@ BC_EXPORT bc_id bc_agent_open_tab(const char* agent, const char* url);
 // Loads the http(s) |url| in |tab|, if it's in the Space of the agent with the id |agent|, and
 // returns whether it does: never another URL. Agent code calls it after bc_agent_may_act.
 BC_EXPORT bool bc_agent_navigate(const char* agent, bc_id tab, const char* url);
+
+// What bc_agent_close_tab did.
+// The tab closed: it's gone, and tab_closed told of it.
+#define BC_AGENT_CLOSED 0
+// The tab isn't in the agent's Space, or the user holds it.
+#define BC_AGENT_CLOSE_REFUSED 1
+// The user pinned the tab, which only the user closes.
+#define BC_AGENT_CLOSE_PINNED 2
+// Its page may ask before it's left, as one with unsaved changes does, and |discard| was false.
+#define BC_AGENT_CLOSE_ASKS 3
+
+// Closes |tab|, in the Space of the agent with the id |agent|, for the agent, never with a dialog:
+// as the "Leave site?" dialog shows the tab, it would take the user's focus. A page that may ask
+// before it's left stays open, unless |discard|, which closes it without its unload handlers, and
+// what it held unsaved is lost. Returns a BC_AGENT_CLOSE value. Agent code calls it after
+// bc_agent_may_act, and asks the user first before it discards a page the agent didn't open.
+BC_EXPORT int bc_agent_close_tab(const char* agent, bc_id tab, bool discard);
 
 // Copies up to |capacity| of the tabs of the Space of the agent with the id |agent| into |tabs|, its
 // pinned tabs top to bottom without their folders, then its Today tabs, and returns how many it

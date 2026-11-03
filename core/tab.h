@@ -120,6 +120,9 @@ class Tab : public content::WebContentsObserver,
   void Unload();
   // Whether Unload is deleting its page.
   bool unloading() const { return unloading_; }
+  // Whether its page may ask before it's left, as one with unsaved changes does: a frame of it has
+  // a beforeunload handler, which Chromium asks with only once the frame was clicked or typed in.
+  bool AsksBeforeLeaving() const;
   // For a tab without its page: gives it one in |window|'s Browser for its profile, at its history,
   // not shown, which loads once it is. Returns it, else null, and the tab stays without.
   content::WebContents* Wake(Window& window);

@@ -12,11 +12,13 @@
 # the page, which isn't the page's. Its keys, typed or pressed, go to the page alone, and Escape
 # the page doesn't keep runs no Stop of ilo's. Where it acts in the page shown, its pointer and a
 # ring with the element's ref show it. It opens a page, clicks its link, scrolls, takes a screenshot
-# and closes a tab, and a bank's site asks first, in a card whose Allow Once opens it. Always Allow
+# and closes a tab, and a page that asks before it's left stays open, with no dialog, until the
+# agent discards it. A bank's site asks first, in a card whose Allow Once opens it. Always Allow
 # opens it from then on, until Revoke Permission in the Space's menu takes that back. A login the
 # user saved fills in neither as the agent's tab loads it nor from a dropdown, and fills once the
 # user takes the tab over, without a reload. Closing the client's end ends its session with the tab,
-# and turning Settings › Agents off takes the socket away and drops a client connected.
+# and turning Settings › Agents off takes the socket away and drops a client connected. Relaunched,
+# a call with a tab's id from before is refused as one from before ilo restarted.
 
 log="$out/mcp.log"
 step=0
@@ -495,6 +497,25 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
     "the close didn't reach the activity log"
   listed=$(call list_tabs '{}')
   printf '%s\n' "$listed" | grep -q "^. $closing  " && fail "list_tabs listed the closed tab"
+  # A page that asks before it's left stays open, and the answer says why, with no dialog: with
+  # discard, the agent's own tab closes without saving (#1447).
+  printf '%s\n' '<!doctype html><title>Leave</title><p>Unsaved changes.</p>
+<script>addEventListener("beforeunload", event => event.preventDefault())</script>' > "$out/site/leave.html"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/leave.html\"}")
+  leaving=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  kept=$(call close_tab "{\"tab\":$leaving}")
+  case "$kept" in
+    "error: Tab $leaving stays open: its page asks before it's left"*"discard: true"*) ;;
+    *) fail "closing a page that asks before it's left answered: $kept" ;;
+  esac
+  call list_tabs '{}' | grep -q "^. $leaving  " || fail "a close that kept the tab took it out"
+  closed=$(call close_tab "{\"tab\":$leaving,\"discard\":true}")
+  case "$closed" in
+    "Closed tab $leaving without saving."*) ;;
+    *) fail "discarding the agent's own tab answered: $closed" ;;
+  esac
+  call list_tabs '{}' | grep -q "^. $leaving  " && fail "list_tabs listed the discarded tab"
+  grep -q "^browser: page $leaving dialog [^n]" "$log" && fail "closing the leaving page showed a dialog"
 
   # run_steps takes several actions in one call, in order, and waits for a page's text.
   ran=$(call run_steps "{\"tab\":$opened_tab,\"steps\":[{\"action\":\"scroll\",\"direction\":\"up\"},{\"action\":\"snapshot\"},{\"action\":\"wait\",\"text\":\"example domain\"}]}")
@@ -771,13 +792,35 @@ if [ "$driven" = 1 ]; then
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 fi
 quit
+
+# A tab's id names it alone across launches (#1449): relaunched, a call with the user's tab's id
+# from before is refused as one from before ilo restarted, as the tab it comes back as has another.
+# The switch the run turned off goes back on.
+printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
+log="$out/mcp-relaunch.log"
+step=0
+BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await '^browser: restored in ' || fail "the relaunch didn't restore the Spaces"
+await "$on" || fail "the relaunch didn't start the server"
+socket=$(grep '^browser: agents server on' "$log" | tail -1 | sed 's/^browser: agents server on //')
+bridge_on
+mcp '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}' \
+  > /dev/null
+mcp '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+stale=$(call read_page "{\"tab\":$user_tab}")
+[ "$stale" = "error: ilo restarted, so the tabs you knew are gone. Call list_tabs for the tabs open now." ] ||
+  fail "a call with a tab's id from before the relaunch answered: $stale"
+exec 4>&- 5<&-
+quit
 forget_login
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, is refused a tab the user took over until they hand it back and Keep answers its ask, its bar's Stop naming ⌘. in its tooltip, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow and again once that's revoked, and off takes the socket away"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, keeps one whose page asks before it's left until it discards it, with no dialog, runs steps in one call, waits on a handoff until Hand Back, is refused a tab the user took over until they hand it back and Keep answers its ask, its bar's Stop naming ⌘. in its tooltip, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow and again once that's revoked, and off takes the socket away, and a tab's id from before a relaunch is refused as such"
 else
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases). skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases). A tab's id from before a relaunch is refused as such. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi
 if [ -n "$msix" ]; then
   echo "ok: a Store copy's bridge, run by the alias its MSIX declares in the user's WindowsApps folder, carries a client's hello to the browser and its answer back."

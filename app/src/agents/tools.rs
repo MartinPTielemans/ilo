@@ -172,11 +172,17 @@ fn shared() -> Value {
         {
             "name": "close_tab",
             "title": "Close tab",
-            "description": "Close a tab in your Space. It goes to the archive, where the user can still find it.",
-            "inputSchema": { "type": "object", "properties": { "tab": tab } },
+            "description": "Close a tab in your Space. It goes to the archive, where the user can still find it. A page that may have unsaved changes stays open unless discard is true.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tab": tab,
+                    "discard": { "type": "boolean", "description": "Close it even if its page may have unsaved changes, losing them. In a tab you didn't open, the user is asked first." },
+                },
+            },
             "annotations": {
                 "readOnlyHint": false,
-                "destructiveHint": false,
+                "destructiveHint": true,
                 "openWorldHint": false,
             },
         },
@@ -577,6 +583,7 @@ pub fn describe(action: &str) -> &'static str {
         "stopped" => "You stopped it",
         "hand_off" => "Handed you a tab",
         "close_tab" => "Closed a tab",
+        "discard_tab" => "Closed a tab without saving",
         "passkey" => "Handed you a tab for your passkey",
         "ask_for_tab" => "Asked for a tab back",
         "kept" => "You kept the tab",

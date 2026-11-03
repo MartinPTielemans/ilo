@@ -72,6 +72,7 @@
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
+#include "third_party/blink/public/mojom/frame/sudden_termination_disabler_type.mojom-shared.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/events/keycodes/dom/dom_key.h"
@@ -543,6 +544,20 @@ content::WebContents* Tab::Wake(Window& window) {
   LOG(ERROR) << "browser: tab " << id_ << " has its page";
   Restored();
   return contents;
+}
+
+bool Tab::AsksBeforeLeaving() const {
+  content::WebContents* contents = web_contents();
+  if (!contents) {
+    return false;
+  }
+  bool asks = false;
+  contents->GetPrimaryMainFrame()->ForEachRenderFrameHost([&asks](content::RenderFrameHost* frame) {
+    asks = asks || (frame->IsRenderFrameLive() &&
+                    frame->GetSuddenTerminationDisablerState(
+                        blink::mojom::SuddenTerminationDisablerType::kBeforeUnloadHandler));
+  });
+  return asks;
 }
 
 void Tab::Close() {
