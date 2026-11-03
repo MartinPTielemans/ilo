@@ -100,7 +100,7 @@ ilo has no assistant of its own: no model, agent loop or AI account. What answer
 - **Handoff to the human.** At a login, 2FA prompt or CAPTCHA, the agent's tab pauses and the sidebar asks the user to step in.
 - **Same rules either way.** To the core, a task asked from ilo is an agent like any other: the same tools, permission checks, confirmations and activity log.
 - **Browser tools only.** A CLI that ilo runs gets ilo's MCP tools and nothing else. Its shell, file and web tools, the user's other MCP servers, plugins, hooks and settings are all off, it runs in an empty folder, and ilo declines any other approval it asks for. Page text can steer an agent, and a shell would reach the user's files, keys included. A CLI that can't be limited this way isn't offered.
-- **Sessions, never secrets.** Agents act inside the user's logged-in sessions but can never read passwords, cookies or autofill data.
+- **Sessions, never secrets.** Agents act inside the user's logged-in sessions but can never read passwords, cookies or autofill data. An agent's HTTP requests go from its tab to that tab's own site alone, as the page's own fetch would, so the browser adds the session's cookies and the headers a page can't set, and the agent never sends or sees them, nor an answer's headers. Values in an answer that look like credentials are hidden. Reads go at once, and every request that may change something asks the user each time, with nothing to allow for good.
 
 Why:
 

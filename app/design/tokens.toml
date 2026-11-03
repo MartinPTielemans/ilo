@@ -1358,6 +1358,8 @@ buttons-top = 12.0
 close = 22.0
 close-inset = 7.0
 close-glyph = 12.0
+# Above each change a request card lists, and above why it asks, so each reads as one.
+change-gap = 6.0
 
 [shell.cast]
 # Ours, as Chrome's dialog has Chrome's look: the Cast card is the question's, and each device a

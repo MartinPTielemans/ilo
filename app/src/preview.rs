@@ -1770,6 +1770,7 @@ fn main() {
                             why,
                             handoff: Some(reading[3]),
                             back,
+                            ..Default::default()
                         };
                         shell.set_agent_question(Some(question), cx);
                     }

@@ -18,10 +18,12 @@
 #include "browser_core/address_import.h"
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_page.h"
+#include "browser_core/agent_request.h"
 #include "browser_core/agent_session.h"
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/autofill_data.h"
+#include "browser_core/autofill_offer.h"
 #include "browser_core/capture.h"
 #include "browser_core/cast_dialog.h"
 #include "browser_core/clear_site.h"
@@ -40,12 +42,11 @@
 #include "browser_core/install_question.h"
 #include "browser_core/main_delegate.h"
 #include "browser_core/notes.h"
+#include "browser_core/page_dialog.h"
 #include "browser_core/page_menu.h"
 #include "browser_core/page_text.h"
-#include "browser_core/autofill_offer.h"
 #include "browser_core/password_offer.h"
 #include "browser_core/passwords.h"
-#include "browser_core/page_dialog.h"
 #include "browser_core/permission_question.h"
 #include "browser_core/platform/playready.h"
 #include "browser_core/platform/window_views.h"
@@ -633,6 +634,26 @@ void bc_agent_page(const char* agent,
   browser_core::AgentPage::CreateForWebContents(contents);
   browser_core::AgentPage::FromWebContents(contents)->Act(request, action, element,
                                                           text ? text : "");
+}
+
+void bc_agent_request(const char* agent,
+                      bc_id tab,
+                      uint64_t request,
+                      const char* method,
+                      const char* url,
+                      const char* headers,
+                      const char* body,
+                      size_t size) {
+  const bool may =
+      agent && browser_core::Space::AgentMayAct(agent, tab) && !browser_core::IsHeld(tab);
+  content::WebContents* contents = may ? browser_core::Window::PageOf(tab) : nullptr;
+  if (!contents) {
+    browser_core::RefuseAgentRequest(request, "The tab isn't in the agent's own Space.");
+    return;
+  }
+  browser_core::SendAgentRequest(*contents, request, method ? method : "", url ? url : "",
+                                 headers ? headers : "",
+                                 body && size ? std::string(body, size) : std::string());
 }
 
 bc_id bc_space_profile(bc_id id) {

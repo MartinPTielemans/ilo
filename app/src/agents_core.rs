@@ -220,6 +220,34 @@ impl Browser for Core {
     fn move_tab(&self, tab: u64, space: u64, _: &mut App) {
         unsafe { bc::bc_tab_move_to_space(tab, space) }
     }
+
+    fn request(&self, agent: &str, tab: u64, request: u64, sent: &agents::request::Request) {
+        let headers: String =
+            (sent.headers.iter()).map(|(name, value)| format!("{name}: {value}\n")).collect();
+        let method = CString::new(sent.method.as_str());
+        let url = CString::new(sent.url.as_str());
+        // The tool's checks leave no NUL, but an answer comes whatever happens.
+        let (Ok(agent), Ok(method), Ok(url), Ok(headers)) =
+            (CString::new(agent), method, url, CString::new(headers))
+        else {
+            let error = Some("The request can't hold a NUL character.".to_string());
+            let response = agents::request::Response { error, ..Default::default() };
+            return update(move |agents, cx| agents.request_done(request, response, cx));
+        };
+        let body = sent.body.as_bytes();
+        unsafe {
+            bc::bc_agent_request(
+                agent.as_ptr(),
+                tab,
+                request,
+                method.as_ptr(),
+                url.as_ptr(),
+                headers.as_ptr(),
+                body.as_ptr().cast(),
+                body.len(),
+            )
+        };
+    }
 }
 
 /// The tabs `copy` copies of `space`, as bc_space_today does.

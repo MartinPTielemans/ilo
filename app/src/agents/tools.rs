@@ -15,8 +15,10 @@ pub const INSTRUCTIONS: &str = concat!(
      passwords, cookies or autofill.\n\n\
      Open a page with open_tab, then click, type, press_key and scroll by ref (like e12), using \
      the outline each action answers with. A ref stays the element's while its page does. Use \
-     read_page for a long page's text and screenshot when the layout matters.\n\n\
-     Payments, orders, sending messages and banks' sites ask the user first. If they say no, \
+     read_page for a long page's text and screenshot when the layout matters. Where a site's \
+     page uses an API, request sends its HTTP requests from the tab, signed in as the page is.\n\n\
+     Payments, orders, sending messages, banks' sites and every request that may change \
+     something ask the user first. If they say no, \
      don't try again. You can never type into a password field: a sign-in, a 2FA prompt or a \
      CAPTCHA is the user's to do, so hand the tab to them with hand_off. The user can take a tab \
      over too; it's theirs until they hand it back, and ask_for_tab asks them for it. Use \
@@ -268,6 +270,34 @@ fn shared() -> Value {
             "annotations": { "readOnlyHint": true, "openWorldHint": true },
         },
         {
+            "name": "request",
+            "title": "Send HTTP requests",
+            "description": "Send HTTP requests from a tab's page to its own site, as the page's own script could, signed in as the page is: for a site's API, such as the JSON its page reads, when that's quicker than its pages. GET and HEAD go at once. Any other method may change something, so it asks the user first, every time: all of a call's changes in one question, and none is sent if they say no. The browser adds the page's cookies, which you never see; you can't set Cookie, Authorization or a header the browser sets. Answers with each request's status, type and text body, never its headers, with values that look like sign-in tokens or secrets hidden. They go one after another; one that gets no answer stops the rest.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "requests": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": super::request::MAX,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "method": { "type": "string", "description": "GET, POST, PUT, PATCH, DELETE or another method." },
+                                "path": { "type": "string", "description": "A path on the tab's site, such as /api/items?page=2, or a whole address on it." },
+                                "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+                                "body": { "description": "JSON, sent as application/json, or a string, sent as text unless headers give its Content-Type. 1 MB at most." },
+                            },
+                            "required": ["method", "path"],
+                        },
+                    },
+                    "tab": tab,
+                },
+                "required": ["requests"],
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": true, "openWorldHint": true },
+        },
+        {
             "name": "run_steps",
             "title": "Run steps",
             "description": "Run several actions in a tab in one call, in order: each is checked as it would be alone. Stops at the first that fails, asks the user first, or is refused. Answers with what each did and the last one's outline.",
@@ -445,6 +475,10 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             };
         }
         "press_key" => ("Pressing", "Pressed", "Couldn't press", target("a key")),
+        "request" => {
+            let to = format!("{} to {}", target("a request"), site("its site"));
+            ("Sending", "Sent", "Couldn't send", to)
+        }
         "scroll" => {
             let to = match did.target.as_str() {
                 "up" | "down" | "" => format!("{} on {}", target("down"), site("the page")),
@@ -505,6 +539,7 @@ pub fn step_glyph(tool: &str) -> &'static str {
         "press_key" => "icons/keyboard.svg",
         "scroll" => "icons/arrow-down.svg",
         "screenshot" => "icons/eye.svg",
+        "request" => "icons/arrow-left-right.svg",
         "wait" => "icons/clock.svg",
         "list_tabs" | "close_tab" | "hand_off" | "ask_for_tab" => "icons/app-window.svg",
         "ask" => "icons/circle-question-mark.svg",
@@ -568,6 +603,7 @@ pub fn describe(action: &str) -> &'static str {
         "press_key" => "Pressed a key",
         "scroll" => "Scrolled",
         "screenshot" => "Took a screenshot",
+        "request" => "Sent a request",
         "connected" => "Connected",
         "disconnected" => "Disconnected",
         "released" => "Let go of the tab",

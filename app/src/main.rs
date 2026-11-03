@@ -6075,6 +6075,32 @@ unsafe extern "C" fn agent_page_element(_: *mut c_void, tab: bc::bc_id, request:
     });
 }
 
+/// The core's answer to an agent's HTTP request (bc_agent_request).
+unsafe extern "C" fn agent_request_done(
+    _: *mut c_void,
+    request: u64,
+    response: *const bc::bc_agent_response,
+) {
+    let response = unsafe { &*response };
+    let text = |text: *const c_char| {
+        (!text.is_null()).then(|| unsafe { CStr::from_ptr(text) }.to_string_lossy().into_owned())
+    };
+    let body = match response.size {
+        0 => Vec::new(),
+        size => unsafe { std::slice::from_raw_parts(response.body.cast::<u8>(), size) }.to_vec(),
+    };
+    let response = browser::agents::request::Response {
+        status: u16::try_from(response.status).unwrap_or(0),
+        kind: text(response.type_).unwrap_or_default(),
+        body,
+        cut: response.cut,
+        error: text(response.error),
+    };
+    // check.sh reads this line.
+    log!("browser: agent request {request} answered {} {}", response.status, response.body.len());
+    agents_core::update(move |agents, cx| agents.request_done(request, response, cx));
+}
+
 /// The text of a tab's page that bc_tab_read_text asked for, or null if it had none.
 unsafe extern "C" fn tab_text(_: *mut c_void, tab: bc::bc_id, request: u64, text: *const c_char) {
     let text = (!text.is_null())
@@ -7828,6 +7854,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_text: Some(tab_text),
         agent_page_done: Some(agent_page_done),
         agent_page_element: Some(agent_page_element),
+        agent_request_done: Some(agent_request_done),
         window_downloads_question: Some(window_downloads_question),
         archive_note_changed: Some(archive_note_changed),
         #[cfg(target_os = "linux")]

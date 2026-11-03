@@ -12,8 +12,10 @@
 # the page, which isn't the page's. Its keys, typed or pressed, go to the page alone, and Escape
 # the page doesn't keep runs no Stop of ilo's. Where it acts in the page shown, its pointer and a
 # ring with the element's ref show it. It opens a page, clicks its link, scrolls, takes a screenshot
-# and closes a tab, and a bank's site asks first, in a card whose Allow Once opens it. Always Allow
-# opens it from then on, until Revoke Permission in the Space's menu takes that back. A login the
+# and closes a tab. It sends requests to its tab's site, carrying a session it never sees, and a
+# change asks every time, in a card whose Allow sends it and Deny doesn't. A bank's site asks
+# first, in a card whose Allow Once opens it. Always Allow opens it from then on, until Revoke
+# Permission in the Space's menu takes that back. A login the
 # user saved fills in neither as the agent's tab loads it nor from a dropdown, and fills once the
 # user takes the tab over, without a reload. Closing the client's end ends its session with the tab,
 # and turning Settings › Agents off takes the socket away and drops a client connected.
@@ -467,6 +469,52 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
   closed=$(call close_tab "{\"tab\":$keys_tab}")
   case "$closed" in "Closed tab $keys_tab."*) ;; *) fail "closing the keys page answered: $closed" ;; esac
 
+  # It sends HTTP requests from its tab to the tab's own site, with the tab's session but never
+  # seeing it: reads go at once, their answers without the cookie the site sets or the token in its
+  # body, and a change asks first, every time, in a card whose Allow sends it and Deny doesn't.
+  sent=$(call request "{\"tab\":$frames_tab,\"requests\":[{\"method\":\"GET\",\"path\":\"/api/me\"},{\"method\":\"GET\",\"path\":\"/api/me\"}]}")
+  case "$sent" in
+    "1. GET /api/me → 200 application/json"*"Ada"*"2. GET /api/me → 200"*) ;;
+    *) fail "request answered: $sent" ;;
+  esac
+  case "$sent" in *s3cret* | *tok-*) fail "the request's answer held the session: $sent" ;; esac
+  grep -q "^GET chromium localhost:$port/api/me cookie .*api=s3cret$port" "$out/site.log" ||
+    fail "the agent's request didn't carry the tab's session"
+  await_log "^browser: agent activity mcp-client $frames_tab request\$" \
+    "the request didn't reach the activity log"
+  changes='^browser: agent mcp-client asks [0-9]*: make a change on localhost$'
+  posted="^POST localhost:$port/api/items cookie .*api=s3cret$port"
+  # Asks for a change and answers $1 with a click on the card's last row, Deny at its left and
+  # Allow at its right.
+  change() {
+    before=$(grep -c "$changes" "$log" || true)
+    request request "{\"tab\":$frames_tab,\"requests\":[{\"method\":\"POST\",\"path\":\"/api/items\",\"body\":{\"title\":\"Milk\"}}]}" >&4
+    await_more "$changes" "$before" || fail "a change didn't ask first"
+    q=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
+    await_log "^browser: agent question $q at " "the change's question wasn't drawn"
+    read -r qx qy qw qh <<CARD
+$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
+CARD
+    ../tools/window-screenshot.sh "$pid" "$out/agent-request.png" || fail "no window to capture"
+    [ "$(grep -c "$posted" "$out/site.log")" = "$2" ] || fail "the change went before the user answered"
+    case "$1" in Once) x=$((qw * 3 / 4)) ;; Dismiss) x=$((qw / 4)) ;; esac
+    send click $((qx + x)) $((qy + qh - 26))
+    await_log "^browser: agent mcp-client answered $q $1\$" "$1 didn't answer the change's question"
+    changed=$(next_answer) || fail "the browser didn't answer the change"
+    changed=$(printf '%s\n' "$changed" | answered)
+  }
+  change Once 0
+  case "$changed" in
+    'POST /api/items → 201 application/json'*'{"id":8,"title":"Milk"}') ;;
+    *) fail "the allowed change answered: $changed" ;;
+  esac
+  grep -q "$posted body {\"title\":\"Milk\"}\$" "$out/site.log" ||
+    fail "the allowed change didn't reach the site with the tab's session"
+  change Dismiss 1
+  [ "$changed" = "error: The user said no: you can't make a change on localhost. Don't try again." ] ||
+    fail "the denied change answered: $changed"
+  [ "$(grep -c "$posted" "$out/site.log")" = 1 ] || fail "the denied change reached the site"
+
   # It opens a page in its Space, clicks its link, scrolls and takes a screenshot.
   opened=$(call open_tab '{"url":"example.com"}')
   case "$opened" in
@@ -775,7 +823,7 @@ forget_login
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, is refused a tab the user took over until they hand it back and Keep answers its ask, its bar's Stop naming ⌘. in its tooltip, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow and again once that's revoked, and off takes the socket away"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, sends requests to its tab's site with the tab's session it never sees, a change asking each time, runs steps in one call, waits on a handoff until Hand Back, is refused a tab the user took over until they hand it back and Keep answers its ask, its bar's Stop naming ⌘. in its tooltip, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow and again once that's revoked, and off takes the socket away"
 else
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases). skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi

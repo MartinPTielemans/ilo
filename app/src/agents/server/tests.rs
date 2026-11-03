@@ -224,6 +224,7 @@ fn the_server_answers_what_needs_no_browser() {
             "press_key",
             "scroll",
             "screenshot",
+            "request",
             "run_steps",
             "hand_off", "ask_for_tab"
         ]
