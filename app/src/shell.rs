@@ -96,7 +96,6 @@ mod recent_downloads;
 mod recorder;
 mod rows;
 mod scroller;
-mod update_sign;
 pub use scroller::{ScrollBarsShown, follow_scroll_bars};
 pub(crate) mod scaled;
 mod side_panel;
