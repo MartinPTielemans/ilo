@@ -906,25 +906,30 @@ none_since '^browser: selected' || fail "a file of the dropped folder showed"
 settled
 ../tools/window-screenshot.sh "$pid" "$out/dropped-folder.png" || fail "no window to capture"
 # The dropped file's row, under the folder's four, dragged onto the page hands the file to the
-# system's drag, to upload it there, as a download's row does, and goes back to its place.
-press=$((step + 1))
-send press $(pinned_row 4)
-send dragto 150 $(($(pinned_row 4 | cut -d' ' -f2) + 10))
-send dragto 600 300
-expect "^browser: tab $e file drag\$" \
-  "a file's row dragged onto the page didn't start the system's drag"
-send release 600 300
-# No real button holds the system's drag, so it may end before the release reaches it.
-for _ in $(seq 100); do
-  sed -n "/^browser: drive $press: /,\$p" "$log" | grep -q '^browser: file drag ended ' && break
-  sleep 0.1
-done
-sed -n "/^browser: drive $press: /,\$p" "$log" | grep -q '^browser: file drag ended ' ||
-  fail "the file row's drag didn't end"
-case "$(outline)" in
-  "$n+["*"] $e $c") ;;
-  *) fail "the file's row didn't go back to its place: $(outline)" ;;
-esac
+# system's drag, to upload it there, as a download's row does, and goes back to its place. On
+# Windows the app stops in DoDragDrop under the driver (#1583).
+if windows; then
+  echo "skip: a file's row dragged onto the page: Windows' system drag stops under the driver (#1583)."
+else
+  press=$((step + 1))
+  send press $(pinned_row 4)
+  send dragto 150 $(($(pinned_row 4 | cut -d' ' -f2) + 10))
+  send dragto 600 300
+  expect "^browser: tab $e file drag\$" \
+    "a file's row dragged onto the page didn't start the system's drag"
+  send release 600 300
+  # No real button holds the system's drag, so it may end before the release reaches it.
+  for _ in $(seq 100); do
+    sed -n "/^browser: drive $press: /,\$p" "$log" | grep -q '^browser: file drag ended ' && break
+    sleep 0.1
+  done
+  sed -n "/^browser: drive $press: /,\$p" "$log" | grep -q '^browser: file drag ended ' ||
+    fail "the file row's drag didn't end"
+  case "$(outline)" in
+    "$n+["*"] $e $c") ;;
+    *) fail "the file's row didn't go back to its place: $(outline)" ;;
+  esac
+fi
 # The +'s menu ends with Add File or Folder… (Add Files… and Add Folder… off the Mac, whose
 # panels pick one kind), whose file, named at launch, opens at the top of Today and shows. Today is
 # read here, as the drag before may have dropped its file on the page, which opens it as a tab.
