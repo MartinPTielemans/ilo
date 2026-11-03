@@ -7,8 +7,8 @@
 # cut to their shapes, while no other app's window is in front of them there. Otherwise it draws
 # each of the process's windows itself with PrintWindow, in their order on screen, so nothing of
 # another app's can get into the picture. PrintWindow draws what DirectComposition leaves
-# see-through, as an overlay's margin, black (#1257), and the caption Windows would give the
-# browser window under the UI (#1262), so it's the way out, not the way in, and says so.
+# see-through, as an overlay's margin, black (#1257), so it's the way out, not the way in, and says
+# so. It has the browser window repaint its frame, which paints no caption under the UI (#1262).
 # On Linux it captures the private session tools/headless.sh --run starts, or check.sh's Xvfb,
 # which hold nothing but the app, and refuses outside one rather than capture the owner's screen.
 # Usage: tools/window-screenshot.sh <pid> <output.png> [all]
@@ -146,8 +146,7 @@ public static class Capture {
       return null;
     }
     Console.Error.WriteLine("A window of another app is in front of the app, so the capture " +
-        "draws its windows with PrintWindow, which draws the clear margins of overlays black " +
-        "and a caption under the UI.");
+        "draws its windows with PrintWindow, which draws the clear margins of overlays black.");
     using (var image = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb))
     using (var graphics = Graphics.FromImage(image)) {
       for (int i = windows.Count - 1; i >= 0; i--) {
