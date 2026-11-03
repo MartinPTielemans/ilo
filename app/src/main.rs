@@ -4949,7 +4949,18 @@ fn finish_opening(
         offer::tab_shown(id, selected, cx);
     }
     let children: Vec<AnyWindowHandle> = [
-        find_bar::open(id, ui_view, cx),
+        find_bar::open(
+            id,
+            ui_view,
+            {
+                let shell = shell.downgrade();
+                move |cx, right, top, width| {
+                    let shell = shell.upgrade()?;
+                    Some(shell.read(cx).at_page_corner(right, top, width))
+                }
+            },
+            cx,
+        ),
         prompt.map(Into::into),
         reveal::open(shell.clone(), ui_view, cx),
     ]

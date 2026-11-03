@@ -1956,6 +1956,35 @@ impl Shell {
         self.selected
     }
 
+    /// Where something placed `right` and `top` in from the focused page's top right corner and
+    /// `width` wide has its top left in the window, as the host places the find bar, and the
+    /// window's size: for a tooltip hanging from a button in it.
+    pub fn at_page_corner(
+        &self,
+        right: f32,
+        top: f32,
+        width: f32,
+    ) -> (Point<Pixels>, Size<Pixels>) {
+        let (_, page_right, page_top) = self.focused_pane_corner();
+        let left = f32::from(self.viewport.width) - page_right - right - width;
+        (point(px(left), px(page_top + top)), self.viewport)
+    }
+
+    /// The focused page's left edge, and how far its right and top edges are in from the card's,
+    /// as the host takes them.
+    fn focused_pane_corner(&self) -> (f32, f32, f32) {
+        let (frame, _) = self.page_frame(self.viewport);
+        let panes = self.panes(self.selected);
+        let focused = panes.iter().position(|&pane| pane == self.selected).unwrap_or(0);
+        let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
+        let pane = pane_frames(frame, panes.len(), stacked, &shares)[focused];
+        (
+            f32::from(pane.left()),
+            f32::from(frame.right() - pane.right()),
+            f32::from(pane.top() - frame.top()),
+        )
+    }
+
     /// Whether the window shows `tab`'s page: the tab shown, or a page beside it in its split view.
     pub fn shows(&self, tab: u64) -> bool {
         self.selected != 0 && self.panes(self.selected).contains(&tab)
@@ -3365,16 +3394,7 @@ impl Render for Shell {
         }
         // The find bar, the zoom HUD and the toast sit at the focused page's corner, and the
         // toast's window spans that page.
-        let (frame, _) = self.page_frame(self.viewport);
-        let panes = self.panes(self.selected);
-        let focused = panes.iter().position(|&pane| pane == self.selected).unwrap_or(0);
-        let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
-        let pane = pane_frames(frame, panes.len(), stacked, &shares)[focused];
-        let pane_corner = (
-            f32::from(pane.left()),
-            f32::from(frame.right() - pane.right()),
-            f32::from(pane.top() - frame.top()),
-        );
+        let pane_corner = self.focused_pane_corner();
         if self.pane_corner != pane_corner {
             self.pane_corner = pane_corner;
             let (left, right, top) = pane_corner;
