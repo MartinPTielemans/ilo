@@ -96,7 +96,7 @@ impl Shell {
         let accent = self.circle_accent(self.space);
         self.run(Command::NewSpace, "swipe", cx);
         if let Some(form) = &self.form {
-            let (space, start) = (form.space, Instant::now());
+            let (space, start) = (form.space, crate::motion::start(cx));
             self.circle_exit = Some(CircleExit {
                 space,
                 accent,
@@ -156,7 +156,7 @@ impl Shell {
 
     /// The circle halfway down the page's edge and its glow, while the last Space's page is pulled
     /// and as the circle goes back after making a Space.
-    pub(super) fn new_space_circle(&self) -> Option<impl IntoElement + use<>> {
+    pub(super) fn new_space_circle(&self, cx: &gpui::App) -> Option<impl IntoElement + use<>> {
         let (travel, accent, look) = match &self.circle_exit {
             Some(exit) => {
                 let t = exit.start.elapsed().as_secs_f32() / EXIT;
@@ -193,7 +193,7 @@ impl Shell {
             Look::Readying(t) => (PI * ((t - POP_AT) / POP).clamp(0., 1.)).sin(),
             _ => 0.,
         };
-        let scale = 1. + (POP_SCALE - 1.) * popped;
+        let scale = crate::motion::scale(1. + (POP_SCALE - 1.) * popped, cx);
         let across = CIRCLE * scale;
         let disc = div()
             .relative()

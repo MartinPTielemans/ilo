@@ -329,6 +329,9 @@ expect "^browser: loaded $tab chrome://history/\$" \
   "⌘Y with the page focused didn't open the history page"
 send key w cmd
 expect "^browser: today $before\$" "⌘W didn't close the history tab"
+# The click waits for the tab ⌘W leaves in front to show, as no hand clicks in the moment before
+# it does: a page shown after a click in the UI would take the keyboard from it (#1209).
+expect '^browser: window [0-9]* shows [0-9]*$' "⌘W didn't show the tab before the history tab"
 send click $sidebar_point
 send key y cmd
 expect '^browser: command view-history via ui$' "⌘Y with the UI focused didn't reach the UI"
