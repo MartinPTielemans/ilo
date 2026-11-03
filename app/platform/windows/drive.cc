@@ -124,7 +124,7 @@ HWND g_hovered = nullptr;
 // The moves the driver has posted and its windows haven't taken yet, which DropRealPointer lets
 // through. Some are never taken, as by a window that closed, so only the latest are kept.
 std::deque<std::pair<HWND, LPARAM>> g_posted_moves;
-// The last click: its window, place on screen, button and time.
+// The last press, a click's or a drag's: its window, place on screen, button and time.
 struct Click {
   HWND hwnd = nullptr;
   POINT at{};
@@ -417,7 +417,8 @@ void Release(const Target& target, UINT button, int modifiers) {
   PostMessageW(target.hwnd, Up(button), MouseKeys(modifiers, 0), ClientParam(target));
 }
 
-// How long a click at |target| waits, so it isn't taken with the last one for a double click.
+// How long a press at |target| waits, so GPUI, which counts every press, a drag's too, doesn't
+// take it with the last one for a double click, as the driver presses faster than a hand does.
 UINT WaitBeforeClick(const Target& target, UINT button) {
   const ULONGLONG since = GetTickCount64() - g_last_click.time;
   const bool close_by =
@@ -428,6 +429,19 @@ UINT WaitBeforeClick(const Target& target, UINT button) {
     return 0;
   }
   return static_cast<UINT>(GetDoubleClickTime() - since + 50);
+}
+
+// The steps of a press at |target| that starts a drag, waiting as a click does (platform/linux/
+// drive.rs waits the same), so a drag from where the last one started isn't a double click.
+void AddPress(const Target& target, UINT button, int modifiers) {
+  if (const UINT wait = WaitBeforeClick(target, button)) {
+    g_steps.push_back({[] {}, wait});
+  }
+  g_steps.push_back({[=] { Move(target, 0, 0); }});
+  g_steps.push_back({[=] {
+    Press(target, button, modifiers, false);
+    g_last_click = {target.hwnd, target.screen, button, GetTickCount64()};
+  }});
 }
 
 // The steps of a click at |target|, or with |twice| a double click.
@@ -1227,8 +1241,7 @@ bool Run(const std::string& line) {
       return false;
     }
     const Target to = At(from.hwnd, OnScreen(Driven(), x2, y2));
-    g_steps.push_back({[=] { Move(from, 0, 0); }});
-    g_steps.push_back({[=] { Press(from, MK_LBUTTON, 0, false); }});
+    AddPress(from, MK_LBUTTON, 0);
     g_steps.push_back({[=] { Move(to, 0, MK_LBUTTON); }});
     g_steps.push_back({[=] { Release(to, MK_LBUTTON, 0); }});
     return true;
@@ -1244,8 +1257,7 @@ bool Run(const std::string& line) {
     HWND key = GetActiveWindow();
     const Target half = At(from.hwnd, OnScreen(key, (x + x2) / 2, (y + y2) / 2));
     const Target to = At(from.hwnd, OnScreen(key, x2, y2));
-    g_steps.push_back({[=] { Move(from, 0, 0); }});
-    g_steps.push_back({[=] { Press(from, MK_LBUTTON, 0, false); }});
+    AddPress(from, MK_LBUTTON, 0);
     g_steps.push_back({[=] { Move(half, 0, MK_LBUTTON); }});
     g_steps.push_back({[=] { Move(to, 0, MK_LBUTTON); }});
     g_steps.push_back({[=] { Release(to, MK_LBUTTON, 0); }});
@@ -1268,8 +1280,7 @@ bool Run(const std::string& line) {
         return false;
       }
       g_pressed = target.hwnd;
-      g_steps.push_back({[=] { Move(target, 0, 0); }});
-      g_steps.push_back({[=] { Press(target, button, keys, false); }});
+      AddPress(target, button, keys);
       return true;
     }
     Target target;
