@@ -2619,6 +2619,8 @@ impl gpui::Render for AccountPage {
             Rc::default(),
             Rc::new(|_, _, _| {}),
             Rc::new(|_, _| {}),
+            &browser::settings_rows::Stops::default(),
+            cx,
         );
         let colors = Colors {
             line: look.line,

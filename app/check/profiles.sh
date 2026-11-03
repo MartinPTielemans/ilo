@@ -396,6 +396,9 @@ expect "^browser: today [0-9]* $d\$" "Clear browsing data didn't open in the Spa
 ../tools/window-screenshot.sh "$pid" "$out/clear-browsing-data.png" || fail "no window to capture"
 send key w cmd
 expect "^browser: today $d\$" "⌘W didn't close Clear browsing data: Today is \"$(today)\""
+# Settings opens only once the tab ⌘W leaves is shown: its page, shown later, would take the
+# keyboard back from Settings, and the click on its section would go to the browser window.
+expect "^browser: selected $d\( in .*\)\{0,1\}\$" "⌘W didn't show the second Space's tab again"
 # A profile's own settings sit in the sections they belong to, a row per profile: its search
 # engine and download folder in General, its archive time in Tabs & Sidebar. Settings › Profiles
 # lists the profiles, with New Profile under them. Settings logs where it draws each control the
