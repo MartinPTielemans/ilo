@@ -260,7 +260,7 @@ impl Bar {
     }
 
     fn open(cx: &mut TestAppContext, tabs: Vec<shell::BarTab>, host: Recorder) -> Self {
-        Bar::opened(cx, host, |cx| show(None, tabs, None, cx))
+        Bar::opened(cx, host, |cx| show(None, Vec::new(), tabs, None, cx))
     }
 
     /// The bar, opened for Search Tabs on `tabs`.
@@ -394,7 +394,9 @@ impl Bar {
     /// Opens the bar again on tab 1's `url`, over `field` if it's the URL field's box.
     fn edit(&mut self, url: &str, field: Option<Bounds<Pixels>>) {
         let editing = Some((1, SharedString::from(url.to_string())));
-        self.cx.cx.update(|cx| show(editing, Vec::new(), field, cx));
+        self.cx
+            .cx
+            .update(|cx| show(editing, Vec::new(), Vec::new(), field, cx));
         self.cx.run_until_parked();
     }
 
@@ -1299,6 +1301,7 @@ fn tab(tab: u64, url: &str) -> shell::BarTab {
         title: url.to_string().into(),
         url: url.to_string().into(),
         favicon: None,
+        renamed: false,
     }
 }
 
@@ -1538,7 +1541,7 @@ fn of_two_matching_tabs_the_one_shown_last_is_first(cx: &mut TestAppContext) {
     let tabs = vec![titled(2, "Convex docs", docs), titled(4, "Convex", CONVEX)];
     let mut bar = Bar::with_tabs(cx, tabs);
     bar.type_text("conv");
-    // The core lists the other as its own row, which stays under the first.
+    // The other rises too, right under the search row, in place of the core's own row for it.
     let other = Suggestion {
         tab: 4,
         ..page(CONVEX)
@@ -1565,6 +1568,142 @@ fn of_two_matching_tabs_the_one_shown_last_is_first(cx: &mut TestAppContext) {
     assert_eq!(bar.calls(), ["select 4", "hide"]);
 }
 
+/// An open tab the user renamed, as Arc's custom title.
+fn renamed(id: u64, name: &str, url: &str) -> shell::BarTab {
+    shell::BarTab {
+        renamed: true,
+        ..titled(id, name, url)
+    }
+}
+
+/// Every tab the typing names rises, up to three: the first above the search row, the others right
+/// after it, before the profile's pages. A renamed tab whose own name the typing starts goes
+/// first, then the most recently shown, and a renamed one named only by a later word doesn't.
+#[gpui::test]
+fn the_tabs_named_rise_a_renamed_one_starting_with_the_typing_first(cx: &mut TestAppContext) {
+    let tabs = vec![
+        titled(2, "Convex docs", "https://docs.convex.dev/"),
+        renamed(3, "My convoy", "https://convoy.test/"),
+        titled(4, "Projects | Convex", CONVEX),
+        renamed(5, "Conv board", "https://board.test/"),
+        titled(6, "Convert units", "https://units.test/"),
+    ];
+    let mut bar = Bar::with_tabs(cx, tabs);
+    bar.type_text("conv");
+    bar.suggest("conv", vec![searching("conv"), page("https://conv.test/")]);
+    let rows = bar.rows();
+    let ids: Vec<u64> = rows.iter().map(|(_, tab)| *tab).collect();
+    assert_eq!(ids, [5, 0, 2, 3, 0], "{rows:?}");
+    assert_eq!(rows[4].0, "https://conv.test/");
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["select 5", "hide"]);
+}
+
+/// An address typed whose page an open tab shows keeps its row first, where ↩ goes, and the
+/// tab's row comes second, as Arc's bar lists them.
+#[gpui::test]
+fn a_typed_address_an_open_tab_shows_keeps_its_row_with_the_tab_second(cx: &mut TestAppContext) {
+    let home = "https://convex.dev/";
+    let mut bar = Bar::with_tabs(cx, vec![titled(4, "Convex", home)]);
+    bar.type_text("convex.dev");
+    let listed = Suggestion {
+        tab: 4,
+        ..page(home)
+    };
+    bar.suggest(
+        "convex.dev",
+        vec![page(home), searching("convex.dev"), listed],
+    );
+    let search = search("convex.dev");
+    assert_eq!(
+        bar.rows(),
+        [(home.to_string(), 0), (home.to_string(), 4), (search, 0)]
+    );
+    bar.keys("down enter");
+    assert_eq!(bar.calls(), ["select 4", "hide"]);
+}
+
+/// A page from history with an earlier row's title, or an open tab's, on a web app that gives
+/// many pages one title, is left out, as Arc's bar keeps one; elsewhere both stay.
+#[gpui::test]
+fn rows_alike_on_a_one_title_web_app_list_once(cx: &mut TestAppContext) {
+    let titled_page = |url: &str, title: &str| Suggestion {
+        text: title.to_string().into(),
+        ..page(url)
+    };
+    let figma = "https://www.figma.com/design/c";
+    let mut bar = Bar::with_tabs(cx, vec![titled(7, "Untitled", figma)]);
+    bar.type_text("pull");
+    bar.suggest(
+        "pull",
+        vec![
+            searching("pull"),
+            Suggestion {
+                tab: 7,
+                ..titled_page(figma, "Untitled")
+            },
+            titled_page("https://github.com/a/b/pulls", "Pull requests"),
+            titled_page("https://github.com/c/d/pulls", "Pull requests"),
+            titled_page("https://gist.github.com/e", "Pull requests"),
+            titled_page("https://gitlab.test/f/pulls", "Pull requests"),
+            titled_page("https://gitlab.test/g/pulls", "Pull requests"),
+            titled_page("https://www.figma.com/design/h", "Untitled"),
+        ],
+    );
+    let urls: Vec<String> = bar.rows().into_iter().map(|(url, _)| url).collect();
+    assert_eq!(
+        urls,
+        [
+            search("pull"),
+            figma.to_string(),
+            "https://github.com/a/b/pulls".to_string(),
+            "https://gitlab.test/f/pulls".to_string(),
+            "https://gitlab.test/g/pulls".to_string(),
+        ]
+    );
+}
+
+/// Rows for the pages shown go last, as Arc's bar deranks the page it's on, but for the first,
+/// where ↩ goes, and another tab's, which switches to it.
+#[gpui::test]
+fn rows_for_the_page_shown_go_last(cx: &mut TestAppContext) {
+    let shown = "https://notes.test/today";
+    let open = |cx: &mut TestAppContext| {
+        Bar::opened(cx, Recorder::default(), |cx| {
+            show(None, vec![shown.into()], Vec::new(), None, cx)
+        })
+    };
+    let mut bar = open(cx);
+    bar.type_text("notes");
+    let other_tab = Suggestion {
+        tab: 8,
+        ..page(shown)
+    };
+    let rows = vec![
+        searching("notes"),
+        page(shown),
+        other_tab,
+        page("https://notes.test/"),
+    ];
+    bar.suggest("notes", rows);
+    let notes = "https://notes.test/".to_string();
+    let expected = [
+        (search("notes"), 0),
+        (shown.to_string(), 8),
+        (notes, 0),
+        (shown.into(), 0),
+    ];
+    assert_eq!(bar.rows(), expected);
+
+    let mut bar = open(cx);
+    bar.type_text("notes");
+    bar.suggest(
+        "notes",
+        vec![completing(shown, ".test/today"), searching("notes")],
+    );
+    assert_eq!(bar.rows()[0], (shown.to_string(), 0));
+}
+
 #[gpui::test]
 fn the_tab_shown_is_never_offered(cx: &mut TestAppContext) {
     // Editing tab 4's URL, which is the tab shown, and tab 2 is another.
@@ -1572,16 +1711,24 @@ fn the_tab_shown_is_never_offered(cx: &mut TestAppContext) {
     let docs = titled(2, "Convex docs", "https://docs.convex.dev/");
     let tabs = vec![titled(4, "Convex", CONVEX), docs];
     let editing = Some((4, SharedString::from(CONVEX)));
-    bar.cx.cx.update(|cx| show(editing, tabs, None, cx));
+    bar.cx
+        .cx
+        .update(|cx| show(editing, Vec::new(), tabs, None, cx));
     bar.cx.run_until_parked();
     bar.type_text("conv");
     bar.suggest("conv", vec![searching("conv")]);
     assert_eq!(bar.rows()[0], ("https://docs.convex.dev/".to_string(), 2));
 
     let editing = Some((4, SharedString::from(CONVEX)));
-    bar.cx
-        .cx
-        .update(|cx| show(editing, vec![titled(4, "Convex", CONVEX)], None, cx));
+    bar.cx.cx.update(|cx| {
+        show(
+            editing,
+            Vec::new(),
+            vec![titled(4, "Convex", CONVEX)],
+            None,
+            cx,
+        )
+    });
     bar.cx.run_until_parked();
     bar.type_text("conv");
     bar.suggest("conv", vec![searching("conv")]);

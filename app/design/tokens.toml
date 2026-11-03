@@ -817,6 +817,11 @@ drop-line-end = 2.0
 drop-slot-inset = 3.0
 drop = 0xffff_ffe6
 plate-radius = 12.0
+# A row's host under its title, in `secondary` at text's small size, Arc's 11 pt (Arc 1.168): a
+# pinned tab's whose page left its pinned URL's host, and a tab's in Developer Mode. The two lines
+# are this tall, centred in the row together (ours: Arc's lines aren't measured).
+host-title-line = 16.0
+host-line = 14.0
 # Around the row the keyboard acts on while the sidebar has it (Focus Sidebar), inside its plate,
 # in the ink at `keyed` (ours: Arc 1.170's isn't measured).
 keyed-ring = 2.0
@@ -1191,8 +1196,10 @@ card-gap = 24.0
 # Once its cards don't fit, the section leaves the page this much of the window, however narrow,
 # and its cards scroll across (Arc 1.171 ax: 500 → 444, 1100 → 1044, live as the window resizes).
 spaces-page = 56.0
-# The name's row in the card, 33 down to its middle as in Arc, with the rows 52 down.
-card-name-top = 14.0
+# The name's row in the card, 25 down to its middle, with the rows 44 down, the first one's middle
+# 64.5 down: Arc 1.170 rec, three Spaces, field 7 to 43 and the first row's middle 65, and Arc
+# 1.171's 25 and 64 (#1401). Arc 1.170.0's one-Space cap had both 8 lower.
+card-name-top = 6.0
 card-name-height = 38.0
 # The name's field across that row (*interim*, by proportion from stills of Arc 1.170's card, 240
 # wide): a plate 8 in from the card's sides and 36 tall, Ink at 0.1, at the controls' radius where
@@ -1212,6 +1219,11 @@ card-brush = 28.0
 card-brush-inset = 4.0
 card-brush-glyph = 14.0
 card-brush-color = 0.35
+# The ••• at the card's foot, which shows the Space's menu: its middle 22 in from the card's right
+# and 21.5 above its foot (Arc 1.170 rec; Arc 1.171's 21). Ours: the sidebar's ••• button, with the
+# pointer on the card, as the brush shows only with it on the field.
+card-more-x = 22.0
+card-more-y = 21.5
 plus-gap = 33.0
 plus-size = 30.0
 # Ours: the + is the Space's accent where Arc's is blue (#319), with the palette's hovered and
@@ -1351,12 +1363,13 @@ opt-in-line = 18.0
 
 [shell.permission]
 # Ours, as Arc's wasn't recorded: under the URL field, as wide as it, with the dialog's corners
-# and the header's plates. The text is the dialog's detail colour.
+# and the header's plates. The detail is the dialog's: the palette's ink at its alpha, dark in
+# light mode, as the card is the window's fill.
 gap = 6.0
 padding = 12.0
 radius = 16.0
 line = 18.0
-detail = 0xffff_ffc7
+detail = 0.78
 button-height = 28.0
 button-gap = 8.0
 buttons-top = 12.0
@@ -1405,6 +1418,32 @@ plate-radius = 12.0
 # shade's height above that.
 shade-gap = 3.0
 shade = 170.0
+
+[shell.scroller]
+# The list's scroller is Arc 1.170's, AppKit's own: a knob and no track, this far in from the
+# sidebar's edge. While the system shows scroll bars only as they're used, it's the overlay knob,
+# 4 wide, the ink at 0.49 (white 49 % measured on a dark theme; the light theme's ink is ours).
+edge = 3.0
+knob = 4.0
+knob-alpha = 0.49
+# With the system's scroll bars shown always, it's AppKit's legacy knob, 5 wide and the ink at 0.5
+# (AppKit's light one is black 0.5), always there while the rows overflow, and the rows give up
+# this much for it. Its rect is 3 in from the rows' part's top and bottom, and the knob 1 inside
+# that. The overlay knob's ends are the same 3 in (ours: Arc's aren't measured).
+knob-shown = 5.0
+knob-shown-alpha = 0.5
+gutter = 8.0
+end = 3.0
+knob-inset = 1.0
+# Ours, *interim* (Arc's isn't measured): the shortest knob.
+knob-min = 18.0
+
+[shell.scroller.motion]
+# Seconds: the design file has no motion, so tools/design-sync.md leaves this table out. Ours,
+# *interim* (Arc's aren't measured): how long the overlay knob stays after the last scroll, and
+# then fades.
+hold = 0.8
+fade = 0.25
 
 [shell.side-panel]
 # The panel's width until the user gives it one, Chrome's, and the range they can give it,

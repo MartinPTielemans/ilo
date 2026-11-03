@@ -159,12 +159,8 @@ expect "^browser: title $b cookie none\$" \
 # Held partway back, the first profile's Space comes in beside this one's whole: its URL field
 # with the tab it would show, its favorite and its rows at its offset, as this one's go out. X11
 # sends a touchpad's scrolling with no start or end, so two fingers never page there (#554).
-# Windows' touchpad comes through DirectManipulation, which the driver can't stand in for: its
-# wheel messages reach GPUI as a mouse wheel's lines, with no fingers to hold partway.
 if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
   echo "skip: two fingers held partway between two profiles' Spaces: X11 sends no touch phases (#554)."
-elif windows; then
-  echo "skip: two fingers held partway between two profiles' Spaces: the Windows driver can't send a touchpad's."
 else
   post swipe 110 500 10 0 10 1500
   await '^browser: swipe across$' || fail "two fingers across the sidebar didn't page"

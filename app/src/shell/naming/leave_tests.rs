@@ -218,7 +218,7 @@ fn a_name_field_opened_from_a_menu_outlasts_the_menu_giving_back_the_keyboard(
         // The menu's window takes the keyboard, and the user chooses before GPUI hears of it.
         menu.update(cx, |_, window, _| window.activate_window())
             .unwrap();
-        cx.update(|_, cx| host.choose("Rename Space", cx));
+        cx.update(|_, cx| host.choose("Rename Space…", cx));
         assert!(
             naming(&shell, cx) == Some(Naming::Space(1)),
             "Rename Space opened no field"

@@ -171,6 +171,9 @@ pub enum Command {
     PinToSpace(u64),
     /// Opens this folder of the Space shown, with the folders it's in, and scrolls to it.
     OpenFolder(u64),
+    /// Pins the tab shown, or the rows chosen, at the bottom of this folder of the Space shown, as
+    /// their menu's Add to Folder › does.
+    MoveToFolder(u64),
     NextSpace,
     PreviousSpace,
     /// Hides the docked sidebar, or shows it.
@@ -712,6 +715,9 @@ pub struct BarTab {
     pub title: SharedString,
     pub url: SharedString,
     pub favicon: Option<Arc<Image>>,
+    /// Whether its title is the name the user gave it, which counts more when what's typed starts
+    /// it, as Arc's custom title does.
+    pub renamed: bool,
 }
 
 /// The commands that do something now that match `typed`, best first.
@@ -727,7 +733,9 @@ pub fn bar_commands(typed: &str, cx: &App) -> Vec<BarCommand> {
     let found = find_commands(typed, keys, |name, command| {
         shell.bar_name(name, command, cx)
     });
-    with_named_rows(found, typed, &shell.named_bar_rows(), keys)
+    let mut named = shell.named_bar_rows();
+    named.extend(shell.numbered_bar_row(typed, cx));
+    with_named_rows(found, typed, &named, keys)
 }
 
 /// The commands of BAR_COMMANDS that match `typed`, best first and then in the table's order, at
@@ -761,13 +769,16 @@ pub fn find_commands(
     ranked(found, &typed, keys)
 }
 
-/// `found` with the rows of `rows` that match `typed`, each a row's name, what it's for, which
-/// finds it as a hidden word does, and its command, ranked as `find_commands` ranks. None with
+/// A command bar row the browser names now: its name, the words that find it as hidden words do,
+/// such as what it's for, and its command.
+pub type NamedRow = (SharedString, Vec<SharedString>, Command);
+
+/// `found` with the rows of `rows` that match `typed`, ranked as `find_commands` ranks. None with
 /// nothing typed, so the commands-only list starts with the table's commands alone (ours).
 pub fn with_named_rows(
     found: Vec<BarCommand>,
     typed: &str,
-    rows: &[(SharedString, SharedString, Command)],
+    rows: &[NamedRow],
     keys: &UserKeys,
 ) -> Vec<BarCommand> {
     let typed = typed.trim().to_lowercase();
@@ -777,9 +788,10 @@ pub fn with_named_rows(
     let found = found
         .into_iter()
         .map(|row| (row.matched, row.name, row.command));
-    let named = rows.iter().filter_map(|(name, of, command)| {
-        let of = of.to_lowercase();
-        let matched = match_of(&name.to_lowercase(), &[of.as_str()], &typed)?;
+    let named = rows.iter().filter_map(|(name, words, command)| {
+        let words: Vec<String> = words.iter().map(|word| word.to_lowercase()).collect();
+        let words: Vec<&str> = words.iter().map(String::as_str).collect();
+        let matched = match_of(&name.to_lowercase(), &words, &typed)?;
         Some((matched, name.clone(), *command))
     });
     ranked(found.chain(named).collect(), &typed, keys)
@@ -1053,6 +1065,7 @@ impl Command {
             Command::MoveToSpace(_) => "move-to-space",
             Command::PinToSpace(_) => "pin-to-space",
             Command::OpenFolder(_) => "open-folder",
+            Command::MoveToFolder(_) => "move-to-folder",
             Command::NextSpace => "next-space",
             Command::PreviousSpace => "previous-space",
             Command::ToggleSidebar => "toggle-sidebar",
@@ -1238,7 +1251,10 @@ impl Shell {
         let target = match command {
             Command::NewTab => {
                 self.set_new_tab(true, cx);
-                return self.browser.command_bar(None, self.bar_tabs(), None, cx);
+                let shown = self.shown_urls();
+                return self
+                    .browser
+                    .command_bar(None, shown, self.bar_tabs(), None, cx);
             }
             Command::SearchTabs => {
                 self.set_new_tab(false, cx);
@@ -1255,9 +1271,10 @@ impl Shell {
                     None if from == "sidebar" => self.url_field_bounds(),
                     None => None,
                 };
+                let shown = self.shown_urls();
                 return self
                     .browser
-                    .command_bar(editing, self.bar_tabs(), field, cx);
+                    .command_bar(editing, shown, self.bar_tabs(), field, cx);
             }
             // A Little ilo window's page closes with it (Arc).
             Command::CloseTab if self.little.is_some() => {
@@ -1501,6 +1518,14 @@ impl Shell {
                 return;
             }
             Command::OpenFolder(folder) => return self.open_folder(folder, cx),
+            Command::MoveToFolder(folder) => {
+                let rows = match self.chosen.is_empty() {
+                    true if self.selected == 0 => return,
+                    true => vec![self.selected],
+                    false => self.chosen_in_order(),
+                };
+                return self.add_to_folder(rows, folder, cx);
+            }
             Command::NextSpace => return self.show_space_at(space.map(|index| index + 1), cx),
             Command::PreviousSpace => {
                 return self.show_space_at(space.and_then(|index| index.checked_sub(1)), cx);
@@ -1770,8 +1795,18 @@ impl Shell {
                 title: self.title(tab),
                 url: self.url(tab),
                 favicon: self.tabs.get(&tab).and_then(|tab| tab.favicon.clone()),
+                renamed: !self.browser.tab_name(tab).is_empty(),
             })
             .collect()
+    }
+
+    /// The pages shown, the tab's and what shows with it, whose rows the command bar puts last.
+    fn shown_urls(&self) -> Vec<SharedString> {
+        let pages = self
+            .panes(self.selected)
+            .into_iter()
+            .map(|tab| self.url(tab));
+        pages.filter(|url| !url.is_empty()).collect()
     }
 
     /// Starts capture mode over the focused page, or with `full_page` captures all of it.
@@ -1971,10 +2006,11 @@ impl Shell {
 impl Shell {
     /// The command bar's rows for the Spaces and the folders, each with what it's for and its
     /// command, as Arc's bar has them: Focus for each other Space, then Pin to and Move to for
-    /// each other of the user's while a tab is shown, and Open for each closed folder of the Space
-    /// shown. With rows chosen, Move to is theirs, as their menu's, for the Spaces it lists. A
-    /// private window has one Space and no folders.
-    pub(super) fn named_bar_rows(&self) -> Vec<(SharedString, SharedString, Command)> {
+    /// each other of the user's while a tab is shown, Open for each closed folder of the Space
+    /// shown, and Move to for each of its folders but the tab's. With rows chosen, Move to is
+    /// theirs, as their menu's, for the Spaces it lists and the folders. A private window has one
+    /// Space and no folders.
+    pub(super) fn named_bar_rows(&self) -> Vec<NamedRow> {
         if self.private {
             return Vec::new();
         }
@@ -1995,7 +2031,7 @@ impl Shell {
             }
             let name = &space.name;
             let mut row = |verb: &str, command| {
-                rows.push((format!("{verb} {name}").into(), name.clone(), command));
+                rows.push((format!("{verb} {name}").into(), vec![name.clone()], command));
             };
             row("Focus", Command::SelectSpace(index));
             if tab && space.agent.is_empty() {
@@ -2009,14 +2045,42 @@ impl Shell {
             let shut = |row: &&u64| space.is_folder(**row) && !space.is_open(**row);
             for &folder in space.pinned.iter().filter(shut) {
                 let name = space.folders.folders[&folder].0.clone();
-                rows.push((
-                    format!("Open {name}").into(),
-                    name,
-                    Command::OpenFolder(folder),
-                ));
+                let command = Command::OpenFolder(folder);
+                rows.push((format!("Open {name}").into(), vec![name], command));
+            }
+            // Named by its path, as Add to Folder › names it, and found by its own name too.
+            let held = |folder: u64| tab && space.folder_of(self.selected) == folder;
+            if (tab || chosen) && space.agent.is_empty() {
+                for (folder, path) in super::menus::folder_paths(space) {
+                    if held(folder) {
+                        continue;
+                    }
+                    let name = space.folders.folders[&folder].0.clone();
+                    let command = Command::MoveToFolder(folder);
+                    rows.push((format!("Move to {path}").into(), vec![name], command));
+                }
             }
         }
         rows
+    }
+
+    /// The command bar's Go to Sidebar Item row for the number `typed` has, found by its name or
+    /// as Arc's "3. tab" and "3. item". It goes where ⌘3 goes, and 9 to the ninth item, where ⌘9
+    /// goes to the last. Only once the number is typed, so "tab" or "item" alone doesn't list
+    /// nine, and none past the sidebar's rows.
+    pub(super) fn numbered_bar_row(&self, typed: &str, cx: &App) -> Option<NamedRow> {
+        let number = typed.chars().find(|c| ('1'..='9').contains(c))?;
+        let index = number as usize - '1' as usize;
+        self.numbered(index, self.sidebar_rows().len(), cx)?;
+        let words = vec![
+            format!("{number}. tab").into(),
+            format!("{number}. item").into(),
+        ];
+        Some((
+            format!("Go to Sidebar Item {number}").into(),
+            words,
+            Command::SelectTab(index),
+        ))
     }
 }
 
@@ -2054,6 +2118,7 @@ pub(super) fn private_runs(command: Command) -> bool {
             | Command::MoveToSpace(_)
             | Command::PinToSpace(_)
             | Command::OpenFolder(_)
+            | Command::MoveToFolder(_)
             | Command::NextSpace
             | Command::PreviousSpace
             | Command::ViewLibrary

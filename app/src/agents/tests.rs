@@ -1781,7 +1781,7 @@ fn a_pages_passkey_hands_its_tab_to_the_user(cx: &mut TestAppContext) {
     assert_eq!(log(&agents, "claude-code", cx)[0].0, "handed back");
 }
 
-/// close_tab closes the agent's own tab, which goes to the archive, with its entry in the log.
+/// close_tab closes the agent's own tab, with its entry in the log.
 /// The user's tab, and one the user holds, are refused.
 #[gpui::test]
 fn an_agent_closes_only_its_own_tabs(cx: &mut TestAppContext) {
@@ -1817,10 +1817,7 @@ fn an_agent_closes_only_its_own_tabs(cx: &mut TestAppContext) {
     );
     let closed = closed.recv().unwrap();
     assert!(!closed.error);
-    assert_eq!(
-        closed.text,
-        "Closed tab 20. The user can still find it in the archive."
-    );
+    assert_eq!(closed.text, "Closed tab 20.");
     assert!(browser.tabs.borrow().iter().all(|tab| tab.0 != 20));
     let entry = log(&agents, "claude-code", cx).remove(0);
     assert_eq!(entry, ("close_tab".into(), "example.com".into(), "".into()));
@@ -2253,12 +2250,25 @@ mod tasks {
             ("Find a flight to Lisbon", "Thinking", Dot::Working)
         );
         // Dropped, its CLI ends and its Space goes.
-        agents.update(cx, |agents, cx| agents.end_tasks(cx));
+        agents.update(cx, |agents, cx| agents.end_tasks(true, cx));
         assert_eq!(*browser.deleted.borrow(), vec![100]);
         assert!(
             agents.read_with(cx, |agents, _| agents.tokens.lock().unwrap().is_empty()
                 || !agents.tokens.lock().unwrap().contains_key(&token))
         );
+    }
+
+    /// At a quit with no window left, its CLI ends and its token with it, and its Space stays for
+    /// the next launch to delete, as the core can't then (#1676).
+    #[cfg(unix)]
+    #[gpui::test]
+    fn a_task_ended_with_no_window_left_keeps_its_space(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(Some(fake_cli("first")), cx);
+        start(&agents, "Find a flight to Lisbon", cx);
+        agents.update(cx, |agents, cx| agents.end_tasks(false, cx));
+        assert!(browser.deleted.borrow().is_empty());
+        assert!(agents.read_with(cx, |agents, _| agents.task("task-1").is_none()));
+        assert!(agents.read_with(cx, |agents, _| agents.tokens.lock().unwrap().is_empty()));
     }
 
     #[gpui::test]
