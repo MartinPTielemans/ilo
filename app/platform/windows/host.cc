@@ -189,6 +189,7 @@ struct Floating {
 
 void LeaveOverlay(int index);
 void DismissOverlay(int index);
+void TooltipOverlayHiding(int index);
 
 // Whether a mouse button is down, the user's on the device or the driver's in the thread's key
 // state: the user pressing on another window takes the keyboard from the one that had it, which
@@ -955,6 +956,7 @@ bool CloseOverlay(int index) {
   Floating& floating = g_overlays[index];
   ++floating.shows;
   const bool was_shown = floating.shown;
+  TooltipOverlayHiding(index);
   Hide(floating);
   if (was_shown) {
     // check.sh reads this line.
@@ -994,7 +996,7 @@ std::map<void*, std::pair<double, double>> g_pane_corners;
 // window starts at (host_set_pane_corner).
 std::map<void*, double> g_page_lefts;
 Floating g_hud;
-double g_hud_right = 0, g_hud_top = 0;
+double g_hud_right = 0, g_hud_top = 0, g_hud_margin = 0;
 Floating g_drop_targets;
 Floating g_dialog;
 Floating g_site_controls;
@@ -1107,6 +1109,10 @@ Floating g_capture;
 Floating g_toast;
 Floating g_tooltip;
 double g_tooltip_margin = 0;
+// The overlay holding what the tooltip names, which it shows over, as a command bar row's button,
+// or -1, and what's told as the tooltip goes with it.
+int g_tooltip_overlay = -1;
+void (*g_tooltip_away)(void) = nullptr;
 Floating g_card;
 double g_card_margin = 0;
 Floating g_link_target;
@@ -2753,6 +2759,7 @@ void host_set_overlay_radius(int, double) {}
 void host_set_overlay_elevation(int, float, double, float, double, double) {}
 void host_set_overlay_growth(int, double, double) {}
 void host_set_overlay_shrink(int) {}
+void host_set_overlays_still(bool) {}
 
 void host_show_overlay(int overlay,
                        void* ui_view,
@@ -2958,10 +2965,11 @@ void host_set_pane_corner(void* ui_view, double left, double right, double top) 
   }
 }
 
-void host_add_hud(void* hud_view, double right, double top, double) {
+void host_add_hud(void* hud_view, double right, double top, double margin) {
   Adopt(g_hud, hud_view, true, nullptr);
   g_hud_right = right;
   g_hud_top = top;
+  g_hud_margin = margin;
 }
 
 void host_show_hud(void* ui_view) {
@@ -2969,12 +2977,31 @@ void host_show_hud(void* ui_view) {
   ContentSize(Root(ui_view), &content_width, &content_height);
   WindowSize(g_hud.hwnd, &width, &height);
   auto [extra_right, extra_top] = g_pane_corners[ui_view];
-  Show(g_hud, ui_view, content_width - g_hud_right - extra_right - width, g_hud_top + extra_top, -1,
-       -1, false);
+  // 8 points below the find bar while it shows, where the HUD would cover it, as the Mac's and
+  // Linux's hosts put it.
+  double top = g_hud_top;
+  if (auto it = g_find_bars.find(ui_view); it != g_find_bars.end()) {
+    HWND bar = it->second.floating.hwnd;
+    double bar_width, bar_height;
+    if (bar && IsWindowVisible(bar)) {
+      WindowSize(bar, &bar_width, &bar_height);
+      top = it->second.top + bar_height + 8 - g_hud_margin;
+    }
+  }
+  Show(g_hud, ui_view, content_width - g_hud_right - extra_right - width, top + extra_top, -1, -1,
+       false);
+  // check.sh reads this line, as the Mac's and Linux's hosts log it.
+  if (g_hud.hwnd && IsWindowVisible(g_hud.hwnd)) {
+    fprintf(stderr, "browser: zoom hud shown\n");
+  }
 }
 
 void host_hide_hud(void) {
+  const bool shown = g_hud.hwnd && IsWindowVisible(g_hud.hwnd);
   Hide(g_hud);
+  if (shown) {
+    fprintf(stderr, "browser: zoom hud hidden\n");
+  }
 }
 
 void host_add_drop_targets(void* view) {
@@ -3246,6 +3273,18 @@ LRESULT CALLBACK SaveDialogEvent(int code, WPARAM wparam, LPARAM lparam) {
   return CallNextHookEx(nullptr, code, wparam, lparam);
 }
 
+// Overlay |index| is closing: the tooltip over it goes at once, not left over the page as it fades.
+void TooltipOverlayHiding(int index) {
+  if (g_tooltip_overlay == index) {
+    g_tooltip_overlay = -1;
+    const bool shown = g_tooltip.hwnd && IsWindowVisible(g_tooltip.hwnd);
+    FadeOut(g_tooltip, 0, [] {});
+    if (shown && g_tooltip_away) {
+      g_tooltip_away();
+    }
+  }
+}
+
 }  // namespace
 
 extern "C" {
@@ -3374,12 +3413,27 @@ void host_hide_toast(void) {
   Hide(g_toast);
 }
 
-void host_add_tooltip(void* tooltip_view, double margin, void (*)(void)) {
+void host_add_tooltip(void* tooltip_view, double margin, void (*away)(void)) {
   Adopt(g_tooltip, tooltip_view, true, nullptr);
+  g_tooltip_away = away;
   g_tooltip_margin = margin;
 }
 
-void host_show_tooltip(void* ui_view, double left, double top, double fade) {
+void host_show_tooltip(void* ui_view, int overlay, double left, double top, double fade) {
+  // In the overlay, from where it shows in the browser window. Shown, the tooltip goes over the
+  // windows its browser window owns, the overlay among them.
+  if (overlay >= 0) {
+    if (overlay >= int(std::size(g_overlays))) {
+      return;
+    }
+    const Floating& owner = g_overlays[overlay];
+    if (!owner.shown || !owner.place || GetWindow(owner.hwnd, GW_OWNER) != Root(ui_view)) {
+      return;
+    }
+    left += owner.place->first;
+    top += owner.place->second;
+  }
+  g_tooltip_overlay = overlay;
   FadeIn(g_tooltip, ui_view, left - g_tooltip_margin, top - g_tooltip_margin, fade, "tooltip");
 }
 

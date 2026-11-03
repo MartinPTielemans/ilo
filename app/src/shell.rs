@@ -138,7 +138,7 @@ pub use history::HistoryPage;
 pub use library::{Archived, Captured, Download, DownloadAction, DownloadState};
 pub use menu_bar::{MenuBar, ProfileChoice, SidebarBackup};
 pub use themes::{AppAppearance, app_appearance};
-pub use menus::{MenuEntry, new_profile_name};
+pub use menus::{MenuEntry, new_profile_name, profile_kept};
 pub use page_menu::{PageMenuItem, made_up as made_up_page_menu};
 pub use side_panel::SidePanel;
 pub use page_dialog::{DialogKind, PageDialog, PageReply, ShownPageDialog};
@@ -924,8 +924,9 @@ struct Swipe {
     way: f32,
     /// Where that page was over the last SWIPE_HISTORY, for how fast it's let go.
     samples: VecDeque<(Instant, f32)>,
-    /// The Space nearest its place, for the detent as it changes.
-    nearest: u64,
+    /// Where letting go would take the pages, for the detent as it changes. None until they
+    /// first move across.
+    landing: Option<swipe::Landing>,
     /// Whether they've pulled the last Space far enough to ready a new Space, and when that last
     /// changed.
     ready: bool,
@@ -2201,7 +2202,7 @@ impl Shell {
         }
         // The Spaces section springs to its width as cards come and go, as on a section's change.
         if self.library.is_some() && self.library_width() != width {
-            self.library_resize = Some((width, Instant::now()));
+            self.library_resize = Some((width, crate::motion::start(cx)));
         }
         if self.show_favorites() {
             self.log_favorites();
@@ -2284,7 +2285,7 @@ impl Shell {
                 beside: Some(before),
                 from: if to > from { width } else { -width },
                 velocity: 0.,
-                start: Instant::now(),
+                start: crate::motion::start(cx),
                 next_door: from.abs_diff(to) == 1,
             });
         }
@@ -2370,12 +2371,12 @@ impl Shell {
             }
             // A folder the user opened or closed moves the rows under it on its own spring.
             let curve = self.folding.take().map_or(Curve::Slide, |open| Curve::Fold { open });
-            self.move_rows(before, curve);
+            self.move_rows(before, curve, cx);
         }
         if space == self.space {
             let tiles = self.drawn();
             if self.end_drag(false) {
-                self.move_tiles(tiles, Curve::Slide);
+                self.move_tiles(tiles, Curve::Slide, cx);
             } else if let Some(position) = self.drag_position() {
                 // A row carried over the new lists finds its place in them where the pointer is.
                 self.drag_to(position, cx);
@@ -2422,7 +2423,7 @@ impl Shell {
             self.tile_slides.clear();
             self.list_slide = None;
         } else {
-            self.move_tiles(tiles, Curve::Slide);
+            self.move_tiles(tiles, Curve::Slide, cx);
         }
         self.forget_closed(cx);
         cx.notify();
@@ -2527,7 +2528,7 @@ impl Shell {
         }
         let hidden = self.panes(self.selected);
         self.selected = tab;
-        self.show_in_space(tab);
+        self.show_in_space(tab, cx);
         self.scroll_to_row(tab);
         if self.walked.is_none() {
             self.shown(tab);
@@ -2621,7 +2622,7 @@ impl Shell {
 
     /// Makes `tab` the Space's shown tab, whose row a closed folder keeps, and moves the rows if
     /// that changes them.
-    fn show_in_space(&mut self, tab: u64) {
+    fn show_in_space(&mut self, tab: u64, cx: &App) {
         let space = self.spaces.iter_mut().find(|space| space.id == self.space);
         let Some(space) = space.filter(|space| space.shown != tab) else {
             return;
@@ -2634,7 +2635,7 @@ impl Shell {
         let before = space.slots();
         space.shown = tab;
         if space.slots() != before {
-            self.move_rows(before, Curve::Slide);
+            self.move_rows(before, Curve::Slide, cx);
         }
     }
 
@@ -3404,7 +3405,7 @@ impl Render for Shell {
         }
         self.step_library(window, cx);
         self.step_new_space(window);
-        self.step_flight(window);
+        self.step_flight(window, cx);
         self.step_task_area(window, cx);
         self.step_foot(window, cx);
         self.step_picture(window);
@@ -3694,7 +3695,7 @@ impl Shell {
             }
         };
         sidebar
-            .children(self.new_space_circle())
+            .children(self.new_space_circle(cx))
             .children(self.recent_download_rows(cx))
             .children((!self.private).then(|| self.library_button(cx)))
             .children(self.archive_flights())
