@@ -2971,10 +2971,18 @@ void host_show_hud(void* ui_view) {
   auto [extra_right, extra_top] = g_pane_corners[ui_view];
   Show(g_hud, ui_view, content_width - g_hud_right - extra_right - width, g_hud_top + extra_top, -1,
        -1, false);
+  // check.sh reads this line, as the Mac's and Linux's hosts log it.
+  if (g_hud.hwnd && IsWindowVisible(g_hud.hwnd)) {
+    fprintf(stderr, "browser: zoom hud shown\n");
+  }
 }
 
 void host_hide_hud(void) {
+  const bool shown = g_hud.hwnd && IsWindowVisible(g_hud.hwnd);
   Hide(g_hud);
+  if (shown) {
+    fprintf(stderr, "browser: zoom hud hidden\n");
+  }
 }
 
 void host_add_drop_targets(void* view) {
