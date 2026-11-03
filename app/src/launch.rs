@@ -16,14 +16,20 @@ pub fn chromium_args(given: Vec<String>, own: Vec<String>, started: bool) -> Vec
         return program.into_iter().chain(own).chain(given).collect();
     }
     // Chromium reads what follows a bare "--" as arguments, never switches.
-    let switches = given.take_while(|arg| arg != "--").filter(|arg| is_switch(arg));
+    let switches = given
+        .take_while(|arg| arg != "--")
+        .filter(|arg| is_switch(arg));
     own.into_iter().chain(switches).collect()
 }
 
 /// Whether Chromium reads `arg` as a switch: "--name", "-name", or on Windows "/name" too
 /// (base::CommandLine).
 fn is_switch(arg: &str) -> bool {
-    let prefixes: &[&str] = if cfg!(windows) { &["--", "-", "/"] } else { &["--", "-"] };
+    let prefixes: &[&str] = if cfg!(windows) {
+        &["--", "-", "/"]
+    } else {
+        &["--", "-"]
+    };
     prefixes
         .iter()
         .any(|prefix| arg.len() > prefix.len() && arg.starts_with(prefix))
@@ -44,14 +50,28 @@ mod tests {
         let added = chromium_args(strings(given), own, true);
         let not_switch = |arg: &&String| !is_switch(arg) && *arg != "--";
         let started = strings(&given[1..]);
-        started.iter().chain(&added).filter(not_switch).cloned().collect()
+        started
+            .iter()
+            .chain(&added)
+            .filter(not_switch)
+            .cloned()
+            .collect()
     }
 
     #[test]
     fn a_launch_opens_only_the_pages_and_files_it_was_given_once() {
         // On Windows a path starting with "/" is a switch, as Chromium reads it.
-        let file = if cfg!(windows) { r"C:\Users\ada\page.html" } else { "/home/ada/page.html" };
-        let given = ["/opt/ilo/chrome", "--ozone-platform=x11", "https://example.org/", file];
+        let file = if cfg!(windows) {
+            r"C:\Users\ada\page.html"
+        } else {
+            "/home/ada/page.html"
+        };
+        let given = [
+            "/opt/ilo/chrome",
+            "--ozone-platform=x11",
+            "https://example.org/",
+            file,
+        ];
         assert_eq!(opened(&given), strings(&["https://example.org/", file]));
     }
 
@@ -64,10 +84,18 @@ mod tests {
     #[test]
     fn the_switches_given_come_after_the_apps_own() {
         let own = strings(&["--user-data-dir=/profile", "--use-mock-keychain"]);
-        let given = strings(&["/opt/ilo/chrome", "--user-data-dir=/other", "https://example.org/"]);
+        let given = strings(&[
+            "/opt/ilo/chrome",
+            "--user-data-dir=/other",
+            "https://example.org/",
+        ]);
         assert_eq!(
             chromium_args(given, own, true),
-            strings(&["--user-data-dir=/profile", "--use-mock-keychain", "--user-data-dir=/other"]),
+            strings(&[
+                "--user-data-dir=/profile",
+                "--use-mock-keychain",
+                "--user-data-dir=/other"
+            ]),
         );
     }
 
@@ -80,7 +108,11 @@ mod tests {
     #[test]
     fn on_the_mac_the_app_starts_chromium_with_everything() {
         let own = strings(&["--user-data-dir=/profile"]);
-        let given = strings(&["/Applications/ilo.app/Contents/MacOS/ilo", "--v=1", "https://example.org/"]);
+        let given = strings(&[
+            "/Applications/ilo.app/Contents/MacOS/ilo",
+            "--v=1",
+            "https://example.org/",
+        ]);
         assert_eq!(
             chromium_args(given, own, false),
             strings(&[

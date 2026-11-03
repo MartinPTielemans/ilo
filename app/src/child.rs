@@ -55,6 +55,10 @@ mod tests {
                     .collect::<Vec<_>>()
             })
             .collect();
-        assert!(bare.is_empty(), "start these with browser::child::command:\n{}", bare.join("\n"));
+        assert!(
+            bare.is_empty(),
+            "start these with browser::child::command:\n{}",
+            bare.join("\n")
+        );
     }
 }

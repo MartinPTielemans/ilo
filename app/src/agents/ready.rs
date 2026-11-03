@@ -70,8 +70,16 @@ impl Found {
 
     pub fn from_saved(saved: &Value) -> Found {
         Found {
-            ready: Ready::from_id(saved.get("ready").and_then(Value::as_str).unwrap_or_default()),
-            program: saved.get("program").and_then(Value::as_str).map(PathBuf::from),
+            ready: Ready::from_id(
+                saved
+                    .get("ready")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            ),
+            program: saved
+                .get("program")
+                .and_then(Value::as_str)
+                .map(PathBuf::from),
             path: saved.get("path").and_then(Value::as_str).map(String::from),
             models: saved
                 .get("models")
@@ -94,7 +102,12 @@ pub fn look(cli: Cli) -> Found {
     let Some(program) = found else {
         // check.sh reads this line.
         log!("browser: task agent {} is NotFound", cli.id());
-        return Found { ready: Ready::NotFound, program: None, path, models: Vec::new() };
+        return Found {
+            ready: Ready::NotFound,
+            program: None,
+            path,
+            models: Vec::new(),
+        };
     };
     let mut command = command(&program);
     match cli {
@@ -119,12 +132,21 @@ pub fn look(cli: Cli) -> Found {
         },
     };
     // check.sh reads this line.
-    log!("browser: task agent {} is {ready:?} at {}", cli.id(), program.display());
+    log!(
+        "browser: task agent {} is {ready:?} at {}",
+        cli.id(),
+        program.display()
+    );
     let models = match (cli, ready) {
         (Cli::Codex, Ready::SignedIn) => codex_models(&program, path.as_deref()),
         _ => Vec::new(),
     };
-    Found { ready, program: Some(program), path, models }
+    Found {
+        ready,
+        program: Some(program),
+        path,
+        models,
+    }
 }
 
 /// Where `cli` is, and the PATH it runs with: the login shell's, or on Windows, where it may be
@@ -132,7 +154,10 @@ pub fn look(cli: Cli) -> Found {
 #[cfg(not(windows))]
 fn locate(cli: Cli) -> (Option<PathBuf>, Option<String>) {
     let path = login_path().clone();
-    let search = path.clone().or_else(|| std::env::var("PATH").ok()).unwrap_or_default();
+    let search = path
+        .clone()
+        .or_else(|| std::env::var("PATH").ok())
+        .unwrap_or_default();
     (find(cli.program(), &search), path)
 }
 
@@ -148,7 +173,11 @@ fn locate(cli: Cli) -> (Option<PathBuf>, Option<String>) {
 /// version: asked of its app-server, which starts no thread for it, and left after 10 s.
 fn codex_models(program: &Path, path: Option<&str>) -> Vec<(String, String)> {
     let mut command = command(program);
-    command.arg("app-server").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    command
+        .arg("app-server")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
     if let Some(path) = path {
         command.env("PATH", path);
     }
@@ -177,14 +206,18 @@ fn codex_models(program: &Path, path: Option<&str>) -> Vec<(String, String)> {
             },
         }))?;
         loop {
-            let line = lines.recv_timeout(deadline.saturating_duration_since(Instant::now())).ok()?;
+            let line = lines
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .ok()?;
             let Ok(message) = serde_json::from_str::<Value>(&line) else {
                 continue;
             };
             match message.get("id").and_then(Value::as_u64) {
                 Some(1) => {
                     say(serde_json::json!({ "method": "initialized" }))?;
-                    say(serde_json::json!({ "id": 2, "method": "model/list", "params": { "limit": 100 } }))?;
+                    say(
+                        serde_json::json!({ "id": 2, "method": "model/list", "params": { "limit": 100 } }),
+                    )?;
                 }
                 Some(2) => return Some(codex_listed(&message)),
                 _ => {}
@@ -205,10 +238,18 @@ pub fn codex_listed(answer: &Value) -> Vec<(String, String)> {
     listed
         .into_iter()
         .flatten()
-        .filter(|model| !model.get("hidden").and_then(Value::as_bool).unwrap_or(false))
+        .filter(|model| {
+            !model
+                .get("hidden")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
         .filter_map(|model| {
             let id = model.get("id").or_else(|| model.get("model"))?.as_str()?;
-            let name = model.get("displayName").and_then(Value::as_str).unwrap_or(id);
+            let name = model
+                .get("displayName")
+                .and_then(Value::as_str)
+                .unwrap_or(id);
             Some((id.to_string(), name.to_string()))
         })
         .collect()
@@ -217,7 +258,10 @@ pub fn codex_listed(answer: &Value) -> Vec<(String, String)> {
 /// Whether `claude auth status --json` says the user is signed in.
 pub fn claude_signed_in(said: &str) -> bool {
     let status: Value = serde_json::from_str(said.trim()).unwrap_or_default();
-    status.get("loggedIn").and_then(Value::as_bool).unwrap_or(false)
+    status
+        .get("loggedIn")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 /// The executable `program` in the first directory of `path` that has it.

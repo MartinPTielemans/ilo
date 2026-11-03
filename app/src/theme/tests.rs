@@ -7,11 +7,18 @@ fn field(x: f32, y: f32) -> (f32, f32) {
 }
 
 fn channels(color: u32) -> [i32; 3] {
-    [(color >> 16) as i32, (color >> 8 & 0xff) as i32, (color & 0xff) as i32]
+    [
+        (color >> 16) as i32,
+        (color >> 8 & 0xff) as i32,
+        (color & 0xff) as i32,
+    ]
 }
 
 fn close(color: u32, expected: [i32; 3], within: i32) -> bool {
-    channels(color).iter().zip(expected).all(|(a, b)| (a - b).abs() <= within)
+    channels(color)
+        .iter()
+        .zip(expected)
+        .all(|(a, b)| (a - b).abs() <= within)
 }
 
 /// The field gives the colours Arc's handles showed where they stood.
@@ -55,18 +62,34 @@ fn more_colours_go_round_the_main_one() {
 /// puts them back at the set angles.
 #[test]
 fn the_main_colour_moves_them_together_and_another_moves_alone() {
-    let near = |(x, y): (f32, f32), (ex, ey): (f32, f32)| (x - ex).abs() < 1e-4 && (y - ey).abs() < 1e-4;
+    let near =
+        |(x, y): (f32, f32), (ex, ey): (f32, f32)| (x - ex).abs() < 1e-4 && (y - ey).abs() < 1e-4;
     let theme = Theme::at(0.5, 0.).with_count(3);
     let alone = theme.moved(2, 0., -0.3);
-    assert!(near(alone.handle(2), (0., -0.3)), "at {:?}", alone.handle(2));
+    assert!(
+        near(alone.handle(2), (0., -0.3)),
+        "at {:?}",
+        alone.handle(2)
+    );
     assert!(near(alone.handle(0), theme.handle(0)) && near(alone.handle(1), theme.handle(1)));
-    assert_eq!(alone.colors()[2], color_at(0., -0.3, 1.), "the window takes it from its place");
+    assert_eq!(
+        alone.colors()[2],
+        color_at(0., -0.3, 1.),
+        "the window takes it from its place"
+    );
     // A quarter turn and 0.2 further out: the third turned and lifted with it.
     let carried = alone.moved(0, 0., 0.7);
-    assert!(near(carried.handle(2), (0.5, 0.)), "at {:?}", carried.handle(2));
+    assert!(
+        near(carried.handle(2), (0.5, 0.)),
+        "at {:?}",
+        carried.handle(2)
+    );
     assert!(near(carried.handle(1), placed(0., 0.7, theme.place(1))));
     assert_eq!(carried.with_count(3).places, None);
-    assert_eq!(carried.with_count(3).handle(2), Theme::at(0., 0.7).with_count(3).handle(2));
+    assert_eq!(
+        carried.with_count(3).handle(2),
+        Theme::at(0., 0.7).with_count(3).handle(2)
+    );
     // Past the edge, the colour stays on it, white.
     let out = theme.moved(0, 3., 4.);
     assert!((out.x - 0.6).abs() < 1e-4 && (out.y - 0.8).abs() < 1e-4);
@@ -94,7 +117,16 @@ fn a_theme_survives_its_text() {
         texture: Texture::Weave,
         third: Some(0x33cc99),
         appearance: Appearance::Dark,
-        places: Some([Place { turn: 95.5, lift: -0.25 }, Place { turn: 300., lift: 0.125 }]),
+        places: Some([
+            Place {
+                turn: 95.5,
+                lift: -0.25,
+            },
+            Place {
+                turn: 300.,
+                lift: 0.125,
+            },
+        ]),
         dark: None,
     };
     let back = Theme::parse(&theme.to_text()).unwrap();
@@ -107,7 +139,11 @@ fn a_theme_survives_its_text() {
     // The field's own saturation goes unsaid, as before swatches kept theirs, and so do noise, an
     // exact third colour and the set angles, as before textures, Arc's thirds and placed colours.
     let plain = Theme::at(0.5, 0.).with_count(3).to_text();
-    assert!(["saturation", "texture", "third", "places"].iter().all(|key| !plain.contains(key)));
+    assert!(
+        ["saturation", "texture", "third", "places"]
+            .iter()
+            .all(|key| !plain.contains(key))
+    );
     assert_eq!(Theme::parse("x=0.5 y=0 places=1,2").unwrap().places, None);
     assert_eq!(Theme::parse("x=0.5 y=0").unwrap().saturation, 1.);
     assert_eq!(Theme::parse(""), None);
@@ -123,25 +159,83 @@ fn a_theme_survives_its_text() {
         third: None,
         places: None,
     };
-    let back = Theme::parse(&Theme { dark: Some(dark), ..theme }.to_text()).unwrap();
+    let back = Theme::parse(
+        &Theme {
+            dark: Some(dark),
+            ..theme
+        }
+        .to_text(),
+    )
+    .unwrap();
     let got = back.dark.unwrap();
     assert!((got.x - 0.1).abs() < 1e-3 && (got.y + 0.2).abs() < 1e-3 && got.count == 2);
-    assert!((got.intensity - 0.3).abs() < 1e-3 && (got.grain - 0.9).abs() < 1e-3 && (got.saturation - 0.5).abs() < 1e-3);
+    assert!(
+        (got.intensity - 0.3).abs() < 1e-3
+            && (got.grain - 0.9).abs() < 1e-3
+            && (got.saturation - 0.5).abs() < 1e-3
+    );
     assert_eq!((got.texture, got.third), (Texture::Noise, None));
-    let dark = Look { count: 3, texture: Texture::Fleck, third: Some(0x102030), ..dark };
-    let got = Theme::parse(&Theme { dark: Some(dark), ..theme }.to_text()).unwrap().dark.unwrap();
+    let dark = Look {
+        count: 3,
+        texture: Texture::Fleck,
+        third: Some(0x102030),
+        ..dark
+    };
+    let got = Theme::parse(
+        &Theme {
+            dark: Some(dark),
+            ..theme
+        }
+        .to_text(),
+    )
+    .unwrap()
+    .dark
+    .unwrap();
     assert_eq!((got.texture, got.third), (Texture::Fleck, Some(0x102030)));
-    let dark = Look { third: None, ..dark };
-    let got = Theme::parse(&Theme { dark: Some(dark), ..theme }.to_text()).unwrap().dark.unwrap();
+    let dark = Look {
+        third: None,
+        ..dark
+    };
+    let got = Theme::parse(
+        &Theme {
+            dark: Some(dark),
+            ..theme
+        }
+        .to_text(),
+    )
+    .unwrap()
+    .dark
+    .unwrap();
     assert_eq!((got.texture, got.third), (Texture::Fleck, None));
-    let places = Some([Place { turn: 170., lift: 0.1 }, Place { turn: 200., lift: -0.05 }]);
+    let places = Some([
+        Place {
+            turn: 170.,
+            lift: 0.1,
+        },
+        Place {
+            turn: 200.,
+            lift: -0.05,
+        },
+    ]);
     let dark = Look { places, ..dark };
-    let got = Theme::parse(&Theme { dark: Some(dark), ..theme }.to_text()).unwrap().dark.unwrap();
+    let got = Theme::parse(
+        &Theme {
+            dark: Some(dark),
+            ..theme
+        }
+        .to_text(),
+    )
+    .unwrap()
+    .dark
+    .unwrap();
     assert_eq!((got.texture, got.places), (Texture::Fleck, places));
     assert!(!theme.to_text().contains("dark="));
     assert_eq!(Theme::parse("colors=2"), None);
     let partial = Theme::parse("x=0.1 y=0.2 colors=7 grain=bad").unwrap();
-    assert_eq!((partial.count, partial.grain, partial.intensity), (3, 0., DEFAULT_INTENSITY));
+    assert_eq!(
+        (partial.count, partial.grain, partial.intensity),
+        (3, 0., DEFAULT_INTENSITY)
+    );
 }
 
 /// A colour from before themes opens the picker at its hue and lightness.
@@ -163,7 +257,10 @@ fn a_swatch_keeps_its_own_colour_until_a_drag() {
     }
     let slate = Theme::of_color(0x656786).with_count(2);
     let second = Hsla::from(rgb(slate.colors()[1]));
-    assert!((second.s - Hsla::from(rgb(0x656786)).s).abs() < 0.02, "{second:?}");
+    assert!(
+        (second.s - Hsla::from(rgb(0x656786)).s).abs() < 0.02,
+        "{second:?}"
+    );
     let dragged = slate.moved(0, slate.x + 0.1, slate.y);
     assert_eq!(dragged.saturation, 1.);
     assert_eq!(dragged.main_color(), color_at(dragged.x, dragged.y, 1.));
@@ -191,14 +288,25 @@ fn oklab_mixing_keeps_its_ends() {
 /// when the picker places all three, as it makes them.
 #[test]
 fn a_third_colour_from_arc_stays_until_the_colours_change() {
-    let theme = Theme { third: Some(0x33cc99), ..Theme::at(0.5, 0.).with_count(3) };
+    let theme = Theme {
+        third: Some(0x33cc99),
+        ..Theme::at(0.5, 0.).with_count(3)
+    };
     assert_eq!(theme.colors()[2], 0x33cc99);
     let placed = Theme::at(0.5, 0.).with_count(3).colors()[2];
     assert_ne!(placed, 0x33cc99);
     assert_eq!(theme.with_count(3).colors()[2], placed);
     assert_eq!(theme.with_count(2).with_count(3).third, None);
     assert_eq!(theme.moved(0, 0.4, 0.1).third, None);
-    assert_eq!(Theme { intensity: 0.2, ..theme }.colors()[2], 0x33cc99, "an edit of the rest keeps it");
+    assert_eq!(
+        Theme {
+            intensity: 0.2,
+            ..theme
+        }
+        .colors()[2],
+        0x33cc99,
+        "an edit of the rest keeps it"
+    );
 }
 
 /// Every texture moves the window's colours as much as the noise does at the same grain, and
@@ -208,7 +316,10 @@ fn every_texture_moves_the_window_as_much_as_the_noise() {
     let strength = |texture: Texture| {
         let pixels = texture.pixels();
         let square: f32 = pixels.iter().map(|(_, alpha)| alpha * alpha).sum();
-        let signed: f32 = pixels.iter().map(|&(white, alpha)| if white { alpha } else { -alpha }).sum();
+        let signed: f32 = pixels
+            .iter()
+            .map(|&(white, alpha)| if white { alpha } else { -alpha })
+            .sum();
         let count = pixels.len() as f32;
         let mean = signed / count;
         assert!(mean.abs() < 0.01, "{texture:?} leans {mean}");
@@ -217,7 +328,10 @@ fn every_texture_moves_the_window_as_much_as_the_noise() {
     let noise = strength(Texture::Noise);
     for texture in Texture::ALL {
         let ratio = strength(texture) / noise;
-        assert!((ratio - 1.).abs() < 0.02, "{texture:?} at {ratio} of the noise");
+        assert!(
+            (ratio - 1.).abs() < 0.02,
+            "{texture:?} at {ratio} of the noise"
+        );
         assert_eq!(Texture::named(texture.name()), Some(texture));
     }
 }
