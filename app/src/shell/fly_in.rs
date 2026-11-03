@@ -60,7 +60,8 @@ impl Shell {
     }
 
     /// Steps the flight for a frame, and once it's done, says so and lets it go.
-    pub(super) fn step_flight(&mut self, window: &mut Window) {
+    /// Under Reduce Motion the icon lands as it leaves, flying nowhere.
+    pub(super) fn step_flight(&mut self, window: &mut Window, cx: &gpui::App) {
         let shown = self.flight_shown();
         let Some(flight) = &mut self.flight else {
             return;
@@ -74,7 +75,7 @@ impl Shell {
             None => {
                 // check.sh waits for this line, logged with the frame that draws the icon first.
                 log!("browser: download flying {}", flight.id);
-                *flight.start.insert(Instant::now())
+                *flight.start.insert(crate::motion::start(cx))
             }
         };
         if start.elapsed().as_secs_f32() < FLIGHT {

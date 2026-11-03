@@ -152,6 +152,36 @@ pub fn new_profile_name(names: &[SharedString]) -> String {
         .unwrap_or_default()
 }
 
+/// Why Settings › Profiles has no Delete for a profile, for the line under its name, or None when
+/// it has one or nothing needs saying. The core deletes none a Space or a favorite is in, nor the
+/// one it started with, `first`. `profiles` counts them all; `spaces` counts the Spaces listed in
+/// it, `task` says whether an agent's task, whose Space isn't listed, is working in it, and
+/// `favorites` whether a favorite is in it.
+pub fn profile_kept(
+    first: bool,
+    profiles: usize,
+    spaces: usize,
+    task: bool,
+    favorites: bool,
+) -> Option<String> {
+    let its = match spaces {
+        0 => None,
+        1 => Some("its Space"),
+        _ => Some("its Spaces"),
+    };
+    let why = match (its, favorites) {
+        // With no other profile there's nothing to delete it for, so nothing to explain.
+        _ if first && profiles < 2 => return None,
+        _ if first => "The first profile can't be deleted.".into(),
+        (Some(its), true) => format!("Delete {its} and remove its favorites to delete it."),
+        (Some(its), false) => format!("Delete {its} to delete it."),
+        (None, true) => "Remove its favorites to delete it.".into(),
+        (None, false) if task => "An agent's task is working in it.".into(),
+        (None, false) => return None,
+    };
+    Some(why)
+}
+
 impl Shell {
     /// The menu a right-click on a Space's name or dot shows (Arc), with its icon (ours).
     pub(super) fn space_menu(
@@ -1599,10 +1629,28 @@ mod empty_space_tests;
 mod tests {
     use gpui::{AppContext, Entity, TestAppContext, point, px};
 
-    use super::{MenuEntry, sentence_case, space_menu_head, space_menu_label};
+    use super::{MenuEntry, profile_kept, sentence_case, space_menu_head, space_menu_label};
     use crate::shell::{
         Command, Folders, Page, Shell, drag::detents::shell_with, recorder::Recorder,
     };
+
+    /// Settings › Profiles says why a profile has no Delete: what keeps it, and what the user does
+    /// to delete it. A profile nothing keeps, and the only one, say nothing.
+    #[test]
+    fn a_profile_kept_from_deleting_says_why() {
+        let says = |first, profiles, spaces, task, favorites| {
+            profile_kept(first, profiles, spaces, task, favorites).unwrap_or_default()
+        };
+        assert_eq!(says(true, 1, 3, false, true), "", "the only profile");
+        assert_eq!(says(true, 2, 1, false, false), "The first profile can't be deleted.");
+        assert_eq!(says(false, 2, 1, false, false), "Delete its Space to delete it.");
+        assert_eq!(says(false, 3, 2, true, false), "Delete its Spaces to delete it.");
+        let both = "Delete its Space and remove its favorites to delete it.";
+        assert_eq!(says(false, 2, 1, false, true), both);
+        assert_eq!(says(false, 2, 0, true, true), "Remove its favorites to delete it.");
+        assert_eq!(says(false, 2, 0, true, false), "An agent's task is working in it.");
+        assert_eq!(says(false, 2, 0, false, false), "", "nothing keeps it, so it has Delete");
+    }
 
     /// Off the Mac, ilo's items are in sentence case, keeping its nouns Space and Library and
     /// acronyms capitalized.
