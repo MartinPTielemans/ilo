@@ -429,8 +429,9 @@ impl Render for OfferPrompt {
                 let label = Hsla::from(palette.accent_label);
                 (palette.accent.into(), palette.accent_hovered(), palette.accent_pressed(), label)
             } else {
-                let states = (palette.state(PLATE, STATE_HOVERED), palette.state(PLATE, STATE_PRESSED));
-                (palette.plate(PLATE), states.0, states.1, palette.text(TITLE))
+                let hovered = palette.state(PLATE, STATE_HOVERED);
+                let pressed = palette.state(PLATE, STATE_PRESSED);
+                (palette.plate(PLATE), hovered, pressed, palette.text(TITLE))
             };
             div()
                 .id(id)
