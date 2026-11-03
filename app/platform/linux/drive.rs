@@ -13,8 +13,8 @@
 //! The commands are drive.mm's, with what Linux has: click, doubleclick, rightclick, middleclick,
 //! clickkey, doubleclickkey, rightclickkey, drag, dragkey, press, dragto, release, rightpress,
 //! rightdragto, rightrelease, dragover, dragdrop, dragleave, move, scroll, wheel, pageswipe, key,
-//! keydown, keyup, flags, type, resize, place, order, layout, state, title, pasteboard, front, menu,
-//! menubar, choose, dismiss, window, agentspace, agentmayact,
+//! keydown, keyup, flags, type, resize, resizekey, place, order, layout, state, title, pasteboard,
+//! front, menu, menubar, choose, dismiss, window, agentspace, agentmayact,
 //! agentrelease, agentdisconnect, takeback, age and insert. The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs):
 //! cmd with Ctrl, ctrl and alt with Alt, and ⌃Tab as Ctrl+Tab; a click's as Chrome reads
 //! them, cmd with Ctrl and alt with Alt. flags presses and lets
@@ -2108,6 +2108,23 @@ fn run_command(line: &str) -> Option<()> {
             // The window manager gives the window its size a moment later, and the UI follows,
             // where the Mac's resize is done at once (#1065).
             resizing(browser.gpui as usize, width, height);
+            x.0.flush().ok()
+        }
+        // Settings with the keyboard, as resize does the driven browser window.
+        "resizekey" => {
+            let numbers: Vec<f64> = words.map(|w| w.parse().ok()).collect::<Option<_>>()?;
+            let &[width, height] = numbers.as_slice() else {
+                return None;
+            };
+            let Some(Keyboard::Settings(settings, _)) = keyboard_window() else {
+                return None;
+            };
+            let scale = scale();
+            let aux = ConfigureWindowAux::new()
+                .width((width * scale) as u32)
+                .height((height * scale) as u32);
+            let x = server()?;
+            x.0.configure_window(settings, &aux).ok()?;
             x.0.flush().ok()
         }
         "order" => {

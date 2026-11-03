@@ -205,6 +205,30 @@ impl Browser for Engine {
         cx.defer(move |cx| drop_targets::show(shown, ui_view, cx));
     }
 
+    fn pointer(&self, _: &mut App) -> Option<Point<Pixels>> {
+        let (mut x, mut y, mut left, mut top, mut width, mut height) = (0., 0., 0., 0., 0., 0.);
+        // The window's frame stands in for its content's, near enough for where a download's
+        // flight leaves from: the browser window draws its own title bar.
+        let known = unsafe {
+            platform::host_pointer(&mut x, &mut y)
+                && platform::host_window_frame(
+                    self.ui_view,
+                    &mut left,
+                    &mut top,
+                    &mut width,
+                    &mut height,
+                )
+        };
+        known.then(|| point(px((x - left) as f32), px((y - top) as f32)))
+    }
+
+    fn over_page_blends(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        return gpui_linux::overlays_blend();
+        #[cfg(not(target_os = "linux"))]
+        true
+    }
+
     fn back_to_pinned_url(&self, tab: u64, _: &mut App) {
         unsafe { bc::bc_tab_back_to_pinned_url(tab) };
     }

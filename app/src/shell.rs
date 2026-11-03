@@ -128,6 +128,7 @@ pub use commands::{
     find_commands, key_name, keystroke_keys, keystroke_label, menu_item, pane_added, run_from_bar,
     shown_tab, task_page_shown, with_named_rows,
 };
+pub use display_face::display_text;
 pub use drag::dropped_urls;
 pub use drm_note::PlayReady;
 pub use extensions::{
@@ -3673,7 +3674,8 @@ impl Render for Shell {
             .as_ref()
             .is_some_and(|drag| drag.over_page.is_some())
             || self.link_over.is_some()
-            || self.agent_pointer_shown();
+            || self.agent_pointer_shown()
+            || self.download_flying(cx);
         if drop_targets || self.drop_targets_shown {
             self.drop_targets_shown = drop_targets;
             self.browser.show_drop_targets(drop_targets, cx);
@@ -3964,10 +3966,10 @@ impl Shell {
             .children(self.new_space_circle(cx))
             .children(self.recent_download_rows(cx))
             .children((!self.private).then(|| self.library_button(cx)))
+            .children(self.download_bin(cx))
             .children(self.archive_flights())
             .children((!self.private).then(|| self.plus_button(cx)))
             .children(self.switcher(cx))
-            .children(self.flying_icon())
             .child(self.press_listener())
             .children(self.paging_frame(started))
     }

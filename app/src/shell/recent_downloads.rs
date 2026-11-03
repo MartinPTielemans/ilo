@@ -1,7 +1,6 @@
 //! The Library button's recent downloads: the newest files, in rows over the foot of the sidebar,
-//! the newest next to the button (Arc), of the kinds picked from the button's menu, the Library's
-//! captures among them. When they show and how they come and go are ours until Arc's are recorded
-//! (docs/ux-spec.md › Downloads).
+//! the newest next to the button, coming and going as Arc's do, of the kinds picked from the
+//! button's menu, the Library's captures among them (docs/ux-spec.md › Downloads).
 
 use std::{
     sync::Arc,
@@ -10,11 +9,12 @@ use std::{
 
 use gpui::{
     AnyElement, Context, Image, MouseButton, MouseDownEvent, Pixels, Point, SharedString, Task,
-    Window, div, img, prelude::*, px, svg,
+    Window, div, img, linear_color_stop, linear_gradient, prelude::*, px, svg,
 };
 
 use super::{
-    Download, DownloadState, FOOTER_HEIGHT, MenuEntry, NAV_SIZE, SECONDARY, Section, Shell,
+    Download, DownloadState, FOOTER_HEIGHT, LIST_TOP, MenuEntry, NAV_SIZE, SECONDARY, Section,
+    Shell,
     library::{capture_id, is_video, of},
 };
 use crate::palette::{STATE_HOVERED, STATE_PRESSED};
@@ -43,9 +43,19 @@ fn kind(name: &str) -> u32 {
     }
 }
 
-/// Ours: the rows wait half a second, so a pointer passing the button leaves them, and fade.
-const RECENT_WAIT: Duration = Duration::from_millis(500);
-const RECENT_FADE: f32 = 0.15;
+/// Arc's: the rows show 0.2 s into a rest on the button, so a pointer passing it leaves them. The
+/// bottom one comes first and each next one 25 ms later, fading in over 0.18 s as it rises 5 pt
+/// over 0.12 s.
+const RECENT_WAIT: Duration = Duration::from_millis(200);
+const RECENT_STAGGER_IN: f32 = 0.025;
+const RECENT_FADE_IN: f32 = 0.18;
+const RECENT_RISE: f32 = 5.;
+const RECENT_RISE_TIME: f32 = 0.12;
+/// Arc's: they go 70 ms after the pointer leaves, the bottom one first and the top one 50 ms after
+/// it, each fading out over 0.13 s where it is.
+const RECENT_LINGER: f32 = 0.07;
+const RECENT_STAGGER_OUT: f32 = 0.05 / (RECENT_COUNT - 1) as f32;
+const RECENT_FADE_OUT: f32 = 0.13;
 /// Arc's: four rows 56 apart, a 40 pt column at 8 for an image's preview 40 wide or the file's
 /// icon 26 wide, and the name at 61 over its age.
 const RECENT_COUNT: usize = 4;
@@ -62,6 +72,8 @@ use crate::tokens::shell::recent_downloads::PLATE_RADIUS;
 use crate::tokens::shell::recent_downloads::PREVIEW_HEIGHT;
 use crate::tokens::shell::recent_downloads::PREVIEW_RADIUS;
 use crate::tokens::shell::recent_downloads::RECENT_PITCH;
+use crate::tokens::shell::recent_downloads::SHADE;
+use crate::tokens::shell::recent_downloads::SHADE_GAP;
 use crate::tokens::shell::recent_downloads::TEXT_END;
 use crate::tokens::shell::recent_downloads::TEXT_X;
 
@@ -95,11 +107,55 @@ pub(super) struct RecentDownloads {
     rows: Vec<(u64, SharedString)>,
     /// They're going, and take no pointer.
     going: bool,
-    /// When the fade toward where they're going would have started from nothing, from the first
-    /// frame drawn after it was set.
+    /// When the fade toward where they're going started, from the first frame drawn after it was
+    /// set.
     fade: Option<Instant>,
+    /// How opaque each row was as the fade started, newest first, where it turned on its way; none
+    /// for rows that started from nothing, or from all there.
+    from: Vec<f32>,
     /// The fade has ended, and its line is logged.
     settled: bool,
+}
+
+impl RecentDownloads {
+    /// How opaque the row `index` places from the bottom was as the fade started.
+    fn from(&self, index: usize) -> f32 {
+        let start = if self.going { 1. } else { 0. };
+        self.from.get(index).copied().unwrap_or(start)
+    }
+}
+
+/// How opaque the row `index` places from the bottom draws `t` seconds into its fade from `from`,
+/// toward going or coming. One starting from nothing, or from all there, waits its turn; one
+/// turned on its way turns at once.
+fn row_opacity(going: bool, index: usize, from: f32, t: f32) -> f32 {
+    let index = index as f32;
+    match going {
+        false => {
+            let start = if from == 0. {
+                index * RECENT_STAGGER_IN
+            } else {
+                0.
+            };
+            (from + (t - start).max(0.) / RECENT_FADE_IN).min(1.)
+        }
+        true => {
+            let start = RECENT_LINGER
+                + if from == 1. {
+                    index * RECENT_STAGGER_OUT
+                } else {
+                    0.
+                };
+            (from - (t - start).max(0.) / RECENT_FADE_OUT).max(0.)
+        }
+    }
+}
+
+/// How far under its place a row coming in draws at `opacity`: it rises out of the ease as it's
+/// two thirds in, since its rise takes 0.12 s of the fade's 0.18.
+fn row_drop(opacity: f32) -> f32 {
+    let risen = (opacity * RECENT_FADE_IN / RECENT_RISE_TIME).min(1.);
+    RECENT_RISE * (1. - risen).powi(3)
 }
 
 /// The downloads the rows can show, of `kinds`, newest first: the finished ones with a file, and
@@ -299,7 +355,10 @@ impl Shell {
         recent.rows = rows;
         recent.going = false;
         recent.fade = None;
+        recent.from.clear();
         recent.settled = false;
+        // The list shows the download the bin holds.
+        self.bin_leaves(cx);
         self.ask_download_previews(cx);
         cx.notify();
     }
@@ -347,31 +406,31 @@ impl Shell {
         cx.notify();
     }
 
-    /// Turns the rows' fade toward going, or coming, from the opacity they're at.
+    /// Turns the rows' fade toward going, or coming, each row from the opacity it's at.
     fn fade_recent_downloads(&mut self, going: bool, cx: &mut Context<Self>) {
-        let opacity = self.recent_downloads_opacity(cx.background_executor().now());
+        let now = cx.background_executor().now();
+        let from = self.recent_row_opacities(now);
         let recent = &mut self.recent_downloads;
         recent.going = going;
         recent.settled = false;
         if going {
             recent.over_rows = false;
         }
-        // From the opacity it's at, as if the fade had started that long ago.
-        let done = if going { 1. - opacity } else { opacity };
-        let since = Duration::from_secs_f32(done * RECENT_FADE);
-        let now = cx.background_executor().now();
-        recent.fade = recent.fade.map(|_| now.checked_sub(since).unwrap_or(now));
+        recent.from = from;
+        // Now, or from the first frame if none has been drawn yet.
+        recent.fade = recent.fade.map(|_| now);
         cx.notify();
     }
 
-    /// How opaque the rows draw, at `now` on the executor's clock, which a test moves on.
-    fn recent_downloads_opacity(&self, now: Instant) -> f32 {
+    /// How opaque each row draws, newest first, at `now` on the executor's clock, which a test
+    /// moves on.
+    fn recent_row_opacities(&self, now: Instant) -> Vec<f32> {
         let recent = &self.recent_downloads;
         let t = recent
             .fade
-            .map_or(0., |fade| (now - fade).as_secs_f32() / RECENT_FADE);
-        let t = t.clamp(0., 1.);
-        if recent.going { 1. - t } else { t }
+            .map_or(0., |fade| now.saturating_duration_since(fade).as_secs_f32());
+        let row = |index| row_opacity(recent.going, index, recent.from(index), t);
+        (0..recent.rows.len()).map(row).collect()
     }
 
     /// The downloads or captures changed: the rows keep those still there, and go with none.
@@ -380,9 +439,15 @@ impl Shell {
             return;
         }
         let files = self.recent_files(cx);
-        let rows = &mut self.recent_downloads.rows;
-        rows.retain(|(id, _)| files.iter().any(|(file, _)| file == id));
-        if rows.is_empty() {
+        let recent = &mut self.recent_downloads;
+        let kept: Vec<_> = (recent.rows.iter())
+            .map(|(id, _)| files.iter().any(|(file, _)| file == id))
+            .collect();
+        let mut keeps = kept.iter();
+        recent.rows.retain(|_| keeps.next() == Some(&true));
+        let mut keeps = kept.iter();
+        recent.from.retain(|_| keeps.next() == Some(&true));
+        if recent.rows.is_empty() {
             // check.sh waits for this line.
             log!("browser: recent downloads hidden");
         }
@@ -411,16 +476,21 @@ impl Shell {
     /// Steps the rows' fade for a frame, and once it's done, says so, and lets them go if they
     /// went.
     pub(super) fn step_recent_downloads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let recent = &mut self.recent_downloads;
-        if recent.rows.is_empty() || recent.settled {
+        if self.recent_downloads.rows.is_empty() || self.recent_downloads.settled {
             return;
         }
         let now = cx.background_executor().now();
-        let fade = *recent.fade.get_or_insert(now);
-        if (now - fade).as_secs_f32() < RECENT_FADE {
+        self.recent_downloads.fade.get_or_insert(now);
+        let end = if self.recent_downloads.going { 0. } else { 1. };
+        if self
+            .recent_row_opacities(now)
+            .iter()
+            .any(|&opacity| opacity != end)
+        {
             window.request_animation_frame();
             return;
         }
+        let recent = &mut self.recent_downloads;
         recent.settled = true;
         // check.sh waits for these lines, logged with the frame that ends the fade.
         if recent.going {
@@ -432,66 +502,91 @@ impl Shell {
     }
 
     /// The rows, over the tab list's foot and taking its pointer while they show, and the gap down
-    /// to the button, which keeps them as the pointer crosses it.
-    pub(super) fn recent_download_rows(
-        &self,
-        cx: &mut Context<Self>,
-    ) -> Option<impl IntoElement + use<>> {
+    /// to the button, which keeps them as the pointer crosses it; and behind them, the sidebar's
+    /// own look hiding the list from just over the top row, coming back over the shade above it.
+    /// The shade takes no pointer.
+    pub(super) fn recent_download_rows(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let recent = &self.recent_downloads;
         if recent.rows.is_empty() || self.page_fullscreen {
-            return None;
+            return Vec::new();
         }
         let live = !recent.going;
         let button_top = (FOOTER_HEIGHT + NAV_SIZE) / 2.;
         let height = recent.rows.len() as f32 * RECENT_PITCH;
         let window = f32::from(self.viewport.height).max(1.);
-        // The sidebar's own look behind them, where the tab list would show through.
-        let fill = self.window_fill_at((window - FOOTER_HEIGHT - height / 2.) / window);
-        let rows: Vec<_> = recent
-            .rows
-            .iter()
-            .rev()
-            .map(|(id, age)| self.recent_row(*id, age, live, cx))
+        let opacities = self.recent_row_opacities(cx.background_executor().now());
+        let still = crate::motion::still(cx);
+        let rows: Vec<_> = (recent.rows.iter().zip(&opacities).enumerate().rev())
+            .map(|(index, ((id, age), &opacity))| {
+                let down = match (still, recent.going) {
+                    (true, _) => 0.,
+                    (false, true) => row_drop(recent.from(index)),
+                    (false, false) => row_drop(opacity),
+                };
+                self.recent_row(*id, age, live, (opacity, down), cx)
+            })
             .collect();
-        Some(
-            div()
-                .id("recent-downloads")
-                .absolute()
-                .left_0()
-                .w(px(self.width()))
-                .bottom(px(button_top))
-                .h(px(height + FOOTER_HEIGHT - button_top))
-                .opacity(self.recent_downloads_opacity(cx.background_executor().now()))
-                .when(live, |area| {
-                    area.block_mouse_except_scroll().on_hover(cx.listener(
-                        |shell, hovered: &bool, window, cx| {
-                            shell.hover_recent_downloads(true, *hovered, window, cx)
-                        },
-                    ))
-                })
-                .child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .right_0()
-                        .h(px(height))
-                        .bg(fill)
-                        .flex()
-                        .flex_col()
-                        .children(rows),
-                )
-                .children(live.then(|| self.download_press_listeners(cx)).flatten()),
-        )
+        // Never over the list's top, above which are the URL field and the window's buttons.
+        let bottom = window - FOOTER_HEIGHT;
+        let hidden = bottom - height - SHADE_GAP;
+        let top = (hidden - SHADE).max(LIST_TOP.min(hidden));
+        let fill = |y: f32| self.window_fill_at(y / window);
+        let shade = div()
+            .absolute()
+            .left_0()
+            .w(px(self.width()))
+            .top(px(top))
+            .h(px(bottom - top))
+            .opacity(opacities.iter().copied().fold(0., f32::max))
+            .flex()
+            .flex_col()
+            .child(div().h(px(hidden - top)).bg(linear_gradient(
+                180.,
+                linear_color_stop(fill(top).opacity(0.), 0.),
+                linear_color_stop(fill(hidden), 1.),
+            )))
+            .child(div().flex_1().bg(linear_gradient(
+                180.,
+                linear_color_stop(fill(hidden), 0.),
+                linear_color_stop(fill(bottom), 1.),
+            )));
+        let area = div()
+            .id("recent-downloads")
+            .absolute()
+            .left_0()
+            .w(px(self.width()))
+            .bottom(px(button_top))
+            .h(px(height + FOOTER_HEIGHT - button_top))
+            .when(live, |area| {
+                area.block_mouse_except_scroll().on_hover(cx.listener(
+                    |shell, hovered: &bool, window, cx| {
+                        shell.hover_recent_downloads(true, *hovered, window, cx)
+                    },
+                ))
+            })
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(height))
+                    .flex()
+                    .flex_col()
+                    .children(rows),
+            )
+            .children(live.then(|| self.download_press_listeners(cx)).flatten());
+        vec![shade.into_any_element(), area.into_any_element()]
     }
 
     /// A row: the file's preview or icon in its column, its name over its age, and while the rows
-    /// show, what a Library row does.
+    /// show, what a Library row does; at its `opacity`, `down` under its place as it comes.
     fn recent_row(
         &self,
         id: u64,
         age: &SharedString,
         live: bool,
+        (opacity, down): (f32, f32),
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let download = self.downloads.iter().find(|each| each.id == id);
@@ -573,9 +668,11 @@ impl Shell {
                     )
             }
         };
-        div()
-            .flex_none()
-            .relative()
+        let row = div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .top(px(down))
             .h(px(RECENT_PITCH))
             .child(plate)
             .child(
@@ -602,8 +699,14 @@ impl Shell {
                     .justify_center()
                     .child(line(name, NAME_SIZE, NAME_LINE, NAME))
                     .child(line(detail, AGE_SIZE, AGE_LINE, SECONDARY)),
-            )
-            .into_any_element()
+            );
+        let row = div()
+            .flex_none()
+            .relative()
+            .h(px(RECENT_PITCH))
+            .opacity(opacity)
+            .child(row);
+        row.into_any_element()
     }
 }
 
@@ -619,7 +722,8 @@ mod tests {
             library::{Section, capture_id},
             recorder::Recorder,
         },
-        DAY, HOUR, MINUTE, RECENT_FADE, RECENT_WAIT, WEEK, age, now,
+        DAY, HOUR, MINUTE, RECENT_FADE_IN, RECENT_FADE_OUT, RECENT_LINGER, RECENT_STAGGER_IN,
+        RECENT_STAGGER_OUT, RECENT_WAIT, WEEK, age, now, row_drop, row_opacity,
     };
 
     /// Ages count minutes, hours, then yesterday, days and weeks, and past four weeks give the
@@ -762,7 +866,7 @@ mod tests {
         assert_eq!(listed(cx), [2, 1]);
     }
 
-    /// Resting on the Library button for half a second shows the four newest downloads, the
+    /// Resting on the Library button for a moment shows the four newest downloads, the
     /// running and held ones with the finished ones, with their ages, and asks for the finished
     /// ones' previews once, and the running one's once it finishes. They stay as the pointer crosses
     /// from the button onto them, go once it's on neither, and come back from going when it's on
@@ -792,7 +896,7 @@ mod tests {
 
         move_to(cx, button.0, button.1);
         wait(cx, RECENT_WAIT - Duration::from_millis(100));
-        assert!(rows(&shell, cx).0.is_empty(), "they wait half a second");
+        assert!(rows(&shell, cx).0.is_empty(), "they wait for a rest");
         wait(cx, Duration::from_millis(100));
         let shown = vec![
             (9, "just now".to_string()),
@@ -823,7 +927,10 @@ mod tests {
 
         // Their fade in ends on the test's clock, which stands still from here, so they're still
         // going when the pointer comes back however long the machine takes.
-        wait(cx, Duration::from_secs_f32(RECENT_FADE));
+        wait(
+            cx,
+            Duration::from_secs_f32(3. * RECENT_STAGGER_IN + RECENT_FADE_IN),
+        );
         move_to(cx, 120., 200.);
         assert_eq!(
             rows(&shell, cx),
@@ -876,6 +983,45 @@ mod tests {
             (shell.library_open, shell.section == Section::Archive)
         });
         assert!(open && archive, "a click opens the Library where it was");
+    }
+
+    /// The rows come in from the bottom, each 25 ms after the one under it, fading in over 0.18 s
+    /// as they rise 5 pt over the first 0.12 s. They go 70 ms after the pointer leaves, the bottom
+    /// one first and the top one 50 ms later, each fading out over 0.13 s; one turned on its way
+    /// turns at once.
+    #[test]
+    fn the_rows_come_up_from_the_bottom_and_go_bottom_first() {
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-4;
+        assert_eq!(row_opacity(false, 0, 0., 0.), 0.);
+        assert!(close(row_opacity(false, 0, 0., 0.09), 0.5));
+        assert_eq!(row_opacity(false, 3, 0., 3. * RECENT_STAGGER_IN), 0.);
+        assert!(close(
+            row_opacity(false, 3, 0., 3. * RECENT_STAGGER_IN + 0.09),
+            0.5
+        ));
+        assert_eq!(
+            row_opacity(false, 3, 0., 3. * RECENT_STAGGER_IN + RECENT_FADE_IN + 1e-4),
+            1.
+        );
+        assert_eq!(row_drop(0.), 5.);
+        assert!(row_drop(0.5) > 0. && row_drop(0.5) < 0.2);
+        assert_eq!(row_drop(2. / 3.), 0.);
+
+        assert_eq!(row_opacity(true, 0, 1., RECENT_LINGER), 1.);
+        assert!(close(
+            row_opacity(true, 0, 1., RECENT_LINGER + RECENT_FADE_OUT / 2.),
+            0.5
+        ));
+        let top = RECENT_LINGER + 3. * RECENT_STAGGER_OUT;
+        assert!(close(top - RECENT_LINGER, 0.05));
+        assert_eq!(row_opacity(true, 3, 1., top), 1.);
+        assert_eq!(row_opacity(true, 3, 1., top + RECENT_FADE_OUT + 1e-4), 0.);
+        // Turned at half: back in over half the fade, and out after the linger alone.
+        assert!(close(row_opacity(false, 3, 0.5, RECENT_FADE_IN / 4.), 0.75));
+        assert!(close(
+            row_opacity(true, 3, 0.5, RECENT_LINGER + RECENT_FADE_OUT / 4.),
+            0.25
+        ));
     }
 
     /// A pointer passing over the button leaves no rows. A download running alone shows as one, and
