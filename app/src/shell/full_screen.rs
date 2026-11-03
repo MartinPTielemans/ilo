@@ -208,6 +208,8 @@ fn a_window_that_keeps_its_size_lays_the_page_out_once_there(cx: &mut TestAppCon
     assert_eq!(left, Some(px(LIBRARY_WIDTH)));
 }
 
+// AppKit's order: on Linux and Windows the shell hears the window is there with its resize.
+#[cfg(target_os = "macos")]
 #[gpui::test]
 fn a_page_leaving_before_its_window_is_there_waits_for_the_resize(cx: &mut TestAppContext) {
     let (shell, _, cx) = window(cx);
