@@ -742,7 +742,7 @@ restore_newest "Restoring the sidebar replaced" 3
 await_today $((backed_up + 1)) "restoring the sidebar replaced didn't bring back the tab"
 exec 3>&-
 quit
-# With Restore windows from last session turned off in Settings › Advanced, a launch opens one
+# With Restore windows from last session turned off in Settings › General, a launch opens one
 # window showing no page, as ⌘N's does: the Space comes back with its pinned tab, and its Today tab
 # goes in the archive. The second window doesn't come back (#684).
 log="$out/fresh-a.log"
