@@ -340,7 +340,11 @@ flatpak_updates_check() {
   procs=/app/ilo/chrome
   log="$out/updates.log"
   step=0
-  flatpak run --user --env=BROWSER_DRIVE=1 "$id" < "$out/drive" > "$log" 2>&1 &
+  # Under Wayland the driver clicks and types through sway, whose socket the sandbox doesn't
+  # otherwise see (drive_wayland.rs).
+  set -- --env=BROWSER_DRIVE=1
+  [ -z "${SWAYSOCK:-}" ] || set -- "$@" --filesystem="$SWAYSOCK" --env=SWAYSOCK="$SWAYSOCK"
+  flatpak run --user "$@" "$id" < "$out/drive" > "$log" 2>&1 &
   pid=$!
   exec 3> "$out/drive"
   await '^browser: updater started$' || fail "the Flatpak didn't start its updater"
