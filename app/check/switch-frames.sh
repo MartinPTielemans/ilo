@@ -159,8 +159,8 @@ for problem in problems:
     print("problem: " + problem)
 sys.exit(1 if problems else 0)
 PY
-# How long the core kept the page each switch left over the one it showed, from its lines: on the
-# Mac until that one's renderer had a frame on screen.
+# How long the core kept the page each switch left over the one it showed, from its lines: until
+# that one's renderer had a frame on screen, on Linux as a copy of the page left.
 awk '/^browser: switch keeps/ { kept++ }
   /^browser: switch let the page it left go after/ { after = after " " $(NF - 1) }
   /^browser: switch let the page it left go at the limit/ { limit++ }
