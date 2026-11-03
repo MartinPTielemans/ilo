@@ -27,6 +27,14 @@
 # With Restore windows from last session off, a launch opens one window with no page, the Spaces
 # and pinned tabs back and the Today tabs in the archive.
 
+# Chooses $1 in the menu shown once it has drawn on screen. AppKit puts its window there some
+# frames after it's shown, taking the keyboard then: chosen before, Rename…'s field lost it to the
+# menu and closed, keeping the name, and the keys meant for the field went nowhere.
+choose_drawn() {
+  expect '^browser: menu drawn ' "the menu didn't come on screen to choose $1 in"
+  send choose "$1"
+}
+
 # The Spaces come back after a quit and after the window closes: their names, their tabs with each
 # tab's history, the tab each showed and the Space the window showed. Back and Forward on a tab put
 # back go through its saved history, and a window that quit full screen comes back so, unless a page
@@ -141,7 +149,7 @@ expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $co
 New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the Space's menu didn't offer its theme"
 # The theme picker's pink swatch, and + for a second colour, which a relaunch brings back.
-send choose "$(cased 'Edit Theme Color…')"
+choose_drawn "$(cased 'Edit Theme Color…')"
 expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
 expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
 send clickkey "$(swatch_x 1)" $swatch_y
@@ -159,7 +167,7 @@ expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
 post rightclick 100 112
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
 New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" "the Space's menu didn't offer Change Icon…"
-send choose "$(cased 'Change Space Icon…')"
+choose_drawn "$(cased 'Change Space Icon…')"
 expect "^browser: icon picker for $second on icon\$" "Change Icon… didn't open the icon picker"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker"
 expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
@@ -195,7 +203,7 @@ expect "^browser: title $c news\$" "return didn't name the tab"
 post rightclick $(row 0)
 expect "^browser: menu shown $(cased '.*, Change Icon…, Rename…, ')" \
   "a right-click on the tab's row didn't offer Change Icon…"
-send choose "$(cased 'Change Icon…')"
+choose_drawn "$(cased 'Change Icon…')"
 expect "^browser: icon picker for tab $c on emoji\$" \
   "Change Icon… didn't open the icon picker on the Emoji tab for the tab"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker under the tab"
@@ -317,7 +325,7 @@ post rightclick $(row 0)
 menu=$(cased "Copy Link$share, Change Icon…, Remove Icon, Rename…, Mute (disabled), Add Split View, Duplicate, Add to Folder › New Folder, Move to › [^,]* (checked), Move to › reading list, Move to › New Space…, Archive Tab, Archive Tabs Below")
 expect "^browser: menu shown $menu\$" \
   "a right-click on the renamed tab's row didn't offer Rename…"
-send choose Rename…
+choose_drawn Rename…
 expect "^browser: rename tab $c\$" "Rename… didn't turn the tab's title into a field"
 send key backspace
 send key return
@@ -327,7 +335,7 @@ expect "^browser: title $c Example Domain\$" \
 # finds no emoji, so ↩ picks nothing. Escape closes the picker with the icon as it was.
 post rightclick $(row 0)
 expect "^browser: menu shown $menu\$" "a right-click on the tab's row didn't offer Remove Icon"
-send choose "$(cased 'Change Icon…')"
+choose_drawn "$(cased 'Change Icon…')"
 expect "^browser: icon picker for tab $c on emoji\$" \
   "Change Icon… didn't open the icon picker again"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker again"
@@ -347,7 +355,7 @@ none_since "^browser: page $c icon " || fail "escape changed the tab's icon"
 # Remove Icon gives it back its favicon.
 post rightclick $(row 0)
 expect "^browser: menu shown $menu\$" "a right-click on the tab's row didn't offer Remove Icon"
-send choose "$(cased 'Remove Icon')"
+choose_drawn "$(cased 'Remove Icon')"
 expect "^browser: page $c icon none\$" "Remove Icon didn't give the tab back its favicon"
 send click $page_point
 # The tab closed before the quit reopens from the Library at the top of Today, at its page. ⌘W
@@ -390,7 +398,7 @@ all=$(cased 'Images (checked), Videos (checked), Other Files (checked), Captures
 post rightclick 24 $((height - 25))
 expect "^browser: menu shown $all\$" "a right-click on the Library button didn't show what it lists"
 ../tools/window-screenshot.sh "$pid" "$out/library-button-menu.png" || fail "no window to capture"
-send choose "$(cased 'Other Files')"
+choose_drawn "$(cased 'Other Files')"
 expect '^browser: hover kinds images, videos, captures$' "Other Files didn't turn off"
 send move $page_point
 send move 24 $((height - 25))
@@ -400,7 +408,7 @@ send move $page_point
 post rightclick 24 $((height - 25))
 expect "^browser: menu shown $(cased 'Images (checked), Videos (checked), Other Files, ')" \
   "the Library button's menu didn't untick Other Files"
-send choose "$(cased 'Other Files')"
+choose_drawn "$(cased 'Other Files')"
 expect '^browser: hover kinds images, videos, other files, captures$' "Other Files didn't turn on"
 # A finished download's menu, with Chrome's word off the Mac for the file manager there.
 file_manager=Finder
@@ -415,13 +423,13 @@ listed=$(grep '^browser: downloads ' "$log" | tail -1 | cut -d' ' -f3)
 post rightclick 300 111
 expect "^browser: menu shown $(cased 'Remove from List, Clear List')\$" \
   "a right-click on the cancelled download's row didn't show its menu"
-send choose "$(cased 'Remove from List')"
+choose_drawn "$(cased 'Remove from List')"
 expect "^browser: download $s Remove via download menu\$" "Remove from List didn't reach it"
 expect "^browser: downloads $((listed - 1))\$" "Remove from List didn't take the download off"
 post rightclick 300 111
 expect "^browser: menu shown $finished_menu\$" \
   "a right-click on the finished download's row didn't show its menu"
-send choose "$(cased 'Clear List')"
+choose_drawn "$(cased 'Clear List')"
 expect '^browser: command clear-downloads via download menu$' "Clear List didn't run"
 expect '^browser: downloads 0$' "Clear List didn't empty the list"
 [ -f "$out/downloads/notes.txt" ] || fail "Clear List deleted the download's file"
@@ -475,7 +483,7 @@ expect '^browser: recent downloads shown 1$' \
 post rightclick 120 $((height - 78))
 expect "^browser: menu shown $finished_menu\$" \
   "a right-click on the recent download's row didn't show its menu"
-send choose "$(cased 'Move to Trash')"
+choose_drawn "$(cased 'Move to Trash')"
 expect "^browser: download $t Trash via download menu\$" "Move to Trash didn't reach the download"
 expect '^browser: downloads 0$' "Move to Trash didn't take the download off the list"
 expect '^browser: recent downloads hidden$' "the recent downloads stayed with none left"
@@ -731,7 +739,7 @@ restore_newest() {
   else
     bar_command restore-earlier-sidebar "Restore Earlier Sidebar…" "restore earlier"
     expect "^browser: menu shown $label" "$1's list didn't start with the newest backup, $label"
-    send choose "$label"
+    choose_drawn "$label"
   fi
   expect "^browser: dialog shown Restore the sidebar from " "$1 didn't ask first"
   expect '^browser: dialog settled$' "$1's dialog didn't settle"
