@@ -519,6 +519,8 @@ fn an_import_offers_its_most_visited_sites_as_favorites(cx: &mut TestAppContext)
     assert_eq!(ticked(&shell, cx), ["https://news.example.org/"]);
     cx.simulate_keystrokes("enter");
     assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser));
+    let offered = shown.read_with(cx, |view, _| view.suggested().map(<[_]>::len));
+    assert_eq!(offered, Some(0), "the step took the offer, so the import's end doesn't make it");
 
     started(&shell, cx);
     skip_to(&shell, cx, Step::Import);
