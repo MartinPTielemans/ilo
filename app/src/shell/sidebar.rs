@@ -8,20 +8,19 @@ use std::{
 };
 
 use gpui::{
-    App, Bounds, ClickEvent, Context, CursorStyle, DispatchPhase, Hsla, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, Rgba, canvas, div, linear_color_stop,
-    linear_gradient, point, prelude::*, px, size,
+    App, Bounds, ClickEvent, Context, CursorStyle, DispatchPhase, Hsla, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Rgba, canvas, div,
+    linear_color_stop, linear_gradient, point, prelude::*, px, size,
 };
 
 use super::access::Accessible as _;
 use crate::tokens::shell::{SHOWN_MARKER, SHOWN_MARKER_HIT};
 
 use super::{
-    PLATE_INSET, ROW_HEIGHT, Row, Slot,
-    CARD_INSET, PRIVATE_SHADE, REVEAL_HOLD, REVEAL_INSET, REVEAL_IN_DAMPING, REVEAL_IN_RESPONSE, REVEAL_OUT_DAMPING,
-    REVEAL_MOVE, REVEAL_OUT_RESPONSE, REVEAL_OVERSHOOT, REVEAL_WAIT, SIDEBAR_EDGE, SIDEBAR_HIDE, SIDEBAR_MAX,
-    SIDEBAR_MIN, SIDEBAR_SHOW, SIDEBAR_WIDTH, Settle, Shell, ShellHandle, Space, settle_progress,
-    spring,
+    CARD_INSET, PLATE_INSET, PRIVATE_SHADE, REVEAL_HOLD, REVEAL_IN_DAMPING, REVEAL_IN_RESPONSE,
+    REVEAL_INSET, REVEAL_MOVE, REVEAL_OUT_DAMPING, REVEAL_OUT_RESPONSE, REVEAL_OVERSHOOT,
+    REVEAL_WAIT, ROW_HEIGHT, Row, SIDEBAR_EDGE, SIDEBAR_HIDE, SIDEBAR_MAX, SIDEBAR_MIN,
+    SIDEBAR_SHOW, SIDEBAR_WIDTH, Settle, Shell, ShellHandle, Slot, Space, settle_progress, spring,
 };
 
 /// What the toast says when a tab opens with the sidebar hidden, Arc's words, and for how long
@@ -39,8 +38,9 @@ impl Shell {
         let Some((from, start)) = self.width_motion else {
             return self.sidebar_width;
         };
-        settle_progress(start)
-            .map_or(self.sidebar_width, |progress| from + (self.sidebar_width - from) * progress)
+        settle_progress(start).map_or(self.sidebar_width, |progress| {
+            from + (self.sidebar_width - from) * progress
+        })
     }
 
     /// The docked sidebar's right edge, which drags its width and puts it back on a double-click.
@@ -147,7 +147,8 @@ impl Shell {
         self.width_motion = (from != to).then(|| (from, crate::motion::start(cx)));
         if self.width_motion.is_none() {
             // check.sh waits for these lines, then reads where the page is.
-            self.logged_once_laid.push(format!("browser: sidebar width {to}"));
+            self.logged_once_laid
+                .push(format!("browser: sidebar width {to}"));
         }
         cx.notify();
     }
@@ -155,7 +156,11 @@ impl Shell {
     /// How far the sidebar has moved since `start`, or None once it's there.
     pub(super) fn sidebar_progress(&self, start: Instant) -> Option<f32> {
         let t = start.elapsed().as_secs_f32();
-        let time = if self.sidebar_hidden { SIDEBAR_HIDE } else { SIDEBAR_SHOW };
+        let time = if self.sidebar_hidden {
+            SIDEBAR_HIDE
+        } else {
+            SIDEBAR_SHOW
+        };
         (t < time).then(|| 1. - (1. - t / time).powi(3))
     }
 
@@ -195,7 +200,10 @@ impl Shell {
             return;
         };
         let row = self.row_of(tab);
-        let shut: Vec<u64> = space.holders(row).filter(|&folder| !space.is_open(folder)).collect();
+        let shut: Vec<u64> = space
+            .holders(row)
+            .filter(|&folder| !space.is_open(folder))
+            .collect();
         if self.sidebar_hidden && !self.reveal_shown() {
             self.toggle_sidebar(cx);
         }
@@ -220,7 +228,8 @@ impl Shell {
         let show = Rc::new(move |cx: &mut App| {
             shell.update(cx, |shell, cx| shell.reveal_row(tab, cx)).ok();
         });
-        self.browser.toast_button(&text, ("Show", "show"), show, OPENED_TIME, cx);
+        self.browser
+            .toast_button(&text, ("Show", "show"), show, OPENED_TIME, cx);
     }
 
     /// Whether what's added to the sidebar goes unseen: it's hidden, its reveal isn't out, and the
@@ -235,7 +244,10 @@ impl Shell {
     /// itself. Spaces made while the toast still tells of others are told of with them.
     pub(super) fn toast_spaces(&mut self, made: Vec<u64>, cx: &mut Context<Self>) {
         let form = self.form.as_ref().map(|form| form.space);
-        let made: Vec<u64> = made.into_iter().filter(|&space| Some(space) != form).collect();
+        let made: Vec<u64> = made
+            .into_iter()
+            .filter(|&space| Some(space) != form)
+            .collect();
         if made.is_empty() || !self.unseen_sidebar() {
             return;
         }
@@ -249,15 +261,21 @@ impl Shell {
         let text = match told.len() {
             1 => {
                 let name = self.spaces.iter().find(|space| space.id == first);
-                format!("Added the Space “{}”", name.map_or("", |space| space.name.as_ref()))
+                format!(
+                    "Added the Space “{}”",
+                    name.map_or("", |space| space.name.as_ref())
+                )
             }
             count => format!("Added {count} Spaces"),
         };
         let shell = cx.entity().downgrade();
         let show = Rc::new(move |cx: &mut App| {
-            shell.update(cx, |shell, cx| shell.show_made_space(first, cx)).ok();
+            shell
+                .update(cx, |shell, cx| shell.show_made_space(first, cx))
+                .ok();
         });
-        self.browser.toast_button(&text, ("Show", "show"), show, OPENED_TIME, cx);
+        self.browser
+            .toast_button(&text, ("Show", "show"), show, OPENED_TIME, cx);
     }
 
     /// The Space toast's Show: the Space, if it's still there, with the sidebar back.
@@ -292,7 +310,11 @@ impl Shell {
         let past = self.selected_row_past();
         let list = self.list_scroll.bounds();
         let drawn = past.map(|top| {
-            let y = if top { list.top() } else { list.bottom() - px(SHOWN_MARKER_HIT) };
+            let y = if top {
+                list.top()
+            } else {
+                list.bottom() - px(SHOWN_MARKER_HIT)
+            };
             let width = list.size.width - px(2. * PLATE_INSET);
             let origin = point(list.left() + px(PLATE_INSET), y);
             (top, Bounds::new(origin, size(width, px(SHOWN_MARKER_HIT))))
@@ -332,7 +354,9 @@ impl Shell {
                 false => marker.bottom_0().justify_end(),
             })
             .block_mouse_except_scroll()
-            .when(self.a11y, |marker| marker.button_named("Scroll to the Selected Tab"))
+            .when(self.a11y, |marker| {
+                marker.button_named("Scroll to the Selected Tab")
+            })
             .on_click(cx.listener(move |shell, _: &ClickEvent, _, cx| {
                 shell.scroll_to_row(tab);
                 cx.notify();
@@ -359,7 +383,11 @@ impl Shell {
     fn window_buttons_drawn(&self) -> WindowButtons {
         // A Little ilo window's are over its bar, where the window's own go.
         if self.little.is_some() {
-            return WindowButtons { window: true, library: false, sidebar: false };
+            return WindowButtons {
+                window: true,
+                library: false,
+                sidebar: false,
+            };
         }
         window_buttons_at(
             self.library_open,
@@ -406,7 +434,8 @@ impl Shell {
     }
 
     pub(super) fn reveal_out(&self) -> f32 {
-        self.reveal_step().unwrap_or(if self.revealed { 1. } else { 0. })
+        self.reveal_step()
+            .unwrap_or(if self.revealed { 1. } else { 0. })
     }
 
     /// The Space the window's colour is of, and while the sidebar pages between two, the one
@@ -442,18 +471,34 @@ impl Shell {
         let to = self.space_color_at(beside, x, y);
         let mix = |from: f32, to: f32| from + (to - from) * t;
         let (r, g, b) = (mix(from.r, to.r), mix(from.g, to.g), mix(from.b, to.b));
-        Rgba { r, g, b, a: mix(from.a, to.a) }.into()
+        Rgba {
+            r,
+            g,
+            b,
+            a: mix(from.a, to.a),
+        }
+        .into()
     }
 
     /// `space`'s colour `x` of the way across the window and `y` of the way down, as the gradient
     /// has it: its theme's, or nothing over the underlay without one.
     pub(super) fn space_color_at(&self, space: u64, x: f32, y: f32) -> Rgba {
         if self.private {
-            return Rgba { r: 0., g: 0., b: 0., a: PRIVATE_SHADE };
+            return Rgba {
+                r: 0.,
+                g: 0.,
+                b: 0.,
+                a: PRIVATE_SHADE,
+            };
         }
         match self.space_theme(space) {
             Some(theme) => self.theme_color_at(&theme, self.palette_of(space).layer_alpha, x, y),
-            None => Rgba { r: 0., g: 0., b: 0., a: 0. },
+            None => Rgba {
+                r: 0.,
+                g: 0.,
+                b: 0.,
+                a: 0.,
+            },
         }
     }
 
@@ -497,10 +542,12 @@ impl Shell {
     /// sidebar hidden (Arc 1.171).
     pub(super) fn pointer_over(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
         let (x, y) = (f32::from(at.x), f32::from(at.y));
-        self.reveal_strip = (0. ..CARD_INSET).contains(&x).then(|| match self.reveal_strip {
-            Some((from, moved)) => (from, moved || (y - from).abs() >= REVEAL_MOVE),
-            None => (y, false),
-        });
+        self.reveal_strip = (0. ..CARD_INSET)
+            .contains(&x)
+            .then(|| match self.reveal_strip {
+                Some((from, moved)) => (from, moved || (y - from).abs() >= REVEAL_MOVE),
+                None => (y, false),
+            });
         self.pointer_at(x, cx);
     }
 
@@ -592,7 +639,8 @@ impl Shell {
     /// Whether this is the window the user last made key, which stays the one while the app is
     /// behind another's.
     fn is_key_window(&self, cx: &Context<Self>) -> bool {
-        cx.try_global::<ShellHandle>().is_none_or(|key| key.0 == cx.weak_entity())
+        cx.try_global::<ShellHandle>()
+            .is_none_or(|key| key.0 == cx.weak_entity())
     }
 
     /// Whether the sidebar is hidden and still, so the reveal can bring it out.
@@ -611,7 +659,8 @@ impl Shell {
         self.revealed = revealed;
         self.revealed_by_option = false;
         if revealed {
-            self.browser.show_reveal(REVEAL_INSET + self.width() + REVEAL_OVERSHOOT, cx);
+            self.browser
+                .show_reveal(REVEAL_INSET + self.width() + REVEAL_OVERSHOOT, cx);
         } else {
             // The panel takes them away, and the pointer it had.
             self.recent_downloads_gone(cx);
@@ -663,7 +712,11 @@ pub(super) fn window_buttons_at(
     at_rest: bool,
     docked: bool,
 ) -> WindowButtons {
-    let window = if moving { at_rest && (open || docked) } else { open || docked };
+    let window = if moving {
+        at_rest && (open || docked)
+    } else {
+        open || docked
+    };
     WindowButtons {
         window,
         library: (open || moving) && !window,
@@ -709,20 +762,37 @@ mod tests {
         let spaces = |ids: &'static [u64]| {
             move |shell: &mut Shell, cx: &mut Context<Shell>| {
                 let entry = |&id: &u64| {
-                    (id, format!("Space {id}").into(), None, 0, "".into(), "".into(), "".into())
+                    (
+                        id,
+                        format!("Space {id}").into(),
+                        None,
+                        0,
+                        "".into(),
+                        "".into(),
+                        "".into(),
+                    )
                 };
                 shell.set_spaces(ids.iter().map(entry).collect(), cx)
             }
         };
         shell.update(cx, spaces(&[1, 2]));
-        assert!(host.toasts.borrow().is_empty(), "a toast with the sidebar shown");
+        assert!(
+            host.toasts.borrow().is_empty(),
+            "a toast with the sidebar shown"
+        );
         shell.update(cx, |shell, cx| shell.toggle_sidebar(cx));
         shell.update(cx, spaces(&[1]));
         shell.update(cx, spaces(&[1, 2]));
-        assert!(host.toasts.borrow().is_empty(), "a toast for a Space brought back");
+        assert!(
+            host.toasts.borrow().is_empty(),
+            "a toast for a Space brought back"
+        );
         host.behind.set(true);
         shell.update(cx, spaces(&[1, 2, 3]));
-        assert!(host.toasts.borrow().is_empty(), "a toast from a window behind");
+        assert!(
+            host.toasts.borrow().is_empty(),
+            "a toast from a window behind"
+        );
         host.behind.set(false);
         shell.update(cx, spaces(&[1, 2, 3, 4]));
         assert_eq!(*host.toasts.borrow(), ["Added the Space “Space 4”"]);
@@ -731,8 +801,15 @@ mod tests {
         let (label, show) = host.toast_run.borrow_mut().take().expect("no Show");
         assert_eq!(label, "Show");
         cx.update(|cx| show(cx));
-        assert!(!shell.read_with(cx, |shell, _| shell.sidebar_hidden), "Show left it hidden");
-        assert_eq!(host.shown.borrow().last(), Some(&4), "Show didn't show the first Space");
+        assert!(
+            !shell.read_with(cx, |shell, _| shell.sidebar_hidden),
+            "Show left it hidden"
+        );
+        assert_eq!(
+            host.shown.borrow().last(),
+            Some(&4),
+            "Show didn't show the first Space"
+        );
     }
 
     /// A tab opening while the sidebar is hidden gets a toast whose Show, as the Spaces' toast has,
@@ -747,7 +824,10 @@ mod tests {
             }
         };
         shell.update(cx, tabs(vec![2, 1]));
-        assert!(host.toasts.borrow().is_empty(), "a toast with the sidebar shown");
+        assert!(
+            host.toasts.borrow().is_empty(),
+            "a toast with the sidebar shown"
+        );
         shell.update(cx, |shell, cx| shell.toggle_sidebar(cx));
         shell.update(cx, tabs(vec![1, 2]));
         assert!(host.toasts.borrow().is_empty(), "a toast for tabs moved");
@@ -755,10 +835,17 @@ mod tests {
         assert_eq!(*host.toasts.borrow(), ["2 New Tabs Created"]);
         shell.update(cx, tabs(vec![5, 3, 4, 1, 2]));
         assert_eq!(host.toasts.borrow().last().unwrap(), super::OPENED);
-        let (label, show) = host.toast_run.borrow_mut().take().expect("the toast has no Show");
+        let (label, show) = host
+            .toast_run
+            .borrow_mut()
+            .take()
+            .expect("the toast has no Show");
         assert_eq!(label, "Show");
         cx.update(|cx| show(cx));
-        assert!(!shell.read_with(cx, |shell, _| shell.sidebar_hidden), "Show left it hidden");
+        assert!(
+            !shell.read_with(cx, |shell, _| shell.sidebar_hidden),
+            "Show left it hidden"
+        );
     }
 
     /// ⌥ tapped alone brings the hidden sidebar out wherever the pointer is, which keeps it out
@@ -801,7 +888,8 @@ mod tests {
 
     impl Render for Reveal {
         fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            self.0.update(cx, |shell, cx| shell.render_reveal(window, cx))
+            self.0
+                .update(cx, |shell, cx| shell.render_reveal(window, cx))
         }
     }
 
@@ -819,7 +907,8 @@ mod tests {
                 show: false,
                 ..Default::default()
             };
-            cx.open_window(options, |_, cx| cx.new(|_| Reveal(reveal))).unwrap();
+            cx.open_window(options, |_, cx| cx.new(|_| Reveal(reveal)))
+                .unwrap();
         });
         shell.update(cx, |shell, cx| {
             let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
@@ -829,11 +918,21 @@ mod tests {
         cx.run_until_parked();
         // Tab 4's row fits in the browser window but is past the bottom of the reveal's list.
         shell.update(cx, |shell, cx| {
-            shell.set_tabs(1, Vec::new(), vec![2, 3, 4], Vec::new(), Folders::default(), cx);
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![2, 3, 4],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
             shell.set_selected(4, cx);
         });
         draw(&shell, cx);
-        assert_eq!(shell.read_with(cx, |shell, _| shell.list_scroll.offset().y), px(0.));
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.list_scroll.offset().y),
+            px(0.)
+        );
     }
 
     /// Draws the shell again, as the app's next frame does, by when the list's glide to a row has
@@ -857,30 +956,53 @@ mod tests {
             let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
             shell.set_spaces(vec![space], cx);
             shell.set_space(1, cx);
-            shell.set_tabs(1, Vec::new(), (10..70).collect(), Vec::new(), Folders::default(), cx);
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                (10..70).collect(),
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
             shell.set_selected(69, cx);
         });
         draw(&shell, cx);
         // Showing it scrolled the list to its row; the wheel takes the list back up.
-        shell.update(cx, |shell, _| shell.list_scroll.set_offset(point(px(0.), px(0.))));
+        shell.update(cx, |shell, _| {
+            shell.list_scroll.set_offset(point(px(0.), px(0.)))
+        });
         draw(&shell, cx);
         let marker = shell.read_with(cx, |shell, _| shell.marker_drawn.get());
         let (top, frame) = marker.expect("no marker for the row under the list's bottom");
-        assert!(!top, "the marker for the row under the list's bottom is at its top");
+        assert!(
+            !top,
+            "the marker for the row under the list's bottom is at its top"
+        );
         cx.simulate_click(frame.center(), Modifiers::none());
         draw(&shell, cx);
         let (marker, scrolled) = shell.read_with(cx, |shell, _| {
             (shell.marker_drawn.get(), shell.list_scroll.offset().y)
         });
-        assert_eq!(marker, None, "the marker stayed once its row scrolled into the list");
-        assert!(scrolled < px(0.), "a click on the marker didn't scroll to the row");
+        assert_eq!(
+            marker, None,
+            "the marker stayed once its row scrolled into the list"
+        );
+        assert!(
+            scrolled < px(0.),
+            "a click on the marker didn't scroll to the row"
+        );
         // The top row selected there, past the list's top.
         shell.update(cx, |shell, cx| shell.set_selected(10, cx));
         draw(&shell, cx);
-        shell.update(cx, |shell, _| shell.list_scroll.set_offset(point(px(0.), scrolled)));
+        shell.update(cx, |shell, _| {
+            shell.list_scroll.set_offset(point(px(0.), scrolled))
+        });
         draw(&shell, cx);
         let marker = shell.read_with(cx, |shell, _| shell.marker_drawn.get());
-        assert!(matches!(marker, Some((true, _))), "no marker at the top: {marker:?}");
+        assert!(
+            matches!(marker, Some((true, _))),
+            "no marker at the top: {marker:?}"
+        );
     }
 
     /// The wheel takes the list up, as favorites.sh's does: a marker comes only once the selected
@@ -896,7 +1018,14 @@ mod tests {
             shell.set_spaces(vec![space], cx);
             shell.set_space(1, cx);
             shell.set_favorites(vec![(10, 1)], cx);
-            shell.set_tabs(1, Vec::new(), vec![11, 12], Vec::new(), Folders::default(), cx);
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![11, 12],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
             shell.set_selected(12, cx);
         });
         draw(&shell, cx);
@@ -921,19 +1050,34 @@ mod tests {
         shell.update(cx, |shell, cx| shell.set_selected(12, cx));
         draw(&shell, cx);
         let markers: Vec<_> = (0..8).map(|_| wheel(cx, 10.)).collect();
-        let first = markers.iter().position(Option::is_some).expect("no marker on the way up");
-        assert!(markers[first..].iter().all(|&past| past == Some(false)), "{markers:?}");
+        let first = markers
+            .iter()
+            .position(Option::is_some)
+            .expect("no marker on the way up");
+        assert!(
+            markers[first..].iter().all(|&past| past == Some(false)),
+            "{markers:?}"
+        );
         draw(&shell, cx);
         let marker = shell.read_with(cx, |shell, _| shell.marker_drawn.get());
         let (top, frame) = marker.expect("the marker went once the list was drawn at its top");
-        assert!(!top, "the marker for the row under the list's bottom is at its top");
+        assert!(
+            !top,
+            "the marker for the row under the list's bottom is at its top"
+        );
         cx.simulate_click(frame.center(), Modifiers::none());
         draw(&shell, cx);
         let (marker, scrolled) = shell.read_with(cx, |shell, _| {
             (shell.marker_drawn.get(), shell.list_scroll.offset().y)
         });
-        assert_eq!(marker, None, "the marker stayed once its row scrolled into the list");
-        assert!(scrolled < px(0.), "a click on the marker didn't scroll to the row");
+        assert_eq!(
+            marker, None,
+            "the marker stayed once its row scrolled into the list"
+        );
+        assert!(
+            scrolled < px(0.),
+            "a click on the marker didn't scroll to the row"
+        );
     }
 
     /// Presses the sidebar's edge where it's drawn, and drags it to `to`, a list of x's.
@@ -970,7 +1114,10 @@ mod tests {
         drag_edge(&shell, cx, &[SIDEBAR_MIN - 20.]);
         assert_eq!(shell.read_with(cx, |shell, _| shell.width()), SIDEBAR_MIN);
         shell.update(cx, |shell, cx| shell.let_go_edge(cx));
-        assert_eq!(shell.read_with(cx, |shell, _| shell.sidebar_width), SIDEBAR_MIN);
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.sidebar_width),
+            SIDEBAR_MIN
+        );
     }
 
     /// Dragged on past half the narrowest width, the sidebar hides at once and keeps the width it
@@ -981,8 +1128,9 @@ mod tests {
         drag_edge(&shell, cx, &[200., SIDEBAR_MIN, SIDEBAR_MIN / 2. + 1.]);
         assert!(!shell.read_with(cx, |shell, _| shell.sidebar_hidden));
         drag_edge(&shell, cx, &[SIDEBAR_MIN / 2. - 1.]);
-        let (hidden, moving) =
-            shell.read_with(cx, |shell, _| (shell.sidebar_hidden, shell.sidebar_motion.is_some()));
+        let (hidden, moving) = shell.read_with(cx, |shell, _| {
+            (shell.sidebar_hidden, shell.sidebar_motion.is_some())
+        });
         assert_eq!((hidden, moving), (true, false));
         shell.update(cx, |shell, cx| shell.let_go_edge(cx));
         let (hidden, width) =
@@ -1021,7 +1169,14 @@ mod tests {
             let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
             shell.set_spaces(vec![space], cx);
             shell.set_space(1, cx);
-            shell.set_tabs(1, Vec::new(), (10..40).collect(), Vec::new(), Folders::default(), cx);
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                (10..40).collect(),
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
         });
         draw(&shell, cx);
         let name_top = shell.read_with(cx, |shell, _| {
@@ -1030,17 +1185,29 @@ mod tests {
         let rows_top = |cx: &mut VisualTestContext| {
             shell.read_with(cx, |shell, _| shell.list_scroll.bounds().top())
         };
-        assert_eq!(rows_top(cx), name_top + px(NAME_HEIGHT), "the rows don't start under the name");
-        shell.update(cx, |shell, _| shell.list_scroll.set_offset(point(px(0.), px(-200.))));
+        assert_eq!(
+            rows_top(cx),
+            name_top + px(NAME_HEIGHT),
+            "the rows don't start under the name"
+        );
+        shell.update(cx, |shell, _| {
+            shell.list_scroll.set_offset(point(px(0.), px(-200.)))
+        });
         draw(&shell, cx);
-        assert_eq!(rows_top(cx), name_top + px(NAME_HEIGHT), "the name row scrolled with the rows");
+        assert_eq!(
+            rows_top(cx),
+            name_top + px(NAME_HEIGHT),
+            "the name row scrolled with the rows"
+        );
         let at = point(px(100.), name_top + px(NAME_HEIGHT / 2.));
         host.menus.borrow_mut().clear();
         cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
         cx.simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
         cx.run_until_parked();
         let menu = host.menus.borrow().last().cloned().unwrap_or_default();
-        let space_menu = menu.iter().any(|(title, _)| title.as_ref() == "Rename Space…");
+        let space_menu = menu
+            .iter()
+            .any(|(title, _)| title.as_ref() == "Rename Space…");
         assert!(space_menu, "a right-click on the name row showed {menu:?}");
     }
 
@@ -1053,18 +1220,31 @@ mod tests {
         let edges = |cx: &mut VisualTestContext| {
             shell.read_with(cx, |shell, _| (shell.top_edge.shown, shell.foot_edge.shown))
         };
-        assert_eq!(edges(cx), (false, true), "the rows under the foot brought no edge");
-        shell.update(cx, |shell, _| shell.list_scroll.set_offset(point(px(0.), px(-1e4))));
+        assert_eq!(
+            edges(cx),
+            (false, true),
+            "the rows under the foot brought no edge"
+        );
+        shell.update(cx, |shell, _| {
+            shell.list_scroll.set_offset(point(px(0.), px(-1e4)))
+        });
         draw(&shell, cx);
         draw(&shell, cx);
-        assert_eq!(edges(cx), (true, false), "the list scrolled all the way kept its foot's edge");
+        assert_eq!(
+            edges(cx),
+            (true, false),
+            "the list scrolled all the way kept its foot's edge"
+        );
         let ends = shell.read_with(cx, |shell, _| {
             let last = shell.layout()[&Slot::Tab(29)] + shell.tiles_room() - shell.fixed_head();
             let plate_end = last + (ROW_HEIGHT + PLATE_HEIGHT) / 2.;
             let height = f32::from(shell.list_scroll.bounds().size.height);
             height - (plate_end + f32::from(shell.list_scroll.offset().y))
         });
-        assert!((ends - 121.).abs() < 0.5, "the last row's plate ends {ends} above the foot");
+        assert!(
+            (ends - 121.).abs() < 0.5,
+            "the last row's plate ends {ends} above the foot"
+        );
         // Rows that all fit bring no edge at the foot.
         let (shell, cx) = list_shell(vec![10, 11], cx.deref_mut());
         let foot = shell.read_with(cx, |shell, _| shell.foot_edge.shown);
@@ -1078,16 +1258,25 @@ mod tests {
         let (shell, cx) = list_shell((10..70).collect(), cx);
         shell.update(cx, |shell, cx| shell.set_selected(69, cx));
         let to = shell.read_with(cx, |shell, _| shell.list_glide.get().map(|glide| glide.to));
-        assert!(to.is_some_and(|to| to > 0.), "showing the last tab didn't glide to its row");
+        assert!(
+            to.is_some_and(|to| to > 0.),
+            "showing the last tab didn't glide to its row"
+        );
         shell.update(cx, |_, cx| cx.notify());
         cx.run_until_parked();
-        shell.update(cx, |shell, _| shell.list_scroll.set_offset(point(px(0.), px(-37.))));
+        shell.update(cx, |shell, _| {
+            shell.list_scroll.set_offset(point(px(0.), px(-37.)))
+        });
         draw(&shell, cx);
         let (glide, offset) = shell.read_with(cx, |shell, _| {
             (shell.list_glide.get(), shell.list_scroll.offset().y)
         });
         assert!(glide.is_none(), "the glide went on past the user's scroll");
-        assert_eq!(offset, px(-37.), "the glide moved the list from where the user had it");
+        assert_eq!(
+            offset,
+            px(-37.),
+            "the glide moved the list from where the user had it"
+        );
     }
 
     /// ⌘T's command bar, with the list scrolled down to its last row, scrolls it back up to the
@@ -1123,8 +1312,14 @@ mod tests {
         let revealed = |shell: &Entity<Shell>, cx: &mut TestAppContext| {
             shell.read_with(cx, |shell, _| shell.revealed)
         };
-        assert!(!revealed(&behind, cx), "the window behind brought its sidebar out");
-        assert!(revealed(&key, cx), "the key window's edge didn't bring its sidebar out");
+        assert!(
+            !revealed(&behind, cx),
+            "the window behind brought its sidebar out"
+        );
+        assert!(
+            revealed(&key, cx),
+            "the key window's edge didn't bring its sidebar out"
+        );
     }
 
     /// A pointer that jumps into the strip at the window's edge and stays leaves the sidebar
@@ -1139,18 +1334,39 @@ mod tests {
             shell.read_with(cx, |shell, _| shell.revealed)
         };
         shell.update(cx, |shell, _| shell.sidebar_hidden = true);
-        assert!(!to(&shell, 400., 300., cx), "the pointer over the page brought it out");
-        assert!(!to(&shell, 5., 300., cx), "a jump into the edge brought it out");
-        assert!(!to(&shell, 1., 301., cx), "a move across the edge brought it out");
-        assert!(to(&shell, 1., 304., cx), "a few points down the edge didn't bring it out");
+        assert!(
+            !to(&shell, 400., 300., cx),
+            "the pointer over the page brought it out"
+        );
+        assert!(
+            !to(&shell, 5., 300., cx),
+            "a jump into the edge brought it out"
+        );
+        assert!(
+            !to(&shell, 1., 301., cx),
+            "a move across the edge brought it out"
+        );
+        assert!(
+            to(&shell, 1., 304., cx),
+            "a few points down the edge didn't bring it out"
+        );
         // Out of the strip and back, it's a new jump in.
         shell.update(cx, |shell, cx| {
             shell.set_revealed(false, cx);
             shell.reveal_motion = None;
         });
-        assert!(!to(&shell, 400., 304., cx), "the pointer over the page brought it out");
-        assert!(!to(&shell, 2., 200., cx), "a jump back into the edge brought it out");
-        assert!(to(&shell, 2., 196., cx), "a few points up the edge didn't bring it out");
+        assert!(
+            !to(&shell, 400., 304., cx),
+            "the pointer over the page brought it out"
+        );
+        assert!(
+            !to(&shell, 2., 200., cx),
+            "a jump back into the edge brought it out"
+        );
+        assert!(
+            to(&shell, 2., 196., cx),
+            "a few points up the edge didn't bring it out"
+        );
     }
 
     /// A pointer that moves down the edge and goes on onto the page, which on Linux and Windows

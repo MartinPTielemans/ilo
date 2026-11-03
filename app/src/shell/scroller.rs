@@ -27,7 +27,10 @@ pub fn follow_scroll_bars(cx: &mut App) {
     let shown = !cx.should_auto_hide_scrollbars();
     if cx.try_global::<ScrollBarsShown>().map(|bars| bars.0) != Some(shown) {
         // check.sh reads this line.
-        crate::log!("browser: scroll bars {}", if shown { "always" } else { "while scrolling" });
+        crate::log!(
+            "browser: scroll bars {}",
+            if shown { "always" } else { "while scrolling" }
+        );
         cx.set_global(ScrollBarsShown(shown));
         cx.refresh_windows();
     }
@@ -49,7 +52,8 @@ impl Shell {
     /// Whether the knob is the legacy one, always there with room of its own, as the system
     /// shows scroll bars always.
     fn scroll_bars_shown(&self, cx: &App) -> bool {
-        cx.try_global::<ScrollBarsShown>().is_some_and(|bars| bars.0)
+        cx.try_global::<ScrollBarsShown>()
+            .is_some_and(|bars| bars.0)
     }
 
     /// Whether the list's rows go past its foot, as it was last laid out.
@@ -60,7 +64,11 @@ impl Shell {
     /// What the rows give up at the sidebar's edge for the knob: the legacy knob's room while the
     /// list overflows, as Arc's rows do.
     pub(super) fn scroller_gutter(&self) -> f32 {
-        if self.legacy_scroller && self.list_overflows() { GUTTER } else { 0. }
+        if self.legacy_scroller && self.list_overflows() {
+            GUTTER
+        } else {
+            0.
+        }
     }
 
     /// How wide the list's rows are, the knob's room taken out.
@@ -71,7 +79,13 @@ impl Shell {
     /// Notes the list scrolled `to`, unless `glided` there: the knob comes as the user scrolls
     /// and fades once they've stopped, and a glide to a row brings none (ours: AppKit shows its
     /// overlay knob for the user's scrolls only).
-    pub(super) fn step_scroller(&mut self, to: f32, glided: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn step_scroller(
+        &mut self,
+        to: f32,
+        glided: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.legacy_scroller = self.scroll_bars_shown(cx);
         let legacy_shown = self.legacy_scroller && self.list_overflows();
         if legacy_shown != self.scroller.legacy_shown {
@@ -112,9 +126,10 @@ impl Shell {
         self.scroller.wake = Some(cx.spawn(async move |shell, cx| {
             loop {
                 let left = shell.update(cx, |shell, cx| {
-                    let left = shell.scroller.moved.map(|moved| {
-                        Duration::from_secs_f32(HOLD).saturating_sub(moved.elapsed())
-                    });
+                    let left = shell
+                        .scroller
+                        .moved
+                        .map(|moved| Duration::from_secs_f32(HOLD).saturating_sub(moved.elapsed()));
                     if left.is_none_or(|left| left.is_zero()) {
                         shell.scroller.wake = None;
                         cx.notify();
@@ -152,7 +167,9 @@ impl Shell {
         let height = f32::from(self.list_scroll.bounds().size.height);
         let most = f32::from(self.list_scroll.max_offset().y).max(0.);
         let track = (height - 2. * END).max(0.);
-        let length = (track * height / (height + most).max(1.)).max(KNOB_MIN).min(track);
+        let length = (track * height / (height + most).max(1.))
+            .max(KNOB_MIN)
+            .min(track);
         let scrolled = (-f32::from(self.list_scroll.offset().y)).clamp(0., most);
         let down = if most > 0. { scrolled / most } else { 0. };
         (END + (track - length) * down, length)
@@ -240,7 +257,9 @@ mod tests {
     fn the_knob_shows_as_the_user_scrolls_and_fades_once_they_stop(cx: &mut TestAppContext) {
         let (shell, cx) = overflowing(cx);
         assert_eq!(shown(&shell, cx), 0., "the knob showed before a scroll");
-        shell.update(cx, |shell, _| shell.list_scroll.set_offset(point(px(0.), px(-200.))));
+        shell.update(cx, |shell, _| {
+            shell.list_scroll.set_offset(point(px(0.), px(-200.)))
+        });
         draw(&shell, cx);
         assert_eq!(shown(&shell, cx), 1., "a scroll didn't bring the knob");
         age(&shell, HOLD + FADE / 2., cx);
@@ -257,19 +276,31 @@ mod tests {
         let (shell, cx) = overflowing(cx);
         // Tall enough that the knob is longer than its shortest.
         cx.simulate_resize(size(px(1000.), px(700.)));
-        shell.update(cx, |shell, _| shell.list_scroll.set_offset(point(px(0.), px(-1e4))));
+        shell.update(cx, |shell, _| {
+            shell.list_scroll.set_offset(point(px(0.), px(-1e4)))
+        });
         draw(&shell, cx);
         draw(&shell, cx);
         let (height, most) = shell.read_with(cx, |shell, _| {
             let scroll = &shell.list_scroll;
-            (f32::from(scroll.bounds().size.height), f32::from(scroll.max_offset().y))
+            (
+                f32::from(scroll.bounds().size.height),
+                f32::from(scroll.max_offset().y),
+            )
         });
         assert!(most > 0., "the list doesn't overflow");
         let knob = shell.read_with(cx, |shell, _| shell.scroller_place());
         let track = height - 6.;
         let length = track * height / (height + most);
-        assert!((knob.1 - length).abs() < 0.01, "the knob is {} long, not {length}", knob.1);
-        assert!((knob.0 + knob.1 - (3. + track)).abs() < 0.01, "the knob isn't at the track's foot");
+        assert!(
+            (knob.1 - length).abs() < 0.01,
+            "the knob is {} long, not {length}",
+            knob.1
+        );
+        assert!(
+            (knob.0 + knob.1 - (3. + track)).abs() < 0.01,
+            "the knob isn't at the track's foot"
+        );
     }
 
     #[gpui::test]
@@ -297,12 +328,20 @@ mod tests {
         draw(&shell, cx);
         draw(&shell, cx);
         assert_eq!(shown(&shell, cx), 1., "the legacy knob didn't show at rest");
-        assert_eq!(plate(cx), wide - GUTTER, "the rows didn't give up the knob's room");
+        assert_eq!(
+            plate(cx),
+            wide - GUTTER,
+            "the rows didn't give up the knob's room"
+        );
         // A list that fits, the room after its last row too, has neither.
         let (fits, cx) = list_of(vec![10, 11], 700., cx);
         cx.update(|_, cx| cx.set_global(ScrollBarsShown(true)));
         draw(&fits, cx);
         let width = fits.read_with(cx, |shell, _| shell.width() - shell.rows_width());
-        assert_eq!((shown(&fits, cx), width), (0., 0.), "a list that fits kept the knob");
+        assert_eq!(
+            (shown(&fits, cx), width),
+            (0., 0.),
+            "a list that fits kept the knob"
+        );
     }
 }
