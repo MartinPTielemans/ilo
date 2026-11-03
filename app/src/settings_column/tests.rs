@@ -3,7 +3,7 @@
 
 use std::cell::{Cell, RefCell};
 
-use gpui::{Context, Modifiers, TestAppContext, VisualTestContext, point, size};
+use gpui::{Context, InputEvent as _, Modifiers, TestAppContext, VisualTestContext, point, size};
 
 use super::*;
 
@@ -117,4 +117,45 @@ fn the_foot_opens_chromiums_settings(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(view.read_with(cx, |view, _| view.foot.get()), 1);
     assert!(view.read_with(cx, |view, _| view.picked.borrow().is_empty()));
+}
+
+/// At Settings' 720 × 480 minimum the twelve sections don't fit over the foot: they scroll above
+/// it, so the last, scrolled to, shows clear of the foot, and a click on the foot is the foot's.
+#[gpui::test]
+fn at_the_least_height_the_sections_scroll_above_the_foot(cx: &mut TestAppContext) {
+    let (view, cx) = shown(cx);
+    cx.simulate_resize(size(px(720.), px(480.)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let event = gpui::ScrollEvent {
+            position: point(px(COLUMN / 2.), px(200.)),
+            delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-400.))),
+            ..Default::default()
+        };
+        window.dispatch_event(event.to_platform_input(), cx);
+    });
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let about = view.read_with(cx, |view, _| {
+        let logged = view.logged.borrow();
+        let line = logged
+            .iter()
+            .find(|line| line.contains(" toolbar About at "))
+            .cloned();
+        line.and_then(|line| line.rsplit(' ').next()?.parse::<f32>().ok())
+    });
+    let foot_top = 480. - FOOT_BOTTOM - PLATE_HEIGHT;
+    let about = about.expect("About wasn't drawn");
+    assert!(
+        about + PLATE_HEIGHT / 2. <= foot_top,
+        "About at {about} runs under the foot at {foot_top}"
+    );
+    let y = 480. - FOOT_BOTTOM - PLATE_HEIGHT / 2.;
+    cx.simulate_click(point(px(COLUMN / 2.), px(y)), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.foot.get()), 1);
+    assert!(
+        view.read_with(cx, |view, _| view.picked.borrow().is_empty()),
+        "the click picked a section"
+    );
 }

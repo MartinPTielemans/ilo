@@ -28,38 +28,35 @@ use browser::theme::Appearance;
 use browser::updates::{self, NightlyRow, Track, VersionRow};
 use browser::widevine::{self, Widevine, WidevineRow};
 use gpui::{
-    AnyElement, App, Bounds, BoxShadow, ClipboardItem, Context, Entity, FocusHandle, Focusable,
-    FontWeight, Global, Hsla, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent,
-    PathPromptOptions, Rgba, ScrollHandle, SharedString, Subscription, TitlebarOptions, Window,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions, actions, canvas, div, linear_color_stop,
-    linear_gradient, point, prelude::*, px, rgb, rgba, size, svg,
+    AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, FontWeight,
+    Global, Hsla, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, PathPromptOptions, Rgba,
+    SharedString, Subscription, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowKind,
+    WindowOptions, actions, canvas, div, point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{bc, ns_view, platform, show_menu};
 use browser::menu::{self, Look};
-use browser::palette::{INK, OVERLAY_DARK, PAPER};
+use browser::palette::{INK, PAPER};
+use browser::settings_card::{self, Card};
 use browser::settings_column::{self, Section};
 use browser::settings_rows::{
     Look as RowLook, SLIDE, button, detailed_row, end, frame, glyph_plate, group, group_lined,
     popup, row, switch, text,
 };
-use browser::tokens::palette::{
-    DIALOG_LIGHT, LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN,
-};
+use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN};
 use browser::tokens::radius;
 use browser::tokens::settings::{
-    BUTTON_GLYPH, BUTTONS_TOP, CARD_RIM, CARD_RING, CARD_SHADOW, CHIP, CHIP_FIXED, CHIP_FIXED_TEXT,
-    CHIP_GAP, CHIP_HEIGHT, CHIP_NONE_TEXT, CHIP_PADDING, CHIP_RADIUS, CHIP_TEXT, CHIP_WIDTH,
-    CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS, DETAIL_LINE, DETAIL_TOP, END_GAP,
-    FADE, FAVORITES_POPUP_WIDTH, FIRST_GROUP, GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP,
-    HEADING_BOTTOM, HEADING_TOP, HEIGHT, HELD_TITLE, LEDE, LEDE_LINE, LEDE_TOP, MIN_HEIGHT,
-    MIN_WIDTH, NAME, PAGE_BOTTOM, PAGE_TOP, PAGE_WIDTH, PAGE_X, POPUP_WIDTH, RESTORE_RADIUS, ROW_X,
-    SECTION_TEXT, SHORT_PADDING, SHORT_ROW, TEXT_X, TITLE, WIDTH,
+    BUTTON_GLYPH, BUTTONS_TOP, CHIP, CHIP_FIXED, CHIP_FIXED_TEXT, CHIP_GAP, CHIP_HEIGHT,
+    CHIP_NONE_TEXT, CHIP_PADDING, CHIP_RADIUS, CHIP_TEXT, CHIP_WIDTH, CONTROL_GAP, CONTROL_HEIGHT,
+    CONTROL_PADDING, CONTROL_RADIUS, DETAIL_LINE, DETAIL_TOP, END_GAP, FAVORITES_POPUP_WIDTH,
+    FIRST_GROUP, GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT,
+    LEDE, LEDE_LINE, LEDE_TOP, MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH,
+    RESTORE_RADIUS, ROW_X, SECTION_TEXT, SHORT_PADDING, SHORT_ROW, TEXT_X, TITLE, WIDTH,
 };
 use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
 use browser::tokens::shell::{
-    CARD_INSET, CARD_RADIUS, WINDOW_BUTTON_GLYPH, WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y,
-    WINDOWS_BUTTON_GLYPH, WINDOWS_BUTTON_PLATE, WINDOWS_CLOSE_HOVERED,
+    WINDOW_BUTTON_GLYPH, WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y, WINDOWS_BUTTON_GLYPH,
+    WINDOWS_BUTTON_PLATE, WINDOWS_CLOSE_HOVERED,
 };
 use browser::tokens::text;
 
@@ -363,8 +360,8 @@ pub struct Settings {
     /// pop-up menus and the views it shows follow.
     dark: bool,
     look: RowLook,
-    /// The card's scroll, which a section starts at the top of.
-    scroll: ScrollHandle,
+    /// The card the section shows on, which a section starts at the top of.
+    card: Card,
     /// It was asked to show, or changed section, and logs the section it draws next.
     shown: bool,
     /// Which switch last changed, and when, for its knob's slide.
@@ -1055,7 +1052,7 @@ fn open(cx: &mut App) {
                 focus: cx.focus_handle(),
                 dark,
                 look,
-                scroll: ScrollHandle::new(),
+                card: Card::default(),
                 shown: false,
                 switched: None,
                 choosing: None,
@@ -1223,7 +1220,7 @@ impl Settings {
         // A section takes no click until it has drawn, so check.sh waits for its "settings drew".
         self.shown = true;
         // Each section opens at its top.
-        self.scroll.set_offset(point(px(0.), px(0.)));
+        self.card.reset();
         if section == Section::ImportExport {
             self.show_import(cx);
         }
@@ -1302,15 +1299,6 @@ impl Settings {
         Look::plain(!self.dark)
     }
 
-    /// The card's fill, which its foot fades into.
-    fn card_fill(&self) -> Rgba {
-        if self.dark {
-            rgb(OVERLAY_DARK)
-        } else {
-            rgb(DIALOG_LIGHT)
-        }
-    }
-
     /// A section's page: its name in the display face, or for About the app's, the sentence that
     /// says what it's for, `action` beside them, and its blocks, each spaced by what's before it.
     fn page(
@@ -1365,6 +1353,8 @@ impl Settings {
     /// A heading over the group after it, on the text's column.
     fn heading(&self, heading: SharedString) -> gpui::Div {
         div()
+            .relative()
+            .child(self.card.mark(heading.clone()))
             .px(px(TEXT_X))
             .font_weight(FontWeight::MEDIUM)
             .text_color(self.look.heading)
@@ -3975,7 +3965,6 @@ impl Render for Settings {
             Section::About => self.about(cx),
         };
         let base = self.base();
-        let fill = self.card_fill();
         let view = cx.entity().downgrade();
         let pick: settings_column::Pick = Rc::new(move |section, window, cx| {
             let show = |settings: &mut Settings, cx: &mut Context<Settings>| {
@@ -3991,76 +3980,14 @@ impl Render for Settings {
             pick,
             foot,
         );
-        // Once scrolled, the section's name holds at the card's top over a hairline, and where
-        // rows go on under the card's foot, it fades into the card's fill.
-        let (offset, max) = (self.scroll.offset().y, self.scroll.max_offset().y);
-        let held = (offset < px(0.)).then(|| {
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .right_0()
-                .h(px(HELD_TITLE))
-                .px(px(PAGE_X + TEXT_X))
-                .flex()
-                .items_center()
-                .bg(fill)
-                .border_b_1()
-                .border_color(self.look.line)
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(base.opacity(NAME))
-                .child(self.section.name())
-        });
-        let fade = (-offset < max - px(1.)).then(|| {
-            div()
-                .absolute()
-                .left_0()
-                .right_0()
-                .bottom_0()
-                .h(px(FADE))
-                .bg(linear_gradient(
-                    180.,
-                    linear_color_stop(fill.opacity(0.), 0.),
-                    linear_color_stop(fill, 1.),
-                ))
-        });
-        let card = div()
-            .flex_1()
-            .min_w_0()
-            .mt(px(CARD_INSET))
-            .mr(px(CARD_INSET))
-            .mb(px(CARD_INSET))
-            .relative()
-            .rounded(px(CARD_RADIUS))
-            .bg(fill)
-            .when(self.dark, |card| {
-                card.border_1().border_color(rgba(CARD_RIM))
-            })
-            .when(!self.dark, |card| {
-                card.border_1()
-                    .border_color(rgba(CARD_RING))
-                    .shadow(vec![BoxShadow {
-                        color: rgba(CARD_SHADOW).into(),
-                        offset: point(px(0.), px(1.)),
-                        blur_radius: px(3.),
-                        spread_radius: px(0.),
-                        inset: false,
-                    }])
-            })
-            .overflow_hidden()
-            .child(
-                div()
-                    .id("card")
-                    .size_full()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    .pt(px(PAGE_TOP))
-                    .pb(px(PAGE_BOTTOM))
-                    .px(px(PAGE_X))
-                    .child(page),
-            )
-            .children(held)
-            .children(fade);
+        // Once scrolled, the section's name and the heading gone under it hold at the card's top,
+        // and where rows go on under the card's foot, it fades into the card's fill.
+        let colors = settings_card::Colors {
+            line: self.look.line,
+            name: base.opacity(NAME),
+            heading: self.look.heading,
+        };
+        let card = self.card.draw(self.section.name(), page, self.dark, colors);
         // The stand-in for the window's material, as the browser window's where it has none.
         let ground = if self.dark {
             rgb(STAND_IN)

@@ -157,16 +157,20 @@ pub fn column(
         .w(px(COLUMN))
         .h_full()
         .pt(px(COLUMN_TOP))
+        .pb(px(FOOT_BOTTOM))
+        .flex()
+        .flex_col()
         .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
-        .children(groups)
+        // At the window's least height the sections scroll above the foot, not under it.
         .child(
             div()
-                .absolute()
-                .left_0()
-                .bottom(px(FOOT_BOTTOM))
-                .w(px(COLUMN))
-                .child(chromium),
+                .id("sections")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .children(groups),
         )
+        .child(div().flex_none().w(px(COLUMN)).child(chromium))
 }
 
 /// A section's plate: the sidebar's row, 8 in, lit under the pointer, and on the sidebar's
