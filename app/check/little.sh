@@ -6,7 +6,8 @@
 # outlives it. Closing one archives its tab, and ⇧⌘T reopens it in a new one. The first opens 900 × 640, and each after at the size the last one closed at. On the
 # Mac one opens over a full-screen window, and the Dock's menu opens one after its New Window, and
 # hides and shows them all. One takes its Space's look as its theme turns light and dark, captured
-# with a title too long for its bar.
+# with a title too long for its bar. Closed over another app's window, one leaves that window in
+# front and its app active, with a stand-in for the app that the run opens itself.
 
 serve
 log="$out/little.log"
@@ -87,6 +88,16 @@ send resize 760 520
 send key w cmd
 expect '^browser: command close-tab via ' "⌘W didn't run in the Little ilo window"
 expect "^browser: window closed $little\$" "⌘W didn't close the Little ilo window"
+# The main window was behind it, and has the keyboard, as the window manager may hand it on late.
+for _ in $(seq 20); do
+  send order
+  case "$(grep '^browser: order ' "$log" | tail -1)" in *", key window 1") break ;; esac
+  sleep 0.1
+done
+case "$(grep '^browser: order ' "$log" | tail -1)" in
+  *", key window 1") ;;
+  *) fail "closing the Little ilo window didn't give the main window behind it the keyboard: $(grep '^browser: order ' "$log" | tail -1)" ;;
+esac
 send window 1
 
 # A ⌘-click on its page's link opens the link behind, at the top of its Space's Today, and an
@@ -323,6 +334,137 @@ expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
 send window "$look_window"
 ../tools/window-screenshot.sh "$pid" "$out/little-dark.png" all || fail "no window to capture"
 
+# Closing a Little ilo window by ⌘W or by an unused escape leaves the window behind it in front, as
+# closing any app's window does, and when that's another app's, that app active, with ilo's main
+# window where it was, behind it, where the main window went in front of it on the Mac (#1689).
+# The other app is a stand-in of the run's own over the main window: on the Mac check/cover.m, on
+# Windows app-windows.py's cover, over the window's lower half, and on Linux ImageMagick's display,
+# which the window manager puts in front with the keyboard as it opens, so there it opens once the
+# Little ilo window has, which then comes back in front of it, as the user going back to it does.
+# Openbox then gives the keyboard to the window that had it last, the stand-in's.
+send window 1
+send order
+main_frame=$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)
+if [ "$(uname)" = Darwin ]; then
+  clang -fobjc-arc -framework Cocoa -o "$out/cover" check/cover.m 2> "$out/cover-build.log" ||
+    fail "check/cover.m didn't build: $(cat "$out/cover-build.log")"
+fi
+# The windows the driver last listed over the window driven.
+stack() { grep '^browser: stack ' "$log" | tail -1 | cut -c16-; }
+# Whether the window in front of window 1, the main window, is the stand-in's, leaving it where it is.
+covered() {
+  send window 1 behind
+  send stack
+  case "$(stack)" in "other "*cover*) return 0 ;; esac
+  return 1
+}
+# Waits for the stand-in's window to be in front of the main window, or fails with $1.
+await_cover() {
+  for _ in $(seq 50); do
+    covered && return 0
+    sleep 0.1
+  done
+  fail "$1: $(stack)"
+}
+# Waits for the driver to say ilo is the active app ($1 1) or isn't (0), or fails with $2.
+await_active() {
+  for _ in $(seq 50); do
+    send state
+    [ "$active" = "$1" ] && return 0
+    sleep 0.1
+  done
+  fail "$2"
+}
+# Opens the stand-in over the main window.
+cover_main() {
+  rm -f "$out/cover-front"
+  case "$(uname)" in
+    Darwin)
+      rm -f "$out/cover-in"
+      mkfifo "$out/cover-in"
+      # shellcheck disable=SC2086 # the frame's four numbers
+      "$out/cover" "$pid" $main_frame < "$out/cover-in" > "$out/cover.log" 2>&1 &
+      helper=$!
+      exec 4> "$out/cover-in"
+      ;;
+    Linux)
+      # shellcheck disable=SC2086 # the frame's four numbers
+      set -- $main_frame
+      display -title cover -geometry "$3x$4+$1+$2" -size "$3x$4" xc:'#406080' \
+        > "$out/cover.log" 2>&1 &
+      helper=$!
+      ;;
+    *)
+      python3 -I -u check/app-windows.py cover "$(cat "/proc/$pid/winpid")" ilo \
+        "$out/cover-front" > "$out/cover.log" 2>&1 &
+      helper=$!
+      ;;
+  esac
+}
+# Ends the stand-in, which gives the main window the keyboard back, and drives the main window.
+uncover() {
+  case "$(uname)" in
+    Darwin) exec 4>&- ;;
+    Linux) kill "$helper" ;;
+    *) touch "$out/cover-front" ;;
+  esac
+  wait "$helper" 2> /dev/null || true
+  helper=
+  await_active 1 "ilo didn't become the active app again once the other app's window went"
+  send window 1
+}
+# Closes a Little ilo window over the stand-in's window by $1, ⌘W or escape, named $2 in its
+# captures.
+give_way() {
+  [ "$(uname)" = Linux ] || {
+    cover_main
+    await_cover "the other app's window didn't open in front of the main window ($1)"
+  }
+  send key n cmd alt
+  expect "^browser: little window opened [0-9]* profile [0-9]* home $home\$" \
+    "⌥⌘N didn't open a Little ilo window over the other app's ($1)"
+  little=$(opened)
+  expect "^browser: window opened $little\$" "the Little ilo window didn't open ($1)"
+  number=$(grep -c '^browser: window opened ' "$log")
+  send window "$number" behind
+  if [ "$2" = escape ]; then
+    send key l cmd
+    expect '^browser: command bar shown$' "⌘L didn't open the Little ilo window's command bar ($1)"
+    send insert "$site"
+    send key return
+    expect "^browser: window $little shows [0-9]*\$" "the Little ilo window didn't show its page ($1)"
+    page=$(sed -n "s|^browser: window $little shows \([0-9]*\)\$|\1|p" "$log" | tail -1)
+    expect "^browser: title $page ready\$" "the Little ilo window's page didn't draw ($1)"
+  fi
+  if [ "$(uname)" = Linux ]; then
+    cover_main
+    await_cover "the other app's window didn't open in front of the main window ($1)"
+    send window "$number"
+  fi
+  send window "$number" behind
+  send stack
+  [ "$(stack)" = driven ] ||
+    fail "the Little ilo window isn't in front of the other app's ($1): $(stack)"
+  ../tools/window-screenshot.sh "$pid" "$out/little-over-other-app.png" all ||
+    fail "no window to capture"
+  if [ "$2" = escape ]; then
+    send click 450 340
+    send key escape
+    expect '^browser: little window closed by escape$' "an unused escape didn't close Little ilo over the other app's window"
+  else
+    send key w cmd
+  fi
+  expect "^browser: window closed $little\$" "$1 didn't close the Little ilo window over the other app's"
+  [ "$(uname)" != Darwin ] || expect '^browser: little window gave way to cover$' \
+    "the Little ilo window didn't give way to the other app's window behind it ($1)"
+  covered || fail "closing the Little ilo window by $1 put a window of ilo's in front of the other app's: $(stack)"
+  await_active 0 "closing the Little ilo window by $1 left ilo the active app, not the other app"
+  ../tools/window-screenshot.sh "$pid" "$out/little-gave-way-$2.png" all || fail "no window to capture"
+  uncover
+}
+give_way ⌘W w
+give_way escape escape
+
 exec 3>&-
 quit
-echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L loads a URL in it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Closing one archives its tab, ⇧⌘T reopens it in a new one, and the Library's Filter lists Little ilo's alone. One takes its Space's look as it changes, light and dark, and its bar ends a long title in an ellipsis. Windows: $out/little.png $out/little-moved.png $out/little-link.png $out/little-archive.png $out/little-light.png $out/little-dark.png, and on the Mac $out/little-full-screen.png $out/little-dock.png"
+echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L loads a URL in it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Closing one archives its tab, ⇧⌘T reopens it in a new one, and the Library's Filter lists Little ilo's alone. One takes its Space's look as it changes, light and dark, and its bar ends a long title in an ellipsis. Closed by ⌘W or an unused escape over another app's window, one leaves that window in front and its app active, the main window behind it. Windows: $out/little.png $out/little-moved.png $out/little-link.png $out/little-archive.png $out/little-light.png $out/little-dark.png $out/little-over-other-app.png $out/little-gave-way-w.png $out/little-gave-way-escape.png, and on the Mac $out/little-full-screen.png $out/little-dock.png"
