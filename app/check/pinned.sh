@@ -26,7 +26,8 @@
 # chevron after the Space's name collapses the pinned rows but the tab shown's, which the tabs'
 # order then skips, and the command bar and the View menu expand and collapse them. Launched again,
 # the app brings them back collapsed. Focus Sidebar rings the tab shown's row, whose ring the arrows
-# move past the collapsed rows and return shows, and a key in the page or escape ends it. A folder
+# move past the collapsed rows and return shows, and a key in the page or escape ends it; ⇧F10
+# opens the ringed row's menu and ⌘W closes the ringed row, not the tab shown. A folder
 # from the desktop dropped on the list becomes a folder of its files' tabs, none shown, a file's
 # row dragged onto the page hands the file to the system's drag, and the +'s Add File or Folder…
 # opens a file at the top of Today.
@@ -856,6 +857,26 @@ send key escape
 expect '^browser: sidebar keys left by escape$' "escape didn't end the ring"
 none_since '^browser: selected' || fail "escape showed another tab"
 in_browser RenderWidgetHostViewCocoa "escape didn't give the page the keyboard"
+# ⇧F10 opens the ringed row's menu, its first item highlighted, and escape closes it with the ring
+# kept. ⌘W then closes the ringed row, the last, rather than the tab shown, and the ring goes to
+# the row before it.
+send menu Focus Sidebar
+expect "^browser: sidebar keyed $d\$" "Focus Sidebar didn't ring the tab shown's row again"
+send key f10 shift
+expect "^browser: menu shown $(cased 'Copy Link, ')" "⇧F10 didn't open the ringed row's menu"
+expect '^browser: menu highlights .* at ' "the row's menu from ⇧F10 didn't highlight its first item"
+send key escape
+expect '^browser: menu closed$' "escape didn't close the row's menu"
+none_since '^browser: sidebar keys left' || fail "closing the row's menu ended the ring"
+send key down
+expect "^browser: sidebar keyed $s\$" "↓ didn't move the ring to the last row"
+send key w cmd
+expect '^browser: command close-tab via sidebar keys$' "⌘W didn't reach the ringed row"
+expect "^browser: today $t $d\$" "⌘W didn't close the ringed row $s: Today is \"$(today)\""
+expect "^browser: sidebar keyed $d\$" "the ring didn't go to the row before the closed one"
+none_since '^browser: selected' || fail "⌘W on the ringed row showed another tab"
+send key escape
+expect '^browser: sidebar keys left by escape$' "escape didn't end the ring after ⌘W"
 quit_by_key
 await '^browser: command quit via ' || fail "⌘Q didn't reach the UI"
 exited
@@ -906,25 +927,30 @@ none_since '^browser: selected' || fail "a file of the dropped folder showed"
 settled
 ../tools/window-screenshot.sh "$pid" "$out/dropped-folder.png" || fail "no window to capture"
 # The dropped file's row, under the folder's four, dragged onto the page hands the file to the
-# system's drag, to upload it there, as a download's row does, and goes back to its place.
-press=$((step + 1))
-send press $(pinned_row 4)
-send dragto 150 $(($(pinned_row 4 | cut -d' ' -f2) + 10))
-send dragto 600 300
-expect "^browser: tab $e file drag\$" \
-  "a file's row dragged onto the page didn't start the system's drag"
-send release 600 300
-# No real button holds the system's drag, so it may end before the release reaches it.
-for _ in $(seq 100); do
-  sed -n "/^browser: drive $press: /,\$p" "$log" | grep -q '^browser: file drag ended ' && break
-  sleep 0.1
-done
-sed -n "/^browser: drive $press: /,\$p" "$log" | grep -q '^browser: file drag ended ' ||
-  fail "the file row's drag didn't end"
-case "$(outline)" in
-  "$n+["*"] $e $c") ;;
-  *) fail "the file's row didn't go back to its place: $(outline)" ;;
-esac
+# system's drag, to upload it there, as a download's row does, and goes back to its place. On
+# Windows the app stops in DoDragDrop under the driver (#1583).
+if windows; then
+  echo "skip: a file's row dragged onto the page: Windows' system drag stops under the driver (#1583)."
+else
+  press=$((step + 1))
+  send press $(pinned_row 4)
+  send dragto 150 $(($(pinned_row 4 | cut -d' ' -f2) + 10))
+  send dragto 600 300
+  expect "^browser: tab $e file drag\$" \
+    "a file's row dragged onto the page didn't start the system's drag"
+  send release 600 300
+  # No real button holds the system's drag, so it may end before the release reaches it.
+  for _ in $(seq 100); do
+    sed -n "/^browser: drive $press: /,\$p" "$log" | grep -q '^browser: file drag ended ' && break
+    sleep 0.1
+  done
+  sed -n "/^browser: drive $press: /,\$p" "$log" | grep -q '^browser: file drag ended ' ||
+    fail "the file row's drag didn't end"
+  case "$(outline)" in
+    "$n+["*"] $e $c") ;;
+    *) fail "the file's row didn't go back to its place: $(outline)" ;;
+  esac
+fi
 # The +'s menu ends with Add File or Folder… (Add Files… and Add Folder… off the Mac, whose
 # panels pick one kind), whose file, named at launch, opens at the top of Today and shows. Today is
 # read here, as the drag before may have dropped its file on the page, which opens it as a tab.

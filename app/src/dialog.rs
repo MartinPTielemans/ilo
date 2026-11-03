@@ -286,6 +286,12 @@ impl Asked {
             None => Pose::arriving(self.arrived_for()),
         }
     }
+
+    /// Where it's drawn: as its motion has it, or in its place under Reduce Motion, fading.
+    fn drawn(&self, cx: &App) -> Pose {
+        let pose = self.pose();
+        Pose { raised: crate::motion::offset(pose.raised, cx), ..pose }
+    }
 }
 
 pub struct Dialog {
@@ -940,7 +946,7 @@ impl Render for Dialog {
                 asked.settling.start("dialog".into(), cx);
             }
         }
-        let pose = asked.pose();
+        let pose = asked.drawn(cx);
         let moving = asked.answered_at.is_some() || asked.arrived_for() < MOVE;
         if moving {
             window.request_animation_frame();

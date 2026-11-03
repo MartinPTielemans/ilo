@@ -1722,6 +1722,8 @@ impl Agents {
         } = act;
         if action == "open_tab" {
             let site = site(&url);
+            // An agent's first call may be this one, and the core opens a tab only in its Space.
+            self.space(&agent, cx);
             tab = self.browser.open_tab(&agent, &url, cx);
             if tab == 0 {
                 self.note(&agent, action, &site, "The tab couldn't open.");

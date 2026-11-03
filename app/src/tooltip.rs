@@ -53,12 +53,22 @@ use crate::tokens::tooltip::CHIP_TEXT_SIZE;
 use crate::tokens::tooltip::CHIP_LIP_FILL;
 use crate::palette::{INK, OVERLAY_DARK, PAPER, over};
 
+/// What a tooltip shows over, which holds what it names.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Over {
+    /// A browser window, by its id.
+    Window(u64),
+    /// One of the host's overlays over the browser window in front, such as the command bar, by
+    /// its number. The overlay is a window of its own over the page, and the tooltip goes over it.
+    Overlay(i32),
+}
+
 /// What the tooltip asks of its window.
 pub trait Host {
-    /// Shows the tooltip's window with its top left at (`left`, `top`) in browser window `window`,
-    /// the one the pointer is in, or moves it there if it shows. The UI has kept it inside the
+    /// Shows the tooltip's window with its top left at (`left`, `top`) in the window it's `over`,
+    /// the one the pointer is in, or moves it there if it shows. The UI has kept it inside that
     /// window.
-    fn show(&self, window: u64, left: f32, top: f32);
+    fn show(&self, over: Over, left: f32, top: f32);
     /// Hides it.
     fn hide(&self);
 }
@@ -274,8 +284,8 @@ pub struct Tooltip {
     went: Option<Instant>,
 }
 
-/// A tooltip waiting to show: the browser window, what it says and what it hangs from.
-type Waiting = (u64, Tip, Anchor);
+/// A tooltip waiting to show: the window it shows over, what it says and what it hangs from.
+type Waiting = (Over, Tip, Anchor);
 
 struct TooltipWindow(WindowHandle<Tooltip>);
 
@@ -327,6 +337,11 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<Tooltip>> {
 /// or at once if another showed less than GRACE ago, as the system's does when the pointer moves
 /// from one tile to the next.
 pub fn hover(window: u64, tip: Tip, anchor: Anchor, cx: &mut App) {
+    hover_over(Over::Window(window), tip, anchor, cx);
+}
+
+/// As `hover`, with what the tooltip names in the window it's `over`, which may be an overlay's.
+pub fn hover_over(over: Over, tip: Tip, anchor: Anchor, cx: &mut App) {
     let Some(tooltip) = cx.try_global::<TooltipWindow>().map(|tooltip| tooltip.0) else {
         return;
     };
@@ -336,10 +351,10 @@ pub fn hover(window: u64, tip: Tip, anchor: Anchor, cx: &mut App) {
             let soon = tooltip.went.is_some_and(|went| now.duration_since(went) < GRACE);
             if tooltip.shown.is_some() || soon {
                 tooltip.wait = None;
-                tooltip.show(window, tip, anchor, cx);
+                tooltip.show(over, tip, anchor, cx);
                 return;
             }
-            tooltip.wait_for((window, tip, anchor), cx);
+            tooltip.wait_for((over, tip, anchor), cx);
         })
         .ok();
 }
@@ -375,20 +390,20 @@ pub fn dismiss(cx: &mut App) {
 impl Tooltip {
     /// Shows `waiting` after DELAY, on a new timer that drops any before it.
     fn wait_for(&mut self, waiting: Waiting, cx: &mut Context<Self>) {
-        let (window, tip, anchor) = waiting.clone();
+        let (over, tip, anchor) = waiting.clone();
         let timer = cx.spawn(async move |tooltip, cx| {
             cx.background_executor().timer(DELAY).await;
             tooltip
                 .update(cx, |tooltip, cx| {
                     tooltip.wait = None;
-                    tooltip.show(window, tip, anchor, cx)
+                    tooltip.show(over, tip, anchor, cx)
                 })
                 .ok();
         });
         self.wait = Some((timer, waiting));
     }
 
-    fn show(&mut self, window: u64, tip: Tip, anchor: Anchor, cx: &mut Context<Self>) {
+    fn show(&mut self, over: Over, tip: Tip, anchor: Anchor, cx: &mut Context<Self>) {
         let layout = measure(&tip, &self.system);
         let (left, top) = place(anchor, (layout.width, HEIGHT));
         // check.sh reads this line, to see the tooltip hangs from what it names.
@@ -400,7 +415,7 @@ impl Tooltip {
         self.shown = Some(tip.clone());
         let near = near(anchor, layout.width, HEIGHT);
         self.drawn = Some((tip, layout, near));
-        self.host.show(window, left, top);
+        self.host.show(over, left, top);
         cx.notify();
     }
 

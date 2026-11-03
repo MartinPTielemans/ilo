@@ -56,13 +56,19 @@ document.onvisibilitychange = () => {
 </script>'
 log="$out/spaces.log"
 step=0
-# X11 sends a touchpad's scrolling with no start or end, so two fingers never page there (#554):
-# its steps go to the Spaces and the Library by key, click and wheel instead. Its clicks land on
-# whole pixels, at scale 1 here.
+# X11 sends a touchpad's scrolling with no start or end, so two fingers never page there (#554),
+# and Windows' touchpad comes through DirectManipulation, which the driver can't stand in for: its
+# wheel messages reach GPUI as a mouse wheel's lines. Their steps go to the Spaces and the Library
+# by key, click and wheel instead. X11's clicks land on whole pixels, at scale 1 here.
 x11=
+fingers=1
 if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
   x11=1
+  fingers=
   echo "skip: two fingers across the sidebar, on X11, which sends no touch phases (#554)."
+elif windows; then
+  fingers=
+  echo "skip: two fingers across the sidebar: the Windows driver can't send a touchpad's."
 fi
 rm -f "$saved" "$launch_frame"
 BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" < "$out/drive" > "$log" 2>&1 &
@@ -280,7 +286,7 @@ expect_tabs "$a" "$a" "after closing the last-used check's tab"
 # along the list scroll it, and a wheel's tick across pages once. Held partway, the next Space's
 # page shows beside the first's.
 swipe_point="110 500"
-if [ -z "$x11" ]; then
+if [ -n "$fingers" ]; then
 post swipe $swipe_point -10 0 10 1500
 await '^browser: swipe across$' || fail "two fingers across the sidebar didn't page"
 ../tools/window-screenshot.sh "$pid" "$out/swipe.png" || fail "no window to capture"
@@ -321,7 +327,7 @@ library_to() {
   expect "^browser: command view-library via $2\$" "a $1 didn't reach the Library"
   expect "^browser: library $3\$" "a $1 didn't leave the Library $3"
 }
-if [ -z "$x11" ]; then
+if [ -n "$fingers" ]; then
 post swipe $swipe_point 30 0 10 1500
 expect '^browser: library section ' "two fingers past the first Space didn't bring the Library out"
 ../tools/window-screenshot.sh "$pid" "$out/library-swipe.png" || fail "no window to capture"
@@ -444,7 +450,7 @@ none_since '^browser: library hidden$' || fail "escape in the card's icon picker
 # In a window 700 wide the two cards, 744 across, don't fit: the section leaves the page 56, 644,
 # and its cards scroll across under two fingers, give past their last and spring back to it once
 # let go, 100 along, the Library staying open (Arc 1.171, #1401).
-if [ -z "$x11" ]; then
+if [ -n "$fingers" ]; then
   send resize 700 ${content#*x}
   expect "^browser: drawn at 700x${content#*x}\$" "the window didn't draw 700 wide"
   record library-cards 3
@@ -567,11 +573,12 @@ expect_soon "^browser: space $second in " "⌃2 didn't show the second Space"
 post rightclick 12 $(row 0 | cut -d' ' -f2)
 expect "^browser: menu shown $(cased 'Copy Link, ')" "a right-click while the second Space's rows slid in showed no menu"
 # Settled before the menu showed, and the press came too late to be a test of the slide. The
-# slide's 0.3 s is the clock's, and a GPU-less Linux runner may draw frames slower than that, which
-# the press waits behind (#732).
+# slide's 0.3 s is the clock's, and a GPU-less Linux or Windows runner may draw frames slower than
+# that, which the press waits behind (#732).
 if ! sed -n "/^browser: drive $slide: /,\$p" "$log" |
   awk '/^browser: settled space/ { late = 1 } /^browser: menu shown/ { exit late }'; then
-  [ "$(uname)" = Linux ] || fail "the rows had settled before the right-click, so it didn't press mid-slide"
+  { [ "$(uname)" = Linux ] || windows; } ||
+    fail "the rows had settled before the right-click, so it didn't press mid-slide"
   echo "skip: a right-click mid-slide: the rows had settled before the app had the press (#732)."
 fi
 send choose Rename…
@@ -584,7 +591,7 @@ step=$slide
 expect "^browser: settled space $second\$" "the second Space's page didn't settle"
 step=$now
 
-if [ -z "$x11" ]; then
+if [ -n "$fingers" ]; then
 send swipe $swipe_point -10 0 10
 expect '^browser: swipe across$' "two fingers across the sidebar didn't page"
 none_since '^browser: new space ready$' || fail "a short pull past the last Space readied a Space"
@@ -636,7 +643,7 @@ expect '^browser: command new-space via ui$' "New Space in the menu didn't run n
 expect "^browser: spaces $first [0-9]* $second\$" "New Space didn't make a Space after the first"
 third=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f4)
 expect "^browser: settled space $third\$" "the form's page didn't settle"
-if [ -z "$x11" ]; then
+if [ -n "$fingers" ]; then
 send swipe $swipe_point -40 0 10
 expect '^browser: swipe across$' "two fingers across the form didn't page"
 expect "^browser: settled space $third\$" "the form's page didn't settle back"
@@ -1114,8 +1121,11 @@ last_title=$(grep "^browser: title $a " "$log" | tail -1 | cut -d' ' -f4-)
   expect "^browser: title $a visible " "a click on the page's row didn't show it"
 ran_hidden "the page shown by its row had run frames while hidden, other than its picture's"
 # Linux has no hiding an app, and the run's sway session keeps its focused window from minimizing.
+# Windows' driver can't hide the app, and a minimized window's page isn't hidden there yet (#1582).
 if [ "$(uname)" = Linux ]; then
   echo "skip: a minimized window and a hidden app, which sway and Linux have no way to make."
+elif windows; then
+  echo "skip: a minimized window and a hidden app: Windows doesn't hide a minimized window's page yet (#1582)."
 else
   send minimize
   expect "^browser: title $a hidden\$" "the page in the minimized window isn't hidden"

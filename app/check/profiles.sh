@@ -215,10 +215,12 @@ expect '^browser: command bar shown$' "⌘L didn't open the Little ilo window's 
 send insert "$cookie_page"
 send key return
 expect "^browser: loaded [0-9]* $cookie_page\$" "the cookie page didn't load in the Little ilo window"
-width=$(grep "^browser: window $little frame " "$log" | tail -1 | cut -d' ' -f7)
+# The width the Little ilo window draws at, the window last drawn at a new size: Windows' frame
+# takes in the borders it resizes by, 8 a side, which draw nothing.
+width=$(grep '^browser: drawn at ' "$log" | tail -1 | sed 's/^browser: drawn at \([0-9.]*\)x.*/\1/')
 # The picker is the third of the bar's header plates from its end: the last one's middle is 20 in
 # from the right edge, and each is 34 before the next (little.rs).
-post clickkey $((width - 20 - 2 * 34)) 24
+post clickkey $(awk -v width="$width" 'BEGIN { print width - 20 - 2 * 34 }') 24
 expect "^browser: menu shown $(cased 'Default (checked), Profile 2')\$" \
   "Little ilo's profile picker didn't list the profiles, the page's checked"
 ../tools/window-screenshot.sh "$pid" "$out/little-profile.png" all || fail "no window to capture"
@@ -432,15 +434,16 @@ expect '^browser: menu shown 12 hours (default), 24 hours, 7 days (checked), 30 
 send key escape
 expect '^browser: menu closed$' "escape didn't close the second profile's times"
 ../tools/window-screenshot.sh "$pid" "$out/settings-profile-settings.png" || fail "no window to capture"
-# A double-click on a name puts it in a field, where escape leaves it and return keeps a new one.
-send doubleclickkey $(drawn "profile $work")
-expect "^browser: rename profile $work\$" "a double-click on Profile 2 didn't put it in a field"
+# Rename, or a double-click on a name, puts it in a field, where escape leaves it and return
+# keeps a new one.
+send clickkey $(drawn "rename profile $work")
+expect "^browser: rename profile $work\$" "Rename on Profile 2 didn't put its name in a field"
 send type personal
 send key escape
 expect '^browser: rename cancelled$' "escape didn't cancel the renaming"
 none_since '^browser: renamed profile' || fail "escape renamed the profile"
 send doubleclickkey $(drawn "profile $work")
-expect "^browser: rename profile $work\$" "the second double-click didn't put it in a field"
+expect "^browser: rename profile $work\$" "a double-click on Profile 2 didn't put it in a field"
 send type personal
 send key return
 expect "^browser: renamed profile $work personal\$" "return didn't rename the profile"
