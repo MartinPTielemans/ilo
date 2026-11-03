@@ -407,6 +407,15 @@ together() {
 windowed_again() {
   check_layout "after the page's display went away $1"
   check_buttons "after the page's display went away $1"
+  # As the window's way out ends, macOS can make another app active, and the app takes it back
+  # (host.mm). The sidebar's material is the active window's only once it has.
+  for _ in $(seq 30); do
+    [ "$active" = 1 ] && break
+    sleep 0.1
+    send state
+  done
+  [ "$active" = 1 ] ||
+    fail "Browser wasn't the active app again after the page's display went away $1, so its window isn't key"
   ../tools/window-screenshot.sh "$pid" "$out/$2.png" || fail "no window to capture"
   sidebar_back "$out/$2.png" ||
     fail "after the page's display went away $1 the sidebar is $sidebar_now, not $sidebar: the page still covers it"
@@ -611,6 +620,15 @@ check_reveal() {
   done
   fail "$1: the reveal's window is at ${child:-none}, not ${expected:-none}"
 }
+# reveal_at_edge <what> [from]: the pointer comes onto the window's edge and moves along it, and the
+# sidebar comes out, which is looked for from the first move, or from command <from>: the wait the
+# pointer starts at the edge can be over before the next move is sent.
+reveal_at_edge() {
+  local from=${2:-$((step + 1))}
+  send move 3 300
+  send move 3 306
+  expect '^browser: reveal shown$' "$1" "$from"
+}
 send key s cmd
 toggle ui hidden "⌘S before the reveal"
 send move 400 300
@@ -622,11 +640,17 @@ step=$((step + 1))
 passed=$step
 echo "move 3 306" >&3
 send move 400 300
-send move 3 300
-send move 3 306
-expect '^browser: reveal shown$' "the pointer at the window's edge didn't bring the sidebar out"
-[ "$(sed -n "/^browser: drive $passed: /,\$p" "$log" | grep -c '^browser: reveal shown$')" = 1 ] ||
-  fail "the pointer passing the window's edge brought the sidebar out"
+if [ "$(uname)" = Linux ]; then
+  # On Linux the shell hears neither the pointer over the page nor, under X11, its leaving for the
+  # page, so the pass brings the sidebar out once its wait is up, which may be before the pointer
+  # is back at the edge: the line is looked for from the pass on.
+  echo "skip: the pointer passing the window's edge, whose leaving for the page Linux's shell doesn't hear."
+  reveal_at_edge "the pointer at the window's edge didn't bring the sidebar out" "$passed"
+else
+  reveal_at_edge "the pointer at the window's edge didn't bring the sidebar out"
+  [ "$(sed -n "/^browser: drive $passed: /,\$p" "$log" | grep -c '^browser: reveal shown$')" = 1 ] ||
+    fail "the pointer passing the window's edge brought the sidebar out"
+fi
 check_reveal "with the sidebar out" shown
 check_layout "with the sidebar out" inset
 check_buttons "with the sidebar out" hidden
@@ -643,17 +667,13 @@ else
   expect '^browser: reveal hidden$' "the pointer past the sidebar out didn't send it away"
 fi
 check_reveal "after the sidebar went away"
-send move 3 300
-send move 3 306
-expect '^browser: reveal shown$' "the pointer at the edge didn't bring the sidebar back out"
+reveal_at_edge "the pointer at the edge didn't bring the sidebar back out"
 send click 93 24
 toggle sidebar shown "a click on the sidebar button of the sidebar out"
 check_reveal "with the sidebar docked from its sidebar button"
 send key s cmd
 toggle ui hidden "⌘S after docking the sidebar out"
-send move 3 300
-send move 3 306
-expect '^browser: reveal shown$' "the pointer at the edge didn't bring the sidebar out again"
+reveal_at_edge "the pointer at the edge didn't bring the sidebar out again"
 send key s cmd
 toggle ui shown "⌘S with the sidebar out"
 check_reveal "with the sidebar docked by ⌘S"
@@ -790,6 +810,7 @@ if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
   srgb="/System/Library/ColorSync/Profiles/sRGB Profile.icc"
   material=
   off=
+  opaque=
   # Each pass: its appearance, then each backdrop's grey and Dia's material over it.
   for pass in "dark 0:24 20:32 60:45 255:104" "light 0:137 20:146 60:165 255:243"; do
     tone=${pass%% *}
@@ -842,6 +863,12 @@ if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
       }')
       echo "$tone material over $level: $line"
       case "$line" in *", off"* | *"capture off"*) off="$off $tone $level," ;; esac
+      # Dia's reads 45 lighter over white than over black in dark, and 20 in light; an opaque
+      # material, as Reduce Transparency draws it, reads the same over both.
+      case $level in
+      0) over_black=${line%% *} ;;
+      255) [ $((${line%% *} - over_black)) -ge 10 ] || opaque="$opaque $tone," ;;
+      esac
       material="$material$tone over $level $line; "
     done
   done
@@ -855,7 +882,16 @@ if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
   expect '^browser: window light true$' "View › Appearance › Automatic didn't give back the Mac's light"
   appearance true || fail "System Events didn't turn the Mac dark again"
   expect '^browser: window light false$' "the window didn't turn dark again with the Mac"
-  [ -z "$off" ] || fail "the sidebar isn't Dia's composite within 3 levels over grey${off%,}: $material"
+  [ -z "$opaque" ] ||
+    fail "the sidebar read the same over black and white in${opaque%,}, so it's opaque: $material"
+  # GitHub's hosted Mac draws AppKit's material behind the window darker than the Mac Dia was
+  # measured on, 119 against 137 over black in light (#1554), so ours there is no measure of Dia's:
+  # the run goes on, saying so, and the check VMs keep the comparison.
+  if [ "${GITHUB_ACTIONS:-}" = true ]; then
+    echo "skip: the sidebar against Dia's composite, as the hosted Mac's AppKit material isn't the one Dia was measured over"
+  else
+    [ -z "$off" ] || fail "the sidebar isn't Dia's composite within 3 levels over grey${off%,}: $material"
+  fi
   material="over grey ${material%; }"
 fi
 exec 3>&-

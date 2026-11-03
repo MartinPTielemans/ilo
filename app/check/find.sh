@@ -14,7 +14,8 @@
 # source in a tab under it. Help › Troubleshooting's Open Task Manager opens Chrome's, with the
 # keyboard, and ⌘W there closes it, not the tab. Its Record a Trace records until the toast's Stop,
 # which shows while it records, and the command bar offers to stop it meanwhile; Stop saves
-# Chromium's trace where the save panel picks.
+# Chromium's trace where the save panel picks. On Windows that's a Save As of the browser window's,
+# which closing the window cancels as it quits.
 # Undocked, after a relaunch, ⌥⌘J opens DevTools in a window of Chrome's, where ⌘C copies
 # the console's text to the run's own pasteboard and ⌘V pastes it, and ⌥⌘I from the page brings
 # them to the front.
@@ -493,13 +494,32 @@ with open(sys.argv[1]) as f:
     trace = json.load(f)
 assert trace["traceEvents"], "no events"
 ' "$out/trace.json" || fail "the saved trace isn't Chromium's"
+elif windows; then
+  # Windows' Save As is the browser window's, which it disables while the dialog shows, as Chrome's
+  # is. Without an owner it left the window usable and kept ilo from quitting (#1647).
+  for _ in $(seq 50); do
+    python3 -I check/app-windows.py list "$(cat "/proc/$pid/winpid")" > "$out/trace-dialog.txt"
+    grep -q '#32770 "Save As" visible' "$out/trace-dialog.txt" && break
+    sleep 0.1
+  done
+  grep -q '#32770 "Save As" visible owned' "$out/trace-dialog.txt" ||
+    fail "the trace's Save As isn't owned by a window: $(grep -v hidden "$out/trace-dialog.txt" | tr '\n' ';')"
+  grep -q ' browser visible disabled' "$out/trace-dialog.txt" ||
+    fail "the browser window takes input under the trace's Save As: $(grep -v hidden "$out/trace-dialog.txt" | tr '\n' ';')"
+  echo "skip: saving the trace: the driver answers only the host's own Save As, not GPUI's."
 else
   echo "skip: saving the trace: the headless session has no file chooser portal for the driver to answer."
 fi
 none_since '^browser: toast shown Recording a trace' || fail "the trace's toast came back after Stop"
-quit_by_key
-await '^browser: command quit via ' || fail "⌘Q didn't quit"
-exited
+if windows; then
+  # The keyboard is the dialog's, so the browser window closes, as the taskbar's Close window
+  # closes it, and the dialog goes with it as Cancel would.
+  quit
+else
+  quit_by_key
+  await '^browser: command quit via ' || fail "⌘Q didn't quit"
+  exited
+fi
 
 # Undocked, as DevTools' Dock side menu leaves them for the next time, DevTools are a window of
 # Chrome's, where ⌘C and ⌘V are the console's, and ⌥⌘I from the page raises them, as Chrome's and

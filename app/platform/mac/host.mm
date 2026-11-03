@@ -653,6 +653,61 @@ void WatchMainWindow() {
                   }];
 }
 
+// A display going away under a full-screen browser window, as a monitor unplugged mid-video, ends
+// with AppKit taking the window out on another display, and as that ends macOS can slide to a
+// Space without the window and make another app active, though the user never left ilo (#1554).
+// The app takes back the activation it had, until a second after that window's way out ends.
+void WatchDisplayGone() {
+  static bool watching = false;
+  if (watching) {
+    return;
+  }
+  watching = true;
+  static bool active_as_display_went = false;
+  static CFTimeInterval reclaim_until = 0;
+  void (^reclaim)(void) = ^{
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (NSApp.active) {
+        return;
+      }
+      // check.sh reads this line.
+      fprintf(stderr, "browser: active again after its display went away\n");
+      [NSApp activateIgnoringOtherApps:YES];
+    });
+  };
+  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+  [center addObserverForName:NSApplicationDidChangeScreenParametersNotification
+                      object:nil
+                       queue:nil
+                  usingBlock:^(NSNotification*) {
+                    for (NSWindow* window in NSApp.windows) {
+                      if (NSApp.active && BrowserOf(window) &&
+                          (window.styleMask & NSWindowStyleMaskFullScreen)) {
+                        active_as_display_went = true;
+                      }
+                    }
+                  }];
+  [center addObserverForName:NSWindowDidExitFullScreenNotification
+                      object:nil
+                       queue:nil
+                  usingBlock:^(NSNotification* notification) {
+                    if (!active_as_display_went || !BrowserOf(notification.object)) {
+                      return;
+                    }
+                    active_as_display_went = false;
+                    reclaim_until = CACurrentMediaTime() + 1;
+                    reclaim();
+                  }];
+  [center addObserverForName:NSApplicationDidResignActiveNotification
+                      object:nil
+                       queue:nil
+                  usingBlock:^(NSNotification*) {
+                    if (CACurrentMediaTime() < reclaim_until) {
+                      reclaim();
+                    }
+                  }];
+}
+
 // GPUI gives a window a title bar. Keeping it (transparent) keeps the system's rounded corners;
 // only its buttons go. A child window stays above its parent, so it doesn't need GPUI's floating
 // level, which would also put it above other apps' windows.
@@ -1462,6 +1517,7 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   }
   WatchMenus();
   WatchMainWindow();
+  WatchDisplayGone();
   WatchHeldEscape();
   if (above && above->window) {
     [window orderWindow:NSWindowBelow relativeTo:above->window.windowNumber];
@@ -1602,8 +1658,13 @@ size_t host_screens(double* frames, size_t count) {
   return screens.count;
 }
 
+// Where drive.mm's pointer last was, which a driven run's pointer is, as its events move no real
+// one.
+NSPoint g_driven_pointer;
+bool g_driven_pointer_known = false;
+
 bool host_pointer(double* x, double* y) {
-  const NSPoint point = NSEvent.mouseLocation;
+  const NSPoint point = g_driven_pointer_known ? g_driven_pointer : NSEvent.mouseLocation;
   *x = point.x;
   // AppKit's y runs up from the bottom of the main display, the core's down from its top.
   *y = NSHeight(NSScreen.screens.firstObject.frame) - point.y;
@@ -4655,8 +4716,9 @@ void host_focus(void* view) {
 void host_add_settings(void* settings_view) {
   g_settings_view = (__bridge NSView*)settings_view;
   g_settings = g_settings_view.window;
-  // Its controls are drawn dark, as the browser's are.
-  g_settings.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+  // It follows NSApp.appearance, as View › Appearance sets it, and has nothing to zoom to: its
+  // close alone does anything, as the Linux and Windows windows have it.
+  [g_settings standardWindowButton:NSWindowZoomButton].enabled = NO;
   g_settings.tabbingMode = NSWindowTabbingModeDisallowed;
   g_settings.collectionBehavior |= NSWindowCollectionBehaviorFullScreenAuxiliary;
 }

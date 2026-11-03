@@ -706,32 +706,31 @@ expect "^browser: menu shown $(cased 'Rename Folder, Change Icon…, Duplicate')
 send choose "$(cased 'Change Icon…')"
 expect "^browser: icon picker for folder $f on emoji\$" "Change Icon… didn't open the icon picker for the folder"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker under the folder"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 send insert glowing star
 send key return
 expect "^browser: iconed folder $f 🌟\$" "the picker's pick didn't become the folder's icon"
 expect '^browser: icon picker hidden$' "picking an emoji didn't close the icon picker"
 ../tools/window-screenshot.sh "$pid" "$out/folder-icon.png" || fail "no window to capture"
-# Export… in Settings › Advanced, in the box under the four switch rows, writes the Space's pinned
+# Export… in Settings › Import & Export, under its Export heading, writes the Space's pinned
 # tabs as Markdown links, the folder a list of what it holds.
 send key , cmd
 expect '^browser: settings shown General$' "⌘, didn't show Settings on its General tab"
 # The run's first ⌘, opens the window, which takes no click until it has drawn (#1101).
 expect '^browser: settings drew General$' "Settings didn't draw General"
-send clickkey $(drawn "toolbar Advanced")
-expect '^browser: settings tab Advanced$' "a click on Advanced didn't show its tab"
-settings_drew Advanced
+send clickkey $(drawn "toolbar Import & Export")
+expect '^browser: settings tab Import & Export$' "a click on Import & Export didn't show its section"
+settings_drew 'Import & Export'
 # Copy All Links' toast is mostly still up, and the click lands all the same (#1134): a toast lets
 # clicks through, but on its plate while it has buttons, which this one hasn't. A slow run says
 # when the toast had gone first, so the click didn't have one to go past.
 shown=$(grep -n '^browser: toast shown Copied Links as Markdown$' "$log" | tail -1 | cut -d: -f1)
-advanced=$(grep -n '^browser: settings tab Advanced$' "$log" | tail -1 | cut -d: -f1)
+section=$(grep -n '^browser: settings tab Import & Export$' "$log" | tail -1 | cut -d: -f1)
 hidden=$(sed -n "${shown:-1},\$p" "$log" | grep -n '^browser: toast hidden$' | head -1 | cut -d: -f1)
-if [ -n "$hidden" ] && [ $((${shown:-1} + hidden - 1)) -lt "$advanced" ]; then
-  echo "skip: the click on Advanced with a toast up, as Copy All Links' toast had gone first (#1134)."
+if [ -n "$hidden" ] && [ $((${shown:-1} + hidden - 1)) -lt "$section" ]; then
+  echo "skip: the click on Import & Export with a toast up, as Copy All Links' toast had gone first (#1134)."
 fi
-# On the Mac and Linux, where the host hears ⌥ alone, its switch row is 42 under the other four.
-case $(uname) in Darwin | Linux) option_row=42 ;; *) option_row=0 ;; esac
-send clickkey 575 $((302 + option_row))
+send clickkey $(drawn "export spaces")
 expect '^browser: exported [0-9]* links to .*/spaces\.md$' "Export… didn't write the Spaces' links"
 grep -qx -- '- later' "$out/spaces.md" ||
   fail "the export didn't list the folder: $(cat "$out/spaces.md")"

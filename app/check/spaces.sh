@@ -199,11 +199,14 @@ show_space "click 97 $dots_y" select-space sidebar "$first" "$a"
 # still hidden to it, until the copy answers (capture.cc), as Chrome does a background tab's
 # preview. That's one run of frames, 0.1 s at most, once the app asks for the tab's picture,
 # which may answer only after the tab is shown again, so a step that keeps it hidden past 0.4 s
-# sees one. Any other frame while hidden fails.
+# sees one. Any other frame while hidden fails. The hidden stretch starts at whichever comes first,
+# the core showing another tab or the page's "hidden", which can reach the log after the picture
+# (#1678), so a picture between the two counts and one from before them doesn't.
 ran_hidden() {
   local seen
   seen=$(awk -v a="$a" '
-    $0 == "browser: title " a " hidden" { pictured = 0 }
+    /^browser: selected [0-9]+( in |$)/ { if ($3 == a) shown = 1; else if (shown) shown = pictured = 0 }
+    $0 == "browser: title " a " hidden" { if (shown) shown = pictured = 0 }
     index($0, "browser: tab " a " picturing ") == 1 { pictured = 1 }
     /^browser: handover picture copied / && index($0, "(tab " a ")") { pictured = 1 }
     index($0, "browser: title " a " visible ") == 1 { title = substr($0, 17 + length(a)); was = pictured }
@@ -270,11 +273,21 @@ expect "^browser: today $b\$" "⌘Z didn't take the dragged tab back: \"$(today)
 send click 97 $dots_y
 expect '^browser: command select-space via sidebar$' "the first Space's dot didn't run select-space"
 expect "^browser: space $first in " "the first Space's dot didn't show it"
-# A click while the Space's page still slides in lands where its rows aren't yet.
-expect "^browser: settled space $first\$" "the first Space's page didn't settle"
 expect_tabs "$c $a" "$a" "after ⌘Z put the dragged tab back"
+# Sent while the Space's page still slides in, the click acts on the row that rests under it.
 send click "$(row 0)"
+press=$step
 expect "^browser: selected $c\( in .*\)\{0,1\}\$" "a click on the top row didn't show tab $c"
+# Where frames draw slower than the slide's 0.3 s (#732), the page settles before the app has the
+# click, which then tests only the row at rest; the run says so, as for the right-click below.
+if ! sed -n "/^browser: drive $((press - 1)): /,\$p" "$log" |
+  awk -v sent="^browser: drive $press: " '/^browser: settled space/ { late = 1 }
+    $0 ~ sent { clicked = 1 } clicked && /^browser: selected / { exit late }'; then
+  { [ "$(uname)" = Linux ] || windows || [ -n "${GITHUB_ACTIONS:-}" ]; } ||
+    fail "the page had settled before the click on the top row, so it didn't click mid-slide"
+  echo "skip: a click on a row mid-slide: the page had settled before the app had the click" \
+    "(#732, #1437)."
+fi
 send key w cmd
 expect_tabs "$a" "$a" "after closing the last-used check's tab"
 
@@ -873,6 +886,7 @@ New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
 send choose "$(cased 'Change Space Icon…')"
 expect "^browser: icon picker for $first on icon\$" "Change Icon… didn't open the icon picker"
 expect '^browser: icon picker shown$' "the icon picker didn't show"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 at=$(grep '^browser: icon picker at' "$log" | tail -1 | cut -d' ' -f5-)
 # 273 wide, with the arrow's tip 13 in, under the icon's middle at x 26.
 [ "$(echo "$at" | awk '{ print $1, $3, $4 }')" = "13 273 286" ] ||
@@ -886,6 +900,7 @@ New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on the Space's name offered Remove Icon without an icon"
 send choose "$(cased 'Change Space Icon…')"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 ../tools/window-screenshot.sh "$pid" "$out/space-icon-picker.png" || fail "no window to capture"
 # A click on a glyph is the Space's icon at once and closes the picker: the bolt, fifth in the first
 # row, the grid's first column 27.75 in and its first row 76.25 down.
@@ -901,6 +916,7 @@ send click 23 112
 expect "^browser: icon picker for $first on icon\$" \
   "a click on the Space's icon didn't open the picker"
 expect '^browser: icon picker shown$' "a click on the Space's icon didn't show the picker"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 send clickkey 92.5 39.5
 expect '^browser: icon picker on emoji$' "a click on Emoji didn't show the Emoji tab"
 send insert fox
@@ -918,6 +934,7 @@ send choose "$(cased 'Change Space Icon…')"
 expect "^browser: icon picker for $first on emoji\$" \
   "Change Icon… didn't open the picker on the Emoji tab for a Space with an emoji"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 ../tools/window-screenshot.sh "$pid" "$out/space-emoji-grid.png" all || fail "no window to capture"
 send clickkey 197 39.5
 expect "^browser: iconed space $first none\$" "the icon picker's trash didn't take the icon away"
@@ -929,6 +946,7 @@ New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the Space's menu offered Remove Icon after the trash"
 send choose "$(cased 'Change Space Icon…')"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 send clickkey 151.75 76.25
 expect "^browser: iconed space $first glyph:bolt\$" \
   "a click on a glyph didn't become the Space's icon"
