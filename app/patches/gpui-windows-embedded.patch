@@ -50,7 +50,7 @@ index 4ad4cc77b3..44d7b2ce80 100644
              self.end_gesture();
  
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 08f91bd626..04f77424a7 100644
+index 08f91bd626..e3544609fe 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
 @@ -109,7 +109,7 @@ impl WindowsWindowInner {
@@ -261,7 +261,7 @@ index 08f91bd626..04f77424a7 100644
      }
  
      fn handle_hit_test_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
-@@ -1823,3 +1950,42 @@ fn notify_frame_changed(handle: HWND) {
+@@ -1823,3 +1950,70 @@ fn notify_frame_changed(handle: HWND) {
          .log_err();
      }
  }
@@ -304,15 +304,43 @@ index 08f91bd626..04f77424a7 100644
 +        .with_input_handler(|handler| handler.marked_text_range())
 +        .flatten()
 +}
++
++/// For an embedder's test driver, where there's no precision touchpad to stand in for, as no window
++/// message carries one's start and lift: two fingers at `x`, `y` in GPUI's window `hwnd`, in its
++/// client area's pixels, moving the content by `delta`, as the Direct Manipulation handler reports
++/// them. Returns whether the window had a view to hand them to.
++pub fn drive_fingers(
++    hwnd: *mut std::ffi::c_void,
++    x: f32,
++    y: f32,
++    delta: Point<Pixels>,
++    touch_phase: TouchPhase,
++) -> bool {
++    let Some(window) = window_from_hwnd(HWND(hwnd)) else {
++        return false;
++    };
++    let Some(mut func) = window.state.callbacks.input.take() else {
++        return false;
++    };
++    func(PlatformInput::Scroll(ScrollEvent {
++        position: logical_point(x, y, window.state.scale_factor.get()),
++        delta: ScrollDelta::Pixels(delta),
++        modifiers: current_modifiers(),
++        touch_phase,
++        source: ScrollSource::Pointer,
++    }));
++    window.state.callbacks.input.set(Some(func));
++    true
++}
 diff --git a/crates/gpui_windows/src/gpui_windows.rs b/crates/gpui_windows/src/gpui_windows.rs
-index e7a45a034d..63c4e0675b 100644
+index e7a45a034d..c7b8e5dc0c 100644
 --- a/crates/gpui_windows/src/gpui_windows.rs
 +++ b/crates/gpui_windows/src/gpui_windows.rs
 @@ -20,6 +20,10 @@ mod vsync;
  mod window;
  mod wrapper;
  
-+pub use events::{drive_commit, drive_compose, marked_range};
++pub use events::{drive_commit, drive_compose, drive_fingers, marked_range};
 +pub use platform::embed;
 +pub use window::open_next_window_in;
 +

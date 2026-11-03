@@ -110,6 +110,10 @@ bool g_schedule_posted = false;
 // Each Today tab no window shows, with its page or without.
 void ForEachUnseen(base::FunctionRef<void(bc_id, Tab*, base::TimeDelta)> each) {
   for (Space* space : Space::All()) {
+    // An agent's tabs aren't the user's to tidy, and it may still be working in them (#1408).
+    if (space->agent()) {
+      continue;
+    }
     // Its profile's own, or for one not loaded, the profile its tabs open in.
     const base::TimeDelta after = ArchiveAfter(ProfileFor(space->profile()));
     // A copy, as closing a tab takes it out.

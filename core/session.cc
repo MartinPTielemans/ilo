@@ -1298,7 +1298,8 @@ Space* RestoreSpace(Window& window,
   for (size_t j = saved_space.today.size(); j-- > 0;) {
     if (!whole) {
       const SavedTab& saved_tab = saved_space.today[j];
-      if (saved_tab.current >= 0 &&
+      // An agent's pages don't come back, nor go in the user's archive (#1408).
+      if (!saved_space.agent && saved_tab.current >= 0 &&
           static_cast<size_t>(saved_tab.current) < saved_tab.history.size()) {
         const sessions::SerializedNavigationEntry& entry = saved_tab.history[saved_tab.current];
         Archive(/*tab=*/0, entry.virtual_url(), base::UTF16ToUTF8(entry.title()), space->id());

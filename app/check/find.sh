@@ -208,7 +208,7 @@ expect '^browser: find bar shown$' "⌘F after the close button didn't open the 
 # left selected. ⌘↑ is the page's own, to its top, and off the Mac that's Home. It ends there, where
 # zooming doesn't scroll it.
 top="key up cmd"
-[ "$(uname)" = Linux ] && top="key home"
+[ "$(uname)" = Darwin ] || top="key home"
 for _ in 1 2 3; do send key backspace; done
 send type far
 expect_find "$first" "open 1 of 1 far" "the find didn't find the text below the fold"
@@ -282,12 +282,13 @@ expect '^browser: loaded [0-9]* https://example.org/$' "the first tab didn't loa
 # of it, from the frame's left, through a resize. Each tab has its own. Sets $views to the frames
 # of the views shown, DevTools' first, once there are $1 of them. DevTools fill the frame at once,
 # and the page moves aside once they've loaded, as in Arc, so with two it waits for that too.
-# Linux's driver lists the pages the UI lays out, and DevTools are an aura window in Chromium's,
-# which the X server doesn't see (drive.rs), so there neither checks the views.
+# Off the Mac the drivers list the pages the UI lays out, and DevTools are an aura window in the
+# same Chromium window as the page, which neither the X server (drive.rs) nor Windows sees, so
+# there neither checks the views; devtools.png shows them.
 sees_devtools=1
-if [ "$(uname)" = Linux ]; then
+if [ "$(uname)" != Darwin ]; then
   sees_devtools=
-  echo "skip: where DevTools dock beside the page: Linux's driver can't see aura windows."
+  echo "skip: where DevTools dock beside the page: off the Mac the driver can't see aura windows."
 fi
 await_views() {
   [ -n "$sees_devtools" ] || return 0
@@ -434,7 +435,7 @@ fi
 if [ -n "$shown" ]; then
   expect "$managed" "Open Task Manager didn't show Chrome's"
   send key w cmd
-  if [ "$(uname)" = Linux ]; then
+  if [ "$(uname)" != Darwin ]; then
     # Off the Mac the Task Manager is Chromium's own window, which takes Ctrl+W itself, as
     # Chrome's, and the window manager gives the keyboard back once it's gone.
     for _ in $(seq 100); do
