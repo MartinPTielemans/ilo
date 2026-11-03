@@ -198,6 +198,35 @@ onkeydown = e => {
   }
 };
 </script>' > "$out/site/dialogs.html"
+# The devices page asks for a device from each click, whose activation USB's and Bluetooth's
+# requests use up: a HID, a USB device, a serial port and a Bluetooth device, in turn. It puts
+# each answer in its title: HID's empty list as "cancelled", the others' rejection by its error's
+# name and message, and an API the engine doesn't expose, as Linux's Bluetooth, as "unsupported".
+# The click after them says "still here".
+printf '%s' '<title>loading</title>
+<script>
+requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
+const asks = [
+  ["hid", () => navigator.hid.requestDevice({filters: []})
+    .then(devices => devices.length ? "chosen" : "cancelled")],
+  ["usb", () => navigator.usb.requestDevice({filters: []}).then(() => "chosen")],
+  ["serial", () => navigator.serial.requestPort().then(() => "chosen")],
+  ["bluetooth", () => navigator.bluetooth.requestDevice({acceptAllDevices: true})
+    .then(() => "chosen")],
+];
+onclick = () => {
+  const [name, ask] = asks.shift() || [];
+  if (!name) {
+    document.title = "still here";
+    return;
+  }
+  document.title = name + " asking";
+  const answer = navigator[name]
+    ? new Promise(resolve => resolve(ask())).catch(e => e.name + ": " + e.message)
+    : Promise.resolve("unsupported");
+  answer.then(said => document.title = name + " " + said);
+};
+</script>' > "$out/site/devices.html"
 # The cookie page's title says whether it finds its cookie, c, never a value, since the app logs
 # every title, and how many times the server has sent its script, which the cache keeps for an
 # hour, once it has painted. Another run's cookies on the site don't count. "c" in it sets the
