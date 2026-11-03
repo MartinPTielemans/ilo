@@ -346,8 +346,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         agent = self.headers.get("User-Agent", "")
         cookies = sorted(c.strip() for c in self.headers.get("Cookie", "").split(";") if c.strip())
-        print("GET", "chromium" if "Chrome/" in agent else "safari",
-              self.headers.get("Host", "") + self.path, "cookie", "; ".join(cookies) or "none")
+        # In one write: print writes each part on its own, so two requests at once, on their own
+        # threads, ran their lines into each other and a run looking for one found neither.
+        sys.stdout.write(" ".join(["GET", "chromium" if "Chrome/" in agent else "safari",
+            self.headers.get("Host", "") + self.path, "cookie", "; ".join(cookies) or "none"]) + "\n")
         path, _, query = self.path.partition("?")
         if path == "/bounce":
             self.send_response(302)
