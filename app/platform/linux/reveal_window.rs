@@ -40,7 +40,10 @@ pub extern "C" fn host_show_reveal(ui_view: *mut c_void, width: f64) {
     let Some(content) = gpui_linux::embedder_size(ui_view) else {
         return;
     };
-    let bounds = Bounds::new(point(px(0.), px(0.)), size(px(width as f32), content.height));
+    let bounds = Bounds::new(
+        point(px(0.), px(0.)),
+        size(px(width as f32), content.height),
+    );
     gpui_linux::show_overlay(view, ui_view, bounds, px(0.), false, ignore_left);
     if !was_shown {
         // check.sh reads it, as the Mac's host says it.
@@ -62,7 +65,10 @@ pub extern "C" fn host_hide_reveal(ui_view: *mut c_void) {
 /// The reveals' views that show, for the test driver's layout.
 pub(crate) fn shown() -> Vec<*mut c_void> {
     REVEALS.with_borrow(|all| {
-        (all.iter()).filter(|&&(.., shown)| shown).map(|&(_, view, _)| view).collect()
+        (all.iter())
+            .filter(|&&(.., shown)| shown)
+            .map(|&(_, view, _)| view)
+            .collect()
     })
 }
 
@@ -74,8 +80,10 @@ pub(crate) fn place(ui_view: *mut c_void) {
             .map(|&(_, view, _)| view)
     });
     if let Some(view) = view
-        && let (Some(content), Some(own)) =
-            (gpui_linux::embedder_size(ui_view), gpui_linux::overlay_size(view))
+        && let (Some(content), Some(own)) = (
+            gpui_linux::embedder_size(ui_view),
+            gpui_linux::overlay_size(view),
+        )
     {
         let bounds = Bounds::new(point(px(0.), px(0.)), size(own.width, content.height));
         gpui_linux::move_overlay(view, bounds, px(0.));

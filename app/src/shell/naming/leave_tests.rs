@@ -6,13 +6,16 @@
 use std::{cell::RefCell, rc::Rc};
 
 use gpui::{
-    Entity, EntityInputHandler, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels,
-    Point, TestAppContext, VisualTestContext, point, px,
+    AppContext, Empty, Entity, EntityInputHandler, Modifiers, MouseButton, MouseDownEvent,
+    MouseUpEvent, Pixels, Point, TestAppContext, VisualTestContext, WindowOptions, point, px,
 };
 
 use crate::{
     menu::Closed,
-    shell::{Folders, Naming, ROW_HEIGHT, Shell, Slot, commands::bind_keys, recorder::Recorder},
+    shell::{
+        Folders, NAME_HEIGHT, Naming, ROW_HEIGHT, Shell, Slot, commands::bind_keys,
+        recorder::Recorder,
+    },
     text_input::{self, Chosen, FieldMenu},
 };
 
@@ -67,12 +70,19 @@ fn press(cx: &mut VisualTestContext, position: Point<Pixels>, button: MouseButto
         click_count: clicks,
         first_mouse: false,
     });
-    cx.simulate_event(MouseUpEvent { position, button, modifiers, click_count: clicks });
+    cx.simulate_event(MouseUpEvent {
+        position,
+        button,
+        modifiers,
+        click_count: clicks,
+    });
     cx.run_until_parked();
 }
 
 fn naming(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<Naming> {
-    shell.read_with(cx, |shell, _| shell.renaming.as_ref().map(|renaming| renaming.naming))
+    shell.read_with(cx, |shell, _| {
+        shell.renaming.as_ref().map(|renaming| renaming.naming)
+    })
 }
 
 /// Double-clicks `tab`'s row, as the user renames a tab, its title all selected in the field.
@@ -81,7 +91,10 @@ fn rename(shell: &Entity<Shell>, cx: &mut VisualTestContext, host: &Recorder, ta
     let at = row(shell, cx, tab);
     press(cx, at, MouseButton::Left, 1);
     press(cx, at, MouseButton::Left, 2);
-    assert!(naming(shell, cx) == Some(Naming::Tab(tab)), "the double-click didn't rename");
+    assert!(
+        naming(shell, cx) == Some(Naming::Tab(tab)),
+        "the double-click didn't rename"
+    );
     host.take();
 }
 
@@ -106,17 +119,27 @@ fn a_tab_name_is_kept_however_the_field_loses_the_keyboard(cx: &mut TestAppConte
         cx.simulate_input(&typed);
         leave(&shell, cx, way);
         assert!(naming(&shell, cx).is_none(), "{way:?} left the field open");
-        assert_eq!(host.take_edits(), [format!("rename tab 3 {typed}")], "{way:?}");
+        assert_eq!(
+            host.take_edits(),
+            [format!("rename tab 3 {typed}")],
+            "{way:?}"
+        );
         // The page that took the keyboard keeps it.
         if let Way::Page = way {
-            assert!(!host.take().iter().any(|call| call == "focus ui"), "the UI took it back");
+            assert!(
+                !host.take().iter().any(|call| call == "focus ui"),
+                "the UI took it back"
+            );
         }
         shell.update(cx, |shell, cx| shell.set_selected(3, cx));
 
         rename(&shell, cx, &host, 3);
         cx.simulate_keystrokes("backspace");
         leave(&shell, cx, way);
-        assert!(naming(&shell, cx).is_none(), "{way:?} left the empty field open");
+        assert!(
+            naming(&shell, cx).is_none(),
+            "{way:?} left the empty field open"
+        );
         assert!(host.take_edits().is_empty(), "{way:?} kept an empty name");
         shell.update(cx, |shell, cx| shell.set_selected(3, cx));
 
@@ -125,7 +148,10 @@ fn a_tab_name_is_kept_however_the_field_loses_the_keyboard(cx: &mut TestAppConte
         cx.simulate_keystrokes("escape");
         assert!(naming(&shell, cx).is_none(), "escape left the field open");
         leave(&shell, cx, way);
-        assert!(host.take_edits().is_empty(), "{way:?} kept a name escape cancelled");
+        assert!(
+            host.take_edits().is_empty(),
+            "{way:?} kept a name escape cancelled"
+        );
         shell.update(cx, |shell, cx| shell.set_selected(3, cx));
     }
 }
@@ -137,13 +163,19 @@ fn a_name_being_composed_is_kept_whole(cx: &mut TestAppContext) {
     let (shell, cx, host) = window(cx);
     for (way, typed) in WAYS.into_iter().zip(["か", "き", "く"]) {
         rename(&shell, cx, &host, 3);
-        let field = shell.read_with(cx, |shell, _| shell.renaming.as_ref().map(|r| r.name.clone()));
+        let field = shell.read_with(cx, |shell, _| {
+            shell.renaming.as_ref().map(|r| r.name.clone())
+        });
         field.expect("no field").update_in(cx, |input, window, cx| {
             input.replace_and_mark_text_in_range(None, typed, None, window, cx)
         });
         leave(&shell, cx, way);
         assert!(naming(&shell, cx).is_none(), "{way:?} left the field open");
-        assert_eq!(host.take_edits(), [format!("rename tab 3 {typed}")], "{way:?}");
+        assert_eq!(
+            host.take_edits(),
+            [format!("rename tab 3 {typed}")],
+            "{way:?}"
+        );
         shell.update(cx, |shell, cx| shell.set_selected(3, cx));
     }
 }
@@ -162,11 +194,65 @@ fn a_space_name_is_kept_at_a_press_on_a_row(cx: &mut TestAppContext) {
     assert_eq!(host.take_edits(), ["rename space 1 Work"]);
 }
 
+/// Rename Space, chosen in the Space's menu, opens the name's field, which stays open as the menu's
+/// window gives the browser window the keyboard back. GPUI hears of each key window change later,
+/// in order, so the change from the menu taking the keyboard can arrive once the field is open,
+/// with the one giving it back right behind it, as when the choice comes before GPUI has heard of
+/// the menu showing (#1589). A window still inactive once both have arrived ends the field.
+#[gpui::test]
+fn a_name_field_opened_from_a_menu_outlasts_the_menu_giving_back_the_keyboard(
+    cx: &mut TestAppContext,
+) {
+    let (shell, cx, host) = window(cx);
+    let menu = cx.update(|_, cx| {
+        cx.open_window(WindowOptions::default(), |_, cx| cx.new(|_| Empty))
+            .unwrap()
+    });
+    let name = shell.read_with(cx, |shell, _| {
+        point(px(60.), px(shell.drawn_list_top() + NAME_HEIGHT / 2.))
+    });
+    for user_left in [false, true] {
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        press(cx, name, MouseButton::Right, 1);
+        // The menu's window takes the keyboard, and the user chooses before GPUI hears of it.
+        menu.update(cx, |_, window, _| window.activate_window())
+            .unwrap();
+        cx.update(|_, cx| host.choose("Rename Space…", cx));
+        assert!(
+            naming(&shell, cx) == Some(Naming::Space(1)),
+            "Rename Space opened no field"
+        );
+        // Closed, the menu gives the browser window the keyboard back, unless the user went on to
+        // another window.
+        if !user_left {
+            cx.update(|window, _| window.activate_window());
+        }
+        cx.run_until_parked();
+        if user_left {
+            assert!(
+                naming(&shell, cx).is_none(),
+                "going to another window left the field open"
+            );
+        } else {
+            assert!(
+                naming(&shell, cx) == Some(Naming::Space(1)),
+                "the menu closing ended the field"
+            );
+            cx.simulate_input("Work");
+            cx.simulate_keystrokes("enter");
+            assert_eq!(host.take_edits(), ["rename space 1 Work"]);
+        }
+    }
+}
+
 /// A pinned tab's Edit… field takes a URL only on purpose: losing the keyboard undoes it.
 #[gpui::test]
 fn a_pinned_url_typed_is_undone_however_the_field_loses_the_keyboard(cx: &mut TestAppContext) {
     let (shell, cx, host) = window(cx);
-    host.pinned_urls.borrow_mut().insert(2, "https://old.test/".into());
+    host.pinned_urls
+        .borrow_mut()
+        .insert(2, "https://old.test/".into());
     for way in WAYS {
         cx.update(|window, _| window.activate_window());
         shell.update(cx, |shell, cx| shell.edit_pinned_url(2, cx));
@@ -201,15 +287,23 @@ fn the_fields_own_menu_leaves_it_open(cx: &mut TestAppContext) {
     cx.simulate_input("Gone");
     let at = row(&shell, cx, 3);
     press(cx, at, MouseButton::Right, 1);
-    let chosen = shown.take().expect("a right-click in the field showed no menu");
+    let chosen = shown
+        .take()
+        .expect("a right-click in the field showed no menu");
     for way in [Way::Page, Way::Window] {
         leave(&shell, cx, way);
-        assert!(naming(&shell, cx) == Some(Naming::Tab(3)), "the menu's {way:?} closed the field");
+        assert!(
+            naming(&shell, cx) == Some(Naming::Tab(3)),
+            "the menu's {way:?} closed the field"
+        );
     }
     cx.update(|window, cx| chosen(Closed::Otherwise, window, cx));
     cx.update(|window, _| window.activate_window());
     cx.run_until_parked();
-    assert!(naming(&shell, cx) == Some(Naming::Tab(3)), "the menu closing closed the field");
+    assert!(
+        naming(&shell, cx) == Some(Naming::Tab(3)),
+        "the menu closing closed the field"
+    );
     cx.simulate_keystrokes("escape");
     assert!(naming(&shell, cx).is_none(), "escape didn't cancel");
     assert!(host.take_edits().is_empty(), "the tab was renamed");
@@ -233,16 +327,26 @@ fn a_press_away_that_closes_the_fields_menu_ends_it(cx: &mut TestAppContext) {
     let field = row(&shell, cx, 3);
     for closed in [Closed::PressedAt(field), Closed::Otherwise] {
         press(cx, field, MouseButton::Right, 1);
-        let chosen = shown.take().expect("a right-click in the field showed no menu");
+        let chosen = shown
+            .take()
+            .expect("a right-click in the field showed no menu");
         cx.update(|window, cx| chosen(closed, window, cx));
         cx.run_until_parked();
-        assert!(naming(&shell, cx) == Some(Naming::Tab(3)), "{closed:?} closed the field");
+        assert!(
+            naming(&shell, cx) == Some(Naming::Tab(3)),
+            "{closed:?} closed the field"
+        );
     }
     press(cx, field, MouseButton::Right, 1);
-    let chosen = shown.take().expect("a right-click in the field showed no menu");
+    let chosen = shown
+        .take()
+        .expect("a right-click in the field showed no menu");
     cx.update(|window, cx| chosen(Closed::PressedAt(page), window, cx));
     cx.run_until_parked();
-    assert!(naming(&shell, cx).is_none(), "a press in the page left the field open");
+    assert!(
+        naming(&shell, cx).is_none(),
+        "a press in the page left the field open"
+    );
     assert_eq!(host.take_edits(), ["rename tab 3 Work"]);
     shell.update(cx, |shell, cx| shell.set_selected(3, cx));
 
@@ -250,11 +354,19 @@ fn a_press_away_that_closes_the_fields_menu_ends_it(cx: &mut TestAppContext) {
     rename(&shell, cx, &host, 3);
     cx.simulate_input("Home");
     press(cx, field, MouseButton::Right, 1);
-    let chosen = shown.take().expect("a right-click in the field showed no menu");
+    let chosen = shown
+        .take()
+        .expect("a right-click in the field showed no menu");
     cx.deactivate_window();
-    assert!(naming(&shell, cx) == Some(Naming::Tab(3)), "the menu taking the keyboard closed it");
+    assert!(
+        naming(&shell, cx) == Some(Naming::Tab(3)),
+        "the menu taking the keyboard closed it"
+    );
     cx.update(|window, cx| chosen(Closed::Left, window, cx));
     cx.run_until_parked();
-    assert!(naming(&shell, cx).is_none(), "leaving with the menu up left the field open");
+    assert!(
+        naming(&shell, cx).is_none(),
+        "leaving with the menu up left the field open"
+    );
     assert_eq!(host.take_edits(), ["rename tab 3 Home"]);
 }

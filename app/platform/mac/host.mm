@@ -4661,8 +4661,9 @@ void host_focus(void* view) {
 void host_add_settings(void* settings_view) {
   g_settings_view = (__bridge NSView*)settings_view;
   g_settings = g_settings_view.window;
-  // Its controls are drawn dark, as the browser's are.
-  g_settings.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+  // It follows NSApp.appearance, as View › Appearance sets it, and has nothing to zoom to: its
+  // close alone does anything, as the Linux and Windows windows have it.
+  [g_settings standardWindowButton:NSWindowZoomButton].enabled = NO;
   g_settings.tabbingMode = NSWindowTabbingModeDisallowed;
   g_settings.collectionBehavior |= NSWindowCollectionBehaviorFullScreenAuxiliary;
 }

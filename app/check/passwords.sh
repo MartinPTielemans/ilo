@@ -462,7 +462,7 @@ go_from_bar "${site#http://}card.html"
 expect "^browser: title $tab card\$" "the card page didn't load"
 submit_form 'Ada Lovelace' 4111111111111111 12 2030
 offered_to_save card
-../tools/window-screenshot.sh "$pid" "$out/card-offer.png, $out/autofill-menu.png (Mac)" || fail "no window to capture"
+../tools/window-screenshot.sh "$pid" "$out/card-offer.png" || fail "no window to capture"
 send key escape
 expect "^browser: offer $tab answered NotNow \$" "escape didn't decline the card"
 expect "^browser: offer $tab gone\$" "declining the card left Chrome's offer open"
