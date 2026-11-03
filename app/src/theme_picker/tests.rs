@@ -16,7 +16,9 @@ struct Recorder {
 impl Host for Recorder {
     fn show(&self, window: u64, left: f32, top: f32, corners: &[(f32, f32, f32)]) {
         let (_, tip, _) = corners[0];
-        self.calls.borrow_mut().push(format!("show {left:.1} {top:.1} tip {tip:.1} over {window}"));
+        self.calls.borrow_mut().push(format!(
+            "show {left:.1} {top:.1} tip {tip:.1} over {window}"
+        ));
     }
 
     fn hide(&self) {
@@ -38,7 +40,9 @@ struct Picker {
 impl Picker {
     fn new(theme: Option<Theme>, cx: &mut TestAppContext) -> Self {
         let host = Rc::new(Recorder::default());
-        let window = cx.update(|cx| open(host.clone(), cx)).expect("no window for the picker");
+        let window = cx
+            .update(|cx| open(host.clone(), cx))
+            .expect("no window for the picker");
         let recorded = host.clone();
         let changed: Changed =
             Rc::new(move |theme, done, _| recorded.themes.borrow_mut().push((theme, done)));
@@ -67,16 +71,22 @@ impl Picker {
 
     fn drag(&mut self, from: (f32, f32), to: (f32, f32)) {
         let left = MouseButton::Left;
-        self.cx.simulate_mouse_down(Self::at(from.0, from.1), left, Modifiers::none());
+        self.cx
+            .simulate_mouse_down(Self::at(from.0, from.1), left, Modifiers::none());
         self.cx.run_until_parked();
-        self.cx.simulate_mouse_move(Self::at(to.0, to.1), left, Modifiers::none());
+        self.cx
+            .simulate_mouse_move(Self::at(to.0, to.1), left, Modifiers::none());
         self.cx.run_until_parked();
-        self.cx.simulate_mouse_up(Self::at(to.0, to.1), left, Modifiers::none());
+        self.cx
+            .simulate_mouse_up(Self::at(to.0, to.1), left, Modifiers::none());
         self.cx.run_until_parked();
     }
 
     fn theme(&mut self) -> Option<Theme> {
-        let editing = self.window.read_with(&self.cx.cx, |picker, _| picker.editing()).unwrap();
+        let editing = self
+            .window
+            .read_with(&self.cx.cx, |picker, _| picker.editing())
+            .unwrap();
         editing.and_then(|(_, theme)| theme)
     }
 
@@ -86,7 +96,12 @@ impl Picker {
 
     /// Whether each theme handed on was kept, since the last look.
     fn handed_on(&mut self) -> Vec<bool> {
-        self.host.themes.borrow_mut().drain(..).map(|(_, done)| done).collect()
+        self.host
+            .themes
+            .borrow_mut()
+            .drain(..)
+            .map(|(_, done)| done)
+            .collect()
     }
 
     fn calls(&mut self) -> Vec<String> {
@@ -115,7 +130,10 @@ fn close(a: (f32, f32), b: (f32, f32)) -> bool {
 fn it_shows_over_the_window_that_asked(cx: &mut TestAppContext) {
     let mut picker = Picker::new(None, cx);
     let calls = picker.calls();
-    assert!(calls[0].starts_with("show ") && calls[0].ends_with(" over 2"), "{calls:?}");
+    assert!(
+        calls[0].starts_with("show ") && calls[0].ends_with(" over 2"),
+        "{calls:?}"
+    );
 }
 
 #[gpui::test]
@@ -124,7 +142,12 @@ fn a_click_on_the_empty_field_places_the_first_colour_there(cx: &mut TestAppCont
     let (x, y) = Picker::in_field(0.2, 0.45);
     picker.click(x, y);
     let theme = picker.theme().expect("no colour placed");
-    assert!(close((theme.x, theme.y), (0.2, 0.45)), "at {}, {}", theme.x, theme.y);
+    assert!(
+        close((theme.x, theme.y), (0.2, 0.45)),
+        "at {}, {}",
+        theme.x,
+        theme.y
+    );
     assert_eq!(theme.count, 1);
     assert_eq!(theme.intensity, DEFAULT_INTENSITY);
     // Handed on as it lands, and kept as the button comes up.
@@ -160,10 +183,17 @@ fn a_click_up_before_the_next_frame_still_keeps_the_colour(cx: &mut TestAppConte
     assert_eq!(picker.handed_on(), vec![false, true]);
     // The pointer isn't still holding the colour.
     let (x, y) = Picker::in_field(-0.5, -0.5);
-    picker.cx.simulate_mouse_move(Picker::at(x, y), None, Modifiers::none());
+    picker
+        .cx
+        .simulate_mouse_move(Picker::at(x, y), None, Modifiers::none());
     picker.cx.run_until_parked();
     let theme = picker.theme().unwrap();
-    assert!(close((theme.x, theme.y), (0.2, 0.45)), "followed to {}, {}", theme.x, theme.y);
+    assert!(
+        close((theme.x, theme.y), (0.2, 0.45)),
+        "followed to {}, {}",
+        theme.x,
+        theme.y
+    );
 }
 
 /// A click as the picker first appears, before it has drawn a frame of itself open, still places
@@ -171,7 +201,9 @@ fn a_click_up_before_the_next_frame_still_keeps_the_colour(cx: &mut TestAppConte
 #[gpui::test]
 fn a_click_before_the_first_frame_still_places_the_colour(cx: &mut TestAppContext) {
     let host = Rc::new(Recorder::default());
-    let window = cx.update(|cx| open(host.clone(), cx)).expect("no window for the picker");
+    let window = cx
+        .update(|cx| open(host.clone(), cx))
+        .expect("no window for the picker");
     let recorded = host.clone();
     let changed: Changed =
         Rc::new(move |theme, done, _| recorded.themes.borrow_mut().push((theme, done)));
@@ -200,11 +232,20 @@ fn a_click_before_the_first_frame_still_places_the_colour(cx: &mut TestAppContex
         })
         .unwrap();
     });
-    let mut picker = Picker { cx: VisualTestContext::from_window(window.into(), cx), window, host };
+    let mut picker = Picker {
+        cx: VisualTestContext::from_window(window.into(), cx),
+        window,
+        host,
+    };
     picker.cx.run_until_parked();
     assert_eq!(picker.handed_on(), vec![false, true]);
     let theme = picker.theme().expect("no colour placed");
-    assert!(close((theme.x, theme.y), (0.2, 0.45)), "at {}, {}", theme.x, theme.y);
+    assert!(
+        close((theme.x, theme.y), (0.2, 0.45)),
+        "at {}, {}",
+        theme.x,
+        theme.y
+    );
 }
 
 #[gpui::test]
@@ -216,7 +257,12 @@ fn dragging_a_handle_moves_every_colour_and_keeps_them_on_letting_go(cx: &mut Te
     let (to_x, to_y) = Picker::in_field(0.05, 0.3);
     picker.drag((x, y), (to_x, to_y));
     let theme = picker.theme().unwrap();
-    assert!(close((theme.x, theme.y), (0., 0.3)), "at {}, {}", theme.x, theme.y);
+    assert!(
+        close((theme.x, theme.y), (0., 0.3)),
+        "at {}, {}",
+        theme.x,
+        theme.y
+    );
     assert_eq!(theme.count, 3);
     assert_ne!(theme.handle(1), complement);
     assert_eq!(picker.handed_on(), vec![false, true]);
@@ -229,8 +275,17 @@ fn dragging_another_handle_places_its_colour_alone(cx: &mut TestAppContext) {
     let (hx, hy) = start.handle(2);
     picker.drag(Picker::in_field(hx, hy), Picker::in_field(0., -0.3));
     let theme = picker.theme().unwrap();
-    assert!(close(theme.handle(2), (0., -0.3)), "the third at {:?}", theme.handle(2));
-    assert!(close((theme.x, theme.y), (0.5, 0.)), "the main one moved, to {}, {}", theme.x, theme.y);
+    assert!(
+        close(theme.handle(2), (0., -0.3)),
+        "the third at {:?}",
+        theme.handle(2)
+    );
+    assert!(
+        close((theme.x, theme.y), (0.5, 0.)),
+        "the main one moved, to {}, {}",
+        theme.x,
+        theme.y
+    );
     assert!(close(theme.handle(1), start.handle(1)), "the second moved");
     assert_eq!(theme.colors()[2], theme::color_at(0., -0.3, 1.));
     assert_eq!(picker.handed_on(), vec![false, true]);
@@ -249,17 +304,24 @@ fn a_held_handle_is_drawn_held_before_it_drags(cx: &mut TestAppContext) {
     let mut picker = Picker::new(Some(start), cx);
     let drawn = |picker: &mut Picker| {
         let editing = picker.window.read_with(&picker.cx.cx, |picker, _| {
-            picker.editing.as_ref().and_then(|editing| editing.drawn_handles)
+            picker
+                .editing
+                .as_ref()
+                .and_then(|editing| editing.drawn_handles)
         });
         editing.unwrap()
     };
     assert_eq!(drawn(&mut picker), Some((3, None)));
     let (x, y) = Picker::in_field(start.handle(2).0, start.handle(2).1);
     let left = MouseButton::Left;
-    picker.cx.simulate_mouse_down(Picker::at(x, y), left, Modifiers::none());
+    picker
+        .cx
+        .simulate_mouse_down(Picker::at(x, y), left, Modifiers::none());
     picker.cx.run_until_parked();
     assert_eq!(drawn(&mut picker), Some((3, Some(Drag::Handle(2, 0., 0.)))));
-    picker.cx.simulate_mouse_up(Picker::at(x, y), left, Modifiers::none());
+    picker
+        .cx
+        .simulate_mouse_up(Picker::at(x, y), left, Modifiers::none());
     picker.cx.run_until_parked();
     assert_eq!(drawn(&mut picker), Some((3, None)));
     // The wave's knob, likewise.
@@ -286,14 +348,31 @@ fn plus_and_minus_add_and_take_colours_from_one_to_three(cx: &mut TestAppContext
 
 #[gpui::test]
 fn a_swatch_gives_its_colour_and_keeps_the_rest(cx: &mut TestAppContext) {
-    let theme = Theme { intensity: 0.4, grain: 0.3, ..Theme::at(0.5, 0.).with_count(2) };
+    let theme = Theme {
+        intensity: 0.4,
+        grain: 0.3,
+        ..Theme::at(0.5, 0.).with_count(2)
+    };
     let mut picker = Picker::new(Some(theme), cx);
     picker.click(SWATCH_X + SWATCH_PITCH * 3., SWATCH_Y);
     let picked = picker.theme().unwrap();
-    let colour = Theme { x: picked.x, y: picked.y, saturation: picked.saturation, ..theme };
+    let colour = Theme {
+        x: picked.x,
+        y: picked.y,
+        saturation: picked.saturation,
+        ..theme
+    };
     assert_eq!(picked, colour);
     let swatch = Theme::of_color(SWATCHES[3]);
-    assert_eq!(picked, Theme { count: 2, intensity: 0.4, grain: 0.3, ..swatch });
+    assert_eq!(
+        picked,
+        Theme {
+            count: 2,
+            intensity: 0.4,
+            grain: 0.3,
+            ..swatch
+        }
+    );
     assert_eq!(picked.main_color(), SWATCHES[3]);
     // Without a colour yet, a swatch is the first, as itself: slate, not the field's vivid blue.
     let mut picker = Picker::new(None, cx);
@@ -307,7 +386,10 @@ fn a_swatch_gives_its_colour_and_keeps_the_rest(cx: &mut TestAppContext) {
     picker.drag((x, y), (to_x, to_y));
     let dragged = picker.theme().unwrap();
     assert_eq!(dragged.saturation, 1.);
-    assert_eq!(dragged.main_color(), theme::color_at(dragged.x, dragged.y, 1.));
+    assert_eq!(
+        dragged.main_color(),
+        theme::color_at(dragged.x, dragged.y, 1.)
+    );
 }
 
 #[gpui::test]
@@ -325,12 +407,18 @@ fn the_wave_sets_the_intensity_and_the_dial_the_grain(cx: &mut TestAppContext) {
     let left = (DIAL.0 - DIAL_RING, DIAL.1);
     let past_top = (DIAL.0 + 5., DIAL.1 - DIAL_RING);
     let (button, none) = (MouseButton::Left, Modifiers::none());
-    picker.cx.simulate_mouse_down(Picker::at(left.0, left.1), button, none);
+    picker
+        .cx
+        .simulate_mouse_down(Picker::at(left.0, left.1), button, none);
     for (x, y) in [(DIAL.0 - 5., DIAL.1 - DIAL_RING), past_top] {
-        picker.cx.simulate_mouse_move(Picker::at(x, y), button, none);
+        picker
+            .cx
+            .simulate_mouse_move(Picker::at(x, y), button, none);
         picker.cx.run_until_parked();
     }
-    picker.cx.simulate_mouse_up(Picker::at(past_top.0, past_top.1), button, none);
+    picker
+        .cx
+        .simulate_mouse_up(Picker::at(past_top.0, past_top.1), button, none);
     picker.cx.run_until_parked();
     assert_eq!(picker.theme().unwrap().grain, 1.);
 }
@@ -392,18 +480,33 @@ fn presses_land_on_what_is_drawn_there() {
         target(APPEARANCE_X[1], APPEARANCE_Y, Some(&theme)),
         Some(Target::Appearance(Appearance::Light))
     );
-    assert_eq!(target(SWATCH_X + SWATCH_PITCH * 8., SWATCH_Y, None), Some(Target::Swatch(8)));
+    assert_eq!(
+        target(SWATCH_X + SWATCH_PITCH * 8., SWATCH_Y, None),
+        Some(Target::Swatch(8))
+    );
     // Between two swatches, nothing.
     assert_eq!(target(SWATCH_X + SWATCH_PITCH / 2., SWATCH_Y, None), None);
-    assert_eq!(target(TRACK_LEFT + 1., SLIDER_Y, None), Some(Target::Intensity));
-    assert_eq!(target(DIAL.0, DIAL.1 + DIAL_RING, None), Some(Target::Grain));
+    assert_eq!(
+        target(TRACK_LEFT + 1., SLIDER_Y, None),
+        Some(Target::Intensity)
+    );
+    assert_eq!(
+        target(DIAL.0, DIAL.1 + DIAL_RING, None),
+        Some(Target::Grain)
+    );
 }
 
 #[test]
 fn minus_and_plus_read_on_the_field_and_off_reads_as_off() {
     let paper = Hsla::from(rgb(palette::PAPER));
-    let light = Theme { appearance: Appearance::Light, ..Theme::of_color(SWATCHES[0]) };
-    let dark = Theme { appearance: Appearance::Dark, ..Theme::of_color(SWATCHES[8]) };
+    let light = Theme {
+        appearance: Appearance::Light,
+        ..Theme::of_color(SWATCHES[0])
+    };
+    let dark = Theme {
+        appearance: Appearance::Dark,
+        ..Theme::of_color(SWATCHES[8])
+    };
     for theme in [light, dark] {
         let palette = Palette::of(Some(&theme), Tone::Dark);
         let states = [
@@ -414,7 +517,12 @@ fn minus_and_plus_read_on_the_field_and_off_reads_as_off() {
         ];
         for (state, enabled, pressed, alpha) in states {
             let color = count_color(&palette, enabled, pressed);
-            assert_eq!(color, paper.opacity(alpha), "{state} on {:?}", theme.appearance);
+            assert_eq!(
+                color,
+                paper.opacity(alpha),
+                "{state} on {:?}",
+                theme.appearance
+            );
         }
         // On the plain field, where there are no dots, over the card as it's drawn off the Mac:
         // enabled reads as a glyph and pressed more, and disabled stands out more than a dot does
@@ -428,7 +536,10 @@ fn minus_and_plus_read_on_the_field_and_off_reads_as_off() {
         let disabled = on_field(count_color(&palette, false, false));
         let dot = on_field(paper.opacity(DOT_ALPHA));
         assert!(enabled >= palette::GLYPH, "enabled {enabled:.2}");
-        assert!(pressed > enabled, "pressed {pressed:.2}, enabled {enabled:.2}");
+        assert!(
+            pressed > enabled,
+            "pressed {pressed:.2}, enabled {enabled:.2}"
+        );
         let off = dot < disabled && disabled < palette::GLYPH;
         assert!(off, "disabled {disabled:.2}, dot {dot:.2}");
     }
@@ -467,14 +578,24 @@ fn the_field_has_no_dots_under_minus_and_plus() {
 fn a_drag_bumps_once_as_it_reaches_a_stop(cx: &mut TestAppContext) {
     let mut picker = Picker::new(Some(Theme::at(0.5, 0.)), cx);
     let detents = |picker: &Picker| {
-        picker.host.calls.borrow().iter().filter(|call| *call == "detent").count()
+        picker
+            .host
+            .calls
+            .borrow()
+            .iter()
+            .filter(|call| *call == "detent")
+            .count()
     };
     let (button, none) = (MouseButton::Left, Modifiers::none());
     let path = |picker: &mut Picker, points: &[(f32, f32)]| {
         let (x, y) = points[0];
-        picker.cx.simulate_mouse_down(Picker::at(x, y), button, none);
+        picker
+            .cx
+            .simulate_mouse_down(Picker::at(x, y), button, none);
         for &(x, y) in &points[1..] {
-            picker.cx.simulate_mouse_move(Picker::at(x, y), button, none);
+            picker
+                .cx
+                .simulate_mouse_move(Picker::at(x, y), button, none);
             picker.cx.run_until_parked();
         }
         let (x, y) = points[points.len() - 1];
@@ -482,13 +603,31 @@ fn a_drag_bumps_once_as_it_reaches_a_stop(cx: &mut TestAppContext) {
         picker.cx.run_until_parked();
     };
     let field = Picker::in_field;
-    path(&mut picker, &[field(0.5, 0.), field(0.8, 0.), field(1.2, 0.), field(1.2, 0.3)]);
+    path(
+        &mut picker,
+        &[
+            field(0.5, 0.),
+            field(0.8, 0.),
+            field(1.2, 0.),
+            field(1.2, 0.3),
+        ],
+    );
     assert_eq!(detents(&picker), 1);
     let theme = picker.theme().unwrap();
-    path(&mut picker, &[field(theme.x, theme.y), field(0.5, 0.), field(1.3, 0.)]);
+    path(
+        &mut picker,
+        &[field(theme.x, theme.y), field(0.5, 0.), field(1.3, 0.)],
+    );
     assert_eq!(detents(&picker), 2);
     let knob = knob_x(DEFAULT_INTENSITY);
-    path(&mut picker, &[(knob, SLIDER_Y), (knob_x(0.5), SLIDER_Y), (knob_x(0.) - 20., SLIDER_Y)]);
+    path(
+        &mut picker,
+        &[
+            (knob, SLIDER_Y),
+            (knob_x(0.5), SLIDER_Y),
+            (knob_x(0.) - 20., SLIDER_Y),
+        ],
+    );
     assert_eq!(detents(&picker), 3);
 }
 
@@ -502,7 +641,10 @@ fn the_keyboard_goes_round_the_buttons_swatches_and_wave(cx: &mut TestAppContext
     assert_eq!((picker.keyed(), picker.handed_on()), (None, vec![]));
     // The appearance chosen first, then along to the next.
     picker.keys("tab");
-    assert_eq!(picker.keyed(), Some(Target::Appearance(Appearance::Automatic)));
+    assert_eq!(
+        picker.keyed(),
+        Some(Target::Appearance(Appearance::Automatic))
+    );
     picker.keys("right space");
     assert_eq!(picker.theme().unwrap().appearance, Appearance::Light);
     // + first, as − doesn't answer with one colour.
@@ -525,7 +667,10 @@ fn the_keyboard_goes_round_the_buttons_swatches_and_wave(cx: &mut TestAppContext
     assert_eq!(picker.theme().unwrap().intensity, 1.);
     // Each press that changed something was kept, as a click's is: + twice, not at three.
     let handed_on = picker.handed_on();
-    assert!(handed_on.len() == 11 && handed_on.iter().all(|&done| done), "{handed_on:?}");
+    assert!(
+        handed_on.len() == 11 && handed_on.iter().all(|&done| done),
+        "{handed_on:?}"
+    );
     // Round to the appearance chosen, and back.
     picker.keys("tab");
     assert_eq!(picker.keyed(), Some(Target::Appearance(Appearance::Light)));
@@ -551,7 +696,10 @@ fn without_a_colour_the_keyboard_has_the_appearance_and_swatches(cx: &mut TestAp
     assert_eq!(picker.keyed(), Some(Target::Appearance(Appearance::Dark)));
     picker.keys("shift-tab right enter");
     let theme = picker.theme().expect("the swatch gave no colour");
-    assert_eq!((theme.main_color(), theme.appearance), (SWATCHES[1], Appearance::Dark));
+    assert_eq!(
+        (theme.main_color(), theme.appearance),
+        (SWATCHES[1], Appearance::Dark)
+    );
     // With it, the wave comes next.
     picker.keys("tab");
     assert_eq!(picker.keyed(), Some(Target::Intensity));

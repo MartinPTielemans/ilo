@@ -4,7 +4,9 @@
 
 use std::rc::Rc;
 
-use gpui::{AppContext as _, Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px};
+use gpui::{
+    AppContext as _, Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px,
+};
 
 use super::{
     ARCHIVE_TOP, ARCHIVED_LEFT, ARCHIVED_PITCH, Archived, COLUMN_WIDTH, FILTER_WIDTH, FILTER_X,
@@ -65,11 +67,32 @@ fn archive(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>, &mut Visual
     cx.update(|window, _| window.activate_window());
     shell.update(cx, |shell, cx| {
         let space = |id: u64, name: &str, agent: &str| {
-            (id, name.to_string().into(), None, 0, "".into(), agent.to_string().into(), "".into())
+            (
+                id,
+                name.to_string().into(),
+                None,
+                0,
+                "".into(),
+                agent.to_string().into(),
+                "".into(),
+            )
         };
-        shell.set_spaces(vec![space(1, "Space 1", ""), space(101, "Lisbon museum hours", "Claude")], cx);
+        shell.set_spaces(
+            vec![
+                space(1, "Space 1", ""),
+                space(101, "Lisbon museum hours", "Claude"),
+            ],
+            cx,
+        );
         shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
-        shell.set_tabs(101, Vec::new(), vec![1010], Vec::new(), Folders::default(), cx);
+        shell.set_tabs(
+            101,
+            Vec::new(),
+            vec![1010],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
         shell.set_space(1, cx);
         shell.set_selected(10, cx);
         shell.section = Section::Archive;
@@ -100,19 +123,31 @@ fn items(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Vec<String> {
 /// The middle of the list's `row`th row, under the first heading.
 fn row(row: usize) -> gpui::Point<gpui::Pixels> {
     let top = ARCHIVE_TOP + HEADING_TOP + HEADING_HEIGHT + HEADING_BOTTOM;
-    point(px(COLUMN_WIDTH + ARCHIVED_LEFT + 60.), px(top + ARCHIVED_PITCH * (row as f32 + 0.5)))
+    point(
+        px(COLUMN_WIDTH + ARCHIVED_LEFT + 60.),
+        px(top + ARCHIVED_PITCH * (row as f32 + 0.5)),
+    )
 }
 
 fn filter(cx: &mut VisualTestContext) {
-    let filter = point(px(FILTER_X + FILTER_WIDTH / 2.), px(SEARCH_TOP + SEARCH_HEIGHT / 2.));
+    let filter = point(
+        px(FILTER_X + FILTER_WIDTH / 2.),
+        px(SEARCH_TOP + SEARCH_HEIGHT / 2.),
+    );
     cx.simulate_click(filter, Modifiers::none());
     cx.run_until_parked();
 }
 
 fn search(shell: &Entity<Shell>, text: &str, cx: &mut VisualTestContext) {
-    let field = shell.read_with(cx, |shell, _| shell.library.as_ref().unwrap().search.clone());
+    let field = shell.read_with(cx, |shell, _| {
+        shell.library.as_ref().unwrap().search.clone()
+    });
     let text = text.to_string();
-    cx.update(|window, cx| field.update(cx, |field, cx| field.set_text(text.clone().into(), text.len(), window, cx)));
+    cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            field.set_text(text.clone().into(), text.len(), window, cx)
+        })
+    });
     cx.run_until_parked();
 }
 
@@ -122,11 +157,17 @@ fn search(shell: &Entity<Shell>, text: &str, cx: &mut VisualTestContext) {
 fn a_dismissed_task_lists_among_the_tabs(cx: &mut TestAppContext) {
     let (shell, _, cx) = archive(cx);
     assert_eq!(items(&shell, cx), ["Today", "tab 7", "task-1", "tab 8"]);
-    assert!(shell.read_with(cx, |shell, _| shell.archive_filtered()), "no Filter button");
+    assert!(
+        shell.read_with(cx, |shell, _| shell.archive_filtered()),
+        "no Filter button"
+    );
     // Gone from the Agents' list, as when it came back to the foot, it leaves the archive's.
     shell.update(cx, |shell, cx| shell.set_archived_tasks(Vec::new(), cx));
     assert_eq!(items(&shell, cx), ["Today", "tab 7", "tab 8"]);
-    assert!(!shell.read_with(cx, |shell, _| shell.archive_filtered()), "a Filter with nothing to pick");
+    assert!(
+        !shell.read_with(cx, |shell, _| shell.archive_filtered()),
+        "a Filter with nothing to pick"
+    );
 }
 
 /// A click on a task's row closes the Library and brings the task back, as ⇧⌘T does, and its
@@ -135,18 +176,34 @@ fn a_dismissed_task_lists_among_the_tabs(cx: &mut TestAppContext) {
 fn a_click_brings_a_task_back_with_its_conversation(cx: &mut TestAppContext) {
     let (shell, host, cx) = archive(cx);
     shell.update(cx, |shell, cx| {
-        shell.keep(super::What::DISMISS_TASK, Some(super::Edit::RestoreTask("task-1".into())), cx)
+        shell.keep(
+            super::What::DISMISS_TASK,
+            Some(super::Edit::RestoreTask("task-1".into())),
+            cx,
+        )
     });
     cx.simulate_click(row(1), Modifiers::none());
     cx.run_until_parked();
     assert_eq!(host.take(), ["task task-1 Restore"]);
-    assert!(!shell.read_with(cx, |shell, _| shell.library_open), "the Library stayed open");
+    assert!(
+        !shell.read_with(cx, |shell, _| shell.library_open),
+        "the Library stayed open"
+    );
     // The Agents send its card back.
     shell.update(cx, |shell, cx| shell.set_task_cards(vec![card()], cx));
     cx.run_until_parked();
-    assert!(host.take().contains(&"show task task-1".to_string()), "its conversation didn't open");
-    assert_eq!(shell.read_with(cx, |shell, _| shell.talk_agent()), Some("task-1".into()));
-    assert!(!shell.update(cx, |shell, cx| shell.undo(cx)), "⌘Z dismissed it again");
+    assert!(
+        host.take().contains(&"show task task-1".to_string()),
+        "its conversation didn't open"
+    );
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.talk_agent()),
+        Some("task-1".into())
+    );
+    assert!(
+        !shell.update(cx, |shell, cx| shell.undo(cx)),
+        "⌘Z dismissed it again"
+    );
 }
 
 /// Delete from Archive takes the task out of the Archive, as a step ⌘Z undoes. Its menu's Open
@@ -159,22 +216,39 @@ fn delete_from_archive_takes_a_task_out(cx: &mut TestAppContext) {
         cx.simulate_mouse_up(row(1), MouseButton::Right, Modifiers::none());
         cx.run_until_parked();
         let items = host.menus.borrow().last().cloned().unwrap_or_default();
-        items.into_iter().filter(|(title, _)| !title.is_empty()).collect::<Vec<_>>()
+        items
+            .into_iter()
+            .filter(|(title, _)| !title.is_empty())
+            .collect::<Vec<_>>()
     };
-    assert_eq!(menu(cx), [("Open Conversation".into(), true), ("Delete from Archive".into(), true)]);
+    assert_eq!(
+        menu(cx),
+        [
+            ("Open Conversation".into(), true),
+            ("Delete from Archive".into(), true)
+        ]
+    );
     cx.update(|_, cx| host.choose("Delete from Archive", cx));
     assert_eq!(host.take(), ["task task-1 Delete"]);
     // The Agents' list leaves it out.
     shell.update(cx, |shell, cx| shell.set_archived_tasks(Vec::new(), cx));
     assert_eq!(items(&shell, cx), ["Today", "tab 7", "tab 8"]);
-    assert!(shell.update(cx, |shell, cx| shell.undo(cx)), "⌘Z has nothing to undo");
+    assert!(
+        shell.update(cx, |shell, cx| shell.undo(cx)),
+        "⌘Z has nothing to undo"
+    );
     assert_eq!(host.take(), ["task task-1 Undelete"]);
 
-    shell.update(cx, |shell, cx| shell.set_archived_tasks(vec![task(1, 2000.)], cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_archived_tasks(vec![task(1, 2000.)], cx)
+    });
     menu(cx);
     cx.update(|_, cx| host.choose("Open Conversation", cx));
     assert_eq!(host.take(), ["task task-1 Restore"]);
-    assert!(!shell.read_with(cx, |shell, _| shell.library_open), "the Library stayed open");
+    assert!(
+        !shell.read_with(cx, |shell, _| shell.library_open),
+        "the Library stayed open"
+    );
 }
 
 /// The Filter's menu offers All, Little ilo and Tasks. Tasks lists the tasks alone, and with none,
@@ -184,13 +258,34 @@ fn the_filter_lists_only_the_tasks(cx: &mut TestAppContext) {
     let (shell, host, cx) = archive(cx);
     filter(cx);
     let menu = host.menus.borrow().last().cloned().unwrap_or_default();
-    assert_eq!(menu, [("All".into(), true), ("Little ilo".into(), true), ("Tasks".into(), true)]);
-    assert_eq!(host.entries.borrow().iter().map(|e| e.checked).collect::<Vec<_>>(), [true, false, false]);
+    assert_eq!(
+        menu,
+        [
+            ("All".into(), true),
+            ("Little ilo".into(), true),
+            ("Tasks".into(), true)
+        ]
+    );
+    assert_eq!(
+        host.entries
+            .borrow()
+            .iter()
+            .map(|e| e.checked)
+            .collect::<Vec<_>>(),
+        [true, false, false]
+    );
     cx.update(|_, cx| host.choose("Tasks", cx));
     cx.run_until_parked();
     assert_eq!(items(&shell, cx), ["Today", "task-1"]);
     filter(cx);
-    assert_eq!(host.entries.borrow().iter().map(|e| e.checked).collect::<Vec<_>>(), [false, false, true]);
+    assert_eq!(
+        host.entries
+            .borrow()
+            .iter()
+            .map(|e| e.checked)
+            .collect::<Vec<_>>(),
+        [false, false, true]
+    );
     cx.update(|_, cx| host.dismiss(cx));
 
     // A Little ilo tab keeps the button once the task has gone, and Tasks then lists nothing.
@@ -233,7 +328,9 @@ fn search_finds_a_task_by_its_title_or_what_was_asked(cx: &mut TestAppContext) {
 fn a_private_window_keeps_no_archived_task(cx: &mut TestAppContext) {
     let host = Rc::new(Recorder::default());
     let private = cx.new(|cx| Shell::private_window(host.clone(), 9, "Private".into(), 1, cx));
-    private.update(cx, |shell, cx| shell.set_archived_tasks(vec![task(1, 2000.)], cx));
+    private.update(cx, |shell, cx| {
+        shell.set_archived_tasks(vec![task(1, 2000.)], cx)
+    });
     assert!(private.read_with(cx, |shell, _| shell.archived_tasks.is_empty()));
 }
 
@@ -242,22 +339,38 @@ fn a_private_window_keeps_no_archived_task(cx: &mut TestAppContext) {
 #[gpui::test]
 fn clear_archive_takes_the_tasks_with_the_tabs(cx: &mut TestAppContext) {
     let (shell, host, cx) = archive(cx);
-    shell.update(cx, |shell, cx| shell.set_archived_tasks(vec![task(2, 2500.), task(1, 2000.)], cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_archived_tasks(vec![task(2, 2500.), task(1, 2000.)], cx)
+    });
     shell.update(cx, |shell, cx| shell.clear_archive(cx));
     let (message, detail, confirmed) = host.confirming.borrow_mut().take().expect("it didn't ask");
     assert_eq!(message, "Clear the archive?");
-    assert!(detail.starts_with("Its 2 tabs and 2 tasks leave the archive. "), "{detail}");
+    assert!(
+        detail.starts_with("Its 2 tabs and 2 tasks leave the archive. "),
+        "{detail}"
+    );
     cx.update(|_, cx| confirmed(cx));
     cx.run_until_parked();
     assert_eq!(host.take_edits(), ["archive clear as 9001"]);
-    let tasks = |host: &Recorder| -> Vec<String> { host.take().into_iter().filter(|call| call.starts_with("task ")).collect() };
+    let tasks = |host: &Recorder| -> Vec<String> {
+        host.take()
+            .into_iter()
+            .filter(|call| call.starts_with("task "))
+            .collect()
+    };
     assert_eq!(tasks(&host), ["task task-2 Delete", "task task-1 Delete"]);
     shell.update(cx, |shell, cx| {
         shell.set_archive(Vec::new(), cx);
         shell.set_archived_tasks(Vec::new(), cx);
     });
     assert!(items(&shell, cx).is_empty());
-    assert!(shell.update(cx, |shell, cx| shell.undo(cx)), "⌘Z has nothing to undo");
+    assert!(
+        shell.update(cx, |shell, cx| shell.undo(cx)),
+        "⌘Z has nothing to undo"
+    );
     assert_eq!(host.take_edits(), ["undo archive remove 9001"]);
-    assert_eq!(tasks(&host), ["task task-2 Undelete", "task task-1 Undelete"]);
+    assert_eq!(
+        tasks(&host),
+        ["task task-2 Undelete", "task task-1 Undelete"]
+    );
 }
