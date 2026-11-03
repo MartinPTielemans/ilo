@@ -108,6 +108,8 @@ pub struct Question {
 pub struct Status {
     /// The agent's id.
     pub agent: SharedString,
+    /// Its name, as its card has it (Agents::agent_name).
+    pub name: SharedString,
     pub space: u64,
     /// What it did last, as the log says it, such as "Clicked · example.com".
     pub doing: SharedString,
@@ -1193,12 +1195,22 @@ impl Agents {
         }
     }
 
-    /// The agent's name, as the user sees it: a task's CLI's, the name the session its `call` is
-    /// of gave, a client's, else its id.
-    fn agent_name(&self, agent: &str, call: u64) -> SharedString {
-        match self.task(agent).or_else(|| self.session_of(agent, call)) {
+    /// The agent's name, as the user sees it wherever it shows: its card, the strip under its page,
+    /// its pointer, its questions and its activity in Settings (#1080). A task's CLI's; an outside
+    /// client's session under way's, which its card has; else the name the client gave last, or for
+    /// one that gave none, or Claude Code or Codex, which the user connected by name, its kind's.
+    pub fn agent_name(&self, agent: &str) -> SharedString {
+        if let Some(task) = self.task(agent) {
+            return task.name.clone();
+        }
+        let session = (self.tasks.tasks.iter()).find(|task| {
+            task.state == task::State::Working
+                && (task.session.as_ref()).is_some_and(|session| session.agent == agent)
+        });
+        match session {
             Some(task) => task.name.clone(),
-            None => name(agent).to_string().into(),
+            None => (self.tasks.names.get(agent).cloned())
+                .unwrap_or_else(|| name(agent).to_string().into()),
         }
     }
 
@@ -1573,6 +1585,7 @@ impl Agents {
                 held.sort();
                 Status {
                     agent: agent.to_string().into(),
+                    name: self.agent_name(agent),
                     space: self.browser.agent_space(agent),
                     doing: self.doing.get(agent).cloned().unwrap_or_default(),
                     held,
@@ -1789,7 +1802,7 @@ impl Agents {
         }
         let question = Question {
             id: self.next_request,
-            agent: self.agent_name(&act.agent, act.call),
+            agent: self.agent_name(&act.agent),
             from: act.agent.clone().into(),
             what: act.what.clone().into(),
             why: why.into(),
@@ -1913,7 +1926,7 @@ impl Agents {
             .min_by_key(|(_, held)| held.question);
         handoff.map(|(&tab, held)| Question {
             id: held.question,
-            agent: self.agent_name(&held.agent, held.call),
+            agent: self.agent_name(&held.agent),
             from: held.agent.clone().into(),
             what: match held.back {
                 Some(_) => "have a tab back".into(),

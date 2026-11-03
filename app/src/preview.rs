@@ -1978,6 +1978,7 @@ fn main() {
                         };
                         let status = browser::agents::Status {
                             agent: "claude-code".into(),
+                            name: "Claude Code".into(),
                             space: first_space + 1,
                             doing: "Clicked · en.wikipedia.org".into(),
                             held,

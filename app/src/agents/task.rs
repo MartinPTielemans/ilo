@@ -1698,7 +1698,8 @@ impl Agents {
     /// The session under way of the call's client, on whichever of its connections, or, for a call
     /// that opens or acts on a tab, a new one: its card shows from then. Its calls are its steps.
     fn session_for(&mut self, call: &super::Call, cx: &mut Context<Self>) -> Option<String> {
-        let client = Client::from_id(&call.agent)?;
+        // Only a client the user connected has sessions.
+        Client::from_id(&call.agent)?;
         let live = (self.tasks.tasks.iter_mut()).find(|task| {
             task.state == State::Working
                 && (task.session.as_ref()).is_some_and(|session| session.agent == call.agent)
@@ -1714,8 +1715,7 @@ impl Agents {
         }
         self.tasks.next += 1;
         let key = format!("session-{}", self.tasks.next);
-        let name =
-            (self.tasks.names.get(&call.agent).cloned()).unwrap_or_else(|| client.name().into());
+        let name = self.agent_name(&call.agent);
         let space = self.space(&call.agent, cx);
         // check.sh reads this line.
         log!("browser: session {key} of agent {} as {name}", call.agent);

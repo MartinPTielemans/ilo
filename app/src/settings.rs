@@ -2552,7 +2552,7 @@ impl Settings {
                     div()
                         .flex()
                         .flex_col()
-                        .child(header(client.name()))
+                        .child(header(agents.read(cx).agent_name(client.id())))
                         .child(groups)
                 })
             })
@@ -3564,12 +3564,12 @@ fn manage_passwords(profile: u64, cx: &mut App) {
 }
 
 /// A section's header, over its box.
-fn header(title: &'static str) -> gpui::Div {
+fn header(title: impl Into<SharedString>) -> gpui::Div {
     div()
         .mb(px(HEADER_GAP))
         .pl(px(PADDING))
         .font_weight(FontWeight::SEMIBOLD)
-        .child(title)
+        .child(title.into())
 }
 
 /// A row with a line under its name that says more, and room after for its controls.

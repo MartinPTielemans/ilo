@@ -3865,17 +3865,55 @@ mod sessions {
         assert_eq!(shown[0].dot, Dot::Working);
     }
 
-    /// Another MCP client's card has the name it gave, and a client the user connected by name has
-    /// that name, whatever it calls itself.
+    /// A client has one name wherever it shows, its card's (Agents::agent_name): the strip under its
+    /// page, from its status, its questions and Settings' activity read the same. Another MCP
+    /// client's is the name it gave, or with none its kind's, MCP client, and a session keeps the
+    /// name it started with while it works. Claude Code, connected by name, is Claude Code whatever
+    /// it calls itself.
     #[gpui::test]
-    fn a_card_has_the_name_its_client_gives(cx: &mut TestAppContext) {
+    fn a_client_has_one_name_the_one_it_gave(cx: &mut TestAppContext) {
         let (agents, _, _) = connected(cx);
-        hello(&agents, "claude-code", "claude-code", cx);
+        agents.update(cx, |agents, cx| agents.connect(Client::Other, cx));
+        cx.run_until_parked();
+        let named = |agents: &Entity<Agents>, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| {
+                let status = agents.status();
+                let strip = status.iter().find(|each| each.agent == "mcp-client");
+                (
+                    agents.agent_name("mcp-client").to_string(),
+                    strip.map(|each| each.name.to_string()),
+                )
+            })
+        };
+        hello(&agents, "mcp-client", "", cx);
+        agents.update(cx, |agents, cx| agents.take_over("mcp-client", 30, cx));
+        assert_eq!(
+            named(&agents, cx),
+            ("MCP client".into(), Some("MCP client".into())),
+            "a client that gave no name has its kind's"
+        );
         hello(&agents, "mcp-client", "Zed", cx);
-        agents.read_with(cx, |agents, _| {
-            assert_eq!(agents.tasks.names["claude-code"], "Claude Code");
-            assert_eq!(agents.tasks.names["mcp-client"], "Zed");
-        });
+        assert_eq!(named(&agents, cx), ("Zed".into(), Some("Zed".into())));
+
+        // Its session's card has that name, and keeps it while it works.
+        let (reply, _answer) = mpsc::channel();
+        let call = Call {
+            id: 1,
+            agent: "mcp-client".into(),
+            tool: "read_page".into(),
+            arguments: json!({ "tab": 20 }),
+            reply,
+            at: std::time::Instant::now(),
+        };
+        agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
+        assert_eq!(cards(&agents, cx)[0].name, "Zed");
+        hello(&agents, "mcp-client", "Cursor", cx);
+        assert_eq!(cards(&agents, cx)[0].name, "Zed");
+        assert_eq!(named(&agents, cx), ("Zed".into(), Some("Zed".into())));
+
+        hello(&agents, "claude-code", "claude-code", cx);
+        let claude = agents.read_with(cx, |agents, _| agents.agent_name("claude-code"));
+        assert_eq!(claude, "Claude Code");
     }
 
     /// A session with no call under way ends once IDLE passes without another, and a call before

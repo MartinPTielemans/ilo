@@ -147,10 +147,7 @@ impl Shell {
         }
         let pointer = self.agent_pointer.as_ref()?;
         let pane = self.pane_of(pointer.tab)?;
-        let name = self
-            .agent_page()
-            .map(|(space, _)| space.agent.clone())
-            .unwrap_or_default();
+        let name = self.agent_bar().map(|bar| bar.name()).unwrap_or_default();
         let t = pointer.since.elapsed().as_secs_f32();
         let still = cx.reduce_motion();
         // Frames only while it moves: the glide, the ring coming in and the fade.

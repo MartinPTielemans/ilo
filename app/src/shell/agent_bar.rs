@@ -30,6 +30,15 @@ pub(super) enum Bar {
     },
 }
 
+impl Bar {
+    /// The agent's name, as its card has it.
+    pub(super) fn name(&self) -> SharedString {
+        match self {
+            Bar::Working { name, .. } | Bar::Held { name, .. } => name.clone(),
+        }
+    }
+}
+
 /// The bar's Stop, which is Stop Loading's key elsewhere, so the bar takes it only while it shows
 /// Stop. Escape, Stop Loading's other key, stays the page's, as an agent stopped by a stray escape
 /// would lose its work.
@@ -90,7 +99,7 @@ impl Shell {
             .agent_status
             .iter()
             .find(|status| status.space == space.id)?;
-        let name = space.agent.clone();
+        let name = status.name.clone();
         if let Some((tab, why)) = status.held.iter().find(|(tab, _)| *tab == shown) {
             return Some(Bar::Held {
                 name,

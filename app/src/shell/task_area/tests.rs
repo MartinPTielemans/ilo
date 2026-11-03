@@ -427,6 +427,7 @@ fn the_strip_takes_over_hands_back_and_stops(cx: &mut TestAppContext) {
         let doing = "Typed · flights.example".into();
         vec![Status {
             agent: "task-1".into(),
+            name: "Claude".into(),
             space: 3,
             doing,
             held,
@@ -692,4 +693,36 @@ fn the_agents_pointer_shows_where_it_acts_in_the_page_watched(cx: &mut TestAppCo
     assert!(shell.update(cx, |shell, _| shell.agent_pointer_shown()));
     cx.executor().advance_clock(Duration::from_secs(2));
     assert!(!shell.update(cx, |shell, _| shell.agent_pointer_shown()));
+}
+
+/// The strip under a page the user holds names its agent as the Agents name it, the name its card
+/// has, which for an outside client is the one it gave, not its Space's.
+#[gpui::test]
+fn the_strip_names_the_agent_as_its_card_does(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    let held = |name: &str| {
+        vec![Status {
+            agent: "task-1".into(),
+            name: name.to_string().into(),
+            space: 3,
+            doing: "Typed · flights.example".into(),
+            held: vec![(30, "Sign in to flights.example".into())],
+        }]
+    };
+    let says = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.task_strip_words(30))
+    };
+    shell.update(cx, |shell, cx| shell.set_agent_status(held("Zed"), cx));
+    assert_eq!(
+        says(&shell, cx),
+        (
+            "Zed needs you".to_string(),
+            "Sign in to flights.example".to_string()
+        )
+    );
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(held("MCP client"), cx)
+    });
+    assert_eq!(says(&shell, cx).0, "MCP client needs you");
 }
