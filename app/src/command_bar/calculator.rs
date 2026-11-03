@@ -9,8 +9,16 @@ pub fn calculate(text: &str) -> Option<String> {
     if is_date(text) {
         return None;
     }
-    let text = text.replace("**", "^").replace(['×', '·'], "*").replace('÷', "/").replace('−', "-");
-    let mut parser = Parser { chars: text.chars().collect(), at: 0, operators: 0 };
+    let text = text
+        .replace("**", "^")
+        .replace(['×', '·'], "*")
+        .replace('÷', "/")
+        .replace('−', "-");
+    let mut parser = Parser {
+        chars: text.chars().collect(),
+        at: 0,
+        operators: 0,
+    };
     let value = parser.sum()?;
     let done = parser.peek().is_none();
     (done && parser.operators > 0 && value.is_finite()).then(|| format(value))
@@ -157,7 +165,18 @@ mod tests {
 
     #[test]
     fn what_isnt_a_sum_has_no_result() {
-        let texts = ["42", "-5", "(5)", "1.2.3", "1e3", "2026-10-26", "1/0", "2+", "12 7", "a+1"];
+        let texts = [
+            "42",
+            "-5",
+            "(5)",
+            "1.2.3",
+            "1e3",
+            "2026-10-26",
+            "1/0",
+            "2+",
+            "12 7",
+            "a+1",
+        ];
         for text in texts {
             assert_eq!(calculate(text), None, "{text}");
         }

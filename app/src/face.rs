@@ -26,10 +26,16 @@ const INTER: [&[u8]; 4] = [
 #[cfg(not(target_os = "macos"))]
 pub fn register(cx: &mut App) {
     let start = std::time::Instant::now();
-    let faces = INTER.iter().map(|face| std::borrow::Cow::Borrowed(*face)).collect();
+    let faces = INTER
+        .iter()
+        .map(|face| std::borrow::Cow::Borrowed(*face))
+        .collect();
     match cx.text_system().add_fonts(faces) {
         // What the face costs the launch.
-        Ok(()) => log!("browser: ui face in {:.2} ms", start.elapsed().as_secs_f64() * 1000.),
+        Ok(()) => log!(
+            "browser: ui face in {:.2} ms",
+            start.elapsed().as_secs_f64() * 1000.
+        ),
         Err(error) => log!("couldn't register the ui face: {error}"),
     }
 }
