@@ -1875,12 +1875,8 @@ impl Agents {
         cx: &mut Context<Self>,
     ) {
         let answer = match closed {
-            Closed::Closed if discarded => Ok(format!(
-                "Closed tab {tab} without saving. The user can still find it in the archive."
-            )),
-            Closed::Closed => {
-                Ok(format!("Closed tab {tab}. The user can still find it in the archive."))
-            }
+            Closed::Closed if discarded => Ok(format!("Closed tab {tab} without saving.")),
+            Closed::Closed => Ok(format!("Closed tab {tab}.")),
             Closed::Pinned => Err(format!("Tab {tab} stays open: the user pinned it.")),
             Closed::Asks => Err(format!(
                 "Tab {tab} stays open: its page asks before it's left, as it may have unsaved \

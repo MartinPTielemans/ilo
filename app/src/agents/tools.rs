@@ -172,7 +172,7 @@ fn shared() -> Value {
         {
             "name": "close_tab",
             "title": "Close tab",
-            "description": "Close a tab in your Space. It goes to the archive, where the user can still find it. A page that may have unsaved changes stays open unless discard is true.",
+            "description": "Close a tab in your Space. A page that may have unsaved changes stays open unless discard is true.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

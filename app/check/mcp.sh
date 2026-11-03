@@ -487,11 +487,11 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
   case "$scrolled" in "Scrolled down."*) ;; *) fail "scroll answered: $scrolled" ;; esac
   picture=$(call screenshot "{\"tab\":$opened_tab}")
   case "$picture" in "image/jpeg "[1-9]*) ;; *) fail "screenshot answered: $picture" ;; esac
-  # close_tab closes a tab of its own, which goes to the archive.
+  # close_tab closes a tab of its own.
   opened=$(call open_tab '{"url":"example.com"}')
   closing=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
   closed=$(call close_tab "{\"tab\":$closing}")
-  [ "$closed" = "Closed tab $closing. The user can still find it in the archive." ] ||
+  [ "$closed" = "Closed tab $closing." ] ||
     fail "close_tab answered: $closed"
   await_log "^browser: agent activity mcp-client $closing close_tab\$" \
     "the close didn't reach the activity log"

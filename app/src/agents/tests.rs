@@ -1293,7 +1293,7 @@ fn a_pages_passkey_hands_its_tab_to_the_user(cx: &mut TestAppContext) {
     assert_eq!(log(&agents, "claude-code", cx)[0].0, "handed back");
 }
 
-/// close_tab closes the agent's own tab, which goes to the archive, with its entry in the log.
+/// close_tab closes the agent's own tab, with its entry in the log.
 /// The user's tab, and one the user holds, are refused.
 #[gpui::test]
 fn an_agent_closes_only_its_own_tabs(cx: &mut TestAppContext) {
@@ -1308,7 +1308,7 @@ fn an_agent_closes_only_its_own_tabs(cx: &mut TestAppContext) {
     let closed = call(&agents, "claude-code", "close_tab", json!({ "tab": 20 }), cx);
     let closed = closed.recv().unwrap();
     assert!(!closed.error);
-    assert_eq!(closed.text, "Closed tab 20. The user can still find it in the archive.");
+    assert_eq!(closed.text, "Closed tab 20.");
     assert!(browser.tabs.borrow().iter().all(|tab| tab.0 != 20));
     let entry = log(&agents, "claude-code", cx).remove(0);
     assert_eq!(entry, ("close_tab".into(), "example.com".into(), "".into()));
@@ -1337,7 +1337,7 @@ fn an_agent_discards_only_a_page_it_opened(cx: &mut TestAppContext) {
     let discard = json!({ "tab": 30, "discard": true });
     let closed = call(&agents, "claude-code", "close_tab", discard, cx).recv().unwrap();
     assert!(!closed.error);
-    assert!(closed.text.starts_with("Closed tab 30 without saving."), "{}", closed.text);
+    assert_eq!(closed.text, "Closed tab 30 without saving.");
     assert!(browser.tabs.borrow().iter().all(|tab| tab.0 != 30));
     let entry = log(&agents, "claude-code", cx).remove(0);
     assert_eq!(entry, ("discard_tab".into(), "docs.example".into(), "".into()));
@@ -1368,7 +1368,7 @@ fn discarding_a_page_the_user_gave_asks_them(cx: &mut TestAppContext) {
     let question = browser.asked.borrow().clone().expect("the discard didn't ask again");
     agents.update(cx, |agents, cx| agents.answer(question.id, Answer::Once, cx));
     let closed = closed.recv().unwrap();
-    assert!(closed.text.starts_with("Closed tab 10 without saving."), "{}", closed.text);
+    assert_eq!(closed.text, "Closed tab 10 without saving.");
     assert!(browser.tabs.borrow().iter().all(|tab| tab.0 != 10));
     let entry = log(&agents, "claude-code", cx).remove(0);
     assert_eq!(entry, ("discard_tab".into(), "en.wikipedia.org".into(), "".into()));
