@@ -437,9 +437,18 @@ else
   printf 'otherwise\t1\n' > "$rules_file"
 fi
 # The sidebar's picture, which the launches below show until their UI has drawn.
-quit_by_key
 mac=
 [ "$(uname)" = Darwin ] && mac=1
+if [ -n "$mac" ]; then
+  # A window the screen has less room for at the next launch opens smaller, with no picture of
+  # that size. One filling the hosted Mac's 1024 by 768 screen opened 2 or 3 points shorter
+  # whenever the Dock had grown since (#1528), so the window quits well inside the screen.
+  send screen
+  corner=$(grep '^browser: screen at ' "$log" | tail -1 | cut -d' ' -f4,5)
+  send place $((${corner% *} + 40)) $((${corner#* } + 60)) 900 560
+  expect '^browser: drawn at 900x560$' "the window didn't draw at 900 by 560"
+fi
+quit_by_key
 [ -z "$mac" ] || grep -q '^browser: launch picture taken$' "$log" ||
   fail "⌘Q didn't keep the sidebar's picture for the next launch"
 exited
@@ -489,14 +498,21 @@ quit_launched() {
 at() {
   grep -m1 "^browser: $1 at " "$log" | sed 's/.* at \([0-9.]*\) ms$/\1/'
 }
+# On the Mac, fails with $1 unless the launch showed the sidebar's picture, which it leaves out
+# when it opens at another size than the picture's, so the failure names both.
+pictured() {
+  [ -z "$mac" ] || grep -q '^browser: launch picture shown$' "$log" || {
+    kept=$(ls "$(dirname "$saved")" | grep '^launch-picture-' | tr '\n' ' ')
+    fail "$1: it opened at $(grep -m1 '^browser: launch window frame ' "$log" | cut -d' ' -f5-), the pictures kept being ${kept:-none}"
+  }
+}
 
 launch "$out/links-plain.log"
 await '^browser: restored in ' || fail "the Spaces didn't come back"
 if [ "$driven" = 1 ]; then
   await '^browser: link rules read 1$' || fail "the link rule didn't come back with the launch"
 fi
-[ -z "$mac" ] || grep -q '^browser: launch picture shown$' "$log" ||
-  fail "the launch without a link didn't show the sidebar's picture"
+pictured "the launch without a link didn't show the sidebar's picture"
 plain="launch window $(at 'launch window') ms, started $(at 'started') ms, first frame $(at 'first frame') ms, UI shown $(at 'UI shown') ms"
 quit_launched
 
@@ -505,8 +521,7 @@ quit_launched
 # frame can come before the link, under the picture.
 launch "$out/links-cold.log" "${site}?cold"
 await '^browser: restored in ' || fail "the Spaces didn't come back under the link"
-[ -z "$mac" ] || grep -q '^browser: launch picture shown$' "$log" ||
-  fail "the launch by a link didn't show the sidebar's picture"
+pictured "the launch by a link didn't show the sidebar's picture"
 await "$(link_line "?cold" "[0-9]*" "[0-9]*")" || fail "the link that launched the browser didn't open"
 tab=$(grep "$(link_line "?cold" "[0-9]*" "[0-9]*")" "$log" | sed 's/.*: tab \([0-9]*\) .*/\1/')
 await "^browser: loaded $tab ${site}?cold\$" || fail "the link that launched the browser didn't load"
