@@ -60,15 +60,11 @@ bool IsBlock(ax::mojom::Role role) {
 }
 
 // A field the user types, picks or has filled in, whose value is theirs, as autofill's is: a text
-// field or text area of any kind, a plain-text editable region, a select, and a date, time, number
-// or colour input. Its subtree too, where Chromium puts the text typed into it. A rich-text region,
-// such as a document being edited, is the page's content: autofill never fills one, and it's what
-// an agent works on.
+// field or text area of any kind, an editable region such as a mail's body, a select, and a date,
+// time, number or colour input. Its subtree too, where Chromium puts the text typed into it.
 bool IsField(const ui::AXNodeData& node) {
-  if (node.HasState(ax::mojom::State::kRichlyEditable)) {
-    return false;
-  }
-  if (node.IsTextField() || node.HasState(ax::mojom::State::kEditable)) {
+  if (node.IsTextField() || node.HasState(ax::mojom::State::kEditable) ||
+      node.HasState(ax::mojom::State::kRichlyEditable)) {
     return true;
   }
   switch (node.role) {
