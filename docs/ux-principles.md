@@ -36,7 +36,7 @@ Each principle has what was **seen**, with the spec section it comes from, our *
 
 ## Wait for intent before acting
 
-- **Seen.** The reveal waits about 100 ms after the pointer reaches the window's edge, so a pointer passing on its way to another display leaves it shut. A swipe let go short of halfway goes back. The New Space pull makes a Space only if it's let go once readied, which a glow and a click on the trackpad announce (Spaces › Switching). A dragged row's neighbours stay put while it's held, and a line marks the gap it would drop into; the rows move only once it's let go (Tab rows › Reorder).
+- **Seen.** The reveal waits about 100 ms after the pointer reaches the window's edge, so a pointer passing on its way to another display leaves it shut. A swipe let go short of halfway goes back. The New Space pull makes a Space only if it's let go once readied, which a glow and a click on the trackpad announce (Spaces › Switching). A dragged row's neighbours stay put while it's held, and a line marks the gap it would drop into; the rows move only once it's let go (Tab rows › Reorder). The link target shows a long address whole only after the pointer has rested on its link for 1.5 s, by Arc's release notes (Link target).
 - **Reading.** An accidental trigger costs more than a short wait or a threshold. And a list that rearranges while the pointer aims moves the target it's aiming at, so every row passed on the way costs a reflow and a second look.
 - **Applies.** A gesture or a hover that opens something gets a threshold, and a visible, felt ready state before it commits. While something is dragged, what the drop would change is marked where it would happen, not done: the change runs once it's let go.
 

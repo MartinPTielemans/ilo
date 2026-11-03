@@ -438,6 +438,12 @@ Dia's New Tab page isn't ours (decision 6). ⌘T opens the command bar over the 
 | [x] | HUD | MVP | the percent over the card's top right until another tab shows; nothing in the URL field | Arc 1.170.0 cap |
 | [x] | HUD look and timing | MVP | a pill in the toast's style, 41.5 tall, 8 inside the card; pops in from 0.4, dips to 0.45 for a change, shrinks out; 5 s after the last zoom *interim*, Arc's ≥ 4.9 s | Arc 1.170 rec |
 
+## Link target
+
+| Done | Item | Phase | Target | Source |
+|---|---|---|---|---|
+| [ ] | The whole address after resting on a link | MVP | after 1.5 s on the same link, a cut address shows whole, up to the card's width inside the plate's margins and 1200; the plate snaps wider in its corner and stays whole for the next links while it shows. Built, and checked by `cargo test`'s `shell::link_target` tests. To tick: a run resting on a link longer than half the card, which the served page of `check/site.sh` doesn't have yet, and its capture | Arc release notes and help |
+
 ## DevTools
 
 | Done | Item | Phase | Target | Source |

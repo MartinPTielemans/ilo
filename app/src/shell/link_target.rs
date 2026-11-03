@@ -1,12 +1,12 @@
 //! The link target's plate on the shell: which page it's for, when it goes, and which corner of
 //! the card it's in, on a host that records what the shell asks.
 
-use std::rc::Rc;
+use std::{rc::Rc, time::Duration};
 
 use gpui::{Entity, TestAppContext, VisualTestContext, point, px, size};
 
 use crate::{
-    link_target::Target,
+    link_target::{Target, WHOLE_AFTER},
     shell::{Folders, Shell, recorder::Recorder},
 };
 
@@ -30,9 +30,21 @@ fn target() -> Target {
     Target { text: "example.com/docs".into(), domain: 0..11 }
 }
 
+/// An address of `path` repeated, too long for half the card, which the whole card holds.
+fn long(path: &str) -> Target {
+    Target { text: format!("example.com/{}", path.repeat(16)).into(), domain: 0..11 }
+}
+
 /// What the shell asked of the plate since the last time.
 fn plates(host: &Recorder) -> Vec<String> {
     host.take().into_iter().filter(|call| call.starts_with("link target")).collect()
+}
+
+/// What the shell asked of the plate in the next `time`.
+fn after(cx: &mut VisualTestContext, host: &Recorder, time: Duration) -> Vec<String> {
+    cx.executor().advance_clock(time);
+    cx.run_until_parked();
+    plates(host)
 }
 
 #[gpui::test]
@@ -122,4 +134,66 @@ fn a_new_link_keeps_the_side_and_leaving_it_forgets_it(cx: &mut TestAppContext) 
     shell.update(cx, |shell, cx| shell.link_target_changed(10, Some(target()), cx));
     let calls = plates(&host);
     assert_eq!(calls.last().map(String::as_str), Some("link target example.com/docs left"));
+}
+
+#[gpui::test]
+fn resting_on_a_link_shows_its_whole_address(cx: &mut TestAppContext) {
+    let (shell, host, cx) = window(cx);
+    let link = long("docs/");
+    shell.update(cx, |shell, cx| shell.link_target_changed(10, Some(link.clone()), cx));
+    let cut = plates(&host);
+    assert_eq!(cut.len(), 1);
+    assert!(cut[0].contains('…'), "the long address fit half the card: {}", cut[0]);
+    let rest = host.link_frame.get().expect("the plate has a place");
+
+    assert!(after(cx, &host, WHOLE_AFTER - Duration::from_millis(1)).is_empty());
+    let grown = after(cx, &host, Duration::from_millis(1));
+    assert_eq!(grown, [format!("link target {} left", link.text)]);
+    let whole = host.link_frame.get().expect("the plate has a place");
+    assert!(whole.size.width > rest.size.width, "the plate didn't grow");
+    assert_eq!(whole.left(), rest.left(), "the plate left its corner");
+    // Once is all.
+    assert!(after(cx, &host, WHOLE_AFTER).is_empty());
+}
+
+#[gpui::test]
+fn leaving_the_link_ends_the_wait(cx: &mut TestAppContext) {
+    let (shell, host, cx) = window(cx);
+    shell.update(cx, |shell, cx| shell.link_target_changed(10, Some(long("docs/")), cx));
+    after(cx, &host, WHOLE_AFTER / 2);
+    shell.update(cx, |shell, cx| shell.link_target_changed(10, None, cx));
+    assert_eq!(after(cx, &host, WHOLE_AFTER), ["link target none"]);
+    // The next link waits again from its start.
+    shell.update(cx, |shell, cx| shell.link_target_changed(10, Some(long("docs/")), cx));
+    assert!(plates(&host)[0].contains('…'));
+    assert!(after(cx, &host, WHOLE_AFTER / 2).is_empty());
+    assert_eq!(after(cx, &host, WHOLE_AFTER / 2).len(), 1);
+}
+
+#[gpui::test]
+fn the_same_link_again_keeps_its_wait_and_another_starts_one(cx: &mut TestAppContext) {
+    let (shell, host, cx) = window(cx);
+    shell.update(cx, |shell, cx| shell.link_target_changed(10, Some(long("docs/")), cx));
+    after(cx, &host, WHOLE_AFTER / 2);
+    shell.update(cx, |shell, cx| shell.link_target_changed(10, Some(long("docs/")), cx));
+    plates(&host);
+    let whole = after(cx, &host, WHOLE_AFTER / 2);
+    assert!(whole.len() == 1 && !whole[0].contains('…'), "{whole:?}");
+
+    // While it shows, the next link has its whole address at once, as Chrome's status bubble does.
+    let next = long("api/");
+    shell.update(cx, |shell, cx| shell.link_target_changed(10, Some(next.clone()), cx));
+    assert_eq!(plates(&host), [format!("link target {} left", next.text)]);
+    assert!(after(cx, &host, WHOLE_AFTER).is_empty());
+}
+
+#[gpui::test]
+fn a_link_that_fits_waits_for_nothing(cx: &mut TestAppContext) {
+    let (shell, host, cx) = window(cx);
+    shell.update(cx, |shell, cx| shell.link_target_changed(10, Some(target()), cx));
+    plates(&host);
+    assert!(after(cx, &host, WHOLE_AFTER).is_empty());
+    // It's no whole plate either: the next long link starts cut.
+    shell.update(cx, |shell, cx| shell.link_target_changed(10, Some(long("docs/")), cx));
+    assert!(plates(&host)[0].contains('…'));
 }
