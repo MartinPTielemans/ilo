@@ -44,7 +44,7 @@ struct State {
     over: bool,
 }
 
-fn main() {
+fn main()   {   
     let args: Vec<String> = std::env::args().skip(1).collect();
     let extent = args.first().and_then(|size| {
         let (width, height) = size.split_once('x')?;
