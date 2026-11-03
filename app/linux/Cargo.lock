@@ -630,13 +630,11 @@ dependencies = [
 
 [[package]]
 name = "browser"
-version = "0.1.4"
+version = "0.0.1"
 dependencies = [
  "async-io",
- "base64 0.22.1",
  "bindgen",
  "cc",
- "chrono",
  "emojis",
  "futures",
  "futures-lite",
@@ -647,12 +645,10 @@ dependencies = [
  "gpui_platform",
  "gpui_windows",
  "image",
- "libc",
  "plist",
  "raw-window-handle",
  "rusqlite",
  "serde_json",
- "unicode-properties",
  "unicode-segmentation",
  "wayland-client",
  "wayland-protocols-misc",
