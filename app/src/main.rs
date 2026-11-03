@@ -3535,11 +3535,12 @@ impl Browser for Engine {
     fn command_bar(
         &self,
         editing: Option<(u64, SharedString)>,
+        shown: Vec<SharedString>,
         tabs: Vec<BarTab>,
         field: Option<Bounds<Pixels>>,
         cx: &mut App,
     ) {
-        with_overlays(move |cx| command_bar::show(editing, tabs, field, cx), cx);
+        with_overlays(move |cx| command_bar::show(editing, shown, tabs, field, cx), cx);
     }
 
     fn search_tabs(&self, tabs: Vec<BarTab>, cx: &mut App) {
