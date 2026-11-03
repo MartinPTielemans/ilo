@@ -415,6 +415,9 @@ row-x = 8.0
 # A line between groups: 1 pt in the middle of this, 8 in from the rows' text.
 line = 9.0
 text = 13.0
+# A heading over the items after it, such as a split's Tab Options, in the secondary ink and
+# semibold, as AppKit's section headers are.
+header-text = 11.0
 # Between the check, the title and what trails it.
 gap = 6.0
 check = 12.0

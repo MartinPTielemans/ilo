@@ -167,6 +167,8 @@ pub(super) struct Recorder {
     pub(super) names: RefCell<HashMap<u64, String>>,
     /// The words of the toasts with no Undo button it was asked to show.
     pub(super) toasts: RefCell<Vec<String>>,
+    /// The tabs it was asked to close with the rest of their split view.
+    pub(super) split_closes: RefCell<Vec<u64>>,
     /// The words of the toasts with an Undo button it was asked to show, and what the last one's
     /// button does.
     pub(super) undo_toasts: RefCell<Vec<String>>,
@@ -282,7 +284,10 @@ impl Browser for Recorder {
         self.record(format!("select {tab}"))
     }
 
-    fn close(&self, tab: u64, _: bool, _: &mut App) {
+    fn close(&self, tab: u64, split: bool, _: &mut App) {
+        if split {
+            self.split_closes.borrow_mut().push(tab);
+        }
         self.edit(format!("close {tab}"));
         self.record(format!("close {tab}"))
     }
