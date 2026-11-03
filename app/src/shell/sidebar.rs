@@ -1166,6 +1166,36 @@ mod tests {
         assert!(!foot, "rows that fit brought the foot's edge");
     }
 
+    /// Wheel ticks of a fraction of a line, as Windows' are, scrolled down and back leave the list
+    /// a rounding error off its top, which is its top: the edge under the favorites goes.
+    #[gpui::test]
+    fn the_list_back_at_its_top_hides_its_edge_after_fractional_ticks(cx: &mut TestAppContext) {
+        let (shell, cx) = list_shell((10..30).collect(), cx);
+        let tick = 26. * (12. / 120. * 3.);
+        let mut offset = 0f32;
+        for _ in 0..5 {
+            offset -= tick;
+        }
+        shell.update(cx, |shell, _| {
+            shell.list_scroll.set_offset(point(px(0.), px(offset)))
+        });
+        draw(&shell, cx);
+        draw(&shell, cx);
+        let top = shell.read_with(cx, |shell, _| shell.top_edge.shown);
+        assert!(top, "the list scrolled down showed no edge");
+        for _ in 0..5 {
+            offset += tick;
+        }
+        assert!(offset < 0., "the ticks summed back to the top exactly");
+        shell.update(cx, |shell, _| {
+            shell.list_scroll.set_offset(point(px(0.), px(offset)))
+        });
+        draw(&shell, cx);
+        draw(&shell, cx);
+        let top = shell.read_with(cx, |shell, _| shell.top_edge.shown);
+        assert!(!top, "the list {offset} off its top kept its edge");
+    }
+
     /// The list glides to the row of a tab shown under its foot, and a scroll of the user's on the
     /// way ends the glide where the user has it.
     #[gpui::test]

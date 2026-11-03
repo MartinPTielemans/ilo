@@ -8,7 +8,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -52,13 +52,12 @@ impl Cli {
         }
     }
 
-    /// Its executable's file name. npm puts a .cmd shim on Windows, as clients.rs runs it.
+    /// Its executable's name, which on Windows takes PATHEXT's extensions: claude.exe from Claude
+    /// Code's installer, or npm's claude.cmd (ready.rs).
     pub fn program(self) -> &'static str {
-        match (self, cfg!(windows)) {
-            (Cli::Claude, false) => "claude",
-            (Cli::Claude, true) => "claude.cmd",
-            (Cli::Codex, false) => "codex",
-            (Cli::Codex, true) => "codex.cmd",
+        match self {
+            Cli::Claude => "claude",
+            Cli::Codex => "codex",
         }
     }
 
@@ -175,12 +174,16 @@ impl Process {
         events: UnboundedSender<Event>,
     ) -> std::io::Result<Process> {
         std::fs::create_dir_all(&launch.dir)?;
-        let mut command = Command::new(&launch.program);
+        let mut command = crate::child::command(&launch.program);
         match launch.cli {
             Cli::Claude => {
                 super::clients::write_private(
                     &launch.config,
                     claude_config(&launch.server).as_bytes(),
+                )?;
+                super::clients::write_private(
+                    &instructions_file(launch),
+                    launch.instructions.as_bytes(),
                 )?;
                 command.args(claude_args(launch));
             }
@@ -345,6 +348,13 @@ fn keep_tail(mut from: impl Read, said: &Mutex<String>) {
     }
 }
 
+/// Where Claude reads what it's told about working in the browser, beside its MCP config: a file,
+/// as the text has paragraphs, and Windows starts no npm claude.cmd with a line break in an
+/// argument (#1676).
+pub fn instructions_file(launch: &Launch) -> PathBuf {
+    launch.config.with_extension("md")
+}
+
 /// Claude's MCP config: the browser's server alone.
 pub fn claude_config(server: &Server) -> String {
     let mut env = serde_json::Map::new();
@@ -413,7 +423,10 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
     if let Some(model) = launch.model.as_ref().filter(|model| !model.is_empty()) {
         args.extend(["--model".into(), model.clone()]);
     }
-    args.extend(["--append-system-prompt".into(), launch.instructions.clone()]);
+    args.extend([
+        "--append-system-prompt-file".into(),
+        instructions_file(launch).to_string_lossy().into_owned(),
+    ]);
     args
 }
 
