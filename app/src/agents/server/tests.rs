@@ -137,7 +137,10 @@ fn the_pipe_is_the_servers_alone() {
     let (events, _second) = futures::channel::mpsc::unbounded();
     assert!(Server::start(&path, Tokens::default(), events).is_err());
     drop(server);
-    assert!(connect(&path).is_err(), "the pipe stayed once the server stopped");
+    assert!(
+        connect(&path).is_err(),
+        "the pipe stayed once the server stopped"
+    );
     let (events, _again) = futures::channel::mpsc::unbounded();
     let again = Server::start(&path, Tokens::default(), events).unwrap();
     assert!(connect(again.path()).is_ok());
@@ -225,7 +228,8 @@ fn the_server_answers_what_needs_no_browser() {
             "scroll",
             "screenshot",
             "run_steps",
-            "hand_off", "ask_for_tab"
+            "hand_off",
+            "ask_for_tab"
         ]
     );
     assert_eq!(list["id"], "a");
@@ -456,7 +460,10 @@ fn send_call(writer: &mut Stream, id: u64, tool: &str, arguments: Value) {
 }
 
 fn answered(answers: &mpsc::Receiver<Value>) -> Value {
-    answers.recv_timeout(std::time::Duration::from_secs(1)).expect("an answer")["id"].clone()
+    answers
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("an answer")["id"]
+        .clone()
 }
 
 /// A page slow to answer holds only its own tab: the call on the next tab reaches the UI and is
@@ -474,7 +481,10 @@ fn a_slow_call_on_one_tab_holds_no_other_tab() {
     ];
     calls.sort_by_key(|call| call.arguments["tab"].as_u64());
     let [slow, quick] = calls;
-    let tabs = (slow.arguments["tab"].clone(), quick.arguments["tab"].clone());
+    let tabs = (
+        slow.arguments["tab"].clone(),
+        quick.arguments["tab"].clone(),
+    );
     assert_eq!(tabs, (json!(1), json!(2)));
     quick.reply.send(ToolResult::text("Clicked.")).unwrap();
     assert_eq!(answered(&answers), 3);
@@ -489,16 +499,27 @@ fn a_tabs_calls_keep_their_order() {
     let (server, _, mut handed) = server();
     let (mut writer, answers) = session(&server, &mut handed);
     send_call(&mut writer, 2, "click", json!({ "tab": 1, "ref": "e1" }));
-    send_call(&mut writer, 3, "type", json!({ "tab": 1, "ref": "e2", "text": "Closed" }));
+    send_call(
+        &mut writer,
+        3,
+        "type",
+        json!({ "tab": 1, "ref": "e2", "text": "Closed" }),
+    );
     send_call(&mut writer, 4, "press_key", json!({ "key": "Enter" }));
     let first = next_call(&mut handed).expect("the first call");
     assert_eq!(first.tool, "click");
-    assert!(no_call(&mut handed), "a call went before the one ahead of it");
+    assert!(
+        no_call(&mut handed),
+        "a call went before the one ahead of it"
+    );
     first.reply.send(ToolResult::text("Clicked.")).unwrap();
     assert_eq!(answered(&answers), 2);
     let second = next_call(&mut handed).expect("the second call");
     assert_eq!(second.tool, "type");
-    assert!(no_call(&mut handed), "the call with no tab went before tab 1's");
+    assert!(
+        no_call(&mut handed),
+        "the call with no tab went before tab 1's"
+    );
     second.reply.send(ToolResult::text("Typed.")).unwrap();
     assert_eq!(answered(&answers), 3);
     let last = next_call(&mut handed).expect("the call with no tab");
@@ -511,8 +532,18 @@ fn a_tabs_calls_keep_their_order() {
 fn asks_come_one_at_a_time() {
     let (server, _, mut handed) = server();
     let (mut writer, answers) = session(&server, &mut handed);
-    send_call(&mut writer, 2, "hand_off", json!({ "tab": 1, "reason": "Sign in" }));
-    send_call(&mut writer, 3, "hand_off", json!({ "tab": 2, "reason": "Sign in" }));
+    send_call(
+        &mut writer,
+        2,
+        "hand_off",
+        json!({ "tab": 1, "reason": "Sign in" }),
+    );
+    send_call(
+        &mut writer,
+        3,
+        "hand_off",
+        json!({ "tab": 2, "reason": "Sign in" }),
+    );
     send_call(&mut writer, 4, "click", json!({ "tab": 3, "ref": "e1" }));
     // The first ask and tab 3's call go at once, so either can reach the UI first.
     let first = next_call(&mut handed).expect("the first hand_off or tab 3's call");
@@ -521,7 +552,10 @@ fn asks_come_one_at_a_time() {
         "click" => (second, first),
         _ => (first, second),
     };
-    assert_eq!((asking.tool.as_str(), asking.arguments["tab"].clone()), ("hand_off", json!(1)));
+    assert_eq!(
+        (asking.tool.as_str(), asking.arguments["tab"].clone()),
+        ("hand_off", json!(1))
+    );
     assert_eq!(click.tool, "click", "two asks at once");
     assert!(no_call(&mut handed), "two asks at once");
     click.reply.send(ToolResult::text("Clicked.")).unwrap();
