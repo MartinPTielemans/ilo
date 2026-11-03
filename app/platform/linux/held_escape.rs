@@ -67,7 +67,10 @@ fn pressed() {
         let views: Vec<u32> =
             WINDOWS.with_borrow(|all| all.iter().map(|w| w.ui_view as usize as u32).collect());
         for view in views {
-            let tree = connection.query_tree(view).ok().and_then(|c| c.reply().ok());
+            let tree = connection
+                .query_tree(view)
+                .ok()
+                .and_then(|c| c.reply().ok());
             if let Some(tree) = tree {
                 windows.push(tree.parent);
                 within(connection, tree.parent, &mut windows);
@@ -80,7 +83,11 @@ fn pressed() {
 }
 
 fn within(connection: &RustConnection, window: xproto::Window, windows: &mut Vec<xproto::Window>) {
-    let Some(tree) = connection.query_tree(window).ok().and_then(|c| c.reply().ok()) else {
+    let Some(tree) = connection
+        .query_tree(window)
+        .ok()
+        .and_then(|c| c.reply().ok())
+    else {
         return;
     };
     for child in tree.children {
@@ -131,7 +138,9 @@ fn connect() -> Option<(RustConnection, xproto::Keycode)> {
     let (connection, _) = x11rb::connect(None).ok()?;
     // The X server sends a release before each repeat unless the client asks it not to, as
     // Chromium and GPUI do.
-    connection.extension_information(xkb::X11_EXTENSION_NAME).ok()??;
+    connection
+        .extension_information(xkb::X11_EXTENSION_NAME)
+        .ok()??;
     connection.xkb_use_extension(1, 0).ok()?.reply().ok()?;
     let detectable = xkb::PerClientFlag::DETECTABLE_AUTO_REPEAT;
     let flags = connection.xkb_per_client_flags(
@@ -145,7 +154,11 @@ fn connect() -> Option<(RustConnection, xproto::Keycode)> {
     flags.ok()?.reply().ok()?;
     let setup = connection.setup();
     let (first, count) = (setup.min_keycode, setup.max_keycode - setup.min_keycode + 1);
-    let map = connection.get_keyboard_mapping(first, count).ok()?.reply().ok()?;
+    let map = connection
+        .get_keyboard_mapping(first, count)
+        .ok()?
+        .reply()
+        .ok()?;
     let per = usize::from(map.keysyms_per_keycode);
     let index = map.keysyms.iter().position(|&keysym| keysym == ESCAPE)?;
     let escape = first + u8::try_from(index / per).ok()?;

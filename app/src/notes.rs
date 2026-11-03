@@ -18,7 +18,10 @@ const DEFAULT: usize = 1;
 /// The index in `SERVICES` of the service the profile keeps as `kept`, or the default's for none
 /// or one this build doesn't know.
 pub fn service(kept: &str) -> usize {
-    SERVICES.iter().position(|&(name, _, _)| name == kept).unwrap_or(DEFAULT)
+    SERVICES
+        .iter()
+        .position(|&(name, _, _)| name == kept)
+        .unwrap_or(DEFAULT)
 }
 
 /// The URL New Note opens for the service the profile keeps as `kept`.
@@ -54,7 +57,10 @@ pub fn typed_new(typed: &str) -> Option<(&'static str, &'static str)> {
     if !typed.contains('.') {
         return None;
     }
-    NEW_ADDRESSES.iter().copied().find(|(address, _)| address.starts_with(typed))
+    NEW_ADDRESSES
+        .iter()
+        .copied()
+        .find(|(address, _)| address.starts_with(typed))
 }
 
 #[cfg(test)]
@@ -74,14 +80,32 @@ mod tests {
     fn a_new_address_is_named_once_typed_to_its_dot() {
         assert_eq!(typed_new("docs.new"), Some(("docs.new", "New Google Doc")));
         assert_eq!(typed_new(" Meet.N"), Some(("meet.new", "New Google Meet")));
-        assert_eq!(typed_new("linear."), Some(("linear.new", "New Linear Issue")));
-        assert_eq!(typed_new("https://figjam.new/"), Some(("figjam.new", "New FigJam Board")));
-        for typed in ["", "docs", "meet", "linear", "docs.google.com", "docs.new/x", "d.", "new"] {
+        assert_eq!(
+            typed_new("linear."),
+            Some(("linear.new", "New Linear Issue"))
+        );
+        assert_eq!(
+            typed_new("https://figjam.new/"),
+            Some(("figjam.new", "New FigJam Board"))
+        );
+        for typed in [
+            "",
+            "docs",
+            "meet",
+            "linear",
+            "docs.google.com",
+            "docs.new/x",
+            "d.",
+            "new",
+        ] {
             assert_eq!(typed_new(typed), None, "{typed:?}");
         }
         // Each address is the service's own .new, named by what it makes.
         for (address, name) in NEW_ADDRESSES {
-            assert!(address.ends_with(".new") && name.starts_with("New "), "{address}");
+            assert!(
+                address.ends_with(".new") && name.starts_with("New "),
+                "{address}"
+            );
         }
         for (_, _, url) in SERVICES {
             let address = url.strip_prefix("https://").unwrap_or(url);

@@ -51,7 +51,10 @@ pub fn uptime_ms() -> f64 {
         fn clock_gettime(clock_id: c_int, tp: *mut Timespec) -> c_int;
     }
     const CLOCK_MONOTONIC: c_int = 1;
-    let mut now = Timespec { tv_sec: 0, tv_nsec: 0 };
+    let mut now = Timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
     unsafe { clock_gettime(CLOCK_MONOTONIC, &mut now) };
     now.tv_sec as f64 * 1e3 + now.tv_nsec as f64 / 1e6
 }
@@ -106,6 +109,7 @@ pub mod link_preview;
 pub mod link_rules;
 pub mod link_target;
 pub mod little_sites;
+pub mod logging;
 pub mod menu;
 pub mod motion;
 pub mod notes;

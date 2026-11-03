@@ -19,9 +19,9 @@ mod codex;
 pub mod page;
 #[cfg(windows)]
 mod pipe;
-mod server;
 pub mod ready;
 pub mod runner;
+mod server;
 pub mod task;
 pub mod tools;
 
@@ -141,7 +141,10 @@ pub trait Browser {
     /// The tabs of `space`, in `space_tabs`' order, without their titles: what a window's menu asks
     /// for while it builds, when the window's titles can't be read.
     fn space_tab_ids(&self, space: u64, cx: &App) -> Vec<u64> {
-        self.space_tabs(space, cx).into_iter().map(|tab| tab.id).collect()
+        self.space_tabs(space, cx)
+            .into_iter()
+            .map(|tab| tab.id)
+            .collect()
     }
     /// The tabs of `agent`'s own Space, in `space_tabs`' order, as the core lists them
     /// (bc_agent_list_tabs): it finds the Space, so no other Space's tabs are ever listed.
@@ -527,7 +530,10 @@ impl Agents {
         socket: PathBuf,
         bridge: Vec<String>,
     ) -> Self {
-        let dir = path.as_ref().and_then(|path| path.parent()).map(PathBuf::from);
+        let dir = path
+            .as_ref()
+            .and_then(|path| path.parent())
+            .map(PathBuf::from);
         Agents {
             browser,
             clients,
@@ -557,7 +563,10 @@ impl Agents {
             held: HashMap::new(),
             runs: Vec::new(),
             stepping: None,
-            tasks: task::Tasks { dir, ..Default::default() },
+            tasks: task::Tasks {
+                dir,
+                ..Default::default()
+            },
         }
     }
 
@@ -577,7 +586,11 @@ impl Agents {
             })
             .collect();
         self.tokens_changed();
-        let grants = saved.get("grants").and_then(Value::as_object).into_iter().flatten();
+        let grants = saved
+            .get("grants")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten();
         self.grants = (grants.filter_map(|(agent, sites)| {
             let sites = (sites.as_object()?.iter())
                 .filter_map(|(site, grant)| match grant.as_str()? {
@@ -590,13 +603,24 @@ impl Agents {
         }))
         .collect();
         let tasks = saved.get("tasks").unwrap_or(&Value::Null);
-        self.tasks.default = tasks.get("default").and_then(Value::as_str).and_then(runner::Cli::from_id);
-        let models = tasks.get("models").and_then(Value::as_object).into_iter().flatten();
+        self.tasks.default = tasks
+            .get("default")
+            .and_then(Value::as_str)
+            .and_then(runner::Cli::from_id);
+        let models = tasks
+            .get("models")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten();
         self.tasks.models = (models.filter_map(|(cli, model)| {
             Some((runner::Cli::from_id(cli)?, model.as_str()?.to_string()))
         }))
         .collect();
-        let found = tasks.get("found").and_then(Value::as_object).into_iter().flatten();
+        let found = tasks
+            .get("found")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten();
         self.tasks.found = (found.filter_map(|(cli, found)| {
             Some((runner::Cli::from_id(cli)?, ready::Found::from_saved(found)))
         }))
@@ -650,7 +674,10 @@ impl Agents {
         match missing {
             [] => "Any MCP client".into(),
             [one] => format!("Any MCP client. {one} isn't on this computer."),
-            _ => format!("Any MCP client. {} aren't on this computer.", missing.join(" and ")),
+            _ => format!(
+                "Any MCP client. {} aren't on this computer.",
+                missing.join(" and ")
+            ),
         }
     }
 
@@ -672,8 +699,9 @@ impl Agents {
     /// Looks again for the clients on this computer, as Settings › Agents shows: one installed
     /// since the last look is listed.
     pub fn look_for_clients(&mut self, cx: &mut Context<Self>) {
-        let found: Vec<Client> =
-            (Client::ALL.into_iter()).filter(|client| self.clients.found(*client)).collect();
+        let found: Vec<Client> = (Client::ALL.into_iter())
+            .filter(|client| self.clients.found(*client))
+            .collect();
         if found != self.found {
             self.found = found;
             cx.notify();
@@ -685,7 +713,9 @@ impl Agents {
     pub fn listed(&self) -> Vec<Client> {
         (Client::ALL.into_iter())
             .filter(|client| {
-                *client == Client::Other || self.found.contains(client) || self.is_connected(*client)
+                *client == Client::Other
+                    || self.found.contains(client)
+                    || self.is_connected(*client)
             })
             .collect()
     }
@@ -851,7 +881,14 @@ impl Agents {
             let question = self.next_request;
             self.next_request += 1;
             let why = PASSKEY.to_string();
-            let held = Held { agent: agent.into(), call: 0, why, question, back: None, reply: None };
+            let held = Held {
+                agent: agent.into(),
+                call: 0,
+                why,
+                question,
+                back: None,
+                reply: None,
+            };
             self.held.insert(tab, held);
         }
         if why != "disconnected" {
@@ -878,7 +915,11 @@ impl Agents {
     /// What the server's threads hand over.
     pub fn handle(&mut self, event: Event, cx: &mut Context<Self>) {
         match event {
-            Event::Hello { agent, client, connection } => {
+            Event::Hello {
+                agent,
+                client,
+                connection,
+            } => {
                 log!("browser: agent {agent} hello from {client}");
                 self.hello(&agent, &client, connection);
                 if self.live.insert(agent.clone()) {
@@ -886,7 +927,11 @@ impl Agents {
                     cx.notify();
                 }
             }
-            Event::Bye { agent, connection, last } => {
+            Event::Bye {
+                agent,
+                connection,
+                last,
+            } => {
                 self.end_session(&agent, connection, cx);
                 if last && self.live.remove(&agent) {
                     self.forget_waiting(&agent, cx);
@@ -896,16 +941,22 @@ impl Agents {
                 }
             }
             Event::Call(call) => self.call(call, cx),
-            Event::Answered { agent, id, at, error, image } => {
-                self.answered(&agent, id, at, error, image, cx)
-            }
+            Event::Answered {
+                agent,
+                id,
+                at,
+                error,
+                image,
+            } => self.answered(&agent, id, at, error, image, cx),
         }
     }
 
     fn call(&mut self, call: Call, cx: &mut Context<Self>) {
         // A token's agent is always one the user connected, or a task of theirs.
         if !self.may_call(&call.agent) {
-            _ = call.reply.send(ToolResult::error("This agent isn't connected."));
+            _ = call
+                .reply
+                .send(ToolResult::error("This agent isn't connected."));
             return;
         }
         self.trace_call(&call, cx);
@@ -1035,7 +1086,17 @@ impl Agents {
                 self.note(&agent, "run_steps", &host, "");
                 let (_, step) = mpsc::channel();
                 let (steps, done, wait) = (steps.into(), Vec::new(), None);
-                let run = Run { agent, call: id, tab, steps, done, step, reply, wait, show };
+                let run = Run {
+                    agent,
+                    call: id,
+                    tab,
+                    steps,
+                    done,
+                    step,
+                    reply,
+                    wait,
+                    show,
+                };
                 self.next_step(run, cx);
                 self.advance(cx);
             }
@@ -1043,7 +1104,11 @@ impl Agents {
                 let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {
                     return;
                 };
-                let why = arguments.get("reason").and_then(Value::as_str).unwrap_or("").trim();
+                let why = arguments
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
                 if why.is_empty() {
                     _ = reply.send(ToolResult::error(
                         "reason is what the user is to do, in a short sentence.",
@@ -1062,7 +1127,14 @@ impl Agents {
                 let question = self.next_request;
                 self.next_request += 1;
                 let why = page::clip(why, 200);
-                let held = Held { agent, call: id, why, question, back: None, reply: Some(reply) };
+                let held = Held {
+                    agent,
+                    call: id,
+                    why,
+                    question,
+                    back: None,
+                    reply: Some(reply),
+                };
                 self.held.insert(tab, held);
                 self.asked(cx);
             }
@@ -1088,7 +1160,11 @@ impl Agents {
                 let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {
                     return;
                 };
-                let why = arguments.get("reason").and_then(Value::as_str).unwrap_or("").trim();
+                let why = arguments
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
                 if why.is_empty() {
                     _ = reply.send(ToolResult::error(
                         "reason is why you need the tab, in a short sentence.",
@@ -1148,7 +1224,11 @@ impl Agents {
         let Some(step) = run.steps.pop_front() else {
             return;
         };
-        let tool = step.get("action").and_then(Value::as_str).unwrap_or_default().to_string();
+        let tool = step
+            .get("action")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         let (reply, answer) = mpsc::channel();
         run.step = answer;
         self.trace_step(&run.agent, run.call, run.tab, &step, cx);
@@ -1158,7 +1238,16 @@ impl Agents {
         let asked = self.asking.len();
         self.stepping = Some(run.agent.clone());
         let show = run.show_now();
-        self.page_tool(&run.agent.clone(), run.call, &tool, run.tab, &step, show, reply, cx);
+        self.page_tool(
+            &run.agent.clone(),
+            run.call,
+            &tool,
+            run.tab,
+            &step,
+            show,
+            reply,
+            cx,
+        );
         self.stepping = None;
         if self.asking.len() > asked {
             let Asking { act, .. } = self.asking.pop().unwrap();
@@ -1184,7 +1273,12 @@ impl Agents {
         reply: mpsc::Sender<ToolResult>,
         cx: &mut Context<Self>,
     ) {
-        let text = step.get("text").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let text = step
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
         let seconds = match step.get("seconds").and_then(Value::as_f64) {
             None if !text.is_empty() => Some(tools::WAIT),
             seconds => seconds.filter(|seconds| *seconds > 0.0 && *seconds <= tools::MAX_WAIT),
@@ -1204,9 +1298,18 @@ impl Agents {
             self.next_request += 1;
             let time = Duration::from_secs_f64(seconds);
             let until = cx.background_executor().now() + time;
-            let mut wait = Wait { id, text, seconds, until, look: None, timer: None };
+            let mut wait = Wait {
+                id,
+                text,
+                seconds,
+                until,
+                look: None,
+                timer: None,
+            };
             match wait.text.is_empty() {
-                true => (wait.look, wait.timer) = (Some(reply), Some(self.look_after(id, time, cx))),
+                true => {
+                    (wait.look, wait.timer) = (Some(reply), Some(self.look_after(id, time, cx)))
+                }
                 false => self.look(&run.agent, run.tab, reply),
             }
             run.wait = Some(wait);
@@ -1228,7 +1331,11 @@ impl Agents {
             return Some(ToolResult::text(self.answer_with(&agent, tab, note, show)));
         }
         let text = page::clip(&wait.text, 60);
-        let outline = self.outlines.get(&tab).map(page::Outline::text).unwrap_or_default();
+        let outline = self
+            .outlines
+            .get(&tab)
+            .map(page::Outline::text)
+            .unwrap_or_default();
         if outline.to_lowercase().contains(&wait.text.to_lowercase()) {
             let note = format!("“{text}” showed.");
             return Some(ToolResult::text(self.answer_with(&agent, tab, note, show)));
@@ -1237,7 +1344,9 @@ impl Agents {
         if now >= wait.until {
             // The run ends here, so with the outline as its last step's.
             let why = format!("“{text}” didn't show in {seconds} s.");
-            return Some(ToolResult::error(self.answer_with(&agent, tab, why, run.show)));
+            return Some(ToolResult::error(
+                self.answer_with(&agent, tab, why, run.show),
+            ));
         }
         let (look, answer) = mpsc::channel();
         run.step = answer;
@@ -1268,7 +1377,14 @@ impl Agents {
         let request = self.next_request;
         self.next_request += 1;
         let (note, show) = (String::new(), Show::Nothing);
-        let acting = Acting { agent: agent.into(), tab, element: 0, note, show, reply };
+        let acting = Acting {
+            agent: agent.into(),
+            tab,
+            element: 0,
+            note,
+            show,
+            reply,
+        };
         self.acting.insert(request, acting);
         self.act_in_page(agent, tab, request, PageAction::Snapshot, 0, "");
     }
@@ -1285,7 +1401,8 @@ impl Agents {
         text: &str,
     ) {
         IN_PAGE.set(true);
-        self.browser.page(agent, tab, request, action, element, text);
+        self.browser
+            .page(agent, tab, request, action, element, text);
         IN_PAGE.set(false);
     }
 
@@ -1361,7 +1478,14 @@ impl Agents {
         let question = self.next_request;
         self.next_request += 1;
         let why = String::new();
-        let held = Held { agent: agent.into(), call: 0, why, question, back: None, reply: None };
+        let held = Held {
+            agent: agent.into(),
+            call: 0,
+            why,
+            question,
+            back: None,
+            reply: None,
+        };
         self.held.insert(tab, held);
         // The core ends the agent's session there, which logs it.
         self.browser.take_back(tab, cx);
@@ -1440,7 +1564,10 @@ impl Agents {
         for (_, acting) in self.acting.extract_if(|_, acting| acting.agent == agent) {
             _ = acting.reply.send(stopped());
         }
-        for asking in self.asking.extract_if(.., |asking| asking.act.agent == agent) {
+        for asking in self
+            .asking
+            .extract_if(.., |asking| asking.act.agent == agent)
+        {
             _ = asking.act.reply.send(stopped());
         }
         for held in self.held.values_mut().filter(|held| held.agent == agent) {
@@ -1492,7 +1619,12 @@ impl Agents {
         cx: &mut Context<Self>,
     ) {
         let host = site(&self.browser.tab(tab, cx).url);
-        let string = |name: &str| arguments.get(name).and_then(Value::as_str).map(str::to_string);
+        let string = |name: &str| {
+            arguments
+                .get(name)
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        };
         let element = match string("ref") {
             Some(name) => match self.refs.get(&tab).and_then(|refs| refs.get(&name)) {
                 Some(element) => Some(element.clone()),
@@ -1576,15 +1708,24 @@ impl Agents {
             }
             "type" => {
                 let (Some(element), Some(text)) = (&element, string("text")) else {
-                    _ = act.reply.send(ToolResult::error("type needs a ref and text."));
+                    _ = act
+                        .reply
+                        .send(ToolResult::error("type needs a ref and text."));
                     return;
                 };
                 act.action = "type";
                 if element.password {
                     return self.refuse(act, &host, PASSWORDS, cx);
                 }
-                let submit = arguments.get("submit").and_then(Value::as_bool).unwrap_or(false);
-                act.page = if submit { PageAction::TypeSubmit } else { PageAction::Type };
+                let submit = arguments
+                    .get("submit")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                act.page = if submit {
+                    PageAction::TypeSubmit
+                } else {
+                    PageAction::Type
+                };
                 act.note = format!(
                     "Typed into {}{}.",
                     label(element),
@@ -1598,20 +1739,28 @@ impl Agents {
                 let key = string("key").unwrap_or_default();
                 if !page::KEYS.contains(&key.as_str()) {
                     let keys = page::KEYS.join(", ");
-                    _ = act.reply.send(ToolResult::error(format!("key is one of {keys}.")));
+                    _ = act
+                        .reply
+                        .send(ToolResult::error(format!("key is one of {keys}.")));
                     return;
                 }
                 act.action = "press_key";
                 act.page = PageAction::Key;
                 act.note = format!("Pressed {key}.");
                 act.what = format!("press Enter to send on {host}");
-                risk = (key == "Enter").then(|| page::risk(&host, "send")).flatten();
+                risk = (key == "Enter")
+                    .then(|| page::risk(&host, "send"))
+                    .flatten();
                 act.text = key;
             }
             _ => {
                 let up = string("direction").as_deref() == Some("up");
                 act.action = "scroll";
-                act.page = if up { PageAction::ScrollUp } else { PageAction::ScrollDown };
+                act.page = if up {
+                    PageAction::ScrollUp
+                } else {
+                    PageAction::ScrollDown
+                };
                 act.note = match &element {
                     Some(element) => format!("Scrolled to {}.", label(element)),
                     None => format!("Scrolled {}.", if up { "up" } else { "down" }),
@@ -1623,8 +1772,13 @@ impl Agents {
 
     /// The `url` argument as the address bar takes it, or None once the call has its error.
     fn url_argument(&self, arguments: &Value, reply: &mpsc::Sender<ToolResult>) -> Option<String> {
-        let typed = arguments.get("url").and_then(Value::as_str).unwrap_or_default();
-        let url = (!typed.trim().is_empty()).then(|| self.browser.url_for(typed)).flatten();
+        let typed = arguments
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let url = (!typed.trim().is_empty())
+            .then(|| self.browser.url_for(typed))
+            .flatten();
         if url.is_none() {
             _ = reply.send(ToolResult::error("url is a URL, or words to search for."));
         }
@@ -1637,14 +1791,24 @@ impl Agents {
         let Some(why) = why else {
             return self.run(act, cx);
         };
-        match self.grants.get(&act.agent).and_then(|sites| sites.get(&site)) {
+        match self
+            .grants
+            .get(&act.agent)
+            .and_then(|sites| sites.get(&site))
+        {
             Some(true) => return self.run(act, cx),
             Some(false) => return self.refuse(act, &site, SAID_NEVER, cx),
             None => {}
         }
         // A tab not the agent's is the core's to refuse, without a question.
         let space = self.browser.agent_space(&act.agent);
-        if act.tab != 0 && !self.browser.space_tabs(space, cx).iter().any(|tab| tab.id == act.tab) {
+        if act.tab != 0
+            && !self
+                .browser
+                .space_tabs(space, cx)
+                .iter()
+                .any(|tab| tab.id == act.tab)
+        {
             return self.run(act, cx);
         }
         let question = Question {
@@ -1658,7 +1822,12 @@ impl Agents {
         };
         self.next_request += 1;
         // check.sh reads this line.
-        log!("browser: agent {} asks {}: {}", act.agent, question.id, act.what);
+        log!(
+            "browser: agent {} asks {}: {}",
+            act.agent,
+            question.id,
+            act.what
+        );
         self.asking.push(Asking {
             question,
             site,
@@ -1669,7 +1838,11 @@ impl Agents {
 
     /// The user's answer to the question `id`.
     pub fn answer(&mut self, id: u64, answer: Answer, cx: &mut Context<Self>) {
-        let Some(at) = self.asking.iter().position(|asking| asking.question.id == id) else {
+        let Some(at) = self
+            .asking
+            .iter()
+            .position(|asking| asking.question.id == id)
+        else {
             return self.answer_back(id, answer, cx);
         };
         let Asking { site, act, .. } = self.asking.remove(at);
@@ -1689,9 +1862,10 @@ impl Agents {
 
     /// The user's answer to an agent asking for a tab back: Hand Back, or Keep, which refuses it.
     fn answer_back(&mut self, id: u64, answer: Answer, cx: &mut Context<Self>) {
-        let asked = self.held.iter().find(|(_, held)| {
-            held.question == id && held.back.is_some() && held.reply.is_some()
-        });
+        let asked = self
+            .held
+            .iter()
+            .find(|(_, held)| held.question == id && held.back.is_some() && held.reply.is_some());
         let Some((&tab, held)) = asked else {
             return;
         };
@@ -1801,7 +1975,10 @@ impl Agents {
         let answer = match why {
             SAID_NO => format!("The user said no: you can't {}. Don't try again.", act.what),
             SAID_NEVER => {
-                format!("The user said never on {site}: you can't {}. Don't try again.", act.what)
+                format!(
+                    "The user said never on {site}: you can't {}. Don't try again.",
+                    act.what
+                )
             }
             _ => why.to_string(),
         };
@@ -1851,7 +2028,14 @@ impl Agents {
         }
         let request = self.next_request;
         self.next_request += 1;
-        let acting = Acting { agent: agent.clone(), tab, element, note, show, reply };
+        let acting = Acting {
+            agent: agent.clone(),
+            tab,
+            element,
+            note,
+            show,
+            reply,
+        };
         self.acting.insert(request, acting);
         self.act_in_page(&agent, tab, request, page, element, &text);
     }
@@ -1866,7 +2050,15 @@ impl Agents {
     /// The core's answer to the action `request`: with `error`, why it couldn't; else a
     /// screenshot's JPEG in base64, or the nodes of the page's tree, which the answer outlines.
     pub fn page_done(&mut self, request: u64, text: String, error: bool, cx: &mut Context<Self>) {
-        let Some(Acting { agent, tab, note, show, reply, .. }) = self.acting.remove(&request) else {
+        let Some(Acting {
+            agent,
+            tab,
+            note,
+            show,
+            reply,
+            ..
+        }) = self.acting.remove(&request)
+        else {
             return;
         };
         if error {
@@ -1889,7 +2081,8 @@ impl Agents {
                 }
             }
             show => {
-                self.outlines.insert(tab, page::outline(&info, &nodes, refs, None));
+                self.outlines
+                    .insert(tab, page::outline(&info, &nodes, refs, None));
                 self.answer_with(&agent, tab, note, show)
             }
         };
@@ -1903,7 +2096,9 @@ impl Agents {
         let Some(outline) = self.outlines.get(&tab) else {
             return note;
         };
-        let had = (self.had.get(&tab)).filter(|(whose, _)| whose == agent).map(|(_, had)| had);
+        let had = (self.had.get(&tab))
+            .filter(|(whose, _)| whose == agent)
+            .map(|(_, had)| had);
         let page = match (show, had) {
             (Show::Nothing, _) => outline.head().to_string(),
             (Show::Changes, Some(had)) => outline.since(had),
@@ -2004,9 +2199,11 @@ impl Agents {
             steps: Vec::new(),
         };
         if self.stepping.as_deref() == Some(agent) {
-            let run = self.log.iter_mut().rev().find(|each| {
-                each.agent == agent && each.action == "run_steps"
-            });
+            let run = self
+                .log
+                .iter_mut()
+                .rev()
+                .find(|each| each.agent == agent && each.action == "run_steps");
             if let Some(run) = run {
                 return run.steps.push(entry);
             }
@@ -2085,17 +2282,18 @@ impl Agents {
             .collect();
         let grants: serde_json::Map<String, Value> = (self.grants.iter())
             .map(|(agent, sites)| {
-                let sites = (sites.iter())
-                    .map(|(site, &may)| {
-                        (site.clone(), json!(if may { "always" } else { "never" }))
-                    });
+                let sites = (sites.iter()).map(|(site, &may)| {
+                    (site.clone(), json!(if may { "always" } else { "never" }))
+                });
                 (agent.clone(), Value::Object(sites.collect()))
             })
             .collect();
-        let models: serde_json::Map<String, Value> =
-            (self.tasks.models.iter()).map(|(cli, model)| (cli.id().into(), json!(model))).collect();
-        let found: serde_json::Map<String, Value> =
-            (self.tasks.found.iter()).map(|(cli, found)| (cli.id().into(), found.saved())).collect();
+        let models: serde_json::Map<String, Value> = (self.tasks.models.iter())
+            .map(|(cli, model)| (cli.id().into(), json!(model)))
+            .collect();
+        let found: serde_json::Map<String, Value> = (self.tasks.found.iter())
+            .map(|(cli, found)| (cli.id().into(), found.saved()))
+            .collect();
         let tasks = json!({
             "default": self.tasks.default.map(runner::Cli::id),
             "models": models,
@@ -2169,7 +2367,8 @@ pub fn local_time(at: u64) -> String {
         return String::new();
     };
     let soon = time.signed_duration_since(Local::now()) < chrono::Duration::hours(20);
-    time.format(if soon { "%H:%M" } else { "%a %H:%M" }).to_string()
+    time.format(if soon { "%H:%M" } else { "%a %H:%M" })
+        .to_string()
 }
 
 /// How long ago `at` was, as the log says it.
