@@ -432,15 +432,16 @@ expect '^browser: menu shown 12 hours (default), 24 hours, 7 days (checked), 30 
 send key escape
 expect '^browser: menu closed$' "escape didn't close the second profile's times"
 ../tools/window-screenshot.sh "$pid" "$out/settings-profile-settings.png" || fail "no window to capture"
-# A double-click on a name puts it in a field, where escape leaves it and return keeps a new one.
-send doubleclickkey $(drawn "profile $work")
-expect "^browser: rename profile $work\$" "a double-click on Profile 2 didn't put it in a field"
+# Rename, or a double-click on a name, puts it in a field, where escape leaves it and return
+# keeps a new one.
+send clickkey $(drawn "rename profile $work")
+expect "^browser: rename profile $work\$" "Rename on Profile 2 didn't put its name in a field"
 send type personal
 send key escape
 expect '^browser: rename cancelled$' "escape didn't cancel the renaming"
 none_since '^browser: renamed profile' || fail "escape renamed the profile"
 send doubleclickkey $(drawn "profile $work")
-expect "^browser: rename profile $work\$" "the second double-click didn't put it in a field"
+expect "^browser: rename profile $work\$" "a double-click on Profile 2 didn't put it in a field"
 send type personal
 send key return
 expect "^browser: renamed profile $work personal\$" "return didn't rename the profile"
