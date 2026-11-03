@@ -5,8 +5,8 @@ use std::{cell::RefCell, rc::Rc};
 use gpui::{Entity, Modifiers, Pixels, Point, TestAppContext, VisualTestContext, point, px};
 
 use super::{
-    CARD_BRUSH, CARD_BRUSH_INSET, CARD_FIELD_INSET, CARD_NAME_GAP, CARD_NAME_HEIGHT, CARD_NAME_TOP,
-    CARD_SLOT, CARD_SLOT_X, CARD_WIDTH, SPACES_INSET, card_x,
+    CARD_BRUSH, CARD_BRUSH_INSET, CARD_FIELD_INSET, CARD_MORE_X, CARD_MORE_Y, CARD_NAME_GAP,
+    CARD_NAME_HEIGHT, CARD_NAME_TOP, CARD_SLOT, CARD_SLOT_X, CARD_WIDTH, SPACES_INSET, card_x,
 };
 use crate::icon_picker::{self, Recents, Subject};
 use crate::shell::{Command, Naming, Pending, Section, Shell, recorder::Recorder};
@@ -343,4 +343,27 @@ fn a_card_s_field_shows_its_plate_under_the_pointer_or_while_renamed(cx: &mut Te
     click(cx, name(0));
     move_to(cx, point(px(card_x(1) + CARD_WIDTH / 2.), px(SPACES_INSET + 150.)));
     assert_eq!(fields_shown(&shell, cx), (true, false), "the first's name typed over");
+}
+
+/// The middle of the `index`th card's •••, at its foot.
+fn more(index: usize, cx: &mut VisualTestContext) -> Point<Pixels> {
+    let height = cx.update(|window, _| window.viewport_size().height);
+    let foot = height - px(SPACES_INSET + CARD_MORE_Y);
+    point(px(card_x(index) + CARD_WIDTH - CARD_MORE_X), foot)
+}
+
+/// The ••• at a card's foot opens that Space's menu, as a right-click on the card does, and
+/// leaves the Space unshown and the Library open.
+#[gpui::test]
+fn a_card_s_more_button_opens_its_space_s_menu(cx: &mut TestAppContext) {
+    let (shell, cx, host) = library(cx);
+    let at = more(1, cx);
+    move_to(cx, at);
+    click(cx, at);
+    let menus = host.menus.borrow();
+    assert_eq!(menus.len(), 1, "no menu, or more than one");
+    assert!(menus[0].iter().any(|(title, _)| title.as_ref() == "Rename Space"), "not the Space's");
+    assert_eq!(host.menu_at.get(), Some(at), "the menu isn't at the pointer");
+    assert!(host.shown.borrow().is_empty(), "the ••• showed the Space");
+    assert!(library_open(&shell, cx), "the Library closed");
 }

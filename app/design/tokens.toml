@@ -1169,8 +1169,10 @@ card-gap = 24.0
 # Ours (*interim*, as Arc's recording never ran out of room): the section grows until the page
 # beside it would be narrower than this, and its cards scroll across past that.
 spaces-page = 400.0
-# The name's row in the card, 33 down to its middle as in Arc, with the rows 52 down.
-card-name-top = 14.0
+# The name's row in the card, 25 down to its middle, with the rows 44 down, the first one's middle
+# 64.5 down: Arc 1.170 rec, three Spaces, field 7 to 43 and the first row's middle 65, and Arc
+# 1.171's 25 and 64 (#1401). Arc 1.170.0's one-Space cap had both 8 lower.
+card-name-top = 6.0
 card-name-height = 38.0
 # The name's field across that row (*interim*, by proportion from stills of Arc 1.170's card, 240
 # wide): a plate 8 in from the card's sides and 36 tall, Ink at 0.1, at the controls' radius where
@@ -1190,6 +1192,11 @@ card-brush = 28.0
 card-brush-inset = 4.0
 card-brush-glyph = 14.0
 card-brush-color = 0.35
+# The ••• at the card's foot, which shows the Space's menu: its middle 22 in from the card's right
+# and 21.5 above its foot (Arc 1.170 rec; Arc 1.171's 21). Ours: the sidebar's ••• button, with the
+# pointer on the card, as the brush shows only with it on the field.
+card-more-x = 22.0
+card-more-y = 21.5
 plus-gap = 33.0
 plus-size = 30.0
 # Ours: the + is the Space's accent where Arc's is blue (#319), with the palette's hovered and

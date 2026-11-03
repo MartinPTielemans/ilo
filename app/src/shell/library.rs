@@ -23,6 +23,7 @@ use super::{
     Command, DRAG_START, Edit, FAVICON_SIZE, FAVICON_X, What,
     task_cards::number as task_number, FOLDER_INDENT, FOOTER_HEIGHT, FORM_TEXT, MenuEntry, NAV,
     NAV_RADIUS, NAV_SIZE, PLATE_INSET, SECONDARY, SEGMENT_FAVICON_X, Shell, Space, UNSELECTED_TITLE,
+    URL_BUTTON_GLYPH, URL_BUTTON_SIZE,
     clean_link, divider_box, favicon, file_url, folder_icon, host, SPACE_SWATCH_SHOWN,
     dashed_square,
     plate, row_box, space_icon_drawn, spring_to, split_plate, still_clear, title, Naming,
@@ -114,6 +115,7 @@ use crate::tokens::shell::library::CARD_BRUSH;
 use crate::tokens::shell::library::CARD_BRUSH_INSET;
 use crate::tokens::shell::library::CARD_BRUSH_GLYPH;
 use crate::tokens::shell::library::CARD_BRUSH_COLOR;
+use crate::tokens::shell::library::{CARD_MORE_X, CARD_MORE_Y};
 use crate::elevation::Level;
 use crate::tokens::shell::library::PLUS_GAP;
 use crate::tokens::shell::library::PLUS_SIZE;
@@ -1442,6 +1444,38 @@ impl Shell {
             }
         });
         let field = self.card_field(space, &palette, window_at(0.), cx);
+        // The ••• at the card's foot (Arc) opens the Space's menu, as the sidebar's does, with the
+        // pointer on the card. Its press stops there, so the card sees no click to pick the Space.
+        let half = URL_BUTTON_SIZE / 2.;
+        let more = div()
+            .id(("space-card-more", id))
+            .absolute()
+            .right(px(CARD_MORE_X - half))
+            .bottom(px(CARD_MORE_Y - half))
+            .size(px(URL_BUTTON_SIZE))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(NAV_RADIUS))
+            .opacity(0.)
+            .group_hover("space-card", |style| style.opacity(1.))
+            .hover(|style| style.bg(palette.plate(STATE_HOVERED)))
+            .when(self.a11y, |more| {
+                more.button_named("Edit Space").pressed_by_mouse_down(true, false)
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    shell.space_menu(id, event.position, cx)
+                }),
+            )
+            .child(
+                svg()
+                    .path("icons/ellipsis.svg")
+                    .size(px(URL_BUTTON_GLYPH))
+                    .text_color(palette.glyph(NAV)),
+            );
         div()
             .id(("space-card", id))
             .flex_none()
@@ -1481,6 +1515,7 @@ impl Shell {
             )
             .child(field)
             .child(div().children(rows))
+            .child(more)
     }
 
     /// The field across the top of a Space's card (Arc): its icon in a dashed slot, which the icon
