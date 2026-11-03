@@ -9,10 +9,12 @@ use gpui::{
 };
 
 use super::HOLD;
-use crate::shell::{
-    BACK_X, FORWARD_X, Folders, HistoryPage, NAV_SIZE, NAV_TOP, Page, RELOAD_X, Shell,
-    recorder::Recorder,
-};
+use crate::shell::{Folders, HistoryPage, NAV_SIZE, NAV_TOP, Page, Shell, recorder::Recorder};
+
+/// Back, forward and reload in the 228 pt sidebar a window starts with (Arc 1.170).
+const BACK_X: f32 = 122.;
+const FORWARD_X: f32 = 156.;
+const RELOAD_X: f32 = 190.;
 
 /// A drawn shell showing tab 10 of 10 and 11, whose page can go back but not forward.
 fn shell(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
