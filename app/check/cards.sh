@@ -123,6 +123,7 @@ send key s cmd
 expect '^browser: sidebar hidden$' "⌘S didn't hide the sidebar for the card over the sidebar out"
 send move 400 300
 send move 3 300
+send move 3 306
 expect '^browser: reveal shown$' "the pointer at the window's edge didn't bring the sidebar out"
 expect '^browser: reveal window shown$' "the sidebar out didn't come on screen"
 send move $(row 1)
