@@ -1,8 +1,8 @@
 # UX principles
 
-[ux-spec.md](ux-spec.md) says what Arc does, measured. This file says why, as far as the measurements let us read it, so we can make the calls Arc's recordings don't cover and design what Arc never had, such as agents, the same way.
+[ux-spec.md](ux-spec.md) says what Arc does, measured. This file says why, so we can make the calls Arc's recordings don't cover and design what Arc never had, such as agents, the same way.
 
-Each principle has what was **seen**, with the spec section it comes from, our **reading** of why, and how it **applies** to new work. The seen part is measured. The reading is ours, and a later recording can prove it wrong. When a new measurement fits a principle, add it to what was seen. When one contradicts a principle, rewrite the principle.
+Each principle has what was **seen**, with the spec section it comes from, our **reading** of why, and how it **applies** to new work. The seen part is measured. The reading is ours, and a later recording can prove it wrong. When a new measurement fits a principle, add it to what was seen. When one contradicts a principle, rewrite it.
 
 ## Everything has a place, and motion shows where
 
@@ -12,9 +12,9 @@ Each principle has what was **seen**, with the spec section it comes from, our *
 
 ## Under the fingers, physics; otherwise, a fixed time
 
-- **Seen.** When the fingers lift, the Space pages settle on a spring that starts at the fingers' speed, ω ≈ 33 (Motion › Space settle). While a theme picker handle, its wave or its dial is dragged, the window takes the colours every frame, with no lag behind the pointer (Themes). The sidebar reveal springs about 4 pt past its rest. A key or a click moves things on fixed curves instead: ⌘S hides the sidebar in 110 ms, and the delete dialog moves 0.275 s, ease-in-out.
+- **Seen.** When the fingers lift, the Space pages settle on a spring that starts at the fingers' speed, ω ≈ 33 (Motion › Space settle). While a theme picker handle, its wave or its dial is dragged, the window takes the colours every frame, with no lag behind the pointer (Themes). The sidebar reveal springs about 4 pt past its rest. A key or a click moves things on fixed curves instead: ⌘S hides the sidebar in 110 ms, and the delete dialog moves 0.275 s, ease-in-out. Fingers in the Library's cards scroll them and stay theirs (Library › Spaces).
 - **Reading.** A dragged thing has to keep the speed the hand gave it, or it stops feeling held. A key press gives no speed to keep, so a fixed curve is the predictable choice.
-- **Applies.** Whatever a gesture moves hands its speed to a spring when the gesture ends. Whatever a key or a click starts runs on a short fixed curve. A swipe moves one place and stops there, however far the fingers go, so the gesture that goes one Space left never overshoots (the owner, over a recording read as one swipe carrying on into the Library).
+- **Applies.** Whatever a gesture moves hands its speed to a spring when the gesture ends. Whatever a key or a click starts runs on a short fixed curve. A swipe moves one thing, however far the fingers go: one Space, never on into the Library (the owner, over a recording read as one swipe carrying on), or the list it starts in.
 
 ## One change at a time, in an order you can follow
 

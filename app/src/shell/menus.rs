@@ -6,7 +6,7 @@ use std::sync::Arc;
 use gpui::{App, Context, Hsla, Image, Pixels, Point, Rgba, SharedString, rgb};
 
 use super::{
-    AgentGrants, Command, MAX_PANES, ProfileChoice, Row, Shell, UserKeys, clean_link, files,
+    AgentGrants, Command, MAX_PANES, Page, ProfileChoice, Row, Shell, UserKeys, clean_link, files,
     commands::markdown_text,
     undo::{Prop, Value},
     user_keys,
@@ -64,6 +64,8 @@ pub struct MenuEntry {
     /// Whether it stands for a page, whose favicon goes before its title, or a globe without one.
     pub page: bool,
     pub favicon: Option<Arc<Image>>,
+    /// Whether it heads the items after it, as Arc's Tab Options does, never to be chosen.
+    pub header: bool,
 }
 
 impl MenuEntry {
@@ -95,7 +97,13 @@ impl MenuEntry {
             alternate: false,
             page: false,
             favicon: None,
+            header: false,
         }
+    }
+
+    /// A heading over the items after it, in the platform's case.
+    pub fn header(title: &'static str) -> Self {
+        MenuEntry { header: true, ..MenuEntry::new(title, false) }
     }
 
     pub fn line() -> Self {
@@ -156,7 +164,7 @@ impl Shell {
         if self.private {
             return;
         }
-        let items = self.space_items(space, cx);
+        let items = self.space_items(space, true, cx);
         self.show_menu(items, position, None, cx);
     }
 
@@ -191,7 +199,7 @@ impl Shell {
             items.push((MenuEntry::line(), Box::new(|_, _| {})));
             // Its Profile submenu's items name their parent by where it is, now further down.
             let after = items.len();
-            items.extend(self.space_items(space, cx).into_iter().map(|(entry, action)| {
+            items.extend(self.space_items(space, false, cx).into_iter().map(|(entry, action)| {
                 let parent = entry.parent.map(|parent| parent + after);
                 (MenuEntry { parent, ..entry }, action)
             }));
@@ -199,8 +207,10 @@ impl Shell {
         self.show_menu(items, position, None, cx);
     }
 
-    /// The Space's menu's items, for its name, its dot and the sidebar's empty space.
-    fn space_items(&self, space: u64, cx: &App) -> Vec<(MenuEntry, MenuAction)> {
+    /// The Space's menu's items, for its name, its dot and the sidebar's empty space, in Arc
+    /// 1.171's order. The empty space's menu leads with its own New Folder…, so `new_folder` is
+    /// false there.
+    fn space_items(&self, space: u64, new_folder: bool, cx: &App) -> Vec<(MenuEntry, MenuAction)> {
         let entry = self.spaces.iter().find(|each| each.id == space);
         let icon = entry.is_some_and(|each| has_icon(&each.icon));
         let theme = entry.is_some_and(|each| each.color.is_some() || each.theme.is_some());
@@ -213,7 +223,7 @@ impl Shell {
             items = agent;
         }
         let at = items.len();
-        items.push((MenuEntry::new("Profile", true), Box::new(|_, _| {})));
+        items.push((MenuEntry::new("Set Profile", true), Box::new(|_, _| {})));
         let mut profiles = self.profile_items(space);
         let deletes = self.delete_profile_items();
         if !deletes.is_empty() {
@@ -221,13 +231,37 @@ impl Shell {
         }
         profiles.extend(deletes);
         items.extend(profiles.into_iter().map(|(entry, action)| (entry.under(at), action)));
-        // Ours: Arc exports every Space at once, from Settings.
+        items.push((MenuEntry::line(), Box::new(|_, _| {})));
+        if new_folder {
+            let entry =
+                MenuEntry::new("New Folder…", true).shortcut(Command::NewFolder, user_keys(cx));
+            items.push((
+                entry,
+                // Into the Space it was asked in, from its dot or its Library card too.
+                Box::new(move |shell, cx| {
+                    shell.show_space(space, cx);
+                    shell.run(Command::NewFolder, "space menu", cx)
+                }),
+            ));
+            items.push((MenuEntry::line(), Box::new(|_, _| {})));
+        }
+        // Ours, where Arc shares and exports a Space into a folder: Arc exports every Space at
+        // once, from Settings.
         items.push((
             MenuEntry::new("Export as Markdown…", true),
             Box::new(move |shell, cx| {
                 // check.sh waits for this line.
                 log!("browser: command export-space via space menu");
                 shell.export_space(space, cx)
+            }),
+        ));
+        items.push((MenuEntry::line(), Box::new(|_, _| {})));
+        items.push((
+            MenuEntry::new("Manage Spaces…", true),
+            Box::new(|shell, cx| {
+                // check.sh waits for this line.
+                log!("browser: command manage-spaces via space menu");
+                shell.manage_spaces(cx)
             }),
         ));
         items.push((MenuEntry::line(), Box::new(|_, _| {})));
@@ -301,6 +335,8 @@ impl Shell {
     ) {
         let look = self.menu_look();
         self.menu_open = true;
+        // The name row says so after this if the menu is its own.
+        self.name_menu = false;
         let shell = cx.weak_entity();
         self.browser.context_menu(
             entries,
@@ -563,6 +599,8 @@ impl Shell {
             self.favorite_menu(keys, tab)
         } else if self.is_folder(tab) {
             self.folder_menu(tab)
+        } else if self.panes(tab).len() > 1 {
+            self.split_menu(keys, tab, position)
         } else if self.pinned().contains(&tab) {
             self.pinned_tab_menu(keys, tab)
         } else {
@@ -896,9 +934,6 @@ impl Shell {
             "duplicate-tab",
             Box::new(move |shell, cx| shell.duplicate_row(tab, cx)),
         ));
-        if self.panes(tab).len() > 1 {
-            items.push(separate(tab));
-        }
         self.push_add_to_folder(vec![tab], &mut items);
         // Each other Space, in the switcher's order, then the agents' it can be given to.
         let others = self.spaces_to_move_to(false);
@@ -927,14 +962,19 @@ impl Shell {
     /// Share as the system can: a submenu of its services where it lists them, as the Mac does;
     /// else one Share… that opens its share sheet, as on Windows, which lists none; else nothing,
     /// as on Linux, which has neither, so the menu never holds a Share that leads nowhere. Dimmed
-    /// for a page with no link.
+    /// for a page with no link. In the submenu of the item at `under`, if any.
     fn push_share(
         &self,
         items: &mut Vec<(MenuEntry, &'static str, MenuAction)>,
         tab: u64,
         link: &str,
         at: Point<Pixels>,
+        under: Option<usize>,
     ) {
+        let placed = |entry: MenuEntry| match under {
+            Some(parent) => entry.under(parent),
+            None => entry,
+        };
         let services = match link.is_empty() {
             true => Vec::new(),
             false => self.browser.share_services(link),
@@ -943,7 +983,7 @@ impl Shell {
             if self.browser.has_share_sheet() {
                 let (link, title) = (link.to_string(), self.title(tab));
                 items.push((
-                    MenuEntry::new("Share…", !link.is_empty()),
+                    placed(MenuEntry::new("Share…", !link.is_empty())),
                     "share",
                     Box::new(move |shell, cx| {
                         shell.browser.show_share_sheet(tab, &link, &title, at, cx)
@@ -953,7 +993,7 @@ impl Shell {
             return;
         }
         let share = items.len();
-        items.push((MenuEntry::new("Share", true), "", Box::new(|_, _| {})));
+        items.push((placed(MenuEntry::new("Share", true)), "", Box::new(|_, _| {})));
         for (at, service) in services.into_iter().enumerate() {
             let (link, title) = (link.to_string(), self.title(tab));
             items.push((
@@ -965,7 +1005,7 @@ impl Shell {
     }
 
     /// A Today tab's menu, as Arc's (docs/ux-spec.md › Tab list), with Remove Icon once it has
-    /// one and Separate from Split View in a split, ours. Arc's Customize Page… is Boosts, which
+    /// one, ours. Arc's Customize Page… is Boosts, which
     /// the browser hasn't. Each item's agent path is the core call it makes, but Copy Link's and
     /// Share's: the clipboard and the system's share services are the user's, outside the
     /// browser, so agents get neither.
@@ -976,9 +1016,7 @@ impl Shell {
         position: Point<Pixels>,
     ) -> Vec<(MenuEntry, &'static str, MenuAction)> {
         let page = self.page(tab);
-        let panes = self.panes(tab);
-        let last = panes[panes.len() - 1];
-        let below = self.today().iter().skip_while(|&&id| id != last).count() > 1;
+        let below = self.today().iter().skip_while(|&&id| id != tab).count() > 1;
         let link = clean_link(&page.url);
         let markdown = MenuEntry::new("Copy Link as Markdown", !link.is_empty())
             .shortcut(Command::CopyMarkdownLink, keys)
@@ -996,7 +1034,7 @@ impl Shell {
                 Box::new(move |shell, cx| shell.copy_link(tab, true, cx)),
             ),
         ];
-        self.push_share(&mut items, tab, &link, position);
+        self.push_share(&mut items, tab, &link, position, None);
         items.push((MenuEntry::line(), "", Box::new(|_, _| {})));
         items.push((
             MenuEntry::new("Change Icon…", true),
@@ -1011,20 +1049,7 @@ impl Shell {
             "rename-tab",
             Box::new(move |shell, cx| shell.rename_tab(tab, cx)),
         ));
-        // Dimmed while the tab is silent, as Arc's; a muted one unmutes. A split's offers it under
-        // each of its tabs' names, as Arc's does.
-        for &pane in &panes {
-            let page = self.page(pane);
-            let mute = if page.muted { "Unmute" } else { "Mute" };
-            let mut entry = MenuEntry::new(mute, page.audible || page.muted);
-            if panes.len() > 1 {
-                let name = items.len();
-                let title = self.tabs.get(&pane).map(|tab| tab.title.clone()).unwrap_or_default();
-                items.push((MenuEntry::named(title, true), "", Box::new(|_, _| {})));
-                entry = entry.under(name);
-            }
-            items.push((entry, "toggle-mute", Box::new(move |shell, cx| shell.toggle_mute(pane, cx))));
-        }
+        items.push(mute(tab, &page));
         // While a page shares another tab, as Chrome's infobar offers it on the rest.
         if page.share_instead {
             items.push((
@@ -1035,13 +1060,10 @@ impl Shell {
         }
         items.push((MenuEntry::line(), "", Box::new(|_, _| {})));
         items.push((
-            MenuEntry::new("Add Split View", panes.len() < MAX_PANES),
+            MenuEntry::new("Add Split View", true),
             "add-split",
             Box::new(move |shell, cx| shell.add_split_to(tab, cx)),
         ));
-        if panes.len() > 1 {
-            items.push(separate(tab));
-        }
         items.push((
             MenuEntry::new("Duplicate", true),
             "duplicate-tab",
@@ -1101,6 +1123,192 @@ impl Shell {
             Box::new(move |shell, cx| shell.close_tabs_below(tab, cx)),
         ));
         items
+    }
+
+    /// A split view's row's menu, from either of its pages, as Arc 1.171's: what's done to the
+    /// split, a submenu for each page under Tab Options, then what's done to the row. Arc's Share
+    /// Split View… shares a link through Arc's servers, which ilo hasn't, and it has no Pin item:
+    /// ⌘D and a drag pin and unpin the split. Change Icon… and Rename… are the page
+    /// right-clicked's, as a split keeps no icon or name of its own.
+    fn split_menu(
+        &self,
+        keys: &UserKeys,
+        tab: u64,
+        position: Point<Pixels>,
+    ) -> Vec<(MenuEntry, &'static str, MenuAction)> {
+        let panes = self.panes(tab);
+        let pinned = self.pinned().contains(&tab);
+        // Arc's closed split is a pinned one with none of its pages loaded.
+        let closed = pinned && panes.iter().all(|&pane| self.page(pane).unloaded);
+        let orientation = super::commands::orientation_title(self.stacked(tab));
+        let mut items: Vec<(MenuEntry, &'static str, MenuAction)> = vec![
+            (
+                MenuEntry::new("Separate All Tabs", true),
+                "separate-split",
+                Box::new(move |shell, cx| shell.separate_all(tab, cx)),
+            ),
+            (
+                MenuEntry::new("Add Tab…", !closed && panes.len() < MAX_PANES),
+                "add-split",
+                Box::new(move |shell, cx| shell.add_split_to(tab, cx)),
+            ),
+            (
+                MenuEntry::new(orientation, true),
+                "change-orientation",
+                Box::new(move |shell, cx| {
+                    let stacked = shell.stacked(tab);
+                    shell.stack_split(tab, !stacked, cx)
+                }),
+            ),
+            (MenuEntry::line(), "", Box::new(|_, _| {})),
+            (MenuEntry::header("Tab Options"), "", Box::new(|_, _| {})),
+        ];
+        for &pane in &panes {
+            self.push_pane(&mut items, keys, pane, pinned, position);
+        }
+        items.push((MenuEntry::line(), "", Box::new(|_, _| {})));
+        items.push((
+            MenuEntry::new("Change Icon…", true),
+            "change-icon",
+            Box::new(move |shell, cx| shell.change_icon(tab, cx)),
+        ));
+        if has_icon(&self.page(tab).icon) {
+            items.push(remove_icon(tab));
+        }
+        items.push((
+            MenuEntry::new("Rename…", true),
+            "rename-tab",
+            Box::new(move |shell, cx| shell.rename_tab(tab, cx)),
+        ));
+        items.push((MenuEntry::line(), "", Box::new(|_, _| {})));
+        items.push((
+            MenuEntry::new("Duplicate", true),
+            "duplicate-tab",
+            Box::new(move |shell, cx| shell.duplicate_row(tab, cx)),
+        ));
+        // Every one of the user's Spaces, the split's checked, then a new one, each taking the
+        // whole split. A private window's tabs stay in it.
+        if !self.private {
+            let move_to = items.len();
+            items.push((MenuEntry::new("Move to", true), "", Box::new(|_, _| {})));
+            for (space, name, shown) in self.spaces_to_move_to(true) {
+                let swatch = self.space_swatch(space);
+                items.push((
+                    MenuEntry::named(name, true).checked(shown).swatch(swatch).under(move_to),
+                    "move-to-space",
+                    Box::new(move |shell, cx| {
+                        if !shown {
+                            shell.move_to_space(tab, space, false, cx)
+                        }
+                    }),
+                ));
+            }
+            items.push((MenuEntry::line().under(move_to), "", Box::new(|_, _| {})));
+            items.push((
+                MenuEntry::new("New Space…", true).under(move_to),
+                "new-space",
+                Box::new(move |shell, cx| shell.new_space_with(Some(tab), cx)),
+            ));
+        }
+        items.push((MenuEntry::line(), "", Box::new(|_, _| {})));
+        // A Today split's pages go to the archive. A pinned split leaves the pinned tabs for it,
+        // as its row's remove button takes it, and ⌘Z pins it again in its place.
+        let first = panes[0];
+        items.push((
+            MenuEntry::new("Archive Item", true),
+            "close-tab",
+            Box::new(move |shell, cx| match pinned {
+                true => shell.remove_pinned(first, cx),
+                false => shell.close_tab(first, true, cx),
+            }),
+        ));
+        if !pinned {
+            let last = panes[panes.len() - 1];
+            let below = self.today().iter().skip_while(|&&id| id != last).count() > 1;
+            items.push((
+                MenuEntry::new("Archive Tabs Below", below),
+                "close-tabs-below",
+                Box::new(move |shell, cx| shell.close_tabs_below(tab, cx)),
+            ));
+        }
+        items
+    }
+
+    /// A split view's page's submenu in its row's menu, titled with the page, as Arc's: Separate
+    /// from Split View, then the page's own items. A pinned page has Back to Pinned URL and Pinned
+    /// URL ›, as a pinned tab's menu does, in place of Archive Item, which would take it out of
+    /// the pinned tabs; its way out is Separate, then its row's remove button. Copy Link and Back
+    /// to Pinned URL show their keys on the page focused, which they act on.
+    fn push_pane(
+        &self,
+        items: &mut Vec<(MenuEntry, &'static str, MenuAction)>,
+        keys: &UserKeys,
+        pane: u64,
+        pinned: bool,
+        position: Point<Pixels>,
+    ) {
+        let page = self.page(pane);
+        let link = clean_link(&page.url);
+        let focused = pane == self.selected;
+        let key = |entry: MenuEntry, command: Command| match focused {
+            true => entry.shortcut(command, keys),
+            false => entry,
+        };
+        let line = |parent: usize| -> (MenuEntry, &'static str, MenuAction) {
+            (MenuEntry::line().under(parent), "", Box::new(|_, _| {}))
+        };
+        let parent = items.len();
+        items.push((MenuEntry::named(self.title(pane), true), "", Box::new(|_, _| {})));
+        let (entry, name, action) = separate(pane);
+        items.push((entry.under(parent), name, action));
+        items.push(line(parent));
+        self.push_share(items, pane, &link, position, Some(parent));
+        let (entry, name, action) = mute(pane, &page);
+        items.push((entry.under(parent), name, action));
+        let copy = MenuEntry::new("Copy Link", !link.is_empty()).under(parent);
+        items.push((
+            key(copy, Command::CopyUrl),
+            "copy-link",
+            Box::new(move |shell, cx| shell.copy_link(pane, false, cx)),
+        ));
+        let markdown = MenuEntry::new("Copy Link as Markdown", !link.is_empty()).under(parent);
+        items.push((
+            key(markdown, Command::CopyMarkdownLink).alternate(),
+            "copy-markdown-link",
+            Box::new(move |shell, cx| shell.copy_link(pane, true, cx)),
+        ));
+        if page.share_instead {
+            items.push((
+                MenuEntry::new("Share This Tab Instead", true).under(parent),
+                "share-instead",
+                Box::new(move |shell, cx| shell.browser.share_instead(pane, cx)),
+            ));
+        }
+        items.push(line(parent));
+        if !pinned {
+            items.push((
+                MenuEntry::new("Archive Item", true).under(parent),
+                "close-tab",
+                Box::new(move |shell, cx| shell.close_tab(pane, false, cx)),
+            ));
+            return;
+        }
+        let back = MenuEntry::new("Back to Pinned URL", page.away_from_pinned_url).under(parent);
+        items.push((
+            key(back, Command::BackToPinnedUrl),
+            "back-to-pinned-url",
+            Box::new(move |shell, cx| shell.browser.back_to_pinned_url(pane, cx)),
+        ));
+        let pinned_url = items.len();
+        items.push((MenuEntry::new("Pinned URL", true).under(parent), "", Box::new(|_, _| {})));
+        let (entry, name, action) =
+            replace_pinned_url(pane, "Replace Pinned URL with Current", page.away_from_pinned_url);
+        items.push((entry.under(pinned_url), name, action));
+        items.push((
+            MenuEntry::new("Edit…", true).under(pinned_url),
+            "edit-pinned-url",
+            Box::new(move |shell, cx| shell.edit_pinned_url(pane, cx)),
+        ));
     }
 
     /// The user's Spaces a tab can move to, by id and name in the switcher's order, and whether
@@ -1282,8 +1490,6 @@ impl Shell {
     }
 }
 
-/// The top of a Space's menu, above its profiles: Rename Space, Change Icon…, Remove Icon once it
-/// has one, Edit Theme Color…, and Remove Theme Color once it has a colour.
 /// `space`'s folders, in the sidebar's order, each named by its path, "Docs / Old".
 fn folder_paths(space: &super::Space) -> Vec<(u64, String)> {
     let name = |folder: u64| space.folders.folders.get(&folder).map(|(name, _)| name.clone());
@@ -1297,17 +1503,14 @@ fn folder_paths(space: &super::Space) -> Vec<(u64, String)> {
     folders.map(|&folder| (folder, path(folder))).collect()
 }
 
+/// The top of a Space's menu, above its profiles, in Arc 1.171's order: Change Space Icon…, Rename
+/// Space… and Edit Theme Color…, with Remove Icon and Remove Theme Color (ours) after what they
+/// undo once the Space has an icon or a colour.
 fn space_menu_head(space: u64, has_icon: bool, has_theme: bool) -> Vec<(MenuEntry, MenuAction)> {
-    let mut items: Vec<(MenuEntry, MenuAction)> = vec![
-        (
-            MenuEntry::new("Rename Space", true),
-            Box::new(move |shell, cx| shell.rename_space(space, cx)),
-        ),
-        (
-            MenuEntry::new("Change Icon…", true),
-            Box::new(move |shell, cx| shell.change_space_icon(space, cx)),
-        ),
-    ];
+    let mut items: Vec<(MenuEntry, MenuAction)> = vec![(
+        MenuEntry::new("Change Space Icon…", true),
+        Box::new(move |shell, cx| shell.change_space_icon(space, cx)),
+    )];
     if has_icon {
         items.push((
             MenuEntry::new("Remove Icon", true),
@@ -1316,7 +1519,10 @@ fn space_menu_head(space: u64, has_icon: bool, has_theme: bool) -> Vec<(MenuEntr
             }),
         ));
     }
-    // After the icon and the name, as in Arc's.
+    items.push((
+        MenuEntry::new("Rename Space…", true),
+        Box::new(move |shell, cx| shell.rename_space(space, cx)),
+    ));
     items.push((
         MenuEntry::new("Edit Theme Color…", true),
         Box::new(move |shell, cx| shell.edit_space_theme(space, cx)),
@@ -1339,6 +1545,16 @@ pub(super) fn space_menu_label(icon: &str, name: &str) -> SharedString {
         SpaceIcon::Emoji(emoji) => format!("{emoji} {name}").into(),
         SpaceIcon::Dot | SpaceIcon::Glyph(_) => name.to_string().into(),
     }
+}
+
+/// Mute, dimmed while the tab is silent, as Arc's; a muted one unmutes.
+fn mute(tab: u64, page: &Page) -> (MenuEntry, &'static str, MenuAction) {
+    let title = if page.muted { "Unmute" } else { "Mute" };
+    (
+        MenuEntry::new(title, page.audible || page.muted),
+        "toggle-mute",
+        Box::new(move |shell, cx| shell.toggle_mute(tab, cx)),
+    )
 }
 
 /// The menu item that takes a tab out of its split view, to show alone.
@@ -1417,13 +1633,13 @@ mod tests {
         items.into_iter().map(|(entry, _)| entry.title.to_string()).collect()
     }
 
-    /// A Space's menu offers Change Icon… always and Remove Icon only once it has an icon, after
-    /// Rename, as a tab's menu does.
+    /// A Space's menu leads with Change Space Icon… and Rename Space…, as Arc 1.171's does, and
+    /// offers Remove Icon after Change Space Icon… only once the Space has an icon.
     #[test]
     fn remove_icon_is_offered_once_the_space_has_one() {
-        let theme = "Edit Theme Color…";
-        assert_eq!(titles(false, false), ["Rename Space", "Change Icon…", theme]);
-        assert_eq!(titles(true, false), ["Rename Space", "Change Icon…", "Remove Icon", theme]);
+        let (icon, name, theme) = ("Change Space Icon…", "Rename Space…", "Edit Theme Color…");
+        assert_eq!(titles(false, false), [icon, name, theme]);
+        assert_eq!(titles(true, false), [icon, "Remove Icon", name, theme]);
     }
 
     /// Remove Theme Color follows Edit Theme Color… only once the Space has a colour, as Remove
@@ -1546,30 +1762,120 @@ mod tests {
         assert!(edits.iter().any(|edit| edit.starts_with("move 10 ")), "{calls:?} {edits:?}");
     }
 
-    /// A split's menu offers Mute under each of its tabs' names, and its Duplicate copies the whole
-    /// split, joined again in its order and orientation, as Arc's does.
-    #[gpui::test]
-    fn a_splits_menu_mutes_each_tab_and_duplicates_the_split(cx: &mut TestAppContext) {
-        let (shell, host) = shell_with(cx, &[1], &[10, 11, 12], Folders::default());
+    /// `tabs` as a split view in Space 1, its pinned tabs `pinned` and Today tabs `today`, titled
+    /// Ten, Eleven and so on, each at a page, the second playing sound.
+    fn split_in(shell: &Entity<Shell>, cx: &mut TestAppContext, pinned: &[u64], today: &[u64]) {
         shell.update(cx, |shell, cx| {
-            let split = crate::shell::Split { tabs: vec![10, 11], stacked: true, ..Default::default() };
-            shell.set_tabs(1, Vec::new(), vec![10, 11, 12], vec![split], Folders::default(), cx);
+            let split = crate::shell::Split { tabs: vec![10, 11], ..Default::default() };
+            shell.set_tabs(1, pinned.to_vec(), today.to_vec(), vec![split], Folders::default(), cx);
             shell.set_title(10, "Ten".into(), cx);
             shell.set_title(11, "Eleven".into(), cx);
-            shell.set_page(11, page("https://example.com/", true, false), cx);
+            shell.set_page(10, page("https://example.com/ten", false, false), cx);
+            shell.set_page(11, page("https://example.com/eleven", true, false), cx);
+            shell.set_selected(11, cx);
         });
-        let menu = tab_menu(&shell, &host, cx, 11);
-        let mutes: Vec<&str> = (menu.iter().map(String::as_str))
-            .filter(|title| title.contains("Mute"))
+    }
+
+    /// A Today split's row has Arc 1.171's menu, from either page: the split's own items, a
+    /// submenu for each page under the Tab Options header, then the row's. Only the page focused
+    /// shows Copy Link's key, as it's the one the key copies.
+    #[gpui::test]
+    fn a_splits_menu_is_arcs(cx: &mut TestAppContext) {
+        let (shell, host) = shell_with(cx, &[], &[10, 11, 12], Folders::default());
+        split_in(&shell, cx, &[], &[10, 11, 12]);
+        let menu = |cx: &mut TestAppContext, tab: u64| {
+            tab_menu(&shell, &host, cx, tab);
+            crate::menu::described(&host.entries.borrow())
+        };
+        let arcs = "Separate All Tabs, Add Tab…, Convert to Vertical Split View, \
+                    Tab Options (header), \
+                    Ten › Separate from Split View, Ten › Mute (disabled), Ten › Copy Link, \
+                    Ten › Archive Item, \
+                    Eleven › Separate from Split View, Eleven › Mute, Eleven › Copy Link, \
+                    Eleven › Archive Item, \
+                    Change Icon…, Rename…, Duplicate, Move to › Work (checked), \
+                    Move to › New Space…, Archive Item, Archive Tabs Below";
+        assert!(menu(cx, 10).contains(arcs), "{}", menu(cx, 10));
+        assert!(menu(cx, 11).contains(arcs), "either page's row shows the same menu");
+        let keyed: Vec<(Option<usize>, String)> = (host.entries.borrow().iter())
+            .filter(|entry| entry.shortcut.is_some())
+            .map(|entry| (entry.parent, entry.title.to_string()))
             .collect();
-        assert_eq!(mutes, ["Ten › Mute (disabled)", "Eleven › Mute"]);
+        let eleven = host.entries.borrow().iter().position(|entry| entry.title == "Eleven");
+        assert_eq!(keyed, [(eleven, "Copy Link".into()), (eleven, "Copy Link as Markdown".into())]);
+        // The split's Archive Item archives every page of it, and a page's only that page.
+        host.take();
+        cx.update(|cx| host.choose_last("Archive Item", cx));
+        assert_eq!(host.take(), ["close 10"]);
+        assert_eq!(host.split_closes.take(), [10]);
+        tab_menu(&shell, &host, cx, 11);
+        host.take();
+        cx.update(|cx| host.choose("Archive Item", cx));
+        assert_eq!(host.take(), ["close 10"]);
+        assert!(host.split_closes.take().is_empty());
+        // Stacked, it converts back to side by side.
+        shell.update(cx, |shell, cx| {
+            let tabs = vec![10, 11];
+            let split = crate::shell::Split { tabs, stacked: true, ..Default::default() };
+            shell.set_tabs(1, Vec::new(), vec![10, 11, 12], vec![split], Folders::default(), cx);
+        });
+        assert!(menu(cx, 10).starts_with("Separate All Tabs, Add Tab…, Convert to Horizontal"));
+    }
+
+    /// A pinned split's menu has no Archive Tabs Below, and its Archive Item takes it out of the
+    /// pinned tabs, split and all, as its remove button does. Each page keeps a pinned tab's
+    /// Back to Pinned URL and Pinned URL ›, and Add Tab… is dimmed while the split is closed.
+    #[gpui::test]
+    fn a_pinned_splits_menu_archives_it_whole(cx: &mut TestAppContext) {
+        let (shell, host) = shell_with(cx, &[10, 11], &[12], Folders::default());
+        split_in(&shell, cx, &[10, 11], &[12]);
+        tab_menu(&shell, &host, cx, 10);
+        let shown = crate::menu::described(&host.entries.borrow());
+        let ten = "Ten › Separate from Split View, Ten › Mute (disabled), Ten › Copy Link, \
+                   Ten › Back to Pinned URL (disabled), \
+                   Ten › Pinned URL › Replace Pinned URL with Current (disabled), \
+                   Ten › Pinned URL › Edit…, Eleven ›";
+        assert!(shown.contains(ten), "{shown}");
+        assert!(shown.ends_with("Move to › New Space…, Archive Item"), "{shown}");
         host.take();
         host.take_edits();
+        cx.update(|cx| host.choose_last("Archive Item", cx));
+        assert_eq!(host.take_edits(), ["pinned 10 false", "close 10"]);
+        assert_eq!(host.split_closes.take(), [10]);
+        shell.update(cx, |shell, cx| {
+            for tab in [10, 11] {
+                shell.set_page(tab, Page { unloaded: true, ..Page::default() }, cx);
+            }
+        });
+        tab_menu(&shell, &host, cx, 10);
+        let shown = crate::menu::described(&host.entries.borrow());
+        assert!(shown.starts_with("Separate All Tabs, Add Tab… (disabled)"), "{shown}");
+    }
+
+    /// Separate All Tabs takes each page out from the right, so they keep their order in the
+    /// list, and Duplicate copies the whole split, joined again in its order and orientation, as
+    /// Arc's does.
+    #[gpui::test]
+    fn a_splits_menu_separates_and_duplicates_it_whole(cx: &mut TestAppContext) {
+        let (shell, host) = shell_with(cx, &[1], &[10, 11, 12], Folders::default());
+        shell.update(cx, |shell, cx| {
+            let tabs = vec![10, 11, 12];
+            let split = crate::shell::Split { tabs, stacked: true, ..Default::default() };
+            shell.set_tabs(1, Vec::new(), vec![10, 11, 12], vec![split], Folders::default(), cx);
+        });
+        tab_menu(&shell, &host, cx, 11);
+        let shown = crate::menu::described(&host.entries.borrow());
+        let full = shown.starts_with("Separate All Tabs, Add Tab… (disabled)");
+        assert!(full, "a full split: {shown}");
+        host.take_edits();
+        cx.update(|cx| host.choose("Separate All Tabs", cx));
+        assert_eq!(host.take_edits(), ["separate 12", "separate 11"]);
+        host.take();
         shell.update(cx, |shell, cx| shell.duplicate_row(11, cx));
         let calls = host.take();
-        assert_eq!(calls[..2], ["duplicate 10", "duplicate 11"]);
+        assert_eq!(calls[..3], ["duplicate 10", "duplicate 11", "duplicate 12"]);
         let edits = host.take_edits();
-        assert_eq!(edits.len(), 1, "{edits:?}");
+        assert_eq!(edits.len(), 2, "{edits:?}");
         let copies: Vec<&str> = edits[0].split(' ').skip(1).collect();
         assert_eq!(copies[2], "false", "the second copy joins the first on its right");
         assert!(calls.contains(&format!("split stacked {} true", copies[1])), "{calls:?}");

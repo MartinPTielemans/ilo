@@ -1575,6 +1575,8 @@ fn a_word_of_the_name_puts_the_best_first_and_the_rest_after(cx: &mut TestAppCon
         "Separate Page from Split View".into(),
         "Expand Current Split".into(),
         "Flip Split View".into(),
+        "Convert to Vertical Split View".into(),
+        "Convert to Horizontal Split View".into(),
         "New Note Split".into(),
     ];
     assert_eq!(bar.listed(), expected);
@@ -1600,6 +1602,8 @@ fn tab_in_an_empty_field_lists_only_the_commands(cx: &mut TestAppContext) {
         "Separate Page from Split View",
         "Expand Current Split",
         "Flip Split View",
+        "Convert to Vertical Split View",
+        "Convert to Horizontal Split View",
         "New Note Split",
     ];
     assert_eq!(bar.listed(), only);
