@@ -15,15 +15,54 @@ fn shell_with_spaces(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>) {
     shell.update(cx, |shell, cx| {
         shell.set_spaces(
             vec![
-                (1, "Space 1".into(), None, 7, "".into(), "".into(), "".into()),
-                (2, "Space 2".into(), None, 7, "".into(), "".into(), "".into()),
-                (3, "Space 3".into(), None, 8, "".into(), "".into(), "".into()),
-                (4, "Research".into(), None, 7, "".into(), "Claude Code".into(), "".into()),
+                (
+                    1,
+                    "Space 1".into(),
+                    None,
+                    7,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                ),
+                (
+                    2,
+                    "Space 2".into(),
+                    None,
+                    7,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                ),
+                (
+                    3,
+                    "Space 3".into(),
+                    None,
+                    8,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                ),
+                (
+                    4,
+                    "Research".into(),
+                    None,
+                    7,
+                    "".into(),
+                    "Claude Code".into(),
+                    "".into(),
+                ),
             ],
             cx,
         );
         for (space, tab) in [(1, 11), (2, 12), (3, 13), (4, 14)] {
-            shell.set_tabs(space, Vec::new(), vec![tab], Vec::new(), Folders::default(), cx);
+            shell.set_tabs(
+                space,
+                Vec::new(),
+                vec![tab],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
         }
         shell.set_space(1, cx);
     });
@@ -35,7 +74,12 @@ fn favorites(shell: &Entity<Shell>, cx: &mut TestAppContext) -> Vec<u64> {
 }
 
 /// What ⌘1 asks the core to show in `space`, the first tile if it has any.
-fn first_tab(shell: &Entity<Shell>, host: &Recorder, cx: &mut TestAppContext, space: u64) -> String {
+fn first_tab(
+    shell: &Entity<Shell>,
+    host: &Recorder,
+    cx: &mut TestAppContext,
+    space: u64,
+) -> String {
     shell.update(cx, |shell, cx| shell.set_space(space, cx));
     host.take();
     shell.update(cx, |shell, cx| shell.run(Command::SelectTab(0), "ui", cx));
@@ -46,8 +90,18 @@ fn first_tab(shell: &Entity<Shell>, host: &Recorder, cx: &mut TestAppContext, sp
 /// and a number the core doesn't know is the default, Arc's.
 #[test]
 fn the_choices_are_listed_as_the_core_numbers_them() {
-    let titles: Vec<_> = FavoritesScope::ALL.iter().map(|scope| scope.title()).collect();
-    assert_eq!(titles, ["In Every Space", "In Each Profile's Spaces", "In Each Space"]);
+    let titles: Vec<_> = FavoritesScope::ALL
+        .iter()
+        .map(|scope| scope.title())
+        .collect();
+    assert_eq!(
+        titles,
+        [
+            "In Every Space",
+            "In Each Profile's Spaces",
+            "In Each Space"
+        ]
+    );
     for (number, scope) in FavoritesScope::ALL.into_iter().enumerate() {
         assert_eq!(scope.to_core(), number as i32);
         assert_eq!(FavoritesScope::from_core(number as i32), scope);
@@ -62,7 +116,9 @@ fn the_choices_are_listed_as_the_core_numbers_them() {
 #[gpui::test]
 fn a_profiles_spaces_share_its_favorites(cx: &mut TestAppContext) {
     let (shell, host) = shell_with_spaces(cx);
-    shell.update(cx, |shell, cx| shell.set_favorites(vec![(40, 7), (41, 7), (42, 8)], cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_favorites(vec![(40, 7), (41, 7), (42, 8)], cx)
+    });
     assert_eq!(favorites(&shell, cx), [40, 41]);
     assert_eq!(first_tab(&shell, &host, cx, 2), "select 40");
     assert_eq!(favorites(&shell, cx), [40, 41]);
@@ -108,7 +164,9 @@ fn every_space_shows_the_same_sites_in_each_profiles_tabs(cx: &mut TestAppContex
 #[gpui::test]
 fn a_change_of_scope_swaps_the_tiles_of_the_space_shown(cx: &mut TestAppContext) {
     let (shell, host) = shell_with_spaces(cx);
-    shell.update(cx, |shell, cx| shell.set_favorites(vec![(40, 7), (41, 7)], cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_favorites(vec![(40, 7), (41, 7)], cx)
+    });
     assert_eq!(favorites(&shell, cx), [40, 41]);
     // Each Space: Space 1 and Space 2 each get a copy, in tabs of their own.
     shell.update(cx, |shell, cx| {
@@ -117,7 +175,9 @@ fn a_change_of_scope_swaps_the_tiles_of_the_space_shown(cx: &mut TestAppContext)
     assert_eq!(favorites(&shell, cx), [40, 41]);
     assert_eq!(first_tab(&shell, &host, cx, 2), "select 70");
     // And back to a profile's: the lists merged, the other tabs closed.
-    shell.update(cx, |shell, cx| shell.set_favorites(vec![(40, 7), (41, 7)], cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_favorites(vec![(40, 7), (41, 7)], cx)
+    });
     assert_eq!(favorites(&shell, cx), [40, 41]);
     assert_eq!(first_tab(&shell, &host, cx, 2), "select 40");
 }
@@ -128,7 +188,9 @@ fn a_change_of_scope_swaps_the_tiles_of_the_space_shown(cx: &mut TestAppContext)
 #[gpui::test]
 fn the_numbers_can_leave_the_favorites_out(cx: &mut TestAppContext) {
     let (shell, host) = shell_with_spaces(cx);
-    shell.update(cx, |shell, cx| shell.set_favorites(vec![(40, 7), (41, 7)], cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_favorites(vec![(40, 7), (41, 7)], cx)
+    });
     assert_eq!(first_tab(&shell, &host, cx, 1), "select 40");
     cx.update(|cx| change_keys(cx, |keys| keys.set_favorites_numbered(false)));
     assert_eq!(first_tab(&shell, &host, cx, 1), "select 11");
@@ -147,7 +209,9 @@ fn the_last_tab_can_be_the_ninth(cx: &mut TestAppContext) {
     let today = |count: u64| (100..100 + count).collect::<Vec<u64>>();
     let ninth = |shell: &Entity<Shell>, cx: &mut TestAppContext| {
         host.take();
-        shell.update(cx, |shell, cx| shell.run(Command::SelectLastTab, "page", cx));
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::SelectLastTab, "page", cx)
+        });
         host.take().join(", ")
     };
     shell.update(cx, |shell, cx| {

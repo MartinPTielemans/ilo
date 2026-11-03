@@ -94,7 +94,11 @@ pub fn parse(bytes: &[u8]) -> Option<Vec<Tab>> {
         at += 2 + size;
         let (id, body) = (command[0], &command[1..]);
         // A command too short for what it says is passed over.
-        let ints = |count: usize| (0..count).map(|n| int(body, n * 4)).collect::<Option<Vec<_>>>();
+        let ints = |count: usize| {
+            (0..count)
+                .map(|n| int(body, n * 4))
+                .collect::<Option<Vec<_>>>()
+        };
         match id {
             MARKER => marked = true,
             SET_TAB_WINDOW => {
@@ -174,7 +178,10 @@ pub fn parse(bytes: &[u8]) -> Option<Vec<Tab>> {
         open.into_iter()
             .filter_map(|(_, _, _, tab)| {
                 // The page it shows, or its last if that one was pruned.
-                let at = tab.pages.iter().position(|(index, _)| *index >= tab.current);
+                let at = tab
+                    .pages
+                    .iter()
+                    .position(|(index, _)| *index >= tab.current);
                 let (_, page) = at.map_or(tab.pages.last(), |at| tab.pages.get(at))?;
                 opens_here(&page.url).then(|| page.clone())
             })

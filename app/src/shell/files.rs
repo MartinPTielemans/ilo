@@ -73,9 +73,14 @@ pub(super) fn folder_path(url: &str) -> Option<PathBuf> {
 /// The folder at `path` as it comes in, by name, hidden files and folders left out, each taken
 /// costing one of `rows`: this folder's first, then its folders' in turn.
 pub(super) fn list(path: &Path, rows: &mut usize, depth: usize) -> Listing {
-    let name = path.file_name().map(|name| name.to_string_lossy().into_owned());
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned());
     let name = name.unwrap_or_else(|| path.display().to_string());
-    let mut listing = Listing { name, ..Listing::default() };
+    let mut listing = Listing {
+        name,
+        ..Listing::default()
+    };
     let Ok(entries) = std::fs::read_dir(path) else {
         return listing;
     };
@@ -93,11 +98,17 @@ pub(super) fn list(path: &Path, rows: &mut usize, depth: usize) -> Listing {
     let taken = entries.len().min(*rows);
     *rows -= taken;
     let (folders, files): (Vec<_>, Vec<_>) = entries.into_iter().take(taken).partition(|e| e.2);
-    listing.files = files.iter().map(|(_, path, _)| file_url(&path.to_string_lossy())).collect();
+    listing.files = files
+        .iter()
+        .map(|(_, path, _)| file_url(&path.to_string_lossy()))
+        .collect();
     listing.folders = (folders.into_iter())
         .map(|(name, path, _)| match depth + 1 < FOLDER_DEPTH {
             true => list(&path, rows, depth + 1),
-            false => Listing { name, ..Listing::default() },
+            false => Listing {
+                name,
+                ..Listing::default()
+            },
         })
         .collect();
     listing
@@ -150,17 +161,23 @@ impl Shell {
         open: bool,
         cx: &mut Context<Self>,
     ) -> u64 {
-        let folder = self.browser.create_folder(self.space, &listing.name, parent, index, cx);
+        let folder = self
+            .browser
+            .create_folder(self.space, &listing.name, parent, index, cx);
         if folder == 0 {
             return 0;
         }
         let (folders, files) = (listing.folders.len(), listing.files.len());
         // check.sh waits for this line.
-        log!("browser: folder {folder} from disk {folders} {files} {}", listing.name);
+        log!(
+            "browser: folder {folder} from disk {folders} {files} {}",
+            listing.name
+        );
         for (at, inner) in listing.folders.iter().enumerate() {
             self.make_folder(inner, folder, at, false, cx);
         }
-        self.browser.open_behind(&listing.files, true, folder, folders, cx);
+        self.browser
+            .open_behind(&listing.files, true, folder, folders, cx);
         if !open {
             self.browser.set_folder_open(folder, false, cx);
         }
@@ -181,8 +198,15 @@ impl Shell {
             prompt: Some("Add".into()),
         });
         cx.spawn(async move |shell, cx| {
-            let paths = asked.await.ok().and_then(Result::ok).flatten().unwrap_or_default();
-            shell.update(cx, |shell, cx| shell.add_paths(paths, cx)).ok();
+            let paths = asked
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .flatten()
+                .unwrap_or_default();
+            shell
+                .update(cx, |shell, cx| shell.add_paths(paths, cx))
+                .ok();
         })
         .detach();
     }
@@ -195,7 +219,11 @@ impl Shell {
         let url = |path: &PathBuf| file_url(&path.to_string_lossy());
         let urls: Vec<String> = files.iter().map(url).collect();
         // check.sh waits for this line.
-        log!("browser: added {} files {} folders", urls.len(), folders.len());
+        log!(
+            "browser: added {} files {} folders",
+            urls.len(),
+            folders.len()
+        );
         if !urls.is_empty() {
             self.browser.open_at(&urls, false, 0, 0, cx);
         }

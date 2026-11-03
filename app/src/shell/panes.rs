@@ -26,7 +26,11 @@ impl Shell {
         let (frame, _) = self.page_frame(self.viewport);
         let stacked = self.stacked(self.selected);
         let frames = pane_frames(frame, panes.len(), stacked, &self.shares(self.selected));
-        let cursor = if stacked { CursorStyle::ResizeUpDown } else { CursorStyle::ResizeLeftRight };
+        let cursor = if stacked {
+            CursorStyle::ResizeUpDown
+        } else {
+            CursorStyle::ResizeLeftRight
+        };
         let mut gaps: Vec<AnyElement> = frames
             .windows(2)
             .enumerate()
@@ -65,8 +69,14 @@ impl Shell {
                 let moved = shell.clone();
                 window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
                     if phase == DispatchPhase::Capture {
-                        let at = if stacked { event.position.y } else { event.position.x };
-                        moved.update(cx, |shell, cx| shell.drag_gap(at.into(), cx)).ok();
+                        let at = if stacked {
+                            event.position.y
+                        } else {
+                            event.position.x
+                        };
+                        moved
+                            .update(cx, |shell, cx| shell.drag_gap(at.into(), cx))
+                            .ok();
                     }
                 });
                 window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
@@ -95,13 +105,19 @@ impl Shell {
         let plate = self.palette.plate(crate::palette::HOVERED_PLATE);
         let mut handles = Vec::new();
         for (index, (tab, pane)) in panes.into_iter().zip(frames).enumerate() {
-            let strip = if stacked && index > 0 { SPLIT_GAP } else { f32::from(frame.top()) };
+            let strip = if stacked && index > 0 {
+                SPLIT_GAP
+            } else {
+                f32::from(frame.top())
+            };
             let dots = (0..3).map(|_| div().size(px(DOT)).rounded_full().bg(rest));
             let handle = div()
                 .id(("split-controls", index))
                 .group("split-controls")
                 .when(self.a11y, |handle| {
-                    handle.button_named("Split Controls").pressed_by_mouse_down(true, false)
+                    handle
+                        .button_named("Split Controls")
+                        .pressed_by_mouse_down(true, false)
                 })
                 .absolute()
                 .left(pane.center().x - px(WIDTH / 2.))
@@ -142,7 +158,12 @@ impl Shell {
     /// The menu of `tab`'s split controls, under its handle at `position`: Change Orientation for
     /// the split, and Separate Page from Split View and Close this Split Pane for `tab`, as the View
     /// menu's commands do for the focused page.
-    pub(super) fn split_controls(&mut self, tab: u64, position: Point<Pixels>, cx: &mut Context<Self>) {
+    pub(super) fn split_controls(
+        &mut self,
+        tab: u64,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
         let items: Vec<(MenuEntry, MenuAction)> = vec![
             (
                 MenuEntry::new("Change Orientation", true),
@@ -176,7 +197,12 @@ impl Shell {
     pub(super) fn shown_pane_edges(&self) -> Vec<f32> {
         let (frame, _) = self.page_frame(self.viewport);
         let count = self.panes(self.selected).len();
-        pane_edges(frame, count, self.stacked(self.selected), &self.shares(self.selected))
+        pane_edges(
+            frame,
+            count,
+            self.stacked(self.selected),
+            &self.shares(self.selected),
+        )
     }
 
     pub(super) fn press_gap(
@@ -217,7 +243,9 @@ impl Shell {
             return;
         }
         let (start, span) = (edges[0], edges[count] - edges[0]);
-        let least = ((span - SPLIT_GAP) * 0.1).clamp(PANE_LEAST.0, PANE_LEAST.1).round();
+        let least = ((span - SPLIT_GAP) * 0.1)
+            .clamp(PANE_LEAST.0, PANE_LEAST.1)
+            .round();
         let low = edges[pane - 1] + least + SPLIT_GAP;
         let high = edges[pane + 1] - SPLIT_GAP - least;
         if low > high {
@@ -236,7 +264,8 @@ impl Shell {
         self.start_page_motion(cx);
         let evened = (0..=count).all(|index| edges[index] == even(index));
         let shares = edge_shares(&edges);
-        self.browser.set_split_shares(self.selected, (!evened).then_some(shares.as_slice()), cx);
+        self.browser
+            .set_split_shares(self.selected, (!evened).then_some(shares.as_slice()), cx);
     }
 
     /// ⌃+: opens the command bar over a new pane right of the pages shown, which make room for it
@@ -269,7 +298,10 @@ impl Shell {
     /// joined again in the same order and orientation. A tab alone is copied alone.
     pub(super) fn duplicate_row(&mut self, tab: u64, cx: &mut Context<Self>) {
         let (panes, stacked) = (self.panes(tab), self.stacked(tab));
-        let copies: Vec<u64> = panes.iter().map(|&pane| self.browser.duplicate(pane, cx)).collect();
+        let copies: Vec<u64> = panes
+            .iter()
+            .map(|&pane| self.browser.duplicate(pane, cx))
+            .collect();
         if copies.len() < 2 || copies.contains(&0) {
             return;
         }
@@ -329,11 +361,18 @@ impl Shell {
     pub(super) fn focus_pane(&mut self, forward: bool, cx: &mut Context<Self>) {
         let panes = self.panes(self.selected);
         let count = panes.len();
-        let Some(at) = panes.iter().position(|&tab| tab == self.selected).filter(|_| count > 1)
+        let Some(at) = panes
+            .iter()
+            .position(|&tab| tab == self.selected)
+            .filter(|_| count > 1)
         else {
             return;
         };
-        let next = if forward { (at + 1) % count } else { (at + count - 1) % count };
+        let next = if forward {
+            (at + 1) % count
+        } else {
+            (at + count - 1) % count
+        };
         self.select(panes[next], cx);
     }
 }
@@ -346,8 +385,12 @@ impl Shell {
         }
         let panes = self.panes(self.selected);
         let (frame, _) = self.page_frame(self.viewport);
-        let frames =
-            pane_frames(frame, panes.len(), self.stacked(self.selected), &self.shares(self.selected));
+        let frames = pane_frames(
+            frame,
+            panes.len(),
+            self.stacked(self.selected),
+            &self.shares(self.selected),
+        );
         panes.into_iter().zip(frames).collect()
     }
 
@@ -355,12 +398,19 @@ impl Shell {
     /// where System Settings has them swipe between pages, goes back, or forward, in the history
     /// of the page under it, as the toolbar's buttons do (Chrome). Taken only over a page.
     pub fn swiped(&mut self, at: Point<Pixels>, back: bool, cx: &mut Context<Self>) -> bool {
-        let Some(tab) = self.shown_pages().into_iter().find(|(_, frame)| frame.contains(&at))
+        let Some(tab) = self
+            .shown_pages()
+            .into_iter()
+            .find(|(_, frame)| frame.contains(&at))
         else {
             return false;
         };
         // check.sh reads this line.
-        log!("browser: swiped {} {}", if back { "back" } else { "forward" }, tab.0);
+        log!(
+            "browser: swiped {} {}",
+            if back { "back" } else { "forward" },
+            tab.0
+        );
         match back {
             true => self.browser.go_back(tab.0, cx),
             false => self.browser.go_forward(tab.0, cx),
@@ -422,7 +472,10 @@ pub(super) fn expanded_shares(count: usize, focused: usize, length: f32) -> Vec<
 /// as `pane_edges` takes them.
 pub(super) fn edge_shares(edges: &[f32]) -> Vec<f64> {
     let span = f64::from(edges[edges.len() - 1] - edges[0]);
-    edges.windows(2).map(|pair| f64::from(pair[1] - pair[0]) / span).collect()
+    edges
+        .windows(2)
+        .map(|pair| f64::from(pair[1] - pair[0]) / span)
+        .collect()
 }
 
 /// Where each of a split view's `count` pages starts across `frame`, or down it stacked, then where
@@ -496,7 +549,18 @@ mod tests {
         let host = Rc::new(Recorder::default());
         let shell = cx.new(|cx| Shell::new(host.clone(), cx));
         shell.update(cx, |shell, cx| {
-            shell.set_spaces(vec![(1, "Space 1".into(), None, 0, "".into(), "".into(), "".into())], cx);
+            shell.set_spaces(
+                vec![(
+                    1,
+                    "Space 1".into(),
+                    None,
+                    0,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                )],
+                cx,
+            );
             shell.set_space(1, cx);
             shell.set_selected(selected, cx);
             shell.viewport = size(px(width), px(800.));
@@ -511,7 +575,10 @@ mod tests {
     fn a_full_split_says_it_takes_no_more_pages(cx: &mut TestAppContext) {
         let (shell, host) = split_of(&[10, 11, 12], 11, 0, 1200., cx);
         shell.update(cx, |shell, cx| {
-            let split = Split { tabs: vec![10, 11, 12], ..Default::default() };
+            let split = Split {
+                tabs: vec![10, 11, 12],
+                ..Default::default()
+            };
             let today = vec![10, 11, 12, 13];
             shell.set_tabs(1, Vec::new(), today, vec![split], Folders::default(), cx);
         });
@@ -519,7 +586,10 @@ mod tests {
         shell.update(cx, |shell, cx| {
             shell.run(Command::AddSplit, "keys", cx);
             assert_eq!(shell.adding_pane, None);
-            assert!(shell.alt_press_row(13, cx), "the ⌥-click is taken, not a plain click");
+            assert!(
+                shell.alt_press_row(13, cx),
+                "the ⌥-click is taken, not a plain click"
+            );
             shell.run(Command::NewNoteSplit, "keys", cx);
         });
         assert_eq!(host.toasts.take(), ["Cannot Add New Pane"; 3]);
@@ -537,7 +607,12 @@ mod tests {
     ) {
         shell.update(cx, |shell, cx| {
             let (tabs, shares) = (tabs.to_vec(), shares.to_vec());
-            let split = Split { tabs: tabs.clone(), stacked: false, shares, expanded };
+            let split = Split {
+                tabs: tabs.clone(),
+                stacked: false,
+                shares,
+                expanded,
+            };
             shell.set_tabs(1, Vec::new(), tabs, vec![split], Folders::default(), cx);
         });
     }
@@ -552,7 +627,10 @@ mod tests {
             let (frame, _) = shell.page_frame(shell.viewport);
             let shares = shell.shares(shell.selected);
             let frames = pane_frames(frame, count, false, &shares);
-            frames.iter().map(|frame| f32::from(frame.size.width)).collect()
+            frames
+                .iter()
+                .map(|frame| f32::from(frame.size.width))
+                .collect()
         })
     }
 
@@ -569,7 +647,11 @@ mod tests {
             assert_eq!(host.take(), ["split expanded 11 true"]);
             reported(&shell, &[10, 11], &[], 11, cx);
             let widths = widths(&shell, 2, cx);
-            assert!((widths[0] - 220.).abs() < 1., "at {width} the other is {}", widths[0]);
+            assert!(
+                (widths[0] - 220.).abs() < 1.,
+                "at {width} the other is {}",
+                widths[0]
+            );
             let (card, _) = shell.read_with(cx, |shell, _| shell.page_frame(shell.viewport));
             assert!((widths[0] + 10. + widths[1] - f32::from(card.size.width)).abs() < 1.);
         }
@@ -583,7 +665,10 @@ mod tests {
         assert_eq!(host.take(), ["split expanded 11 true"]);
         reported(&shell, &[10, 11, 12], &[], 11, cx);
         let widths = widths(&shell, 3, cx);
-        assert!((widths[0] - 220.).abs() < 1. && (widths[2] - 220.).abs() < 1., "{widths:?}");
+        assert!(
+            (widths[0] - 220.).abs() < 1. && (widths[2] - 220.).abs() < 1.,
+            "{widths:?}"
+        );
         assert!(widths[1] > 600., "{widths:?}");
     }
 
@@ -611,7 +696,11 @@ mod tests {
         for width in [1000., 2400., 1300.] {
             resize(&shell, width, cx);
             let widths = widths(&shell, 2, cx);
-            assert!((widths[0] - 220.).abs() < 1., "at {width} the other is {}", widths[0]);
+            assert!(
+                (widths[0] - 220.).abs() < 1.,
+                "at {width} the other is {}",
+                widths[0]
+            );
         }
         assert_eq!(host.take(), Vec::<String>::new());
     }
@@ -633,8 +722,14 @@ mod tests {
                 pane_frames(frame, 2, false, &shell.shares(shell.selected))[index]
             });
             let (left, right) = (f32::from(origin.x), f32::from(origin.x) + 300.);
-            assert!(f32::from(pane.left()) < left && right < f32::from(pane.right()), "{pane:?}");
-            corners.push((f32::from(pane.right()) - right, f32::from(origin.y - pane.top())));
+            assert!(
+                f32::from(pane.left()) < left && right < f32::from(pane.right()),
+                "{pane:?}"
+            );
+            corners.push((
+                f32::from(pane.right()) - right,
+                f32::from(origin.y - pane.top()),
+            ));
         }
         assert_eq!(corners[0], corners[1]);
     }
@@ -710,9 +805,8 @@ mod tests {
     #[gpui::test]
     fn each_pages_split_controls_act_on_that_page(cx: &mut TestAppContext) {
         let (shell, host) = split_of(&[10, 11, 12], 10, 0, 1200., cx);
-        let handles = |cx: &mut TestAppContext| {
-            shell.update(cx, |shell, cx| shell.pane_handles(cx).len())
-        };
+        let handles =
+            |cx: &mut TestAppContext| shell.update(cx, |shell, cx| shell.pane_handles(cx).len());
         assert_eq!(handles(cx), 3);
         host.take();
         for (title, call) in [
@@ -720,7 +814,9 @@ mod tests {
             ("Separate Page from Split View", "separate 11"),
             ("Close this Split Pane", "close 11"),
         ] {
-            shell.update(cx, |shell, cx| shell.split_controls(11, point(px(600.), px(10.)), cx));
+            shell.update(cx, |shell, cx| {
+                shell.split_controls(11, point(px(600.), px(10.)), cx)
+            });
             cx.update(|cx| host.choose(title, cx));
             let mut calls = host.take();
             calls.extend(host.take_edits());
@@ -729,7 +825,10 @@ mod tests {
         shell.update(cx, |shell, _| shell.page_fullscreen = true);
         assert_eq!(handles(cx), 0, "a page full screen has the whole window");
         let (alone, _) = split_of(&[10], 10, 0, 1200., cx);
-        assert_eq!(alone.update(cx, |shell, cx| shell.pane_handles(cx).len()), 0);
+        assert_eq!(
+            alone.update(cx, |shell, cx| shell.pane_handles(cx).len()),
+            0
+        );
     }
 
     /// A click on a page's split controls opens their menu where it pressed, which the menu takes
@@ -741,7 +840,18 @@ mod tests {
         let browser = host.clone();
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
         shell.update(cx, |shell, cx| {
-            shell.set_spaces(vec![(1, "Space 1".into(), None, 0, "".into(), "".into(), "".into())], cx);
+            shell.set_spaces(
+                vec![(
+                    1,
+                    "Space 1".into(),
+                    None,
+                    0,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                )],
+                cx,
+            );
             shell.set_space(1, cx);
             shell.set_selected(10, cx);
         });
@@ -757,7 +867,10 @@ mod tests {
         cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
         cx.run_until_parked();
         let titles = host.menus.borrow().last().cloned().unwrap_or_default();
-        assert_eq!(titles.first().map(|(title, _)| title.as_ref()), Some("Change Orientation"));
+        assert_eq!(
+            titles.first().map(|(title, _)| title.as_ref()),
+            Some("Change Orientation")
+        );
         assert_eq!(host.menu_at.get(), Some(at));
     }
 
@@ -770,7 +883,14 @@ mod tests {
         let (shell, host) = split_of(&[10, 11], 11, 0, 1200., cx);
         shell.update(cx, |shell, cx| {
             for (tab, url) in [(10, left), (11, right)] {
-                shell.set_page(tab, Page { url: url.into(), ..Page::default() }, cx);
+                shell.set_page(
+                    tab,
+                    Page {
+                        url: url.into(),
+                        ..Page::default()
+                    },
+                    cx,
+                );
             }
         });
         for (focused, url) in [(11, right), (10, left)] {
