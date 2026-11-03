@@ -66,10 +66,12 @@ constexpr bool kCheckBuild = false;
 constexpr ULONGLONG kInterval = 8ULL * 60 * 60 * 10'000'000;
 // Where the last check's time is kept, under HKEY_CURRENT_USER, so a launch doesn't check again
 // before it's due, and the build a quit started installing, so the next launch can tell whether it
-// went in. A check build's are its own, so it never moves a copy of ilo's next check.
+// went in, with its release notes, which that build's first launch opens. A check build's are its
+// own, so it never moves a copy of ilo's next check.
 constexpr const wchar_t* kSettings =
     kCheckBuild ? L"Software\\ilo\\Updates (check)" : L"Software\\ilo\\Updates";
 constexpr wchar_t kInstalling[] = L"Installing";
+constexpr wchar_t kInstallingNotes[] = L"InstallingNotes";
 // No appcast is this big, and no installer: past it, the download stops.
 constexpr size_t kMostFeed = 4 << 20;
 constexpr ULONGLONG kMostInstaller = 1ULL << 30;
@@ -83,12 +85,14 @@ std::mutex g_said_lock;
 int g_stage = HOST_UPDATE_IDLE;
 std::string g_version;
 // The installer, once verified, held open so nothing can change it until it runs, the build it
-// installs, and whether the quit it runs at is Restart to Update's, which relaunches ilo.
+// installs and its release notes, and whether the quit it runs at is Restart to Update's, which
+// relaunches ilo.
 std::atomic<bool> g_ready{false};
 std::wstring g_installer;
 // Whether the checks read the nightly feed (host_follow_nightly).
 std::atomic<bool> g_nightly{false};
 ULONGLONG g_build = 0;
+std::string g_notes;
 HANDLE g_held = INVALID_HANDLE_VALUE;
 bool g_relaunch = false;
 
@@ -320,6 +324,8 @@ ULONGLONG Build(const std::string& text) {
 struct Update {
   ULONGLONG build = 0;
   std::string version, url, signature;
+  // The release notes' https address, else empty.
+  std::string notes;
   ULONGLONG length = 0;
 };
 
@@ -355,6 +361,10 @@ Update Newest(const std::string& feed) {
     }
     update.url = Attribute(enclosure, "url");
     update.signature = Attribute(enclosure, "sparkle:edSignature");
+    update.notes = Element(item, "sparkle:releaseNotesLink");
+    if (update.notes.rfind("https://", 0) != 0) {
+      update.notes.clear();
+    }
     update.length = Build(Attribute(enclosure, "length"));
     if (update.build > own && update.build > newest.build && update.url.rfind("https://", 0) == 0 &&
         Base64(update.signature).size() == 64) {
@@ -481,6 +491,7 @@ void Check() {
   }
   fprintf(stderr, "browser: update %s ready\n", update.version.c_str());
   g_build = update.build;
+  g_notes = update.notes;
   g_ready = true;
   Said(HOST_UPDATE_READY, update.version);
 }
@@ -557,6 +568,7 @@ void host_take_install(bool (*installed)(uint64_t build, uint64_t own)) {
     return;
   }
   RegDeleteKeyValueW(HKEY_CURRENT_USER, kSettings, kInstalling);
+  RegDeleteKeyValueW(HKEY_CURRENT_USER, kSettings, kInstallingNotes);
   const ULONGLONG own = Build(APP_BUILD);
   if (!installed(build, own)) {
     fprintf(stderr, "browser: update build %llu didn't install: this is build %llu\n", build, own);
@@ -596,6 +608,13 @@ void host_finish_update(void) {
   }
   // Before it starts, so one that never starts counts as one that failed.
   RegSetKeyValueW(HKEY_CURRENT_USER, kSettings, kInstalling, REG_QWORD, &g_build, sizeof g_build);
+  const std::wstring notes = Wide(g_notes);
+  if (notes.empty()) {
+    RegDeleteKeyValueW(HKEY_CURRENT_USER, kSettings, kInstallingNotes);
+  } else {
+    RegSetKeyValueW(HKEY_CURRENT_USER, kSettings, kInstallingNotes, REG_SZ, notes.c_str(),
+                    static_cast<DWORD>((notes.size() + 1) * sizeof(wchar_t)));
+  }
   std::wstring command = L"\"" + g_installer +
                          L"\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /waitpid=" +
                          std::to_wstring(GetCurrentProcessId());
@@ -617,4 +636,28 @@ void host_finish_update(void) {
           g_relaunch ? ", then relaunching" : "");
   CloseHandle(process.hThread);
   CloseHandle(process.hProcess);
+}
+
+// The first launch of the build a quit installed opens its notes, once. Before host_take_install,
+// which forgets them with the build.
+void host_take_update_notes(void (*notes)(const char* url)) {
+  ULONGLONG build = 0;
+  DWORD size = sizeof build;
+  if (!host_updates_available() ||
+      RegGetValueW(HKEY_CURRENT_USER, kSettings, kInstalling, RRF_RT_REG_QWORD, nullptr, &build,
+                   &size) != ERROR_SUCCESS ||
+      build != Build(APP_BUILD)) {
+    return;
+  }
+  wchar_t url[2048];
+  size = sizeof url;
+  if (RegGetValueW(HKEY_CURRENT_USER, kSettings, kInstallingNotes, RRF_RT_REG_SZ, nullptr, url,
+                   &size) != ERROR_SUCCESS) {
+    return;
+  }
+  RegDeleteKeyValueW(HKEY_CURRENT_USER, kSettings, kInstallingNotes);
+  char utf8[sizeof url * 2];
+  if (WideCharToMultiByte(CP_UTF8, 0, url, -1, utf8, sizeof utf8, nullptr, nullptr) > 0) {
+    notes(utf8);
+  }
 }
