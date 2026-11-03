@@ -2467,15 +2467,11 @@ bool host_save_launch_picture(void* ui_view, const char* profile_dir, double wid
   if (!framed || !IsWindowVisible(root) || full_screen || width < 1) {
     return false;
   }
-  // Only the sidebar: the page could be anything, and shouldn't be kept on disk. Of GPUI's window,
-  // which draws it: a PrintWindow of the browser window has it repaint its frame, where Windows'
-  // theme paints the caption the window's style has, under the UI, in the window's own surface,
-  // which shows on screen and in the picture (#1262).
-  HWND ui = GetWindow(Hwnd(ui_view), GW_CHILD);
+  // Only the sidebar: the page could be anything, and shouldn't be kept on disk.
   std::vector<uint8_t> pixels;
   LONG high = 0;
   const LONG wide = static_cast<LONG>(std::lround(width * Scale(root)));
-  if (!ui || !Sidebar(ui, wide, &pixels, &high)) {
+  if (!Sidebar(root, wide, &pixels, &high)) {
     return false;
   }
   const UINT columns = static_cast<UINT>(pixels.size() / 4 / high);
