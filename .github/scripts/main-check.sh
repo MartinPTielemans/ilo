@@ -7,6 +7,11 @@
 # it when its job named "check", the one with the default runs, failed past its "Engine" step, or
 # passed with its "Runs" step done: one with no engine for the commit, or cancelled, checked nothing.
 #
+# `main-check.sh rerun`, in a re-run's check job, fails when an earlier attempt of this run failed
+# past its "Engine" step. A run's page, summary and conclusion are its last attempt's, and each
+# attempt's artifact has the same name, so a re-run's pass would show over that failure, as run
+# 41574039797's attempt 2 did over attempt 1 failing spaces (#1589). A new run checks again instead.
+#
 # `main-check.sh report <result> <found>` keeps one open issue per workflow, "<workflow> fails on
 # main": a run that fails opens it, or comments on it if it's open, and one that passes with an
 # engine found (<found> true) closes it. Other results, such as cancelled, leave it as it is.
@@ -42,6 +47,21 @@ seen)
   echo "No run has checked ${GITHUB_SHA:0:12} on $GITHUB_REF_NAME yet."
   echo "seen=false" >> "$GITHUB_OUTPUT"
   ;;
+rerun)
+  attempt=1
+  while [ "$attempt" -lt "$GITHUB_RUN_ATTEMPT" ]; do
+    failed=$(gh api "repos/$repo/actions/runs/$GITHUB_RUN_ID/attempts/$attempt/jobs" --jq 'any(.jobs[];
+      (.name | startswith("check")) and .conclusion == "failure"
+        and (any(.steps[]; .name == "Engine" and .conclusion == "failure") | not))')
+    if [ "$failed" = true ]; then
+      echo "::error::Attempt $attempt of this run failed, so a pass here would show over it: start a new run to check again. $run/attempts/$attempt"
+      printf 'Failed: [attempt %s](%s) of this run failed, so a pass here would show over it. Start a new run to check again.\n' \
+        "$attempt" "$run/attempts/$attempt" >> "$GITHUB_STEP_SUMMARY"
+      exit 1
+    fi
+    attempt=$((attempt + 1))
+  done
+  ;;
 report)
   result=$2 found=$3
   title="$GITHUB_WORKFLOW fails on main"
@@ -76,5 +96,5 @@ The next run of $GITHUB_WORKFLOW on main that passes closes this issue (.github/
     ;;
   esac
   ;;
-*) echo "usage: main-check.sh seen | report <result> <found>" >&2 && exit 2 ;;
+*) echo "usage: main-check.sh seen | rerun | report <result> <found>" >&2 && exit 2 ;;
 esac
