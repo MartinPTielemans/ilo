@@ -6,7 +6,8 @@
 # says what it does. A click on the tile shows it, and ⌘1–⌘9 count favorites first. Past its top, the list shows an
 # edge under the tile, and showing a tab under its bottom scrolls to the tab's row. Scrolled out of
 # the list, the shown tab's row has a marker at the edge it's past, which scrolls back to it. Away
-# from its URL, a double-click on the tile goes back there. ⌘W unloads it and keeps the tile,
+# from its URL, a double-click on the tile goes back there. ⌥-click on a Today row with it shown
+# joins that tab to a copy of it in Today, which ⌘Z closes. ⌘W unloads it and keeps the tile,
 # showing the top Today tab. The tile's menu hangs the icon picker under the tile, whose pick is the
 # tile's icon until Remove Icon, and duplicates it to the top of Today. Launched again, the app
 # brings the favorite back, shown, with the icon it was given before the quit, and Remove from
@@ -44,11 +45,11 @@ fi
 favorites() {
   grep '^browser: favorites' "$log" | tail -1 | sed 's/^browser: favorites *//'
 }
-# One favorite is one tile across the sidebar, 41 tall and 90 below the window's top, under the URL
-# field, and its row of tiles takes the Space's rows 47 down.
-tile="114 110"
+# One favorite is one tile across the sidebar, 47 tall and 90 below the window's top, under the URL
+# field, and its row of tiles takes the Space's rows 55 down, with the 8 under it.
+tile="114 114"
 tiled_row() {
-  echo "100 $(($(row "$1" | cut -d' ' -f2) + 47))"
+  echo "100 $(($(row "$1" | cut -d' ' -f2) + 55))"
 }
 open_from_bar example.org
 b=$tab
@@ -166,6 +167,21 @@ expect '^browser: command back-to-pinned-url via favorite$' \
   "a double-click on the tile didn't run Back to Favorite URL"
 expect "^browser: loaded $a $site\$" "a double-click on the tile didn't load the favorite's URL"
 expect "^browser: page $a away 0\$" "the favorite still read as away at its URL"
+# ⌥-click on a Today row with the favorite shown joins that tab to a copy of the favorite at the
+# top of Today, as no Space holds a favorite (Arc), and ⌘Z closes the copy and puts the tab back.
+send click $(tiled_row 0) alt
+expect '^browser: command split via sidebar$' "⌥-click on the Today row didn't reach the sidebar"
+expect "^browser: splits [0-9][0-9]*+$b\$" \
+  "the Today tab didn't join a copy of the favorite: $(grep '^browser: splits' "$log" | tail -1)"
+[ "$(favorites)" = "$a" ] || fail "joining the favorite took its tile: \"$(favorites)\""
+../tools/window-screenshot.sh "$pid" "$out/favorite-split.png" || fail "no window to capture"
+send key z cmd
+undone=$step
+expect '^browser: splits $' "⌘Z didn't undo the split with the favorite's copy"
+expect "^browser: today $b\$" "⌘Z didn't close the copy and put the tab back: \"$(today)\""
+# The copy closing may have shown the favorite already.
+send click $tile
+expect "^browser: selected $a\( in .*\)\{0,1\}\$" "the favorite isn't shown again" "$undone"
 # ⌘W unloads a favorite and keeps its tile, showing the top Today tab, and ⌘1 loads it again.
 send click $page_point
 send key w cmd
@@ -217,8 +233,8 @@ expect "^browser: loaded $c $site\$" "the copy didn't load the favorite's page"
 # The row under the copy slides down to make room, and until it's there the list is only as long as
 # where the row is drawn, too short to scroll in the window below.
 expect '^browser: rows settled$' "the row under the copy didn't settle"
-# Past its top in a window too short for its rows, the list shows a line across the sidebar 4 under
-# the tile, and back at the top it hides it.
+# Past its top in a window too short for its rows, the list shows a line across the sidebar 6 under
+# the tile, 2 over the rows' top, and back at the top it hides it.
 send layout
 size=$(grep '^browser: layout content' "$log" | tail -1 |
   sed 's/^browser: layout content \([0-9]*\)x\([0-9]*\),.*/\1 \2/')
@@ -230,8 +246,8 @@ expect '^browser: scroll foot edge shown$' "the rows under the list's foot didn'
 send scroll 100 200 10 5
 expect '^browser: scroll edge shown$' "the list scrolled past its top didn't show its edge"
 ../tools/window-screenshot.sh "$pid" "$out/scroll-edge.png" || fail "no window to capture"
-edge=$(pixel "$out/scroll-edge.png" 0.1 $(awk 'BEGIN { print 135.5 / 340 }'))
-gap=$(pixel "$out/scroll-edge.png" 0.1 $(awk 'BEGIN { print 133.5 / 340 }'))
+edge=$(pixel "$out/scroll-edge.png" 0.1 $(awk 'BEGIN { print 143.5 / 340 }'))
+gap=$(pixel "$out/scroll-edge.png" 0.1 $(awk 'BEGIN { print 141.5 / 340 }'))
 # A light sidebar, as an opaque window's is, draws its edge darker.
 brighter "$edge" "$gap" || brighter "$gap" "$edge" ||
   fail "the edge is $edge over the sidebar's $gap"
@@ -439,7 +455,7 @@ none_since '^browser: dragged' || fail "a tile's drag escape put back dropped it
 [ "$(favorites)" = "$a" ] || fail "a tile's drag escape put back moved it: \"$(favorites)\""
 # A press hits the frame drawn, so the next drag waits for the put-back's.
 expect '^browser: drag put back$' "Escape's put-back didn't finish" "$escaped"
-# Three tiles in the sidebar at its narrowest take two rows, 94 points, more than 40 % of a window
+# Three tiles in the sidebar at its narrowest take two rows, 110 points, more than 40 % of a window
 # 220 tall, so they scroll with the list, under the URL field (Ardia).
 send drag $(tiled_row 0) 200 112
 expect "^browser: dragged $x to favorites 1\$" "a row dragged right of the tile didn't go there"
@@ -632,9 +648,9 @@ if [ "$active" != 1 ]; then
 fi
 # The rows are drawn by the time the driver's click is done.
 ../tools/window-screenshot.sh "$pid" "$out/favorites-most.png" || fail "no window to capture"
-# Four to a row across the sidebar, the first tile's middle at 32 110.
+# Four to a row across the sidebar, the first tile's middle at 32 114.
 r=$(favorites | cut -d' ' -f1)
-post rightclick 32 110
+post rightclick 32 114
 expect "^browser: menu shown $(cased 'Back to Favorite URL, ')" "a right-click on the first tile didn't show its menu"
 send choose "$(cased 'Remove from Favorites')"
 expect '^browser: favorites\( [0-9][0-9]*\)\{12\}$' "Remove from Favorites didn't leave 12 favorites"
@@ -642,13 +658,13 @@ expect "^browser: today $r\( \|\$\)" "Remove from Favorites didn't put the tab a
 expect '^browser: tiles settled$' "the 12 tiles didn't settle"
 expect '^browser: rows settled$' "the rows didn't settle under the 12 tiles"
 twelve=$(favorites)
-# Three rows of tiles take the Space's rows 141 down.
-send click 100 $(($(row 0 | cut -d' ' -f2) + 141))
+# Three rows of tiles take the Space's rows 165 down.
+send click 100 $(($(row 0 | cut -d' ' -f2) + 165))
 expect "^browser: selected $r\( in .*\)\{0,1\}\$" "a click on Today's top row didn't show the tab taken out"
 send key d cmd
 expect "^browser: pinned $r\$" "⌘D didn't pin the tab taken out of the favorites"
 expect '^browser: rows settled$' "the rows didn't settle after ⌘D"
-pinned_full="100 $(($(pinned_row 0 | cut -d' ' -f2) + 141))"
+pinned_full="100 $(($(pinned_row 0 | cut -d' ' -f2) + 165))"
 post rightclick $pinned_full
 expect "^browser: menu shown $(cased 'Unpin Tab, Add to Favorites (disabled), ')" \
   "with 12 favorites, a pinned tab's menu didn't dim Add to Favorites"

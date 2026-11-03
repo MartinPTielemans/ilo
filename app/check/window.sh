@@ -765,7 +765,7 @@ if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
   # faint and known: stops at 0.06 in dark and 0.09 in light, from black at the top to 0.25 · 255
   # at the bottom.
   post rightclick 100 112
-  expect '^browser: menu shown Rename Space' "a right-click on the Space's name showed no menu"
+  expect "^browser: menu shown $(cased 'Change Space Icon…')" "a right-click on the Space's name showed no menu"
   send choose "$(cased 'Edit Theme Color…')"
   expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
   expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
@@ -787,7 +787,7 @@ if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
       expect '^browser: window light true$' "the window didn't turn light with the Mac"
       ../tools/window-screenshot.sh "$pid" "$out/light.png" || fail "no window to capture"
       post rightclick 100 112
-      expect '^browser: menu shown Rename Space' "a right-click on the Space's name showed no menu"
+      expect "^browser: menu shown $(cased 'Change Space Icon…')" "a right-click on the Space's name showed no menu"
       ../tools/window-screenshot.sh "$pid" "$out/light-menu.png" || fail "no window to capture"
       send key escape
       expect '^browser: menu closed$' "escape didn't close the Space's menu"
