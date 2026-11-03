@@ -684,7 +684,7 @@ fn a_change_of_orientation_is_its_own_step(cx: &mut TestAppContext) {
     let (shell, host) = window(cx, Vec::new(), vec![10, 11], Folders::default(), vec![split]);
     shell.update(cx, |shell, cx| shell.stack_split(10, true, cx));
     assert!(host.take().contains(&"split stacked 10 true".to_string()));
-    assert_eq!(titles(&shell, cx).0, Some("Change Orientation"));
+    assert_eq!(titles(&shell, cx).0, Some("Convert to Vertical Split View"));
     report_split(&shell, cx, vec![10, 11], vec![10, 11], true);
     assert!(undo(&shell, cx));
     assert!(host.take().contains(&"split stacked 10 false".to_string()));
@@ -1340,6 +1340,37 @@ fn only_a_pinned_tab_joining_today_moves_a_row_first(cx: &mut TestAppContext) {
     report_lists(&shell, cx, vec![20, 10], vec![11], vec![20, 10]);
     shell.update(cx, |shell, cx| shell.join_split(11, 10, false, false, cx));
     assert_eq!(host.take_edits(), ["split 11 10 false"]);
+}
+
+/// A tab joining a favorite joins a copy of it at the top of Today, as Arc's does: a pinned tab as
+/// a copy too, both originals staying, and a Today tab moved. ⌘Z closes the copies and puts the
+/// Today tab back in its place.
+#[gpui::test]
+fn a_tab_joining_a_favorite_joins_its_copy_in_today(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![20], vec![10, 11], Folders::default(), Vec::new());
+    shell.update(cx, |shell, cx| shell.set_favorites(vec![(30, 1)], cx));
+    let copies = |calls: &[String]| {
+        calls.iter().filter(|call| call.starts_with("duplicate")).cloned().collect::<Vec<_>>()
+    };
+    host.take();
+
+    shell.update(cx, |shell, cx| shell.join_split(20, 30, false, false, cx));
+    assert_eq!(copies(&host.take()), ["duplicate 20", "duplicate 30"], "the favorite's shows last");
+    assert_eq!(host.take_edits(), ["split 1001 1002 false"]);
+    assert_eq!(titles(&shell, cx), (Some("Split View"), None));
+    report_lists(&shell, cx, vec![20], vec![1002, 1001, 10, 11], vec![1002, 1001]);
+    assert!(undo(&shell, cx));
+    assert_eq!(host.take_edits(), ["close 1001", "close 1002"], "the pinned tab stays");
+
+    report(&shell, cx, vec![20], vec![10, 11]);
+    shell.update(cx, |shell, cx| shell.join_split(11, 30, true, true, cx));
+    let calls = host.take();
+    assert_eq!(copies(&calls), ["duplicate 30"], "a Today tab moves");
+    assert!(calls.contains(&"split stacked 1003 true".to_string()));
+    assert_eq!(host.take_edits(), ["split 11 1003 true"]);
+    report_lists(&shell, cx, vec![20], vec![11, 1003, 10], vec![11, 1003]);
+    assert!(undo(&shell, cx));
+    assert_eq!(host.take_edits(), ["close 1003", "move 11 false 0 1"]);
 }
 
 /// One's pinned 4, then the folder Reading holding 6 and the closed folder Old, which holds 8.

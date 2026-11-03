@@ -12,10 +12,10 @@ use std::{
 
 use gpui::{
     AnyElement, App, Bounds, BoxShadow, Context, DispatchPhase, Entity, FocusHandle, Focusable,
-    FontWeight, HitboxBehavior, Hsla, Image, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent,
-    MouseUpEvent, PathBuilder, Pixels, Point, Rgba, Role, ScrollHandle, SharedString, Size,
-    Subscription, Task, Window, WindowTextSystem, canvas, div, img, point, prelude::*, px, rgb,
-    rgba, size, svg,
+    FontWeight, HitboxBehavior, Hsla, Image, ModifiersChangedEvent, MouseButton, MouseDownEvent,
+    MouseExitEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, Rgba, Role,
+    ScrollHandle, SharedString, Size, Subscription, Task, Window, WindowTextSystem, canvas, div,
+    img, point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{
@@ -852,9 +852,10 @@ struct Drag {
     /// go to, unless that's where it was. The rows stay where they are until it's let go.
     line: Option<f32>,
     /// The tab whose row's middle the pointer is on, and the wait for it to rest there, after which
-    /// it's the tab the dragged one would join in a split view, as Arc's, in place of a gap.
+    /// it's the tab the dragged one would join in a split view, as Arc's, in place of a gap, on its
+    /// left if the pointer is on the row's left half.
     resting: Option<(u64, Task<()>)>,
-    onto: Option<u64>,
+    onto: Option<(u64, bool)>,
     /// Let go, until the browser reports the lists it made.
     dropped: bool,
     /// Over the page, where it can join the page shown in a split view.
@@ -1033,6 +1034,10 @@ pub struct Shell {
     /// button waits until the pointer has left the row or pressed it, so a second click meant for
     /// the − never removes the tab.
     remove_held: Option<u64>,
+    /// The split row whose ✕ or − the pointer is on, and whether ⌥ is held, when a click separates
+    /// its tabs instead of closing them (Arc). The pointer's moves say the keys held, as GPUI hears
+    /// no ⌥ of its own while the page has the keyboard.
+    on_split_close: Option<(u64, bool)>,
     /// A shortcut the page handed back ran since the pointer last moved. The sidebar draws no row
     /// or favicon under the pointer until it moves, as GPUI hides its hover after a key of its own,
     /// so a row the pointer rests on doesn't read as selected beside the tab a key showed.
@@ -1541,6 +1546,7 @@ impl Shell {
             selected: 0,
             hovered: None,
             remove_held: None,
+            on_split_close: None,
             page_keyed: false,
             retip: false,
             menu_row: None,
@@ -3099,6 +3105,10 @@ impl Shell {
         if self.remove_held.is_some_and(|held| self.hovered != Some(Row::Tab(held))) {
             self.remove_held = None;
         }
+        // Its button goes with the row's hover, which may tell it nothing.
+        if self.on_split_close.is_some_and(|(on, _)| self.hovered != Some(Row::Tab(on))) {
+            self.on_split_close = None;
+        }
         cx.notify();
     }
 
@@ -3535,6 +3545,9 @@ impl Render for Shell {
             .on_action(cx.listener(|shell, _: &crate::text_input::Redo, _, cx| {
                 shell.redo(cx);
             }))
+            .on_modifiers_changed(cx.listener(|shell, event: &ModifiersChangedEvent, _, cx| {
+                shell.alt_on_close(event.modifiers.alt, cx)
+            }))
             .size_full()
             .relative()
             .font_family(crate::face::UI)
@@ -3880,8 +3893,10 @@ impl Shell {
         });
         let line = over_list.and_then(|drag| Some(self.drop_line(drag.line?, drag.depth, room)));
         let dragged = over_list.filter(|drag| !drag.incoming);
-        // Mid-turn into or out of a tile, it's drawn over the sidebar instead.
-        let dragged = dragged.filter(|drag| drag.shape.start.is_none()).map(|drag| {
+        // Mid-turn into or out of a tile, it's drawn over the sidebar instead, and rested on a
+        // row, it's in that row's slot for it.
+        let dragged = dragged.filter(|drag| drag.shape.start.is_none() && drag.onto.is_none());
+        let dragged = dragged.map(|drag| {
             let row = self.tab_row(drag.tab, true, cx);
             let top = room + self.drag_at(drag);
             let ghost = div().id("ghost").absolute().top(px(top)).left_0();

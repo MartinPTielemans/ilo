@@ -285,17 +285,20 @@ expect "^browser: loaded $n ${site}notes.txt\$" "the link didn't load in the pan
 # The outline comes as the rows are drawn.
 expect '^browser: outline ' "the pinned split's row wasn't drawn"
 ../tools/window-screenshot.sh "$pid" "$out/pinned-split.png" || fail "no window to capture"
-bar_command separate-split "Separate All Pages" "separate all"
-expect '^browser: splits $' "Separate All Pages didn't end the pinned split"
-expect "^browser: panes $n\$" "Separate All Pages didn't leave the focused pane's tab shown alone"
+bar_command separate-split "Separate All Tabs" "separate all"
+expect '^browser: splits $' "Separate All Tabs didn't end the pinned split"
+expect "^browser: panes $n\$" "Separate All Tabs didn't leave the focused pane's tab shown alone"
 # A split made by dragging inside Pinned stays pinned too, as Arc's: the pane's tab, a pinned row
-# of its own now, rested on the pinned tab's row joins it there, and ⌘Z takes it back to its row.
-expect_lists "$c $n" "$a" "after Separate All Pages on the pinned split"
+# of its own now, rested on the pinned tab's row's right half joins it there on the right, and ⌘Z
+# takes it back to its row.
+expect_lists "$c $n" "$a" "after Separate All Tabs on the pinned split"
+y0=$(pinned_row 0 | cut -d' ' -f2)
 send press $(pinned_row 1)
 send dragto 110 $(pinned_row 1 | cut -d' ' -f2)
-send dragto $(pinned_row 0)
-expect "^browser: drop onto $c\$" "a pinned tab rested on another pinned tab's row didn't take it as the drop"
-send release $(pinned_row 0)
+send dragto 170 $y0
+expect "^browser: drop onto $c right\$" \
+  "a pinned tab rested on a pinned row didn't take it as the drop"
+send release 170 $y0
 expect "^browser: dragged $n onto $c\$" "the pinned tab let go on another pinned tab's row didn't join it"
 expect "^browser: splits $c+$n\$" "the pinned tabs dragged together aren't a split: $(grep '^browser: splits' "$log" | tail -1)"
 expect_lists "$c $n" "$a" "after dragging a pinned tab onto another inside Pinned"
@@ -903,25 +906,30 @@ none_since '^browser: selected' || fail "a file of the dropped folder showed"
 settled
 ../tools/window-screenshot.sh "$pid" "$out/dropped-folder.png" || fail "no window to capture"
 # The dropped file's row, under the folder's four, dragged onto the page hands the file to the
-# system's drag, to upload it there, as a download's row does, and goes back to its place.
-press=$((step + 1))
-send press $(pinned_row 4)
-send dragto 150 $(($(pinned_row 4 | cut -d' ' -f2) + 10))
-send dragto 600 300
-expect "^browser: tab $e file drag\$" \
-  "a file's row dragged onto the page didn't start the system's drag"
-send release 600 300
-# No real button holds the system's drag, so it may end before the release reaches it.
-for _ in $(seq 100); do
-  sed -n "/^browser: drive $press: /,\$p" "$log" | grep -q '^browser: file drag ended ' && break
-  sleep 0.1
-done
-sed -n "/^browser: drive $press: /,\$p" "$log" | grep -q '^browser: file drag ended ' ||
-  fail "the file row's drag didn't end"
-case "$(outline)" in
-  "$n+["*"] $e $c") ;;
-  *) fail "the file's row didn't go back to its place: $(outline)" ;;
-esac
+# system's drag, to upload it there, as a download's row does, and goes back to its place. On
+# Windows the app stops in DoDragDrop under the driver (#1583).
+if windows; then
+  echo "skip: a file's row dragged onto the page: Windows' system drag stops under the driver (#1583)."
+else
+  press=$((step + 1))
+  send press $(pinned_row 4)
+  send dragto 150 $(($(pinned_row 4 | cut -d' ' -f2) + 10))
+  send dragto 600 300
+  expect "^browser: tab $e file drag\$" \
+    "a file's row dragged onto the page didn't start the system's drag"
+  send release 600 300
+  # No real button holds the system's drag, so it may end before the release reaches it.
+  for _ in $(seq 100); do
+    sed -n "/^browser: drive $press: /,\$p" "$log" | grep -q '^browser: file drag ended ' && break
+    sleep 0.1
+  done
+  sed -n "/^browser: drive $press: /,\$p" "$log" | grep -q '^browser: file drag ended ' ||
+    fail "the file row's drag didn't end"
+  case "$(outline)" in
+    "$n+["*"] $e $c") ;;
+    *) fail "the file's row didn't go back to its place: $(outline)" ;;
+  esac
+fi
 # The +'s menu ends with Add File or Folder… (Add Files… and Add Folder… off the Mac, whose
 # panels pick one kind), whose file, named at launch, opens at the top of Today and shows. Today is
 # read here, as the drag before may have dropped its file on the page, which opens it as a tab.
