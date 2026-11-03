@@ -148,33 +148,43 @@ fn open() -> Result<Session, String> {
     let outputs = sway(GET_OUTPUTS, "").ok_or("no sway at SWAYSOCK")?;
     let outputs = outputs.as_array().ok_or("sway listed no outputs")?;
     let headless = |output: &Value| {
-        output["name"].as_str().is_some_and(|name| name.starts_with("HEADLESS-"))
+        output["name"]
+            .as_str()
+            .is_some_and(|name| name.starts_with("HEADLESS-"))
     };
     if outputs.is_empty() || !outputs.iter().all(headless) {
         return Err("sway's outputs aren't all headless".into());
     }
-    let extent = outputs.iter().fold((0f64, 0f64), |(width, height), output| {
-        let rect = &output["rect"];
-        let right = number(&rect["x"]) + number(&rect["width"]);
-        let bottom = number(&rect["y"]) + number(&rect["height"]);
-        (width.max(right), height.max(bottom))
-    });
+    let extent = outputs
+        .iter()
+        .fold((0f64, 0f64), |(width, height), output| {
+            let rect = &output["rect"];
+            let right = number(&rect["x"]) + number(&rect["width"]);
+            let bottom = number(&rect["y"]) + number(&rect["height"]);
+            (width.max(right), height.max(bottom))
+        });
     let connection = Connection::connect_to_env().map_err(|e| e.to_string())?;
     let (globals, mut queue) =
         registry_queue_init::<State>(&connection).map_err(|e| e.to_string())?;
     let handle = queue.handle();
-    let seat: WlSeat = globals.bind(&handle, 1..=1, ()).map_err(|e| e.to_string())?;
-    let pointers: ZwlrVirtualPointerManagerV1 =
-        globals.bind(&handle, 1..=2, ()).map_err(|e| e.to_string())?;
-    let keyboards: ZwpVirtualKeyboardManagerV1 =
-        globals.bind(&handle, 1..=1, ()).map_err(|e| e.to_string())?;
+    let seat: WlSeat = globals
+        .bind(&handle, 1..=1, ())
+        .map_err(|e| e.to_string())?;
+    let pointers: ZwlrVirtualPointerManagerV1 = globals
+        .bind(&handle, 1..=2, ())
+        .map_err(|e| e.to_string())?;
+    let keyboards: ZwpVirtualKeyboardManagerV1 = globals
+        .bind(&handle, 1..=1, ())
+        .map_err(|e| e.to_string())?;
     let pointer = pointers.create_virtual_pointer(Some(&seat), &handle, ());
     let keyboard = keyboards.create_virtual_keyboard(&seat, &handle, ());
     let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
     let keymap = xkb::Keymap::new_from_names(&context, "evdev", "pc105", "us", "", None, 0)
         .ok_or("xkbcommon has no us keymap")?;
     // The compositor maps the keymap from a file, with its NUL.
-    let mut text = keymap.get_as_string(xkb::KEYMAP_FORMAT_TEXT_V1).into_bytes();
+    let mut text = keymap
+        .get_as_string(xkb::KEYMAP_FORMAT_TEXT_V1)
+        .into_bytes();
     text.push(0);
     let path = std::env::temp_dir().join(format!("ilo-drive-keymap-{}", std::process::id()));
     let mut file = std::fs::File::options()
@@ -221,7 +231,9 @@ fn sway(kind: u32, payload: &str) -> Option<Value> {
 /// Has sway run `command`, such as "[con_id=4] focus".
 fn sway_command(command: &str) -> Option<()> {
     let answer = sway(RUN_COMMAND, command)?;
-    (answer.as_array()?.iter()).all(|each| each["success"].as_bool() == Some(true)).then_some(())
+    (answer.as_array()?.iter())
+        .all(|each| each["success"].as_bool() == Some(true))
+        .then_some(())
 }
 
 /// A window of the app's as sway has it, with its content's frame in the layout.
@@ -267,10 +279,15 @@ fn ours() -> Vec<Node> {
                 width: number(&window["width"]),
                 height: number(&window["height"]),
                 focused: node["focused"].as_bool() == Some(true),
-                full_screen: node["fullscreen_mode"].as_u64().is_some_and(|mode| mode != 0),
+                full_screen: node["fullscreen_mode"]
+                    .as_u64()
+                    .is_some_and(|mode| mode != 0),
             });
         }
-        for child in ["nodes", "floating_nodes"].iter().filter_map(|key| node[*key].as_array()) {
+        for child in ["nodes", "floating_nodes"]
+            .iter()
+            .filter_map(|key| node[*key].as_array())
+        {
             child.iter().for_each(|each| walk(each, out));
         }
     }
@@ -360,14 +377,20 @@ fn stacked() -> Vec<(bc::bc_id, Node)> {
 /// numbers them.
 fn name_of(id: bc::bc_id) -> String {
     let index = PAIRED.with_borrow(|paired| paired.iter().position(|&(each, _)| each == id));
-    index.map_or_else(|| "none".to_string(), |index| format!("window {}", index + 1))
+    index.map_or_else(
+        || "none".to_string(),
+        |index| format!("window {}", index + 1),
+    )
 }
 
 /// The browser window with sway's focus.
 fn focused_browser() -> Option<bc::bc_id> {
     let nodes = ours();
     let focused = nodes.iter().find(|node| node.focused)?;
-    browsers(&nodes).into_iter().find(|(_, node)| node.id == focused.id).map(|(id, _)| id)
+    browsers(&nodes)
+        .into_iter()
+        .find(|(_, node)| node.id == focused.id)
+        .map(|(id, _)| id)
 }
 
 /// The title of the window with sway's focus, as drive.rs's key_title: a dialog of Chromium's in a
@@ -375,7 +398,9 @@ fn focused_browser() -> Option<bc::bc_id> {
 pub(crate) fn key_title() -> Option<String> {
     let nodes = ours();
     let focused = nodes.iter().find(|node| node.focused)?;
-    if let Some((id, _)) = browsers(&nodes).into_iter().find(|(_, node)| node.id == focused.id)
+    if let Some((id, _)) = browsers(&nodes)
+        .into_iter()
+        .find(|(_, node)| node.id == focused.id)
         && unsafe { bc::bc_window_keyboard_in_child(id) }
     {
         return Some(drive::child_title(id));
@@ -391,7 +416,9 @@ fn frame(at: Option<(f64, f64)>, width: f64, height: f64) -> Option<()> {
     let handle =
         WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == id).map(|w| w.handle))?;
     let cx = CX.with_borrow(Clone::clone)?;
-    let view = cx.update(|cx| handle.update(cx, |_, window, _| crate::ns_view(window))).ok()?;
+    let view = cx
+        .update(|cx| handle.update(cx, |_, window, _| crate::ns_view(window)))
+        .ok()?;
     let (x, y) = at.unwrap_or((node.x, node.y));
     let con = node.id;
     sway_command(&format!(
@@ -412,9 +439,8 @@ fn overlay_frame(view: *mut c_void) -> Option<(bc::bc_id, gpui::Bounds<gpui::Pix
     let (ui_view, bounds) = (overlays::placed(view))
         .or_else(|| panels::placed(view))
         .or_else(|| floats::placed(view))?;
-    let id = WINDOWS.with_borrow(|windows| {
-        windows.iter().find(|w| w.ui_view == ui_view).map(|w| w.id)
-    })?;
+    let id = WINDOWS
+        .with_borrow(|windows| windows.iter().find(|w| w.ui_view == ui_view).map(|w| w.id))?;
     Some((id, bounds))
 }
 
@@ -450,7 +476,10 @@ fn key_origin() -> Option<(f64, f64)> {
     // As drive.rs's is the X focus's: a Little ilo window the driven one opened has the keys, and
     // its profile picker's click went to the driven window under it.
     let focused = nodes.iter().find(|node| node.focused).map(|node| node.id);
-    let node = match browsers(&nodes).into_iter().find(|(_, node)| Some(node.id) == focused) {
+    let node = match browsers(&nodes)
+        .into_iter()
+        .find(|(_, node)| Some(node.id) == focused)
+    {
         Some((_, node)) => node,
         None => driven()?.1,
     };
@@ -469,7 +498,10 @@ pub(crate) fn keyboard() -> (&'static str, &'static str, bool) {
     if gpui_linux::shown_keyboard_overlay().is_some() {
         return ("GPUIPanel", "GPUIView", true);
     }
-    let Some((id, _)) = browsers(&nodes).into_iter().find(|(_, node)| node.id == focused.id) else {
+    let Some((id, _)) = browsers(&nodes)
+        .into_iter()
+        .find(|(_, node)| node.id == focused.id)
+    else {
         return ("none", "none", true);
     };
     if unsafe { bc::bc_window_keyboard_in_child(id) } {
@@ -591,8 +623,7 @@ fn keycode(keysym: u32) -> Option<(u32, bool)> {
             let key = xkb::Keycode::new(code);
             let levels = keymap.num_levels_for_key(key, 0).min(2);
             let level = (0..levels).find(|&level| {
-                (keymap.key_get_syms_by_level(key, 0, level).iter())
-                    .any(|sym| sym.raw() == keysym)
+                (keymap.key_get_syms_by_level(key, 0, level).iter()).any(|sym| sym.raw() == keysym)
             })?;
             Some((code.checked_sub(8)?, level == 1))
         })
@@ -642,7 +673,9 @@ fn insert(text: &str) -> Option<()> {
     // A page with the keys gets the text typed, as drive.rs's insert types it there: its field is
     // Chromium's, which no GPUI keystroke reaches.
     if keyboard().1 == "RenderWidgetHostViewCocoa" {
-        return text.chars().try_for_each(|c| key_events(&c.to_string(), 0, &[true, false]));
+        return text
+            .chars()
+            .try_for_each(|c| key_events(&c.to_string(), 0, &[true, false]));
     }
     let nodes = ours();
     let view = match gpui_linux::shown_keyboard_overlay() {
@@ -661,9 +694,13 @@ fn insert(text: &str) -> Option<()> {
     };
     cx.update(|cx| {
         let handle = cx.windows().into_iter().find(|handle| {
-            handle.update(cx, |_, window, _| crate::ns_view(window)).is_ok_and(|each| each == view)
+            handle
+                .update(cx, |_, window, _| crate::ns_view(window))
+                .is_ok_and(|each| each == view)
         })?;
-        handle.update(cx, |_, window, cx| window.dispatch_keystroke(typed, cx)).ok()
+        handle
+            .update(cx, |_, window, cx| window.dispatch_keystroke(typed, cx))
+            .ok()
     })
     .filter(|&typed| typed)
     .map(drop)
@@ -678,7 +715,9 @@ fn wheel(x: f64, y: f64, axis: wl_pointer::Axis, notches: i32) -> Option<()> {
             for _ in 0..notches.unsigned_abs() {
                 session.pointer.axis_source(wl_pointer::AxisSource::Wheel);
                 let notch = notches.signum();
-                session.pointer.axis_discrete(time, axis, 15. * f64::from(notch), notch);
+                session
+                    .pointer
+                    .axis_discrete(time, axis, 15. * f64::from(notch), notch);
                 session.pointer.frame();
             }
         })
@@ -698,22 +737,31 @@ fn swipe(x: f64, y: f64, by: (f64, f64), count: u32, rest: u32) -> Option<()> {
 /// The swipe's `left` scrolls, then its fingers lifting.
 fn swiping(by: (f64, f64), left: u32, rest: u32, done: Box<dyn FnOnce()>) {
     if left > 0 {
-        drive::after(8, Box::new(move || {
-            _ = fingers(by);
-            swiping(by, left - 1, rest, done);
-        }));
+        drive::after(
+            8,
+            Box::new(move || {
+                _ = fingers(by);
+                swiping(by, left - 1, rest, done);
+            }),
+        );
         return;
     }
-    drive::after(rest, Box::new(move || {
-        _ = with_session(|session, time| {
-            for axis in [wl_pointer::Axis::HorizontalScroll, wl_pointer::Axis::VerticalScroll] {
-                session.pointer.axis_stop(time, axis);
-                session.pointer.axis_source(wl_pointer::AxisSource::Finger);
-            }
-            session.pointer.frame();
-        });
-        done();
-    }));
+    drive::after(
+        rest,
+        Box::new(move || {
+            _ = with_session(|session, time| {
+                for axis in [
+                    wl_pointer::Axis::HorizontalScroll,
+                    wl_pointer::Axis::VerticalScroll,
+                ] {
+                    session.pointer.axis_stop(time, axis);
+                    session.pointer.axis_source(wl_pointer::AxisSource::Finger);
+                }
+                session.pointer.frame();
+            });
+            done();
+        }),
+    );
 }
 
 /// One scroll of two fingers, `dx` points right and `dy` down. GPUI scrolls a touchpad's axis
@@ -741,19 +789,29 @@ fn layout() -> Option<()> {
     let ring = drive::ring(id, height).unwrap_or_default();
     let size = format!("{width:.0}x{height:.0}");
     log!("browser: layout content {size}, GPUIView 0,0 {size}{pages}{ring}");
-    log!("browser: layout buttons {}", drive::buttons(id).unwrap_or_default());
+    log!(
+        "browser: layout buttons {}",
+        drive::buttons(id).unwrap_or_default()
+    );
     if let Some(dialog) = drive::dialog(id) {
         log!("browser: layout child {dialog}");
     }
     for (each, bounds) in drive::overlay_views().into_iter().filter_map(overlay_frame) {
         if each == id {
-            let [x, y, width, height] =
-                [bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height]
-                    .map(f32::from);
+            let [x, y, width, height] = [
+                bounds.origin.x,
+                bounds.origin.y,
+                bounds.size.width,
+                bounds.size.height,
+            ]
+            .map(f32::from);
             log!("browser: layout child {x:.0},{y:.0} {width:.0}x{height:.0}");
         }
     }
-    log!("browser: layout keyboard {}", drive::keyboard_page(id, height));
+    log!(
+        "browser: layout keyboard {}",
+        drive::keyboard_page(id, height)
+    );
     log!("browser: layout full screen {}", node.full_screen as u8);
     Some(())
 }
@@ -799,7 +857,11 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
             }
             let (left, top) = key_origin()?;
             let (x, y) = (left + x, top + y);
-            let which = if action == "rightclickkey" { BTN_RIGHT } else { BTN_LEFT };
+            let which = if action == "rightclickkey" {
+                BTN_RIGHT
+            } else {
+                BTN_LEFT
+            };
             click(x, y, which, 0, false)?;
             if action == "doubleclickkey" {
                 click(x, y, BTN_LEFT, 0, true)?;
@@ -836,7 +898,8 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
                     _ => Some(()),
                 }
             })
-        })(),
+        })(
+        ),
         "move" => (|| {
             let (x, y) = in_driven_point(&mut words)?;
             motion(x, y)
@@ -947,9 +1010,8 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
                 _ => return None,
             };
             let id = driven_id()?;
-            let surface = WINDOWS.with_borrow(|windows| {
-                windows.iter().find(|w| w.id == id).map(|w| w.ui_view)
-            })?;
+            let surface = WINDOWS
+                .with_borrow(|windows| windows.iter().find(|w| w.id == id).map(|w| w.ui_view))?;
             crate::swiped(surface, x, y, back);
             Some(())
         })(),

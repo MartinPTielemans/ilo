@@ -25,9 +25,20 @@ fn shell(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<
         let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
         shell.set_spaces(vec![space], cx);
         shell.set_space(1, cx);
-        shell.set_tabs(1, Vec::new(), vec![10, 11], Vec::new(), Folders::default(), cx);
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            vec![10, 11],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
         shell.set_selected(10, cx);
-        let page = Page { url: "https://example.org/c".into(), can_go_back: true, ..Page::default() };
+        let page = Page {
+            url: "https://example.org/c".into(),
+            can_go_back: true,
+            ..Page::default()
+        };
         shell.set_page(10, page, cx);
     });
     cx.run_until_parked();
@@ -46,12 +57,18 @@ fn pages() -> Vec<HistoryPage> {
         title: title.to_string().into(),
         favicon: None,
     };
-    vec![page(-1, "https://example.org/b", "B"), page(-2, "https://example.org/a", "")]
+    vec![
+        page(-1, "https://example.org/b", "B"),
+        page(-2, "https://example.org/a", ""),
+    ]
 }
 
 /// What the shell asked of the core, but the tooltips hovering the buttons asks for.
 fn calls(host: &Recorder) -> Vec<String> {
-    host.take().into_iter().filter(|call| !call.starts_with("tooltip")).collect()
+    host.take()
+        .into_iter()
+        .filter(|call| !call.starts_with("tooltip"))
+        .collect()
 }
 
 fn titles(host: &Recorder) -> Vec<String> {

@@ -53,7 +53,9 @@ mod tests {
     use super::*;
 
     #[gpui::test]
-    fn under_reduce_motion_a_change_starts_at_its_end_and_what_comes_rests(cx: &mut TestAppContext) {
+    fn under_reduce_motion_a_change_starts_at_its_end_and_what_comes_rests(
+        cx: &mut TestAppContext,
+    ) {
         cx.update(|cx| {
             assert!(start(cx).elapsed() < LONG_AGO / 2);
             assert_eq!((scale(0.7, cx), offset(32., cx)), (0.7, 32.));
