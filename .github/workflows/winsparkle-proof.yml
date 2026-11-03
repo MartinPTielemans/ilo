@@ -7,7 +7,7 @@ name: WinSparkle update proof
 
 on:
   push:
-    branches: ['test/winsparkle-0112-*', 'test/winsparkle-0113-*']
+    branches: ['test/winsparkle-0112-*', 'test/winsparkle-0113-*', 'test/winsparkle-0114-*']
 
 permissions:
   contents: read
