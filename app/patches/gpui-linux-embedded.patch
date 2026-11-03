@@ -1629,7 +1629,7 @@ index cbc962bcff..bfbb357677 100644
  use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
  
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index 2d40cf7fa9..35e80d0a7e 100644
+index 2d40cf7fa9..ba3235887a 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
 @@ -12,11 +12,7 @@ use std::{
@@ -2671,7 +2671,7 @@ index 2d40cf7fa9..35e80d0a7e 100644
              }
              _ => {}
          }
-@@ -3479,3 +3995,504 @@ mod tests {
+@@ -3479,3 +3995,518 @@ mod tests {
          );
      }
  }
@@ -2762,15 +2762,29 @@ index 2d40cf7fa9..35e80d0a7e 100644
 +    }
 +}
 +
++/// GPUI's window a test driver's input method composes in, by the surface it shows in: the
++/// embedder's, as for its input method, or a window's own, such as Settings'.
++fn drive_text_window(surface: *mut std::ffi::c_void) -> Option<WaylandWindowStatePtr> {
++    if let Some((window, _)) = embedded_text_window(surface) {
++        return Some(window);
++    }
++    let client = EMBEDDED_CLIENT.with_borrow(|client| client.as_ref()?.upgrade())?;
++    let windows: Vec<_> = client.borrow().windows.values().cloned().collect();
++    windows.into_iter().find(|window| {
++        let own = window.surface().id().as_ptr().cast::<std::ffi::c_void>();
++        window.embedder_surface().is_none() && own == surface && window.is_active()
++    })
++}
++
 +/// For a test driver, as an input method, as X11's `drive_compose`: the text field with the keys
-+/// in the embedder's surface `parent` composes `text` with `selected` selected in it, or stops
++/// in `surface` (drive_text_window) composes `text` with `selected` selected in it, or stops
 +/// composing with `text` empty. Returns false unless one there takes text.
 +pub fn drive_compose_in(
-+    parent: *mut std::ffi::c_void,
++    surface: *mut std::ffi::c_void,
 +    text: &str,
 +    selected: Option<std::ops::Range<usize>>,
 +) -> bool {
-+    let Some((window, _)) = embedded_text_window(parent) else {
++    let Some(window) = drive_text_window(surface) else {
 +        return false;
 +    };
 +    window
@@ -2786,17 +2800,17 @@ index 2d40cf7fa9..35e80d0a7e 100644
 +}
 +
 +/// As `drive_compose_in`: commits `text` in place of what was composed.
-+pub fn drive_commit_in(parent: *mut std::ffi::c_void, text: &str) -> bool {
-+    embedded_text_window(parent)
-+        .and_then(|(window, _)| {
++pub fn drive_commit_in(surface: *mut std::ffi::c_void, text: &str) -> bool {
++    drive_text_window(surface)
++        .and_then(|window| {
 +            window.with_input_handler(|handler| handler.replace_text_in_range(None, text))
 +        })
 +        .is_some()
 +}
 +
-+/// What the text field with the keys in the embedder's surface `parent` has marked, in UTF-16.
-+pub fn marked_range_in(parent: *mut std::ffi::c_void) -> Option<std::ops::Range<usize>> {
-+    let (window, _) = embedded_text_window(parent)?;
++/// What the text field with the keys in `surface` (drive_text_window) has marked, in UTF-16.
++pub fn marked_range_in(surface: *mut std::ffi::c_void) -> Option<std::ops::Range<usize>> {
++    let window = drive_text_window(surface)?;
 +    window.with_input_handler(|handler| handler.marked_text_range()).flatten()
 +}
 +

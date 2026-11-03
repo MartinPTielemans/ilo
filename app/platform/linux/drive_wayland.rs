@@ -567,10 +567,13 @@ fn key_events(key: &str, state: u16, kinds: &[bool]) -> Option<()> {
     hold(held())
 }
 
-/// The surface of the browser window with sway's focus while its UI or an overlay over it has the
-/// keys, where drive.rs's scripted input method composes, as the compositor's would. Not while a
-/// page has them, whose input method is Chromium's.
+/// The surface where drive.rs's scripted input method composes, as the compositor's would:
+/// Settings' with sway's focus, or the browser window's while its UI or an overlay over it has the
+/// keys. Not while a page has them, whose input method is Chromium's.
 pub(crate) fn ime_surface() -> Option<*mut c_void> {
+    if focused_settings(&ours()).is_some() {
+        return settings_window::shown();
+    }
     let id = focused_browser()?;
     let ui = gpui_linux::shown_keyboard_overlay().is_some()
         || unsafe { bc::bc_window_keyboard_is_ui(id) };
