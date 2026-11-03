@@ -241,7 +241,12 @@ impl Shell {
 
     /// Shows the rows a moment after the pointer comes onto the button, keeps them while it's on
     /// the button or them, and sends them away once it's on neither.
-    fn settle_recent_downloads(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn settle_recent_downloads(&mut self, cx: &mut Context<Self>) {
+        // A row's menu takes the pointer from them as it comes on screen over them, and they stay
+        // while it's open, as the reveal does, for it to act on them. They settle as it closes.
+        if self.menu_open {
+            return;
+        }
         let recent = &self.recent_downloads;
         if !recent.over_button && !(recent.over_rows && !recent.going) {
             self.recent_downloads.wait = None;
@@ -876,6 +881,44 @@ mod tests {
             (shell.library_open, shell.section == Section::Archive)
         });
         assert!(open && archive, "a click opens the Library where it was");
+    }
+
+    /// A right-click on a row shows its menu, which takes the pointer as it comes on screen over
+    /// them, and the rows stay while it's open for it to act on, then go once it closes with the
+    /// pointer on neither them nor the button.
+    #[gpui::test]
+    fn the_recent_downloads_stay_under_a_rows_menu(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx);
+        let downloads = vec![done(2, HOUR), done(1, 2. * HOUR)];
+        shell.update(cx, |shell, cx| shell.set_downloads(downloads, cx));
+        let height = shell.read_with(cx, |shell, _| f32::from(shell.viewport.height));
+        move_to(cx, 24., height - 25.);
+        wait(cx, RECENT_WAIT);
+        wait(cx, Duration::from_secs_f32(RECENT_FADE));
+        assert_eq!(rows(&shell, cx).0.len(), 2);
+
+        let row = point(px(120.), px(height - 50. - 28.));
+        move_to(cx, 120., height - 50. - 28.);
+        cx.simulate_mouse_down(row, MouseButton::Right, Modifiers::none());
+        cx.simulate_mouse_up(row, MouseButton::Right, Modifiers::none());
+        cx.run_until_parked();
+        let titles: Vec<_> = (host.menus.borrow().last().unwrap().iter())
+            .map(|(title, _)| title.to_string())
+            .collect();
+        assert!(
+            titles.iter().any(|title| title == "Move to Trash"),
+            "{titles:?}"
+        );
+        move_to(cx, 120., 200.);
+        let (kept, going) = rows(&shell, cx);
+        assert!(kept.len() == 2 && !going, "the menu keeps them");
+
+        cx.update(|_, cx| host.dismiss(cx));
+        cx.run_until_parked();
+        assert!(
+            rows(&shell, cx).1,
+            "they go as it closes, the pointer on neither"
+        );
     }
 
     /// A pointer passing over the button leaves no rows. A download running alone shows as one, and
