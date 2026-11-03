@@ -344,9 +344,10 @@ send window "$look_window"
 # closing any app's window does, and when that's another app's, that app active, with ilo's main
 # window where it was, behind it, where the main window went in front of it on the Mac (#1689).
 # The other app is a stand-in of the run's own over the main window: on the Mac check/cover.m, on
-# Windows app-windows.py's cover, over the window's lower half, and on Linux ImageMagick's display,
-# which the window manager puts in front with the keyboard as it opens. The Little ilo window then
-# comes back in front of it, as the user going back to it does. Openbox then gives the keyboard to
+# Windows app-windows.py's cover, over the window's lower half and behind the Little ilo window, as
+# the driver never brings a window in front of another app's there, and on Linux ImageMagick's
+# display, which the window manager puts in front with the keyboard as it opens. The Little ilo
+# window then comes back in front of it, as the user going back to it does. Openbox then gives the keyboard to
 # the window that had it last, the stand-in's.
 send window 1
 send order
@@ -364,10 +365,13 @@ covered() {
   case "$(stack)" in "other "*cover*) return 0 ;; esac
   return 1
 }
-# Waits for the stand-in's window to be in front of the main window, or fails with $1.
+# Waits for the stand-in's window to be over the main window, behind the Little ilo window or in
+# front of it, or fails with $1.
 await_cover() {
   for _ in $(seq 50); do
-    covered && return 0
+    send window 1 behind
+    send stack
+    case "$(stack)" in *"other cover"*) return 0 ;; esac
     sleep 0.1
   done
   fail "$1: $(stack)"
@@ -401,7 +405,7 @@ cover_main() {
       helper=$!
       ;;
     *)
-      python3 -I -u check/app-windows.py cover "$(cat "/proc/$pid/winpid")" ilo \
+      python3 -I -u check/app-windows.py cover "$(cat "/proc/$pid/winpid")" behind \
         "$out/cover-front" > "$out/cover.log" 2>&1 &
       helper=$!
       ;;
@@ -438,8 +442,8 @@ give_way() {
     page=$(sed -n "s|^browser: window $little shows \([0-9]*\)\$|\1|p" "$log" | tail -1)
     expect "^browser: title $page ready\$" "the Little ilo window's page didn't draw ($1)"
   fi
-  # The stand-in opens once the Little ilo window has, as a key the driver sends brings the window
-  # driven to the front on Windows, and the Little ilo window then comes back in front of it.
+  # The stand-in opens once the Little ilo window has, which takes the foreground as it opens, and
+  # the Little ilo window then comes back in front of it.
   cover_main
   await_cover "the other app's window didn't open in front of the main window ($1)"
   send window "$number"
