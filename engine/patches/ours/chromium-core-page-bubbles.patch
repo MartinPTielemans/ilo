@@ -1,0 +1,123 @@
+Ends what a page can ask of Chrome's bubbles in the core's windows as if the user had dismissed
+it: a device chooser (WebHID, WebUSB, Web Serial, Web Bluetooth), the safety tip on a lookalike
+domain, the File System Access prompt to restore a file's permission, the low-storage bubble, the
+prompt to remote a cast tab's video, and the iOS promo after a saved password. Each anchors to a
+BrowserView, which the core's windows don't have, and a device request dereferenced the null in
+bubble_anchor_util and took the browser down (issue #1640). A device request ends before
+fullscreen drops, and dropping its controller settles it as a cancel, so the page gets the
+rejection a user's cancel gives it.
+
+--- a/chrome/browser/ui/views/permissions/chooser_bubble_ui.cc
++++ b/chrome/browser/ui/views/permissions/chooser_bubble_ui.cc
+@@ -18,6 +18,7 @@
+ #include "chrome/browser/ui/views/bubble_anchor_util_views.h"
+ #include "chrome/browser/ui/views/chrome_widget_sublevel.h"
+ #include "chrome/browser/ui/views/device_chooser_content_view.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/location_bar/location_bar_bubble_delegate_view.h"
+ #include "chrome/browser/ui/views/title_origin_label.h"
+ #include "components/permissions/chooser_controller.h"
+@@ -355,6 +356,16 @@
+   }
+ #endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+ 
++  // browser_core: the core's windows have no BrowserView for Chrome's chooser
++  // to hang from, nor a chooser of their own yet, so a request from one of
++  // their tabs ends as if the user had cancelled it, without leaving
++  // fullscreen. Dropping `controller` settles the request.
++  if (BrowserWindowInterface* tab_browser =
++          GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(contents);
++      tab_browser && !BrowserView::GetBrowserViewForBrowser(tab_browser)) {
++    return base::DoNothing();
++  }
++
+   std::optional<ChooserDialogHost> host =
+       DropFullscreenForChooserDialog(contents, weak_document);
+   if (!host) {
+--- a/chrome/browser/ui/views/page_info/safety_tip_page_info_bubble_view.cc
++++ b/chrome/browser/ui/views/page_info/safety_tip_page_info_bubble_view.cc
+@@ -13,6 +13,7 @@
+ #include "chrome/browser/ui/views/accessibility/theme_tracking_non_accessible_image_view.h"
+ #include "chrome/browser/ui/views/bubble_anchor_util_views.h"
+ #include "chrome/browser/ui/views/chrome_layout_provider.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/page_info/page_info_view_factory.h"
+ #include "chrome/grit/theme_resources.h"
+ #include "components/security_state/core/security_state.h"
+@@ -231,6 +232,10 @@
+   if (!browser) {
+     return;
+   }
++  if (!BrowserView::GetBrowserViewForBrowser(browser)) {
++    // browser_core: the core's windows have no location bar to point at.
++    return;
++  }
+ 
+   bubble_anchor_util::AnchorConfiguration configuration =
+       bubble_anchor_util::GetPageInfoAnchorConfiguration(
+--- a/chrome/browser/ui/views/file_system_access/file_system_access_restore_permission_bubble_view.cc
++++ b/chrome/browser/ui/views/file_system_access/file_system_access_restore_permission_bubble_view.cc
+@@ -10,6 +10,7 @@
+ #include "chrome/browser/ui/file_system_access/file_system_access_ui_helpers.h"
+ #include "chrome/browser/ui/views/bubble_anchor_util_views.h"
+ #include "chrome/browser/ui/views/file_system_access/file_system_access_scroll_panel.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/title_origin_label.h"
+ #include "chrome/grit/generated_resources.h"
+ #include "components/permissions/permission_util.h"
+@@ -141,6 +142,12 @@
+       browser->GetActiveTabInterface()->GetContents() != web_contents) {
+     return nullptr;
+   }
++  if (!BrowserView::GetBrowserViewForBrowser(browser)) {
++    // browser_core: the core's windows have no location bar to point at, so
++    // the request ends as if dismissed, as where Chrome has no views.
++    std::move(callback).Run(permissions::PermissionAction::DISMISSED);
++    return nullptr;
++  }
+ 
+   Profile* profile =
+       web_contents
+--- a/chrome/browser/ui/views/storage/storage_pressure_bubble_view.cc
++++ b/chrome/browser/ui/views/storage/storage_pressure_bubble_view.cc
+@@ -45,6 +45,10 @@
+   }
+ 
+   auto* browser_view = BrowserView::GetBrowserViewForBrowser(bwi);
++  if (!browser_view) {
++    // browser_core: the core's windows have no app menu to point at.
++    return;
++  }
+   auto* control = browser_view->toolbar_button_provider()->GetAppMenuControl();
+   views::BubbleAnchor anchor =
+       control ? control->GetAnchor() : views::BubbleAnchor();
+--- a/chrome/browser/ui/views/media_router/media_remoting_dialog_view.cc
++++ b/chrome/browser/ui/views/media_router/media_remoting_dialog_view.cc
+@@ -46,6 +46,12 @@
+     std::move(permission_callback).Run(false);
+     return false;
+   }
++  if (!BrowserView::GetBrowserViewForBrowser(browser)) {
++    // browser_core: the core's windows have no toolbar to point at, so the
++    // video isn't remoted, as when the tab has no window.
++    std::move(permission_callback).Run(false);
++    return false;
++  }
+   auto anchor = BrowserView::GetBrowserViewForBrowser(browser)
+                     ->toolbar_button_provider()
+                     ->GetPinnedToolbarActions()
+--- a/chrome/browser/ui/desktop_to_mobile_promos/ios_promos_utils.cc
++++ b/chrome/browser/ui/desktop_to_mobile_promos/ios_promos_utils.cc
+@@ -183,6 +183,12 @@
+     std::optional<base::OnceClosure> promo_will_be_shown_callback =
+         std::nullopt,
+     std::optional<base::OnceClosure> promo_not_shown_callback = std::nullopt) {
++  if (!BrowserView::GetBrowserViewForBrowser(browser)) {
++    // browser_core: the core's windows have no toolbar for the promo to point
++    // at.
++    RunCallback(std::move(promo_not_shown_callback));
++    return;
++  }
+   const syncer::SyncService* sync_service =
+       SyncServiceFactory::GetForProfile(browser->GetProfile());
+ 

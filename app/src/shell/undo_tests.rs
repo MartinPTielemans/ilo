@@ -485,10 +485,82 @@ fn the_command_bar_finds_spaces_and_closed_folders_by_name(cx: &mut TestAppConte
     assert!(found("", cx).is_empty());
     assert!(found("one", cx).iter().all(|(name, _)| !name.ends_with("One")));
     let recipes = found("recipes", cx);
-    assert_eq!(recipes, [("Open Recipes".to_string(), Command::OpenFolder(6))]);
+    assert_eq!(
+        recipes,
+        [
+            ("Open Recipes".to_string(), Command::OpenFolder(6)),
+            ("Move to Reading / Recipes".to_string(), Command::MoveToFolder(6)),
+        ]
+    );
     host.take();
     shell.update(cx, |shell, cx| shell.run(Command::OpenFolder(6), "command-bar", cx));
     assert_eq!(host.take(), ["folder open 6 true", "folder open 5 true"]);
+}
+
+/// The command bar finds each folder of the Space shown by its name, as Arc's moveToFolder rows,
+/// to pin the tab shown at its bottom as Add to Folder › does, as one step to undo. Not the folder
+/// the tab is in.
+#[gpui::test]
+fn the_command_bar_moves_the_tab_into_a_folder_by_name(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![4, 5, 6, 7, 8], vec![9], reading(), Vec::new());
+    shell.update(cx, |shell, cx| shell.set_selected(9, cx));
+    let found = |typed: &str, cx: &mut TestAppContext| {
+        shell.read_with(cx, |shell, _| {
+            let keys = crate::shell::UserKeys::default();
+            let named = shell.named_bar_rows();
+            let rows = crate::shell::with_named_rows(Vec::new(), typed, &named, &keys);
+            rows.into_iter().map(|row| (row.name.to_string(), row.command)).collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(
+        found("old", cx),
+        [
+            ("Open Old".to_string(), Command::OpenFolder(7)),
+            ("Move to Reading / Old".to_string(), Command::MoveToFolder(7)),
+        ]
+    );
+    // "move" finds the folders as it finds the Spaces, by the row's name.
+    let moves = found("move to", cx);
+    let into_reading = ("Move to Reading".to_string(), Command::MoveToFolder(5));
+    assert!(moves.contains(&into_reading), "{moves:?}");
+    host.take_edits();
+    shell.update(cx, |shell, cx| shell.run(Command::MoveToFolder(5), "command-bar", cx));
+    // Under what Reading holds: 6, and Old with what it holds.
+    assert_eq!(host.take_edits(), ["move 9 true 5 2"]);
+    let mut folders = reading();
+    folders.parents.insert(9, 5);
+    let pinned = vec![4, 5, 6, 9, 7, 8];
+    shell.update(cx, |shell, cx| shell.set_tabs(1, pinned, Vec::new(), Vec::new(), folders, cx));
+    // In Reading now, the tab isn't offered Reading again.
+    assert!(found("reading", cx).iter().all(|(_, command)| *command != Command::MoveToFolder(5)));
+    assert!(undo(&shell, cx));
+    assert_eq!(host.take_edits(), ["move 9 false 0 0"]);
+}
+
+/// Arc's "3. tab", "3. item" and Go to Sidebar Item 3 find the row ⌘3 goes to, once the number is
+/// typed, and none past the sidebar's rows.
+#[gpui::test]
+fn the_command_bar_finds_a_sidebar_item_by_its_number(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![4], vec![9, 10], Folders::default(), Vec::new());
+    let found = |typed: &str, cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            let shell = shell.read(cx);
+            let keys = crate::shell::UserKeys::default();
+            let rows: Vec<_> = shell.numbered_bar_row(typed, cx).into_iter().collect();
+            let rows = crate::shell::with_named_rows(Vec::new(), typed, &rows, &keys);
+            rows.into_iter().map(|row| (row.name.to_string(), row.command)).collect::<Vec<_>>()
+        })
+    };
+    let second = [("Go to Sidebar Item 2".to_string(), Command::SelectTab(1))];
+    for typed in ["2", "2.", "2. tab", "2. Item", "item 2", "go to sidebar item 2"] {
+        assert_eq!(found(typed, cx), second, "{typed}");
+    }
+    for typed in ["tab", "item", "go to sidebar", "4. tab", "2 tab", "12*7"] {
+        assert!(found(typed, cx).is_empty(), "{typed}");
+    }
+    host.take();
+    shell.update(cx, |shell, cx| shell.run(Command::SelectTab(1), "command-bar", cx));
+    assert!(host.take().contains(&"select 9".to_string()), "{:?}", host.take());
 }
 
 #[gpui::test]
