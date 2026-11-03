@@ -6,7 +6,7 @@
 //! handoff asks the same way: the agent needs the user in a tab, which Show Tab shows and Hand Back
 //! gives back. So does an agent asking for a tab the user took over: Keep, or Hand Back.
 
-use gpui::{Context, FontWeight, div, prelude::*, px, rgba};
+use gpui::{Context, FontWeight, div, prelude::*, px};
 
 use super::{
     Shell, TITLE,
@@ -78,7 +78,11 @@ impl Shell {
                             .font_weight(FontWeight::MEDIUM)
                             .child(title),
                     )
-                    .child(div().text_color(rgba(DETAIL)).child(question.why.clone()))
+                    .child(
+                        div()
+                            .text_color(self.palette.on_overlay(DETAIL))
+                            .child(question.why.clone()),
+                    )
                     .child(
                         div()
                             .mt(px(BUTTONS_TOP))
@@ -106,7 +110,11 @@ impl Shell {
                         .font_weight(FontWeight::MEDIUM)
                         .child(format!("{} wants to {}", question.agent, question.what)),
                 )
-                .child(div().text_color(rgba(DETAIL)).child(question.why.clone()))
+                .child(
+                    div()
+                        .text_color(self.palette.on_overlay(DETAIL))
+                        .child(question.why.clone()),
+                )
                 // Three labels don't fit a row of the sidebar at its default width, so the last
                 // takes a row of its own, as wide as the card, rather than running past its edge.
                 .child(

@@ -5,7 +5,7 @@ and Settings › About opens each. Chromium's own, for the engine and what it's 
 browser, at chrome://credits.
 
 Ardia (https://github.com/mantrakp04/ardia), Apache License 2.0
-Used in docs/ux-spec.md, docs/ux-parity.md, core/browser_window_stand_in.{h,cc},
+Used in docs/ux-spec.md, docs/ux-parity/, core/browser_window_stand_in.{h,cc},
 engine/patches/ours/chromium-core-browser-window.patch,
 engine/patches/ours/chromium-core-embedded-view.patch and the patches in engine/patches/ardia/.
 

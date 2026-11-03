@@ -5,7 +5,7 @@
 //! hangs from its toolbar's Cast button, which our layout hasn't. It opens from View › Cast…, the
 //! command bar, the page menu's Cast… and a page asking to cast, and shows over its tab alone.
 
-use gpui::{Context, FontWeight, SharedString, div, prelude::*, px, rgba, svg};
+use gpui::{Context, FontWeight, SharedString, div, prelude::*, px, svg};
 
 use super::{
     NAV, NAV_RADIUS, SECONDARY, Shell, TITLE,
@@ -109,7 +109,7 @@ impl Shell {
         let looking = cast.devices.is_empty().then(|| {
             div()
                 .mt(px(ROW_GAP))
-                .text_color(rgba(DETAIL))
+                .text_color(self.palette.on_overlay(DETAIL))
                 .child("Looking for devices…")
         });
         let devices = cast
