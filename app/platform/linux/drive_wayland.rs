@@ -519,16 +519,25 @@ fn first_press(x: f64, y: f64, which: u32, again: bool) {
     LAST_CLICK.set(Some((Instant::now(), x, y, which)));
 }
 
-/// A click of `which` at (`x`, `y`) in sway's layout with the modifiers `state`. Control held after
-/// a key for the ⌃Tab walk isn't one: drive.rs's X events leave it out, but Wayland gives a click
-/// the keyboard's modifiers, so it goes up for the click, ending the walk as the click would.
+/// Has the pointer do `events` with the modifiers `state`, and those flags holds. Control held
+/// after a key for the ⌃Tab walk isn't one: drive.rs's X events each carry their own state, but
+/// Wayland gives a pointer's the keyboard's, so it goes up for them, ending the walk as a click
+/// would. With it, a wheel zoomed the page (#1219) and a drag pressed as a ⌃-click (#1221).
+fn with_modifiers(state: u16, events: impl FnOnce() -> Option<()>) -> Option<()> {
+    hold(state | FLAGS.get())?;
+    let done = events();
+    hold(held())?;
+    done
+}
+
+/// A click of `which` at (`x`, `y`) in sway's layout with the modifiers `state`.
 fn click(x: f64, y: f64, which: u32, state: u16, again: bool) -> Option<()> {
     first_press(x, y, which, again);
     motion(x, y)?;
-    hold(state | FLAGS.get())?;
-    button(which, true)?;
-    button(which, false)?;
-    hold(held())
+    with_modifiers(state, || {
+        button(which, true)?;
+        button(which, false)
+    })
 }
 
 /// (`x`, `y`) in the driven browser window's content, in sway's layout.
@@ -600,13 +609,15 @@ fn insert(text: &str) -> Option<()> {
 /// for a positive one.
 fn wheel(x: f64, y: f64, axis: wl_pointer::Axis, notches: i32) -> Option<()> {
     motion(x, y)?;
-    with_session(|session, time| {
-        for _ in 0..notches.unsigned_abs() {
-            session.pointer.axis_source(wl_pointer::AxisSource::Wheel);
-            let notch = notches.signum();
-            session.pointer.axis_discrete(time, axis, 15. * f64::from(notch), notch);
-            session.pointer.frame();
-        }
+    with_modifiers(0, || {
+        with_session(|session, time| {
+            for _ in 0..notches.unsigned_abs() {
+                session.pointer.axis_source(wl_pointer::AxisSource::Wheel);
+                let notch = notches.signum();
+                session.pointer.axis_discrete(time, axis, 15. * f64::from(notch), notch);
+                session.pointer.frame();
+            }
+        })
     })
 }
 
@@ -687,9 +698,11 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
             let (x2, y2) = in_driven_point(&mut words)?;
             first_press(x, y, BTN_LEFT, false);
             motion(x, y)?;
-            button(BTN_LEFT, true)?;
-            motion(x2, y2)?;
-            button(BTN_LEFT, false)
+            with_modifiers(0, || {
+                button(BTN_LEFT, true)?;
+                motion(x2, y2)?;
+                button(BTN_LEFT, false)
+            })
         })(),
         "press" | "dragto" | "release" | "rightpress" | "rightdragto" | "rightrelease" => (|| {
             let (x, y) = in_driven_point(&mut words)?;
@@ -697,15 +710,19 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
                 Some(step) => (BTN_RIGHT, step),
                 None => (BTN_LEFT, action),
             };
+            // The keys named after the point, such as ⌥ for a drag that drops a copy.
+            let keys = drive::click_modifiers(words);
             if step == "press" {
                 first_press(x, y, which, false);
             }
-            motion(x, y)?;
-            match step {
-                "press" => button(which, true),
-                "release" => button(which, false),
-                _ => Some(()),
-            }
+            with_modifiers(keys, || {
+                motion(x, y)?;
+                match step {
+                    "press" => button(which, true),
+                    "release" => button(which, false),
+                    _ => Some(()),
+                }
+            })
         })(),
         "move" => (|| {
             let (x, y) = in_driven_point(&mut words)?;
