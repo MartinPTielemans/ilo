@@ -211,12 +211,15 @@ expect '^browser: command bar shown$' "⌘L didn't open the Little ilo window's 
 send insert "$cookie_page"
 send key return
 expect "^browser: loaded [0-9]* $cookie_page\$" "the cookie page didn't load in the Little ilo window"
-# The width the Little ilo window draws at, the window last drawn at a new size: Windows' frame
-# takes in the borders it resizes by, 8 a side, which draw nothing.
-width=$(grep '^browser: drawn at ' "$log" | tail -1 | sed 's/^browser: drawn at \([0-9.]*\)x.*/\1/')
-# The picker is the third of the bar's header plates from its end: the last one's middle is 20 in
-# from the right edge, and each is 34 before the next (little.rs).
-post clickkey $(awk -v width="$width" 'BEGIN { print width - 20 - 2 * 34 }') 24
+# The picker comes before Copy Link and Open in <Space> ⌘O | ⌄, whose words set where it is, so
+# the bar logs its place, in the window's own points as Settings' are.
+for _ in $(seq 100); do
+  picker=$(sed -n 's/^browser: little profile picker at //p' "$log" | tail -1)
+  [ -n "$picker" ] && break
+  sleep 0.1
+done
+[ -n "$picker" ] || fail "Little ilo's bar didn't draw its profile picker"
+post clickkey $picker
 expect "^browser: menu shown $(cased 'Default (checked), Profile 2')\$" \
   "Little ilo's profile picker didn't list the profiles, the page's checked"
 ../tools/window-screenshot.sh "$pid" "$out/little-profile.png" all || fail "no window to capture"

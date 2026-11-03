@@ -7,6 +7,8 @@
 //! at the same inset and radius. The bar's row is the main window's header row, its buttons the
 //! header's, and the favicon stands where the header's first button does.
 
+use std::cell::Cell;
+
 use gpui::{
     App, Bounds, Context, Entity, FontWeight, MouseButton, Pixels, Point, SharedString, Window,
     div, point, prelude::*, px, relative, size, svg,
@@ -41,11 +43,12 @@ const PITCH: f32 = super::NAV_PITCH;
 
 /// A Little ilo window's own: the user's Space it's for, whose look it takes and which ⌘O moves
 /// its page to, the user's Spaces, in the sidebar's order, which its Spaces menu offers, and
-/// whether it has drawn on screen yet.
+/// whether it has drawn on screen yet, and where it last logged its profile picker.
 pub(super) struct Little {
     pub(super) home: u64,
     spaces: Vec<Elsewhere>,
     drawn: bool,
+    picker_at: Cell<Option<Point<Pixels>>>,
 }
 
 /// One of the user's Spaces, as a Little ilo window knows it: enough to name and mark it in its
@@ -104,6 +107,7 @@ impl Shell {
             home,
             spaces,
             drawn: false,
+            picker_at: Cell::new(None),
         });
         shell.spaces = vec![Space {
             id: space,
@@ -620,6 +624,17 @@ impl Shell {
         // Profiles' glyph, as Settings' Profiles tab has it, and nothing with only one profile. It
         // runs no command, so it has no tooltip: its menu names the profiles.
         let profile = self.little_profiles().map(|_| {
+            // check.sh clicks it where it's logged, as the words before it make its place vary.
+            let at = Some(end.profile);
+            if let Some(little) = self
+                .little
+                .as_ref()
+                .filter(|little| little.picker_at.get() != at)
+            {
+                little.picker_at.set(at);
+                let (x, y) = (f32::from(end.profile.x), f32::from(end.profile.y));
+                log!("browser: little profile picker at {x:.0} {y:.0}");
+            }
             button("little-profile", end.profile, None, "Profile", cx)
                 .on_click(cx.listener(|shell, _, _, cx| shell.little_profile_menu(cx)))
                 .child(
