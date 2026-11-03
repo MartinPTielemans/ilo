@@ -1,12 +1,15 @@
 #ifndef BROWSER_CORE_SUGGEST_H_
 #define BROWSER_CORE_SUGGEST_H_
 
+#include <map>
 #include <memory>
 #include <string>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/task/cancelable_task_tracker.h"
 #include "browser_core/public/browser_core.h"
 #include "chrome/browser/profiles/profile_observer.h"
 #include "components/omnibox/browser/autocomplete_controller.h"
@@ -39,6 +42,13 @@ class Suggestions : public AutocompleteController::Observer, public ProfileObser
   // others again.
   void Remove(const GURL& url);
 
+  // Puts back what Remove took out for |url| as it was, and lists the suggestions again. Start on no
+  // text forgets what it took out.
+  void Restore(const GURL& url);
+
+  // What Remove took out of the profile's history for a suggestion. Defined where it's used.
+  struct Removed;
+
  private:
   // AutocompleteController::Observer:
   void OnResultChanged(AutocompleteController* controller, bool default_match_changed) override;
@@ -59,6 +69,9 @@ class Suggestions : public AutocompleteController::Observer, public ProfileObser
   std::u16string keyword_;
   std::u16string text_;
   bool report_posted_ = false;
+  // What Remove took out, by the suggestion's URL, filled on the history database's thread.
+  std::map<GURL, scoped_refptr<Removed>> removed_;
+  base::CancelableTaskTracker history_tasks_;
   base::ScopedObservation<AutocompleteController, AutocompleteController::Observer> observation_{
       this};
   base::ScopedObservation<Profile, ProfileObserver> profile_observation_{this};

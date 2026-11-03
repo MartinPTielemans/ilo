@@ -332,6 +332,9 @@ pub trait Host {
     /// Takes the suggestion going to `url` out of the profile's history. The suggestions come
     /// again without it.
     fn remove_suggestion(&self, url: &str);
+    /// Puts back what `remove_suggestion` took out for `url`, as it was. The suggestions come
+    /// again with it.
+    fn restore_suggestion(&self, url: &str);
     /// The page the address bar goes to for `text` typed in it: the one it names, else a search.
     fn typed_url(&self, text: &str) -> Option<String>;
     /// A search for `text` with the search engine whose keyword is `site`, else the default one,
@@ -448,6 +451,9 @@ pub struct CommandBar {
     hovered: Option<usize>,
     /// The row whose trash was last drawn, and its page, for check.sh's line as it draws.
     remove_drawn: Option<(usize, String)>,
+    /// The pages and searches it took out of history since it last asked for no text, the last
+    /// last, which ⌘Z puts back. The core forgets them as it's asked for no text.
+    removed: Vec<String>,
     /// Whether an assistive app reads the bar's window, so its rows say what they are.
     a11y: bool,
     /// Whether it shows over the URL field, from a click on it, rather than centred.
@@ -577,6 +583,7 @@ pub fn open_at(
                 selected: 0,
                 hovered: None,
                 remove_drawn: None,
+                removed: Vec::new(),
                 a11y: false,
                 over_field: false,
                 page: String::new(),
@@ -709,7 +716,8 @@ fn reset(
             bar.set_rows(String::new(), rows, window, cx);
             bar.input.update(cx, |input, cx| input.reset(text, window, cx));
             bar.keep_focus(window, cx);
-            // The last query's suggestions are of no use now.
+            // The last query's suggestions are of no use now, nor what it took out of history.
+            bar.removed.clear();
             bar.host.suggest(None, "", false);
             bar.host.clone()
         })
@@ -1063,6 +1071,9 @@ impl CommandBar {
         self.suggested.clear();
         self.completion.clear();
         self.show_completion(completion, window, cx);
+        if self.asked.is_empty() {
+            self.removed.clear();
+        }
         let site = self.site.as_ref().map(|site| site.keyword.as_str());
         self.host.suggest(site, &self.asked, complete);
     }
@@ -1742,13 +1753,26 @@ impl CommandBar {
 
     /// Takes row `index`'s page or search out of the profile's history, if it came from there. The
     /// core lists the rows again without it, and the row under it takes its place.
-    fn remove_row(&self, index: usize) {
+    fn remove_row(&mut self, index: usize) {
         let Some(row) = self.rows.get(index).filter(|row| row.removable) else {
             return;
         };
         // check.sh reads this line.
         log!("browser: command bar removes {}", row.url);
         self.host.remove_suggestion(&row.url);
+        self.removed.push(row.url.clone());
+    }
+
+    /// ⌘Z: puts the last row taken out of history back as it was, its visits and typed count or a
+    /// search's term, and the core lists it again. With none to put back, ⌘Z is the field's.
+    fn put_back(&mut self, cx: &mut Context<Self>) {
+        let Some(url) = self.removed.pop() else {
+            return;
+        };
+        // check.sh reads this line.
+        log!("browser: command bar puts back {url}");
+        self.host.restore_suggestion(&url);
+        cx.stop_propagation();
     }
 
     /// The trash a row from history shows under the pointer, where Arc's has a ✕, which takes it
@@ -2308,6 +2332,7 @@ impl Render for CommandBar {
                 .on_action(cx.listener(Self::shortcut))
                 .on_action(cx.listener(Self::enter_site_or_next))
                 .on_action(cx.listener(Self::leave_site_or_previous))
+                .capture_action(cx.listener(|bar, _: &text_input::Undo, _, cx| bar.put_back(cx)))
                 .capture_action(cx.listener(|bar, _: &text_input::Backspace, window, cx| {
                     bar.leave_at_start(window, cx)
                 }))

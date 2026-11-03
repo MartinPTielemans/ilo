@@ -1457,6 +1457,13 @@ void bc_window_remove_suggestion(bc_id window_id, const char* url) {
   }
 }
 
+void bc_window_restore_suggestion(bc_id window_id, const char* url) {
+  browser_core::Window* window = browser_core::Window::FromId(window_id);
+  if (window && url) {
+    window->RestoreSuggestion(GURL(url));
+  }
+}
+
 bc_id bc_tab_open(bc_id window_id, const char* url, bool when_shown) {
   browser_core::Window* window = browser_core::Window::FromId(window_id);
   Profile* profile = window ? ProfileOf(*window) : nullptr;

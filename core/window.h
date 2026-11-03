@@ -306,6 +306,8 @@ class Window : public web_modal::WebContentsModalDialogHost,
 
   // Takes a suggestion out of the profile's history. See bc_window_remove_suggestion.
   void RemoveSuggestion(const GURL& url);
+  // Puts a suggestion RemoveSuggestion took out back. See bc_window_restore_suggestion.
+  void RestoreSuggestion(const GURL& url);
   // Lets go of what each window built on |profile|, which is about to go.
   static void LetProfileGo(Profile* profile);
 

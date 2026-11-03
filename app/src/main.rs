@@ -1779,6 +1779,12 @@ impl command_bar::Host for Bar {
         }
     }
 
+    fn restore_suggestion(&self, url: &str) {
+        if let Ok(url) = CString::new(url) {
+            unsafe { bc::bc_window_restore_suggestion(front().0, url.as_ptr()) };
+        }
+    }
+
     fn typed_url(&self, text: &str) -> Option<String> {
         let window = front().0;
         url_for(text, |text, url, capacity| unsafe { bc::bc_typed_url(window, text, url, capacity) })

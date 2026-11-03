@@ -1267,6 +1267,12 @@ void Window::RemoveSuggestion(const GURL& url) {
   }
 }
 
+void Window::RestoreSuggestion(const GURL& url) {
+  if (suggestions_) {
+    suggestions_->Restore(url);
+  }
+}
+
 content::WebContents* Window::OpenTab(Profile* profile, const GURL& url, bool when_shown) {
   BrowserWindowInterface* browser = BrowserFor(profile);
   if (!browser) {

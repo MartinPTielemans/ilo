@@ -1355,6 +1355,8 @@ struct PreviewBar;
 impl command_bar::Host for PreviewBar {
     fn suggest(&self, _: Option<&str>, _: &str, _: bool) {}
     fn remove_suggestion(&self, _: &str) {}
+
+    fn restore_suggestion(&self, _: &str) {}
     fn typed_url(&self, text: &str) -> Option<String> {
         self.search_url(None, text)
     }

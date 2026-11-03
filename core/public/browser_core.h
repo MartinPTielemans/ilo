@@ -1969,6 +1969,13 @@ BC_EXPORT void bc_window_suggest(bc_id window, const char* keyword, const char* 
 // bookmarks' suggestions, as ⇧⌦ does in Chrome's address bar. Then window_suggestions without it.
 BC_EXPORT void bc_window_remove_suggestion(bc_id window, const char* url);
 
+// Puts back what bc_window_remove_suggestion took out of the profile's history for |url| in the
+// window, as it was: a page with each of its visits, and so its visit and typed counts, or a search
+// with its term and the pages it searched. Then window_suggestions with it, for the text last
+// asked. What it took out stays out once bc_window_suggest asks for no text, as the command bar does
+// as it opens.
+BC_EXPORT void bc_window_restore_suggestion(bc_id window, const char* url);
+
 // Opens a tab in the window, loading |url|, in the default profile, at the top of the Today tabs of
 // the Space it shows. It isn't shown until bc_window_select or bc_tab_show. With |when_shown|, an
 // http(s) |url| loads only once the tab is first shown, as a link a page opens behind does. Returns
