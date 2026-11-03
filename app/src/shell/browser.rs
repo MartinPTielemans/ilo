@@ -546,6 +546,15 @@ pub trait Browser {
         field: Option<Bounds<Pixels>>,
         cx: &mut App,
     );
+    /// Opens the command bar at `bar` in the window, for a new tab or on `editing`'s URL, with
+    /// `tabs` to list before anything is typed: a Little ilo window's for ⌘L and ⌘T.
+    fn command_bar_in(
+        &self,
+        editing: Option<(u64, SharedString)>,
+        tabs: Vec<BarTab>,
+        bar: Bounds<Pixels>,
+        cx: &mut App,
+    );
     /// Opens the command bar centred for Search Tabs, listing only `tabs` and filtering them by
     /// what's typed, to switch to one.
     fn search_tabs(&self, tabs: Vec<BarTab>, cx: &mut App);

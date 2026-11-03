@@ -894,6 +894,16 @@ impl Browser for Fake {
     }
 
     // No command bar here, as for a new tab.
+    // No Little ilo window here.
+    fn command_bar_in(
+        &self,
+        _: Option<(u64, SharedString)>,
+        _: Vec<BarTab>,
+        _: Bounds<Pixels>,
+        _: &mut App,
+    ) {
+    }
+
     fn search_tabs(&self, _: Vec<BarTab>, _: &mut App) {}
 
     // The made-up pages have nothing to find.

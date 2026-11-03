@@ -129,6 +129,8 @@ pub(super) struct Recorder {
     pub(super) command_bars: RefCell<Vec<Option<Bounds<Pixels>>>>,
     /// And the tab whose URL it edits, if any.
     pub(super) bar_edits: RefCell<Vec<Option<u64>>>,
+    /// Each time the shell opened the command bar inside a Little ilo window: where.
+    pub(super) bars_in: RefCell<Vec<Bounds<Pixels>>>,
     /// Each time the shell opened Search Tabs: the tabs it lists, in order.
     pub(super) searched_tabs: RefCell<Vec<Vec<u64>>>,
     /// The command bar shows, until a test plays the app's report that it was dismissed.
@@ -1142,6 +1144,18 @@ impl Browser for Recorder {
         _: &mut App,
     ) {
         self.command_bars.borrow_mut().push(field);
+        self.bar_edits.borrow_mut().push(editing.map(|(tab, _)| tab));
+        self.bar_open.set(true);
+    }
+
+    fn command_bar_in(
+        &self,
+        editing: Option<(u64, SharedString)>,
+        _: Vec<BarTab>,
+        bar: Bounds<Pixels>,
+        _: &mut App,
+    ) {
+        self.bars_in.borrow_mut().push(bar);
         self.bar_edits.borrow_mut().push(editing.map(|(tab, _)| tab));
         self.bar_open.set(true);
     }

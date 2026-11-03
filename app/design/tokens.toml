@@ -81,6 +81,11 @@ field-radius = 20.0
 field-input-text = 13.0
 # Over a new pane of a split view, the bar's right edge stays this far inside the card's (Arc).
 beside-end = 70.0
+# In a Little ilo window, ⌘L and ⌘T open the bar inside the window, this wide, centred across it,
+# its top this far down the window (Arc 1.168, measured by an outside reverse-engineering,
+# *interim*, #1407).
+little-width = 500.0
+little-down = 0.333_333
 # The bar is the palette's overlay, opaque, and what's on it the palette's ink at these alphas
 # (Arc's white ones over its #191919), text raised to the overlay's floor (palette.rs).
 line-color = 0.1

@@ -23,6 +23,7 @@ use super::{
     swap::{CHECK, LINK},
 };
 use crate::theme::Theme;
+use crate::tokens::command_bar::{LITTLE_DOWN, LITTLE_WIDTH};
 use crate::tokens::shell::{
     FAVICON_DRAWN, LITTLE_BAR, LITTLE_GLYPH, NAV_SIZE, NAV_TOP, SIDEBAR_BUTTON_X,
 };
@@ -249,9 +250,19 @@ impl Shell {
         )
     }
 
-    /// Where ⌘L's compact command bar opens in a Little ilo window: over its title.
+    /// Where a click on its bar's title opens the compact command bar in a Little ilo window: over
+    /// the title, as a click on the URL field opens it over the field.
     pub(super) fn little_field_bounds(&self) -> Option<Bounds<Pixels>> {
         self.little.as_ref().map(|_| self.little_title_bounds())
+    }
+
+    /// Where ⌘L and ⌘T open the command bar in a Little ilo window: inside it, centred across it,
+    /// its top a third of the way down (Arc), where a key's surfaces are in this window.
+    pub(super) fn little_bar_bounds(&self) -> Bounds<Pixels> {
+        let width = px(LITTLE_WIDTH).min(self.viewport.width);
+        let left = (self.viewport.width - width) / 2.;
+        let top = self.viewport.height * LITTLE_DOWN;
+        Bounds::new(point(left, top), size(width, px(crate::tokens::command_bar::HEIGHT)))
     }
 
     /// The bar, over the window's tint: the page's favicon, host and title, then the profile

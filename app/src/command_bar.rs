@@ -634,6 +634,24 @@ pub fn show(
     }
 }
 
+/// Shows the command bar at `bar` in the window, with the keyboard, on `editing`'s URL, selected, or
+/// empty, listing `tabs`: a Little ilo window's for ⌘L and ⌘T, inside it (Arc).
+pub fn show_in(
+    editing: Option<(u64, SharedString)>,
+    tabs: Vec<shell::BarTab>,
+    bar: Bounds<Pixels>,
+    cx: &mut App,
+) {
+    let target = editing.as_ref().map_or(Target::NewTab, |&(tab, _)| Target::Tab(tab));
+    let text = editing.map(|(_, url)| url).unwrap_or_default();
+    // check.sh reads this line.
+    log!("browser: command bar opens inside the window");
+    if let Some(host) = reset(target, text, tabs, false, cx) {
+        let (left, top, width) = (bar.left().into(), bar.top().into(), bar.size.width.into());
+        host.show(false, left, top, width, RADIUS, Level::Modal);
+    }
+}
+
 /// Shows the command bar centred and empty for Search Tabs, listing `tabs` alone, as many as it
 /// lists rows, and then those that what's typed names.
 pub fn show_tabs(tabs: Vec<shell::BarTab>, cx: &mut App) {

@@ -3520,6 +3520,16 @@ impl Browser for Engine {
         with_overlays(move |cx| command_bar::show(editing, tabs, field, cx), cx);
     }
 
+    fn command_bar_in(
+        &self,
+        editing: Option<(u64, SharedString)>,
+        tabs: Vec<BarTab>,
+        bar: Bounds<Pixels>,
+        cx: &mut App,
+    ) {
+        with_overlays(move |cx| command_bar::show_in(editing, tabs, bar, cx), cx);
+    }
+
     fn search_tabs(&self, tabs: Vec<BarTab>, cx: &mut App) {
         with_overlays(move |cx| command_bar::show_tabs(tabs, cx), cx);
     }

@@ -979,6 +979,12 @@ impl Shell {
         if self.private && !private_runs(command) {
             return;
         }
+        // ⌘T in a Little ilo window opens its command bar on its page, as ⌘L does (Arc): it holds
+        // one page.
+        let command = match command {
+            Command::NewTab if self.little.is_some() => Command::EditUrl,
+            command => command,
+        };
         if self.little.is_some() && !little_runs(command) {
             return;
         }
@@ -1021,10 +1027,15 @@ impl Shell {
                 self.set_new_tab(false, cx);
                 let tab = self.field_tab();
                 let editing = (tab != 0).then(|| (tab, self.url(tab)));
-                // A click on the URL field opens the bar over the field, and ⌘L centred (Arc). A
-                // Little ilo window's opens compact over its bar's title either way.
+                // A click on the URL field opens the bar over the field, and ⌘L centred (Arc). In a
+                // Little ilo window a click on its bar's title opens it compact over the title, and
+                // the keys inside the window.
                 let field = match self.little_field_bounds() {
-                    Some(title) => Some(title),
+                    Some(title) if from == "little bar" => Some(title),
+                    Some(_) => {
+                        let bar = self.little_bar_bounds();
+                        return self.browser.command_bar_in(editing, self.bar_tabs(), bar, cx);
+                    }
                     None if from == "sidebar" => self.url_field_bounds(),
                     None => None,
                 };

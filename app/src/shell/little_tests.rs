@@ -371,3 +371,36 @@ fn its_bar_is_the_headers_row(cx: &mut TestAppContext) {
     assert_eq!((f32::from(field.origin.x), f32::from(field.origin.y)), (77., 7.5));
     assert!(f32::from(field.right()) < width - 54. - 16.);
 }
+
+/// ⌘L and ⌘T open the command bar inside the window, on its page, 500 wide and centred across it,
+/// its top a third of the way down, as Arc's does; only a click on the title opens it over the
+/// title.
+#[gpui::test]
+fn its_keys_open_the_command_bar_inside_it(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) =
+        cx.add_window_view(|_, cx| Shell::little_window(browser, 9, 1, 1, None, cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(9, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+        shell.set_selected(10, cx);
+        let url = "https://example.com/".into();
+        shell.set_page(10, Page { url, ..Page::default() }, cx);
+    });
+    cx.run_until_parked();
+    let size = cx.update(|window, _| window.viewport_size());
+    let (width, height) = (f32::from(size.width), f32::from(size.height));
+    for command in [Command::EditUrl, Command::NewTab] {
+        host.take();
+        shell.update(cx, |shell, cx| shell.run(command, "ui", cx));
+        let bar = host.bars_in.borrow_mut().pop().expect("no bar inside the window");
+        let bar_width = 500f32.min(width);
+        let at = (f32::from(bar.origin.x), f32::from(bar.origin.y), f32::from(bar.size.width));
+        assert_eq!(at, ((width - bar_width) / 2., height * 0.333_333, bar_width));
+        assert_eq!(host.bar_edits.borrow_mut().pop(), Some(Some(10)));
+        assert!(host.command_bars.borrow().is_empty(), "{command:?} opened over the title");
+    }
+    shell.update(cx, |shell, cx| shell.run(Command::EditUrl, "little bar", cx));
+    assert!(host.bars_in.borrow().is_empty());
+    assert!(host.command_bars.borrow().last().copied().flatten().is_some());
+}
