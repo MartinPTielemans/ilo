@@ -231,6 +231,11 @@ impl Browser for Made {
             tabs.insert(0, moved);
         }
     }
+
+    /// The user's Space is 1.
+    fn user_space(&self, _: u64) -> u64 {
+        1
+    }
 }
 
 /// The clients' configs as Connect and Disconnect left them.

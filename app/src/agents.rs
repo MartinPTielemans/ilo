@@ -198,18 +198,25 @@ pub trait Browser {
     fn task_spaces(&self) -> Vec<u64>;
     /// Moves `tab` out of a task's Space to the top of the user's Space `space`'s Today tabs.
     fn move_tab(&self, tab: u64, space: u64, cx: &mut App);
+    /// The user's Space a session's pages open into: the one the front window shows, if it's in
+    /// the profile of `like`, an agent's Space, else the first of the user's in that profile.
+    fn user_space(&self, like: u64) -> u64;
 }
 
 /// What the server's threads hand the UI thread.
 pub enum Event {
-    /// A client began a session as the agent with the id `agent`. `client` is the name it gave.
+    /// A client began a session on its `connection` as the agent with the id `agent`. `client` is
+    /// the name it gave: its title, else its name, or empty.
     Hello {
         agent: String,
         client: String,
+        connection: u64,
     },
-    /// The agent's last session ended.
+    /// The session on `connection` ended, and with `last`, the agent's last.
     Bye {
         agent: String,
+        connection: u64,
+        last: bool,
     },
     Call(Call),
     /// The call `id` was answered, `at` then: with why it failed, if it did, and its picture.
@@ -227,6 +234,8 @@ pub struct Call {
     /// Its number, which its answer's event names.
     pub id: u64,
     pub agent: String,
+    /// The connection it came on, whose session's card it's a step of.
+    pub connection: u64,
     pub tool: String,
     pub arguments: Value,
     pub reply: mpsc::Sender<ToolResult>,
@@ -285,6 +294,8 @@ impl ToolResult {
 /// user first if it does.
 struct Act {
     agent: String,
+    /// The call it's for, whose session's card says it waits for the user's OK.
+    call: u64,
     /// What the activity log names it, as `tools::describe` knows it.
     action: &'static str,
     /// The tab, or 0 for open_tab, which makes it.
@@ -484,6 +495,8 @@ const LOOK_EVERY: Duration = Duration::from_millis(500);
 /// A tab the user holds from its agent: handed to them, or taken over.
 struct Held {
     agent: String,
+    /// The handoff's or ask_for_tab's call, whose session's card says it waits for the user, or 0.
+    call: u64,
     /// What the agent asked the user to do, or empty if they took it over.
     why: String,
     /// The handoff's question, or the agent's asking for the tab back, for its card.
@@ -838,7 +851,7 @@ impl Agents {
             let question = self.next_request;
             self.next_request += 1;
             let why = PASSKEY.to_string();
-            let held = Held { agent: agent.into(), why, question, back: None, reply: None };
+            let held = Held { agent: agent.into(), call: 0, why, question, back: None, reply: None };
             self.held.insert(tab, held);
         }
         if why != "disconnected" {
@@ -865,15 +878,17 @@ impl Agents {
     /// What the server's threads hand over.
     pub fn handle(&mut self, event: Event, cx: &mut Context<Self>) {
         match event {
-            Event::Hello { agent, client } => {
+            Event::Hello { agent, client, connection } => {
                 log!("browser: agent {agent} hello from {client}");
+                self.hello(&agent, &client, connection);
                 if self.live.insert(agent.clone()) {
                     self.note(&agent, "connected", "", "");
                     cx.notify();
                 }
             }
-            Event::Bye { agent } => {
-                if self.live.remove(&agent) {
+            Event::Bye { agent, connection, last } => {
+                self.end_session(&agent, connection, cx);
+                if last && self.live.remove(&agent) {
                     self.forget_waiting(&agent, cx);
                     self.browser.disconnected(&agent, cx);
                     self.note(&agent, "disconnected", "", "");
@@ -947,6 +962,7 @@ impl Agents {
                 let host = site(&url);
                 let act = Act {
                     agent: agent.clone(),
+                    call: id,
                     action: "open_tab",
                     tab: 0,
                     what: format!("open {host}"),
@@ -988,7 +1004,7 @@ impl Agents {
                         return;
                     }
                 };
-                self.page_tool(&agent, &tool, tab, &arguments, show, reply, cx);
+                self.page_tool(&agent, id, &tool, tab, &arguments, show, reply, cx);
             }
             "run_steps" => {
                 let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {
@@ -1046,7 +1062,7 @@ impl Agents {
                 let question = self.next_request;
                 self.next_request += 1;
                 let why = page::clip(why, 200);
-                let held = Held { agent, why, question, back: None, reply: Some(reply) };
+                let held = Held { agent, call: id, why, question, back: None, reply: Some(reply) };
                 self.held.insert(tab, held);
                 self.asked(cx);
             }
@@ -1099,7 +1115,7 @@ impl Agents {
                 self.next_request += 1;
                 let held = self.held.get_mut(&tab).expect("held, as matched");
                 (held.question, held.back) = (question, Some(page::clip(why, 200)));
-                held.reply = Some(reply);
+                (held.call, held.reply) = (id, Some(reply));
                 self.asked(cx);
             }
             "title" | "ask" | "finish" if is_task(&agent) => {
@@ -1117,10 +1133,11 @@ impl Agents {
         }
     }
 
-    /// The agent's name, as the user sees it: a task's CLI's, a client's, else its id.
-    fn agent_name(&self, agent: &str) -> SharedString {
-        match self.task(agent) {
-            Some(task) => task.cli.name().into(),
+    /// The agent's name, as the user sees it: a task's CLI's, the name the session its `call` is
+    /// of gave, a client's, else its id.
+    fn agent_name(&self, agent: &str, call: u64) -> SharedString {
+        match self.task(agent).or_else(|| self.session_of(agent, call)) {
+            Some(task) => task.name.clone(),
             None => name(agent).to_string().into(),
         }
     }
@@ -1141,7 +1158,7 @@ impl Agents {
         let asked = self.asking.len();
         self.stepping = Some(run.agent.clone());
         let show = run.show_now();
-        self.page_tool(&run.agent.clone(), &tool, run.tab, &step, show, reply, cx);
+        self.page_tool(&run.agent.clone(), run.call, &tool, run.tab, &step, show, reply, cx);
         self.stepping = None;
         if self.asking.len() > asked {
             let Asking { act, .. } = self.asking.pop().unwrap();
@@ -1344,7 +1361,7 @@ impl Agents {
         let question = self.next_request;
         self.next_request += 1;
         let why = String::new();
-        let held = Held { agent: agent.into(), why, question, back: None, reply: None };
+        let held = Held { agent: agent.into(), call: 0, why, question, back: None, reply: None };
         self.held.insert(tab, held);
         // The core ends the agent's session there, which logs it.
         self.browser.take_back(tab, cx);
@@ -1466,6 +1483,7 @@ impl Agents {
     fn page_tool(
         &mut self,
         agent: &str,
+        call: u64,
         tool: &str,
         tab: u64,
         arguments: &Value,
@@ -1493,6 +1511,7 @@ impl Agents {
         };
         let mut act = Act {
             agent: agent.into(),
+            call,
             action: "snapshot",
             tab,
             url: String::new(),
@@ -1630,7 +1649,7 @@ impl Agents {
         }
         let question = Question {
             id: self.next_request,
-            agent: self.agent_name(&act.agent),
+            agent: self.agent_name(&act.agent, act.call),
             from: act.agent.clone().into(),
             what: act.what.clone().into(),
             why: why.into(),
@@ -1744,7 +1763,7 @@ impl Agents {
             .min_by_key(|(_, held)| held.question);
         handoff.map(|(&tab, held)| Question {
             id: held.question,
-            agent: self.agent_name(&held.agent),
+            agent: self.agent_name(&held.agent, held.call),
             from: held.agent.clone().into(),
             what: match held.back {
                 Some(_) => "have a tab back".into(),
@@ -1793,6 +1812,7 @@ impl Agents {
     fn run(&mut self, act: Act, cx: &mut Context<Self>) {
         let Act {
             agent,
+            call,
             action,
             mut tab,
             url,
@@ -1818,6 +1838,7 @@ impl Agents {
             self.note(&agent, action, &site, "");
             cx.notify();
             self.current.insert(agent.clone(), tab);
+            self.opened(&agent, call, tab);
             note = format!("Opened tab {tab}.");
         } else {
             if !self.act(&agent, tab, action, &reply, cx) {
@@ -1937,18 +1958,21 @@ impl Agents {
         }
     }
 
-    /// The agent's Space, made the first time it calls, so it shows in the sidebar for the user
-    /// to open pages in.
+    /// The agent's Space, hidden, made the first time it calls, where its tabs open.
     fn space(&mut self, agent: &str, cx: &mut Context<Self>) -> u64 {
         match self.browser.agent_space(agent) {
             0 => match self.task(agent) {
                 Some(task) => {
-                    let (cli, home) = (task.cli, task.home);
-                    let space = self.browser.make_task_space(agent, cli.name(), home, cx);
+                    let (named, home) = (task.name.clone(), task.home);
+                    let space = self.browser.make_task_space(agent, &named, home, cx);
                     self.task_space_made(agent, space);
                     space
                 }
-                None => self.browser.make_agent_space(agent, name(agent), cx),
+                None => {
+                    let space = self.browser.make_agent_space(agent, name(agent), cx);
+                    self.client_space_made(agent, space);
+                    space
+                }
             },
             space => space,
         }
@@ -2047,7 +2071,10 @@ impl Agents {
             .agents
             .iter()
             .map(|agent| (agent.token.clone(), agent.client.id().into()));
-        let tasks = (self.tasks.tasks.iter()).map(|task| (task.token().to_string(), task.agent.clone()));
+        // A session's calls come with its client's token: it has none of its own.
+        let tasks = (self.tasks.tasks.iter())
+            .filter(|task| task.session.is_none())
+            .map(|task| (task.token().to_string(), task.agent.clone()));
         *self.tokens.lock().unwrap() = tokens.chain(tasks).collect();
     }
 

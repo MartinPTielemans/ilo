@@ -547,9 +547,14 @@ fn initialize(shared: &Shared, number: u64, agent: &str, params: &Value) -> Valu
         .iter()
         .find(|each| **each == asked)
         .unwrap_or(&VERSIONS[0]);
-    let client = params
-        .pointer("/clientInfo/name")
-        .and_then(Value::as_str)
+    // The name its card shows: its title, which MCP gives for display, else its name as it is.
+    let named = |pointer: &str| {
+        (params.pointer(pointer).and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+    };
+    let client = named("/clientInfo/title")
+        .or_else(|| named("/clientInfo/name"))
         .unwrap_or_default();
     if let Some(connection) = shared.connections.lock().unwrap().get_mut(&number) {
         connection.initialized = true;
@@ -557,6 +562,7 @@ fn initialize(shared: &Shared, number: u64, agent: &str, params: &Value) -> Valu
     _ = shared.events.unbounded_send(Event::Hello {
         agent: agent.into(),
         client: client.into(),
+        connection: number,
     });
     json!({
         "protocolVersion": version,
@@ -577,6 +583,7 @@ fn call(shared: &Shared, number: u64, agent: &str, tool: &str, arguments: Value)
     let call = Call {
         id,
         agent: agent.into(),
+        connection: number,
         tool: tool.into(),
         arguments,
         reply,
@@ -607,7 +614,7 @@ fn call(shared: &Shared, number: u64, agent: &str, tool: &str, arguments: Value)
     result
 }
 
-/// The connection closed. The agent's last session ending tells the UI it's gone.
+/// The connection closed, which ends its session, and with the agent's last, tells the UI it's gone.
 fn end(shared: &Shared, number: u64) {
     let mut connections = shared.connections.lock().unwrap();
     let Some(ended) = connections.remove(&number) else {
@@ -616,10 +623,12 @@ fn end(shared: &Shared, number: u64) {
     let others = connections
         .values()
         .any(|each| each.agent == ended.agent && each.initialized);
-    if ended.initialized && !others {
-        _ = shared
-            .events
-            .unbounded_send(Event::Bye { agent: ended.agent });
+    if ended.initialized {
+        _ = shared.events.unbounded_send(Event::Bye {
+            agent: ended.agent,
+            connection: number,
+            last: !others,
+        });
     }
 }
 
