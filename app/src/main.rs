@@ -25,7 +25,7 @@ use browser::window_frames::{self, Frame};
 use browser::widevine::Widevine;
 use browser::{
     account, capture, command_bar, dialog, dock_dot, elevation::Level, folder_preview, hover_card,
-    icon_picker, launch, link_preview, link_target, log, menu, offer, passwords, site_controls,
+    icon_picker, launch, link_preview, link_target, log, log_in, menu, offer, passwords, site_controls,
     theme_picker, toast, tooltip, updates, zoom_hud,
 };
 use browser::shell::{
@@ -3957,6 +3957,20 @@ thread_local! {
     static SECOND_PRESS: RefCell<shell::SecondPress> = RefCell::default();
 }
 
+/// The keys area's line for `key`, which a page had, `when` the page sees it or after, gone to
+/// `route`: the chord, never the character typed (logging::chord).
+fn log_key(key: *const bc::bc_key, when: &str, route: &str) {
+    if !browser::logging::on("keys") {
+        return;
+    }
+    let key = unsafe { &*key };
+    let name = match key.key.is_null() {
+        true => Default::default(),
+        false => unsafe { CStr::from_ptr(key.key) }.to_string_lossy(),
+    };
+    log_in!("keys", "{} {when}: {route}", browser::logging::chord(&name, key.modifiers));
+}
+
 unsafe extern "C" fn tab_key_before_page(
     _: *mut c_void,
     tab: bc::bc_id,
@@ -3966,30 +3980,37 @@ unsafe extern "C" fn tab_key_before_page(
     if browser::agents::pressing_key() {
         return false;
     }
+    let (kept, route) = key_before_page(tab, key);
+    log_key(key, "before the page", route);
+    kept
+}
+
+/// Whether ilo keeps `key` from the page that has it, and where it went.
+fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static str) {
     #[cfg(target_os = "linux")]
     if held_escape::keeps_from_page(unsafe { &*key }) {
-        return true;
+        return (true, "held escape");
     }
     // Any key ends the hover card, as in Dia, the page's as the UI's.
     update_app(hover_card::close);
     // The page has the keyboard, so the sidebar's ring of Focus Sidebar has gone stale.
     update_tab_window(tab, |shell, cx| shell.leave_keys("page", cx));
     if let Some(lost) = link_preview_key(tab, key, true) {
-        return lost;
+        return (lost, "link preview");
     }
     // As in Chrome, the reserved shortcuts come first, then the extensions' keys.
     if run_page_shortcut(tab, key, true) {
-        return true;
+        return (true, "reserved shortcut");
     }
     let keystroke = keystroke(unsafe { &*key });
     // ⌘. is the agent bar's Stop while it shows one, before the page could keep it.
     if update_tab_window(tab, |shell, cx| shell.run_agent_key(&keystroke, cx)).unwrap_or(false) {
-        return true;
+        return (true, "agent bar");
     }
     if update_tab_window(tab, |shell, cx| shell.run_extension_key(&keystroke, "page", cx))
         .unwrap_or(false)
     {
-        return true;
+        return (true, "extension");
     }
     let cx = CX.with_borrow(Clone::clone);
     // A shortcut the page gets first that it kept, pressed again at once, runs ilo's (Arc's).
@@ -4002,7 +4023,7 @@ unsafe extern "C" fn tab_key_before_page(
     if SECOND_PRESS.with_borrow_mut(|second| second.press(tab, &keystroke, shortcut, repeat, now)) {
         // check.sh reads this line.
         log!("browser: second press {keystroke}");
-        return run_page_shortcut(tab, key, false);
+        return (run_page_shortcut(tab, key, false), "second press");
     }
     // The keys typed after ⌘L would reach the page before it hands ⌘L back to open the bar.
     let holds = cx.and_then(|cx| {
@@ -4015,8 +4036,9 @@ unsafe extern "C" fn tab_key_before_page(
         unsafe { platform::host_hold_keys() };
         #[cfg(target_os = "linux")]
         gpui_linux::hold_keys(Some(&held_keystroke(unsafe { &*key })));
+        return (false, "page, holding the keys after it");
     }
-    false
+    (false, "page")
 }
 
 /// The keystroke GPUI has for `key`, one typed in a page.
@@ -4094,7 +4116,13 @@ unsafe extern "C" fn tab_key_unhandled(
         return false;
     }
     SECOND_PRESS.with_borrow_mut(|second| second.declined(&keystroke(unsafe { &*key })));
-    link_preview_key(tab, key, false).unwrap_or_else(|| run_page_shortcut(tab, key, false))
+    let (taken, route) = match link_preview_key(tab, key, false) {
+        Some(lost) => (lost, "link preview"),
+        None if run_page_shortcut(tab, key, false) => (true, "shortcut"),
+        None => (false, "nothing"),
+    };
+    log_key(key, "the page didn't keep", route);
+    taken
 }
 
 /// Opens a browser window and returns its id, with `ui_view` filling it under the page: the first

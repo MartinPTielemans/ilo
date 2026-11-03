@@ -17,6 +17,9 @@ on:
       runs:
         description: The runs to do, such as "load tabs", or "all"; empty for the ones Windows passes
         default: ''
+      log:
+        description: The app's debug log areas for this run, such as "keys,drag" (BROWSER_LOG, app/src/logging.rs); empty for none
+        default: ''
 
 concurrency:
   group: check-windows-${{ github.ref }}
@@ -93,6 +96,8 @@ jobs:
         shell: bash
         working-directory: app
     env:
+      # The areas of the app's debug log a dispatch asks for, on stderr, so in each run's log.
+      BROWSER_LOG: ${{ inputs.log }}
       # The runs the Windows driver (platform/windows/drive.cc) is meant to pass so far.
       WINDOWS_RUNS: >-
         load tabs dialogs crash about onboarding agents access passkeys passwords quit relaunch
