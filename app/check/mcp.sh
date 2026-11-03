@@ -9,7 +9,8 @@
 # text and in its outline, and the agent can't type into the password field. It types into another.
 # A page's frames, of its own site and of another, are in its outline, where the agent clicks and
 # types, and not into a frame's password field. Its text leaves out a frame an extension puts in
-# the page, which isn't the page's. Its keys, typed or pressed, go to the page alone, and Escape
+# the page, which isn't the page's. Frames two deep, of other sites, and one the page fills later
+# are in its outline and its text too, and the agent clicks two frames deep. Its keys, typed or pressed, go to the page alone, and Escape
 # the page doesn't keep runs no Stop of ilo's. Where it acts in the page shown, its pointer and a
 # ring with the element's ref show it. It opens a page, clicks its link, scrolls, takes a screenshot
 # and closes a tab, and a bank's site asks first, in a card whose Allow Once opens it. Always Allow
@@ -395,6 +396,62 @@ painted(() => document.title = "fields");
     *"Extension text"*) fail "reading the frames page gave the extension's frame's text: $read" ;;
     *"Top text"*"Inner text"*"Cross text"*) ;;
     *) fail "reading the frames page answered: $read" ;;
+  esac
+
+  # Frames nested deeper are the page's too, whatever their sites and whenever they come (#1444).
+  # A frame of another site holds one of a third site and one of the page's own, each in a process
+  # of its own, and a frame the page fills once the agent asks, as a site posts a document into its
+  # editor's frame, comes in too. All are in the outline and the text, each where the page has it.
+  # The answers are kept before any is judged, so a run that fails shows them all.
+  printf '%s' '<p>Deep text</p>
+<button onclick="document.body.append(&quot;deep clicked&quot;)">Deep button</button>
+<script src="painted.js"></script><script>painted(() => top.postMessage("deep", "*"));</script>' \
+    > "$out/site/deep.html"
+  printf '%s' '<p>Back text</p><script src="painted.js"></script>
+<script>painted(() => top.postMessage("back", "*"));</script>' > "$out/site/back.html"
+  printf '%s' '<p>Late text</p><script src="painted.js"></script>
+<script>painted(() => top.postMessage("late", "*"));</script>' > "$out/site/late.html"
+  printf '%s' "<p>Outer text</p><iframe src=http://deep.localhost:$port/deep.html></iframe>
+<iframe src=http://localhost:$port/back.html></iframe>" > "$out/site/outer.html"
+  printf '%s' "<title>loading</title><p>Nested top text</p>
+<iframe src=http://127.0.0.1:$port/outer.html></iframe><iframe name=late></iframe>
+<form target=late action=http://127.0.0.1:$port/late.html></form>
+<button onclick=\"document.forms[0].submit()\">Fill the frame</button>
+<script>const heard = new Set();
+addEventListener('message', (event) => {
+  heard.add(event.data);
+  if (heard.has('deep') && heard.has('back')) {
+    document.title = heard.has('late') ? 'late' : 'nested';
+  }
+});</script>" > "$out/site/nested.html"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/nested.html\"}")
+  nested_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  await_log "^browser: title $nested_tab nested\$" "the nested frames didn't paint"
+  outline=$(call snapshot "{\"tab\":$nested_tab}")
+  nested=$outline
+  printf '%s\n' "$nested" > "$out/mcp-nested.txt"
+  call click "{\"tab\":$nested_tab,\"ref\":\"$(ref_of button "Fill the frame")\"}" > /dev/null
+  await_log "^browser: title $nested_tab late\$" "the frame the page fills didn't paint"
+  late=$(call snapshot "{\"tab\":$nested_tab}")
+  printf '%s\n' "$late" > "$out/mcp-nested-late.txt"
+  read=$(call read_page "{\"tab\":$nested_tab}")
+  printf '%s\n' "$read" > "$out/mcp-nested-text.txt"
+  case "$nested" in
+    *"Nested top text"*"Outer text"*"Deep text"*"Deep button"*"Back text"*) ;;
+    *) fail "the page with nested frames was outlined as: $nested" ;;
+  esac
+  case "$late" in
+    *"Outer text"*"Deep text"*"Back text"*"Late text"*) ;;
+    *) fail "the page whose frame it filled was outlined as: $late" ;;
+  esac
+  case "$read" in
+    *"Nested top text"*"Outer text"*"Deep text"*"Back text"*"Late text"*) ;;
+    *) fail "reading the page with nested frames answered: $read" ;;
+  esac
+  clicked=$(call click "{\"tab\":$nested_tab,\"ref\":\"$(ref_of button "Deep button")\"}")
+  case "$clicked" in
+    "Clicked button “Deep button”."*"deep clicked"*) ;;
+    *) fail "clicking two frames deep answered: $clicked" ;;
   esac
 
   # Its keys go to the page alone: type with submit and press_key's Enter submit the form, Tab
