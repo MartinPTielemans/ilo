@@ -996,7 +996,7 @@ std::map<void*, std::pair<double, double>> g_pane_corners;
 // window starts at (host_set_pane_corner).
 std::map<void*, double> g_page_lefts;
 Floating g_hud;
-double g_hud_right = 0, g_hud_top = 0;
+double g_hud_right = 0, g_hud_top = 0, g_hud_margin = 0;
 Floating g_drop_targets;
 Floating g_dialog;
 Floating g_site_controls;
@@ -2965,10 +2965,11 @@ void host_set_pane_corner(void* ui_view, double left, double right, double top) 
   }
 }
 
-void host_add_hud(void* hud_view, double right, double top, double) {
+void host_add_hud(void* hud_view, double right, double top, double margin) {
   Adopt(g_hud, hud_view, true, nullptr);
   g_hud_right = right;
   g_hud_top = top;
+  g_hud_margin = margin;
 }
 
 void host_show_hud(void* ui_view) {
@@ -2976,12 +2977,31 @@ void host_show_hud(void* ui_view) {
   ContentSize(Root(ui_view), &content_width, &content_height);
   WindowSize(g_hud.hwnd, &width, &height);
   auto [extra_right, extra_top] = g_pane_corners[ui_view];
-  Show(g_hud, ui_view, content_width - g_hud_right - extra_right - width, g_hud_top + extra_top, -1,
-       -1, false);
+  // 8 points below the find bar while it shows, where the HUD would cover it, as the Mac's and
+  // Linux's hosts put it.
+  double top = g_hud_top;
+  if (auto it = g_find_bars.find(ui_view); it != g_find_bars.end()) {
+    HWND bar = it->second.floating.hwnd;
+    double bar_width, bar_height;
+    if (bar && IsWindowVisible(bar)) {
+      WindowSize(bar, &bar_width, &bar_height);
+      top = it->second.top + bar_height + 8 - g_hud_margin;
+    }
+  }
+  Show(g_hud, ui_view, content_width - g_hud_right - extra_right - width, top + extra_top, -1, -1,
+       false);
+  // check.sh reads this line, as the Mac's and Linux's hosts log it.
+  if (g_hud.hwnd && IsWindowVisible(g_hud.hwnd)) {
+    fprintf(stderr, "browser: zoom hud shown\n");
+  }
 }
 
 void host_hide_hud(void) {
+  const bool shown = g_hud.hwnd && IsWindowVisible(g_hud.hwnd);
   Hide(g_hud);
+  if (shown) {
+    fprintf(stderr, "browser: zoom hud hidden\n");
+  }
 }
 
 void host_add_drop_targets(void* view) {
