@@ -450,7 +450,7 @@ none_since '^browser: library hidden$' || fail "escape in the card's icon picker
 # In a window 700 wide the two cards, 744 across, don't fit: the section leaves the page 56, 644,
 # and its cards scroll across under two fingers, give past their last and spring back to it once
 # let go, 100 along, the Library staying open (Arc 1.171, #1401).
-if [ -z "$x11" ]; then
+if [ -n "$fingers" ]; then
   send resize 700 ${content#*x}
   expect "^browser: drawn at 700x${content#*x}\$" "the window didn't draw 700 wide"
   record library-cards 3
