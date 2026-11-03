@@ -2927,12 +2927,21 @@ impl Shell {
         if self.task_select(tab, cx) {
             return;
         }
-        // The tab selected whose page another window shows is taken from it by selecting it again.
-        if tab == self.selected && !self.pictured(tab) && !core_away {
+        // The tab selected whose page another window shows is taken from it by selecting it again,
+        // and so is one while another's switch is under way, which would show that one.
+        if self.tab_asked() == tab && !self.pictured(tab) && !core_away {
             return;
         }
         self.switching = Some((Switch::Tab(tab), Instant::now()));
         self.browser.select(tab, cx);
+    }
+
+    /// The tab the window shows once the switch under way, if one is, has shown it.
+    fn tab_asked(&self) -> u64 {
+        match self.switching {
+            Some((Switch::Tab(tab), _)) => tab,
+            _ => self.selected,
+        }
     }
 
     /// A double-click on the window's background: in the sidebar below the rows it opens a new tab
