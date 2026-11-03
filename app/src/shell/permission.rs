@@ -8,31 +8,30 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    Bounds, Context, Div, FontWeight, Pixels, SharedString, Stateful, canvas, div,
-    prelude::*, px, svg,
+    Bounds, Context, Div, FontWeight, Pixels, SharedString, Stateful, canvas, div, prelude::*, px,
+    svg,
 };
 
+use super::{
+    NAV, NAV_RADIUS, PLATE_INSET, Shell, TITLE, URL_FIELD, URL_FIELD_HEIGHT, URL_FIELD_TOP,
+};
 use crate::{
     palette::{Palette, STATE_HOVERED, STATE_PRESSED},
     settling::Settling,
 };
-use super::{
-    NAV, NAV_RADIUS, PLATE_INSET, Shell, TITLE, URL_FIELD, URL_FIELD_HEIGHT,
-    URL_FIELD_TOP,
-};
 
-use crate::tokens::shell::permission::GAP;
-use crate::tokens::shell::permission::PADDING;
-use crate::tokens::shell::permission::RADIUS;
-use crate::tokens::shell::permission::LINE;
-use crate::tokens::shell::permission::DETAIL;
-use crate::tokens::shell::permission::BUTTON_HEIGHT;
+use crate::elevation::Level;
 use crate::tokens::shell::permission::BUTTON_GAP;
+use crate::tokens::shell::permission::BUTTON_HEIGHT;
 pub(super) use crate::tokens::shell::permission::BUTTONS_TOP;
 use crate::tokens::shell::permission::CLOSE;
-use crate::tokens::shell::permission::CLOSE_INSET;
 use crate::tokens::shell::permission::CLOSE_GLYPH;
-use crate::elevation::Level;
+use crate::tokens::shell::permission::CLOSE_INSET;
+use crate::tokens::shell::permission::DETAIL;
+use crate::tokens::shell::permission::GAP;
+use crate::tokens::shell::permission::LINE;
+use crate::tokens::shell::permission::PADDING;
+use crate::tokens::shell::permission::RADIUS;
 use crate::tokens::text;
 /// The room a card's first line leaves for its ×.
 pub(super) const BESIDE_CLOSE: f32 = CLOSE + CLOSE_INSET - PADDING;
@@ -103,7 +102,10 @@ impl Shell {
             return None;
         };
         let mut settling = self.question_settling.borrow_mut();
-        if settling.as_ref().is_none_or(|(shown, _)| *shown != self.selected) {
+        if settling
+            .as_ref()
+            .is_none_or(|(shown, _)| *shown != self.selected)
+        {
             let mut started = Settling::default();
             started.start(format!("question {}", self.selected), cx);
             *settling = Some((self.selected, started));
@@ -128,7 +130,9 @@ impl Shell {
                         .child(format!("{} wants\u{a0}to", question.site)),
                 )
                 .children(question.permissions.iter().map(|permission| {
-                    div().text_color(self.palette.on_overlay(DETAIL)).child(permission.clone())
+                    div()
+                        .text_color(self.palette.on_overlay(DETAIL))
+                        .child(permission.clone())
                 }))
                 .child(
                     div()
@@ -157,7 +161,12 @@ pub(super) fn card_close(palette: &Palette, id: &'static str) -> Stateful<Div> {
         .rounded(px(NAV_RADIUS))
         .hover(|style| style.bg(palette.plate(STATE_HOVERED)))
         .active(|style| style.bg(palette.plate(STATE_PRESSED)))
-        .child(svg().path("icons/x.svg").size(px(CLOSE_GLYPH)).text_color(palette.glyph(NAV)))
+        .child(
+            svg()
+                .path("icons/x.svg")
+                .size(px(CLOSE_GLYPH))
+                .text_color(palette.glyph(NAV)),
+        )
 }
 
 /// A button on a card, as wide as its share of the row, as tall as a line of text and a half, and
@@ -206,7 +215,6 @@ impl Shell {
             .text_size(px(text::BODY))
             .line_height(px(LINE))
     }
-
 }
 
 /// Logs where a card is in its window, as `what` ("question") for `tab`, when that changes.
@@ -218,11 +226,14 @@ pub(super) fn card_listener(
     tab: u64,
 ) -> impl IntoElement + use<> {
     let drawn = drawn.clone();
-    canvas(move |bounds, _, _| logged_at(what, &drawn, tab, bounds), |_, _, _, _| {})
-        .absolute()
-        .top_0()
-        .left_0()
-        .size_full()
+    canvas(
+        move |bounds, _, _| logged_at(what, &drawn, tab, bounds),
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
 }
 
 /// Logs where a card is in its window when that changes.
@@ -250,7 +261,7 @@ fn logged_at(
 mod tests {
     use std::rc::Rc;
 
-    use gpui::{Modifiers, Point, Pixels, TestAppContext, point, px};
+    use gpui::{Modifiers, Pixels, Point, TestAppContext, point, px};
 
     use crate::{
         settling::SETTLING,
@@ -266,7 +277,14 @@ mod tests {
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
         let ask = |shell: &mut Shell, cx: &mut gpui::Context<Shell>| {
             let permissions = vec!["Use your camera".into()];
-            shell.set_question(10, Some(Question { site: "example.com".into(), permissions }), cx);
+            shell.set_question(
+                10,
+                Some(Question {
+                    site: "example.com".into(),
+                    permissions,
+                }),
+                cx,
+            );
         };
         shell.update(cx, |shell, cx| {
             let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
@@ -279,8 +297,14 @@ mod tests {
         cx.run_until_parked();
         // Allow is at the right of the buttons along the card's bottom, × in its top corner.
         let at = |shell: &Shell| -> (Point<Pixels>, Point<Pixels>) {
-            let card = shell.question_drawn.get().expect("the question wasn't drawn");
-            let (right, bottom) = (card.origin.x + card.size.width, card.origin.y + card.size.height);
+            let card = shell
+                .question_drawn
+                .get()
+                .expect("the question wasn't drawn");
+            let (right, bottom) = (
+                card.origin.x + card.size.width,
+                card.origin.y + card.size.height,
+            );
             let allow = point(card.origin.x + card.size.width * 0.75, bottom - px(26.));
             (allow, point(right - px(18.), card.origin.y + px(18.)))
         };
