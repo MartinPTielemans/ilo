@@ -20,7 +20,11 @@ impl Recorder {
 
 fn describe(frame: Bounds<Pixels>) -> String {
     let (x, y) = (f32::from(frame.origin.x), f32::from(frame.origin.y));
-    format!("{x} {y} {} {}", f32::from(frame.size.width), f32::from(frame.size.height))
+    format!(
+        "{x} {y} {} {}",
+        f32::from(frame.size.width),
+        f32::from(frame.size.height)
+    )
 }
 
 impl Host for Recorder {
@@ -50,7 +54,10 @@ impl Host for Recorder {
     fn closed(&self, window: u64, closed: Closed, undone: bool, _: &mut App) {
         let (x, y) = (f32::from(closed.link.x), f32::from(closed.link.y));
         let undone = if undone { " undone" } else { "" };
-        self.push(format!("closed {window} over {} {} {x} {y}{undone}", closed.over, closed.url));
+        self.push(format!(
+            "closed {window} over {} {} {x} {y}{undone}",
+            closed.over, closed.url
+        ));
     }
     fn tooltip(&self, tip: Option<(Tip, Anchor)>, _: &mut App) {
         match tip {
@@ -114,7 +121,9 @@ impl Shown {
     fn show(&mut self, tab: u64) {
         let link = point(px(400.), px(200.));
         let url = "https://www.example.org/a".into();
-        self.cx.cx.update(|cx| show(WINDOW, tab, OVER, url, (page(), 6.), link, cx));
+        self.cx
+            .cx
+            .update(|cx| show(WINDOW, tab, OVER, url, (page(), 6.), link, cx));
         self.cx.run_until_parked();
     }
 
@@ -124,18 +133,22 @@ impl Shown {
     }
 
     fn hover(&mut self, (x, y): (f32, f32)) {
-        self.cx.simulate_mouse_move(point(px(x), px(y)), None, Modifiers::none());
+        self.cx
+            .simulate_mouse_move(point(px(x), px(y)), None, Modifiers::none());
         self.cx.run_until_parked();
     }
 
     fn click(&mut self, (x, y): (f32, f32)) {
-        self.cx.simulate_click(point(px(x), px(y)), Modifiers::none());
+        self.cx
+            .simulate_click(point(px(x), px(y)), Modifiers::none());
         self.cx.run_until_parked();
     }
 
     /// What the preview asked since the last time, once it has had time to leave.
     fn calls(&mut self) -> Vec<String> {
-        self.cx.executor().advance_clock(Duration::from_secs_f32(KEEP.max(CLOSE)));
+        self.cx
+            .executor()
+            .advance_clock(Duration::from_secs_f32(KEEP.max(CLOSE)));
         self.cx.run_until_parked();
         self.host.calls.take()
     }
@@ -146,13 +159,25 @@ impl Shown {
 #[test]
 fn the_card_sits_over_the_page_and_grows_into_it() {
     assert_eq!(card(page()), bounds(295., 105., 440., 430.));
-    assert_eq!(card(bounds(0., 0., 200., 150.)), bounds(24., 64., 152., 62.));
-    assert_eq!(card(bounds(0., 0., 3000., 2000.)), bounds(120., 160., 2760., 1720.));
+    assert_eq!(
+        card(bounds(0., 0., 200., 150.)),
+        bounds(24., 64., 152., 62.)
+    );
+    assert_eq!(
+        card(bounds(0., 0., 3000., 2000.)),
+        bounds(120., 160., 2760., 1720.)
+    );
     assert_eq!(page_in(card(page())), bounds(296., 106., 438., 428.));
     assert_eq!(controls_over(card(page())), bounds(295., 65., 440., 32.));
     assert_eq!(card_around(page_in(card(page()))), card(page()));
     let link = point(px(400.), px(200.));
-    let rest = Pose { scale: 1., kept: 0., page: 1., card: 1., dim: 1. };
+    let rest = Pose {
+        scale: 1.,
+        kept: 0.,
+        page: 1.,
+        card: 1.,
+        dim: 1.,
+    };
     assert_eq!(frames(rest, page(), link).2, page_in(card(page())));
     let kept = rest.keeping(KEEP);
     assert_eq!(kept.card, 0.);
@@ -175,7 +200,10 @@ fn it_grows_from_the_link() {
     let open = Pose::arriving(OPEN);
     assert_eq!((open.scale, open.page, open.dim), (1., 1., 1.));
     let closed = open.closing(CLOSE);
-    assert_eq!((closed.scale, closed.page, closed.dim), (FROM_SCALE, 0., 0.));
+    assert_eq!(
+        (closed.scale, closed.page, closed.dim),
+        (FROM_SCALE, 0., 0.)
+    );
 }
 
 #[test]
@@ -194,7 +222,10 @@ fn its_keys() {
 #[test]
 fn it_shows_the_site() {
     assert_eq!(site_of("https://www.example.org/a?b#c"), "example.org");
-    assert_eq!(site_of("http://user@news.example.com:8080/"), "news.example.com");
+    assert_eq!(
+        site_of("http://user@news.example.com:8080/"),
+        "news.example.com"
+    );
     assert_eq!(site_of("https://example.org"), "example.org");
     assert_eq!(site_of("http://localhost:50821/b.html"), "localhost");
     assert_eq!(site_of("http://[::1]:8080/"), "[::1]");
@@ -226,7 +257,10 @@ fn its_buttons_keep_and_close_it(cx: &mut TestAppContext) {
     // The next preview's keep button came in under the pointer, which asked for its tooltip, and
     // the click on close ends it.
     shown.click(CLOSE_BUTTON);
-    assert_eq!(shown.calls(), ["tooltip none", "release", "hide", "close 7", CLOSED]);
+    assert_eq!(
+        shown.calls(),
+        ["tooltip none", "release", "hide", "close 7", CLOSED]
+    );
 }
 
 /// Each button's tooltip names it and its key, as written here, and hangs from it: from the
@@ -253,12 +287,25 @@ fn its_buttons_name_themselves_and_their_keys(cx: &mut TestAppContext) {
     assert_eq!(shown.calls(), Vec::<String>::new());
     shown.hover(KEEP_BUTTON);
     shown.click(KEEP_BUTTON);
-    assert_eq!(shown.calls(), [keep.as_str(), "tooltip none", "release", "keep 1 7", "hide"]);
+    assert_eq!(
+        shown.calls(),
+        [keep.as_str(), "tooltip none", "release", "keep 1 7", "hide"]
+    );
     shown.show(TAB);
     shown.calls();
     shown.hover(CLOSE_BUTTON);
     shown.keys("escape");
-    assert_eq!(shown.calls(), [close.as_str(), "tooltip none", "release", "hide", "close 7", CLOSED]);
+    assert_eq!(
+        shown.calls(),
+        [
+            close.as_str(),
+            "tooltip none",
+            "release",
+            "hide",
+            "close 7",
+            CLOSED
+        ]
+    );
 }
 
 /// A click on the dim closes it; one on the card or the site over it doesn't.
@@ -278,7 +325,10 @@ fn a_click_outside_closes_it(cx: &mut TestAppContext) {
 fn its_pages_keys_stay_in_it(cx: &mut TestAppContext) {
     let mut shown = Shown::new(cx);
     let route = |window, tab, keystroke: &str, reserved| {
-        shown.cx.cx.update(|cx| key(window, tab, keystroke, reserved, cx))
+        shown
+            .cx
+            .cx
+            .update(|cx| key(window, tab, keystroke, reserved, cx))
     };
     // Another window's page keeps its keys.
     assert_eq!(route(WINDOW + 1, 4, "escape", true), None);
@@ -293,7 +343,10 @@ fn its_pages_keys_stay_in_it(cx: &mut TestAppContext) {
     assert_eq!(shown.cx.cx.update(|cx| tab(cx)), None);
     shown.show(TAB);
     shown.calls();
-    assert_eq!(shown.cx.cx.update(|cx| key(0, TAB, "escape", true, cx)), Some(true));
+    assert_eq!(
+        shown.cx.cx.update(|cx| key(0, TAB, "escape", true, cx)),
+        Some(true)
+    );
     assert_eq!(shown.calls(), ["release", "hide", "close 7", CLOSED]);
 }
 
@@ -304,7 +357,10 @@ fn redo_closes_it_over_its_tab(cx: &mut TestAppContext) {
     assert!(!shown.cx.cx.update(|cx| close_over(WINDOW, OVER + 1, cx)));
     assert!(!shown.cx.cx.update(|cx| close_over(WINDOW + 1, OVER, cx)));
     assert!(shown.cx.cx.update(|cx| close_over(WINDOW, OVER, cx)));
-    assert_eq!(shown.calls(), ["release", "hide", "close 7", &format!("{CLOSED} undone")]);
+    assert_eq!(
+        shown.calls(),
+        ["release", "hide", "close 7", &format!("{CLOSED} undone")]
+    );
 }
 
 /// A call's link opens as a tab, and the same sites' other pages preview.
@@ -341,7 +397,10 @@ fn meeting_links_are_known_by_site_and_path() {
 fn a_second_preview_takes_the_firsts_place(cx: &mut TestAppContext) {
     let mut shown = Shown::new(cx);
     shown.show(8);
-    assert_eq!(shown.calls(), ["hide", "close 7", "place 8 296 106 438 428 r16", "show 1"]);
+    assert_eq!(
+        shown.calls(),
+        ["hide", "close 7", "place 8 296 106 438 428 r16", "show 1"]
+    );
     assert_eq!(shown.cx.cx.update(|cx| tab(cx)), Some(8));
 }
 
@@ -358,8 +417,17 @@ fn its_tab_closing_takes_it_away(cx: &mut TestAppContext) {
 #[gpui::test]
 fn it_follows_the_window(cx: &mut TestAppContext) {
     let mut shown = Shown::new(cx);
-    shown.cx.cx.update(|cx| page_moved(2, (bounds(0., 0., 100., 100.), 6.), cx));
-    shown.cx.cx.update(|cx| page_moved(WINDOW, (page(), 6.), cx));
-    shown.cx.cx.update(|cx| page_moved(WINDOW, (bounds(240., 10., 750., 580.), 6.), cx));
+    shown
+        .cx
+        .cx
+        .update(|cx| page_moved(2, (bounds(0., 0., 100., 100.), 6.), cx));
+    shown
+        .cx
+        .cx
+        .update(|cx| page_moved(WINDOW, (page(), 6.), cx));
+    shown
+        .cx
+        .cx
+        .update(|cx| page_moved(WINDOW, (bounds(240., 10., 750., 580.), 6.), cx));
     assert_eq!(shown.calls(), ["place 7 299 109 632 422 r16"]);
 }

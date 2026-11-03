@@ -14,8 +14,8 @@ use std::{
 
 use gpui::{
     App, AppContext as _, Bounds, BoxShadow, Context, IntoElement, ParentElement as _, Pixels,
-    Render, Styled as _, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
-    RootLook, WindowKind, WindowOptions, div, hsla, point, px, size,
+    Render, RootLook, Styled as _, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
+    WindowKind, WindowOptions, div, hsla, point, px, size,
 };
 
 use crate::motion::{self, Motion};
@@ -263,7 +263,15 @@ pub(crate) fn follow(overlay: c_int, mut motion: Motion) {
 pub(crate) fn drew(overlay: c_int, scale: f32, opacity: f32, origin: gpui::Point<Pixels>) {
     if let Some(Some((view, inset))) = with(overlay, |slot| Some((slot.window?.1, slot.inset))) {
         let origin = origin + inset;
-        motion::hold(view, RootLook { scale, origin, opacity, moving: false });
+        motion::hold(
+            view,
+            RootLook {
+                scale,
+                origin,
+                opacity,
+                moving: false,
+            },
+        );
     }
 }
 
