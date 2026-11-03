@@ -36,13 +36,17 @@ pub fn save_png(png: &[u8]) {
     crate::update_app_later(move |cx| {
         // The portal opens in the folder given, and GPUI asks for one; the home folder is always
         // there.
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default();
         let chosen = cx.prompt_for_new_path(&home, Some(&name));
         let background = cx.background_executor().clone();
         cx.foreground_executor()
             .spawn(async move {
                 if let Ok(Ok(Some(path))) = chosen.await {
-                    _ = background.spawn(async move { std::fs::write(path, png) }).await;
+                    _ = background
+                        .spawn(async move { std::fs::write(path, png) })
+                        .await;
                 }
             })
             .detach();
@@ -70,14 +74,20 @@ pub fn watch_activation<T: 'static>(
 /// drag under Wayland, from the press the left button holds.
 #[unsafe(no_mangle)]
 pub extern "C" fn host_drag_file(path: *const c_char, ended: extern "C" fn(taken: bool)) -> bool {
-    let path = PathBuf::from(unsafe { CStr::from_ptr(path) }.to_string_lossy().into_owned());
+    let path = PathBuf::from(
+        unsafe { CStr::from_ptr(path) }
+            .to_string_lossy()
+            .into_owned(),
+    );
     if !path.exists() {
         return false;
     }
     gpui_linux::start_file_drag(&path, move |taken| {
         // After the event that let it go, out of the display's handling.
         if let Some(cx) = crate::CX.with_borrow(Clone::clone) {
-            cx.foreground_executor().spawn(async move { ended(taken) }).detach();
+            cx.foreground_executor()
+                .spawn(async move { ended(taken) })
+                .detach();
         }
     })
 }
@@ -96,13 +106,17 @@ pub extern "C" fn host_watch_control(released: extern "C" fn()) {
 #[unsafe(no_mangle)]
 pub extern "C" fn host_watch_option_taps(tapped: extern "C" fn(ui_view: *mut c_void)) {
     gpui_linux::watch_alt_taps(move || {
-        let Some(cx) = crate::CX.with_borrow(Clone::clone) else { return };
+        let Some(cx) = crate::CX.with_borrow(Clone::clone) else {
+            return;
+        };
         // After the event, out of the display's handling. Not in an overlay or Settings, which
         // are other windows.
         cx.spawn(async move |cx| {
             let active = cx.update(|cx| cx.active_window());
             let view = crate::WINDOWS.with_borrow(|windows| {
-                let window = windows.iter().find(|window| Some(window.handle) == active)?;
+                let window = windows
+                    .iter()
+                    .find(|window| Some(window.handle) == active)?;
                 Some(window.ui_view)
             });
             if let Some(view) = view {

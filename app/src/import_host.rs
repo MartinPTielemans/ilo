@@ -7,10 +7,10 @@ use std::collections::VecDeque;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
 
-use browser::import::{Exported, Passwords};
 use browser::import::found::{Page, Tab};
 use browser::import::plan::{Existing, ExistingSpace, Row};
 use browser::import::sources::{Os, Roots};
+use browser::import::{Exported, Passwords};
 use browser::theme::Theme;
 use gpui::{App, PathPromptOptions};
 

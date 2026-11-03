@@ -132,7 +132,11 @@ pub const BROWSERS: &[Browser] = &[
                 Flatpak,
                 "com.brave.Browser/config/BraveSoftware/Brave-Browser",
             ),
-            (Linux, Snap, "brave/current/.config/BraveSoftware/Brave-Browser"),
+            (
+                Linux,
+                Snap,
+                "brave/current/.config/BraveSoftware/Brave-Browser",
+            ),
         ],
     },
     Browser {
@@ -362,7 +366,12 @@ pub fn find(roots: &Roots) -> Vec<Source> {
     // An install is named only beside another of the same browser.
     for index in 0..found.len() {
         let name = found[index].browser.name;
-        if found.iter().filter(|other| other.browser.name == name).count() == 1 {
+        if found
+            .iter()
+            .filter(|other| other.browser.name == name)
+            .count()
+            == 1
+        {
             found[index].install = None;
         }
     }

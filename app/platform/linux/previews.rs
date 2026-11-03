@@ -30,7 +30,11 @@ type Done =
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_file_preview(path: *const c_char, id: u64, done: Done) {
-    let path = PathBuf::from(unsafe { CStr::from_ptr(path) }.to_string_lossy().into_owned());
+    let path = PathBuf::from(
+        unsafe { CStr::from_ptr(path) }
+            .to_string_lossy()
+            .into_owned(),
+    );
     let Some(cx) = crate::CX.with_borrow(Clone::clone) else {
         return;
     };
@@ -42,9 +46,14 @@ pub extern "C" fn host_file_preview(path: *const c_char, id: u64, done: Done) {
     cx.foreground_executor()
         .spawn(async move {
             match thumbnail.await {
-                Some((png, width, height)) => {
-                    done(id, png.as_ptr(), png.len(), width.into(), height.into(), true)
-                }
+                Some((png, width, height)) => done(
+                    id,
+                    png.as_ptr(),
+                    png.len(),
+                    width.into(),
+                    height.into(),
+                    true,
+                ),
                 None => done(id, std::ptr::null(), 0, 0., 0., false),
             }
         })
@@ -63,7 +72,9 @@ fn thumbnail(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
         picture = picture.thumbnail(THUMBNAIL, THUMBNAIL);
     }
     let mut png = Vec::new();
-    picture.write_to(&mut Cursor::new(&mut png), ImageFormat::Png).ok()?;
+    picture
+        .write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+        .ok()?;
     Some((png, picture.width(), picture.height()))
 }
 
@@ -93,7 +104,9 @@ fn data_dirs() -> Vec<PathBuf> {
         .ok()
         .filter(|dirs| !dirs.is_empty())
         .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
-    home.into_iter().chain(shared.split(':').map(PathBuf::from)).collect()
+    home.into_iter()
+        .chain(shared.split(':').map(PathBuf::from))
+        .collect()
 }
 
 /// `path`'s MIME type by its name, as shared-mime-info's globs give it, the heaviest first. Only a

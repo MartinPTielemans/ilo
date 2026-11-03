@@ -11,9 +11,8 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use gpui::{
     App, Bounds, Context, Entity, Focusable, FontWeight, Global, Hsla, KeyBinding, Pixels, Point,
-    SharedString, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
-    WindowHandle, WindowKind, WindowOptions, actions, div, point, prelude::*, px, size,
-    svg,
+    SharedString, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
+    WindowKind, WindowOptions, actions, div, point, prelude::*, px, size, svg,
 };
 
 use crate::{
@@ -39,26 +38,26 @@ pub const HEIGHT: f32 = INSET * 2.
     + BUTTON_HEIGHT;
 pub const RIGHT: f32 = shell::CARD_INSET + 8.;
 pub const TOP: f32 = shell::CARD_INSET + 8.;
-use crate::tokens::offer::INSET;
-use crate::tokens::offer::RADIUS;
-use crate::tokens::offer::TITLE_LINE;
-use crate::tokens::offer::SITE_LINE;
-use crate::tokens::offer::HEADER_GAP;
-use crate::tokens::offer::ROW;
-use crate::tokens::offer::ROW_GAP;
-use crate::tokens::offer::FIELD_X;
-use crate::tokens::offer::CHEVRON;
-use crate::tokens::offer::GLYPH;
-use crate::tokens::offer::BUTTONS_TOP;
+use crate::elevation::Level;
+use crate::tokens::offer::BUTTON_GAP;
 use crate::tokens::offer::BUTTON_HEIGHT;
 use crate::tokens::offer::BUTTON_X;
-use crate::tokens::offer::BUTTON_GAP;
-use crate::tokens::offer::PLATE_RADIUS;
-use crate::tokens::offer::TITLE;
+use crate::tokens::offer::BUTTONS_TOP;
+use crate::tokens::offer::CHEVRON;
 use crate::tokens::offer::DETAIL;
-use crate::elevation::Level;
-use crate::tokens::offer::PLATE;
+use crate::tokens::offer::FIELD_X;
+use crate::tokens::offer::GLYPH;
+use crate::tokens::offer::HEADER_GAP;
+use crate::tokens::offer::INSET;
 use crate::tokens::offer::PLACEHOLDER;
+use crate::tokens::offer::PLATE;
+use crate::tokens::offer::PLATE_RADIUS;
+use crate::tokens::offer::RADIUS;
+use crate::tokens::offer::ROW;
+use crate::tokens::offer::ROW_GAP;
+use crate::tokens::offer::SITE_LINE;
+use crate::tokens::offer::TITLE;
+use crate::tokens::offer::TITLE_LINE;
 use crate::tokens::text;
 
 /// What an offer offers.
@@ -271,12 +270,16 @@ pub fn page_elsewhere(browser: u64, elsewhere: bool, cx: &mut App) {
     let Some(window) = window_of(browser, cx) else {
         return;
     };
-    window.update(cx, |prompt, _, _| prompt.elsewhere = elsewhere).ok();
+    window
+        .update(cx, |prompt, _, _| prompt.elsewhere = elsewhere)
+        .ok();
     show_offer(window, cx);
 }
 
 fn window_of(browser: u64, cx: &App) -> Option<WindowHandle<OfferPrompt>> {
-    cx.try_global::<OfferWindows>().and_then(|windows| windows.0.get(&browser)).copied()
+    cx.try_global::<OfferWindows>()
+        .and_then(|windows| windows.0.get(&browser))
+        .copied()
 }
 
 /// `tab` closed.
@@ -291,7 +294,9 @@ fn show_offer(window: WindowHandle<OfferPrompt>, cx: &mut App) {
         .update(cx, |prompt, window, cx| {
             match prompt.offer().filter(|_| !prompt.elsewhere) {
                 Some(offer) => {
-                    prompt.input.update(cx, |input, cx| input.reset(offer.username, window, cx));
+                    prompt
+                        .input
+                        .update(cx, |input, cx| input.reset(offer.username, window, cx));
                     prompt.host.show();
                     prompt.settling.start(format!("offer {}", prompt.tab), cx);
                 }
@@ -312,7 +317,10 @@ impl OfferPrompt {
         if answer != Answer::NotNow && !self.settling.settled(cx) {
             return;
         }
-        if OFFERS.with_borrow_mut(|offers| offers.remove(&tab)).is_none() {
+        if OFFERS
+            .with_borrow_mut(|offers| offers.remove(&tab))
+            .is_none()
+        {
             return;
         }
         let username = self.input.read(cx).text().to_string();
@@ -336,12 +344,17 @@ impl OfferPrompt {
 
     /// Shows the page's usernames under the field, and puts the one chosen in it.
     fn pick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(offer), Some(menu)) =
-            (self.offer(), cx.try_global::<FieldMenu>().map(|menu| menu.0.clone()))
-        else {
+        let (Some(offer), Some(menu)) = (
+            self.offer(),
+            cx.try_global::<FieldMenu>().map(|menu| menu.0.clone()),
+        ) else {
             return;
         };
-        let items = offer.usernames.iter().map(|username| (username.clone(), true)).collect();
+        let items = offer
+            .usernames
+            .iter()
+            .map(|username| (username.clone(), true))
+            .collect();
         let input = self.input.clone();
         let usernames = offer.usernames;
         let chosen = Box::new(move |index: usize, window: &mut Window, cx: &mut App| {
@@ -355,13 +368,19 @@ impl OfferPrompt {
 
 /// Where the username field's bottom left corner is in the window, where its menu shows.
 fn field_bottom_left() -> Point<Pixels> {
-    point(px(INSET), px(INSET + TITLE_LINE + SITE_LINE + HEADER_GAP + ROW))
+    point(
+        px(INSET),
+        px(INSET + TITLE_LINE + SITE_LINE + HEADER_GAP + ROW),
+    )
 }
 
 impl Render for OfferPrompt {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The browser's shortcuts work here too, below the offer's own keys.
-        let root = div().key_context(shell::KEY_CONTEXT).size_full().font_family(crate::face::UI);
+        let root = div()
+            .key_context(shell::KEY_CONTEXT)
+            .size_full()
+            .font_family(crate::face::UI);
         let Some(offer) = self.offer() else {
             return root;
         };
@@ -369,14 +388,26 @@ impl Render for OfferPrompt {
         // The placeholder and the accent follow the Space shown, which may have changed since it
         // opened.
         self.input.update(cx, |input, _| {
-            input.set_colors(palette.text(PLACEHOLDER), palette.accent.into(), palette.selection())
+            input.set_colors(
+                palette.text(PLACEHOLDER),
+                palette.accent.into(),
+                palette.selection(),
+            )
         });
         // Save or Update stands out in the Space's accent, as a dialog's action does.
         let button = |id: &'static str, label: SharedString, answer: Answer, default: bool| {
             let (rest, hovered, pressed) = if default {
-                (palette.accent.into(), palette.accent_hovered(), palette.accent_pressed())
+                (
+                    palette.accent.into(),
+                    palette.accent_hovered(),
+                    palette.accent_pressed(),
+                )
             } else {
-                (palette.plate(PLATE), palette.state(PLATE, STATE_HOVERED), palette.state(PLATE, STATE_PRESSED))
+                (
+                    palette.plate(PLATE),
+                    palette.state(PLATE, STATE_HOVERED),
+                    palette.state(PLATE, STATE_PRESSED),
+                )
             };
             div()
                 .id(id)
@@ -417,11 +448,20 @@ impl Render for OfferPrompt {
             .active(move |style| style.bg(palette.plate(STATE_PRESSED)))
             .on_click(cx.listener(|prompt, _, window, cx| prompt.pick(window, cx)))
             .child(
-                svg().path("icons/chevron-down.svg").size(px(GLYPH)).text_color(palette.glyph(DETAIL)),
+                svg()
+                    .path("icons/chevron-down.svg")
+                    .size(px(GLYPH))
+                    .text_color(palette.glyph(DETAIL)),
             );
         let username = row()
             .pr(px(FIELD_X))
-            .child(div().flex_1().min_w_0().overflow_hidden().child(self.input.clone()))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(self.input.clone()),
+            )
             .when(offer.usernames.len() > 1, |row| row.pr_0().child(chevron));
         let password = row()
             .overflow_hidden()
@@ -431,7 +471,11 @@ impl Render for OfferPrompt {
             .mt(px(BUTTONS_TOP))
             .flex()
             .gap(px(BUTTON_GAP))
-            .children(offer.never.map(|never| button("never", never, Answer::Never, false)))
+            .children(
+                offer
+                    .never
+                    .map(|never| button("never", never, Answer::Never, false)),
+            )
             .child(div().flex_1())
             .child(button("decline", offer.decline, Answer::NotNow, false))
             .child(button("accept", offer.accept, Answer::Accept, true));

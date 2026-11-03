@@ -23,7 +23,15 @@ fn library(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, R
     cx.update(|window, _| window.activate_window());
     shell.update(cx, |shell, cx| {
         let space = |id: u64, name: &str| {
-            (id, name.to_string().into(), None, 1, "".into(), "".into(), "".into())
+            (
+                id,
+                name.to_string().into(),
+                None,
+                1,
+                "".into(),
+                "".into(),
+                "".into(),
+            )
         };
         shell.set_spaces(vec![space(1, "Home"), space(2, "Work")], cx);
         shell.set_space(1, cx);
@@ -52,7 +60,10 @@ fn slot(index: usize) -> Point<Pixels> {
 }
 
 fn brush(index: usize) -> Point<Pixels> {
-    in_field(index, CARD_WIDTH - 2. * CARD_FIELD_INSET - CARD_BRUSH_INSET - CARD_BRUSH / 2.)
+    in_field(
+        index,
+        CARD_WIDTH - 2. * CARD_FIELD_INSET - CARD_BRUSH_INSET - CARD_BRUSH / 2.,
+    )
 }
 
 fn click(cx: &mut VisualTestContext, at: Point<Pixels>) {
@@ -81,7 +92,11 @@ fn library_open(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> bool {
 fn a_click_on_a_card_s_name_edits_it_in_place(cx: &mut TestAppContext) {
     let (shell, cx, host) = library(cx);
     click(cx, name(1));
-    assert_eq!(renaming_in_card(&shell, cx), Some(2), "the name isn't a field");
+    assert_eq!(
+        renaming_in_card(&shell, cx),
+        Some(2),
+        "the name isn't a field"
+    );
     assert!(host.shown.borrow().is_empty(), "the click showed the Space");
     assert!(library_open(&shell, cx), "the Library closed");
     cx.simulate_input("Play");
@@ -123,7 +138,10 @@ fn a_click_outside_the_field_keeps_the_name(cx: &mut TestAppContext) {
     let (shell, cx, host) = library(cx);
     click(cx, name(1));
     cx.simulate_input("Play");
-    click(cx, point(px(card_x(1) + CARD_WIDTH / 2.), px(SPACES_INSET / 2.)));
+    click(
+        cx,
+        point(px(card_x(1) + CARD_WIDTH / 2.), px(SPACES_INSET / 2.)),
+    );
     assert_eq!(host.take_edits(), ["rename space 2 Play"]);
     assert_eq!(renaming_in_card(&shell, cx), None, "the field stayed");
     assert!(library_open(&shell, cx), "the click closed the Library");
@@ -150,7 +168,11 @@ fn clicks_in_the_field_stay_in_it(cx: &mut TestAppContext) {
     assert!(library_open(&shell, cx), "the Library closed");
     click(cx, name(0));
     assert_eq!(host.take_edits(), ["rename space 2 Play"]);
-    assert_eq!(renaming_in_card(&shell, cx), Some(1), "the other name isn't a field");
+    assert_eq!(
+        renaming_in_card(&shell, cx),
+        Some(1),
+        "the other name isn't a field"
+    );
 }
 
 /// Closing the Library, however it closes, keeps the name being typed in a card.
@@ -171,9 +193,16 @@ fn the_icon_slot_opens_the_icon_picker(cx: &mut TestAppContext) {
     let (shell, cx, host) = library(cx);
     cx.simulate_mouse_move(slot(1), None, Modifiers::none());
     cx.run_until_parked();
-    assert!(host.take().iter().any(|line| line == "tooltip Edit Space icon "), "no tooltip");
+    assert!(
+        host.take()
+            .iter()
+            .any(|line| line == "tooltip Edit Space icon "),
+        "no tooltip"
+    );
     click(cx, slot(1));
-    let pending = shell.read_with(cx, |shell, _| shell.picker_pending.map(|(picker, _)| picker));
+    let pending = shell.read_with(cx, |shell, _| {
+        shell.picker_pending.map(|(picker, _)| picker)
+    });
     assert_eq!(pending, Some(Pending::Icon(Subject::Space(2))));
     assert_eq!(renaming_in_card(&shell, cx), None, "the slot renamed");
 }
@@ -183,7 +212,9 @@ fn the_icon_slot_opens_the_icon_picker(cx: &mut TestAppContext) {
 fn the_brush_opens_the_theme_picker(cx: &mut TestAppContext) {
     let (shell, cx, _) = library(cx);
     click(cx, brush(0));
-    let pending = shell.read_with(cx, |shell, _| shell.picker_pending.map(|(picker, _)| picker));
+    let pending = shell.read_with(cx, |shell, _| {
+        shell.picker_pending.map(|(picker, _)| picker)
+    });
     assert_eq!(pending, Some(Pending::Theme(1)));
     assert_eq!(renaming_in_card(&shell, cx), None, "the brush renamed");
 }
@@ -194,10 +225,17 @@ fn the_brush_opens_the_theme_picker(cx: &mut TestAppContext) {
 fn edit_theme_in_the_command_bar_opens_the_theme_picker(cx: &mut TestAppContext) {
     let keys = crate::shell::UserKeys::default();
     let found = crate::shell::find_commands("theme", &keys, |name, _| Some(name));
-    assert_eq!(found.first().map(|row| row.command), Some(Command::EditTheme));
+    assert_eq!(
+        found.first().map(|row| row.command),
+        Some(Command::EditTheme)
+    );
     let (shell, cx, _) = library(cx);
-    shell.update(cx, |shell, cx| shell.run(Command::EditTheme, "command-bar", cx));
-    let pending = shell.read_with(cx, |shell, _| shell.picker_pending.map(|(picker, _)| picker));
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::EditTheme, "command-bar", cx)
+    });
+    let pending = shell.read_with(cx, |shell, _| {
+        shell.picker_pending.map(|(picker, _)| picker)
+    });
     assert_eq!(pending, Some(Pending::Theme(1)));
 }
 
@@ -221,10 +259,28 @@ fn a_card_s_field_shows_its_plate_under_the_pointer_or_while_renamed(cx: &mut Te
     let (shell, cx, _) = library(cx);
     assert_eq!(fields_shown(&shell, cx), (false, false), "at rest");
     move_to(cx, brush(1));
-    assert_eq!(fields_shown(&shell, cx), (false, true), "the pointer on the second's brush");
-    move_to(cx, point(px(card_x(1) + CARD_WIDTH / 2.), px(SPACES_INSET + 150.)));
-    assert_eq!(fields_shown(&shell, cx), (false, false), "the pointer on the card, off its field");
+    assert_eq!(
+        fields_shown(&shell, cx),
+        (false, true),
+        "the pointer on the second's brush"
+    );
+    move_to(
+        cx,
+        point(px(card_x(1) + CARD_WIDTH / 2.), px(SPACES_INSET + 150.)),
+    );
+    assert_eq!(
+        fields_shown(&shell, cx),
+        (false, false),
+        "the pointer on the card, off its field"
+    );
     click(cx, name(0));
-    move_to(cx, point(px(card_x(1) + CARD_WIDTH / 2.), px(SPACES_INSET + 150.)));
-    assert_eq!(fields_shown(&shell, cx), (true, false), "the first's name typed over");
+    move_to(
+        cx,
+        point(px(card_x(1) + CARD_WIDTH / 2.), px(SPACES_INSET + 150.)),
+    );
+    assert_eq!(
+        fields_shown(&shell, cx),
+        (true, false),
+        "the first's name typed over"
+    );
 }

@@ -9,19 +9,17 @@
 
 use std::{ops::Range, rc::Rc};
 
+use crate::shell::MenuEntry;
+use crate::tokens::palette::{NO_THEME_ACCENT, SELECTION};
+use crate::tokens::text_input::PLACEHOLDER;
 use gpui::{
     Action, App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler,
     Entity, EntityInputHandler, FocusHandle, Focusable, Global, GlobalElementId, Hsla, KeyBinding,
-    LayoutId, MouseButton, Role, accesskit,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine,
-    SharedString, Style, Subscription, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div,
-    fill, hsla,
-    point, prelude::*, px, relative, rgb, size,
+    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
+    Role, ShapedLine, SharedString, Style, Subscription, TextRun, UTF16Selection, UnderlineStyle,
+    Window, accesskit, actions, div, fill, hsla, point, prelude::*, px, relative, rgb, size,
 };
 use unicode_segmentation::*;
-use crate::shell::MenuEntry;
-use crate::tokens::text_input::PLACEHOLDER;
-use crate::tokens::palette::{NO_THEME_ACCENT, SELECTION};
 
 actions!(
     text_input,
@@ -54,7 +52,8 @@ actions!(
 /// `menu::field_menu`, shows it in ilo's own menu.
 pub struct FieldMenu(pub Rc<ShowMenu>);
 
-pub type ShowMenu = dyn Fn(Vec<(SharedString, bool)>, Point<Pixels>, bool, &Window, Chosen, &mut App);
+pub type ShowMenu =
+    dyn Fn(Vec<(SharedString, bool)>, Point<Pixels>, bool, &Window, Chosen, &mut App);
 pub type Chosen = Box<dyn FnOnce(usize, &mut Window, &mut App)>;
 
 impl Global for FieldMenu {}
@@ -222,8 +221,11 @@ impl TextInput {
     /// The placeholder's, caret's and selection's colours, for an input whose ground and accent
     /// change with the Space.
     pub fn set_colors(&mut self, placeholder: Hsla, caret: Hsla, selection: Hsla) {
-        (self.placeholder_color, self.caret_color, self.selection_color) =
-            (placeholder, caret, selection);
+        (
+            self.placeholder_color,
+            self.caret_color,
+            self.selection_color,
+        ) = (placeholder, caret, selection);
     }
 
     pub fn caret_color(mut self, color: impl Into<Hsla>) -> Self {
@@ -365,11 +367,19 @@ impl TextInput {
         let Some(menu) = cx.try_global::<FieldMenu>().map(|menu| menu.0.clone()) else {
             return;
         };
-        let Some(bounds) = self.last_bounds else { return };
+        let Some(bounds) = self.last_bounds else {
+            return;
+        };
         let x = (self.last_layout.as_ref())
             .filter(|line| line.text == self.content)
             .map_or(px(0.), |line| line.x_for_index(self.cursor_offset()));
-        self.show_menu(menu, point(bounds.left() + x, bounds.bottom()), true, window, cx);
+        self.show_menu(
+            menu,
+            point(bounds.left() + x, bounds.bottom()),
+            true,
+            window,
+            cx,
+        );
     }
 
     fn show_menu(
@@ -392,7 +402,11 @@ impl TextInput {
             items.push(("Paste and Search", true, Some(Box::new(PasteAndSearch))));
         }
         items.push(("", false, None));
-        items.push(("Select All", !self.content.is_empty(), Some(Box::new(SelectAll))));
+        items.push((
+            "Select All",
+            !self.content.is_empty(),
+            Some(Box::new(SelectAll)),
+        ));
         let titles = (items.iter())
             .map(|&(title, enabled, _)| (MenuEntry::label(title), enabled))
             .collect();
@@ -433,7 +447,11 @@ impl TextInput {
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
             let text = text.replace("\n", " ");
-            let text = if self.paste_and_go { without_javascript(&text) } else { &text };
+            let text = if self.paste_and_go {
+                without_javascript(&text)
+            } else {
+                &text
+            };
             self.replace_text_in_range(None, text, window, cx);
             self.pasted = true;
         }
@@ -986,7 +1004,11 @@ impl Render for TextInput {
             // its dots, never what was typed.
             .when(window.is_a11y_active(), |field| {
                 let name = self.placeholder.trim_end_matches('…').to_owned();
-                let role = if self.secure { Role::PasswordInput } else { Role::TextInput };
+                let role = if self.secure {
+                    Role::PasswordInput
+                } else {
+                    Role::TextInput
+                };
                 let shown = self.shown();
                 let characters =
                     |offset| shown[..self.shown_offset(offset)].graphemes(true).count();
@@ -995,8 +1017,11 @@ impl Render for TextInput {
                     false => self.selected_range.start,
                 };
                 let (anchor, focus) = (characters(anchor), characters(self.cursor_offset()));
-                field.role(role).aria_label(name).aria_value(shown.clone()).a11y_synthetic_children(
-                    move |builder| {
+                field
+                    .role(role)
+                    .aria_label(name)
+                    .aria_value(shown.clone())
+                    .a11y_synthetic_children(move |builder| {
                         let mut run = accesskit::Node::new(Role::TextRun);
                         let lengths = shown.graphemes(true).map(|each| each.len().min(255) as u8);
                         run.set_character_lengths(lengths.collect::<Vec<_>>());
@@ -1007,12 +1032,13 @@ impl Render for TextInput {
                             node,
                             character_index,
                         };
-                        builder.parent_node().set_text_selection(accesskit::TextSelection {
-                            anchor: at(anchor),
-                            focus: at(focus),
-                        });
-                    },
-                )
+                        builder
+                            .parent_node()
+                            .set_text_selection(accesskit::TextSelection {
+                                anchor: at(anchor),
+                                focus: at(focus),
+                            });
+                    })
             })
             .flex()
             .key_context("TextInput")

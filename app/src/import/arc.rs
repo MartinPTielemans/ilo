@@ -241,10 +241,16 @@ fn theme(window_theme: &Value) -> Option<Theme> {
     };
     let (main, style) = light.or(dark)?;
     let two = light.is_some() && dark.is_some();
-    let appearance = window_appearance(window_theme.get("windowAppearance"))
-        .unwrap_or(if two { Appearance::Automatic } else { style });
+    let appearance = window_appearance(window_theme.get("windowAppearance")).unwrap_or(if two {
+        Appearance::Automatic
+    } else {
+        style
+    });
     Some(match (appearance, light, dark) {
-        (Appearance::Automatic, Some(_), Some((dark, _))) => Theme { dark: Some(dark.look()), ..main },
+        (Appearance::Automatic, Some(_), Some((dark, _))) => Theme {
+            dark: Some(dark.look()),
+            ..main
+        },
         (Appearance::Dark, _, Some((dark, _))) => Theme { appearance, ..dark },
         _ => Theme { appearance, ..main },
     })
@@ -264,7 +270,11 @@ fn window_appearance(value: Option<&Value>) -> Option<Appearance> {
     }
     let based = value.get("appearanceBased")?;
     let (light, dark) = (named(based.get("light"))?, named(based.get("dark"))?);
-    Some(if light == dark { light } else { Appearance::Automatic })
+    Some(if light == dark {
+        light
+    } else {
+        Appearance::Automatic
+    })
 }
 
 /// One of Arc's looks: its first colour as our main one, as many colours as it has up to ours,
@@ -289,7 +299,9 @@ fn look(background: &Value) -> Option<(Theme, Appearance)> {
         }
         (colors, gradient)
     } else {
-        let single = style.pointer("/blendedSingleColor/_0").or_else(|| style.pointer("/basicColor/_0"))?;
+        let single = style
+            .pointer("/blendedSingleColor/_0")
+            .or_else(|| style.pointer("/basicColor/_0"))?;
         (vec![color(single.get("color")?)?], single)
     };
     let main = *colors.first()?;
@@ -307,11 +319,19 @@ fn look(background: &Value) -> Option<(Theme, Appearance)> {
         _ => Appearance::Automatic,
     };
     let theme = Theme::of_color(main).with_count(colors.len().min(MAX_COLORS));
-    let overlay = config.get("modifiers").and_then(|modifiers| modifiers.get("overlay"));
+    let overlay = config
+        .get("modifiers")
+        .and_then(|modifiers| modifiers.get("overlay"));
     let theme = Theme {
         intensity: factor("intensityFactor").unwrap_or(theme.intensity),
-        grain: if basic { 0. } else { factor("noiseFactor").unwrap_or(0.) },
-        texture: overlay.and_then(Value::as_str).map_or(Texture::Noise, texture),
+        grain: if basic {
+            0.
+        } else {
+            factor("noiseFactor").unwrap_or(0.)
+        },
+        texture: overlay
+            .and_then(Value::as_str)
+            .map_or(Texture::Noise, texture),
         third: colors.get(2).copied().filter(|_| theme.count == MAX_COLORS),
         places: places(&theme, &colors),
         ..theme

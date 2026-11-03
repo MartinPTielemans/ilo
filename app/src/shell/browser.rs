@@ -41,8 +41,14 @@ pub trait Browser {
     /// Opens tabs loading `urls`, in their order, at `index` in the Space shown's Today tabs, or
     /// in its pinned tabs, inside `folder` if it isn't 0, counted as `move_tab` counts. Shows the
     /// first and returns it, or 0 if none opened.
-    fn open_at(&self, urls: &[String], pinned: bool, folder: u64, index: usize, cx: &mut App)
-    -> u64;
+    fn open_at(
+        &self,
+        urls: &[String],
+        pinned: bool,
+        folder: u64,
+        index: usize,
+        cx: &mut App,
+    ) -> u64;
     /// Makes an open folder named `name` at `index` in `folder`, else in the pinned tabs of
     /// `space`, counted as `move_tab` counts, else at the bottom, and returns it.
     fn create_folder(&self, space: u64, name: &str, folder: u64, index: usize, cx: &mut App)
@@ -490,7 +496,11 @@ pub trait Browser {
     /// if it shows. `None` ends it.
     fn link_target(
         &self,
-        plate: Option<(crate::link_target::Plate, Bounds<Pixels>, crate::link_target::Side)>,
+        plate: Option<(
+            crate::link_target::Plate,
+            Bounds<Pixels>,
+            crate::link_target::Side,
+        )>,
         cx: &mut App,
     );
     /// Opens the command bar for a new tab or on `editing`'s URL, with `tabs` to list before
@@ -511,12 +521,7 @@ pub trait Browser {
     /// The window shows another Space: the command bar, if it shows over this window, lists
     /// `tabs` from it, or `open_tabs` for Search Tabs, and its profile's suggestions (decision 5).
     /// Returns whether its pick opens a new tab, for New Tab to keep its plate.
-    fn command_bar_follows(
-        &self,
-        tabs: Vec<BarTab>,
-        open_tabs: Vec<BarTab>,
-        cx: &mut App,
-    ) -> bool;
+    fn command_bar_follows(&self, tabs: Vec<BarTab>, open_tabs: Vec<BarTab>, cx: &mut App) -> bool;
     /// Opens the command bar over `pane`, a new pane in the card at `card`, for a page to show
     /// there in a split view with `with`.
     fn split_bar(&self, with: u64, pane: Bounds<Pixels>, card: Bounds<Pixels>, cx: &mut App);

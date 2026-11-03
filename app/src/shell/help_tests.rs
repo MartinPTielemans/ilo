@@ -17,7 +17,14 @@ fn window(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>) {
         let space = (1, "Work".into(), None, 0, "".into(), "".into(), "".into());
         shell.set_spaces(vec![space], cx);
         shell.set_space(1, cx);
-        shell.set_tabs(1, Vec::new(), Vec::new(), Vec::new(), Folders::default(), cx);
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
     });
     (shell, host)
 }
@@ -40,11 +47,18 @@ fn help_center_and_whats_new_open_the_sites_pages(cx: &mut TestAppContext) {
 #[gpui::test]
 fn report_a_problem_fills_the_issue_with_the_builds_details(cx: &mut TestAppContext) {
     let (shell, host) = window(cx);
-    shell.update(cx, |shell, cx| shell.run(Command::ReportProblem, "menu", cx));
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::ReportProblem, "menu", cx)
+    });
     let here = BuildInfo::here();
-    assert_eq!(host.opened_pages.take(), [here.issue_url(build_info::NEW_ISSUE)]);
+    assert_eq!(
+        host.opened_pages.take(),
+        [here.issue_url(build_info::NEW_ISSUE)]
+    );
 
-    shell.update(cx, |shell, cx| shell.run(Command::CopyBuildInfo, "menu", cx));
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::CopyBuildInfo, "menu", cx)
+    });
     assert_eq!(host.copied.take(), [here.text()]);
     assert_eq!(host.toasts.take(), ["Copied Build Info"]);
 }
@@ -61,8 +75,12 @@ fn check_for_updates_is_in_the_bar_of_a_build_that_updates(cx: &mut TestAppConte
     host.updates.set(true);
     assert!(offered(cx));
     let found = crate::shell::find_commands("updat", &Default::default(), |name, _| Some(name));
-    let row = found.iter().find(|row| row.command == Command::CheckForUpdates);
+    let row = found
+        .iter()
+        .find(|row| row.command == Command::CheckForUpdates);
     assert_eq!(row.map(|row| row.name.as_ref()), Some("Check for Updates…"));
-    shell.update(cx, |shell, cx| shell.run(Command::CheckForUpdates, "command bar", cx));
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::CheckForUpdates, "command bar", cx)
+    });
     assert_eq!(host.checked_for_updates.get(), 1);
 }

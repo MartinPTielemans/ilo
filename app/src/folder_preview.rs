@@ -22,11 +22,11 @@ use crate::hover_card::{Anchor, DWELL, EDGE, GAP, Icon, LEAVE};
 use crate::palette::{Palette, STATE_HOVERED, STATE_SELECTED};
 use crate::shell::KEY_CONTEXT;
 use crate::text_input::TextInput;
-pub use crate::tokens::folder_preview::{RADIUS, WIDTH};
 use crate::tokens::folder_preview::{
     HINT, ICON, ICON_X, PADDING, RIM, ROW, ROW_RADIUS, SEARCH, SEARCH_GLYPH, TITLE, TITLE_SIZE,
     TITLE_X,
 };
+pub use crate::tokens::folder_preview::{RADIUS, WIDTH};
 
 actions!(folder_preview, [Dismiss, Choose, Up, Down]);
 
@@ -109,10 +109,16 @@ pub fn height(count: usize) -> f32 {
 /// Where a preview `height` tall has its top left: as the hover card's, GAP right of its row, its
 /// top at the row's, and EDGE inside the window, the top and left first if it can't be both.
 pub fn place(anchor: Anchor, height: f32) -> (f32, f32) {
-    let (width, tall) = (f32::from(anchor.window.width), f32::from(anchor.window.height));
+    let (width, tall) = (
+        f32::from(anchor.window.width),
+        f32::from(anchor.window.height),
+    );
     let left = f32::from(anchor.row.right()) + GAP;
     let top = f32::from(anchor.row.top());
-    (left.min(width - WIDTH - EDGE).max(EDGE), top.min(tall - height - EDGE).max(EDGE))
+    (
+        left.min(width - WIDTH - EDGE).max(EDGE),
+        top.min(tall - height - EDGE).max(EDGE),
+    )
 }
 
 /// The preview that shows.
@@ -157,7 +163,10 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<FolderPrevi
         KeyBinding::new("up", Up, Some("FolderPreview")),
         KeyBinding::new("down", Down, Some("FolderPreview")),
     ]);
-    let bounds = Bounds::new(point(px(0.), px(0.)), size(px(WIDTH), px(height(MOST_ROWS))));
+    let bounds = Bounds::new(
+        point(px(0.), px(0.)),
+        size(px(WIDTH), px(height(MOST_ROWS))),
+    );
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions {
@@ -205,7 +214,9 @@ fn update(
     f: impl FnOnce(&mut FolderPreview, &mut Window, &mut Context<FolderPreview>),
 ) {
     if let Some(window) = cx.try_global::<PreviewWindow>().map(|preview| preview.0) {
-        window.update(cx, |preview, window, cx| f(preview, window, cx)).ok();
+        window
+            .update(cx, |preview, window, cx| f(preview, window, cx))
+            .ok();
     }
 }
 
@@ -257,7 +268,10 @@ impl FolderPreview {
             self.wait = None;
             return self.show(rest, window, cx);
         }
-        let waiting = self.resting.as_ref().is_some_and(|resting| resting.folder == rest.folder);
+        let waiting = self
+            .resting
+            .as_ref()
+            .is_some_and(|resting| resting.folder == rest.folder);
         self.resting = Some(rest);
         if waiting {
             return;
@@ -276,11 +290,18 @@ impl FolderPreview {
     }
 
     fn left(&mut self, folder: u64, cx: &mut Context<Self>) {
-        if self.resting.as_ref().is_some_and(|rest| rest.folder == folder) {
+        if self
+            .resting
+            .as_ref()
+            .is_some_and(|rest| rest.folder == folder)
+        {
             self.resting = None;
             self.wait = None;
         }
-        let leaves = self.shown.as_ref().is_some_and(|shown| shown.rest.folder == folder);
+        let leaves = self
+            .shown
+            .as_ref()
+            .is_some_and(|shown| shown.rest.folder == folder);
         if leaves && !self.on_card {
             self.leave_after(cx);
         }
@@ -361,7 +382,10 @@ impl FolderPreview {
         shown.kept = true;
         shown.selected = (!text.trim().is_empty() && !shown.found.is_empty()).then_some(0);
         // check.sh waits for this line, to see what's typed reaches the search.
-        log!("browser: folder preview found {} for {text}", shown.found.len());
+        log!(
+            "browser: folder preview found {} for {text}",
+            shown.found.len()
+        );
         self.wait = None;
         self.scroll.scroll_to_item(0, ScrollStrategy::Top);
         cx.notify();
@@ -516,7 +540,10 @@ impl Focusable for FolderPreview {
 
 impl Render for FolderPreview {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let root = div().key_context(KEY_CONTEXT).size_full().font_family(crate::face::UI);
+        let root = div()
+            .key_context(KEY_CONTEXT)
+            .size_full()
+            .font_family(crate::face::UI);
         let Some(shown) = &self.shown else {
             return root;
         };
@@ -574,9 +601,9 @@ impl Render for FolderPreview {
                 .on_action(cx.listener(Self::choose_selected))
                 .on_action(cx.listener(Self::up))
                 .on_action(cx.listener(Self::down))
-                .on_hover(cx.listener(|preview, hovered: &bool, _, cx| {
-                    preview.on_card(*hovered, cx)
-                }))
+                .on_hover(
+                    cx.listener(|preview, hovered: &bool, _, cx| preview.on_card(*hovered, cx)),
+                )
                 // A click anywhere but a row keeps the keyboard in the search.
                 .on_mouse_down(
                     MouseButton::Left,

@@ -22,7 +22,8 @@ impl Host for Recorder {
 
 fn open_tooltip(cx: &mut TestAppContext) -> Rc<Recorder> {
     let host = Rc::new(Recorder::default());
-    cx.update(|cx| open(host.clone(), cx)).expect("no tooltip window");
+    cx.update(|cx| open(host.clone(), cx))
+        .expect("no tooltip window");
     host
 }
 
@@ -60,7 +61,11 @@ fn after(cx: &mut TestAppContext, host: &Recorder, time: Duration) -> Vec<String
 /// Whether the delay's timer is running.
 fn waiting(cx: &mut TestAppContext) -> bool {
     let window = cx.update(|cx| cx.global::<TooltipWindow>().0);
-    cx.update(|cx| window.update(cx, |tooltip, _, _| tooltip.wait.is_some()).unwrap())
+    cx.update(|cx| {
+        window
+            .update(cx, |tooltip, _, _| tooltip.wait.is_some())
+            .unwrap()
+    })
 }
 
 fn window() -> Size<Pixels> {
@@ -148,8 +153,12 @@ fn the_next_tile_shows_at_once(cx: &mut TestAppContext) {
 #[gpui::test]
 fn each_tooltip_is_placed_from_its_own_width_whichever_was_before_it(cx: &mut TestAppContext) {
     let host = open_tooltip(cx);
-    let tile =
-        |middle: f32| Anchor::under(frame(middle - 33., 90., 66., 41.), size(px(1400.), px(900.)));
+    let tile = |middle: f32| {
+        Anchor::under(
+            frame(middle - 33., 90., 66., 41.),
+            size(px(1400.), px(900.)),
+        )
+    };
     let titles = [
         ("Creating A World That Doesn't Exist", tile(41.)),
         ("Elon Musk on X: a post / X", tile(114.)),
@@ -165,7 +174,11 @@ fn each_tooltip_is_placed_from_its_own_width_whichever_was_before_it(cx: &mut Te
         let mut shown = host.0.take();
         shown.extend(after(cx, &host, DELAY));
         let want = anchor.x.max(EDGE_INSET);
-        assert_eq!(shown.last().unwrap(), &format!("show {want} {}", 131. + GAP), "{text}");
+        assert_eq!(
+            shown.last().unwrap(),
+            &format!("show {want} {}", 131. + GAP),
+            "{text}"
+        );
     }
 }
 
@@ -316,7 +329,12 @@ fn a_header_buttons_tooltip_has_its_square_corner_under_its_middle() {
 #[test]
 fn a_name_alone_has_its_text_11_in_and_10_before_the_end() {
     let layout = layout(60., &[]);
-    let alone = Layout { width: 11. + 60. + 10., text: 60., truncated: false, chips: vec![] };
+    let alone = Layout {
+        width: 11. + 60. + 10.,
+        text: 60.,
+        truncated: false,
+        chips: vec![],
+    };
     assert_eq!(layout, alone);
 }
 
@@ -325,7 +343,10 @@ fn chips_follow_the_text_on_arcs_pitch() {
     // View Library ⇧⌘L: 8 after the text, 18.5 wide on a pitch of 22, and 10 after the last.
     let layout = layout(70., &[CHIP, CHIP, CHIP]);
     let first = 11. + 70. + 8.;
-    assert_eq!(layout.chips, [(first, 18.5), (first + 22., 18.5), (first + 44., 18.5)]);
+    assert_eq!(
+        layout.chips,
+        [(first, 18.5), (first + 22., 18.5), (first + 44., 18.5)]
+    );
     assert_eq!(layout.width, first + 44. + 18.5 + 10.);
     assert!(!layout.truncated);
 }
@@ -335,7 +356,14 @@ fn a_wider_chip_moves_the_next() {
     // A key named in words, as Space is, between two glyphs.
     let layout = layout(50., &[CHIP, 40., CHIP]);
     let first = 11. + 50. + 8.;
-    assert_eq!(layout.chips, [(first, 18.5), (first + 22., 40.), (first + 22. + 43.5, 18.5)]);
+    assert_eq!(
+        layout.chips,
+        [
+            (first, 18.5),
+            (first + 22., 40.),
+            (first + 22. + 43.5, 18.5)
+        ]
+    );
     assert_eq!(layout.width, first + 22. + 43.5 + 18.5 + 10.);
 }
 
@@ -368,7 +396,10 @@ fn a_keys_chip_is_square_unless_its_name_is_wider(cx: &mut TestAppContext) {
 
 #[test]
 fn the_log_names_the_keys_as_a_menu_does() {
-    let tip = Tip { text: "View Library".into(), keys: vec!["⇧".into(), "⌘".into(), "L".into()] };
+    let tip = Tip {
+        text: "View Library".into(),
+        keys: vec!["⇧".into(), "⌘".into(), "L".into()],
+    };
     assert_eq!(label(&tip), "View Library ⇧⌘L");
     assert_eq!(label(&Tip::named("Docs".into())), "Docs");
 }

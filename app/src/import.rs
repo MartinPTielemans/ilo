@@ -653,9 +653,17 @@ impl ImportView {
         self.suggested = Some(suggested);
         cx.emit(ImportEvent::Suggested);
         // Another ad blocker is left off the list, which says so once (extensions_box).
-        let listed = found.extensions.iter().filter(|each| !each.blocks_ads()).count();
+        let listed = found
+            .extensions
+            .iter()
+            .filter(|each| !each.blocks_ads())
+            .count();
         if !found.extensions.is_empty() {
-            let ids: Vec<&str> = found.extensions.iter().map(|each| each.id.as_str()).collect();
+            let ids: Vec<&str> = found
+                .extensions
+                .iter()
+                .map(|each| each.id.as_str())
+                .collect();
             // check.sh reads this line.
             log!("browser: import lists extensions {}", ids.join(" "));
             extensions::list(&name, found.extensions);
@@ -749,7 +757,8 @@ impl ImportView {
         let view = cx.entity().downgrade();
         let then = Box::new(move |file: Option<PathBuf>, cx: &mut App| {
             if let Some(file) = file {
-                view.update(cx, |view, cx| view.import_passwords(file, cx)).ok();
+                view.update(cx, |view, cx| view.import_passwords(file, cx))
+                    .ok();
             }
         });
         self.host.clone().choose_file(Exported::Passwords, then, cx);
@@ -760,7 +769,8 @@ impl ImportView {
         let view = cx.entity().downgrade();
         let then = Box::new(move |file: Option<PathBuf>, cx: &mut App| {
             if let Some(file) = file {
-                view.update(cx, |view, cx| view.import_bookmarks(file, cx)).ok();
+                view.update(cx, |view, cx| view.import_bookmarks(file, cx))
+                    .ok();
             }
         });
         self.host.clone().choose_file(Exported::Bookmarks, then, cx);
@@ -821,8 +831,10 @@ impl ImportView {
         let view = cx.entity().downgrade();
         let chosen = file.clone();
         let then = Box::new(move |passwords: Passwords, cx: &mut App| {
-            view.update(cx, |view, cx| view.passwords_imported(&chosen, passwords, cx))
-                .ok();
+            view.update(cx, |view, cx| {
+                view.passwords_imported(&chosen, passwords, cx)
+            })
+            .ok();
         });
         if !self.host.import_passwords(&file, then) {
             return self.finish("The passwords couldn't be imported.", cx);
@@ -909,11 +921,15 @@ impl ImportView {
     fn list(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let list = div().flex().flex_col().gap(px(BOX_GAP));
         let list = match self.sources.is_empty() {
-            true => list.child(line("No browser to import from was found on this computer.")),
+            true => list.child(line(
+                "No browser to import from was found on this computer.",
+            )),
             false => list.child(self.browsers(cx)),
         };
         let extensions = self.extensions_box(cx);
-        list.children(extensions).child(self.files(cx)).into_any_element()
+        list.children(extensions)
+            .child(self.files(cx))
+            .into_any_element()
     }
 
     /// The extensions the last import listed, each with Add…, which opens its Web Store page, and
@@ -962,13 +978,13 @@ impl ImportView {
                 "{names} from {from} {is} listed, as {} blocks ads itself.",
                 env!("APP_NAME")
             );
-            let anyway = button(look, "import-add-ad-blocker", "Add Anyway").on_click(
-                cx.listener(move |view, _, _, cx| {
+            let anyway = button(look, "import-add-ad-blocker", "Add Anyway").on_click(cx.listener(
+                move |view, _, _, cx| {
                     for id in &ids {
                         view.add_extension(id, cx);
                     }
-                }),
-            );
+                },
+            ));
             detailed_line(look, said.into(), anyway.into_any_element())
         });
         let group = (!rows.is_empty()).then(|| group(look, rows));
@@ -1001,7 +1017,12 @@ impl ImportView {
             .text_color(look.detail)
             .on_click(cx.listener(|view, _, _, cx| view.choose_folders(cx)))
             .child("Choose folders")
-            .child(svg().path(glyph).size(px(DISCLOSURE_GLYPH)).text_color(look.detail));
+            .child(
+                svg()
+                    .path(glyph)
+                    .size(px(DISCLOSURE_GLYPH))
+                    .text_color(look.detail),
+            );
         let names = folders.open.then_some(folders.names.as_deref());
         let chosen = match names {
             None => None,
@@ -1013,9 +1034,9 @@ impl ImportView {
                     let toggled = name.clone();
                     div()
                         .id(("import-folder", index))
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            view.toggle_folder(&toggled, cx)
-                        }))
+                        .on_click(
+                            cx.listener(move |view, _, _, cx| view.toggle_folder(&toggled, cx)),
+                        )
                         .child(checked_row(
                             look,
                             on,
@@ -1079,11 +1100,13 @@ impl ImportView {
             "A bookmarks file, in HTML, which every browser exports.".into(),
             choose.into_any_element(),
         );
-        let places = export_places(&self.sources, self.os).into_iter().map(|place| {
-            line(place)
-                .text_size(px(text::SMALL))
-                .text_color(look.detail)
-        });
+        let places = export_places(&self.sources, self.os)
+            .into_iter()
+            .map(|place| {
+                line(place)
+                    .text_size(px(text::SMALL))
+                    .text_color(look.detail)
+            });
         div()
             .flex()
             .flex_col()

@@ -17,8 +17,24 @@ fn pinned_tabs_and_favorites_preview_links(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| {
         shell.set_spaces(
             vec![
-                (1, "Space 1".into(), None, 0, "".into(), "".into(), "".into()),
-                (2, "Research".into(), None, 0, "".into(), "Claude Code".into(), "".into()),
+                (
+                    1,
+                    "Space 1".into(),
+                    None,
+                    0,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                ),
+                (
+                    2,
+                    "Research".into(),
+                    None,
+                    0,
+                    "".into(),
+                    "Claude Code".into(),
+                    "".into(),
+                ),
             ],
             cx,
         );
@@ -49,15 +65,40 @@ fn a_closed_preview_comes_back_with_undo_and_reopen(cx: &mut TestAppContext) {
     let browser = host.clone();
     let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
     shell.update(cx, |shell, cx| {
-        shell.set_spaces(vec![(1, "Space 1".into(), None, 0, "".into(), "".into(), "".into())], cx);
-        shell.set_tabs(1, vec![10], vec![11, 12], Vec::new(), Folders::default(), cx);
+        shell.set_spaces(
+            vec![(
+                1,
+                "Space 1".into(),
+                None,
+                0,
+                "".into(),
+                "".into(),
+                "".into(),
+            )],
+            cx,
+        );
+        shell.set_tabs(
+            1,
+            vec![10],
+            vec![11, 12],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
         shell.set_space(1, cx);
         shell.set_selected(10, cx);
     });
     cx.run_until_parked();
-    assert!(shell.read_with(cx, |shell, _| shell.page_laid().is_some()), "no page laid out");
+    assert!(
+        shell.read_with(cx, |shell, _| shell.page_laid().is_some()),
+        "no page laid out"
+    );
     let link = point(px(400.), px(200.));
-    let closed = Closed { over: 10, url: "https://example.org/a".into(), link };
+    let closed = Closed {
+        over: 10,
+        url: "https://example.org/a".into(),
+        link,
+    };
     let close = |cx: &mut VisualTestContext| {
         let closed = closed.clone();
         shell.update(cx, |shell, cx| shell.preview_closed(closed, false, cx));
@@ -68,11 +109,19 @@ fn a_closed_preview_comes_back_with_undo_and_reopen(cx: &mut TestAppContext) {
     };
     host.take();
     close(cx);
-    assert_eq!(run(Command::Undo, cx), ["reopen preview over 10 https://example.org/a"]);
+    assert_eq!(
+        run(Command::Undo, cx),
+        ["reopen preview over 10 https://example.org/a"]
+    );
     assert_eq!(run(Command::Redo, cx), ["close preview over 10"]);
     // Redo's close tells the shell too, which the history has already.
-    shell.update(cx, |shell, cx| shell.preview_closed(closed.clone(), true, cx));
-    assert_eq!(run(Command::ReopenClosedTab, cx), ["reopen preview over 10 https://example.org/a"]);
+    shell.update(cx, |shell, cx| {
+        shell.preview_closed(closed.clone(), true, cx)
+    });
+    assert_eq!(
+        run(Command::ReopenClosedTab, cx),
+        ["reopen preview over 10 https://example.org/a"]
+    );
     assert_eq!(run(Command::Undo, cx), Vec::<String>::new());
     close(cx);
     shell.update(cx, |shell, cx| shell.close_tab(12, false, cx));

@@ -33,11 +33,22 @@ pub extern "C" fn host_can_draw_emoji(emoji: *const c_char) -> bool {
         let Some(text) = text.get() else {
             return true;
         };
-        let run = TextRun { len: emoji.len(), font: font(browser::face::UI), ..Default::default() };
+        let run = TextRun {
+            len: emoji.len(),
+            font: font(browser::face::UI),
+            ..Default::default()
+        };
         let line = text.layout_line(&emoji, px(EMOJI_SIZE), &[run], None);
         let glyphs: Vec<_> = line.runs.iter().flat_map(|run| &run.glyphs).collect();
-        let ends = glyphs.iter().skip(1).map(|glyph| glyph.position.x).chain([line.width]);
-        let wide = glyphs.iter().zip(ends).filter(|(glyph, end)| *end > glyph.position.x);
+        let ends = glyphs
+            .iter()
+            .skip(1)
+            .map(|glyph| glyph.position.x)
+            .chain([line.width]);
+        let wide = glyphs
+            .iter()
+            .zip(ends)
+            .filter(|(glyph, end)| *end > glyph.position.x);
         wide.count() == 1 && glyphs.iter().all(|glyph| glyph.id.0 != 0)
     })
 }

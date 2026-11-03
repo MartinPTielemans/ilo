@@ -91,7 +91,12 @@ impl From<String> for ReadError {
 /// and the extensions of Chromium's family, which Firefox's and Safari's aren't.
 pub fn kinds(source: &Source) -> &'static [Kind] {
     if source.arc_sidebar().is_some() {
-        &[Kind::Spaces, Kind::Favorites, Kind::History, Kind::Extensions]
+        &[
+            Kind::Spaces,
+            Kind::Favorites,
+            Kind::History,
+            Kind::Extensions,
+        ]
     } else {
         match source.browser.family {
             Family::Safari => &[Kind::Bookmarks, Kind::ReadingList, Kind::History],
@@ -160,7 +165,11 @@ pub fn read(source: &Source, picked: &[Kind], now: SystemTime) -> Result<Found, 
             found.history.push((from, read.pages));
         }
         for extension in read.extensions {
-            match found.extensions.iter_mut().find(|each| each.id == extension.id) {
+            match found
+                .extensions
+                .iter_mut()
+                .find(|each| each.id == extension.id)
+            {
                 Some(each) => each.pinned |= extension.pinned,
                 None => found.extensions.push(extension),
             }

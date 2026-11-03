@@ -7,7 +7,9 @@ use crate::shell::{Folders, NAME_HEIGHT, Place, ROW_HEIGHT, ROW_PITCH, Shell, Sl
 
 /// Where the drop line is, down the list, or None.
 fn line(shell: &gpui::Entity<Shell>, cx: &mut TestAppContext) -> Option<f32> {
-    shell.read_with(cx, |shell, _| shell.drag.as_ref().and_then(|drag| drag.line))
+    shell.read_with(cx, |shell, _| {
+        shell.drag.as_ref().and_then(|drag| drag.line)
+    })
 }
 
 /// Halfway between the plates of the row at `top` and the one after it.
@@ -50,7 +52,10 @@ fn the_line_marks_the_ends_of_the_lists(cx: &mut TestAppContext) {
     press(&shell, cx, 4);
     let y = shell.read_with(cx, |shell, _| row_y(shell, 1));
     drag_to(&shell, cx, X, y);
-    assert_eq!(line(&shell, cx), Some(NAME_HEIGHT - (ROW_PITCH - ROW_HEIGHT) / 2.));
+    assert_eq!(
+        line(&shell, cx),
+        Some(NAME_HEIGHT - (ROW_PITCH - ROW_HEIGHT) / 2.)
+    );
     let y = shell.read_with(cx, |shell, _| row_y(shell, 3));
     drag_to(&shell, cx, X, y);
     assert_eq!(line(&shell, cx), Some(under(layout[&Slot::NewTab])));
@@ -68,14 +73,25 @@ fn what_is_dragged_in_goes_to_the_gap_nearest_the_pointer(cx: &mut TestAppContex
         let space = (1, "Work".into(), None, 0, "".into(), "".into(), "".into());
         shell.set_spaces(vec![space], cx);
         shell.set_space(1, cx);
-        shell.set_tabs(1, Vec::new(), vec![1, 2], Vec::new(), Folders::default(), cx);
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            vec![1, 2],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
     });
     cx.run_until_parked();
     let layout = shell.read_with(cx, |shell, _| shell.layout());
     let (one, two) = shell.read_with(cx, |shell, _| (row_y(shell, 1), row_y(shell, 2)));
     let mut place = |y: f32| {
-        shell.update(cx, |shell, cx| assert!(shell.drag_in(at(X, y), cx), "not taken at {y}"));
-        shell.read_with(cx, |shell, _| shell.drag.as_ref().map(|drag| (drag.to, drag.line)))
+        shell.update(cx, |shell, cx| {
+            assert!(shell.drag_in(at(X, y), cx), "not taken at {y}")
+        });
+        shell.read_with(cx, |shell, _| {
+            shell.drag.as_ref().map(|drag| (drag.to, drag.line))
+        })
     };
     let today = |index, above: Slot| Some((Place::List(false, index), Some(under(layout[&above]))));
     assert_eq!(place(one - 4.), today(0, Slot::NewTab));

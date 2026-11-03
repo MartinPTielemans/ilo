@@ -9,9 +9,9 @@ use gpui::{Entity, Focusable, Modifiers, TestAppContext, VisualTestContext, poin
 
 use super::{Drawn, END_FADE, INTRO_END, OptIn, STEP_MOTION, Step};
 use crate::import::ImportEvent;
+use crate::shell::{Folders, Shell, commands::Command, recorder::Recorder};
 use crate::theme::Theme;
 use crate::theme_picker::SWATCHES;
-use crate::shell::{Folders, Shell, commands::Command, recorder::Recorder};
 use crate::tokens::shell::onboarding::SKIP_MARGIN;
 
 /// A drawn shell showing one Space with no tab shown, as at a new profile's first launch, with the
@@ -21,7 +21,18 @@ fn first_window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestConte
     let browser = host.clone();
     let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
     shell.update(cx, |shell, cx| {
-        shell.set_spaces(vec![(1, "Space 1".into(), None, 0, "".into(), "".into(), "".into())], cx);
+        shell.set_spaces(
+            vec![(
+                1,
+                "Space 1".into(),
+                None,
+                0,
+                "".into(),
+                "".into(),
+                "".into(),
+            )],
+            cx,
+        );
         shell.set_space(1, cx);
         shell.set_tabs(1, Vec::new(), vec![1], Vec::new(), Folders::default(), cx);
     });
@@ -32,7 +43,9 @@ fn first_window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestConte
 
 /// The step the flow shows, if it shows.
 fn step(shell: &Entity<Shell>, cx: &VisualTestContext) -> Option<Step> {
-    shell.read_with(cx, |shell, _| shell.onboarding.as_ref().map(|onboarding| onboarding.step))
+    shell.read_with(cx, |shell, _| {
+        shell.onboarding.as_ref().map(|onboarding| onboarding.step)
+    })
 }
 
 /// Starts the flow, and draws it once, as a launch with nothing to bring back does.
@@ -70,25 +83,53 @@ fn later(shell: &Entity<Shell>, cx: &mut VisualTestContext, seconds: f32) {
 #[test]
 fn the_intro_draws_the_wordmark_then_its_line() {
     let at = |t| Drawn::at(t, false);
-    assert_eq!(at(0.), Drawn { stem_i: 0., stem_l: 0., ring: 0., dot: 0., signal: 0., tagline: 0. });
+    assert_eq!(
+        at(0.),
+        Drawn {
+            stem_i: 0.,
+            stem_l: 0.,
+            ring: 0.,
+            dot: 0.,
+            signal: 0.,
+            tagline: 0.
+        }
+    );
     let early = at(0.4);
-    assert!(early.stem_i > early.stem_l && early.stem_l > 0., "the stems in order: {early:?}");
-    assert_eq!(early.ring, 0., "the ring waits for the stems to be under way");
+    assert!(
+        early.stem_i > early.stem_l && early.stem_l > 0.,
+        "the stems in order: {early:?}"
+    );
+    assert_eq!(
+        early.ring, 0.,
+        "the ring waits for the stems to be under way"
+    );
     // A frame after each part ends, which is when the next may start.
     let ring_closed = at(1.11);
     assert_eq!(ring_closed.ring, 1.);
-    assert!(ring_closed.dot < 0.1, "the dot lands once the ring closes: {ring_closed:?}");
+    assert!(
+        ring_closed.dot < 0.1,
+        "the dot lands once the ring closes: {ring_closed:?}"
+    );
     let landed = at(1.35);
     assert_eq!(landed.dot, 1.);
     assert!(landed.signal < 0.1, "the dot lands in the ink: {landed:?}");
     let green = at(1.65);
     assert_eq!(green.signal, 1.);
-    assert!(green.tagline < 0.1, "it takes the green before the line comes: {green:?}");
+    assert!(
+        green.tagline < 0.1,
+        "it takes the green before the line comes: {green:?}"
+    );
     assert_eq!(at(2.05).tagline, 1.);
 
     let still = Drawn::at(0., true);
-    assert_eq!((still.stem_i, still.ring, still.dot, still.signal), (1., 1., 1., 1.));
-    assert_eq!(still.tagline, 0., "with Reduce Motion it fades in rather than drawing");
+    assert_eq!(
+        (still.stem_i, still.ring, still.dot, still.signal),
+        (1., 1., 1., 1.)
+    );
+    assert_eq!(
+        still.tagline, 0.,
+        "with Reduce Motion it fades in rather than drawing"
+    );
 }
 
 /// A launch that brings Spaces back never starts it: the shell has no flow until it's asked for.
@@ -135,7 +176,11 @@ fn the_intro_goes_on_by_itself(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
     started(&shell, cx);
     later(&shell, cx, INTRO_END - 0.5);
-    assert_eq!(step(&shell, cx), Some(Step::Intro), "it holds after it's drawn");
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Intro),
+        "it holds after it's drawn"
+    );
     later(&shell, cx, 0.5);
     assert_eq!(step(&shell, cx), Some(Step::Import));
 }
@@ -158,7 +203,10 @@ fn escape_goes_on_and_the_last_step_leaves_the_flow(cx: &mut TestAppContext) {
     assert!(ending.is_some(), "Esc on the last step leaves the flow");
     later(&shell, cx, END_FADE);
     assert_eq!(step(&shell, cx), None);
-    assert!(shell.read_with(cx, |shell, _| shell.welcome), "the welcome is under it");
+    assert!(
+        shell.read_with(cx, |shell, _| shell.welcome),
+        "the welcome is under it"
+    );
 }
 
 /// Return is the step's button, and Skip, at the window's bottom right, goes on too, from a step
@@ -208,7 +256,11 @@ fn the_default_browser_step_asks_the_system(cx: &mut TestAppContext) {
         host.take();
         cx.simulate_keystrokes(key);
         assert_eq!(step(&shell, cx), Some(Step::Color));
-        assert_eq!(host.take().contains(&"make default browser".to_string()), asked, "{key}");
+        assert_eq!(
+            host.take().contains(&"make default browser".to_string()),
+            asked,
+            "{key}"
+        );
     }
 }
 
@@ -250,7 +302,9 @@ fn a_default_browser_leaves_its_step_out(cx: &mut TestAppContext) {
 fn the_colour_picked_is_the_first_spaces(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     let picked = |shell: &Entity<Shell>, cx: &VisualTestContext| {
-        shell.read_with(cx, |shell, _| shell.onboarding.as_ref().and_then(|o| o.picked))
+        shell.read_with(cx, |shell, _| {
+            shell.onboarding.as_ref().and_then(|o| o.picked)
+        })
     };
     let colored = |calls: Vec<String>| calls.iter().any(|call| call.starts_with("space color 1 "));
 
@@ -258,9 +312,17 @@ fn the_colour_picked_is_the_first_spaces(cx: &mut TestAppContext) {
     skip_to(&shell, cx, Step::Color);
     assert_eq!(picked(&shell, cx), None, "none is picked for the user");
     cx.simulate_keystrokes("left");
-    assert_eq!(picked(&shell, cx), Some(SWATCHES.len() - 1), "← starts at the last");
+    assert_eq!(
+        picked(&shell, cx),
+        Some(SWATCHES.len() - 1),
+        "← starts at the last"
+    );
     cx.simulate_keystrokes("right");
-    assert_eq!(picked(&shell, cx), Some(SWATCHES.len() - 1), "it stops at the end");
+    assert_eq!(
+        picked(&shell, cx),
+        Some(SWATCHES.len() - 1),
+        "it stops at the end"
+    );
     cx.simulate_keystrokes("escape");
     assert!(!colored(host.take()), "Skip keeps the Space's colour");
 
@@ -271,9 +333,15 @@ fn the_colour_picked_is_the_first_spaces(cx: &mut TestAppContext) {
     host.take();
     cx.simulate_keystrokes("enter");
     let calls = host.take();
-    assert!(colored(calls.clone()), "Return gives the Space its colour: {calls:?}");
+    assert!(
+        colored(calls.clone()),
+        "Return gives the Space its colour: {calls:?}"
+    );
     let theme = Theme::of_color(SWATCHES[1]).to_text();
-    assert!(calls.contains(&format!("space theme 1 {theme}")), "{calls:?}");
+    assert!(
+        calls.contains(&format!("space theme 1 {theme}")),
+        "{calls:?}"
+    );
 }
 
 /// A page shown covers the window, so it ends the flow at once, with no command bar over it.
@@ -295,14 +363,20 @@ fn it_ends_with_the_command_bar_up(cx: &mut TestAppContext) {
     started(&shell, cx);
     skip_to(&shell, cx, Step::Color);
     cx.simulate_keystrokes("escape");
-    assert!(host.command_bars.borrow().is_empty(), "not while the flow fades");
+    assert!(
+        host.command_bars.borrow().is_empty(),
+        "not while the flow fades"
+    );
     later(&shell, cx, END_FADE);
     assert_eq!(step(&shell, cx), None);
     assert_eq!(host.command_bars.borrow().len(), 1, "the bar is up");
     assert!(shell.read_with(cx, |shell, _| shell.in_hint));
     shell.update(cx, |shell, cx| shell.set_selected(1, cx));
     cx.run_until_parked();
-    assert!(!shell.read_with(cx, |shell, _| shell.in_hint), "a page shown takes the line away");
+    assert!(
+        !shell.read_with(cx, |shell, _| shell.in_hint),
+        "a page shown takes the line away"
+    );
 }
 
 /// The opt-ins step shows the switches offered, each Settings' own and set as it's turned, and
@@ -317,7 +391,11 @@ fn the_opt_ins_show_only_those_offered(cx: &mut TestAppContext) {
     skip_to(&shell, cx, Step::Color);
     cx.simulate_keystrokes("escape");
     later(&shell, cx, END_FADE);
-    assert_eq!(step(&shell, cx), None, "with neither offered, the colour is the last step");
+    assert_eq!(
+        step(&shell, cx),
+        None,
+        "with neither offered, the colour is the last step"
+    );
 
     // With no collector set up, only the agents' switch shows.
     host.agents.set(Some(false));
@@ -331,7 +409,11 @@ fn the_opt_ins_show_only_those_offered(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("escape");
     let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
     assert!(ending.is_some(), "it's the last step");
-    assert_eq!(host.agents.get(), Some(true), "Skip leaves a switch as it was turned");
+    assert_eq!(
+        host.agents.get(),
+        Some(true),
+        "Skip leaves a switch as it was turned"
+    );
     later(&shell, cx, END_FADE);
 
     host.crash_reports.set(Some(false));
@@ -350,7 +432,10 @@ fn welcome_to_ilo_plays_it_again(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| shell.run(Command::Welcome, "menu", cx));
     cx.run_until_parked();
     assert_eq!(step(&shell, cx), Some(Step::Intro));
-    assert!(!host.take().contains(&"welcome window".to_string()), "no new window for it");
+    assert!(
+        !host.take().contains(&"welcome window".to_string()),
+        "no new window for it"
+    );
 
     shell.update(cx, |shell, cx| shell.set_selected(1, cx));
     cx.run_until_parked();
@@ -368,7 +453,9 @@ fn welcome_to_ilo_plays_it_again(cx: &mut TestAppContext) {
 fn the_import_step_is_the_import_view(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
     let view = |shell: &Entity<Shell>, cx: &VisualTestContext| {
-        shell.read_with(cx, |shell, _| shell.importing.as_ref().map(|i| i.view.clone()))
+        shell.read_with(cx, |shell, _| {
+            shell.importing.as_ref().map(|i| i.view.clone())
+        })
     };
     let line = |shell: &Entity<Shell>, cx: &VisualTestContext| {
         shell.read_with(cx, |shell, cx| shell.import_line(cx))
@@ -376,26 +463,53 @@ fn the_import_step_is_the_import_view(cx: &mut TestAppContext) {
     started(&shell, cx);
     skip_to(&shell, cx, Step::Import);
     let shown = view(&shell, cx).expect("the import view");
-    assert!(!shown.read_with(cx, |view, _| view.is_empty()), "it found the made-up Arc");
+    assert!(
+        !shown.read_with(cx, |view, _| view.is_empty()),
+        "it found the made-up Arc"
+    );
     shown.update(cx, |_, cx| cx.emit(ImportEvent::Started));
-    assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser), "an import begun goes on");
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::DefaultBrowser),
+        "an import begun goes on"
+    );
     let said: gpui::SharedString = "2 Spaces came in from Arc.".into();
     shown.update(cx, |_, cx| cx.emit(ImportEvent::Finished(said.clone())));
     assert_eq!(line(&shell, cx), Some(said), "what came in, said quietly");
-    assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser), "only its own step goes on");
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::DefaultBrowser),
+        "only its own step goes on"
+    );
 
     started(&shell, cx);
-    assert_eq!(line(&shell, cx), None, "played again, it has nothing to say yet");
+    assert_eq!(
+        line(&shell, cx),
+        None,
+        "played again, it has nothing to say yet"
+    );
     skip_to(&shell, cx, Step::Import);
-    assert_eq!(view(&shell, cx).map(|v| v.entity_id()), Some(shown.entity_id()), "the same view");
+    assert_eq!(
+        view(&shell, cx).map(|v| v.entity_id()),
+        Some(shown.entity_id()),
+        "the same view"
+    );
     shown.update(cx, |_, cx| cx.emit(ImportEvent::Done));
-    assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser), "its Done goes on");
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::DefaultBrowser),
+        "its Done goes on"
+    );
 
     skip_to(&shell, cx, Step::Color);
     cx.simulate_keystrokes("escape");
     later(&shell, cx, END_FADE);
     assert_eq!(step(&shell, cx), None);
-    assert_eq!(view(&shell, cx).map(|v| v.entity_id()), Some(shown.entity_id()), "it lives on");
+    assert_eq!(
+        view(&shell, cx).map(|v| v.entity_id()),
+        Some(shown.entity_id()),
+        "it lives on"
+    );
 }
 
 /// With no browser to import from, the import step is left out.
@@ -415,23 +529,42 @@ fn no_browser_found_leaves_the_import_out(cx: &mut TestAppContext) {
 fn an_import_offers_its_most_visited_sites_as_favorites(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
     let view = |shell: &Entity<Shell>, cx: &VisualTestContext| {
-        shell.read_with(cx, |shell, _| shell.importing.as_ref().map(|i| i.view.clone())).unwrap()
+        shell
+            .read_with(cx, |shell, _| {
+                shell.importing.as_ref().map(|i| i.view.clone())
+            })
+            .unwrap()
     };
-    let tab = |url: &str| crate::import::found::Tab { url: url.into(), name: String::new() };
+    let tab = |url: &str| crate::import::found::Tab {
+        url: url.into(),
+        name: String::new(),
+    };
     started(&shell, cx);
     skip_to(&shell, cx, Step::Import);
     let shown = view(&shell, cx);
-    let offered = vec![tab("https://example.com/"), tab("https://news.example.org/")];
+    let offered = vec![
+        tab("https://example.com/"),
+        tab("https://news.example.org/"),
+    ];
     shown.update(cx, |view, cx| view.offer(offered, cx));
     shown.update(cx, |_, cx| cx.emit(ImportEvent::Started));
     assert_eq!(step(&shell, cx), Some(Step::Favorites));
     let ticked = |shell: &Entity<Shell>, cx: &VisualTestContext| {
         shell.read_with(cx, |shell, cx| {
-            shell.favorites_ticked(cx).into_iter().map(|tab| tab.url).collect::<Vec<_>>()
+            shell
+                .favorites_ticked(cx)
+                .into_iter()
+                .map(|tab| tab.url)
+                .collect::<Vec<_>>()
         })
     };
-    assert_eq!(ticked(&shell, cx), ["https://example.com/", "https://news.example.org/"]);
-    shell.update(cx, |shell, cx| shell.onboarding_tick("https://example.com/", cx));
+    assert_eq!(
+        ticked(&shell, cx),
+        ["https://example.com/", "https://news.example.org/"]
+    );
+    shell.update(cx, |shell, cx| {
+        shell.onboarding_tick("https://example.com/", cx)
+    });
     assert_eq!(ticked(&shell, cx), ["https://news.example.org/"]);
     cx.simulate_keystrokes("enter");
     assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser));
@@ -440,5 +573,9 @@ fn an_import_offers_its_most_visited_sites_as_favorites(cx: &mut TestAppContext)
     skip_to(&shell, cx, Step::Import);
     shown.update(cx, |view, cx| view.offer(Vec::new(), cx));
     shown.update(cx, |_, cx| cx.emit(ImportEvent::Started));
-    assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser), "none offered, no step");
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::DefaultBrowser),
+        "none offered, no step"
+    );
 }

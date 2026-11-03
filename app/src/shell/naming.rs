@@ -10,10 +10,10 @@ use std::{
 use gpui::{Context, Focusable, SharedString, Window, div, point, prelude::*, px};
 
 use super::{
-    undo::{Prop, Value},
     CancelName, FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FORM_PLACEHOLDER, FORM_TEXT, KeepName,
     NEW_FOLDER, Naming, PLATE_INSET, Pending, Renaming, SPACE_ICON_SLOT, SPACE_ICON_X, Shell,
     ShellHandle,
+    undo::{Prop, Value},
 };
 use crate::{
     icon_picker::{self, Picked, Subject},
@@ -31,7 +31,11 @@ impl Shell {
         if self.private {
             return;
         }
-        let Some(name) = self.spaces.iter().find(|each| each.id == space).map(|each| &each.name)
+        let Some(name) = self
+            .spaces
+            .iter()
+            .find(|each| each.id == space)
+            .map(|each| &each.name)
         else {
             return;
         };
@@ -78,7 +82,11 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(name) = self.spaces.iter().find(|each| each.id == space).map(|each| &each.name)
+        let Some(name) = self
+            .spaces
+            .iter()
+            .find(|each| each.id == space)
+            .map(|each| &each.name)
         else {
             return;
         };
@@ -212,9 +220,7 @@ impl Shell {
             Pending::Icon(Subject::Space(space)) | Pending::Theme(space) => {
                 (self.name_row_drawn.get(), space == self.space)
             }
-            Pending::Icon(Subject::Tab(_) | Subject::Folder(_)) => {
-                (self.tab_row_drawn.get(), true)
-            }
+            Pending::Icon(Subject::Tab(_) | Subject::Folder(_)) => (self.tab_row_drawn.get(), true),
         };
         // Not before the Library has gone and the sidebar has come in, as a frame of either can
         // leave the row where it was.
@@ -231,7 +237,9 @@ impl Shell {
         }
         self.picker_pending = None;
         // The picker shows over the key window, which may have changed while the row moved.
-        let key = cx.try_global::<ShellHandle>().is_some_and(|key| key.0 == cx.weak_entity());
+        let key = cx
+            .try_global::<ShellHandle>()
+            .is_some_and(|key| key.0 == cx.weak_entity());
         if !key {
             return;
         }
@@ -334,8 +342,12 @@ impl Shell {
     /// Whether the shown Space's name row holds the icon's place with the placeholder: while the
     /// icon picker shows for it, until it has an icon.
     pub(super) fn holds_icon_place(&self) -> bool {
-        self.icon_placeholder.as_ref().is_some_and(|(space, _)| *space == self.space)
-            && self.shown_space().is_some_and(|space| !has_icon(&space.icon))
+        self.icon_placeholder
+            .as_ref()
+            .is_some_and(|(space, _)| *space == self.space)
+            && self
+                .shown_space()
+                .is_some_and(|space| !has_icon(&space.icon))
     }
 
     /// Shows the folder's name in a field, all selected, to type a new one over.
@@ -367,7 +379,9 @@ impl Shell {
     /// to type over.
     pub(super) fn new_folder(&mut self, cx: &mut Context<Self>) {
         let name = SharedString::from(NEW_FOLDER);
-        let folder = self.browser.create_folder(self.space, &name, 0, usize::MAX, cx);
+        let folder = self
+            .browser
+            .create_folder(self.space, &name, 0, usize::MAX, cx);
         if folder != 0 {
             self.name_folder(folder, name, cx);
         }
@@ -401,7 +415,9 @@ impl Shell {
     /// The emoji the user gave `folder`, else empty.
     pub(super) fn folder_icon(&self, folder: u64) -> SharedString {
         let space = self.spaces.iter().find(|space| space.is_folder(folder));
-        space.and_then(|space| space.folders.icons.get(&folder).cloned()).unwrap_or_default()
+        space
+            .and_then(|space| space.folders.icons.get(&folder).cloned())
+            .unwrap_or_default()
     }
 
     pub(super) fn folder_name(&self, folder: u64) -> SharedString {
@@ -437,8 +453,10 @@ impl Shell {
             }
             Naming::Folder(_) => {}
             Naming::Profile(profile) => {
-                let listed =
-                    self.profiles.iter().any(|(id, listed)| *id == profile && **listed == name);
+                let listed = self
+                    .profiles
+                    .iter()
+                    .any(|(id, listed)| *id == profile && **listed == name);
                 if !name.is_empty() && !listed {
                     // check.sh waits for this line.
                     log!("browser: name profile {profile} {name}");
@@ -507,7 +525,10 @@ mod tests {
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
         cx.update(|window, _| window.activate_window());
         shell.update(cx, |shell, cx| {
-            shell.set_spaces(vec![(1, "Home".into(), None, 1, "".into(), "".into(), "".into())], cx);
+            shell.set_spaces(
+                vec![(1, "Home".into(), None, 1, "".into(), "".into(), "".into())],
+                cx,
+            );
             shell.set_space(1, cx);
             shell.rename_space(1, cx);
         });
@@ -524,11 +545,17 @@ mod tests {
         cx.deactivate_window();
         cx.update(|window, _| window.refresh());
         cx.run_until_parked();
-        assert!(shell.read_with(cx, |shell, _| shell.renaming.is_some()), "the field closed");
+        assert!(
+            shell.read_with(cx, |shell, _| shell.renaming.is_some()),
+            "the field closed"
+        );
         cx.update(|window, _| window.activate_window());
         cx.run_until_parked();
         cx.simulate_keystrokes("escape");
-        assert!(shell.read_with(cx, |shell, _| shell.renaming.is_none()), "escape didn't cancel");
+        assert!(
+            shell.read_with(cx, |shell, _| shell.renaming.is_none()),
+            "escape didn't cancel"
+        );
         assert!(host.take_edits().is_empty(), "the Space was renamed");
     }
 
@@ -537,9 +564,14 @@ mod tests {
     fn leaving_the_name_for_the_sidebar_keeps_it(cx: &mut TestAppContext) {
         let (shell, cx, host) = renaming(cx);
         cx.simulate_input("Work");
-        shell.update_in(cx, |shell, window, cx| window.focus(&shell.focus_handle, cx));
+        shell.update_in(cx, |shell, window, cx| {
+            window.focus(&shell.focus_handle, cx)
+        });
         cx.run_until_parked();
-        assert!(shell.read_with(cx, |shell, _| shell.renaming.is_none()), "the field stayed");
+        assert!(
+            shell.read_with(cx, |shell, _| shell.renaming.is_none()),
+            "the field stayed"
+        );
         assert_eq!(host.take_edits(), ["rename space 1 Work"]);
     }
 
@@ -551,7 +583,9 @@ mod tests {
 
         let (shell, cx, host) = renaming(cx);
         cx.simulate_keystrokes("escape");
-        host.pinned_urls.borrow_mut().insert(2, "https://old.test/".into());
+        host.pinned_urls
+            .borrow_mut()
+            .insert(2, "https://old.test/".into());
         let edit = |cx: &mut VisualTestContext| {
             shell.update(cx, |shell, cx| shell.edit_pinned_url(2, cx));
             cx.run_until_parked();
@@ -563,12 +597,18 @@ mod tests {
         edit(cx);
         cx.simulate_input("new.test");
         cx.simulate_keystrokes("enter");
-        assert!(shell.read_with(cx, |shell, _| shell.renaming.is_none()), "the field stayed");
+        assert!(
+            shell.read_with(cx, |shell, _| shell.renaming.is_none()),
+            "the field stayed"
+        );
         assert_eq!(host.take_edits(), ["pinned url 2 https://new.test/"]);
         shell.update(cx, |shell, cx| shell.run(Command::Undo, "ui", cx));
         assert_eq!(host.take_edits(), ["pinned url 2 https://old.test/"]);
         edit(cx);
         cx.simulate_keystrokes("backspace enter");
-        assert!(host.take_edits().is_empty(), "an empty field changed the pinned URL");
+        assert!(
+            host.take_edits().is_empty(),
+            "an empty field changed the pinned URL"
+        );
     }
 }

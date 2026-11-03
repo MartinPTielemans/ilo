@@ -77,7 +77,9 @@ pub(super) fn group_rows(builder: &mut A11ySubtreeBuilder) {
     let mut groups: [(&str, Vec<NodeId>); 2] = [("Pinned", Vec::new()), ("Today", Vec::new())];
     let mut after_new_tab = false;
     for child in children {
-        let id = builder.built_node(child).and_then(|node| node.author_id().map(str::to_owned));
+        let id = builder
+            .built_node(child)
+            .and_then(|node| node.author_id().map(str::to_owned));
         let id = id.unwrap_or_default();
         if id == NEW_TAB {
             after_new_tab = true;
@@ -100,7 +102,11 @@ pub(super) fn group_rows(builder: &mut A11ySubtreeBuilder) {
         let tabs: Vec<_> = members
             .iter()
             .copied()
-            .filter(|&member| builder.built_node(member).is_some_and(|n| n.role() == Role::Tab))
+            .filter(|&member| {
+                builder
+                    .built_node(member)
+                    .is_some_and(|n| n.role() == Role::Tab)
+            })
             .collect();
         for (index, &tab) in tabs.iter().enumerate() {
             let node = builder.built_node(tab).expect("listed above");
@@ -164,16 +170,24 @@ mod tests {
         }
 
         fn named(&self, role: Role, label: &str) -> (NodeId, &Node) {
-            let found = self.0.nodes.iter().find(|(_, node)| {
-                node.role() == role && node.label() == Some(label)
-            });
+            let found = self
+                .0
+                .nodes
+                .iter()
+                .find(|(_, node)| node.role() == role && node.label() == Some(label));
             let (id, node) = found.unwrap_or_else(|| panic!("no {role:?} called {label}"));
             (*id, node)
         }
 
         fn children(&self, id: NodeId) -> Vec<(Role, String)> {
-            let children = self.node(id).children().iter().map(|&child| self.node(child));
-            children.map(|node| (node.role(), node.label().unwrap_or("").to_owned())).collect()
+            let children = self
+                .node(id)
+                .children()
+                .iter()
+                .map(|&child| self.node(child));
+            children
+                .map(|node| (node.role(), node.label().unwrap_or("").to_owned()))
+                .collect()
         }
 
         /// The labels of the nodes under `id` and the groups among them, in order, as VoiceOver
@@ -213,14 +227,30 @@ mod tests {
             let space = (1, "Home".into(), None, 1, "".into(), "".into(), "".into());
             shell.set_spaces(vec![space], cx);
             shell.set_space(1, cx);
-            shell.set_tabs(1, vec![1, 2, 3, 9, 10], vec![4, 5, 6], Vec::new(), folders, cx);
-            for (tab, title) in
-                [(1, "Docs"), (2, "Mail"), (3, "Notes"), (10, "Wiki"), (4, "News"), (5, "Video")]
-            {
+            shell.set_tabs(
+                1,
+                vec![1, 2, 3, 9, 10],
+                vec![4, 5, 6],
+                Vec::new(),
+                folders,
+                cx,
+            );
+            for (tab, title) in [
+                (1, "Docs"),
+                (2, "Mail"),
+                (3, "Notes"),
+                (10, "Wiki"),
+                (4, "News"),
+                (5, "Video"),
+            ] {
                 shell.set_title(tab, title.into(), cx);
             }
             shell.set_title(6, "Search".into(), cx);
-            let playing = Page { audible: true, loading: true, ..Page::default() };
+            let playing = Page {
+                audible: true,
+                loading: true,
+                ..Page::default()
+            };
             shell.set_page(5, playing, cx);
             shell.set_selected(shown, cx);
         });
@@ -273,18 +303,29 @@ mod tests {
 
         let (_, mail) = tree.named(Role::Tab, "Mail");
         assert_eq!(mail.is_selected(), Some(true));
-        assert_eq!((mail.position_in_set(), mail.size_of_set()), (Some(2), Some(3)));
+        assert_eq!(
+            (mail.position_in_set(), mail.size_of_set()),
+            (Some(2), Some(3))
+        );
         assert!(mail.supports_action(Action::Click));
         assert!(mail.supports_action(Action::ShowContextMenu));
         let (_, news) = tree.named(Role::Tab, "News");
         assert_eq!(news.is_selected(), Some(false));
-        assert_eq!((news.position_in_set(), news.size_of_set()), (Some(1), Some(3)));
+        assert_eq!(
+            (news.position_in_set(), news.size_of_set()),
+            (Some(1), Some(3))
+        );
 
         let (_, work) = tree.named(Role::Button, "Work");
         assert_eq!(work.is_expanded(), Some(false));
         assert_eq!(work.role_description(), Some("folder"));
 
-        let root = tree.0.tree.as_ref().expect("a first update has the root").root;
+        let root = tree
+            .0
+            .tree
+            .as_ref()
+            .expect("a first update has the root")
+            .root;
         let order = tree.walk(root);
         let at = |label: &str| order.iter().position(|each| each == label).unwrap();
         assert!(at("Home") < at("Pinned") && at("Pinned") < at("New Tab"));
@@ -308,8 +349,16 @@ mod tests {
 
         cx.simulate_a11y_action(tree.named(Role::Tab, "Mail").0, Action::ShowContextMenu);
         let menus = host.menus.borrow();
-        let titles: Vec<_> = menus.last().expect("a menu").iter().map(|(t, _)| t).collect();
-        assert!(titles.iter().any(|title| title.contains("Unpin")), "{titles:?}");
+        let titles: Vec<_> = menus
+            .last()
+            .expect("a menu")
+            .iter()
+            .map(|(t, _)| t)
+            .collect();
+        assert!(
+            titles.iter().any(|title| title.contains("Unpin")),
+            "{titles:?}"
+        );
     }
 
     /// The header's buttons say what they do, and back says it can't while there's no page to

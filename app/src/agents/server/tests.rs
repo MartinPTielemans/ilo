@@ -137,7 +137,10 @@ fn the_pipe_is_the_servers_alone() {
     let (events, _second) = futures::channel::mpsc::unbounded();
     assert!(Server::start(&path, Tokens::default(), events).is_err());
     drop(server);
-    assert!(connect(&path).is_err(), "the pipe stayed once the server stopped");
+    assert!(
+        connect(&path).is_err(),
+        "the pipe stayed once the server stopped"
+    );
     let (events, _again) = futures::channel::mpsc::unbounded();
     let again = Server::start(&path, Tokens::default(), events).unwrap();
     assert!(connect(again.path()).is_ok());
@@ -225,7 +228,8 @@ fn the_server_answers_what_needs_no_browser() {
             "scroll",
             "screenshot",
             "run_steps",
-            "hand_off", "ask_for_tab"
+            "hand_off",
+            "ask_for_tab"
         ]
     );
     assert_eq!(list["id"], "a");

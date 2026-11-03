@@ -57,14 +57,20 @@ fn main() {
                     .define("UPDATE_PUBLIC_KEY", quoted(&key).as_str())
                     .define("APP_VERSION", quoted(env!("CARGO_PKG_VERSION")).as_str())
                     .define("APP_BUILD", quoted(&build_number(&root)).as_str());
-                println!("cargo:rerun-if-changed={}", root.join("branding/update-feed").display());
+                println!(
+                    "cargo:rerun-if-changed={}",
+                    root.join("branding/update-feed").display()
+                );
             }
         }
         // Only what the preview asks of the host so far; the browser doesn't build here yet.
         "linux" => {
             // The desktop entry's name, for the default browser (branding/id).
             let id = std::fs::read_to_string(root.join("branding/id")).expect("no branding/id");
-            println!("cargo:rerun-if-changed={}", root.join("branding/id").display());
+            println!(
+                "cargo:rerun-if-changed={}",
+                root.join("branding/id").display()
+            );
             host.file("platform/linux/host.cc")
                 .flag("-std=c++20")
                 .define("APP_ID", format!("\"{}\"", id.trim()).as_str());
@@ -90,12 +96,26 @@ fn main() {
     if os == "windows" {
         // Chromium's framework on Windows is chrome.dll, which the browser loads from beside it.
         let engine = root.join(".deps/engine");
-        println!("cargo:rustc-link-arg-bin=Browser={}", engine.join("chrome.dll.lib").display());
+        println!(
+            "cargo:rustc-link-arg-bin=Browser={}",
+            engine.join("chrome.dll.lib").display()
+        );
         // windowscodecs is WIC, for host_file_preview's thumbnails; uuid carries the COM GUIDs it
         // and host_drag_file name; windowsapp is WinRT, for the share sheet; advapi32 reads the
         // registry, for WinSparkle's settings.
-        for lib in ["user32", "gdi32", "dwmapi", "shell32", "ole32", "comctl32", "comdlg32",
-                    "windowscodecs", "uuid", "windowsapp", "advapi32"] {
+        for lib in [
+            "user32",
+            "gdi32",
+            "dwmapi",
+            "shell32",
+            "ole32",
+            "comctl32",
+            "comdlg32",
+            "windowscodecs",
+            "uuid",
+            "windowsapp",
+            "advapi32",
+        ] {
             println!("cargo:rustc-link-lib={lib}");
         }
     } else if os == "macos" {
@@ -136,7 +156,10 @@ fn main() {
     println!("cargo:rerun-if-changed={}", name.display());
     // Default service URLs a fork changes (principle 2): the site, for help and release notes, and
     // where a new issue is filed (src/build_info.rs).
-    for (file, variable) in [("branding/site", "APP_SITE"), ("branding/issues", "APP_ISSUES")] {
+    for (file, variable) in [
+        ("branding/site", "APP_SITE"),
+        ("branding/issues", "APP_ISSUES"),
+    ] {
         let path = root.join(file);
         let url = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("no {file}"));
         println!("cargo:rustc-env={variable}={}", url.trim());
@@ -160,7 +183,10 @@ fn engine_mismatch(link: &Path, header: &Path) -> Option<String> {
     let engine = std::fs::canonicalize(link).ok()?;
     // A relinked or rebuilt engine checks again, and one without a record every build until it has.
     println!("cargo:rerun-if-changed={}", link.display());
-    if engine.components().any(|part| part.as_os_str() == "prebuilt") {
+    if engine
+        .components()
+        .any(|part| part.as_os_str() == "prebuilt")
+    {
         return None;
     }
     let built = engine.parent()?.join("browser_core.h.built");
@@ -184,7 +210,10 @@ fn engine_mismatch(link: &Path, header: &Path) -> Option<String> {
 /// which only grows on main. A shallow clone's would be wrong, so a release build stops there.
 fn build_number(root: &std::path::Path) -> String {
     let git = |args: &[&str]| {
-        let out = std::process::Command::new("git").args(args).current_dir(root).output();
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output();
         let out = out.expect("a release build needs git");
         assert!(out.status.success(), "git {args:?} failed");
         String::from_utf8(out.stdout).unwrap().trim().to_string()
@@ -194,7 +223,10 @@ fn build_number(root: &std::path::Path) -> String {
         "a release build needs the whole history: git fetch --unshallow"
     );
     // A new commit is a new build number.
-    for path in [git(&["rev-parse", "--git-path", "HEAD"]), git(&["rev-parse", "--git-path", "refs"])] {
+    for path in [
+        git(&["rev-parse", "--git-path", "HEAD"]),
+        git(&["rev-parse", "--git-path", "refs"]),
+    ] {
         println!("cargo:rerun-if-changed={}", root.join(path).display());
     }
     git(&["rev-list", "--count", "HEAD"])
@@ -205,13 +237,17 @@ fn build_number(root: &std::path::Path) -> String {
 /// and a one-line array of either an array. It reads only that much TOML and stops the build on
 /// anything else, so the file can't hold a value the code wouldn't get.
 fn tokens_rs(toml: &str) -> String {
-    let mut out = String::from("// Generated by build.rs from design/tokens.toml; edit that file.\n");
-    let (mut path, mut closed, mut docs) = (Vec::<&str>::new(), Vec::<String>::new(), String::new());
+    let mut out =
+        String::from("// Generated by build.rs from design/tokens.toml; edit that file.\n");
+    let (mut path, mut closed, mut docs) =
+        (Vec::<&str>::new(), Vec::<String>::new(), String::new());
     for (n, line) in toml.lines().enumerate() {
         let line = line.trim();
         let ident = |name: &str| {
             if !name.starts_with(|c: char| c.is_ascii_lowercase())
-                || !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+                || !name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
             {
                 fail(n, line, "names are kebab-case");
             }
@@ -228,7 +264,10 @@ fn tokens_rs(toml: &str) -> String {
             docs.clear();
         } else if let Some(comment) = line.strip_prefix('#') {
             docs += &format!("///{comment}\n");
-        } else if let Some(table) = line.strip_prefix('[').and_then(|line| line.strip_suffix(']')) {
+        } else if let Some(table) = line
+            .strip_prefix('[')
+            .and_then(|line| line.strip_suffix(']'))
+        {
             let table: Vec<&str> = table.split('.').collect();
             let shared = path.iter().zip(&table).take_while(|(a, b)| a == b).count();
             for depth in (shared..path.len()).rev() {
@@ -236,7 +275,11 @@ fn tokens_rs(toml: &str) -> String {
                 out += "}\n";
             }
             if shared == table.len() || closed.contains(&table.join(".")) {
-                fail(n, line, "a table comes once, with the tables inside it right after it");
+                fail(
+                    n,
+                    line,
+                    "a table comes once, with the tables inside it right after it",
+                );
             }
             for name in &table[shared..] {
                 out += &format!("{docs}pub mod {} {{\n", ident(name));
@@ -246,16 +289,30 @@ fn tokens_rs(toml: &str) -> String {
             if path.is_empty() {
                 fail(n, line, "a key outside a table");
             }
-            let value = value.split_once('#').map_or(value, |(value, _)| value).trim();
-            let (ty, value) = match value.strip_prefix('[').and_then(|value| value.strip_suffix(']')) {
+            let value = value
+                .split_once('#')
+                .map_or(value, |(value, _)| value)
+                .trim();
+            let (ty, value) = match value
+                .strip_prefix('[')
+                .and_then(|value| value.strip_suffix(']'))
+            {
                 Some(items) => {
-                    let items: Vec<&str> =
-                        items.split(',').map(str::trim).filter(|i| !i.is_empty()).collect();
-                    let Some(ty) = items.first().map(|i| number(i)) else { fail(n, line, "an empty array") };
+                    let items: Vec<&str> = items
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|i| !i.is_empty())
+                        .collect();
+                    let Some(ty) = items.first().map(|i| number(i)) else {
+                        fail(n, line, "an empty array")
+                    };
                     if items.iter().any(|i| number(i) != ty) {
                         fail(n, line, "an array of one type");
                     }
-                    (format!("[{ty}; {}]", items.len()), format!("[{}]", items.join(", ")))
+                    (
+                        format!("[{ty}; {}]", items.len()),
+                        format!("[{}]", items.join(", ")),
+                    )
                 }
                 None => (number(value).to_string(), value.to_string()),
             };

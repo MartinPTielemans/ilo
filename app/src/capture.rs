@@ -22,20 +22,20 @@ use crate::toast;
 
 actions!(capture, [Leave]);
 
-use crate::tokens::capture::RING;
-use crate::tokens::capture::RING_RADIUS;
 use crate::tokens::capture::DIM;
-use crate::tokens::capture::PILL_WIDTH;
-use crate::tokens::capture::PILL_HEIGHT;
-use crate::tokens::capture::PILL_RADIUS;
-use crate::tokens::capture::PILL_BOTTOM;
-use crate::tokens::capture::PILL_TEXT_SIZE;
-use crate::tokens::capture::MENU_LEFT;
 use crate::tokens::capture::GLYPH;
 use crate::tokens::capture::MARGIN;
+use crate::tokens::capture::MENU_LEFT;
+use crate::tokens::capture::PILL_BOTTOM;
+use crate::tokens::capture::PILL_HEIGHT;
+use crate::tokens::capture::PILL_RADIUS;
+use crate::tokens::capture::PILL_TEXT_SIZE;
+use crate::tokens::capture::PILL_WIDTH;
+use crate::tokens::capture::RING;
+use crate::tokens::capture::RING_RADIUS;
 // The menu is ilo's (menu.rs), in its tokens, the narrowest it comes.
-use crate::tokens::menu::{GAP, LINE, PADDING, RADIUS, ROW, ROW_RADIUS, ROW_X, TEXT};
 use crate::tokens::menu::MIN_WIDTH as MENU_WIDTH;
+use crate::tokens::menu::{GAP, LINE, PADDING, RADIUS, ROW, ROW_RADIUS, ROW_X, TEXT};
 /// How far the pointer moves with the button down before a click is a drag (ours).
 pub const DRAG: f32 = 4.;
 /// How long the toast after a capture stays, and longer while the pointer is over it (ours).
@@ -210,12 +210,17 @@ impl Session {
     /// The menu's rows, without Save to Library where there's no Library to save to.
     fn rows(&self) -> impl Iterator<Item = Option<Action>> + use<> {
         let library = self.library;
-        ROWS.iter().copied().filter(move |row| library || *row != Some(Action::SaveToLibrary))
+        ROWS.iter()
+            .copied()
+            .filter(move |row| library || *row != Some(Action::SaveToLibrary))
     }
 
     /// The field, a line under it, the rows and their lines, inside the panel's padding.
     fn menu_height(&self) -> f32 {
-        let rows = self.rows().map(|row| if row.is_some() { ROW } else { LINE }).sum::<f32>();
+        let rows = self
+            .rows()
+            .map(|row| if row.is_some() { ROW } else { LINE })
+            .sum::<f32>();
         PADDING + ROW + LINE + rows + PADDING
     }
 }
@@ -344,7 +349,11 @@ fn start_now(
 /// the pointer from the press on, so the core hands its moves to capture mode, as its own.
 pub fn page_dragged(tab: u64, at: Point<Pixels>, cx: &mut App) {
     update(cx, |capture, _, cx| {
-        if capture.session.as_ref().is_some_and(|session| session.tab == tab) {
+        if capture
+            .session
+            .as_ref()
+            .is_some_and(|session| session.tab == tab)
+        {
             capture.moved(at, cx);
         }
     });
@@ -353,7 +362,11 @@ pub fn page_dragged(tab: u64, at: Point<Pixels>, cx: &mut App) {
 /// The ⇧⌘-drag on `tab`'s page was let go: what it dragged is chosen.
 pub fn page_released(tab: u64, cx: &mut App) {
     update(cx, |capture, _, cx| {
-        if capture.session.as_ref().is_some_and(|session| session.tab == tab) {
+        if capture
+            .session
+            .as_ref()
+            .is_some_and(|session| session.tab == tab)
+        {
             capture.released(cx);
         }
     });
@@ -365,7 +378,11 @@ pub fn set_look(tab: u64, look: Look, cx: &mut App) {
     // Once the update that asked is over, as start's, since the shell asks as it draws.
     cx.defer(move |cx| {
         update(cx, |capture, _, cx| {
-            let Some(session) = capture.session.as_mut().filter(|session| session.tab == tab) else {
+            let Some(session) = capture
+                .session
+                .as_mut()
+                .filter(|session| session.tab == tab)
+            else {
                 return;
             };
             if session.look != look {
@@ -394,20 +411,28 @@ pub fn full_page(tab: u64, cx: &mut App) {
 
 /// The core's picture for `request`, a PNG, or none if the page couldn't give one.
 pub fn captured(tab: u64, request: u64, png: Option<Vec<u8>>, cx: &mut App) {
-    update(cx, |capture, window, cx| capture.captured(tab, request, png, window, cx));
+    update(cx, |capture, window, cx| {
+        capture.captured(tab, request, png, window, cx)
+    });
 }
 
 /// The core's box of the element at `at` in `tab`'s page, if there's one.
 pub fn element_box(tab: u64, at: Point<Pixels>, box_: Option<Bounds<Pixels>>, cx: &mut App) {
     update(cx, |capture, _, cx| {
-        let Some(session) = capture.session.as_mut().filter(|session| session.tab == tab) else {
+        let Some(session) = capture
+            .session
+            .as_mut()
+            .filter(|session| session.tab == tab)
+        else {
             return;
         };
         if session.chosen.is_some() || session.press.is_some() {
             return;
         }
         let page = session.page();
-        let hover = box_.map(|box_| box_.intersect(&page)).filter(|box_| !box_.is_empty());
+        let hover = box_
+            .map(|box_| box_.intersect(&page))
+            .filter(|box_| !box_.is_empty());
         if hover != session.hover {
             session.hover = hover;
             if let Some(box_) = hover {
@@ -423,7 +448,9 @@ pub fn element_box(tab: u64, at: Point<Pixels>, box_: Option<Bounds<Pixels>>, cx
 /// The user left capture mode: a click outside it, another window or another app. The host has
 /// hidden it already.
 pub fn dismissed(cx: &mut App) {
-    update(cx, |capture, window, cx| capture.leave("dismissed", window, cx));
+    update(cx, |capture, window, cx| {
+        capture.leave("dismissed", window, cx)
+    });
 }
 
 /// The tab closed, and capture mode over it.
@@ -432,7 +459,11 @@ pub fn tab_closed(tab: u64, cx: &mut App) {
         if capture.full_page.is_some_and(|(full, _)| full == tab) {
             capture.full_page = None;
         }
-        if capture.session.as_ref().is_some_and(|session| session.tab == tab) {
+        if capture
+            .session
+            .as_ref()
+            .is_some_and(|session| session.tab == tab)
+        {
             capture.leave("tab closed", window, cx);
         }
     });
@@ -442,7 +473,11 @@ pub fn tab_closed(tab: u64, cx: &mut App) {
 fn describe(rect: Bounds<Pixels>) -> String {
     let Bounds { origin, size } = rect;
     let (x, y) = (f32::from(origin.x), f32::from(origin.y));
-    format!("{x} {y} {} {}", f32::from(size.width), f32::from(size.height))
+    format!(
+        "{x} {y} {} {}",
+        f32::from(size.width),
+        f32::from(size.height)
+    )
 }
 
 /// The picture of the page decoded, and a grey copy, in the BGRA GPUI draws.
@@ -462,7 +497,10 @@ fn snapshot(png: &[u8]) -> Option<Snapshot> {
         let image = RgbaImage::from_raw(width, height, data)?;
         Some(Arc::new(RenderImage::new(vec![Frame::new(image)])))
     };
-    Some(Snapshot { colour: image(colour)?, grey: image(grey)? })
+    Some(Snapshot {
+        colour: image(colour)?,
+        grey: image(grey)?,
+    })
 }
 
 impl Capture {
@@ -481,7 +519,11 @@ impl Capture {
     ) {
         if self.full_page == Some((tab, request)) {
             self.full_page = None;
-            if self.session.as_ref().is_none_or(|session| session.tab != tab) {
+            if self
+                .session
+                .as_ref()
+                .is_none_or(|session| session.tab != tab)
+            {
                 self.host.end(tab);
             }
             return self.done(Action::Copy, png, cx);
@@ -498,7 +540,9 @@ impl Capture {
             cx.spawn_in(window, async move |capture, cx| {
                 let decoded = decoded.await;
                 capture
-                    .update_in(cx, |capture, window, cx| capture.show(request, decoded, window, cx))
+                    .update_in(cx, |capture, window, cx| {
+                        capture.show(request, decoded, window, cx)
+                    })
                     .ok();
             })
             .detach();
@@ -533,7 +577,11 @@ impl Capture {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(session) = self.session.as_mut().filter(|s| s.snapshot_request == request) else {
+        let Some(session) = self
+            .session
+            .as_mut()
+            .filter(|s| s.snapshot_request == request)
+        else {
             return;
         };
         let Some(snapshot) = snapshot else {
@@ -574,7 +622,11 @@ impl Capture {
                         run: Rc::new(move |at, _| host.share(&png, Share::Toast(at))),
                     }
                 };
-                let buttons = if SHARES { vec![save, share] } else { vec![save] };
+                let buttons = if SHARES {
+                    vec![save, share]
+                } else {
+                    vec![save]
+                };
                 // After this update, as the toast is another window's.
                 cx.defer(|cx| toast::show_with_buttons(COPIED, buttons, TOAST_TIME, cx));
             }
@@ -608,7 +660,10 @@ impl Capture {
     }
 
     fn moved(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
-        let Some(session) = self.session.as_mut().filter(|session| session.chosen.is_none())
+        let Some(session) = self
+            .session
+            .as_mut()
+            .filter(|session| session.chosen.is_none())
         else {
             return;
         };
@@ -621,7 +676,10 @@ impl Capture {
             return;
         }
         let page = session.page();
-        let at = point(at.x.clamp(px(0.), page.right()), at.y.clamp(px(0.), page.bottom()));
+        let at = point(
+            at.x.clamp(px(0.), page.right()),
+            at.y.clamp(px(0.), page.bottom()),
+        );
         session.drag = Some(Bounds::from_corners(
             point(press.x.min(at.x), press.y.min(at.y)),
             point(press.x.max(at.x), press.y.max(at.y)),
@@ -641,7 +699,10 @@ impl Capture {
     }
 
     fn released(&mut self, cx: &mut Context<Self>) {
-        let Some(session) = self.session.as_mut().filter(|session| session.chosen.is_none())
+        let Some(session) = self
+            .session
+            .as_mut()
+            .filter(|session| session.chosen.is_none())
         else {
             return;
         };
@@ -717,7 +778,13 @@ impl Capture {
                 .mx(px(PADDING))
                 .flex()
                 .items_center()
-                .child(div().mx(px(ROW_X)).h(px(1.)).flex_1().bg(rgba(palette.line)))
+                .child(
+                    div()
+                        .mx(px(ROW_X))
+                        .h(px(1.))
+                        .flex_1()
+                        .bg(rgba(palette.line)),
+                )
                 .into_any_element()
         };
         let rows: Vec<_> = (rows.into_iter())
@@ -777,7 +844,10 @@ impl Render for Capture {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The browser's shortcuts work here too, below capture mode's own keys, as the Mac's menu
         // bar has them in every window: a second ⇧⌘2 leaves.
-        div().key_context(crate::shell::KEY_CONTEXT).size_full().child(self.mode(cx))
+        div()
+            .key_context(crate::shell::KEY_CONTEXT)
+            .size_full()
+            .child(self.mode(cx))
     }
 }
 
@@ -787,13 +857,21 @@ impl Capture {
             .id("capture")
             .key_context("Capture")
             .track_focus(&self.focus)
-            .on_action(cx.listener(|capture, _: &Leave, window, cx| {
-                capture.leave("escape", window, cx)
-            }))
+            .on_action(
+                cx.listener(|capture, _: &Leave, window, cx| capture.leave("escape", window, cx)),
+            )
             .size_full()
             .font_family(crate::face::UI);
-        if let Some(session) = self.session.as_mut().filter(|session| session.snapshot.is_some()) {
-            let what = if session.chosen.is_some() { "menu" } else { "pill" };
+        if let Some(session) = self
+            .session
+            .as_mut()
+            .filter(|session| session.snapshot.is_some())
+        {
+            let what = if session.chosen.is_some() {
+                "menu"
+            } else {
+                "pill"
+            };
             let drawn = (what, session.look.light);
             if session.drawn != Some(drawn) {
                 session.drawn = Some(drawn);
@@ -816,11 +894,15 @@ impl Capture {
             |_, _, _| {},
             move |bounds, _, window, _| {
                 let corners = Corners::all(radius);
-                window.paint_image(bounds, bounds, corners, grey.clone(), 0, false).ok();
+                window
+                    .paint_image(bounds, bounds, corners, grey.clone(), 0, false)
+                    .ok();
                 if let Some(lit) = lit {
                     let lit = Bounds::new(bounds.origin + lit.origin, lit.size);
                     let square = Corners::default();
-                    window.paint_image(lit, bounds, square, colour.clone(), 0, false).ok();
+                    window
+                        .paint_image(lit, bounds, square, colour.clone(), 0, false)
+                        .ok();
                 }
             },
         )
@@ -856,15 +938,17 @@ impl Capture {
                 .text_size(px(PILL_TEXT_SIZE))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgba(palette.label))
-                .child(SharedString::from("Click or drag to capture a portion of this page"))
+                .child(SharedString::from(
+                    "Click or drag to capture a portion of this page",
+                ))
         });
         let menu = session.chosen.map(|chosen| {
             let origin = session.menu_origin(chosen);
             self.menu(origin, session.rows().collect(), look, cx)
         });
-        root.on_mouse_move(cx.listener(|capture, event: &MouseMoveEvent, _, cx| {
-            capture.moved(event.position, cx)
-        }))
+        root.on_mouse_move(
+            cx.listener(|capture, event: &MouseMoveEvent, _, cx| capture.moved(event.position, cx)),
+        )
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(|capture, event: &MouseDownEvent, window, cx| {

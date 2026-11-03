@@ -14,10 +14,21 @@ fn shell(cx: &mut TestAppContext) -> (gpui::Entity<Shell>, std::rc::Rc<Recorder>
         let space = |id, name: &str, agent: &str| {
             (id, name.into(), None, 0, "".into(), agent.into(), "".into())
         };
-        let spaces = vec![space(1, "One", ""), space(2, "Two", ""), space(9, "Agent", "claude")];
+        let spaces = vec![
+            space(1, "One", ""),
+            space(2, "Two", ""),
+            space(9, "Agent", "claude"),
+        ];
         shell.set_spaces(spaces, cx);
         shell.set_space(1, cx);
-        shell.set_tabs(1, Vec::new(), vec![3, 4], Vec::new(), Folders::default(), cx);
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            vec![3, 4],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
         shell.set_tabs(2, vec![5], vec![6], Vec::new(), Folders::default(), cx);
     });
     (shell, host)

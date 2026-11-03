@@ -171,7 +171,12 @@ pub fn popup(look: &Look, label: impl Into<SharedString>, width: f32, open: bool
         .rounded(px(CONTROL_RADIUS))
         .bg(if open { look.pressed } else { look.control })
         .child(div().min_w_0().truncate().child(label.into()))
-        .child(svg().path("icons/chevrons-up-down.svg").size(px(CHEVRONS)).text_color(look.ink))
+        .child(
+            svg()
+                .path("icons/chevrons-up-down.svg")
+                .size(px(CHEVRONS))
+                .text_color(look.ink),
+        )
 }
 
 /// A switch, on or off, with its knob `slid` of the way to that side.
@@ -198,7 +203,10 @@ pub fn switch(look: &Look, on: bool, slid: f32, accent: Rgba) -> impl IntoElemen
 
 /// A checkbox, ticked in `accent` with a `tick`, else a line round the switch's off fill.
 pub fn checkbox(look: &Look, on: bool, accent: Rgba, tick: Rgba) -> gpui::Div {
-    let tick = svg().path("icons/check.svg").size(px(CHECK_GLYPH)).text_color(tick);
+    let tick = svg()
+        .path("icons/check.svg")
+        .size(px(CHECK_GLYPH))
+        .text_color(tick);
     div()
         .flex_none()
         .size(px(CHECK_BOX))
@@ -207,7 +215,9 @@ pub fn checkbox(look: &Look, on: bool, accent: Rgba, tick: Rgba) -> gpui::Div {
         .justify_center()
         .rounded(px(CHECK_RADIUS))
         .when(on, |ticked| ticked.bg(accent).child(tick))
-        .when(!on, |empty| empty.border_1().border_color(look.line).bg(look.switch_off))
+        .when(!on, |empty| {
+            empty.border_1().border_color(look.line).bg(look.switch_off)
+        })
 }
 
 /// A row with a checkbox before its name, as a list to tick from has.

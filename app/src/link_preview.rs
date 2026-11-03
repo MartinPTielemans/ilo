@@ -138,7 +138,10 @@ fn card(page: Bounds<Pixels>) -> Bounds<Pixels> {
     let inset = (side * INSET_SHARE).clamp(INSET_MIN, INSET_MAX);
     Bounds::new(
         page.origin + point(px(inset), px(inset)),
-        size(page.size.width - px(2. * inset), page.size.height - px(2. * inset)),
+        size(
+            page.size.width - px(2. * inset),
+            page.size.height - px(2. * inset),
+        ),
     )
 }
 
@@ -146,7 +149,10 @@ fn card(page: Bounds<Pixels>) -> Bounds<Pixels> {
 fn page_in(card: Bounds<Pixels>) -> Bounds<Pixels> {
     Bounds::new(
         card.origin + point(px(FRAME), px(HEADER)),
-        size(card.size.width - px(2. * FRAME), card.size.height - px(HEADER + FRAME)),
+        size(
+            card.size.width - px(2. * FRAME),
+            card.size.height - px(HEADER + FRAME),
+        ),
     )
 }
 
@@ -154,7 +160,10 @@ fn page_in(card: Bounds<Pixels>) -> Bounds<Pixels> {
 fn card_around(page: Bounds<Pixels>) -> Bounds<Pixels> {
     Bounds::new(
         page.origin - point(px(FRAME), px(HEADER)),
-        size(page.size.width + px(2. * FRAME), page.size.height + px(HEADER + FRAME)),
+        size(
+            page.size.width + px(2. * FRAME),
+            page.size.height + px(HEADER + FRAME),
+        ),
     )
 }
 
@@ -169,8 +178,14 @@ fn scaled_about(frame: Bounds<Pixels>, scale: f32, about: Point<Pixels>) -> Boun
 fn between(from: Bounds<Pixels>, to: Bounds<Pixels>, t: f32) -> Bounds<Pixels> {
     let mix = |a: Pixels, b: Pixels| a + (b - a) * t;
     Bounds::new(
-        point(mix(from.origin.x, to.origin.x), mix(from.origin.y, to.origin.y)),
-        size(mix(from.size.width, to.size.width), mix(from.size.height, to.size.height)),
+        point(
+            mix(from.origin.x, to.origin.x),
+            mix(from.origin.y, to.origin.y),
+        ),
+        size(
+            mix(from.size.width, to.size.width),
+            mix(from.size.height, to.size.height),
+        ),
     )
 }
 
@@ -249,7 +264,12 @@ fn frames(
 fn corners(size: Size<Pixels>, radius: f32) -> [(f32, f32, f32); 4] {
     let (width, height) = (f32::from(size.width), f32::from(size.height));
     let radius = radius.min(width / 2.).min(height / 2.);
-    [(0., 0., radius), (width, 0., radius), (width, height, radius), (0., height, radius)]
+    [
+        (0., 0., radius),
+        (width, 0., radius),
+        (width, height, radius),
+        (0., height, radius),
+    ]
 }
 
 /// The parts of a window of `size` round `hole`: above it, below it, left and right of it.
@@ -257,9 +277,15 @@ fn around(hole: Bounds<Pixels>, size: Size<Pixels>) -> [Bounds<Pixels>; 4] {
     let (width, height, rows) = (size.width, size.height, hole.size.height);
     [
         Bounds::new(point(px(0.), px(0.)), gpui::size(width, hole.top())),
-        Bounds::new(point(px(0.), hole.bottom()), gpui::size(width, height - hole.bottom())),
+        Bounds::new(
+            point(px(0.), hole.bottom()),
+            gpui::size(width, height - hole.bottom()),
+        ),
         Bounds::new(point(px(0.), hole.top()), gpui::size(hole.left(), rows)),
-        Bounds::new(point(hole.right(), hole.top()), gpui::size(width - hole.right(), rows)),
+        Bounds::new(
+            point(hole.right(), hole.top()),
+            gpui::size(width - hole.right(), rows),
+        ),
     ]
 }
 
@@ -330,7 +356,9 @@ impl Preview {
 
     fn moving(&self) -> bool {
         self.leaving.is_some()
-            || self.shown.is_none_or(|shown| shown.elapsed().as_secs_f32() < OPEN)
+            || self
+                .shown
+                .is_none_or(|shown| shown.elapsed().as_secs_f32() < OPEN)
     }
 
     /// The page's corners, which the card's follow outside the frame.
@@ -355,7 +383,11 @@ impl LinkPreviewWindow {
     /// from any of its pages, which the preview's never is, so while the preview shows, with the
     /// keyboard, its window's keys are its own.
     pub fn holds(&self, window: u64, tab: u64, cx: &App) -> bool {
-        let shown = self.0.read(cx).ok().and_then(|preview| preview.preview.as_ref());
+        let shown = self
+            .0
+            .read(cx)
+            .ok()
+            .and_then(|preview| preview.preview.as_ref());
         shown.is_some_and(|shown| {
             shown.tab == tab || (window != 0 && shown.window == window && shown.leaving.is_none())
         })
@@ -366,11 +398,12 @@ impl LinkPreviewWindow {
 /// the dialog's is.
 pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<LinkPreview>> {
     let key = |key, action| crate::shell::view_binding(key, action, "LinkPreview", cx);
-    let mac_keys = [key("cmd-w", Box::new(Close)), key("cmd-enter", Box::new(Keep))];
+    let mac_keys = [
+        key("cmd-w", Box::new(Close)),
+        key("cmd-enter", Box::new(Keep)),
+    ];
     cx.bind_keys(mac_keys);
-    cx.bind_keys([
-        KeyBinding::new("escape", Close, Some("LinkPreview")),
-    ]);
+    cx.bind_keys([KeyBinding::new("escape", Close, Some("LinkPreview"))]);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
             point(px(0.), px(0.)),
@@ -392,7 +425,11 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<LinkPreview
         ..Default::default()
     };
     let window = cx.open_window(options, |_, cx| {
-        cx.new(|cx| LinkPreview { host, focus: cx.focus_handle(), preview: None })
+        cx.new(|cx| LinkPreview {
+            host,
+            focus: cx.focus_handle(),
+            preview: None,
+        })
     });
     match window {
         Ok(window) => {
@@ -410,7 +447,9 @@ fn update<R>(
     cx: &mut App,
     change: impl FnOnce(&mut LinkPreview, &mut Window, &mut Context<LinkPreview>) -> R,
 ) -> Option<R> {
-    let window = cx.try_global::<LinkPreviewWindow>().map(|preview| preview.0)?;
+    let window = cx
+        .try_global::<LinkPreviewWindow>()
+        .map(|preview| preview.0)?;
     window.update(cx, change).ok()
 }
 
@@ -485,13 +524,18 @@ pub fn set_url(tab: u64, url: SharedString, cx: &mut App) {
 
 /// The preview's tab, while one shows.
 pub fn tab(cx: &mut App) -> Option<u64> {
-    update(cx, |preview, _, _| preview.preview.as_ref().map(|shown| shown.tab)).flatten()
+    update(cx, |preview, _, _| {
+        preview.preview.as_ref().map(|shown| shown.tab)
+    })
+    .flatten()
 }
 
 /// What `keystroke` from `tab`'s page in the browser window `window` does, if it's the preview's
 /// (LinkPreviewWindow::holds): it's done, and whether the page loses it. None for another page.
 pub fn key(window: u64, tab: u64, keystroke: &str, reserved: bool, cx: &mut App) -> Option<bool> {
-    let holds = cx.try_global::<LinkPreviewWindow>().is_some_and(|it| it.holds(window, tab, cx));
+    let holds = cx
+        .try_global::<LinkPreviewWindow>()
+        .is_some_and(|it| it.holds(window, tab, cx));
     if !holds {
         return None;
     }
@@ -499,7 +543,11 @@ pub fn key(window: u64, tab: u64, keystroke: &str, reserved: bool, cx: &mut App)
         Some(KeyAction::Close) => preview.close(keystroke, cx),
         Some(KeyAction::Keep) => preview.keep(keystroke, cx),
         Some(KeyAction::CopyUrl) => {
-            let url = preview.preview.as_ref().map(|shown| shown.url.clone()).unwrap_or_default();
+            let url = preview
+                .preview
+                .as_ref()
+                .map(|shown| shown.url.clone())
+                .unwrap_or_default();
             crate::shell::copy_url_of_preview(&url, cx);
             true
         }
@@ -528,7 +576,11 @@ pub fn dismissed(cx: &mut App) {
 /// The tab closed, and its preview goes with it at once.
 pub fn tab_closed(tab: u64, cx: &mut App) {
     update(cx, |preview, _, cx| {
-        if preview.preview.as_ref().is_some_and(|shown| shown.tab == tab) {
+        if preview
+            .preview
+            .as_ref()
+            .is_some_and(|shown| shown.tab == tab)
+        {
             preview.preview = None;
             preview.host.hide();
             cx.notify();
@@ -549,21 +601,35 @@ impl LinkPreview {
     }
 
     fn leave(&mut self, how: Leave, why: &str, seconds: f32, cx: &mut Context<Self>) -> bool {
-        let Some(shown) = self.preview.as_mut().filter(|shown| shown.leaving.is_none()) else {
+        let Some(shown) = self
+            .preview
+            .as_mut()
+            .filter(|shown| shown.leaving.is_none())
+        else {
             return false;
         };
         shown.leaving = Some((Instant::now(), how, shown.pose()));
         // check.sh reads this line, before the host's that it's released.
-        let what = if how == Leave::Keep { "keeping" } else { "closing" };
+        let what = if how == Leave::Keep {
+            "keeping"
+        } else {
+            "closing"
+        };
         log!("browser: link preview {what} ({why})");
         self.host.release();
         let tab = shown.tab;
         shown._leave = Some(cx.spawn(async move |preview, cx| {
-            cx.background_executor().timer(Duration::from_secs_f32(seconds)).await;
+            cx.background_executor()
+                .timer(Duration::from_secs_f32(seconds))
+                .await;
             preview
                 .update(cx, |preview, cx| {
                     // Unless another preview took its place meanwhile.
-                    if preview.preview.as_ref().is_some_and(|shown| shown.tab == tab) {
+                    if preview
+                        .preview
+                        .as_ref()
+                        .is_some_and(|shown| shown.tab == tab)
+                    {
                         preview.finish(cx);
                         cx.notify();
                     }
@@ -591,8 +657,16 @@ impl LinkPreview {
                 self.host.hide();
                 self.host.close(shown.tab);
                 if leaving.is_some() {
-                    let Preview { window, over, url, link, undone, .. } = shown;
-                    self.host.closed(window, Closed { over, url, link }, undone, cx);
+                    let Preview {
+                        window,
+                        over,
+                        url,
+                        link,
+                        undone,
+                        ..
+                    } = shown;
+                    self.host
+                        .closed(window, Closed { over, url, link }, undone, cx);
                 }
             }
         }
@@ -683,17 +757,19 @@ impl Render for LinkPreview {
                     .child(site),
             )
             .child(
-                button("link-preview-keep", "icons/maximize.svg").on_click(
-                    cx.listener(|preview, _, _, cx| {
+                button("link-preview-keep", "icons/maximize.svg").on_click(cx.listener(
+                    |preview, _, _, cx| {
                         preview.keep("button", cx);
-                    }),
-                ),
+                    },
+                )),
             )
-            .child(button("link-preview-close", "icons/x.svg").on_click(cx.listener(
-                |preview, _, _, cx| {
-                    preview.close("button", cx);
-                },
-            )));
+            .child(
+                button("link-preview-close", "icons/x.svg").on_click(cx.listener(
+                    |preview, _, _, cx| {
+                        preview.close("button", cx);
+                    },
+                )),
+            );
         let card = div()
             .id("link-preview-card")
             .absolute()
@@ -715,7 +791,11 @@ impl Render for LinkPreview {
             true => {
                 let hole = (scaled_about(page, 1. / pose.scale, about), shown.radius());
                 let color = Hsla::from(palette.overlay);
-                let colors = (color, color.opacity(1. - pose.page), Level::Modal.rim_in(&palette));
+                let colors = (
+                    color,
+                    color.opacity(1. - pose.page),
+                    Level::Modal.rim_in(&palette),
+                );
                 let frame = canvas(
                     |_, _, _| {},
                     move |_, _, window, _| paint_frame((card_frame, radius), hole, colors, window),

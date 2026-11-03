@@ -56,8 +56,15 @@ pub enum State {
 #[derive(Debug, PartialEq)]
 pub enum Event {
     /// Flatpak found a build: `local` installed and `remote` on Flathub, against the running one.
-    Available { running: String, local: String, remote: String },
-    Progress { status: u32, error: String },
+    Available {
+        running: String,
+        local: String,
+        remote: String,
+    },
+    Progress {
+        status: u32,
+        error: String,
+    },
 }
 
 impl State {
@@ -68,12 +75,17 @@ impl State {
             Event::Available { running, local, .. } if local != running => (State::Ready, false),
             Event::Available { local, remote, .. } if remote != local => (State::Installing, true),
             Event::Available { .. } => (self.clone(), false),
-            Event::Progress { status: RUNNING, .. } => (State::Installing, false),
+            Event::Progress {
+                status: RUNNING, ..
+            } => (State::Installing, false),
             Event::Progress { status: EMPTY, .. } if *self == State::Installing => {
                 (State::Current, false)
             }
             Event::Progress { status: DONE, .. } => (State::Ready, false),
-            Event::Progress { status: ERROR, error } => (State::Failed(error.clone()), false),
+            Event::Progress {
+                status: ERROR,
+                error,
+            } => (State::Failed(error.clone()), false),
             Event::Progress { .. } => (self.clone(), false),
         }
     }
@@ -84,7 +96,10 @@ impl Event {
         let header = message.header();
         let info: HashMap<String, OwnedValue> = message.body().deserialize().ok()?;
         let text = |key: &str| {
-            info.get(key).and_then(|value| value.downcast_ref::<&str>().ok()).unwrap_or("").to_string()
+            info.get(key)
+                .and_then(|value| value.downcast_ref::<&str>().ok())
+                .unwrap_or("")
+                .to_string()
         };
         match header.member()?.as_str() {
             "UpdateAvailable" => Some(Event::Available {
@@ -120,7 +135,13 @@ impl Portal {
     pub async fn open(connection: zbus::Connection) -> zbus::Result<(Portal, Events)> {
         let options: HashMap<&str, Value> = HashMap::new();
         let reply = connection
-            .call_method(Some(PORTAL), PATH, Some(PORTAL), "CreateUpdateMonitor", &(options,))
+            .call_method(
+                Some(PORTAL),
+                PATH,
+                Some(PORTAL),
+                "CreateUpdateMonitor",
+                &(options,),
+            )
             .await?;
         let monitor: OwnedObjectPath = reply.body().deserialize()?;
         let rule = zbus::MatchRule::builder()
@@ -129,14 +150,28 @@ impl Portal {
             .path(monitor.clone())?
             .build();
         let events = zbus::MessageStream::for_match_rule(rule, &connection, None).await?;
-        Ok((Portal { connection, monitor }, Events(events)))
+        Ok((
+            Portal {
+                connection,
+                monitor,
+            },
+            Events(events),
+        ))
     }
 
     /// Installs the newest build beside the running one; Progress says how it goes.
     pub async fn update(&self) -> zbus::Result<()> {
         let options: HashMap<&str, Value> = HashMap::new();
         let monitor = self.monitor.as_ref();
-        self.connection.call_method(Some(PORTAL), monitor, Some(MONITOR), "Update", &("", options)).await?;
+        self.connection
+            .call_method(
+                Some(PORTAL),
+                monitor,
+                Some(MONITOR),
+                "Update",
+                &("", options),
+            )
+            .await?;
         Ok(())
     }
 
@@ -145,7 +180,12 @@ impl Portal {
     /// this one and end. This one quits next. Without this launch's arguments: cobalt adds its
     /// flags again, and the session brings back the pages a launch's URLs opened.
     pub async fn restart(&self, lock: &Path) -> zbus::Result<()> {
-        let mut command = vec!["/bin/sh".to_string(), "-c".into(), RESTART.into(), "sh".into()];
+        let mut command = vec![
+            "/bin/sh".to_string(),
+            "-c".into(),
+            RESTART.into(),
+            "sh".into(),
+        ];
         command.push(lock.to_string_lossy().into_owned());
         command.push(COMMAND.into());
         // Byte strings, ended with a NUL, as the portal reads them.
@@ -155,7 +195,9 @@ impl Portal {
         let envs: HashMap<&str, &str> = HashMap::new();
         let options: HashMap<&str, Value> = HashMap::new();
         let body = (bytes(""), argv, fds, envs, LATEST_VERSION, options);
-        self.connection.call_method(Some(PORTAL), PATH, Some(PORTAL), "Spawn", &body).await?;
+        self.connection
+            .call_method(Some(PORTAL), PATH, Some(PORTAL), "Spawn", &body)
+            .await?;
         Ok(())
     }
 }
@@ -275,7 +317,11 @@ pub fn changed(state: State, cx: &mut App) {
 pub fn check(cx: &mut App) {
     let told = cx.default_global::<Told>();
     let failed = matches!(told.state, Some(State::Failed(_)));
-    let action = if failed { told.retry.clone() } else { told.restart.clone() };
+    let action = if failed {
+        told.retry.clone()
+    } else {
+        told.restart.clone()
+    };
     let question = question(told.state.as_ref(), told.retry.is_some());
     dialog::pose(
         question,
@@ -311,11 +357,19 @@ pub fn question(state: Option<&State>, retries: bool) -> Question {
             if !retries {
                 return failed;
             }
-            return Question { action: "Try Again".into(), cancel: "Later".into(), ..failed };
+            return Question {
+                action: "Try Again".into(),
+                cancel: "Later".into(),
+                ..failed
+            };
         }
         Some(State::Current) | None => (
             "No update yet",
-            concat!(env!("APP_NAME"), " looks for one every half hour while it’s open.").into(),
+            concat!(
+                env!("APP_NAME"),
+                " looks for one every half hour while it’s open."
+            )
+            .into(),
         ),
     };
     notice(message, detail)

@@ -207,7 +207,10 @@ mod tests {
     /// says it's downloading and offers nothing until the core says where it got to.
     #[gpui::test]
     fn the_row_downloads_the_module_and_follows_the_core(cx: &mut TestAppContext) {
-        let core = Rc::new(Core { state: Cell::new(Widevine::Absent), ..Core::default() });
+        let core = Rc::new(Core {
+            state: Cell::new(Widevine::Absent),
+            ..Core::default()
+        });
         let row = row(&core, cx);
         row.read_with(cx, |row, _| {
             assert!(row.shown());
@@ -227,7 +230,9 @@ mod tests {
         assert_eq!(core.asked.borrow().len(), 1, "a second download began");
         core.state.set(Widevine::Failed);
         row.update(cx, |row, cx| row.check(cx));
-        row.read_with(cx, |row, _| assert_eq!(row.action(), Some((Action::Download, "Try Again"))));
+        row.read_with(cx, |row, _| {
+            assert_eq!(row.action(), Some((Action::Download, "Try Again")))
+        });
         core.state.set(Widevine::Restart);
         row.update(cx, |row, cx| row.check(cx));
         row.read_with(cx, |row, _| {
@@ -240,7 +245,10 @@ mod tests {
     /// Settings, which watches the row, draws it so.
     #[gpui::test]
     fn the_row_removes_the_module(cx: &mut TestAppContext) {
-        let core = Rc::new(Core { state: Cell::new(Widevine::Ready), ..Core::default() });
+        let core = Rc::new(Core {
+            state: Cell::new(Widevine::Ready),
+            ..Core::default()
+        });
         let row = row(&core, cx);
         let redrawn = Rc::new(Cell::new(0));
         let _watch = cx.update(|cx| {
@@ -257,6 +265,8 @@ mod tests {
         row.update(cx, |row, cx| row.check(cx));
         cx.run_until_parked();
         assert_eq!(redrawn.get(), 1);
-        row.read_with(cx, |row, _| assert_eq!(row.action(), Some((Action::Download, "Download"))));
+        row.read_with(cx, |row, _| {
+            assert_eq!(row.action(), Some((Action::Download, "Download")))
+        });
     }
 }

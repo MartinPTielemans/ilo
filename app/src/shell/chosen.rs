@@ -15,7 +15,9 @@ impl Shell {
         let (pinned, today) = self.rows();
         let space = self.shown_space();
         let shut = |row: u64| space.is_some_and(|space| space.shut(row));
-        let pinned = pinned.into_iter().filter(|&row| !self.is_folder(row) && !shut(row));
+        let pinned = pinned
+            .into_iter()
+            .filter(|&row| !self.is_folder(row) && !shut(row));
         pinned.chain(today).collect()
     }
 
@@ -122,7 +124,9 @@ impl Shell {
     /// The chosen rows in the sidebar's order.
     pub(super) fn chosen_in_order(&self) -> Vec<u64> {
         let rows = self.choosable_rows();
-        rows.into_iter().filter(|row| self.chosen.contains(row)).collect()
+        rows.into_iter()
+            .filter(|row| self.chosen.contains(row))
+            .collect()
     }
 
     /// ⌘W with rows chosen closes them all, as Arc's does: Today's archive, as one step to undo,
@@ -140,8 +144,16 @@ impl Shell {
         }
         self.chosen.clear();
         self.chosen_from = 0;
-        let what = if tabs.len() > 1 { What::CLOSE_TABS } else { What::CLOSE_TAB };
-        self.keep(what, (!tabs.is_empty()).then_some(Edit::Reopen { tabs, show }), cx);
+        let what = if tabs.len() > 1 {
+            What::CLOSE_TABS
+        } else {
+            What::CLOSE_TAB
+        };
+        self.keep(
+            what,
+            (!tabs.is_empty()).then_some(Edit::Reopen { tabs, show }),
+            cx,
+        );
     }
 
     /// ⇧⌘C with rows chosen copies each of their pages' links, one a line, without tracking
@@ -179,7 +191,11 @@ impl Shell {
             edits.extend(self.put_back(row));
             self.browser.set_pinned(row, pin, cx);
         }
-        let what = if pin { What::PIN_TABS } else { What::UNPIN_TABS };
+        let what = if pin {
+            What::PIN_TABS
+        } else {
+            What::UNPIN_TABS
+        };
         self.keep(what, (!edits.is_empty()).then_some(Edit::Many(edits)), cx);
     }
 
@@ -187,8 +203,10 @@ impl Shell {
     /// them go.
     pub(super) fn move_chosen_to_space(&mut self, space: u64, cx: &mut Context<Self>) {
         let today = self.today();
-        let (today_rows, pinned): (Vec<u64>, Vec<u64>) =
-            self.chosen_in_order().into_iter().partition(|row| today.contains(row));
+        let (today_rows, pinned): (Vec<u64>, Vec<u64>) = self
+            .chosen_in_order()
+            .into_iter()
+            .partition(|row| today.contains(row));
         let mut edits = Vec::new();
         // A pinned tab goes to the bottom of the Space's pinned tabs and a Today tab to the top
         // of its Today.
@@ -197,14 +215,20 @@ impl Shell {
             self.browser.move_to_space(row, space, cx);
         }
         self.unchoose(cx);
-        self.keep(What::MOVE_TABS_TO_SPACE, (!edits.is_empty()).then_some(Edit::Many(edits)), cx);
+        self.keep(
+            What::MOVE_TABS_TO_SPACE,
+            (!edits.is_empty()).then_some(Edit::Many(edits)),
+            cx,
+        );
     }
 
     /// New Folder with rows chosen pins them into a new folder at the bottom of the pinned tabs,
     /// in their order, as Arc's does, and names it as New Folder does.
     pub(super) fn folder_chosen(&mut self, cx: &mut Context<Self>) {
         let name = SharedString::from(NEW_FOLDER);
-        let folder = self.browser.create_folder(self.space, &name, 0, usize::MAX, cx);
+        let folder = self
+            .browser
+            .create_folder(self.space, &name, 0, usize::MAX, cx);
         if folder == 0 {
             return;
         }

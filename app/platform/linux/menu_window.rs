@@ -116,10 +116,17 @@ pub extern "C" fn host_hide_menu_window() {
 #[unsafe(no_mangle)]
 pub extern "C" fn host_menu_area(ui_view: *mut c_void, _in_reveal: bool, area: *mut f64) {
     let (ui_view, origin) = overlays::placed(ui_view)
-        .map_or((ui_view, point(px(0.), px(0.))), |(browser, bounds)| (browser, bounds.origin));
+        .map_or((ui_view, point(px(0.), px(0.))), |(browser, bounds)| {
+            (browser, bounds.origin)
+        });
     let content = gpui_linux::embedder_size(ui_view).unwrap_or_default();
     let (x, y) = (f64::from(origin.x), f64::from(origin.y));
-    let edges = [-x, -y, f64::from(content.width) - x, f64::from(content.height) - y];
+    let edges = [
+        -x,
+        -y,
+        f64::from(content.width) - x,
+        f64::from(content.height) - y,
+    ];
     // SAFETY: the caller passes four.
     unsafe { std::slice::from_raw_parts_mut(area, 4) }.copy_from_slice(&edges);
 }

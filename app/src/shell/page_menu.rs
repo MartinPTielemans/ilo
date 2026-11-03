@@ -45,8 +45,14 @@ pub fn made_up(kind: &str, mac: bool) -> Vec<PageMenuItem> {
     };
     let os = |on_mac: &str, elsewhere: &str| if mac { on_mac } else { elsewhere }.to_string();
     let line = || row(0, "");
-    let under = |parent: usize, item: PageMenuItem| PageMenuItem { parent: Some(parent), ..item };
-    let off = |item: PageMenuItem| PageMenuItem { enabled: false, ..item };
+    let under = |parent: usize, item: PageMenuItem| PageMenuItem {
+        parent: Some(parent),
+        ..item
+    };
+    let off = |item: PageMenuItem| PageMenuItem {
+        enabled: false,
+        ..item
+    };
     let mut items = match kind {
         "image" => vec![
             row(50120, &os("Open Image in New Tab", "Open image in new tab")),
@@ -91,7 +97,13 @@ pub fn made_up(kind: &str, mac: bool) -> Vec<PageMenuItem> {
             if mac {
                 items.extend([
                     row(50180, "Writing Direction"),
-                    under(10, PageMenuItem { checked: true, ..row(50181, "Default") }),
+                    under(
+                        10,
+                        PageMenuItem {
+                            checked: true,
+                            ..row(50181, "Default")
+                        },
+                    ),
                     under(10, row(50182, "Left to Right")),
                     under(10, row(50183, "Right to Left")),
                     line(),
@@ -104,9 +116,21 @@ pub fn made_up(kind: &str, mac: bool) -> Vec<PageMenuItem> {
         }
         _ => vec![
             row(50100, &os("Open Link in New Tab", "Open link in new tab")),
-            row(50101, &os("Open Link in New Window", "Open link in new window")),
-            row(50105, &os("Open Link in Split View", "Open link in split view")),
-            row(50102, &os("Open Link in Incognito Window", "Open link in incognito window")),
+            row(
+                50101,
+                &os("Open Link in New Window", "Open link in new window"),
+            ),
+            row(
+                50105,
+                &os("Open Link in Split View", "Open link in split view"),
+            ),
+            row(
+                50102,
+                &os(
+                    "Open Link in Incognito Window",
+                    "Open link in incognito window",
+                ),
+            ),
             line(),
             row(50103, &os("Save Link As…", "Save link as…")),
             row(50104, &os("Copy Link Address", "Copy link address")),
@@ -155,7 +179,13 @@ mod tests {
     use crate::shell::{Folders, recorder::Recorder};
 
     fn row(command: i32, title: &str) -> PageMenuItem {
-        PageMenuItem { command, title: title.into(), parent: None, enabled: true, checked: false }
+        PageMenuItem {
+            command,
+            title: title.into(),
+            parent: None,
+            enabled: true,
+            checked: false,
+        }
     }
 
     fn line() -> PageMenuItem {
@@ -168,13 +198,23 @@ mod tests {
             row(1, "receive"),
             row(2, "Add to Dictionary"),
             line(),
-            PageMenuItem { enabled: false, ..row(3, "Cut") },
+            PageMenuItem {
+                enabled: false,
+                ..row(3, "Cut")
+            },
             row(4, "Copy"),
             row(5, "Paste"),
             line(),
             row(6, "Writing Direction"),
-            PageMenuItem { parent: Some(7), checked: true, ..row(7, "Default") },
-            PageMenuItem { parent: Some(7), ..row(8, "Left to Right") },
+            PageMenuItem {
+                parent: Some(7),
+                checked: true,
+                ..row(7, "Default")
+            },
+            PageMenuItem {
+                parent: Some(7),
+                ..row(8, "Left to Right")
+            },
             line(),
             row(9, "Inspect"),
         ]
@@ -184,7 +224,18 @@ mod tests {
         let host = Rc::new(Recorder::default());
         let shell = cx.new(|cx| Shell::new(host.clone(), cx));
         shell.update(cx, |shell, cx| {
-            shell.set_spaces(vec![(1, "Space 1".into(), None, 0, "".into(), "".into(), "".into())], cx);
+            shell.set_spaces(
+                vec![(
+                    1,
+                    "Space 1".into(),
+                    None,
+                    0,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                )],
+                cx,
+            );
             shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
             shell.set_space(1, cx);
             shell.set_selected(10, cx);
@@ -219,7 +270,11 @@ mod tests {
         assert!(entries[8].checked && !entries[9].checked);
         assert!(!entries[3].enabled, "Cut is off with nothing selected");
         assert!(!entries[2].enabled, "a line isn't chosen");
-        assert!(entries.iter().all(|entry| entry.shortcut.is_none() && !entry.destructive));
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.shortcut.is_none() && !entry.destructive)
+        );
     }
 
     fn titles(items: &[PageMenuItem]) -> Vec<&str> {
@@ -264,16 +319,27 @@ mod tests {
     /// Spell check, which a misspelt word's menu leaves out. Each submenu row is under its own.
     #[test]
     fn the_macs_own_items_are_only_on_the_mac() {
-        let macs = ["Look Up “ilo”", "Speech", "Writing Direction", "Language Settings"];
+        let macs = [
+            "Look Up “ilo”",
+            "Speech",
+            "Writing Direction",
+            "Language Settings",
+        ];
         for kind in ["link", "image", "text", "field"] {
             for mac in [true, false] {
                 let items = made_up(kind, mac);
                 for item in &items {
                     let parent = item.parent.map(|parent| items[parent].title.as_ref());
-                    assert!(matches!(parent, None | Some("Speech" | "Writing Direction")));
+                    assert!(matches!(
+                        parent,
+                        None | Some("Speech" | "Writing Direction")
+                    ));
                 }
                 if !mac {
-                    assert!(titles(&items).iter().all(|title| !macs.contains(title)), "{kind}");
+                    assert!(
+                        titles(&items).iter().all(|title| !macs.contains(title)),
+                        "{kind}"
+                    );
                 }
             }
         }
@@ -284,7 +350,13 @@ mod tests {
 
     #[test]
     fn a_row_in_the_submenu_of_one_after_it_goes_at_the_top() {
-        let items = vec![PageMenuItem { parent: Some(1), ..row(1, "Early") }, row(2, "Later")];
+        let items = vec![
+            PageMenuItem {
+                parent: Some(1),
+                ..row(1, "Early")
+            },
+            row(2, "Later"),
+        ];
         assert_eq!(entries(&items)[0].parent, None);
     }
 
@@ -342,7 +414,9 @@ mod tests {
     #[gpui::test]
     fn an_empty_menu_closes_at_once(cx: &mut TestAppContext) {
         let (shell, host) = window_showing_tab(cx);
-        shell.update(cx, |shell, cx| shell.show_page_menu(10, Vec::new(), point(px(0.), px(0.)), cx));
+        shell.update(cx, |shell, cx| {
+            shell.show_page_menu(10, Vec::new(), point(px(0.), px(0.)), cx)
+        });
         assert!(host.menus.borrow().is_empty());
         assert_eq!(host.take(), ["page menu 10 closes"]);
     }

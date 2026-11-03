@@ -20,7 +20,12 @@ impl Shell {
     /// The pointer is on the link `target` in `tab`'s page, or has left the link (`None`). Only
     /// the page the window shows has a plate, and not in the page's full screen or over the
     /// Library.
-    pub fn link_target_changed(&mut self, tab: u64, target: Option<Target>, cx: &mut Context<Self>) {
+    pub fn link_target_changed(
+        &mut self,
+        tab: u64,
+        target: Option<Target>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(target) = target else {
             if self.link.as_ref().is_some_and(|link| link.tab == tab) {
                 self.hide_link(cx);
@@ -81,6 +86,7 @@ impl Shell {
             return;
         };
         let frame = link_target::place(card, link.plate.width, link.side);
-        self.browser.link_target(Some((link.plate.clone(), frame, link.side)), cx);
+        self.browser
+            .link_target(Some((link.plate.clone(), frame, link.side)), cx);
     }
 }

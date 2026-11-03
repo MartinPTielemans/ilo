@@ -72,9 +72,15 @@ fn around(content: Size<Pixels>, hole: Bounds<Pixels>) -> [Bounds<Pixels>; 4] {
     let rows = hole.size.height;
     [
         Bounds::new(point(px(0.), px(0.)), size(width, hole.top())),
-        Bounds::new(point(px(0.), hole.bottom()), size(width, height - hole.bottom())),
+        Bounds::new(
+            point(px(0.), hole.bottom()),
+            size(width, height - hole.bottom()),
+        ),
         Bounds::new(point(px(0.), hole.top()), size(hole.left(), rows)),
-        Bounds::new(point(hole.right(), hole.top()), size(width - hole.right(), rows)),
+        Bounds::new(
+            point(hole.right(), hole.top()),
+            size(width - hole.right(), rows),
+        ),
     ]
 }
 
@@ -89,7 +95,11 @@ fn place(view: *mut c_void, shown: &Shown) {
     };
     gpui_linux::set_overlay_pointer(view, areas.as_deref());
     // Which puts its outline in place too.
-    gpui_linux::move_overlay(view, Bounds::new(point(px(0.), px(0.)), shown.content), px(0.));
+    gpui_linux::move_overlay(
+        view,
+        Bounds::new(point(px(0.), px(0.)), shown.content),
+        px(0.),
+    );
 }
 
 /// The user left the preview: a click in its page, as GPUI hears the browser window's too, or
@@ -117,7 +127,13 @@ pub extern "C" fn host_show_link_preview(ui_view: *mut c_void) {
     };
     let window = crate::window_with_view(ui_view);
     // All of it until its first frame says where the page is.
-    let shown = Shown { ui_view, window, content, hole: None, released: false };
+    let shown = Shown {
+        ui_view,
+        window,
+        content,
+        hole: None,
+        released: false,
+    };
     let view = PREVIEW.with_borrow_mut(|preview| {
         preview.shown = Some(shown);
         preview.view
@@ -190,7 +206,10 @@ pub extern "C" fn host_hide_link_preview() {
 /// `ui_view`'s window's content may have changed size, which the preview covers all of.
 pub(crate) fn resized(ui_view: *mut c_void) {
     let placed = PREVIEW.with_borrow_mut(|preview| {
-        let shown = preview.shown.as_mut().filter(|shown| shown.ui_view == ui_view)?;
+        let shown = preview
+            .shown
+            .as_mut()
+            .filter(|shown| shown.ui_view == ui_view)?;
         shown.content = gpui_linux::embedder_size(ui_view)?;
         Some((preview.view, *shown))
     });

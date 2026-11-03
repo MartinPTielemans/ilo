@@ -22,7 +22,9 @@ impl Host for Recorder {
     }
 
     fn answer(&self, tab: u64, answer: Answer, username: &str) {
-        self.0.borrow_mut().push(format!("{answer:?} {tab} {username}"));
+        self.0
+            .borrow_mut()
+            .push(format!("{answer:?} {tab} {username}"));
     }
 }
 
@@ -32,7 +34,10 @@ fn offer(kind: Kind, usernames: &[&str]) -> Offer {
         title: "Save password?".into(),
         site: "127.0.0.1".into(),
         username: usernames[0].to_string().into(),
-        usernames: usernames.iter().map(|username| username.to_string().into()).collect(),
+        usernames: usernames
+            .iter()
+            .map(|username| username.to_string().into())
+            .collect(),
         password_length: 13,
         accept: "Save".into(),
         decline: "No Thanks".into(),
@@ -54,7 +59,14 @@ fn open_over(
 ) -> (WindowHandle<OfferPrompt>, Rc<Recorder>) {
     let host = Rc::new(Recorder::default());
     let window = cx
-        .update(|cx| open(browser, host.clone(), |_| (hsla(0., 0., 0.2, 1.), Default::default()), cx))
+        .update(|cx| {
+            open(
+                browser,
+                host.clone(),
+                |_| (hsla(0., 0., 0.2, 1.), Default::default()),
+                cx,
+            )
+        })
         .expect("no window for the offer");
     cx.update(|cx| tab_shown(browser, tab, cx));
     (window, host)
@@ -97,7 +109,8 @@ impl Prompt {
     }
 
     fn click(&mut self, x: f32, y: f32) {
-        self.cx.simulate_click(point(px(x), px(y)), Modifiers::none());
+        self.cx
+            .simulate_click(point(px(x), px(y)), Modifiers::none());
         self.cx.run_until_parked();
     }
 
@@ -131,7 +144,10 @@ fn return_saves_the_shown_tabs_offer(cx: &mut TestAppContext) {
 fn the_offer_takes_no_answer_for_good_for_its_first_moment(cx: &mut TestAppContext) {
     let mut prompt = Prompt::new(cx);
     prompt.calls();
-    prompt.cx.cx.update(|cx| changed(1, Some(offer(Kind::Save, &["check@example.test"])), cx));
+    prompt
+        .cx
+        .cx
+        .update(|cx| changed(1, Some(offer(Kind::Save, &["check@example.test"])), cx));
     prompt.cx.run_until_parked();
     assert_eq!(prompt.calls(), ["show"]);
     prompt.keys("enter");
@@ -141,7 +157,10 @@ fn the_offer_takes_no_answer_for_good_for_its_first_moment(cx: &mut TestAppConte
     prompt.click_never();
     assert_eq!(prompt.calls(), ["Never 1 check@example.test", "hide"]);
     // Shown again, as with its tab, it settles again, and escape needn't wait.
-    prompt.cx.cx.update(|cx| changed(1, Some(offer(Kind::Save, &["check@example.test"])), cx));
+    prompt
+        .cx
+        .cx
+        .update(|cx| changed(1, Some(offer(Kind::Save, &["check@example.test"])), cx));
     prompt.cx.run_until_parked();
     prompt.calls();
     prompt.keys("enter");

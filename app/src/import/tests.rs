@@ -13,11 +13,11 @@ use gpui::{App, AppContext, TestAppContext};
 use super::arc;
 use super::chromium;
 use super::extensions::{self, Extension};
-use super::suggested;
 use super::found::{Found, FromProfile, Node, Page, Tab};
 use super::plan::{self, Counts, Existing, ExistingSpace, Row};
 use super::read::{self, Kind, ReadError};
 use super::sources::{self, Os, Roots};
+use super::suggested;
 use super::{Exported, Host, ImportEvent, ImportView, Look, Passwords};
 use super::{firefox, safari};
 use crate::theme::{Appearance, Texture, Theme};
@@ -114,27 +114,47 @@ fn arcs_theme_becomes_the_spaces_theme() {
     let sidebar = sidebar();
     let personal = sidebar.spaces[0].theme.unwrap();
     assert_eq!(personal.count, 3);
-    assert_eq!((personal.colors()[2], personal.texture), (0x33cc99, Texture::Dust));
+    assert_eq!(
+        (personal.colors()[2], personal.texture),
+        (0x33cc99, Texture::Dust)
+    );
     assert_eq!(
         personal.main_color(),
         Theme::of_color(0x3366cc).main_color()
     );
     // Arc's second, (1.1, 0.5, -0.05), is orange's hue and lightness, not the main one's opposite.
     let ((x, y), orange) = (personal.handle(1), Theme::of_color(0xff8000));
-    assert!((x - orange.x).abs() < 1e-3 && (y - orange.y).abs() < 1e-3, "at {x}, {y}");
+    assert!(
+        (x - orange.x).abs() < 1e-3 && (y - orange.y).abs() < 1e-3,
+        "at {x}, {y}"
+    );
     // The third's handle is where its teal is, the window taking the teal itself.
     let ((x, y), teal) = (personal.handle(2), Theme::of_color(0x33cc99));
-    assert!((x - teal.x).abs() < 1e-3 && (y - teal.y).abs() < 1e-3, "at {x}, {y}");
+    assert!(
+        (x - teal.x).abs() < 1e-3 && (y - teal.y).abs() < 1e-3,
+        "at {x}, {y}"
+    );
     assert_eq!((personal.intensity, personal.grain), (0.6, 0.3));
-    assert_eq!((personal.appearance, personal.dark), (Appearance::Dark, None));
+    assert_eq!(
+        (personal.appearance, personal.dark),
+        (Appearance::Dark, None)
+    );
     let work = sidebar.spaces[1].theme.unwrap();
     assert_eq!(work.count, 1);
     assert_eq!(work.main_color(), Theme::of_color(0xe699b3).main_color());
     assert_eq!(work.appearance, Appearance::Automatic);
     let dark = work.shown(true);
     assert_eq!(dark.main_color(), Theme::of_color(0x1a1a33).main_color());
-    assert_eq!((dark.count, dark.grain), (1, 0.), "a basic colour has no grain");
-    assert_eq!((work.texture, work.third), (Texture::Noise, None), "Arc's base as our noise");
+    assert_eq!(
+        (dark.count, dark.grain),
+        (1, 0.),
+        "a basic colour has no grain"
+    );
+    assert_eq!(
+        (work.texture, work.third),
+        (Texture::Noise, None),
+        "Arc's base as our noise"
+    );
     assert_eq!(work.shown(false).main_color(), work.main_color());
 }
 
@@ -154,17 +174,32 @@ fn arcs_appearance_comes_from_its_window_appearance_else_its_look() {
         arc::parse(&json).unwrap().spaces[0].theme.unwrap()
     };
     let one = |color: &str, forced: &str| {
-        theme_of(format!(r#"{{{forced} "background": {{"single": {{"_0": {}}}}}}}"#, look(color)))
+        theme_of(format!(
+            r#"{{{forced} "background": {{"single": {{"_0": {}}}}}}}"#,
+            look(color)
+        ))
     };
-    assert_eq!(one(pink, "").appearance, Appearance::Light, "its translucency style");
+    assert_eq!(
+        one(pink, "").appearance,
+        Appearance::Light,
+        "its translucency style"
+    );
     assert_eq!(one(three, "").appearance, Appearance::Automatic);
     assert_eq!(one(three, "").count, 3);
     let forced = r#""windowAppearance": {"single": {"_0": "dark"}},"#;
     assert_eq!(one(pink, forced).appearance, Appearance::Dark);
-    let both = format!(r#""background": {{"appearanceBased": {{"light": {}, "dark": {}}}}}"#, look(pink), look(navy));
+    let both = format!(
+        r#""background": {{"appearanceBased": {{"light": {}, "dark": {}}}}}"#,
+        look(pink),
+        look(navy)
+    );
     let dark = theme_of(format!(r#"{{{forced} {both}}}"#));
     assert_eq!((dark.appearance, dark.dark), (Appearance::Dark, None));
-    assert_eq!(dark.main_color(), Theme::of_color(0x1a1a33).main_color(), "a dark theme takes its dark look");
+    assert_eq!(
+        dark.main_color(),
+        Theme::of_color(0x1a1a33).main_color(),
+        "a dark theme takes its dark look"
+    );
     let auto = theme_of(format!("{{{both}}}"));
     assert_eq!(auto.appearance, Appearance::Automatic);
     assert!(auto.dark.is_some());
@@ -295,7 +330,10 @@ fn linux_finds_each_browser_where_it_keeps_its_profiles() {
 
 /// The names the browsers found under `roots` are listed by, the one used last first.
 fn listed(roots: &Roots) -> Vec<String> {
-    sources::find(roots).iter().map(sources::Source::name).collect()
+    sources::find(roots)
+        .iter()
+        .map(sources::Source::name)
+        .collect()
 }
 
 /// A Chromium user data folder with its default profile, used `ago` seconds ago.
@@ -305,7 +343,10 @@ fn chromium_dir(dir: PathBuf, ago: u64) {
 
 /// A Firefox folder with one profile, used `ago` seconds ago.
 fn firefox_dir(dir: PathBuf, ago: u64) {
-    write(dir.join("profiles.ini"), "[Profile0]\nName=default\nPath=p.default\n");
+    write(
+        dir.join("profiles.ini"),
+        "[Profile0]\nName=default\nPath=p.default\n",
+    );
     used(&write(dir.join("p.default/places.sqlite"), ""), ago);
 }
 
@@ -322,7 +363,10 @@ fn linux_finds_flatpak_snap_and_xdg_installs() {
     chrome(".config/google-chrome", 40);
     firefox_dir(home.join("snap/firefox/common/.mozilla/firefox"), 50);
     firefox_dir(home.join(".config/zen"), 60);
-    chrome(".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser", 70);
+    chrome(
+        ".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser",
+        70,
+    );
     chrome("snap/opera/current/.config/opera", 80);
     chrome(".var/app/com.vivaldi.Vivaldi/config/vivaldi", 90);
     chrome(".var/app/com.microsoft.Edge/config/microsoft-edge", 100);
@@ -366,7 +410,10 @@ fn windows_finds_the_chromium_family_operas_profile_and_store_installs() {
         20,
     );
     used(
-        &write(home.join("AppData/Roaming/Opera Software/Opera Stable/Preferences"), "{}"),
+        &write(
+            home.join("AppData/Roaming/Opera Software/Opera Stable/Preferences"),
+            "{}",
+        ),
         30,
     );
     chrome("Microsoft/Edge/User Data", 40);
@@ -428,8 +475,14 @@ fn the_passwords_box_names_exports_for_the_system() {
         let name = |place: &String| place.split(':').next().unwrap().to_string();
         places.iter().map(name).collect()
     };
-    assert_eq!(names(super::export_places(&[], Os::Mac)), ["Arc", "Chrome", "Firefox", "Safari"]);
-    assert_eq!(names(super::export_places(&[], Os::Windows)), ["Chrome", "Edge", "Firefox", "Arc"]);
+    assert_eq!(
+        names(super::export_places(&[], Os::Mac)),
+        ["Arc", "Chrome", "Firefox", "Safari"]
+    );
+    assert_eq!(
+        names(super::export_places(&[], Os::Windows)),
+        ["Chrome", "Edge", "Firefox", "Arc"]
+    );
     assert_eq!(
         names(super::export_places(&[], Os::Linux)),
         ["Firefox", "Chrome", "Chromium", "Brave"]
@@ -1170,7 +1223,10 @@ fn each_profile_of_a_browser_gets_a_space_named_after_it() {
         now,
     );
     let source = &super::importable(&Roots::under(&home, Os::Linux))[0];
-    assert_eq!(read::kinds(source), [Kind::Bookmarks, Kind::History, Kind::Extensions]);
+    assert_eq!(
+        read::kinds(source),
+        [Kind::Bookmarks, Kind::History, Kind::Extensions]
+    );
     let found = read::read(source, &[Kind::Bookmarks], now).unwrap();
     let spaces: Vec<_> = (found.spaces.iter())
         .map(|space| (space.name.as_str(), &space.profile))
@@ -1830,14 +1886,20 @@ fn a_passwords_file_comes_in_and_the_view_offers_to_delete_it(cx: &mut TestAppCo
     // Cancelling the panel imports nothing.
     view.update(cx, |view, cx| view.choose_passwords(cx));
     cx.run_until_parked();
-    view.read_with(cx, |view, _| assert!(matches!(view.step, super::Step::List)));
+    view.read_with(cx, |view, _| {
+        assert!(matches!(view.step, super::Step::List))
+    });
     assert!(browser.importing.borrow().is_none());
 
     let file = write(home("passwords").join("Chrome Passwords.csv"), PASSWORDS);
     *browser.passwords_file.borrow_mut() = Some(file.clone());
     view.update(cx, |view, cx| view.choose_passwords(cx));
     cx.run_until_parked();
-    let given = browser.importing.borrow().as_ref().map(|(file, _)| file.clone());
+    let given = browser
+        .importing
+        .borrow()
+        .as_ref()
+        .map(|(file, _)| file.clone());
     assert_eq!(given, Some(file.clone()));
     view.read_with(cx, |view, _| {
         assert_eq!(view.running().as_deref(), Some("Importing passwords…"));
@@ -1868,11 +1930,16 @@ fn a_passwords_file_comes_in_and_the_view_offers_to_delete_it(cx: &mut TestAppCo
         let super::Step::Done(shown) = &view.step else {
             panic!()
         };
-        assert_eq!(shown.as_ref(), format!("{said} Chrome Passwords.csv is deleted."));
+        assert_eq!(
+            shown.as_ref(),
+            format!("{said} Chrome Passwords.csv is deleted.")
+        );
         assert_eq!(view.passwords_file, None);
     });
     view.update(cx, |view, cx| view.done(cx));
-    view.read_with(cx, |view, _| assert!(matches!(view.step, super::Step::List)));
+    view.read_with(cx, |view, _| {
+        assert!(matches!(view.step, super::Step::List))
+    });
     fs::remove_dir_all(file.parent().unwrap()).unwrap();
 }
 
@@ -1946,7 +2013,12 @@ fn chrome_extensions(home: &Path) -> PathBuf {
     write(profile.join("Preferences"), pinned);
     let named = format!(r#"{{"name": "__MSG_appName__", "default_locale": "en", {STORE}}}"#);
     let messages = r#"{"APPNAME": {"message": "Dark Reader"}}"#;
-    extension(&profile, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", &named, Some(messages));
+    extension(
+        &profile,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        &named,
+        Some(messages),
+    );
     let plain = format!(r#"{{"name": "Bitwarden", {STORE}}}"#);
     extension(&profile, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", &plain, None);
     let blocker = format!(r#"{{"name": "uBlock Origin", {STORE}}}"#);
@@ -1966,16 +2038,27 @@ fn a_profiles_extensions_come_with_their_pins() {
     let home = home("extensions");
     let profile = chrome_extensions(&home);
     let read = extensions::read(&profile);
-    let listed: Vec<_> = read.iter().map(|e| (e.name.as_str(), e.pinned, e.blocks_ads())).collect();
+    let listed: Vec<_> = read
+        .iter()
+        .map(|e| (e.name.as_str(), e.pinned, e.blocks_ads()))
+        .collect();
     assert_eq!(
         listed,
-        [("Bitwarden", false, false), ("Dark Reader", true, false), ("uBlock Origin", false, true)]
+        [
+            ("Bitwarden", false, false),
+            ("Dark Reader", true, false),
+            ("uBlock Origin", false, true)
+        ]
     );
     assert_eq!(
         read[1].store_page(),
         "https://chromewebstore.google.com/detail/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     );
-    let named = |name: &str| Extension { id: "x".into(), name: name.into(), pinned: false };
+    let named = |name: &str| Extension {
+        id: "x".into(),
+        name: name.into(),
+        pinned: false,
+    };
     assert!(named("AdGuard AdBlocker").blocks_ads() && named("Total Adblock").blocks_ads());
     assert!(!named("Grammarly").blocks_ads());
     fs::remove_dir_all(home).unwrap();
@@ -2008,7 +2091,11 @@ fn chromes_extensions_are_listed_to_add_and_keep_their_pins(cx: &mut TestAppCont
         );
     });
     let ids = || -> Vec<String> {
-        extensions::listed().extensions.iter().map(|each| each.id.clone()).collect()
+        extensions::listed()
+            .extensions
+            .iter()
+            .map(|each| each.id.clone())
+            .collect()
     };
     assert_eq!(extensions::listed().from, "Chrome");
     assert_eq!(ids().len(), 3, "the ad blocker is kept to add anyway");
@@ -2038,7 +2125,10 @@ fn a_bookmark_folder_unticked_stays_out(cx: &mut TestAppContext) {
     let now = SystemTime::now();
     let home = chrome("chrome-folders", &[("Default", "Me")], now);
     let source = &super::importable(&Roots::under(&home, Os::Linux))[0];
-    assert_eq!(read::folders(source, now).unwrap(), ["Bookmarks Bar", "Other bookmarks"]);
+    assert_eq!(
+        read::folders(source, now).unwrap(),
+        ["Bookmarks Bar", "Other bookmarks"]
+    );
     let mut found = read::read(source, &[Kind::Bookmarks], now).unwrap();
     read::leave_out(&mut found, &["Bookmarks Bar".into()], source.browser.family);
     let nodes = node_shape(&found.spaces[0].pinned);
@@ -2046,7 +2136,10 @@ fn a_bookmark_folder_unticked_stays_out(cx: &mut TestAppContext) {
     let mut found = read::read(source, &[Kind::Bookmarks], now).unwrap();
     let both = ["Bookmarks Bar".into(), "Other bookmarks".into()];
     read::leave_out(&mut found, &both, source.browser.family);
-    assert!(found.spaces.is_empty(), "a Space with nothing left doesn't come");
+    assert!(
+        found.spaces.is_empty(),
+        "a Space with nothing left doesn't come"
+    );
 
     let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Linux))));
     let host: Rc<dyn Host> = browser.clone();
@@ -2058,7 +2151,10 @@ fn a_bookmark_folder_unticked_stays_out(cx: &mut TestAppContext) {
     cx.run_until_parked();
     view.update(cx, |view, cx| {
         let names = view.folders.names.clone();
-        assert_eq!(names.as_deref(), Some(&["Bookmarks Bar".into(), "Other bookmarks".into()][..]));
+        assert_eq!(
+            names.as_deref(),
+            Some(&["Bookmarks Bar".into(), "Other bookmarks".into()][..])
+        );
         view.toggle_folder("Other bookmarks", cx);
         view.import(cx);
     });
@@ -2095,11 +2191,21 @@ fn the_sites_visited_most_are_offered_as_favorites() {
         page("file:///Users/me/notes.html", 40),
     ];
     let skip = ["https://mail.example.net/".to_string()];
-    let urls: Vec<String> =
-        suggested::favorites(&history, &skip).into_iter().map(|tab| tab.url).collect();
-    assert_eq!(urls, ["https://www.example.com/", "https://news.example.org/"]);
-    assert_eq!(suggested::site_name("https://www.example.com/"), "example.com");
-    let many: Vec<Page> = (0..12).map(|n| page(&format!("https://site{n}.example/"), 3)).collect();
+    let urls: Vec<String> = suggested::favorites(&history, &skip)
+        .into_iter()
+        .map(|tab| tab.url)
+        .collect();
+    assert_eq!(
+        urls,
+        ["https://www.example.com/", "https://news.example.org/"]
+    );
+    assert_eq!(
+        suggested::site_name("https://www.example.com/"),
+        "example.com"
+    );
+    let many: Vec<Page> = (0..12)
+        .map(|n| page(&format!("https://site{n}.example/"), 3))
+        .collect();
     assert_eq!(suggested::favorites(&many, &[]).len(), suggested::MOST);
 }
 
@@ -2119,7 +2225,12 @@ fn an_import_offers_favorites_from_its_history(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     view.read_with(cx, |view, _| {
-        let urls: Vec<&str> = view.suggested().unwrap().iter().map(|t| t.url.as_str()).collect();
+        let urls: Vec<&str> = view
+            .suggested()
+            .unwrap()
+            .iter()
+            .map(|t| t.url.as_str())
+            .collect();
         assert_eq!(urls, ["https://example.com/"]);
         assert!(!view.suggesting());
     });
@@ -2242,7 +2353,10 @@ fn a_long_bar_in_a_bookmarks_file_comes_as_a_folder() {
 fn a_file_that_isnt_bookmarks_says_so() {
     let error = super::html::bookmarks("url,username,password\n").unwrap_err();
     assert_eq!(error, "it isn't a bookmarks file a browser exported");
-    assert_eq!(super::html::bookmarks("<!DOCTYPE NETSCAPE-Bookmark-file-1>").unwrap(), []);
+    assert_eq!(
+        super::html::bookmarks("<!DOCTYPE NETSCAPE-Bookmark-file-1>").unwrap(),
+        []
+    );
 }
 
 /// Bookmarks from a file come in as a Space named Bookmarks, in the profile this browser started
@@ -2261,14 +2375,26 @@ fn a_bookmarks_file_comes_in_once(cx: &mut TestAppContext) {
     // Cancelling the panel imports nothing.
     view.update(cx, |view, cx| view.choose_bookmarks(cx));
     cx.run_until_parked();
-    view.read_with(cx, |view, _| assert!(matches!(view.step, super::Step::List)));
+    view.read_with(cx, |view, _| {
+        assert!(matches!(view.step, super::Step::List))
+    });
 
-    let file = write(home("bookmarks-file").join("bookmarks.html"), CHROME_BOOKMARKS_HTML);
+    let file = write(
+        home("bookmarks-file").join("bookmarks.html"),
+        CHROME_BOOKMARKS_HTML,
+    );
     *browser.bookmarks_file.borrow_mut() = Some(file.clone());
     view.update(cx, |view, cx| view.choose_bookmarks(cx));
     cx.run_until_parked();
-    assert_eq!(said(cx), "1 Space and 3 pinned tabs came in from bookmarks.html.");
-    let space = browser.spaces().into_iter().find(|space| space.name == "Bookmarks").unwrap();
+    assert_eq!(
+        said(cx),
+        "1 Space and 3 pinned tabs came in from bookmarks.html."
+    );
+    let space = browser
+        .spaces()
+        .into_iter()
+        .find(|space| space.name == "Bookmarks")
+        .unwrap();
     assert_eq!(space.profile, 1);
     assert_eq!(
         shape(&space.rows),

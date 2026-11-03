@@ -56,7 +56,12 @@ thread_local! {
 fn add(kind: Kind, view: *mut c_void, dismissed: extern "C" fn()) {
     POPOVERS.with_borrow_mut(|all| {
         all.retain(|each| each.kind != kind);
-        all.push(Popover { kind, view, dismissed, shown: None });
+        all.push(Popover {
+            kind,
+            view,
+            dismissed,
+            shown: None,
+        });
     });
 }
 
@@ -74,7 +79,10 @@ fn name(kind: Kind) -> &'static str {
 /// Shows `kind` over `ui_view`'s window at `left`, `top`, `width` by `height` in its content, with
 /// the keyboard.
 fn show(kind: Kind, ui_view: *mut c_void, left: f64, top: f64, width: f64, height: f64) -> bool {
-    if with(kind, |p| p.shown.is_some_and(|shown| shown.ui_view != ui_view)) == Some(true) {
+    if with(kind, |p| {
+        p.shown.is_some_and(|shown| shown.ui_view != ui_view)
+    }) == Some(true)
+    {
         hide(kind);
     }
     let Some(content) = gpui_linux::embedder_size(ui_view) else {
@@ -87,7 +95,13 @@ fn show(kind: Kind, ui_view: *mut c_void, left: f64, top: f64, width: f64, heigh
     let window = crate::window_with_view(ui_view);
     let Some((view, had)) = with(kind, |p| {
         let had = p.shown.is_some_and(|shown| !shown.released);
-        p.shown = Some(Shown { ui_view, window, content, bounds, released: false });
+        p.shown = Some(Shown {
+            ui_view,
+            window,
+            content,
+            bounds,
+            released: false,
+        });
         (p.view, had)
     }) else {
         return false;
@@ -206,7 +220,10 @@ pub(crate) fn placed(view: *mut c_void) -> Option<(*mut c_void, Bounds<Pixels>)>
 /// `ui_view`'s window is closing: what shows over it goes.
 pub(crate) fn forget_window(ui_view: *mut c_void) {
     for kind in [Kind::SiteControls, Kind::Capture] {
-        if with(kind, |p| p.shown.is_some_and(|shown| shown.ui_view == ui_view)) == Some(true) {
+        if with(kind, |p| {
+            p.shown.is_some_and(|shown| shown.ui_view == ui_view)
+        }) == Some(true)
+        {
             hide(kind);
         }
     }
@@ -220,7 +237,9 @@ pub extern "C" fn host_add_site_controls(view: *mut c_void, dismissed: extern "C
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_set_site_controls_shape(corners: *const f64, count: usize) {
-    let Some(view) = with(Kind::SiteControls, |p| p.view) else { return };
+    let Some(view) = with(Kind::SiteControls, |p| p.view) else {
+        return;
+    };
     if corners.is_null() {
         return;
     }
@@ -310,7 +329,9 @@ pub extern "C" fn host_capture_camera(camera: bool) {
 
 /// Capture's window shows the pointer as the camera, or the arrow, as `CAMERA` says.
 fn camera() {
-    let Some(view) = with(Kind::Capture, |p| p.view) else { return };
+    let Some(view) = with(Kind::Capture, |p| p.view) else {
+        return;
+    };
     let style = CAMERA.get().then_some(CursorStyle::Crosshair);
     crate::update_app_later(move |cx| {
         overlays::update_window(view, cx, |window, cx| window.set_cursor_override(style, cx));

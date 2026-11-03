@@ -44,10 +44,16 @@ use crate::widevine::Widevine;
 /// localStorage over with the tab.
 const SWITCH_WORDS: &str = "This site's video needs Safari's engine. Play it in this tab.";
 const SWITCH: &str = "Play in This Tab";
-const WORDS: &str =
-    concat!("This site's video needs a module ", env!("APP_NAME"), " doesn't have yet.");
-const PLAYREADY_WINDOWS_11: &str =
-    concat!("This site's video needs Windows 11, where ", env!("APP_NAME"), " plays it.");
+const WORDS: &str = concat!(
+    "This site's video needs a module ",
+    env!("APP_NAME"),
+    " doesn't have yet."
+);
+const PLAYREADY_WINDOWS_11: &str = concat!(
+    "This site's video needs Windows 11, where ",
+    env!("APP_NAME"),
+    " plays it."
+);
 const PLAYREADY_X64: &str = concat!(
     "This site's video needs an Intel or AMD PC. ",
     env!("APP_NAME"),
@@ -121,7 +127,9 @@ pub(super) fn escape_binding() -> KeyBinding {
 pub(super) fn bind(cx: &mut App) {
     cx.bind_keys([escape_binding()]);
     cx.on_action(|_: &CloseNote, cx| {
-        let shell = cx.try_global::<ShellHandle>().map(|handle| handle.0.clone());
+        let shell = cx
+            .try_global::<ShellHandle>()
+            .map(|handle| handle.0.clone());
         let closed = shell.and_then(|shell| shell.update(cx, Shell::escape_drm_note).ok());
         if !closed.unwrap_or(false) {
             cx.propagate();
@@ -136,8 +144,12 @@ impl Shell {
     pub fn set_media_unsupported(&mut self, tab: u64, key_system: &str, cx: &mut Context<Self>) {
         let changed = match key_system.is_empty() {
             true => self.drm_notes.remove(&tab).is_some(),
-            false => self.drm_notes.insert(tab, key_system.to_owned().into()).as_deref()
-                != Some(key_system),
+            false => {
+                self.drm_notes
+                    .insert(tab, key_system.to_owned().into())
+                    .as_deref()
+                    != Some(key_system)
+            }
         };
         if changed {
             cx.notify();
@@ -151,14 +163,15 @@ impl Shell {
     pub(super) fn drm_note(&self) -> Option<&SharedString> {
         let playing = self.page(self.selected).system_engine;
         let asked = self.question().is_some() || self.agent_question.is_some();
-        self.drm_notes.get(&self.selected).filter(|key_system| {
-            (key_system.as_ref() == OUTPUT_RESTRICTED) == playing && !asked
-        })
+        self.drm_notes
+            .get(&self.selected)
+            .filter(|key_system| (key_system.as_ref() == OUTPUT_RESTRICTED) == playing && !asked)
     }
 
     /// Whether the note of the tab shown is the output's, which offers nothing.
     fn output_note(&self) -> bool {
-        self.drm_note().is_some_and(|key_system| key_system.as_ref() == OUTPUT_RESTRICTED)
+        self.drm_note()
+            .is_some_and(|key_system| key_system.as_ref() == OUTPUT_RESTRICTED)
     }
 
     /// Closes the note of the tab shown for its site, which the core keeps from asking again. It
@@ -183,7 +196,11 @@ impl Shell {
     fn hover_drm_close(&mut self, hovered: bool, cx: &mut Context<Self>) {
         let busy = self.dragging().is_some() || self.menu_row.is_some();
         let frame = self.button_frames.borrow().get(CLOSE_KEY).copied();
-        let name = if self.output_note() { OUTPUT_CLOSE_TIP } else { CLOSE_TIP };
+        let name = if self.output_note() {
+            OUTPUT_CLOSE_TIP
+        } else {
+            CLOSE_TIP
+        };
         let tip = frame
             .filter(|_| hovered && !busy)
             .map(|frame| (Tip::named(name.into()), Anchor::under(frame, self.viewport)));
@@ -291,10 +308,7 @@ impl Shell {
     }
 
     /// The note of the tab shown, as a card under the URL field.
-    pub(super) fn drm_note_card(
-        &self,
-        cx: &mut Context<Self>,
-    ) -> Option<impl IntoElement + use<>> {
+    pub(super) fn drm_note_card(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         if self.drm_note().is_none() {
             // Drawn again, it's logged again.
             if self.drm_drawn.take().is_some() {
@@ -330,7 +344,9 @@ impl Shell {
         // pointer. It takes clicks either way, as the pointer is over the card to click it.
         let close = card_close(&self.palette, CLOSE_KEY)
             .when(!self.a11y, |close| {
-                close.opacity(0.).group_hover("drm-note", |style| style.opacity(1.))
+                close
+                    .opacity(0.)
+                    .group_hover("drm-note", |style| style.opacity(1.))
             })
             .child(self.button_frame(CLOSE_KEY))
             .on_hover(
@@ -376,11 +392,29 @@ mod tests {
         let host = Rc::new(Recorder::default());
         let shell = cx.new(|cx| Shell::new(host.clone(), cx));
         shell.update(cx, |shell, cx| {
-            let space = (1, "Space 1".into(), None, 0, "".into(), "".into(), "".into());
+            let space = (
+                1,
+                "Space 1".into(),
+                None,
+                0,
+                "".into(),
+                "".into(),
+                "".into(),
+            );
             shell.set_spaces(vec![space], cx);
-            shell.set_tabs(1, Vec::new(), vec![10, 11], Vec::new(), Folders::default(), cx);
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![10, 11],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
             shell.set_space(1, cx);
-            let page = |url: &str| Page { url: url.to_owned().into(), ..Page::default() };
+            let page = |url: &str| Page {
+                url: url.to_owned().into(),
+                ..Page::default()
+            };
             shell.set_page(10, page("https://www.netflix.com/browse"), cx);
             shell.set_page(11, page("https://example.com/"), cx);
             shell.set_selected(10, cx);
@@ -422,7 +456,10 @@ mod tests {
         let (shell, _) = window_with_tabs(cx);
         shell.update(cx, |shell, cx| {
             shell.set_media_unsupported(10, "com.widevine.alpha", cx);
-            let question = Question { site: "netflix.com".into(), permissions: Vec::new() };
+            let question = Question {
+                site: "netflix.com".into(),
+                permissions: Vec::new(),
+            };
             shell.set_question(10, Some(question), cx);
             assert!(shell.drm_note().is_none());
             shell.set_question(10, None, cx);
@@ -452,7 +489,10 @@ mod tests {
         host.system_engine.set(true);
         shell.update(cx, |shell, cx| {
             shell.set_media_unsupported(10, "com.widevine.alpha", cx);
-            let page = Page { system_engine: true, ..shell.page(10) };
+            let page = Page {
+                system_engine: true,
+                ..shell.page(10)
+            };
             shell.set_page(10, page, cx);
             assert!(shell.drm_note().is_none());
         });
@@ -479,7 +519,10 @@ mod tests {
             host.take();
             shell.open_in_safari(cx);
         });
-        assert_eq!(host.take(), ["open in safari https://www.netflix.com/browse"]);
+        assert_eq!(
+            host.take(),
+            ["open in safari https://www.netflix.com/browse"]
+        );
         // The tab keeps its page and its note.
         shell.update(cx, |shell, _| assert!(shell.drm_note().is_some()));
     }
@@ -508,7 +551,10 @@ mod tests {
             shell.set_media_unsupported(11, "com.widevine.alpha", cx);
             shell.close_drm_note(cx);
             shell.set_selected(11, cx);
-            assert!(shell.drm_note().is_some(), "closing one site's note closed another's");
+            assert!(
+                shell.drm_note().is_some(),
+                "closing one site's note closed another's"
+            );
         });
     }
 
@@ -520,11 +566,22 @@ mod tests {
         let browser = host.clone();
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
         shell.update(cx, |shell, cx| {
-            let space = (1, "Space 1".into(), None, 0, "".into(), "".into(), "".into());
+            let space = (
+                1,
+                "Space 1".into(),
+                None,
+                0,
+                "".into(),
+                "".into(),
+                "".into(),
+            );
             shell.set_spaces(vec![space], cx);
             shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
             shell.set_space(1, cx);
-            let page = Page { url: "https://www.netflix.com/browse".into(), ..Page::default() };
+            let page = Page {
+                url: "https://www.netflix.com/browse".into(),
+                ..Page::default()
+            };
             shell.set_page(10, page, cx);
             shell.set_selected(10, cx);
             shell.set_media_unsupported(10, "com.widevine.alpha", cx);
@@ -535,7 +592,10 @@ mod tests {
         host.take();
         cx.simulate_mouse_move(close, None, Modifiers::none());
         cx.run_until_parked();
-        assert!(host.take().contains(&"tooltip Don't Show for This Site ".to_string()));
+        assert!(
+            host.take()
+                .contains(&"tooltip Don't Show for This Site ".to_string())
+        );
         cx.simulate_click(close, Modifiers::none());
         cx.run_until_parked();
         assert!(host.take().contains(&"close media note 10".to_string()));
@@ -552,7 +612,10 @@ mod tests {
             shell.set_media_unsupported(10, OUTPUT_RESTRICTED, cx);
             // Not while the tab is Chromium's, as the note is Safari's engine's.
             assert!(shell.drm_note().is_none());
-            let page = Page { system_engine: true, ..shell.page(10) };
+            let page = Page {
+                system_engine: true,
+                ..shell.page(10)
+            };
             shell.set_page(10, page, cx);
             assert!(shell.output_note());
             host.take();
@@ -570,12 +633,28 @@ mod tests {
         let browser = host.clone();
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
         shell.update(cx, |shell, cx| {
-            let space = (1, "Space 1".into(), None, 0, "".into(), "".into(), "".into());
+            let space = (
+                1,
+                "Space 1".into(),
+                None,
+                0,
+                "".into(),
+                "".into(),
+                "".into(),
+            );
             shell.set_spaces(vec![space], cx);
             shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
             shell.set_space(1, cx);
             let url = "https://www.disneyplus.com/play/1".into();
-            shell.set_page(10, Page { url, system_engine: true, ..Page::default() }, cx);
+            shell.set_page(
+                10,
+                Page {
+                    url,
+                    system_engine: true,
+                    ..Page::default()
+                },
+                cx,
+            );
             shell.set_selected(10, cx);
             shell.set_media_unsupported(10, OUTPUT_RESTRICTED, cx);
         });
@@ -588,7 +667,12 @@ mod tests {
         assert!(host.take().contains(&"tooltip Close ".to_string()));
         cx.simulate_click(close, Modifiers::none());
         cx.run_until_parked();
-        assert!(!host.take().iter().any(|asked| asked.starts_with("close media note")));
+        assert!(
+            !host
+                .take()
+                .iter()
+                .any(|asked| asked.starts_with("close media note"))
+        );
         shell.read_with(cx, |shell, _| assert!(shell.drm_note().is_none()));
     }
 
@@ -664,7 +748,15 @@ mod tests {
         let (shell, host) = window_with_tabs(cx);
         host.widevine.set(Widevine::Absent);
         shell.update(cx, |shell, cx| {
-            let agent = (1, "Agent".into(), None, 0, "".into(), "claude-code".into(), "".into());
+            let agent = (
+                1,
+                "Agent".into(),
+                None,
+                0,
+                "".into(),
+                "claude-code".into(),
+                "".into(),
+            );
             shell.set_spaces(vec![agent], cx);
             shell.set_media_unsupported(10, "com.widevine.alpha", cx);
             assert!(shell.drm_note().is_some());
@@ -695,7 +787,11 @@ mod tests {
         let (shell, host) = window_with_tabs(cx);
         shell.update(cx, |shell, cx| {
             shell.set_media_unsupported(10, "com.microsoft.playready", cx);
-            assert_eq!(shell.unplayable_words(), WORDS, "a Mac or Linux note named Windows");
+            assert_eq!(
+                shell.unplayable_words(),
+                WORDS,
+                "a Mac or Linux note named Windows"
+            );
             let said = |needs| {
                 host.playready.set(needs);
                 shell.unplayable_words()
@@ -730,11 +826,22 @@ mod tests {
         cx.update(bind_keys);
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
         shell.update(cx, |shell, cx| {
-            let space = (1, "Space 1".into(), None, 0, "".into(), "".into(), "".into());
+            let space = (
+                1,
+                "Space 1".into(),
+                None,
+                0,
+                "".into(),
+                "".into(),
+                "".into(),
+            );
             shell.set_spaces(vec![space], cx);
             shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
             shell.set_space(1, cx);
-            let page = Page { url: "https://www.netflix.com/browse".into(), ..Page::default() };
+            let page = Page {
+                url: "https://www.netflix.com/browse".into(),
+                ..Page::default()
+            };
             shell.set_page(10, page, cx);
             shell.set_selected(10, cx);
             shell.set_full_screen(true, cx);
@@ -746,7 +853,10 @@ mod tests {
         shell.read_with(cx, |shell, _| assert!(shell.drm_note().is_none()));
         let asked = host.take();
         assert!(asked.contains(&"close media note 10".to_string()));
-        assert!(!asked.contains(&"window button zoom".to_string()), "escape also stopped");
+        assert!(
+            !asked.contains(&"window button zoom".to_string()),
+            "escape also stopped"
+        );
         cx.simulate_keystrokes("escape");
         assert!(host.take().contains(&"window button zoom".to_string()));
     }

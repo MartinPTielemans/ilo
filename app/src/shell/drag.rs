@@ -59,7 +59,11 @@ impl Shell {
             if !whole {
                 self.scroll_to_row(tabs[0]);
             }
-            self.opened = Some(Opened { tabs, whole, start: now });
+            self.opened = Some(Opened {
+                tabs,
+                whole,
+                start: now,
+            });
         }
         for (&slot, &top) in &before {
             let Slot::Tab(tab) = slot else { continue };
@@ -89,7 +93,9 @@ impl Shell {
             return self.drag_at(drag) - drag.top;
         }
         self.slides.get(&slot).map_or(0., |&(from, start, curve)| {
-            curve.at(start.elapsed().as_secs_f32()).map_or(0., |done| from * (1. - done))
+            curve
+                .at(start.elapsed().as_secs_f32())
+                .map_or(0., |done| from * (1. - done))
         })
     }
 
@@ -105,7 +111,10 @@ impl Shell {
     /// point the pointer holds goes from where it held the row to where it holds the tile, so the
     /// plate grows and shrinks around the pointer.
     pub(super) fn turning_shape(&self) -> Option<(u64, [f32; 5], f32)> {
-        let drag = self.drag.as_ref().filter(|drag| drag.moving && drag.shape.start.is_some())?;
+        let drag = self
+            .drag
+            .as_ref()
+            .filter(|drag| drag.moving && drag.shape.start.is_some())?;
         if drag.incoming || drag.over_page.is_some() {
             return None;
         }
@@ -119,7 +128,11 @@ impl Shell {
             PLATE_HEIGHT,
             PLATE_RADIUS,
         ];
-        let others = self.favorites.iter().filter(|&&tab| tab != drag.tab).count();
+        let others = self
+            .favorites
+            .iter()
+            .filter(|&&tab| tab != drag.tab)
+            .count();
         let width = self.tile_places(others + 1)[0][2];
         let centre = drag.pointer - drag.grab.1;
         let tile = [
@@ -138,7 +151,17 @@ impl Shell {
             blend(pointer.y - row[1], pointer.y - tile[1]),
         );
         let radius = blend(row[4], tile[4]);
-        Some((drag.tab, [pointer.x - held.x, pointer.y - held.y, width, height, radius], turned))
+        Some((
+            drag.tab,
+            [
+                pointer.x - held.x,
+                pointer.y - held.y,
+                width,
+                height,
+                radius,
+            ],
+            turned,
+        ))
     }
 
     /// Scrolls the list the least that shows `tab`'s row whole, if it has one: for a new tab's row,
@@ -173,7 +196,10 @@ impl Shell {
 
     /// The row the pointer drags, once it has come away.
     pub(super) fn dragging(&self) -> Option<Slot> {
-        self.drag.as_ref().filter(|drag| drag.moving).map(|drag| Slot::Tab(drag.tab))
+        self.drag
+            .as_ref()
+            .filter(|drag| drag.moving)
+            .map(|drag| Slot::Tab(drag.tab))
     }
 
     /// The pointer pressed `tab`'s row at `position`, which may start a drag.
@@ -188,7 +214,11 @@ impl Shell {
         let pointer = in_sidebar(position, self.sidebar_origin.get());
         let grab = (self.list_y(pointer.y) - top, point(0., 0.));
         self.press(tab, position, Place::List(pinned, index), top, grab);
-        self.held_row = Some(HeldRow { tab, pressed: Instant::now(), let_go: None });
+        self.held_row = Some(HeldRow {
+            tab,
+            pressed: Instant::now(),
+            let_go: None,
+        });
     }
 
     /// How small `tab`'s row's plate is drawn: smaller while it's held, growing back from where it
@@ -242,7 +272,11 @@ impl Shell {
         top: f32,
         grab: (f32, Point<f32>),
     ) {
-        if self.drag.as_ref().is_some_and(|drag| drag.dropped || drag.held) {
+        if self
+            .drag
+            .as_ref()
+            .is_some_and(|drag| drag.dropped || drag.held)
+        {
             return;
         }
         let origin = self.sidebar_origin.get();
@@ -280,7 +314,11 @@ impl Shell {
     /// at the end of folders or after one, the pointer moved right takes it into them, a row in for
     /// each FOLDER_INDENT. A split view's row stays in the list, and a folder's in the pinned tabs.
     pub(super) fn drag_to(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let Some(drag) = self.drag.as_ref().filter(|drag| !drag.dropped && !drag.held) else {
+        let Some(drag) = self
+            .drag
+            .as_ref()
+            .filter(|drag| !drag.dropped && !drag.held)
+        else {
             return;
         };
         let (moved, incoming) = (position - drag.press, drag.incoming);
@@ -362,8 +400,9 @@ impl Shell {
                 false => grab.0,
             };
             let at = (self.list_y(pointer.y) - held).clamp(span.0, span.1);
-            let Some(((in_pinned, index), _, _)) =
-                layouts.into_iter().min_by(|a, b| (a.1 - at).abs().total_cmp(&(b.1 - at).abs()))
+            let Some(((in_pinned, index), _, _)) = layouts
+                .into_iter()
+                .min_by(|a, b| (a.1 - at).abs().total_cmp(&(b.1 - at).abs()))
             else {
                 return;
             };
@@ -377,13 +416,20 @@ impl Shell {
         };
         // Rested on another tab's row, it would join it, so the gap it would go to stays where it
         // was. Off the row's middle, it no longer would, and reordering carries on.
-        let middle = (!incoming && !over_favorites).then(|| self.split_onto(tab, pointer.y)).flatten();
-        let resting = self.drag.as_ref().and_then(|drag| drag.resting.as_ref().map(|rest| rest.0));
+        let middle = (!incoming && !over_favorites)
+            .then(|| self.split_onto(tab, pointer.y))
+            .flatten();
+        let resting = self
+            .drag
+            .as_ref()
+            .and_then(|drag| drag.resting.as_ref().map(|rest| rest.0));
         if middle != resting {
             let rest = middle.map(|row| {
                 let wait = cx.spawn(async move |shell, cx| {
                     cx.background_executor().timer(SPLIT_REST).await;
-                    shell.update(cx, |shell, cx| shell.rested_onto(row, cx)).ok();
+                    shell
+                        .update(cx, |shell, cx| shell.rested_onto(row, cx))
+                        .ok();
                 });
                 (row, wait)
             });
@@ -393,7 +439,11 @@ impl Shell {
         }
         let was_onto = self.drag.as_ref().and_then(|drag| drag.onto);
         let onto = was_onto.filter(|&row| middle == Some(row));
-        let (place, line) = if onto.is_some() { (to, None) } else { (place, line) };
+        let (place, line) = if onto.is_some() {
+            (to, None)
+        } else {
+            (place, line)
+        };
         if let Some(drag) = &mut self.drag {
             drag.moving = true;
             drag.pointer = pointer;
@@ -439,7 +489,9 @@ impl Shell {
     /// Move to takes: not a favorite, a folder, a split view or links dragged in.
     fn watch_edge(&mut self, x: f32, cx: &mut Context<Self>) {
         let width = self.width();
-        let side = (x < EDGE).then_some(false).or((x > width - EDGE).then_some(true));
+        let side = (x < EDGE)
+            .then_some(false)
+            .or((x > width - EDGE).then_some(true));
         let Some(drag) = &self.drag else {
             return;
         };
@@ -464,9 +516,19 @@ impl Shell {
 
     /// The user's Space beside the one shown, right or left.
     fn edge_space(&self, right: bool) -> Option<u64> {
-        let index = self.spaces.iter().position(|space| space.id == self.space)?;
-        let index = if right { index + 1 } else { index.checked_sub(1)? };
-        self.spaces.get(index).filter(|space| space.agent.is_empty()).map(|space| space.id)
+        let index = self
+            .spaces
+            .iter()
+            .position(|space| space.id == self.space)?;
+        let index = if right {
+            index + 1
+        } else {
+            index.checked_sub(1)?
+        };
+        self.spaces
+            .get(index)
+            .filter(|space| space.agent.is_empty())
+            .map(|space| space.id)
     }
 
     /// Pages to the Space on the edge's side once the tab has been held there since `since`, and
@@ -503,7 +565,12 @@ impl Shell {
     /// joins it in a split view.
     fn rested_onto(&mut self, row: u64, cx: &mut Context<Self>) {
         let resting = |drag: &&mut Drag| drag.resting.as_ref().is_some_and(|rest| rest.0 == row);
-        let Some(drag) = self.drag.as_mut().filter(|drag| !drag.dropped).filter(resting) else {
+        let Some(drag) = self
+            .drag
+            .as_mut()
+            .filter(|drag| !drag.dropped)
+            .filter(resting)
+        else {
             return;
         };
         drag.onto = Some(row);
@@ -544,7 +611,9 @@ impl Shell {
             (false, at) => Some(at.map_or(Slot::NewTab, |at| Slot::Tab(today[at]))),
         };
         let layout = self.layout();
-        let below = above.map_or(Some(NAME_HEIGHT), |slot| Some(layout.get(&slot)? + ROW_PITCH))?;
+        let below = above.map_or(Some(NAME_HEIGHT), |slot| {
+            Some(layout.get(&slot)? + ROW_PITCH)
+        })?;
         Some(below - (ROW_PITCH - ROW_HEIGHT) / 2.)
     }
 
@@ -644,7 +713,10 @@ impl Shell {
     /// row's drag has the sidebar.
     pub fn drag_in(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) -> bool {
         let busy = self.sidebar_hidden || self.library_open || self.swipe.is_some();
-        let other = self.drag.as_ref().is_some_and(|drag| !drag.incoming || drag.dropped);
+        let other = self
+            .drag
+            .as_ref()
+            .is_some_and(|drag| !drag.incoming || drag.dropped);
         if busy || other || !self.list_scroll.bounds().contains(&position) {
             self.drag_away(cx);
             return false;
@@ -667,7 +739,11 @@ impl Shell {
     /// The drag from the page or another app left the list, or ended without a drop there: the
     /// rows settle back.
     pub fn drag_away(&mut self, cx: &mut Context<Self>) {
-        if self.drag.as_ref().is_some_and(|drag| drag.incoming && !drag.dropped) {
+        if self
+            .drag
+            .as_ref()
+            .is_some_and(|drag| drag.incoming && !drag.dropped)
+        {
             self.settle_drag();
             cx.notify();
         }
@@ -694,9 +770,15 @@ impl Shell {
                 (true, folder, index)
             }
             // The browser counts tabs, and the rows above may be split views.
-            Place::List(false, index) => {
-                (false, 0, today.iter().take(index).map(|&row| self.panes(row).len()).sum())
-            }
+            Place::List(false, index) => (
+                false,
+                0,
+                today
+                    .iter()
+                    .take(index)
+                    .map(|&row| self.panes(row).len())
+                    .sum(),
+            ),
             Place::Favorite(_) => return false,
         };
         // check.sh waits for these lines.
@@ -753,10 +835,16 @@ impl Shell {
             _ if depth == 0 => 0,
             Some(row) if space.is_folder(row) && depth == space.depth(row) + 1 => row,
             // The folder holding the row above at that depth.
-            Some(row) => space.holders(row).nth(space.depth(row) - depth).unwrap_or(0),
+            Some(row) => space
+                .holders(row)
+                .nth(space.depth(row) - depth)
+                .unwrap_or(0),
             None => 0,
         };
-        let before = rows.get(gap).copied().filter(|&row| space.folder_of(row) == folder);
+        let before = rows
+            .get(gap)
+            .copied()
+            .filter(|&row| space.folder_of(row) == folder);
         let panes = space.panes(dragged);
         let index = space
             .pinned
@@ -769,7 +857,11 @@ impl Shell {
 
     /// Puts the tab the pointer drags back where it was, and returns whether there was one.
     pub(super) fn cancel_drag(&mut self, cx: &mut Context<Self>) -> bool {
-        if !self.drag.as_ref().is_some_and(|drag| drag.moving && !drag.dropped && !drag.held) {
+        if !self
+            .drag
+            .as_ref()
+            .is_some_and(|drag| drag.moving && !drag.dropped && !drag.held)
+        {
             return false;
         }
         // The release that ends the drag isn't a click.
@@ -849,7 +941,9 @@ impl Shell {
                 let moved = shell.clone();
                 window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
                     if phase == DispatchPhase::Capture {
-                        moved.update(cx, |shell, cx| shell.drag_to(event.position, cx)).ok();
+                        moved
+                            .update(cx, |shell, cx| shell.drag_to(event.position, cx))
+                            .ok();
                     }
                 });
                 window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
@@ -883,17 +977,19 @@ pub fn dropped_urls<'a>(
     }
     let is = |scheme: &str, names: &[&str]| names.iter().any(|n| scheme.eq_ignore_ascii_case(n));
     let spaced = |url: &str| url.contains(char::is_whitespace);
-    let items = items.into_iter().filter_map(|(url, file)| match scheme(url) {
-        _ if file => Some(url.to_owned()),
-        Some(s) if is(s, &["http", "https"]) && !spaced(url) && url.len() > s.len() + 3 => {
-            Some(url.to_owned())
-        }
-        Some(s) if is(s, &["javascript", "data", "file"]) || !spaced(url) => None,
-        _ => {
-            let words = url.split_whitespace().collect::<Vec<_>>().join(" ");
-            (!words.is_empty()).then(|| search(&words)).flatten()
-        }
-    });
+    let items = items
+        .into_iter()
+        .filter_map(|(url, file)| match scheme(url) {
+            _ if file => Some(url.to_owned()),
+            Some(s) if is(s, &["http", "https"]) && !spaced(url) && url.len() > s.len() + 3 => {
+                Some(url.to_owned())
+            }
+            Some(s) if is(s, &["javascript", "data", "file"]) || !spaced(url) => None,
+            _ => {
+                let words = url.split_whitespace().collect::<Vec<_>>().join(" ");
+                (!words.is_empty()).then(|| search(&words)).flatten()
+            }
+        });
     items.collect()
 }
 

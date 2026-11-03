@@ -219,7 +219,15 @@ pub fn list() -> Value {
 }
 
 /// The actions run_steps takes: those of the tools that act in a tab, not a screenshot, and wait.
-pub const STEPS: [&str; 7] = ["navigate", "snapshot", "click", "type", "press_key", "scroll", "wait"];
+pub const STEPS: [&str; 7] = [
+    "navigate",
+    "snapshot",
+    "click",
+    "type",
+    "press_key",
+    "scroll",
+    "wait",
+];
 /// The steps one run_steps takes at most.
 pub const MAX_STEPS: usize = 20;
 /// How long a wait step waits for its text, in seconds, unless it says, and at most.

@@ -12,7 +12,9 @@ struct Recorder(RefCell<Vec<String>>);
 
 impl Host for Recorder {
     fn show(&self, left: f32, top: f32, height: f32) {
-        self.0.borrow_mut().push(format!("show {left} {top} {height}"));
+        self.0
+            .borrow_mut()
+            .push(format!("show {left} {top} {height}"));
     }
 
     fn hide(&self) {
@@ -27,11 +29,19 @@ fn window() -> Size<Pixels> {
 /// The row of folder `folder`, the sidebar's rows being 36 apart from 100 down.
 fn row(folder: u64) -> Anchor {
     let top = 100. + 36. * folder as f32;
-    Anchor { row: Bounds::new(point(px(8.), px(top)), size(px(224.), px(34.))), window: window() }
+    Anchor {
+        row: Bounds::new(point(px(8.), px(top)), size(px(224.), px(34.))),
+        window: window(),
+    }
 }
 
 fn item(tab: u64, title: &str, url: &str) -> Item {
-    Item { tab, title: title.to_string().into(), url: url.into(), icon: Icon::Favicon(None) }
+    Item {
+        tab,
+        title: title.to_string().into(),
+        url: url.into(),
+        icon: Icon::Favicon(None),
+    }
 }
 
 /// Folder 1, Reading, with three tabs, and folder 2, Work, with one.
@@ -63,8 +73,14 @@ struct Preview {
 fn open_preview(cx: &mut TestAppContext) -> Preview {
     let host = Rc::new(Recorder::default());
     cx.update(crate::text_input::bind_keys);
-    let window = cx.update(|cx| open(host.clone(), cx)).expect("no preview window");
-    let preview = Preview { host, chose: Rc::default(), window };
+    let window = cx
+        .update(|cx| open(host.clone(), cx))
+        .expect("no preview window");
+    let preview = Preview {
+        host,
+        chose: Rc::default(),
+        window,
+    };
     // The pointer is on the folder's row in the sidebar, not on the preview beside it.
     preview.pointer_at(OFF, cx);
     preview
@@ -97,7 +113,9 @@ impl Preview {
     }
 
     fn showing(&self, cx: &mut TestAppContext) -> Option<(u64, Vec<u64>, Option<u64>)> {
-        self.window.read_with(cx, |preview, _| preview.showing()).unwrap()
+        self.window
+            .read_with(cx, |preview, _| preview.showing())
+            .unwrap()
     }
 
     fn keys(&self, keys: &str, cx: &mut TestAppContext) {
@@ -127,13 +145,18 @@ fn shown_at(folder: u64, count: usize) -> String {
 }
 
 #[gpui::test]
-fn a_closed_folder_s_preview_shows_once_the_pointer_has_rested_on_its_row(
-    cx: &mut TestAppContext,
-) {
+fn a_closed_folder_s_preview_shows_once_the_pointer_has_rested_on_its_row(cx: &mut TestAppContext) {
     let preview = open_preview(cx);
     preview.rest_on(1, cx);
-    assert!(preview.after(DWELL - Duration::from_millis(10), cx).is_empty());
-    assert_eq!(preview.after(Duration::from_millis(10), cx), [shown_at(1, 3)]);
+    assert!(
+        preview
+            .after(DWELL - Duration::from_millis(10), cx)
+            .is_empty()
+    );
+    assert_eq!(
+        preview.after(Duration::from_millis(10), cx),
+        [shown_at(1, 3)]
+    );
     assert_eq!(preview.showing(cx), Some((1, vec![11, 12, 13], None)));
 }
 
@@ -151,7 +174,10 @@ fn the_preview_goes_once_the_pointer_has_left_its_row_and_it(cx: &mut TestAppCon
     let preview = open_preview(cx);
     preview.shown(1, cx);
     preview.ask(Ask::Left(1), cx);
-    assert!(preview.after(LEAVE / 2, cx).is_empty(), "the pointer may be crossing onto it");
+    assert!(
+        preview.after(LEAVE / 2, cx).is_empty(),
+        "the pointer may be crossing onto it"
+    );
     assert_eq!(preview.after(LEAVE, cx), ["hide"]);
 }
 
@@ -161,7 +187,10 @@ fn the_pointer_on_the_preview_keeps_it(cx: &mut TestAppContext) {
     preview.shown(1, cx);
     preview.ask(Ask::Left(1), cx);
     preview.pointer_at(point(px(20.), px(20.)), cx);
-    assert!(preview.after(LEAVE * 4, cx).is_empty(), "it stays while the pointer is on it");
+    assert!(
+        preview.after(LEAVE * 4, cx).is_empty(),
+        "it stays while the pointer is on it"
+    );
     preview.pointer_at(OFF, cx);
     assert_eq!(preview.after(LEAVE, cx), ["hide"]);
 }
@@ -173,7 +202,10 @@ fn the_next_folder_s_preview_takes_its_place_at_once(cx: &mut TestAppContext) {
     preview.ask(Ask::Left(1), cx);
     preview.rest_on(2, cx);
     assert_eq!(preview.after(Duration::ZERO, cx), [shown_at(2, 1)]);
-    assert!(preview.after(LEAVE * 2, cx).is_empty(), "leaving the first doesn't end the second");
+    assert!(
+        preview.after(LEAVE * 2, cx).is_empty(),
+        "leaving the first doesn't end the second"
+    );
 }
 
 #[gpui::test]
@@ -206,7 +238,11 @@ fn the_arrows_select_without_typing_and_stop_at_the_ends(cx: &mut TestAppContext
     let preview = open_preview(cx);
     preview.shown(1, cx);
     preview.keys("up", cx);
-    assert_eq!(preview.showing(cx).unwrap().2, Some(13), "↑ from none starts at the end");
+    assert_eq!(
+        preview.showing(cx).unwrap().2,
+        Some(13),
+        "↑ from none starts at the end"
+    );
     preview.keys("down down", cx);
     assert_eq!(preview.showing(cx).unwrap().2, Some(13));
     preview.keys("up up up", cx);
@@ -238,7 +274,10 @@ fn a_click_outside_leaves_it_without_showing_a_tab(cx: &mut TestAppContext) {
 #[gpui::test]
 fn an_empty_folder_has_no_preview(cx: &mut TestAppContext) {
     let preview = open_preview(cx);
-    let empty = Rest { items: Vec::new(), ..rest(1, &preview.chose) };
+    let empty = Rest {
+        items: Vec::new(),
+        ..rest(1, &preview.chose)
+    };
     preview.ask(Ask::Rest(empty), cx);
     assert!(preview.after(DWELL * 2, cx).is_empty());
 }
@@ -247,7 +286,11 @@ fn an_empty_folder_has_no_preview(cx: &mut TestAppContext) {
 fn a_long_folder_s_preview_scrolls_past_its_most_rows() {
     assert_eq!(height(MOST_ROWS + 20), height(MOST_ROWS));
     assert!(height(1) < height(2));
-    assert_eq!(height(0), height(1), "an empty search keeps a row for No Matches");
+    assert_eq!(
+        height(0),
+        height(1),
+        "an empty search keeps a row for No Matches"
+    );
 }
 
 #[test]

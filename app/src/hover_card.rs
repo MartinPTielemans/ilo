@@ -24,14 +24,16 @@ use gpui::{
 };
 
 use crate::elevation::{Level, WINDOW_MARGIN};
-use crate::palette::{Palette, STATE_HOVERED, STATE_PRESSED, STATE_SELECTED, STATE_SELECTED_HOVERED};
+use crate::palette::{
+    Palette, STATE_HOVERED, STATE_PRESSED, STATE_SELECTED, STATE_SELECTED_HOVERED,
+};
 use crate::shell::{PagePicture, cubic_bezier, scaled::scaled, spring};
-pub use crate::tokens::hover_card::{EDGE, GAP, WIDTH};
 use crate::tokens::hover_card::{
     BUTTON, BUTTON_GAP, BUTTON_INSET, BUTTON_RADIUS, FAVICON, GLYPH, GLYPH_ALPHA, GROUND, HOST,
     HOST_SIZE, PADDING, PICTURE_DEFAULT, PICTURE_LEAST, PICTURE_MOST, PICTURE_RADIUS, RADIUS, RIM,
     TEXT_TOP, TEXT_X, TITLE, TITLE_LINE, TITLE_SIZE,
 };
+pub use crate::tokens::hover_card::{EDGE, GAP, WIDTH};
 
 /// How long the pointer rests on a row before its card shows: Dia's, sooner than the tooltip's
 /// delay (docs/ux-spec.md › Tooltip).
@@ -90,7 +92,13 @@ impl Pose {
 
 /// How far a fade is `seconds` in, from 0 to 1.
 fn fade(seconds: f32) -> f32 {
-    cubic_bezier(0.25, 0.46, 0.45, 0.94, (seconds / FADE.as_secs_f32()).min(1.))
+    cubic_bezier(
+        0.25,
+        0.46,
+        0.45,
+        0.94,
+        (seconds / FADE.as_secs_f32()).min(1.),
+    )
 }
 
 /// The card is going: when it started, where its motion was then, and the timer that hides its
@@ -238,7 +246,9 @@ pub fn picture_height(pictured: bool, size: Option<(f32, f32)>) -> f32 {
     if !pictured {
         return 0.;
     }
-    let share = size.filter(|&(width, _)| width > 0.).map_or(PICTURE_DEFAULT, |(w, h)| h / w);
+    let share = size
+        .filter(|&(width, _)| width > 0.)
+        .map_or(PICTURE_DEFAULT, |(w, h)| h / w);
     INNER * share.clamp(PICTURE_LEAST, PICTURE_MOST)
 }
 
@@ -253,10 +263,16 @@ pub fn height(picture: f32) -> f32 {
 /// Where a card `height` tall has its top left: GAP right of its row, its top at the row's, and
 /// EDGE inside the window, the top and left first if it can't be both.
 pub fn place(anchor: Anchor, height: f32) -> (f32, f32) {
-    let (width, tall) = (f32::from(anchor.window.width), f32::from(anchor.window.height));
+    let (width, tall) = (
+        f32::from(anchor.window.width),
+        f32::from(anchor.window.height),
+    );
     let left = f32::from(anchor.row.right()) + GAP;
     let top = f32::from(anchor.row.top());
-    (left.min(width - WIDTH - EDGE).max(EDGE), top.min(tall - height - EDGE).max(EDGE))
+    (
+        left.min(width - WIDTH - EDGE).max(EDGE),
+        top.min(tall - height - EDGE).max(EDGE),
+    )
 }
 
 /// What the window draws, which stays as it fades out after the card went.
@@ -444,7 +460,10 @@ impl HoverCard {
             return self.show(rest, cx);
         }
         let tab = rest.card.tab;
-        let waiting = self.resting.as_ref().is_some_and(|resting| resting.card.tab == tab);
+        let waiting = self
+            .resting
+            .as_ref()
+            .is_some_and(|resting| resting.card.tab == tab);
         self.resting = Some(rest);
         if waiting {
             return;
@@ -462,7 +481,11 @@ impl HoverCard {
     }
 
     fn left(&mut self, tab: u64, cx: &mut Context<Self>) {
-        if self.resting.as_ref().is_some_and(|rest| rest.card.tab == tab) {
+        if self
+            .resting
+            .as_ref()
+            .is_some_and(|rest| rest.card.tab == tab)
+        {
             self.resting = None;
             self.wait = None;
         }
@@ -514,7 +537,10 @@ impl HoverCard {
             self.settled = false;
         }
         let (tab, events) = (rest.card.tab, rest.events.clone());
-        let new = self.shown.as_ref().is_none_or(|shown| shown.card.tab != tab);
+        let new = self
+            .shown
+            .as_ref()
+            .is_none_or(|shown| shown.card.tab != tab);
         self.shown = Some(rest);
         let picture = self.draw(cx);
         if new {
@@ -522,7 +548,10 @@ impl HoverCard {
                 .map(|action| action.label())
                 .collect();
             // check.sh reads this line.
-            log!("browser: hover card shown {tab} {} {picture}", actions.join(" "));
+            log!(
+                "browser: hover card shown {tab} {} {picture}",
+                actions.join(" ")
+            );
             events(tab, Event::Shown, cx);
         }
     }
@@ -534,8 +563,14 @@ impl HoverCard {
             return "none";
         };
         let card = rest.card.clone();
-        let picture = card.pictured.then(|| self.pictures.get(&card.tab).cloned()).flatten();
-        let height = height(picture_height(card.pictured, picture.as_ref().map(|p| p.size())));
+        let picture = card
+            .pictured
+            .then(|| self.pictures.get(&card.tab).cloned())
+            .flatten();
+        let height = height(picture_height(
+            card.pictured,
+            picture.as_ref().map(|p| p.size()),
+        ));
         let (left, top) = place(rest.anchor, height);
         // check.sh reads this line, to see the card is beside its row.
         log!("browser: hover card at {left} {top} {WIDTH} {height}");
@@ -544,7 +579,11 @@ impl HoverCard {
             (None, true) => "favicon",
             (None, false) => "none",
         };
-        self.drawn = Some(Drawn { card, picture, height });
+        self.drawn = Some(Drawn {
+            card,
+            picture,
+            height,
+        });
         self.host.show(left, top, WIDTH, height);
         cx.notify();
         holds
@@ -564,7 +603,11 @@ impl HoverCard {
             cx.background_executor().timer(FADE).await;
             card.update(cx, |card, cx| card.hide(cx)).ok();
         });
-        self.going = Some(Going { at: Instant::now(), from, _hide: hide });
+        self.going = Some(Going {
+            at: Instant::now(),
+            from,
+            _hide: hide,
+        });
         cx.notify();
     }
 
@@ -612,7 +655,9 @@ impl HoverCard {
     /// card again without it.
     fn let_go(&mut self, cx: &mut Context<Self>) {
         let held = |image: &Arc<RenderImage>| {
-            self.pictures.values().any(|picture| Arc::ptr_eq(&picture.image(), image))
+            self.pictures
+                .values()
+                .any(|picture| Arc::ptr_eq(&picture.image(), image))
         };
         if self.painted.as_ref().is_some_and(|image| !held(image)) {
             self.stale.extend(self.painted.take());
@@ -628,20 +673,28 @@ impl HoverCard {
 
 impl Render for HoverCard {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let picture = self.drawn.as_ref().and_then(|drawn| drawn.picture.as_ref()).map(|p| p.image());
+        let picture = self
+            .drawn
+            .as_ref()
+            .and_then(|drawn| drawn.picture.as_ref())
+            .map(|p| p.image());
         let same = |a: &Option<Arc<RenderImage>>, b: &Option<Arc<RenderImage>>| match (a, b) {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
             (a, b) => a.is_none() && b.is_none(),
         };
         // One picture at most is in the atlas at a time.
         if !same(&self.painted, &picture) {
-            self.stale.extend(std::mem::replace(&mut self.painted, picture));
+            self.stale
+                .extend(std::mem::replace(&mut self.painted, picture));
         }
         for image in self.stale.drain(..) {
             window.drop_image(image).ok();
         }
         // The plate is inset by the margin, which its shadow draws in.
-        let root = div().size_full().p(px(WINDOW_MARGIN)).font_family(crate::face::UI);
+        let root = div()
+            .size_full()
+            .p(px(WINDOW_MARGIN))
+            .font_family(crate::face::UI);
         let Some(drawn) = self.drawn.clone() else {
             return root;
         };
@@ -676,7 +729,11 @@ impl Render for HoverCard {
         let on_card = self.on_card;
         let card = &drawn.card;
         let picture_h = picture_height(card.pictured, drawn.picture.as_ref().map(|p| p.size()));
-        let text_top = if picture_h > 0. { PADDING + picture_h } else { 0. };
+        let text_top = if picture_h > 0. {
+            PADDING + picture_h
+        } else {
+            0.
+        };
         let picture = (picture_h > 0.).then(|| {
             let frame = div()
                 .absolute()
@@ -695,7 +752,11 @@ impl Render for HoverCard {
                         .object_fit(ObjectFit::Cover)
                         .rounded(px(PICTURE_RADIUS)),
                 ),
-                None => frame.flex().items_center().justify_center().child(icon(&palette, &card.icon)),
+                None => frame
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(icon(&palette, &card.icon)),
             }
         });
         let title = div()
@@ -717,7 +778,12 @@ impl Render for HoverCard {
             .absolute()
             .left(px(TEXT_X))
             .top(px(row_top))
-            .w(px((WIDTH - TEXT_X - BUTTON_INSET - buttons_width - BUTTON_GAP).max(0.)))
+            .w(px((WIDTH
+                - TEXT_X
+                - BUTTON_INSET
+                - buttons_width
+                - BUTTON_GAP)
+                .max(0.)))
             .h(px(BUTTON))
             .flex()
             .items_center()
@@ -770,7 +836,9 @@ impl Render for HoverCard {
         root.child(pointer).child(scaled(
             div()
                 .id("hover-card")
-                .when(a11y, |plate| plate.role(Role::Group).aria_label(card.title.clone()))
+                .when(a11y, |plate| {
+                    plate.role(Role::Group).aria_label(card.title.clone())
+                })
                 .relative()
                 .w(px(WIDTH))
                 .h(px(drawn.height))
@@ -826,7 +894,9 @@ fn button(
     let palette = *palette;
     div()
         .id(action.label())
-        .when(a11y, |button| button.role(Role::Button).aria_label(action.name()))
+        .when(a11y, |button| {
+            button.role(Role::Button).aria_label(action.name())
+        })
         .size(px(BUTTON))
         .flex()
         .items_center()
@@ -834,7 +904,9 @@ fn button(
         .rounded(px(BUTTON_RADIUS))
         .bg(palette.state(0., rest))
         // Only with the pointer on the card, as GPUI's hover is the last place the window saw it.
-        .when(on_card, |button| button.hover(move |style| style.bg(palette.state(0., hovered))))
+        .when(on_card, |button| {
+            button.hover(move |style| style.bg(palette.state(0., hovered)))
+        })
         .active(move |style| style.bg(palette.state(0., STATE_PRESSED)))
         .on_click(cx.listener(move |card, _, _, cx| card.press(action, cx)))
         .child(

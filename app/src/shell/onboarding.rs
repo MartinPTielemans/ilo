@@ -15,9 +15,9 @@ use gpui::{
 };
 
 use super::{
-    Command, Shell,
+    Command, Shell, cubic_bezier,
     display_face::{cap_top, display_text},
-    cubic_bezier, fade_at,
+    fade_at,
 };
 use crate::default_browser::{self, Os};
 use crate::import::{ImportEvent, ImportView, Look};
@@ -30,13 +30,13 @@ use crate::tokens::shell::onboarding::BUTTON_HEIGHT;
 use crate::tokens::shell::onboarding::BUTTON_INSET;
 use crate::tokens::shell::onboarding::BUTTON_RADIUS;
 use crate::tokens::shell::onboarding::BUTTON_SIZE;
-use crate::tokens::shell::onboarding::IMPORT_SURFACE;
-use crate::tokens::shell::onboarding::IMPORT_WIDTH;
 use crate::tokens::shell::onboarding::CHIP;
 use crate::tokens::shell::onboarding::CHIP_GAP;
 use crate::tokens::shell::onboarding::CHIP_HEIGHT;
 use crate::tokens::shell::onboarding::CHIP_INSET;
 use crate::tokens::shell::onboarding::CHIP_RADIUS;
+use crate::tokens::shell::onboarding::IMPORT_SURFACE;
+use crate::tokens::shell::onboarding::IMPORT_WIDTH;
 use crate::tokens::shell::onboarding::LINE_GAP;
 use crate::tokens::shell::onboarding::LINE_LINE;
 use crate::tokens::shell::onboarding::LINE_SIZE;
@@ -228,14 +228,22 @@ impl Drawn {
     /// The intro `t` seconds in, or `still`, under Reduce Motion, all of it fading in at once.
     pub(super) fn at(t: f32, still: bool) -> Drawn {
         // Each part's curve, exactly at its ends, so a part not yet started isn't drawn at all.
-        let along = |(start, length): (f32, f32), curve: fn(f32) -> f32| match (t - start) / length {
+        let along = |(start, length): (f32, f32), curve: fn(f32) -> f32| match (t - start) / length
+        {
             x if x <= 0. => 0.,
             x if x >= 1. => 1.,
             x => curve(x),
         };
         if still {
             let fade = along((0., STILL_FADE), fade);
-            return Drawn { stem_i: 1., stem_l: 1., ring: 1., dot: 1., signal: 1., tagline: fade };
+            return Drawn {
+                stem_i: 1.,
+                stem_l: 1.,
+                ring: 1.,
+                dot: 1.,
+                signal: 1.,
+                tagline: fade,
+            };
         }
         Drawn {
             stem_i: along(STEM_I, ease_in_out),
@@ -320,8 +328,13 @@ impl Shell {
             }
             None => {
                 let view = cx.new(|_| ImportView::new(self.browser.import_host(), false));
-                let events = cx.subscribe(&view, |shell, _, event, cx| shell.import_event(event, cx));
-                self.importing = Some(Importing { view, said: None, _events: events });
+                let events =
+                    cx.subscribe(&view, |shell, _, event, cx| shell.import_event(event, cx));
+                self.importing = Some(Importing {
+                    view,
+                    said: None,
+                    _events: events,
+                });
             }
         }
         let import = self.importing.as_ref().is_some_and(|importing| {
@@ -392,7 +405,9 @@ impl Shell {
         let step = onboarding.step;
         log!("browser: onboarding left {} via {how}", step.name());
         if !favorites {
-            onboarding.steps.retain(|&each| each != Step::Favorites || each == step);
+            onboarding
+                .steps
+                .retain(|&each| each != Step::Favorites || each == step);
         }
         let at = onboarding.steps.iter().position(|&each| each == step);
         match at.and_then(|at| onboarding.steps.get(at + 1)).copied() {
@@ -450,12 +465,21 @@ impl Shell {
             && *event == ImportEvent::Started
             && !onboarding.steps.contains(&Step::Favorites)
         {
-            let at = onboarding.steps.iter().position(|&each| each == Step::Import);
-            onboarding.steps.insert(at.map_or(0, |at| at + 1), Step::Favorites);
+            let at = onboarding
+                .steps
+                .iter()
+                .position(|&each| each == Step::Import);
+            onboarding
+                .steps
+                .insert(at.map_or(0, |at| at + 1), Step::Favorites);
         }
         // Waiting for what to offer, the step goes on by itself once it's none.
         let none = self.importing.as_ref().is_some_and(|importing| {
-            importing.view.read(cx).suggested().is_some_and(|tabs| tabs.is_empty())
+            importing
+                .view
+                .read(cx)
+                .suggested()
+                .is_some_and(|tabs| tabs.is_empty())
         });
         match event {
             ImportEvent::Started | ImportEvent::Done if on_it => self.onboarding_next("import", cx),
@@ -475,7 +499,9 @@ impl Shell {
             return Vec::new();
         };
         let offered = importing.view.read(cx).suggested().unwrap_or_default();
-        let ticked = offered.iter().filter(|tab| !onboarding.unticked.contains(&tab.url));
+        let ticked = offered
+            .iter()
+            .filter(|tab| !onboarding.unticked.contains(&tab.url));
         ticked.cloned().collect()
     }
 
@@ -491,14 +517,21 @@ impl Shell {
             None => onboarding.unticked.push(url.into()),
         }
         // check.sh reads this line.
-        log!("browser: onboarding unticked {}", onboarding.unticked.join(" "));
+        log!(
+            "browser: onboarding unticked {}",
+            onboarding.unticked.join(" ")
+        );
         cx.notify();
     }
 
     /// The flow's quiet line about the import: what it's doing, or what it brought in.
     pub(super) fn import_line(&self, cx: &gpui::App) -> Option<gpui::SharedString> {
         let importing = self.importing.as_ref()?;
-        importing.view.read(cx).running().or_else(|| importing.said.clone())
+        importing
+            .view
+            .read(cx)
+            .running()
+            .or_else(|| importing.said.clone())
     }
 
     /// The opt-ins offered, each with whether it's on.
@@ -507,7 +540,10 @@ impl Shell {
             OptIn::CrashReports => self.browser.crash_reports(cx),
             OptIn::Agents => self.browser.agents(cx),
         };
-        OptIn::ALL.into_iter().filter_map(|opt_in| Some((opt_in, on(opt_in)?))).collect()
+        OptIn::ALL
+            .into_iter()
+            .filter_map(|opt_in| Some((opt_in, on(opt_in)?)))
+            .collect()
     }
 
     /// Turns an opt-in's switch, which is Settings' own, so it's set at once.
@@ -516,7 +552,11 @@ impl Shell {
             return;
         };
         // check.sh reads this line.
-        log!("browser: onboarding {} {}", opt_in.name(), if on { "off" } else { "on" });
+        log!(
+            "browser: onboarding {} {}",
+            opt_in.name(),
+            if on { "off" } else { "on" }
+        );
         match opt_in {
             OptIn::CrashReports => self.browser.set_crash_reports(!on, cx),
             OptIn::Agents => self.browser.set_agents(!on, cx),
@@ -569,7 +609,9 @@ impl Shell {
     ) -> Option<AnyElement> {
         let onboarding = self.onboarding.as_mut()?;
         // A page shown covers it, so it has ended.
-        let ended = onboarding.ending.is_some_and(|at| at.elapsed().as_secs_f32() >= END_FADE);
+        let ended = onboarding
+            .ending
+            .is_some_and(|at| at.elapsed().as_secs_f32() >= END_FADE);
         if ended || self.selected != 0 {
             self.onboarding = None;
             // check.sh waits for this line.
@@ -577,7 +619,9 @@ impl Shell {
             // In: the first Space with the command bar up, as ⌘T has it, once this frame is drawn.
             if ended && self.selected == 0 {
                 self.in_hint = true;
-                cx.defer_in(window, |shell, _, cx| shell.run(Command::NewTab, "onboarding", cx));
+                cx.defer_in(window, |shell, _, cx| {
+                    shell.run(Command::NewTab, "onboarding", cx)
+                });
             }
             return None;
         }
@@ -618,7 +662,9 @@ impl Shell {
         }
         // Frames while something moves; the intro's hold waits on a timer instead.
         let ending = onboarding.ending.map(|at| at.elapsed().as_secs_f32());
-        let sliding = onboarding.switched.is_some_and(|(_, at)| at.elapsed().as_secs_f32() < SLIDE);
+        let sliding = onboarding
+            .switched
+            .is_some_and(|(_, at)| at.elapsed().as_secs_f32() < SLIDE);
         if !came || onboarding.leaving.is_some() || ending.is_some() || sliding {
             window.request_animation_frame();
         } else if step == Step::Intro && onboarding.hold.is_none() {
@@ -630,14 +676,21 @@ impl Shell {
             }));
         }
         let light = onboarding.light.unwrap_or_else(|| {
-            matches!(window.appearance(), gpui::WindowAppearance::Light | gpui::WindowAppearance::VibrantLight)
+            matches!(
+                window.appearance(),
+                gpui::WindowAppearance::Light | gpui::WindowAppearance::VibrantLight
+            )
         });
         let leaving = onboarding.leaving;
         let colors = Colors::of(light);
         // The step comes from the right as the one before leaves to the left, but for a fade with
         // Reduce Motion. The intro, first, is simply there.
         let eased = ease_out(motion);
-        let shift = if still || leaving.is_none() { 0. } else { SHIFT };
+        let shift = if still || leaving.is_none() {
+            0.
+        } else {
+            SHIFT
+        };
         let coming = self
             .step_content(step, elapsed, still, colors, cx)
             .left(px(shift * (1. - eased)))
@@ -678,7 +731,11 @@ impl Shell {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|shell, _, _, cx| {
-                        if shell.onboarding.as_ref().is_some_and(|o| o.step == Step::Intro) {
+                        if shell
+                            .onboarding
+                            .as_ref()
+                            .is_some_and(|o| o.step == Step::Intro)
+                        {
                             shell.onboarding_next("click", cx);
                         }
                     }),
@@ -700,7 +757,13 @@ impl Shell {
         colors: Colors,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let layer = div().absolute().top_0().size_full().flex().items_center().justify_center();
+        let layer = div()
+            .absolute()
+            .top_0()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center();
         if step == Step::Intro {
             let drawn = Drawn::at(t, still);
             return layer.child(
@@ -717,7 +780,10 @@ impl Shell {
                     ),
             );
         }
-        let os = self.onboarding.as_ref().map_or(Os::Mac, |onboarding| onboarding.os);
+        let os = self
+            .onboarding
+            .as_ref()
+            .map_or(Os::Mac, |onboarding| onboarding.os);
         let (title, line, button) = step.message(os);
         let switches = (step == Step::OptIns).then(|| self.opt_in_rows(colors, cx));
         let favorites = (step == Step::Favorites).then(|| self.favorite_rows(colors, cx));
@@ -727,7 +793,10 @@ impl Shell {
             _ => button,
         };
         let swatches = (step == Step::Color).then(|| {
-            let picked = self.onboarding.as_ref().and_then(|onboarding| onboarding.picked);
+            let picked = self
+                .onboarding
+                .as_ref()
+                .and_then(|onboarding| onboarding.picked);
             swatch_row(picked, colors, cx)
         });
         let chip = |keys: String, fill: Rgba| {
@@ -742,10 +811,15 @@ impl Shell {
         };
         let import = (step == Step::Import).then(|| {
             // Its boxes a little into the ink from the ground, in the ink, as Settings' are.
-            let view = self.importing.as_ref().map(|importing| importing.view.clone());
+            let view = self
+                .importing
+                .as_ref()
+                .map(|importing| importing.view.clone());
             let surface = colors.ground.blend(colors.ink(IMPORT_SURFACE));
             if let Some(view) = &view {
-                view.update(cx, |view, cx| view.set_look(Look::on(surface, colors.ink(1.)), cx));
+                view.update(cx, |view, cx| {
+                    view.set_look(Look::on(surface, colors.ink(1.)), cx)
+                });
             }
             div()
                 .mt(px(BUTTON_GAP))
@@ -756,27 +830,27 @@ impl Shell {
         });
         let button = (!button.is_empty()).then(|| {
             div()
-                    .id("onboarding-continue")
-                    .mt(px(BUTTON_GAP))
-                    .h(px(BUTTON_HEIGHT))
-                    .px(px(BUTTON_INSET))
-                    .flex()
-                    .items_center()
-                    .gap(px(CHIP_GAP))
-                    .rounded(px(BUTTON_RADIUS))
-                    .bg(rgb(SIGNAL))
-                    .text_color(rgb(PAPER))
-                    .text_size(px(BUTTON_SIZE))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    // The dialog's Delete darkens as much under the pointer.
-                    .hover(|style| style.opacity(0.9))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(|shell, _, _, cx| shell.onboarding_continue("button", cx)))
-                    .child(button)
-                    .child(chip(
-                        super::key_name("enter", super::OFF_THE_MAC),
-                        with_alpha(PAPER, CHIP),
-                    ))
+                .id("onboarding-continue")
+                .mt(px(BUTTON_GAP))
+                .h(px(BUTTON_HEIGHT))
+                .px(px(BUTTON_INSET))
+                .flex()
+                .items_center()
+                .gap(px(CHIP_GAP))
+                .rounded(px(BUTTON_RADIUS))
+                .bg(rgb(SIGNAL))
+                .text_color(rgb(PAPER))
+                .text_size(px(BUTTON_SIZE))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                // The dialog's Delete darkens as much under the pointer.
+                .hover(|style| style.opacity(0.9))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(|shell, _, _, cx| shell.onboarding_continue("button", cx)))
+                .child(button)
+                .child(chip(
+                    super::key_name("enter", super::OFF_THE_MAC),
+                    with_alpha(PAPER, CHIP),
+                ))
         });
         layer.child(
             div()
@@ -804,7 +878,10 @@ impl Shell {
 
     /// The opt-ins offered, a row each: its name and sentence, and Settings' switch, in the green.
     fn opt_in_rows(&self, colors: Colors, cx: &mut Context<Self>) -> gpui::Div {
-        let switched = self.onboarding.as_ref().and_then(|onboarding| onboarding.switched);
+        let switched = self
+            .onboarding
+            .as_ref()
+            .and_then(|onboarding| onboarding.switched);
         // Off, the ink over the ground, as Settings' is over its box.
         let look = Look::on(colors.ground, colors.ink(1.));
         let rows = self.opt_ins(cx).into_iter().map(|(opt_in, on)| {
@@ -835,7 +912,11 @@ impl Shell {
                         )
                         .child(div().text_color(colors.ink(QUIET)).child(sentence)),
                 )
-                .child(div().flex_none().child(switch(&look, on, slid, rgb(SIGNAL))))
+                .child(
+                    div()
+                        .flex_none()
+                        .child(switch(&look, on, slid, rgb(SIGNAL))),
+                )
         });
         div()
             .mt(px(BUTTON_GAP))
@@ -850,11 +931,23 @@ impl Shell {
     /// a quiet line while the import is still reading its history.
     fn favorite_rows(&self, colors: Colors, cx: &mut Context<Self>) -> gpui::Div {
         let look = Look::on(colors.ground, colors.ink(1.));
-        let unticked = self.onboarding.as_ref().map(|o| o.unticked.clone()).unwrap_or_default();
+        let unticked = self
+            .onboarding
+            .as_ref()
+            .map(|o| o.unticked.clone())
+            .unwrap_or_default();
         let offered = self.importing.as_ref().and_then(|importing| {
-            importing.view.read(cx).suggested().map(<[crate::import::found::Tab]>::to_vec)
+            importing
+                .view
+                .read(cx)
+                .suggested()
+                .map(<[crate::import::found::Tab]>::to_vec)
         });
-        let list = div().mt(px(BUTTON_GAP)).w(px(OPT_IN_WIDTH)).flex().flex_col();
+        let list = div()
+            .mt(px(BUTTON_GAP))
+            .w(px(OPT_IN_WIDTH))
+            .flex()
+            .flex_col();
         let Some(offered) = offered else {
             let reading = div().text_center().text_color(colors.ink(QUIET));
             return list.child(reading.child("Reading your history…"));
@@ -910,9 +1003,16 @@ fn swatch_row(
 ) -> impl IntoElement + use<> {
     // Each swatch's ring and the gap inside it, on both sides.
     let ringed = SWATCH + 4. * SWATCH_RING;
-    div().mt(px(SWATCH_GAP)).flex().gap(px(SWATCH_PITCH - ringed)).children(
-        SWATCHES.iter().enumerate().map(|(index, &color)| {
-            let ring = if picked == Some(index) { colors.ink(1.) } else { colors.ink(0.) };
+    div()
+        .mt(px(SWATCH_GAP))
+        .flex()
+        .gap(px(SWATCH_PITCH - ringed))
+        .children(SWATCHES.iter().enumerate().map(|(index, &color)| {
+            let ring = if picked == Some(index) {
+                colors.ink(1.)
+            } else {
+                colors.ink(0.)
+            };
             div()
                 .id(("onboarding-swatch", index))
                 .p(px(SWATCH_RING))
@@ -929,8 +1029,7 @@ fn swatch_row(
                         .border_1()
                         .border_color(colors.ink(SWATCH_EDGE)),
                 )
-        }),
-    )
+        }))
 }
 
 /// The flow's two colours: the ground, and the ink drawn on it.
@@ -945,8 +1044,14 @@ impl Colors {
     /// app icon's tile and stem.
     fn of(light: bool) -> Colors {
         match light {
-            true => Colors { ground: rgb(PAPER), ink: INK },
-            false => Colors { ground: rgb(INK), ink: PAPER },
+            true => Colors {
+                ground: rgb(PAPER),
+                ink: INK,
+            },
+            false => Colors {
+                ground: rgb(INK),
+                ink: PAPER,
+            },
         }
     }
 
@@ -956,7 +1061,10 @@ impl Colors {
 }
 
 fn with_alpha(color: u32, alpha: f32) -> Rgba {
-    Rgba { a: alpha, ..rgb(color) }
+    Rgba {
+        a: alpha,
+        ..rgb(color)
+    }
 }
 
 /// The brand's wordmark (ilo-studio's brand/logo/wordmark.svg), in its own units: a box from
@@ -988,7 +1096,10 @@ fn wordmark(drawn: Drawn, colors: Colors) -> impl IntoElement {
                 if height <= 0. {
                     continue;
                 }
-                let stem = Bounds::new(at(left, foot - height), size(px(STEM_WIDTH * scale), px(height * scale)));
+                let stem = Bounds::new(
+                    at(left, foot - height),
+                    size(px(STEM_WIDTH * scale), px(height * scale)),
+                );
                 let radius = px(STEM_WIDTH.min(height) / 2. * scale);
                 window.paint_quad(fill(stem, ink).corner_radii(radius));
             }
@@ -1032,7 +1143,12 @@ fn wordmark(drawn: Drawn, colors: Colors) -> impl IntoElement {
 /// `from` taking on `to`, `t` of the way.
 fn mix(from: Rgba, to: Rgba, t: f32) -> Rgba {
     let at = |a: f32, b: f32| a + (b - a) * t;
-    Rgba { r: at(from.r, to.r), g: at(from.g, to.g), b: at(from.b, to.b), a: at(from.a, to.a) }
+    Rgba {
+        r: at(from.r, to.r),
+        g: at(from.g, to.g),
+        b: at(from.b, to.b),
+        a: at(from.a, to.a),
+    }
 }
 
 #[cfg(test)]

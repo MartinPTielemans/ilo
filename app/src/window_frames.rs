@@ -60,13 +60,28 @@ mod tests {
     use super::*;
 
     fn frame(x: f64, y: f64, width: f64, height: f64) -> Frame {
-        Frame { x, y, width, height }
+        Frame {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     // A 1512 by 982 laptop screen under a 25-point menu bar, with a 2560 by 1440 display to its
     // right, its top level with the laptop's.
-    const LAPTOP: Frame = Frame { x: 0., y: 25., width: 1512., height: 957. };
-    const DISPLAY: Frame = Frame { x: 1512., y: 25., width: 2560., height: 1415. };
+    const LAPTOP: Frame = Frame {
+        x: 0.,
+        y: 25.,
+        width: 1512.,
+        height: 957.,
+    };
+    const DISPLAY: Frame = Frame {
+        x: 1512.,
+        y: 25.,
+        width: 2560.,
+        height: 1415.,
+    };
 
     #[test]
     fn a_frame_on_its_screen_stays_where_it_was() {
@@ -92,18 +107,30 @@ mod tests {
     fn a_frame_hanging_off_its_screen_comes_back_on_it() {
         // Mostly on the display, partly below it.
         let saved = frame(3000., 1000., 1200., 800.);
-        assert_eq!(place(saved, &[LAPTOP, DISPLAY]), Some(frame(2872., 640., 1200., 800.)));
+        assert_eq!(
+            place(saved, &[LAPTOP, DISPLAY]),
+            Some(frame(2872., 640., 1200., 800.))
+        );
         // Above the top of every screen, as AppKit never puts a window.
         let saved = frame(100., -400., 800., 600.);
-        assert_eq!(place(saved, &[LAPTOP, DISPLAY]), Some(frame(100., 25., 800., 600.)));
+        assert_eq!(
+            place(saved, &[LAPTOP, DISPLAY]),
+            Some(frame(100., 25., 800., 600.))
+        );
     }
 
     #[test]
     fn a_frame_across_two_screens_goes_to_the_one_with_more_of_it() {
         let saved = frame(1312., 100., 1000., 600.);
-        assert_eq!(place(saved, &[LAPTOP, DISPLAY]), Some(frame(1512., 100., 1000., 600.)));
+        assert_eq!(
+            place(saved, &[LAPTOP, DISPLAY]),
+            Some(frame(1512., 100., 1000., 600.))
+        );
         let saved = frame(812., 100., 1000., 600.);
-        assert_eq!(place(saved, &[LAPTOP, DISPLAY]), Some(frame(512., 100., 1000., 600.)));
+        assert_eq!(
+            place(saved, &[LAPTOP, DISPLAY]),
+            Some(frame(512., 100., 1000., 600.))
+        );
     }
 
     #[test]

@@ -130,7 +130,10 @@ impl Server {
         let accepting = thread::Builder::new()
             .name("agents-server".into())
             .spawn(move || accept(listener, accepting))?;
-        Ok(Server { shared, accepting: Some(accepting) })
+        Ok(Server {
+            shared,
+            accepting: Some(accepting),
+        })
     }
 
     pub fn path(&self) -> &Path {

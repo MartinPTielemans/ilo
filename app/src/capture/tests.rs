@@ -32,7 +32,11 @@ impl Host for Recorder {
     }
 
     fn element_at(&self, tab: u64, at: Point<Pixels>) {
-        self.record(format!("element at {tab} {} {}", f32::from(at.x), f32::from(at.y)));
+        self.record(format!(
+            "element at {tab} {} {}",
+            f32::from(at.x),
+            f32::from(at.y)
+        ));
     }
 
     fn capture(&self, tab: u64, request: u64, full_page: bool, rect: Option<Bounds<Pixels>>) {
@@ -68,7 +72,9 @@ impl Host for Recorder {
 /// A picture as the core sends one.
 fn png() -> Vec<u8> {
     let mut png = Vec::new();
-    RgbaImage::new(8, 6).write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    RgbaImage::new(8, 6)
+        .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
     png
 }
 
@@ -84,9 +90,16 @@ struct Mode {
 impl Mode {
     fn new(cx: &mut TestAppContext) -> Self {
         let host = Rc::new(Recorder::default());
-        let window = cx.update(|cx| open(host.clone(), cx)).expect("no window for Capture");
+        let window = cx
+            .update(|cx| open(host.clone(), cx))
+            .expect("no window for Capture");
         let cx = VisualTestContext::from_window(window.into(), cx);
-        Mode { cx, window, host, library: true }
+        Mode {
+            cx,
+            window,
+            host,
+            library: true,
+        }
     }
 
     /// What ⇧⌘2 does: the shell's `start`.
@@ -98,12 +111,16 @@ impl Mode {
     fn start_from(&mut self, press: Option<Point<Pixels>>) {
         let frame = Bounds::new(point(px(0.), px(0.)), size(px(800.), px(600.)));
         let library = self.library;
-        self.cx.cx.update(|cx| start(TAB, frame, 8., library, Look::dark(), press, cx));
+        self.cx
+            .cx
+            .update(|cx| start(TAB, frame, 8., library, Look::dark(), press, cx));
         self.cx.run_until_parked();
     }
 
     fn captured(&mut self, request: u64) {
-        self.cx.cx.update(|cx| captured(TAB, request, Some(png()), cx));
+        self.cx
+            .cx
+            .update(|cx| captured(TAB, request, Some(png()), cx));
         self.cx.run_until_parked();
     }
 
@@ -118,7 +135,10 @@ impl Mode {
         mode.library = library;
         mode.start();
         mode.captured(1);
-        assert_eq!(mode.calls(), [format!("capture {TAB} 1 view"), "show 0 0 800 600".into()]);
+        assert_eq!(
+            mode.calls(),
+            [format!("capture {TAB} 1 view"), "show 0 0 800 600".into()]
+        );
         mode
     }
 
@@ -128,12 +148,15 @@ impl Mode {
         self.cx.simulate_mouse_move(at, None, Modifiers::none());
         self.cx.run_until_parked();
         assert_eq!(self.calls(), [format!("element at {TAB} {x} {y}")]);
-        self.cx.cx.update(|cx| element_box(TAB, at, Some(element), cx));
+        self.cx
+            .cx
+            .update(|cx| element_box(TAB, at, Some(element), cx));
         self.cx.run_until_parked();
     }
 
     fn click(&mut self, x: f32, y: f32) {
-        self.cx.simulate_click(point(px(x), px(y)), Modifiers::none());
+        self.cx
+            .simulate_click(point(px(x), px(y)), Modifiers::none());
         self.cx.run_until_parked();
     }
 
@@ -148,7 +171,10 @@ impl Mode {
 
     /// The browser window over `tab` draws its menus light, or dark, now.
     fn look(&mut self, tab: u64, light: bool) {
-        let look = Look { light, ..Look::dark() };
+        let look = Look {
+            light,
+            ..Look::dark()
+        };
         self.cx.cx.update(|cx| set_look(tab, look, cx));
         self.cx.run_until_parked();
     }
@@ -156,8 +182,12 @@ impl Mode {
     /// What capture mode last drew, the pill or the menu, and whether in the light look.
     fn drawn(&mut self) -> Option<(&'static str, bool)> {
         let window = self.window;
-        let drawn = |capture: &mut Capture| capture.session.as_ref().and_then(|session| session.drawn);
-        self.cx.cx.update(|cx| window.update(cx, |capture, _, _| drawn(capture))).unwrap()
+        let drawn =
+            |capture: &mut Capture| capture.session.as_ref().and_then(|session| session.drawn);
+        self.cx
+            .cx
+            .update(|cx| window.update(cx, |capture, _, _| drawn(capture)))
+            .unwrap()
     }
 }
 
@@ -204,7 +234,10 @@ fn the_second_shift_cmd_2_leaves(cx: &mut TestAppContext) {
     mode.start();
     mode.captured(2);
     let left = ["hide".to_string(), format!("end {TAB}")];
-    assert_eq!(mode.calls(), [&[format!("capture {TAB} 2 view")], &left[..]].concat());
+    assert_eq!(
+        mode.calls(),
+        [&[format!("capture {TAB} 2 view")], &left[..]].concat()
+    );
 }
 
 #[gpui::test]
@@ -219,7 +252,14 @@ fn a_click_takes_the_element_under_the_pointer(cx: &mut TestAppContext) {
     assert_eq!(mode.calls(), [format!("capture {TAB} 2 50 60 200 80")]);
     mode.captured(2);
     let len = png().len();
-    assert_eq!(mode.calls(), ["hide".to_string(), format!("end {TAB}"), format!("copy {len}")]);
+    assert_eq!(
+        mode.calls(),
+        [
+            "hide".to_string(),
+            format!("end {TAB}"),
+            format!("copy {len}")
+        ]
+    );
 }
 
 #[gpui::test]
@@ -227,11 +267,15 @@ fn a_drag_takes_the_rectangle_dragged(cx: &mut TestAppContext) {
     let mut mode = Mode::shown(cx);
     mode.hover(100., 100., rect(50., 60., 200., 80.));
     let (left, button) = (Modifiers::none(), MouseButton::Left);
-    mode.cx.simulate_mouse_down(point(px(100.), px(100.)), button, left);
+    mode.cx
+        .simulate_mouse_down(point(px(100.), px(100.)), button, left);
     // Under 4 pt it's still a click; past it, a drag, which asks the core nothing as it goes.
-    mode.cx.simulate_mouse_move(point(px(102.), px(101.)), button, left);
-    mode.cx.simulate_mouse_move(point(px(300.), px(250.)), button, left);
-    mode.cx.simulate_mouse_up(point(px(300.), px(250.)), button, left);
+    mode.cx
+        .simulate_mouse_move(point(px(102.), px(101.)), button, left);
+    mode.cx
+        .simulate_mouse_move(point(px(300.), px(250.)), button, left);
+    mode.cx
+        .simulate_mouse_up(point(px(300.), px(250.)), button, left);
     mode.cx.run_until_parked();
     assert_eq!(mode.calls(), ["camera false"]);
     let menu = point(100. - RING + MENU_LEFT, 100. - RING);
@@ -239,7 +283,14 @@ fn a_drag_takes_the_rectangle_dragged(cx: &mut TestAppContext) {
     assert_eq!(mode.calls(), [format!("capture {TAB} 2 100 100 200 150")]);
     mode.captured(2);
     let len = png().len();
-    assert_eq!(mode.calls(), ["hide".to_string(), format!("end {TAB}"), format!("save {len}")]);
+    assert_eq!(
+        mode.calls(),
+        [
+            "hide".to_string(),
+            format!("end {TAB}"),
+            format!("save {len}")
+        ]
+    );
 }
 
 #[gpui::test]
@@ -248,12 +299,19 @@ fn a_shift_cmd_drag_on_the_page_takes_the_rectangle_dragged(cx: &mut TestAppCont
     // The page's window keeps the pointer, so its moves come from the core, the first before the
     // picture of the page has.
     mode.start_from(Some(point(px(100.), px(100.))));
-    mode.cx.cx.update(|cx| page_dragged(TAB, point(px(200.), px(150.)), cx));
+    mode.cx
+        .cx
+        .update(|cx| page_dragged(TAB, point(px(200.), px(150.)), cx));
     mode.captured(1);
-    assert_eq!(mode.calls(), [format!("capture {TAB} 1 view"), "show 0 0 800 600".into()]);
+    assert_eq!(
+        mode.calls(),
+        [format!("capture {TAB} 1 view"), "show 0 0 800 600".into()]
+    );
     // Another ⇧⌘-drag's start, past its window, doesn't leave, as ⇧⌘2's second press does.
     mode.start_from(Some(point(px(10.), px(10.))));
-    mode.cx.cx.update(|cx| page_dragged(TAB, point(px(300.), px(250.)), cx));
+    mode.cx
+        .cx
+        .update(|cx| page_dragged(TAB, point(px(300.), px(250.)), cx));
     mode.cx.cx.update(|cx| page_released(TAB, cx));
     mode.cx.run_until_parked();
     assert_eq!(mode.calls(), ["camera false"]);
@@ -267,9 +325,12 @@ fn a_press_that_barely_moves_is_a_click(cx: &mut TestAppContext) {
     let mut mode = Mode::shown(cx);
     mode.hover(100., 100., rect(50., 60., 200., 80.));
     let (left, button) = (Modifiers::none(), MouseButton::Left);
-    mode.cx.simulate_mouse_down(point(px(100.), px(100.)), button, left);
-    mode.cx.simulate_mouse_move(point(px(102.), px(101.)), button, left);
-    mode.cx.simulate_mouse_up(point(px(102.), px(101.)), button, left);
+    mode.cx
+        .simulate_mouse_down(point(px(100.), px(100.)), button, left);
+    mode.cx
+        .simulate_mouse_move(point(px(102.), px(101.)), button, left);
+    mode.cx
+        .simulate_mouse_up(point(px(102.), px(101.)), button, left);
     mode.cx.run_until_parked();
     assert_eq!(mode.calls(), ["camera false"]);
     let menu = point(50. - RING + MENU_LEFT, 60. - RING);
@@ -350,7 +411,11 @@ fn save_to_library_is_the_first_row_but_in_a_private_window(cx: &mut TestAppCont
     assert_eq!(mode.calls(), [format!("capture {TAB} 2 50 60 200 80")]);
     mode.captured(2);
     let len = png().len();
-    let saved = ["hide".to_string(), format!("end {TAB}"), format!("save to library {len}")];
+    let saved = [
+        "hide".to_string(),
+        format!("end {TAB}"),
+        format!("save to library {len}"),
+    ];
     assert_eq!(mode.calls(), saved);
 
     let mut private = Mode::shown_with(false, cx);
@@ -359,7 +424,11 @@ fn save_to_library_is_the_first_row_but_in_a_private_window(cx: &mut TestAppCont
     assert_eq!(private.calls(), ["camera false"]);
     private.click(menu.x + MENU_WIDTH / 2., menu.y + first);
     private.captured(2);
-    let copied = ["hide".to_string(), format!("end {TAB}"), format!("copy {len}")];
+    let copied = [
+        "hide".to_string(),
+        format!("end {TAB}"),
+        format!("copy {len}"),
+    ];
     assert_eq!(private.calls()[1..], copied);
 }
 

@@ -18,7 +18,10 @@ fn with_tiles(
     let browser = host.clone();
     let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
     shell.update(cx, |shell, cx| {
-        shell.set_spaces(vec![(1, "Space".into(), None, 1, "".into(), "".into(), "".into())], cx);
+        shell.set_spaces(
+            vec![(1, "Space".into(), None, 1, "".into(), "".into(), "".into())],
+            cx,
+        );
         shell.set_space(1, cx);
         shell.set_favorites(vec![(10, 1), (11, 1), (12, 1)], cx);
         for (tab, title) in [(10, "YouTube"), (11, "X"), (12, "Proton Mail: Sign-in")] {
@@ -77,8 +80,16 @@ fn a_tiles_card_starts_at_its_top_at_1x_and_2x(cx: &mut TestAppContext) {
         cx.simulate_scale_factor_change(scale);
         cx.run_until_parked();
         let (anchor, frame) = hover_tile(&shell, cx, &host, tab);
-        assert_eq!(f32::from(anchor.row.top()), LIST_TOP, "tile {tab} at {scale}×");
-        assert_eq!(f32::from(frame.size.height), TILE_HEIGHT, "tile {tab} at {scale}×");
+        assert_eq!(
+            f32::from(anchor.row.top()),
+            LIST_TOP,
+            "tile {tab} at {scale}×"
+        );
+        assert_eq!(
+            f32::from(frame.size.height),
+            TILE_HEIGHT,
+            "tile {tab} at {scale}×"
+        );
     }
 }
 
@@ -95,7 +106,11 @@ fn a_narrow_sidebars_tiles_have_cards_at_their_own_tops(cx: &mut TestAppContext)
     let right = rows_right(&shell, cx);
     for tab in [10, 11, 12] {
         let (anchor, frame) = hover_tile(&shell, cx, &host, tab);
-        assert_eq!((anchor.row.top(), f32::from(anchor.row.right())), (frame.top(), right), "tile {tab}");
+        assert_eq!(
+            (anchor.row.top(), f32::from(anchor.row.right())),
+            (frame.top(), right),
+            "tile {tab}"
+        );
     }
 }
 
@@ -107,9 +122,19 @@ fn with_docs(
     let browser = host.clone();
     let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
     shell.update(cx, |shell, cx| {
-        shell.set_spaces(vec![(1, "Work".into(), None, 0, "".into(), "".into(), "".into())], cx);
+        shell.set_spaces(
+            vec![(1, "Work".into(), None, 0, "".into(), "".into(), "".into())],
+            cx,
+        );
         shell.set_space(1, cx);
-        shell.set_tabs(1, Vec::new(), vec![1, 2], Vec::new(), Folders::default(), cx);
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            vec![1, 2],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
         shell.set_favorites(vec![(10, 0)], cx);
         shell.set_title(10, "Docs".into(), cx);
     });
@@ -119,7 +144,10 @@ fn with_docs(
 
 fn cards_for(host: &Recorder, tab: u64) -> usize {
     let rest = format!("card rest {tab} ");
-    host.take().iter().filter(|call| call.starts_with(&rest)).count()
+    host.take()
+        .iter()
+        .filter(|call| call.starts_with(&rest))
+        .count()
 }
 
 /// A drop that leaves the pointer on a tile, which the drag had it hover, asks for the tile's
@@ -130,7 +158,10 @@ fn a_tile_under_the_pointer_after_a_drag_has_its_card(cx: &mut TestAppContext) {
     let (shell, cx, host) = with_docs(cx);
     let (x, y) = shell.update(cx, |shell, _| {
         let [left, top, width] = shell.tile_places(1)[0];
-        (left + width / 2., shell.tiles_top() + top + TILE_HEIGHT / 2.)
+        (
+            left + width / 2.,
+            shell.tiles_top() + top + TILE_HEIGHT / 2.,
+        )
     });
     shell.update(cx, |shell, _| shell.press_tile(10, point(px(x), px(y))));
     shell.update(cx, |shell, cx| shell.drag_to(point(px(x), px(y + 30.)), cx));
@@ -143,7 +174,14 @@ fn a_tile_under_the_pointer_after_a_drag_has_its_card(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| {
         assert!(shell.cancel_drag(cx));
         // Its tile is still sliding home.
-        shell.tile_slides.insert(10, ([0.; 3], std::time::Instant::now(), crate::shell::Curve::Slide));
+        shell.tile_slides.insert(
+            10,
+            (
+                [0.; 3],
+                std::time::Instant::now(),
+                crate::shell::Curve::Slide,
+            ),
+        );
         cx.notify();
     });
     cx.run_until_parked();
@@ -169,7 +207,10 @@ fn a_click_on_a_tile_gives_its_page_the_keyboard(cx: &mut TestAppContext) {
     cx.simulate_click(middle, Modifiers::none());
     cx.run_until_parked();
     let calls = host.take();
-    assert!(calls.ends_with(&["select 11".into(), "focus page".into()]), "{calls:?}");
+    assert!(
+        calls.ends_with(&["select 11".into(), "focus page".into()]),
+        "{calls:?}"
+    );
 }
 
 /// At MOST_FAVORITES no tab becomes another: Add to Favorites is dimmed and leaves them, the hover
@@ -196,10 +237,14 @@ fn the_favorites_take_no_more_than_the_most(cx: &mut TestAppContext) {
         shell.update(cx, |shell, cx| shell.cancel_drag(cx));
         to
     };
-    shell.update(cx, |shell, cx| shell.set_favorites(favorites(MOST_FAVORITES as u64 - 1), cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_favorites(favorites(MOST_FAVORITES as u64 - 1), cx)
+    });
     assert!(matches!(over_tiles(cx), Some(Place::Favorite(_))));
 
-    shell.update(cx, |shell, cx| shell.set_favorites(favorites(MOST_FAVORITES as u64), cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_favorites(favorites(MOST_FAVORITES as u64), cx)
+    });
     assert!(matches!(over_tiles(cx), Some(Place::List(..))));
     let actions = shell.read_with(cx, |shell, _| shell.card_actions(1));
     assert_eq!(actions, [Action::Unpin]);
