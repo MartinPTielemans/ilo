@@ -924,8 +924,9 @@ struct Swipe {
     way: f32,
     /// Where that page was over the last SWIPE_HISTORY, for how fast it's let go.
     samples: VecDeque<(Instant, f32)>,
-    /// The Space nearest its place, for the detent as it changes.
-    nearest: u64,
+    /// Where letting go would take the pages, for the detent as it changes. None until they
+    /// first move across.
+    landing: Option<swipe::Landing>,
     /// Whether they've pulled the last Space far enough to ready a new Space, and when that last
     /// changed.
     ready: bool,
