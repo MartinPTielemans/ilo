@@ -25,6 +25,8 @@ const LANDMARKS: &[&str] = &[
     "contentinfo",
 ];
 const STATES: &[&str] = &["checked", "selected", "expanded", "disabled", "required", "level"];
+/// A frame's element, under which the core puts its document.
+const FRAMES: &[&str] = &["Iframe", "IframePresentational"];
 /// The outline's bytes at most, as a long page would fill the agent's context.
 pub const MAX_OUTLINE: usize = 30_000;
 
@@ -166,6 +168,8 @@ impl Walk<'_> {
         }
         let (mut next, mut next_name) = (depth, parent_name.to_string());
         let shown = INTERACTIVE.contains(&role) || !name.is_empty() || LANDMARKS.contains(&role);
+        // Where a frame's element's line went, and the size before it.
+        let mut frame = None;
         if !ignored && !FLATTEN.contains(&role) && shown {
             let mut line = format!("- {role}");
             if !name.is_empty() {
@@ -203,7 +207,11 @@ impl Walk<'_> {
                     _ => {}
                 }
             }
+            let before = (self.lines.len(), self.size);
             self.add(depth, line);
+            if FRAMES.contains(&role) && self.lines.len() > before.0 {
+                frame = Some(before);
+            }
             next = depth + 1;
             next_name = name;
         }
@@ -212,6 +220,14 @@ impl Walk<'_> {
             if let Some(child) = child.as_str().and_then(|id| self.by_id.get(id).copied()) {
                 self.node(child, next, &next_name, levels + 1);
             }
+        }
+        // A frame with nothing under its line, as a site's helper frames have, says nothing
+        // (#1444).
+        if let Some((at, size)) = frame
+            && self.lines.len() == at + 1
+        {
+            self.lines.pop();
+            self.size = size;
         }
     }
 }
@@ -356,6 +372,32 @@ mod tests {
         nodes.swap(4, 5);
         let again = super::outline(&tab(), &nodes, &mut refs);
         assert!(again.contains("- textbox \"Coupon\" [e2]"));
+    }
+
+    /// A frame's document is outlined under its element, however deep, and a frame with nothing in
+    /// it, as a site's helper frames, is left out (#1444).
+    #[test]
+    fn a_frame_is_outlined_only_with_what_is_in_it() {
+        let nodes = vec![
+            node("1", "RootWebArea", "Document", &["2", "3"]),
+            node("2", "Iframe", "Not intended for user action", &["1:1"]),
+            node("3", "Iframe", "Office on the web Frame", &["2:1"]),
+            node("1:1", "RootWebArea", "", &[]),
+            node("2:1", "RootWebArea", "Word", &["2:2", "2:3"]),
+            node("2:2", "Iframe", "Not intended for user action", &[]),
+            node("2:3", "Iframe", "Document", &["3:1"]),
+            node("3:1", "RootWebArea", "", &["3:2"]),
+            node("3:2", "paragraph", "", &["3:3"]),
+            node("3:3", "StaticText", "Quarterly report", &[]),
+        ];
+        let outline = outline(&tab(), &nodes, &mut Refs::default());
+        assert_eq!(
+            outline,
+            "Tab 20: Document\nURL: https://shop.example/\n\n\
+             - Iframe \"Office on the web Frame\"\n\
+             \x20 - Iframe \"Document\"\n\
+             \x20   - text: Quarterly report"
+        );
     }
 
     /// A page bigger than an agent should take in is cut, and says so.

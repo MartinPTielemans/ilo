@@ -7,6 +7,8 @@
 # turn, a turn's ten calls answered at once, which logs the turns and how long they took. A
 # page with fields gives its prose and none of their values: typed, filled in or a password, in its
 # text and in its outline, and the agent can't type into the password field. It types into another.
+# A frame nested two sites deep and one the page adds after its load are in the page's outline
+# and text too, and an empty helper frame is in neither.
 # A page's frames, of its own site and of another, are in its outline, where the agent clicks and
 # types, and not into a frame's password field. Its text leaves out a frame an extension puts in
 # the page, which isn't the page's. Its keys, typed or pressed, go to the page alone, and Escape
@@ -340,7 +342,9 @@ painted(() => document.title = "fields");
   # one of another, which Chromium puts in a process of its own, and the agent acts in both. A
   # password field in a frame is as off limits as one in the page. The page names itself once the
   # other site's frame has painted: until then Chromium hasn't the frame's drawing to find what's
-  # under a click in, and gives the click to the page around it.
+  # under a click in, and gives the click to the page around it. A third site's frame inside the
+  # other site's, and a frame the page adds after it has loaded, are in the outline and the text
+  # too, in the page's order, and an empty helper frame is in neither (#1444).
   printf '%s' '<p>Inner text</p><button>Inner button</button><input aria-label="Inner field">' \
     > "$out/site/inner.html"
   printf '%s' '<p>Cross text</p>
@@ -348,10 +352,21 @@ painted(() => document.title = "fields");
 <input aria-label="Cross field" oninput="document.body.append(&quot;cross typed&quot;)">
 <input type=password aria-label="Cross password"><script src="painted.js"></script>
 <script>painted(() => parent.postMessage("painted", "*"));</script>' > "$out/site/cross.html"
+  printf '%s' "<iframe src=http://nested.localhost:$port/deep.html></iframe>" >> "$out/site/cross.html"
+  printf '%s' '<p>Deep text</p>' > "$out/site/deep.html"
+  printf '%s' '<p>Late text</p><script>top.postMessage("late", "*")</script>' > "$out/site/late.html"
+  : > "$out/site/empty.html"
   printf '%s' "<title>loading</title><p>Top text</p><iframe src=inner.html></iframe>
 <iframe src=http://127.0.0.1:$port/cross.html></iframe>
+<iframe title='Helper frame' src=empty.html width=1 height=1></iframe>
 <script>addEventListener('message', (event) => {
-  if (event.data === 'painted') document.title = 'frames';
+  if (event.data === 'painted') {
+    document.title = 'frames';
+    const late = document.createElement('iframe');
+    late.src = 'http://127.0.0.1:$port/late.html';
+    document.body.append(late);
+  }
+  if (event.data === 'late') document.title = 'frames late';
   if (event.data === 'extension frame') document.title = 'frames with extension';
 });</script>" > "$out/site/frames.html"
   outline=$(call open_tab "{\"url\":\"localhost:$port/frames.html\"}")
@@ -389,11 +404,19 @@ painted(() => document.title = "fields");
   # and not that one's.
   await_log "^browser: title $frames_tab frames with extension\$" \
     "the check's extension didn't put its frame in the frames page"
+  await_log "^browser: title $frames_tab frames late\$" "the frame added after the load didn't load"
+  later=$(call snapshot "{\"tab\":$frames_tab}")
+  printf '%s\n' "$later" > "$out/mcp-frames-later.txt"
+  case "$later" in
+    *"Helper frame"*) fail "the outline had the empty helper frame: $later" ;;
+    *"Top text"*"Inner text"*"Cross text"*"Deep text"*"Late text"*) ;;
+    *) fail "the frames page was outlined later as: $later" ;;
+  esac
   read=$(call read_page "{\"tab\":$frames_tab}")
   printf '%s\n' "$read" > "$out/mcp-frames-text.txt"
   case "$read" in
     *"Extension text"*) fail "reading the frames page gave the extension's frame's text: $read" ;;
-    *"Top text"*"Inner text"*"Cross text"*) ;;
+    *"Top text"*"Inner text"*"Cross text"*"Deep text"*"Late text"*) ;;
     *) fail "reading the frames page answered: $read" ;;
   esac
 
