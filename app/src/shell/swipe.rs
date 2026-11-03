@@ -789,6 +789,36 @@ mod tests {
         assert_eq!(*host.shown.borrow(), [1]);
     }
 
+    /// Two fingers as Direct Manipulation reports a precision touchpad's on Windows: the touch
+    /// comes with the first move, the lift ends the scroll, and the inertia after it goes on
+    /// across. The swipe stops at the next Space, the inertia carrying it no further and scrolling
+    /// nothing, and the next swipe goes on from there.
+    #[gpui::test]
+    fn a_touchpads_inertia_stops_at_the_next_space(cx: &mut TestAppContext) {
+        let (shell, host, cx) = three_spaces(cx, 1);
+        shell.update_in(cx, |shell, window, cx| {
+            let fingers = |touch_phase, x| ScrollEvent {
+                delta: ScrollDelta::Pixels(point(px(x), px(0.))),
+                touch_phase,
+                ..Default::default()
+            };
+            let step = -0.15 * shell.width() / SWIPE_TRACKING;
+            for space in [1, 2] {
+                shell.set_space(space, cx);
+                shell.scroll(&fingers(TouchPhase::Started, step), window, cx);
+                for _ in 0..3 {
+                    shell.scroll(&fingers(TouchPhase::Moved, step), window, cx);
+                }
+                shell.scroll(&fingers(TouchPhase::Ended, 0.), window, cx);
+                for _ in 0..30 {
+                    let took = shell.scroll(&fingers(TouchPhase::Moved, step), window, cx);
+                    assert!(took, "the inertia from Space {space} scrolled the list");
+                }
+            }
+        });
+        assert_eq!(*host.shown.borrow(), [2, 3]);
+    }
+
     /// The sidebar under the Library fades out whole and the Library fades in over it by what the
     /// sidebar has lost, never a whole sheet over a half-faded sidebar, which would show only cut
     /// along its edge: with fingers part of the way out, and on a click's close as the sidebar
