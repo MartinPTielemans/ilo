@@ -164,7 +164,7 @@ pub fn tile(glyph: &'static str, color: u32) -> gpui::Div {
         )
 }
 
-/// A push button, a step lighter under the pointer and lighter again while pressed.
+/// A push button, a step toward its pressed fill under the pointer, and that fill while pressed.
 pub fn button(
     look: &Look,
     id: impl Into<gpui::ElementId>,
@@ -217,7 +217,8 @@ pub fn icon_button(
 }
 
 /// A pop-up button `width` wide showing `label`, with its chevrons at its end, lit as a button is
-/// under the pointer and pressed while its menu is `open`. It opens on a press, as a pop-up button does, which its caller listens for.
+/// under the pointer and pressed while its menu is `open`. It opens on a press, as a pop-up
+/// button does, which its caller listens for.
 pub fn popup(look: &Look, label: impl Into<SharedString>, width: f32, open: bool) -> gpui::Div {
     div()
         .flex_none()
