@@ -10,13 +10,14 @@
 // The commands are drive.mm's, with what Windows has: click, doubleclick, rightclick, middleclick,
 // clickkey, doubleclickkey, rightclickkey, drag, dragkey, press, dragto, release, rightpress,
 // rightdragto, rightrelease, move, key, keydown, keyup, flags, type, insert, scroll, swipe, wheel,
-// resize, place, minimize, window, order, layout, state, title, pasteboard, front, menu, menubar,
-// choose, dismiss, agentspace, agentmayact, agentrelease, agentdisconnect, takeback and age, and
-// Windows' own maximize, which the Mac's has no command for, and placement, which logs the window's
-// maximized state and the frame it un-maximizes to as Windows keeps them; overlays, which lists the
-// windows on screen over the app's browser windows; stack, which lists every app's windows over the
-// driven one, front first; and reshow, which shows those of the UI's that are hidden again, as
-// Windows does. window <n> behind drives a window without bringing it forward, as drive.mm's does.
+// resize, resizekey, place, minimize, window, order, layout, state, title, pasteboard, front, menu,
+// menubar, choose, dismiss, agentspace, agentmayact, agentrelease, agentdisconnect, takeback and
+// age, and Windows' own maximize, which the Mac's has no command for, and placement, which logs the
+// window's maximized state and the frame it un-maximizes to as Windows keeps them; overlays, which
+// lists the windows on screen over the app's browser windows; stack, which lists every app's
+// windows over the driven one, front first; and reshow, which shows those of the UI's that are
+// hidden again, as Windows does. window <n> behind drives a window without bringing it forward, as
+// drive.mm's does.
 // The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl
 // with Alt, but Ctrl for ⌃Tab, and alt with both. A click's or a drag's are held as a Windows user
 // holds them, cmd with Ctrl and alt with Alt. A trackpad's scrolls, and its swipes over a page, are
@@ -742,9 +743,8 @@ bool PlaceFrame(double x, double y, double width, double height) {
   return true;
 }
 
-// Sets the driven window's content to |width| by |height| points, where it is.
-bool ResizeContent(double width, double height) {
-  HWND root = Driven();
+// Sets |root|'s content to |width| by |height| points, where it is.
+bool ResizeContent(HWND root, double width, double height) {
   if (!root) {
     return false;
   }
@@ -1382,7 +1382,12 @@ bool Run(const std::string& line) {
   }
   if (action == "resize") {
     double width, height;
-    return words >> width >> height && ResizeContent(width, height);
+    return words >> width >> height && ResizeContent(Driven(), width, height);
+  }
+  // The window with the keyboard, such as Settings, as resize does the driven one.
+  if (action == "resizekey") {
+    double width, height;
+    return words >> width >> height && ResizeContent(GetActiveWindow(), width, height);
   }
   if (action == "place") {
     double x, y, width, height;

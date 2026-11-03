@@ -56,6 +56,7 @@
 //                                         "browser: drag dropped" or "browser: drag refused"
 //   dragleave                             takes the drag away, as cancelled
 //   resize <width> <height>               resizes the window, keeping its top-left corner
+//   resizekey <width> <height>            as resize, the key window's content, such as Settings
 //   fullscreen                            enters or leaves full screen, like the green button
 //   display add <width> <height> [main]   plugs in a second display of that size in points, a
 //                                         virtual one, the main one with the menu bar if main
@@ -1816,6 +1817,19 @@ bool Run(const std::string& line, void (^done)(void)) {
     return true;
   }
   NSWindow* key_window = NSApp.keyWindow ?: window;
+  if (action == "resizekey") {
+    double width, height;
+    if (!(words >> width >> height)) {
+      return false;
+    }
+    NSRect frame = key_window.frame;
+    NSSize size = [key_window frameRectForContentRect:NSMakeRect(0, 0, width, height)].size;
+    [key_window setFrame:NSMakeRect(NSMinX(frame), NSMaxY(frame) - size.height, size.width,
+                                    size.height)
+                 display:YES];
+    done();
+    return true;
+  }
   if (action == "keydown" || action == "keyup") {
     std::string key, repeat;
     words >> key >> repeat;

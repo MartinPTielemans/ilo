@@ -1169,6 +1169,123 @@ fn the_view_imports_what_the_user_picks(cx: &mut TestAppContext) {
     });
 }
 
+/// Each state's one button, the one that does what it's for, is in the host's accent: Settings'
+/// green, or the first launch's Signal. The list has none, as each browser's Import… is one of
+/// many, and an import going on by itself none until a profile hasn't opened, when it's Try Again.
+/// At the end it's Add Favorites while there are favorites to add, else Done.
+#[gpui::test]
+fn each_states_one_button_is_in_the_hosts_accent(cx: &mut TestAppContext) {
+    let signal = gpui::rgb(crate::tokens::shell::onboarding::SIGNAL);
+    let ground = Look::on(gpui::rgb(crate::palette::INK), gpui::white().into(), signal);
+    assert_eq!(ground.accent, signal);
+    assert_eq!(
+        Look::settings(false).accent,
+        gpui::rgb(crate::palette::NO_THEME_ACCENT)
+    );
+    let primary = |view: &Entity<ImportView>, cx: &mut TestAppContext| {
+        view.read_with(cx, |view, _| view.primary())
+    };
+
+    // Arc's import, which waits for its Work profile.
+    let browser = Rc::new(Browser::new(None));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false).look(ground));
+    view.read_with(cx, |view, _| assert_eq!(view.look.accent, signal));
+    assert_eq!(primary(&view, cx), None);
+    view.update(cx, |view, cx| view.pick(0, cx));
+    assert_eq!(primary(&view, cx), Some("Import"));
+    view.update(cx, |view, cx| view.import(cx));
+    cx.run_until_parked();
+    assert_eq!(
+        primary(&view, cx),
+        None,
+        "an import under way goes on by itself"
+    );
+    cx.executor().advance_clock(STALL);
+    cx.run_until_parked();
+    assert_eq!(primary(&view, cx), Some("Try Again"));
+    cx.update(|cx| browser.load(cx));
+    assert_eq!(
+        says(&view, cx),
+        "2 Spaces, 6 pinned tabs, 3 favorites and 3 link rules came in from Arc."
+    );
+    assert_eq!(
+        primary(&view, cx),
+        Some("Done"),
+        "Arc's favorites come with it, so none are offered"
+    );
+
+    // Chrome's, whose end offers the favorites its history visits most.
+    let made = chrome("chrome-primary", &[("Default", "Me")], SystemTime::now());
+    let browser = Rc::new(Browser::new(Some(Roots::under(&made, Os::Linux))));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    import_first(&view, cx);
+    cx.update(|cx| browser.added(cx));
+    assert_eq!(primary(&view, cx), Some("Add Favorites"));
+    view.update(cx, |view, cx| view.add_ticked(cx));
+    assert_eq!(
+        primary(&view, cx),
+        Some("Done"),
+        "the offer ends once they're added"
+    );
+    fs::remove_dir_all(made).unwrap();
+}
+
+/// Esc in a browser's choices goes back to the list, as Back does, and keeps the browser picked
+/// with what was switched off, so its Import… shows them as they were left. On the list, Esc is
+/// left to the host.
+#[gpui::test]
+fn escape_from_the_choices_goes_back_to_the_list_keeping_the_pick(cx: &mut TestAppContext) {
+    let made = chrome("chrome-escape", &[("Default", "Me")], SystemTime::now());
+    let host: Rc<dyn Host> = Rc::new(Browser::new(Some(Roots::under(&made, Os::Linux))));
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let mut view = ImportView::new(host, false).headed();
+        view.take_keys(cx);
+        view
+    });
+    let focus = view.read_with(cx, |view, _| view.keys().unwrap());
+    cx.update(|window, cx| window.focus(&focus, cx));
+    view.update(cx, |view, cx| {
+        view.pick(0, cx);
+        view.toggle(Kind::History, cx);
+    });
+    let picked = |view: &ImportView| match &view.step {
+        super::Step::Pick { picked, .. } => Some(picked.clone()),
+        _ => None,
+    };
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.crumb().as_deref(), Some("Chrome"));
+        assert!(view.under_way());
+    });
+    cx.simulate_keystrokes("escape");
+    view.read_with(cx, |view, _| {
+        assert!(
+            matches!(view.step, super::Step::List),
+            "Esc stayed in the choices"
+        );
+        assert_eq!((view.kept(), view.crumb()), (Some(0), None));
+        assert!(!view.under_way());
+    });
+    view.update(cx, |view, cx| view.pick(0, cx));
+    view.read_with(cx, |view, _| {
+        let picked = picked(view).unwrap();
+        assert!(
+            !picked.contains(&Kind::History),
+            "History came back on: {picked:?}"
+        );
+        assert!(picked.contains(&Kind::Bookmarks));
+    });
+    // Back keeps it too; on the list Esc does nothing of the view's.
+    view.update(cx, |view, cx| view.back(cx));
+    cx.simulate_keystrokes("escape");
+    view.read_with(cx, |view, _| {
+        assert!(matches!(view.step, super::Step::List));
+        assert_eq!(view.kept(), Some(0));
+    });
+    fs::remove_dir_all(made).unwrap();
+}
+
 /// What the view says, as the user reads it: how the import under way goes, or what came in.
 fn says(view: &Entity<ImportView>, cx: &mut TestAppContext) -> String {
     view.read_with(cx, |view, _| match &view.step {
@@ -1854,6 +1971,7 @@ fn rows_on_a_hosts_ground_mix_its_ink() {
     let light = Look::on(
         gpui::rgb(crate::tokens::palette::DIALOG_LIGHT),
         gpui::rgb(crate::palette::INK),
+        gpui::rgb(crate::tokens::shell::onboarding::SIGNAL),
     );
     assert!(light.line.r < light.surface.r && light.control.r > light.detail.r);
     assert_eq!(light.edge, Some(light.line));
@@ -1873,6 +1991,7 @@ fn a_control_under_the_pointer_is_a_step_short_of_pressed() {
     let ground = Look::on(
         gpui::rgb(crate::tokens::palette::DIALOG_LIGHT),
         gpui::rgb(crate::palette::INK),
+        gpui::rgb(crate::tokens::shell::onboarding::SIGNAL),
     );
     assert!(
         light(ground.control) > light(ground.hovered)
