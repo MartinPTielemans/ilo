@@ -630,6 +630,7 @@ fn layout() -> Option<()> {
             log!("browser: layout child {x:.0},{y:.0} {width:.0}x{height:.0}");
         }
     }
+    log!("browser: layout keyboard {}", drive::keyboard_page(id, height));
     log!("browser: layout full screen {}", node.full_screen as u8);
     Some(())
 }
