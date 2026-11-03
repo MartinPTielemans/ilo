@@ -3,12 +3,14 @@
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
 
+#include <cstdio>
+
 #include "base/apple/foundation_util.h"
 #include "base/functional/callback.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #import "components/remote_cocoa/app_shim/bridged_content_view.h"
-#include "content/public/browser/frame_shown_mac.h"
+#include "content/public/browser/frame_shown.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/stretch_content_on_resize_mac.h"
 #include "ui/gfx/geometry/rect.h"
@@ -224,6 +226,49 @@ void UpdateOcclusion(NSWindow* window) {
 // stuck.
 constexpr base::TimeDelta kLeavingAtMost = base::Seconds(1);
 
+// Keeps the pages leaving |view| until each of |arrivals| has drawn in it. Asked once they're in
+// the window, so the frame each waits for is one drawn there. Not at the first frame of the page's
+// compositor, which can come before the page's own and, with the new layer it draws into, leaves
+// a frame of neither page on screen.
+void HoldLeaving(BrowserCoreWindowView* view,
+                 base::span<const Pane> panes,
+                 NSSet<NSView*>* arrivals) {
+  const NSUInteger hold = ++view.holds;
+  const base::TimeTicks since = base::TimeTicks::Now();
+  // check.sh's switch-frames run reads these lines.
+  fprintf(stderr, "browser: switch keeps the page it left\n");
+  __weak BrowserCoreWindowView* weak_view = view;
+  for (const Pane& pane : panes) {
+    NSView* page_view = pane.page.GetNativeNSView();
+    if (![arrivals containsObject:page_view]) {
+      continue;
+    }
+    [view.awaited addObject:page_view];
+    __weak NSView* weak_page = page_view;
+    content::CallWhenFrameShown(pane.widget, base::BindOnce(^{
+      BrowserCoreWindowView* shown_in = weak_view;
+      if (NSView* drawn = weak_page) {
+        [shown_in.awaited removeObject:drawn];
+      }
+      if (shown_in.awaited.count == 0 && shown_in.leaving.count > 0) {
+        fprintf(stderr, "browser: switch let the page it left go after %.1f ms\n",
+                (base::TimeTicks::Now() - since).InMillisecondsF());
+        [shown_in letLeavingGo];
+      }
+    }));
+  }
+  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE, base::BindOnce(^{
+        BrowserCoreWindowView* shown_in = weak_view;
+        if (shown_in.holds == hold && shown_in.leaving.count > 0) {
+          fprintf(stderr, "browser: switch let the page it left go at the limit\n");
+          [shown_in.awaited removeAllObjects];
+          [shown_in letLeavingGo];
+        }
+      }),
+      kLeavingAtMost);
+}
+
 constexpr CACornerMask kAllCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner |
                                      kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
 
@@ -281,33 +326,16 @@ void ShowPages(views::Widget* widget,
       [view.awaited removeObject:page];
     }
   }
-  // The pages put in the window that were hidden, which show nothing until they've drawn. One
-  // moving from another window shows what it drew there.
-  bool arriving = false;
-  __weak BrowserCoreWindowView* weak_view = view;
+  // The pages put in the window, each showing only its background until its renderer has drawn
+  // there, even one that was drawing unseen for a picture or in another window.
+  NSMutableSet<NSView*>* arrivals = [NSMutableSet set];
   for (const Pane& pane : panes) {
     NSView* page_view = pane.page.GetNativeNSView();
-    if (hidden || !pane.widget || page_view.superview == view || pane.widget->IsShowing()) {
-      continue;
+    if (!hidden && pane.widget && page_view.superview != view) {
+      [arrivals addObject:page_view];
     }
-    arriving = true;
-    [view.awaited addObject:page_view];
-    __weak NSView* weak_page = page_view;
-    content::CallWhenFrameShown(pane.widget, base::BindOnce(^{
-      // Posted, so the page left goes outside Chromium's frame callback, and the frame shows
-      // under it first rather than a frame of neither.
-      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, base::BindOnce(^{
-        BrowserCoreWindowView* shown_in = weak_view;
-        NSView* drawn = weak_page;
-        if (drawn) {
-          [shown_in.awaited removeObject:drawn];
-        }
-        if (shown_in.awaited.count == 0) {
-          [shown_in letLeavingGo];
-        }
-      }));
-    }));
   }
+  const bool arriving = arrivals.count > 0;
   // The pages that leave stay where they are, over the pages a switch shows, until those have
   // drawn, as do the ones an earlier switch left while its pages haven't.
   NSWindow* window = view.window;
@@ -330,18 +358,7 @@ void ShowPages(views::Widget* widget,
       }
     }
   }
-  if (arriving && view.leaving.count > 0) {
-    const NSUInteger hold = ++view.holds;
-    base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
-        FROM_HERE, base::BindOnce(^{
-          BrowserCoreWindowView* shown_in = weak_view;
-          if (shown_in.holds == hold) {
-            [shown_in.awaited removeAllObjects];
-            [shown_in letLeavingGo];
-          }
-        }),
-        kLeavingAtMost);
-  }
+  const bool holding = arriving && view.leaving.count > 0;
   // The pages put in the window go under the ones leaving it.
   NSView* lowest_leaving = nil;
   for (NSView* subview in view.subviews) {
@@ -437,6 +454,9 @@ void ShowPages(views::Widget* widget,
   [view layOutPage];
   if (!had_page && !panes.empty()) {
     UpdateOcclusion(view.window);
+  }
+  if (holding) {
+    HoldLeaving(view, panes, arrivals);
   }
 }
 

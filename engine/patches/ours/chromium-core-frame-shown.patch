@@ -1,105 +1,84 @@
 Lets the core keep the page a switch leaves over the one it shows until that one has drawn (issue
-#1438). On the Mac, a page shown again gets a new compositor, and its view shows only its
-background colour until that compositor's first frame, 60 to 230 ms on GitHub's hosted Mac, so the
-window showed no page partway through every tab and Space switch. A hook only: the core decides
-what stays, through content::CallWhenFrameShown.
+#1438). A page shown again shows only its background until its renderer's first frame, 60 to 230
+ms on GitHub's hosted Mac, so the window showed no page partway through every tab and Space switch.
+It waits for the renderer's own frame to have been presented, through Blink's ForceRedraw, rather
+than for the view's compositor: that one's first frame can come before the page's, and on the Mac
+in the same Core Animation transaction as the new layer it draws into, which left a frame of the
+background at a switch. A hook only: the core decides what stays, through
+content::CallWhenFrameShown.
 
-diff --color -ruN a/content/browser/renderer_host/render_widget_host_view_mac.h b/content/browser/renderer_host/render_widget_host_view_mac.h
---- a/content/browser/renderer_host/render_widget_host_view_mac.h
-+++ b/content/browser/renderer_host/render_widget_host_view_mac.h
-@@ -12,6 +12,7 @@
- #include <string_view>
- #include <vector>
- 
-+#include "base/functional/callback.h"
- #include "base/gtest_prod_util.h"
- #include "base/memory/raw_ptr.h"
- #include "base/memory/scoped_refptr.h"
-@@ -339,6 +340,9 @@
-   BrowserCompositorMac* BrowserCompositor() const {
-     return browser_compositor_.get();
-   }
-+  // browser_core: runs |shown| once the view next puts a frame on screen, as
-+  // content::CallWhenFrameShown says.
-+  void CallWhenFrameShown(base::OnceClosure shown);
- 
-   MouseWheelPhaseHandler mouse_wheel_phase_handler_;
- 
-@@ -685,6 +689,9 @@
-   // applied until the swap completes (see comments in
-   // AcceleratedWidgetCALayerParamsUpdated).
-   SkColor last_frame_root_background_color_ = SK_ColorTRANSPARENT;
-+
-+  // browser_core: run as the next frame reaches the NSView (CallWhenFrameShown).
-+  std::vector<base::OnceClosure> frame_shown_callbacks_;
- 
-   std::unique_ptr<input::CursorManager> cursor_manager_;
- 
-diff --color -ruN a/content/browser/renderer_host/render_widget_host_view_mac.mm b/content/browser/renderer_host/render_widget_host_view_mac.mm
---- a/content/browser/renderer_host/render_widget_host_view_mac.mm
-+++ b/content/browser/renderer_host/render_widget_host_view_mac.mm
-@@ -56,6 +56,7 @@
- #include "content/public/browser/browser_context.h"
- #include "content/public/browser/browser_plugin_guest_manager.h"
- #include "content/public/browser/render_widget_host.h"
-+#include "content/public/browser/frame_shown_mac.h"
- #include "content/public/browser/stretch_content_on_resize_mac.h"
- #include "content/public/browser/web_contents.h"
- #include "content/public/common/page_visibility_state.h"
-@@ -219,8 +220,19 @@
- 
-   // Update the contents that the NSView is displaying.
-   ns_view_->SetCALayerParams(std::move(ca_layer_params));
-+  // browser_core: in the same Core Animation transaction as the frame, so what the callbacks
-+  // change on screen changes with it.
-+  std::vector<base::OnceClosure> shown;
-+  shown.swap(frame_shown_callbacks_);
-+  for (base::OnceClosure& callback : shown) {
-+    std::move(callback).Run();
-+  }
+diff --color -ruN a/content/browser/renderer_host/render_widget_host_impl.cc b/content/browser/renderer_host/render_widget_host_impl.cc
+--- a/content/browser/renderer_host/render_widget_host_impl.cc
++++ b/content/browser/renderer_host/render_widget_host_impl.cc
+@@ -102,6 +102,7 @@
+ #include "content/public/browser/content_browser_client.h"
+ #include "content/public/browser/device_service.h"
+ #include "content/public/browser/disallow_activation_reason.h"
++#include "content/public/browser/frame_shown.h"
+ #include "content/public/browser/global_dom_node_id.h"
+ #include "content/public/browser/gpu_data_manager.h"
+ #include "content/public/browser/keyboard_event_processing_result.h"
+@@ -4587,6 +4588,14 @@
+   blink_widget_->ForceRedraw(base::DoNothing());
  }
  
-+void RenderWidgetHostViewMac::CallWhenFrameShown(base::OnceClosure shown) {
-+  frame_shown_callbacks_.push_back(std::move(shown));
++void RenderWidgetHostImpl::CallWhenFrameShown(base::OnceClosure shown) {
++  // Answered once the renderer's next frame has been presented, which the renderer draws
++  // only once it's visible.
++  if (blink_widget_) {
++    blink_widget_->ForceRedraw(std::move(shown));
++  }
 +}
 +
- ////////////////////////////////////////////////////////////////////////////////
- // views::AccessibilityFocusOverrider::Client:
- id RenderWidgetHostViewMac::GetAccessibilityFocusedUIElement() {
-@@ -2792,6 +2804,14 @@
-   if (compositor && compositor->GetDelegatedFrameHost()) {
-     compositor->GetDelegatedFrameHost()->SetStretchContentOnResize(stretch);
-   }
+ void RenderWidgetHostImpl::SetIsDiscarding(bool is_discarding) {
+   if (is_discarding_ == is_discarding) {
+     return;
+@@ -4680,6 +4689,12 @@
+         "Navigation.SwapRFHToCompositorCreation",
+         create_frame_sink_timestamp_ - swap_rfh_timestamp_,
+         base::Milliseconds(1), base::Minutes(10), 50);
++  }
 +}
 +
 +void CallWhenFrameShown(RenderWidgetHostView* view, base::OnceClosure shown) {
-+  if (!view || static_cast<RenderWidgetHostViewBase*>(view)
-+                   ->IsRenderWidgetHostViewChildFrame()) {
-+    return;
-+  }
-+  static_cast<RenderWidgetHostViewMac*>(view)->CallWhenFrameShown(std::move(shown));
++  if (RenderWidgetHost* host = view ? view->GetRenderWidgetHost() : nullptr) {
++    RenderWidgetHostImpl::From(host)->CallWhenFrameShown(std::move(shown));
+   }
  }
  
- }  // namespace content
+diff --color -ruN a/content/browser/renderer_host/render_widget_host_impl.h b/content/browser/renderer_host/render_widget_host_impl.h
+--- a/content/browser/renderer_host/render_widget_host_impl.h
++++ b/content/browser/renderer_host/render_widget_host_impl.h
+@@ -1096,6 +1096,10 @@
+   // Requests a commit and forced redraw in the renderer compositor.
+   void ForceRedrawForTesting();
+ 
++  // browser_core: runs |shown| once the page has drawn a frame since and that frame has
++  // reached the screen, as content::CallWhenFrameShown says.
++  void CallWhenFrameShown(base::OnceClosure shown);
++
+   // Indicates the page is discarding. The renderer process will get
+   // cpu-priority boosted to run discard logic.
+   void SetIsDiscarding(bool is_discarding);
 diff --color -ruN a/content/public/browser/BUILD.gn b/content/public/browser/BUILD.gn
 --- a/content/public/browser/BUILD.gn
 +++ b/content/public/browser/BUILD.gn
-@@ -716,6 +716,7 @@
-       "native_event_processor_mac.h",
-       "native_event_processor_observer_mac.h",
-       "native_event_processor_observer_mac.mm",
-+      "frame_shown_mac.h",
-       "remote_cocoa.h",
-       "stretch_content_on_resize_mac.h",
-     ]
-diff --color -ruN a/content/public/browser/frame_shown_mac.h b/content/public/browser/frame_shown_mac.h
+@@ -197,6 +197,7 @@
+     "frame_eviction_opt_out_client.cc",
+     "frame_eviction_opt_out_client.h",
+     "frame_rate_throttling.h",
++    "frame_shown.h",
+     "frame_tree_node_id.h",
+     "frame_type.h",
+     "fullscreen_types.h",
+diff --color -ruN a/content/public/browser/frame_shown.h b/content/public/browser/frame_shown.h
 --- /dev/null
-+++ b/content/public/browser/frame_shown_mac.h
-@@ -0,0 +1,20 @@
++++ b/content/public/browser/frame_shown.h
+@@ -0,0 +1,19 @@
 +// browser_core: lets the core keep the page a switch leaves over a view until the view has drawn.
 +
-+#ifndef CONTENT_PUBLIC_BROWSER_FRAME_SHOWN_MAC_H_
-+#define CONTENT_PUBLIC_BROWSER_FRAME_SHOWN_MAC_H_
++#ifndef CONTENT_PUBLIC_BROWSER_FRAME_SHOWN_H_
++#define CONTENT_PUBLIC_BROWSER_FRAME_SHOWN_H_
 +
 +#include "base/functional/callback_forward.h"
 +#include "content/common/content_export.h"
@@ -108,11 +87,10 @@ diff --color -ruN a/content/public/browser/frame_shown_mac.h b/content/public/br
 +
 +class RenderWidgetHostView;
 +
-+// Runs |shown| once |view| next puts a frame in its NSView, in the same Core Animation transaction,
-+// or never if the view goes first. A view shown again gets a new compositor, and shows nothing
-+// until it draws.
++// Runs |shown| once |view|'s page has drawn a frame since, and that frame has reached the screen,
++// or never if the page goes first. A page shown again shows only its background until then.
 +CONTENT_EXPORT void CallWhenFrameShown(RenderWidgetHostView* view, base::OnceClosure shown);
 +
 +}  // namespace content
 +
-+#endif  // CONTENT_PUBLIC_BROWSER_FRAME_SHOWN_MAC_H_
++#endif  // CONTENT_PUBLIC_BROWSER_FRAME_SHOWN_H_
