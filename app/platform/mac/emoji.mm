@@ -6,7 +6,7 @@
 // Apple Color Emoji draws a sequence it knows as one glyph, and one it doesn't as the glyphs of its
 // parts, or a missing glyph from the Last Resort font: so one glyph in that font is a drawn emoji.
 bool host_can_draw_emoji(const char* emoji) {
-  static CTFontRef font = CTFontCreateWithName(CFSTR("Apple Color Emoji"), 20, nullptr);
+  static CTFontRef font = CTFontCreateWithName(CFSTR("Apple Color Emoji"), 20, nullptr)
   NSDictionary* attributes = @{(__bridge id)kCTFontAttributeName : (__bridge id)font};
   NSAttributedString* text = [[NSAttributedString alloc] initWithString:@(emoji)
                                                              attributes:attributes];
