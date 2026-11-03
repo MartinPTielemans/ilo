@@ -441,11 +441,14 @@ send press 300 111
 send dragto 300 140
 expect "^browser: download $t drag\$" "dragging the download's row didn't start the system's drag"
 # Off the Mac a user holds the drag until the Library has gone, as the release waits for it there.
-# On the Mac the release lands as the Library closes, where nothing takes the file, not on the page.
 [ "$(uname)" = Darwin ] ||
   expect '^browser: library hidden$' "the Library didn't close for the download's drag"
-send release 300 140
-# No real button holds the system's drag, so it may end before the release reaches it.
+# It's let go over the sidebar's top bar, between its buttons, where nothing takes a file whether
+# the Library has gone yet or not. Where it started, the page's edge once the sidebar is 298 wide,
+# the page took it once the Library had gone, as on the hosted Mac (#1554).
+send dragto 142 22
+send release 142 22
+# No real button holds the system's drag, so it may end before the release reaches it, at the move.
 dragged() {
   for _ in $(seq 100); do
     sed -n "/^browser: drive $press: /,\$p" "$log" | sed -n "/$1/,\$p" | grep -q "$2" && return 0
