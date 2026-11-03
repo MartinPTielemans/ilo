@@ -49,9 +49,50 @@ fn claude_gets_the_browser_alone() {
     assert_eq!(after("--mcp-config"), "/tmp/Tasks/task-1.json");
     assert_eq!(after("--allowedTools"), "mcp__ilo__open_tab,mcp__ilo__finish");
     assert_eq!(after("--model"), "haiku");
-    assert_eq!(after("--append-system-prompt"), "Work in the browser.");
+    assert_eq!(after("--append-system-prompt-file"), "/tmp/Tasks/task-1.md");
     // The token never goes on the command line, which other users can read.
     assert!(!args.iter().any(|arg| arg.contains("secret")));
+}
+
+/// Nothing on Claude's command line has a line break, which Windows can't hand npm's claude.cmd:
+/// the instructions, in paragraphs, go in a file (#1676).
+#[test]
+fn claudes_command_line_has_no_line_break() {
+    let mut launch = launch(Cli::Claude);
+    launch.instructions = "One.\n\nTwo.\r\n".into();
+    let args = claude_args(&launch);
+    assert!(!args.iter().any(|arg| arg.contains(['\n', '\r'])), "{args:?}");
+}
+
+/// On Windows, a task starts through an npm .cmd shim, as through an .exe: Rust starts no .cmd
+/// with a line break in an argument, which was why 0.1.3's tasks couldn't start (#1676). Claude
+/// gets its instructions whole in their file.
+#[cfg(windows)]
+#[test]
+fn a_task_starts_through_a_cmd_shim() {
+    let dir = std::env::temp_dir().join(format!("ilo-shim-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // A shim that reads all it's given, as claude and codex do.
+    let shim = dir.join("claude.cmd");
+    std::fs::write(&shim, "@findstr \"^\" > nul\r\n").unwrap();
+    let refused = crate::child::command(&shim).arg("One.\n\nTwo.").output().unwrap_err();
+    assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput, "{refused}");
+    for cli in Cli::ALL {
+        let mut launch = launch(cli);
+        launch.program = shim.clone();
+        launch.path = None;
+        launch.dir = dir.join(format!("{}-task", cli.id()));
+        launch.config = dir.join(format!("{}-task.json", cli.id()));
+        launch.instructions = "One.\n\nTwo.".into();
+        let (events, _said) = futures::channel::mpsc::unbounded();
+        let process = Process::start(&launch, "task-1", "Find a flight.\nTo Lisbon.", events)
+            .unwrap_or_else(|error| panic!("{} didn't start through a .cmd: {error}", cli.id()));
+        if cli == Cli::Claude {
+            assert_eq!(std::fs::read_to_string(instructions_file(&launch)).unwrap(), "One.\n\nTwo.");
+        }
+        drop(process);
+    }
+    _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]

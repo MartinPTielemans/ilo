@@ -400,57 +400,76 @@ if windows; then
   home="$PWD/$out/task-home"
   rm -rf "$home"
   python=$(python3 -I -c 'import sys; print(sys.executable)')
-  # What a stand-in answers, as the CLI named first: claude's and codex's status, and codex's
-  # app-server's initialize and model/list, its model named for the kind of program it is.
+  # What a stand-in answers, as the CLI named first, which is the kind of program it is second:
+  # claude's and codex's status, codex's app-server's model list, with a model named for the kind,
+  # and a task on either, whose instructions and first message it writes beside itself, as
+  # task-<cli>.json, before it answers and ends its turn.
   cat > "$out/task-cli.py" << 'EOF'
-import json, sys
-cli, args = sys.argv[1], sys.argv[2:]
+import json, os, sys
+cli, kind, args = sys.argv[1], sys.argv[2], sys.argv[3:]
+here = os.path.dirname(os.path.abspath(__file__))
+def record(instructions, first):
+    with open(os.path.join(here, f"task-{cli}.json"), "w", encoding="utf-8") as file:
+        json.dump({"kind": kind, "args": args, "instructions": instructions, "first": first}, file)
+def say(message):
+    print(json.dumps(message), flush=True)
 if cli == "claude" and args == ["auth", "status", "--json"]:
-    print(json.dumps({"loggedIn": True, "authMethod": "check"}))
+    say({"loggedIn": True, "authMethod": "check"})
 elif cli == "codex" and args == ["login", "status"]:
     print("Logged in using ChatGPT")
-elif cli == "codex" and args == ["app-server"]:
+elif cli == "claude" and "-p" in args:
+    at = args.index("--append-system-prompt-file") + 1
+    with open(args[at], encoding="utf-8") as file:
+        instructions = file.read()
+    first = json.loads(sys.stdin.readline())["message"]["content"]
+    record(instructions, first)
+    say({"type": "assistant", "message": {"content": [{"type": "text", "text": f"Done, from the {kind} stand-in."}]}})
+    say({"type": "result", "subtype": "success", "is_error": False, "result": "Done"})
     for line in sys.stdin:
-        method = json.loads(line).get("method")
+        pass
+elif cli == "codex" and args == ["app-server"]:
+    instructions = None
+    for line in sys.stdin:
+        message = json.loads(line)
+        method, id = message.get("method"), message.get("id")
         if method == "initialize":
-            print(json.dumps({"id": 1, "result": {}}), flush=True)
+            say({"id": id, "result": {}})
         elif method == "model/list":
-            print(json.dumps({"id": 2, "result": {"data": [{"id": "check-cmd", "displayName": "Check cmd"}]}}), flush=True)
+            say({"id": id, "result": {"data": [{"id": f"check-{kind}", "displayName": f"Check {kind}"}]}})
+        elif method == "thread/start":
+            instructions = message["params"].get("developerInstructions")
+            say({"id": id, "result": {"thread": {"id": "check-thread"}}})
+        elif method == "turn/start":
+            record(instructions, message["params"]["input"][0]["text"])
+            say({"id": id, "result": {"turn": {"id": "check-turn"}}})
+            say({"method": "item/completed", "params": {"item": {"type": "agentMessage", "text": f"Done, from the {kind} stand-in."}}})
+            say({"method": "turn/completed", "params": {"turn": {"id": "check-turn", "status": "completed"}}})
 else:
     sys.exit(2)
 EOF
+  # The .exe kind: a program of its own, as CreateProcess starts it, that runs the stand-in with
+  # the Python beside it in task-cli.python, its input and output its own.
   cat > "$out/task-cli.rs" << 'EOF'
-use std::io::{BufRead, Write};
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let exe = std::env::current_exe().unwrap();
     let cli = exe.file_stem().unwrap().to_string_lossy().to_lowercase();
-    match (cli.as_str(), args.as_slice()) {
-        ("claude", ["auth", "status", "--json"]) => println!("{{\"loggedIn\":true,\"authMethod\":\"check\"}}"),
-        ("codex", ["login", "status"]) => println!("Logged in using ChatGPT"),
-        ("codex", ["app-server"]) => {
-            let mut out = std::io::stdout();
-            for line in std::io::stdin().lock().lines() {
-                let line = line.unwrap();
-                if line.contains("\"method\":\"initialize\"") {
-                    writeln!(out, "{{\"id\":1,\"result\":{{}}}}").unwrap();
-                } else if line.contains("\"method\":\"model/list\"") {
-                    writeln!(out, "{{\"id\":2,\"result\":{{\"data\":[{{\"id\":\"check-exe\",\"displayName\":\"Check exe\"}}]}}}}").unwrap();
-                }
-                out.flush().unwrap();
-            }
-        }
-        _ => std::process::exit(2),
-    }
+    let python = std::fs::read_to_string(exe.with_file_name("task-cli.python")).unwrap();
+    let status = std::process::Command::new(python.trim())
+        .arg(exe.with_file_name("task-cli.py"))
+        .args([cli.as_str(), "exe"])
+        .args(std::env::args_os().skip(1))
+        .status()
+        .unwrap();
+    std::process::exit(status.code().unwrap_or(1));
 }
 EOF
   rustc -O -o "$out/task-cli.exe" "$out/task-cli.rs" || fail "rustc couldn't build the stand-in CLI"
+  printf '%s' "$python" > "$out/task-cli.python"
   # An npm shim for the CLI $1, as npm writes one, that runs the Python stand-in.
   npm_shim() {
     printf '%s\n' '@ECHO off' 'GOTO start' ':find_dp0' 'SET dp0=%~dp0' 'EXIT /b' ':start' 'SETLOCAL' \
       'CALL :find_dp0' "SET \"_prog=$python\"" \
-      "endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\task-cli.py\" $1 %*" |
+      "endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\task-cli.py\" $1 cmd %*" |
       sed 's/$/\r/'
   }
   # Every console window Windows shows, from a WinEvent hook, written to $2 once $1 is there. It
@@ -529,11 +548,9 @@ EOF
     for cli in "$1" "$2"; do
       case $cli in
         *.exe) cp "$out/task-cli.exe" "$cli" ;;
-        *.cmd)
-          npm_shim "$(basename "$cli" .cmd)" > "$cli"
-          cp "$out/task-cli.py" "$(dirname "$cli")/"
-          ;;
+        *.cmd) npm_shim "$(basename "$cli" .cmd)" > "$cli" ;;
       esac
+      cp "$out/task-cli.py" "$out/task-cli.python" "$(dirname "$cli")/"
     done
     printf '{"on":true,"agents":[]}' > "$agents_file"
     # The PATH stays the run's, which has none of these folders.
@@ -565,6 +582,50 @@ EOF
     done
     grep -q "\"$3\"" "$agents_file" || fail "Codex at $2 didn't list its model $3: $(cat "$agents_file")"
     ../tools/window-screenshot.sh "$pid" "$out/task-agents-$3.png" || fail "no window to capture"
+    send key w cmd
+    expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+    # A task from ⌘T on each, Claude first, as the agent listed first, then Codex, below it.
+    for cli in "$1" "$2"; do
+      task_cli=$(basename "$cli"); task_cli=${task_cli%.*}
+      asked="Find a flight on $task_cli"
+      send key t cmd
+      expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+      send type "$asked"
+      send key tab
+      expect '^browser: command bar asks an agent$' "⇥ didn't make what was typed a task"
+      expect '^browser: command bar agents: Claude, Codex$' "⇥ didn't list Claude and Codex, signed in"
+      [ "$task_cli" = codex ] && send key down
+      send key return
+      expect "^browser: command bar runs a task on $task_cli\$" "↩ didn't run the task on $task_cli"
+      expect_late "^browser: task task-[0-9]* on $task_cli asked from space " "the task on $task_cli didn't start"
+      task=$(sed -n "s/^browser: task \(task-[0-9]*\) on $task_cli asked from space .*/\1/p" "$log" | tail -1)
+      recorded="$(dirname "$cli")/task-$task_cli.json"
+      for _ in $(seq 300); do
+        [ -s "$recorded" ] && break
+        grep -q "^browser: task $task \(couldn.t start\|failed\)" "$log" && break
+        sleep 0.1
+      done
+      grep "^browser: task $task \(couldn.t start\|failed\|ended\)" "$log" &&
+        fail "the task on $task_cli at $cli didn't run: $(grep "^browser: task $task " "$log" | tail -1)"
+      python3 -I - "$recorded" "$asked" << 'PY' || fail "the task's CLI at $cli didn't get what it's told whole"
+import json, sys
+path, asked = sys.argv[1:]
+with open(path, encoding="utf-8") as file:
+    task = json.load(file)
+instructions = task.get("instructions") or ""
+if not instructions.startswith("You do a task the user asked in") or "\n\n" not in instructions:
+    sys.exit(f"its instructions were {instructions[:200]!r}")
+if not task.get("first", "").startswith(asked):
+    sys.exit(f"its first message was {task.get('first')!r}")
+if any("\n" in arg or "\r" in arg for arg in task.get("args", [])):
+    sys.exit(f"an argument had a line break: {task['args']!r}")
+PY
+      # It answered, which ends its turn.
+      sleep 1
+      grep "^browser: task $task \(couldn.t start\|failed\|ended\|had no answer\)" "$log" &&
+        fail "the task on $task_cli at $cli ended badly: $(grep "^browser: task $task " "$log" | tail -1)"
+      ../tools/window-screenshot.sh "$pid" "$out/task-$3-$task_cli.png" || fail "no window to capture"
+    done
     quit
   }
   task_clis "$native/claude.exe" "$npm/codex.cmd" check-cmd
@@ -573,7 +634,7 @@ EOF
   wait "$watcher" || fail "the console watcher failed"
   [ -s "$out/consoles" ] && fail "console windows showed as the task agents were looked for: $(tr '\n' ';' < "$out/consoles")"
   rm -rf "$home" "$agents_file"
-  tasks_found="; on Windows the task agents find claude.exe and codex.cmd, then claude.cmd and codex.exe, off the PATH, each signed in, Codex's models listed, and no console window shows"
+  tasks_found="; on Windows the task agents find claude.exe and codex.cmd, then claude.cmd and codex.exe, off the PATH, each signed in, Codex's models listed, a task from ⌘T starts on each and its CLI gets its instructions whole and the first message, and no console window shows"
 fi
 if [ "$driven" = 1 ]; then
   echo "ok: $made; an agent's Space shows and switches as the user's, keeps the user's tabs out, refuses an agent ad blocking, passwords, DevTools, a profile's settings and any action agents lack, with why in the activity log, gets a tab the user gives it until they move it back, clears its mark as each session ends, and comes back the agent's$connected$tasks_found; a task's Space is in no list of Spaces"

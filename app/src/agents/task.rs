@@ -1182,6 +1182,7 @@ impl Agents {
         let dir = dir.join("Tasks");
         _ = std::fs::remove_dir_all(dir.join(agent));
         _ = std::fs::remove_file(dir.join(format!("{agent}.json")));
+        _ = std::fs::remove_file(dir.join(format!("{agent}.md")));
     }
 
     /// A task's call, as a step of its trace from when it came. A run's steps are steps of their
