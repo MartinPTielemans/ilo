@@ -361,7 +361,9 @@ painted(() => document.title = "fields");
     *) fail "the page with frames was outlined as: $outline" ;;
   esac
   frames_tab=$(printf '%s\n' "$outline" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
-  await_log "^browser: title $frames_tab frames\$" "the other site's frame didn't paint"
+  # The agent doesn't wait for that. The core gives a click to the frame it's in, so it lands
+  # before the window has drawn the other site's frame, which in a background tab it may not
+  # have yet (#1175).
   inner=$(ref_of button "Inner button")
   cross=$(ref_of button "Cross button")
   [ -n "$inner" ] && [ -n "$cross" ] && [ "$inner" != "$cross" ] ||

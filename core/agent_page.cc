@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <deque>
 #include <functional>
+#include <iterator>
 #include <map>
 #include <string_view>
 #include <utility>
@@ -324,8 +325,12 @@ void AgentPage::Settle() {
 }
 
 void AgentPage::Click() {
-  Center(base::BindOnce(
-      [](base::WeakPtr<AgentPage> page, std::optional<gfx::RectF> box) {
+  // In the session of the element's frame: DevTools then gives the click to that frame even while
+  // the window's hit-test data lacks it, as in a background tab, where through the main frame's
+  // session the page around the frame took the click (#1175).
+  const int slot = SlotOfElement(job_->element);
+  Locate(base::BindOnce(
+      [](base::WeakPtr<AgentPage> page, int slot, std::optional<gfx::RectF> box) {
         if (!page) {
           return;
         }
@@ -333,34 +338,44 @@ void AgentPage::Click() {
           page->Fail("The element isn't on the page any more, or is hidden. Take a new snapshot.");
           return;
         }
-        page->Point(*box);
-        const std::pair<double, double> at(box->CenterPoint().x(), box->CenterPoint().y());
-        base::WeakPtr<AgentPage> weak = page;
-        page->Mouse("mouseMoved", at,
-                    base::BindOnce(
-                        [](base::WeakPtr<AgentPage> page, std::pair<double, double> at) {
-                          if (!page) {
-                            return;
-                          }
-                          page->Mouse(
-                              "mousePressed", at,
-                              base::BindOnce(
-                                  [](base::WeakPtr<AgentPage> page, std::pair<double, double> at) {
-                                    if (page) {
-                                      page->Mouse("mouseReleased", at,
-                                                  base::BindOnce(&AgentPage::Settle, page));
-                                    }
-                                  },
-                                  page, at));
-                        },
-                        weak, at));
+        // Where that is in the main frame's viewport, for the agent's pointer.
+        page->Offset(
+            slot, *box,
+            base::BindOnce(
+                [](base::WeakPtr<AgentPage> page, int slot, gfx::PointF at,
+                   std::optional<gfx::RectF> shown) {
+                  if (!page) {
+                    return;
+                  }
+                  if (!shown) {
+                    page->Fail(
+                        "The element isn't on the page any more, or is hidden. Take a new "
+                        "snapshot.");
+                    return;
+                  }
+                  page->Point(*shown);
+                  page->ClickAt(slot, at, 0);
+                },
+                page, slot, box->CenterPoint()));
       },
-      weak_factory_.GetWeakPtr()));
+      weak_factory_.GetWeakPtr(), slot));
 }
 
-void AgentPage::Mouse(const char* type, std::pair<double, double> at, base::OnceClosure then) {
-  base::DictValue params =
-      base::DictValue().Set("type", type).Set("x", at.first).Set("y", at.second);
+void AgentPage::ClickAt(int slot, gfx::PointF at, size_t step) {
+  static constexpr const char* kSteps[] = {"mouseMoved", "mousePressed", "mouseReleased"};
+  if (step == std::size(kSteps)) {
+    Settle();
+    return;
+  }
+  Mouse(kSteps[step], at, slot,
+        base::BindOnce(&AgentPage::ClickAt, weak_factory_.GetWeakPtr(), slot, at, step + 1));
+}
+
+void AgentPage::Mouse(const char* type, gfx::PointF at, int slot, base::OnceClosure then) {
+  base::DictValue params = base::DictValue()
+                               .Set("type", type)
+                               .Set("x", static_cast<double>(at.x()))
+                               .Set("y", static_cast<double>(at.y()));
   if (std::string_view(type) != "mouseMoved") {
     params.Set("button", "left");
     params.Set("clickCount", 1);
@@ -377,7 +392,8 @@ void AgentPage::Mouse(const char* type, std::pair<double, double> at, base::Once
              }
              std::move(then).Run();
            },
-           weak_factory_.GetWeakPtr(), std::move(then)));
+           weak_factory_.GetWeakPtr(), std::move(then)),
+       slot);
 }
 
 void AgentPage::Type(bool submit) {
@@ -755,6 +771,21 @@ void AgentPage::CheckPasswords(base::ListValue nodes,
 }
 
 void AgentPage::Center(Then then) {
+  Locate(base::BindOnce(
+      [](base::WeakPtr<AgentPage> page, int slot, Then then, std::optional<gfx::RectF> box) {
+        if (!page) {
+          return;
+        }
+        if (!box) {
+          std::move(then).Run(std::nullopt);
+          return;
+        }
+        page->Offset(slot, *box, std::move(then));
+      },
+      weak_factory_.GetWeakPtr(), SlotOfElement(job_->element), std::move(then)));
+}
+
+void AgentPage::Locate(Then then) {
   const int slot = SlotOfElement(job_->element);
   const int element = NodeOfElement(job_->element);
   Send("DOM.getDocument", base::DictValue().Set("depth", 0),
@@ -775,7 +806,7 @@ void AgentPage::Center(Then then) {
                        page->Send(
                            "DOM.getContentQuads", base::DictValue().Set("backendNodeId", element),
                            base::BindOnce(
-                               [](base::WeakPtr<AgentPage> page, int slot, Then then,
+                               [](base::WeakPtr<AgentPage> page, Then then,
                                   const base::DictValue* result) {
                                  if (!page) {
                                    return;
@@ -801,9 +832,9 @@ void AgentPage::Center(Then then) {
                                      static_cast<float>(left), static_cast<float>(top),
                                      static_cast<float>(right - left),
                                      static_cast<float>(bottom - top));
-                                 page->Offset(slot, box, std::move(then));
+                                 std::move(then).Run(box);
                                },
-                               page, slot, std::move(then)),
+                               page, std::move(then)),
                            slot);
                      },
                      page, slot, element, std::move(then)),
