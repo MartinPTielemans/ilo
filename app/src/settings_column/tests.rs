@@ -16,7 +16,7 @@ struct Shown {
 }
 
 impl Render for Shown {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.weak_entity();
         let picked = self.picked.clone();
         let pick: Pick = Rc::new(move |section, _, cx| {
@@ -29,9 +29,14 @@ impl Render for Shown {
         });
         let foot = self.foot.clone();
         let foot: Foot = Rc::new(move |_, _| foot.set(foot.get() + 1));
-        div()
-            .size_full()
-            .child(column(self.shown, true, self.logged.clone(), pick, foot))
+        div().size_full().child(column(
+            self.shown,
+            true,
+            self.logged.clone(),
+            pick,
+            foot,
+            window.is_a11y_active(),
+        ))
     }
 }
 
@@ -158,4 +163,48 @@ fn at_the_least_height_the_sections_scroll_above_the_foot(cx: &mut TestAppContex
         view.read_with(cx, |view, _| view.picked.borrow().is_empty()),
         "the click picked a section"
     );
+}
+
+/// VoiceOver reads the column as a tab list of the twelve sections, the one shown selected, and
+/// Chromium settings as a button; its press on a section shows it, as a click does (#1381).
+#[gpui::test]
+fn voiceover_reads_the_sections_as_tabs(cx: &mut TestAppContext) {
+    use gpui::accesskit::{Action, Role};
+    let (view, cx) = shown(cx);
+    cx.simulate_a11y_activation();
+    cx.run_until_parked();
+    let tree = cx.a11y_tree().expect("GPUI built a tree");
+    let tabs: Vec<(String, bool)> = (tree.nodes.iter())
+        .filter(|(_, node)| node.role() == Role::Tab)
+        .map(|(_, node)| {
+            (
+                node.label().unwrap_or_default().into(),
+                node.is_selected() == Some(true),
+            )
+        })
+        .collect();
+    let names: Vec<&str> = tabs.iter().map(|(name, _)| name.as_str()).collect();
+    let all: Vec<&str> = Section::all().map(Section::name).collect();
+    assert_eq!(names, all);
+    let selected: Vec<&str> = (tabs.iter().filter(|(_, selected)| *selected))
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(selected, ["General"]);
+    let list = tree
+        .nodes
+        .iter()
+        .find(|(_, node)| node.role() == Role::TabList);
+    assert_eq!(list.and_then(|(_, node)| node.label()), Some("Sections"));
+    let chromium = tree
+        .nodes
+        .iter()
+        .find(|(_, node)| node.role() == Role::Button && node.label() == Some("Chromium settings"));
+    assert!(chromium.is_some(), "no Chromium settings button");
+    let privacy = (tree.nodes.iter())
+        .find(|(_, node)| node.role() == Role::Tab && node.label() == Some("Privacy"))
+        .map(|(id, _)| *id)
+        .expect("no Privacy tab");
+    cx.simulate_a11y_action(privacy, Action::Click);
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.shown), Section::Privacy);
 }

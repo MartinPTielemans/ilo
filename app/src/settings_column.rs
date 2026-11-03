@@ -5,10 +5,16 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gpui::{App, BoxShadow, MouseButton, Rgba, Window, div, point, prelude::*, px, rgb, rgba, svg};
+use gpui::{
+    App, BoxShadow, MouseButton, Rgba, Window,
+    accesskit::{Orientation, Role},
+    div, point,
+    prelude::*,
+    px, rgb, rgba, svg,
+};
 
 use crate::palette::{INK, PAPER};
-use crate::settings_rows::drawn;
+use crate::settings_rows::{drawn, named_button};
 use crate::tokens::radius;
 use crate::tokens::settings::{
     COLUMN, COLUMN_TOP, FOOT_BOTTOM, FOOT_GLYPH, FOOT_GLYPH_ALPHA, FOOT_TEXT, NAME, PLATE_GAP,
@@ -100,13 +106,16 @@ pub type Foot = Rc<dyn Fn(&mut Window, &mut App)>;
 
 /// The column, 208 wide, `shown`'s plate lit, light or dark as the window is. Each section logs
 /// where it's drawn as "toolbar {name}", as the toolbar's tabs did, for check.sh to click, with
-/// `logged`. A press on the column's ground moves the window, as a title bar does.
+/// `logged`. A press on the column's ground moves the window, as a title bar does. While an
+/// assistive app asks, `a11y`, the sections are a tab list, the one shown selected, and Chromium
+/// settings a button (#1381).
 pub fn column(
     shown: Section,
     dark: bool,
     logged: Rc<RefCell<Vec<String>>>,
     pick: Pick,
     foot: Foot,
+    a11y: bool,
 ) -> gpui::Div {
     let base = if dark { rgb(PAPER) } else { rgb(INK) };
     let groups = Section::GROUPS
@@ -118,6 +127,12 @@ pub fn column(
                 let pick = pick.clone();
                 plate(base, selected, dark)
                     .id(section.name())
+                    .when(a11y, |plate| {
+                        plate
+                            .role(Role::Tab)
+                            .aria_label(section.name())
+                            .aria_selected(selected)
+                    })
                     .child(drawn(format!("toolbar {}", section.name()), logged.clone()))
                     // A press on a plate is its click's, not the window's move.
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -141,6 +156,7 @@ pub fn column(
     let chromium = plate(base, false, dark)
         .mb_0()
         .id("chromium-settings")
+        .when(a11y, |foot| named_button(foot, "Chromium settings"))
         .text_color(base.opacity(FOOT_TEXT))
         .child(drawn("chromium settings".into(), logged))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -165,6 +181,10 @@ pub fn column(
         .child(
             div()
                 .id("sections")
+                .when(a11y, |sections| {
+                    let sections = sections.role(Role::TabList).aria_label("Sections");
+                    sections.aria_orientation(Orientation::Vertical)
+                })
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()

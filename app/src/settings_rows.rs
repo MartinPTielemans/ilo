@@ -4,7 +4,13 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gpui::{BoxShadow, Rgba, SharedString, canvas, div, point, prelude::*, px, rgb, rgba, svg};
+use gpui::{
+    BoxShadow, Rgba, SharedString,
+    accesskit::{HasPopup, Role, Toggled},
+    canvas, div, point,
+    prelude::*,
+    px, rgb, rgba, svg,
+};
 
 use crate::palette::{INK, OVERLAY_DARK, PAPER};
 use crate::tokens::palette::DIALOG_LIGHT;
@@ -41,6 +47,39 @@ pub fn drawn(what: String, logged: Rc<RefCell<Vec<String>>>) -> gpui::Canvas<()>
     )
     .absolute()
     .inset_0()
+}
+
+/// What an assistive app reads of a button: a button called `name`, as Site Controls' are (#1381).
+/// Put on while one asks (`Window::is_a11y_active`).
+pub fn named_button<E: StatefulInteractiveElement>(control: E, name: impl Into<SharedString>) -> E {
+    control.role(Role::Button).aria_label(name)
+}
+
+/// What an assistive app reads of a switch: a switch called by its row's `name`, on or off.
+pub fn named_switch<E: StatefulInteractiveElement>(
+    control: E,
+    name: impl Into<SharedString>,
+    on: bool,
+) -> E {
+    let toggled = if on { Toggled::True } else { Toggled::False };
+    control
+        .role(Role::Switch)
+        .aria_label(name)
+        .aria_toggled(toggled)
+}
+
+/// What an assistive app reads of a pop-up button: a button called by its row's `name`, its value
+/// the item it shows, which says it opens a menu, as Site Controls' rows do.
+pub fn named_popup<E: StatefulInteractiveElement>(
+    control: E,
+    name: impl Into<SharedString>,
+    item: impl Into<SharedString>,
+) -> E {
+    control
+        .role(Role::Button)
+        .aria_label(name)
+        .aria_value(item)
+        .a11y_synthetic_children(|builder| builder.parent_node().set_has_popup(HasPopup::Menu))
 }
 
 /// A switch's knob slides across over 150 ms (ours).
@@ -376,6 +415,65 @@ pub fn checked_row(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A button, a switch and a pop-up, named as Settings names them while VoiceOver asks.
+    struct Named;
+
+    impl Render for Named {
+        fn render(
+            &mut self,
+            window: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            let look = Look::settings(true);
+            let a11y = window.is_a11y_active();
+            let switch = div()
+                .id("switch")
+                .child(switch(&look, true, 1., rgb(0x2ea44f)));
+            let pop_up = popup(&look, "12 hours", 155., false).id("archive");
+            div()
+                .child(
+                    button(&look, "make-default", "Make Default")
+                        .when(a11y, |button| named_button(button, "Make Default")),
+                )
+                .child(switch.when(a11y, |switch| {
+                    named_switch(switch, "Ask before quitting", true)
+                }))
+                .child(pop_up.when(a11y, |pop_up| {
+                    named_popup(pop_up, "Archive Today tabs after", "12 hours")
+                }))
+        }
+    }
+
+    /// VoiceOver reads Settings' controls by their rows' names: a button by its title, a switch
+    /// on, and a pop-up with the item it shows, opening a menu (#1381). With no assistive app
+    /// asking, there's no tree to read.
+    #[gpui::test]
+    fn voiceover_reads_the_controls_by_their_rows(cx: &mut gpui::TestAppContext) {
+        use gpui::accesskit::{HasPopup, Role, Toggled};
+        let (_, cx) = cx.add_window_view(|_, _| Named);
+        cx.run_until_parked();
+        assert!(cx.a11y_tree().is_none(), "a tree with nothing asking");
+        cx.simulate_a11y_activation();
+        cx.run_until_parked();
+        let tree = cx.a11y_tree().expect("GPUI built a tree");
+        let find = |role: Role, label: &str| {
+            let found = tree
+                .nodes
+                .iter()
+                .find(|(_, node)| node.role() == role && node.label() == Some(label));
+            found
+                .unwrap_or_else(|| panic!("no {role:?} called {label}"))
+                .1
+                .clone()
+        };
+        find(Role::Button, "Make Default");
+        let switch = find(Role::Switch, "Ask before quitting");
+        assert_eq!(switch.toggled(), Some(Toggled::True));
+        let pop_up = find(Role::Button, "Archive Today tabs after");
+        assert_eq!(pop_up.value(), Some("12 hours"));
+        assert_eq!(pop_up.has_popup(), Some(HasPopup::Menu));
+    }
 
     fn contrast(look: &Look, color: Rgba) -> f32 {
         let lum = |c: Rgba| c.r + c.g + c.b;
