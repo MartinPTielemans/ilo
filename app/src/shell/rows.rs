@@ -433,6 +433,7 @@ impl Shell {
                     folder_glyph(open),
                     FAVICON_DRAWN,
                     self.palette.text(SECONDARY).into(),
+                    cx,
                 )
                 .into_any_element(),
         };
@@ -595,6 +596,7 @@ impl Shell {
                     icon,
                     SPEAKER_DRAWN,
                     self.palette.text(SECONDARY).into(),
+                    cx,
                 ))
                 // Not the row's press, which would show the tab, nor a double-click's rename.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -1185,7 +1187,7 @@ impl Shell {
             let room = room.unwrap_or(if arrow == NONE { 0. } else { 1. });
             // Fading out, it takes no click and doesn't light up.
             let color = if live && self.clear_hovered { CLEAR_HOVERED } else { CLEAR };
-            let glyph = self.swaps.glyph(what, arrow, CLEAR_ARROW, self.palette.text(color));
+            let glyph = self.swaps.glyph(what, arrow, CLEAR_ARROW, self.palette.text(color), cx);
             let clear = clear_label(&self.palette, glyph, room, color).id("clear").opacity(self.tools_opacity());
             let clear = clear.when(self.a11y, |clear| {
                 clear.accessibility_id("clear").button_named("Clear Today")

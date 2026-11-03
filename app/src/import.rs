@@ -596,7 +596,7 @@ impl ImportView {
                 }
                 None => picked.push(kind),
             }
-            self.switched = Some((kind, Instant::now()));
+            self.switched = Some((kind, crate::motion::start(cx)));
             cx.notify();
         }
     }

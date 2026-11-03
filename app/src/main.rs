@@ -232,6 +232,7 @@ mod platform {
         pub fn host_set_overlay_radius(overlay: c_int, radius: f64);
         pub fn host_set_overlay_growth(overlay: c_int, x: f64, y: f64);
         pub fn host_set_overlay_shrink(overlay: c_int);
+        pub fn host_set_overlays_still(still: bool);
         pub fn host_show_overlay(
             overlay: c_int,
             ui_view: *mut c_void,
@@ -6179,6 +6180,8 @@ fn set_reduce_motion(reduce: bool, cx: &mut App) {
         // check.sh reads this line.
         log!("browser: reduce motion {}", if reduce { "on" } else { "off" });
         cx.set_reduce_motion(reduce);
+        // The pickers' grow and shrink are the platform's to draw.
+        unsafe { platform::host_set_overlays_still(reduce) };
     }
 }
 

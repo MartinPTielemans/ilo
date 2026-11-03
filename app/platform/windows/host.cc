@@ -2632,6 +2632,7 @@ void host_set_overlay_radius(int, double) {}
 void host_set_overlay_elevation(int, float, double, float, double, double) {}
 void host_set_overlay_growth(int, double, double) {}
 void host_set_overlay_shrink(int) {}
+void host_set_overlays_still(bool) {}
 
 void host_show_overlay(int overlay,
                        void* ui_view,

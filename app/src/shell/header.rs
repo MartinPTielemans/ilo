@@ -63,7 +63,7 @@ impl Shell {
         let color = Hsla::from(self.palette.glyph(if enabled { NAV } else { NAV_DISABLED }));
         // Reload and stop are one button, which changes with the tab shown's page.
         let glyph = match x == RELOAD_X {
-            true => self.swaps.glyph(Swapped::Reload(self.field_tab()), icon, NAV_GLYPH, color),
+            true => self.swaps.glyph(Swapped::Reload(self.field_tab()), icon, NAV_GLYPH, color, cx),
             false => svg().path(icon).size(px(NAV_GLYPH)).text_color(color).into_any_element(),
         };
         let button = div()
@@ -432,6 +432,7 @@ impl Shell {
                     if self.url_copied.is_some() { CHECK } else { LINK },
                     URL_BUTTON_GLYPH,
                     self.palette.glyph(NAV).into(),
+                    cx,
                 ))
         });
         let site_controls = tools.then(|| {

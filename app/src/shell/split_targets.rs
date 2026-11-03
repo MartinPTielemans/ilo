@@ -115,9 +115,9 @@ impl OverPage {
     }
 
     /// The pointer is at `position` over `card`: a target it's in grows toward it, and the one it
-    /// was under shrinks once it leaves it.
-    fn point(&mut self, card: Bounds<Pixels>, position: Point<Pixels>) {
-        let (edge, now) = (self.edge(), Instant::now());
+    /// was under shrinks once it leaves it, from `now` (`motion::start`).
+    fn point(&mut self, card: Bounds<Pixels>, position: Point<Pixels>, now: Instant) {
+        let edge = self.edge();
         self.pointer = position;
         for target in &mut self.targets {
             let (at, under, since, from) = *target;
@@ -217,7 +217,7 @@ impl Shell {
         };
         drag.moving = true;
         let over = drag.over_page.get_or_insert_with(|| OverPage::new(with, edges, position));
-        over.point(card, position);
+        over.point(card, position, crate::motion::start(cx));
         cx.notify();
         true
     }
@@ -269,7 +269,7 @@ impl Shell {
             return false;
         };
         link.url = url.to_string();
-        link.over.point(card, position);
+        link.over.point(card, position, crate::motion::start(cx));
         cx.notify();
         link.over.edge().is_some()
     }
@@ -319,7 +319,7 @@ impl Shell {
         let alone = self.panes(with).len() == 1;
         // The release that ends the drag isn't a click.
         self.dragged = true;
-        self.settle_drag();
+        self.settle_drag(cx);
         if let Some(edge) = edge {
             // A page alone has every target, and the top and bottom ones stack its new split.
             self.join_split(tab, with, edge.first(), alone && edge.stacked(), cx);

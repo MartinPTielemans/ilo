@@ -2209,8 +2209,15 @@ void host_set_overlay_radius(int index, double radius) {
   [overlay->shadow setFrame:NSZeroRect display:NO];
 }
 
+// From host_set_overlays_still: Reduce Motion, under which an overlay's growth is a fade alone.
+static bool g_overlays_still = false;
+
+void host_set_overlays_still(bool still) {
+  g_overlays_still = still;
+}
+
 // |overlay| at near nothing about its growth point, as a sublayer transform of the layer holding
-// its blur and drawing.
+// its blur and drawing; at its size under Reduce Motion.
 static CATransform3D ShrunkOverlay(const Overlay& overlay) {
   NSView* container = overlay.view.superview;
   CALayer* layer = container.layer;
@@ -2221,7 +2228,8 @@ static CATransform3D ShrunkOverlay(const Overlay& overlay) {
   const double y = (container.isFlipped ? overlay.grow_y : size.height - overlay.grow_y) -
                    layer.anchorPoint.y * size.height;
   CATransform3D shrunk = CATransform3DMakeTranslation(x, y, 0);
-  shrunk = CATransform3DScale(shrunk, 0.05, 0.05, 1);
+  const double scale = g_overlays_still ? 1 : 0.05;
+  shrunk = CATransform3DScale(shrunk, scale, scale, 1);
   return CATransform3DTranslate(shrunk, -x, -y, 0);
 }
 

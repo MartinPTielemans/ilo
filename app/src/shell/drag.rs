@@ -35,14 +35,16 @@ impl Shell {
     /// Starts the list's rows from where they were in `before` to where they are now: rows still
     /// there slide, a new tab's row is in its place at once with its plate fading in, several new
     /// ones fade in whole, and a closed one fades where it was (docs/ux-spec.md › Tab rows).
-    pub(super) fn move_rows(&mut self, before: HashMap<Slot, f32>, curve: Curve) {
-        let now = Instant::now();
+    /// Under Reduce Motion the rows are in their places at once, a closed one gone with its room,
+    /// and new ones still fade in.
+    pub(super) fn move_rows(&mut self, before: HashMap<Slot, f32>, curve: Curve, cx: &gpui::App) {
+        let (now, moved) = (Instant::now(), crate::motion::start(cx));
         let after = self.layout();
         let slides = after
             .iter()
             .filter_map(|(&slot, &top)| {
                 let from = before.get(&slot)? + self.slide(slot) - top;
-                (from != 0.).then_some((slot, (from, now, curve)))
+                (from != 0.).then_some((slot, (from, moved, curve)))
             })
             .collect();
         let mut opened = after
@@ -75,7 +77,7 @@ impl Shell {
                     folder: folder.map(|space| space.is_open(tab)),
                     indent: self.depth(tab) as f32 * FOLDER_INDENT,
                     top: top + self.slide(slot),
-                    start: now,
+                    start: moved,
                 });
             }
         }
@@ -427,7 +429,7 @@ impl Shell {
             drag.depth = depth;
             drag.line = line;
             drag.onto = onto;
-            drag.shape.turn(over_favorites, Instant::now());
+            drag.shape.turn(over_favorites, crate::motion::start(cx));
         }
         if onto != was_onto {
             // check.sh waits for this line.
@@ -455,7 +457,7 @@ impl Shell {
             if let Some(drag) = &mut self.drag {
                 drag.to = place;
             }
-            self.move_tiles(tiles, Curve::Room);
+            self.move_tiles(tiles, Curve::Room, cx);
         }
         cx.notify();
     }
@@ -634,14 +636,14 @@ impl Shell {
         if let Some(with) = drag.onto {
             // check.sh waits for this line.
             log!("browser: dragged {tab} onto {with}");
-            self.settle_drag();
+            self.settle_drag(cx);
             self.join_split(tab, with, false, false, cx);
             cx.notify();
             return;
         }
         let listed = matches!((drag.from, to), (Place::List(..), Place::List(..)));
         if alt && listed && self.panes(tab).len() == 1 && !self.is_folder(tab) {
-            self.settle_drag();
+            self.settle_drag(cx);
             self.putting_back = true;
             self.drop_copy(tab, to, drag_depth, cx);
             cx.notify();
@@ -652,7 +654,7 @@ impl Shell {
         };
         let favorite = matches!(to, Place::Favorite(_));
         if drag.to == drag.from && (favorite || drag.depth == drag.from_depth) {
-            self.settle_drag();
+            self.settle_drag(cx);
             self.putting_back = true;
         } else {
             drag.dropped = true;
@@ -717,7 +719,7 @@ impl Shell {
     /// rows settle back.
     pub fn drag_away(&mut self, cx: &mut Context<Self>) {
         if self.drag.as_ref().is_some_and(|drag| drag.incoming && !drag.dropped) {
-            self.settle_drag();
+            self.settle_drag(cx);
             cx.notify();
         }
     }
@@ -778,7 +780,7 @@ impl Shell {
                 drag.tab = tab;
                 drag.dropped = true;
             }
-            None => self.settle_drag(),
+            None => self.settle_drag(cx),
         }
         cx.notify();
         tab != 0 || made
@@ -874,7 +876,7 @@ impl Shell {
         }
         // The release that ends the drag isn't a click.
         self.dragged = true;
-        self.settle_drag();
+        self.settle_drag(cx);
         self.putting_back = true;
         cx.notify();
         true
@@ -882,12 +884,12 @@ impl Shell {
 
     /// Ends a drag that moves nothing in the browser: the rows and tiles settle from where they're
     /// drawn.
-    pub(super) fn settle_drag(&mut self) {
+    pub(super) fn settle_drag(&mut self, cx: &gpui::App) {
         let tiles = self.drawn();
-        self.move_rows(self.layout(), Curve::Slide);
+        self.move_rows(self.layout(), Curve::Slide, cx);
         self.drag = None;
         self.retip = true;
-        self.move_tiles(tiles, Curve::Slide);
+        self.move_tiles(tiles, Curve::Slide, cx);
     }
 
     /// The browser reported its favorites, or else the Space shown's lists. A row still held whose
