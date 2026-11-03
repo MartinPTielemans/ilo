@@ -828,9 +828,11 @@ status-ring = 1.5
 status-ring-color = 0xf3f0e8
 title-gap = 8.0
 # The speaker before a title, while its tab plays sound or is muted, and its pressable square.
+# Arc's title is 8 after its speaker's glyph; ours draws 0.6 inside its 16 pt box, which is 1
+# inside the square, so the title is 6.5 after the square.
 speaker-drawn = 16.0
 speaker-size = 18.0
-speaker-gap = 4.0
+speaker-gap = 6.5
 # Arc's close button, 5 inside the plate's right edge, and the box its glyph is drawn in.
 close-size = 26.0
 close-right = 5.0
@@ -1898,9 +1900,13 @@ note-height = 41.0
 note-top = 4.0
 
 [tooltip]
-# How far below the tile or row it names the tooltip's top is, or above it if it doesn't fit
-# below. The gap between two tiles, so it reads as the tile's own and the tile's edge shows.
+# How far below a folder's row the tooltip's top is, or above it if it doesn't fit below. The gap
+# between two tiles, so it reads as the row's own and the row's edge shows.
 gap = 6.0
+# A button's or tile's tooltip hangs off the bottom right of a 16 pt box around its glyph: its top
+# left is this far right of the glyph's centre and this far below it (Arc 1.170).
+button-x = 8.0
+button-y = 7.0
 # How far in from the window's left and right edges a tooltip that would cross one stays (ours).
 edge-inset = 8.0
 # How far right of a footer button's plate the tooltip beside it starts (Arc).

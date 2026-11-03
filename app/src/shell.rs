@@ -3496,6 +3496,8 @@ impl Render for Shell {
                     shell.browser.start_window_move(cx);
                 }
                 shell.pointer_at(event.position.x.into(), cx);
+                // A tooltip shows once the pointer rests (tooltip.rs).
+                crate::tooltip::moved(cx);
             }))
             .on_scroll(cx.listener(|shell, _, _, cx| shell.end_hovers(cx)))
             .on_mouse_up(
