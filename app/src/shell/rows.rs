@@ -528,11 +528,7 @@ impl Shell {
                 if split && event.modifiers().alt {
                     log!("browser: command separate-split via sidebar");
                     shell.on_split_close = None;
-                    // From the right, so the pages keep their order in the list.
-                    for &tab in tabs[1..].iter().rev() {
-                        shell.separate_tab(tab, cx);
-                    }
-                    return;
+                    return shell.separate_all(row, cx);
                 }
                 log!("browser: command close-tab via sidebar");
                 shell.close_row(row, cx);
