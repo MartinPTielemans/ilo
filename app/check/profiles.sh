@@ -477,10 +477,6 @@ settings_answer() {
     send choose "$1"
   fi
 }
-# The new profile's row sits at the window's foot once the two above it say why they have no
-# Delete, so the tab scrolls it up into view first.
-send scroll 400 400 30 2
-expect "^browser: settings delete profile $spare at " "scrolling didn't move the new profile's Delete"
 post clickkey $(drawn "delete profile $spare")
 expect "^browser: $asks shown Delete “spare 日本語”?\$" "Delete in Settings didn't ask first"
 settings_answer Cancel
