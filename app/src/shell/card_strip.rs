@@ -148,11 +148,19 @@ impl Shell {
         let now = Instant::now();
         let (room, at) = (self.cards_room(), self.cards_at());
         let to = (at - lines * WHEEL_LINE).clamp(0., room);
-        let rested = self.card_strip.wheeled.is_none_or(|wheeled| now - wheeled >= WHEEL_REST);
+        let rested = self
+            .card_strip
+            .wheeled
+            .is_none_or(|wheeled| now - wheeled >= WHEEL_REST);
         if to == at && rested {
             return false;
         }
-        self.card_strip = CardStrip { at: to, settle: None, coasting: false, wheeled: Some(now) };
+        self.card_strip = CardStrip {
+            at: to,
+            settle: None,
+            coasting: false,
+            wheeled: Some(now),
+        };
         cx.notify();
         true
     }
@@ -203,7 +211,15 @@ mod tests {
         cx.run_until_parked();
         shell.update(cx, |shell, cx| {
             let space = |id: u64| {
-                (id, format!("Space {id}").into(), None, 1, "".into(), "".into(), "".into())
+                (
+                    id,
+                    format!("Space {id}").into(),
+                    None,
+                    1,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                )
             };
             shell.set_spaces((1..=8).map(space).collect(), cx);
             shell.set_space(1, cx);
@@ -215,7 +231,9 @@ mod tests {
         });
         cx.run_until_parked();
         host.shown.take();
-        let widths = read(&shell, cx, |shell| (shell.library_width(), shell.cards_room()));
+        let widths = read(&shell, cx, |shell| {
+            (shell.library_width(), shell.cards_room())
+        });
         assert_eq!(widths, (1044., 1284.));
         (shell, cx, host)
     }
@@ -277,7 +295,10 @@ mod tests {
     fn fingers_over_the_cards_scroll_them_one_to_one(cx: &mut TestAppContext) {
         let (shell, cx, host) = eight_spaces(cx);
         fingers(cx, 600., &[-100., -100., -100.], false);
-        assert_eq!(read(&shell, cx, |shell| (shell.cards_at(), shell.library_out())), (300., 1.));
+        assert_eq!(
+            read(&shell, cx, |shell| (shell.cards_at(), shell.library_out())),
+            (300., 1.)
+        );
         lift(cx, 600.);
         fingers(cx, 600., &[-100.], true);
         let coast = ScrollEvent {
@@ -295,8 +316,14 @@ mod tests {
             ..coast
         };
         cx.simulate_event(along.clone());
-        cx.simulate_event(ScrollEvent { touch_phase: TouchPhase::Moved, ..along.clone() });
-        cx.simulate_event(ScrollEvent { touch_phase: TouchPhase::Ended, ..along });
+        cx.simulate_event(ScrollEvent {
+            touch_phase: TouchPhase::Moved,
+            ..along.clone()
+        });
+        cx.simulate_event(ScrollEvent {
+            touch_phase: TouchPhase::Ended,
+            ..along
+        });
         cx.run_until_parked();
         assert_eq!(read(&shell, cx, |shell| shell.cards_at()), 450.);
         // Space 4's card is at 112 + 28 + 3 × 264 = 932 before the scroll, 482 after it.
@@ -311,11 +338,19 @@ mod tests {
         let (shell, cx, _) = eight_spaces(cx);
         fingers(cx, 600., &[-100., 440.], false);
         let pulled = read(&shell, cx, |shell| shell.cards_at());
-        assert!((pulled + 17.).abs() < 0.5, "340 past the start, the cards are at {pulled}");
+        assert!(
+            (pulled + 17.).abs() < 0.5,
+            "340 past the start, the cards are at {pulled}"
+        );
         lift(cx, 600.);
-        assert!(read(&shell, cx, |shell| shell.library_open && shell.library_out() == 1.));
+        assert!(read(&shell, cx, |shell| shell.library_open
+            && shell.library_out() == 1.));
         shell.update(cx, |shell, _| {
-            let settle = shell.card_strip.settle.as_mut().expect("the cards spring back");
+            let settle = shell
+                .card_strip
+                .settle
+                .as_mut()
+                .expect("the cards spring back");
             settle.1 -= Duration::from_secs(1);
         });
         shell.update(cx, |shell, _| assert!(!shell.step_cards()));
@@ -323,7 +358,10 @@ mod tests {
 
         fingers(cx, 600., &[-100., -3000.], false);
         let (at, out) = read(&shell, cx, |shell| (shell.cards_at(), shell.library_out()));
-        assert!(at > 1284. && at < 1284. + 80., "pushed past the end, the cards are at {at}");
+        assert!(
+            at > 1284. && at < 1284. + 80.,
+            "pushed past the end, the cards are at {at}"
+        );
         assert_eq!(out, 1., "the Library moved");
         lift(cx, 600.);
         assert!(read(&shell, cx, |shell| shell.library_open));
@@ -338,7 +376,10 @@ mod tests {
         fingers(cx, 600., &[40.], false);
         let (at, out) = read(&shell, cx, |shell| (shell.cards_at(), shell.library_out()));
         assert_eq!(at, 0.);
-        assert!(out > 1., "fingers past the first card didn't take the Library on: {out}");
+        assert!(
+            out > 1.,
+            "fingers past the first card didn't take the Library on: {out}"
+        );
         lift(cx, 600.);
         shell.update(cx, |shell, _| shell.library_motion = None);
 
@@ -346,17 +387,26 @@ mod tests {
         assert_eq!(read(&shell, cx, |shell| shell.cards_at()), 1284.);
         fingers(cx, 600., &[-200.], false);
         let out = read(&shell, cx, |shell| shell.library_out());
-        assert!(out < 1., "fingers past the last card didn't take the Library out: {out}");
+        assert!(
+            out < 1.,
+            "fingers past the last card didn't take the Library out: {out}"
+        );
         assert_eq!(read(&shell, cx, |shell| shell.cards_at()), 1284.);
         fingers(cx, 600., &[-1200.], false);
         lift(cx, 600.);
-        assert!(!read(&shell, cx, |shell| shell.library_open), "the Library stayed");
+        assert!(
+            !read(&shell, cx, |shell| shell.library_open),
+            "the Library stayed"
+        );
 
         let (shell, cx, _) = eight_spaces(cx);
         fingers(cx, 600., &[-300.], true);
         fingers(cx, 50., &[-100.], false);
         let out = read(&shell, cx, |shell| shell.library_out());
-        assert!(out < 1., "fingers over the column didn't move the Library: {out}");
+        assert!(
+            out < 1.,
+            "fingers over the column didn't move the Library: {out}"
+        );
         assert_eq!(read(&shell, cx, |shell| shell.cards_at()), 300.);
     }
 
@@ -374,12 +424,18 @@ mod tests {
         }
         assert_eq!(read(&shell, cx, |shell| shell.cards_at()), 1284.);
         wheel(cx, 600., -1.);
-        assert!(read(&shell, cx, |shell| shell.library_open), "ticks going on at the end left");
+        assert!(
+            read(&shell, cx, |shell| shell.library_open),
+            "ticks going on at the end left"
+        );
         shell.update(cx, |shell, _| {
             shell.card_strip.wheeled = Some(Instant::now() - Duration::from_secs(1));
         });
         wheel(cx, 600., -1.);
-        assert!(!read(&shell, cx, |shell| shell.library_open), "a tick after a rest stayed");
+        assert!(
+            !read(&shell, cx, |shell| shell.library_open),
+            "a tick after a rest stayed"
+        );
     }
 
     /// Between their ends the cards go one to one with the fingers, and past either end they give
@@ -390,9 +446,15 @@ mod tests {
         assert_eq!(card_band(240., 500.), 240.);
         assert_eq!(card_band(500., 500.), 500.);
         let pulled = -card_band(-340., 500.);
-        assert!((pulled - 17.).abs() < 0.5, "340 past the start gives {pulled}");
+        assert!(
+            (pulled - 17.).abs() < 0.5,
+            "340 past the start gives {pulled}"
+        );
         let pushed = card_band(840., 500.) - 500.;
-        assert!((pushed - pulled).abs() < 0.01, "both ends give alike: {pushed} and {pulled}");
+        assert!(
+            (pushed - pulled).abs() < 0.01,
+            "both ends give alike: {pushed} and {pulled}"
+        );
         assert!(card_band(-2000., 500.) > -80., "the band never gives 80");
         let (pulled, pushed) = (card_band(-100., 0.), card_band(100., 0.));
         assert!(pulled < 0. && pushed > 0., "with no room both ends give");

@@ -36,7 +36,9 @@ impl Shell {
 
     /// The agent's question the card shows, unless a page's question has the place.
     pub(super) fn agent_question(&self) -> Option<&Question> {
-        self.agent_question.as_ref().filter(|_| self.question().is_none())
+        self.agent_question
+            .as_ref()
+            .filter(|_| self.question().is_none())
     }
 
     fn answer_agent(&mut self, answer: Answer, cx: &mut Context<Self>) {
@@ -47,10 +49,7 @@ impl Shell {
     }
 
     /// The agent's question, as a card under the URL field.
-    pub(super) fn agent_question_card(
-        &self,
-        cx: &mut Context<Self>,
-    ) -> Option<gpui::AnyElement> {
+    pub(super) fn agent_question_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let Some(question) = self.agent_question() else {
             // Drawn again, it's logged again.
             self.agent_question_drawn.set(None);
@@ -59,9 +58,8 @@ impl Shell {
         let listener = card_listener("agent question", &self.agent_question_drawn, question.id);
         if let Some(tab) = question.handoff {
             let first = match question.back {
-                true => card_button(&self.palette, "agent-keep", "Keep").on_click(
-                    cx.listener(|shell, _, _, cx| shell.answer_agent(Answer::Never, cx)),
-                ),
+                true => card_button(&self.palette, "agent-keep", "Keep")
+                    .on_click(cx.listener(|shell, _, _, cx| shell.answer_agent(Answer::Never, cx))),
                 false => card_button(&self.palette, "agent-handoff-show", "Show Tab")
                     .on_click(cx.listener(move |shell, _, _, cx| shell.select(tab, cx))),
             };
@@ -119,7 +117,11 @@ impl Shell {
                         .gap(px(BUTTON_GAP))
                         .child(button("agent-question-never", "Never", Answer::Never))
                         .child(button("agent-question-once", "Allow Once", Answer::Once))
-                        .child(button("agent-question-always", "Always Allow", Answer::Always)),
+                        .child(button(
+                            "agent-question-always",
+                            "Always Allow",
+                            Answer::Always,
+                        )),
                 )
                 .child(close)
                 .into_any_element(),
@@ -158,11 +160,22 @@ mod tests {
         let browser = host.clone();
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
         shell.update(cx, |shell, cx| {
-            let space = (1, "Space 1".into(), None, 0, "".into(), "".into(), "".into());
+            let space = (
+                1,
+                "Space 1".into(),
+                None,
+                0,
+                "".into(),
+                "".into(),
+                "".into(),
+            );
             shell.set_spaces(vec![space], cx);
             shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
             shell.set_space(1, cx);
-            let page = Page { url: "https://example.com/".into(), ..Page::default() };
+            let page = Page {
+                url: "https://example.com/".into(),
+                ..Page::default()
+            };
             shell.set_page(10, page, cx);
             shell.set_selected(10, cx);
             shell.set_agent_question(Some(question(7)), cx);
@@ -176,28 +189,45 @@ mod tests {
             (card, last, last - px(BUTTON_HEIGHT + BUTTON_GAP))
         };
         let (card, _, above) = rows(&shell, cx);
-        cx.simulate_click(point(card.left() + card.size.width * 0.75, above), Modifiers::none());
+        cx.simulate_click(
+            point(card.left() + card.size.width * 0.75, above),
+            Modifiers::none(),
+        );
         cx.run_until_parked();
         assert!(host.take().contains(&"answer agent 7 Once".to_string()));
         shell.read_with(cx, |shell, _| assert!(shell.agent_question().is_none()));
 
         shell.update(cx, |shell, cx| {
-            let asked = PageQuestion { site: "example.com".into(), permissions: Vec::new() };
+            let asked = PageQuestion {
+                site: "example.com".into(),
+                permissions: Vec::new(),
+            };
             shell.set_question(10, Some(asked), cx);
             shell.set_agent_question(Some(question(8)), cx);
-            assert!(shell.agent_question().is_none(), "the agent's card covered the page's");
+            assert!(
+                shell.agent_question().is_none(),
+                "the agent's card covered the page's"
+            );
             shell.set_question(10, None, cx);
             assert_eq!(shell.agent_question().map(|question| question.id), Some(8));
         });
         cx.run_until_parked();
         let (card, last, above) = rows(&shell, cx);
-        cx.simulate_click(point(card.left() + px(PADDING + 4.), last), Modifiers::none());
+        cx.simulate_click(
+            point(card.left() + px(PADDING + 4.), last),
+            Modifiers::none(),
+        );
         cx.run_until_parked();
         assert!(host.take().contains(&"answer agent 8 Always".to_string()));
 
-        shell.update(cx, |shell, cx| shell.set_agent_question(Some(question(9)), cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_agent_question(Some(question(9)), cx)
+        });
         cx.run_until_parked();
-        cx.simulate_click(point(card.left() + card.size.width * 0.25, above), Modifiers::none());
+        cx.simulate_click(
+            point(card.left() + card.size.width * 0.25, above),
+            Modifiers::none(),
+        );
         cx.run_until_parked();
         assert!(host.take().contains(&"answer agent 9 Never".to_string()));
     }
