@@ -367,10 +367,11 @@ impl Shell {
         let height = f32::from(self.list_scroll.bounds().size.height);
         let rows_end = self.layout().into_values().fold(0., f32::max) + ROW_PITCH;
         let below = height > 0. && rows_end + self.tiles_room() > scrolled + height + 0.5;
-        // Those are the last frame's, before a resize or new rows: one more frame decides again
-        // once this one has measured the list.
-        if self.list_measured != (height, most) {
-            self.list_measured = (height, most);
+        // The list's bounds are the last frame's: when what it's laid out from changes, as in the
+        // frame a resize draws, one more frame decides again once this one has measured it.
+        let measured = (window.viewport_size(), self.pages_top(), self.list_bottom());
+        if self.list_measured != measured {
+            self.list_measured = measured;
             window.request_animation_frame();
         }
         for (edge, shown, name) in [

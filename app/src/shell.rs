@@ -1097,8 +1097,8 @@ pub struct Shell {
     /// foot, while rows are hidden under it.
     top_edge: swipe::EdgeLine,
     foot_edge: swipe::EdgeLine,
-    /// The list's height and how far it scrolls, as the edges were last decided from.
-    list_measured: (f32, f32),
+    /// What the list was last laid out from: the window's size and where the list starts and ends.
+    list_measured: (Size<Pixels>, f32, f32),
     /// The list's glide to a row it scrolls to, if it's on its way.
     list_glide: Cell<Option<ListGlide>>,
     /// The edge the selected tab's marker was last drawn at, true for the top, and its frame in
@@ -1547,7 +1547,7 @@ impl Shell {
             empty_drawn: Rc::default(),
             top_edge: Default::default(),
             foot_edge: Default::default(),
-            list_measured: (0., 0.),
+            list_measured: Default::default(),
             list_glide: Cell::new(None),
             marker_drawn: Cell::new(None),
             caret_drawn: Rc::default(),
