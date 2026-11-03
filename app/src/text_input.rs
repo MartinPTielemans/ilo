@@ -2,8 +2,9 @@
 // b36b283021c48f1712714b8a0e2ad6ffb578920b). Copyright Zed Industries, Inc. Licensed under the
 // Apache License, Version 2.0. Changes: a constructor, `text`, `composing`, `selection`, `pasted`,
 // `reset`, `complete`, `set_text`, a placeholder colour, `set_placeholder`, key bindings scoped to
-// the field, ⌘← and ⌘→ as Home and End, a context menu, `Away`, scrolling to keep the caret in
-// view with a fade where text runs past an edge, and no styling of its own.
+// the field, ⌘← and ⌘→ as Home and End, word moves and selection, double- and triple-click, a
+// context menu, `Away`, scrolling to keep the caret in view with a fade where text runs past an
+// edge, and no styling of its own.
 //
 //! A single-line text field, with IME support through GPUI's input handler. GPUI has no text
 //! field of its own; Zed's is its editor.
@@ -26,6 +27,8 @@ use crate::shell::MenuEntry;
 use crate::tokens::text_input::PLACEHOLDER;
 use crate::tokens::palette::{NO_THEME_ACCENT, SELECTION};
 
+mod words;
+
 actions!(
     text_input,
     [
@@ -33,10 +36,20 @@ actions!(
         Delete,
         DeleteToStart,
         DeleteWordBack,
+        DeleteWordForward,
+        DeleteToNextWordStart,
         Left,
         Right,
+        WordLeft,
+        WordRight,
+        NextWordStart,
         SelectLeft,
         SelectRight,
+        SelectWordLeft,
+        SelectWordRight,
+        SelectToNextWordStart,
+        SelectToStart,
+        SelectToEnd,
         SelectAll,
         Home,
         End,
@@ -133,7 +146,29 @@ pub fn without_javascript(text: &str) -> &str {
     }
 }
 
+/// Whose keys a field takes: a Mac text field's, or Chrome's fields' on Linux or on Windows,
+/// where Ctrl+→ goes to a word's end on one and the next word's start on the other.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Keys {
+    Mac,
+    Linux,
+    Windows,
+}
+
+impl Keys {
+    pub const HERE: Keys = match (crate::shell::OFF_THE_MAC, cfg!(target_os = "windows")) {
+        (false, _) => Keys::Mac,
+        (true, false) => Keys::Linux,
+        (true, true) => Keys::Windows,
+    };
+}
+
 pub fn bind_keys(cx: &mut App) {
+    bind_keys_for(Keys::HERE, cx)
+}
+
+/// Binds `keys`' field keys, which a test can pick to drive another platform's.
+pub fn bind_keys_for(keys: Keys, cx: &mut App) {
     let context = Some("TextInput");
     let key = |key, action| crate::shell::view_binding(key, action, "TextInput", cx);
     let mac_keys = [
@@ -148,24 +183,48 @@ pub fn bind_keys(cx: &mut App) {
         key("shift-cmd-v", Box::new(PasteAndMatchStyle)),
     ];
     cx.bind_keys(mac_keys);
-    // A Mac text field's forward delete, which keeps ⌃D from the browser's Developer Mode.
-    if !crate::shell::OFF_THE_MAC {
-        cx.bind_keys([KeyBinding::new("ctrl-d", Delete, context)]);
-    }
-    // ⌘⌫ deletes to the field's start and ⌥⌫ the word before the caret, as in any Mac field. Off
-    // the Mac Ctrl+Backspace deletes the word, and on Linux Ctrl+Shift+Backspace to the start, as
-    // in Chrome's fields there, ahead of Clear Browsing Data while a field has the keys.
-    match crate::shell::OFF_THE_MAC {
-        false => cx.bind_keys([
+    match keys {
+        // A Mac text field's keys: ⌘⌫ deletes to the start, ⌥ moves and deletes by words, ⌘
+        // goes to an end, ⌃A and ⌃E as Emacs does, and ⌃D deletes forward, which keeps it from
+        // the browser's Developer Mode.
+        Keys::Mac => cx.bind_keys([
             KeyBinding::new("cmd-backspace", DeleteToStart, context),
             KeyBinding::new("alt-backspace", DeleteWordBack, context),
+            KeyBinding::new("alt-delete", DeleteWordForward, context),
+            KeyBinding::new("ctrl-d", Delete, context),
+            KeyBinding::new("alt-left", WordLeft, context),
+            KeyBinding::new("alt-right", WordRight, context),
+            KeyBinding::new("shift-alt-left", SelectWordLeft, context),
+            KeyBinding::new("shift-alt-right", SelectWordRight, context),
+            KeyBinding::new("shift-cmd-left", SelectToStart, context),
+            KeyBinding::new("shift-cmd-right", SelectToEnd, context),
+            KeyBinding::new("ctrl-a", Home, context),
+            KeyBinding::new("ctrl-e", End, context),
+            KeyBinding::new("ctrl-shift-a", SelectToStart, context),
+            KeyBinding::new("ctrl-shift-e", SelectToEnd, context),
         ]),
-        true => {
-            cx.bind_keys([KeyBinding::new("ctrl-backspace", DeleteWordBack, context)]);
-            if cfg!(target_os = "linux") {
-                cx.bind_keys([KeyBinding::new("ctrl-shift-backspace", DeleteToStart, context)]);
-            }
-        }
+        // Chrome's fields there: Ctrl moves and deletes by words, ahead of the browser's Back
+        // and Forward while a field has the keys. On Linux Ctrl+Shift+Backspace deletes to the
+        // start, ahead of Clear Browsing Data.
+        Keys::Linux | Keys::Windows => cx.bind_keys([
+            KeyBinding::new("ctrl-backspace", DeleteWordBack, context),
+            KeyBinding::new("ctrl-left", WordLeft, context),
+            KeyBinding::new("ctrl-shift-left", SelectWordLeft, context),
+        ]),
+    }
+    match keys {
+        Keys::Mac => {}
+        Keys::Linux => cx.bind_keys([
+            KeyBinding::new("ctrl-shift-backspace", DeleteToStart, context),
+            KeyBinding::new("ctrl-delete", DeleteWordForward, context),
+            KeyBinding::new("ctrl-right", WordRight, context),
+            KeyBinding::new("ctrl-shift-right", SelectWordRight, context),
+        ]),
+        Keys::Windows => cx.bind_keys([
+            KeyBinding::new("ctrl-delete", DeleteToNextWordStart, context),
+            KeyBinding::new("ctrl-right", NextWordStart, context),
+            KeyBinding::new("ctrl-shift-right", SelectToNextWordStart, context),
+        ]),
     }
     cx.bind_keys([
         KeyBinding::new("backspace", Backspace, context),
@@ -176,6 +235,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-right", SelectRight, context),
         KeyBinding::new("home", Home, context),
         KeyBinding::new("end", End, context),
+        KeyBinding::new("shift-home", SelectToStart, context),
+        KeyBinding::new("shift-end", SelectToEnd, context),
         // As in any Mac text field, and ahead of the browser's back and forward.
         KeyBinding::new("cmd-left", Home, context),
         KeyBinding::new("cmd-right", End, context),
@@ -204,6 +265,11 @@ pub struct TextInput {
     /// How wide a fade an edge with more text past it gets, and the ground it fades into.
     fade: Option<(Pixels, Hsla)>,
     is_selecting: bool,
+    /// The word a double-click selected, which a drag from it grows by whole words.
+    word_drag: Option<Range<usize>>,
+    /// The selection came whole, from a double- or triple-click or Select All, so the first key
+    /// that grows it picks the end it moves by the way it goes, as in a Mac field.
+    undirected: bool,
     paste_and_go: bool,
     secure: bool,
     /// The field's own menu shows, with the keyboard its window had.
@@ -228,6 +294,8 @@ impl TextInput {
             scroll: px(0.),
             fade: None,
             is_selecting: false,
+            word_drag: None,
+            undirected: false,
             paste_and_go: false,
             secure: false,
             menu_shown: false,
@@ -307,6 +375,7 @@ impl TextInput {
     /// Starts with `text` in the field, all selected.
     pub fn with_text(mut self, text: SharedString) -> Self {
         self.selected_range = 0..text.len();
+        self.undirected = true;
         self.content = text;
         self
     }
@@ -336,6 +405,9 @@ impl TextInput {
     }
 
     fn left(&mut self, _: &Left, window: &mut Window, cx: &mut Context<Self>) {
+        if self.composing() {
+            return;
+        }
         if self.selected_range.is_empty() {
             self.move_to(self.previous_boundary(self.cursor_offset()), window, cx);
         } else {
@@ -344,6 +416,9 @@ impl TextInput {
     }
 
     fn right(&mut self, _: &Right, window: &mut Window, cx: &mut Context<Self>) {
+        if self.composing() {
+            return;
+        }
         if self.selected_range.is_empty() {
             self.move_to(self.next_boundary(self.selected_range.end), window, cx);
         } else {
@@ -352,24 +427,137 @@ impl TextInput {
     }
 
     fn select_left(&mut self, _: &SelectLeft, window: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.previous_boundary(self.cursor_offset()), window, cx);
+        self.grow(false, Self::previous_boundary, window, cx);
     }
 
     fn select_right(&mut self, _: &SelectRight, window: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.next_boundary(self.cursor_offset()), window, cx);
+        self.grow(true, Self::next_boundary, window, cx);
+    }
+
+    fn word_left(&mut self, _: &WordLeft, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_by_word(false, words::start_before, window, cx);
+    }
+
+    fn word_right(&mut self, _: &WordRight, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_by_word(true, words::end_after, window, cx);
+    }
+
+    fn next_word_start(&mut self, _: &NextWordStart, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_by_word(true, words::next_start, window, cx);
+    }
+
+    fn select_word_left(
+        &mut self,
+        _: &SelectWordLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.grow(false, |field, at| field.word_from(at, false, words::start_before), window, cx);
+    }
+
+    fn select_word_right(
+        &mut self,
+        _: &SelectWordRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.grow(true, |field, at| field.word_from(at, true, words::end_after), window, cx);
+    }
+
+    fn select_to_next_word_start(
+        &mut self,
+        _: &SelectToNextWordStart,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.grow(true, |field, at| field.word_from(at, true, words::next_start), window, cx);
+    }
+
+    fn select_to_start(&mut self, _: &SelectToStart, window: &mut Window, cx: &mut Context<Self>) {
+        self.grow(false, |_, _| 0, window, cx);
+    }
+
+    fn select_to_end(&mut self, _: &SelectToEnd, window: &mut Window, cx: &mut Context<Self>) {
+        self.grow(true, |field, _| field.content.len(), window, cx);
     }
 
     fn select_all(&mut self, _: &SelectAll, window: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(0, window, cx);
-        self.select_to(self.content.len(), window, cx)
+        self.select_whole(0..self.content.len(), window, cx)
     }
 
+    /// Moves the caret a word, from the selection's end the way it goes where there is one, as
+    /// Chrome's fields and a Mac's do.
+    fn move_by_word(
+        &mut self,
+        forward: bool,
+        step: fn(&str, usize) -> usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.composing() {
+            return;
+        }
+        let from = if forward { self.selected_range.end } else { self.selected_range.start };
+        self.move_to(self.word_from(from, forward, step), window, cx)
+    }
+
+    /// Moves the selection's moving end to where `to` finds from it. A selection that came whole
+    /// grows the way the key goes, keeping its other end.
+    fn grow(
+        &mut self,
+        forward: bool,
+        to: impl FnOnce(&Self, usize) -> usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.composing() {
+            return;
+        }
+        // Chrome's fields elsewhere keep the end a selection was made toward, as their own do.
+        if self.undirected && Keys::HERE == Keys::Mac {
+            self.selection_reversed = !forward;
+        }
+        self.select_to(to(self, self.cursor_offset()), window, cx)
+    }
+
+    /// Where a word move from `offset` lands. A secure field's go to its ends, as a Mac password
+    /// field's do, so they don't tell where its words are.
+    fn word_from(&self, offset: usize, forward: bool, step: fn(&str, usize) -> usize) -> usize {
+        match (self.secure, forward) {
+            (true, true) => self.content.len(),
+            (true, false) => 0,
+            (false, _) => step(&self.content, offset),
+        }
+    }
+
+    /// What a double-click at `offset` selects: the word, the spaces or the mark there, with the
+    /// spaces after a word on Windows, as its fields take them. A secure field's is all of it.
+    fn word_at(&self, offset: usize) -> Range<usize> {
+        match self.secure {
+            true => 0..self.content.len(),
+            false => words::at(&self.content, offset, cfg!(target_os = "windows")),
+        }
+    }
+
+    /// Selects `range` as one piece, as Select All and a double- or triple-click do.
+    fn select_whole(&mut self, range: Range<usize>, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_to(range.start, window, cx);
+        self.select_to(range.end, window, cx);
+        self.undirected = true;
+    }
+
+    // An input method composing has the keys first, and the ones it leaves the field, as ⌃A can
+    // be, move nothing in its text, which stays one piece until it commits.
     fn home(&mut self, _: &Home, window: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(0, window, cx);
+        if !self.composing() {
+            self.move_to(0, window, cx);
+        }
     }
 
     fn end(&mut self, _: &End, window: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(self.content.len(), window, cx);
+        if !self.composing() {
+            self.move_to(self.content.len(), window, cx);
+        }
     }
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
@@ -385,7 +573,7 @@ impl TextInput {
     }
 
     fn delete_to_start(&mut self, _: &DeleteToStart, window: &mut Window, cx: &mut Context<Self>) {
-        self.delete_back_to(0, window, cx);
+        self.delete_to(0, window, cx);
     }
 
     fn delete_word_back(
@@ -394,13 +582,33 @@ impl TextInput {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let start = self.previous_word_start(self.cursor_offset());
-        self.delete_back_to(start, window, cx);
+        let start = self.word_from(self.cursor_offset(), false, words::start_before);
+        self.delete_to(start, window, cx);
     }
 
-    /// Deletes the selection, or with none, back from the caret to `offset`, as ⌫ does a
+    fn delete_word_forward(
+        &mut self,
+        _: &DeleteWordForward,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let end = self.word_from(self.cursor_offset(), true, words::end_after);
+        self.delete_to(end, window, cx);
+    }
+
+    fn delete_to_next_word_start(
+        &mut self,
+        _: &DeleteToNextWordStart,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let end = self.word_from(self.cursor_offset(), true, words::next_start);
+        self.delete_to(end, window, cx);
+    }
+
+    /// Deletes the selection, or with none, from the caret to `offset`, as ⌫ and ⌦ do a
     /// character.
-    fn delete_back_to(&mut self, offset: usize, window: &mut Window, cx: &mut Context<Self>) {
+    fn delete_to(&mut self, offset: usize, window: &mut Window, cx: &mut Context<Self>) {
         // The input method's while it composes, which has the keys before the field.
         if self.marked_range.is_some() {
             return;
@@ -435,11 +643,22 @@ impl TextInput {
     ) {
         self.is_selecting = true;
         window.request_virtual_keyboard();
-
+        let at = self.index_for_mouse_position(event.position);
+        self.word_drag = None;
+        // While an input method composes, its text is one piece, so more clicks are one.
+        let clicks = if self.composing() { 1 } else { event.click_count };
         if event.modifiers.shift {
-            self.select_to(self.index_for_mouse_position(event.position), window, cx);
+            self.grow(at >= self.selected_range.start, |_, _| at, window, cx);
+        } else if clicks == 2 {
+            let word = self.word_at(self.index_under_mouse(event.position));
+            self.select_whole(word.clone(), window, cx);
+            self.word_drag = Some(word);
+        } else if clicks >= 3 {
+            // A field is one line, so its line is all of it.
+            self.select_whole(0..self.content.len(), window, cx);
+            self.is_selecting = false;
         } else {
-            self.move_to(self.index_for_mouse_position(event.position), window, cx)
+            self.move_to(at, window, cx)
         }
     }
 
@@ -535,9 +754,20 @@ impl TextInput {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.is_selecting {
-            self.select_to(self.index_for_mouse_position(event.position), window, cx);
+        if !self.is_selecting {
+            return;
         }
+        let Some(word) = self.word_drag.clone() else {
+            return self.select_to(self.index_for_mouse_position(event.position), window, cx);
+        };
+        // A drag from a double-click selects whole words, from the one it started on to the one
+        // under the pointer.
+        let under = self.word_at(self.index_under_mouse(event.position));
+        let reversed = under.start < word.start;
+        self.selected_range = under.start.min(word.start)..under.end.max(word.end);
+        self.selection_reversed = reversed;
+        window.notify_text_selection_changed(&self.focus_handle);
+        cx.notify()
     }
 
     fn show_character_palette(
@@ -577,6 +807,7 @@ impl TextInput {
     fn move_to(&mut self, offset: usize, window: &Window, cx: &mut Context<Self>) {
         self.selected_range = offset..offset;
         self.selection_reversed = false;
+        self.undirected = false;
         window.notify_text_selection_changed(&self.focus_handle);
         cx.notify()
     }
@@ -607,7 +838,24 @@ impl TextInput {
         self.text_offset(line.closest_index_for_x(position.x - bounds.left() + self.scroll))
     }
 
+    /// The character under `position`, whose word a double-click selects, where a click goes to
+    /// the nearest place between two. Past the text, its end.
+    fn index_under_mouse(&self, position: Point<Pixels>) -> usize {
+        let (Some(bounds), Some(line)) = (self.last_bounds.as_ref(), self.last_layout.as_ref())
+        else {
+            return 0;
+        };
+        if self.content.is_empty() {
+            return 0;
+        }
+        match line.index_for_x(position.x - bounds.left() + self.scroll) {
+            Some(index) => self.text_offset(index),
+            None => self.content.len(),
+        }
+    }
+
     fn select_to(&mut self, offset: usize, window: &Window, cx: &mut Context<Self>) {
+        self.undirected = false;
         if self.selection_reversed {
             self.selected_range.start = offset
         } else {
@@ -667,20 +915,6 @@ impl TextInput {
             .unwrap_or(0)
     }
 
-    /// Where the word before `offset` starts, past the spaces and punctuation after it, as ⌥⌫
-    /// finds it: in "example.com/some/path" from its end, at "path".
-    fn previous_word_start(&self, offset: usize) -> usize {
-        let before = &self.content[..offset];
-        let mut start = offset;
-        for (index, text) in before.split_word_bound_indices().rev() {
-            start = index;
-            if text.chars().any(char::is_alphanumeric) {
-                break;
-            }
-        }
-        start
-    }
-
     fn next_boundary(&self, offset: usize) -> usize {
         self.content
             .grapheme_indices(true)
@@ -693,12 +927,14 @@ impl TextInput {
         self.selected_range = 0..text.len();
         self.content = text;
         self.selection_reversed = false;
+        self.undirected = true;
         self.marked_range = None;
         self.pasted = false;
         self.last_layout = None;
         self.last_bounds = None;
         self.scroll = px(0.);
         self.is_selecting = false;
+        self.word_drag = None;
         window.notify_text_input_changed(&self.focus_handle);
         cx.notify();
     }
@@ -713,6 +949,7 @@ impl TextInput {
     ) {
         self.selected_range = caret..caret;
         self.selection_reversed = false;
+        self.undirected = false;
         self.content = text;
         window.notify_text_input_changed(&self.focus_handle);
         cx.notify();
@@ -734,6 +971,7 @@ impl TextInput {
     ) {
         self.selected_range = typed..text.len();
         self.selection_reversed = true;
+        self.undirected = false;
         self.content = text;
         window.notify_text_input_changed(&self.focus_handle);
         cx.notify();
@@ -773,6 +1011,7 @@ impl EntityInputHandler for TextInput {
     ) {
         self.selected_range = self.range_from_utf16(&range_utf16);
         self.selection_reversed = false;
+        self.undirected = false;
         window.notify_text_selection_changed(&self.focus_handle);
         cx.notify();
     }
@@ -1206,10 +1445,20 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::delete_to_start))
             .on_action(cx.listener(Self::delete_word_back))
+            .on_action(cx.listener(Self::delete_word_forward))
+            .on_action(cx.listener(Self::delete_to_next_word_start))
             .on_action(cx.listener(Self::left))
             .on_action(cx.listener(Self::right))
+            .on_action(cx.listener(Self::word_left))
+            .on_action(cx.listener(Self::word_right))
+            .on_action(cx.listener(Self::next_word_start))
             .on_action(cx.listener(Self::select_left))
             .on_action(cx.listener(Self::select_right))
+            .on_action(cx.listener(Self::select_word_left))
+            .on_action(cx.listener(Self::select_word_right))
+            .on_action(cx.listener(Self::select_to_next_word_start))
+            .on_action(cx.listener(Self::select_to_start))
+            .on_action(cx.listener(Self::select_to_end))
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::home))
             .on_action(cx.listener(Self::end))
@@ -1250,3 +1499,5 @@ impl Focusable for TextInput {
 mod tests;
 #[cfg(test)]
 mod leave_tests;
+#[cfg(test)]
+mod word_tests;
