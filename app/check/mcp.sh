@@ -11,8 +11,8 @@
 # types, and not into a frame's password field. Its text leaves out a frame an extension puts in
 # the page, which isn't the page's. Its keys, typed or pressed, go to the page alone, and Escape
 # the page doesn't keep runs no Stop of ilo's. Where it acts in the page shown, its pointer and a
-# ring with the element's ref show it. It opens a page, clicks its link, scrolls, takes a screenshot
-# and closes a tab, and a bank's site asks first, in a card whose Allow Once opens it. Always Allow
+# ring with the element's ref show it. It opens a page, clicks its link, goes back, where the tab
+# takes the page's title again, scrolls, takes a screenshot and closes a tab, and a bank's site asks first, in a card whose Allow Once opens it. Always Allow
 # opens it from then on, until Revoke Permission in the Space's menu takes that back. A login the
 # user saved fills in neither as the agent's tab loads it nor from a dropdown, and fills once the
 # user takes the tab over, without a reload. Closing the client's end ends its session with the tab,
@@ -481,6 +481,13 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
     "Clicked link"*"iana.org"*) ;;
     *) fail "clicking example.com's link answered: $clicked" ;;
   esac
+  # Back to a page it saw before, whose entry kept its title, the tab's row takes that title again
+  # (#1469).
+  titles=$(grep -c "^browser: title $opened_tab Example Domain\$" "$log" || true)
+  went=$(call navigate "{\"tab\":$opened_tab,\"url\":\"back\"}")
+  case "$went" in "Went back."*"Example Domain"*) ;; *) fail "navigate back answered: $went" ;; esac
+  await_more "^browser: title $opened_tab Example Domain\$" "$titles" ||
+    fail "back on example.com, the tab kept the title of the page it left: $(grep "^browser: title $opened_tab " "$log" | tail -1)"
   scrolled=$(call scroll "{\"tab\":$opened_tab}")
   case "$scrolled" in "Scrolled down."*) ;; *) fail "scroll answered: $scrolled" ;; esac
   picture=$(call screenshot "{\"tab\":$opened_tab}")
