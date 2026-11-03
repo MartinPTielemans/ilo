@@ -918,11 +918,48 @@ impl Shell {
         stacked: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.favorites.contains(&with) {
+            return self.join_favorite(tab, with, left, stacked, cx);
+        }
         self.keep_split(tab, with, cx);
         self.browser.split_with(tab, with, left, cx);
         if stacked {
             self.browser.set_split_stacked(with, true, cx);
         }
+    }
+
+    /// `tab` joins `favorite`, which no Space holds, so a split view of them is made of a copy of
+    /// the favorite at the top of the shown Space's Today, as Arc's is. A pinned tab or a favorite
+    /// joins as a copy too, leaving both in their places, and a Today tab moves into the split, as
+    /// it does to join any other. ⌘Z closes the copies and puts a Today tab back in its place.
+    fn join_favorite(
+        &mut self,
+        tab: u64,
+        favorite: u64,
+        left: bool,
+        stacked: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let kept = self.favorites.contains(&tab) || self.pinned().contains(&tab);
+        let back = if kept { None } else { self.put_back(tab) };
+        // The copies show as they open, so the favorite's last, which the window then shows.
+        let joining = if kept { self.browser.duplicate(tab, cx) } else { tab };
+        let copy = self.browser.duplicate(favorite, cx);
+        if joining == 0 || copy == 0 {
+            return;
+        }
+        self.browser.split_with(joining, copy, left, cx);
+        if stacked {
+            self.browser.set_split_stacked(copy, true, cx);
+        }
+        // The copies close first, the favorite's last so the joining one's goes back beside it on
+        // Redo, and then the Today tab, alone again, goes back to its place.
+        let close = Edit::Close(if kept { vec![copy, joining] } else { vec![copy] });
+        let undo = match back {
+            Some(back) => Edit::Many(vec![close, back]),
+            None => close,
+        };
+        self.keep(What::SPLIT, Some(undo), cx);
     }
 
     /// `tab` is joining `with` in a split view, which ⌘Z takes it back out of. A pinned tab
