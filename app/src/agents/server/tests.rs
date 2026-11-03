@@ -600,3 +600,47 @@ fn asks_come_one_at_a_time() {
     let opening: Vec<Call> = (5..15).filter_map(|_| next_call(&mut handed)).collect();
     assert_eq!(opening.len(), 10, "a turn's tabs opened one after another");
 }
+
+/// Stopped by the user, a connection answers the call under way, refuses the calls after it
+/// without the UI hearing them, then closes, and the UI hears the agent's bye (#1080).
+#[test]
+fn a_stopped_agents_connection_closes_once_it_has_answered() {
+    let (server, _, mut handed) = server();
+    let (mut writer, answers) = session(&server, &mut handed);
+    send_call(&mut writer, 2, "click", json!({ "tab": 1, "ref": "e1" }));
+    let under_way = next_call(&mut handed).expect("the call under way");
+    server.stop("claude-code");
+    send_call(&mut writer, 3, "click", json!({ "tab": 2, "ref": "e1" }));
+    let refused = answers
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("an answer to the call after Stop");
+    assert_eq!(refused["id"], 3);
+    assert_eq!(refused["result"]["isError"], true);
+    assert_eq!(
+        refused["result"]["content"][0]["text"],
+        super::super::STOPPED
+    );
+    assert!(no_call(&mut handed), "a call after Stop reached the UI");
+    under_way
+        .reply
+        .send(ToolResult::error(super::super::STOPPED))
+        .unwrap();
+    assert_eq!(answered(&answers), 2);
+    assert!(
+        matches!(
+            answers.recv_timeout(std::time::Duration::from_secs(1)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ),
+        "the connection stayed open once it had answered"
+    );
+    let until = Instant::now() + std::time::Duration::from_secs(1);
+    let mut bye = false;
+    while !bye && Instant::now() < until {
+        match handed.try_recv() {
+            Ok(Event::Bye { agent }) => bye = agent == "claude-code",
+            Ok(_) => {}
+            Err(_) => thread::sleep(std::time::Duration::from_millis(5)),
+        }
+    }
+    assert!(bye, "the UI didn't hear the stopped agent's bye");
+}

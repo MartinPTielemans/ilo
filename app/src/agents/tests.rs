@@ -1630,7 +1630,7 @@ fn the_user_takes_over_and_stops_an_agent(cx: &mut TestAppContext) {
     assert!(stopped.error && stopped.text.starts_with("The user stopped you."));
     assert_eq!(*browser.asked.borrow(), None);
     assert_eq!(*browser.disconnected.borrow(), ["claude-code"]);
-    assert_eq!(log(&agents, "claude-code", cx)[0].0, "stopped");
+    assert_eq!(log(&agents, "claude-code", cx)[0].0, "stopped by the user");
 }
 
 /// A tab the user took over stays theirs: the agent's calls on it are refused until it asks with
@@ -3898,11 +3898,36 @@ mod sessions {
         assert_eq!(shown[0].dot, Dot::Done);
     }
 
-    /// The card's Stop stops the client on every connection, its calls under way answered that
-    /// the user stopped it, and so does ⌘. from its page, which stops the client.
+    /// The card's Stop stops the client on every connection: its calls under way are answered that
+    /// the user stopped it, and its connections close, so it shows the browser's server as gone,
+    /// with "stopped by the user" in its activity log. Reconnected, its next call is a card of its
+    /// own, and ⌘. from its page, which stops the client, stops that card too.
     #[gpui::test]
-    fn stop_stops_the_client_and_its_card(cx: &mut TestAppContext) {
+    fn stop_closes_the_clients_connections_and_its_card(cx: &mut TestAppContext) {
         let (agents, browser) = at_work(cx);
+        agents.update(cx, |agents, cx| agents.set_on(true, cx));
+        let (socket, token) = agents.read_with(cx, |agents, _| {
+            let tokens = agents.tokens.lock().unwrap();
+            let token = tokens.iter().find(|(_, agent)| *agent == "claude-code");
+            (agents.socket.clone(), token.unwrap().0.clone())
+        });
+        // Two connections of Claude Code's, each past its token.
+        let open = || {
+            let stream = server::connect(&socket).unwrap();
+            let mut writer = stream.try_clone().unwrap();
+            std::io::Write::write_all(
+                &mut writer,
+                format!("{}\n", json!({ "token": token })).as_bytes(),
+            )
+            .unwrap();
+            let mut reader = std::io::BufReader::new(stream);
+            assert_eq!(
+                server::read_line(&mut reader).as_deref(),
+                Some(r#"{"ok":true}"#)
+            );
+            reader
+        };
+        let mut connections = [open(), open()];
         let waiting = call_as(&agents, 3, "read_page", json!({ "tab": 20 }), cx);
         let agent = cards(&agents, cx)[0].agent.to_string();
         agents.update(cx, |agents, cx| {
@@ -3911,6 +3936,14 @@ mod sessions {
         assert_eq!(waiting.recv().unwrap().text, STOPPED);
         assert_eq!(*browser.disconnected.borrow(), ["claude-code"]);
         assert_eq!(cards(&agents, cx)[0].dot, Dot::Ended);
+        for reader in &mut connections {
+            assert_eq!(server::read_line(reader), None, "a connection stayed open");
+        }
+        assert!(
+            log(&agents, "claude-code", cx)
+                .iter()
+                .any(|entry| entry.0 == "stopped by the user")
+        );
 
         call_as(&agents, 4, "read_page", json!({ "tab": 20 }), cx);
         assert_eq!(cards(&agents, cx)[0].dot, Dot::Working, "a new session");

@@ -1539,9 +1539,21 @@ impl Agents {
             }
         }
         self.browser.disconnected(agent, cx);
-        self.note(agent, "stopped", "", "");
-        // ⌘. from its page stops an outside agent's session as its card's Stop does.
-        self.session_stopped(agent);
+        // An outside client stopped stops for good: its connections close once the calls stopped
+        // have their answer, so it shows the browser's server as gone until the user reconnects
+        // it, a session of its own (#1080). ⌘. from its page stops its card as the card's Stop does.
+        match Client::from_id(agent) {
+            Some(_) => {
+                // check.sh reads this line.
+                log!("browser: agent {agent} stopped by the user");
+                if let Some((server, _)) = &self.server {
+                    server.stop(agent);
+                }
+                self.note(agent, "stopped by the user", "", "");
+                self.session_stopped(agent);
+            }
+            None => self.note(agent, "stopped", "", ""),
+        }
         self.advance(cx);
         self.asked(cx);
     }
