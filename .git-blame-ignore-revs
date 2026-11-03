@@ -1,0 +1,5 @@
+# Commits git blame skips: whole-tree reformats that change no behavior. GitHub reads this file;
+# locally, `git config blame.ignoreRevsFile .git-blame-ignore-revs`.
+
+# style(app): format the app's Rust with rustfmt (#1682)
+239a882f017796e7352ce3a46746bbfd81e515dd

@@ -333,10 +333,10 @@ kill_pages() {
     grep -v -e '--extension-process' | awk '{ print $1 }')
   [ -n "$renderers" ] && kill -KILL $renderers
 }
-# Where Settings' close button is, in $close: AppKit's on the Mac, else where Settings drew its own,
-# which on Windows is in the top right corner.
+# Where Settings' close button is, in $close: AppKit's on the Mac, the middle of the 14 pt button
+# Settings puts at 12, 16, else where Settings drew its own, which on Windows is in the top right.
 settings_close() {
-  close="16 16"
+  close="19 23"
   [ "$(uname)" = Darwin ] && return
   await '^browser: settings close at ' || fail "Settings didn't draw its close button"
   close=$(sed -n 's/^browser: settings close at //p' "$log" | tail -1)

@@ -32,51 +32,51 @@ use crate::{
 
 actions!(dialog, [Confirm, Cancel, NextField]);
 
-use crate::tokens::dialog::WIDTH;
-use crate::tokens::dialog::RADIUS;
-use crate::tokens::dialog::TEXT_INSET;
-use crate::tokens::dialog::BUTTON_INSET;
-use crate::tokens::dialog::TITLE_LINE;
-use crate::tokens::dialog::DETAIL_TOP;
-use crate::tokens::dialog::DETAIL_LINE;
-use crate::tokens::dialog::ICON;
-use crate::tokens::dialog::ICON_GAP;
-use crate::tokens::dialog::LIST_TOP;
-use crate::tokens::dialog::LIST_GAP;
-use crate::tokens::dialog::SUBLINE;
-use crate::tokens::dialog::SUBLINE_INDENT;
-use crate::tokens::dialog::SUBLINE_TEXT;
-use crate::tokens::dialog::BUTTONS_TOP;
-use crate::tokens::dialog::BUTTONS_UNDER_TITLE;
-use crate::tokens::dialog::ALSO_GAP;
 use crate::elevation::Level;
-use crate::tokens::dialog::DETAIL;
-use crate::tokens::dialog::DIM;
-use crate::tokens::dialog::DIM_OPACITY;
-use crate::tokens::dialog::BUTTON_HEIGHT;
-use crate::tokens::dialog::BUTTON_RADIUS;
-use crate::tokens::dialog::LABEL_X;
-use crate::tokens::dialog::CHIP_END;
-use crate::tokens::dialog::CHIP_GAP;
-use crate::tokens::dialog::CANCEL_FILL;
-use crate::tokens::dialog::CANCEL_HOVERED;
-use crate::tokens::dialog::CANCEL_BORDER;
-use crate::tokens::dialog::CANCEL_TEXT;
 use crate::tokens::dialog::ACTION;
 use crate::tokens::dialog::ACTION_HOVERED;
 use crate::tokens::dialog::ACTION_LEDGE;
+use crate::tokens::dialog::ALSO_GAP;
+use crate::tokens::dialog::BUTTON_HEIGHT;
+use crate::tokens::dialog::BUTTON_INSET;
+use crate::tokens::dialog::BUTTON_RADIUS;
+use crate::tokens::dialog::BUTTONS_TOP;
+use crate::tokens::dialog::BUTTONS_UNDER_TITLE;
+use crate::tokens::dialog::CANCEL_BORDER;
+use crate::tokens::dialog::CANCEL_FILL;
+use crate::tokens::dialog::CANCEL_HOVERED;
+use crate::tokens::dialog::CANCEL_TEXT;
+use crate::tokens::dialog::CHIP_END;
+use crate::tokens::dialog::CHIP_GAP;
 use crate::tokens::dialog::CHIP_HEIGHT;
 use crate::tokens::dialog::CHIP_RADIUS;
+use crate::tokens::dialog::DETAIL;
+use crate::tokens::dialog::DETAIL_LINE;
+use crate::tokens::dialog::DETAIL_TOP;
+use crate::tokens::dialog::DIM;
+use crate::tokens::dialog::DIM_OPACITY;
 use crate::tokens::dialog::ESC_FILL;
 use crate::tokens::dialog::ESC_TEXT;
-use crate::tokens::dialog::RETURN_WIDTH;
-use crate::tokens::dialog::RETURN_FILL;
+use crate::tokens::dialog::ICON;
+use crate::tokens::dialog::ICON_GAP;
+use crate::tokens::dialog::LABEL_X;
+use crate::tokens::dialog::LIST_GAP;
+use crate::tokens::dialog::LIST_TOP;
+use crate::tokens::dialog::RADIUS;
 use crate::tokens::dialog::RETURN_BORDER;
+use crate::tokens::dialog::RETURN_FILL;
 use crate::tokens::dialog::RETURN_GLYPH;
+use crate::tokens::dialog::RETURN_WIDTH;
+use crate::tokens::dialog::SUBLINE;
+use crate::tokens::dialog::SUBLINE_INDENT;
+use crate::tokens::dialog::SUBLINE_TEXT;
 use crate::tokens::dialog::TEXT;
+use crate::tokens::dialog::TEXT_INSET;
+use crate::tokens::dialog::TITLE_LINE;
+use crate::tokens::dialog::WIDTH;
 use crate::tokens::dialog::{
-    CHECK_BOX, CHECK_GAP, CHECK_GLYPH, CHECK_RADIUS, CHECK_TOP, FIELD_GAP, FIELD_PLACEHOLDER, FIELD_TEXT,
-    FIELDS_TOP,
+    CHECK_BOX, CHECK_GAP, CHECK_GLYPH, CHECK_RADIUS, CHECK_TOP, FIELD_GAP, FIELD_PLACEHOLDER,
+    FIELD_TEXT, FIELDS_TOP,
 };
 use crate::tokens::text;
 /// Arc's motion: over 0.275 s the window dims and the card comes down 32 pt into place,
@@ -290,7 +290,10 @@ impl Asked {
     /// Where it's drawn: as its motion has it, or in its place under Reduce Motion, fading.
     fn drawn(&self, cx: &App) -> Pose {
         let pose = self.pose();
-        Pose { raised: crate::motion::offset(pose.raised, cx), ..pose }
+        Pose {
+            raised: crate::motion::offset(pose.raised, cx),
+            ..pose
+        }
     }
 }
 
@@ -348,7 +351,9 @@ pub fn open_at(
         // does and stays, as the app shows it again for the next question (#1362).
         let asked = dialog.downgrade();
         window.on_window_should_close(cx, move |_, cx| {
-            asked.update(cx, |dialog, cx| dialog.answer(Answer::Cancel, cx)).ok();
+            asked
+                .update(cx, |dialog, cx| dialog.answer(Answer::Cancel, cx))
+                .ok();
             false
         });
         dialog
@@ -395,9 +400,14 @@ pub fn ask_in(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let question = Question { on_return, ..destructive(message, detail, action) };
+    let question = Question {
+        on_return,
+        ..destructive(message, detail, action)
+    };
     let confirmed = Box::new(move |_, cx: &mut App| confirmed(cx));
-    dialog.update(cx, |dialog, cx| dialog.pose(None, question, confirmed, window, cx));
+    dialog.update(cx, |dialog, cx| {
+        dialog.pose(None, question, confirmed, window, cx)
+    });
 }
 
 /// Whether a window's own `dialog` is asking, or leaving after the answer.
@@ -444,7 +454,15 @@ pub fn ask(
     confirmed: Box<dyn FnOnce(&mut App)>,
     cx: &mut App,
 ) {
-    ask_returning(window, message, detail, action, Return::Action, confirmed, cx);
+    ask_returning(
+        window,
+        message,
+        detail,
+        action,
+        Return::Action,
+        confirmed,
+        cx,
+    );
 }
 
 /// `ask`, with ↩ answering `on_return`, as `ask_in` has it.
@@ -457,7 +475,10 @@ pub fn ask_returning(
     confirmed: Box<dyn FnOnce(&mut App)>,
     cx: &mut App,
 ) {
-    let question = Question { on_return, ..destructive(message, detail, action) };
+    let question = Question {
+        on_return,
+        ..destructive(message, detail, action)
+    };
     pose(window, question, Box::new(move |_, cx| confirmed(cx)), cx);
 }
 
@@ -490,7 +511,11 @@ pub fn pose(
     let Some(window) = cx.try_global::<DialogWindow>().map(|dialog| dialog.0) else {
         return;
     };
-    window.update(cx, |dialog, window, cx| dialog.pose(over, question, confirmed, window, cx)).ok();
+    window
+        .update(cx, |dialog, window, cx| {
+            dialog.pose(over, question, confirmed, window, cx)
+        })
+        .ok();
 }
 
 /// Asks Chrome's `question` once the dialog that shows has gone, in place of any of Chrome's
@@ -531,8 +556,14 @@ fn ask_granting(
         return;
     };
     let answered = Box::new(move |reply: Reply, cx: &mut App| answered(reply.accept, cx));
-    let mut request =
-        Some(Request { question, source, window: None, over: None, page: None, answered });
+    let mut request = Some(Request {
+        question,
+        source,
+        window: None,
+        over: None,
+        page: None,
+        answered,
+    });
     window
         .update(cx, |dialog, window, cx| {
             dialog.withdraw(source, cx);
@@ -545,7 +576,14 @@ fn ask_granting(
         })
         .ok();
     if let Some(request) = request {
-        (request.answered)(Reply { accept: false, texts: Vec::new(), checked: false }, cx);
+        (request.answered)(
+            Reply {
+                accept: false,
+                texts: Vec::new(),
+                checked: false,
+            },
+            cx,
+        );
     }
 }
 
@@ -553,7 +591,9 @@ fn withdraw_granting(source: Source, cx: &mut App) {
     let Some(window) = cx.try_global::<DialogWindow>().map(|dialog| dialog.0) else {
         return;
     };
-    window.update(cx, |dialog, _, cx| dialog.withdraw(source, cx)).ok();
+    window
+        .update(cx, |dialog, _, cx| dialog.withdraw(source, cx))
+        .ok();
 }
 
 /// For the drivers, as AppKit's alerts are chosen on the Mac: answers with the button `label` names
@@ -562,7 +602,9 @@ pub fn choose(label: &str, cx: &mut App) -> bool {
     let Some(window) = cx.try_global::<DialogWindow>().map(|dialog| dialog.0) else {
         return false;
     };
-    window.update(cx, |dialog, _, cx| dialog.choose(label, cx)).unwrap_or(false)
+    window
+        .update(cx, |dialog, _, cx| dialog.choose(label, cx))
+        .unwrap_or(false)
 }
 
 /// Asks a page's `question`, the dialog `id` of `tab`, over its tab's card, `over` in the window
@@ -582,7 +624,14 @@ pub fn ask_page(
     let page = Some((tab, id));
     // Over the window in front, which the page's is before it asks (main.rs).
     let source = Source::Page;
-    let request = Request { question, source, window: None, over: Some(over), page, answered };
+    let request = Request {
+        question,
+        source,
+        window: None,
+        over: Some(over),
+        page,
+        answered,
+    };
     window
         .update(cx, |dialog, window, cx| {
             if let Some(asked) = &mut dialog.asked
@@ -615,7 +664,9 @@ pub fn withdraw_page(cx: &mut App) {
     let Some(window) = cx.try_global::<DialogWindow>().map(|dialog| dialog.0) else {
         return;
     };
-    window.update(cx, |dialog, _, cx| dialog.withdraw(Source::Page, cx)).ok();
+    window
+        .update(cx, |dialog, _, cx| dialog.withdraw(Source::Page, cx))
+        .ok();
 }
 
 impl Dialog {
@@ -647,12 +698,26 @@ impl Dialog {
             }
         });
         let source = Source::User;
-        let request = Request { question, source, window: over, over: None, page: None, answered };
+        let request = Request {
+            question,
+            source,
+            window: over,
+            over: None,
+            page: None,
+            answered,
+        };
         self.show(request, window, cx);
     }
 
     fn show(&mut self, request: Request, window: &mut Window, cx: &mut Context<Self>) {
-        let Request { mut question, source, window: asker, over, page, answered } = request;
+        let Request {
+            mut question,
+            source,
+            window: asker,
+            over,
+            page,
+            answered,
+        } = request;
         // check.sh reads this line.
         log!("browser: dialog shown {}", question.message);
         let (also, also_chosen) = question.also.take().unzip();
@@ -744,8 +809,10 @@ impl Dialog {
         let Some(asked) = &self.asked else {
             return;
         };
-        let focused =
-            asked.fields.iter().position(|field| field.focus_handle(cx).is_focused(window));
+        let focused = asked
+            .fields
+            .iter()
+            .position(|field| field.focus_handle(cx).is_focused(window));
         let next = focused.map_or(0, |focused| (focused + 1) % asked.fields.len().max(1));
         if let Some(field) = asked.fields.get(next) {
             window.focus(&field.focus_handle(cx), cx);
@@ -807,7 +874,10 @@ impl Dialog {
         match answer {
             Answer::Action => log!("browser: dialog confirmed"),
             Answer::Also => {
-                log!("browser: dialog chose {}", asked.also.clone().unwrap_or_default())
+                log!(
+                    "browser: dialog chose {}",
+                    asked.also.clone().unwrap_or_default()
+                )
             }
             Answer::Cancel => log!("browser: dialog cancelled"),
         }
@@ -830,12 +900,17 @@ impl Dialog {
                         .collect(),
                     checked: asked.checked,
                 };
-                (asked.answered.take().map(|answered| (answered, reply)), None)
+                (
+                    asked.answered.take().map(|answered| (answered, reply)),
+                    None,
+                )
             }
             None => (None, None),
         };
         asked._leave = Some(cx.spawn(async move |dialog, cx| {
-            cx.background_executor().timer(Duration::from_secs_f32(MOVE)).await;
+            cx.background_executor()
+                .timer(Duration::from_secs_f32(MOVE))
+                .await;
             let hidden = dialog.update(cx, |dialog, cx| {
                 dialog.asked = None;
                 dialog.host.hide();
@@ -904,7 +979,11 @@ fn button_frame(name: &'static str, asked: &Asked) -> impl IntoElement + use<> {
             let at = origin + bounds.center();
             if settled && drawn.borrow_mut().insert(name, at) != Some(at) {
                 // check.sh reads this line.
-                log!("browser: dialog {name} at {:.0} {:.0}", f32::from(at.x), f32::from(at.y));
+                log!(
+                    "browser: dialog {name} at {:.0} {:.0}",
+                    f32::from(at.x),
+                    f32::from(at.y)
+                );
             }
         },
         |_, _, _, _| {},
@@ -915,7 +994,12 @@ fn button_frame(name: &'static str, asked: &Asked) -> impl IntoElement + use<> {
 
 /// A key's chip on a button.
 fn chip() -> Div {
-    div().h(px(CHIP_HEIGHT)).flex().items_center().justify_center().rounded(px(CHIP_RADIUS))
+    div()
+        .h(px(CHIP_HEIGHT))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(CHIP_RADIUS))
 }
 
 fn shadow(color: Hsla, y: f32, blur: f32, spread: f32) -> BoxShadow {
@@ -964,23 +1048,27 @@ impl Render for Dialog {
         // As the hover line, for a capture of the button held down.
         if asked.pressed != asked.drawn_press {
             asked.drawn_press = asked.pressed;
-            log!("browser: dialog pressed {}", asked.pressed.unwrap_or("none"));
+            log!(
+                "browser: dialog pressed {}",
+                asked.pressed.unwrap_or("none")
+            );
         }
         let question = &asked.question;
         let palette = palette::current(cx);
         let page = asked.source == Source::Page;
         // An alert has only its action.
-        let cancel = (!question.cancel.is_empty()).then(|| button(
-            "dialog-cancel",
-            question.cancel.clone(),
-            chip()
-                .px(px(6.5))
-                .bg(palette.plate(ESC_FILL))
-                .text_size(px(text::SMALL))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(palette.on_overlay(ESC_TEXT))
-                .child("ESC"),
-        )
+        let cancel = (!question.cancel.is_empty()).then(|| {
+            button(
+                "dialog-cancel",
+                question.cancel.clone(),
+                chip()
+                    .px(px(6.5))
+                    .bg(palette.plate(ESC_FILL))
+                    .text_size(px(text::SMALL))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(palette.on_overlay(ESC_TEXT))
+                    .child("ESC"),
+            )
             // Its border is inside its edge, where Arc's label and chip are measured from.
             .pl(px(LABEL_X - 1.))
             .pr(px(CHIP_END - 1.))
@@ -993,7 +1081,8 @@ impl Render for Dialog {
             .relative()
             .child(button_frame("cancel", asked))
             .on_hover(cx.listener(|dialog, hovered, _, cx| dialog.hover("cancel", *hovered, cx)))
-            .on_click(cx.listener(|dialog, _, _, cx| dialog.answer(Answer::Cancel, cx))));
+            .on_click(cx.listener(|dialog, _, _, cx| dialog.answer(Answer::Cancel, cx)))
+        });
         // A text-only button in Cancel's look, its label as far in from each side.
         let also = asked.also.clone().map(|label| {
             div()
@@ -1020,7 +1109,13 @@ impl Render for Dialog {
             match question.tone {
                 Tone::Destructive => {
                     let hovered = rgb(ACTION_HOVERED).into();
-                    (rgb(ACTION).into(), hovered, hovered, rgba(ACTION_LEDGE).into(), rgb(TEXT).into())
+                    (
+                        rgb(ACTION).into(),
+                        hovered,
+                        hovered,
+                        rgba(ACTION_LEDGE).into(),
+                        rgb(TEXT).into(),
+                    )
                 }
                 Tone::Accent => {
                     let accent = Hsla::from(palette.accent);
@@ -1047,11 +1142,15 @@ impl Render for Dialog {
                 )
         });
         let action = (!question.action.is_empty()).then(|| {
-            button("dialog-confirm", question.action.clone(), div().children(return_chip))
-                // Without its chip, its label is as far in from each side.
-                .when(question.on_return != Return::Action, |button| {
-                    button.gap_0().pr(px(LABEL_X))
-                })
+            button(
+                "dialog-confirm",
+                question.action.clone(),
+                div().children(return_chip),
+            )
+            // Without its chip, its label is as far in from each side.
+            .when(question.on_return != Return::Action, |button| {
+                button.gap_0().pr(px(LABEL_X))
+            })
             .bg(fill)
             .hover(move |style| style.bg(hovered))
             .active(move |style| style.bg(pressed))
@@ -1097,7 +1196,9 @@ impl Render for Dialog {
                 .line_height(px(DETAIL_LINE))
                 .text_size(px(text::BODY))
                 .text_color(palette.on_overlay(DETAIL))
-                .when(!question.detail.is_empty(), |text| text.child(question.detail.clone()))
+                .when(!question.detail.is_empty(), |text| {
+                    text.child(question.detail.clone())
+                })
                 .when(!question.list.is_empty(), |text| {
                     text.child(
                         div()
@@ -1110,8 +1211,12 @@ impl Render for Dialog {
                 })
         });
         let fields = (!asked.fields.is_empty()).then(|| {
-            div().mt(px(FIELDS_TOP)).flex().flex_col().gap(px(FIELD_GAP)).children(
-                asked.fields.iter().map(|field| {
+            div()
+                .mt(px(FIELDS_TOP))
+                .flex()
+                .flex_col()
+                .gap(px(FIELD_GAP))
+                .children(asked.fields.iter().map(|field| {
                     div()
                         .h(px(BUTTON_HEIGHT))
                         .px(px(LABEL_X - 1.))
@@ -1124,8 +1229,7 @@ impl Render for Dialog {
                         .text_size(px(text::BODY))
                         .text_color(palette.on_overlay(FIELD_TEXT))
                         .child(field.clone())
-                }),
-            )
+                }))
         });
         let check = question.check.clone().map(|check| {
             let checked = asked.checked;
@@ -1147,7 +1251,11 @@ impl Render for Dialog {
                         .rounded(px(CHECK_RADIUS))
                         .border_1()
                         .border_color(palette.plate(CANCEL_BORDER))
-                        .bg(if checked { fill } else { palette.plate(CANCEL_FILL) })
+                        .bg(if checked {
+                            fill
+                        } else {
+                            palette.plate(CANCEL_FILL)
+                        })
                         .when(checked, |tick| {
                             tick.child(
                                 svg()
@@ -1184,7 +1292,10 @@ impl Render for Dialog {
             .shadow(Level::Modal.shadow())
             .opacity(pose.opacity)
             .children(
-                question.icon.clone().map(|icon| img(icon).size(px(ICON)).mb(px(ICON_GAP))),
+                question
+                    .icon
+                    .clone()
+                    .map(|icon| img(icon).size(px(ICON)).mb(px(ICON_GAP))),
             )
             .child(
                 div()

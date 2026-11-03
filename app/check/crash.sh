@@ -187,10 +187,10 @@ if [ "$(uname)" = Darwin ] && [ "$active" = 1 ]; then
   expect '^browser: settings shown General$' "⌘, didn't show Settings"
   settings_drew General
   send clickkey $(drawn "toolbar Privacy")
-  expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its tab"
+  expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"
   settings_drew Privacy
   ../tools/window-screenshot.sh "$pid" "$out/privacy.png" || fail "no window to capture"
-  send clickkey 592 133
+  send clickkey $(drawn "switch send crash reports")
   expect '^browser: send crash reports off$' "a click on the switch didn't turn crash reports off"
   expect '^browser: crash reports deleted 1$' "turning crash reports off didn't delete the report"
   [ "$(pending)" = 0 ] || fail "the report not sent outlived turning crash reports off"

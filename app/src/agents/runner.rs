@@ -8,7 +8,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -52,13 +52,12 @@ impl Cli {
         }
     }
 
-    /// Its executable's file name. npm puts a .cmd shim on Windows, as clients.rs runs it.
+    /// Its executable's name, which on Windows takes PATHEXT's extensions: claude.exe from Claude
+    /// Code's installer, or npm's claude.cmd (ready.rs).
     pub fn program(self) -> &'static str {
-        match (self, cfg!(windows)) {
-            (Cli::Claude, false) => "claude",
-            (Cli::Claude, true) => "claude.cmd",
-            (Cli::Codex, false) => "codex",
-            (Cli::Codex, true) => "codex.cmd",
+        match self {
+            Cli::Claude => "claude",
+            Cli::Codex => "codex",
         }
     }
 
@@ -175,10 +174,17 @@ impl Process {
         events: UnboundedSender<Event>,
     ) -> std::io::Result<Process> {
         std::fs::create_dir_all(&launch.dir)?;
-        let mut command = Command::new(&launch.program);
+        let mut command = crate::child::command(&launch.program);
         match launch.cli {
             Cli::Claude => {
-                super::clients::write_private(&launch.config, claude_config(&launch.server).as_bytes())?;
+                super::clients::write_private(
+                    &launch.config,
+                    claude_config(&launch.server).as_bytes(),
+                )?;
+                super::clients::write_private(
+                    &instructions_file(launch),
+                    launch.instructions.as_bytes(),
+                )?;
                 command.args(claude_args(launch));
             }
             Cli::Codex => _ = command.arg("app-server"),
@@ -201,36 +207,54 @@ impl Process {
         let stderr = child.stderr.take().expect("piped");
         let codex = (launch.cli == Cli::Codex).then(|| Arc::new(super::codex::State::default()));
         let id = child.id();
-        let process =
-            Process { cli: launch.cli, child: Some(child), id, stdin: stdin.clone(), codex: codex.clone() };
+        let process = Process {
+            cli: launch.cli,
+            child: Some(child),
+            id,
+            stdin: stdin.clone(),
+            codex: codex.clone(),
+        };
         let said = Arc::new(Mutex::new(String::new()));
-        let err = std::thread::Builder::new().name("task-stderr".into()).spawn({
-            let said = said.clone();
-            move || keep_tail(stderr, &said)
-        })?;
+        let err = std::thread::Builder::new()
+            .name("task-stderr".into())
+            .spawn({
+                let said = said.clone();
+                move || keep_tail(stderr, &said)
+            })?;
         let agent = agent.to_string();
         let codex_launch = launch.clone();
-        std::thread::Builder::new().name("task-output".into()).spawn(move || {
-            let mut turn = Turn::default();
-            for line in BufReader::new(stdout).lines() {
-                let Ok(line) = line else { break };
-                let Ok(message) = serde_json::from_str::<Value>(&line) else {
-                    continue;
-                };
-                let outs = match &codex {
-                    Some(state) => super::codex::read(&message, state, &stdin, &codex_launch),
-                    None => claude_read(&message, &mut turn),
-                };
-                for out in outs {
-                    if events.unbounded_send(Event { agent: agent.clone(), out }).is_err() {
-                        return;
+        std::thread::Builder::new()
+            .name("task-output".into())
+            .spawn(move || {
+                let mut turn = Turn::default();
+                for line in BufReader::new(stdout).lines() {
+                    let Ok(line) = line else { break };
+                    let Ok(message) = serde_json::from_str::<Value>(&line) else {
+                        continue;
+                    };
+                    let outs = match &codex {
+                        Some(state) => super::codex::read(&message, state, &stdin, &codex_launch),
+                        None => claude_read(&message, &mut turn),
+                    };
+                    for out in outs {
+                        if events
+                            .unbounded_send(Event {
+                                agent: agent.clone(),
+                                out,
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
                     }
                 }
-            }
-            _ = err.join();
-            let said = std::mem::take(&mut *said.lock().unwrap());
-            _ = events.unbounded_send(Event { agent, out: Out::Gone(said) });
-        })?;
+                _ = err.join();
+                let said = std::mem::take(&mut *said.lock().unwrap());
+                _ = events.unbounded_send(Event {
+                    agent,
+                    out: Out::Gone(said),
+                });
+            })?;
         let mut process = process;
         match launch.cli {
             Cli::Claude => process.say(first)?,
@@ -282,13 +306,18 @@ impl Drop for Process {
         self.stdin.lock().unwrap().take();
         if let Some(mut child) = self.child.take() {
             _ = child.kill();
-            _ = std::thread::Builder::new().name("task-reap".into()).spawn(move || child.wait());
+            _ = std::thread::Builder::new()
+                .name("task-reap".into())
+                .spawn(move || child.wait());
         }
     }
 }
 
 /// Writes `message` as a line on the CLI's input.
-pub(super) fn write_line(stdin: &Mutex<Option<ChildStdin>>, message: &Value) -> std::io::Result<()> {
+pub(super) fn write_line(
+    stdin: &Mutex<Option<ChildStdin>>,
+    message: &Value,
+) -> std::io::Result<()> {
     let mut stdin = stdin.lock().unwrap();
     let Some(stdin) = stdin.as_mut() else {
         return Err(std::io::Error::other("the task has ended"));
@@ -319,6 +348,13 @@ fn keep_tail(mut from: impl Read, said: &Mutex<String>) {
     }
 }
 
+/// Where Claude reads what it's told about working in the browser, beside its MCP config: a file,
+/// as the text has paragraphs, and Windows starts no npm claude.cmd with a line break in an
+/// argument (#1676).
+pub fn instructions_file(launch: &Launch) -> PathBuf {
+    launch.config.with_extension("md")
+}
+
 /// Claude's MCP config: the browser's server alone.
 pub fn claude_config(server: &Server) -> String {
     let mut env = serde_json::Map::new();
@@ -340,8 +376,11 @@ pub fn claude_config(server: &Server) -> String {
 /// init message then listed that tool alone, no slash commands or skills, and only its built-in
 /// plugins and agent types, which no tool could reach.
 pub fn claude_args(launch: &Launch) -> Vec<String> {
-    let allowed: Vec<String> =
-        launch.tools.iter().map(|tool| format!("mcp__{SERVER}__{tool}")).collect();
+    let allowed: Vec<String> = launch
+        .tools
+        .iter()
+        .map(|tool| format!("mcp__{SERVER}__{tool}"))
+        .collect();
     let mut args: Vec<String> = [
         // Print mode, reading the user's messages as stream-json, so a reply is one more line.
         "-p",
@@ -384,7 +423,10 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
     if let Some(model) = launch.model.as_ref().filter(|model| !model.is_empty()) {
         args.extend(["--model".into(), model.clone()]);
     }
-    args.extend(["--append-system-prompt".into(), launch.instructions.clone()]);
+    args.extend([
+        "--append-system-prompt-file".into(),
+        instructions_file(launch).to_string_lossy().into_owned(),
+    ]);
     args
 }
 
@@ -400,23 +442,39 @@ pub struct Turn {
 
 /// What a line of Claude's stream-json output says to the user, if anything.
 pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
-    let kind = message.get("type").and_then(Value::as_str).unwrap_or_default();
+    let kind = message
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     if kind == "stream_event" {
         return claude_piece(message.get("event").unwrap_or(&Value::Null), turn);
     }
     let now = Instant::now();
     // A message comes whole, so its thinking took from the whole line before it.
-    let took = turn.heard.replace(now).map_or(Duration::ZERO, |heard| now - heard);
+    let took = turn
+        .heard
+        .replace(now)
+        .map_or(Duration::ZERO, |heard| now - heard);
     match kind {
         "assistant" => {
-            let content = message.pointer("/message/content").and_then(Value::as_array);
+            let content = message
+                .pointer("/message/content")
+                .and_then(Value::as_array);
             (content.into_iter().flatten())
                 .filter_map(|block| {
                     let text = |name| block.get(name).and_then(Value::as_str).map(str::trim);
                     match block.get("type").and_then(Value::as_str) {
-                        Some("text") => text("text").filter(|text| !text.is_empty()).map(|text| Out::Said(text.into())),
-                        Some("thinking") => (text("thinking").filter(|text| !text.is_empty()))
-                            .map(|text| Out::Thought { text: text.into(), took }),
+                        Some("text") => text("text")
+                            .filter(|text| !text.is_empty())
+                            .map(|text| Out::Said(text.into())),
+                        Some("thinking") => {
+                            (text("thinking").filter(|text| !text.is_empty())).map(|text| {
+                                Out::Thought {
+                                    text: text.into(),
+                                    took,
+                                }
+                            })
+                        }
                         Some("tool_use") => Some(Out::Calling),
                         _ => None,
                     }
@@ -432,8 +490,14 @@ pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
         }
         "result" => {
             let limit = turn.limit.take();
-            let error = message.get("is_error").and_then(Value::as_bool).unwrap_or(false);
-            let text = message.get("result").and_then(Value::as_str).unwrap_or_default();
+            let error = message
+                .get("is_error")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let text = message
+                .get("result")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             let failure = match (limit, error) {
                 (Some(resets), _) => Some(Failure::Limit(resets)),
                 (None, false) => None,
@@ -448,12 +512,17 @@ pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
 /// What a piece of the message Claude is writing says: its text so far as a piece of it comes, and
 /// that it goes on to call a tool as one starts. Its thinking comes whole, as its message does.
 fn claude_piece(event: &Value, turn: &mut Turn) -> Vec<Out> {
-    match event.get("type").and_then(Value::as_str).unwrap_or_default() {
+    match event
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+    {
         "message_start" => {
             turn.writing.clear();
             vec![Out::Writing(String::new())]
         }
-        "content_block_start" => match event.pointer("/content_block/type").and_then(Value::as_str) {
+        "content_block_start" => match event.pointer("/content_block/type").and_then(Value::as_str)
+        {
             Some("tool_use") => vec![Out::Calling],
             // Each text block comes whole as a message of its own, so the next starts afresh.
             Some("text") => {
@@ -462,8 +531,13 @@ fn claude_piece(event: &Value, turn: &mut Turn) -> Vec<Out> {
             }
             _ => Vec::new(),
         },
-        "content_block_delta" if event.pointer("/delta/type").and_then(Value::as_str) == Some("text_delta") => {
-            let piece = event.pointer("/delta/text").and_then(Value::as_str).unwrap_or_default();
+        "content_block_delta"
+            if event.pointer("/delta/type").and_then(Value::as_str) == Some("text_delta") =>
+        {
+            let piece = event
+                .pointer("/delta/text")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             turn.writing.push_str(piece);
             match turn.writing.trim().is_empty() {
                 true => Vec::new(),
@@ -477,16 +551,24 @@ fn claude_piece(event: &Value, turn: &mut Turn) -> Vec<Out> {
 /// Why Claude's turn failed, from its result's words.
 fn claude_failure(text: &str, message: &Value) -> Failure {
     let lower = text.to_lowercase();
-    if lower.contains("/login") || lower.contains("not logged in") || lower.contains("invalid api key") {
+    if lower.contains("/login")
+        || lower.contains("not logged in")
+        || lower.contains("invalid api key")
+    {
         return Failure::SignedOut;
     }
     if lower.contains("limit") {
         // Older versions end the text with the reset's time: "…limit reached|1730000000".
-        let resets = text.rsplit_once('|').and_then(|(_, at)| at.trim().parse().ok());
+        let resets = text
+            .rsplit_once('|')
+            .and_then(|(_, at)| at.trim().parse().ok());
         return Failure::Limit(resets);
     }
     // With no words, the result's subtype says why, which the card says in plain words.
-    let subtype = message.get("subtype").and_then(Value::as_str).unwrap_or_default();
+    let subtype = message
+        .get("subtype")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     Failure::Other(match (text.is_empty(), subtype) {
         (true, "error_max_turns") => "Claude hit its turn limit.".into(),
         (true, "error_max_budget_usd") => "Claude hit its budget.".into(),
@@ -498,7 +580,8 @@ fn claude_failure(text: &str, message: &Value) -> Failure {
 /// the log keeps and the user can't act on.
 pub(super) fn plain_failure(name: &str, text: &str) -> String {
     let text = text.trim();
-    let code = !text.contains(char::is_whitespace) || text.contains('{') || text.starts_with("API Error");
+    let code =
+        !text.contains(char::is_whitespace) || text.contains('{') || text.starts_with("API Error");
     match code {
         true => format!("{name} ran into an error."),
         false => text.to_string(),
