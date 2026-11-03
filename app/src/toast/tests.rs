@@ -333,44 +333,29 @@ fn a_toast_too_long_for_its_page_shortens_its_words(cx: &mut TestAppContext) {
     assert_eq!(f32::from(plate.size.height), HEIGHT);
 }
 
-/// A toast that is itself its button, as New Tab Created is, takes clicks and draws no chip, and
-/// a click anywhere on its plate runs it, as VoiceOver can, the toast being a button.
+/// Under Reduce Motion the toast doesn't grow from 0.7: it's drawn at its size once it has faded
+/// in, where it otherwise still springs (#1380).
 #[gpui::test]
-fn a_click_on_a_toast_that_is_its_button_runs_it(cx: &mut TestAppContext) {
-    use gpui::VisualTestContext;
-    let host = Rc::new(Recorder::default());
-    let window = cx.update(|cx| open(host.clone(), |_| (hsla(0., 0., 0., 1.), Default::default()), cx));
-    let window = window.expect("no toast window");
-    let mut visual = VisualTestContext::from_window(window.into(), cx);
-    visual.simulate_a11y_activation();
-    let clicked = Rc::new(Cell::new(0));
-    let counted = clicked.clone();
-    let button = Button {
-        label: Label::Plate,
-        name: "show",
-        run: Rc::new(move |_, _| counted.set(counted.get() + 1)),
+fn under_reduce_motion_the_toast_only_fades_in(cx: &mut TestAppContext) {
+    let host = open_toast(cx);
+    let faded_in = |cx: &mut TestAppContext| {
+        let window = cx.update(|cx| cx.global::<ToastWindow>().0);
+        cx.update(|cx| {
+            window
+                .update(cx, |toast, _, _| {
+                    let shown = toast.shown.as_mut().unwrap();
+                    shown.shown = Some(Instant::now() - Duration::from_secs_f32(FADE_IN * 2.));
+                })
+                .unwrap()
+        });
+        draw(cx);
+        host.1.take().pop()
     };
-    cx.update(|cx| show_with_buttons("New Tab Created", vec![button], TIME, cx));
-    cx.run_until_parked();
-    assert_eq!(host.0.take(), ["clicks true", "show"]);
-    cx.update(|cx| {
-        window
-            .update(cx, |toast, _, _| {
-                toast.shown.as_mut().unwrap().shown = Some(Instant::now() - Duration::from_secs(3));
-            })
-            .unwrap()
-    });
-    // Through the any-window handle, since drawing renders the toast the other would lease.
-    cx.update(|cx| {
-        cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx)).unwrap()
-    });
-    let tree = visual.a11y_tree().expect("GPUI built a tree");
-    let roles: Vec<_> = tree.nodes.iter().map(|(_, node)| node.role()).collect();
-    assert_eq!(roles.iter().filter(|&&role| role == Role::Button).count(), 1, "{roles:?}");
-    let plate = *host.1.borrow().last().expect("the plate wasn't told");
-    // Near its left end, over the words rather than a chip.
-    visual.simulate_click(point(plate.left() + px(20.), plate.center().y), Default::default());
-    visual.run_until_parked();
-    assert_eq!(clicked.get(), 1);
-    assert_eq!(after(cx, &host, LEAVE), ["clicks false", "hide"]);
+    show_deleted(cx);
+    assert_eq!(faded_in(cx), None, "the toast came to rest while still growing");
+    cx.update(|cx| cx.set_reduce_motion(true));
+    show_deleted(cx);
+    let plate = faded_in(cx).expect("the toast wasn't at rest once faded in");
+    assert_eq!(f32::from(plate.origin.y), TOP);
+    assert_eq!(f32::from(plate.size.height), HEIGHT);
 }

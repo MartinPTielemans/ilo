@@ -40,7 +40,8 @@ impl Asking {
         let deleted = host.clone();
         cx.update(|cx| {
             let delete = Box::new(move |_: &mut App| deleted.0.borrow_mut().push("delete".into()));
-            let (message, detail) = ("Delete “Work”?".into(), "Its 3 tabs close too.".into());
+            let detail = "Its 3 tabs go with it. ⌘Z brings them back.".into();
+            let (message, detail) = ("Delete “Work”?".into(), detail);
             ask(None, message, detail, "Delete", delete, cx);
         });
         let cx = VisualTestContext::from_window(window.into(), cx);
@@ -615,4 +616,30 @@ fn a_windows_own_dialog_covers_it_until_it_has_gone(cx: &mut TestAppContext) {
     cx.executor().advance_clock(Duration::from_secs_f32(MOVE));
     cx.run_until_parked();
     assert_eq!(host.0.take(), ["hide"]);
+}
+
+/// Under Reduce Motion the dialog doesn't drop into place: it fades in where it rests (#1380).
+#[gpui::test]
+fn under_reduce_motion_the_dialog_fades_in_where_it_rests(cx: &mut TestAppContext) {
+    let mut dialog = Asking::new(cx);
+    let window = dialog.cx.cx.update(|cx| cx.global::<DialogWindow>().0);
+    let arriving = |dialog: &mut Asking| {
+        dialog.cx.cx.update(|cx| {
+            window
+                .update(cx, |dialog, _, cx| {
+                    let asked = dialog.asked.as_mut().expect("nothing asked");
+                    asked.shown = Some(Instant::now());
+                    let pose = asked.drawn(cx);
+                    (pose.raised, pose.opacity)
+                })
+                .unwrap()
+        })
+    };
+    let (raised, opacity) = arriving(&mut dialog);
+    assert!(raised > DROP * 0.9 && opacity < 0.1, "{raised} {opacity}");
+    dialog.cx.cx.update(|cx| cx.set_reduce_motion(true));
+    let (raised, opacity) = arriving(&mut dialog);
+    assert!(raised == 0. && opacity < 0.1, "{raised} {opacity}");
+    dialog.keys("escape");
+    assert_eq!(dialog.calls(), ["show", "hide"]);
 }

@@ -232,6 +232,7 @@ mod platform {
         pub fn host_set_overlay_radius(overlay: c_int, radius: f64);
         pub fn host_set_overlay_growth(overlay: c_int, x: f64, y: f64);
         pub fn host_set_overlay_shrink(overlay: c_int);
+        pub fn host_set_overlays_still(still: bool);
         pub fn host_show_overlay(
             overlay: c_int,
             ui_view: *mut c_void,
@@ -457,7 +458,13 @@ mod platform {
         pub fn host_show_toast(ui_view: *mut c_void);
         pub fn host_hide_toast();
         pub fn host_add_tooltip(tooltip_view: *mut c_void, margin: f64, away: extern "C" fn());
-        pub fn host_show_tooltip(ui_view: *mut c_void, left: f64, top: f64, fade: f64);
+        pub fn host_show_tooltip(
+            ui_view: *mut c_void,
+            overlay: c_int,
+            left: f64,
+            top: f64,
+            fade: f64,
+        );
         pub fn host_hide_tooltip(fade: f64);
         pub fn host_add_hover_card(card_view: *mut c_void, margin: f64, away: extern "C" fn());
         pub fn host_show_hover_card(ui_view: *mut c_void, left: f64, top: f64, width: f64, height: f64);
@@ -2001,6 +2008,16 @@ impl command_bar::Host for Bar {
     fn set_up_agents(&self, cx: &mut App) {
         settings::show_agents(cx);
     }
+
+    fn tooltip(&self, tip: Option<(tooltip::Tip, tooltip::Anchor)>, cx: &mut App) {
+        match tip {
+            // Its buttons are in the bar's window, which the tooltip goes over.
+            Some((tip, anchor)) => {
+                tooltip::hover_over(tooltip::Over::Overlay(COMMAND_BAR), tip, anchor, cx)
+            }
+            None => tooltip::dismiss(cx),
+        }
+    }
 }
 
 /// `color` as the host takes a colour, 0xRRGGBBAA.
@@ -2122,12 +2139,17 @@ extern "C" fn theme_picker_dismissed() {
 struct TooltipHost;
 
 impl tooltip::Host for TooltipHost {
-    fn show(&self, window: u64, left: f32, top: f32) {
-        let Some(view) = ui_view_of(window) else {
+    fn show(&self, over: tooltip::Over, left: f32, top: f32) {
+        let (view, overlay) = match over {
+            tooltip::Over::Window(window) => (ui_view_of(window), -1),
+            // The overlays show over the window in front.
+            tooltip::Over::Overlay(overlay) => (Some(front().1), overlay),
+        };
+        let Some(view) = view.filter(|view| !view.is_null()) else {
             return;
         };
         let fade = tooltip::FADE_IN.as_secs_f64();
-        unsafe { platform::host_show_tooltip(view, left.into(), top.into(), fade) };
+        unsafe { platform::host_show_tooltip(view, overlay, left.into(), top.into(), fade) };
     }
 
     fn hide(&self) {
@@ -3475,14 +3497,14 @@ impl Browser for Engine {
     fn toast_button(
         &self,
         text: &str,
-        (label, name): (Option<&'static str>, &'static str),
+        (label, name): (&'static str, &'static str),
         run: Rc<dyn Fn(&mut App)>,
         time: Duration,
         cx: &mut App,
     ) {
         let text = text.to_string();
         let button = toast::Button {
-            label: label.map_or(toast::Label::Plate, |label| toast::Label::Text(label.into())),
+            label: toast::Label::Text(label.into()),
             name,
             run: Rc::new(move |_, cx| run(cx)),
         };
@@ -6267,6 +6289,8 @@ fn set_reduce_motion(reduce: bool, cx: &mut App) {
         // check.sh reads this line.
         log!("browser: reduce motion {}", if reduce { "on" } else { "off" });
         cx.set_reduce_motion(reduce);
+        // The pickers' grow and shrink are the platform's to draw.
+        unsafe { platform::host_set_overlays_still(reduce) };
     }
 }
 
@@ -7908,6 +7932,7 @@ fn main() {
 unsafe extern "C" fn window_resized(_: *mut c_void, window: bc::bc_id, width: f64, height: f64) {
     if let Some(ui_view) = ui_view_of(window) {
         gpui_linux::resize_embedded(ui_view, width as f32, height as f32);
+        frames::sized(ui_view, [width, height]);
     }
 }
 

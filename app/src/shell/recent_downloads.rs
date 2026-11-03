@@ -492,7 +492,7 @@ impl Shell {
         let height = recent.rows.len() as f32 * RECENT_PITCH;
         let window = f32::from(self.viewport.height).max(1.);
         let opacities = self.recent_row_opacities(cx.background_executor().now());
-        let still = cx.reduce_motion();
+        let still = crate::motion::still(cx);
         let rows: Vec<_> = (recent.rows.iter().zip(&opacities).enumerate().rev())
             .map(|(index, ((id, age), &opacity))| {
                 let down = match (still, recent.going) {

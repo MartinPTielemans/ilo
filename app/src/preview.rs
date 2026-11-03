@@ -50,6 +50,8 @@ unsafe extern "C" {
 // Two Spaces, so the switcher shows, the second in Dia's pink. The tabs are in the first, the top
 // two pinned, the second in a folder.
 const SPACES: [(&str, Option<u32>); 2] = [("Space 1", None), ("Reading", Some(0xbf556a))];
+// The colours of the Spaces past those two, in turn, with PREVIEW_SPACES.
+const MORE_COLORS: [u32; 6] = [0x4f7cff, 0x2f9e6e, 0xd98a2b, 0x8a5cd6, 0x2aa3b8, 0xc44f3a];
 const TABS: [(&str, &str); 5] = [
     (
         "Arc (web browser) - Wikipedia",
@@ -1231,7 +1233,7 @@ impl Browser for Fake {
     fn toast_button(
         &self,
         _: &str,
-        _: (Option<&'static str>, &'static str),
+        _: (&'static str, &'static str),
         _: Rc<dyn Fn(&mut App)>,
         _: Duration,
         _: &mut App,
@@ -1417,6 +1419,8 @@ impl command_bar::Host for PreviewBar {
     fn run_task(&self, _: &str, _: &str, _: Option<(SharedString, SharedString)>, _: &mut App) {}
 
     fn set_up_agents(&self, _: &mut App) {}
+
+    fn tooltip(&self, _: Option<(browser::tooltip::Tip, browser::tooltip::Anchor)>, _: &mut App) {}
 }
 
 /// Opens the command bar at `at`, with the suggestions for what `mode` has typed.
@@ -1609,10 +1613,22 @@ fn main() {
                 // The preview's Spaces and favorites are in its one profile, 0.
                 // PREVIEW_SPACE_ICONS=1 gives them glyphs, for the footer's row of icons.
                 let glyphs = std::env::var_os("PREVIEW_SPACE_ICONS").is_some();
+                // PREVIEW_SPACES=<count> makes that many, those past the two named by number, for
+                // a switcher and a Library's Spaces that run out of room.
+                let count = std::env::var("PREVIEW_SPACES").ok();
+                let count = count.and_then(|count| count.parse().ok());
+                let count: usize = count.unwrap_or(SPACES.len()).max(SPACES.len());
+                let named = (0..count).map(|index| match SPACES.get(index) {
+                    Some(&(name, color)) => (name.to_string(), color),
+                    None => (
+                        format!("Space {}", index + 1),
+                        Some(MORE_COLORS[(index - SPACES.len()) % MORE_COLORS.len()]),
+                    ),
+                });
                 let mut spaces: Vec<SpaceEntry> =
                     (first_space..)
-                        .zip(SPACES)
-                        .zip(["glyph:star", "glyph:leaf"])
+                        .zip(named)
+                        .zip(["glyph:star", "glyph:leaf"].into_iter().cycle())
                         .map(|((id, (name, color)), icon)| {
                             let icon = if glyphs { icon } else { "" };
                             let agent = match agent.is_some() && id == first_space + 1 {
@@ -1626,7 +1642,7 @@ fn main() {
                     spaces[0].2 = Some(theme.main_color());
                     spaces[0].6 = theme.to_text().into();
                 }
-                let first_archived = first_space + SPACES.len() as u64;
+                let first_archived = first_space + count as u64;
                 let archive = (first_archived..)
                     .zip(ARCHIVE)
                     .map(|(id, (title, url, days))| (id, title, url, now() - days * DAY))

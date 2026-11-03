@@ -128,10 +128,11 @@ impl Shell {
         };
         let now = cx.background_executor().now();
         // It lands as it leaves too where the window over the page would cover the page with it.
-        let still = cx.reduce_motion() || !self.browser.over_page_blends();
+        let still = crate::motion::still(cx) || !self.browser.over_page_blends();
         let start = *flight.start.get_or_insert_with(|| {
             // check.sh waits for this line, logged with the frame that draws the icon first.
             log!("browser: download flying {}", flight.id);
+            // Exactly one flight ago, not motion::start's long ago, as the bin's stay counts from it.
             let still = Duration::from_secs_f32(if still { FLIGHT } else { 0. });
             now.checked_sub(still).unwrap_or(now)
         });
@@ -187,7 +188,7 @@ impl Shell {
         let start = flight.start?;
         let leave = flight.leave.unwrap_or(start + Duration::from_secs_f32(FLIGHT + BIN_STAY));
         let opacity = 1. - (now.saturating_duration_since(leave).as_secs_f32() / BIN_FADE).min(1.);
-        let down = if cx.reduce_motion() { 0. } else { bin_drop((now - start).as_secs_f32()) };
+        let down = crate::motion::offset(bin_drop((now - start).as_secs_f32()), cx);
         let (x, y) = self.bin_center();
         Some(
             div()

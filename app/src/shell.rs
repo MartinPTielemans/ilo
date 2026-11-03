@@ -12,10 +12,10 @@ use std::{
 
 use gpui::{
     AnyElement, App, Bounds, BoxShadow, Context, DispatchPhase, Entity, FocusHandle, Focusable,
-    FontWeight, HitboxBehavior, Hsla, Image, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent,
-    MouseUpEvent, PathBuilder, Pixels, Point, Rgba, Role, ScrollHandle, SharedString, Size,
-    Subscription, Task, Window, WindowTextSystem, canvas, div, img, point, prelude::*, px, rgb,
-    rgba, size, svg,
+    FontWeight, HitboxBehavior, Hsla, Image, ModifiersChangedEvent, MouseButton, MouseDownEvent,
+    MouseExitEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, Rgba, Role,
+    ScrollHandle, SharedString, Size, Subscription, Task, Window, WindowTextSystem, canvas, div,
+    img, point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{
@@ -30,6 +30,7 @@ use crate::{
 #[cfg(test)]
 mod agent_spaces;
 mod beside;
+mod card_strip;
 #[cfg(test)]
 mod link_previews;
 #[cfg(test)]
@@ -137,7 +138,7 @@ pub use history::HistoryPage;
 pub use library::{Archived, Captured, Download, DownloadAction, DownloadState};
 pub use menu_bar::{MenuBar, ProfileChoice, SidebarBackup};
 pub use themes::{AppAppearance, app_appearance};
-pub use menus::{MenuEntry, new_profile_name};
+pub use menus::{MenuEntry, new_profile_name, profile_kept};
 pub use page_menu::{PageMenuItem, made_up as made_up_page_menu};
 pub use side_panel::SidePanel;
 pub use page_dialog::{DialogKind, PageDialog, PageReply, ShownPageDialog};
@@ -228,12 +229,20 @@ const TURN_TITLE_FADE: f32 = 0.5;
 // Folder close).
 const FOLD_OPEN: f32 = 0.2;
 const FOLD_CLOSE_OMEGA: f32 = 25.;
-// The edge under the favorites fades in once the list scrolls past its top and out back there, on
-// Dia's Scroll edge curve (docs/ux-spec.md › Motion).
-const SCROLL_EDGE_FADE: f32 = 0.1;
+// The edge under the favorites fades in once the list scrolls past its top and out back there, and
+// the one at its foot while rows are hidden under it, as long as Arc's take, on Dia's Scroll edge
+// curve (docs/ux-spec.md › Motion).
+const SCROLL_EDGE_FADE: f32 = 0.25;
+// The list glides to a row it scrolls to, most of the way in its first frame and still at the end,
+// as Arc's (docs/ux-spec.md › Tab rows).
+const LIST_GLIDE: f32 = 0.22;
+const LIST_GLIDE_POWER: i32 = 18;
 // Clear and the URL field's button fade in as the pointer comes onto the sidebar and out as it
 // leaves, on the scroll edge's curve. Arc's fade isn't recorded (docs/ux-spec.md › Clear divider).
 const TOOLS_FADE: f32 = 0.15;
+// The Space's chevron turns a quarter as its pinned rows collapse or expand, ease-in-out (Arc
+// 1.171's 0.12 s; the curve is ours).
+const PINNED_TURN: f32 = 0.12;
 // Two fingers across the sidebar page between Spaces (docs/ux-spec.md › Spaces › Switching). The
 // pages follow at half the fingers' way and rubber-band past the ends. Let go, they settle
 // critically damped on the next Space if the last 100 ms moved them faster than a flick, else on
@@ -254,13 +263,13 @@ const WHEEL_REST: Duration = Duration::from_millis(250);
 
 use crate::tokens::shell::NAV_TOP;
 use crate::tokens::shell::SIDEBAR_BUTTON_X;
-use crate::tokens::shell::BACK_X;
-use crate::tokens::shell::FORWARD_X;
-use crate::tokens::shell::RELOAD_X;
+use crate::tokens::shell::FULL_SCREEN_SIDEBAR_BUTTON_X;
+use crate::tokens::shell::NAV_TRAIL;
+use crate::tokens::shell::NAV_PITCH;
+use crate::tokens::shell::NAV_AFTER_SIDEBAR;
 use crate::tokens::shell::NAV_SIZE;
 use crate::tokens::shell::NAV_RADIUS;
 use crate::tokens::shell::NAV_GLYPH;
-use crate::tokens::shell::NAV_END;
 
 use crate::tokens::shell::URL_FIELD_TOP;
 use crate::tokens::shell::URL_FIELD_HEIGHT;
@@ -274,6 +283,7 @@ const LIST_TOP: f32 = URL_FIELD_TOP + URL_FIELD_HEIGHT + 8.;
 use crate::tokens::shell::TILE_HEIGHT;
 use crate::tokens::shell::TILE_GAP;
 use crate::tokens::shell::TILE_MIN;
+use crate::tokens::shell::TILE_COLUMNS;
 use crate::tokens::shell::TILE_RADIUS;
 use crate::tokens::shell::{TILE_MARK, TILE_MARK_INSET};
 use crate::tokens::shell::TALL_FAVORITES;
@@ -294,6 +304,7 @@ use crate::tokens::shell::SPACE_ICON_PLATE;
 use crate::tokens::shell::PINNED_CARET;
 use crate::tokens::shell::PINNED_CARET_PLATE;
 use crate::tokens::shell::PINNED_CARET_GAP;
+use crate::tokens::shell::{SPACE_DONE_HEIGHT, SPACE_DONE_WIDTH, SPACE_MORE, SPACE_MORE_INSET};
 // While the icon picker shows for a Space with no icon, a dashed square holds the icon's place,
 // centred in its frame (Arc 1.170 cap at 1×): 24 across, its corners rounded by about 6, a 1 pt
 // line of 4 pt dashes and 2 pt gaps, in black at 0.30, seen over a red Space (*interim* over the
@@ -304,6 +315,7 @@ use crate::tokens::shell::ICON_PLACEHOLDER_LINE;
 const ICON_PLACEHOLDER_DASH: (f32, f32) = (4., 2.);
 use crate::tokens::shell::ICON_PLACEHOLDER_COLOR;
 const SPACE_ICON_TEXT: f32 = EMOJI_SIZE;
+use crate::tokens::shell::LIST_TRAIL;
 use crate::tokens::shell::SPACE_GLYPH;
 use crate::tokens::shell::ROW_PITCH;
 use crate::tokens::shell::ROW_HEIGHT;
@@ -376,6 +388,9 @@ use crate::tokens::shell::SPACE_HEIGHT;
 use crate::tokens::shell::SPACE_SWATCH_SHOWN;
 use crate::tokens::shell::SPACE_SWATCH;
 use crate::tokens::shell::SPACE_SWATCH_HOVERED;
+use crate::tokens::shell::SPACE_SHOWN_LEAST;
+use crate::tokens::shell::SPACE_CLEAR;
+use crate::tokens::shell::SPACE_LEAST;
 // A Space's icon in the switcher takes its dot's place in the same item. Its glyph is 16 pt, a
 // favicon's size (ours, *interim*).
 const SPACE_ICON_SWITCHER: f32 = EMOJI_SIZE;
@@ -717,6 +732,15 @@ enum Slot {
     NewTab,
 }
 
+/// The list on its way to a row, from `from` down its top at `start` to `to`, last set at `set`.
+#[derive(Clone, Copy)]
+struct ListGlide {
+    start: Instant,
+    from: f32,
+    to: f32,
+    set: f32,
+}
+
 /// Tabs' rows new in the list, fading in since `start`: a new tab's plate, or whole rows when
 /// several come at once, as after Undo.
 struct Opened {
@@ -827,9 +851,10 @@ struct Drag {
     /// go to, unless that's where it was. The rows stay where they are until it's let go.
     line: Option<f32>,
     /// The tab whose row's middle the pointer is on, and the wait for it to rest there, after which
-    /// it's the tab the dragged one would join in a split view, as Arc's, in place of a gap.
+    /// it's the tab the dragged one would join in a split view, as Arc's, in place of a gap, on its
+    /// left if the pointer is on the row's left half.
     resting: Option<(u64, Task<()>)>,
-    onto: Option<u64>,
+    onto: Option<(u64, bool)>,
     /// Let go, until the browser reports the lists it made.
     dropped: bool,
     /// Over the page, where it can join the page shown in a split view.
@@ -905,6 +930,9 @@ struct Swipe {
     /// changed.
     ready: bool,
     turned: Option<Instant>,
+    /// Where they've taken the Library's Spaces cards, before the rubber band, while they scroll
+    /// them rather than move the Library (`card_strip`).
+    cards: Option<f32>,
 }
 
 /// A Space's page settling on its place, after a swipe or a switch.
@@ -1005,6 +1033,10 @@ pub struct Shell {
     /// button waits until the pointer has left the row or pressed it, so a second click meant for
     /// the − never removes the tab.
     remove_held: Option<u64>,
+    /// The split row whose ✕ or − the pointer is on, and whether ⌥ is held, when a click separates
+    /// its tabs instead of closing them (Arc). The pointer's moves say the keys held, as GPUI hears
+    /// no ⌥ of its own while the page has the keyboard.
+    on_split_close: Option<(u64, bool)>,
     /// A shortcut the page handed back ran since the pointer last moved. The sidebar draws no row
     /// or favicon under the pointer until it moves, as GPUI hides its hover after a key of its own,
     /// so a row the pointer rests on doesn't read as selected beside the tab a key showed.
@@ -1078,15 +1110,27 @@ pub struct Shell {
     fields_drawn: Rc<RefCell<HashMap<u64, bool>>>,
     /// Where the Library's empty line was last laid out, for its log line.
     empty_drawn: Rc<RefCell<String>>,
-    /// Whether the list is past its top, and the edge under the favorites' fade since it last
-    /// went past or back, from how far in it was then.
-    scrolled: bool,
-    scroll_edge_fade: Option<(Instant, f32)>,
+    /// The line under the favorites, shown while the list is past its top, and the one at its
+    /// foot, while rows are hidden under it.
+    top_edge: swipe::EdgeLine,
+    foot_edge: swipe::EdgeLine,
+    /// What the list was last laid out from: the window's size and where the list starts and ends.
+    list_measured: (Size<Pixels>, f32, f32),
+    /// The list's glide to a row it scrolls to, if it's on its way.
+    list_glide: Cell<Option<ListGlide>>,
     /// The edge the selected tab's marker was last drawn at, true for the top, and its frame in
     /// the window (`shown_marker`).
     marker_drawn: Cell<Option<(bool, Bounds<Pixels>)>>,
     /// Whether the pinned rows' chevron was last drawn for collapsed ones, and where.
     caret_drawn: Rc<Cell<Option<(bool, Bounds<Pixels>)>>>,
+    /// Whether the pointer is over the Space's name row, which then shows its fill, chevron and
+    /// •••, and whether the menu up is the one it opened, which keeps them while it's up.
+    name_hovered: bool,
+    name_menu: bool,
+    /// The Space and whether its pinned rows were collapsed when last drawn, and when they last
+    /// changed there, for the chevron's turn.
+    pinned_seen: Option<(u64, bool)>,
+    pinned_turn: Option<Instant>,
     /// The row whose ring the keys move while the sidebar has the keyboard (sidebar_keys.rs), the
     /// focus it takes them with, whether it takes them at the next draw, and where the ring was
     /// last drawn.
@@ -1342,6 +1386,8 @@ pub struct Shell {
     library_motion: Option<(f32, f32, Instant)>,
     /// While the sidebar under the Library fades: its opacity when it started, and when.
     sidebar_fade: Option<(f32, Instant)>,
+    /// How far the Library's Spaces cards have scrolled across, when they don't fit.
+    card_strip: card_strip::CardStrip,
     /// While the circle goes back after a pull made a Space.
     circle_exit: Option<new_space::CircleExit>,
     /// What the tabs' pages ask, such as for the camera: only shown tabs ask.
@@ -1496,6 +1542,7 @@ impl Shell {
             selected: 0,
             hovered: None,
             remove_held: None,
+            on_split_close: None,
             page_keyed: false,
             retip: false,
             menu_row: None,
@@ -1526,10 +1573,16 @@ impl Shell {
             card_press_closes: false,
             fields_drawn: Rc::default(),
             empty_drawn: Rc::default(),
-            scrolled: false,
-            scroll_edge_fade: None,
+            top_edge: Default::default(),
+            foot_edge: Default::default(),
+            list_measured: Default::default(),
+            list_glide: Cell::new(None),
             marker_drawn: Cell::new(None),
             caret_drawn: Rc::default(),
+            name_hovered: false,
+            name_menu: false,
+            pinned_seen: None,
+            pinned_turn: None,
             keyed: None,
             sidebar_keys: cx.focus_handle(),
             focus_keys: false,
@@ -1653,6 +1706,7 @@ impl Shell {
             library_resize: None,
             library_motion: None,
             sidebar_fade: None,
+            card_strip: Default::default(),
             circle_exit: None,
             questions: HashMap::new(),
             question_drawn: Rc::default(),
@@ -2146,7 +2200,7 @@ impl Shell {
         }
         // The Spaces section springs to its width as cards come and go, as on a section's change.
         if self.library.is_some() && self.library_width() != width {
-            self.library_resize = Some((width, Instant::now()));
+            self.library_resize = Some((width, crate::motion::start(cx)));
         }
         if self.show_favorites() {
             self.log_favorites();
@@ -2229,7 +2283,7 @@ impl Shell {
                 beside: Some(before),
                 from: if to > from { width } else { -width },
                 velocity: 0.,
-                start: Instant::now(),
+                start: crate::motion::start(cx),
                 next_door: from.abs_diff(to) == 1,
             });
         }
@@ -2315,12 +2369,12 @@ impl Shell {
             }
             // A folder the user opened or closed moves the rows under it on its own spring.
             let curve = self.folding.take().map_or(Curve::Slide, |open| Curve::Fold { open });
-            self.move_rows(before, curve);
+            self.move_rows(before, curve, cx);
         }
         if space == self.space {
             let tiles = self.drawn();
             if self.end_drag(false) {
-                self.move_tiles(tiles, Curve::Slide);
+                self.move_tiles(tiles, Curve::Slide, cx);
             } else if let Some(position) = self.drag_position() {
                 // A row carried over the new lists finds its place in them where the pointer is.
                 self.drag_to(position, cx);
@@ -2367,7 +2421,7 @@ impl Shell {
             self.tile_slides.clear();
             self.list_slide = None;
         } else {
-            self.move_tiles(tiles, Curve::Slide);
+            self.move_tiles(tiles, Curve::Slide, cx);
         }
         self.forget_closed(cx);
         cx.notify();
@@ -2472,7 +2526,7 @@ impl Shell {
         }
         let hidden = self.panes(self.selected);
         self.selected = tab;
-        self.show_in_space(tab);
+        self.show_in_space(tab, cx);
         self.scroll_to_row(tab);
         if self.walked.is_none() {
             self.shown(tab);
@@ -2550,19 +2604,23 @@ impl Shell {
         }
     }
 
-    /// Gives "New Tab" the selected plate while ⌘T's command bar is open, or gives it back.
+    /// Gives "New Tab" the selected plate while ⌘T's command bar is open, scrolling the list to
+    /// its row as Arc's does, or gives it back.
     fn set_new_tab(&mut self, new_tab: bool, cx: &mut Context<Self>) {
         if self.new_tab != new_tab {
             self.new_tab = new_tab;
             // check.sh reads this line.
             log!("browser: new tab plate {}", new_tab as u8);
+            if new_tab {
+                self.scroll_to_slot(Slot::NewTab, "new tab");
+            }
             cx.notify();
         }
     }
 
     /// Makes `tab` the Space's shown tab, whose row a closed folder keeps, and moves the rows if
     /// that changes them.
-    fn show_in_space(&mut self, tab: u64) {
+    fn show_in_space(&mut self, tab: u64, cx: &App) {
         let space = self.spaces.iter_mut().find(|space| space.id == self.space);
         let Some(space) = space.filter(|space| space.shown != tab) else {
             return;
@@ -2575,7 +2633,7 @@ impl Shell {
         let before = space.slots();
         space.shown = tab;
         if space.slots() != before {
-            self.move_rows(before, Curve::Slide);
+            self.move_rows(before, Curve::Slide, cx);
         }
     }
 
@@ -2848,7 +2906,8 @@ impl Shell {
         }
     }
 
-    /// Deletes the Space, asking first if it has tabs, which close with it.
+    /// Deletes the Space, asking first if it has tabs, which go with it: its Today tabs to the
+    /// archive, its pinned tabs with the Space, and ⌘Z brings them all back.
     fn delete_space(&mut self, space: u64, cx: &mut Context<Self>) {
         let Some(found) = self.spaces.iter().find(|each| each.id == space) else {
             return;
@@ -2859,12 +2918,13 @@ impl Shell {
             return;
         }
         let shell = cx.weak_entity();
+        let undo = keystroke_label("cmd-z");
         self.browser.confirm(
             format!("Delete “{}”?", found.name),
             if tabs == 1 {
-                "Its tab closes too.".into()
+                format!("Its tab goes with it. {undo} brings it back.")
             } else {
-                format!("Its {tabs} tabs close too.")
+                format!("Its {tabs} tabs go with it. {undo} brings them back.")
             },
             "Delete",
             Box::new(move |cx| {
@@ -3036,6 +3096,10 @@ impl Shell {
         }
         if self.remove_held.is_some_and(|held| self.hovered != Some(Row::Tab(held))) {
             self.remove_held = None;
+        }
+        // Its button goes with the row's hover, which may tell it nothing.
+        if self.on_split_close.is_some_and(|(on, _)| self.hovered != Some(Row::Tab(on))) {
+            self.on_split_close = None;
         }
         cx.notify();
     }
@@ -3358,6 +3422,7 @@ impl Render for Shell {
         self.step_form_going(cx);
         self.step_scroll_edge(window);
         self.step_tools(window);
+        self.step_pinned_turn(window);
         self.step_empty(window);
         self.step_crash_cards(window);
         let drop_targets = self.drag.as_ref().is_some_and(|drag| drag.over_page.is_some())
@@ -3471,6 +3536,9 @@ impl Render for Shell {
             }))
             .on_action(cx.listener(|shell, _: &crate::text_input::Redo, _, cx| {
                 shell.redo(cx);
+            }))
+            .on_modifiers_changed(cx.listener(|shell, event: &ModifiersChangedEvent, _, cx| {
+                shell.alt_on_close(event.modifiers.alt, cx)
             }))
             .size_full()
             .relative()
@@ -3601,6 +3669,7 @@ impl Shell {
                 sidebar
                     .child(self.with_page(self.url_field(cx)))
                     .children(self.scroll_edge_line().map(|line| self.with_page(line)))
+                    .children(self.foot_edge_line().map(|line| self.with_page(line)))
                     .child(self.space_pages(cx))
                     // Over the pages, which they scroll with when they're tall.
                     .children(self.tiles(cx).map(|tiles| self.with_page(tiles)))
@@ -3620,7 +3689,7 @@ impl Shell {
             }
         };
         sidebar
-            .children(self.new_space_circle())
+            .children(self.new_space_circle(cx))
             .children(self.recent_download_rows(cx))
             .children((!self.private).then(|| self.library_button(cx)))
             .children(self.download_bin(cx))
@@ -3816,8 +3885,10 @@ impl Shell {
         });
         let line = over_list.and_then(|drag| Some(self.drop_line(drag.line?, drag.depth, room)));
         let dragged = over_list.filter(|drag| !drag.incoming);
-        // Mid-turn into or out of a tile, it's drawn over the sidebar instead.
-        let dragged = dragged.filter(|drag| drag.shape.start.is_none()).map(|drag| {
+        // Mid-turn into or out of a tile, it's drawn over the sidebar instead, and rested on a
+        // row, it's in that row's slot for it.
+        let dragged = dragged.filter(|drag| drag.shape.start.is_none() && drag.onto.is_none());
+        let dragged = dragged.map(|drag| {
             let row = self.tab_row(drag.tab, true, cx);
             let top = room + self.drag_at(drag);
             let ghost = div().id("ghost").absolute().top(px(top)).left_0();
@@ -3849,6 +3920,7 @@ impl Shell {
             .when(!under.is_empty(), |list| {
                 list.child(div().flex_none().flex().flex_col().overflow_hidden().children(under))
             })
+            .child(div().flex_none().h(px(LIST_TRAIL)))
             .children(line)
             .children(dragged)
             .child(self.drag_listeners(cx))
@@ -3915,6 +3987,7 @@ impl Shell {
         self.step_form_going(cx);
         self.step_scroll_edge(window);
         self.step_tools(window);
+        self.step_pinned_turn(window);
         self.step_foot(window, cx);
         let left = REVEAL_INSET - (REVEAL_INSET + self.width()) * (1. - self.reveal_out());
         // Unless a field in the panel has it.

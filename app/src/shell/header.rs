@@ -15,10 +15,11 @@ use gpui::{
 use super::{
     access::Accessible,
     beside::AtRest,
-    BACK_X, Command, FORWARD_X, HeldNav, NAV, NAV_DISABLED, NAV_END, NAV_GLYPH, NAV_HOVERED,
-    NAV_PRESS_SCALE, NAV_RADIUS, NAV_SIZE, NAV_TOP, PLATE_INSET, PLATE_RADIUS, RELOAD_X, SECONDARY,
-    SIDEBAR_BUTTON_X, Shell, Swapped, TILE_HOVERED, TOOLS_FADE, URL_BUTTON_GLYPH, URL_BUTTON_INSET,
-    URL_BUTTON_SIZE, URL_FIELD, URL_FIELD_HEIGHT, URL_FIELD_TEXT_X, URL_FIELD_TOP,
+    Command, FULL_SCREEN_SIDEBAR_BUTTON_X, HeldNav, NAV, NAV_AFTER_SIDEBAR, NAV_DISABLED,
+    NAV_GLYPH, NAV_HOVERED, NAV_PITCH, NAV_PRESS_SCALE, NAV_RADIUS, NAV_SIZE, NAV_TOP, NAV_TRAIL,
+    PLATE_INSET, PLATE_RADIUS, SECONDARY, SIDEBAR_BUTTON_X, Shell, Swapped, TILE_HOVERED,
+    TOOLS_FADE, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD, URL_FIELD_HEIGHT,
+    URL_FIELD_TEXT_X, URL_FIELD_TOP,
     commands::BAR_COMMANDS, drag::held_depth, fade_at, host,
     scaled::scaled_from_middle,
     swap::{CHECK, LINK},
@@ -62,8 +63,8 @@ impl Shell {
     ) -> impl IntoElement + use<> {
         let color = Hsla::from(self.palette.glyph(if enabled { NAV } else { NAV_DISABLED }));
         // Reload and stop are one button, which changes with the tab shown's page.
-        let glyph = match x == RELOAD_X {
-            true => self.swaps.glyph(Swapped::Reload(self.field_tab()), icon, NAV_GLYPH, color),
+        let glyph = match matches!(command, Command::Reload | Command::Stop) {
+            true => self.swaps.glyph(Swapped::Reload(self.field_tab()), icon, NAV_GLYPH, color, cx),
             false => svg().path(icon).size(px(NAV_GLYPH)).text_color(color).into_any_element(),
         };
         let button = div()
@@ -105,7 +106,7 @@ impl Shell {
                     }))
             })
             // Back, forward and reload shrink a little while they're held.
-            .when(enabled && x != SIDEBAR_BUTTON_X, |button| {
+            .when(enabled && command != Command::ToggleSidebar, |button| {
                 let release =
                     |shell: &mut Shell, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Shell>| {
                         shell.release_nav();
@@ -259,9 +260,10 @@ impl Shell {
     /// as fit.
     pub(super) fn nav_buttons(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         let page = self.page(self.field_tab());
+        let [sidebar, back, forward, reload_x] = nav_places(self.width(), self.full_screen);
         let reload = match page.loading {
-            true => (RELOAD_X, reload_glyph(true), Command::Stop, true),
-            false => (RELOAD_X, reload_glyph(false), Command::Reload, self.field_tab() != 0),
+            true => (reload_x, reload_glyph(true), Command::Stop, true),
+            false => (reload_x, reload_glyph(false), Command::Reload, self.field_tab() != 0),
         };
         if self.reload_drawn.replace(Some(reload.2)) != Some(reload.2) {
             // check.sh reads this line: a press hits the button the window drew last, which
@@ -273,15 +275,14 @@ impl Shell {
             log!("browser: nav back drawn {}", if page.can_go_back { "on" } else { "dimmed" });
         }
         let buttons = [
-            (SIDEBAR_BUTTON_X, "icons/nav-sidebar.svg", Command::ToggleSidebar, true),
-            (BACK_X, "icons/nav-back.svg", Command::Back, page.can_go_back),
-            (FORWARD_X, "icons/nav-forward.svg", Command::Forward, page.can_go_forward),
+            (sidebar, "icons/nav-sidebar.svg", Command::ToggleSidebar, true),
+            (back, "icons/nav-back.svg", Command::Back, page.can_go_back),
+            (forward, "icons/nav-forward.svg", Command::Forward, page.can_go_forward),
             reload,
         ];
-        let width = self.width();
         buttons
             .into_iter()
-            .filter(|&(x, ..)| x + NAV_SIZE <= width - NAV_END)
+            .filter_map(|(x, icon, command, enabled)| Some((x?, icon, command, enabled)))
             .map(|(x, icon, command, enabled)| {
                 self.nav_button(x, icon, command, enabled, cx).into_any_element()
             })
@@ -432,6 +433,7 @@ impl Shell {
                     if self.url_copied.is_some() { CHECK } else { LINK },
                     URL_BUTTON_GLYPH,
                     self.palette.glyph(NAV).into(),
+                    cx,
                 ))
         });
         let site_controls = tools.then(|| {
@@ -745,6 +747,26 @@ const DEVTOOLS_GLYPH: &str = "icons/code.svg";
 /// The header's reload, which is stop while the page loads.
 pub(super) fn reload_glyph(loading: bool) -> &'static str {
     if loading { "icons/nav-stop.svg" } else { "icons/nav-reload.svg" }
+}
+
+/// Where the header's buttons' plates start in a sidebar `width` wide: the sidebar button, then
+/// back, forward and reload, each None where it doesn't fit. The sidebar button follows the traffic
+/// lights, or starts near the sidebar's edge in full screen, where they're gone (Arc 1.171). The
+/// others keep to the sidebar's right edge, NAV_TRAIL in and NAV_PITCH apart (Arc 1.170), and a
+/// narrow sidebar loses reload, then forward, while back would come nearer the sidebar button than
+/// NAV_AFTER_SIDEBAR.
+pub(super) fn nav_places(width: f32, full_screen: bool) -> [Option<f32>; 4] {
+    let sidebar = if full_screen { FULL_SCREEN_SIDEBAR_BUTTON_X } else { SIDEBAR_BUTTON_X };
+    let first = sidebar + NAV_SIZE + NAV_AFTER_SIDEBAR;
+    let last = width - NAV_TRAIL - NAV_SIZE;
+    let count = (0..=3).rev().find(|&count| last - (count as f32 - 1.) * NAV_PITCH >= first);
+    let mut places = [Some(sidebar), None, None, None];
+    if let Some(count) = count.filter(|&count| count > 0) {
+        for index in 0..count {
+            places[1 + index] = Some(last - (count - 1 - index) as f32 * NAV_PITCH);
+        }
+    }
+    places
 }
 
 #[cfg(test)]

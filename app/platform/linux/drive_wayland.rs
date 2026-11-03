@@ -10,15 +10,15 @@
 //! and the core hands them on to the UI or an overlay as it does a real keyboard's. The done line's
 //! key window is sway's focused window, and in a browser window the overlay that has the keys, else
 //! whose the core says they are. Every window floats (tools/headless.sh), so sway stacks them as a
-//! desktop does, and moves and sizes them as it's told. The scripted input method, drags from
-//! another app and page swipes aren't here yet.
+//! desktop does, and moves and sizes them as it's told. Drags from another app aren't here yet.
 
 use std::{
     cell::{Cell, RefCell},
     ffi::c_void,
     io::{Read as _, Write as _},
     os::{fd::AsFd as _, unix::net::UnixStream},
-    time::Instant,
+    sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
 };
 
 use browser::log;
@@ -39,7 +39,7 @@ use wayland_protocols_wlr::virtual_pointer::v1::client::{
 };
 use xkbcommon::xkb;
 
-use crate::{CX, WINDOWS, bc, drive, overlays, panels, settings_window};
+use crate::{CX, WINDOWS, bc, drive, floats, overlays, panels, settings_window};
 
 /// The modifiers, as drive.rs's X states hold them, which are the xkb masks of the keymap the
 /// driver's keyboard has.
@@ -111,8 +111,26 @@ pub(crate) fn start() {
         Ok(session) => {
             log!("browser: drive input through sway's virtual pointer and keyboard");
             SESSION.set(Some(session));
+            ON.store(true, Ordering::Relaxed);
         }
         Err(why) => log!("browser: drive has no input under Wayland: {why}"),
+    }
+}
+
+/// Whether the driver's input is Wayland's, for the thread that reads its commands.
+static ON: AtomicBool = AtomicBool::new(false);
+
+/// Waits, on the thread that reads the commands, until sway has given one of the app's windows the
+/// keyboard, for up to 5 s. Input before that goes to no window, which lost a run's first command
+/// sent as the window comes on screen: its key, or a menu for a window the driver couldn't find yet
+/// (#1218, #1226).
+pub(crate) fn await_first_focus() {
+    if !ON.load(Ordering::Relaxed) {
+        return;
+    }
+    let until = Instant::now() + Duration::from_secs(5);
+    while !ours().iter().any(|node| node.focused) && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -387,7 +405,9 @@ fn focused_settings(nodes: &[Node]) -> Option<Node> {
 
 /// Where in the content of its browser window the overlay of `view` shows.
 fn overlay_frame(view: *mut c_void) -> Option<(bc::bc_id, gpui::Bounds<gpui::Pixels>)> {
-    let (ui_view, bounds) = overlays::placed(view).or_else(|| panels::placed(view))?;
+    let (ui_view, bounds) = (overlays::placed(view))
+        .or_else(|| panels::placed(view))
+        .or_else(|| floats::placed(view))?;
     let id = WINDOWS.with_borrow(|windows| {
         windows.iter().find(|w| w.ui_view == ui_view).map(|w| w.id)
     })?;
@@ -401,14 +421,15 @@ fn await_settings_focus() {
     if !settings_window::take_shown_anew() {
         return;
     }
-    let until = Instant::now() + std::time::Duration::from_secs(2);
+    let until = Instant::now() + Duration::from_secs(2);
     while focused_settings(&ours()).is_none() && Instant::now() < until {
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
 /// The origin, in sway's layout, of the window with the keyboard, for clickkey: Settings with
-/// sway's focus, the overlay with the keys in its browser window, or the driven browser window.
+/// sway's focus, the overlay with the keys in its browser window, or the browser window with sway's
+/// focus, else the driven one.
 fn key_origin() -> Option<(f64, f64)> {
     let nodes = ours();
     if let Some(settings) = focused_settings(&nodes) {
@@ -417,10 +438,18 @@ fn key_origin() -> Option<(f64, f64)> {
     if let Some((id, bounds)) = gpui_linux::shown_keyboard_overlay().and_then(overlay_frame)
         && let Some((_, node)) = browsers(&nodes).into_iter().find(|&(each, _)| each == id)
     {
-        let origin = bounds.origin.map(f64::from);
+        // At whole points, as a subsurface's place is, which GPUI truncates the overlay's to: a
+        // click in the theme picker, at a half point, landed half a point off.
+        let origin = bounds.origin.map(|each| f64::from(each).trunc());
         return Some((node.x + origin.x, node.y + origin.y));
     }
-    let (_, node) = driven()?;
+    // As drive.rs's is the X focus's: a Little ilo window the driven one opened has the keys, and
+    // its profile picker's click went to the driven window under it.
+    let focused = nodes.iter().find(|node| node.focused).map(|node| node.id);
+    let node = match browsers(&nodes).into_iter().find(|(_, node)| Some(node.id) == focused) {
+        Some((_, node)) => node,
+        None => driven()?.1,
+    };
     Some((node.x, node.y))
 }
 
@@ -519,16 +548,25 @@ fn first_press(x: f64, y: f64, which: u32, again: bool) {
     LAST_CLICK.set(Some((Instant::now(), x, y, which)));
 }
 
-/// A click of `which` at (`x`, `y`) in sway's layout with the modifiers `state`. Control held after
-/// a key for the ⌃Tab walk isn't one: drive.rs's X events leave it out, but Wayland gives a click
-/// the keyboard's modifiers, so it goes up for the click, ending the walk as the click would.
+/// Has the pointer do `events` with the modifiers `state`, and those flags holds. Control held
+/// after a key for the ⌃Tab walk isn't one: drive.rs's X events each carry their own state, but
+/// Wayland gives a pointer's the keyboard's, so it goes up for them, ending the walk as a click
+/// would. With it, a wheel zoomed the page (#1219) and a drag pressed as a ⌃-click (#1221).
+fn with_modifiers(state: u16, events: impl FnOnce() -> Option<()>) -> Option<()> {
+    hold(state | FLAGS.get())?;
+    let done = events();
+    hold(held())?;
+    done
+}
+
+/// A click of `which` at (`x`, `y`) in sway's layout with the modifiers `state`.
 fn click(x: f64, y: f64, which: u32, state: u16, again: bool) -> Option<()> {
     first_press(x, y, which, again);
     motion(x, y)?;
-    hold(state | FLAGS.get())?;
-    button(which, true)?;
-    button(which, false)?;
-    hold(held())
+    with_modifiers(state, || {
+        button(which, true)?;
+        button(which, false)
+    })
 }
 
 /// (`x`, `y`) in the driven browser window's content, in sway's layout.
@@ -568,9 +606,37 @@ fn key_events(key: &str, state: u16, kinds: &[bool]) -> Option<()> {
     hold(held())
 }
 
+/// The surface where drive.rs's scripted input method composes, as the compositor's would:
+/// Settings' with sway's focus, or the browser window's while its UI or an overlay over it has the
+/// keys. Not while a page has them, whose input method is Chromium's.
+pub(crate) fn ime_surface() -> Option<*mut c_void> {
+    if focused_settings(&ours()).is_some() {
+        return settings_window::shown();
+    }
+    let id = focused_browser()?;
+    let ui = gpui_linux::shown_keyboard_overlay().is_some()
+        || unsafe { bc::bc_window_keyboard_is_ui(id) };
+    ui.then_some(())?;
+    WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == id).map(|w| w.ui_view))
+}
+
+/// Presses and releases `key` with the modifiers `state`, or composes it in the UI's field while
+/// drive.rs's scripted input method types, as drive.rs's key does.
+fn key(key: &str, state: u16) -> Option<()> {
+    if drive::ime_key(key, state | FLAGS.get())? {
+        return Some(());
+    }
+    key_events(key, state, &[true, false])
+}
+
 /// Commits `text` to the field of the UI, Settings or the overlay with the keys, as drive.rs's
 /// insert does.
 fn insert(text: &str) -> Option<()> {
+    // A page with the keys gets the text typed, as drive.rs's insert types it there: its field is
+    // Chromium's, which no GPUI keystroke reaches.
+    if keyboard().1 == "RenderWidgetHostViewCocoa" {
+        return text.chars().try_for_each(|c| key_events(&c.to_string(), 0, &[true, false]));
+    }
     let nodes = ours();
     let view = match gpui_linux::shown_keyboard_overlay() {
         Some(view) => view,
@@ -600,13 +666,63 @@ fn insert(text: &str) -> Option<()> {
 /// for a positive one.
 fn wheel(x: f64, y: f64, axis: wl_pointer::Axis, notches: i32) -> Option<()> {
     motion(x, y)?;
-    with_session(|session, time| {
-        for _ in 0..notches.unsigned_abs() {
-            session.pointer.axis_source(wl_pointer::AxisSource::Wheel);
-            let notch = notches.signum();
-            session.pointer.axis_discrete(time, axis, 15. * f64::from(notch), notch);
+    with_modifiers(0, || {
+        with_session(|session, time| {
+            for _ in 0..notches.unsigned_abs() {
+                session.pointer.axis_source(wl_pointer::AxisSource::Wheel);
+                let notch = notches.signum();
+                session.pointer.axis_discrete(time, axis, 15. * f64::from(notch), notch);
+                session.pointer.frame();
+            }
+        })
+    })
+}
+
+/// Two fingers on the touchpad at (`x`, `y`), as the Mac's driver has them: `count` scrolls 8 ms
+/// apart, each `by` points right and down, then the fingers lift `rest` ms after the last, which
+/// ends the touch's phases. Done once they have.
+fn swipe(x: f64, y: f64, by: (f64, f64), count: u32, rest: u32) -> Option<()> {
+    motion(x, y)?;
+    fingers(by)?;
+    drive::go_on(Box::new(move |done| swiping(by, count - 1, rest, done)));
+    Some(())
+}
+
+/// The swipe's `left` scrolls, then its fingers lifting.
+fn swiping(by: (f64, f64), left: u32, rest: u32, done: Box<dyn FnOnce()>) {
+    if left > 0 {
+        drive::after(8, Box::new(move || {
+            _ = fingers(by);
+            swiping(by, left - 1, rest, done);
+        }));
+        return;
+    }
+    drive::after(rest, Box::new(move || {
+        _ = with_session(|session, time| {
+            for axis in [wl_pointer::Axis::HorizontalScroll, wl_pointer::Axis::VerticalScroll] {
+                session.pointer.axis_stop(time, axis);
+                session.pointer.axis_source(wl_pointer::AxisSource::Finger);
+            }
             session.pointer.frame();
+        });
+        done();
+    }));
+}
+
+/// One scroll of two fingers, `dx` points right and `dy` down. GPUI scrolls a touchpad's axis
+/// value three times over, the other way. Each axis's source comes after it: wlroots gives a source
+/// to the axis named last, and sway aborts on a frame whose axes have different ones.
+fn fingers((dx, dy): (f64, f64)) -> Option<()> {
+    with_session(|session, time| {
+        let axes = [
+            (wl_pointer::Axis::HorizontalScroll, dx),
+            (wl_pointer::Axis::VerticalScroll, dy),
+        ];
+        for (axis, points) in axes.into_iter().filter(|&(_, points)| points != 0.) {
+            session.pointer.axis(time, axis, -points / 3.);
+            session.pointer.axis_source(wl_pointer::AxisSource::Finger);
         }
+        session.pointer.frame();
     })
 }
 
@@ -630,6 +746,7 @@ fn layout() -> Option<()> {
             log!("browser: layout child {x:.0},{y:.0} {width:.0}x{height:.0}");
         }
     }
+    log!("browser: layout keyboard {}", drive::keyboard_page(id, height));
     log!("browser: layout full screen {}", node.full_screen as u8);
     Some(())
 }
@@ -687,9 +804,11 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
             let (x2, y2) = in_driven_point(&mut words)?;
             first_press(x, y, BTN_LEFT, false);
             motion(x, y)?;
-            button(BTN_LEFT, true)?;
-            motion(x2, y2)?;
-            button(BTN_LEFT, false)
+            with_modifiers(0, || {
+                button(BTN_LEFT, true)?;
+                motion(x2, y2)?;
+                button(BTN_LEFT, false)
+            })
         })(),
         "press" | "dragto" | "release" | "rightpress" | "rightdragto" | "rightrelease" => (|| {
             let (x, y) = in_driven_point(&mut words)?;
@@ -697,15 +816,19 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
                 Some(step) => (BTN_RIGHT, step),
                 None => (BTN_LEFT, action),
             };
+            // The keys named after the point, such as ⌥ for a drag that drops a copy.
+            let keys = drive::click_modifiers(words);
             if step == "press" {
                 first_press(x, y, which, false);
             }
-            motion(x, y)?;
-            match step {
-                "press" => button(which, true),
-                "release" => button(which, false),
-                _ => Some(()),
-            }
+            with_modifiers(keys, || {
+                motion(x, y)?;
+                match step {
+                    "press" => button(which, true),
+                    "release" => button(which, false),
+                    _ => Some(()),
+                }
+            })
         })(),
         "move" => (|| {
             let (x, y) = in_driven_point(&mut words)?;
@@ -718,6 +841,14 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
             let count: i32 = words.next()?.parse().ok()?;
             let notches = count.max(1) * if dy > 0. { 1 } else { -1 };
             wheel(x, y, wl_pointer::Axis::VerticalScroll, notches)
+        })(),
+        "swipe" => (|| {
+            let (x, y) = in_driven_point(&mut words)?;
+            let dx: f64 = words.next()?.parse().ok()?;
+            let dy: f64 = words.next()?.parse().ok()?;
+            let count: u32 = words.next()?.parse().ok().filter(|&count| count > 0)?;
+            let rest: u32 = words.next().map_or(Some(0), |rest| rest.parse().ok())?;
+            swipe(x, y, (dx, dy), count, rest)
         })(),
         // Lines right are the Mac's wheel's positive x, which GPUI reads from a turn left.
         "wheel" => (|| {
@@ -736,7 +867,7 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
                 let option = if words.contains(&"alt") { ALT } else { 0 };
                 state = state & !ALT | CONTROL | option;
             }
-            key_events(name, state, &[true, false])
+            key(name, state)
         })(),
         // Each modifier going down or up as its key does, after the modifiers the last key went
         // with, which are held until the flags change, as on drive.rs's X server.
@@ -758,7 +889,7 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
         })(),
         "keydown" => (|| key_events(words.next()?, 0, &[true]))(),
         "keyup" => (|| key_events(words.next()?, 0, &[false]))(),
-        "type" => rest.chars().try_for_each(|c| key_events(&c.to_string(), 0, &[true, false])),
+        "type" => rest.chars().try_for_each(|c| key(&c.to_string(), 0)),
         "insert" => insert(rest),
         "resize" | "place" => (|| {
             let numbers: Vec<f64> = words.map(|w| w.parse().ok()).collect::<Option<_>>()?;
@@ -792,7 +923,23 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
             log!("browser: front {first}, main {key}, key {key}, ax focused {key}, ax main {key}");
             Some(())
         }
-        "ime" | "pageswipe" | "dragover" | "dragdrop" | "dragleave" => None,
+        // Handed to the app as drive.rs hands it, in the browser window's surface, where a
+        // touchpad's swipe comes from (gpui_linux::watch_embedder_swipes).
+        "pageswipe" => (|| {
+            let (x, y) = drive::point(&mut words)?;
+            let back = match words.next()? {
+                "back" => true,
+                "forward" => false,
+                _ => return None,
+            };
+            let id = driven_id()?;
+            let surface = WINDOWS.with_borrow(|windows| {
+                windows.iter().find(|w| w.id == id).map(|w| w.ui_view)
+            })?;
+            crate::swiped(surface, x, y, back);
+            Some(())
+        })(),
+        "dragover" | "dragdrop" | "dragleave" => None,
         "layout" => layout(),
         _ => return None,
     })

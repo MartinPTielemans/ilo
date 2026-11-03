@@ -24,8 +24,7 @@ use super::{
 };
 use crate::theme::Theme;
 use crate::tokens::shell::{
-    BACK_X, FAVICON_DRAWN, FORWARD_X, LITTLE_BAR, LITTLE_GLYPH, NAV_SIZE, NAV_TOP,
-    SIDEBAR_BUTTON_X,
+    FAVICON_DRAWN, LITTLE_BAR, LITTLE_GLYPH, NAV_SIZE, NAV_TOP, SIDEBAR_BUTTON_X,
 };
 use crate::tokens::text;
 
@@ -33,7 +32,7 @@ use crate::tokens::text;
 const GAP: f32 = 6.;
 
 /// The bar's buttons are the header's pitch apart, back to forward.
-const PITCH: f32 = FORWARD_X - BACK_X;
+const PITCH: f32 = super::NAV_PITCH;
 
 /// The middle of the bar's button `index` from its right end, in a window `width` wide. The last
 /// one's glyph is as far in from the window's right edge as the close button's is from its left,
@@ -353,6 +352,7 @@ impl Shell {
                 if self.url_copied.is_some() { CHECK } else { LINK },
                 LITTLE_GLYPH,
                 glyph,
+                cx,
             ));
         let main = button("little-main", 0, Some(Command::OpenInMainWindow), "Open in Main Window", cx)
             .on_click(cx.listener(|shell, _, _, cx| {

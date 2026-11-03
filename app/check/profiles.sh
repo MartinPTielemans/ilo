@@ -119,17 +119,17 @@ expect '^browser: space form gone$' "the form didn't leave after return"
 name_point="100 112"
 tiled_name="100 159"
 post rightclick $name_point
-expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $themed, Profile › Default, \
-Profile › Profile 2 (checked), Profile › New Profile, Export as Markdown…, Delete Space")\$" \
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, Set Profile › Default, \
+Set Profile › Profile 2 (checked), Set Profile › New Profile, New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the empty Space's menu didn't offer its profiles"
 ../tools/window-screenshot.sh "$pid" "$out/profile-menu.png" || fail "no window to capture"
 send choose Default
 expect "^browser: profiled space $second $default\$" "Default didn't take the Space back"
 expect "^browser: favorites $a\$" "the first profile's favorite didn't show in its Space again"
 post rightclick $tiled_name
-expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $themed, Profile › Default (checked), \
-Profile › Profile 2, Profile › New Profile, Profile › Delete “Profile 2”, \
-Export as Markdown…, Delete Space")\$" \
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, Set Profile › Default (checked), \
+Set Profile › Profile 2, Set Profile › New Profile, Set Profile › Delete “Profile 2”, \
+New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the menu didn't offer the unused profile back"
 send choose Profile 2
 expect "^browser: profiled space $second $work\$" "Profile 2 didn't take the Space again"
@@ -175,9 +175,9 @@ else
 fi
 # Its menu, with a tab, can't change its profile.
 post rightclick $name_point
-expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $themed, Profile › Default (disabled), \
-Profile › Profile 2 (checked), Profile › New Profile (disabled), \
-Export as Markdown…, Delete Space")\$" \
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, Set Profile › Default (disabled), \
+Set Profile › Profile 2 (checked), Set Profile › New Profile (disabled), \
+New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the menu of a Space with a tab offered another profile"
 send choose Profile 2
 none_since '^browser: profiled space' || fail "choosing its own profile changed the Space's"
@@ -215,10 +215,12 @@ expect '^browser: command bar shown$' "⌘L didn't open the Little ilo window's 
 send insert "$cookie_page"
 send key return
 expect "^browser: loaded [0-9]* $cookie_page\$" "the cookie page didn't load in the Little ilo window"
-width=$(grep "^browser: window $little frame " "$log" | tail -1 | cut -d' ' -f7)
+# The width the Little ilo window draws at, the window last drawn at a new size: Windows' frame
+# takes in the borders it resizes by, 8 a side, which draw nothing.
+width=$(grep '^browser: drawn at ' "$log" | tail -1 | sed 's/^browser: drawn at \([0-9.]*\)x.*/\1/')
 # The picker is the third of the bar's header plates from its end: the last one's middle is 20 in
 # from the right edge, and each is 34 before the next (little.rs).
-post clickkey $((width - 20 - 2 * 34)) 24
+post clickkey $(awk -v width="$width" 'BEGIN { print width - 20 - 2 * 34 }') 24
 expect "^browser: menu shown $(cased 'Default (checked), Profile 2')\$" \
   "Little ilo's profile picker didn't list the profiles, the page's checked"
 ../tools/window-screenshot.sh "$pid" "$out/little-profile.png" all || fail "no window to capture"
@@ -291,7 +293,7 @@ expect "^browser: space $first\$" "the window didn't go with the moved tab"
 expect '^browser: today [0-9][0-9]*$' "the moved tab isn't in the first Space"
 c=$(today)
 expect "^browser: title $c cookie p\$" "the moved tab didn't load with the first profile's cookie"
-post rightclick 100 $(($(row 0 | cut -d' ' -f2) + 47))
+post rightclick 100 $(($(row 0 | cut -d' ' -f2) + 55))
 expect '^browser: menu shown .*, Move to › Space 1 (checked), Move to › work, ' \
   "the moved tab's menu didn't offer its old Space"
 send choose work
@@ -432,15 +434,16 @@ expect '^browser: menu shown 12 hours (default), 24 hours, 7 days (checked), 30 
 send key escape
 expect '^browser: menu closed$' "escape didn't close the second profile's times"
 ../tools/window-screenshot.sh "$pid" "$out/settings-profile-settings.png" || fail "no window to capture"
-# A double-click on a name puts it in a field, where escape leaves it and return keeps a new one.
-send doubleclickkey $(drawn "profile $work")
-expect "^browser: rename profile $work\$" "a double-click on Profile 2 didn't put it in a field"
+# Rename, or a double-click on a name, puts it in a field, where escape leaves it and return
+# keeps a new one.
+send clickkey $(drawn "rename profile $work")
+expect "^browser: rename profile $work\$" "Rename on Profile 2 didn't put its name in a field"
 send type personal
 send key escape
 expect '^browser: rename cancelled$' "escape didn't cancel the renaming"
 none_since '^browser: renamed profile' || fail "escape renamed the profile"
 send doubleclickkey $(drawn "profile $work")
-expect "^browser: rename profile $work\$" "the second double-click didn't put it in a field"
+expect "^browser: rename profile $work\$" "a double-click on Profile 2 didn't put it in a field"
 send type personal
 send key return
 expect "^browser: renamed profile $work personal\$" "return didn't rename the profile"
@@ -522,7 +525,7 @@ expect '^browser: download [0-9]* done profile.txt$' "the second profile's page 
 # Deleted, the Space leaves its profile unused, which the first Space's menu then deletes, once the
 # user confirms.
 post rightclick $name_point
-expect "^browser: menu shown Rename Space, " \
+expect "^browser: menu shown $(cased 'Change Space Icon…'), " \
   "a right-click on the Space's name didn't show its menu"
 post choose Delete Space
 expect '^browser: dialog settled$' "Delete Space didn't ask first"
@@ -531,9 +534,9 @@ expect "^browser: spaces $first\$" "Delete didn't delete the second Space"
 expect "^browser: space $first\( in .*\)\{0,1\}\$" "deleting the second Space didn't show the first"
 expect "^browser: settled space $first\$" "the first Space's page didn't settle"
 post rightclick $tiled_name
-expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $colors, Profile › Default (checked), \
-Profile › personal, Profile › New Profile, Profile › Delete “personal”, \
-Export as Markdown…, Delete Space (disabled)")\$" \
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, Set Profile › Default (checked), \
+Set Profile › personal, Set Profile › New Profile, Set Profile › Delete “personal”, \
+New Folder…, Export as Markdown…, Manage Spaces…, Delete Space (disabled)")\$" \
   "the menu didn't offer to delete the unused profile by the name Settings gave it"
 post choose Delete “personal”
 expect '^browser: dialog shown Delete “personal”?$' "Delete didn't ask before deleting the profile"
