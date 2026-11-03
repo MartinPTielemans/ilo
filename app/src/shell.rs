@@ -508,6 +508,8 @@ struct Tab {
     /// What the favicon (by its id) themes the tile with when the tab is a favorite shown, made
     /// the first time that's drawn.
     theme: RefCell<Option<(u64, Option<Rc<TileTheme>>)>>,
+    /// Its page is on another host than the URL it's pinned or a favorite at, which its row names.
+    left_pinned_host: bool,
 }
 
 impl Tab {
@@ -2702,6 +2704,9 @@ impl Shell {
             flag(page.loading),
             page.url
         );
+        // Asked here, once a report, as the row drawn each frame needs only the answer.
+        let left_pinned_host =
+            page.away_from_pinned_url && host(&page.url) != host(&self.browser.pinned_url(tab));
         let entry = self.tabs.entry(tab).or_default();
         if page.unloaded != entry.page.unloaded {
             log!("browser: page {tab} unloaded {}", flag(page.unloaded));
@@ -2712,6 +2717,9 @@ impl Shell {
         }
         if page.away_from_pinned_url != entry.page.away_from_pinned_url {
             log!("browser: page {tab} away {}", flag(page.away_from_pinned_url));
+        }
+        if left_pinned_host != entry.left_pinned_host {
+            log!("browser: page {tab} left pinned host {}", flag(left_pinned_host));
         }
         if (page.audible, page.muted) != (entry.page.audible, entry.page.muted) {
             let (audible, muted) = (flag(page.audible), flag(page.muted));
@@ -2762,7 +2770,7 @@ impl Shell {
         // What its hover card shows of the page, besides its title: its host, emoji and buttons.
         let carded = |page: &Page| (page.url.clone(), page.icon.clone(), page.share_instead);
         let card_changed = carded(&page) != carded(&entry.page);
-        let changed = entry.keep_page(page);
+        let changed = entry.keep_page(page) | replace(&mut entry.left_pinned_host, left_pinned_host);
         if card_changed {
             self.card_changed(tab, cx);
         }
