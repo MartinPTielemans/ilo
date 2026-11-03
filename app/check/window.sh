@@ -778,6 +778,7 @@ if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
   srgb="/System/Library/ColorSync/Profiles/sRGB Profile.icc"
   material=
   off=
+  opaque=
   # Each pass: its appearance, then each backdrop's grey and Dia's material over it.
   for pass in "dark 0:24 20:32 60:45 255:104" "light 0:137 20:146 60:165 255:243"; do
     tone=${pass%% *}
@@ -830,6 +831,12 @@ if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
       }')
       echo "$tone material over $level: $line"
       case "$line" in *", off"* | *"capture off"*) off="$off $tone $level," ;; esac
+      # Dia's reads 45 lighter over white than over black in dark, and 20 in light; an opaque
+      # material, as Reduce Transparency draws it, reads the same over both.
+      case $level in
+      0) over_black=${line%% *} ;;
+      255) [ $((${line%% *} - over_black)) -ge 10 ] || opaque="$opaque $tone," ;;
+      esac
       material="$material$tone over $level $line; "
     done
   done
@@ -843,7 +850,16 @@ if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
   expect '^browser: window light true$' "View › Appearance › Automatic didn't give back the Mac's light"
   appearance true || fail "System Events didn't turn the Mac dark again"
   expect '^browser: window light false$' "the window didn't turn dark again with the Mac"
-  [ -z "$off" ] || fail "the sidebar isn't Dia's composite within 3 levels over grey${off%,}: $material"
+  [ -z "$opaque" ] ||
+    fail "the sidebar read the same over black and white in${opaque%,}, so it's opaque: $material"
+  # GitHub's hosted Mac draws AppKit's material behind the window darker than the Mac Dia was
+  # measured on, 119 against 137 over black in light (#1554), so ours there is no measure of Dia's:
+  # the run goes on, saying so, and the check VMs keep the comparison.
+  if [ "${GITHUB_ACTIONS:-}" = true ]; then
+    echo "skip: the sidebar against Dia's composite, as the hosted Mac's AppKit material isn't the one Dia was measured over"
+  else
+    [ -z "$off" ] || fail "the sidebar isn't Dia's composite within 3 levels over grey${off%,}: $material"
+  fi
   material="over grey ${material%; }"
 fi
 exec 3>&-
