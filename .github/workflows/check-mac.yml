@@ -9,9 +9,10 @@
 # and why, with the lines a run that passed skipped. A failure on main opens an issue, which the
 # next run that passes closes (.github/scripts/main-check.sh).
 # The 2026-10-28 trial (branch ci/mac-check) found the runner a VM of 3 cores and 7.5 GB with a
-# 1024 by 768 screen, where Metal, windows, making an app active, window captures, IME, keys and
-# focus work, but scrolling drew 35-41 frames a second: it checks behaviour, never the performance
-# gate (docs/roadmap.md), whose numbers come from the owner's Mac.
+# 1024 by 768 screen, which the job sets to 1920 by 1080, where Metal, windows, making an app
+# active, window captures, IME, keys and focus work, but scrolling drew 35-41 frames a second: it
+# checks behaviour, never the performance gate (docs/roadmap.md), whose numbers come from the
+# owner's Mac.
 name: Check on macOS
 
 on:
@@ -90,6 +91,11 @@ jobs:
             ;;
           *) exit "$status" ;;
           esac
+
+      # The runner's 1024 by 768 screen is too small for the windows the checks lay out for the VMs'
+      # (#1554). Before the build, which the Dock and the windows' layout settle over.
+      - if: ${{ steps.engine.outputs.found == 'true' }}
+        run: swift ../.github/scripts/display-mode.swift 1920 1080
 
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: rustup update stable --no-self-update
