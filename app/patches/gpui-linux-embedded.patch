@@ -173,10 +173,10 @@ index 0000000000..846d17431f
 +}
 diff --git a/crates/gpui_linux/src/linux/overlay.rs b/crates/gpui_linux/src/linux/overlay.rs
 new file mode 100644
-index 0000000000..97e735cf8f
+index 0000000000..9b78836cd9
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/overlay.rs
-@@ -0,0 +1,1035 @@
+@@ -0,0 +1,1048 @@
 +//! An embedder's overlays: windows GPUI opened with `show: false` that the embedder shows over its
 +//! own window, as a browser shows its command bar over its pages. Under Wayland one is a subsurface
 +//! of the embedder's surface, on X11 a window of its own over the embedder's. One shown
@@ -265,6 +265,8 @@ index 0000000000..97e735cf8f
 +    KeyboardLeft,
 +    /// An overlay that shows takes the pointer where `set_overlay_pointer` last said.
 +    Pointer(usize),
++    /// Whether Control is held, for `watch_control`.
++    Control,
 +}
 +
 +thread_local! {
@@ -828,7 +830,7 @@ index 0000000000..97e735cf8f
 +    CONTROL_RELEASED.set(Some(Box::new(released)));
 +    let held = super::platform::with_embedded_connection(|connection| match connection {
 +        #[cfg(feature = "wayland")]
-+        DisplayConnection::Wayland(_) => super::wayland::control_held(),
++        DisplayConnection::Wayland(_) => None,
 +        // The server's, as GPUI may not have heard yet of a press the embedder's connection has.
 +        #[cfg(feature = "x11")]
 +        DisplayConnection::X11(x11) => {
@@ -836,12 +838,18 @@ index 0000000000..97e735cf8f
 +            let xcb = x11.0.borrow().xcb_connection.clone();
 +            let state = xcb.xkb_get_state(xkb::ID::USE_CORE_KBD.into());
 +            let state = state.ok().and_then(|state| state.reply().log_err());
-+            state.is_some_and(|state| state.mods.contains(xproto::ModMask::CONTROL))
++            Some(state.is_some_and(|state| state.mods.contains(xproto::ModMask::CONTROL)))
 +        }
 +        #[allow(unreachable_patterns)]
-+        _ => false,
++        _ => Some(false),
 +    });
-+    control_changed(held == Some(true));
++    match held {
++        // Under Wayland, GPUI's, once it has had the events read with the key that asked: the
++        // embedder handles its page's key first, before GPUI hears of the press of Control that
++        // came with it.
++        Some(None) => later(Op::Control),
++        held => control_changed(held.flatten() == Some(true)),
++    }
 +}
 +
 +/// Control is `held`, or not, after a change to the keyboard's state.
@@ -934,6 +942,11 @@ index 0000000000..97e735cf8f
 +        Op::KeyboardLeft if super::wayland::keyboard_entered() => false,
 +        Op::KeyboardLeft => {
 +            pressed(None);
++            false
++        }
++        Op::Control => {
++            #[cfg(feature = "wayland")]
++            control_changed(super::wayland::control_held());
 +            false
 +        }
 +        Op::Left(view, showing) => {
@@ -1112,7 +1125,7 @@ index 0000000000..97e735cf8f
 +                super::wayland::show_window(view as _).log_err();
 +            }
 +            Op::HideWindow(view) => super::wayland::hide_window(view as _),
-+            Op::Left(..) | Op::Pressed(_) | Op::KeyboardLeft => {}
++            Op::Left(..) | Op::Pressed(_) | Op::KeyboardLeft | Op::Control => {}
 +        },
 +        #[cfg(feature = "x11")]
 +        DisplayConnection::X11(x11) => {
@@ -1205,7 +1218,7 @@ index 0000000000..97e735cf8f
 +                Op::HideWindow(view) => {
 +                    x11.hide_window(view as _).log_err();
 +                }
-+                Op::Left(..) | Op::Pressed(_) | Op::KeyboardLeft => {}
++                Op::Left(..) | Op::Pressed(_) | Op::KeyboardLeft | Op::Control => {}
 +            }
 +        }
 +        #[allow(unreachable_patterns)]
