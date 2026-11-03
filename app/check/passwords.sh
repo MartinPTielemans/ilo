@@ -55,10 +55,11 @@ fi
 # Logs in on the page shown with password $1: the username field has the keyboard.
 log_in() {
   send key a cmd
-  send type check@example.test
+  # scratch (#1290): the values committed as an input method does, not typed.
+  send insert check@example.test
   send key tab
   send key a cmd
-  send type "$1"
+  send insert "$1"
   send key return
 }
 # Waits for the page's login to bring an offer of kind $1, and for its card to take input. Sets $ox
