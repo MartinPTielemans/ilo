@@ -382,7 +382,11 @@ fn a_closed_folder_previews_the_tabs_in_it_and_in_its_folders(cx: &mut TestAppCo
     let titles: Vec<String> = (host.folder_preview.borrow().iter())
         .flat_map(|rest| rest.items.iter().map(|item| item.title.to_string()))
         .collect();
-    assert_eq!(titles, ["News", "Book"]);
+    assert_eq!(titles, ["News", "Book"], "unseen, they keep the sidebar's order");
+    let aged = (host.folder_preview.borrow().iter()).any(|rest| {
+        rest.items.iter().any(|item| !item.age.is_empty())
+    });
+    assert!(!aged, "a tab never seen has an age");
     // An open folder's rows show what's in it, and a tab has its card instead.
     preview_on(&shell, cx, 9);
     preview_on(&shell, cx, 1);
@@ -392,6 +396,23 @@ fn a_closed_folder_previews_the_tabs_in_it_and_in_its_folders(cx: &mut TestAppCo
         shell.folder_preview(Row::Tab(5), false, cx)
     });
     assert_eq!(host.take(), ["folder preview left 5"]);
+}
+
+#[gpui::test]
+fn a_preview_lists_the_tab_seen_last_first_with_how_long_ago(cx: &mut TestAppContext) {
+    let (shell, cx, host) = with_folders(cx);
+    let (minute, now) = (60_000., super::super::recent_downloads::now());
+    host.seen.borrow_mut().extend([(6, now - 3. * 24. * 60. * minute), (8, now - 31.5 * minute)]);
+    preview_on(&shell, cx, 5);
+    assert_eq!(host.take(), ["folder preview rest 5 8 6"]);
+    let row = |item: &crate::folder_preview::Item| (item.title.to_string(), item.age.to_string());
+    let rows: Vec<(String, String)> = (host.folder_preview.borrow().iter())
+        .flat_map(|rest| rest.items.iter().map(row))
+        .collect();
+    assert_eq!(
+        rows,
+        [("Book".into(), "31 minutes ago".into()), ("News".into(), "3 days ago".into())]
+    );
 }
 
 /// A hover lost while the preview is open, with the pointer last moved onto the folder's row, isn't

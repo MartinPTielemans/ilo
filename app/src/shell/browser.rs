@@ -183,6 +183,11 @@ pub trait Browser {
     /// The starts of today, yesterday, this week and last week in the user's calendar, in
     /// milliseconds since the Unix epoch.
     fn day_starts(&self) -> [f64; 4];
+    /// When a window last showed `tab`, in milliseconds since the Unix epoch: now while one shows
+    /// it. 0 when that isn't known.
+    fn last_seen(&self, _tab: u64) -> f64 {
+        0.
+    }
     fn go_back(&self, tab: u64, cx: &mut App);
     fn go_forward(&self, tab: u64, cx: &mut App);
     /// Lists the pages back from `tab`'s, or forward of it, and calls `Shell::show_history`.

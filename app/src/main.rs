@@ -232,6 +232,7 @@ mod platform {
         pub fn host_set_overlay_radius(overlay: c_int, radius: f64);
         pub fn host_set_overlay_growth(overlay: c_int, x: f64, y: f64);
         pub fn host_set_overlay_shrink(overlay: c_int);
+        pub fn host_set_overlay_motion(overlay: c_int, from: f64, seconds: f64, out: f64);
         pub fn host_show_overlay(
             overlay: c_int,
             ui_view: *mut c_void,
@@ -2060,14 +2061,23 @@ extern "C" fn icon_picker_dismissed() {
 struct FolderPreviewHost;
 
 impl folder_preview::Host for FolderPreviewHost {
-    fn show(&self, window: u64, left: f32, top: f32, height: f32) {
+    fn show(&self, window: u64, left: f32, top: f32, height: f32, from: f32) {
         let Some(view) = ui_view_of(window) else {
             return;
         };
         let (left, top, width) = (left.into(), top.into(), folder_preview::WIDTH.into());
+        let (grow, fade) = (folder_preview::IN, folder_preview::OUT);
+        // At its height before it shows, so it grows from the middle of its left edge.
         unsafe {
-            platform::host_show_overlay(FOLDER_PREVIEW, view, false, left, top, width);
             platform::host_set_overlay_height(FOLDER_PREVIEW, height.into());
+            platform::host_set_overlay_growth(FOLDER_PREVIEW, 0., (height / 2.).into());
+            platform::host_set_overlay_motion(
+                FOLDER_PREVIEW,
+                from.into(),
+                grow.as_secs_f64(),
+                fade.as_secs_f64(),
+            );
+            platform::host_show_overlay(FOLDER_PREVIEW, view, false, left, top, width);
         }
     }
 

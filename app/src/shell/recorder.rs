@@ -153,6 +153,8 @@ pub(super) struct Recorder {
     pub(super) card: RefCell<Option<crate::hover_card::Rest>>,
     /// The folder preview asked for last, whose choice a test makes.
     pub(super) folder_preview: RefCell<Option<crate::folder_preview::Rest>>,
+    /// When a window last showed each tab, for `last_seen`, which a test sets.
+    pub(super) seen: RefCell<HashMap<u64, f64>>,
     /// Where the shell last put the link target's plate, in the window.
     pub(super) link_frame: Cell<Option<Bounds<Pixels>>>,
     /// What the shell did to tabs, folders and Spaces that ⌘Z puts back, in order, such as
@@ -597,6 +599,10 @@ impl Browser for Recorder {
 
     fn day_starts(&self) -> [f64; 4] {
         Default::default()
+    }
+
+    fn last_seen(&self, tab: u64) -> f64 {
+        self.seen.borrow().get(&tab).copied().unwrap_or_default()
     }
 
     fn go_back(&self, tab: u64, _: &mut App) {

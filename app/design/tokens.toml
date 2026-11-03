@@ -336,24 +336,34 @@ rim = 0.5
 
 [folder-preview]
 # Resting on a closed folder shows a searchable list of its tabs beside its row (Arc's Folder
-# Preview, #690). Arc's isn't measured, so it takes the hover card's look: the panel radius in the
-# palette's overlay with the popover level's rim, and rows at the row radius inside its padding,
-# concentric: 16 - 4.
-width = 272.0
+# Preview, #690). Arc 1.171's layout (outside measurement, #1405): 240 wide, the search 48 tall
+# with its glyph centred 20 in and its text from 36, a 1 pt line under it, then rows 4 below it on
+# a 45 pitch, each a 44 fill 4 in from the sides with the favicon centred 20 in and the title over
+# its age from 36, at most 320 tall. Ours: the hover card's look, the panel radius in the palette's
+# overlay with the popover level's rim, the rows at the row radius, concentric: 16 - 4, so 3 more
+# under the last row than Arc's 1.
+width = 240.0
 radius = 16.0
 padding = 4.0
 rim = 0.5
-# The search, a line of body type after the magnifying glass, as tall as a sidebar row.
-search = 32.0
+tallest = 320.0
+search = 48.0
 search-glyph = 14.0
-# Each tab a row: its icon, then its title, at these alphas of the ink. The selected row has the
-# selected state's plate, a hovered one the hovered state's.
-row = 32.0
+# The line under the search, at this alpha of the ink, as the sidebar's dividers.
+divider = 1.0
+divider-alpha = 0.15
+# Each tab a row: its icon, then its title over how long ago it was seen, at these alphas of the
+# ink. The selected row and the one under the pointer both have the selected state's plate.
+row = 45.0
+row-fill = 44.0
 row-radius = 12.0
 icon = 16.0
-icon-x = 10.0
-title-x = 34.0
+icon-x = 8.0
+title-x = 32.0
 title-size = 13.0
+title-line = 16.0
+age-size = 11.0
+age-line = 14.0
 title = 0.9
 hint = 0.55
 
