@@ -18,7 +18,8 @@ use std::{
     ffi::c_void,
     io::{Read as _, Write as _},
     os::{fd::AsFd as _, unix::net::UnixStream},
-    time::Instant,
+    sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
 };
 
 use browser::log;
@@ -111,8 +112,26 @@ pub(crate) fn start() {
         Ok(session) => {
             log!("browser: drive input through sway's virtual pointer and keyboard");
             SESSION.set(Some(session));
+            ON.store(true, Ordering::Relaxed);
         }
         Err(why) => log!("browser: drive has no input under Wayland: {why}"),
+    }
+}
+
+/// Whether the driver's input is Wayland's, for the thread that reads its commands.
+static ON: AtomicBool = AtomicBool::new(false);
+
+/// Waits, on the thread that reads the commands, until sway has given one of the app's windows the
+/// keyboard, for up to 5 s. Input before that goes to no window, which lost a run's first command
+/// sent as the window comes on screen: its key, or a menu for a window the driver couldn't find yet
+/// (#1218, #1226).
+pub(crate) fn await_first_focus() {
+    if !ON.load(Ordering::Relaxed) {
+        return;
+    }
+    let until = Instant::now() + Duration::from_secs(5);
+    while !ours().iter().any(|node| node.focused) && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -401,9 +420,9 @@ fn await_settings_focus() {
     if !settings_window::take_shown_anew() {
         return;
     }
-    let until = Instant::now() + std::time::Duration::from_secs(2);
+    let until = Instant::now() + Duration::from_secs(2);
     while focused_settings(&ours()).is_none() && Instant::now() < until {
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 

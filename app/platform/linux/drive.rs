@@ -97,6 +97,9 @@ pub fn start() {
         let mut number = 0;
         for line in std::io::stdin().lock().lines() {
             let Ok(line) = line else { break };
+            if number == 0 {
+                crate::drive_wayland::await_first_focus();
+            }
             number += 1;
             let n = number;
             idle(Box::new(move || {
