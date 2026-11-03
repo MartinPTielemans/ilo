@@ -52,7 +52,7 @@ use std::{
     io::BufRead,
     rc::Rc,
     sync::{
-        Arc, OnceLock,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -95,6 +95,10 @@ unsafe extern "C" {
 
 /// GLib's G_PRIORITY_LOW, below its idle priority.
 const G_PRIORITY_LOW: c_int = 300;
+/// How long, in milliseconds, a command waits for the loop to be free before it runs anyway: past
+/// the longest wait seen while windows animate on a loaded machine, about 110, so it only runs
+/// early while frames draw without a break.
+const IDLE_WAIT: c_uint = 250;
 
 /// Starts reading commands from stdin.
 pub fn start() {
@@ -139,16 +143,28 @@ pub fn start() {
 /// Runs `task` on the main thread once nothing more urgent is ready: the X events Chromium and GPUI
 /// have to read, and the tasks Chromium has posted. Those run at GLib's idle priority, a few a turn,
 /// so a command there could come between them, as a key between the browser window becoming active
-/// and the page taking the keyboard back, which reached no page (#1621).
+/// and the page taking the keyboard back, which reached no page (#1621). Frames drawn without a
+/// break, as a shimmer's under software rendering, keep the loop from ever being free, as their
+/// sources are above the idle priority, so after IDLE_WAIT the task runs anyway (#1700).
 fn idle(task: Box<dyn FnOnce() + Send>) {
+    type Slot = Mutex<Option<Box<dyn FnOnce() + Send>>>;
     extern "C" fn run(data: *mut c_void) -> c_int {
-        // SAFETY: the box `idle` leaked, which runs once.
-        let task = unsafe { Box::from_raw(data as *mut Box<dyn FnOnce() + Send>) };
-        task();
+        // SAFETY: one of the two references `idle` leaked, each taken back once. The first to run
+        // takes the task.
+        let slot = unsafe { Arc::from_raw(data as *const Slot) };
+        let task = slot.lock().ok().and_then(|mut task| task.take());
+        if let Some(task) = task {
+            task();
+        }
         0
     }
-    let data = Box::into_raw(Box::new(task)) as *mut c_void;
-    unsafe { g_idle_add_full(G_PRIORITY_LOW, run, data, std::ptr::null_mut()) };
+    let slot: Arc<Slot> = Arc::new(Mutex::new(Some(task)));
+    let free = Arc::into_raw(slot.clone()) as *mut c_void;
+    let late = Arc::into_raw(slot) as *mut c_void;
+    unsafe {
+        g_idle_add_full(G_PRIORITY_LOW, run, free, std::ptr::null_mut());
+        g_timeout_add(IDLE_WAIT, run, late);
+    }
 }
 
 /// Has the command running go on after it returns, with `rest`, which gets what reports the
