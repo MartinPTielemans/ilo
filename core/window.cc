@@ -198,9 +198,10 @@ void KeepClosed(bc_id id) {
   Tab* tab = Tab::Get(id);
   Space* space = Space::Holding(id);
   // One not in a Space never showed, a pinned tab closes only when its page closes itself, and a
-  // private window's leaves nothing behind. A Little ilo window's goes in the archive, as Arc's
-  // Little Arc's do, and ⇧⌘T reopens it in another.
-  if (!tab || !space || space->IsPinned(id) || space->off_the_record()) {
+  // private window's leaves nothing behind. An agent's pages aren't the user's to find again
+  // (#1408). A Little ilo window's goes in the archive, as Arc's Little Arc's do, and ⇧⌘T reopens
+  // it in another.
+  if (!tab || !space || space->IsPinned(id) || space->off_the_record() || space->agent()) {
     return;
   }
   SavedTab saved = tab->Save();
