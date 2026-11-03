@@ -1067,3 +1067,119 @@ fn each_permission_has_its_glyph(_: &mut TestAppContext) {
     // A type Chrome adds later.
     assert_eq!(glyph_for("something-new"), "icons/settings.svg");
 }
+
+impl Panel {
+    /// What the keyboard's ring is on, and the tooltip last asked for.
+    fn keyed(&mut self) -> (Option<Stop>, Option<String>) {
+        let keyed = self.cx.cx.update(|cx| {
+            let window = cx.global::<SiteControlsWindow>().0;
+            window
+                .update(cx, |panel, _, _| panel.open.as_ref()?.keyed.clone())
+                .ok()
+                .flatten()
+        });
+        (keyed, self.host.tips.borrow().last().cloned())
+    }
+}
+
+/// Tab goes down the tiles, the extensions' tiles and +, the rows a click changes, past one a
+/// policy sets, and the footer's buttons, round from the last to the first and back with ⇧Tab;
+/// the arrows go the same way and stop at the ends. A tile, which is a glyph alone, is named by
+/// its tooltip (#1382).
+#[gpui::test]
+fn tab_and_the_arrows_go_down_the_panel(cx: &mut TestAppContext) {
+    let mut panel = Panel::new(cx, site());
+    panel.calls();
+    assert_eq!(panel.keyed().0, None, "a ring before a key");
+    panel.keys("tab");
+    let (keyed, tip) = panel.keyed();
+    assert_eq!(keyed, Some(Stop::Tile("share")));
+    assert!(tip.is_some_and(|tip| tip.starts_with("Share at ")));
+    panel.keys("tab tab tab");
+    assert_eq!(
+        panel.keyed(),
+        (
+            Some(Stop::Extension("abc".into())),
+            Some("Notes at 122 202".into())
+        )
+    );
+    panel.keys("tab");
+    assert_eq!(panel.keyed().0, Some(Stop::AddExtension));
+    panel.keys("tab");
+    // The rows take it without a tooltip, which goes.
+    assert_eq!(
+        panel.keyed(),
+        (Some(Stop::Permission(5)), Some("none".into()))
+    );
+    panel.keys("tab");
+    assert_eq!(panel.keyed().0, Some(Stop::Permission(WINDOWS)));
+    panel.keys("tab");
+    assert_eq!(
+        panel.keyed().0,
+        Some(Stop::Reset),
+        "the ring stopped on a row a policy sets"
+    );
+    panel.keys("tab tab");
+    assert_eq!(panel.keyed().0, Some(Stop::More));
+    panel.keys("down");
+    assert_eq!(panel.keyed().0, Some(Stop::More), "↓ went past the last");
+    panel.keys("tab");
+    assert_eq!(
+        panel.keyed().0,
+        Some(Stop::Tile("share")),
+        "Tab didn't go round"
+    );
+    panel.keys("up");
+    assert_eq!(
+        panel.keyed().0,
+        Some(Stop::Tile("share")),
+        "↑ went past the first"
+    );
+    panel.keys("shift-tab");
+    assert_eq!(panel.keyed().0, Some(Stop::More), "⇧Tab didn't go round");
+    panel.keys("up");
+    assert_eq!(panel.keyed().0, Some(Stop::Lock));
+    assert!(panel.calls().is_empty(), "moving the ring did something");
+}
+
+/// Space or return does what a click on the ringed stop does: a row's menu under it, a toggle,
+/// Reset, or a tile's or the lock's run, which closes the panel.
+#[gpui::test]
+fn space_and_return_act_on_the_ringed_stop(cx: &mut TestAppContext) {
+    let site = Site {
+        ad_blocking: Some(true),
+        ..site()
+    };
+    let mut panel = Panel::new(cx, site);
+    panel.calls();
+    panel.host.answer.set(Some(1));
+    // The tiles, the extension's and +, then the ad blocking row and Location's.
+    panel.keys("tab tab tab tab tab tab");
+    assert_eq!(panel.keyed().0, Some(Stop::AdBlocking));
+    panel.keys("space");
+    assert_eq!(panel.calls(), [format!("ad blocking {TAB} false")]);
+    panel.keys("down enter");
+    assert_eq!(
+        panel.calls(),
+        [
+            "menu Allow, Block, Ask*".to_owned(),
+            format!("set {TAB} 5 Block")
+        ]
+    );
+    panel.keys("down down space");
+    assert_eq!(panel.calls(), [format!("reset {TAB}")]);
+    panel.keys("down enter");
+    panel.ran("certificate");
+}
+
+/// The tiles run from the keyboard as from a click, and a click takes the ring away.
+#[gpui::test]
+fn a_tile_runs_from_the_keyboard_and_a_click_takes_the_ring_away(cx: &mut TestAppContext) {
+    let mut panel = Panel::new(cx, site());
+    panel.calls();
+    panel.keys("tab");
+    panel.click(SETTINGS_HEADING);
+    assert_eq!(panel.keyed().0, None, "a click left the ring");
+    panel.keys("tab tab space");
+    panel.ran("CapturePortion");
+}
