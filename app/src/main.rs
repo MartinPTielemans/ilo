@@ -4313,7 +4313,7 @@ fn first_launch_notes() -> Option<String> {
     #[cfg(target_os = "linux")]
     if cfg!(feature = "prod") {
         let file = std::path::PathBuf::from(profile_dir()).join("last-version");
-        return updates::first_launch_notes(&file, env!("CARGO_PKG_VERSION"));
+        return updates::first_launch_notes(&file, browser::build_info::VERSION);
     }
     UPDATE_NOTES.take()
 }
