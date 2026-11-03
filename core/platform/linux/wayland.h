@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
@@ -27,6 +28,11 @@ void* JoinWaylandDisplay(void (*dispatched)());
 
 // |widget|'s wl_surface, and its content's size in DIPs. Null off Wayland.
 void* WaylandSurfaceOf(views::Widget* widget, gfx::Size* size);
+
+// Gives |widget|'s surface |region|, in pixels at |scale|, at once, which Chromium's
+// SetInputRegion leaves for its next frame: a region with no rects is the whole surface, one empty
+// rect none of it. Nothing off Wayland.
+void SetInputRegionNow(views::Widget* widget, const std::vector<gfx::Rect>& region, float scale);
 
 // Makes the browser window frameless, under Wayland and X11, as the app draws the window's buttons,
 // and under Wayland see-through, for the app's UI under it to show and take the clicks the pages
