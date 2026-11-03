@@ -441,10 +441,17 @@ send press 300 111
 send dragto 300 140
 expect "^browser: download $t drag\$" "dragging the download's row didn't start the system's drag"
 # Off the Mac a user holds the drag until the Library has gone, as the release waits for it there.
-# On the Mac the release lands as the Library closes, where nothing takes the file, not on the page.
-[ "$(uname)" = Darwin ] ||
+# On the Mac the release doesn't wait, and the drag ends where it's let go with the Library on its
+# way out: on GitHub's hosted Mac the page under the row has taken it by then (#1690). So it's let
+# go over the sidebar's top, above its tab list, which takes no file, and left of the page.
+let_go="300 140"
+if [ "$(uname)" = Darwin ]; then
+  let_go="100 60"
+  send dragto $let_go
+else
   expect '^browser: library hidden$' "the Library didn't close for the download's drag"
-send release 300 140
+fi
+send release $let_go
 # No real button holds the system's drag, so it may end before the release reaches it.
 dragged() {
   for _ in $(seq 100); do
