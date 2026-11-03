@@ -108,6 +108,17 @@ pub(crate) fn shown() -> Vec<*mut c_void> {
     })
 }
 
+/// The browser window the float of `view` shows over, by its UI's view, and where in its content,
+/// for the Wayland driver's layout, as overlays::placed says it for the overlays.
+pub(crate) fn placed(view: *mut c_void) -> Option<(*mut c_void, Bounds<Pixels>)> {
+    let (kind, over) = FLOATS.with_borrow(|floats| {
+        (floats.iter())
+            .find(|float| float.view == view && !float.over.is_null())
+            .map(|float| (float.kind, float.over))
+    })?;
+    Some((over, bounds(kind, over)?))
+}
+
 fn find<R>(kind: Kind, f: impl FnOnce(&mut Float) -> R) -> Option<R> {
     FLOATS.with_borrow_mut(|floats| floats.iter_mut().find(|float| float.kind == kind).map(f))
 }

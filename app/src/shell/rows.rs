@@ -8,8 +8,9 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, Bounds, ClickEvent, Context, Div, MouseButton, MouseDownEvent, Pixels, Radians,
-    Role, SharedString, Transformation, Window, canvas, div, prelude::*, px, rgb, svg,
+    AnyElement, App, Bounds, ClickEvent, Context, Div, FontWeight, MouseButton, MouseDownEvent,
+    Pixels, Point, Radians, Role, SharedString, Transformation, Window, canvas, div, prelude::*, px,
+    rgb, svg,
 };
 
 use super::{
@@ -21,9 +22,10 @@ use super::{
     PINNED_CARET_GAP, PINNED_CARET_PLATE, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS, REMOVE_GLYPH,
     SPACE_NAME, SPACE_NAME_SHUT, Page,
     ROW_HEIGHT, ROW_PITCH, Row, SECONDARY, SEGMENT_END, SEGMENT_FAVICON_X, SEGMENT_LINE, SEGMENT_TITLE_GAP,
-    SELECTED_UNHOVER, SLEEPING_FAVICON, SPACE_ICON_PLATE, SPEAKER_DRAWN, SPEAKER_GAP, SPEAKER_SIZE,
-    Shell, Slot, Swapped, TITLE_END_INSET, URL_BUTTON_GLYPH, URL_BUTTON_SIZE, clear_label, cubic_bezier, divider_box, favicon,
-    folder_icon, icon_placeholder, name_box, new_tab_label, plate, row_box, row_spring,
+    SELECTED_UNHOVER, SLEEPING_FAVICON, SPACE_DONE_HEIGHT, SPACE_DONE_WIDTH, SPACE_ICON_PLATE,
+    SPACE_MORE, SPACE_MORE_INSET, SPEAKER_DRAWN, SPEAKER_GAP, SPEAKER_SIZE, PINNED_TURN,
+    Shell, Slot, Swapped, TITLE_END_INSET, URL_BUTTON_GLYPH, clear_label, cubic_bezier, divider_box, favicon,
+    folder_icon, icon_placeholder, icon_slot, name_box, new_tab_label, plate, row_box, row_spring,
     developer_outline, scaled::scaled_from_middle, selected_plate, space_icon, split_plate,
     swap::{ARROW_DOWN, NONE, folder_glyph}, title,
 };
@@ -90,23 +92,47 @@ impl Shell {
         self.browser.set_pinned_open(space, open, cx);
     }
 
-    /// The chevron after the Space's name that collapses its pinned rows or expands them. It fades
-    /// in with Clear while collapsing would hide a row, and stays while they're collapsed and a row
-    /// is hidden, so the way back shows. It acts as it's pressed, as a folder does.
-    fn pinned_caret(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+    /// Whether the Space's pinned rows can collapse or expand now, which the name row then does
+    /// as it's pressed.
+    pub(super) fn pinned_folds(&self) -> bool {
+        self.offers(Command::CollapsePinned) || self.offers(Command::ExpandPinned)
+    }
+
+    /// Starts the chevron's quarter turn as the Space shown's pinned rows collapse or expand, and
+    /// runs frames while it turns.
+    pub(super) fn step_pinned_turn(&mut self, window: &mut Window) {
+        let seen = self.shown_space().map(|space| (space.id, space.folders.pinned_shut));
+        match (self.pinned_seen, seen) {
+            (Some((was_in, was)), Some((space, shut))) if was_in == space && was != shut => {
+                self.pinned_turn = Some(Instant::now());
+            }
+            (Some((was_in, _)), Some((space, _))) if was_in != space => self.pinned_turn = None,
+            _ => {}
+        }
+        self.pinned_seen = seen;
+        if let Some(start) = self.pinned_turn {
+            if start.elapsed().as_secs_f32() < PINNED_TURN {
+                window.request_animation_frame();
+            } else {
+                self.pinned_turn = None;
+            }
+        }
+    }
+
+    /// The chevron that says the name row collapses the Space's pinned rows or expands them (Arc
+    /// 1.171): in the icon's slot if `in_slot`, else after the name, while the row is `shown` and
+    /// while they're collapsed, so the way back shows, with no fade. It turns a quarter, down to
+    /// pointing right, as they fold.
+    fn pinned_caret(&self, in_slot: bool, shown: bool) -> Option<AnyElement> {
         let shut = self.shown_space()?.folders.pinned_shut;
-        let shown = self.offers(Command::CollapsePinned) || self.offers(Command::ExpandPinned);
         let drawn = self.caret_drawn.clone();
-        if !shown {
+        if !self.pinned_folds() {
             if drawn.take().is_some() {
                 log!("browser: pinned caret hidden");
             }
             return None;
         }
-        let (command, name) = match shut {
-            true => (Command::ExpandPinned, "Expand Pinned Tabs"),
-            false => (Command::CollapsePinned, "Collapse Pinned Tabs"),
-        };
+        let name = if shut { "Expand Pinned Tabs" } else { "Collapse Pinned Tabs" };
         // check.sh clicks where this says it's drawn.
         let frame = canvas(
             move |bounds, _, _| {
@@ -126,39 +152,33 @@ impl Shell {
         )
         .absolute()
         .size_full();
+        let t = (self.pinned_turn)
+            .map_or(1., |start| (start.elapsed().as_secs_f32() / PINNED_TURN).min(1.));
+        let turned = cubic_bezier(0.42, 0., 0.58, 1., t);
+        let turned = if shut { turned } else { 1. - turned };
         let glyph = svg()
             .path("icons/chevron-down.svg")
             .size(px(PINNED_CARET))
             .text_color(self.palette.text(SPACE_NAME))
-            .when(shut, |glyph| {
-                glyph.with_transformation(Transformation::rotate(Radians(-FRAC_PI_2)))
-            });
-        let live = shut || self.tools_live();
+            .with_transformation(Transformation::rotate(Radians(-FRAC_PI_2 * turned)));
+        // The row takes the press; VoiceOver's goes to the row through it.
         let caret = div()
             .id("pinned-caret")
             .flex_none()
-            .ml(px(PINNED_CARET_GAP))
             .size(px(PINNED_CARET_PLATE))
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(NAV_RADIUS))
-            .opacity(if shut { 1. } else { self.tools_opacity() })
+            .opacity(if shut || shown { 1. } else { 0. })
             .child(frame)
             .child(glyph)
             .when(self.a11y, |caret| {
                 caret.button_named(name).aria_expanded(!shut).pressed_by_mouse_down(true, false)
             });
-        Some(caret.when(live, |caret| {
-            caret.hover(|style| style.bg(self.palette.plate(NAV_HOVERED))).on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |shell, _: &MouseDownEvent, _, cx| {
-                    // Not the name's double-click, which renames the Space.
-                    cx.stop_propagation();
-                    shell.run(command, "sidebar", cx);
-                }),
-            )
-        }))
+        Some(match in_slot {
+            true => icon_slot(caret).into_any_element(),
+            false => caret.ml(px(PINNED_CARET_GAP)).into_any_element(),
+        })
     }
 
     /// Opens or closes the folder as it's pressed, as Arc's does, even if the press becomes a drag.
@@ -1054,13 +1074,30 @@ impl Shell {
         })
     }
 
+    /// The Space's name over its rows. Under the pointer it's a row of its own (Arc 1.171): a tab
+    /// row's plate, the chevron in the icon's slot and the ••• at its end, in one frame, kept while
+    /// its menu is up. A press anywhere on it but the ••• collapses the pinned rows or expands them.
     pub(super) fn name_row(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let space = self.space;
         let icon = (self.shown_space()).and_then(|each| space_icon(&self.palette, &each.icon));
         let placeholder = self.holds_icon_place().then(icon_placeholder);
+        let room = icon.is_some() || placeholder.is_some();
+        let renaming = (self.renaming.as_ref())
+            .filter(|renaming| renaming.naming == Naming::Space(space) && !renaming.in_library)
+            .map(|renaming| renaming.name.clone());
+        let lit = renaming.is_some()
+            || self.dragging().is_none() && self.name_hovered
+            || self.name_menu && self.menu_open;
+        // VoiceOver's cursor is no pointer, so the chevron and the ••• stay for it.
+        let shown = renaming.is_none() && (lit || self.a11y);
+        let in_slot = icon.is_some();
+        let caret = self.pinned_caret(in_slot, shown);
+        let shut = self.shown_space().is_some_and(|space| space.folders.pinned_shut);
+        let icon = icon.filter(|_| caret.is_none() || !in_slot || !(shut || shown));
         // A click on the plate under its icon opens the icon picker, or closes it: the click
         // outside the picker has closed it by now, but the picker hears so only after this event.
-        let icon_plate = icon.is_some().then(|| {
+        // While the row folds the pinned rows, the slot is the chevron's.
+        let icon_plate = (icon.is_some() && !self.pinned_folds()).then(|| {
             div()
                 .id("space-icon")
                 .absolute()
@@ -1089,12 +1126,21 @@ impl Shell {
             .top_0()
             .left_0()
             .size_full();
+        let fill = lit.then(|| {
+            div()
+                .absolute()
+                .left(px(PLATE_INSET))
+                .right(px(PLATE_INSET))
+                .top(px((NAME_HEIGHT - PLATE_HEIGHT) / 2.))
+                .h(px(PLATE_HEIGHT))
+                .rounded(px(PLATE_RADIUS))
+                .bg(self.palette.plate(HOVERED))
+        });
         let name = self.shown_space().map(|space| space.name.clone()).unwrap_or_default();
-        // Lit while the pinned rows are collapsed, where Arc's turns bold.
-        let shut = self.shown_space().is_some_and(|space| space.folders.pinned_shut);
         // A heading VoiceOver can jump to, whose menu is the Space's.
-        let row = name_box(&self.palette, icon.is_some() || placeholder.is_some())
+        let row = name_box(&self.palette, room)
             .id("space-name")
+            // Lit while the pinned rows are collapsed, where Arc's turns bold.
             .when(shut, |row| row.text_color(self.palette.text(SPACE_NAME_SHUT)))
             .when(self.a11y, |row| {
                 row.role(Role::Heading)
@@ -1104,15 +1150,51 @@ impl Shell {
                     .pressed_by_mouse_down(false, true)
             })
             .block_mouse_except_scroll()
+            .on_hover(cx.listener(|shell, hovered: &bool, _, cx| {
+                if shell.name_hovered != *hovered {
+                    shell.name_hovered = *hovered;
+                    // check.sh waits for this line.
+                    log!("browser: space name {}", if *hovered { "hovered" } else { "left" });
+                    cx.notify();
+                }
+            }))
             .child(bounds)
+            .children(fill)
             .children(icon_plate)
             .children(icon)
             .children(placeholder);
-        if let Some(renaming) =
-            self.renaming.as_ref().filter(|renaming| {
-                renaming.naming == Naming::Space(space) && !renaming.in_library
-            })
-        {
+        let (caret_in_slot, caret_after) = match in_slot {
+            true => (caret, None),
+            false => (None, caret),
+        };
+        // The end of the plate, where the ••• is and Rename Space… puts Done.
+        let end = PLATE_INSET + SPACE_MORE_INSET;
+        if let Some(field) = renaming {
+            let done = div()
+                .id("space-done")
+                .absolute()
+                .right(px(end))
+                .top(px((NAME_HEIGHT - SPACE_DONE_HEIGHT) / 2.))
+                .w(px(SPACE_DONE_WIDTH))
+                .h(px(SPACE_DONE_HEIGHT))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(NAV_RADIUS))
+                .bg(self.palette.plate(CLOSE_HOVERED))
+                .text_size(px(crate::tokens::text::SMALL))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(self.palette.text(SECONDARY))
+                .child("Done")
+                .when(self.a11y, |done| done.button_named("Done").pressed_by_mouse_down(true, false))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|shell, _: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        log!("browser: space name done");
+                        shell.keep_name(window, cx);
+                    }),
+                );
             return row
                 .key_context("Naming")
                 .on_action(
@@ -1122,23 +1204,24 @@ impl Shell {
                     cx.listener(|shell, _: &CancelName, window, cx| shell.cancel_name(window, cx)),
                 )
                 .text_color(self.palette.text(FORM_TEXT))
-                .child(renaming.name.clone());
+                .pr(px(end + SPACE_DONE_WIDTH + 4.))
+                .children(caret_in_slot)
+                .child(field)
+                .child(done);
         }
-        // Arc's edit button, only while the pointer is over the row, opens the Space's menu. Over
-        // the name's end, so the name keeps its width.
-        let edit = div()
+        // Arc's •••, on a tab row's ✕ square in its place, opens the Space's menu as it's pressed.
+        let more = div()
             .id("space-edit")
             .absolute()
-            .right(px(FAVICON_X))
-            .top(px((NAME_HEIGHT - URL_BUTTON_SIZE) / 2.))
-            .size(px(URL_BUTTON_SIZE))
+            .right(px(end))
+            .top(px((NAME_HEIGHT - SPACE_MORE) / 2.))
+            .size(px(SPACE_MORE))
             .flex()
             .items_center()
             .justify_center()
             .rounded(px(NAV_RADIUS))
-            .opacity(0.)
-            .group_hover("space-name", |style| style.opacity(1.))
-            .hover(|style| style.bg(self.palette.plate(NAV_HOVERED)))
+            .opacity(if shown { 1. } else { 0. })
+            .hover(|style| style.bg(self.palette.plate(CLOSE_HOVERED)))
             .when(self.a11y, |edit| {
                 edit.button_named("Edit Space").pressed_by_mouse_down(true, false)
             })
@@ -1146,33 +1229,47 @@ impl Shell {
                 MouseButton::Left,
                 cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    shell.space_menu(space, event.position, cx)
+                    shell.name_row_menu(space, event.position, cx)
                 }),
             )
             .child(
                 svg()
                     .path("icons/ellipsis.svg")
                     .size(px(URL_BUTTON_GLYPH))
-                    .text_color(self.palette.glyph(NAV)),
+                    .text_color(self.palette.text(SECONDARY)),
             );
-        row.group("space-name")
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
-                    if event.click_count == 2 {
-                        shell.rename_space(space, cx);
-                    }
-                }),
-            )
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
-                    shell.space_menu(space, event.position, cx)
-                }),
-            )
-            .child(div().truncate().child(name))
-            .children(self.pinned_caret(cx))
-            .child(edit)
+        row.on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |shell, _: &MouseDownEvent, _, cx| {
+                if !shell.pinned_folds() {
+                    return;
+                }
+                // Not the window's background, which a drag from it would move.
+                cx.stop_propagation();
+                let shut = shell.shown_space().is_some_and(|space| space.folders.pinned_shut);
+                let command = if shut { Command::ExpandPinned } else { Command::CollapsePinned };
+                shell.run(command, "sidebar", cx);
+            }),
+        )
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
+                shell.name_row_menu(space, event.position, cx)
+            }),
+        )
+        // The name ends before the ••• while it shows, as a tab's title does before its ✕.
+        .when(shown, |row| row.pr(px(end + SPACE_MORE + 4.)))
+        .children(caret_in_slot)
+        .child(div().truncate().child(name))
+        .children(caret_after)
+        .child(more)
+    }
+
+    /// The Space's menu from its name row, which keeps the row lit while it's up.
+    fn name_row_menu(&mut self, space: u64, position: Point<Pixels>, cx: &mut Context<Self>) {
+        self.space_menu(space, position, cx);
+        self.name_menu = self.menu_open;
+        cx.notify();
     }
 
     /// The line over Today, and Clear at its end, where the titles end.
@@ -1433,7 +1530,7 @@ mod tests {
         super::{
             CLOSE_RIGHT, CLOSE_SIZE, FAVICON_SIZE, FAVICON_X, Folders, NAME_HEIGHT, PLATE_INSET,
             PRESS_SCALE, PRESS_TIME, Page, ROW_HEIGHT, ROW_PITCH, Row, SELECTED_UNHOVER,
-            SPACE_ICON_PLATE, Shell, Slot, Swapped, URL_BUTTON_SIZE,
+            PINNED_TURN, SPACE_ICON_PLATE, SPACE_MORE, SPACE_MORE_INSET, Shell, Slot, Swapped,
             commands::{Command, bind_keys},
             drag::detents::shell_with,
             recorder::Recorder,
@@ -1542,17 +1639,27 @@ mod tests {
             });
             cx.run_until_parked();
             let row = shell.read_with(cx, |shell, _| shell.name_row_drawn.get()).expect("a row");
-            let at = point(row.right() - px(FAVICON_X + URL_BUTTON_SIZE / 2.), row.center().y);
+            let at = point(row.right() - px(MORE_END), row.center().y);
             cx.simulate_mouse_move(at, None, Modifiers::none());
             cx.run_until_parked();
             host.menus.take();
+            host.take();
             cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
             cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
             cx.run_until_parked();
             let menus = host.menus.take();
-            let first = menus.last().and_then(|menu| menu.first()).map(|(title, _)| title.clone());
-            assert_eq!(first.as_deref(), Some("Rename Space"), "pinned {pinned:?}, a11y {a11y}");
+            let titles: Vec<_> = (menus.last().into_iter().flatten())
+                .filter(|(_, on)| *on)
+                .map(|(title, _)| title.as_str())
+                .collect();
+            assert_eq!(
+                titles.first().copied(),
+                Some("Change Space Icon…"),
+                "pinned {pinned:?}, a11y {a11y}"
+            );
             assert_eq!(host.menu_at.get(), Some(at), "pinned {pinned:?}, a11y {a11y}");
+            let calls = host.take();
+            assert!(!calls.iter().any(|call| call.starts_with("pinned open")), "{calls:?}");
         }
     }
 
@@ -1583,12 +1690,141 @@ mod tests {
         assert!(host.take().contains(&"select 2".into()), "the first click on a row");
 
         let row = shell.read_with(cx, |shell, _| shell.name_row_drawn.get()).expect("a name row");
-        let at = point(row.right() - px(FAVICON_X + URL_BUTTON_SIZE / 2.), row.center().y);
+        let at = point(row.right() - px(MORE_END), row.center().y);
         host.menus.take();
         first_click(cx, at);
         let menus = host.menus.take();
         let first = menus.last().and_then(|menu| menu.first()).map(|(title, _)| title.clone());
-        assert_eq!(first.as_deref(), Some("Rename Space"), "the first click on the …");
+        assert_eq!(first.as_deref(), Some("Change Space Icon…"), "the first click on the …");
+    }
+
+    /// The ••• 's middle, in from the name row's end: its square's end is 6 in from the plate's.
+    const MORE_END: f32 = PLATE_INSET + SPACE_MORE_INSET + SPACE_MORE / 2.;
+
+    /// A Space with an icon whose pinned rows can collapse, shown with a Today tab.
+    fn header_shell(
+        cx: &mut TestAppContext,
+    ) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        shell.update(cx, |shell, cx| {
+            let space = (1, "Space".into(), None, 1, "🌱".into(), "".into(), "".into());
+            shell.set_spaces(vec![space], cx);
+            shell.set_space(1, cx);
+            shell.set_tabs(1, vec![5, 6], vec![2], Vec::new(), Folders::default(), cx);
+            shell.set_selected(2, cx);
+        });
+        cx.run_until_parked();
+        (shell, cx, host)
+    }
+
+    /// A press anywhere on the name row but its •••, the name and the icon's slot too, collapses
+    /// the pinned rows, and the next expands them (Arc 1.171), each turning the chevron a quarter
+    /// over PINNED_TURN. A double-click no longer renames the Space.
+    #[gpui::test]
+    fn a_press_on_the_name_row_folds_the_pinned_rows(cx: &mut TestAppContext) {
+        let (shell, cx, host) = header_shell(cx);
+        let row = shell.read_with(cx, |shell, _| shell.name_row_drawn.get()).expect("a name row");
+        let slot = point(row.left() + px(FAVICON_X + FAVICON_SIZE / 2.), row.center().y);
+        let name = point(row.left() + px(80.), row.center().y);
+        for (at, open) in [(slot, false), (name, true)] {
+            cx.simulate_mouse_move(at, None, Modifiers::none());
+            host.take();
+            cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+            cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
+            cx.run_until_parked();
+            assert!(host.take().contains(&format!("pinned open 1 {open}")), "at {at:?}");
+            shell.update(cx, |shell, cx| {
+                shell.set_tabs(1, vec![5, 6], vec![2], Vec::new(), folded(!open), cx)
+            });
+            cx.run_until_parked();
+            let turn = shell.read_with(cx, |shell, _| shell.pinned_turn);
+            assert!(turn.is_some_and(|start| start.elapsed().as_secs_f32() < PINNED_TURN));
+        }
+        assert!(shell.read_with(cx, |shell, _| shell.renaming.is_none()), "a press renamed");
+    }
+
+    fn folded(shut: bool) -> Folders {
+        Folders { pinned_shut: shut, ..Folders::default() }
+    }
+
+    /// Under the pointer the row is lit, its chevron in the icon's place and its ••• showing, all
+    /// at once; the menu the ••• opens keeps them while it's up. Collapsed, the chevron stays with
+    /// the pointer gone, so the way back shows.
+    #[gpui::test]
+    fn the_name_row_lights_under_the_pointer_and_keeps_it_for_its_menu(cx: &mut TestAppContext) {
+        let (shell, cx, host) = header_shell(cx);
+        let row = shell.read_with(cx, |shell, _| shell.name_row_drawn.get()).expect("a name row");
+        let lit = |cx: &mut VisualTestContext| {
+            shell.read_with(cx, |shell, _| {
+                shell.name_hovered || shell.name_menu && shell.menu_open
+            })
+        };
+        assert!(!lit(cx), "lit before the pointer came");
+        let more = point(row.right() - px(MORE_END), row.center().y);
+        cx.simulate_mouse_move(more, None, Modifiers::none());
+        cx.run_until_parked();
+        assert!(lit(cx), "the pointer over the row didn't light it");
+        cx.simulate_mouse_down(more, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(more, MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+        cx.simulate_mouse_move(point(px(600.), px(400.)), None, Modifiers::none());
+        cx.run_until_parked();
+        assert!(lit(cx), "the row went dark under its menu");
+        // Arc 1.171's order, with Remove Icon (ours) after what it undoes and Export as Markdown…
+        // where Arc shares and exports; the lines between its groups.
+        let top: Vec<String> = (host.entries.borrow().iter())
+            .filter(|entry| entry.parent.is_none())
+            .map(|entry| if entry.title.is_empty() { "—".into() } else { entry.title.to_string() })
+            .collect();
+        let order = [
+            "Change Space Icon…",
+            "Remove Icon",
+            "Rename Space…",
+            "Edit Theme Color…",
+            "Set Profile",
+            "—",
+            "New Folder…",
+            "—",
+            "Export as Markdown…",
+            "—",
+            "Manage Spaces…",
+            "—",
+            "Delete Space",
+        ];
+        assert_eq!(top, order);
+        cx.update(|_, cx| host.choose("Manage Spaces…", cx));
+        cx.run_until_parked();
+        assert!(!lit(cx), "the row stayed lit after its menu closed");
+        let library = shell.read_with(cx, |shell, _| shell.library_open);
+        assert!(library, "Manage Spaces… didn't open the Library");
+        // The pinned rows collapsed, the chevron stays drawn with the pointer away.
+        shell.update(cx, |shell, cx| {
+            shell.set_library(false, cx);
+            shell.set_tabs(1, vec![5, 6], vec![2], Vec::new(), folded(true), cx)
+        });
+        cx.run_until_parked();
+        let caret = shell.read_with(cx, |shell, _| shell.caret_drawn.get());
+        assert!(caret.is_some_and(|(shut, _)| shut), "no chevron for the collapsed rows");
+    }
+
+    /// Rename Space… puts Done in the •••'s place, and a press on it keeps the name typed.
+    #[gpui::test]
+    fn done_keeps_the_spaces_new_name(cx: &mut TestAppContext) {
+        let (shell, cx, host) = header_shell(cx);
+        shell.update(cx, |shell, cx| shell.rename_space(1, cx));
+        cx.run_until_parked();
+        cx.simulate_input("Work");
+        let row = shell.read_with(cx, |shell, _| shell.name_row_drawn.get()).expect("a name row");
+        let done = point(row.right() - px(PLATE_INSET + SPACE_MORE_INSET + 16.), row.center().y);
+        host.take_edits();
+        cx.simulate_mouse_down(done, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(done, MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+        let edits = host.take_edits();
+        assert!(edits.contains(&"rename space 1 Work".into()), "Done kept {edits:?}");
+        assert!(shell.read_with(cx, |shell, _| shell.renaming.is_none()), "the field stayed");
     }
 
     /// Change Icon… on a tab asks for the icon picker under that tab's row, which draws where the
@@ -2481,8 +2717,9 @@ mod tests {
     /// A pinned tab without its page has nothing to close, so under the pointer its row shows the
     /// remove button in the −'s place (#1349), selected or not. A click on it takes the tab out of
     /// the pinned tabs without showing or loading it: the core unpins it, which puts it at the top
-    /// of Today, and closes it there, into the archive, so Today doesn't gain it. ⌘Z pins it again
-    /// at its place, with its pinned URL.
+    /// of Today, and closes it there, into the archive, so Today doesn't gain it. The toast offers
+    /// its Undo, as a pinned tab is kept as a favorite is, and ⌘Z pins it again at its place, with
+    /// its pinned URL.
     #[gpui::test]
     fn an_unloaded_pinned_rows_button_removes_it_and_undo_pins_it_again(
         cx: &mut TestAppContext,
@@ -2503,7 +2740,7 @@ mod tests {
         assert_eq!(host.take_edits(), ["pinned 3 false", "close 3"]);
         assert!(!host.take().iter().any(|call| call.starts_with("select")));
         assert_eq!(shell.read_with(cx, |shell, _| shell.history.titles().0), Some("Remove Tab"));
-        assert!(host.undo_toasts.borrow().is_empty(), "the row going is plain to see");
+        assert_eq!(host.undo_toasts.borrow().as_slice(), ["Tab Removed"]);
         report_lists(&shell, cx, vec![2], vec![4, 5]);
         assert_eq!(shell.read_with(cx, |shell, _| shell.today().to_vec()), [4, 5]);
 

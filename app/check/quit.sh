@@ -236,7 +236,6 @@ else
   quit_cleanly
   echo "skip: the quit with a link preview open. Browser wasn't the active app, so the page ignored the click."
 fi
-kill "$server"
 
 closed=
 ! windows || closed=", and on Windows the close buttons of every window with Little ilo open, of the regular window alone under it, and of the last window"

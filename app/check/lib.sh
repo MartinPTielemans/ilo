@@ -35,8 +35,8 @@ themed=$(cased "$colors, Remove Theme Color")
 swatch_y=380
 swatch_x() { echo "$1" | awk '{ print 13 + 60.5 + 29.5 * $1 }'; }
 # Its profiles, in the one the check starts with, for a Space with tabs and an empty one.
-profile=$(cased "Profile › Default (checked), Profile › New Profile (disabled)")
-empty_profile=$(cased "Profile › Default (checked), Profile › New Profile")
+profile=$(cased "Set Profile › Default (checked), Set Profile › New Profile (disabled)")
+empty_profile=$(cased "Set Profile › Default (checked), Set Profile › New Profile")
 # The product's name, which the app's menus and alerts use, and the dev build's id.
 app_name=$(cat branding/name)
 app_id=dev.browser.app
@@ -577,7 +577,9 @@ start_with_cdp() {
   helper=$!
   exec 5> "$scratch/cdp"
 }
-# Starts the check's web server, in site.sh, unless a run before has. Its pages are at $site.
+# Starts the check's web server, in site.sh, unless a run before has. Its pages are at $site. It
+# serves every run after, so only cleanup stops it: a run that did would leave the next its address
+# and no server (#1369).
 serve() {
   [ -n "${site:-}" ] || . check/site.sh
 }
