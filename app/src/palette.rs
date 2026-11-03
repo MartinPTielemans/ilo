@@ -367,6 +367,18 @@ impl Palette {
         Rgba { r: r * ACCENT_PRESSED, g: g * ACCENT_PRESSED, b: b * ACCENT_PRESSED, a }.into()
     }
 
+    /// A site's own colour as the command bar's accent in its site search (#1397), and its label:
+    /// the colour nearest `main` at its hue that reads on the bar, as the accent does, with Ink or
+    /// Paper on it.
+    pub fn site_accent(&self, main: Rgba) -> (Rgba, Rgba) {
+        let passes = |c: Rgba| {
+            contrast(rgb(INK), c).max(contrast(rgb(PAPER), c)) >= LABEL
+                && contrast(c, self.overlay) >= GLYPH
+        };
+        let fill = nearest(main, passes).unwrap_or(self.accent);
+        (fill, label_on(fill))
+    }
+
     /// Behind selected text in a field: the accent, faint.
     pub fn selection(&self) -> Hsla {
         Hsla::from(self.accent).opacity(SELECTION)

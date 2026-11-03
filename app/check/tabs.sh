@@ -679,7 +679,7 @@ expect '^browser: command bar go https://duckduckgo.com/?q=example.com$' \
 expect '^browser: command bar hidden$' "⇧⌘↩ didn't close the command bar"
 # Site search, as Chrome's keyword mode: Tab on the row that hints the default engine searches
 # with it alone, ⌫ in its empty field leaves it, keeping the keyword and a space, and a space typed
-# after the keyword enters it again.
+# after the keyword is only a space, as in Arc, where Tab enters it again (#1397).
 listed='^browser: command bar suggestions "duckduckgo.com'
 hint="[0-9.]* ms: [^,]* site duckduckgo.com"
 send key t cmd
@@ -704,9 +704,17 @@ expect '^browser: command bar drew "duckduckgo.com "$' \
 send key backspace
 expect "$listed\" in $hint" \
   "the command bar didn't hint DuckDuckGo's site search again: $(suggestions | tr '\n' ' ')"
-send type ' dogs'
-expect '^browser: command bar site search duckduckgo.com by space$' \
-  "a space after DuckDuckGo's keyword didn't enter its site search"
+send type ' '
+expect "$listed \" in " "the command bar didn't list what a space after DuckDuckGo's keyword asks"
+none_since '^browser: command bar site search' || fail "a space after DuckDuckGo's keyword entered its site search"
+expect '^browser: command bar drew "duckduckgo.com "$' "a space after DuckDuckGo's keyword didn't stay in the field"
+send key backspace
+expect "$listed\" in $hint" \
+  "the command bar didn't hint DuckDuckGo's site search again: $(suggestions | tr '\n' ' ')"
+send key tab
+expect '^browser: command bar site search duckduckgo.com by tab$' \
+  "Tab didn't enter DuckDuckGo's site search again"
+send type dogs
 expect "$listed dogs\" in " "the site search didn't list DuckDuckGo's searches for what was typed"
 send key return
 went=$(grep '^browser: command bar go' "$log" | tail -1)
@@ -716,6 +724,25 @@ expect '^browser: command bar hidden$' "↩ in the site search didn't close the 
 # History has the search once its page commits, which can come after the next ⌘T. The page's
 # title says it has: its first page line comes as it starts.
 expect '^browser: title [0-9]* .*dogs' "the search for dogs didn't reach DuckDuckGo"
+# A new profile has Arc's 19 site searches, and a word that starts one's host hints it on the first
+# row, whatever that row is; Tab enters it, in YouTube's red (#1397). It needs an engine built with
+# this core (core/search.cc).
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send type yout
+expect '^browser: command bar suggestions "yout" in [0-9.]* ms: [^,]* site youtube.com' \
+  "the command bar's first row didn't hint YouTube's site search: $(suggestions | tr '\n' ' ')"
+await_bar_height
+../tools/window-screenshot.sh "$pid" "$out/site-hint-youtube.png" || fail "no window to capture"
+send key tab
+expect '^browser: command bar site search youtube.com by tab$' \
+  "Tab on the row that hints YouTube didn't enter its site search"
+expect '^browser: command bar drew ""$' "the command bar didn't draw YouTube's site search"
+../tools/window-screenshot.sh "$pid" "$out/site-search-youtube.png" || fail "no window to capture"
+send key escape
+expect '^browser: command bar leaves site search$' "Esc didn't leave YouTube's site search"
+send key escape
+expect '^browser: command bar hidden$' "Esc didn't close the command bar"
 # ⌥⌘⌫ takes the selected row out too, beside ⇧⌦, as Arc's does: here the search for dogs, typed
 # before. Off the Mac it would be Ctrl+Alt+Backspace, which X11 can take to end the session, so
 # there ⇧⌦ alone does (command_bar.rs).
