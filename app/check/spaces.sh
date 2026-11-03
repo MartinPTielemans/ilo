@@ -199,11 +199,14 @@ show_space "click 97 $dots_y" select-space sidebar "$first" "$a"
 # still hidden to it, until the copy answers (capture.cc), as Chrome does a background tab's
 # preview. That's one run of frames, 0.1 s at most, once the app asks for the tab's picture,
 # which may answer only after the tab is shown again, so a step that keeps it hidden past 0.4 s
-# sees one. Any other frame while hidden fails.
+# sees one. Any other frame while hidden fails. The hidden stretch starts at whichever comes first,
+# the core showing another tab or the page's "hidden", which can reach the log after the picture
+# (#1678), so a picture between the two counts and one from before them doesn't.
 ran_hidden() {
   local seen
   seen=$(awk -v a="$a" '
-    $0 == "browser: title " a " hidden" { pictured = 0 }
+    /^browser: selected [0-9]+( in |$)/ { if ($3 == a) shown = 1; else if (shown) shown = pictured = 0 }
+    $0 == "browser: title " a " hidden" { if (shown) shown = pictured = 0 }
     index($0, "browser: tab " a " picturing ") == 1 { pictured = 1 }
     /^browser: handover picture copied / && index($0, "(tab " a ")") { pictured = 1 }
     index($0, "browser: title " a " visible ") == 1 { title = substr($0, 17 + length(a)); was = pictured }
