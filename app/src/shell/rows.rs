@@ -3211,7 +3211,7 @@ mod tests {
             cx.run_until_parked();
             shell.read_with(cx, |shell, _| shell.pages()[0])
         };
-        let click = |cx: &mut VisualTestContext| {
+        let click = |cx: &mut VisualTestContext, at: gpui::Point<gpui::Pixels>| {
             host.take();
             cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
             cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
@@ -3234,7 +3234,7 @@ mod tests {
         });
         let now = shell.read_with(cx, |shell, _| shell.pages()[0].1);
         assert!(now > 100. - width && now < 0., "the page is at {now}");
-        let calls = click(cx);
+        let calls = click(cx, at);
         assert_eq!(
             calls
                 .iter()
@@ -3248,16 +3248,20 @@ mod tests {
             "behind the slide: {calls:?}"
         );
 
-        // The pointer rests where row 10's ✕ is drawn as the page slides under it.
+        // The pointer rests where row 10's ✕ is drawn as the page slides under it, a point that
+        // at rest is on the row, left of its ✕. Taken from the frame drawn, not a time into the
+        // slide, so the ✕'s place in the row doesn't move it off the pointer.
         back(cx);
         cx.simulate_mouse_move(at, None, Modifiers::none());
         let (_, drawn) = slide_in(cx, 60);
+        let over_close = point(px(close + drawn), px(y));
         assert!(
-            (close + drawn - 100.).abs() < 10.,
-            "the ✕ is drawn at {}",
+            close + drawn > 0. && close + drawn < close - CLOSE_SIZE,
+            "the ✕ is drawn at {}, where it rests at {close}",
             close + drawn
         );
-        let calls = click(cx);
+        cx.simulate_mouse_move(over_close, None, Modifiers::none());
+        let calls = click(cx, over_close);
         assert!(
             calls.contains(&"select 10".to_string()),
             "over the ✕: {calls:?}"
