@@ -82,8 +82,9 @@ class AgentPage : public content::WebContentsObserver,
   // Runs the next job once the one before has answered.
   void Next();
   void Run();
-  // Whether the tab's page is one agents may use.
+  // Whether the tab's page is one agents may use, and if not, why, for the agent.
   bool IsWebPage();
+  std::string NotWebPage();
   // Runs |then| once the page has stopped loading, or after a while.
   void AfterLoad(base::OnceClosure then);
   // Waits a moment for what an input starts, such as a navigation, then for it to load, then

@@ -12,6 +12,7 @@
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/task/single_thread_task_runner.h"
@@ -258,11 +259,29 @@ bool AgentPage::IsWebPage() {
   return GetWebContents().GetLastCommittedURL().SchemeIsHTTPOrHTTPS();
 }
 
+std::string AgentPage::NotWebPage() {
+  content::WebContents& contents = GetWebContents();
+  // A tab whose first page hasn't committed is still on its empty start page, which isn't the
+  // page's fault: the agent can wait for it (#1461).
+  const content::NavigationEntry* pending = contents.GetController().GetPendingEntry();
+  const GURL loading = pending ? pending->GetURL() : GURL();
+  if (contents.IsLoading() && loading.SchemeIsHTTPOrHTTPS()) {
+    std::string_view site = loading.host_piece();
+    if (base::StartsWith(site, "www.")) {
+      site.remove_prefix(4);
+    }
+    return base::StrCat({site, " is still loading after ",
+                         base::NumberToString(kLoadTimeout.InSeconds()),
+                         " s. Wait, or try again."});
+  }
+  return "The tab's page isn't an http or https page, the only pages agents may use.";
+}
+
 void AgentPage::Run() {
   const int action = job_->action;
   const bool history = action == BC_AGENT_PAGE_BACK || action == BC_AGENT_PAGE_FORWARD;
   if (!history && !IsWebPage()) {
-    Fail("The tab's page isn't an http or https page, the only pages agents may use.");
+    Fail(NotWebPage());
     return;
   }
   // An element in a frame that's gone, or now holds what isn't a web page's, is off limits.
@@ -579,7 +598,7 @@ void AgentPage::Screenshot() {
 void AgentPage::Snapshot() {
   // After an action, the page may have gone somewhere agents may not.
   if (!IsWebPage()) {
-    Fail("The tab's page isn't an http or https page, the only pages agents may use.");
+    Fail(NotWebPage());
     return;
   }
   Send("Accessibility.getFullAXTree", base::DictValue(),

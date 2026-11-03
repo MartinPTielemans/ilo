@@ -308,6 +308,9 @@ struct Acting {
     /// The element it acts on, or 0.
     element: i64,
     note: String,
+    /// Whether the action opened the tab, which stays open if its page then fails, so the answer
+    /// keeps the note that names it.
+    opened: bool,
     reply: mpsc::Sender<ToolResult>,
 }
 
@@ -1179,7 +1182,7 @@ impl Agents {
         let request = self.next_request;
         self.next_request += 1;
         let note = String::new();
-        let acting = Acting { agent: agent.into(), tab, element: 0, note, reply };
+        let acting = Acting { agent: agent.into(), tab, element: 0, note, opened: false, reply };
         self.acting.insert(request, acting);
         self.act_in_page(agent, tab, request, PageAction::Snapshot, 0, "");
     }
@@ -1744,7 +1747,8 @@ impl Agents {
         }
         let request = self.next_request;
         self.next_request += 1;
-        let acting = Acting { agent: agent.clone(), tab, element, note, reply };
+        let opened = action == "open_tab";
+        let acting = Acting { agent: agent.clone(), tab, element, note, opened, reply };
         self.acting.insert(request, acting);
         self.act_in_page(&agent, tab, request, page, element, &text);
     }
@@ -1759,10 +1763,15 @@ impl Agents {
     /// The core's answer to the action `request`: with `error`, why it couldn't; else a
     /// screenshot's JPEG in base64, or the nodes of the page's tree, which the answer outlines.
     pub fn page_done(&mut self, request: u64, text: String, error: bool, cx: &mut Context<Self>) {
-        let Some(Acting { tab, note, reply, .. }) = self.acting.remove(&request) else {
+        let Some(Acting { tab, note, opened, reply, .. }) = self.acting.remove(&request) else {
             return;
         };
         if error {
+            // As a page still loading: the agent can look at the tab it opened later (#1461).
+            let text = match opened {
+                true => format!("{note} {text}"),
+                false => text,
+            };
             _ = reply.send(ToolResult::error(text));
             return self.advance(cx);
         }
