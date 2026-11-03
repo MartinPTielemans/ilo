@@ -80,13 +80,21 @@ use crate::{
 
 unsafe extern "C" {
     // GLib's, from chrome, whose main loop is GLib's.
-    fn g_idle_add(function: extern "C" fn(*mut c_void) -> c_int, data: *mut c_void) -> c_uint;
+    fn g_idle_add_full(
+        priority: c_int,
+        function: extern "C" fn(*mut c_void) -> c_int,
+        data: *mut c_void,
+        notify: *mut c_void,
+    ) -> c_uint;
     fn g_timeout_add(
         interval: c_uint,
         function: extern "C" fn(*mut c_void) -> c_int,
         data: *mut c_void,
     ) -> c_uint;
 }
+
+/// GLib's G_PRIORITY_LOW, below its idle priority.
+const G_PRIORITY_LOW: c_int = 300;
 
 /// Starts reading commands from stdin.
 pub fn start() {
@@ -128,8 +136,10 @@ pub fn start() {
     });
 }
 
-/// Runs `task` on the main thread once nothing more urgent is ready, such as the X events Chromium
-/// and GPUI have to read: GLib's idle priority is below their sources'.
+/// Runs `task` on the main thread once nothing more urgent is ready: the X events Chromium and GPUI
+/// have to read, and the tasks Chromium has posted. Those run at GLib's idle priority, a few a turn,
+/// so a command there could come between them, as a key between the browser window becoming active
+/// and the page taking the keyboard back, which reached no page (#1621).
 fn idle(task: Box<dyn FnOnce() + Send>) {
     extern "C" fn run(data: *mut c_void) -> c_int {
         // SAFETY: the box `idle` leaked, which runs once.
@@ -137,7 +147,8 @@ fn idle(task: Box<dyn FnOnce() + Send>) {
         task();
         0
     }
-    unsafe { g_idle_add(run, Box::into_raw(Box::new(task)) as *mut c_void) };
+    let data = Box::into_raw(Box::new(task)) as *mut c_void;
+    unsafe { g_idle_add_full(G_PRIORITY_LOW, run, data, std::ptr::null_mut()) };
 }
 
 /// Has the command running go on after it returns, with `rest`, which gets what reports the
