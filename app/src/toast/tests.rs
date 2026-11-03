@@ -31,7 +31,14 @@ const TIME: Duration = Duration::from_secs(5);
 
 fn open_toast(cx: &mut TestAppContext) -> Rc<Recorder> {
     let host = Rc::new(Recorder::default());
-    cx.update(|cx| open(host.clone(), |_| (hsla(0., 0., 0., 1.), Default::default()), cx)).expect("no toast window");
+    cx.update(|cx| {
+        open(
+            host.clone(),
+            |_| (hsla(0., 0., 0., 1.), Default::default()),
+            cx,
+        )
+    })
+    .expect("no toast window");
     host
 }
 
@@ -52,7 +59,8 @@ fn resize(cx: &mut TestAppContext, width: f32) {
 fn draw(cx: &mut TestAppContext) {
     let window = cx.update(|cx| cx.global::<ToastWindow>().0);
     cx.update(|cx| {
-        cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx)).unwrap()
+        cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap()
     });
 }
 
@@ -71,7 +79,8 @@ fn rest(cx: &mut TestAppContext) {
 
 /// Moves the clock on by `seconds` and returns what the toast asked of the host meanwhile.
 fn after(cx: &mut TestAppContext, host: &Recorder, seconds: f32) -> Vec<String> {
-    cx.executor().advance_clock(Duration::from_secs_f32(seconds));
+    cx.executor()
+        .advance_clock(Duration::from_secs_f32(seconds));
     cx.run_until_parked();
     host.0.take()
 }
@@ -104,7 +113,10 @@ fn another_toast_starts_the_time_again(cx: &mut TestAppContext) {
 /// than come in again; not before it's on screen, nor under Reduce Motion.
 #[gpui::test]
 fn a_toast_asked_for_again_in_place_bumps(cx: &mut TestAppContext) {
-    let rest_pose = Pose { scale: 1., opacity: 1. };
+    let rest_pose = Pose {
+        scale: 1.,
+        opacity: 1.,
+    };
     assert_eq!(rest_pose.bumped(0.), rest_pose);
     assert!((rest_pose.bumped(BUMP_UP).scale - BUMP).abs() < 1e-4);
     let falling = rest_pose.bumped((BUMP_UP + BUMP_TIME) / 2.).scale;
@@ -115,7 +127,16 @@ fn a_toast_asked_for_again_in_place_bumps(cx: &mut TestAppContext) {
     open_toast(cx);
     let bumped = |cx: &mut TestAppContext| {
         let window = cx.update(|cx| cx.global::<ToastWindow>().0);
-        cx.update(|cx| window.read(cx).unwrap().shown.as_ref().unwrap().bumped.is_some())
+        cx.update(|cx| {
+            window
+                .read(cx)
+                .unwrap()
+                .shown
+                .as_ref()
+                .unwrap()
+                .bumped
+                .is_some()
+        })
     };
     show_deleted(cx);
     // As AppKit hasn't put its window on screen yet.
@@ -136,12 +157,29 @@ fn a_toast_asked_for_again_in_place_bumps(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn it_overshoots_its_size_as_arcs_does(_: &mut TestAppContext) {
-    let peak = (0..60).map(|frame| Pose::arriving(frame as f32 / 120.).scale).fold(0., f32::max);
+    let peak = (0..60)
+        .map(|frame| Pose::arriving(frame as f32 / 120.).scale)
+        .fold(0., f32::max);
     assert!((1.03..1.05).contains(&peak), "peak {peak}");
-    assert_eq!(Pose::arriving(0.), Pose { scale: FROM, opacity: 0. });
-    assert_eq!(Pose::arriving(1.), Pose { scale: 1., opacity: 1. });
+    assert_eq!(
+        Pose::arriving(0.),
+        Pose {
+            scale: FROM,
+            opacity: 0.
+        }
+    );
+    assert_eq!(
+        Pose::arriving(1.),
+        Pose {
+            scale: 1.,
+            opacity: 1.
+        }
+    );
     let gone = Pose::arriving(1.).leaving(LEAVE);
-    assert!((gone.scale - FROM).abs() < 1e-3 && gone.opacity < 1e-3, "{gone:?}");
+    assert!(
+        (gone.scale - FROM).abs() < 1e-3 && gone.opacity < 1e-3,
+        "{gone:?}"
+    );
 }
 
 /// Capture's toast has buttons, so the clicks go to it rather than the page under it, until it
@@ -149,7 +187,11 @@ fn it_overshoots_its_size_as_arcs_does(_: &mut TestAppContext) {
 #[gpui::test]
 fn a_toast_with_buttons_takes_clicks_while_it_shows(cx: &mut TestAppContext) {
     let host = open_toast(cx);
-    let save = Button { label: Label::Text("Save".into()), name: "save", run: Rc::new(|_, _| {}) };
+    let save = Button {
+        label: Label::Text("Save".into()),
+        name: "save",
+        run: Rc::new(|_, _| {}),
+    };
     cx.update(|cx| show_with_buttons("Screenshot Copied to Clipboard", vec![save], TIME, cx));
     cx.run_until_parked();
     assert_eq!(host.0.take(), ["clicks true", "show"]);
@@ -164,12 +206,22 @@ fn a_toast_with_buttons_takes_clicks_while_it_shows(cx: &mut TestAppContext) {
 fn voiceover_says_the_toast_as_it_comes(cx: &mut TestAppContext) {
     use gpui::{VisualTestContext, accesskit::Live};
     let host = Rc::new(Recorder::default());
-    let window = cx.update(|cx| open(host.clone(), |_| (hsla(0., 0., 0., 1.), Default::default()), cx));
+    let window = cx.update(|cx| {
+        open(
+            host.clone(),
+            |_| (hsla(0., 0., 0., 1.), Default::default()),
+            cx,
+        )
+    });
     let mut window = VisualTestContext::from_window(window.expect("no toast window").into(), cx);
     window.simulate_a11y_activation();
     show_deleted(cx);
     let tree = window.a11y_tree().expect("GPUI built a tree");
-    let (_, toast) = tree.nodes.iter().find(|(_, node)| node.role() == Role::Status).unwrap();
+    let (_, toast) = tree
+        .nodes
+        .iter()
+        .find(|(_, node)| node.role() == Role::Status)
+        .unwrap();
     assert_eq!(toast.live(), Some(Live::Polite));
     assert_eq!(toast.value(), Some("Space deleted! Use ⌘Z to undo."));
 }
@@ -192,12 +244,19 @@ fn an_undo_toast_goes_once_the_undo_is_done_some_other_way(cx: &mut TestAppConte
     host.0.take();
     cx.update(|cx| hide_undo(cx));
     cx.run_until_parked();
-    assert_eq!(after(cx, &host, LEAVE), ["hide"], "Space deleted! goes with its ⌘Z");
+    assert_eq!(
+        after(cx, &host, LEAVE),
+        ["hide"],
+        "Space deleted! goes with its ⌘Z"
+    );
 
     cx.update(|cx| show("Tab Pinned", None, TIME, cx));
     host.0.take();
     cx.update(|cx| hide_undo(cx));
-    assert!(after(cx, &host, 4.9).is_empty(), "another toast stays its five seconds");
+    assert!(
+        after(cx, &host, 4.9).is_empty(),
+        "another toast stays its five seconds"
+    );
 }
 
 #[gpui::test]
@@ -211,7 +270,9 @@ fn an_undo_toast_runs_its_undo_with_a_click_on_the_button(cx: &mut TestAppContex
     host.0.take();
     let run = cx.update(|cx| {
         let window = cx.global::<ToastWindow>().0;
-        window.read(cx).unwrap().shown.as_ref().unwrap().buttons[0].run.clone()
+        window.read(cx).unwrap().shown.as_ref().unwrap().buttons[0]
+            .run
+            .clone()
     });
     cx.update(|cx| run(point(px(0.), px(0.)), cx));
     assert_eq!(undone.get(), 1);
@@ -236,7 +297,9 @@ fn a_question_stays_until_a_button_answers_it(cx: &mut TestAppContext) {
     assert!(after(cx, &host, 60.).is_empty(), "it waits for the answer");
     cx.update(|cx| {
         let window = cx.global::<ToastWindow>().0;
-        window.update(cx, |toast, _, cx| toast.press(1, point(px(0.), px(0.)), cx)).unwrap();
+        window
+            .update(cx, |toast, _, cx| toast.press(1, point(px(0.), px(0.)), cx))
+            .unwrap();
     });
     cx.run_until_parked();
     assert_eq!(*answers.borrow(), [false]);
@@ -265,37 +328,59 @@ fn a_question_shows_until_answered_or_replaced(cx: &mut TestAppContext) {
     assert!(!cx.update(|cx| showing("Space deleted! Use", cx)));
     cx.update(|cx| {
         let window = cx.global::<ToastWindow>().0;
-        window.update(cx, |toast, _, cx| toast.press(0, point(px(0.), px(0.)), cx)).unwrap();
+        window
+            .update(cx, |toast, _, cx| toast.press(0, point(px(0.), px(0.)), cx))
+            .unwrap();
     });
     cx.run_until_parked();
-    assert!(!cx.update(|cx| showing(note, cx)), "an answered question is leaving");
+    assert!(
+        !cx.update(|cx| showing(note, cx)),
+        "an answered question is leaving"
+    );
     after(cx, &host, LEAVE);
     ask(cx);
     show_deleted(cx);
-    assert!(!cx.update(|cx| showing(note, cx)), "another toast took its place");
+    assert!(
+        !cx.update(|cx| showing(note, cx)),
+        "another toast took its place"
+    );
 }
 
 #[gpui::test]
 fn a_resting_toast_comes_back_after_another_until_its_button_takes_it(cx: &mut TestAppContext) {
     let host = open_toast(cx);
-    let stop = Button { label: Label::Text("Stop".into()), name: "stop", run: Rc::new(|_, _| {}) };
+    let stop = Button {
+        label: Label::Text("Stop".into()),
+        name: "stop",
+        run: Rc::new(|_, _| {}),
+    };
     cx.update(|cx| show_resting("Recording a trace", vec![stop], cx));
     cx.run_until_parked();
     assert_eq!(host.0.take(), ["clicks true", "show"]);
     assert!(after(cx, &host, 60.).is_empty(), "it stays");
     show_deleted(cx);
     assert_eq!(host.0.take(), ["clicks false", "show"]);
-    assert_eq!(after(cx, &host, 5. + LEAVE), ["hide", "clicks true", "show"]);
+    assert_eq!(
+        after(cx, &host, 5. + LEAVE),
+        ["hide", "clicks true", "show"]
+    );
     let text = |cx: &mut TestAppContext| {
         cx.update(|cx| {
             let window = cx.global::<ToastWindow>().0;
-            window.read(cx).unwrap().shown.as_ref().map(|shown| shown.text.clone())
+            window
+                .read(cx)
+                .unwrap()
+                .shown
+                .as_ref()
+                .map(|shown| shown.text.clone())
         })
     };
     assert_eq!(text(cx).as_deref(), Some("Recording a trace"));
     cx.update(|cx| {
         let window = cx.global::<ToastWindow>().0;
-        window.update(cx, |toast, _, cx| toast.press(0, point(px(0.), px(0.)), cx)).unwrap();
+        window
+            .update(cx, |toast, _, cx| toast.press(0, point(px(0.), px(0.)), cx))
+            .unwrap();
     });
     cx.run_until_parked();
     assert_eq!(host.0.take(), ["clicks false"]);
@@ -311,7 +396,10 @@ fn the_toasts_shadow_fades_out_inside_its_window() {
     let reach = Level::Popover.reach();
     for (height, top) in [(HEIGHT, TOP), (NOTE_HEIGHT, NOTE_TOP)] {
         let below = WINDOW_HEIGHT - top - height;
-        assert!(below >= reach.below, "{below} below a toast of {height}, {reach:?}");
+        assert!(
+            below >= reach.below,
+            "{below} below a toast of {height}, {reach:?}"
+        );
     }
 }
 
@@ -327,7 +415,10 @@ fn the_host_is_told_where_the_plate_is_once_it_is_at_rest(cx: &mut TestAppContex
     cx.update(|cx| show_undo("Removed from Favorites", undo, TIME, cx));
     cx.run_until_parked();
     draw(cx);
-    assert!(host.1.take().is_empty(), "told while the toast was still arriving");
+    assert!(
+        host.1.take().is_empty(),
+        "told while the toast was still arriving"
+    );
     rest(cx);
     draw(cx);
     draw(cx);
@@ -338,7 +429,10 @@ fn the_host_is_told_where_the_plate_is_once_it_is_at_rest(cx: &mut TestAppContex
     assert_eq!(f32::from(plate.size.height), HEIGHT);
     assert_eq!(f32::from(plate.origin.y), TOP);
     assert_eq!(f32::from(plate.right()), page - RIGHT);
-    assert!(f32::from(plate.size.width) < page - RIGHT - WINDOW_MARGIN, "{plate:?}");
+    assert!(
+        f32::from(plate.size.width) < page - RIGHT - WINDOW_MARGIN,
+        "{plate:?}"
+    );
     // The margin where the shadow falls is left of it and under it.
     assert!(f32::from(plate.origin.x) > 0. && f32::from(plate.bottom()) < WINDOW_HEIGHT);
 }
@@ -361,7 +455,11 @@ fn a_toast_too_long_for_its_page_shortens_its_words(cx: &mut TestAppContext) {
     cx.run_until_parked();
     rest(cx);
     draw(cx);
-    let plate = host.1.take().pop().expect("the host wasn't told where the plate is");
+    let plate = host
+        .1
+        .take()
+        .pop()
+        .expect("the host wasn't told where the plate is");
     assert_eq!(f32::from(plate.origin.x), WINDOW_MARGIN, "{plate:?}");
     assert_eq!(f32::from(plate.right()), page - RIGHT);
     assert_eq!(f32::from(plate.origin.y), TOP);

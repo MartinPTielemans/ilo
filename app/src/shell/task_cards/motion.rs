@@ -33,7 +33,14 @@ pub(super) struct Ease {
 
 impl Ease {
     pub(super) fn rest(at: f32) -> Self {
-        Self { from: at, to: at, since: None, delay: 0., length: 0., curve: Curve::Ease }
+        Self {
+            from: at,
+            to: at,
+            since: None,
+            delay: 0.,
+            length: 0.,
+            curve: Curve::Ease,
+        }
     }
 
     /// Where it is at `now`.
@@ -79,7 +86,14 @@ impl Ease {
             *self = Self::rest(to);
             return;
         }
-        *self = Self { from: self.at(now), to, since: Some(now), delay, length, curve };
+        *self = Self {
+            from: self.at(now),
+            to,
+            since: Some(now),
+            delay,
+            length,
+            curve,
+        };
     }
 
     /// Settles it once it has got there, so it isn't asked again.

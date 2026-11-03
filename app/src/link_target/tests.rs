@@ -10,14 +10,25 @@ fn measure(text: &str) -> f32 {
 /// A link whose site is the part of `text` that reads `site`.
 fn target(text: &str, site: &str) -> Target {
     let start = text.find(site).unwrap();
-    Target { text: text.to_string().into(), domain: start..start + site.len() }
+    Target {
+        text: text.to_string().into(),
+        domain: start..start + site.len(),
+    }
 }
 
 #[test]
 fn an_address_that_fits_is_whole_with_its_site_apart() {
-    let plate = plate(&target("www.example.com/docs", "example.com"), 480., measure);
+    let plate = plate(
+        &target("www.example.com/docs", "example.com"),
+        480.,
+        measure,
+    );
     assert_eq!(
-        (plate.before.as_ref(), plate.site.as_ref(), plate.after.as_ref()),
+        (
+            plate.before.as_ref(),
+            plate.site.as_ref(),
+            plate.after.as_ref()
+        ),
         ("www.", "example.com", "/docs")
     );
     assert_eq!(plate.width, measure("www.example.com/docs") + 2. * PAD_X);
@@ -32,9 +43,17 @@ fn a_long_path_loses_its_middle_and_the_site_stays() {
     assert!(plate.width <= 240.);
     assert_eq!(plate.before.as_ref(), "login.");
     assert_eq!(plate.site.as_ref(), "example.co.uk");
-    assert!(plate.after.starts_with("/a/"), "the path's start stays: {}", plate.after);
+    assert!(
+        plate.after.starts_with("/a/"),
+        "the path's start stays: {}",
+        plate.after
+    );
     assert!(plate.after.contains('…'), "{}", plate.after);
-    assert!(plate.after.ends_with(".pdf"), "the file's end stays: {}", plate.after);
+    assert!(
+        plate.after.ends_with(".pdf"),
+        "the file's end stays: {}",
+        plate.after
+    );
     assert!(plate.text().chars().count() <= 31);
 }
 
@@ -61,16 +80,25 @@ fn a_site_wider_than_the_plate_is_cut_at_its_end() {
 #[test]
 fn an_address_with_no_host_has_no_site() {
     let plate = plate(
-        &Target { text: "mailto:someone@example.com".into(), domain: 0..0 },
+        &Target {
+            text: "mailto:someone@example.com".into(),
+            domain: 0..0,
+        },
         480.,
         measure,
     );
     assert_eq!(plate.site.as_ref(), "");
     assert_eq!(plate.text(), "mailto:someone@example.com");
     // A range that isn't in the text, or splits a character, is no site either.
-    let wrong = Target { text: "日本語.jp/".into(), domain: 1..4 };
+    let wrong = Target {
+        text: "日本語.jp/".into(),
+        domain: 1..4,
+    };
     assert_eq!(super::plate(&wrong, 480., measure).text(), "日本語.jp/");
-    let past = Target { text: "a.com".into(), domain: 2..40 };
+    let past = Target {
+        text: "a.com".into(),
+        domain: 2..40,
+    };
     assert_eq!(super::plate(&past, 480., measure).text(), "a.com");
 }
 
@@ -91,7 +119,11 @@ fn a_huge_address_is_cut_before_it_is_measured() {
         measured.set(measured.get().max(text.chars().count()));
         measure(text)
     });
-    assert!(measured.get() < 1000, "measured a string of {}", measured.get());
+    assert!(
+        measured.get() < 1000,
+        "measured a string of {}",
+        measured.get()
+    );
     assert!(plate.after.contains('…'));
 }
 
