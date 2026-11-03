@@ -3049,20 +3049,10 @@ impl Shell {
         }
     }
 
-    /// Under Wayland the core told the window's content size, again once the window has gone full
-    /// screen or maximized, or back. At the size it was drawn at, as a window already its screen's
-    /// size goes, no resize comes to ask (#1220). At another, the resize asks, once the page is laid
-    /// out at it, so the window's line comes after the page's place.
-    pub fn size_told(&mut self, size: Size<Pixels>, cx: &mut Context<Self>) {
-        if size == self.viewport {
-            self.bounds_changed(cx);
-        }
-    }
-
     /// The window's bounds changed, as they do when it's maximized or restored: the third button
     /// shows which it would do next. They change as it goes full screen or comes back too, which
     /// on Linux nothing else says, and under Wayland the core tells the size again once the window
-    /// has, for one that keeps its size (`size_told`).
+    /// has, for one that keeps its size (`window_resized`).
     pub fn bounds_changed(&mut self, cx: &mut Context<Self>) {
         let maximized = self.browser.window_maximized();
         if maximized != std::mem::replace(&mut self.maximized, maximized) {
