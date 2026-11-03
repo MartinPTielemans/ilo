@@ -32,6 +32,7 @@ pub use crate::tokens::palette::SECOND_AT;
 pub use crate::tokens::palette::{STATE_HOVERED, STATE_PRESSED, STATE_SELECTED, STATE_SELECTED_HOVERED};
 use crate::tokens::shell::library::{COLUMN, LIBRARY_PLATE};
 use crate::tokens::shell::{CARD as PAGE_CARD, LIGHT_CARD as LIGHT_PAGE_CARD};
+use crate::tokens::shell::{LIGHT_UNPAINTED, UNPAINTED};
 use crate::tokens::palette::{ACCENT_HOVERED, ACCENT_PRESSED, INTENSITY_FLOOR, INTENSITY_SPAN, RING, SELECTION};
 use crate::tokens::palette::{
     LIGHT_SELECTED, LIGHT_SELECTED_HOVERED, LIGHT_SELECTED_SHADOW, LIGHT_SELECTED_SHADOW_BLUR,
@@ -145,11 +146,19 @@ impl Tone {
         }
     }
 
-    /// The card the pages lie in, what shows before a page first paints.
+    /// The card the pages lie in.
     fn page(self) -> Rgba {
         rgba(match self {
             Tone::Dark => PAGE_CARD,
             Tone::Light => LIGHT_PAGE_CARD,
+        })
+    }
+
+    /// What a page shows until its first frame, while websites are told this is the appearance.
+    pub fn unpainted(self) -> Rgba {
+        rgba(match self {
+            Tone::Dark => UNPAINTED,
+            Tone::Light => LIGHT_UNPAINTED,
         })
     }
 
