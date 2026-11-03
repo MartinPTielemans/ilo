@@ -2873,7 +2873,8 @@ impl Shell {
         }
     }
 
-    /// Deletes the Space, asking first if it has tabs, which close with it.
+    /// Deletes the Space, asking first if it has tabs, which go with it: its Today tabs to the
+    /// archive, its pinned tabs with the Space, and ⌘Z brings them all back.
     fn delete_space(&mut self, space: u64, cx: &mut Context<Self>) {
         let Some(found) = self.spaces.iter().find(|each| each.id == space) else {
             return;
@@ -2884,12 +2885,13 @@ impl Shell {
             return;
         }
         let shell = cx.weak_entity();
+        let undo = keystroke_label("cmd-z");
         self.browser.confirm(
             format!("Delete “{}”?", found.name),
             if tabs == 1 {
-                "Its tab closes too.".into()
+                format!("Its tab goes with it. {undo} brings it back.")
             } else {
-                format!("Its {tabs} tabs close too.")
+                format!("Its {tabs} tabs go with it. {undo} brings them back.")
             },
             "Delete",
             Box::new(move |cx| {
