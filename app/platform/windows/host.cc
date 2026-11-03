@@ -3083,29 +3083,70 @@ void host_capture_name(char* name, size_t capacity) {
   }
 }
 
+}  // extern "C"
+
+namespace {
+
+// The dialog host_save_png shows, once it's on screen, for the driver's savepanel.
+HWND g_save_dialog = nullptr;
+
+LRESULT CALLBACK SaveDialogEvent(int code, WPARAM wparam, LPARAM lparam) {
+  wchar_t name[8] = L"";
+  HWND hwnd = reinterpret_cast<HWND>(wparam);
+  if (code == HCBT_ACTIVATE && !g_save_dialog && GetClassNameW(hwnd, name, 8) &&
+      wcscmp(name, L"#32770") == 0) {
+    g_save_dialog = hwnd;
+    // check.sh reads this line, as the Mac's and Linux's hosts write it.
+    fprintf(stderr, "browser: capture save panel shown\n");
+  }
+  return CallNextHookEx(nullptr, code, wparam, lparam);
+}
+
+}  // namespace
+
+extern "C" {
+
+void* host_save_dialog(void) {
+  return g_save_dialog;
+}
+
 void host_save_png(void* ui_view, const uint8_t* png, size_t size) {
-  wchar_t path[MAX_PATH];
-  SYSTEMTIME now;
-  GetLocalTime(&now);
-  swprintf_s(path, L"Capture %04d-%02d-%02d at %02d.%02d.%02d.png", now.wYear, now.wMonth,
-             now.wDay, now.wHour, now.wMinute, now.wSecond);
-  OPENFILENAMEW save{};
-  save.lStructSize = sizeof save;
-  save.hwndOwner = Root(ui_view);
-  save.lpstrFilter = L"PNG image\0*.png\0";
-  save.lpstrFile = path;
-  save.nMaxFile = MAX_PATH;
-  save.lpstrDefExt = L"png";
-  save.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
-  if (!GetSaveFileNameW(&save)) {
-    return;
-  }
-  HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
-  if (file != INVALID_HANDLE_VALUE) {
-    DWORD written;
-    WriteFile(file, png, static_cast<DWORD>(size), &written, nullptr);
+  HWND root = Root(ui_view);
+  // From a task of its own, once the UI's event has returned, as the Mac's sheet returns at once:
+  // the dialog's loop runs the UI's tasks, which would find the UI still held by its event (#1358).
+  Later([root, png = std::vector<uint8_t>(png, png + size)] {
+    wchar_t path[MAX_PATH];
+    SYSTEMTIME now;
+    GetLocalTime(&now);
+    swprintf_s(path, L"Capture %04d-%02d-%02d at %02d.%02d.%02d.png", now.wYear, now.wMonth,
+               now.wDay, now.wHour, now.wMinute, now.wSecond);
+    OPENFILENAMEW save{};
+    save.lStructSize = sizeof save;
+    save.hwndOwner = IsWindow(root) ? root : nullptr;
+    save.lpstrFilter = L"PNG image\0*.png\0";
+    save.lpstrFile = path;
+    save.nMaxFile = MAX_PATH;
+    save.lpstrDefExt = L"png";
+    save.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
+    HHOOK hook = SetWindowsHookExW(WH_CBT, SaveDialogEvent, nullptr, GetCurrentThreadId());
+    const bool chosen = GetSaveFileNameW(&save);
+    if (hook) {
+      UnhookWindowsHookEx(hook);
+    }
+    g_save_dialog = nullptr;
+    if (!chosen) {
+      return;
+    }
+    HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+      return;
+    }
+    DWORD written = 0;
+    WriteFile(file, png.data(), static_cast<DWORD>(png.size()), &written, nullptr);
     CloseHandle(file);
-  }
+    // check.sh reads this line.
+    fprintf(stderr, "browser: capture saved %s\n", Utf8(path).c_str());
+  });
 }
 
 // Shares the screenshot through the system share flyout as an image. Windows has no Messages app,
