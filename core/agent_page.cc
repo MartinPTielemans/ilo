@@ -266,7 +266,7 @@ std::string AgentPage::NotWebPage() {
   const content::NavigationEntry* pending = contents.GetController().GetPendingEntry();
   const GURL loading = pending ? pending->GetURL() : GURL();
   if (contents.IsLoading() && loading.SchemeIsHTTPOrHTTPS()) {
-    std::string_view site = loading.host_piece();
+    std::string_view site = loading.host();
     if (base::StartsWith(site, "www.")) {
       site.remove_prefix(4);
     }
