@@ -96,6 +96,8 @@ mod update_sign;
 #[cfg(test)]
 mod recorder;
 mod rows;
+mod scroller;
+pub use scroller::{ScrollBarsShown, follow_scroll_bars};
 pub(crate) mod scaled;
 mod side_panel;
 mod sidebar;
@@ -197,6 +199,10 @@ const SIDEBAR_EDGE: f32 = 6.;
 pub use crate::tokens::shell::REVEAL_INSET;
 const REVEAL_HOLD: f32 = 24.;
 const REVEAL_WAIT: Duration = Duration::from_millis(100);
+// How far up or down the pointer moves in the edge's strip before it brings the sidebar out: Arc's
+// did once it had moved a few points there, and not as it jumped in (*interim*, Arc's distance
+// isn't measured).
+const REVEAL_MOVE: f32 = 3.;
 const REVEAL_IN_RESPONSE: f32 = 0.175;
 const REVEAL_IN_DAMPING: f32 = 0.8;
 const REVEAL_OUT_RESPONSE: f32 = 0.175;
@@ -1262,6 +1268,13 @@ pub struct Shell {
     /// Where across the window the pointer was last, for the reveal, and whether it's on a row's
     /// hover card, which keeps the sidebar out as the panel does.
     reveal_x: f32,
+    /// While the pointer is in the strip at the window's left edge: where up or down it came in,
+    /// and whether it has moved `REVEAL_MOVE` from there since.
+    reveal_strip: Option<(f32, bool)>,
+    /// The list's knob: whether it's the legacy one, as the system shows scroll bars always, and
+    /// when the user last scrolled, for the overlay one.
+    legacy_scroller: bool,
+    scroller: scroller::Scroller,
     pointer_on_card: bool,
     /// The Copy URL button shows a checkmark until this one-shot timer ends.
     url_copied: Option<Task<()>>,
@@ -1643,6 +1656,9 @@ impl Shell {
             reveal_motion: None,
             reveal_wait: None,
             reveal_x: 0.,
+            reveal_strip: None,
+            legacy_scroller: false,
+            scroller: Default::default(),
             pointer_on_card: false,
             url_copied: None,
             history_asked: None,
@@ -3420,7 +3436,7 @@ impl Render for Shell {
         self.step_held_row(window);
         self.step_held_nav(window);
         self.step_form_going(cx);
-        self.step_scroll_edge(window);
+        self.step_scroll_edge(window, cx);
         self.step_tools(window);
         self.step_pinned_turn(window);
         self.step_empty(window);
@@ -3563,7 +3579,7 @@ impl Render for Shell {
                     #[cfg(any(target_os = "linux", target_os = "windows"))]
                     shell.browser.start_window_move(cx);
                 }
-                shell.pointer_at(event.position.x.into(), cx);
+                shell.pointer_over(event.position, cx);
                 // A tooltip shows once the pointer rests (tooltip.rs).
                 crate::tooltip::moved(cx);
             }))
@@ -3860,7 +3876,14 @@ impl Shell {
     /// beneath it.
     fn list(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let room = self.tiles_room();
-        let mut rows = vec![(None, self.name_row(cx).into_any_element())];
+        // Over the rows, the name row stays put while they scroll (Arc 1.170), unless the tiles
+        // scroll with them and take it along. What's drawn in the rows' own place is `head` up.
+        let head = self.fixed_head();
+        let name = self.name_row(cx).into_any_element();
+        let (name, mut rows) = match head > 0. {
+            true => (Some(name), Vec::new()),
+            false => (None, vec![(None, name)]),
+        };
         let (pinned, today) = self.rows();
         let drawn = self.layout().into_iter().filter_map(|(slot, top)| match slot {
             Slot::Tab(tab) => Some((tab, top + self.slide(slot))),
@@ -3882,16 +3905,17 @@ impl Shell {
         let over_list = self.drag.as_ref().filter(|drag| {
             drag.moving && drag.over_page.is_none() && matches!(drag.to, Place::List(..))
         });
-        let line = over_list.and_then(|drag| Some(self.drop_line(drag.line?, drag.depth, room)));
+        let line = over_list
+            .and_then(|drag| Some(self.drop_line(drag.line?, drag.depth, room - head)));
         let dragged = over_list.filter(|drag| !drag.incoming);
         // Mid-turn into or out of a tile, it's drawn over the sidebar instead, and rested on a
         // row, it's in that row's slot for it.
         let dragged = dragged.filter(|drag| drag.shape.start.is_none() && drag.onto.is_none());
         let dragged = dragged.map(|drag| {
             let row = self.tab_row(drag.tab, true, cx);
-            let top = room + self.drag_at(drag);
+            let top = room - head + self.drag_at(drag);
             let ghost = div().id("ghost").absolute().top(px(top)).left_0();
-            ghost.w(px(self.width())).child(row)
+            ghost.w(px(self.rows_width())).child(row)
         });
         let under = self
             .opened
@@ -3901,20 +3925,24 @@ impl Shell {
             })
             .map_or(rows.len(), |row| row + 1);
         let under = rows.split_off(under).into_iter().map(|(_, row)| row).collect::<Vec<_>>();
-        div()
+        let list = div()
             .id("today")
             .when(self.a11y, |list| {
                 list.role(Role::List).a11y_synthetic_children(access::group_rows)
             })
-            .size_full()
+            .w_full()
+            .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
             .overflow_y_scroll()
             .track_scroll(&self.list_scroll)
             // Fingers across the list page between Spaces instead.
             .restrict_scroll_to_axis()
+            // The legacy knob's room, which the rows give up for it.
+            .pr(px(self.scroller_gutter()))
             .when(room > 0., |list| list.child(div().flex_none().h(px(room))))
-            .children(self.closing.iter().map(|row| self.closing_row(row, room)))
+            .children(self.closing.iter().map(|row| self.closing_row(row, room - head)))
             .children(rows.into_iter().map(|(_, row)| row))
             .when(!under.is_empty(), |list| {
                 list.child(div().flex_none().flex().flex_col().overflow_hidden().children(under))
@@ -3922,7 +3950,9 @@ impl Shell {
             .child(div().flex_none().h(px(LIST_TRAIL)))
             .children(line)
             .children(dragged)
-            .child(self.drag_listeners(cx))
+            .child(self.drag_listeners(cx));
+        let knob = self.scroller_knob(head);
+        div().relative().size_full().flex().flex_col().children(name).child(list).children(knob)
     }
 
     /// A tab's row in the list, which stays in its place while it's dragged (Arc).
@@ -3944,7 +3974,7 @@ impl Shell {
             .absolute()
             .top(px(room + y - DROP_RING / 2.))
             .left(px(left))
-            .w(px(self.width() - PLATE_INSET - DROP_LINE_END - left))
+            .w(px(self.rows_width() - PLATE_INSET - DROP_LINE_END - left))
             .h(px(DROP_RING))
             .flex()
             .items_center()
@@ -3984,7 +4014,7 @@ impl Shell {
         self.step_held_row(window);
         self.step_held_nav(window);
         self.step_form_going(cx);
-        self.step_scroll_edge(window);
+        self.step_scroll_edge(window, cx);
         self.step_tools(window);
         self.step_pinned_turn(window);
         self.step_foot(window, cx);

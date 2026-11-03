@@ -37,7 +37,7 @@ impl Shell {
         };
         // A tile's card starts where a row's would, past the sidebar's rows, not over the tiles
         // beside it.
-        let right = self.sidebar_origin.get().x + px(self.width() - PLATE_INSET);
+        let right = self.sidebar_origin.get().x + px(self.rows_width() - PLATE_INSET);
         let row = Bounds::new(frame.origin, size(right.max(frame.right()) - frame.origin.x, frame.size.height));
         let shell = cx.weak_entity();
         // It may tell of the card inside this update, so what it tells waits for the update's end.

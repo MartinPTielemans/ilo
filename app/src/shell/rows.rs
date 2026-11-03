@@ -368,7 +368,7 @@ impl Shell {
             .absolute()
             .top(px(room + row.top))
             .left_0()
-            .w(px(self.width()))
+            .w(px(self.rows_width()))
             .h(px(ROW_HEIGHT))
             .px(px(PLATE_INSET))
             .pl(px(PLATE_INSET + row.indent))
@@ -740,6 +740,14 @@ impl Shell {
         if !(0. ..width).contains(&at.x) || !rows.contains(&at.y) {
             return false;
         }
+        // The name row stays put over the rows scrolled under it, which take no press there.
+        if self.on_fixed_head(at.y) && self.settle.is_none() {
+            if event.button == MouseButton::Right {
+                self.space_menu(self.space, event.position, cx);
+                return true;
+            }
+            return false;
+        }
         let y = self.list_y(at.y);
         let row_at = |tops: &[(u64, f32)]| {
             tops.iter().find_map(|&(tab, top)| (top..top + ROW_PITCH).contains(&y).then_some(tab))
@@ -802,7 +810,7 @@ impl Shell {
 
     /// How wide each segment of a split view's row is, `count` of them `depth` folders in.
     pub(super) fn segment_width(&self, depth: usize, count: usize) -> f32 {
-        let plate = self.width() - 2. * PLATE_INSET - depth as f32 * FOLDER_INDENT;
+        let plate = self.rows_width() - 2. * PLATE_INSET - depth as f32 * FOLDER_INDENT;
         (plate - (FAVICON_X - PLATE_INSET - SEGMENT_FAVICON_X)) / count as f32
     }
 

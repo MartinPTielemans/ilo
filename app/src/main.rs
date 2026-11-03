@@ -5034,6 +5034,7 @@ fn finish_opening(
         platform::host_watch_active(became_active);
     }
     follow_reduce_motion(cx);
+    browser::shell::follow_scroll_bars(cx);
     #[cfg(not(target_os = "linux"))]
     unsafe { platform::host_watch_reduce_motion(reduce_motion_changed) };
     #[cfg(target_os = "linux")]
@@ -6208,12 +6209,13 @@ unsafe extern "C" fn launching(_: *mut c_void) {
 }
 
 /// Back from another app, such as System Settings, where the user may have changed the default
-/// browser or given the app Full Disk Access.
+/// browser, given the app Full Disk Access or changed when scroll bars show.
 extern "C" fn became_active() {
     // Later: AppKit can say so from inside the update that activated the app to show a window.
     update_app_later(|cx| {
         settings::check_default_browser(cx);
         import_host::became_active(cx);
+        browser::shell::follow_scroll_bars(cx);
         // GTK's settings file, Linux's last word, says nothing as it changes.
         #[cfg(target_os = "linux")]
         follow_reduce_motion(cx);
