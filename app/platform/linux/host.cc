@@ -371,7 +371,7 @@ void host_activate(void* ui_view) {
 }
 
 // The window manager places windows, on the workspace it picks.
-void host_set_window_little(void* ui_view) {}
+void host_set_window_little(void* ui_view, bool grows) {}
 
 // Little ilo's Dock items alone hide windows, and there's no Dock.
 void host_set_window_shown(void* ui_view, bool shown) {}

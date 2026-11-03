@@ -27,7 +27,7 @@ use crate::tokens::command_bar::{LITTLE_DOWN, LITTLE_WIDTH, ROW_HEIGHT};
 use crate::tokens::shell::{
     FAVICON_DRAWN, LITTLE_BAR, LITTLE_CHEVRON, LITTLE_CHEVRON_GLYPH, LITTLE_COPY_GAP, LITTLE_GLYPH,
     LITTLE_OPEN, LITTLE_OPEN_GAP, LITTLE_OPEN_KEY, LITTLE_OPEN_MAX, LITTLE_OPEN_PAD,
-    LITTLE_SPACES_BELOW, LITTLE_SPACES_WIDTH, LITTLE_SPLIT, LITTLE_SPLIT_LINE, NAV_SIZE, NAV_TOP,
+    LITTLE_SPACES_BELOW, LITTLE_SPACES_EDGE, LITTLE_SPACES_WIDTH, LITTLE_SPLIT, LITTLE_SPLIT_LINE, NAV_SIZE, NAV_TOP,
     SIDEBAR_BUTTON_X,
 };
 use crate::tokens::text;
@@ -272,9 +272,10 @@ impl Shell {
             })
             .collect();
         let end = self.little_end(cx);
-        let width = px(LITTLE_SPACES_WIDTH).min(end.chevron.right());
+        let right = end.chevron.right().min(self.viewport.width - px(LITTLE_SPACES_EDGE));
+        let width = px(LITTLE_SPACES_WIDTH).min(right);
         let top = end.chevron.bottom() + px(LITTLE_SPACES_BELOW);
-        let at = Bounds::new(point(end.chevron.right() - width, top), size(width, px(ROW_HEIGHT)));
+        let at = Bounds::new(point(right - width, top), size(width, px(ROW_HEIGHT)));
         self.browser.spaces_menu(spaces, at, cx);
     }
 

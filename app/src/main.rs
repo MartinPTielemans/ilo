@@ -155,7 +155,7 @@ mod platform {
         #[cfg(target_os = "linux")]
         pub fn host_window_active(ui_view: *mut c_void, active: bool, whole_window: bool);
         pub fn host_capture_name(name: *mut c_char, capacity: usize);
-        pub fn host_set_window_little(ui_view: *mut c_void);
+        pub fn host_set_window_little(ui_view: *mut c_void, grows: bool);
         pub fn host_show_window(ui_view: *mut c_void);
         pub fn host_show_window_behind(ui_view: *mut c_void, above_ui_view: *mut c_void);
         pub fn host_show_launch_window(
@@ -4864,7 +4864,7 @@ fn open_window_as(
     // screen, so the core's reports of its tabs can come before its first frame.
     let restored = first && restore_spaces(id, window, cx);
     if let Some(Own::Little { .. }) = own {
-        unsafe { platform::host_set_window_little(ui_view) };
+        unsafe { platform::host_set_window_little(ui_view, !cx.reduce_motion()) };
     }
     match (&from, saved) {
         (Some(from), Some(_)) => unsafe { platform::host_show_window_behind(ui_view, from.ui_view) },
@@ -6265,8 +6265,11 @@ extern "C" fn reduce_motion_changed() {
     update_app_later(follow_reduce_motion);
 }
 
-/// What GPUI's animations and the UI's own motion follow (`App::reduce_motion`).
+/// What GPUI's animations and the UI's own motion follow (`App::reduce_motion`). A check that
+/// records motion on a runner whose system reduces it, as GitHub's hosted Mac and Windows do,
+/// launches with BROWSER_MOTION=full.
 fn set_reduce_motion(reduce: bool, cx: &mut App) {
+    let reduce = reduce && std::env::var_os("BROWSER_MOTION").is_none_or(|motion| motion != "full");
     if reduce != cx.reduce_motion() {
         // check.sh reads this line.
         log!("browser: reduce motion {}", if reduce { "on" } else { "off" });

@@ -248,8 +248,10 @@ struct Browser {
   double reveal_width = 0;
   id reveal_monitor;
 
-  // A Little ilo window's (host_set_window_little).
+  // A Little ilo window's, and whether it grows in as it first comes on screen
+  // (host_set_window_little).
   bool little = false;
+  bool grows = false;
 };
 
 // In the order their views were made. Each is allocated alone, so the pointers stay put.
@@ -305,6 +307,10 @@ constexpr double kOverlayGrow = 0.2;
 constexpr double kOverlayGrowFade = 0.1;
 // Arc's theme picker shrinks to its arrow and fades as it closes, gone in 0.11 s.
 constexpr double kOverlayShrink = 0.11;
+// Little ilo grows in as Little Arc does, from a small rectangle to its frame in 6 to 7 frames,
+// easing out, never faded (Arc 1.168 at 60 fps, from an outside reverse-engineering, #1407).
+constexpr double kLittleGrow = 0.12;
+constexpr NSSize kLittleGrowFrom = {40, 28};
 
 // A window of the UI's over a browser window's page, translucent over a blur, with a shadow: the
 // command bar, the Space's icon or theme picker, or the Site Controls.
@@ -1390,10 +1396,71 @@ void* host_ui_view(void) {
   return (__bridge void*)g_browsers.back()->ui_view;
 }
 
-void host_set_window_little(void* ui_view) {
+void host_set_window_little(void* ui_view, bool grows) {
   if (Browser* browser = BrowserWithView(ui_view)) {
     browser->little = true;
+    browser->grows = grows;
   }
+}
+
+// Whether the user's last press in the app was a key's rather than a click's. A key from a page
+// reaches the app only once the page has passed on it, after other events, so the event at hand
+// can't say.
+static bool g_pressed_key = false;
+
+// Grows Little ilo's |window| in from a small rectangle under the pointer, or at its middle when a
+// key in the app opened it. A link from another app was clicked there, under the pointer. What it
+// draws is scaled rather than its frame resized, so its page and UI are laid out at full size the
+// whole way and never again on a frame. The frame view's layer holds all the window draws, its
+// corners and material too, so the window is clear and without its shadow while it grows, or the
+// rest of its frame would show from the start.
+static void GrowLittleWindow(NSWindow* window) {
+  CALayer* layer = window.contentView.superview.layer;
+  if (!layer) {
+    return;
+  }
+  const NSRect frame = window.frame;
+  // In the window, from its bottom left, as AppKit's y runs up.
+  NSPoint from = NSMakePoint(NSWidth(frame) / 2, NSHeight(frame) / 2);
+  if (!NSApp.active || !g_pressed_key) {
+    const NSPoint pointer = NSEvent.mouseLocation;
+    from = NSMakePoint(pointer.x - NSMinX(frame), pointer.y - NSMinY(frame));
+  }
+  const NSRect rest = layer.frame;
+  const NSRect small = NSMakeRect(from.x - kLittleGrowFrom.width / 2,
+                                  from.y - kLittleGrowFrom.height / 2, kLittleGrowFrom.width,
+                                  kLittleGrowFrom.height);
+  // The transform applies about the layer's position, so the rectangle at rest maps to the small
+  // one once that's taken out.
+  const double scale_x = NSWidth(small) / NSWidth(rest);
+  const double scale_y = NSHeight(small) / NSHeight(rest);
+  const double dx = NSMinX(small) - scale_x * NSMinX(rest) - layer.position.x * (1 - scale_x);
+  const double dy = NSMinY(small) - scale_y * NSMinY(rest) - layer.position.y * (1 - scale_y);
+  CABasicAnimation* grow = [CABasicAnimation animationWithKeyPath:@"transform"];
+  grow.fromValue = [NSValue
+      valueWithCATransform3D:CATransform3DScale(CATransform3DMakeTranslation(dx, dy, 0), scale_x,
+                                                scale_y, 1)];
+  grow.toValue = [NSValue valueWithCATransform3D:CATransform3DIdentity];
+  grow.duration = kLittleGrow;
+  grow.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+  const BOOL opaque = window.opaque;
+  const BOOL shadow = window.hasShadow;
+  window.opaque = NO;
+  window.hasShadow = NO;
+  __weak NSWindow* weak = window;
+  [CATransaction begin];
+  [CATransaction setCompletionBlock:^{
+    NSWindow* grown = weak;
+    grown.opaque = opaque;
+    grown.hasShadow = shadow;
+    [grown invalidateShadow];
+    // check.sh reads this line.
+    fprintf(stderr, "browser: little window grown\n");
+  }];
+  [layer addAnimation:grow forKey:@"little grow"];
+  [CATransaction commit];
+  // check.sh reads this line: where it grew from, from the window's top left as the UI's points go.
+  fprintf(stderr, "browser: little window grows from %g %g\n", from.x, NSHeight(frame) - from.y);
 }
 
 // Brings Little ilo's |window| to the desktop shown on its way on screen, as Arc's Little Arc
@@ -1437,6 +1504,8 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
       }
     }
     ToActiveSpace(window);
+    // Its own motion, or none under Reduce Motion, rather than AppKit's for a new window.
+    window.animationBehavior = NSWindowAnimationBehaviorNone;
   }
   // Never drawn, but Mission Control and the Window menu name the window by it.
   window.title = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleName"];
@@ -1462,6 +1531,11 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   if (above && above->window) {
     [window orderWindow:NSWindowBelow relativeTo:above->window.windowNumber];
   } else {
+    // Before it's on screen, so its first frame is already the small one.
+    if (browser->grows) {
+      browser->grows = false;
+      GrowLittleWindow(window);
+    }
     [window makeKeyAndOrderFront:nil];
     [g_launch_window orderOut:nil];
     g_launch_window = nil;
@@ -1478,6 +1552,12 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   static bool watching_clicks = false;
   if (!watching_clicks) {
     watching_clicks = true;
+    // Before the press reaches anything it could open a Little ilo window from.
+    [NSEvent addLocalMonitorForEventsMatchingMask:kMouseDown | NSEventMaskKeyDown
+                                          handler:^NSEvent*(NSEvent* event) {
+                                            g_pressed_key = event.type == NSEventTypeKeyDown;
+                                            return event;
+                                          }];
     [NSEvent addLocalMonitorForEventsMatchingMask:kMouseDown
                                           handler:^NSEvent*(NSEvent* event) {
                                             if (HostIsMenuWindow(event.window)) {

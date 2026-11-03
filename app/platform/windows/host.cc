@@ -2605,7 +2605,7 @@ void host_activate(void* ui_view) {
 }
 
 // Windows opens a window on the virtual desktop shown, and has no full-screen desktops.
-void host_set_window_little(void* ui_view) {}
+void host_set_window_little(void* ui_view, bool grows) {}
 
 // Little ilo's Dock items alone hide windows, and Windows has no Dock menu: its taskbar's jump list
 // isn't ours yet.

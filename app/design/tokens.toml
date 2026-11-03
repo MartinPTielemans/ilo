@@ -1025,10 +1025,12 @@ little-split-line = 0.16
 little-chevron = 28.0
 little-chevron-glyph = 12.0
 little-copy-gap = 2.0
-# The chevron's Spaces menu is the compact command bar this wide, its right edge the button's and
-# its top this far under it.
+# The chevron's Spaces menu is the compact command bar this wide, its top this far under the
+# button, and its right edge the button's, but no nearer the window's than every overlay keeps
+# (host_show_overlay), so no host narrows or moves it.
 little-spaces-width = 240.0
 little-spaces-below = 4.0
+little-spaces-edge = 8.0
 
 [shell.agent-pointer]
 # Ours (#365), as Arc and Dia have no agents in pages: while an agent clicks or types in the page

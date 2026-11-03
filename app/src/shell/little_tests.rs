@@ -427,8 +427,11 @@ fn its_chevron_lists_the_users_spaces_to_send_the_page_to(cx: &mut TestAppContex
     cx.run_until_parked();
     assert!(host.take().contains(&"spaces menu 1 One, 2 Two, 4 Work".to_string()));
     let menu = host.spaces_menus.borrow().last().copied().expect("no menu");
-    let at = (menu.origin, menu.size.width);
-    assert_eq!(at, (point(end.chevron.right() - px(240.), px(7.5 + 32. + 4.)), px(240.)));
+    // Its right edge 8 in from the window's, as every overlay's is, which is 4 inside the chevron's.
+    let at = (menu.origin, menu.size.width, end.chevron.right());
+    let width = shell.read_with(cx, |shell, _| shell.viewport.width);
+    let right = width - px(8.);
+    assert_eq!(at, (point(right - px(240.), px(7.5 + 32. + 4.)), px(240.), width - px(4.)));
 
     // A Space renamed is named so the next time.
     shell.update(cx, |shell, cx| {
