@@ -340,9 +340,11 @@ deleted=,
 if [ "$(uname)" = Linux ]; then
   post clickkey $(drawn "sync delete-account")
   expect "^browser: dialog shown Delete the account $email?\$" "Delete Account didn't ask first"
+  expect '^browser: dialog settled$' "Settings' dialog didn't settle"
   expect '^browser: dialog confirm at ' "Delete Account's question didn't say where its button is"
   ../tools/window-screenshot.sh "$pid" "$out/sync-delete-asked.png" || fail "no window to capture"
-  send click $(sed -n 's/^browser: dialog confirm at //p' "$log" | tail -1)
+  # In Settings' window, which has the keyboard, as the dialog is drawn in it.
+  send clickkey $(sed -n 's/^browser: dialog confirm at //p' "$log" | tail -1)
   expect '^browser: dialog confirmed$' "a click on Delete Account didn't delete it"
   expect '^browser: account SignedOut None$' "Delete Account didn't sign the browser out"
   for table in accounts devices sync_entities sync_stores passkeys; do
