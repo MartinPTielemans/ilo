@@ -85,6 +85,10 @@ send window 3
 ../tools/window-screenshot.sh "$pid" "$out/little-link.png" all || fail "no window to capture"
 # ⌘W closes the window, its page with it, and the next opens at the size it had.
 send resize 760 520
+# The size it's kept at is the window's frame, which on Windows takes in the borders, not the page.
+send order
+closed_size=$(grep '^browser: frame window 3 ' "$log" | tail -1 | cut -d' ' -f7-)
+[ -n "$closed_size" ] || fail "the driver didn't give the Little ilo window's frame"
 send key w cmd
 expect '^browser: command close-tab via ' "⌘W didn't run in the Little ilo window"
 expect "^browser: window closed $little\$" "⌘W didn't close the Little ilo window"
@@ -108,7 +112,7 @@ send key n cmd alt
 expect "^browser: little window opened [0-9]* profile [0-9]* home $home\$" \
   "⌥⌘N didn't open a second Little ilo window"
 little=$(opened)
-expect "^browser: window $little frame -\{0,1\}[0-9]* -\{0,1\}[0-9]* 760 520\$" \
+expect "^browser: window $little frame -\{0,1\}[0-9]* -\{0,1\}[0-9]* $closed_size\$" \
   "the Little ilo window didn't open at the last one's size: $(grep "^browser: window $little frame" "$log")"
 send window 4
 send key l cmd
