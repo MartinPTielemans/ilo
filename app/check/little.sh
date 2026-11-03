@@ -17,6 +17,8 @@ pid=$!
 exec 3> "$out/drive"
 await_load
 await '^browser: title [0-9]* ready$' || fail "the test page didn't draw"
+# The app can say which window opened after its page has loaded.
+await '^browser: window opened [0-9]' || fail "the app didn't say which window opened"
 main=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
 home=$(space)
 a=$(today)

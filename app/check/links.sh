@@ -74,6 +74,8 @@ pid=$!
 exec 3> "$out/drive"
 await_load
 first=$(space)
+# The app can say which window opened after its page has loaded.
+await '^browser: window opened [0-9]' || fail "the app didn't say which window opened"
 window=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
 # The line the app logs for a link from another app, $1 being what follows the site's address.
 link_line() {
