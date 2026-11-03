@@ -549,6 +549,14 @@ pub fn find_commands(
                 true => Match::Letters,
                 false => match_of(lowercase, keywords, &typed)?,
             };
+            // "close" means the tab, as Arc lists Archive Tab above Close Window for it, and ↩ on
+            // the window's close would take every tab with it: Close Window comes before the
+            // suggestions only once what's typed goes past its first word.
+            let first_word = matched == Match::Name && !typed.contains(' ');
+            let matched = match command == Command::CloseWindow && first_word {
+                true => Match::Letters,
+                false => matched,
+            };
             Some((matched, SharedString::from(named(name, command)?), command))
         })
         .collect();

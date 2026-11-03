@@ -834,6 +834,27 @@ fn clearing_and_deleting_a_space_are_undone_and_done_again(cx: &mut TestAppConte
     assert_eq!(host.take_edits(), ["delete space 2"]);
 }
 
+/// Deleting a Space with tabs asks first, in words that say its tabs go with it and name the ⌘Z
+/// that brings them back, as it does, since "close" would make the delete sound final.
+#[gpui::test]
+fn the_delete_space_dialog_names_the_undo(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![10], vec![11, 12], Folders::default(), Vec::new());
+    shell.update(cx, |shell, cx| shell.delete_space(1, cx));
+    let (message, detail, confirmed) = host.confirming.take().expect("it didn't ask");
+    let key = crate::shell::keystroke_label("cmd-z");
+    assert_eq!(message, "Delete “One”?");
+    assert_eq!(detail, format!("Its 3 tabs go with it. {key} brings them back."));
+    cx.update(confirmed);
+    assert_eq!(host.take_edits(), ["delete space 1"]);
+    undo(&shell, cx);
+    assert_eq!(host.take_edits(), ["undo delete space 1"]);
+
+    let (shell, host) = plain(cx, vec![11]);
+    shell.update(cx, |shell, cx| shell.delete_space(1, cx));
+    let (_, detail, _) = host.confirming.take().expect("it didn't ask");
+    assert_eq!(detail, format!("Its tab goes with it. {key} brings it back."));
+}
+
 /// "Space deleted! Use ⌘Z to undo." goes with the ⌘Z it names, so it can't prompt a second one,
 /// which would undo the edit before, and with the next edit, which ⌘Z would undo instead.
 #[gpui::test]
@@ -1212,6 +1233,21 @@ fn a_removed_pinned_split_comes_back_split_at_its_place(cx: &mut TestAppContext)
     report_lists(&shell, cx, vec![19, 1002, 1001], vec![10], vec![1002, 1001]);
     assert!(redo(&shell, cx));
     assert_eq!(host.take_edits(), ["pinned 1002 false", "close 1002"]);
+}
+
+/// The trash takes the pinned tab out of sight, so the toast offers its Undo, as Remove from
+/// Favorites' does, and its button pins the tab again at its place.
+#[gpui::test]
+fn removing_a_pinned_tab_offers_its_undo(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![19, 20], vec![10], Folders::default(), Vec::new());
+    shell.update(cx, |shell, cx| shell.remove_pinned(20, cx));
+    report(&shell, cx, vec![19], vec![10]);
+    assert_eq!(host.undo_toasts.borrow().as_slice(), ["Tab Removed"]);
+    host.take_edits();
+    let button = host.undo_toast.borrow().clone().expect("the toast offers Undo");
+    cx.update(|cx: &mut App| button(cx));
+    assert_eq!(host.take_edits(), ["reopen 20 as 1001", "move 1001 true 0 1"]);
+    assert!(host.undo_toast.borrow().is_none(), "the offer goes once it's taken");
 }
 
 /// ⇧⌘T after removing a pinned tab pins it again at its place, as ⌘Z does, where the core's

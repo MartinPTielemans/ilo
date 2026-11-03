@@ -616,6 +616,29 @@ mod tests {
         assert_eq!(host.take(), Vec::<String>::new());
     }
 
+    /// The find bar sits at the focused page's top right corner, so its buttons' tooltips hang
+    /// from it there: over the left page of a split when that's focused, and the right one's.
+    #[gpui::test]
+    fn the_find_bar_is_placed_over_the_focused_page(cx: &mut TestAppContext) {
+        // Its place, as find_bar.rs gives it: twice the card's inset in, and 300 wide.
+        let inset = crate::shell::CARD_INSET * 2.;
+        let mut corners = Vec::new();
+        for (focused, index) in [(10, 0), (11, 1)] {
+            let (shell, _) = split_of(&[10, 11], focused, focused, 1400., cx);
+            let (origin, window) =
+                shell.read_with(cx, |shell, _| shell.at_page_corner(inset, inset, 300.));
+            assert_eq!(window, size(px(1400.), px(800.)));
+            let pane = shell.read_with(cx, |shell, _| {
+                let (frame, _) = shell.page_frame(shell.viewport);
+                pane_frames(frame, 2, false, &shell.shares(shell.selected))[index]
+            });
+            let (left, right) = (f32::from(origin.x), f32::from(origin.x) + 300.);
+            assert!(f32::from(pane.left()) < left && right < f32::from(pane.right()), "{pane:?}");
+            corners.push((f32::from(pane.right()) - right, f32::from(origin.y - pane.top())));
+        }
+        assert_eq!(corners[0], corners[1]);
+    }
+
     /// On a card too short for 220 and a larger page, the pages are even.
     #[gpui::test]
     fn a_card_too_short_for_it_leaves_the_pages_even(cx: &mut TestAppContext) {
