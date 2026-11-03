@@ -1314,8 +1314,9 @@ BC_EXPORT size_t bc_agent_list_tabs(const char* agent, bc_id* tabs, size_t capac
 // in the agent's Space or its page isn't http(s). Through Chromium's DevTools protocol, inside the
 // browser, never a remote-debugging port, and never with the agent's own script. The tree leaves
 // out what fields hold: no node's value, and nothing under a field, where Chromium puts the text
-// typed or filled into it, and it marks password fields. It has the page's frames, each under the
-// element it's in, those from http(s) origins only: never an extension's or the browser's, nor
+// typed or filled into it, and it marks password fields. A rich-text editable region, such as a
+// document being edited, isn't a field: what's in it is there. It has the page's frames, under the
+// element each is in, those from http(s) origins only: never an extension's or the browser's, nor
 // what's in one. An element in a frame in a process of its own has its frame above its DOM node's
 // id in the backendDOMNodeId, so ids stay unique. A tab whose page the browser unloaded gets
 // it back, not shown. While an agent works in a tab its page keeps drawing, hidden, as a tab Chrome
@@ -2193,8 +2194,9 @@ BC_EXPORT void bc_tab_picture(bc_id tab, uint64_t request, int width, int height
 
 // Reads the text of the tab's page as its accessibility tree has it, across its frames from
 // http(s) origins, a line for each block: what a screen reader reads, but no extension's frame and
-// no field's value, typed or autofilled, a password's
-// above all, nor the text of an editable region. Chromium builds the tree for this one read,
+// no field's value, typed or autofilled, a password's above all, nor the text of a plain-text
+// editable region. A rich-text one, such as a document being edited, is the page's text, though the
+// user may have typed it, as autofill never fills one. Chromium builds the tree for this one read,
 // without running the page's JavaScript or turning accessibility on for the tab. A page that's
 // loading is read once it stops, or after 15 s. A tab without its page loaded has nothing to read.
 // Then tab_text with |request|, from a task of its own. Agents read pages through it, each read

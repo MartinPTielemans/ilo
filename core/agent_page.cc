@@ -65,14 +65,16 @@ constexpr Key kKeys[] = {
 };
 
 // Whether the node is a field, whose value is the user's: a text field of any kind, a select, a
-// date, time or number input, or an editable region such as a mail's body.
+// date, time or number input, or a plain-text editable region. A rich-text region, such as a
+// document being edited, is the page's content, as page_text.cc reads it.
 bool IsField(const base::DictValue& node) {
   if (const base::ListValue* properties = node.FindList("properties")) {
     for (const base::Value& property : *properties) {
       const base::DictValue* dict = property.GetIfDict();
       const std::string* name = dict ? dict->FindString("name") : nullptr;
       if (name && *name == "editable") {
-        return true;
+        const std::string* kind = dict->FindStringByDottedPath("value.value");
+        return !kind || *kind != "richtext";
       }
     }
   }

@@ -261,7 +261,8 @@ if [ "$driven" = 1 ]; then
   await_log "^browser: agent mcp-client at work in $agent_tab\$" "the agent's tab didn't show it at work"
 
   # Sessions, never secrets: a page's text has its prose, and no field's value, whether the user
-  # typed it, the page filled it in as autofill does, or it's a password.
+  # typed it, the page filled it in as autofill does, or it's a password. A rich-text region, as a
+  # document being edited is, is the page's, and a plain-text one a field.
   serve
   # The page names itself once its fields and their handlers are there, which its title in the
   # head, read before them, wouldn't say, and it has painted (painted.js, site.sh).
@@ -272,7 +273,8 @@ if [ "$driven" = 1 ]; then
 <label>Email <input id=email autocomplete=email></label>
 <label>Card <input id=card autocomplete=cc-number value=4111111111111111></label>
 <label>Note <textarea id=note>note-by-ada</textarea></label>
-<div contenteditable>editable-by-ada</div>
+<div contenteditable>Rich document by ada</div>
+<div contenteditable=plaintext-only>plain-by-ada</div>
 <select><option>Pick one<option selected>chosen-by-ada</select>
 <script>
 password.value = "hunter2-by-ada";
@@ -293,10 +295,10 @@ painted(() => document.title = "fields");
   read=$(call read_page "{\"tab\":$agent_tab}")
   printf '%s\n' "$read" > "$out/mcp-fields.txt"
   case "$read" in
-    *"Fields for the agents check."*) ;;
-    *) fail "reading the fields page didn't give its prose: $read" ;;
+    *"Fields for the agents check."*"Rich document by ada"*) ;;
+    *) fail "reading the fields page didn't give its prose and its document: $read" ;;
   esac
-  secrets="typed-by-ada hunter2-by-ada ada@example.com 4111111111111111 note-by-ada editable-by-ada
+  secrets="typed-by-ada hunter2-by-ada ada@example.com 4111111111111111 note-by-ada plain-by-ada
     chosen-by-ada"
   for secret in $secrets; do
     case "$read" in *"$secret"*) fail "reading the fields page gave a field's value, $secret" ;; esac
@@ -308,6 +310,10 @@ painted(() => document.title = "fields");
   case "$outline" in
     "Tab $agent_tab: typed"*"Fields for the agents check."*"(password: off limits)"*) ;;
     *) fail "the fields page's outline was: $outline" ;;
+  esac
+  case "$outline" in
+    *"Rich document by ada"*) ;;
+    *) fail "the fields page's outline left out its document: $outline" ;;
   esac
   for secret in $secrets; do
     case "$outline" in *"$secret"*) fail "the fields page's outline gave a field's value, $secret" ;; esac
@@ -402,10 +408,12 @@ painted(() => document.title = "fields");
   # A frame of another site holds one of a third site and one of the page's own, each in a process
   # of its own, and a frame the page fills once the agent asks, as a site posts a document into its
   # editor's frame, comes in too. All are in the outline and the text, each where the page has it,
-  # and a helper frame with nothing in it, named as Office names its own, isn't. The answers are
-  # kept before any is judged, so a run that fails shows them all.
+  # and a helper frame with nothing in it, named as Office names its own, isn't. The deepest frame
+  # holds a document being edited, a rich-text textbox as a web editor's, which is the page's too.
+  # The answers are kept before any is judged, so a run that fails shows them all.
   printf '%s' '<p>Deep text</p>
 <button onclick="document.body.append(&quot;deep clicked&quot;)">Deep button</button>
+<div contenteditable role=textbox aria-label=Document><p>Deep document text</div>
 <script src="painted.js"></script><script>painted(() => top.postMessage("deep", "*"));</script>' \
     > "$out/site/deep.html"
   printf '%s' '<p>Back text</p><script src="painted.js"></script>
@@ -442,7 +450,7 @@ addEventListener('message', (event) => {
   printf '%s\n' "$read" > "$out/mcp-nested-text.txt"
   case "$nested" in
     *"Not intended for user action"*) fail "the empty helper frame was outlined: $nested" ;;
-    *"Nested top text"*"Outer text"*"Deep text"*"Deep button"*"Back text"*) ;;
+    *"Nested top text"*"Outer text"*"Deep text"*"Deep button"*"Deep document text"*"Back text"*) ;;
     *) fail "the page with nested frames was outlined as: $nested" ;;
   esac
   case "$late" in
@@ -450,7 +458,7 @@ addEventListener('message', (event) => {
     *) fail "the page whose frame it filled was outlined as: $late" ;;
   esac
   case "$read" in
-    *"Nested top text"*"Outer text"*"Deep text"*"Back text"*"Late text"*) ;;
+    *"Nested top text"*"Outer text"*"Deep text"*"Deep document text"*"Back text"*"Late text"*) ;;
     *) fail "reading the page with nested frames answered: $read" ;;
   esac
   clicked=$(call click "{\"tab\":$nested_tab,\"ref\":\"$(ref_of button "Deep button")\"}")
