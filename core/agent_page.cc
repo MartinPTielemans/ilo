@@ -12,13 +12,17 @@
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "browser_core/host.h"
 #include "browser_core/tab.h"
 #include "build/build_config.h"
+#include "chrome/browser/shell_integration.h"
 #include "components/autofill/content/browser/content_autofill_client.h"
 #include "components/autofill/core/browser/filling/filling_product.h"
 #include "components/autofill/core/browser/suggestions/suggestion_hiding_reason.h"
@@ -912,10 +916,42 @@ void AgentPage::HideSuggestions() {
   }
 }
 
+// static
+void AgentPage::AppRefused(content::WebContents* contents, const GURL& url) {
+  AgentPage* page = contents ? FromWebContents(contents) : nullptr;
+  if (!page || !page->job_) {
+    return;
+  }
+  page->app_link_ = url;
+  page->app_name_.clear();
+  // As Chrome finds it for its own question, off the UI thread: on Linux it reads desktop files.
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(&shell_integration::GetApplicationNameForScheme, url),
+      base::BindOnce(
+          [](base::WeakPtr<AgentPage> page, const GURL& url, const std::u16string& name) {
+            if (page && page->app_link_ == url) {
+              page->app_name_ = name;
+            }
+          },
+          page->weak_factory_.GetWeakPtr(), url));
+}
+
 void AgentPage::Answer(std::string text, bool error) {
   if (!job_) {
     return;
   }
+  // A link to an app, which the core stopped, is what the action did, whatever the page shows
+  // after (#1443).
+  if (std::optional<GURL> app = std::exchange(app_link_, std::nullopt); app && !error) {
+    const std::string opens = app_name_.empty() ? "an app" : base::UTF16ToUTF8(app_name_);
+    text = base::StrCat({"That link opens ", opens, " (", app->GetScheme(),
+                         ":), outside the browser, and agents can't open apps. ",
+                         "The tab stayed on “", base::UTF16ToUTF8(GetWebContents().GetTitle()),
+                         "”. Ask the user, or use the page's web link if it has one."});
+    error = true;
+  }
+  app_name_.clear();
   const uint64_t request = job_->request;
   job_.reset();
   frames_.clear();

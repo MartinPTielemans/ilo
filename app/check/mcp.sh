@@ -2,7 +2,9 @@
 # it's connected, as the saved settings say here. The socket is the user's alone, and the bridge
 # gets nowhere without the agent's token. Its first call makes its Space, and it may list and read
 # only the tabs there: its list leaves out the user's tab, a read of the user's tab is refused, with
-# an activity-log entry, and a read of example.com, opened in its Space, gives the page's text. Ten
+# an activity-log entry, and a read of example.com, opened in its Space, gives the page's text. A
+# link to an app (ms-word:) opens nothing and asks nothing, the tab staying on its page, and the
+# click's answer names the scheme. Ten
 # cases, each the same form in a tab of its own the user isn't looking at, move to Closed a step a
 # turn, a turn's ten calls answered at once, which logs the turns and how long they took. A
 # page with fields gives its prose and none of their values: typed, filled in or a password, in its
@@ -197,6 +199,32 @@ refused=$(call read_page "{\"tab\":$user_tab}")
 await_log "^browser: agent activity mcp-client $user_tab read_page refused: The tab isn't in the agent's own Space\.\$" \
   "the refused read didn't reach the activity log"
 grep -q "^browser: tab text $user_tab " "$log" && fail "the core read the user's tab"
+
+# A link to an app, as a Word document's in SharePoint (ms-word:), opens nothing outside the
+# browser and asks nothing: the tab stays on its page, which the agent can go on using, and the
+# click's answer names the scheme (#1443).
+serve
+printf '%s' '<!doctype html><title>Documents</title>
+<a href="ms-word:ofe|u|http://localhost/report.docx">Report</a>' > "$out/site/documents.html"
+opened=$(call open_tab "{\"url\":\"localhost:$port/documents.html\"}")
+documents=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+ref=$(printf '%s\n' "$opened" | sed -n 's/.*- link "Report" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+clicked=$(call click "{\"tab\":$documents,\"ref\":\"$ref\"}")
+case "$clicked" in
+  "error: That link opens "*"(ms-word:), outside the browser"*"The tab stayed on “Documents”."*) ;;
+  *) fail "clicking a link to an app answered: $clicked" ;;
+esac
+listed=$(call list_tabs '{}')
+printf '%s\n' "$listed" | grep -q "^. $documents  Documents  .*/documents\.html\$" ||
+  fail "the link to an app took the tab off its page: $listed"
+grep -q "^browser: page $documents dialog [^n]" "$log" && fail "the link to an app asked to open it"
+read=$(call read_page "{\"tab\":$documents}")
+case "$read" in
+  "Tab $documents: Documents"*) ;;
+  *) fail "reading the tab a link to an app left answered: $read" ;;
+esac
+closed=$(call close_tab "{\"tab\":$documents}")
+case "$closed" in "Closed tab $documents."*) ;; *) fail "closing the documents tab answered: $closed" ;; esac
 
 # Ten cases of a web toolkit, each the same form on a page of its own, which an agent moves to
 # Closed in tabs the user isn't looking at, each step on all ten in one turn: cases.py, through a
@@ -775,9 +803,9 @@ forget_login
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, is refused a tab the user took over until they hand it back and Keep answers its ask, its bar's Stop naming ⌘. in its tooltip, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow and again once that's revoked, and off takes the socket away"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, is refused a tab the user took over until they hand it back and Keep answers its ask, its bar's Stop naming ⌘. in its tooltip, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow and again once that's revoked, and off takes the socket away"
 else
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases). skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases). skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi
 if [ -n "$msix" ]; then
   echo "ok: a Store copy's bridge, run by the alias its MSIX declares in the user's WindowsApps folder, carries a client's hello to the browser and its answer back."

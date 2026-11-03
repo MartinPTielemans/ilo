@@ -21,6 +21,7 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "ui/gfx/geometry/rect_f.h"
+#include "url/gurl.h"
 
 namespace content {
 class DevToolsAgentHost;
@@ -49,6 +50,10 @@ class AgentPage : public content::WebContentsObserver,
   // The agent's session with |tab| ended: its page stops drawing while hidden, and DevTools lets
   // it go. What's still asked is answered as an error.
   static void SessionEnded(bc_id tab);
+
+  // |contents|' page went to |url|, which opens an app outside the browser, and the core stopped it
+  // where it was. The action running there, as a click on such a link, answers that, as an error.
+  static void AppRefused(content::WebContents* contents, const GURL& url);
 
  private:
   friend class content::WebContentsUserData<AgentPage>;
@@ -165,6 +170,9 @@ class AgentPage : public content::WebContentsObserver,
   std::vector<Frame> frames_;
   // Keeps the page drawing while it's hidden, for the agent's input and screenshots.
   base::ScopedClosureRunner drawing_;
+  // The app link the job running followed, and the app the system opens it in, once it's found.
+  std::optional<GURL> app_link_;
+  std::u16string app_name_;
   base::WeakPtrFactory<AgentPage> weak_factory_{this};
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
