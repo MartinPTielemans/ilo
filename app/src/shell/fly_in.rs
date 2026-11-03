@@ -127,10 +127,12 @@ impl Shell {
             return;
         };
         let now = cx.background_executor().now();
+        // It lands as it leaves too where the window over the page would cover the page with it.
+        let still = cx.reduce_motion() || !self.browser.over_page_blends();
         let start = *flight.start.get_or_insert_with(|| {
             // check.sh waits for this line, logged with the frame that draws the icon first.
             log!("browser: download flying {}", flight.id);
-            let still = Duration::from_secs_f32(if cx.reduce_motion() { FLIGHT } else { 0. });
+            let still = Duration::from_secs_f32(if still { FLIGHT } else { 0. });
             now.checked_sub(still).unwrap_or(now)
         });
         if (now - start).as_secs_f32() < FLIGHT {
@@ -424,6 +426,22 @@ mod tests {
         cx.simulate_click(point(px(24.), px(height - 25.)), Modifiers::none());
         after(0., &shell, cx);
         assert!(shell.read_with(cx, |shell, _| shell.flight.is_none()), "the Library takes it");
+    }
+
+    /// Under Reduce Motion, and where the window over the page would cover the page, the icon
+    /// lands as it leaves, with nothing drawn over the page, and the bin shows.
+    #[gpui::test]
+    fn the_icon_lands_at_once_without_motion_or_blending(cx: &mut TestAppContext) {
+        for reduced in [true, false] {
+            let (shell, cx, host) = window(cx);
+            cx.update(|_, cx| cx.set_reduce_motion(reduced));
+            host.over_page_opaque.set(!reduced);
+            shell.update(cx, |shell, cx| shell.set_downloads(vec![download(7, DownloadState::Running)], cx));
+            after(0., &shell, cx);
+            assert_eq!(shown(&shell, cx), (false, true), "reduced {reduced}");
+            let drawn = cx.update(|window, cx| shell.read(cx).download_flight_drawn(window, cx).is_none());
+            assert!(drawn, "nothing over the page, reduced {reduced}");
+        }
     }
 
     /// The bin shows 6 pt high, drops to 12 under its place, comes back to 2 over it and rests.

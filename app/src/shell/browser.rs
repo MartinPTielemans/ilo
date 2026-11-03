@@ -91,6 +91,9 @@ pub trait Browser {
     /// Where the pointer is, in the window's content, wherever it is on screen: over the page, as
     /// the UI hears no move there, or outside the window. None where the host doesn't say.
     fn pointer(&self, cx: &mut App) -> Option<Point<Pixels>>;
+    /// Whether what the window over the page draws blends with the page under it, as motion
+    /// across it needs: not on X11 with no compositor, which draws its every pixel opaque.
+    fn over_page_blends(&self) -> bool;
     /// Loads a pinned tab's pinned URL, unless it's there already.
     fn back_to_pinned_url(&self, tab: u64, cx: &mut App);
     /// Mutes `tab`, or unmutes it.

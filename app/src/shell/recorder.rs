@@ -66,6 +66,8 @@ pub(super) struct Recorder {
     pub(super) os: Cell<Option<crate::default_browser::Os>>,
     /// Where the pointer is in the window, as `pointer` answers.
     pub(super) pointer: Cell<Option<Point<Pixels>>>,
+    /// The window over the page draws opaque, as `over_page_blends` answers.
+    pub(super) over_page_opaque: Cell<bool>,
     /// The build updates itself, as `updates` answers, and how often Check for Updates ran.
     pub(super) updates: Cell<bool>,
     pub(super) checked_for_updates: Cell<usize>,
@@ -412,6 +414,10 @@ impl Browser for Recorder {
 
     fn pointer(&self, _: &mut App) -> Option<Point<Pixels>> {
         self.pointer.get()
+    }
+
+    fn over_page_blends(&self) -> bool {
+        !self.over_page_opaque.get()
     }
 
     fn back_to_pinned_url(&self, tab: u64, _: &mut App) {

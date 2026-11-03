@@ -44,7 +44,8 @@ if command -v sqlite3 > /dev/null && [ -f "$history_db" ]; then
   sqlite3 "$history_db" "delete from downloads; delete from downloads_url_chains;
     delete from downloads_slices;" || { echo "FAIL: the downloads wouldn't clear" >&2; exit 1; }
 fi
-BROWSER_DRIVE=1 BROWSER_URL="$site" "$browser" < "$out/drive" > "$log" 2>&1 &
+# With the motion GitHub's hosted Mac and Windows reduce, for the download's flight recorded below.
+BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL="$site" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -82,20 +83,20 @@ if [ "$(uname)" = Darwin ]; then
     fail "the download has no quarantine flag: $flag"
   [ -n "$(echo "$flag" | cut -d';' -f3)" ] || fail "the download's quarantine flag names no app: $flag"
 fi
+# Its icon flies from the pointer, over the page, into a bin on the Library button. The window is
+# captured only between recordings: on the hosted Mac a capture ends the recording's stream.
 record download-flight 3
 send type s
 expect '^browser: download [0-9]* running slow.bin$' "the page's slow download didn't start"
-# Its icon flies from the pointer, over the page, into a bin on the Library button.
 d=$(grep -m1 '^browser: download [0-9]* running slow.bin$' "$log" | cut -d' ' -f3)
 expect "^browser: download flying $d\$" "the new download's icon didn't fly"
-../tools/window-screenshot.sh "$pid" "$out/download-flying.png" || fail "no window to capture"
 expect "^browser: download landed $d\$" "the new download's icon didn't land"
-../tools/window-screenshot.sh "$pid" "$out/download-bin.png" || fail "no window to capture"
 recorded
+../tools/window-screenshot.sh "$pid" "$out/download-bin.png" || fail "no window to capture"
 # While it runs, the Library button keeps its name and keys, and resting on it shows the running
-# download over the finished one, and sends the bin away.
+# download over the finished one, and sends the bin away. Rested on again, recorded, the rows come
+# up from the bottom and go bottom first.
 check_layout "with a download running"
-record recent-downloads 3
 send move 24 $((height - 25))
 library_keys=⇧⌘L
 [ "$(uname)" = Darwin ] || library_keys=Ctrl+Shift+L
@@ -107,6 +108,11 @@ expect '^browser: recent downloads shown 2$' \
   fail "no window to capture"
 send move $page_point
 expect '^browser: recent downloads hidden$' "the recent downloads stayed after the pointer left"
+record recent-downloads 3
+send move 24 $((height - 25))
+expect '^browser: recent downloads shown 2$' "resting on the Library button again didn't show them"
+send move $page_point
+expect '^browser: recent downloads hidden$' "the recent downloads stayed after the pointer left again"
 recorded
 send key j cmd shift
 expect '^browser: command view-downloads via page$' "⇧⌘J with the page focused didn't reach the UI"

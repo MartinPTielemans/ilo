@@ -1162,6 +1162,10 @@ impl Browser for Fake {
         None
     }
 
+    fn over_page_blends(&self) -> bool {
+        true
+    }
+
     fn show_window_buttons(&self, _: bool, _: &mut App) {}
 
     fn press_window_button(&self, _: WindowButton, _: &mut App) {}
