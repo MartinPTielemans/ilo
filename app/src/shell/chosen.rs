@@ -160,8 +160,9 @@ impl Shell {
     pub(super) fn close_chosen(&mut self, cx: &mut Context<Self>) {
         let rows = self.chosen_tabs();
         let today = self.today();
+        // A split's panes reopen last first, as the core closes them in their order.
         let tabs: Vec<u64> = (rows.iter().filter(|row| today.contains(row)))
-            .flat_map(|&row| self.panes(row))
+            .flat_map(|&row| self.panes(row).into_iter().rev())
             .collect();
         let show = self.shown_among(&tabs);
         // Bottom up, as Close Tabs Below closes them, so each reopens at its place.

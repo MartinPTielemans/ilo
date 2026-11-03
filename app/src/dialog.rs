@@ -286,6 +286,15 @@ impl Asked {
             None => Pose::arriving(self.arrived_for()),
         }
     }
+
+    /// Where it's drawn: as its motion has it, or in its place under Reduce Motion, fading.
+    fn drawn(&self, cx: &App) -> Pose {
+        let pose = self.pose();
+        Pose {
+            raised: crate::motion::offset(pose.raised, cx),
+            ..pose
+        }
+    }
 }
 
 pub struct Dialog {
@@ -336,7 +345,19 @@ pub fn open_at(
         window_background: WindowBackgroundAppearance::Transparent,
         ..Default::default()
     };
-    let window = cx.open_window(options, |_, cx| cx.new(|cx| Dialog::new(host, cx)));
+    let window = cx.open_window(options, |window, cx| {
+        let dialog = cx.new(|cx| Dialog::new(host, cx));
+        // Asked to close, as Windows asks the window with the keyboard on Alt+F4, it cancels as Esc
+        // does and stays, as the app shows it again for the next question (#1362).
+        let asked = dialog.downgrade();
+        window.on_window_should_close(cx, move |_, cx| {
+            asked
+                .update(cx, |dialog, cx| dialog.answer(Answer::Cancel, cx))
+                .ok();
+            false
+        });
+        dialog
+    });
     match window {
         Ok(window) => {
             cx.set_global(DialogWindow(window));
@@ -1009,7 +1030,7 @@ impl Render for Dialog {
                 asked.settling.start("dialog".into(), cx);
             }
         }
-        let pose = asked.pose();
+        let pose = asked.drawn(cx);
         let moving = asked.answered_at.is_some() || asked.arrived_for() < MOVE;
         if moving {
             window.request_animation_frame();

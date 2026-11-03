@@ -20,7 +20,8 @@ use gpui::{
 use super::{
     Command, DRAG_START, Edit, FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FOOTER_HEIGHT, FORM_TEXT,
     MenuEntry, NAV, NAV_RADIUS, NAV_SIZE, Naming, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS,
-    SECONDARY, SEGMENT_FAVICON_X, SPACE_SWATCH_SHOWN, Shell, Space, UNSELECTED_TITLE, What,
+    SECONDARY, SEGMENT_FAVICON_X, SPACE_SWATCH_SHOWN, Shell, Space, UNSELECTED_TITLE,
+    URL_BUTTON_GLYPH, URL_BUTTON_SIZE, What,
     access::Accessible,
     clean_link, dashed_square,
     display_face::{cap_top, display_text},
@@ -121,6 +122,7 @@ use crate::tokens::shell::library::PLUS_SIZE;
 use crate::tokens::shell::library::SPACES_INSET;
 use crate::tokens::shell::library::SPACES_LEFT;
 use crate::tokens::shell::library::SPACES_PAGE;
+use crate::tokens::shell::library::{CARD_MORE_X, CARD_MORE_Y};
 
 use crate::tokens::shell::library::SEARCH_GLYPH;
 use crate::tokens::shell::library::SEARCH_GLYPH_X;
@@ -660,6 +662,13 @@ impl Shell {
         }
     }
 
+    /// Whether a click's fade of the sidebar is still under way, which outlasts the card's motion
+    /// under Reduce Motion.
+    fn sidebar_fading(&self) -> bool {
+        let shown = if self.library_open { 0. } else { 1. };
+        self.clicked_fade().is_some() && self.sidebar_opacity() != shown
+    }
+
     /// The sidebar's size under the Library, about `RECEDE_X` right of its edge: receding with the
     /// card, or full while a click fades it.
     pub(super) fn sidebar_scale(&self) -> f32 {
@@ -730,9 +739,9 @@ impl Shell {
         opacity: Option<f32>,
         cx: &mut Context<Self>,
     ) {
-        let now = Instant::now();
-        self.library_motion = Some((out, speed, now));
-        self.sidebar_fade = opacity.map(|opacity| (opacity, now));
+        // Under Reduce Motion the card is where it goes at once, and the sidebar still fades.
+        self.library_motion = Some((out, speed, crate::motion::start(cx)));
+        self.sidebar_fade = opacity.map(|opacity| (opacity, Instant::now()));
         self.library_open = open;
         if open {
             self.conceal_now(cx);
@@ -756,6 +765,13 @@ impl Shell {
         self.show_section(section, cx);
     }
 
+    /// Manage Spaces… in a Space's menu: the Library on its Spaces, left there if it shows them.
+    pub(super) fn manage_spaces(&mut self, cx: &mut Context<Self>) {
+        if !(self.library_open && self.section == Section::Spaces) {
+            self.view_section(Section::Spaces, cx);
+        }
+    }
+
     /// Opens the Library on its Spaces, for the preview, which has no pointer to pick it with.
     pub fn show_spaces(&mut self, cx: &mut Context<Self>) {
         self.view_section(Section::Spaces, cx);
@@ -774,7 +790,7 @@ impl Shell {
         // Ours: the Library goes to the new section's width on the push's spring, as Arc's
         // isn't recorded.
         if self.library.is_some() && self.section_width(section) != self.library_width() {
-            self.library_resize = Some((self.library_width(), Instant::now()));
+            self.library_resize = Some((self.library_width(), crate::motion::start(cx)));
         }
         self.section = section;
         let placeholder = match section {
@@ -804,6 +820,7 @@ impl Shell {
             self.browser.list_captures(cx);
         }
         if section == Section::Spaces {
+            self.reset_cards();
             let (count, width) = (self.spaces.len(), self.section_width(section));
             log!("browser: library spaces {count} wide {width}");
         }
@@ -832,6 +849,9 @@ impl Shell {
         if self.library.is_none() {
             self.library_resize = None;
         }
+        if self.step_cards() {
+            window.request_animation_frame();
+        }
         if let Some((from, start)) = self.library_resize {
             let (t, to) = (
                 start.elapsed().as_secs_f32(),
@@ -853,7 +873,7 @@ impl Shell {
             }
             return;
         }
-        if self.library_step().is_some() {
+        if self.library_step().is_some() || self.sidebar_fading() {
             window.request_animation_frame();
             return;
         }
@@ -1418,7 +1438,8 @@ impl Shell {
     }
 
     /// The Spaces section: a card for each Space of the window's profile set, in the switcher's
-    /// order, and the + after them, which scroll across together if they don't fit.
+    /// order, and the + after them, which scroll across together if they don't fit (`card_strip`),
+    /// clipped at the Library's edge.
     fn space_cards(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let cards: Vec<_> = self
             .spaces
@@ -1462,10 +1483,13 @@ impl Shell {
             .top_0()
             .bottom_0()
             .right_0()
-            .overflow_x_scroll()
+            .overflow_hidden()
             .child(
                 div()
-                    .h_full()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(-self.cards_at()))
                     .flex()
                     .items_center()
                     .gap(px(CARD_GAP))
@@ -1543,6 +1567,39 @@ impl Shell {
             }
         });
         let field = self.card_field(space, &palette, window_at(0.), cx);
+        // The ••• at the card's foot (Arc) opens the Space's menu, as the sidebar's does, with the
+        // pointer on the card. Its press stops there, so the card sees no click to pick the Space.
+        let half = URL_BUTTON_SIZE / 2.;
+        let more = div()
+            .id(("space-card-more", id))
+            .absolute()
+            .right(px(CARD_MORE_X - half))
+            .bottom(px(CARD_MORE_Y - half))
+            .size(px(URL_BUTTON_SIZE))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(NAV_RADIUS))
+            .opacity(0.)
+            .group_hover("space-card", |style| style.opacity(1.))
+            .hover(|style| style.bg(palette.plate(STATE_HOVERED)))
+            .when(self.a11y, |more| {
+                more.button_named("Edit Space")
+                    .pressed_by_mouse_down(true, false)
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    shell.space_menu(id, event.position, cx)
+                }),
+            )
+            .child(
+                svg()
+                    .path("icons/ellipsis.svg")
+                    .size(px(URL_BUTTON_GLYPH))
+                    .text_color(palette.glyph(NAV)),
+            );
         div()
             .id(("space-card", id))
             .flex_none()
@@ -1586,6 +1643,7 @@ impl Shell {
             )
             .child(field)
             .child(div().children(rows))
+            .child(more)
     }
 
     /// The field across the top of a Space's card (Arc): its icon in a dashed slot, which the icon
@@ -2778,11 +2836,18 @@ fn plus_x(cards: usize) -> f32 {
     card_x(cards.max(1) - 1) + CARD_WIDTH + PLUS_GAP
 }
 
-/// How wide the Spaces section is with `cards` of them in a window `window` wide: to the room
-/// after the +, but leaving the page `SPACES_PAGE`, and never narrower than with one card.
+/// How wide the Spaces section's contents are with `cards` of them: to the room after the +.
+pub(super) fn spaces_content(cards: usize) -> f32 {
+    plus_x(cards) + PLUS_SIZE + PLUS_AFTER
+}
+
+/// How wide the Spaces section is with `cards` of them in a window `window` wide: its contents',
+/// but leaving the page `SPACES_PAGE` however narrow the window, its cards scrolling past that
+/// (Arc 1.171), and always with its column.
 fn spaces_width(cards: usize, window: f32) -> f32 {
-    let width = |cards| plus_x(cards) + PLUS_SIZE + PLUS_AFTER;
-    width(cards).min(window - SPACES_PAGE).max(width(1))
+    spaces_content(cards)
+        .min(window - SPACES_PAGE)
+        .max(COLUMN_WIDTH)
 }
 
 /// How far, in points, fingers past where the Library opens take it on, its card `out` of its way
@@ -2961,7 +3026,7 @@ mod tests {
         cx.run_until_parked();
         let titles = host.menus.borrow().last().cloned().unwrap_or_default();
         assert!(
-            titles.iter().any(|(title, _)| title == "Rename Space"),
+            titles.iter().any(|(title, _)| title == "Rename Space…"),
             "no Space menu"
         );
         assert!(
@@ -3370,18 +3435,23 @@ mod tests {
     }
 
     /// The Spaces section is as wide as Arc's: 480 with one Space and 1008 with three, the cards
-    /// 264 apart from 140 and the + 33 after the last, until the page beside it would get too
-    /// narrow, and never narrower than with one card.
+    /// 264 apart from 140 and the + 33 after the last. Once they don't fit it leaves the page 56,
+    /// however narrow the window, as Arc 1.171's with 8 Spaces: 1044 at 1100 and 444 at 500.
     #[test]
     fn the_spaces_section_grows_with_its_spaces() {
         assert_eq!(spaces_width(1, 1800.), 480.);
         assert_eq!(spaces_width(3, 1800.), 1008.);
         assert_eq!([card_x(0), card_x(1), card_x(2)], [140., 404., 668.]);
         assert_eq!(plus_x(3), 941.);
-        assert_eq!(spaces_width(10, 1800.), 1400.);
-        assert_eq!(spaces_width(3, 1200.), 800.);
-        assert_eq!(spaces_width(3, 700.), 480.);
         assert_eq!(spaces_width(0, 1800.), 480.);
+        assert_eq!(spaces_width(8, 1100.), 1044.);
+        assert_eq!(spaces_width(8, 500.), 444.);
+        assert_eq!(spaces_width(10, 1800.), 1744.);
+        assert_eq!(spaces_width(3, 1200.), 1008.);
+        assert_eq!(spaces_width(3, 700.), 644.);
+        assert_eq!(spaces_width(1, 500.), 444.);
+        // The column stays, in a window narrower than any.
+        assert_eq!(spaces_width(3, 100.), COLUMN_WIDTH);
     }
 
     /// With three Spaces in Arc's 1800-wide window, the card going from 288 to 1008, the Library

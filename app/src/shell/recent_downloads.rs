@@ -762,7 +762,7 @@ mod tests {
         assert_eq!(listed(cx), [2, 1]);
     }
 
-    /// Resting on the Library button for the tooltip's delay shows the four newest downloads, the
+    /// Resting on the Library button for half a second shows the four newest downloads, the
     /// running and held ones with the finished ones, with their ages, and asks for the finished
     /// ones' previews once, and the running one's once it finishes. They stay as the pointer crosses
     /// from the button onto them, go once it's on neither, and come back from going when it's on
@@ -792,10 +792,7 @@ mod tests {
 
         move_to(cx, button.0, button.1);
         wait(cx, RECENT_WAIT - Duration::from_millis(100));
-        assert!(
-            rows(&shell, cx).0.is_empty(),
-            "they wait the tooltip's delay"
-        );
+        assert!(rows(&shell, cx).0.is_empty(), "they wait half a second");
         wait(cx, Duration::from_millis(100));
         let shown = vec![
             (9, "just now".to_string()),

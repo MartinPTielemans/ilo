@@ -23,10 +23,10 @@ index a91818acd0..5ab4a515da 100644
  # WARNING: If you change this, you must also publish a new version of zed-xim to crates.io
  xim = { git = "https://github.com/zed-industries/xim-rs.git", rev = "16f35a2c881b815a2b6cdfd6687988e84f8447d8", features = [
 diff --git a/crates/gpui_linux/src/gpui_linux.rs b/crates/gpui_linux/src/gpui_linux.rs
-index a5390e77f8..9622143976 100644
+index a5390e77f8..9dd5252986 100644
 --- a/crates/gpui_linux/src/gpui_linux.rs
 +++ b/crates/gpui_linux/src/gpui_linux.rs
-@@ -1,4 +1,22 @@
+@@ -1,4 +1,25 @@
  #![cfg(any(target_os = "linux", target_os = "freebsd"))]
  mod linux;
  
@@ -49,9 +49,12 @@ index a5390e77f8..9622143976 100644
 +    take_embedder_drops, watch_alt_taps, watch_embedder_swipes, watch_pointer_over,
 +};
 +#[cfg(feature = "wayland")]
-+pub use linux::{commit_embedded, compose_embedded, open_next_window_in_surface, resize_embedded};
++pub use linux::{
++    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, marked_range_in,
++    open_next_window_in_surface, resize_embedded,
++};
 diff --git a/crates/gpui_linux/src/linux.rs b/crates/gpui_linux/src/linux.rs
-index e4da54b52b..278fe19d60 100644
+index e4da54b52b..94fd3b6cc0 100644
 --- a/crates/gpui_linux/src/linux.rs
 +++ b/crates/gpui_linux/src/linux.rs
 @@ -1,7 +1,9 @@
@@ -64,7 +67,7 @@ index e4da54b52b..278fe19d60 100644
  mod platform;
  mod system_notifications;
  #[cfg(any(feature = "wayland", feature = "x11"))]
-@@ -15,14 +17,49 @@ mod x11;
+@@ -15,14 +17,52 @@ mod x11;
  mod xdg_desktop_portal;
  
  pub use dispatcher::*;
@@ -105,7 +108,10 @@ index e4da54b52b..278fe19d60 100644
  #[cfg(feature = "wayland")]
  pub(crate) use wayland::*;
 +#[cfg(feature = "wayland")]
-+pub use wayland::{commit_embedded, compose_embedded, open_next_window_in_surface, resize_embedded};
++pub use wayland::{
++    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, marked_range_in,
++    open_next_window_in_surface, resize_embedded,
++};
 +#[cfg(feature = "x11")]
 +pub use x11::{
 +    answer_clipboard_reads_with, drive_commit, drive_compose, drive_pointer, drive_scroll,
@@ -167,10 +173,10 @@ index 0000000000..846d17431f
 +}
 diff --git a/crates/gpui_linux/src/linux/overlay.rs b/crates/gpui_linux/src/linux/overlay.rs
 new file mode 100644
-index 0000000000..550c32d49b
+index 0000000000..696efa705a
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/overlay.rs
-@@ -0,0 +1,1030 @@
+@@ -0,0 +1,1051 @@
 +//! An embedder's overlays: windows GPUI opened with `show: false` that the embedder shows over its
 +//! own window, as a browser shows its command bar over its pages. Under Wayland one is a subsurface
 +//! of the embedder's surface, on X11 a window of its own over the embedder's. One shown
@@ -259,6 +265,8 @@ index 0000000000..550c32d49b
 +    KeyboardLeft,
 +    /// An overlay that shows takes the pointer where `set_overlay_pointer` last said.
 +    Pointer(usize),
++    /// Whether Control is held, for `watch_control`.
++    Control,
 +}
 +
 +thread_local! {
@@ -822,7 +830,7 @@ index 0000000000..550c32d49b
 +    CONTROL_RELEASED.set(Some(Box::new(released)));
 +    let held = super::platform::with_embedded_connection(|connection| match connection {
 +        #[cfg(feature = "wayland")]
-+        DisplayConnection::Wayland(_) => super::wayland::control_held(),
++        DisplayConnection::Wayland(_) => None,
 +        // The server's, as GPUI may not have heard yet of a press the embedder's connection has.
 +        #[cfg(feature = "x11")]
 +        DisplayConnection::X11(x11) => {
@@ -830,12 +838,18 @@ index 0000000000..550c32d49b
 +            let xcb = x11.0.borrow().xcb_connection.clone();
 +            let state = xcb.xkb_get_state(xkb::ID::USE_CORE_KBD.into());
 +            let state = state.ok().and_then(|state| state.reply().log_err());
-+            state.is_some_and(|state| state.mods.contains(xproto::ModMask::CONTROL))
++            Some(state.is_some_and(|state| state.mods.contains(xproto::ModMask::CONTROL)))
 +        }
 +        #[allow(unreachable_patterns)]
-+        _ => false,
++        _ => Some(false),
 +    });
-+    control_changed(held == Some(true));
++    match held {
++        // Under Wayland, GPUI's, once it has had the events read with the key that asked: the
++        // embedder handles its page's key first, before GPUI hears of the press of Control that
++        // came with it.
++        Some(None) => later(Op::Control),
++        held => control_changed(held.flatten() == Some(true)),
++    }
 +}
 +
 +/// Control is `held`, or not, after a change to the keyboard's state.
@@ -928,6 +942,11 @@ index 0000000000..550c32d49b
 +        Op::KeyboardLeft if super::wayland::keyboard_entered() => false,
 +        Op::KeyboardLeft => {
 +            pressed(None);
++            false
++        }
++        Op::Control => {
++            #[cfg(feature = "wayland")]
++            control_changed(super::wayland::control_held());
 +            false
 +        }
 +        Op::Left(view, showing) => {
@@ -1046,16 +1065,17 @@ index 0000000000..550c32d49b
 +    });
 +}
 +
-+/// The overlay but `view` that takes the keys in an op still to run.
++/// The overlay but `view` that takes the keys in an op still to run, and that op's place among
++/// them.
 +#[cfg(feature = "x11")]
-+fn next_to_take_keys(view: usize) -> Option<usize> {
++fn next_to_take_keys(view: usize) -> Option<(usize, usize)> {
 +    OPS.with_borrow(|ops| {
-+        ops.iter().find_map(|op| match op {
++        ops.iter().enumerate().find_map(|(at, op)| match op {
 +            Op::Show { view: next, keyboard: true, .. }
 +            | Op::Keyboard { view: next, keyboard: true }
 +                if *next != view =>
 +            {
-+                Some(*next)
++                Some((*next, at))
 +            }
 +            _ => None,
 +        })
@@ -1090,10 +1110,13 @@ index 0000000000..550c32d49b
 +                ..
 +            } => {
 +                super::wayland::show_overlay(view as _, parent as _, bounds, keyboard).log_err();
-+                super::wayland::overlay_pointer(view as _, pointer_areas(view).as_deref());
++                // With its first frame, which comes as it shows.
++                super::wayland::overlay_pointer(view as _, pointer_areas(view).as_deref(), false);
 +            }
++            // With a frame asked for: one that shows may draw none by itself again, as a toast
++            // whose buttons come after its last frame.
 +            Op::Pointer(view) => {
-+                super::wayland::overlay_pointer(view as _, pointer_areas(view).as_deref())
++                super::wayland::overlay_pointer(view as _, pointer_areas(view).as_deref(), true)
 +            }
 +            Op::Move { view, bounds, .. } => super::wayland::move_overlay(view as _, bounds),
 +            Op::Hide { view, keyboard, .. } => super::wayland::hide_overlay(view as _, keyboard),
@@ -1105,7 +1128,7 @@ index 0000000000..550c32d49b
 +                super::wayland::show_window(view as _).log_err();
 +            }
 +            Op::HideWindow(view) => super::wayland::hide_window(view as _),
-+            Op::Left(..) | Op::Pressed(_) | Op::KeyboardLeft => {}
++            Op::Left(..) | Op::Pressed(_) | Op::KeyboardLeft | Op::Control => {}
 +        },
 +        #[cfg(feature = "x11")]
 +        DisplayConnection::X11(x11) => {
@@ -1156,12 +1179,16 @@ index 0000000000..550c32d49b
 +                    // opens, takes them from this one, to give back where this one had them from.
 +                    // Given back in between, wlroots 0.17's Xwayland would put the input focus on
 +                    // that window's top-level once the next overlay had it, as it does each time
-+                    // the focus comes into a top-level, and the next one would close.
++                    // the focus comes into a top-level, and the next one would close. This one
++                    // hides once the next has them: unmapped with the input focus, it would leave
++                    // it to the root window, which openbox gives to the top-level, and that could
++                    // come after the next one had it too.
 +                    if from != x11rb::NONE
-+                        && let Some(next) = next_to_take_keys(view)
++                        && let Some((next, at)) = next_to_take_keys(view)
 +                    {
 +                        focus_from(next, from);
-+                        x11.hide_overlay(view as _, x11rb::NONE).log_err();
++                        let op = Op::Hide { view, keyboard: false, hidden: Box::new(|| {}) };
++                        OPS.with_borrow_mut(|ops| ops.insert(at + 1, op));
 +                        return;
 +                    }
 +                    // The user left the overlay that had the keys before, such as a find bar under
@@ -1194,7 +1221,7 @@ index 0000000000..550c32d49b
 +                Op::HideWindow(view) => {
 +                    x11.hide_window(view as _).log_err();
 +                }
-+                Op::Left(..) | Op::Pressed(_) | Op::KeyboardLeft => {}
++                Op::Left(..) | Op::Pressed(_) | Op::KeyboardLeft | Op::Control => {}
 +            }
 +        }
 +        #[allow(unreachable_patterns)]
@@ -1600,22 +1627,25 @@ index 0c5370db6c..9d0a77223e 100644
      let shift = keymap_state.mod_name_is_active(xkb::MOD_NAME_SHIFT, xkb::STATE_MODS_EFFECTIVE);
      let alt = keymap_state.mod_name_is_active(xkb::MOD_NAME_ALT, xkb::STATE_MODS_EFFECTIVE);
 diff --git a/crates/gpui_linux/src/linux/wayland.rs b/crates/gpui_linux/src/linux/wayland.rs
-index cbc962bcff..4c439cadad 100644
+index cbc962bcff..bfbb357677 100644
 --- a/crates/gpui_linux/src/linux/wayland.rs
 +++ b/crates/gpui_linux/src/linux/wayland.rs
-@@ -9,7 +9,10 @@ mod window;
+@@ -9,7 +9,13 @@ mod window;
  /// Contains Types for configuring layer_shell surfaces.
  pub mod layer_shell;
  
 +pub(crate) use client::dispatch_embedded_queue;
-+pub use client::{commit_embedded, compose_embedded, resize_embedded};
++pub use client::{
++    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, marked_range_in,
++    resize_embedded,
++};
  pub(crate) use client::*;
 +pub use window::open_next_window_in_surface;
  
  use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
  
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index 2d40cf7fa9..c812c86c35 100644
+index 2d40cf7fa9..ba08fc21b3 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
 @@ -12,11 +12,7 @@ use std::{
@@ -2657,7 +2687,7 @@ index 2d40cf7fa9..c812c86c35 100644
              }
              _ => {}
          }
-@@ -3479,3 +3995,466 @@ mod tests {
+@@ -3479,3 +3995,523 @@ mod tests {
          );
      }
  }
@@ -2746,6 +2776,58 @@ index 2d40cf7fa9..c812c86c35 100644
 +    if let Some((window, _)) = embedded_text_window(parent) {
 +        window.handle_ime(ImeInput::InsertText(text.to_owned()));
 +    }
++}
++
++/// GPUI's window a test driver's input method composes in, by the surface it shows in: the
++/// embedder's, as for its input method, or a window's own, such as Settings'.
++fn drive_text_window(surface: *mut std::ffi::c_void) -> Option<WaylandWindowStatePtr> {
++    if let Some((window, _)) = embedded_text_window(surface) {
++        return Some(window);
++    }
++    let client = EMBEDDED_CLIENT.with_borrow(|client| client.as_ref()?.upgrade())?;
++    let windows: Vec<_> = client.borrow().windows.values().cloned().collect();
++    windows.into_iter().find(|window| {
++        let own = window.surface().id().as_ptr().cast::<std::ffi::c_void>();
++        window.embedder_surface().is_none() && own == surface && window.is_active()
++    })
++}
++
++/// For a test driver, as an input method, as X11's `drive_compose`: the text field with the keys
++/// in `surface` (drive_text_window) composes `text` with `selected` selected in it, or stops
++/// composing with `text` empty. Returns false unless one there takes text.
++pub fn drive_compose_in(
++    surface: *mut std::ffi::c_void,
++    text: &str,
++    selected: Option<std::ops::Range<usize>>,
++) -> bool {
++    let Some(window) = drive_text_window(surface) else {
++        return false;
++    };
++    window
++        .with_input_handler(|handler| match text.is_empty() {
++            true => {
++                if let Some(marked) = handler.marked_text_range() {
++                    handler.replace_text_in_range(Some(marked), "");
++                }
++            }
++            false => handler.replace_and_mark_text_in_range(None, text, selected),
++        })
++        .is_some()
++}
++
++/// As `drive_compose_in`: commits `text` in place of what was composed.
++pub fn drive_commit_in(surface: *mut std::ffi::c_void, text: &str) -> bool {
++    drive_text_window(surface)
++        .and_then(|window| {
++            window.with_input_handler(|handler| handler.replace_text_in_range(None, text))
++        })
++        .is_some()
++}
++
++/// What the text field with the keys in `surface` (drive_text_window) has marked, in UTF-16.
++pub fn marked_range_in(surface: *mut std::ffi::c_void) -> Option<std::ops::Range<usize>> {
++    let window = drive_text_window(surface)?;
++    window.with_input_handler(|handler| handler.marked_text_range()).flatten()
 +}
 +
 +/// Whether `window`'s frame waits for the embedder to have read its display: Vulkan's present
@@ -3078,11 +3160,16 @@ index 2d40cf7fa9..c812c86c35 100644
 +    }
 +}
 +
-+/// The overlay window of the `view` surface takes the pointer only in `areas`, or all over.
-+pub(crate) fn overlay_pointer(view: *mut std::ffi::c_void, areas: Option<&[Bounds<Pixels>]>) {
++/// The overlay window of the `view` surface takes the pointer only in `areas`, or all over, from
++/// its next frame, which `redraw` asks for.
++pub(crate) fn overlay_pointer(
++    view: *mut std::ffi::c_void,
++    areas: Option<&[Bounds<Pixels>]>,
++    redraw: bool,
++) {
 +    // Not through a WaylandWindow, whose drop would close the window.
 +    if let Some(window) = overlay_window(view) {
-+        window.set_input_region(areas);
++        window.set_input_region(areas, redraw);
 +        flush(&window);
 +    }
 +}
@@ -3186,7 +3273,7 @@ index 86dc7da97b..91362b8937 100644
          if let Some(text) = self
              .primary_contents
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
-index 8d92234ef1..e2a70f83bc 100644
+index 8d92234ef1..3cda5c06c5 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
 +++ b/crates/gpui_linux/src/linux/wayland/window.rs
 @@ -11,12 +11,13 @@ use calloop::ping::Ping;
@@ -3360,7 +3447,7 @@ index 8d92234ef1..e2a70f83bc 100644
              presentation: PresentationState::Unpresented,
              pending_frame_callback: None,
              in_progress_window_controls: None,
-@@ -896,6 +971,260 @@ impl WaylandWindowStatePtr {
+@@ -896,6 +971,271 @@ impl WaylandWindowStatePtr {
          self.state.borrow().surface.clone()
      }
  
@@ -3417,6 +3504,17 @@ index 8d92234ef1..e2a70f83bc 100644
 +
 +    pub fn is_active(&self) -> bool {
 +        self.state.borrow().active
++    }
++
++    /// Runs `f` with the window's text input, as an input method would, unless it has none.
++    pub(crate) fn with_input_handler<R>(
++        &self,
++        f: impl FnOnce(&mut PlatformInputHandler) -> R,
++    ) -> Option<R> {
++        let mut handler = self.state.borrow_mut().input_handler.take()?;
++        let result = f(&mut handler);
++        self.state.borrow_mut().input_handler = Some(handler);
++        Some(result)
 +    }
 +
 +    /// The embedder's surface this window is a subsurface of.
@@ -3621,7 +3719,7 @@ index 8d92234ef1..e2a70f83bc 100644
      pub fn toplevel(&self) -> Option<xdg_toplevel::XdgToplevel> {
          self.state.borrow().surface_state.toplevel().cloned()
      }
-@@ -936,6 +1265,21 @@ impl WaylandWindowStatePtr {
+@@ -936,6 +1276,21 @@ impl WaylandWindowStatePtr {
      }
  
      pub fn frame(&self, signal_at: Option<Instant>, signal_source: FrameRequestSource) {
@@ -3643,7 +3741,7 @@ index 8d92234ef1..e2a70f83bc 100644
          self.frame_loop.set(FrameLoop::Ticking);
          let mut state = self.state.borrow_mut();
          state.resize_throttle = false;
-@@ -966,7 +1310,8 @@ impl WaylandWindowStatePtr {
+@@ -966,7 +1321,8 @@ impl WaylandWindowStatePtr {
          let mut state = self.state.borrow_mut();
  
          let frame_loop = self.frame_loop.get();
@@ -3653,7 +3751,7 @@ index 8d92234ef1..e2a70f83bc 100644
              return;
          }
  
-@@ -1024,6 +1369,12 @@ impl WaylandWindowStatePtr {
+@@ -1024,6 +1380,12 @@ impl WaylandWindowStatePtr {
          }
      }
  
@@ -3666,7 +3764,7 @@ index 8d92234ef1..e2a70f83bc 100644
      pub fn retry_timer_fired(&self, signal_at: Instant) {
          if self.frame_loop.get() == FrameLoop::RetryScheduled {
              self.frame(
-@@ -1060,6 +1411,10 @@ impl WaylandWindowStatePtr {
+@@ -1060,6 +1422,10 @@ impl WaylandWindowStatePtr {
      }
  
      fn update_ime_enabled(&self) {
@@ -3677,7 +3775,7 @@ index 8d92234ef1..e2a70f83bc 100644
          let mut state = self.state.borrow_mut();
          if !state.active {
              return;
-@@ -1493,6 +1848,17 @@ impl WaylandWindowStatePtr {
+@@ -1493,6 +1859,17 @@ impl WaylandWindowStatePtr {
          }
      }
  
@@ -3695,31 +3793,37 @@ index 8d92234ef1..e2a70f83bc 100644
      pub fn get_ime_area(&self) -> Option<Bounds<Pixels>> {
          let mut state = self.state.borrow_mut();
          let mut bounds: Option<Bounds<Pixels>> = None;
-@@ -1598,6 +1964,23 @@ impl WaylandWindowStatePtr {
+@@ -1598,6 +1975,29 @@ impl WaylandWindowStatePtr {
          }
      }
  
-+    /// The surface takes the pointer only in `areas`, or all over, as `set_input_region`.
-+    pub(crate) fn set_input_region(&self, areas: Option<&[Bounds<Pixels>]>) {
-+        let state = self.state.borrow();
-+        let region = areas.map(|areas| {
-+            let region = state.globals.compositor.create_region(&state.globals.qh, ());
-+            for area in areas {
-+                let area = area.map(|pixels| f32::from(pixels) as i32);
-+                region.add(area.origin.x, area.origin.y, area.size.width, area.size.height);
++    /// The surface takes the pointer only in `areas`, or all over, as `set_input_region`, from its
++    /// next frame, which `redraw` asks for.
++    pub(crate) fn set_input_region(&self, areas: Option<&[Bounds<Pixels>]>, redraw: bool) {
++        {
++            let state = self.state.borrow();
++            let region = areas.map(|areas| {
++                let region = state.globals.compositor.create_region(&state.globals.qh, ());
++                for area in areas {
++                    let area = area.map(|pixels| f32::from(pixels) as i32);
++                    region.add(area.origin.x, area.origin.y, area.size.width, area.size.height);
++                }
++                region
++            });
++            state.surface.set_input_region(region.as_ref());
++            if let Some(region) = region {
++                region.destroy();
 +            }
-+            region
-+        });
-+        state.surface.set_input_region(region.as_ref());
-+        if let Some(region) = region {
-+            region.destroy();
++        }
++        if redraw {
++            self.request_redraw();
 +        }
 +    }
 +
      pub fn set_focused(&self, focus: bool) {
          self.state.borrow_mut().active = focus;
          let callback = self.callbacks.borrow_mut().active_status_change.take();
-@@ -1888,9 +2271,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -1888,9 +2288,11 @@ impl PlatformWindow for WaylandWindow {
      }
  
      fn set_title(&mut self, title: &str) {
@@ -3732,7 +3836,7 @@ index 8d92234ef1..e2a70f83bc 100644
      }
  
      fn set_app_id(&mut self, app_id: &str) {
-@@ -2011,6 +2396,13 @@ impl PlatformWindow for WaylandWindow {
+@@ -2011,6 +2413,13 @@ impl PlatformWindow for WaylandWindow {
      fn draw(&self, scene: &Scene) {
          let mut state = self.borrow_mut();
          let state = &mut *state;
@@ -3746,7 +3850,7 @@ index 8d92234ef1..e2a70f83bc 100644
          let Some(renderer) = &mut state.renderer else {
              return;
          };
-@@ -2046,6 +2438,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -2046,6 +2455,11 @@ impl PlatformWindow for WaylandWindow {
          if renderer.draw(scene) {
              state.presentation = PresentationState::Presented;
              self.0.frame_loop.set(FrameLoop::AwaitingCallback);
@@ -3758,7 +3862,7 @@ index 8d92234ef1..e2a70f83bc 100644
          } else {
              state.presentation = state.presentation.failed();
              self.0.frame_loop.set(FrameLoop::PresentationFailed);
-@@ -2208,6 +2605,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -2208,6 +2622,11 @@ impl PlatformWindow for WaylandWindow {
      }
  
      fn update_ime_position(&self, bounds: Bounds<Pixels>) {

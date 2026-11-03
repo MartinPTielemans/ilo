@@ -504,12 +504,11 @@ pub trait Browser {
     /// Whether this window is the browser window in front, over which the toast shows.
     fn in_front(&self) -> bool;
     /// Shows `text` in the toast with a button after it, its label and its name in the logs, which
-    /// runs `run`, for `time` and for as long as the pointer is over it. With no label, the toast
-    /// itself is the button.
+    /// runs `run`, for `time` and for as long as the pointer is over it.
     fn toast_button(
         &self,
         text: &str,
-        button: (Option<&'static str>, &'static str),
+        button: (&'static str, &'static str),
         run: Rc<dyn Fn(&mut App)>,
         time: Duration,
         cx: &mut App,
@@ -549,10 +548,12 @@ pub trait Browser {
         cx: &mut App,
     );
     /// Opens the command bar for a new tab or on `editing`'s URL, with `tabs` to list before
-    /// anything is typed: over `field`, the URL field's box in the window, else centred over it.
+    /// anything is typed, and the pages `shown`, whose rows go last: over `field`, the URL field's
+    /// box in the window, else centred over it.
     fn command_bar(
         &self,
         editing: Option<(u64, SharedString)>,
+        shown: Vec<SharedString>,
         tabs: Vec<BarTab>,
         field: Option<Bounds<Pixels>>,
         cx: &mut App,

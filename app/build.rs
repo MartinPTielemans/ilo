@@ -41,32 +41,60 @@ fn main() {
             // key its updates are signed with, as build.sh gives the Mac's: what Info.plist holds
             // there is defined here. They're branding/update-feed's and branding/update-key's
             // unless UPDATE_FEED or UPDATE_PUBLIC_KEY is set, as the updates run sets them for its
-            // own feed, and a fork that empties the key's file builds a copy with no updater.
-            println!("cargo:rerun-if-env-changed=UPDATE_PUBLIC_KEY");
-            println!("cargo:rerun-if-env-changed=UPDATE_FEED");
+            // own feed, and a fork that empties the key's file builds a copy with no updater. The
+            // nightly feed beside it is branding/update-feed-nightly's, or UPDATE_FEED_NIGHTLY's,
+            // where there is one. A check build has an updater only for a feed on the check's own
+            // server (check/nightly.sh), as build.sh updates gives the Mac's copy.
+            for name in [
+                "UPDATE_PUBLIC_KEY",
+                "UPDATE_FEED",
+                "UPDATE_FEED_NIGHTLY",
+                "APP_TRACK",
+            ] {
+                println!("cargo:rerun-if-env-changed={name}");
+            }
             let key_file = root.join("branding/update-key");
             println!("cargo:rerun-if-changed={}", key_file.display());
+            // The folder, so a nightly feed's file that comes or goes is seen too.
+            println!("cargo:rerun-if-changed={}", root.join("branding").display());
             let key = match std::env::var("UPDATE_PUBLIC_KEY") {
                 Ok(key) if !key.is_empty() => key,
                 _ => std::fs::read_to_string(&key_file)
                     .map(|key| key.split_whitespace().collect())
                     .unwrap_or_default(),
             };
-            if std::env::var_os("CARGO_FEATURE_PROD").is_some() && !key.is_empty() {
-                let feed = match std::env::var("UPDATE_FEED") {
-                    Ok(feed) if !feed.is_empty() => feed,
-                    _ => std::fs::read_to_string(root.join("branding/update-feed"))
-                        .expect("no branding/update-feed"),
+            let env = |name| {
+                std::env::var(name)
+                    .ok()
+                    .filter(|value: &String| !value.is_empty())
+            };
+            let prod = std::env::var_os("CARGO_FEATURE_PROD").is_some();
+            let local = |feed: String| feed.starts_with("http://127.0.0.1:");
+            let check = !prod && env("UPDATE_FEED").is_some_and(local);
+            if (prod || check) && !key.is_empty() {
+                let feed = env("UPDATE_FEED").unwrap_or_else(|| {
+                    std::fs::read_to_string(root.join("branding/update-feed"))
+                        .expect("no branding/update-feed")
+                });
+                let nightly = match check {
+                    true => env("UPDATE_FEED_NIGHTLY").unwrap_or_default(),
+                    false => env("UPDATE_FEED_NIGHTLY").unwrap_or_else(|| {
+                        std::fs::read_to_string(root.join("branding/update-feed-nightly"))
+                            .unwrap_or_default()
+                    }),
                 };
                 let quoted = |value: &str| format!("\"{value}\"");
                 host.define("UPDATE_FEED", quoted(feed.trim()).as_str())
+                    .define("UPDATE_FEED_NIGHTLY", quoted(nightly.trim()).as_str())
                     .define("UPDATE_PUBLIC_KEY", quoted(&key).as_str())
                     .define("APP_VERSION", quoted(env!("CARGO_PKG_VERSION")).as_str())
                     .define("APP_BUILD", quoted(&build_number(&root)).as_str());
-                println!(
-                    "cargo:rerun-if-changed={}",
-                    root.join("branding/update-feed").display()
-                );
+                if check {
+                    host.define("UPDATE_CHECK_BUILD", None);
+                }
+            }
+            if env("APP_TRACK").as_deref() == Some("nightly") {
+                host.define("APP_NIGHTLY", None);
             }
         }
         // Only what the preview asks of the host so far; the browser doesn't build here yet.

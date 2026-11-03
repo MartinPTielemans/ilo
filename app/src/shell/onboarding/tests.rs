@@ -625,9 +625,9 @@ fn no_browser_found_leaves_the_import_out(cx: &mut TestAppContext) {
     assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser));
 }
 
-/// An import begun brings in the favorites step, with the sites its history visited most, each
-/// ticked; a click unticks one, and ↩ adds those still ticked. One that offers none goes on past
-/// it.
+/// An import that has read brings in the favorites step, with the sites its history visited most,
+/// each ticked; a click unticks one, and ↩ adds those still ticked. One that offers none goes on
+/// past it.
 #[gpui::test]
 fn an_import_offers_its_most_visited_sites_as_favorites(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
@@ -649,7 +649,7 @@ fn an_import_offers_its_most_visited_sites_as_favorites(cx: &mut TestAppContext)
         tab("https://example.com/"),
         tab("https://news.example.org/"),
     ];
-    shown.update(cx, |view, cx| view.offer(offered, cx));
+    shown.update(cx, |view, _| view.offer(offered));
     shown.update(cx, |_, cx| cx.emit(ImportEvent::Started));
     assert_eq!(step(&shell, cx), Some(Step::Favorites));
     let ticked = |shell: &Entity<Shell>, cx: &VisualTestContext| {
@@ -671,10 +671,16 @@ fn an_import_offers_its_most_visited_sites_as_favorites(cx: &mut TestAppContext)
     assert_eq!(ticked(&shell, cx), ["https://news.example.org/"]);
     cx.simulate_keystrokes("enter");
     assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser));
+    let offered = shown.read_with(cx, |view, _| view.suggested().map(<[_]>::len));
+    assert_eq!(
+        offered,
+        Some(0),
+        "the step took the offer, so the import's end doesn't make it"
+    );
 
     started(&shell, cx);
     skip_to(&shell, cx, Step::Import);
-    shown.update(cx, |view, cx| view.offer(Vec::new(), cx));
+    shown.update(cx, |view, _| view.offer(Vec::new()));
     shown.update(cx, |_, cx| cx.emit(ImportEvent::Started));
     assert_eq!(
         step(&shell, cx),
@@ -844,4 +850,131 @@ fn the_first_devices_words_go_on_with_done(cx: &mut TestAppContext) {
         .expect("Done is drawn");
     cx.simulate_click(done.center(), Modifiers::none());
     assert_eq!(step(&shell, cx), Some(Step::OptIns));
+}
+
+/// The import step with a browser of the test's own behind the view, from its first launch.
+fn importing_from(
+    browser: Rc<crate::import::tests::Browser>,
+    cx: &mut TestAppContext,
+) -> (
+    Entity<Shell>,
+    &mut VisualTestContext,
+    Entity<crate::import::ImportView>,
+) {
+    let (shell, cx, host) = first_window(cx);
+    *host.import.borrow_mut() = Some(browser);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Import);
+    later(&shell, cx, STEP_MOTION);
+    let view = shell.read_with(cx, |shell, _| {
+        shell.importing.as_ref().map(|i| i.view.clone())
+    });
+    (shell, cx, view.expect("the import view"))
+}
+
+/// Safari's files kept from the app need Full Disk Access: the import step stays, showing the
+/// view's way to System Settings, and Skip still goes on. Once it's given and the user is back,
+/// the import reads and the flow goes on by itself (#1378).
+#[cfg(unix)]
+#[gpui::test]
+fn an_import_that_needs_full_disk_access_keeps_its_step(cx: &mut TestAppContext) {
+    use crate::import::sources::{Os, Roots};
+    use crate::import::tests::{Browser, let_read, safari};
+    let Some(home) = safari("onboarding-access") else {
+        return;
+    };
+    let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Mac))));
+    let (shell, cx, view) = importing_from(browser.clone(), cx);
+    view.update(cx, |view, cx| {
+        view.pick(0, cx);
+        view.import(cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Import),
+        "it waits for the user"
+    );
+    assert_eq!(
+        view.read_with(cx, |view, _| view.drawn()),
+        Some("no access")
+    );
+
+    // With access given, coming back reads, and the flow goes on.
+    let_read(&home);
+    cx.update(|_, cx| browser.activate(cx));
+    cx.run_until_parked();
+    assert_ne!(step(&shell, cx), Some(Step::Import), "read, it went on");
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// Skip goes on from the import step's no-access view, as from any step.
+#[cfg(unix)]
+#[gpui::test]
+fn skip_goes_on_from_full_disk_access(cx: &mut TestAppContext) {
+    use crate::import::sources::{Os, Roots};
+    use crate::import::tests::{Browser, safari};
+    let Some(home) = safari("onboarding-access-skip") else {
+        return;
+    };
+    let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Mac))));
+    let (shell, cx, view) = importing_from(browser, cx);
+    view.update(cx, |view, cx| {
+        view.pick(0, cx);
+        view.import(cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |view, _| view.drawn()),
+        Some("no access")
+    );
+    cx.simulate_keystrokes("escape");
+    assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser));
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// A passwords file chosen at the import step keeps the step until its end, which offers to delete
+/// the file in the words Settings has; Delete File deletes it, and Done goes on (#1379).
+#[gpui::test]
+fn a_passwords_file_from_onboarding_is_offered_for_deletion(cx: &mut TestAppContext) {
+    use crate::import::Passwords;
+    use crate::import::tests::{Browser, PASSWORDS, home, write};
+    let browser = Rc::new(Browser::new(None));
+    let file = write(
+        home("onboarding-passwords").join("Chrome Passwords.csv"),
+        PASSWORDS,
+    );
+    *browser.passwords_file.borrow_mut() = Some(file.clone());
+    let (shell, cx, view) = importing_from(browser.clone(), cx);
+    view.update(cx, |view, cx| view.choose_passwords(cx));
+    cx.run_until_parked();
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Import),
+        "the step stays while it imports"
+    );
+    let passwords = Passwords::Imported {
+        imported: 1,
+        conflicted: 0,
+        skipped: 0,
+    };
+    cx.update(|_, cx| browser.imported(passwords, cx));
+    cx.run_until_parked();
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Import),
+        "its end shows on the step"
+    );
+    assert_eq!(
+        view.read_with(cx, |view, _| view.drawn()),
+        Some("done with file")
+    );
+    view.update(cx, |view, cx| view.delete_passwords_file(cx));
+    cx.run_until_parked();
+    assert!(!file.exists(), "Delete File deleted it");
+    assert_eq!(view.read_with(cx, |view, _| view.drawn()), Some("done"));
+    view.update(cx, |view, cx| view.done(cx));
+    cx.run_until_parked();
+    assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser), "Done goes on");
+    std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
 }

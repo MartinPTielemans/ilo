@@ -9,18 +9,19 @@ use gpui::{
 };
 
 use super::{
-    SCROLL_EDGE, SCROLL_EDGE_FADE, SWIPE_FLICK, SWIPE_HISTORY, SWIPE_TRACKING, Settle, Shell,
-    Space, Swipe, WHEEL_BURST, WHEEL_LINE, WHEEL_REST, fade_at, library::library_band, rubber_band,
+    ROW_PITCH, SCROLL_EDGE, SCROLL_EDGE_FADE, SWIPE_FLICK, SWIPE_HISTORY, SWIPE_TRACKING, Settle,
+    Shell, Space, Swipe, WHEEL_BURST, WHEEL_LINE, WHEEL_REST, fade_at, library::library_band,
+    rubber_band,
 };
 
 impl Shell {
     /// The Spaces' pages the sidebar draws, and where from its left edge: the shown Space's, and
     /// while a swipe or a settle moves one, it and the page beside it.
     pub(super) fn pages(&self) -> Vec<(u64, f32)> {
-        let swipe = self
-            .swipe
-            .as_ref()
-            .filter(|swipe| swipe.across == Some(true) && self.library_swiped(swipe).is_none());
+        let swipe = self.swipe.as_ref().filter(|swipe| {
+            let paging = swipe.across == Some(true) && swipe.cards.is_none();
+            paging && self.library_swiped(swipe).is_none()
+        });
         let (space, x, beside) = match (swipe, &self.settle) {
             (Some(swipe), _) => (swipe.from, self.swiped_to(swipe), None),
             (None, Some(settle)) => (settle.space, settle.offset().unwrap_or(0.), settle.beside),
@@ -118,7 +119,7 @@ impl Shell {
 
     /// How far out a swipe has taken the Library (`library_out`), while it moves the Library.
     pub(super) fn library_swiped(&self, swipe: &Swipe) -> Option<f32> {
-        if swipe.across != Some(true) {
+        if swipe.across != Some(true) || swipe.cards.is_some() {
             return None;
         }
         let x = self.swiped_to(swipe);
@@ -142,7 +143,8 @@ impl Shell {
     }
 
     /// Fingers or a wheel over the sidebar. Across it they page between Spaces, and along it they
-    /// scroll the list. Returns whether paging took the event.
+    /// scroll the list. Over the Library's Spaces cards they scroll them across, if they don't
+    /// fit. Returns whether paging, or the cards, took the event.
     fn scroll(&mut self, event: &ScrollEvent, window: &mut Window, cx: &mut Context<Self>) -> bool {
         // The form pages back to the Space it was made from, but not while another Space shows.
         let form_hidden = self.form.is_some() && self.form().is_none();
@@ -151,26 +153,34 @@ impl Shell {
         }
         let delta = match event.delta {
             ScrollDelta::Pixels(delta) => delta.map(f32::from),
-            ScrollDelta::Lines(lines) => return self.wheel(lines, window, cx),
+            ScrollDelta::Lines(lines) => {
+                return self.wheel(lines, f32::from(event.position.x), window, cx);
+            }
         };
         match event.touch_phase {
             TouchPhase::Started => {
                 self.swiped = false;
+                let cards = self.fingers_down(f32::from(event.position.x));
                 self.swipe = Some(Swipe {
                     from: self.space,
                     library: self.library_open || self.library_motion.is_some(),
                     across: None,
                     way: 0.,
                     samples: VecDeque::new(),
-                    nearest: self.space,
+                    landing: None,
                     ready: false,
                     turned: None,
+                    cards,
                 });
             }
             TouchPhase::Ended | TouchPhase::Cancelled => return self.release(window, cx),
             TouchPhase::Moved => {}
         }
         let Some(mut swipe) = self.swipe.take() else {
+            // The momentum after fingers lift from the cards carries them on.
+            if self.coast_cards(delta.x, cx) {
+                return true;
+            }
             // A page swipe's momentum, across, doesn't scroll the list.
             return self.swiped && delta.x.abs() > delta.y.abs();
         };
@@ -183,6 +193,16 @@ impl Shell {
             if across {
                 self.leave_popovers(cx);
             }
+            // Over the Spaces cards, fingers scroll them, unless the cards are at the end they
+            // push past, where the swipe is the Library's (Arc 1.171).
+            swipe.cards = swipe
+                .cards
+                .filter(|_| across)
+                .and_then(|_| self.catch_cards(delta.x));
+            if swipe.cards.is_some() {
+                // check.sh waits for this line.
+                log!("browser: swipe cards");
+            }
             // Fingers catch a page, or the Library, that's still settling where it is.
             if across && swipe.library {
                 swipe.way = (self.library_out() - 1.) * self.library_width();
@@ -191,17 +211,20 @@ impl Shell {
                 && let Some(settle) = self.settle.take()
                 && let Some(x) = settle.offset()
             {
-                (swipe.from, swipe.way, swipe.nearest) = (settle.space, x, settle.space);
+                (swipe.from, swipe.way) = (settle.space, x);
+            }
+            // Where letting go would take the pages before they move.
+            if across {
+                swipe.landing = self.letting_go(&swipe, 0.);
             }
         }
         let across = swipe.across == Some(true);
-        if across {
-            let library_near =
-                |shell: &Self, swipe: &Swipe| shell.library_swiped(swipe).map(|out| out > 0.5);
+        if across && let Some(cards) = swipe.cards {
+            swipe.cards = Some(self.move_cards(cards, delta.x, cx));
+        } else if across {
             let past_end = |shell: &Self, swipe: &Swipe| {
                 shell.library_swiped(swipe).is_some_and(|out| out > 1.)
             };
-            let was_near = library_near(self, &swipe);
             let was_past = past_end(self, &swipe);
             swipe.way += SWIPE_TRACKING * delta.x;
             if !was_past && past_end(self, &swipe) {
@@ -218,19 +241,19 @@ impl Shell {
                 swipe.samples.pop_front();
             }
             self.ready_new_space(&mut swipe, cx);
-            let near = library_near(self, &swipe);
-            if near.is_some() {
-                if self.library.is_none() {
-                    self.show_section(self.section, cx);
-                }
-                if was_near.is_some() && was_near != near {
+            if self.library_swiped(&swipe).is_some() && self.library.is_none() {
+                self.show_section(self.section, cx);
+            }
+            // The trackpad clicks as where letting go would take the pages changes, by the rule
+            // the release goes by, so it's felt while the fingers are down: as a swipe takes the
+            // next Space, or the Library, and if it turns back (#1075). How fast they go is known
+            // from two moves; until then where it was stands.
+            if let Some(velocity) = velocity(&swipe.samples, now) {
+                let landing = self.letting_go(&swipe, velocity);
+                if landing != swipe.landing {
+                    swipe.landing = landing;
                     self.browser.detent(cx);
                 }
-            } else if let Some(nearest) = self.nearest(swipe.from, x)
-                && nearest != swipe.nearest
-            {
-                swipe.nearest = nearest;
-                self.browser.detent(cx);
             }
             cx.notify();
         }
@@ -246,23 +269,14 @@ impl Shell {
             return false;
         };
         self.swiped = true;
+        if let Some(cards) = swipe.cards {
+            self.release_cards(cards, cx);
+            return true;
+        }
         let (now, x) = (Instant::now(), self.swiped_to(&swipe));
-        let recent = swipe
-            .samples
-            .iter()
-            .filter(|&&(at, _)| now - at <= SWIPE_HISTORY);
-        let velocity = match (recent.clone().next(), recent.last()) {
-            (Some(&(start, from)), Some(&(end, to))) if end > start => {
-                (to - from) / (end - start).as_secs_f32()
-            }
-            _ => 0.,
-        };
+        let velocity = velocity(&swipe.samples, now).unwrap_or(0.);
         if let Some(out) = self.library_swiped(&swipe) {
-            let open = if velocity.abs() >= SWIPE_FLICK {
-                velocity > 0.
-            } else {
-                out > 0.5
-            };
+            let open = library_opens(out, velocity);
             if open != self.library_open {
                 // check.sh waits for this line.
                 log!("browser: command view-library via swipe");
@@ -289,12 +303,14 @@ impl Shell {
         let velocity = if velocity * from < 0. { velocity } else { 0. };
         let cancel = space != swipe.from && self.form().is_some();
         let beside = cancel.then_some(swipe.from);
+        // The fingers' speed carries on, unless Reduce Motion has the pages land where they go.
+        let start = crate::motion::start(cx);
         self.settle = Some(Settle {
             space,
             beside,
             from,
             velocity,
-            start: now,
+            start,
             next_door: false,
         });
         if cancel {
@@ -308,11 +324,36 @@ impl Shell {
         true
     }
 
+    /// Where letting go now, going at `velocity`, would take the pages, as `release` decides: the
+    /// Library, or a Space, the first when the Library shuts. The pull past the last Space has its
+    /// own detent.
+    fn letting_go(&self, swipe: &Swipe, velocity: f32) -> Option<Landing> {
+        if let Some(out) = self.library_swiped(swipe) {
+            if library_opens(out, velocity) {
+                return Some(Landing::Library);
+            }
+            return self.spaces.first().map(|first| Landing::Space(first.id));
+        }
+        let toward = heading(self.swiped_to(swipe), velocity, self.width());
+        self.nearest(swipe.from, toward).map(Landing::Space)
+    }
+
     /// A wheel's ticks across the sidebar page once per burst, then rest. Past the first Space they
-    /// open the Library, and back they close it. Back off the form they cancel it.
-    fn wheel(&mut self, lines: Point<f32>, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    /// open the Library, and back they close it. Back off the form they cancel it. Over the
+    /// Library's Spaces cards at `x`, they scroll them first.
+    fn wheel(
+        &mut self,
+        lines: Point<f32>,
+        x: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if lines.x.abs() <= lines.y.abs() {
             return false;
+        }
+        if self.wheel_cards(lines.x, x, cx) {
+            self.wheel = None;
+            return true;
         }
         let now = Instant::now();
         if self
@@ -388,49 +429,103 @@ impl Shell {
         .size_full()
     }
 
-    /// Fades the edge under the favorites in once the list is past its top, and out back there.
-    pub(super) fn step_scroll_edge(&mut self, window: &mut Window) {
-        let scrolled = self.list_scroll.offset().y < px(0.);
-        if scrolled != self.scrolled {
-            self.scroll_edge_fade = Some((Instant::now(), self.scroll_edge()));
-            self.scrolled = scrolled;
+    /// Moves the list on along its glide, then fades the edge under the favorites in once the list
+    /// is past its top and out back there, and the one at its foot in while rows are hidden under
+    /// it, the room after the last row not counting, and out once they're in view (Arc), and
+    /// brings the knob as the user scrolls.
+    pub(super) fn step_scroll_edge(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let glided = self.step_list_glide(window);
+        let most = f32::from(self.list_scroll.max_offset().y).max(0.);
+        let scrolled = (-f32::from(self.list_scroll.offset().y)).clamp(0., most);
+        // As the list was last laid out: none before its first layout.
+        let height = f32::from(self.list_scroll.bounds().size.height);
+        let rows_end = self.layout().into_values().fold(0., f32::max) + ROW_PITCH;
+        let rows_end = rows_end + self.tiles_room() - self.fixed_head();
+        let below = height > 0. && rows_end > scrolled + height + 0.5;
+        // The list's bounds are the last frame's: when what it's laid out from changes, as in the
+        // frame a resize draws, one more frame decides again once this one has measured it.
+        let measured = (window.viewport_size(), self.pages_top(), self.list_bottom());
+        if self.list_measured != measured {
+            self.list_measured = measured;
+            window.request_animation_frame();
         }
-        if let Some((start, _)) = self.scroll_edge_fade {
-            if start.elapsed().as_secs_f32() < SCROLL_EDGE_FADE {
-                window.request_animation_frame();
-            } else {
-                self.scroll_edge_fade = None;
+        for (edge, shown, name) in [
+            // Within half a point of its top, as Windows' wheel ticks of a fraction of a line
+            // leave it once summed down and back, the list is at its top.
+            (&mut self.top_edge, scrolled > 0.5, "edge"),
+            (&mut self.foot_edge, below, "foot edge"),
+        ] {
+            match edge.step(shown) {
+                Some(true) => window.request_animation_frame(),
                 // check.sh waits for these lines.
-                log!(
-                    "browser: scroll edge {}",
-                    if scrolled { "shown" } else { "hidden" }
-                );
+                Some(false) => {
+                    log!(
+                        "browser: scroll {name} {}",
+                        if shown { "shown" } else { "hidden" }
+                    )
+                }
+                None => {}
             }
         }
+        self.step_scroller(scrolled, glided, window, cx);
     }
 
-    /// How far the edge under the favorites has faded in.
-    fn scroll_edge(&self) -> f32 {
-        let to = if self.scrolled { 1. } else { 0. };
-        self.scroll_edge_fade.map_or(to, |(start, from)| {
-            fade_at(from, to, start.elapsed().as_secs_f32(), SCROLL_EDGE_FADE)
-        })
-    }
-
-    /// The edge across the sidebar 4 under the favorites, or the URL field without them or while
-    /// they scroll with the list, while the rows go under it (Dia).
+    /// The edge across the sidebar 2 over the scrolled rows' top, under the name row that stays
+    /// put (Arc 1.170), or under the URL field while the tiles scroll with the list and the name
+    /// row with them, while the rows go under it.
     pub(super) fn scroll_edge_line(&self) -> Option<impl IntoElement + use<>> {
-        let shown = self.scroll_edge();
+        let top = self.pages_top() + self.fixed_head() - 2.;
+        Some(self.edge_line(self.top_edge.at())?.top(px(top)))
+    }
+
+    /// The edge across the sidebar 1 under the list's foot while rows are hidden under it (Arc).
+    pub(super) fn foot_edge_line(&self) -> Option<impl IntoElement + use<>> {
+        let line = self.edge_line(self.foot_edge.at())?;
+        Some(line.bottom(px(self.list_bottom() - 2.)))
+    }
+
+    fn edge_line(&self, shown: f32) -> Option<gpui::Div> {
         (shown > 0.).then(|| {
             div()
                 .absolute()
-                .top(px(self.pages_top() - 2.))
                 .left_0()
                 .w(px(self.width()))
                 .h(px(1.))
                 .bg(self.palette.faint(SCROLL_EDGE))
                 .opacity(shown)
         })
+    }
+}
+
+/// A line at an edge of the list, which fades in while it's shown and out once it isn't.
+#[derive(Default)]
+pub(super) struct EdgeLine {
+    pub(super) shown: bool,
+    /// Its fade since it last turned, from how far in it was then.
+    fade: Option<(Instant, f32)>,
+}
+
+impl EdgeLine {
+    /// How far it has faded in.
+    fn at(&self) -> f32 {
+        let to = if self.shown { 1. } else { 0. };
+        self.fade.map_or(to, |(start, from)| {
+            fade_at(from, to, start.elapsed().as_secs_f32(), SCROLL_EDGE_FADE)
+        })
+    }
+
+    /// Turns it to `shown`: Some(true) while it's fading, Some(false) the frame it ends.
+    fn step(&mut self, shown: bool) -> Option<bool> {
+        if shown != self.shown {
+            self.fade = Some((Instant::now(), self.at()));
+            self.shown = shown;
+        }
+        let (start, _) = self.fade?;
+        let fading = start.elapsed().as_secs_f32() < SCROLL_EDGE_FADE;
+        if !fading {
+            self.fade = None;
+        }
+        Some(fading)
     }
 }
 
@@ -464,6 +559,32 @@ fn nearest(
     match (x / width).abs() >= 0.5 {
         true => beside(spaces, form, from, x).or(Some(from)),
         false => Some(from),
+    }
+}
+
+/// Where letting go would take the pages (`Shell::letting_go`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Landing {
+    Library,
+    Space(u64),
+}
+
+/// How fast the page went over the last SWIPE_HISTORY before `now`, from `samples` of where it
+/// was, in points a second. None from fewer than two.
+fn velocity(samples: &VecDeque<(Instant, f32)>, now: Instant) -> Option<f32> {
+    let mut recent = samples.iter().filter(|&&(at, _)| now - at <= SWIPE_HISTORY);
+    let &(start, from) = recent.next()?;
+    let &(end, to) = recent.last()?;
+    (end > start).then(|| (to - from) / (end - start).as_secs_f32())
+}
+
+/// Whether the Library, `out` of the way open, opens when let go going at `velocity`: on a flick
+/// toward it, else past halfway.
+fn library_opens(out: f32, velocity: f32) -> bool {
+    if velocity.abs() >= SWIPE_FLICK {
+        velocity > 0.
+    } else {
+        out > 0.5
     }
 }
 
@@ -804,6 +925,36 @@ mod tests {
         assert_eq!(*host.shown.borrow(), [1]);
     }
 
+    /// Two fingers as Direct Manipulation reports a precision touchpad's on Windows: the touch
+    /// comes with the first move, the lift ends the scroll, and the inertia after it goes on
+    /// across. The swipe stops at the next Space, the inertia carrying it no further and scrolling
+    /// nothing, and the next swipe goes on from there.
+    #[gpui::test]
+    fn a_touchpads_inertia_stops_at_the_next_space(cx: &mut TestAppContext) {
+        let (shell, host, cx) = three_spaces(cx, 1);
+        shell.update_in(cx, |shell, window, cx| {
+            let fingers = |touch_phase, x| ScrollEvent {
+                delta: ScrollDelta::Pixels(point(px(x), px(0.))),
+                touch_phase,
+                ..Default::default()
+            };
+            let step = -0.15 * shell.width() / SWIPE_TRACKING;
+            for space in [1, 2] {
+                shell.set_space(space, cx);
+                shell.scroll(&fingers(TouchPhase::Started, step), window, cx);
+                for _ in 0..3 {
+                    shell.scroll(&fingers(TouchPhase::Moved, step), window, cx);
+                }
+                shell.scroll(&fingers(TouchPhase::Ended, 0.), window, cx);
+                for _ in 0..30 {
+                    let took = shell.scroll(&fingers(TouchPhase::Moved, step), window, cx);
+                    assert!(took, "the inertia from Space {space} scrolled the list");
+                }
+            }
+        });
+        assert_eq!(*host.shown.borrow(), [2, 3]);
+    }
+
     /// The sidebar under the Library fades out whole and the Library fades in over it by what the
     /// sidebar has lost, never a whole sheet over a half-faded sidebar, which would show only cut
     /// along its edge: with fingers part of the way out, and on a click's close as the sidebar
@@ -838,6 +989,72 @@ mod tests {
                 shell.sidebar_opacity_at(halfway)
             );
         });
+    }
+
+    /// Under Reduce Motion the Library doesn't push the page aside or the sidebar back: it's open
+    /// from its first frame and closed from its first, while the sidebar under it still fades
+    /// (#1380).
+    #[gpui::test]
+    fn under_reduce_motion_the_library_comes_and_goes_at_once_and_the_sidebar_fades(
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, _, cx) = three_spaces(cx, 1);
+        shell.update(cx, |shell, cx| {
+            shell.set_library(true, cx);
+            assert!(
+                shell.library_out() < 0.5,
+                "the Library pushed out at once with motion on"
+            );
+            shell.close_library_now();
+            cx.set_reduce_motion(true);
+            shell.set_library(true, cx);
+            assert_eq!((shell.library_out(), shell.sidebar_scale()), (1., 1.));
+            // The sidebar has faded out under it.
+            shell.sidebar_fade = shell
+                .sidebar_fade
+                .map(|(from, start)| (from, start - Duration::from_secs(1)));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        shell.update(cx, |shell, cx| {
+            shell.set_library(false, cx);
+            assert_eq!((shell.library_out(), shell.sidebar_scale()), (0., 1.));
+            assert!(
+                shell.sidebar_opacity() < 1.,
+                "the sidebar came back without its fade"
+            );
+            cx.notify();
+        });
+        // A frame, which ends the card's motion but not the sidebar's fade.
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, _| {
+            assert!(
+                shell.sidebar_fade.is_some(),
+                "the sidebar's fade ended with the card's motion"
+            );
+        });
+    }
+
+    /// Under Reduce Motion the pages still follow the fingers, and once they lift they're where
+    /// they land, without a spring (#1380).
+    #[gpui::test]
+    fn under_reduce_motion_a_swipe_follows_the_fingers_and_lands_without_a_spring(
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, host, cx) = three_spaces(cx, 2);
+        shell.update_in(cx, |shell, window, cx| {
+            cx.set_reduce_motion(true);
+            fingers(shell, 0.3 * shell.width(), false, window, cx);
+            let pages = shell.pages();
+            assert!(
+                pages[0].1 > 0. && pages.len() == 2,
+                "the pages didn't follow the fingers: {pages:?}"
+            );
+            fingers(shell, 0.6 * shell.width(), true, window, cx);
+            assert!(shell.settle.is_some(), "the pages didn't settle");
+            assert_eq!(shell.pages(), [(1, 0.)]);
+        });
+        assert_eq!(*host.shown.borrow(), [1]);
     }
 
     /// Back off the form, the URL field and the favorites are drawn from the first frame, at the
@@ -1144,5 +1361,115 @@ mod tests {
         let (shell, host, window) = switched_back(cx, true);
         held_swipe(&shell, window, -10., 10);
         assert!(host.shown.borrow().is_empty());
+    }
+
+    /// Fingers across the sidebar, `dx` this event, a moment after the last, as a trackpad sends
+    /// them. Returns how many detents the trackpad has been asked for.
+    fn finger(
+        shell: &mut Shell,
+        host: &Recorder,
+        touch_phase: TouchPhase,
+        dx: f32,
+        window: &mut Window,
+        cx: &mut Context<Shell>,
+    ) -> usize {
+        std::thread::sleep(Duration::from_millis(2));
+        let event = ScrollEvent {
+            delta: ScrollDelta::Pixels(point(px(dx), px(0.))),
+            touch_phase,
+            ..Default::default()
+        };
+        shell.scroll(&event, window, cx);
+        host.detents.get()
+    }
+
+    /// A haptic is felt only with a finger on the trackpad, so a swipe's detent comes while the
+    /// fingers are down, as soon as letting go would take the next Space, even short of halfway,
+    /// where most swipes are let go. Nothing clicks at the lift or in the momentum after it
+    /// (#1075).
+    #[gpui::test]
+    fn a_swipe_clicks_as_it_takes_the_next_space_with_the_fingers_down(cx: &mut TestAppContext) {
+        use TouchPhase::{Ended, Moved, Started};
+        let (shell, host, cx) = three_spaces(cx, 2);
+        shell.update_in(cx, |shell, window, cx| {
+            let step = -0.05 * shell.width() / SWIPE_TRACKING;
+            let first = finger(shell, &host, Started, step, window, cx);
+            assert_eq!(first, 0, "a click before the fingers had gone two moves");
+            assert_eq!(
+                finger(shell, &host, Moved, step, window, cx),
+                1,
+                "no click going"
+            );
+            for _ in 0..2 {
+                assert_eq!(
+                    finger(shell, &host, Moved, step, window, cx),
+                    1,
+                    "a click going on"
+                );
+            }
+            assert_eq!(
+                finger(shell, &host, Ended, 0., window, cx),
+                1,
+                "a click at the lift"
+            );
+            for _ in 0..10 {
+                let momentum = finger(shell, &host, Moved, step, window, cx);
+                assert_eq!(momentum, 1, "a click in the momentum");
+            }
+        });
+        assert_eq!(*host.shown.borrow(), [3]);
+    }
+
+    /// From the first Space, the fingers click as letting go would bring out the Library, and
+    /// again as they turn back and letting go would leave it shut.
+    #[gpui::test]
+    fn a_swipe_clicks_as_it_takes_the_library_and_as_it_turns_back(cx: &mut TestAppContext) {
+        use TouchPhase::{Ended, Moved, Started};
+        let (shell, host, cx) = three_spaces(cx, 1);
+        shell.update_in(cx, |shell, window, cx| {
+            let step = 0.05 * shell.library_width() / SWIPE_TRACKING;
+            assert_eq!(finger(shell, &host, Started, step, window, cx), 0);
+            assert_eq!(
+                finger(shell, &host, Moved, step, window, cx),
+                1,
+                "no click to the Library"
+            );
+            assert_eq!(finger(shell, &host, Moved, step, window, cx), 1);
+            // The moves out are past the ones the fingers' speed is read from.
+            let before = Instant::now() - Duration::from_millis(500);
+            for (at, _) in &mut shell.swipe.as_mut().expect("a swipe").samples {
+                *at = (*at).min(before);
+            }
+            assert_eq!(finger(shell, &host, Moved, -step / 2., window, cx), 1);
+            let back = finger(shell, &host, Moved, -step / 2., window, cx);
+            assert_eq!(back, 2, "no click turning back");
+            assert_eq!(
+                finger(shell, &host, Ended, 0., window, cx),
+                2,
+                "a click at the lift"
+            );
+            assert!(!shell.library_open, "the Library came out turned back from");
+        });
+    }
+
+    /// Past the last Space, a swipe has no Space to take, and the trackpad clicks once, as the pull
+    /// readies a new Space, with the fingers down.
+    #[gpui::test]
+    fn a_swipe_past_the_last_space_clicks_as_the_pull_readies(cx: &mut TestAppContext) {
+        use TouchPhase::{Moved, Started};
+        let (shell, host, cx) = three_spaces(cx, 3);
+        shell.update_in(cx, |shell, window, cx| {
+            assert_eq!(finger(shell, &host, Started, -20., window, cx), 0);
+            for _ in 0..30 {
+                let detents = finger(shell, &host, Moved, -20., window, cx);
+                let ready = shell.swipe.as_ref().expect("a swipe").ready;
+                assert_eq!(
+                    detents, ready as usize,
+                    "a click short of the pull's or past it"
+                );
+            }
+            let readied = shell.swipe.as_ref().is_some_and(|swipe| swipe.ready);
+            assert!(readied, "the pull never readied");
+        });
     }
 }

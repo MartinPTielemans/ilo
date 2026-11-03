@@ -98,8 +98,22 @@ expect_find "$first" "open 1 of 3 apple" "⌘G in the find bar didn't go on, rou
 check_find_bar "after ⌘F"
 ../tools/window-screenshot.sh "$pid" "$out/find.png" || fail "no window to capture"
 
+# The pointer resting on next names it and its key in the tooltip, hung off its glyph as the
+# header's buttons' are, and the click on it ends the tooltip. The bar is 20 in from the page's
+# corner, and the button 2 under its top and 28 tall, so its middle is at 36 and the tooltip's
+# top 7 under that, at 43.
+send move $((content - 320 + 252)) 36
+next_keys=⌘G
+[ "$(uname)" = Darwin ] || next_keys=Ctrl+G
+expect "^browser: tooltip shown Next $next_keys\$" \
+  "resting on the find bar's next didn't show Next and $next_keys"
+expect '^browser: tooltip at [0-9.]* 43 ' "the find bar's tooltip didn't hang off its next's glyph"
+expect '^browser: tooltip window shown$' "the find bar's next's tooltip didn't fade in"
+../tools/window-screenshot.sh "$pid" "$out/find-tooltip.png" || fail "no window to capture"
+
 # The bar's next and previous go through the matches. Arc's are 28 pt at 212 and 238 in the bar.
 send click $((content - 320 + 252)) 36
+expect '^browser: tooltip hidden$' "a click on the find bar's next didn't end its tooltip"
 expect_find "$first" "open 2 of 3 apple" \
   "a click on the find bar's next didn't go to the next match"
 send click $((content - 320 + 226)) 36
@@ -194,7 +208,7 @@ expect '^browser: find bar shown$' "⌘F after the close button didn't open the 
 # left selected. ⌘↑ is the page's own, to its top, and off the Mac that's Home. It ends there, where
 # zooming doesn't scroll it.
 top="key up cmd"
-[ "$(uname)" = Linux ] && top="key home"
+[ "$(uname)" = Darwin ] || top="key home"
 for _ in 1 2 3; do send key backspace; done
 send type far
 expect_find "$first" "open 1 of 1 far" "the find didn't find the text below the fold"
@@ -268,12 +282,13 @@ expect '^browser: loaded [0-9]* https://example.org/$' "the first tab didn't loa
 # of it, from the frame's left, through a resize. Each tab has its own. Sets $views to the frames
 # of the views shown, DevTools' first, once there are $1 of them. DevTools fill the frame at once,
 # and the page moves aside once they've loaded, as in Arc, so with two it waits for that too.
-# Linux's driver lists the pages the UI lays out, and DevTools are an aura window in Chromium's,
-# which the X server doesn't see (drive.rs), so there neither checks the views.
+# Off the Mac the drivers list the pages the UI lays out, and DevTools are an aura window in the
+# same Chromium window as the page, which neither the X server (drive.rs) nor Windows sees, so
+# there neither checks the views; devtools.png shows them.
 sees_devtools=1
-if [ "$(uname)" = Linux ]; then
+if [ "$(uname)" != Darwin ]; then
   sees_devtools=
-  echo "skip: where DevTools dock beside the page: Linux's driver can't see aura windows."
+  echo "skip: where DevTools dock beside the page: off the Mac the driver can't see aura windows."
 fi
 await_views() {
   [ -n "$sees_devtools" ] || return 0
@@ -329,17 +344,15 @@ await_views 2 "after JavaScript Console"
 # off already, ↩ runs those words as a script that fails, and the paste reads the same. $1 says
 # where DevTools are, docked or undocked.
 console_keys() {
-  local word=$1-copy
+  local word=$1-copy copied= pasted=
   for _ in $(seq 50); do
     send key a cmd
     send type "$word"
     send key a cmd
     send key c cmd
-    send pasteboard
-    sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q "^browser: pasteboard text $word\$" &&
-      break
+    holds "$word" && copied=1 && break
   done
-  expect "^browser: pasteboard text $word\$" "⌘C in $1 DevTools didn't copy the console's text"
+  [ -n "$copied" ] || fail "⌘C in $1 DevTools didn't copy the console's text"
   send key v cmd
   send key a cmd
   send type "allow pasting"
@@ -352,13 +365,23 @@ console_keys() {
   for _ in $(seq 50); do
     send key a cmd
     send key c cmd
-    send pasteboard
-    logged "^browser: pasteboard text pasted-$word\$" && break
+    holds "pasted-$word" && pasted=1 && break
   done
-  logged "^browser: pasteboard text pasted-$word\$" || {
+  [ -n "$pasted" ] || {
     ../tools/window-screenshot.sh "$pid" "$out/devtools-$1-paste.png" all || true
     fail "⌘V in $1 DevTools didn't paste in the console, see $out/devtools-$1-paste.png"
   }
+}
+# The run's pasteboard holds $1, as the driver reads GPUI's. On Wayland a client hears of the
+# selection only while it has the keyboard, which DevTools' page has here. So there GPUI's reads
+# nothing, and the session's clipboard is read instead (#1575).
+holds() {
+  if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    clipboard_holds "$1"
+  else
+    send pasteboard
+    logged "^browser: pasteboard text $1\$"
+  fi
 }
 keys=$((step + 1))
 console_keys docked
@@ -412,7 +435,7 @@ fi
 if [ -n "$shown" ]; then
   expect "$managed" "Open Task Manager didn't show Chrome's"
   send key w cmd
-  if [ "$(uname)" = Linux ]; then
+  if [ "$(uname)" != Darwin ]; then
     # Off the Mac the Task Manager is Chromium's own window, which takes Ctrl+W itself, as
     # Chrome's, and the window manager gives the keyboard back once it's gone.
     for _ in $(seq 100); do
@@ -524,4 +547,4 @@ quit_by_key
 await '^browser: command quit via ' || fail "⌘Q didn't quit"
 exited
 dock right
-echo "ok: ⌘F opens the find bar from the page with the keyboard, what's typed right after it lands there, typing finds with \"n/m\", return, shift-return, ⌘G and ⇧⌘G and the bar's arrows go through the matches, from the bar and the page, a text the page doesn't have shows NOT FOUND, Japanese input finds once committed, the bar keeps its place through a resize and full screen, each tab keeps its own find, escape and the close button close it and another page closes it. ⌘J and Jump to Selection scroll the page back to the match a find left selected. ⌘0, ⌘- and the View menu zoom the page, and the HUD shows the zoom for a moment, under the find bar, and goes when another tab shows. ⌥⌘I and the View menu dock DevTools in the card beside the page, through a resize and per tab, where ⌘A, ⌘C and ⌘V are the console's, F12 closes them and the page gets the keyboard back, and View Source opens a tab under the page. Open Task Manager shows Chrome's, which ⌘W closes, keeping the tab. Record a Trace records until the toast's Stop, and saves Chromium's trace where the save panel picks. Undocked DevTools open in a window of their own, where ⌘C copies and ⌘V pastes, and ⌥⌘I from the page brings them to the front. Windows: $out/find.png, $out/find-not-found.png, $out/find-fullscreen.png, $out/zoom.png, $out/devtools.png, $out/task-manager.png, $out/trace.png, $out/devtools-undocked.png"
+echo "ok: ⌘F opens the find bar from the page with the keyboard, what's typed right after it lands there, typing finds with \"n/m\", return, shift-return, ⌘G and ⇧⌘G and the bar's arrows go through the matches, from the bar and the page, a text the page doesn't have shows NOT FOUND, Japanese input finds once committed, the bar keeps its place through a resize and full screen, each tab keeps its own find, escape and the close button close it and another page closes it. The pointer resting on next names it and its key in a tooltip hung off its glyph, which the click ends. ⌘J and Jump to Selection scroll the page back to the match a find left selected. ⌘0, ⌘- and the View menu zoom the page, and the HUD shows the zoom for a moment, under the find bar, and goes when another tab shows. ⌥⌘I and the View menu dock DevTools in the card beside the page, through a resize and per tab, where ⌘A, ⌘C and ⌘V are the console's, F12 closes them and the page gets the keyboard back, and View Source opens a tab under the page. Open Task Manager shows Chrome's, which ⌘W closes, keeping the tab. Record a Trace records until the toast's Stop, and saves Chromium's trace where the save panel picks. Undocked DevTools open in a window of their own, where ⌘C copies and ⌘V pastes, and ⌥⌘I from the page brings them to the front. Windows: $out/find.png, $out/find-tooltip.png, $out/find-not-found.png, $out/find-fullscreen.png, $out/zoom.png, $out/devtools.png, $out/task-manager.png, $out/trace.png, $out/devtools-undocked.png"

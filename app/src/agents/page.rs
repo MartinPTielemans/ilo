@@ -115,9 +115,13 @@ impl Refs {
     }
 }
 
-/// The page's outline, from the nodes of its tree, which names each element it can act on in
-/// `refs`: a line for each, as `- role "name" [e12] (states)`, and `- text: …` for its text.
-pub fn outline(tab: &TabInfo, nodes: &[Value], refs: &mut Refs) -> String {
+/// The outlines an action answers with changes, as what's left would rather be read whole.
+const MAX_COMPARED: usize = 1_000_000;
+
+/// A page's outline, from the nodes of its tree, which names each element it can act on in its
+/// tab's `refs`: a line for each, as `- role "name" [e12] (states)`, and `- text: …` for its
+/// text. With `part`, the outline of that element alone, by its DOM node.
+pub fn outline(tab: &TabInfo, nodes: &[Value], refs: &mut Refs, part: Option<i64>) -> Outline {
     let by_id: HashMap<&str, &Value> = (nodes.iter())
         .filter_map(|node| Some((node.get("nodeId")?.as_str()?, node)))
         .collect();
@@ -136,10 +140,18 @@ pub fn outline(tab: &TabInfo, nodes: &[Value], refs: &mut Refs) -> String {
         password: false,
         captcha: false,
     };
-    if let Some(root) = nodes.first() {
+    let backend = |node: &&Value| node.get("backendDOMNodeId").and_then(Value::as_i64);
+    let root = match part {
+        Some(part) => nodes.iter().find(|node| backend(node) == Some(part)),
+        None => nodes.first(),
+    };
+    if let Some(root) = root {
         walk.node(root, 0, "", 0);
     }
     let mut notes = Vec::new();
+    if root.is_none() && part.is_some() {
+        notes.push("That element isn't on the page any more. Take a snapshot without a ref.");
+    }
     if walk.size > MAX_OUTLINE {
         notes.push("The outline is cut here. read_page has all of the page's text.");
     }
@@ -156,33 +168,213 @@ pub fn outline(tab: &TabInfo, nodes: &[Value], refs: &mut Refs) -> String {
     }
     let title = nodes.first().map(name).filter(|title| !title.is_empty());
     let title = title.unwrap_or_else(|| tab.title.to_string());
-    let lines = walk.lines.join("\n");
-    let mut text = format!("Tab {}: {title}\nURL: {}\n\n{lines}", tab.id, tab.url);
-    if !notes.is_empty() {
-        text.push_str("\n\n");
-        text.push_str(&notes.join("\n"));
+    let url = tab.url.to_string();
+    Outline {
+        head: format!("Tab {}: {title}\nURL: {url}", tab.id),
+        page: url.split('#').next().unwrap_or_default().to_string(),
+        document: nodes.first().as_ref().and_then(backend),
+        lines: walk.lines,
+        notes,
     }
-    text
+}
+
+/// A page's outline, which an answer gives whole, or as what changed since one the agent had.
+#[derive(Clone, Debug, Default)]
+pub struct Outline {
+    /// Which tab and page it is: "Tab 20: Shop\nURL: https://shop.example/".
+    head: String,
+    /// The page's address without its fragment, and its document's node: either changes on a new
+    /// page.
+    page: String,
+    document: Option<i64>,
+    lines: Vec<Line>,
+    notes: Vec<&'static str>,
+}
+
+#[derive(Clone, Debug)]
+struct Line {
+    depth: usize,
+    /// The line without its indent, as `- button "Pay" [e4] (disabled)`.
+    text: String,
+    /// Its element's ref, by number, if it has one.
+    element: Option<u32>,
+}
+
+impl Outline {
+    /// Which tab and page it is, without the outline.
+    pub fn head(&self) -> &str {
+        &self.head
+    }
+
+    /// The outline whole.
+    pub fn text(&self) -> String {
+        let lines = (self.lines.iter())
+            .map(|line| format!("{}{}", "  ".repeat(line.depth), line.text))
+            .collect::<Vec<_>>();
+        self.with_notes(format!("{}\n\n{}", self.head, lines.join("\n")))
+    }
+
+    /// What changed since `last`, the outline the agent had: the lines added, changed or gone,
+    /// each the same line as before by its element's ref, else by its text in the same order. A
+    /// new page, or changes of more than half the outline, are answered with the outline whole.
+    pub fn since(&self, last: &Outline) -> String {
+        if (self.page.as_str(), self.document) != (last.page.as_str(), last.document) {
+            return self.text();
+        }
+        let Some(same) = same_lines(&last.lines, &self.lines) else {
+            return self.text();
+        };
+        let kept: std::collections::HashSet<usize> = same.iter().flatten().copied().collect();
+        let changed: Vec<&str> = (self.lines.iter().zip(&same))
+            .filter_map(|(line, was)| {
+                let was = &last.lines[(*was)?];
+                (line.element.is_some() && line.text != was.text).then_some(line.text.as_str())
+            })
+            .collect();
+        let mut parts = Vec::new();
+        let added = runs(&self.lines, |at| same[at].is_none());
+        if !added.is_empty() {
+            parts.push(format!("New:\n{added}"));
+        }
+        if !changed.is_empty() {
+            parts.push(format!("Changed:\n{}", changed.join("\n")));
+        }
+        let gone = runs(&last.lines, |at| !kept.contains(&at));
+        if !gone.is_empty() {
+            parts.push(format!("Gone:\n{gone}"));
+        }
+        if parts.is_empty() {
+            return self.with_notes(format!("{}\n\nNothing in the outline changed.", self.head));
+        }
+        let changes = parts.join("\n\n");
+        let whole: usize = self
+            .lines
+            .iter()
+            .map(|line| 2 * line.depth + line.text.len() + 1)
+            .sum();
+        if 2 * changes.len() > whole {
+            return self.text();
+        }
+        let since = "What changed since the last outline you had of this tab:";
+        self.with_notes(format!("{}\n\n{since}\n\n{changes}", self.head))
+    }
+
+    fn with_notes(&self, mut text: String) -> String {
+        if !self.notes.is_empty() {
+            text.push_str("\n\n");
+            text.push_str(&self.notes.join("\n"));
+        }
+        text
+    }
+}
+
+/// For each of `new`'s lines, the line of `old` it is, if any: the same element by its ref, else
+/// the same text, in the longest run of them both have in order. None when they're too far apart
+/// to compare.
+fn same_lines(old: &[Line], new: &[Line]) -> Option<Vec<Option<usize>>> {
+    let same = |a: &Line, b: &Line| match (a.element, b.element) {
+        (None, None) => a.text == b.text,
+        (a, b) => a == b,
+    };
+    let start = old.iter().zip(new).take_while(|(a, b)| same(a, b)).count();
+    let end = (old[start..].iter().rev().zip(new[start..].iter().rev()))
+        .take_while(|(a, b)| same(a, b))
+        .count();
+    let (old_rest, new_rest) = (&old[start..old.len() - end], &new[start..new.len() - end]);
+    let (rows, columns) = (old_rest.len(), new_rest.len() + 1);
+    if rows * columns > MAX_COMPARED {
+        return None;
+    }
+    // At [i * columns + j], how many lines `old_rest[i..]` and `new_rest[j..]` have in common.
+    let mut common = vec![0u16; (rows + 1) * columns];
+    for i in (0..rows).rev() {
+        for j in (0..columns - 1).rev() {
+            common[i * columns + j] = match same(&old_rest[i], &new_rest[j]) {
+                true => common[(i + 1) * columns + j + 1] + 1,
+                false => common[(i + 1) * columns + j].max(common[i * columns + j + 1]),
+            };
+        }
+    }
+    let mut was: Vec<Option<usize>> = (0..new.len()).map(|_| None).collect();
+    for at in 0..start {
+        was[at] = Some(at);
+    }
+    for back in 1..=end {
+        was[new.len() - back] = Some(old.len() - back);
+    }
+    let (mut i, mut j) = (0, 0);
+    while i < rows && j < columns - 1 {
+        if same(&old_rest[i], &new_rest[j]) {
+            was[start + j] = Some(start + i);
+            (i, j) = (i + 1, j + 1);
+        } else if common[(i + 1) * columns + j] >= common[i * columns + j + 1] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    // An element that moved is still the same element.
+    let by_ref: HashMap<u32, usize> = (old.iter().enumerate())
+        .filter_map(|(at, line)| Some((line.element?, at)))
+        .collect();
+    for (at, line) in new.iter().enumerate() {
+        if was[at].is_none() {
+            was[at] = line
+                .element
+                .and_then(|element| by_ref.get(&element).copied());
+        }
+    }
+    Some(was)
+}
+
+/// The lines `pick` picks, each run of them in a row indented from its own outermost line.
+fn runs(lines: &[Line], pick: impl Fn(usize) -> bool) -> String {
+    let mut text = Vec::new();
+    let mut at = 0;
+    while at < lines.len() {
+        if !pick(at) {
+            at += 1;
+            continue;
+        }
+        let run = (at..lines.len()).take_while(|&at| pick(at)).count();
+        let lines = &lines[at..at + run];
+        let outermost = lines
+            .iter()
+            .map(|line| line.depth)
+            .min()
+            .unwrap_or_default();
+        text.extend(
+            lines
+                .iter()
+                .map(|line| format!("{}{}", "  ".repeat(line.depth - outermost), line.text)),
+        );
+        at += run;
+    }
+    text.join("\n")
 }
 
 struct Walk<'a> {
     by_id: HashMap<&'a str, &'a Value>,
     field_names: Vec<String>,
     refs: &'a mut Refs,
-    lines: Vec<String>,
+    lines: Vec<Line>,
     size: usize,
     password: bool,
     captcha: bool,
 }
 
 impl Walk<'_> {
-    fn add(&mut self, depth: usize, line: String) {
+    fn add(&mut self, depth: usize, text: String, element: Option<u32>) {
         if self.size > MAX_OUTLINE {
             return;
         }
         // Its indent and line break too.
-        self.size += 2 * depth + line.len() + 1;
-        self.lines.push(format!("{}{line}", "  ".repeat(depth)));
+        self.size += 2 * depth + text.len() + 1;
+        self.lines.push(Line {
+            depth,
+            text,
+            element,
+        });
     }
 
     fn node(&mut self, node: &Value, depth: usize, parent_name: &str, levels: usize) {
@@ -204,7 +396,7 @@ impl Walk<'_> {
         if !ignored && role == "StaticText" {
             let repeated = parent_name.contains(&name) || self.field_names.contains(&name);
             if !name.is_empty() && !repeated {
-                self.add(depth, format!("- text: {name}"));
+                self.add(depth, format!("- text: {name}"), None);
             }
             return;
         }
@@ -212,6 +404,7 @@ impl Walk<'_> {
         let shown = INTERACTIVE.contains(&role) || !name.is_empty() || LANDMARKS.contains(&role);
         if !ignored && !FLATTEN.contains(&role) && shown {
             let mut line = format!("- {role}");
+            let mut reference = None;
             if !name.is_empty() {
                 line.push_str(&format!(" \"{}\"", clip(&name, 160)));
             }
@@ -227,7 +420,9 @@ impl Walk<'_> {
                     name: name.clone(),
                     password,
                 };
-                line.push_str(&format!(" [e{}]", self.refs.name(element)));
+                let number = self.refs.name(element);
+                reference = Some(number);
+                line.push_str(&format!(" [e{number}]"));
                 if password {
                     self.password = true;
                     line.push_str(" (password: off limits)");
@@ -255,7 +450,7 @@ impl Walk<'_> {
                     _ => {}
                 }
             }
-            self.add(depth, line);
+            self.add(depth, line, reference);
             next = depth + 1;
             next_name = name;
         }
@@ -427,7 +622,7 @@ mod tests {
         nodes[7]["backendDOMNodeId"] = json!(90);
         nodes[7]["properties"] = json!([{ "name": "checked", "value": { "value": "true" } }]);
         let mut refs = Refs::default();
-        let outline = outline(&tab(), &nodes, &mut refs);
+        let outline = outline(&tab(), &nodes, &mut refs, None).text();
         assert_eq!(
             outline,
             "Tab 20: Shop\nURL: https://shop.example/\n\n\
@@ -446,8 +641,137 @@ mod tests {
 
         // Outlined again, the same element keeps its ref.
         nodes.swap(4, 5);
-        let again = super::outline(&tab(), &nodes, &mut refs);
+        let again = super::outline(&tab(), &nodes, &mut refs, None).text();
         assert!(again.contains("- textbox \"Coupon\" [e2]"));
+    }
+
+    /// A shop's page, its menu and a size picker, open or not, each node's DOM node its id.
+    fn shop(open: bool) -> Vec<Value> {
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Shop", &["2", "3", "4", "5", "6"]),
+            node("2", "navigation", "Menu", &["21", "22", "23", "24"]),
+            node("21", "link", "Home", &[]),
+            node("22", "link", "Shirts", &[]),
+            node("23", "link", "Shoes", &[]),
+            node("24", "link", "Basket", &[]),
+            node("3", "heading", "Linen shirt", &[]),
+            node("4", "paragraph", "", &["41"]),
+            node(
+                "41",
+                "StaticText",
+                "Light linen, cut loose, for long summer days.",
+                &[],
+            ),
+            node("5", "combobox", "Size", if open { &["7"] } else { &[] }),
+            node("6", "button", "Add to basket", &[]),
+            node("7", "listbox", "Size", &["71", "72"]),
+            node("71", "option", "S", &[]),
+            node("72", "option", "M", &[]),
+        ];
+        for node in &mut nodes {
+            node["backendDOMNodeId"] =
+                json!(node["nodeId"].as_str().unwrap().parse::<i64>().unwrap());
+        }
+        if open {
+            nodes[9]["properties"] = json!([{ "name": "expanded", "value": { "value": true } }]);
+        }
+        nodes
+    }
+
+    /// An action on the same page answers with the lines new, changed and gone since the outline
+    /// the agent had, each the same line by its ref, else its text; nothing, when nothing changed.
+    #[test]
+    fn an_outline_gives_what_changed_since_another() {
+        let mut refs = Refs::default();
+        let closed = outline(&tab(), &shop(false), &mut refs, None);
+        let open = outline(&tab(), &shop(true), &mut refs, None);
+        let head = "Tab 20: Shop\nURL: https://shop.example/\n\n";
+        let since = "What changed since the last outline you had of this tab:\n\n";
+        assert_eq!(
+            open.since(&closed),
+            format!(
+                "{head}{since}New:\n\
+                 - listbox \"Size\" [e7]\n  - option \"S\" [e8]\n  - option \"M\" [e9]\n\n\
+                 Changed:\n- combobox \"Size\" [e5] (expanded)"
+            )
+        );
+        assert_eq!(
+            closed.since(&open),
+            format!(
+                "{head}{since}Changed:\n- combobox \"Size\" [e5]\n\n\
+                 Gone:\n- listbox \"Size\" [e7]\n  - option \"S\" [e8]\n  - option \"M\" [e9]"
+            )
+        );
+        assert_eq!(
+            open.since(&open),
+            format!("{head}Nothing in the outline changed.")
+        );
+
+        // Elements in another order are the same elements.
+        let mut moved = shop(false);
+        moved[1]["childIds"] = json!(["21", "23", "22", "24"]);
+        let moved = outline(&tab(), &moved, &mut refs, None);
+        assert_eq!(
+            moved.since(&closed),
+            format!("{head}Nothing in the outline changed.")
+        );
+        // Text is the same line by its text, in order.
+        let mut text = shop(false);
+        text[8]["name"]["value"] = json!("Heavy linen.");
+        let text = outline(&tab(), &text, &mut refs, None);
+        assert!(text.since(&closed).ends_with(
+            "New:\n- text: Heavy linen.\n\nGone:\n- text: Light linen, cut loose, for long summer days."
+        ));
+    }
+
+    /// A new page, by its address or its document, answers whole, as do changes to more than half
+    /// the outline; a link to a part of the same page doesn't make a new one.
+    #[test]
+    fn a_new_page_or_a_new_outline_is_whole() {
+        let mut refs = Refs::default();
+        let closed = outline(&tab(), &shop(false), &mut refs, None);
+        let basket = TabInfo {
+            url: "https://shop.example/basket".into(),
+            ..tab()
+        };
+        let elsewhere = outline(&basket, &shop(false), &mut refs, None);
+        assert_eq!(elsewhere.since(&closed), elsewhere.text());
+        let mut reloaded = shop(false);
+        reloaded[0]["backendDOMNodeId"] = json!(100);
+        let reloaded = outline(&tab(), &reloaded, &mut refs, None);
+        assert_eq!(reloaded.since(&closed), reloaded.text());
+        let reviews = TabInfo {
+            url: "https://shop.example/#reviews".into(),
+            ..tab()
+        };
+        let reviews = outline(&reviews, &shop(false), &mut refs, None);
+        assert!(
+            reviews
+                .since(&closed)
+                .ends_with("Nothing in the outline changed.")
+        );
+
+        let mut thanks = shop(false);
+        thanks[0]["childIds"] = json!(["3"]);
+        thanks[6]["name"]["value"] = json!("Thanks for your order");
+        let thanks = outline(&tab(), &thanks, &mut refs, None);
+        assert_eq!(thanks.since(&closed), thanks.text());
+    }
+
+    /// With an element, the outline is of it alone; one gone from the page says so.
+    #[test]
+    fn an_outline_of_an_element_alone() {
+        let mut refs = Refs::default();
+        outline(&tab(), &shop(true), &mut refs, None);
+        assert_eq!(
+            outline(&tab(), &shop(true), &mut refs, Some(5)).text(),
+            "Tab 20: Shop\nURL: https://shop.example/\n\n\
+             - combobox \"Size\" [e5] (expanded)\n  - listbox \"Size\" [e6]\n    \
+             - option \"S\" [e7]\n    - option \"M\" [e8]"
+        );
+        let gone = outline(&tab(), &shop(false), &mut refs, Some(999)).text();
+        let note = "That element isn't on the page any more. Take a snapshot without a ref.";
+        assert!(gone.ends_with(note), "{gone}");
     }
 
     /// A page bigger than an agent should take in is cut, and says so.
@@ -460,7 +784,7 @@ mod tests {
             ids.iter()
                 .map(|id| node(id, "paragraph", &format!("Paragraph {id}"), &[])),
         );
-        let outline = outline(&tab(), &nodes, &mut Refs::default());
+        let outline = outline(&tab(), &nodes, &mut Refs::default(), None).text();
         assert!(outline.len() < MAX_OUTLINE + 1000);
         assert!(outline.ends_with("read_page has all of the page's text."));
     }

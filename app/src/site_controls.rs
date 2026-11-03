@@ -5,7 +5,8 @@
 //! connection. GPUI can't draw over the page's native view, so it's a window of its own that the
 //! host shows over the browser window, as its child, with the keyboard, as the command bar is,
 //! over a blur in its shape with a shadow. What it asks of its window and the core goes through
-//! `Host`.
+//! `Host`. Tab and the arrows take a ring over its tiles, rows and footer buttons, and space or
+//! return does what a click on the ringed one does (#1382).
 
 use std::{
     rc::Rc,
@@ -25,10 +26,14 @@ use crate::{
     palette::{self, Palette, STATE_HOVERED, STATE_PRESSED},
     passwords::{self, Login},
     shell::{Command, MenuEntry, cubic_bezier, scaled::scaled},
+    tokens::shell::{KEYED, KEYED_RING},
     tooltip,
 };
 
-actions!(site_controls, [Close]);
+actions!(
+    site_controls,
+    [Close, NextStop, PreviousStop, StopDown, StopUp, Press]
+);
 
 // Arc 1.170.0 cap, in a dark Space, 1 pt a pixel, except where a comment says ours.
 /// The body's width: a row of four tiles inside the padding.
@@ -112,6 +117,8 @@ use crate::tokens::site_controls::LINE;
 const OPEN: f32 = 0.15;
 const CLOSE: f32 = 0.1;
 const FROM_SCALE: f32 = 0.9;
+/// The keyboard's ring is this far outside a row's circle, as round a theme's swatch.
+const RING_GAP: f32 = 1.;
 
 /// A value of a site's permission, in Chrome's page info's words.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -494,6 +501,8 @@ struct Open {
     tip: Option<SharedString>,
     /// When its window was first on screen, where the motion starts.
     shown: Option<Instant>,
+    /// What the keyboard's ring is on, from the first Tab or arrow until a press.
+    keyed: Option<Stop>,
     settled: bool,
     /// Once it's closing: when, and how far it had opened.
     closing: Option<(Instant, f32)>,
@@ -531,6 +540,25 @@ impl Open {
     fn in_window(&self, frame: Bounds<Pixels>) -> Bounds<Pixels> {
         Bounds::new(self.at + frame.origin, frame.size)
     }
+}
+
+/// What the keyboard's ring can be on, down the panel: the tiles, the extensions' tiles and +, the
+/// Settings rows a click changes, the lock button while it shows a certificate, and "…". The
+/// headings' links, there only under the pointer, are the "…" menu's items too.
+#[derive(Clone, PartialEq, Debug)]
+enum Stop {
+    Tile(&'static str),
+    Extension(SharedString),
+    AddExtension,
+    Engine,
+    AdBlocking,
+    DeveloperMode,
+    Passwords,
+    /// By Chrome's ContentSettingsType.
+    Permission(i32),
+    Reset,
+    Lock,
+    More,
 }
 
 /// Where each part of the panel goes, down its window.
@@ -663,7 +691,16 @@ pub fn open_at(
     show: bool,
     cx: &mut App,
 ) -> Option<WindowHandle<SiteControls>> {
-    cx.bind_keys([KeyBinding::new("escape", Close, Some("SiteControls"))]);
+    let context = Some("SiteControls");
+    cx.bind_keys([
+        KeyBinding::new("escape", Close, context),
+        KeyBinding::new("tab", NextStop, context),
+        KeyBinding::new("shift-tab", PreviousStop, context),
+        KeyBinding::new("down", StopDown, context),
+        KeyBinding::new("up", StopUp, context),
+        KeyBinding::new("space", Press, context),
+        KeyBinding::new("enter", Press, context),
+    ]);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions {
@@ -741,6 +778,7 @@ pub fn show(
             hovered: None,
             tip: None,
             shown: None,
+            keyed: None,
             settled: false,
             closing: None,
             _leave: None,
@@ -1199,6 +1237,205 @@ impl SiteControls {
         }
     }
 
+    /// The stops the keyboard goes over, in their order down the panel, each with its frame in the
+    /// panel's window, which a menu hangs from: the circle's for a row.
+    fn stops(&self) -> Vec<(Stop, Bounds<Pixels>)> {
+        let Some(open) = self.open.as_ref().filter(|open| open.closing.is_none()) else {
+            return Vec::new();
+        };
+        let Some(site) = open.site.as_ref() else {
+            return Vec::new();
+        };
+        let at = layout(site, open.extensions.len(), open.beak.is_some());
+        let share = self.host.has_share_sheet();
+        let tiles = (TILES.iter())
+            .filter(|tile| share || tile.run != TileRun::Share)
+            .enumerate();
+        let mut stops: Vec<(Stop, Bounds<Pixels>)> = tiles
+            .map(|(index, tile)| {
+                let x = PADDING + index as f32 * (TILE_WIDTH + GAP);
+                (Stop::Tile(tile.name), Self::tile_frame(x, at.tiles))
+            })
+            .collect();
+        let extension = |index: usize| {
+            let (column, line) = (index % EXTENSIONS_PER_ROW, index / EXTENSIONS_PER_ROW);
+            let x = PADDING + column as f32 * (TILE_WIDTH + GAP);
+            Self::tile_frame(x, at.extensions + line as f32 * (TILE_HEIGHT + GAP))
+        };
+        for (index, each) in open.extensions.iter().enumerate() {
+            stops.push((Stop::Extension(each.id.clone()), extension(index)));
+        }
+        stops.push((Stop::AddExtension, extension(open.extensions.len())));
+        // The rows in render's order, a managed permission's taking its place without a stop.
+        let rows = [
+            site.system_engine.map(|_| Some(Stop::Engine)),
+            site.ad_blocking.map(|_| Some(Stop::AdBlocking)),
+            site.developer_mode.map(|_| Some(Stop::DeveloperMode)),
+            passwords::state(&site.logins).map(|_| Some(Stop::Passwords)),
+        ];
+        let permissions = (site.permissions.iter())
+            .map(|each| Some((!each.choices.is_empty()).then_some(Stop::Permission(each.kind))));
+        let reset = site.reset.as_ref().map(|_| Some(Stop::Reset));
+        let rows = rows
+            .into_iter()
+            .flatten()
+            .chain(permissions.flatten())
+            .chain(reset);
+        for (index, stop) in rows.enumerate() {
+            let y = at.rows + index as f32 * ROW_PITCH;
+            let circle = Bounds::new(point(px(PADDING), px(y)), size(px(CIRCLE), px(CIRCLE)));
+            stops.extend(stop.map(|stop| (stop, circle)));
+        }
+        let footer =
+            |x: f32| Bounds::new(point(px(x), px(at.footer)), size(px(FOOTER), px(FOOTER)));
+        if site.certificate {
+            stops.push((Stop::Lock, footer(PADDING)));
+        }
+        stops.push((Stop::More, footer(WIDTH - PADDING - FOOTER)));
+        stops
+    }
+
+    /// Moves the ring to the next stop, or the one before, round from the last to the first if
+    /// `round`, else stopping at the ends. From none it goes to the first, or back from the last.
+    fn key_step(&mut self, forward: bool, round: bool, cx: &mut Context<Self>) {
+        let stops = self.stops();
+        let Some(open) = self.open.as_ref().filter(|_| !stops.is_empty()) else {
+            return;
+        };
+        let at = (open.keyed.as_ref())
+            .and_then(|keyed| stops.iter().position(|(stop, _)| stop == keyed));
+        let last = stops.len() - 1;
+        let next = match (at, forward) {
+            (None, true) => 0,
+            (None, false) => last,
+            (Some(at), true) if at == last => {
+                if round {
+                    0
+                } else {
+                    last
+                }
+            }
+            (Some(at), true) => at + 1,
+            (Some(0), false) => {
+                if round {
+                    last
+                } else {
+                    0
+                }
+            }
+            (Some(at), false) => at - 1,
+        };
+        let (stop, frame) = stops[next].clone();
+        self.key_to(stop, frame, cx);
+    }
+
+    /// Rings `stop`, naming a tile, which shows a glyph alone, with its tooltip.
+    fn key_to(&mut self, stop: Stop, frame: Bounds<Pixels>, cx: &mut Context<Self>) {
+        let Some(open) = self.open.as_mut() else {
+            return;
+        };
+        // check.sh reads this line.
+        log!("browser: site controls keyed {stop:?}");
+        let tip = match &stop {
+            Stop::Tile(name) => TILES
+                .iter()
+                .find(|tile| tile.name == *name)
+                .map(|tile| tile.label.into()),
+            Stop::Extension(id) => open
+                .extensions
+                .iter()
+                .find(|each| &each.id == id)
+                .map(|each| each.title.clone()),
+            Stop::AddExtension => Some("Add Extension".into()),
+            _ => None,
+        };
+        open.keyed = Some(stop);
+        if open.tip.take().is_some() {
+            self.host.tooltip(None, cx);
+        }
+        if let Some(tip) = tip {
+            self.tooltip(tip, frame, true, cx);
+        }
+        cx.notify();
+    }
+
+    /// Space or return: what a click on the ringed stop does, a menu opening under it with its
+    /// first item highlighted, as a menu from the keyboard does.
+    fn key_press(&mut self, cx: &mut Context<Self>) {
+        let stops = self.stops();
+        let Some(open) = self.open.as_ref() else {
+            return;
+        };
+        let Some((stop, frame)) = (open.keyed.as_ref())
+            .and_then(|keyed| stops.into_iter().find(|(stop, _)| stop == keyed))
+        else {
+            return;
+        };
+        let Some(site) = open.site.clone() else {
+            return;
+        };
+        let under = point(frame.left(), frame.bottom());
+        let menu = matches!(
+            stop,
+            Stop::Engine | Stop::Passwords | Stop::Permission(_) | Stop::More
+        );
+        match stop {
+            Stop::Tile(name) => {
+                if let Some(&tile) = TILES.iter().find(|tile| tile.name == name) {
+                    self.run_tile(tile, frame, cx);
+                }
+            }
+            Stop::Extension(id) => {
+                let tile = open.in_window(frame);
+                self.run("extension", Run::Extension(id, tile), cx)
+            }
+            Stop::AddExtension => {
+                self.run("add-extension", Run::Command(Command::ManageExtensions), cx)
+            }
+            Stop::Engine => self.choose_engine(site.system_engine == Some(true), under, cx),
+            Stop::AdBlocking => self.toggle_ad_blocking(site.ad_blocking != Some(true), cx),
+            Stop::DeveloperMode => {
+                self.toggle_developer_mode(site.developer_mode != Some(true), cx)
+            }
+            Stop::Passwords => self.choose_login(site.logins.clone(), under, cx),
+            Stop::Permission(kind) => {
+                if let Some(permission) = site.permissions.iter().find(|each| each.kind == kind) {
+                    self.choose_value(permission.clone(), under, cx);
+                }
+            }
+            Stop::Reset => self.reset(cx),
+            Stop::Lock => self.run("certificate", Run::Certificate, cx),
+            Stop::More => self.more(under, cx),
+        }
+        if menu {
+            // After the host's own show, which waits for the overlays to open for a shortcut.
+            cx.defer(crate::menu::highlight_first);
+        }
+    }
+
+    /// The keyboard's ring, Focus Sidebar's, if it's on `stop`: inside a plate with corners of
+    /// `radius`, or with none `RING_GAP` round a row's circle, as round a theme's swatch.
+    fn ring(&self, stop: &Stop, radius: Option<f32>, cx: &App) -> Option<gpui::Div> {
+        let keyed = self.open.as_ref().and_then(|open| open.keyed.as_ref());
+        if keyed != Some(stop) {
+            return None;
+        }
+        let ring = div()
+            .absolute()
+            .border(px(KEYED_RING))
+            .border_color(palette::current(cx).plate(KEYED));
+        Some(match radius {
+            Some(radius) => ring.inset_0().rounded(px(radius)),
+            None => {
+                let reach = RING_GAP + KEYED_RING;
+                ring.left(px(-reach))
+                    .top(px(-reach))
+                    .size(px(CIRCLE + 2. * reach))
+                    .rounded_full()
+            }
+        })
+    }
+
     /// A tile `TILE_WIDTH` by `TILE_HEIGHT` at (`x`, `y`), named by its tooltip.
     fn tile_frame(x: f32, y: f32) -> Bounds<Pixels> {
         Bounds::new(point(px(x), px(y)), size(px(TILE_WIDTH), px(TILE_HEIGHT)))
@@ -1244,6 +1481,7 @@ impl SiteControls {
                     .size(px(tile.glyph_size))
                     .text_color(palette.on_overlay_glyph(TEXT)),
             )
+            .children(self.ring(&Stop::Tile(tile.name), Some(TILE_RADIUS), cx))
             .into_any_element()
     }
 
@@ -1293,6 +1531,11 @@ impl SiteControls {
                         let icon = img(icon).size(px(EXTENSION_ICON));
                         icon.when(!extension.enabled, |icon| icon.opacity(ACTION_DIMMED))
                     }))
+                    .children(self.ring(
+                        &Stop::Extension(extension.id.clone()),
+                        Some(TILE_RADIUS),
+                        cx,
+                    ))
                     .into_any_element()
             })
             .collect();
@@ -1310,6 +1553,7 @@ impl SiteControls {
                     .size(px(PLUS_GLYPH))
                     .text_color(palette.on_overlay_glyph(TEXT)),
             )
+            .children(self.ring(&Stop::AddExtension, Some(TILE_RADIUS), cx))
             .into_any_element(),
         );
         tiles
@@ -1465,6 +1709,7 @@ impl SiteControls {
         match permission.choices.is_empty() {
             true => row.opacity(MANAGED_OPACITY).into_any_element(),
             false => {
+                let row = row.children(self.ring(&Stop::Permission(permission.kind), None, cx));
                 let permission = permission.clone();
                 row.on_click(cx.listener(move |panel, event: &ClickEvent, _, cx| {
                     panel.choose_value(permission.clone(), event.position(), cx)
@@ -1529,7 +1774,8 @@ impl SiteControls {
                         panel.run("certificate", Run::Certificate, cx)
                     })),
                 false => button.opacity(DISABLED_OPACITY),
-            });
+            })
+            .children(self.ring(&Stop::Lock, Some(LOCK_RADIUS), cx));
         let more = div()
             .id("site-more")
             .absolute()
@@ -1551,7 +1797,8 @@ impl SiteControls {
                     .path("icons/ellipsis.svg")
                     .size(px(MORE_GLYPH))
                     .text_color(palette.on_overlay_glyph(TEXT)),
-            );
+            )
+            .children(self.ring(&Stop::More, Some(FOOTER / 2.), cx));
         [button.into_any_element(), more.into_any_element()]
     }
 }
@@ -1562,6 +1809,22 @@ impl Render for SiteControls {
             .key_context("SiteControls")
             .track_focus(&self.focus)
             .on_action(cx.listener(|panel, _: &Close, _, cx| panel.close("escape", cx)))
+            .on_action(cx.listener(|panel, _: &NextStop, _, cx| panel.key_step(true, true, cx)))
+            .on_action(
+                cx.listener(|panel, _: &PreviousStop, _, cx| panel.key_step(false, true, cx)),
+            )
+            .on_action(cx.listener(|panel, _: &StopDown, _, cx| panel.key_step(true, false, cx)))
+            .on_action(cx.listener(|panel, _: &StopUp, _, cx| panel.key_step(false, false, cx)))
+            .on_action(cx.listener(|panel, _: &Press, _, cx| panel.key_press(cx)))
+            // A press takes the ring away, as in the theme picker.
+            .on_any_mouse_down(cx.listener(|panel, _, _, cx| {
+                if let Some(open) = panel.open.as_mut().filter(|open| open.keyed.is_some()) {
+                    open.keyed = None;
+                    cx.notify();
+                }
+            }))
+            // A tooltip shows once the pointer rests (tooltip.rs).
+            .on_mouse_move(|_, _, cx| crate::tooltip::moved(cx))
             .size_full()
             .font_family(crate::face::UI);
         let Some(open) = self.open.as_mut() else {
@@ -1576,7 +1839,7 @@ impl Render for SiteControls {
             open.shown = Some(Instant::now());
         }
         let progress = open.progress();
-        let scale = FROM_SCALE + (1. - FROM_SCALE) * progress;
+        let scale = crate::motion::scale(FROM_SCALE + (1. - FROM_SCALE) * progress, cx);
         let origin = open.origin();
         let moving = open.moving();
         let settling = !moving && !open.settled;
@@ -1660,6 +1923,7 @@ impl Render for SiteControls {
                 let row = row.on_click(cx.listener(move |panel, event: &ClickEvent, _, cx| {
                     panel.choose_engine(on, event.position(), cx)
                 }));
+                let row = row.children(self.ring(&Stop::Engine, None, cx));
                 rows.push(row.into_any_element());
                 y += ROW_PITCH;
             }
@@ -1680,6 +1944,7 @@ impl Render for SiteControls {
                 let row = row.on_click(
                     cx.listener(move |panel, _, _, cx| panel.toggle_ad_blocking(!on, cx)),
                 );
+                let row = row.children(self.ring(&Stop::AdBlocking, None, cx));
                 rows.push(row.into_any_element());
                 y += ROW_PITCH;
             }
@@ -1690,6 +1955,7 @@ impl Render for SiteControls {
                 let row = row.on_click(
                     cx.listener(move |panel, _, _, cx| panel.toggle_developer_mode(!on, cx)),
                 );
+                let row = row.children(self.ring(&Stop::DeveloperMode, None, cx));
                 rows.push(row.into_any_element());
                 y += ROW_PITCH;
             }
@@ -1709,6 +1975,7 @@ impl Render for SiteControls {
                 let row = row.on_click(cx.listener(move |panel, event: &ClickEvent, _, cx| {
                     panel.choose_login(logins.clone(), event.position(), cx)
                 }));
+                let row = row.children(self.ring(&Stop::Passwords, None, cx));
                 rows.push(row.into_any_element());
                 y += ROW_PITCH;
             }
@@ -1727,6 +1994,7 @@ impl Render for SiteControls {
                     None,
                 );
                 let row = row.on_click(cx.listener(|panel, _, _, cx| panel.reset(cx)));
+                let row = row.children(self.ring(&Stop::Reset, None, cx));
                 rows.push(row.into_any_element());
             }
             rows

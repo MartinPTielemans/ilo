@@ -274,8 +274,8 @@ impl Render for DraggedRule {
     }
 }
 
-/// Settings' Links tab: a box of the rules, a row each, + under it, and where everything else
-/// opens.
+/// Settings' Links tab: a box of the rules, a row each with its trash, + under it, and where
+/// everything else opens.
 pub struct LinkRulesView {
     host: Rc<dyn Host>,
     rules: Rules,
@@ -286,6 +286,9 @@ pub struct LinkRulesView {
     focus: Option<usize>,
     /// What the last draw showed, which check.sh reads once each time it changes.
     drawn: Option<String>,
+    /// The rules the trash took, the last at the end, each with its place, which ⌘Z brings back
+    /// until Settings closes. A rule with no text goes without one: there's nothing to lose.
+    removed: Vec<(usize, Rule)>,
     _typed: Vec<Subscription>,
 }
 
@@ -298,6 +301,7 @@ impl LinkRulesView {
             choosing: None,
             focus: None,
             drawn: None,
+            removed: Vec::new(),
             _typed: Vec::new(),
         };
         view.make_fields(cx);
@@ -355,13 +359,33 @@ impl LinkRulesView {
         self.keep(cx);
     }
 
-    /// − on the rule at `index`.
+    /// The trash on the rule at `index`.
     pub fn remove(&mut self, index: usize, cx: &mut Context<Self>) {
         if index < self.rules.rules.len() {
-            self.rules.rules.remove(index);
+            let rule = self.rules.rules.remove(index);
+            if !rule.text.trim().is_empty() {
+                self.removed.push((index, rule));
+            }
             self.make_fields(cx);
             self.keep(cx);
         }
+    }
+
+    /// ⌘Z: the last rule the trash took, back at its place. Whether there was one.
+    pub fn undo(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some((index, rule)) = self.removed.pop() else {
+            return false;
+        };
+        let index = index.min(self.rules.rules.len());
+        self.rules.rules.insert(index, rule);
+        self.make_fields(cx);
+        self.keep(cx);
+        true
+    }
+
+    /// Settings closed: what the trash took stays gone.
+    pub fn forget_removed(&mut self) {
+        self.removed.clear();
     }
 
     /// The rule at `from` dragged onto the row at `to`, which it takes the place of.
@@ -517,7 +541,7 @@ impl LinkRulesView {
             POPUP_WIDTH,
             cx,
         );
-        let remove = icon_button(&look, ("remove-link-rule", index), "icons/minus.svg")
+        let remove = icon_button(&look, ("remove-link-rule", index), "icons/trash.svg")
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |view, _, _, cx| view.remove(index, cx)));
         let label: SharedString = format!("{} {}", rule.condition.title(), rule.text).into();

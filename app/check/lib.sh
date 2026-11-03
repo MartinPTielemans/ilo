@@ -35,8 +35,8 @@ themed=$(cased "$colors, Remove Theme Color")
 swatch_y=380
 swatch_x() { echo "$1" | awk '{ print 13 + 60.5 + 29.5 * $1 }'; }
 # Its profiles, in the one the check starts with, for a Space with tabs and an empty one.
-profile=$(cased "Profile › Default (checked), Profile › New Profile (disabled)")
-empty_profile=$(cased "Profile › Default (checked), Profile › New Profile")
+profile=$(cased "Set Profile › Default (checked), Set Profile › New Profile (disabled)")
+empty_profile=$(cased "Set Profile › Default (checked), Set Profile › New Profile")
 # The product's name, which the app's menus and alerts use, and the dev build's id.
 app_name=$(cat branding/name)
 app_id=dev.browser.app
@@ -64,6 +64,8 @@ cleanup() {
   [ -z "${scratch:-}" ] || rm -rf "$scratch"
   # A check VM that a run turned light or dark goes back to the appearance it had.
   [ -z "${dark_mode:-}" ] || appearance "$dark_mode" || true
+  # So does one whose Dock and menu bar a run hid.
+  [ -z "${bars:-}" ] || show_bars || true
   # A crash's minidump goes with the run's captures, once Crashpad's handler has written it.
   for _ in $(seq 60); do
     ls "$profile_dir"/Crashpad/new/*.dmp > /dev/null 2>&1 || break
@@ -210,6 +212,31 @@ quit_app() {
 # Turns the Mac's appearance dark (true) or light (false), as System Settings › Appearance does.
 appearance() {
   osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $1"
+}
+# Hides the Dock and, for the apps launched after, the menu bar, as System Settings › Desktop &
+# Dock and Control Center do, keeping what they were in $bars for show_bars.
+hide_bars() {
+  bars="$(defaults read com.apple.dock autohide 2>/dev/null || echo none)"
+  bars="$bars $(defaults read -g _HIHideMenuBar 2>/dev/null || echo none)"
+  defaults write com.apple.dock autohide -bool true
+  defaults write -g _HIHideMenuBar -bool true
+  killall Dock 2>/dev/null || true
+}
+# Puts the Dock and the menu bar back as hide_bars found them.
+show_bars() {
+  set -- $bars
+  bars=
+  case $1 in
+    none) defaults delete com.apple.dock autohide ;;
+    1) defaults write com.apple.dock autohide -bool true ;;
+    *) defaults write com.apple.dock autohide -bool false ;;
+  esac
+  case $2 in
+    none) defaults delete -g _HIHideMenuBar ;;
+    1) defaults write -g _HIHideMenuBar -bool true ;;
+    *) defaults write -g _HIHideMenuBar -bool false ;;
+  esac
+  killall Dock 2>/dev/null || true
 }
 quit() {
   quit_app
@@ -401,13 +428,15 @@ expect_tabs() {
   expect "^browser: today $1\$" "$3: Today is \"$(today)\", not \"$1\""
   expect "^browser: selected $2\( in .*\)\{0,1\}\$" "$3: tab $2 isn't shown"
 }
-# Opens a tab from the command bar, to https://$1.
+# Opens a tab from the command bar, to https://$1. The scheme is typed: a bare host goes to http
+# and Chrome's HTTPS-Upgrades takes it to https, falling back to http when the runner's https is
+# slow or fails (#1261), and the runs that follow expect https. history checks the upgrade itself.
 open_from_bar() {
   before=$(today)
   send key t cmd
   expect '^browser: command bar shown$' "⌘T didn't open the command bar"
   expect '^browser: new tab plate 1$' "⌘T didn't give New Tab the selected plate"
-  send type "$1"
+  send type "https://$1"
   send key return
   expect "^browser: today [0-9][0-9]*${before:+ $before}\$" "the tab for $1 didn't open at the top of Today"
   tab=$(today | cut -d' ' -f1)
@@ -577,7 +606,9 @@ start_with_cdp() {
   helper=$!
   exec 5> "$scratch/cdp"
 }
-# Starts the check's web server, in site.sh, unless a run before has. Its pages are at $site.
+# Starts the check's web server, in site.sh, unless a run before has. Its pages are at $site. It
+# serves every run after, so only cleanup stops it: a run that did would leave the next its address
+# and no server (#1369).
 serve() {
   [ -n "${site:-}" ] || . check/site.sh
 }

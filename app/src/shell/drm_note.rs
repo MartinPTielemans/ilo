@@ -81,7 +81,7 @@ const WIDEVINE_RESTART_WORDS: &str = concat!(
     env!("APP_NAME"),
     " to play this video."
 );
-const WIDEVINE_RESTART: &str = concat!("Restart ", env!("APP_NAME"));
+const WIDEVINE_RESTART: &str = crate::widevine::RESTART;
 /// Ours: what the × does, as there's no second control for it.
 const CLOSE_TIP: &str = "Don't Show for This Site";
 /// What the core reports for a page in Safari's engine whose protected video is kept off the

@@ -25,7 +25,7 @@ use browser::passwords::{self, Login};
 use browser::shell::{self, CancelName, Command, Holder, KeepName, MenuEntry, Refused, UserKeys};
 use browser::text_input::{self, TextInput};
 use browser::theme::Appearance;
-use browser::updates::VersionRow;
+use browser::updates::{self, NightlyRow, Track, VersionRow};
 use browser::widevine::{self, Widevine, WidevineRow};
 use gpui::{
     AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, FontWeight,
@@ -367,9 +367,12 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
                 Keys::Of(Command::SeparatePane),
             ),
             ("Expand Current Split", Keys::Of(Command::ExpandSplit)),
-            ("Separate All Pages", Keys::Of(Command::SeparateSplit)),
+            ("Separate All Tabs", Keys::Of(Command::SeparateSplit)),
             ("Flip Split View", Keys::Of(Command::FlipSplit)),
-            ("Change Orientation", Keys::Of(Command::ChangeOrientation)),
+            (
+                "Convert to Vertical/Horizontal Split View",
+                Keys::Of(Command::ChangeOrientation),
+            ),
             ("Move Pane Left", Keys::Of(Command::MovePaneLeft)),
             ("Move Pane Right", Keys::Of(Command::MovePaneRight)),
         ],
@@ -503,6 +506,8 @@ pub struct Settings {
     widevine: Entity<WidevineRow>,
     /// About's first row, which says where the update stands.
     version: Entity<VersionRow>,
+    /// About's second row, where the build carries a nightly feed: Get nightly builds.
+    nightly: Entity<NightlyRow>,
     /// Draws the Agents tab again as the agents change.
     _agents: Option<Subscription>,
 }
@@ -689,6 +694,10 @@ impl widevine::Module for Module {
     fn remove(&self) {
         unsafe { bc::bc_widevine_remove() };
     }
+
+    fn restart(&self, cx: &mut App) {
+        crate::restart_browser(cx);
+    }
 }
 
 struct Renaming {
@@ -705,6 +714,8 @@ struct Profile {
     spaces: usize,
     /// As the core has it: not the one it started with, nor one a Space or a favorite is in.
     deletable: bool,
+    /// Why it has no Delete, for the line under its name.
+    kept: Option<SharedString>,
     /// Whether one of the user's Spaces is in it, for Clear Browsing Data's tab.
     users_space: bool,
 }
@@ -772,14 +783,20 @@ fn profiles() -> Vec<Profile> {
         .into_iter()
         .map(of_tab)
         .collect();
-    (crate::ids(bc::bc_profiles).into_iter().enumerate())
+    let ids = crate::ids(bc::bc_profiles);
+    let total = ids.len();
+    (ids.into_iter().enumerate())
         .map(|(index, id)| {
             let count = spaces.iter().filter(|&&each| each == id).count();
+            let listed = listed.iter().filter(|&&each| each == id).count();
+            let favorites = favorites.contains(&id);
+            let kept = shell::profile_kept(index == 0, total, listed, count > listed, favorites);
             Profile {
                 id,
                 name: crate::name(bc::bc_profile_name, id),
-                spaces: listed.iter().filter(|&&each| each == id).count(),
-                deletable: index > 0 && count == 0 && !favorites.contains(&id),
+                spaces: listed,
+                deletable: index > 0 && count == 0 && !favorites,
+                kept: kept.map(Into::into),
                 users_space: users.contains(&id),
             }
         })
@@ -1009,6 +1026,9 @@ fn open(cx: &mut App) {
         CloseSettings,
         Some("Settings"),
     )]);
+    // ⌘Z, Ctrl+Z off the Mac, which has no menu bar to send it; a field's own comes first.
+    let undo = Box::new(browser::text_input::Undo);
+    cx.bind_keys([shell::view_binding("cmd-z", undo, "Settings", cx)]);
     account::bind_keys(cx);
     let synced = account::synced(cx);
     let options = WindowOptions {
@@ -1075,7 +1095,10 @@ fn open(cx: &mut App) {
             cx.observe(&account, |_, _, cx| cx.notify()).detach();
             let widevine = cx.new(|_| WidevineRow::new(Rc::new(Module)));
             cx.observe(&widevine, |_, _, cx| cx.notify()).detach();
-            let version = cx.new(|cx| VersionRow::new(version(), cx));
+            let version = cx.new(|cx| VersionRow::new(version(cx), cx));
+            let nightly = cx.new(NightlyRow::new);
+            // The row shows only where the updater can follow its choice, which it says at launch.
+            updates::observe_view(cx, |_, cx| cx.notify()).detach();
             let agents = agents::global(cx);
             let agents = agents.map(|agents| cx.observe(&agents, |_, _, cx| cx.notify()));
             let search = cx.new(|cx| {
@@ -1100,6 +1123,7 @@ fn open(cx: &mut App) {
                 default_browser,
                 widevine,
                 version,
+                nightly,
                 _agents: agents,
                 tab: Tab::General,
                 focus: cx.focus_handle(),
@@ -1210,13 +1234,36 @@ fn windows_close_button(at: gpui::Canvas<()>) -> AnyElement {
         .into_any_element()
 }
 
-fn hide(_: &mut App) {
+fn hide(cx: &mut App) {
     // check.sh waits for this line.
     log!("browser: settings hidden");
     unsafe { platform::host_hide_settings() };
+    // Later, as it can come from inside the window's own update. What Links' ⌘Z would bring back
+    // goes with the window, as the issue's "until Settings closes" (#1377).
+    cx.defer(|cx| {
+        if let Some(window) = cx.try_global::<SettingsWindow>().map(|settings| settings.0) {
+            window
+                .update(cx, |settings, _, cx| settings.forget_undo(cx))
+                .ok();
+        }
+    });
 }
 
 impl Settings {
+    /// ⌘Z: on the Links tab, the last rule its trash took comes back. The other tabs' changes
+    /// show as they're made and are made back the same way.
+    fn undo(&mut self, cx: &mut Context<Self>) {
+        if let Some(links) = self.links.as_ref().filter(|_| self.tab == Tab::Links) {
+            links.update(cx, |links, cx| links.undo(cx));
+        }
+    }
+
+    fn forget_undo(&mut self, cx: &mut Context<Self>) {
+        if let Some(links) = &self.links {
+            links.update(cx, |links, _| links.forget_removed());
+        }
+    }
+
     fn show_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
         if tab == self.tab {
             return;
@@ -1569,7 +1616,7 @@ impl Settings {
                 // check.sh waits for this line.
                 log!("browser: {name} {}", if on { "off" } else { "on" });
                 set(!on, cx);
-                settings.switched = Some((name, Instant::now()));
+                settings.switched = Some((name, browser::motion::start(cx)));
                 cx.notify();
             }))
             .relative()
@@ -1751,9 +1798,9 @@ impl Settings {
         cx.notify();
     }
 
-    /// A row for each profile, with how many Spaces are in it and Delete for one nothing is in, and
-    /// New Profile under them, then each profile's New Documents. A double-click on a profile's name
-    /// renames it, as on a Space's.
+    /// A row for each profile, with how many Spaces are in it, Rename, and Delete for one nothing is
+    /// in, else a line under its name saying why it has none, and New Profile under them, then each
+    /// profile's New Documents. A double-click on a profile's name renames it too, as on a Space's.
     fn profiles(&self, profiles: &[Profile], cx: &mut Context<Self>) -> AnyElement {
         let services: Vec<_> = profiles
             .iter()
@@ -1761,10 +1808,12 @@ impl Settings {
             .collect();
         let rows = profiles.iter().map(|profile| {
             let (id, name) = (profile.id, profile.name.clone());
+            let naming = self
+                .renaming
+                .as_ref()
+                .is_some_and(|renaming| renaming.profile == id);
             let label = match &self.renaming {
                 Some(renaming) if renaming.profile == id => div()
-                    .flex_1()
-                    .min_w_0()
                     .key_context("Naming")
                     .on_action(cx.listener(|settings, _: &KeepName, window, cx| {
                         settings.keep_name(window, cx)
@@ -1775,8 +1824,6 @@ impl Settings {
                     .child(renaming.name.clone()),
                 _ => div()
                     .relative()
-                    .flex_1()
-                    .min_w_0()
                     .truncate()
                     .child(self.drawn(format!("profile {id}")))
                     .on_mouse_down(
@@ -1789,11 +1836,36 @@ impl Settings {
                     )
                     .child(profile.name.clone()),
             };
+            // Under the name in its row, as a login's username is under its site in Passwords.
+            let kept = profile.kept.clone().map(|why| {
+                div()
+                    .truncate()
+                    .text_size(px(USERNAME_SIZE))
+                    .text_color(rgb(DETAIL))
+                    .child(why)
+            });
+            let label = div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(label)
+                .children(kept);
             let spaces: SharedString = match profile.spaces {
                 0 => "No Spaces".into(),
                 1 => "1 Space".into(),
                 count => format!("{count} Spaces").into(),
             };
+            let rename = (!naming).then(|| {
+                let name = profile.name.clone();
+                let button = button(&RowLook::settings(), ("rename-profile", id), "Rename");
+                let button = button
+                    .relative()
+                    .child(self.drawn(format!("rename profile {id}")));
+                button.ml(px(PADDING)).on_click(
+                    cx.listener(move |settings, _, _, cx| settings.rename(id, name.clone(), cx)),
+                )
+            });
             let name = profile.name.clone();
             let delete = profile.deletable.then(|| {
                 let button = button(&RowLook::settings(), ("delete-profile", id), "Delete");
@@ -1818,6 +1890,7 @@ impl Settings {
                         .text_color(rgb(DETAIL))
                         .child(spaces),
                 )
+                .children(rename)
                 .children(delete.map(|delete| delete.ml(px(PADDING))));
             // Its own settings under it, as Arc's Settings › Profiles keeps them: none to show
             // until the core has loaded it.
@@ -2926,22 +2999,29 @@ impl Settings {
             .into_any_element()
     }
 
-    /// Google's Widevine module, where the core offers it: where it is, and the way to get it or
-    /// remove it. The user's, as the note's yes is.
+    /// Google's Widevine module, where the core offers it: where it is, and the ways to get it,
+    /// load it or remove it. The user's, as the note's yes is.
     fn widevine_row(&self, cx: &mut Context<Self>) -> gpui::Div {
         let row = self.widevine.read(cx);
-        let action = row.action().map(|(action, title)| {
+        let (title, detail, actions) = (row.title(), row.detail(), row.actions());
+        let buttons = actions.iter().enumerate().map(|(index, &(action, title))| {
             let act = cx.listener(move |settings: &mut Self, _, _, cx| {
                 log!("browser: settings widevine {action:?}");
-                settings.widevine.read(cx).act(action);
+                settings.widevine.update(cx, |row, cx| row.act(action, cx));
             });
-            button(&RowLook::settings(), "widevine", title).on_click(act)
+            let what = format!("widevine {}", format!("{action:?}").to_lowercase());
+            button(&RowLook::settings(), ("widevine", index), title)
+                .relative()
+                .child(self.drawn(what))
+                .on_click(act)
         });
-        detailed_row(
-            row.title(),
-            row.detail(),
-            action.map(IntoElement::into_any_element),
-        )
+        let buttons = div()
+            .flex()
+            .items_center()
+            .gap(px(PADDING))
+            .children(buttons);
+        let control = (!actions.is_empty()).then(|| buttons.into_any_element());
+        detailed_row(title, detail, control)
     }
 
     /// Gives the renaming field the keyboard once its profile is listed, which a new one is once
@@ -3320,20 +3400,26 @@ thread_local! {
     static ABOUT_LOGGED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
-/// The app's version and its engine's.
-fn version() -> String {
-    let version = format!("Version {}", build_info::version());
+/// The app's version and its engine's: a nightly's says so first, as long as a release's says
+/// Version, so About's first row reads the same width.
+fn version(cx: &App) -> String {
+    let built = match updates::built(cx) {
+        Track::Nightly => "Nightly",
+        Track::Release => "Version",
+    };
+    let version = format!("{built} {}", build_info::version());
     match build_info::ENGINE_VERSION.as_deref() {
         Some(engine) => format!("{version}, on Chromium {engine}"),
         None => version,
     }
 }
 
-/// The app's version and its engine's, where its update stands, the licence it's under, and the
-/// notices of what it's built from, each of which opens in a tab.
-fn about(version_row: &Entity<VersionRow>) -> AnyElement {
+/// The app's version and its engine's, where its update stands and, where the build carries a
+/// nightly feed, whether it takes nightly builds, then the licence it's under and the notices of
+/// what it's built from, each of which opens in a tab.
+fn about(version_row: &Entity<VersionRow>, nightly: &Entity<NightlyRow>, cx: &App) -> AnyElement {
     // check.sh reads the engine's version here.
-    let line = format!("browser: settings about {}", version());
+    let line = format!("browser: settings about {}", version(cx));
     ABOUT_LOGGED.with_borrow_mut(|logged| {
         if logged.insert(line.clone()) {
             log!("{line}");
@@ -3363,6 +3449,7 @@ fn about(version_row: &Entity<VersionRow>) -> AnyElement {
                 .into_any_element()
         })
     };
+    let offered = updates::followed(cx).is_some();
     let notices = [
         detailed_row(
             "Licence",
@@ -3392,7 +3479,12 @@ fn about(version_row: &Entity<VersionRow>) -> AnyElement {
     div()
         .child(group(
             &RowLook::settings(),
-            [div().child(version_row.clone())],
+            [
+                Some(div().child(version_row.clone())),
+                offered.then(|| div().child(nightly.clone())),
+            ]
+            .into_iter()
+            .flatten(),
         ))
         .child(group(&RowLook::settings(), notices).mt(px(BOX_GAP)))
         .into_any_element()
@@ -3694,7 +3786,7 @@ impl Render for Settings {
                 None => div().into_any_element(),
             },
             Tab::Advanced => self.advanced(accent, cx),
-            Tab::About => about(&self.version),
+            Tab::About => about(&self.version, &self.nightly, cx),
         };
         div()
             // While a command's key is recorded, every key is the recording's, ⌘W too.
@@ -3706,6 +3798,9 @@ impl Render for Settings {
                 settings.record(&event.keystroke, cx)
             }))
             .on_action(|_: &CloseSettings, _, cx| hide(cx))
+            .on_action(
+                cx.listener(|settings, _: &browser::text_input::Undo, _, cx| settings.undo(cx)),
+            )
             .size_full()
             .flex()
             .flex_col()

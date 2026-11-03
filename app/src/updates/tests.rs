@@ -22,6 +22,13 @@ impl Host for Recorder {
     fn restart(&self, _: &mut App) {
         self.asked.borrow_mut().push("restart");
     }
+
+    fn follow(&self, track: Track, _: &mut App) {
+        self.asked.borrow_mut().push(match track {
+            Track::Release => "follow releases",
+            Track::Nightly => "follow nightlies",
+        });
+    }
 }
 
 struct Shown<'a> {
@@ -178,6 +185,57 @@ fn a_dev_build_has_no_button(cx: &mut TestAppContext) {
     );
 }
 
+/// A launch that's older than the update the last quit started installing is the copy it was to
+/// replace, so the install didn't go in: the row says so at once, with Try Again, which checks
+/// again (#1459). A launch that's the update, or newer, says nothing of it.
+#[gpui::test]
+fn a_launch_older_than_the_update_installed_says_it_didn_t_install(cx: &mut TestAppContext) {
+    assert!(went_in(1572, 1572), "the update's own build");
+    assert!(
+        went_in(1572, 1580),
+        "a newer build, as one installed by hand"
+    );
+    assert!(!went_in(1572, 1571), "the build it was to replace");
+    let mut about = shown(Updater::Own, cx);
+    about.cx.update(|_, cx| didnt_install(cx));
+    about.cx.run_until_parked();
+    assert_eq!(
+        about.reads(),
+        (Some("The update didn’t install".into()), Some("Try Again"))
+    );
+    about.click();
+    assert_eq!(about.asked(), ["check"]);
+    about.says(Stage::Checking);
+    assert_eq!(about.reads(), (Some("Checking…".into()), None));
+}
+
+/// On Linux, a profile's launches, each of a version: the first launch of a newer one opens its
+/// changelog entry, once, and a new profile's first launch and a downgrade open nothing (#1495).
+#[test]
+fn only_the_first_launch_of_a_newer_version_opens_its_notes() {
+    let dir = std::env::temp_dir().join(format!("ilo-last-version-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("last-version");
+    let launch = |version: &str| first_launch_notes(&file, version);
+    let notes = |version: &str| Some(format!("{}#{version}", crate::build_info::WHATS_NEW));
+    assert_eq!(launch("0.1.9"), None, "a new profile's first launch");
+    assert_eq!(launch("0.1.9"), None, "the same version again");
+    assert_eq!(
+        launch("0.1.10"),
+        notes("0.1.10"),
+        "an update, numbered past 0.1.9"
+    );
+    assert_eq!(launch("0.1.10"), None, "the update's next launch");
+    assert_eq!(launch("0.1.9"), None, "a downgrade");
+    assert_eq!(
+        launch("0.2.0"),
+        notes("0.2.0"),
+        "an update after the downgrade"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// The ways back: a failed check says so and tries again; a failed download or install says the
 /// update didn't install; and when the user closes the updater's own window, the row offers the
 /// check again.
@@ -202,4 +260,163 @@ fn a_failure_or_a_cancel_offers_the_check_again(cx: &mut TestAppContext) {
     assert_eq!(about.reads(), (Some("An update is available".into()), None));
     about.says(Stage::Idle);
     assert_eq!(about.reads(), (None, Some("Check for Updates")));
+}
+
+/// About's nightly row and the version row above it, drawn for a copy `updater` updates, which is
+/// one of `built`'s builds and takes `followed`'s.
+struct Nightly<'a> {
+    row: Entity<NightlyRow>,
+    version: Entity<VersionRow>,
+    cx: &'a mut VisualTestContext,
+    host: Rc<Recorder>,
+}
+
+fn nightly(
+    updater: Updater,
+    built: Track,
+    followed: Option<Track>,
+    cx: &mut TestAppContext,
+) -> Nightly<'_> {
+    let host = Rc::new(Recorder::default());
+    let asked = host.clone();
+    cx.update(|cx| {
+        start(updater, asked, cx);
+        tracks(built, followed, cx);
+    });
+    let (row, cx) = cx.add_window_view(|_, cx| NightlyRow::new(cx));
+    let version = cx.new(|cx| VersionRow::new("Version 0.2.0 (1688)", cx));
+    cx.run_until_parked();
+    Nightly {
+        row,
+        version,
+        cx,
+        host,
+    }
+}
+
+impl Nightly<'_> {
+    /// What the row says under its name, and whether its switch is on, if the row is drawn.
+    fn reads(&mut self) -> Option<(&'static str, bool)> {
+        let drawn = self
+            .row
+            .read_with(self.cx, |row, _| row.switch_bounds().is_some());
+        let shown = self
+            .cx
+            .update(|_, cx| followed(cx).map(|followed| (built(cx), followed)));
+        assert_eq!(
+            drawn,
+            shown.is_some(),
+            "the switch drawn isn't the row offered"
+        );
+        shown.map(|(built, followed)| (nightly_words(built, followed), followed == Track::Nightly))
+    }
+
+    /// Clicks the switch, which must be drawn.
+    fn click(&mut self) {
+        let bounds = self.row.read_with(self.cx, |row, _| row.switch_bounds());
+        let bounds = bounds.expect("no switch drawn");
+        self.cx.simulate_click(bounds.center(), Modifiers::none());
+        self.cx.run_until_parked();
+    }
+
+    fn says(&mut self, stage: Stage) {
+        self.cx.update(|_, cx| changed(stage, cx));
+        self.cx.run_until_parked();
+    }
+
+    /// What the version row says, and its button's title.
+    fn version_reads(&mut self) -> (Option<String>, Option<&'static str>) {
+        _ = &self.version;
+        let (said, action) = self.cx.update(|_, cx| words(updater(cx), &stage(cx)));
+        (
+            said.map(|said| said.to_string()),
+            action.map(|(_, title)| title),
+        )
+    }
+
+    fn asked(&self) -> Vec<&'static str> {
+        self.host.asked.take()
+    }
+}
+
+const NIGHTLY_LINE: &str = concat!(
+    "Each night’s build of ",
+    env!("APP_NAME"),
+    ", ahead of the next release."
+);
+const KEEPS_LINE: &str = concat!(
+    env!("APP_NAME"),
+    " keeps this build until a release is newer."
+);
+
+/// On a release, the switch starts off and says what a nightly is. Turned on, the updater reads
+/// the nightly feed and checks it at once; turned off again, it reads the releases' and checks
+/// nothing, as the release running is the newest it would take.
+#[gpui::test]
+fn the_switch_turns_nightly_builds_on_and_off(cx: &mut TestAppContext) {
+    let mut about = nightly(Updater::Own, Track::Release, Some(Track::Release), cx);
+    assert_eq!(about.reads(), Some((NIGHTLY_LINE, false)));
+    about.click();
+    assert_eq!(about.asked(), ["follow nightlies", "check"]);
+    assert_eq!(about.reads(), Some((NIGHTLY_LINE, true)));
+    about.click();
+    assert_eq!(about.asked(), ["follow releases"]);
+    assert_eq!(about.reads(), Some((NIGHTLY_LINE, false)));
+}
+
+/// A nightly starts on. Turned off, it never goes back to an older release: the updater reads the
+/// releases' feed, which it installs only a build numbered above this one from, so the row says
+/// this build stays until a release is newer, and nothing is installed meanwhile. Turned on again,
+/// it checks the nightly feed at once.
+#[gpui::test]
+fn a_nightly_turned_off_keeps_its_build(cx: &mut TestAppContext) {
+    let mut about = nightly(Updater::Own, Track::Nightly, Some(Track::Nightly), cx);
+    assert_eq!(about.reads(), Some((NIGHTLY_LINE, true)));
+    about.click();
+    assert_eq!(about.asked(), ["follow releases"]);
+    assert_eq!(about.reads(), Some((KEEPS_LINE, false)));
+    // The release feed's newest is older than this nightly, so the updater has nothing to offer.
+    about.says(Stage::Checking);
+    about.says(Stage::Current);
+    let up_to_date = concat!(env!("APP_NAME"), " is up to date");
+    assert_eq!(
+        about.version_reads(),
+        (Some(up_to_date.into()), Some("Check for Updates"))
+    );
+    assert!(about.asked().is_empty());
+    about.click();
+    assert_eq!(about.asked(), ["follow nightlies", "check"]);
+    assert_eq!(about.reads(), Some((NIGHTLY_LINE, true)));
+}
+
+/// The choice is the user's, kept across launches by the host: a nightly whose user turned it off
+/// starts off, saying it keeps its build.
+#[gpui::test]
+fn a_nightly_turned_off_before_starts_off(cx: &mut TestAppContext) {
+    let mut about = nightly(Updater::Own, Track::Nightly, Some(Track::Release), cx);
+    assert_eq!(about.reads(), Some((KEEPS_LINE, false)));
+    assert!(about.asked().is_empty());
+}
+
+/// There's no row where nothing would follow the choice: a build with no nightly feed, a copy the
+/// Microsoft Store updates, or a dev build. Asked to follow nightlies there, nothing is asked of
+/// the updater.
+#[gpui::test]
+fn only_a_copy_with_a_nightly_feed_offers_it(_: &mut TestAppContext) {
+    let cases = [
+        (Updater::Own, None),
+        (Updater::Store, Some(Track::Release)),
+        (Updater::None, Some(Track::Release)),
+    ];
+    for (updater, followed) in cases {
+        let mut cx = TestAppContext::single();
+        let mut about = nightly(updater, Track::Release, followed, &mut cx);
+        assert_eq!(
+            about.reads(),
+            None,
+            "{updater:?} with {followed:?} offers nightly builds"
+        );
+        about.cx.update(|_, cx| follow(Track::Nightly, cx));
+        assert!(about.asked().is_empty());
+    }
 }

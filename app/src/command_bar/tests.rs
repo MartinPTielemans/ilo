@@ -25,12 +25,17 @@ struct Recorder {
     levels: RefCell<Vec<(Level, Option<f32>)>>,
     heights: RefCell<Vec<f32>>,
     commands: bool,
+    /// Commands that do nothing now, so the bar isn't offered them, such as a split's outside one.
+    idle: Vec<shell::Command>,
     elsewhere: RefCell<HashMap<u64, u64>>,
     /// The agents ⇥ asks, None while tasks are off, and the page the user is on.
     agents: RefCell<Option<TaskAgents>>,
     page: Option<(SharedString, SharedString)>,
     /// The bar shows over a private window.
     private: bool,
+    /// The tooltips asked for and ended, apart from the rest, and where each hangs from.
+    tips: RefCell<Vec<String>>,
+    anchors: RefCell<Vec<Anchor>>,
 }
 
 impl Recorder {
@@ -145,7 +150,10 @@ impl Host for Recorder {
         if !self.commands {
             return Vec::new();
         }
-        shell::find_commands(text, &shell::UserKeys::default(), |name, _| Some(name))
+        let keys = shell::UserKeys::default();
+        shell::find_commands(text, &keys, |name, command| {
+            (!self.idle.contains(&command)).then_some(name)
+        })
     }
 
     fn task_agents(&self, _: &App) -> Option<TaskAgents> {
@@ -177,6 +185,16 @@ impl Host for Recorder {
 
     fn set_up_agents(&self, _: &mut App) {
         self.record("set up agents".into());
+    }
+
+    fn tooltip(&self, tip: Option<(Tip, Anchor)>, _: &mut App) {
+        let Some((tip, anchor)) = tip else {
+            return self.tips.borrow_mut().push("no tooltip".into());
+        };
+        self.tips
+            .borrow_mut()
+            .push(format!("tooltip {} {}", tip.text, tip.keys.join(" ")));
+        self.anchors.borrow_mut().push(anchor);
     }
 }
 
@@ -226,13 +244,23 @@ impl Bar {
         )
     }
 
+    /// The bar, opened for a new tab, finding the browser's commands but `idle`.
+    fn with_commands_but(cx: &mut TestAppContext, idle: &[shell::Command]) -> Self {
+        let host = Recorder {
+            commands: true,
+            idle: idle.to_vec(),
+            ..Recorder::default()
+        };
+        Bar::open(cx, Vec::new(), host)
+    }
+
     /// The bar, opened for a new tab in a Space with `tabs`.
     fn with_tabs(cx: &mut TestAppContext, tabs: Vec<shell::BarTab>) -> Self {
         Bar::open(cx, tabs, Recorder::default())
     }
 
     fn open(cx: &mut TestAppContext, tabs: Vec<shell::BarTab>, host: Recorder) -> Self {
-        Bar::opened(cx, host, |cx| show(None, tabs, None, cx))
+        Bar::opened(cx, host, |cx| show(None, Vec::new(), tabs, None, cx))
     }
 
     /// The bar, opened for Search Tabs on `tabs`.
@@ -353,6 +381,11 @@ impl Bar {
         self.host.calls.take()
     }
 
+    /// The tooltips asked for and ended since the last time.
+    fn tips(&self) -> Vec<String> {
+        self.host.tips.take()
+    }
+
     /// Where the host was asked to show the bar since the last time.
     fn shown(&self) -> Vec<String> {
         self.host.shown.take()
@@ -361,7 +394,9 @@ impl Bar {
     /// Opens the bar again on tab 1's `url`, over `field` if it's the URL field's box.
     fn edit(&mut self, url: &str, field: Option<Bounds<Pixels>>) {
         let editing = Some((1, SharedString::from(url.to_string())));
-        self.cx.cx.update(|cx| show(editing, Vec::new(), field, cx));
+        self.cx
+            .cx
+            .update(|cx| show(editing, Vec::new(), Vec::new(), field, cx));
         self.cx.run_until_parked();
     }
 
@@ -479,13 +514,19 @@ impl Bar {
         self.cx.run_until_parked();
     }
 
-    /// A click where row `index` shows its ✕ under the pointer, at its end.
+    /// A click where row `index` shows its trash under the pointer, at its end.
     fn click_remove(&mut self, index: usize) {
         self.point_at(index);
-        let x = WIDTH - LIST_X - PLATE_INSET - ROW_END - 3. - ICON_BOX / 2.;
-        let y = height(0) + LINE + LIST_TOP + (index as f32 + 0.5) * ROW_HEIGHT;
         self.cx
-            .simulate_click(point(px(x), px(y)), Modifiers::none());
+            .simulate_click(remove_button(index), Modifiers::none());
+        self.cx.run_until_parked();
+    }
+
+    /// The pointer comes onto row `index`, then onto the remove button it shows at its end.
+    fn point_at_remove(&mut self, index: usize) {
+        self.point_at(index);
+        self.cx
+            .simulate_mouse_move(remove_button(index), None, Modifiers::none());
         self.cx.run_until_parked();
     }
 
@@ -498,6 +539,13 @@ impl Bar {
             })
             .unwrap()
     }
+}
+
+/// The middle of the remove button at the end of row `index`, in the bar's window.
+fn remove_button(index: usize) -> gpui::Point<gpui::Pixels> {
+    let x = WIDTH - LIST_X - PLATE_INSET - ROW_END - 3. - ICON_BOX / 2.;
+    let y = height(0) + LINE + LIST_TOP + (index as f32 + 0.5) * ROW_HEIGHT;
+    point(px(x), px(y))
 }
 
 /// A row for a page from the profile's history, which ⇧⌦ can take out.
@@ -849,11 +897,11 @@ fn shift_delete_takes_a_page_out_of_history(cx: &mut TestAppContext) {
     assert_eq!(bar.calls(), ["open https://b.test/", "hide"]);
 }
 
-/// A page from history, or a search typed before, shows a ✕ under the pointer that takes it out,
-/// as Arc's does, and ⌥⌘⌫ takes out the selected one, as ⇧⌦ does. The search for what's typed
-/// and the well-known sites have none: there a click at the row's end takes the row.
+/// A page from history, or a search typed before, shows a trash under the pointer that takes it
+/// out, where Arc's has a ✕, and ⌥⌘⌫ takes out the selected one, as ⇧⌦ does. The search for
+/// what's typed and the well-known sites have none: there a click at the row's end takes the row.
 #[gpui::test]
-fn the_pointer_shows_a_cross_that_takes_a_suggestion_out(cx: &mut TestAppContext) {
+fn the_pointer_shows_a_trash_that_takes_a_suggestion_out(cx: &mut TestAppContext) {
     let mut bar = Bar::new(cx);
     bar.type_text("ex");
     let typed_before = Suggestion {
@@ -883,6 +931,66 @@ fn the_pointer_shows_a_cross_that_takes_a_suggestion_out(cx: &mut TestAppContext
         bar.calls(),
         [format!("open {}", search("ex")), "hide".into()]
     );
+}
+
+/// A history row's remove button names itself and its key in a tooltip, Arc's ⌥⌘⌫ on the Mac and
+/// ⇧⌦ off it, which hangs from the button in the bar's window and stays inside it. The tooltip goes
+/// as the pointer leaves the button, as another row takes the row's place, and as it's clicked.
+#[gpui::test]
+fn the_remove_button_names_itself_and_its_key(cx: &mut TestAppContext) {
+    let keys = if shell::OFF_THE_MAC {
+        "Shift Del"
+    } else {
+        "⌥ ⌘ ⌫"
+    };
+    let named = format!("tooltip Remove from History {keys}");
+    let rows = || {
+        vec![
+            searching("ex"),
+            page("https://a.test/"),
+            page("https://b.test/"),
+        ]
+    };
+    let mut bar = Bar::new(cx);
+    bar.type_text("ex");
+    bar.suggest("ex", rows());
+    bar.point_at_remove(1);
+    assert_eq!(bar.tips(), [named.clone()]);
+    let anchor = bar.host.anchors.take().pop().expect("no tooltip asked for");
+    let button = remove_button(1);
+    let (middle, row) = (f32::from(button.x), f32::from(button.y));
+    assert!(
+        (anchor.x - middle).abs() < 1.,
+        "it hangs from {}, not the button's middle",
+        anchor.x
+    );
+    let (top, bottom) = (row - ICON_BOX / 2., row + ICON_BOX / 2.);
+    assert!((anchor.top - top).abs() < 1. && (anchor.bottom - bottom).abs() < 1.);
+    assert_eq!(
+        anchor.window,
+        (WIDTH, height(ROWS_SHOWN)),
+        "it isn't kept inside the bar"
+    );
+
+    // Off the button onto its row, the tooltip goes.
+    bar.point_at(1);
+    assert_eq!(bar.tips(), ["no tooltip"]);
+
+    // More suggestions for what's typed keep it, and another page in the row's place ends it.
+    bar.point_at_remove(1);
+    bar.suggest("ex", rows());
+    assert_eq!(bar.tips(), [named.clone()]);
+    bar.suggest("ex", vec![searching("ex"), page("https://c.test/")]);
+    assert_eq!(bar.tips(), ["no tooltip"]);
+
+    // A click on the button ends it before the page goes.
+    bar.suggest("ex", rows());
+    bar.point_at_remove(2);
+    assert_eq!(bar.tips(), [named]);
+    bar.cx.simulate_click(remove_button(2), Modifiers::none());
+    bar.cx.run_until_parked();
+    assert_eq!(bar.tips(), ["no tooltip"]);
+    assert_eq!(bar.calls(), ["remove https://b.test/"]);
 }
 
 #[gpui::test]
@@ -1193,6 +1301,7 @@ fn tab(tab: u64, url: &str) -> shell::BarTab {
         title: url.to_string().into(),
         url: url.to_string().into(),
         favicon: None,
+        renamed: false,
     }
 }
 
@@ -1432,7 +1541,7 @@ fn of_two_matching_tabs_the_one_shown_last_is_first(cx: &mut TestAppContext) {
     let tabs = vec![titled(2, "Convex docs", docs), titled(4, "Convex", CONVEX)];
     let mut bar = Bar::with_tabs(cx, tabs);
     bar.type_text("conv");
-    // The core lists the other as its own row, which stays under the first.
+    // The other rises too, right under the search row, in place of the core's own row for it.
     let other = Suggestion {
         tab: 4,
         ..page(CONVEX)
@@ -1459,6 +1568,142 @@ fn of_two_matching_tabs_the_one_shown_last_is_first(cx: &mut TestAppContext) {
     assert_eq!(bar.calls(), ["select 4", "hide"]);
 }
 
+/// An open tab the user renamed, as Arc's custom title.
+fn renamed(id: u64, name: &str, url: &str) -> shell::BarTab {
+    shell::BarTab {
+        renamed: true,
+        ..titled(id, name, url)
+    }
+}
+
+/// Every tab the typing names rises, up to three: the first above the search row, the others right
+/// after it, before the profile's pages. A renamed tab whose own name the typing starts goes
+/// first, then the most recently shown, and a renamed one named only by a later word doesn't.
+#[gpui::test]
+fn the_tabs_named_rise_a_renamed_one_starting_with_the_typing_first(cx: &mut TestAppContext) {
+    let tabs = vec![
+        titled(2, "Convex docs", "https://docs.convex.dev/"),
+        renamed(3, "My convoy", "https://convoy.test/"),
+        titled(4, "Projects | Convex", CONVEX),
+        renamed(5, "Conv board", "https://board.test/"),
+        titled(6, "Convert units", "https://units.test/"),
+    ];
+    let mut bar = Bar::with_tabs(cx, tabs);
+    bar.type_text("conv");
+    bar.suggest("conv", vec![searching("conv"), page("https://conv.test/")]);
+    let rows = bar.rows();
+    let ids: Vec<u64> = rows.iter().map(|(_, tab)| *tab).collect();
+    assert_eq!(ids, [5, 0, 2, 3, 0], "{rows:?}");
+    assert_eq!(rows[4].0, "https://conv.test/");
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["select 5", "hide"]);
+}
+
+/// An address typed whose page an open tab shows keeps its row first, where ↩ goes, and the
+/// tab's row comes second, as Arc's bar lists them.
+#[gpui::test]
+fn a_typed_address_an_open_tab_shows_keeps_its_row_with_the_tab_second(cx: &mut TestAppContext) {
+    let home = "https://convex.dev/";
+    let mut bar = Bar::with_tabs(cx, vec![titled(4, "Convex", home)]);
+    bar.type_text("convex.dev");
+    let listed = Suggestion {
+        tab: 4,
+        ..page(home)
+    };
+    bar.suggest(
+        "convex.dev",
+        vec![page(home), searching("convex.dev"), listed],
+    );
+    let search = search("convex.dev");
+    assert_eq!(
+        bar.rows(),
+        [(home.to_string(), 0), (home.to_string(), 4), (search, 0)]
+    );
+    bar.keys("down enter");
+    assert_eq!(bar.calls(), ["select 4", "hide"]);
+}
+
+/// A page from history with an earlier row's title, or an open tab's, on a web app that gives
+/// many pages one title, is left out, as Arc's bar keeps one; elsewhere both stay.
+#[gpui::test]
+fn rows_alike_on_a_one_title_web_app_list_once(cx: &mut TestAppContext) {
+    let titled_page = |url: &str, title: &str| Suggestion {
+        text: title.to_string().into(),
+        ..page(url)
+    };
+    let figma = "https://www.figma.com/design/c";
+    let mut bar = Bar::with_tabs(cx, vec![titled(7, "Untitled", figma)]);
+    bar.type_text("pull");
+    bar.suggest(
+        "pull",
+        vec![
+            searching("pull"),
+            Suggestion {
+                tab: 7,
+                ..titled_page(figma, "Untitled")
+            },
+            titled_page("https://github.com/a/b/pulls", "Pull requests"),
+            titled_page("https://github.com/c/d/pulls", "Pull requests"),
+            titled_page("https://gist.github.com/e", "Pull requests"),
+            titled_page("https://gitlab.test/f/pulls", "Pull requests"),
+            titled_page("https://gitlab.test/g/pulls", "Pull requests"),
+            titled_page("https://www.figma.com/design/h", "Untitled"),
+        ],
+    );
+    let urls: Vec<String> = bar.rows().into_iter().map(|(url, _)| url).collect();
+    assert_eq!(
+        urls,
+        [
+            search("pull"),
+            figma.to_string(),
+            "https://github.com/a/b/pulls".to_string(),
+            "https://gitlab.test/f/pulls".to_string(),
+            "https://gitlab.test/g/pulls".to_string(),
+        ]
+    );
+}
+
+/// Rows for the pages shown go last, as Arc's bar deranks the page it's on, but for the first,
+/// where ↩ goes, and another tab's, which switches to it.
+#[gpui::test]
+fn rows_for_the_page_shown_go_last(cx: &mut TestAppContext) {
+    let shown = "https://notes.test/today";
+    let open = |cx: &mut TestAppContext| {
+        Bar::opened(cx, Recorder::default(), |cx| {
+            show(None, vec![shown.into()], Vec::new(), None, cx)
+        })
+    };
+    let mut bar = open(cx);
+    bar.type_text("notes");
+    let other_tab = Suggestion {
+        tab: 8,
+        ..page(shown)
+    };
+    let rows = vec![
+        searching("notes"),
+        page(shown),
+        other_tab,
+        page("https://notes.test/"),
+    ];
+    bar.suggest("notes", rows);
+    let notes = "https://notes.test/".to_string();
+    let expected = [
+        (search("notes"), 0),
+        (shown.to_string(), 8),
+        (notes, 0),
+        (shown.into(), 0),
+    ];
+    assert_eq!(bar.rows(), expected);
+
+    let mut bar = open(cx);
+    bar.type_text("notes");
+    bar.suggest(
+        "notes",
+        vec![completing(shown, ".test/today"), searching("notes")],
+    );
+    assert_eq!(bar.rows()[0], (shown.to_string(), 0));
+}
+
 #[gpui::test]
 fn the_tab_shown_is_never_offered(cx: &mut TestAppContext) {
     // Editing tab 4's URL, which is the tab shown, and tab 2 is another.
@@ -1466,16 +1711,24 @@ fn the_tab_shown_is_never_offered(cx: &mut TestAppContext) {
     let docs = titled(2, "Convex docs", "https://docs.convex.dev/");
     let tabs = vec![titled(4, "Convex", CONVEX), docs];
     let editing = Some((4, SharedString::from(CONVEX)));
-    bar.cx.cx.update(|cx| show(editing, tabs, None, cx));
+    bar.cx
+        .cx
+        .update(|cx| show(editing, Vec::new(), tabs, None, cx));
     bar.cx.run_until_parked();
     bar.type_text("conv");
     bar.suggest("conv", vec![searching("conv")]);
     assert_eq!(bar.rows()[0], ("https://docs.convex.dev/".to_string(), 2));
 
     let editing = Some((4, SharedString::from(CONVEX)));
-    bar.cx
-        .cx
-        .update(|cx| show(editing, vec![titled(4, "Convex", CONVEX)], None, cx));
+    bar.cx.cx.update(|cx| {
+        show(
+            editing,
+            Vec::new(),
+            vec![titled(4, "Convex", CONVEX)],
+            None,
+            cx,
+        )
+    });
     bar.cx.run_until_parked();
     bar.type_text("conv");
     bar.suggest("conv", vec![searching("conv")]);
@@ -1931,6 +2184,8 @@ fn a_word_of_the_name_puts_the_best_first_and_the_rest_after(cx: &mut TestAppCon
         "Separate Page from Split View".into(),
         "Expand Current Split".into(),
         "Flip Split View".into(),
+        "Convert to Vertical Split View".into(),
+        "Convert to Horizontal Split View".into(),
         "New Note Split".into(),
     ];
     assert_eq!(bar.listed(), expected);
@@ -1959,6 +2214,8 @@ fn tab_in_an_empty_field_lists_only_the_commands(cx: &mut TestAppContext) {
         "Separate Page from Split View",
         "Expand Current Split",
         "Flip Split View",
+        "Convert to Vertical Split View",
+        "Convert to Horizontal Split View",
         "New Note Split",
     ];
     assert_eq!(bar.listed(), only);
@@ -2146,6 +2403,37 @@ fn a_hidden_word_finds_its_command(cx: &mut TestAppContext) {
         "Toggle Sidebar ⌘S".into(),
     ];
     assert_eq!(bar.listed(), expected);
+}
+
+/// "close" archives the tab, as Arc lists Archive Tab above Close Window for it, and so does
+/// "clos": the window's close comes first only once what's typed goes past its first word.
+#[gpui::test]
+fn close_archives_the_tab_until_the_window_is_named(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_commands_but(cx, &[shell::Command::CloseSplitPane]);
+    for typed in ["close", "clos"] {
+        type_and_suggest(&mut bar, typed, suggestions(typed, &[]));
+        let listed = bar.listed();
+        assert_eq!(
+            listed[..2],
+            ["Archive Tab ⌘W".to_string(), search(typed)],
+            "{typed}"
+        );
+        assert!(
+            listed[2..].contains(&"Close Window ⇧⌘W".to_string()),
+            "{typed}: {listed:?}"
+        );
+        bar.keys("cmd-a");
+    }
+    type_and_suggest(&mut bar, "close", suggestions("close", &[]));
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["hide"]);
+
+    let mut bar = Bar::with_commands_but(cx, &[shell::Command::CloseSplitPane]);
+    type_and_suggest(&mut bar, "close w", suggestions("close w", &[]));
+    assert_eq!(
+        bar.listed(),
+        ["Close Window ⇧⌘W".to_string(), search("close w")]
+    );
 }
 
 /// Arc's "tab", where a site completes what's typed: the site first, then the core's rows, then

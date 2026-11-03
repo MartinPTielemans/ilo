@@ -177,8 +177,9 @@ impl Portal {
 
     /// Starts the newest build through the Flatpak's command, once this one has let go of its
     /// profile, whose `lock` Chromium holds while it runs: a second copy would hand its launch to
-    /// this one and end. This one quits next. Without this launch's arguments: cobalt adds its
-    /// flags again, and the session brings back the pages a launch's URLs opened.
+    /// this one and end. Asked as this one's restart goes ahead, never before, as nothing could
+    /// take it back. Without this launch's arguments: cobalt adds its flags again, and the session
+    /// brings back the pages a launch's URLs opened.
     pub async fn restart(&self, lock: &Path) -> zbus::Result<()> {
         let mut command = vec![
             "/bin/sh".to_string(),
@@ -274,11 +275,13 @@ async fn install_waiting(portal: &Portal, answer: Duration) -> Option<State> {
 }
 
 /// Where the update stands as the user is told, once the portal has answered, what Restart runs:
-/// the portal's start of the newest build, and the quit, and what Try Again runs after a failure.
+/// the browser's restart, then as it goes ahead, the portal's start of the newest build; and what
+/// Try Again runs after a failure.
 #[derive(Default)]
 struct Told {
     state: Option<State>,
     restart: Option<Rc<dyn Fn(&mut App)>>,
+    relaunch: Option<Rc<dyn Fn() -> bool>>,
     retry: Option<Rc<dyn Fn(&mut App)>>,
 }
 
@@ -287,6 +290,12 @@ impl Global for Told {}
 /// The portal answered: Restart runs `restart`.
 pub fn on_restart(restart: impl Fn(&mut App) + 'static, cx: &mut App) {
     cx.default_global::<Told>().restart = Some(Rc::new(restart));
+}
+
+/// The portal answered: a restart that goes ahead with a build in runs `relaunch`, which starts
+/// it in place of this one, true if it did.
+pub fn on_relaunch(relaunch: impl Fn() -> bool + 'static, cx: &mut App) {
+    cx.default_global::<Told>().relaunch = Some(Rc::new(relaunch));
 }
 
 /// The portal answered: Try Again, after a failed install, runs `retry`.
@@ -322,10 +331,40 @@ impl State {
     }
 }
 
-/// Restart, as the offer's: starts the newest build and quits, once the portal has answered.
+/// Restart, as the offer's: restarts the browser, once the portal has answered, into the newest
+/// build if the restart goes ahead (`relaunch`).
 pub fn restart(cx: &mut App) {
     if let Some(restart) = cx.default_global::<Told>().restart.clone() {
         restart(cx);
+    }
+}
+
+/// A restart goes ahead: the newest build starts in place of this one, if one is in. True if it
+/// did, so Chromium doesn't start this one again.
+pub fn relaunch(cx: &mut App) -> bool {
+    let told = cx.default_global::<Told>();
+    let relaunch = told
+        .relaunch
+        .clone()
+        .filter(|_| told.state == Some(State::Ready));
+    relaunch.is_some_and(|relaunch| relaunch())
+}
+
+/// How long the quit waits on the portal to start the newest build.
+pub const SPAWN: Duration = Duration::from_secs(5);
+
+/// Has the portal start the newest build once `lock` has gone, waiting up to `answer` for it to
+/// say it has, as the quit can't go on before.
+pub fn start_newest(portal: &Portal, lock: &Path, answer: Duration) -> Result<(), String> {
+    let started = async { Some(portal.restart(lock).await) };
+    let unanswered = async {
+        async_io::Timer::after(answer).await;
+        None
+    };
+    match async_io::block_on(future::or(started, unanswered)) {
+        Some(Ok(())) => Ok(()),
+        Some(Err(error)) => Err(error.to_string()),
+        None => Err("Flatpak’s portal didn’t answer".into()),
     }
 }
 

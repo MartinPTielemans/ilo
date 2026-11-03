@@ -22,6 +22,7 @@
 #include "base/time/time.h"
 #include "browser_core/ad_block.h"
 #include "browser_core/agent_autofill.h"
+#include "browser_core/agent_page.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/cast_dialog.h"
 #include "browser_core/crash_reports.h"
@@ -68,9 +69,11 @@
 #include "chrome/browser/ui/startup/startup_tab_provider.h"
 #include "chrome/common/chrome_content_client.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/common/profiler/main_thread_stack_sampling_profiler.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view_delegate.h"
 #include "content/public/common/content_features.h"
@@ -292,6 +295,14 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     // A remote-debugging switch, with the window Chrome doesn't open at startup, has Chrome hold
     // the browser up until a client closes it over the protocol, so the user's quit never ended.
     ChromeDevToolsManagerDelegate::AllowBrowserToClose();
+    // Chrome clears its restart whenever a quit is stopped, in one place for every way one can be.
+    PrefService* local_state = g_browser_process->local_state();
+    const bool restarting = local_state->GetBoolean(prefs::kRestartLastSessionOnShutdown);
+    if (g_host.quit_going_ahead && g_host.quit_going_ahead(g_host.context, restarting) &&
+        restarting) {
+      fprintf(stderr, "browser: restart taken by the app\n");
+      local_state->ClearPref(prefs::kRestartLastSessionOnShutdown);
+    }
   }
 
   static const char* ShutdownName(browser_shutdown::ShutdownType type) {
@@ -350,10 +361,12 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
       const net::IsolationInfo& isolation_info,
       mojo::PendingRemote<network::mojom::URLLoaderFactory>* out_factory) override {
     // A page in an agent's Space opens no other app, as one Chrome's own agent acts on doesn't,
-    // and a saved "Always allow" doesn't count there.
+    // and a saved "Always allow" doesn't count there. Handled, the navigation stops where it was,
+    // with no error page in place of the page, and the agent hears why (#1443).
     content::WebContents* contents = web_contents_getter.Run();
     if (contents && !OpenAppDialog::MayOpen(contents)) {
-      return false;
+      AgentPage::AppRefused(contents, url);
+      return true;
     }
     return ChromeContentBrowserClient::HandleExternalProtocol(
         url, std::move(web_contents_getter), frame_tree_node_id, navigation_data,

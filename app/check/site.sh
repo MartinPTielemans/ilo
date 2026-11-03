@@ -8,9 +8,10 @@
 # "corner" in the title. "x" and "z" each open check.crx, an extension the
 # extensions run puts there, which Chrome installs from. "a" asks to manage windows on all the
 # displays, a permission with no question from macOS, and puts the answer in the title. Keys with
-# ⌘, ⌃ or ⌥ are the browser's. /wait is a page that never comes. login.html is a login form, its
-# username field across the page's top half and its password field across the bottom, that posts
-# to /login, which sends the browser on to welcome.html, as a site that took the login would.
+# ⌘, ⌃ or ⌥ are the browser's. /wait is a page that never comes, and /held one that comes once the
+# run has made held.go in the site's folder. login.html is a login form, its username field
+# across the page's top half and its password field across the bottom, that posts to /login,
+# which sends the browser on to welcome.html, as a site that took the login would.
 # signup.html is the same form asking for a new password, which posts to /signup, as /login.
 # /sign-in, with any query, asks for HTTP basic sign-in and takes ada with the password lovelace.
 # address.html and card.html are an address's form and a card's, their first field across the
@@ -20,18 +21,22 @@ mkdir "$out/site"
 # A page that a run types into once its title says so sets that title with painted(): Chromium
 # drops a key that comes before a page it loaded first shows, for up to half a second while it
 # holds the last page's picture (paint holding). A page paints once it has something to draw.
-# Chrome reports the paint only once a frame from then on is presented successfully, and a page
-# that's still makes no more frames, so one whose first frame's presentation isn't reported sits
-# drawn with no paint, for good: the second login page in a tab did, on a GPU's GL in the headless
-# session (#1011). So the page asks for frames until its paint is reported.
+# Chrome reports the paint only once a frame from then on is presented successfully, and in the
+# headless session on a GPU's GL a login page sometimes drew frames, visible and focused, for 6 s
+# with no paint reported (#1011, #1069). So a page that has drawn frames for longer than paint
+# holding lasts counts as painted too.
 printf '%s' 'function painted(then) {
-  let heard = false;
+  let done = false;
+  const call = () => done || (done = true, then());
   new PerformanceObserver((entries, observer) => {
     observer.disconnect();
-    heard = true;
-    then();
+    call();
   }).observe({type: "paint", buffered: true});
-  const frame = () => heard || requestAnimationFrame(frame);
+  let first;
+  const frame = time => {
+    first ??= time;
+    time - first > 600 ? call() : done || requestAnimationFrame(frame);
+  };
   requestAnimationFrame(frame);
 }' > "$out/site/painted.js"
 printf '%s' '<title>loading</title><link rel="icon" href="icon.png">
@@ -86,10 +91,11 @@ const say = () => document.title = "scheme " + (dark.matches ? "dark" : "light")
 say();
 dark.onchange = say;
 </script>' > "$out/site/scheme.html"
-# Its title says "login" once it has painted, "filled" each time Chrome fills a saved password in,
-# and "cleared" when the password filled in is edited. Chrome's preview of a login its dropdown has
-# highlighted fills it too, but only a fill the user chose gives the page its value, with a change
-# event, and then the title says "chosen".
+# Its title says "login" once it has painted, then "filled" each time Chrome fills a saved password
+# in, and "cleared" when the password filled in is edited. Chrome can fill a saved login before the
+# paint, so the page tells of a fill only after it, or the title would never say "login" (#1069).
+# Chrome's preview of a login its dropdown has highlighted fills it too, but only a fill the user
+# chose gives the page its value, with a change event, and then the title says "chosen".
 printf '%s' '<title>loading</title><script src="painted.js"></script>
 <form method="post" action="login">
 <input id=user name=username autocomplete=username
@@ -99,11 +105,15 @@ printf '%s' '<title>loading</title><script src="painted.js"></script>
 <button style="position:fixed;right:0;bottom:0;width:1px;height:1px"></button>
 </form>
 <script>
-painted(() => document.title == "loading" && (document.title = "login"));
+let shown = false;
+painted(() => {
+  shown = true;
+  document.title = "login";
+});
 let filled = false;
 pass.onchange = () => { if (pass.matches(":autofill") && pass.value) document.title = "chosen"; };
 setInterval(() => {
-  if (pass.matches(":autofill") != filled) {
+  if (shown && pass.matches(":autofill") != filled) {
     filled = !filled;
     document.title = filled ? "filled" : "cleared";
   }
@@ -157,9 +167,11 @@ autofill_form address name 'address-line1 address-level2 address-level1 postal-c
   > "$out/site/address.html"
 autofill_form card cc-name 'cc-number cc-exp-month cc-exp-year' > "$out/site/card.html"
 # The dialogs page asks with "a" alert(), "c" confirm() and "p" prompt(), each from a key in the
-# page, and puts what the user answered in the title. "u" has it ask before it's left, and "o" goes
-# to a link another app opens: maps:, which macOS opens in Maps, or on Windows, which no longer
-# has a Maps app, ms-settings:, which every Windows 10 and 11 opens in Settings.
+# page, and puts what the user answered in the title. "l" alerts once /held comes, which the run
+# lets go of later, as a page that asks while the user is in another app. "u" has it ask before
+# it's left, and "o" goes to a link another app opens: maps:, which macOS opens in Maps, or on
+# Windows, which no longer has a Maps app, ms-settings:, which every Windows 10 and 11 opens in
+# Settings.
 app_link=maps:?q=check
 ! windows || app_link=ms-settings:
 printf '%s' '<title>loading</title>
@@ -179,6 +191,13 @@ onkeydown = e => {
   if (e.key == "p") {
     document.title = "prompt " + prompt("Your name?", "Ada");
   }
+  if (e.key == "l") {
+    document.title = "waiting";
+    fetch("held").then(() => {
+      alert("The check says hello, later.");
+      document.title = "alerted later";
+    });
+  }
   if (e.key == "u") {
     onbeforeunload = e => e.preventDefault();
     document.title = "armed";
@@ -188,6 +207,35 @@ onkeydown = e => {
   }
 };
 </script>' > "$out/site/dialogs.html"
+# The devices page asks for a device from each click, whose activation USB's and Bluetooth's
+# requests use up: a HID, a USB device, a serial port and a Bluetooth device, in turn. It puts
+# each answer in its title: HID's empty list as "cancelled", the others' rejection by its error's
+# name and message, and an API the engine doesn't expose, as Linux's Bluetooth, as "unsupported".
+# The click after them says "still here".
+printf '%s' '<title>loading</title>
+<script>
+requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
+const asks = [
+  ["hid", () => navigator.hid.requestDevice({filters: []})
+    .then(devices => devices.length ? "chosen" : "cancelled")],
+  ["usb", () => navigator.usb.requestDevice({filters: []}).then(() => "chosen")],
+  ["serial", () => navigator.serial.requestPort().then(() => "chosen")],
+  ["bluetooth", () => navigator.bluetooth.requestDevice({acceptAllDevices: true})
+    .then(() => "chosen")],
+];
+onclick = () => {
+  const [name, ask] = asks.shift() || [];
+  if (!name) {
+    document.title = "still here";
+    return;
+  }
+  document.title = name + " asking";
+  const answer = navigator[name]
+    ? new Promise(resolve => resolve(ask())).catch(e => e.name + ": " + e.message)
+    : Promise.resolve("unsupported");
+  answer.then(said => document.title = name + " " + said);
+};
+</script>' > "$out/site/devices.html"
 # The cookie page's title says whether it finds its cookie, c, never a value, since the app logs
 # every title, and how many times the server has sent its script, which the cache keeps for an
 # hour, once it has painted. Another run's cookies on the site don't count. "c" in it sets the
@@ -323,7 +371,7 @@ Promise.all([document.fonts.ready, ...[...document.images].map(image => image.de
 # The server logs each GET as "GET <engine> <host><path> cookie <cookies sorted, or none>", the
 # engine named by the user agent as the engine page does.
 python3 -I -u -c '
-import base64, functools, http.server, socketserver, sys, time, urllib.parse
+import base64, functools, http.server, os, socketserver, sys, time, urllib.parse
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     sent = 0
@@ -369,6 +417,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         if self.path == "/wait":
             time.sleep(3600)
+            return
+        if path == "/held":
+            # Every request waiting is let go at once, so one Chrome asked for ahead is no matter.
+            while not os.path.exists(sys.argv[1] + "/held.go"):
+                time.sleep(0.05)
+            body = b"<title>held</title>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if path == "/sign-in":
             signed_in = self.headers.get("Authorization") == "Basic " + base64.b64encode(

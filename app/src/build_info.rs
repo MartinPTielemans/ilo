@@ -64,11 +64,15 @@ impl BuildInfo {
     }
 }
 
+/// This copy's version, as the release names it. This crate's: on Linux and Windows src/main.rs
+/// is built in a crate of its own (linux/, windows/), whose version isn't the app's.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// The version Settings › About shows, with the build number build.sh gives a build.
 pub fn version() -> String {
     match option_env!("APP_BUILD") {
-        Some(build) => format!("{} ({build})", env!("CARGO_PKG_VERSION")),
-        None => env!("CARGO_PKG_VERSION").to_owned(),
+        Some(build) => format!("{VERSION} ({build})"),
+        None => VERSION.to_owned(),
     }
 }
 
@@ -158,7 +162,7 @@ fn system() -> String {
 /// The processor's name, else the architecture's.
 fn chip() -> String {
     #[cfg(target_os = "macos")]
-    let name = (std::process::Command::new("/usr/sbin/sysctl")
+    let name = (crate::child::command("/usr/sbin/sysctl")
         .args(["-n", "machdep.cpu.brand_string"])
         .output()
         .ok())

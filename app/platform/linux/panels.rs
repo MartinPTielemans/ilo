@@ -315,6 +315,7 @@ pub extern "C" fn host_forget_window(ui_view: *mut c_void) {
     overlays::forget_window(ui_view);
     crate::menu_window::forget_window(ui_view);
     crate::floats::forget_window(ui_view);
+    crate::frames::forget_window(ui_view);
     crate::popovers::forget_window(ui_view);
     crate::link_preview_window::forget_window(ui_view);
     crate::reveal_window::forget_window(ui_view);

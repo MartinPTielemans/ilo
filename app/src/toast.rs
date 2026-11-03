@@ -86,8 +86,6 @@ pub enum Label {
     Glyph(&'static str),
     /// Words and a key's name after them, in the button's chip: Undo ⌘Z.
     Keyed(SharedString, SharedString),
-    /// No chip: the toast itself is the button, as Arc's New Tab Created is.
-    Plate,
 }
 
 /// A button after the toast's words, such as Capture's Save. A click runs it with where the
@@ -158,9 +156,14 @@ impl Shown {
         }
     }
 
-    fn moving(&self) -> bool {
+    /// Whether it's still on its way in or out. Under Reduce Motion it's in once it has faded in,
+    /// as it's drawn at its size.
+    fn moving(&self, cx: &App) -> bool {
         match (self.shown, self.leaving) {
             (_, Some(_)) | (None, _) => true,
+            (Some(shown), None) if crate::motion::still(cx) => {
+                shown.elapsed().as_secs_f32() < FADE_IN
+            }
             (Some(shown), None) => {
                 spring(shown.elapsed().as_secs_f32(), RESPONSE, DAMPING).is_some()
             }
@@ -335,11 +338,13 @@ pub fn showing(text: &str, cx: &App) -> bool {
         .is_some_and(|shown| shown.leaving.is_none() && shown.text == text)
 }
 
-/// The undo it offered has been done some other way: its toast goes, if it shows.
+/// The undo it offered has been done some other way: its toast goes, if it shows, whether it
+/// offers the undo with its button or names its key, as "Space deleted! Use ⌘Z to undo." does.
 pub fn hide_undo(cx: &mut App) {
     let Some(window) = cx.try_global::<ToastWindow>().map(|toast| toast.0) else {
         return;
     };
+    let undo_key = crate::shell::keystroke_label("cmd-z");
     window
         .update(cx, |toast, _, cx| {
             let undoing = toast.shown.as_ref().is_some_and(|shown| {
@@ -347,6 +352,10 @@ pub fn hide_undo(cx: &mut App) {
                     .buttons
                     .iter()
                     .any(|button| button.name == UNDO_BUTTON)
+                    || shown
+                        .key
+                        .as_ref()
+                        .is_some_and(|(key, _)| **key == *undo_key)
             });
             if undoing {
                 toast.leave(cx);
@@ -535,7 +544,7 @@ impl Render for Toast {
         if shown.shown.is_none() && window.is_visible() {
             shown.shown = Some(Instant::now());
         }
-        let at_rest = !shown.moving();
+        let at_rest = !shown.moving(cx);
         if !at_rest {
             window.request_animation_frame();
         } else if !shown.settled {
@@ -550,12 +559,7 @@ impl Render for Toast {
             ..fill
         };
         let a11y = window.is_a11y_active();
-        let plate = shown
-            .buttons
-            .iter()
-            .position(|button| button.label == Label::Plate);
         let buttons: Vec<_> = (shown.buttons.iter().enumerate())
-            .filter(|(_, button)| button.label != Label::Plate)
             .map(|(index, button)| {
                 let chip = div()
                     .id(("toast-button", index))
@@ -573,7 +577,7 @@ impl Render for Toast {
                             // A keyed button goes by its words: Undo.
                             Label::Text(text) | Label::Keyed(text, _) => text.to_string(),
                             // A glyph's button goes by its name, "share" read as Share.
-                            Label::Glyph(_) | Label::Plate => {
+                            Label::Glyph(_) => {
                                 let mut name = button.name.to_owned();
                                 name[..1].make_ascii_uppercase();
                                 name
@@ -586,8 +590,6 @@ impl Render for Toast {
                     }));
                 match &button.label {
                     Label::Text(text) => chip.child(text.clone()),
-                    // Left out above: the toast itself is its button.
-                    Label::Plate => chip,
                     Label::Glyph(path) => chip.child(
                         svg()
                             .path(*path)
@@ -610,17 +612,10 @@ impl Render for Toast {
         let toast = div()
             .id("toast")
             .when(a11y, |toast| {
-                let toast = match plate {
-                    Some(_) => toast.role(Role::Button).aria_label(said),
-                    None => toast.role(Role::Status).aria_value(said),
-                };
                 toast
+                    .role(Role::Status)
+                    .aria_value(said)
                     .a11y_synthetic_children(|builder| builder.parent_node().set_live(Live::Polite))
-            })
-            .when_some(plate, |toast, index| {
-                toast.on_click(cx.listener(move |toast, event: &ClickEvent, _, cx| {
-                    toast.press(index, event.position(), cx)
-                }))
             })
             .on_hover(cx.listener(|toast, hovered: &bool, _, cx| toast.hover(*hovered, cx)))
             .h(px(height))

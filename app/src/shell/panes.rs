@@ -7,10 +7,13 @@ use gpui::{
 };
 
 use super::{
-    CARD_INSET, EXPANDED_OTHER, MAX_PANES, MenuAction, MenuEntry, PANE_LEAST, PANE_SNAP, SPLIT_GAP,
-    Shell, access::Accessible,
+    CARD_INSET, COPIED_TIME, EXPANDED_OTHER, MAX_PANES, MenuAction, MenuEntry, PANE_LEAST,
+    PANE_SNAP, SPLIT_GAP, Shell, access::Accessible,
 };
 use crate::tokens::shell::split_controls::{DOT, DOT_GAP, DOTS, DOTS_HOVERED, INSET, WIDTH};
+
+/// Arc's toast for a page that a full split view can't take (`maxNumberPanes`).
+const FULL_SPLIT: &str = "Cannot Add New Pane";
 
 impl Shell {
     /// The gaps between the pages of the split view shown, which drag the pages' shares of the
@@ -152,18 +155,19 @@ impl Shell {
         handles
     }
 
-    /// The menu of `tab`'s split controls, under its handle at `position`: Change Orientation for
-    /// the split, and Separate Page from Split View and Close this Split Pane for `tab`, as the View
-    /// menu's commands do for the focused page.
+    /// The menu of `tab`'s split controls, under its handle at `position`: Convert to Vertical or
+    /// Horizontal Split View for the split, and Separate Page from Split View and Close this Split
+    /// Pane for `tab`, as the View menu's commands do for the focused page.
     pub(super) fn split_controls(
         &mut self,
         tab: u64,
         position: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
+        let turn = super::commands::orientation_title(self.stacked(tab));
         let items: Vec<(MenuEntry, MenuAction)> = vec![
             (
-                MenuEntry::new("Change Orientation", true),
+                MenuEntry::new(turn, true),
                 Box::new(move |shell, cx| {
                     // check.sh waits for this line.
                     log!("browser: command change-orientation via split controls");
@@ -270,7 +274,7 @@ impl Shell {
     pub(super) fn add_pane(&mut self, cx: &mut Context<Self>) {
         let with = self.selected;
         let count = self.panes(with).len();
-        if with == 0 || count >= MAX_PANES {
+        if with == 0 || self.split_full(with, cx) {
             return;
         }
         self.adding_pane = Some(with);
@@ -311,10 +315,10 @@ impl Shell {
     }
 
     /// ⌥-click on `tab`'s row or segment in the sidebar, as Arc's: a split's tab leaves it, the
-    /// page shown alone splits with a copy of itself, and another tab joins the page shown.
-    /// Returns false where none applies, so the press shows the tab as a plain one does.
+    /// page shown alone splits with a copy of itself, and another tab joins the page shown, unless
+    /// its split is full. Returns false where none applies, so the press shows the tab as a plain
+    /// one does.
     pub(super) fn alt_press_row(&mut self, tab: u64, cx: &mut Context<Self>) -> bool {
-        let shown = self.panes(self.selected);
         if self.is_folder(tab) || self.selected == 0 {
             return false;
         }
@@ -327,13 +331,21 @@ impl Shell {
                 self.browser.split_with(copy, tab, false, cx);
                 self.split_opened(copy, cx);
             }
-        } else if shown.len() < MAX_PANES {
+        } else if !self.split_full(self.selected, cx) {
             self.join_split(tab, self.selected, false, false, cx);
-        } else {
-            return false;
         }
         cx.notify();
         true
+    }
+
+    /// Whether `tab`'s split view has as many pages as one can: a page asked to join it doesn't,
+    /// and Arc's toast says why.
+    pub(super) fn split_full(&self, tab: u64, cx: &mut Context<Self>) -> bool {
+        let full = self.panes(tab).len() >= MAX_PANES;
+        if full {
+            self.browser.toast(FULL_SPLIT, None, COPIED_TIME, cx);
+        }
+        full
     }
 
     /// Expand Current Split: the focused page takes the card and each other page keeps 220 pt, in
@@ -558,6 +570,34 @@ mod tests {
         (shell, host)
     }
 
+    /// A full split view takes no more pages: ⌃+, an ⌥-click on another tab's row and New Note
+    /// Split each show Arc's toast and change nothing.
+    #[gpui::test]
+    fn a_full_split_says_it_takes_no_more_pages(cx: &mut TestAppContext) {
+        let (shell, host) = split_of(&[10, 11, 12], 11, 0, 1200., cx);
+        shell.update(cx, |shell, cx| {
+            let split = Split {
+                tabs: vec![10, 11, 12],
+                ..Default::default()
+            };
+            let today = vec![10, 11, 12, 13];
+            shell.set_tabs(1, Vec::new(), today, vec![split], Folders::default(), cx);
+        });
+        host.take_edits();
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::AddSplit, "keys", cx);
+            assert_eq!(shell.adding_pane, None);
+            assert!(
+                shell.alt_press_row(13, cx),
+                "the ⌥-click is taken, not a plain click"
+            );
+            shell.run(Command::NewNoteSplit, "keys", cx);
+        });
+        assert_eq!(host.toasts.take(), ["Cannot Add New Pane"; 3]);
+        assert!(host.take_edits().is_empty());
+        assert!(host.notes.borrow().is_empty());
+    }
+
     /// The core reports the split with these `shares` and the tab that took the card.
     fn reported(
         shell: &Entity<Shell>,
@@ -666,6 +706,35 @@ mod tests {
         assert_eq!(host.take(), Vec::<String>::new());
     }
 
+    /// The find bar sits at the focused page's top right corner, so its buttons' tooltips hang
+    /// from it there: over the left page of a split when that's focused, and the right one's.
+    #[gpui::test]
+    fn the_find_bar_is_placed_over_the_focused_page(cx: &mut TestAppContext) {
+        // Its place, as find_bar.rs gives it: twice the card's inset in, and 300 wide.
+        let inset = crate::shell::CARD_INSET * 2.;
+        let mut corners = Vec::new();
+        for (focused, index) in [(10, 0), (11, 1)] {
+            let (shell, _) = split_of(&[10, 11], focused, focused, 1400., cx);
+            let (origin, window) =
+                shell.read_with(cx, |shell, _| shell.at_page_corner(inset, inset, 300.));
+            assert_eq!(window, size(px(1400.), px(800.)));
+            let pane = shell.read_with(cx, |shell, _| {
+                let (frame, _) = shell.page_frame(shell.viewport);
+                pane_frames(frame, 2, false, &shell.shares(shell.selected))[index]
+            });
+            let (left, right) = (f32::from(origin.x), f32::from(origin.x) + 300.);
+            assert!(
+                f32::from(pane.left()) < left && right < f32::from(pane.right()),
+                "{pane:?}"
+            );
+            corners.push((
+                f32::from(pane.right()) - right,
+                f32::from(origin.y - pane.top()),
+            ));
+        }
+        assert_eq!(corners[0], corners[1]);
+    }
+
     /// On a card too short for 220 and a larger page, the pages are even.
     #[gpui::test]
     fn a_card_too_short_for_it_leaves_the_pages_even(cx: &mut TestAppContext) {
@@ -742,7 +811,7 @@ mod tests {
         assert_eq!(handles(cx), 3);
         host.take();
         for (title, call) in [
-            ("Change Orientation", "split stacked 11 true"),
+            ("Convert to Vertical Split View", "split stacked 11 true"),
             ("Separate Page from Split View", "separate 11"),
             ("Close this Split Pane", "close 11"),
         ] {
@@ -761,6 +830,58 @@ mod tests {
             alone.update(cx, |shell, cx| shell.pane_handles(cx).len()),
             0
         );
+    }
+
+    /// The command bar and the split controls name the orientation's turn as Arc does: Convert to
+    /// Vertical Split View for a split side by side and Horizontal for a stacked one, which
+    /// Dia's Change Orientation still finds, as Separate All Pages finds Separate All Tabs.
+    #[gpui::test]
+    fn the_orientations_turn_has_arcs_name(cx: &mut TestAppContext) {
+        use crate::shell::commands::{ShellHandle, bar_commands};
+        let (shell, host) = split_of(&[10, 11], 10, 0, 1200., cx);
+        cx.update(|cx| cx.set_global(ShellHandle(shell.downgrade())));
+        let names = |typed: &str, cx: &mut TestAppContext| {
+            let rows = cx.update(|cx| bar_commands(typed, cx));
+            rows.into_iter()
+                .map(|row| row.name.to_string())
+                .collect::<Vec<_>>()
+        };
+        let controls = |cx: &mut TestAppContext| {
+            shell.update(cx, |shell, cx| {
+                shell.split_controls(11, point(px(600.), px(10.)), cx)
+            });
+            let titles = host.menus.borrow().last().cloned().unwrap_or_default();
+            titles.first().map(|(title, _)| title.to_string())
+        };
+        assert_eq!(
+            names("change orientation", cx),
+            ["Convert to Vertical Split View"]
+        );
+        assert_eq!(
+            controls(cx).as_deref(),
+            Some("Convert to Vertical Split View")
+        );
+        shell.update(cx, |shell, cx| {
+            let split = Split {
+                tabs: vec![10, 11],
+                stacked: true,
+                ..Default::default()
+            };
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![10, 11],
+                vec![split],
+                Folders::default(),
+                cx,
+            );
+        });
+        assert_eq!(names("convert", cx), ["Convert to Horizontal Split View"]);
+        assert_eq!(
+            controls(cx).as_deref(),
+            Some("Convert to Horizontal Split View")
+        );
+        assert_eq!(names("separate all pages", cx), ["Separate All Tabs"]);
     }
 
     /// A click on a page's split controls opens their menu where it pressed, which the menu takes
@@ -799,10 +920,8 @@ mod tests {
         cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
         cx.run_until_parked();
         let titles = host.menus.borrow().last().cloned().unwrap_or_default();
-        assert_eq!(
-            titles.first().map(|(title, _)| title.as_ref()),
-            Some("Change Orientation")
-        );
+        let first = titles.first().map(|(title, _)| title.as_ref());
+        assert_eq!(first, Some("Convert to Vertical Split View"));
         assert_eq!(host.menu_at.get(), Some(at));
     }
 

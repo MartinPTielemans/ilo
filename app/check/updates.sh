@@ -10,8 +10,8 @@
 # downloads the update, here the check build one build on, in the background. Once it's ready,
 # Restart to Update shows at the sidebar's foot, in light and dark, and its click installs the
 # update and relaunches into it.
-# Not here: the release notes the first launch of an update opens, which only the prod build does,
-# for https notes only.
+# Not here: the release notes the first launch of an update opens, which Sparkle keeps for https
+# notes only, so the links run opens notes of its own.
 # On Linux, ilo's Flatpak, built as a release's (tools/flatpak.sh), installed from a repository of
 # the run's own, where a newer build then comes, as a release puts one in ilo's. Flatpak's own
 # portal, on a session bus of the run's own and looking every 10 s rather than every half hour,
@@ -340,7 +340,11 @@ flatpak_updates_check() {
   procs=/app/ilo/chrome
   log="$out/updates.log"
   step=0
-  flatpak run --user --env=BROWSER_DRIVE=1 "$id" < "$out/drive" > "$log" 2>&1 &
+  # Under Wayland the driver clicks and types through sway, whose socket the sandbox doesn't
+  # otherwise see (drive_wayland.rs).
+  set -- --env=BROWSER_DRIVE=1
+  [ -z "${SWAYSOCK:-}" ] || set -- "$@" --filesystem="$SWAYSOCK" --env=SWAYSOCK="$SWAYSOCK"
+  flatpak run --user "$@" "$id" < "$out/drive" > "$log" 2>&1 &
   pid=$!
   exec 3> "$out/drive"
   await '^browser: updater started$' || fail "the Flatpak didn't start its updater"

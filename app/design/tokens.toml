@@ -415,6 +415,9 @@ row-x = 8.0
 # A line between groups: 1 pt in the middle of this, 8 in from the rows' text.
 line = 9.0
 text = 13.0
+# A heading over the items after it, such as a split's Tab Options, in the secondary ink and
+# semibold, as AppKit's section headers are.
+header-text = 11.0
 # Between the check, the title and what trails it.
 gap = 6.0
 check = 12.0
@@ -473,6 +476,10 @@ buttons-top = 12.0
 button-height = 28.0
 button-x = 12.0
 button-gap = 8.0
+# Save's ↩ and Not Now's esc after their words, fainter, as the toast's Undo names ⌘Z: the
+# dialog's chips leave no room for Never in a 320-wide card (#1386).
+key-gap = 5.0
+key = 0.6
 plate-radius = 6.0
 title = 1.0
 detail = 0.78
@@ -660,6 +667,9 @@ title = 0xa4a6a6
 tab-text = 0x9e9f9f
 text = 0xc2c2c2
 control = 0x313333
+# Under the pointer, a quiet step toward pressed, short of it, so a button shows it can be
+# clicked before it's pressed (ours, #1387).
+control-hovered = 0x3a3c3c
 control-pressed = 0x404242
 switch-off = 0x383939
 knob = 0xe1e2e2
@@ -693,6 +703,7 @@ tile-glyph-color = 0xffffff
 # over its boxes.
 on-line = 0.11
 on-control = 0.09
+on-hovered = 0.14
 on-pressed = 0.18
 on-switch-off = 0.13
 on-detail = 0.77
@@ -713,20 +724,22 @@ focus-glow-alpha = 0.5
 sidebar-min = 164.0
 sidebar-max = 500.0
 reveal-inset = 5.0
-# The header's buttons: their plates' tops and left edges, from the window's, as Arc 1.170's
-# accessibility tree has them. The sidebar button is 3 pt past the traffic lights, 13 before back.
+# The header's buttons: their plates' tops and the sidebar button's left edge, from the window's,
+# as Arc 1.170's accessibility tree has them, 3 pt past the traffic lights. In full screen, with no
+# traffic lights, its glyph's centre is 29.25 in, so its plate starts at 13.25 (Arc 1.171).
 nav-top = 7.5
 sidebar-button-x = 77.0
-back-x = 122.0
-forward-x = 156.0
-reload-x = 190.0
+full-screen-sidebar-button-x = 13.25
+# Back, forward and reload keep to the sidebar's right edge, 6 in from it and 34 apart, so 2 apart
+# (Arc 1.170: 241/275/309 in a 347 sidebar, 122/156/190 in a 228). A narrow sidebar loses reload,
+# then forward, while back would come nearer the sidebar button than its 13 at 228, as Ardia's do.
+nav-trail = 6.0
+nav-pitch = 34.0
+nav-after-sidebar = 13.0
 nav-size = 32.0
 nav-radius = 6.0
 # Header glyphs are drawn in points in a box this big, at Arc's sizes and centres.
 nav-glyph = 24.0
-# A header button shows while its plate ends this far inside the sidebar, so a narrow sidebar loses
-# reload, then forward, as Ardia's does.
-nav-end = 5.0
 url-field-top = 46.0
 url-field-height = 36.0
 url-field-text-x = 21.0
@@ -735,12 +748,13 @@ url-field-text-x = 21.0
 url-button-size = 30.0
 url-button-inset = 3.0
 url-button-glyph = 14.0
-# The favorites' tiles, over the Space's name (docs/ux-spec.md › Favorites): their height, the gap
-# between them and under the last row, the narrowest a row's tiles get before it takes one fewer,
-# and their corners.
-tile-height = 41.0
-tile-gap = 6.0
-tile-min = 48.0
+# The favorites' tiles, over the Space's name (docs/ux-spec.md › Favorites): Arc 1.170's height
+# and the gap between them and under the last row, the narrowest a tile gets before its row takes
+# one fewer, the most a row takes (Arc 1.171), and their corners (ours).
+tile-height = 47.0
+tile-gap = 8.0
+tile-min = 47.0
+tile-columns = 4
 tile-radius = 12.0
 # A favorite's mark in its tile's top right, while its page uses the camera or microphone, shares
 # or is shared, or plays sound (ours).
@@ -764,11 +778,18 @@ name-x = 41.0
 space-icon-slot = 20.0
 # The sidebar's icon takes clicks on Arc's frame, which lights with the header's plate (ours).
 space-icon-plate = 26.0
-# The chevron after the name that collapses the Space's pinned rows and expands them, on the
-# header's hover plate: down while they show, turned to point right while they're collapsed (ours).
+# The chevron that collapses the Space's pinned rows and expands them, in the icon's slot, or after
+# the name without an icon in a box this wide (ours): down while they show, a quarter turned to
+# point right while they're collapsed (Arc 1.171; its size is ours).
 pinned-caret = 12.0
 pinned-caret-plate = 20.0
 pinned-caret-gap = 2.0
+# Under the pointer the name row is a tab row's plate, with its ••• on a square this big whose end
+# is this far in from the plate's (Arc 1.171). Rename Space… puts Done there (Arc 1.171).
+space-more = 24.0
+space-more-inset = 6.0
+space-done-width = 32.0
+space-done-height = 26.0
 icon-placeholder = 24.0
 icon-placeholder-radius = 6.0
 icon-placeholder-line = 1.0
@@ -780,6 +801,9 @@ row-pitch = 41.0
 row-height = 40.0
 plate-height = 36.0
 plate-inset = 8.0
+# Room after the list's last row: at full scroll its plate, 3 inside its row, ends 121 above the
+# list's foot (Arc 1.170). Rows hidden only by it don't bring the foot's edge line.
+list-trail = 118.0
 folder-indent = 16.0
 # A dragged row's drop line is Arc's: 2 pt, from a ring 8 across, drawn with the same 2 pt,
 # whose left is 7 in from the plate's, to 2 before the plate's end (Arc 1.170 rec).
@@ -787,8 +811,17 @@ drop-line = 2.0
 drop-ring = 8.0
 drop-ring-x = 7.0
 drop-line-end = 2.0
+# A tab rested on a row shows in the split it would make, in a slot this far in from its segment's
+# edges at the plate's radius less as much, filled as a hovered row (ours: Arc's preview isn't
+# measured).
+drop-slot-inset = 3.0
 drop = 0xffff_ffe6
 plate-radius = 12.0
+# A row's host under its title, in `secondary` at text's small size, Arc's 11 pt (Arc 1.168): a
+# pinned tab's whose page left its pinned URL's host, and a tab's in Developer Mode. The two lines
+# are this tall, centred in the row together (ours: Arc's lines aren't measured).
+host-title-line = 16.0
+host-line = 14.0
 # Around the row the keyboard acts on while the sidebar has it (Focus Sidebar), inside its plate,
 # in the ink at `keyed` (ours: Arc 1.170's isn't measured).
 keyed-ring = 2.0
@@ -820,9 +853,11 @@ status-ring = 1.5
 status-ring-color = 0xf3f0e8
 title-gap = 8.0
 # The speaker before a title, while its tab plays sound or is muted, and its pressable square.
+# Arc's title is 8 after its speaker's glyph; ours draws 0.6 inside its 16 pt box, which is 1
+# inside the square, so the title is 6.5 after the square.
 speaker-drawn = 16.0
 speaker-size = 18.0
-speaker-gap = 4.0
+speaker-gap = 6.5
 # Arc's close button, 5 inside the plate's right edge, and the box its glyph is drawn in.
 close-size = 26.0
 close-right = 5.0
@@ -859,6 +894,13 @@ space-height = 34.0
 space-swatch-shown = 14.0
 space-swatch = 10.0
 space-swatch-hovered = 12.0
+# More Spaces than fit at the pitch share the switcher's span in half points; once a share would be
+# under 22, the Space shown keeps 22 and the others share the rest: 17.5, 13 and 9 with 12, 16
+# and 22 Spaces in a sidebar 300 wide (Arc 1.171 ax). A squeezed item's ink keeps 4 clear of its
+# neighbours, and never goes under 4 (ours).
+space-shown-least = 22.0
+space-clear = 4.0
+space-least = 4.0
 form-title-top = 140.0
 form-title-height = 20.0
 form-inset = 14.0
@@ -906,7 +948,8 @@ new-tab = 0.62
 new-tab-plus = 0.45
 # The Clear divider's line, 0.15 (Arc).
 divider = 0.15
-# The edge under the favorites while the list is scrolled: Dia's separator, 0.09.
+# The edges under the favorites while the list is scrolled and at its foot while rows are hidden
+# under it: Dia's separator, 0.09.
 scroll-edge = 0.09
 # Clear, 0.62 (#320's secondary), and 0.81 under the pointer: Arc lights the word and its arrow,
 # with no plate (Arc in use, the owner's captures, 2026-10-26).
@@ -1150,11 +1193,13 @@ spaces-inset = 48.0
 card-width = 240.0
 card-radius = 16.0
 card-gap = 24.0
-# Ours (*interim*, as Arc's recording never ran out of room): the section grows until the page
-# beside it would be narrower than this, and its cards scroll across past that.
-spaces-page = 400.0
-# The name's row in the card, 33 down to its middle as in Arc, with the rows 52 down.
-card-name-top = 14.0
+# Once its cards don't fit, the section leaves the page this much of the window, however narrow,
+# and its cards scroll across (Arc 1.171 ax: 500 → 444, 1100 → 1044, live as the window resizes).
+spaces-page = 56.0
+# The name's row in the card, 25 down to its middle, with the rows 44 down, the first one's middle
+# 64.5 down: Arc 1.170 rec, three Spaces, field 7 to 43 and the first row's middle 65, and Arc
+# 1.171's 25 and 64 (#1401). Arc 1.170.0's one-Space cap had both 8 lower.
+card-name-top = 6.0
 card-name-height = 38.0
 # The name's field across that row (*interim*, by proportion from stills of Arc 1.170's card, 240
 # wide): a plate 8 in from the card's sides and 36 tall, Ink at 0.1, at the controls' radius where
@@ -1174,6 +1219,11 @@ card-brush = 28.0
 card-brush-inset = 4.0
 card-brush-glyph = 14.0
 card-brush-color = 0.35
+# The ••• at the card's foot, which shows the Space's menu: its middle 22 in from the card's right
+# and 21.5 above its foot (Arc 1.170 rec; Arc 1.171's 21). Ours: the sidebar's ••• button, with the
+# pointer on the card, as the brush shows only with it on the field.
+card-more-x = 22.0
+card-more-y = 21.5
 plus-gap = 33.0
 plus-size = 30.0
 # Ours: the + is the Space's accent where Arc's is blue (#319), with the palette's hovered and
@@ -1308,12 +1358,13 @@ opt-in-line = 18.0
 
 [shell.permission]
 # Ours, as Arc's wasn't recorded: under the URL field, as wide as it, with the dialog's corners
-# and the header's plates. The text is the dialog's detail colour.
+# and the header's plates. The detail is the dialog's: the palette's ink at its alpha, dark in
+# light mode, as the card is the window's fill.
 gap = 6.0
 padding = 12.0
 radius = 16.0
 line = 18.0
-detail = 0xffff_ffc7
+detail = 0.78
 button-height = 28.0
 button-gap = 8.0
 buttons-top = 12.0
@@ -1358,6 +1409,32 @@ preview-radius = 8.0
 # Ours: a row's plate under the pointer, as the Library's rows have one.
 plate-inset = 4.0
 plate-radius = 12.0
+
+[shell.scroller]
+# The list's scroller is Arc 1.170's, AppKit's own: a knob and no track, this far in from the
+# sidebar's edge. While the system shows scroll bars only as they're used, it's the overlay knob,
+# 4 wide, the ink at 0.49 (white 49 % measured on a dark theme; the light theme's ink is ours).
+edge = 3.0
+knob = 4.0
+knob-alpha = 0.49
+# With the system's scroll bars shown always, it's AppKit's legacy knob, 5 wide and the ink at 0.5
+# (AppKit's light one is black 0.5), always there while the rows overflow, and the rows give up
+# this much for it. Its rect is 3 in from the rows' part's top and bottom, and the knob 1 inside
+# that. The overlay knob's ends are the same 3 in (ours: Arc's aren't measured).
+knob-shown = 5.0
+knob-shown-alpha = 0.5
+gutter = 8.0
+end = 3.0
+knob-inset = 1.0
+# Ours, *interim* (Arc's isn't measured): the shortest knob.
+knob-min = 18.0
+
+[shell.scroller.motion]
+# Seconds: the design file has no motion, so tools/design-sync.md leaves this table out. Ours,
+# *interim* (Arc's aren't measured): how long the overlay knob stays after the last scroll, and
+# then fades.
+hold = 0.8
+fade = 0.25
 
 [shell.side-panel]
 # The panel's width until the user gives it one, Chrome's, and the range they can give it,
@@ -1890,9 +1967,13 @@ note-height = 41.0
 note-top = 4.0
 
 [tooltip]
-# How far below the tile or row it names the tooltip's top is, or above it if it doesn't fit
-# below. The gap between two tiles, so it reads as the tile's own and the tile's edge shows.
+# How far below a folder's row the tooltip's top is, or above it if it doesn't fit below. The gap
+# between two tiles, so it reads as the row's own and the row's edge shows.
 gap = 6.0
+# A button's or tile's tooltip hangs off the bottom right of a 16 pt box around its glyph: its top
+# left is this far right of the glyph's centre and this far below it (Arc 1.170).
+button-x = 8.0
+button-y = 7.0
 # How far in from the window's left and right edges a tooltip that would cross one stays (ours).
 edge-inset = 8.0
 # How far right of a footer button's plate the tooltip beside it starts (Arc).
