@@ -7,8 +7,8 @@ use gpui::{AppContext, Entity, TestAppContext};
 
 use crate::shell::{Command, FavoritesScope, Folders, Shell, change_keys, recorder::Recorder};
 
-/// The user's Spaces 1 and 2 in profile 7 and Space 3 in profile 8, and Claude Code's Space 4 in
-/// profile 7, each with a Today tab. Space 1 shows.
+/// The user's Spaces 1 and 2 in profile 7 and Space 3 in profile 8, each with a Today tab. Space 1
+/// shows.
 fn shell_with_spaces(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>) {
     let host = Rc::new(Recorder::default());
     let shell = cx.new(|cx| Shell::new(host.clone(), cx));
@@ -42,19 +42,10 @@ fn shell_with_spaces(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>) {
                     "".into(),
                     "".into(),
                 ),
-                (
-                    4,
-                    "Research".into(),
-                    None,
-                    7,
-                    "".into(),
-                    "Claude Code".into(),
-                    "".into(),
-                ),
             ],
             cx,
         );
-        for (space, tab) in [(1, 11), (2, 12), (3, 13), (4, 14)] {
+        for (space, tab) in [(1, 11), (2, 12), (3, 13)] {
             shell.set_tabs(
                 space,
                 Vec::new(),
@@ -112,7 +103,7 @@ fn the_choices_are_listed_as_the_core_numbers_them() {
 }
 
 /// Where the core keeps one list per profile, the Spaces of a profile show the same tiles, another
-/// profile's Space shows its own, and an agent's Space shows its profile's, as today.
+/// profile's Space shows its own.
 #[gpui::test]
 fn a_profiles_spaces_share_its_favorites(cx: &mut TestAppContext) {
     let (shell, host) = shell_with_spaces(cx);
@@ -124,13 +115,10 @@ fn a_profiles_spaces_share_its_favorites(cx: &mut TestAppContext) {
     assert_eq!(favorites(&shell, cx), [40, 41]);
     assert_eq!(first_tab(&shell, &host, cx, 3), "select 42");
     assert_eq!(favorites(&shell, cx), [42]);
-    shell.update(cx, |shell, cx| shell.set_space(4, cx));
-    assert_eq!(favorites(&shell, cx), [40, 41]);
 }
 
 /// Where each Space has its own, a Space shows its own tiles alone, even beside another Space of its
-/// profile, ⌘1 asks for the first of the Space shown, and an agent's Space, which owns none, shows
-/// none.
+/// profile, and ⌘1 asks for the first of the Space shown.
 #[gpui::test]
 fn each_space_shows_its_own_favorites(cx: &mut TestAppContext) {
     let (shell, host) = shell_with_spaces(cx);
@@ -142,8 +130,6 @@ fn each_space_shows_its_own_favorites(cx: &mut TestAppContext) {
     assert_eq!(first_tab(&shell, &host, cx, 2), "select 52");
     assert_eq!(favorites(&shell, cx), [52]);
     assert_eq!(first_tab(&shell, &host, cx, 3), "select 53");
-    shell.update(cx, |shell, cx| shell.set_space(4, cx));
-    assert!(favorites(&shell, cx).is_empty());
 }
 
 /// Where every profile has a tab for each site, a Space shows its profile's, so Spaces of two

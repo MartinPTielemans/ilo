@@ -483,13 +483,9 @@ impl Shell {
         ))
     }
 
-    /// Whether the window shows `tab`'s page as an agent's: a task's in place in the area, else a
-    /// page shown in an agent's Space.
+    /// Whether the window shows `tab`'s page as an agent's: a task's in place in the area.
     pub(super) fn agent_page_shows(&self, tab: u64) -> bool {
-        match self.task_area {
-            Some(_) => self.task_page_live() == Some(tab),
-            None => self.shows(tab) && self.agents_space_shown(),
-        }
+        self.task_area.is_some() && self.task_page_live() == Some(tab)
     }
 
     /// The task Space and its tab whose page the area draws, on its way back too.
@@ -498,14 +494,10 @@ impl Shell {
         Some((area.space, area.page.as_ref()?.tab))
     }
 
-    /// The agent's Space whose page the window shows, and the tab: a task's page the area draws,
-    /// else the Space shown if it's an agent's, with the tab selected there.
+    /// The agent's Space whose page the window shows, and the tab: a task's page the area draws.
     pub(super) fn agent_page(&self) -> Option<(&Space, u64)> {
-        if let Some((space, tab)) = self.task_page_drawn() {
-            return Some((self.task_space(space)?, tab));
-        }
-        let space = self.shown_space().filter(|space| !space.agent.is_empty())?;
-        Some((space, self.selected))
+        let (space, tab) = self.task_page_drawn()?;
+        Some((self.task_space(space)?, tab))
     }
 
     /// Where the window's page goes, given the card's frame: there, unless a task has the area.
@@ -784,7 +776,10 @@ impl Shell {
     /// What the page area draws for a task, if it shows one: the conversation, and a page watched
     /// zooming or in place over its card, with the strip under it.
     pub(super) fn task_area_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let area = self.task_area.as_ref()?;
+        let Some(area) = self.task_area.as_ref() else {
+            self.task_strip_drawn.set(None);
+            return None;
+        };
         let (card_frame, _) = self.page_frame(self.viewport);
         let now = Instant::now();
         let zoom = area.page.as_ref().map_or(0., |page| page.zoom.at(now));
@@ -815,6 +810,8 @@ impl Shell {
             );
         }
         let Some(page) = &area.page else {
+            // Drawn again, for another page, the strip is logged again.
+            self.task_strip_drawn.set(None);
             return Some(layer.into_any_element());
         };
         let place = watched(card_frame);

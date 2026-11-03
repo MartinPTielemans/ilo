@@ -6,7 +6,7 @@ use std::sync::Arc;
 use gpui::{App, Context, Hsla, Image, Pixels, Point, Rgba, SharedString, rgb};
 
 use super::{
-    AgentGrants, Command, MAX_PANES, Page, ProfileChoice, Row, Shell, UserKeys, clean_link,
+    Command, MAX_PANES, Page, ProfileChoice, Row, Shell, UserKeys, clean_link,
     commands::markdown_text,
     files,
     undo::{Prop, Value},
@@ -274,13 +274,6 @@ impl Shell {
         let icon = entry.is_some_and(|each| has_icon(&each.icon));
         let theme = entry.is_some_and(|each| each.color.is_some() || each.theme.is_some());
         let mut items = space_menu_head(space, icon, theme);
-        // An agent's Space leads to what the agent did in it, and lists what the user let it do
-        // for good, to take back.
-        if let Some(each) = entry.filter(|each| !each.agent.is_empty()) {
-            let mut agent = self.agent_items(space, &each.agent, cx);
-            agent.extend(items);
-            items = agent;
-        }
         let at = items.len();
         items.push((MenuEntry::new("Set Profile", true), Box::new(|_, _| {})));
         let mut profiles = self.profile_items(space);
@@ -332,52 +325,6 @@ impl Shell {
             MenuEntry::new("Delete Space", self.spaces.len() > 1).destructive(),
             Box::new(move |shell, cx| shell.delete_space(space, cx)),
         ));
-        items
-    }
-
-    /// The head of an agent's Space's menu: its activity, Revoke Permission with what the user
-    /// answered for good on each site, Take Back All Tabs and Disconnect.
-    fn agent_items(&self, space: u64, name: &str, cx: &App) -> Vec<(MenuEntry, MenuAction)> {
-        let AgentGrants {
-            sites: grants,
-            connected,
-            tabs,
-        } = self.browser.agent_permissions(space, cx);
-        let mut items: Vec<(MenuEntry, MenuAction)> = vec![
-            (
-                MenuEntry::new("Agent Activity…", true),
-                Box::new(|shell, cx| shell.browser.agent_activity(cx)),
-            ),
-            (
-                MenuEntry::new("Revoke Permission", !grants.is_empty()),
-                Box::new(|_, _| {}),
-            ),
-        ];
-        let several = grants.len() > 1;
-        for (site, may) in grants {
-            let title = MenuEntry::label(if may { "Always Allow" } else { "Never" });
-            let title = format!("{title} on {site}");
-            items.push((
-                MenuEntry::named(title, true).under(1),
-                Box::new(move |shell, cx| shell.browser.revoke_agent(space, Some(site), cx)),
-            ));
-        }
-        if several {
-            items.push((MenuEntry::line().under(1), Box::new(|_, _| {})));
-            items.push((
-                MenuEntry::new("All Sites", true).under(1),
-                Box::new(move |shell, cx| shell.browser.revoke_agent(space, None, cx)),
-            ));
-        }
-        items.push((
-            MenuEntry::new("Take Back All Tabs", tabs),
-            Box::new(move |shell, cx| shell.browser.take_back_agent_tabs(space, cx)),
-        ));
-        items.push((
-            MenuEntry::named(format!("Disconnect {name}"), connected),
-            Box::new(move |shell, cx| shell.browser.disconnect_agent(space, cx)),
-        ));
-        items.push((MenuEntry::line(), Box::new(|_, _| {})));
         items
     }
 
@@ -700,14 +647,6 @@ impl Shell {
         } else {
             self.today_tab_menu(keys, tab, position)
         };
-        // A tab the user holds from an agent says so first, and gives it back (#404).
-        let mut held = self.held_items(tab);
-        let shift = held.len();
-        held.extend(items.into_iter().map(|(entry, name, action)| {
-            let parent = entry.parent.map(|parent| parent + shift);
-            (MenuEntry { parent, ..entry }, name, action)
-        }));
-        let items = held;
         let entries = items.iter().map(|(entry, ..)| entry.clone()).collect();
         self.context_menu(
             entries,
@@ -729,39 +668,6 @@ impl Shell {
         );
         self.menu_row = Some(self.row_of(tab));
         cx.notify();
-    }
-
-    /// The head of the menu of a tab the user holds from the agent whose Space shows: that they
-    /// took it back or the agent handed it to them, and Hand Back.
-    fn held_items(&self, tab: u64) -> Vec<(MenuEntry, &'static str, MenuAction)> {
-        let Some(space) = self.shown_space().filter(|space| !space.agent.is_empty()) else {
-            return Vec::new();
-        };
-        let held = (self.agent_status.iter())
-            .filter(|status| status.space == space.id)
-            .flat_map(|status| &status.held)
-            .find(|(id, _)| *id == tab);
-        let Some((_, why)) = held else {
-            return Vec::new();
-        };
-        let name = &space.agent;
-        let state = match why.is_empty() {
-            true => MenuEntry::label("Taken Back from"),
-            false => MenuEntry::label("Handed to You by"),
-        };
-        vec![
-            (
-                MenuEntry::named(format!("{state} {name}"), false),
-                "",
-                Box::new(|_, _| {}),
-            ),
-            (
-                MenuEntry::named(format!("{} {name}", MenuEntry::label("Hand Back to")), true),
-                "hand-back",
-                Box::new(move |shell, cx| shell.browser.hand_back(tab, cx)),
-            ),
-            (MenuEntry::line(), "", Box::new(|_, _| {})),
-        ]
     }
 
     /// A favorite's menu.
@@ -791,7 +697,7 @@ impl Shell {
                 }),
             ),
             (
-                MenuEntry::new("Remove from Favorites", !self.agents_space_shown()),
+                MenuEntry::new("Remove from Favorites", true),
                 "remove-from-favorites",
                 // To the top of Today.
                 Box::new(move |shell, cx| shell.move_tab_to(tab, false, 0, 0, cx)),
@@ -1061,11 +967,10 @@ impl Shell {
             Box::new(move |shell, cx| shell.duplicate_row(tab, cx)),
         ));
         self.push_add_to_folder(vec![tab], &mut items);
-        // Each other Space, in the switcher's order, then the agents' it can be given to.
+        // Each other Space, in the switcher's order.
         let others = self.spaces_to_move_to(false);
-        let agents = self.agents_to_give(tab);
         let move_to = items.len();
-        let any = !others.is_empty() || !agents.is_empty();
+        let any = !others.is_empty();
         items.push((
             MenuEntry::new("Move to Space", any),
             "",
@@ -1080,7 +985,6 @@ impl Shell {
                 Box::new(move |shell, cx| shell.move_to_space(tab, space, false, cx)),
             ));
         }
-        items.extend(self.give_items(tab, agents, move_to));
         items.push((MenuEntry::line(), "", Box::new(|_, _| {})));
         // One closed already has nothing to close.
         items.push((
@@ -1238,7 +1142,6 @@ impl Shell {
                     ));
                 }
             }
-            items.extend(self.give_items(tab, self.agents_to_give(tab), move_to));
             items.push((MenuEntry::line().under(move_to), "", Box::new(|_, _| {})));
             items.push((
                 MenuEntry::new("New Space…", true).under(move_to),
@@ -1542,42 +1445,6 @@ impl Shell {
         }
         self.send_to_space(tab, space, false, cx);
         self.browser.move_tab(tab, true, folder, 0, cx);
-    }
-
-    /// The agents' Spaces the user can give `tab` to, by id and name: a tab of the user's own,
-    /// to an agent whose Space is in its profile, as the page goes as it is (bc_tab_give_to_agent).
-    fn agents_to_give(&self, tab: u64) -> Vec<(u64, SharedString)> {
-        let Some(from) = (self.spaces.iter())
-            .find(|space| space.pinned.contains(&tab) || space.today.contains(&tab))
-            .filter(|space| space.agent.is_empty())
-        else {
-            return Vec::new();
-        };
-        (self.spaces.iter())
-            .filter(|space| !space.agent.is_empty() && space.profile == from.profile)
-            .map(|space| (space.id, space.name.clone()))
-            .collect()
-    }
-
-    /// Move to's items that give `tab` to an agent, under the item at `move_to`.
-    fn give_items(
-        &self,
-        tab: u64,
-        agents: Vec<(u64, SharedString)>,
-        move_to: usize,
-    ) -> Vec<(MenuEntry, &'static str, MenuAction)> {
-        let item = |(space, name)| -> (MenuEntry, &'static str, MenuAction) {
-            (
-                MenuEntry::named(name, true)
-                    .swatch(self.space_swatch(space))
-                    .under(move_to),
-                "give-to-agent",
-                Box::new(move |shell: &mut Shell, cx: &mut Context<Shell>| {
-                    shell.browser.give_to_agent(tab, space, cx)
-                }),
-            )
-        };
-        agents.into_iter().map(item).collect()
     }
 
     /// `space`'s swatch: its theme's first two colours, or its one colour going lighter down as

@@ -189,9 +189,6 @@ pub trait Browser {
     fn hand_back(&self, tab: u64) -> bool;
     /// Closes `tab` as the user would (bc_tab_close): a Today tab goes to the archive.
     fn close_tab(&self, tab: u64, cx: &mut App);
-    /// The user gives the agent whose Space is `space` their `tab`, which moves there
-    /// (bc_tab_give_to_agent). Whether it did.
-    fn give(&self, tab: u64, space: u64, cx: &mut App) -> bool;
     /// Makes the hidden Space of the task agent `agent`, named `name`, in the profile of the
     /// user's Space `like` (bc_space_create_for_agent, bc_space_set_profile).
     fn make_task_space(&self, agent: &str, name: &str, like: u64, cx: &mut App) -> u64;
@@ -208,18 +205,15 @@ pub trait Browser {
 
 /// What the server's threads hand the UI thread.
 pub enum Event {
-    /// A client began a session on its `connection` as the agent with the id `agent`. `client` is
-    /// the name it gave: its title, else its name, or empty.
+    /// A client began a session as the agent with the id `agent`. `client` is the name it gave:
+    /// its title, else its name, or empty.
     Hello {
         agent: String,
         client: String,
-        connection: u64,
     },
-    /// The session on `connection` ended, and with `last`, the agent's last.
+    /// The agent's last session ended.
     Bye {
         agent: String,
-        connection: u64,
-        last: bool,
     },
     Call(Call),
     /// The call `id` was answered, `at` then: with why it failed, if it did, and its picture.
@@ -237,8 +231,6 @@ pub struct Call {
     /// Its number, which its answer's event names.
     pub id: u64,
     pub agent: String,
-    /// The connection it came on, whose session's card it's a step of.
-    pub connection: u64,
     pub tool: String,
     pub arguments: Value,
     pub reply: mpsc::Sender<ToolResult>,
@@ -915,25 +907,17 @@ impl Agents {
     /// What the server's threads hand over.
     pub fn handle(&mut self, event: Event, cx: &mut Context<Self>) {
         match event {
-            Event::Hello {
-                agent,
-                client,
-                connection,
-            } => {
+            Event::Hello { agent, client } => {
                 log!("browser: agent {agent} hello from {client}");
-                self.hello(&agent, &client, connection);
+                self.hello(&agent, &client);
                 if self.live.insert(agent.clone()) {
                     self.note(&agent, "connected", "", "");
                     cx.notify();
                 }
             }
-            Event::Bye {
-                agent,
-                connection,
-                last,
-            } => {
-                self.end_session(&agent, connection, cx);
-                if last && self.live.remove(&agent) {
+            Event::Bye { agent } => {
+                self.end_session(&agent, cx);
+                if self.live.remove(&agent) {
                     self.forget_waiting(&agent, cx);
                     self.browser.disconnected(&agent, cx);
                     self.note(&agent, "disconnected", "", "");
@@ -1492,28 +1476,6 @@ impl Agents {
         cx.notify();
     }
 
-    /// The user gives the agent whose Space is `space` their `tab`, which it may act in from then
-    /// on, as in any tab of its own. Moving the tab to a Space of the user's takes it back.
-    pub fn give(&mut self, tab: u64, space: u64, cx: &mut Context<Self>) {
-        let agent = (Client::ALL.into_iter().map(Client::id))
-            .find(|agent| self.browser.agent_space(agent) == space);
-        let Some(agent) = agent else {
-            return;
-        };
-        if !self.browser.give(tab, space, cx) {
-            return;
-        }
-        // A hold from before is over, as the core's is.
-        if let Some(reply) = self.held.remove(&tab).and_then(|held| held.reply) {
-            _ = reply.send(ToolResult::text(format!("The user gave you tab {tab}.")));
-        }
-        // check.sh reads this line.
-        log!("browser: gave {tab} to agent {agent}");
-        let site = site(&self.browser.tab(tab, cx).url);
-        self.note(agent, "given", &site, "");
-        cx.notify();
-    }
-
     /// The tabs of the agent's Space the user doesn't hold.
     pub fn tabs_to_take(&self, agent: &str, cx: &App) -> Vec<u64> {
         let space = self.browser.agent_space(agent);
@@ -1578,6 +1540,8 @@ impl Agents {
         }
         self.browser.disconnected(agent, cx);
         self.note(agent, "stopped", "", "");
+        // ⌘. from its page stops an outside agent's session as its card's Stop does.
+        self.session_stopped(agent);
         self.advance(cx);
         self.asked(cx);
     }

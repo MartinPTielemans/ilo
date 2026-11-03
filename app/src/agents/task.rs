@@ -3,9 +3,9 @@
 //! the rules, the activity log, the confirmations and the handoffs are any agent's. Its Space is
 //! hidden, in the profile of the Space it was asked in, and it shows as a card at the sidebar's
 //! foot. An outside agent's session, from a client the user connected, is a task too,
-//! `session-<n>`, with the same card (Agent task › Outside agents): its calls come on its client's
-//! connection, as its client's agent, in that agent's hidden Space. Tasks and sessions live as long
-//! as the browser runs: their Spaces go when a task is dropped, at quit, and at the next launch for
+//! `session-<n>`, with the same card (Agent task › Outside agents): one a client at a time, whose
+//! calls, on any of its connections, come as its client's agent, in that agent's hidden Space. Tasks
+//! and sessions live as long as the browser runs: their Spaces go when a task is dropped, at quit, and at the next launch for
 //! any a crash left.
 
 use std::collections::{HashMap, VecDeque};
@@ -285,12 +285,12 @@ pub struct Writing {
     pub said: bool,
 }
 
-/// An outside agent's session: a connection of a client the user connected, from its first call
-/// that opens or acts on a tab until it disconnects, the user stops it, or IDLE passes.
+/// An outside agent's session: a client the user connected at work, on any of its connections,
+/// from its first call that opens or acts on a tab until its last connection closes, the user
+/// stops it, or IDLE passes. Its connections share its client's Space, rules and card.
 pub struct Session {
     /// The agent's id, which its calls, its rules, its Space and its activity go by.
     pub agent: String,
-    pub connection: u64,
     /// Its pages: the tabs it opened or acted in, in that order.
     pub tabs: Vec<u64>,
     /// Its calls under way, which it waits on.
@@ -434,8 +434,8 @@ pub struct Tasks {
     /// The dismissed, newest last, for ⇧⌘T.
     pub(super) dismissed: VecDeque<String>,
     pub(super) next: u64,
-    /// The name each outside agent's connection gave, for its session's card.
-    pub(super) names: HashMap<u64, SharedString>,
+    /// The name each outside agent last gave, by its id, for its session's card.
+    pub(super) names: HashMap<String, SharedString>,
     pub found: HashMap<Cli, Found>,
     pub(super) looking: bool,
     /// Whether ⌘T's ask has shown in this run, which learns again once.
@@ -1450,7 +1450,7 @@ impl Agents {
     }
 
     /// The task goes for good: its CLI ends and its Space goes, with its tabs.
-    fn drop_task(&mut self, agent: &str, cx: &mut Context<Self>) {
+    pub(super) fn drop_task(&mut self, agent: &str, cx: &mut Context<Self>) {
         let Some(at) = self.tasks.tasks.iter().position(|task| task.agent == agent) else {
             return;
         };
@@ -1554,7 +1554,7 @@ impl Agents {
     }
 
     /// A task's call, as a step of its trace from when it came, or an outside agent's, as a step
-    /// of its connection's session, which its first call that opens or acts on a tab starts. A
+    /// of its client's session, which its first call that opens or acts on a tab starts. A
     /// run's steps are steps of their own (`trace_step`); its name and its finish aren't steps of
     /// its work.
     pub(super) fn trace_call(&mut self, call: &super::Call, cx: &mut Context<Self>) {
@@ -1682,9 +1682,9 @@ impl Agents {
         cx.notify();
     }
 
-    /// A client said hello on `connection`: the name its sessions' cards show. One the user
-    /// connected in Settings › Agents by name has that; any other MCP client, the name it gives.
-    pub(super) fn hello(&mut self, agent: &str, client: &str, connection: u64) {
+    /// A client said hello: the name its sessions' cards show. One the user connected in
+    /// Settings › Agents by name has that; any other MCP client, the name it gives.
+    pub(super) fn hello(&mut self, agent: &str, client: &str) {
         let name = match Client::from_id(agent) {
             Some(Client::Other) if !client.is_empty() => client.to_string(),
             Some(known) => known.name().to_string(),
@@ -1692,18 +1692,16 @@ impl Agents {
         };
         self.tasks
             .names
-            .insert(connection, page::clip(&name, 60).into());
+            .insert(agent.into(), page::clip(&name, 60).into());
     }
 
-    /// The session under way on `agent`'s `connection`, or, for a call that opens or acts on a
-    /// tab, a new one: its card shows from then. Its calls are its steps.
+    /// The session under way of the call's client, on whichever of its connections, or, for a call
+    /// that opens or acts on a tab, a new one: its card shows from then. Its calls are its steps.
     fn session_for(&mut self, call: &super::Call, cx: &mut Context<Self>) -> Option<String> {
         let client = Client::from_id(&call.agent)?;
         let live = (self.tasks.tasks.iter_mut()).find(|task| {
             task.state == State::Working
-                && (task.session.as_ref()).is_some_and(|session| {
-                    session.agent == call.agent && session.connection == call.connection
-                })
+                && (task.session.as_ref()).is_some_and(|session| session.agent == call.agent)
         });
         if let Some(task) = live {
             let session = task.session.as_mut().expect("a session, as found");
@@ -1716,18 +1714,13 @@ impl Agents {
         }
         self.tasks.next += 1;
         let key = format!("session-{}", self.tasks.next);
-        let name = (self.tasks.names.get(&call.connection).cloned())
-            .unwrap_or_else(|| client.name().into());
+        let name =
+            (self.tasks.names.get(&call.agent).cloned()).unwrap_or_else(|| client.name().into());
         let space = self.space(&call.agent, cx);
         // check.sh reads this line.
-        log!(
-            "browser: session {key} of agent {} on {} as {name}",
-            call.agent,
-            call.connection
-        );
+        log!("browser: session {key} of agent {} as {name}", call.agent);
         let session = Session {
             agent: call.agent.clone(),
-            connection: call.connection,
             tabs: Vec::new(),
             calls: vec![call.id],
             idle: None,
@@ -1786,17 +1779,29 @@ impl Agents {
         }
     }
 
-    /// The session on `agent`'s `connection` ended, as its client disconnected: it's done.
-    pub(super) fn end_session(&mut self, agent: &str, connection: u64, cx: &mut Context<Self>) {
-        self.tasks.names.remove(&connection);
+    /// The client's last connection closed: its session under way is done.
+    pub(super) fn end_session(&mut self, agent: &str, cx: &mut Context<Self>) {
         let live = (self.tasks.tasks.iter()).find(|task| {
             task.state == State::Working
-                && (task.session.as_ref()).is_some_and(|session| {
-                    session.agent == agent && session.connection == connection
-                })
+                && (task.session.as_ref()).is_some_and(|session| session.agent == agent)
         });
         if let Some(key) = live.map(|task| task.agent.clone()) {
             self.session_done(&key, cx);
+        }
+    }
+
+    /// The user stopped the outside agent `agent`: its session under way is stopped.
+    pub(super) fn session_stopped(&mut self, agent: &str) {
+        let live = (self.tasks.tasks.iter_mut()).find(|task| {
+            task.state == State::Working
+                && (task.session.as_ref()).is_some_and(|session| session.agent == agent)
+        });
+        if let Some(task) = live {
+            task.state = State::Stopped;
+            task.ended = Some(SystemTime::now());
+            if let Some(session) = &mut task.session {
+                session.idle = None;
+            }
         }
     }
 

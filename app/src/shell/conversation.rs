@@ -161,6 +161,8 @@ pub struct TalkView {
     pictures: Vec<(u64, u64, Option<PagePicture>)>,
     /// Where each picture was drawn last, in the window, for its page to zoom out of.
     drawn: Rc<RefCell<Vec<(u64, Bounds<Pixels>)>>>,
+    /// Where each picture was drawn when that was logged last.
+    drawn_logged: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
     /// Its pages changed while one was watched over it, so they're pictured again once it shows.
     stale: bool,
     /// Its lines, which keep the newest in view as they come while the user is at the end.
@@ -257,6 +259,7 @@ impl Shell {
                     replies,
                     pictures: Vec::new(),
                     drawn: Rc::default(),
+                    drawn_logged: Rc::default(),
                     stale: false,
                     scroll: ScrollHandle::new(),
                     viewport: Size::default(),
@@ -869,11 +872,21 @@ impl TalkView {
             let (width, opacity) = grown[index];
             let image = (self.pictures.iter().find(|(each, ..)| *each == tab))
                 .and_then(|(_, _, picture)| picture.as_ref().map(PagePicture::image));
-            let drawn = self.drawn.clone();
+            let (drawn, logged) = (self.drawn.clone(), self.drawn_logged.clone());
             let paint = canvas(
                 |_, _, _| {},
                 move |bounds, _, window, _| {
                     drawn.borrow_mut().push((tab, bounds));
+                    if logged.borrow_mut().insert(tab, bounds) != Some(bounds) {
+                        // check.sh reads this line, to click the picture.
+                        log!(
+                            "browser: task picture {tab} at {:.0} {:.0} {:.0} {:.0}",
+                            f32::from(bounds.origin.x),
+                            f32::from(bounds.origin.y),
+                            f32::from(bounds.size.width),
+                            f32::from(bounds.size.height)
+                        );
+                    }
                     if let Some(image) = image {
                         let corners = Corners::all(px(PICTURE_RADIUS));
                         window

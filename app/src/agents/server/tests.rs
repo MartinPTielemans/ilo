@@ -203,6 +203,32 @@ fn initialize_begins_a_session() {
     assert_eq!(newest["result"]["protocolVersion"], VERSIONS[0]);
 }
 
+/// The name a client's card shows is the title MCP gives it for display, else its name, trimmed.
+#[test]
+fn hello_gives_the_clients_title_else_its_name() {
+    let (server, _, mut handed) = server();
+    for (info, named) in [
+        (
+            json!({ "name": "zed", "title": " Zed ", "version": "1" }),
+            "Zed",
+        ),
+        (json!({ "name": "zed", "title": "", "version": "1" }), "zed"),
+        (json!({ "version": "1" }), ""),
+    ] {
+        let mut client = Client::connect(&server);
+        client.ask(json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": info },
+        }));
+        match next(&mut handed) {
+            Some(Event::Hello { client, .. }) => assert_eq!(client, named),
+            _ => panic!("the UI didn't hear the agent's hello"),
+        }
+        drop(client);
+        assert!(matches!(next(&mut handed), Some(Event::Bye { .. })));
+    }
+}
+
 /// The tools list says what each takes; a notification is answered with nothing; an unknown
 /// method, a line that isn't JSON and a batch are errors, and the connection goes on.
 #[test]

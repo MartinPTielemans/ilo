@@ -570,7 +570,6 @@ fn initialize(shared: &Shared, number: u64, agent: &str, params: &Value) -> Valu
     _ = shared.events.unbounded_send(Event::Hello {
         agent: agent.into(),
         client: client.into(),
-        connection: number,
     });
     json!({
         "protocolVersion": version,
@@ -591,7 +590,6 @@ fn call(shared: &Shared, number: u64, agent: &str, tool: &str, arguments: Value)
     let call = Call {
         id,
         agent: agent.into(),
-        connection: number,
         tool: tool.into(),
         arguments,
         reply,
@@ -622,7 +620,7 @@ fn call(shared: &Shared, number: u64, agent: &str, tool: &str, arguments: Value)
     result
 }
 
-/// The connection closed, which ends its session, and with the agent's last, tells the UI it's gone.
+/// The connection closed. The agent's last session ending tells the UI it's gone.
 fn end(shared: &Shared, number: u64) {
     let mut connections = shared.connections.lock().unwrap();
     let Some(ended) = connections.remove(&number) else {
@@ -631,12 +629,10 @@ fn end(shared: &Shared, number: u64) {
     let others = connections
         .values()
         .any(|each| each.agent == ended.agent && each.initialized);
-    if ended.initialized {
-        _ = shared.events.unbounded_send(Event::Bye {
-            agent: ended.agent,
-            connection: number,
-            last: !others,
-        });
+    if ended.initialized && !others {
+        _ = shared
+            .events
+            .unbounded_send(Event::Bye { agent: ended.agent });
     }
 }
 

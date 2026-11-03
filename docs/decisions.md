@@ -94,7 +94,7 @@ Agents drive the user's real browser through ilo's built-in MCP server, as a fir
 ilo has no assistant of its own: no model, agent loop or AI account. What answers is the user's agent, and it can do in a page only what the MCP server lets any agent do.
 
 - **Built-in MCP server.** Local-only at first, on a socket only this user's processes can reach. Cloud agents come later, through explicit pairing.
-- **Where the work shows.** An outside agent works in its own Agent Space, visible in the sidebar. A task asked from ilo shows among the user's tabs without becoming tabs: its pages and its conversation live in the task. An agent never takes the user's focus or cursor. The user can watch, take over and hand back at any time.
+- **Where the work shows.** Each agent works in a Space of its own that no window lists, and its work shows as a card at the sidebar's foot, without becoming tabs: its pages and its steps live in the card. A task asked from ilo and an outside agent's session get the same card; an outside agent's conversation stays in its own terminal. An agent never takes the user's focus or cursor. The user can watch, take over and hand back at any time.
 - **Engine-native page access.** The core serves the accessibility tree, a cleaned-up DOM, stable element references and screenshots straight from Chromium. No extension, and no remote-debugging port.
 - **Permissions per agent and per site,** plus an activity log. Defaults are conservative: no payments, no sending messages or forms on sensitive sites without confirmation, and no banking sites unless the user allows them.
 - **Handoff to the human.** At a login, 2FA prompt or CAPTCHA, the agent's tab pauses and the sidebar asks the user to step in.
@@ -114,7 +114,7 @@ Revisit asking from ilo if Anthropic or OpenAI stop other apps from running thei
 Consequences now:
 
 - The core exposes one API that both the UI and agents use. Agents are not a bolt-on.
-- "Agent Space" is a kind of Space in the data model from the start.
+- "Agent Space" is a kind of Space in the data model from the start, hidden from the user, who sees an agent's work on its card.
 - The main risk is prompt injection from page content. Permissions and confirmations limit the damage but don't solve it, so confirmation UI and the activity log ship with the MCP server, never after it.
 
 ## 9. Crash reports: opt-in, to Sentry (EU region)

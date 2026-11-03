@@ -768,16 +768,13 @@ fn profiles() -> Vec<Profile> {
         .into_iter()
         .map(in_space)
         .collect();
-    // A task's Space is never listed as a Space, so its profile's count leaves it out, though it
-    // keeps the profile from being deleted.
-    let listed = crate::ids(bc::bc_spaces)
-        .into_iter()
-        .filter(|&space| !agents::is_task(&crate::name(bc::bc_space_agent, space)));
-    let listed: Vec<u64> = listed.map(in_space).collect();
+    // An agent's Space, a task's or an outside client's, is never listed as a Space (#1080), so its
+    // profile's count leaves it out, though it keeps the profile from being deleted.
     let users = crate::ids(bc::bc_spaces)
         .into_iter()
         .filter(|&space| crate::name(bc::bc_space_agent, space).is_empty());
     let users: Vec<u64> = users.map(in_space).collect();
+    let listed = &users;
     let of_tab = |tab| unsafe { bc::bc_tab_profile(tab) };
     let favorites: Vec<u64> = crate::ids(bc::bc_favorites)
         .into_iter()
@@ -2770,12 +2767,15 @@ impl Settings {
         let grants = agents.read(cx).grants(client.id());
         let revoke = |site: Option<SharedString>, title| {
             let id = format!("revoke-{}-{}", client.id(), site.as_deref().unwrap_or(""));
+            let at = self.drawn(format!("revoke {}", site.as_deref().unwrap_or("all")));
             let agents = agents.clone();
             button(
                 &RowLook::settings(),
                 gpui::ElementId::Name(id.into()),
                 title,
             )
+            .relative()
+            .child(at)
             .ml(px(PADDING))
             .on_click(move |_, _, cx| {
                 agents.update(cx, |agents, cx| {

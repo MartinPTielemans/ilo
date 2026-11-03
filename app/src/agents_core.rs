@@ -207,10 +207,6 @@ impl Browser for Core {
         unsafe { bc::bc_tab_close(tab, false) };
     }
 
-    fn give(&self, tab: u64, space: u64, _: &mut App) -> bool {
-        unsafe { bc::bc_tab_give_to_agent(tab, space) }
-    }
-
     fn make_task_space(&self, agent: &str, agent_name: &str, like: u64, cx: &mut App) -> u64 {
         let space = self.make_agent_space(agent, agent_name, cx);
         let profile = unsafe { bc::bc_space_profile(like) };

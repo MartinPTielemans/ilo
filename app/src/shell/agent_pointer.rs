@@ -52,8 +52,8 @@ impl AgentPointer {
 
 impl Shell {
     /// The agent at work in `tab` is about to click or type in the element it named `tag`, whose
-    /// box is `element`, in points from the top left of the tab's page. Only a page the window
-    /// shows in the agent's Space has the pointer.
+    /// box is `element`, in points from the top left of the tab's page. Only an agent's page the
+    /// window shows, a task's watched, has the pointer.
     pub fn agent_pointing(
         &mut self,
         tab: u64,
