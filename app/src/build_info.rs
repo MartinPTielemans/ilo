@@ -39,7 +39,11 @@ impl BuildInfo {
     /// One detail a line, as Copy Build Info copies them.
     pub fn text(&self) -> String {
         let mut lines = vec![format!("{} {}", env!("APP_NAME"), self.version)];
-        lines.extend(self.engine.as_ref().map(|engine| format!("Chromium {engine}")));
+        lines.extend(
+            self.engine
+                .as_ref()
+                .map(|engine| format!("Chromium {engine}")),
+        );
         lines.push(self.system.clone());
         lines.push(self.chip.clone());
         lines.join("\n")
@@ -52,8 +56,10 @@ impl BuildInfo {
         fields.push(("version", self.version.clone()));
         fields.extend(self.engine.clone().map(|engine| ("chromium", engine)));
         fields.push(("os", format!("{}, {}", self.system, self.chip)));
-        let query: Vec<String> =
-            fields.iter().map(|(name, value)| format!("{name}={}", escape(value))).collect();
+        let query: Vec<String> = fields
+            .iter()
+            .map(|(name, value)| format!("{name}={}", escape(value)))
+            .collect();
         format!("{new_issue}?{}", query.join("&"))
     }
 }
@@ -74,14 +80,17 @@ pub static ENGINE_VERSION: LazyLock<Option<String>> = LazyLock::new(|| {
         return engine_beside(exe.parent()?);
     }
     let frameworks = exe.parent()?.parent()?.join("Frameworks");
-    std::fs::read_dir(frameworks).ok()?.flatten().find_map(|entry| {
-        let name = entry.file_name();
-        if !name.to_str()?.ends_with(" Framework.framework") {
-            return None;
-        }
-        let current = std::fs::read_link(entry.path().join("Versions/Current")).ok()?;
-        Some(current.to_str()?.to_owned())
-    })
+    std::fs::read_dir(frameworks)
+        .ok()?
+        .flatten()
+        .find_map(|entry| {
+            let name = entry.file_name();
+            if !name.to_str()?.ends_with(" Framework.framework") {
+                return None;
+            }
+            let current = std::fs::read_link(entry.path().join("Versions/Current")).ok()?;
+            Some(current.to_str()?.to_owned())
+        })
 });
 
 /// The version of the engine in `dir`: Windows's build names a manifest after it, such as
@@ -96,9 +105,10 @@ fn engine_beside(dir: &std::path::Path) -> Option<String> {
     if let Ok(text) = std::fs::read_to_string(dir.join("VERSION")) {
         return version(text.trim());
     }
-    std::fs::read_dir(dir).ok()?.flatten().find_map(|entry| {
-        version(entry.file_name().to_str()?.strip_suffix(".manifest")?)
-    })
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .find_map(|entry| version(entry.file_name().to_str()?.strip_suffix(".manifest")?))
 }
 
 /// `text` for a URL's query: what isn't a letter, a digit or `-._~` as UTF-8 bytes in %XX.
@@ -117,8 +127,17 @@ fn escape(text: &str) -> String {
 
 #[cfg(target_os = "macos")]
 fn system() -> String {
-    let version = (plist::Value::from_file("/System/Library/CoreServices/SystemVersion.plist").ok())
-        .and_then(|plist| Some(plist.as_dictionary()?.get("ProductVersion")?.as_string()?.to_owned()));
+    let version = (plist::Value::from_file("/System/Library/CoreServices/SystemVersion.plist")
+        .ok())
+    .and_then(|plist| {
+        Some(
+            plist
+                .as_dictionary()?
+                .get("ProductVersion")?
+                .as_string()?
+                .to_owned(),
+        )
+    });
     format!("macOS {}", version.as_deref().unwrap_or("(unknown)"))
 }
 
@@ -174,13 +193,19 @@ mod tests {
         let text = made_up().text();
         assert_eq!(
             text,
-            concat!(env!("APP_NAME"), " 0.1.0 (4321)\nChromium 156.0.7600.12\nmacOS 15.1\nApple M2 Pro")
+            concat!(
+                env!("APP_NAME"),
+                " 0.1.0 (4321)\nChromium 156.0.7600.12\nmacOS 15.1\nApple M2 Pro"
+            )
         );
     }
 
     #[test]
     fn copies_no_engine_line_without_one() {
-        let info = BuildInfo { engine: None, ..made_up() };
+        let info = BuildInfo {
+            engine: None,
+            ..made_up()
+        };
         assert!(!info.text().contains("Chromium"));
         assert!(!info.issue_url(NEW_ISSUE).contains("chromium="));
     }

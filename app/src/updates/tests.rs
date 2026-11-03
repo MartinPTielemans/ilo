@@ -49,10 +49,19 @@ impl Shown<'_> {
 
     /// What the row says, and its button's title, as drawn.
     fn reads(&mut self) -> (Option<String>, Option<&'static str>) {
-        let drawn = self.row.read_with(self.cx, |row, _| row.button_bounds().is_some());
+        let drawn = self
+            .row
+            .read_with(self.cx, |row, _| row.button_bounds().is_some());
         let (said, action) = self.cx.update(|_, cx| words(updater(cx), &stage(cx)));
-        assert_eq!(drawn, action.is_some(), "the button drawn isn't the one offered");
-        (said.map(|said| said.to_string()), action.map(|(_, title)| title))
+        assert_eq!(
+            drawn,
+            action.is_some(),
+            "the button drawn isn't the one offered"
+        );
+        (
+            said.map(|said| said.to_string()),
+            action.map(|(_, title)| title),
+        )
     }
 
     /// Clicks the row's button, which must be drawn.
@@ -95,7 +104,10 @@ fn up_to_date_says_so_and_checks_again(cx: &mut TestAppContext) {
     about.says(Stage::Checking);
     about.says(Stage::Current);
     let up_to_date = concat!(env!("APP_NAME"), " is up to date");
-    assert_eq!(about.reads(), (Some(up_to_date.into()), Some("Check for Updates")));
+    assert_eq!(
+        about.reads(),
+        (Some(up_to_date.into()), Some("Check for Updates"))
+    );
     about.click();
     assert_eq!(about.asked(), ["check"]);
 }
@@ -109,7 +121,10 @@ fn downloading_names_the_version(cx: &mut TestAppContext) {
     assert_eq!(about.reads(), (Some("Downloading 0.1.1…".into()), None));
     // Flatpak's portal doesn't name it.
     about.says(Stage::Downloading(None));
-    assert_eq!(about.reads(), (Some("Downloading the update…".into()), None));
+    assert_eq!(
+        about.reads(),
+        (Some("Downloading the update…".into()), None)
+    );
     assert!(about.asked().is_empty());
 }
 
@@ -122,8 +137,14 @@ fn ready_restarts_into_the_update(cx: &mut TestAppContext) {
     about.says(Stage::Downloading(Some("0.1.1".into())));
     about.says(Stage::Ready(Some("0.1.1".into())));
     let ready = concat!(env!("APP_NAME"), " 0.1.1 is ready");
-    assert_eq!(about.reads(), (Some(ready.into()), Some("Restart to Update")));
-    assert_eq!(about.cx.update(|_, cx| command_title(cx)), "Restart to Update");
+    assert_eq!(
+        about.reads(),
+        (Some(ready.into()), Some("Restart to Update"))
+    );
+    assert_eq!(
+        about.cx.update(|_, cx| command_title(cx)),
+        "Restart to Update"
+    );
     about.click();
     assert_eq!(about.asked(), ["restart"]);
     about.says(Stage::Checking);
@@ -151,7 +172,10 @@ fn a_dev_build_has_no_button(cx: &mut TestAppContext) {
     assert_eq!(about.reads(), (None, None));
     about.cx.update(|_, cx| act(Action::Check, cx));
     assert!(about.asked().is_empty());
-    assert_eq!(about.cx.update(|_, cx| command_title(cx)), "Check for Updates…");
+    assert_eq!(
+        about.cx.update(|_, cx| command_title(cx)),
+        "Check for Updates…"
+    );
 }
 
 /// The ways back: a failed check says so and tries again; a failed download or install says the
@@ -162,12 +186,18 @@ fn a_failure_or_a_cancel_offers_the_check_again(cx: &mut TestAppContext) {
     let mut about = shown(Updater::Own, cx);
     about.says(Stage::Checking);
     about.says(Stage::Failed { found: true });
-    assert_eq!(about.reads(), (Some("Couldn’t check for updates".into()), Some("Try Again")));
+    assert_eq!(
+        about.reads(),
+        (Some("Couldn’t check for updates".into()), Some("Try Again"))
+    );
     about.click();
     assert_eq!(about.asked(), ["check"]);
     about.says(Stage::Downloading(Some("0.1.1".into())));
     about.says(Stage::Failed { found: false });
-    assert_eq!(about.reads(), (Some("The update didn’t install".into()), Some("Try Again")));
+    assert_eq!(
+        about.reads(),
+        (Some("The update didn’t install".into()), Some("Try Again"))
+    );
     about.says(Stage::Found(None));
     assert_eq!(about.reads(), (Some("An update is available".into()), None));
     about.says(Stage::Idle);

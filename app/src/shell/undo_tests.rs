@@ -20,7 +20,14 @@ fn window(
     folders: Folders,
     splits: Vec<Split>,
 ) -> (Entity<Shell>, Rc<Recorder>) {
-    on(cx, Rc::new(Recorder::default()), pinned, today, folders, splits)
+    on(
+        cx,
+        Rc::new(Recorder::default()),
+        pinned,
+        today,
+        folders,
+        splits,
+    )
 }
 
 /// As `window`, on `host`.
@@ -251,7 +258,10 @@ fn an_every_space_favorite_is_put_back_by_its_place_among_the_tiles_its_space_sh
     // Spaces 1 and 2 are in profile 1; the twins 40 to 42 are profile 2's.
     let both = vec![(20, 1), (40, 2), (21, 1), (41, 2), (22, 1), (42, 2)];
     shell.update(cx, |shell, cx| shell.set_favorites(both.clone(), cx));
-    assert_eq!(shell.read_with(cx, |shell, _| shell.favorites().to_vec()), [20, 21, 22]);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.favorites().to_vec()),
+        [20, 21, 22]
+    );
     host.pinned_urls
         .borrow_mut()
         .insert(21, "https://a.example/".into());
@@ -273,10 +283,16 @@ fn an_every_space_favorite_is_put_back_by_its_place_among_the_tiles_its_space_sh
 
     // The core made the twin again, under a new id, in the same place.
     shell.update(cx, |shell, cx| {
-        shell.set_favorites(vec![(20, 1), (40, 2), (21, 1), (43, 2), (22, 1), (42, 2)], cx)
+        shell.set_favorites(
+            vec![(20, 1), (40, 2), (21, 1), (43, 2), (22, 1), (42, 2)],
+            cx,
+        )
     });
     report(&shell, cx, Vec::new(), vec![30]);
-    assert_eq!(shell.read_with(cx, |shell, _| shell.favorites().to_vec()), [20, 21, 22]);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.favorites().to_vec()),
+        [20, 21, 22]
+    );
     assert!(redo(&shell, cx));
     assert_eq!(host.take_edits(), ["move 21 false 0 0"]);
 }
@@ -411,7 +427,10 @@ fn a_new_space_goes_right_after_the_space_shown(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| shell.set_space(2, cx));
     host.take();
     shell.update(cx, |shell, cx| shell.run(Command::NewSpace, "ui", cx));
-    assert!(host.take().contains(&"create space Space 4 after 2".to_string()));
+    assert!(
+        host.take()
+            .contains(&"create space Space 4 after 2".to_string())
+    );
 }
 
 /// The command bar finds each other Space by its name, to focus it, pin the tab in it or move the
@@ -420,7 +439,10 @@ fn a_new_space_goes_right_after_the_space_shown(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_command_bar_finds_spaces_and_closed_folders_by_name(cx: &mut TestAppContext) {
     let folders = Folders {
-        folders: HashMap::from([(5, ("Reading".into(), false)), (6, ("Recipes".into(), false))]),
+        folders: HashMap::from([
+            (5, ("Reading".into(), false)),
+            (6, ("Recipes".into(), false)),
+        ]),
         parents: HashMap::from([(6, 5), (7, 6)]),
         ..Default::default()
     };
@@ -431,7 +453,9 @@ fn the_command_bar_finds_spaces_and_closed_folders_by_name(cx: &mut TestAppConte
             let found = Vec::new();
             let keys = crate::shell::UserKeys::default();
             let rows = crate::shell::with_named_rows(found, typed, &shell.named_bar_rows(), &keys);
-            rows.into_iter().map(|row| (row.name.to_string(), row.command)).collect::<Vec<_>>()
+            rows.into_iter()
+                .map(|row| (row.name.to_string(), row.command))
+                .collect::<Vec<_>>()
         })
     };
     assert_eq!(
@@ -444,11 +468,20 @@ fn the_command_bar_finds_spaces_and_closed_folders_by_name(cx: &mut TestAppConte
     );
     // Nothing typed lists none, and the Space shown has none.
     assert!(found("", cx).is_empty());
-    assert!(found("one", cx).iter().all(|(name, _)| !name.ends_with("One")));
+    assert!(
+        found("one", cx)
+            .iter()
+            .all(|(name, _)| !name.ends_with("One"))
+    );
     let recipes = found("recipes", cx);
-    assert_eq!(recipes, [("Open Recipes".to_string(), Command::OpenFolder(6))]);
+    assert_eq!(
+        recipes,
+        [("Open Recipes".to_string(), Command::OpenFolder(6))]
+    );
     host.take();
-    shell.update(cx, |shell, cx| shell.run(Command::OpenFolder(6), "command-bar", cx));
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::OpenFolder(6), "command-bar", cx)
+    });
     assert_eq!(host.take(), ["folder open 6 true", "folder open 5 true"]);
 }
 
@@ -581,7 +614,13 @@ fn a_tab_that_left_one_split_for_another_goes_back_to_the_first(cx: &mut TestApp
             ..Default::default()
         },
     ];
-    let (shell, host) = window(cx, Vec::new(), vec![10, 11, 12, 13], Folders::default(), splits);
+    let (shell, host) = window(
+        cx,
+        Vec::new(),
+        vec![10, 11, 12, 13],
+        Folders::default(),
+        splits,
+    );
     shell.update(cx, |shell, cx| shell.join_split(11, 12, true, false, cx));
     assert_eq!(host.take_edits(), ["split 11 12 true"]);
     report_split(&shell, cx, vec![10, 11, 12, 13], vec![11, 12, 13], false);
@@ -642,7 +681,13 @@ fn a_change_of_orientation_is_its_own_step(cx: &mut TestAppContext) {
         tabs: vec![10, 11],
         ..Default::default()
     };
-    let (shell, host) = window(cx, Vec::new(), vec![10, 11], Folders::default(), vec![split]);
+    let (shell, host) = window(
+        cx,
+        Vec::new(),
+        vec![10, 11],
+        Folders::default(),
+        vec![split],
+    );
     shell.update(cx, |shell, cx| shell.stack_split(10, true, cx));
     assert!(host.take().contains(&"split stacked 10 true".to_string()));
     assert_eq!(titles(&shell, cx).0, Some("Change Orientation"));
@@ -656,7 +701,14 @@ fn a_private_window_keeps_no_split_to_undo(cx: &mut TestAppContext) {
     let host = Rc::new(Recorder::default());
     let shell = cx.new(|cx| Shell::private_window(host.clone(), 9, "Private".into(), 1, cx));
     shell.update(cx, |shell, cx| {
-        shell.set_tabs(9, Vec::new(), vec![10, 11], Vec::new(), Folders::default(), cx);
+        shell.set_tabs(
+            9,
+            Vec::new(),
+            vec![10, 11],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
         shell.join_split(11, 10, false, false, cx);
         shell.split_opened(12, cx);
     });
@@ -671,7 +723,10 @@ fn names_icons_and_colours_go_back_to_what_they_were(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| {
         shell.change(Prop::TabName(10), Value::Text("New".into()), cx);
         shell.change(Prop::SpaceName(2), Value::Text("Work".into()), cx);
-        let red = Value::Color { color: Some(0xff0000), theme: "red".into() };
+        let red = Value::Color {
+            color: Some(0xff0000),
+            theme: "red".into(),
+        };
         shell.change(Prop::SpaceColor(2), red, cx);
         shell.change(Prop::SpaceIcon(2), Value::Text("🌱".into()), cx);
     });
@@ -975,7 +1030,10 @@ fn command_z_and_the_edit_menu_undo_and_redo_with_the_ui_focused(cx: &mut TestAp
     let (shell, cx): (Entity<Shell>, &mut VisualTestContext) =
         cx.add_window_view(|_, cx| Shell::new(browser, cx));
     shell.update(cx, |shell, cx| {
-        shell.set_spaces(vec![(1, "One".into(), None, 1, "".into(), "".into(), "".into())], cx);
+        shell.set_spaces(
+            vec![(1, "One".into(), None, 1, "".into(), "".into(), "".into())],
+            cx,
+        );
         shell.set_space(1, cx);
         shell.set_tabs(
             1,
@@ -1068,9 +1126,7 @@ fn report_lists(
 /// unloaded, as ⌘W keeps a pinned tab's row; ⇧⌘T then puts it back in its pane, pinned, and
 /// doesn't reopen an archived tab instead (#1289).
 #[gpui::test]
-fn closing_a_pinned_tabs_pane_keeps_it_pinned_and_reopening_puts_it_back(
-    cx: &mut TestAppContext,
-) {
+fn closing_a_pinned_tabs_pane_keeps_it_pinned_and_reopening_puts_it_back(cx: &mut TestAppContext) {
     let split = Split {
         tabs: vec![20, 21],
         ..Default::default()
@@ -1086,13 +1142,17 @@ fn closing_a_pinned_tabs_pane_keeps_it_pinned_and_reopening_puts_it_back(
     shell.update(cx, |shell, cx| shell.set_selected(21, cx));
     host.take();
 
-    shell.update(cx, |shell, cx| shell.run(Command::ReopenClosedTab, "ui", cx));
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::ReopenClosedTab, "ui", cx)
+    });
     assert_eq!(host.take_edits(), ["split 20 21 true"]);
     assert!(!host.take().contains(&"reopen closed tab".to_string()));
     // Reopened, it's no longer a close for ⌘Z to undo, and the next ⇧⌘T is the core's.
     assert_eq!(titles(&shell, cx).0, None);
     report_lists(&shell, cx, vec![20, 21], vec![10], vec![20, 21]);
-    shell.update(cx, |shell, cx| shell.run(Command::ReopenClosedTab, "ui", cx));
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::ReopenClosedTab, "ui", cx)
+    });
     assert!(host.take_edits().is_empty());
     assert!(host.take().contains(&"reopen closed tab".to_string()));
 }
@@ -1114,7 +1174,9 @@ fn undoing_a_pinned_panes_close_rejoins_it_once(cx: &mut TestAppContext) {
     assert_eq!(host.take_edits(), ["split 21 20 false"]);
     report_lists(&shell, cx, vec![20, 21], vec![10], vec![20, 21]);
     host.take();
-    shell.update(cx, |shell, cx| shell.run(Command::ReopenClosedTab, "ui", cx));
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::ReopenClosedTab, "ui", cx)
+    });
     assert!(host.take_edits().is_empty());
     assert!(host.take().contains(&"reopen closed tab".to_string()));
 }
@@ -1128,7 +1190,13 @@ fn a_removed_pinned_split_comes_back_split_at_its_place(cx: &mut TestAppContext)
         tabs: vec![20, 21],
         ..Default::default()
     };
-    let (shell, host) = window(cx, vec![19, 20, 21], vec![10], Folders::default(), vec![split]);
+    let (shell, host) = window(
+        cx,
+        vec![19, 20, 21],
+        vec![10],
+        Folders::default(),
+        vec![split],
+    );
     shell.update(cx, |shell, cx| shell.set_selected(10, cx));
     host.pinned_urls.borrow_mut().extend([
         (20, "https://a.example/".to_string()),
@@ -1165,12 +1233,19 @@ fn reopening_a_removed_pinned_tab_pins_it_again(cx: &mut TestAppContext) {
     report(&shell, cx, vec![19], vec![10]);
     host.take();
     host.take_edits();
-    shell.update(cx, |shell, cx| shell.run(Command::ReopenClosedTab, "ui", cx));
-    assert_eq!(host.take_edits(), ["reopen 20 as 1001", "move 1001 true 0 1"]);
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::ReopenClosedTab, "ui", cx)
+    });
+    assert_eq!(
+        host.take_edits(),
+        ["reopen 20 as 1001", "move 1001 true 0 1"]
+    );
     assert!(!host.take().contains(&"reopen closed tab".to_string()));
     assert_eq!(titles(&shell, cx).0, None);
     report(&shell, cx, vec![19, 1001], vec![10]);
-    shell.update(cx, |shell, cx| shell.run(Command::ReopenClosedTab, "ui", cx));
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::ReopenClosedTab, "ui", cx)
+    });
     assert!(host.take().contains(&"reopen closed tab".to_string()));
 }
 
@@ -1200,14 +1275,22 @@ fn closing_a_today_tabs_pane_closes_the_tab(cx: &mut TestAppContext) {
         tabs: vec![10, 11],
         ..Default::default()
     };
-    let (shell, host) = window(cx, Vec::new(), vec![10, 11, 12], Folders::default(), vec![split]);
+    let (shell, host) = window(
+        cx,
+        Vec::new(),
+        vec![10, 11, 12],
+        Folders::default(),
+        vec![split],
+    );
     shell.update(cx, |shell, cx| shell.set_selected(11, cx));
     host.take();
     shell.update(cx, |shell, cx| shell.run(Command::CloseSplitPane, "ui", cx));
     assert_eq!(host.take_edits(), ["close 11"]);
     report(&shell, cx, Vec::new(), vec![10, 12]);
     host.take();
-    shell.update(cx, |shell, cx| shell.run(Command::ReopenClosedTab, "ui", cx));
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::ReopenClosedTab, "ui", cx)
+    });
     assert!(host.take().contains(&"reopen closed tab".to_string()));
     assert!(host.take_edits().is_empty());
 }
@@ -1270,10 +1353,15 @@ fn a_folder_moved_to_another_space_is_put_back_by_undo(cx: &mut TestAppContext) 
     host.take_edits();
     cx.update(|cx| host.choose("Two", cx));
     assert_eq!(host.take_edits(), ["space folder 5 2"]);
-    assert_eq!(host.undo_toasts.borrow().as_slice(), ["Folder Moved to Space"]);
+    assert_eq!(
+        host.undo_toasts.borrow().as_slice(),
+        ["Folder Moved to Space"]
+    );
     assert_eq!(titles(&shell, cx).0, Some("Move to Space"));
     let two = |shell: &Entity<Shell>, cx: &mut TestAppContext, pinned: Vec<u64>, folders| {
-        shell.update(cx, |shell, cx| shell.set_tabs(2, pinned, Vec::new(), Vec::new(), folders, cx))
+        shell.update(cx, |shell, cx| {
+            shell.set_tabs(2, pinned, Vec::new(), Vec::new(), folders, cx)
+        })
     };
     report(&shell, cx, vec![4], vec![9]);
     two(&shell, cx, vec![10, 5, 6, 7, 8], reading());
@@ -1330,7 +1418,9 @@ fn the_command_bar_moves_a_chosen_folder_to_another_space(cx: &mut TestAppContex
             let keys = crate::shell::UserKeys::default();
             let rows = shell.named_bar_rows();
             let rows = crate::shell::with_named_rows(Vec::new(), typed, &rows, &keys);
-            rows.into_iter().map(|row| (row.name.to_string(), row.command)).collect::<Vec<_>>()
+            rows.into_iter()
+                .map(|row| (row.name.to_string(), row.command))
+                .collect::<Vec<_>>()
         })
     };
     assert_eq!(
@@ -1340,9 +1430,14 @@ fn the_command_bar_moves_a_chosen_folder_to_another_space(cx: &mut TestAppContex
             ("Move to Two".to_string(), Command::MoveToSpace(2)),
         ]
     );
-    assert_eq!(found("three", cx), [("Focus Three".to_string(), Command::SelectSpace(2))]);
+    assert_eq!(
+        found("three", cx),
+        [("Focus Three".to_string(), Command::SelectSpace(2))]
+    );
     host.take_edits();
-    shell.update(cx, |shell, cx| shell.run(Command::MoveToSpace(2), "command-bar", cx));
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::MoveToSpace(2), "command-bar", cx)
+    });
     assert_eq!(host.take_edits(), ["space folder 5 2"]);
     assert!(shell.read_with(cx, |shell, _| shell.chosen.is_empty()));
     report(&shell, cx, vec![4], vec![9]);

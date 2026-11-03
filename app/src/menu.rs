@@ -17,10 +17,10 @@ use std::{
 
 use gpui::{
     AnyWindowHandle, App, Bounds, Context, FocusHandle, Hsla, KeyDownEvent, ModifiersChangedEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Radians, Role, SharedString,
-    Task, TitlebarOptions, Transformation, Window, WindowBackgroundAppearance, WindowBounds,
-    WindowHandle, WindowKind, WindowOptions, div, img, linear_color_stop, linear_gradient, point, prelude::*, px,
-    Rgba, rgb, rgba, size, svg,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Radians, Rgba, Role,
+    SharedString, Task, TitlebarOptions, Transformation, Window, WindowBackgroundAppearance,
+    WindowBounds, WindowHandle, WindowKind, WindowOptions, div, img, linear_color_stop,
+    linear_gradient, point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{
@@ -81,7 +81,11 @@ pub struct Highlight {
 
 impl Highlight {
     pub fn of(palette: &crate::palette::Palette) -> Self {
-        Highlight { fill: palette.accent, pressed: palette.accent_pressed().into(), label: palette.accent_label }
+        Highlight {
+            fill: palette.accent,
+            pressed: palette.accent_pressed().into(),
+            label: palette.accent_label,
+        }
     }
 }
 
@@ -110,7 +114,10 @@ impl Default for Look {
 impl Look {
     /// The dark panel with no theme's accent, for a window that isn't a Space's, such as Settings.
     pub fn dark() -> Self {
-        Look { light: false, highlight: Highlight::of(&crate::palette::Palette::default()) }
+        Look {
+            light: false,
+            highlight: Highlight::of(&crate::palette::Palette::default()),
+        }
     }
 
     pub fn palette(self) -> &'static Palette {
@@ -194,9 +201,16 @@ pub(crate) struct Level {
 
 impl Level {
     fn row_bounds(&self, at: usize, entries: &[MenuEntry]) -> Bounds<Pixels> {
-        let height = if entries[self.items[at]].title.is_empty() { LINE } else { ROW };
+        let height = if entries[self.items[at]].title.is_empty() {
+            LINE
+        } else {
+            ROW
+        };
         let origin = self.bounds.origin + point(px(PADDING), px(self.tops[at]));
-        Bounds::new(origin, size(self.bounds.size.width - px(2. * PADDING), px(height)))
+        Bounds::new(
+            origin,
+            size(self.bounds.size.width - px(2. * PADDING), px(height)),
+        )
     }
 }
 
@@ -210,7 +224,9 @@ pub(crate) struct Layout {
 impl Layout {
     /// The level that's the submenu of `entry`.
     fn level_of(&self, entry: usize) -> Option<usize> {
-        self.levels.iter().position(|level| level.parent == Some(entry))
+        self.levels
+            .iter()
+            .position(|level| level.parent == Some(entry))
     }
 
     /// As laid out for a window that can't blend: each panel out to whole points, since a pixel its
@@ -218,9 +234,17 @@ impl Layout {
     pub(crate) fn opaque(mut self) -> Layout {
         for level in &mut self.levels {
             let (origin, end) = (level.bounds.origin, level.bounds.bottom_right());
-            level.bounds = Bounds::from_corners(origin.map(|at| at.floor()), end.map(|at| at.ceil()));
+            level.bounds =
+                Bounds::from_corners(origin.map(|at| at.floor()), end.map(|at| at.ceil()));
         }
-        self.frame = framed(&self.levels, Reach { above: 0., below: 0., sides: 0. });
+        self.frame = framed(
+            &self.levels,
+            Reach {
+                above: 0.,
+                below: 0.,
+                sides: 0.,
+            },
+        );
         self
     }
 }
@@ -229,7 +253,8 @@ impl Layout {
 /// A window put at a fraction of one lands on a pixel, so each pointer move reached the menu twice,
 /// a quarter point apart, and the second left the safe triangle.
 fn framed(levels: &[Level], reach: Reach) -> Bounds<Pixels> {
-    let union = (levels.iter().skip(1)).fold(levels[0].bounds, |all, level| all.union(&level.bounds));
+    let union =
+        (levels.iter().skip(1)).fold(levels[0].bounds, |all, level| all.union(&level.bounds));
     Bounds::from_corners(
         (union.origin - point(px(reach.sides), px(reach.above))).map(|at| at.floor()),
         (union.bottom_right() + point(px(reach.sides), px(reach.below))).map(|at| at.ceil()),
@@ -238,20 +263,29 @@ fn framed(levels: &[Level], reach: Reach) -> Bounds<Pixels> {
 
 /// How wide a level's panel is for titles and shortcuts `width_of` measures, between the
 /// minimum and the maximum, where longer titles end in "…".
-fn panel_width(entries: &[MenuEntry], items: &[usize], checks: bool, width_of: &dyn Fn(&str) -> f32) -> f32 {
+fn panel_width(
+    entries: &[MenuEntry],
+    items: &[usize],
+    checks: bool,
+    width_of: &dyn Fn(&str) -> f32,
+) -> f32 {
     // An item's ⌥ alternate takes its row while ⌥ is held, so the panel fits both.
-    let widest = (items.iter().flat_map(|&at| std::iter::once(at).chain(alternate_of(entries, at))))
-        .map(|at| &entries[at])
-        .filter(|entry| !entry.title.is_empty())
-        .map(|entry| {
-            let trailing = match &entry.shortcut {
-                Some(keys) => GAP + width_of(&keystroke_label(keys)),
-                None => 0.,
-            };
-            width_of(&entry.title) + trailing
-        })
-        .fold(0., f32::max);
-    let submenus = items.iter().any(|&at| entries.iter().any(|each| each.parent == Some(at)));
+    let widest = (items
+        .iter()
+        .flat_map(|&at| std::iter::once(at).chain(alternate_of(entries, at))))
+    .map(|at| &entries[at])
+    .filter(|entry| !entry.title.is_empty())
+    .map(|entry| {
+        let trailing = match &entry.shortcut {
+            Some(keys) => GAP + width_of(&keystroke_label(keys)),
+            None => 0.,
+        };
+        width_of(&entry.title) + trailing
+    })
+    .fold(0., f32::max);
+    let submenus = items
+        .iter()
+        .any(|&at| entries.iter().any(|each| each.parent == Some(at)));
     let lead = if checks { CHECK + GAP } else { 0. };
     let swatches = items.iter().any(|&at| entries[at].swatch.is_some());
     let lead = lead + if swatches { SWATCH + GAP } else { 0. };
@@ -264,7 +298,10 @@ fn panel_width(entries: &[MenuEntry], items: &[usize], checks: bool, width_of: &
 /// The item shown in place of `item` while ⌥ is held, as AppKit's alternates are: the one after it,
 /// if that's marked so.
 fn alternate_of(entries: &[MenuEntry], item: usize) -> Option<usize> {
-    entries.get(item + 1).is_some_and(|next| next.alternate).then_some(item + 1)
+    entries
+        .get(item + 1)
+        .is_some_and(|next| next.alternate)
+        .then_some(item + 1)
 }
 
 /// The item that `item`'s row is while ⌥ is held, if `alt`, or else.
@@ -275,7 +312,10 @@ pub(crate) fn as_held(entries: &[MenuEntry], item: usize, alt: bool) -> usize {
 /// `origin` moved inside `area` by EDGE for a panel of `size`, as far as it fits.
 fn clamped(origin: Point<Pixels>, size: (f32, f32), area: Bounds<Pixels>) -> Point<Pixels> {
     let (left, top) = (f32::from(area.left()) + EDGE, f32::from(area.top()) + EDGE);
-    let (right, bottom) = (f32::from(area.right()) - EDGE, f32::from(area.bottom()) - EDGE);
+    let (right, bottom) = (
+        f32::from(area.right()) - EDGE,
+        f32::from(area.bottom()) - EDGE,
+    );
     let x = f32::from(origin.x).min(right - size.0).max(left);
     let y = f32::from(origin.y).min(bottom - size.1).max(top);
     point(px(x), px(y))
@@ -291,25 +331,42 @@ pub(crate) fn lay_out(
     width_of: &dyn Fn(&str) -> f32,
 ) -> Layout {
     let parents: Vec<Option<usize>> = std::iter::once(None)
-        .chain((0..entries.len()).filter(|&at| entries.iter().any(|e| e.parent == Some(at))).map(Some))
+        .chain(
+            (0..entries.len())
+                .filter(|&at| entries.iter().any(|e| e.parent == Some(at)))
+                .map(Some),
+        )
         .collect();
     let mut levels: Vec<Level> = Vec::new();
     for parent in parents {
-        let items: Vec<usize> =
-            (0..entries.len()).filter(|&at| entries[at].parent == parent && !entries[at].alternate).collect();
+        let items: Vec<usize> = (0..entries.len())
+            .filter(|&at| entries[at].parent == parent && !entries[at].alternate)
+            .collect();
         let mut tops = Vec::with_capacity(items.len());
         let mut y = PADDING;
         for &item in &items {
             tops.push(y);
-            y += if entries[item].title.is_empty() { LINE } else { ROW };
+            y += if entries[item].title.is_empty() {
+                LINE
+            } else {
+                ROW
+            };
         }
         let checks = items.iter().any(|&item| entries[item].checked);
         let size = (panel_width(entries, &items, checks, width_of), y + PADDING);
         let origin = match parent {
             None => {
                 let (x, y) = (f32::from(at.x), f32::from(at.y));
-                let x = if x + size.0 > f32::from(area.right()) - EDGE { x - size.0 } else { x };
-                let y = if y + size.1 > f32::from(area.bottom()) - EDGE { y - size.1 } else { y };
+                let x = if x + size.0 > f32::from(area.right()) - EDGE {
+                    x - size.0
+                } else {
+                    x
+                };
+                let y = if y + size.1 > f32::from(area.bottom()) - EDGE {
+                    y - size.1
+                } else {
+                    y
+                };
                 clamped(point(px(x), px(y)), size, area)
             }
             Some(parent) => {
@@ -317,7 +374,10 @@ pub(crate) fn lay_out(
                 let Some(above) = levels.iter().find(|level| level.items.contains(&parent)) else {
                     continue;
                 };
-                let row = above.row_bounds(above.items.iter().position(|&i| i == parent).unwrap_or(0), entries);
+                let row = above.row_bounds(
+                    above.items.iter().position(|&i| i == parent).unwrap_or(0),
+                    entries,
+                );
                 let right = f32::from(above.bounds.right()) - OVERLAP;
                 let x = if right + size.0 > f32::from(area.right()) - EDGE {
                     f32::from(above.bounds.left()) + OVERLAP - size.0
@@ -328,7 +388,13 @@ pub(crate) fn lay_out(
             }
         };
         let bounds = Bounds::new(origin, gpui::size(px(size.0), px(size.1)));
-        levels.push(Level { parent, items, bounds, tops, checks });
+        levels.push(Level {
+            parent,
+            items,
+            bounds,
+            tops,
+            checks,
+        });
     }
     let frame = framed(&levels, Elevation::Popover.reach());
     Layout { levels, frame }
@@ -344,7 +410,9 @@ pub(crate) fn lay_out_over(
 ) -> Layout {
     let layout = lay_out(entries, at, area, width_of);
     let root = &layout.levels[0];
-    let Some(row) = root.items.iter().position(|&item| entries[item].over) else { return layout };
+    let Some(row) = root.items.iter().position(|&item| entries[item].over) else {
+        return layout;
+    };
     let lead = if root.checks { CHECK + GAP } else { 0. };
     let title = root.row_bounds(row, entries).origin + point(px(ROW_X + lead), px(0.));
     lay_out(entries, at - (title - root.bounds.origin), area, width_of)
@@ -436,19 +504,28 @@ fn folded(text: &str) -> String {
         ("ýÿ", 'y'),
     ];
     (text.chars().flat_map(char::to_lowercase))
-        .map(|c| ACCENTED.iter().find(|(set, _)| set.contains(c)).map_or(c, |&(_, base)| base))
+        .map(|c| {
+            ACCENTED
+                .iter()
+                .find(|(set, _)| set.contains(c))
+                .map_or(c, |&(_, base)| base)
+        })
         .collect()
 }
 
 impl Tracking {
     pub(crate) fn new(entries: Vec<MenuEntry>, layout: Layout, at: Point<Pixels>) -> Self {
         // A pop-up's menu opens with its current item highlighted.
-        let over = (layout.levels[0].items.iter().copied())
-            .find(|&item| entries[item].over && entries[item].enabled && !entries[item].title.is_empty());
+        let over = (layout.levels[0].items.iter().copied()).find(|&item| {
+            entries[item].over && entries[item].enabled && !entries[item].title.is_empty()
+        });
         Tracking {
             entries,
             layout,
-            open: vec![Open { level: 0, highlight: over }],
+            open: vec![Open {
+                level: 0,
+                highlight: over,
+            }],
             press: Some(over.is_none().then_some(at)),
             pressed: false,
             pointer: Some(at),
@@ -460,7 +537,10 @@ impl Tracking {
 
     /// The items whose submenus are open, the outermost first.
     fn open_submenus(&self) -> Vec<usize> {
-        self.open[1..].iter().filter_map(|open| self.layout.levels[open.level].parent).collect()
+        self.open[1..]
+            .iter()
+            .filter_map(|open| self.layout.levels[open.level].parent)
+            .collect()
     }
 
     fn selectable(&self, entry: usize) -> bool {
@@ -488,7 +568,8 @@ impl Tracking {
             if !level.bounds.contains(&at) {
                 continue;
             }
-            let row = (0..level.items.len()).find(|&row| level.row_bounds(row, &self.entries).contains(&at));
+            let row = (0..level.items.len())
+                .find(|&row| level.row_bounds(row, &self.entries).contains(&at));
             return match row {
                 Some(row) if !self.entries[level.items[row]].title.is_empty() => {
                     Hit::Row(open.level, level.items[row])
@@ -505,7 +586,9 @@ impl Tracking {
         let depth = |open: &[Open], level| open.iter().position(|each| each.level == level);
         match self.hit(at) {
             Hit::Row(level, item) => {
-                let Some(k) = depth(&self.open, level) else { return };
+                let Some(k) = depth(&self.open, level) else {
+                    return;
+                };
                 let sub = self.layout.level_of(item);
                 if sub.is_some() && self.open.get(k + 1).map(|next| next.level) == sub {
                     // Back on the row whose submenu is open: it stays open.
@@ -518,7 +601,10 @@ impl Tracking {
                 let selectable = self.selectable(item);
                 self.open[k].highlight = selectable.then_some(item);
                 if let Some(level) = sub.filter(|_| selectable) {
-                    self.open.push(Open { level, highlight: None });
+                    self.open.push(Open {
+                        level,
+                        highlight: None,
+                    });
                 }
             }
             Hit::Panel(level) => {
@@ -540,7 +626,9 @@ impl Tracking {
     /// the triangle from where it was to the submenu's two near corners, off the row that opened
     /// it and not yet in the submenu.
     fn safe(&self, from: Point<Pixels>, to: Point<Pixels>) -> bool {
-        let [.., parent, sub] = self.open[..] else { return false };
+        let [.., parent, sub] = self.open[..] else {
+            return false;
+        };
         let level = &self.layout.levels[sub.level];
         if from == to || level.bounds.contains(&to) || parent.highlight != level.parent {
             return false;
@@ -549,8 +637,17 @@ impl Tracking {
             return false;
         }
         let beside = &self.layout.levels[parent.level].bounds;
-        let x = if level.bounds.left() >= beside.center().x { level.bounds.left() } else { level.bounds.right() };
-        in_triangle(to, from, point(x, level.bounds.top()), point(x, level.bounds.bottom()))
+        let x = if level.bounds.left() >= beside.center().x {
+            level.bounds.left()
+        } else {
+            level.bounds.right()
+        };
+        in_triangle(
+            to,
+            from,
+            point(x, level.bounds.top()),
+            point(x, level.bounds.bottom()),
+        )
     }
 
     /// The pointer moved to `at` at `now`. Returns whether it's resting in the safe triangle, for
@@ -577,7 +674,10 @@ impl Tracking {
     /// The pointer has rested since its last move: in the safe triangle for SAFE_TIMEOUT, what's
     /// under it takes the highlight.
     pub(crate) fn rested(&mut self, now: Instant) {
-        if self.resting.is_some_and(|since| now.duration_since(since) >= SAFE_TIMEOUT) {
+        if self
+            .resting
+            .is_some_and(|since| now.duration_since(since) >= SAFE_TIMEOUT)
+        {
             self.resting = None;
             if let Some(at) = self.pointer {
                 self.point_at(at);
@@ -630,20 +730,40 @@ impl Tracking {
     /// The selectable items of the deepest level, and its place in `open`.
     fn deepest(&mut self) -> (usize, Vec<usize>) {
         // A submenu the pointer opened has nothing highlighted, and the keys walk its parent.
-        if self.open.len() > 1 && self.open.last().is_some_and(|last| last.highlight.is_none()) {
+        if self.open.len() > 1
+            && self
+                .open
+                .last()
+                .is_some_and(|last| last.highlight.is_none())
+        {
             self.open.pop();
         }
         let k = self.open.len() - 1;
         let items = self.layout.levels[self.open[k].level].items.clone();
-        (k, items.into_iter().filter(|&item| self.selectable(item)).collect())
+        (
+            k,
+            items
+                .into_iter()
+                .filter(|&item| self.selectable(item))
+                .collect(),
+        )
     }
 
     /// Opens the highlighted row's submenu, if it has one, with its first item highlighted.
     fn open_submenu(&mut self) -> bool {
-        let Some(item) = self.open.last().and_then(|last| last.highlight) else { return false };
-        let Some(level) = self.layout.level_of(item) else { return false };
-        let first = (self.layout.levels[level].items.iter()).copied().find(|&each| self.selectable(each));
-        self.open.push(Open { level, highlight: first });
+        let Some(item) = self.open.last().and_then(|last| last.highlight) else {
+            return false;
+        };
+        let Some(level) = self.layout.level_of(item) else {
+            return false;
+        };
+        let first = (self.layout.levels[level].items.iter())
+            .copied()
+            .find(|&each| self.selectable(each));
+        self.open.push(Open {
+            level,
+            highlight: first,
+        });
         true
     }
 
@@ -653,7 +773,9 @@ impl Tracking {
             return Outcome::Stay;
         }
         let (k, items) = self.deepest();
-        let current = self.open[k].highlight.and_then(|item| items.iter().position(|&each| each == item));
+        let current = self.open[k]
+            .highlight
+            .and_then(|item| items.iter().position(|&each| each == item));
         let to = |at: Option<usize>| at.and_then(|at| items.get(at).copied());
         match key {
             // At the ends they stay, as NSMenu's do.
@@ -664,12 +786,15 @@ impl Tracking {
                 }
             }
             Key::Up => {
-                let previous = current.map_or(items.len().checked_sub(1), |at| Some(at.saturating_sub(1)));
+                let previous =
+                    current.map_or(items.len().checked_sub(1), |at| Some(at.saturating_sub(1)));
                 if let Some(item) = to(previous) {
                     self.open[k].highlight = Some(item);
                 }
             }
-            Key::First => self.open[k].highlight = items.first().copied().or(self.open[k].highlight),
+            Key::First => {
+                self.open[k].highlight = items.first().copied().or(self.open[k].highlight)
+            }
             Key::Last => self.open[k].highlight = items.last().copied().or(self.open[k].highlight),
             Key::Right => {
                 self.open_submenu();
@@ -701,7 +826,10 @@ impl Tracking {
     /// typed in the last second, ignoring case and accents, or with the same letter again, the
     /// next one that starts with it.
     fn type_select(&mut self, c: char, now: Instant) {
-        if self.typed_at.is_none_or(|at| now.duration_since(at) > TYPE_RESET) {
+        if self
+            .typed_at
+            .is_none_or(|at| now.duration_since(at) > TYPE_RESET)
+        {
             self.typed.clear();
         }
         self.typed.push(c);
@@ -711,12 +839,17 @@ impl Tracking {
         let mut letters = typed.chars();
         let first = letters.next();
         let repeated = typed.chars().count() > 1 && letters.all(|each| Some(each) == first);
-        let starts = |item: &usize, with: &str| folded(&self.entries[*item].title).starts_with(with);
+        let starts =
+            |item: &usize, with: &str| folded(&self.entries[*item].title).starts_with(with);
         let found = if repeated {
             let with = first.map(String::from).unwrap_or_default();
-            let after = self.open[k].highlight.and_then(|item| items.iter().position(|&each| each == item));
+            let after = self.open[k]
+                .highlight
+                .and_then(|item| items.iter().position(|&each| each == item));
             let start = after.map_or(0, |at| at + 1);
-            (items[start..].iter().chain(&items[..start])).find(|item| starts(item, &with)).copied()
+            (items[start..].iter().chain(&items[..start]))
+                .find(|item| starts(item, &with))
+                .copied()
         } else {
             items.iter().find(|item| starts(item, &typed)).copied()
         };
@@ -738,7 +871,9 @@ impl Tracking {
                 && entry.title == title
                 && self.layout.level_of(at).is_none()
                 && parent.is_none_or(|parent| {
-                    entry.parent.is_some_and(|up| self.entries[up].title == parent)
+                    entry
+                        .parent
+                        .is_some_and(|up| self.entries[up].title == parent)
                 })
         })
     }
@@ -778,7 +913,10 @@ pub(crate) fn described_held(entries: &[MenuEntry], alt: bool) -> String {
                 continue;
             }
             let title = format!("{path}{}", entry.title);
-            if entries.iter().any(|each| each.parent == Some(at) && !each.title.is_empty()) {
+            if entries
+                .iter()
+                .any(|each| each.parent == Some(at) && !each.title.is_empty())
+            {
                 walk(entries, Some(at), &format!("{title} › "), alt, mark, titles);
             } else {
                 let held = &entries[as_held(entries, at, alt)];
@@ -811,7 +949,9 @@ pub(crate) fn key_of(event: &KeyDownEvent) -> Option<Key> {
         key => {
             let typed = keystroke.key_char.as_deref().unwrap_or(key);
             let mut chars = typed.chars();
-            let c = chars.next().filter(|c| !c.is_control() && chars.next().is_none())?;
+            let c = chars
+                .next()
+                .filter(|c| !c.is_control() && chars.next().is_none())?;
             Key::Char(c)
         }
     })
@@ -848,7 +988,12 @@ impl Shown {
         };
         match self.blends {
             true => (0..layout.levels.len()).map(at).collect(),
-            false => self.tracking.open.iter().map(|open| at(open.level)).collect(),
+            false => self
+                .tracking
+                .open
+                .iter()
+                .map(|open| at(open.level))
+                .collect(),
         }
     }
 }
@@ -880,7 +1025,11 @@ fn options(bounds: Bounds<Pixels>, show: bool) -> WindowOptions {
         }),
         // A panel hides while its app isn't the active one, which a preview a script started
         // isn't, so the preview's is a plain window over its own.
-        kind: if show { WindowKind::Normal } else { WindowKind::Floating },
+        kind: if show {
+            WindowKind::Normal
+        } else {
+            WindowKind::Floating
+        },
         show,
         focus: show,
         is_movable: false,
@@ -899,7 +1048,14 @@ fn open_window(
     cx: &mut App,
 ) -> Option<WindowHandle<ContextMenu>> {
     let window = cx.open_window(options(bounds, fixed.is_some()), |_, cx| {
-        cx.new(|cx| ContextMenu { host, focus: cx.focus_handle(), shown: None, fixed, _rest: None, a11y: false })
+        cx.new(|cx| ContextMenu {
+            host,
+            focus: cx.focus_handle(),
+            shown: None,
+            fixed,
+            _rest: None,
+            a11y: false,
+        })
     });
     match window {
         Ok(window) => {
@@ -922,11 +1078,18 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<ContextMenu
 
 /// Opens the menu's window on screen at `bounds`, over a browser window there whose content is
 /// the same, where it stays: for the preview, whose host can't move it.
-pub fn open_at(host: Rc<dyn Host>, bounds: Bounds<Pixels>, cx: &mut App) -> Option<WindowHandle<ContextMenu>> {
+pub fn open_at(
+    host: Rc<dyn Host>,
+    bounds: Bounds<Pixels>,
+    cx: &mut App,
+) -> Option<WindowHandle<ContextMenu>> {
     open_window(host, bounds, Some(point(px(0.), px(0.))), cx)
 }
 
-fn update(cx: &mut App, change: impl FnOnce(&mut ContextMenu, &mut Window, &mut Context<ContextMenu>)) {
+fn update(
+    cx: &mut App,
+    change: impl FnOnce(&mut ContextMenu, &mut Window, &mut Context<ContextMenu>),
+) {
     if let Some(window) = cx.try_global::<MenuWindow>().map(|menu| menu.0) {
         window.update(cx, change).ok();
     }
@@ -937,10 +1100,16 @@ pub fn show(request: Request, cx: &mut App) {
     let mut request = Some(request);
     // The window it opens from saw the press or key that opened it, with what was held then.
     let alt = (cx.active_window())
-        .and_then(|window| window.update(cx, |_, window, _| window.modifiers().alt).ok())
+        .and_then(|window| {
+            window
+                .update(cx, |_, window, _| window.modifiers().alt)
+                .ok()
+        })
         .unwrap_or(false);
     update(cx, |menu, window, cx| {
-        let Some(request) = request.take() else { return };
+        let Some(request) = request.take() else {
+            return;
+        };
         menu.close(Closed::Otherwise, cx);
         let system = window.text_system().clone();
         let width_of = |text: &str| {
@@ -980,7 +1149,9 @@ pub fn show(request: Request, cx: &mut App) {
 /// does, so VoiceOver reads it with the menu.
 pub fn highlight_first(cx: &mut App) {
     update(cx, |menu, _, cx| {
-        let Some(shown) = menu.shown.as_mut() else { return };
+        let Some(shown) = menu.shown.as_mut() else {
+            return;
+        };
         if shown.tracking.open[0].highlight.is_none() {
             let outcome = shown.tracking.key(Key::First, Instant::now());
             menu.outcome(outcome, cx);
@@ -1021,7 +1192,10 @@ pub fn dismissed(cx: &mut App) {
 pub fn choose(title: &str, cx: &mut App) -> bool {
     let mut chosen = false;
     update(cx, |menu, _, cx| {
-        let found = menu.shown.as_ref().and_then(|shown| shown.tracking.find(title));
+        let found = menu
+            .shown
+            .as_ref()
+            .and_then(|shown| shown.tracking.find(title));
         if let Some(item) = found {
             chosen = true;
             menu.close(Closed::Chose(item), cx);
@@ -1044,15 +1218,30 @@ pub fn field_menu(show: Rc<ShowOver>) -> FieldMenu {
         cx.defer(move |cx| {
             // Looked up once the update is over, in case the window closed meanwhile.
             let Ok(look) = cx.update_window(handle, |root, _, cx| {
-                root.downcast::<Shell>().ok().map_or_else(Look::dark, |shell| shell.read(cx).menu_look())
+                root.downcast::<Shell>()
+                    .ok()
+                    .map_or_else(Look::dark, |shell| shell.read(cx).menu_look())
             }) else {
                 return;
             };
-            let items = (items.into_iter()).map(|(title, enabled)| MenuEntry::named(title, enabled)).collect();
+            let items = (items.into_iter())
+                .map(|(title, enabled)| MenuEntry::named(title, enabled))
+                .collect();
             let chosen = Box::new(move |closed: Closed, cx: &mut App| {
-                cx.update_window(handle, |_, window, cx| chosen(closed, window, cx)).ok();
+                cx.update_window(handle, |_, window, cx| chosen(closed, window, cx))
+                    .ok();
             });
-            show(handle, Request { items, at, area: Bounds::default(), look, chosen }, cx);
+            show(
+                handle,
+                Request {
+                    items,
+                    at,
+                    area: Bounds::default(),
+                    look,
+                    chosen,
+                },
+                cx,
+            );
             if from_keys {
                 highlight_first(cx);
             }
@@ -1063,7 +1252,9 @@ pub fn field_menu(show: Rc<ShowOver>) -> FieldMenu {
 impl ContextMenu {
     /// Closes the menu, if it shows, and says how once the update is over.
     fn close(&mut self, closed: Closed, cx: &mut Context<Self>) {
-        let Some(mut shown) = self.shown.take() else { return };
+        let Some(mut shown) = self.shown.take() else {
+            return;
+        };
         let closed = match closed {
             Closed::Chose(item) => Closed::Chose(as_held(&shown.tracking.entries, item, shown.alt)),
             closed => closed,
@@ -1099,7 +1290,9 @@ impl ContextMenu {
 
     fn pointer(&mut self, event: Pointer, at: Point<Pixels>, cx: &mut Context<Self>) -> bool {
         let at = self.in_content(at);
-        let Some(shown) = self.shown.as_mut() else { return false };
+        let Some(shown) = self.shown.as_mut() else {
+            return false;
+        };
         let tracking = &mut shown.tracking;
         match event {
             Pointer::Moved => {
@@ -1151,7 +1344,9 @@ impl ContextMenu {
     }
 
     fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
-        let Some(shown) = self.shown.as_mut() else { return };
+        let Some(shown) = self.shown.as_mut() else {
+            return;
+        };
         let modifiers = event.keystroke.modifiers;
         // A shortcut closes the menu, as the menu shows them but doesn't run them.
         if modifiers.platform || modifiers.control {
@@ -1169,19 +1364,30 @@ impl ContextMenu {
     /// row whose submenu shows. And each submenu as it opens, with its panel, and as it closes,
     /// when a window that can't blend is shown again with the panels open now.
     fn changed(&mut self, cx: &mut Context<Self>) {
-        let Some(shown) = self.shown.as_mut() else { return };
+        let Some(shown) = self.shown.as_mut() else {
+            return;
+        };
         let tracking = &shown.tracking;
         let open = tracking.open_submenus();
         if !shown.blends && open != shown.logged_open {
             let (host, frame, panels) = (self.host.clone(), tracking.layout.frame, shown.panels());
             cx.defer(move |_| host.show(frame, &panels));
         }
-        let kept = open.iter().zip(&shown.logged_open).take_while(|(a, b)| a == b).count();
+        let kept = open
+            .iter()
+            .zip(&shown.logged_open)
+            .take_while(|(a, b)| a == b)
+            .count();
         for &closed in shown.logged_open[kept..].iter().rev() {
-            log!("browser: menu submenu {} hidden", tracking.entries[closed].title);
+            log!(
+                "browser: menu submenu {} hidden",
+                tracking.entries[closed].title
+            );
         }
         for &opened in &open[kept..] {
-            let Some(level) = tracking.layout.level_of(opened) else { continue };
+            let Some(level) = tracking.layout.level_of(opened) else {
+                continue;
+            };
             let at = tracking.layout.levels[level].bounds;
             log!(
                 "browser: menu submenu {} shown at {:.0} {:.0} {:.0} {:.0}",
@@ -1193,7 +1399,11 @@ impl ContextMenu {
             );
         }
         shown.logged_open = open;
-        let lit = tracking.open.iter().rev().find_map(|open| open.highlight.map(|item| (open.level, item)));
+        let lit = tracking
+            .open
+            .iter()
+            .rev()
+            .find_map(|open| open.highlight.map(|item| (open.level, item)));
         if lit.map(|(_, item)| item) == shown.logged {
             return;
         }
@@ -1207,7 +1417,11 @@ impl ContextMenu {
             None => entry.title.to_string(),
         };
         let lay = &tracking.layout.levels[level];
-        let row = lay.items.iter().position(|&each| each == item).unwrap_or_default();
+        let row = lay
+            .items
+            .iter()
+            .position(|&each| each == item)
+            .unwrap_or_default();
         let at = lay.row_bounds(row, &tracking.entries);
         log!(
             "browser: menu highlights {title} at {:.0} {:.0} {:.0} {:.0}",
@@ -1218,7 +1432,14 @@ impl ContextMenu {
         );
     }
 
-    fn row(&self, shown: &Shown, level: usize, row: usize, lit: Option<usize>, open: bool) -> gpui::AnyElement {
+    fn row(
+        &self,
+        shown: &Shown,
+        level: usize,
+        row: usize,
+        lit: Option<usize>,
+        open: bool,
+    ) -> gpui::AnyElement {
         let tracking = &shown.tracking;
         let palette = shown.look.palette();
         let lay = &tracking.layout.levels[level];
@@ -1226,7 +1447,12 @@ impl ContextMenu {
         let entry = &tracking.entries[as_held(&tracking.entries, item, shown.alt)];
         let bounds = lay.row_bounds(row, &tracking.entries);
         let top = bounds.origin.y - lay.bounds.origin.y;
-        let placed = div().absolute().left(px(PADDING)).top(top).w(bounds.size.width).h(bounds.size.height);
+        let placed = div()
+            .absolute()
+            .left(px(PADDING))
+            .top(top)
+            .w(bounds.size.width)
+            .h(bounds.size.height);
         if entry.title.is_empty() {
             let line = div().mx(px(ROW_X)).h(px(1.)).bg(rgba(palette.line));
             return (placed.id(("menu-line", item)).flex().items_center())
@@ -1256,7 +1482,12 @@ impl ContextMenu {
         let pressed = lit && tracking.pressed;
         let check = lay.checks.then(|| {
             div().w(px(CHECK)).flex_none().when(entry.checked, |slot| {
-                slot.child(svg().path("icons/check.svg").size(px(CHECK)).text_color(label))
+                slot.child(
+                    svg()
+                        .path("icons/check.svg")
+                        .size(px(CHECK))
+                        .text_color(label),
+                )
             })
         });
         let swatch = entry.swatch.map(|swatch| {
@@ -1267,7 +1498,8 @@ impl ContextMenu {
             )
             .color_space(gpui::ColorSpace::Oklab);
             let panel = rgb(palette.fill >> 8);
-            let ring = crate::palette::Palette::swatch_ring_of(rgb(swatch.from), rgb(swatch.to), &[panel]);
+            let ring =
+                crate::palette::Palette::swatch_ring_of(rgb(swatch.from), rgb(swatch.to), &[panel]);
             div()
                 .size(px(SWATCH))
                 .flex_none()
@@ -1276,7 +1508,10 @@ impl ContextMenu {
                 .when_some(ring, |dot, ring| dot.border_1().border_color(ring))
         });
         let favicon = entry.page.then(|| match entry.favicon.clone() {
-            Some(favicon) => img(favicon).size(px(FAVICON)).flex_none().into_any_element(),
+            Some(favicon) => img(favicon)
+                .size(px(FAVICON))
+                .flex_none()
+                .into_any_element(),
             None => svg()
                 .path("icons/globe.svg")
                 .size(px(FAVICON))
@@ -1291,12 +1526,18 @@ impl ContextMenu {
                     .size(px(CHEVRON))
                     .flex_none()
                     .text_color(secondary)
-                    .with_transformation(Transformation::rotate(Radians(-std::f32::consts::FRAC_PI_2)))
+                    .with_transformation(Transformation::rotate(Radians(
+                        -std::f32::consts::FRAC_PI_2,
+                    )))
                     .into_any_element(),
             ),
-            (Some(keys), false) => {
-                Some(div().flex_none().text_color(secondary).child(keys.clone()).into_any_element())
-            }
+            (Some(keys), false) => Some(
+                div()
+                    .flex_none()
+                    .text_color(secondary)
+                    .child(keys.clone())
+                    .into_any_element(),
+            ),
             (None, false) => None,
         };
         let a11y = self.a11y;
@@ -1304,7 +1545,12 @@ impl ContextMenu {
         let (enabled, checked, keys) = (entry.enabled, entry.checked, shortcut.clone());
         let radio = checked && level != 0;
         // Where it stands among the level's items, as VoiceOver says it: "3 of 11".
-        let titled = |items: &[usize]| items.iter().filter(|&&i| !tracking.entries[i].title.is_empty()).count();
+        let titled = |items: &[usize]| {
+            items
+                .iter()
+                .filter(|&&i| !tracking.entries[i].title.is_empty())
+                .count()
+        };
         let (position, of) = (titled(&lay.items[..row]) + 1, titled(&lay.items));
         placed
             .id(("menu-item", item))
@@ -1314,15 +1560,30 @@ impl ContextMenu {
             .items_center()
             .gap(px(GAP))
             .when(lit, |row| row.bg(fill))
-            .when(pressed && !entry.destructive, |row| row.bg(highlight.pressed))
+            .when(pressed && !entry.destructive, |row| {
+                row.bg(highlight.pressed)
+            })
             // Ink darkens Delete's red under its Paper label.
             .when(pressed && entry.destructive, |row| {
-                row.child(div().absolute().inset_0().rounded(px(ROW_RADIUS)).bg(rgba(PRESSED)))
+                row.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .rounded(px(ROW_RADIUS))
+                        .bg(rgba(PRESSED)),
+                )
             })
             .children(check)
             .children(swatch)
             .children(favicon)
-            .child(div().flex_1().min_w_0().truncate().text_color(label).child(entry.title.clone()))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(label)
+                    .child(entry.title.clone()),
+            )
             .children(trailing)
             .when(a11y, |row| {
                 let role = match (checked, radio) {
@@ -1334,7 +1595,9 @@ impl ContextMenu {
                     .aria_label(name)
                     .aria_position_in_set(position)
                     .aria_size_of_set(of)
-                    .when(checked, |row| row.aria_toggled(gpui::accesskit::Toggled::True))
+                    .when(checked, |row| {
+                        row.aria_toggled(gpui::accesskit::Toggled::True)
+                    })
                     .when_some(keys, |row, keys| row.aria_keyshortcuts(keys))
                     .when(submenu, |row| row.aria_expanded(open))
                     .when(lit, |row| row.aria_active_descendant())
@@ -1359,10 +1622,13 @@ impl ContextMenu {
         let at = level.bounds.origin - shown.origin;
         let next = tracking.open.get(depth + 1).map(|next| next.level);
         let rows = (0..level.items.len()).map(|row| {
-            let opens = next.is_some_and(|next| tracking.layout.levels[next].parent == Some(level.items[row]));
+            let opens = next
+                .is_some_and(|next| tracking.layout.levels[next].parent == Some(level.items[row]));
             self.row(shown, open.level, row, open.highlight, opens)
         });
-        let name = level.parent.map_or(SharedString::from("Menu"), |parent| tracking.entries[parent].title.clone());
+        let name = level.parent.map_or(SharedString::from("Menu"), |parent| {
+            tracking.entries[parent].title.clone()
+        });
         div()
             .id(("menu", open.level))
             .absolute()
@@ -1371,14 +1637,20 @@ impl ContextMenu {
             .w(level.bounds.size.width)
             .h(level.bounds.size.height)
             // Where the window can't blend, a round corner or a shadow would show black.
-            .when(shown.blends, |panel| panel.rounded(px(RADIUS)).shadow(Elevation::Popover.shadow()))
+            .when(shown.blends, |panel| {
+                panel
+                    .rounded(px(RADIUS))
+                    .shadow(Elevation::Popover.shadow())
+            })
             .bg(rgba(palette.fill))
             .border_1()
             .border_color(rgba(palette.rim))
             .text_size(px(TEXT))
             .children(rows)
             // The root level's rows go under the window's own node, which has the keyboard.
-            .when(self.a11y && level.parent.is_some(), |panel| panel.role(Role::Menu).aria_label(name))
+            .when(self.a11y && level.parent.is_some(), |panel| {
+                panel.role(Role::Menu).aria_label(name)
+            })
             .into_any_element()
     }
 }
@@ -1393,13 +1665,19 @@ impl Render for ContextMenu {
         // as its active descendant as the keys move it.
         let root = div()
             .id("menu-window")
-            .when(self.a11y && shows, |root| root.role(Role::Menu).aria_label("Menu"))
+            .when(self.a11y && shows, |root| {
+                root.role(Role::Menu).aria_label("Menu")
+            })
             .size_full()
             .font_family(crate::face::UI)
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|menu, event: &KeyDownEvent, _, cx| menu.key_down(event, cx)))
             .on_modifiers_changed(cx.listener(|menu, event: &ModifiersChangedEvent, _, cx| {
-                if let Some(shown) = menu.shown.as_mut().filter(|shown| shown.alt != event.modifiers.alt) {
+                if let Some(shown) = menu
+                    .shown
+                    .as_mut()
+                    .filter(|shown| shown.alt != event.modifiers.alt)
+                {
                     shown.alt = event.modifiers.alt;
                     cx.notify();
                 }
@@ -1430,37 +1708,62 @@ impl Render for ContextMenu {
             && window.is_visible()
         {
             let open = shown.tracking.open_submenus();
-            for &opened in open.iter().filter(|opened| !shown.drawn_open.contains(opened)) {
-                log!("browser: menu submenu {} drawn", shown.tracking.entries[opened].title);
+            for &opened in open
+                .iter()
+                .filter(|opened| !shown.drawn_open.contains(opened))
+            {
+                log!(
+                    "browser: menu submenu {} drawn",
+                    shown.tracking.entries[opened].title
+                );
             }
             shown.drawn_open = open;
         }
-        let Some(shown) = self.shown.as_ref() else { return root };
-        let panels: Vec<_> = (0..shown.tracking.open.len()).map(|depth| self.panel(shown, depth)).collect();
+        let Some(shown) = self.shown.as_ref() else {
+            return root;
+        };
+        let panels: Vec<_> = (0..shown.tracking.open.len())
+            .map(|depth| self.panel(shown, depth))
+            .collect();
         // On a platform whose host doesn't see the pointer first (Linux, the preview), the
         // window's own events drive the menu, and its check reads the log they leave.
         let on = |event: Pointer| {
-            cx.listener(move |menu: &mut Self, at: &Point<Pixels>, _: &mut Window, cx: &mut Context<Self>| {
-                menu.pointer(event, *at, cx);
-                menu.changed(cx);
-            })
+            cx.listener(
+                move |menu: &mut Self,
+                      at: &Point<Pixels>,
+                      _: &mut Window,
+                      cx: &mut Context<Self>| {
+                    menu.pointer(event, *at, cx);
+                    menu.changed(cx);
+                },
+            )
         };
-        let (moved, pressed, right) = (on(Pointer::Moved), on(Pointer::Pressed), on(Pointer::RightPressed));
+        let (moved, pressed, right) = (
+            on(Pointer::Moved),
+            on(Pointer::Pressed),
+            on(Pointer::RightPressed),
+        );
         let (released, right_released) = (on(Pointer::Released), on(Pointer::Released));
-        root.on_mouse_move(move |event: &MouseMoveEvent, window, cx| moved(&event.position, window, cx))
-            .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, cx| {
-                pressed(&event.position, window, cx)
-            })
-            .on_mouse_down(MouseButton::Right, move |event: &MouseDownEvent, window, cx| {
-                right(&event.position, window, cx)
-            })
-            .on_mouse_up(MouseButton::Left, move |event: &MouseUpEvent, window, cx| {
-                released(&event.position, window, cx)
-            })
-            .on_mouse_up(MouseButton::Right, move |event: &MouseUpEvent, window, cx| {
-                right_released(&event.position, window, cx)
-            })
-            .children(panels)
+        root.on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
+            moved(&event.position, window, cx)
+        })
+        .on_mouse_down(
+            MouseButton::Left,
+            move |event: &MouseDownEvent, window, cx| pressed(&event.position, window, cx),
+        )
+        .on_mouse_down(
+            MouseButton::Right,
+            move |event: &MouseDownEvent, window, cx| right(&event.position, window, cx),
+        )
+        .on_mouse_up(
+            MouseButton::Left,
+            move |event: &MouseUpEvent, window, cx| released(&event.position, window, cx),
+        )
+        .on_mouse_up(
+            MouseButton::Right,
+            move |event: &MouseUpEvent, window, cx| right_released(&event.position, window, cx),
+        )
+        .children(panels)
     }
 }
 

@@ -43,7 +43,9 @@ pub enum Stage {
     /// Downloaded and waiting: a restart installs it.
     Ready(Option<SharedString>),
     /// The check failed, or once an update was `found`, its download or install did.
-    Failed { found: bool },
+    Failed {
+        found: bool,
+    },
 }
 
 impl Stage {
@@ -110,10 +112,16 @@ pub fn start(updater: Updater, host: Rc<dyn Host>, cx: &mut App) {
 /// fails, as no check would find anything newer to show first. A failure's `found` is where it
 /// came from: after an update was found, it's the update's, else the check's.
 pub fn changed(stage: Stage, cx: &mut App) {
-    let previous = cx.try_global::<Updates>().map(|updates| updates.stage.clone()).unwrap_or_default();
+    let previous = cx
+        .try_global::<Updates>()
+        .map(|updates| updates.stage.clone())
+        .unwrap_or_default();
     let stage = match stage {
         Stage::Failed { .. } => Stage::Failed {
-            found: matches!(previous, Stage::Found(_) | Stage::Downloading(_) | Stage::Ready(_)),
+            found: matches!(
+                previous,
+                Stage::Found(_) | Stage::Downloading(_) | Stage::Ready(_)
+            ),
         },
         Stage::Idle | Stage::Checking | Stage::Current | Stage::Found(_)
             if matches!(previous, Stage::Ready(_)) =>
@@ -130,11 +138,15 @@ pub fn changed(stage: Stage, cx: &mut App) {
 }
 
 pub fn stage(cx: &App) -> Stage {
-    cx.try_global::<Updates>().map(|updates| updates.stage.clone()).unwrap_or_default()
+    cx.try_global::<Updates>()
+        .map(|updates| updates.stage.clone())
+        .unwrap_or_default()
 }
 
 pub fn updater(cx: &App) -> Updater {
-    cx.try_global::<Updates>().map(|updates| updates.updater).unwrap_or_default()
+    cx.try_global::<Updates>()
+        .map(|updates| updates.updater)
+        .unwrap_or_default()
 }
 
 /// Whether an update is downloaded and waits for a restart.
@@ -175,7 +187,11 @@ pub fn act(action: Action, cx: &mut App) {
     let Some(updates) = cx.try_global::<Updates>() else {
         return;
     };
-    if words(updates.updater, &updates.stage).1.map(|(offered, _)| offered) != Some(action) {
+    if words(updates.updater, &updates.stage)
+        .1
+        .map(|(offered, _)| offered)
+        != Some(action)
+    {
         return;
     }
     let Some(host) = updates.host.clone() else {
@@ -197,13 +213,20 @@ pub fn words(
     const CHECK: Option<(Action, &str)> = Some((Action::Check, "Check for Updates"));
     // Flatpak's portal doesn't name the version.
     fn named(version: &Option<SharedString>, words: String, unnamed: &str) -> Option<SharedString> {
-        Some(if version.is_some() { words.into() } else { SharedString::from(unnamed.to_string()) })
+        Some(if version.is_some() {
+            words.into()
+        } else {
+            SharedString::from(unnamed.to_string())
+        })
     }
     let app = env!("APP_NAME");
     match updater {
         Updater::None => return (None, None),
         Updater::Store => {
-            return (Some(concat!("The Microsoft Store updates ", env!("APP_NAME")).into()), None);
+            return (
+                Some(concat!("The Microsoft Store updates ", env!("APP_NAME")).into()),
+                None,
+            );
         }
         Updater::Own => {}
     }
@@ -211,23 +234,42 @@ pub fn words(
     match stage {
         Stage::Idle => (None, CHECK),
         Stage::Checking => (Some("Checking…".into()), None),
-        Stage::Current => (Some(concat!(env!("APP_NAME"), " is up to date").into()), CHECK),
-        Stage::Found(found) => {
-            (named(found, format!("{app} {} is available", v(found)), "An update is available"), None)
-        }
-        Stage::Downloading(found) => {
-            (named(found, format!("Downloading {}…", v(found)), "Downloading the update…"), None)
-        }
+        Stage::Current => (
+            Some(concat!(env!("APP_NAME"), " is up to date").into()),
+            CHECK,
+        ),
+        Stage::Found(found) => (
+            named(
+                found,
+                format!("{app} {} is available", v(found)),
+                "An update is available",
+            ),
+            None,
+        ),
+        Stage::Downloading(found) => (
+            named(
+                found,
+                format!("Downloading {}…", v(found)),
+                "Downloading the update…",
+            ),
+            None,
+        ),
         Stage::Ready(found) => (
-            named(found, format!("{app} {} is ready", v(found)), "The update is ready"),
+            named(
+                found,
+                format!("{app} {} is ready", v(found)),
+                "The update is ready",
+            ),
             Some((Action::Restart, RESTART)),
         ),
-        Stage::Failed { found: false } => {
-            (Some("Couldn’t check for updates".into()), Some((Action::Check, "Try Again")))
-        }
-        Stage::Failed { found: true } => {
-            (Some("The update didn’t install".into()), Some((Action::Check, "Try Again")))
-        }
+        Stage::Failed { found: false } => (
+            Some("Couldn’t check for updates".into()),
+            Some((Action::Check, "Try Again")),
+        ),
+        Stage::Failed { found: true } => (
+            Some("The update didn’t install".into()),
+            Some((Action::Check, "Try Again")),
+        ),
     }
 }
 
@@ -265,13 +307,19 @@ impl Render for VersionRow {
         self.drawn.set(None);
         let button = action.map(|(action, title)| {
             let drawn_at = self.drawn.clone();
-            let at = canvas(|_, _, _| {}, move |bounds, _, _, _| drawn_at.set(Some(bounds)))
-                .absolute()
-                .inset_0();
+            let at = canvas(
+                |_, _, _| {},
+                move |bounds, _, _, _| drawn_at.set(Some(bounds)),
+            )
+            .absolute()
+            .inset_0();
             button(&look, "update", title)
                 .relative()
                 .when(said.is_some(), |button| button.ml(px(PADDING)))
-                .child(drawn(format!("update {}", action.name()), self.logged.clone()))
+                .child(drawn(
+                    format!("update {}", action.name()),
+                    self.logged.clone(),
+                ))
                 .child(at)
                 .on_click(move |_, _, cx| act(action, cx))
         });

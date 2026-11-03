@@ -132,13 +132,17 @@ impl Shell {
             folder != 0
         };
         let rows = self.choosable_rows();
-        rows.into_iter().filter(|&row| self.chosen.contains(&row) && !in_chosen(row)).collect()
+        rows.into_iter()
+            .filter(|&row| self.chosen.contains(&row) && !in_chosen(row))
+            .collect()
     }
 
     /// The chosen rows that are tabs, which ⌘W and ⌘D act on.
     pub(super) fn chosen_tabs(&self) -> Vec<u64> {
         let rows = self.chosen_in_order();
-        rows.into_iter().filter(|&row| !self.is_folder(row)).collect()
+        rows.into_iter()
+            .filter(|&row| !self.is_folder(row))
+            .collect()
     }
 
     /// The tabs of `rows`, each folder's in it, in the sidebar's order.
@@ -166,8 +170,16 @@ impl Shell {
         }
         self.chosen.clear();
         self.chosen_from = 0;
-        let what = if tabs.len() > 1 { What::CLOSE_TABS } else { What::CLOSE_TAB };
-        self.keep(what, (!tabs.is_empty()).then_some(Edit::Reopen { tabs, show }), cx);
+        let what = if tabs.len() > 1 {
+            What::CLOSE_TABS
+        } else {
+            What::CLOSE_TAB
+        };
+        self.keep(
+            what,
+            (!tabs.is_empty()).then_some(Edit::Reopen { tabs, show }),
+            cx,
+        );
     }
 
     /// ⇧⌘C with rows chosen copies each of their pages' links, one a line, without tracking
@@ -205,7 +217,11 @@ impl Shell {
             edits.extend(self.put_back(row));
             self.browser.set_pinned(row, pin, cx);
         }
-        let what = if pin { What::PIN_TABS } else { What::UNPIN_TABS };
+        let what = if pin {
+            What::PIN_TABS
+        } else {
+            What::UNPIN_TABS
+        };
         self.keep(what, (!edits.is_empty()).then_some(Edit::Many(edits)), cx);
     }
 
@@ -213,8 +229,10 @@ impl Shell {
     /// them go.
     pub(super) fn move_chosen_to_space(&mut self, space: u64, cx: &mut Context<Self>) {
         let today = self.today();
-        let (today_rows, pinned): (Vec<u64>, Vec<u64>) =
-            self.chosen_in_order().into_iter().partition(|row| today.contains(row));
+        let (today_rows, pinned): (Vec<u64>, Vec<u64>) = self
+            .chosen_in_order()
+            .into_iter()
+            .partition(|row| today.contains(row));
         let mut edits = Vec::new();
         // A pinned tab or folder goes to the bottom of the Space's pinned tabs and a Today tab to
         // the top of its Today.
@@ -226,7 +244,11 @@ impl Shell {
             }
         }
         self.unchoose(cx);
-        self.keep(What::MOVE_TABS_TO_SPACE, (!edits.is_empty()).then_some(Edit::Many(edits)), cx);
+        self.keep(
+            What::MOVE_TABS_TO_SPACE,
+            (!edits.is_empty()).then_some(Edit::Many(edits)),
+            cx,
+        );
     }
 
     /// The chosen rows' Add to Folder › New Folder: as `add_to_new_folder`.
@@ -244,11 +266,18 @@ impl Shell {
             ([row], Some(space)) if space.pinned.contains(row) => {
                 let parent = space.folder_of(*row);
                 let before = space.pinned.iter().take_while(|&each| each != row);
-                (parent, before.filter(|&&each| space.folder_of(each) == parent).count())
+                (
+                    parent,
+                    before
+                        .filter(|&&each| space.folder_of(each) == parent)
+                        .count(),
+                )
             }
             _ => (0, usize::MAX),
         };
-        let folder = self.browser.create_folder(self.space, &name, parent, index, cx);
+        let folder = self
+            .browser
+            .create_folder(self.space, &name, parent, index, cx);
         if folder == 0 {
             return;
         }
@@ -289,7 +318,11 @@ impl Shell {
             index += self.panes(row).len();
         }
         self.unchoose(cx);
-        self.keep(What::MOVE_TAB, (!edits.is_empty()).then_some(Edit::Many(edits)), cx);
+        self.keep(
+            What::MOVE_TAB,
+            (!edits.is_empty()).then_some(Edit::Many(edits)),
+            cx,
+        );
     }
 
     /// Pins `row` at `index` in `folder`, a folder whole.
@@ -306,7 +339,9 @@ impl Shell {
         let tabs: Vec<(SharedString, SharedString)> = (self.tabs_of(rows).into_iter())
             .map(|tab| (self.page(tab).url, self.title(tab)))
             .collect();
-        let tabs = tabs.iter().map(|(url, title)| (url.as_ref(), title.as_ref()));
+        let tabs = tabs
+            .iter()
+            .map(|(url, title)| (url.as_ref(), title.as_ref()));
         site_name(tabs).map_or_else(|| NEW_FOLDER.into(), Into::into)
     }
 }
@@ -335,7 +370,10 @@ pub(super) fn site_name<'a>(tabs: impl IntoIterator<Item = (&'a str, &'a str)>) 
     // A part of a title between the separators titles put round a site's name that spells one
     // of the host's labels but its last, "GitHub" for github.com.
     let letters = |text: &str| -> String {
-        text.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+        text.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect()
     };
     let labels: Vec<&str> = site.split('.').collect();
     let labels = &labels[..labels.len().saturating_sub(1)];
@@ -358,7 +396,10 @@ mod tests {
     fn a_folder_of_one_sites_tabs_is_named_for_it() {
         let github = [
             ("https://github.com/pulls", "Pull requests · GitHub"),
-            ("https://www.github.com/zed-industries/zed", "GitHub - zed-industries/zed: Code"),
+            (
+                "https://www.github.com/zed-industries/zed",
+                "GitHub - zed-industries/zed: Code",
+            ),
         ];
         assert_eq!(site_name(github).as_deref(), Some("GitHub"));
         let docs = [("https://docs.github.com/en", "GitHub Docs")];
@@ -370,7 +411,10 @@ mod tests {
             ("https://youtube.com/", "YouTube"),
         ];
         assert_eq!(site_name(youtube).as_deref(), Some("YouTube"));
-        let two = [("https://github.com/", "GitHub"), ("https://example.com/", "Example")];
+        let two = [
+            ("https://github.com/", "GitHub"),
+            ("https://example.com/", "Example"),
+        ];
         assert_eq!(site_name(two), None);
         assert_eq!(site_name([("file:///tmp/notes.txt", "notes.txt")]), None);
         assert_eq!(site_name([]), None);

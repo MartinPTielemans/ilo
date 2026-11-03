@@ -108,7 +108,14 @@ mod tests {
             let space = (1, "Home".into(), None, 1, "".into(), "".into(), "".into());
             shell.set_spaces(vec![space], cx);
             shell.set_space(1, cx);
-            shell.set_tabs(1, Vec::new(), vec![1, 2], Vec::new(), Folders::default(), cx);
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![1, 2],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
             shell.set_selected(1, cx);
         });
         shell
@@ -136,8 +143,9 @@ mod tests {
             assert!(shell.update(cx, |shell, _| shell.update_sign().is_none()));
         }
         cx.update(|cx| updates::changed(Stage::Ready(Some("0.1.2".into())), cx));
-        let (room, bottom) =
-            shell.update(cx, |shell, _| (shell.update_sign_room(), shell.list_bottom()));
+        let (room, bottom) = shell.update(cx, |shell, _| {
+            (shell.update_sign_room(), shell.list_bottom())
+        });
         assert!(room > 0. && bottom == bare + room, "no room for the sign");
         assert!(shell.update(cx, |shell, _| shell.update_sign().is_some()));
         cx.update(|cx| updates::act(updates::Action::Restart, cx));

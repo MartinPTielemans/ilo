@@ -86,7 +86,10 @@ pub struct Rules {
 
 impl Default for Rules {
     fn default() -> Rules {
-        Rules { rules: Vec::new(), otherwise: LITTLE }
+        Rules {
+            rules: Vec::new(),
+            otherwise: LITTLE,
+        }
     }
 }
 
@@ -96,10 +99,20 @@ impl Rules {
     /// the Space in front.
     pub fn route(&self, url: &str, spaces: &[u64]) -> (u64, Option<usize>) {
         let there = |space: u64| space == LITTLE || spaces.contains(&space);
-        let rule = self.rules.iter().position(|rule| there(rule.space) && rule.matches(url));
+        let rule = self
+            .rules
+            .iter()
+            .position(|rule| there(rule.space) && rule.matches(url));
         match rule {
             Some(index) => (self.rules[index].space, Some(index)),
-            None => (if there(self.otherwise) { self.otherwise } else { 0 }, None),
+            None => (
+                if there(self.otherwise) {
+                    self.otherwise
+                } else {
+                    0
+                },
+                None,
+            ),
         }
     }
 
@@ -135,7 +148,11 @@ impl Rules {
                         continue;
                     };
                     let space = space(place).unwrap_or(0);
-                    rules.rules.push(Rule { condition, text: text.to_string(), space });
+                    rules.rules.push(Rule {
+                        condition,
+                        text: text.to_string(),
+                        space,
+                    });
                 }
                 (Some("otherwise"), Some(place), None, None) => {
                     rules.otherwise = space(place).unwrap_or(0);
@@ -172,11 +189,21 @@ impl Rules {
         let rules: Vec<String> = (self.rules.iter())
             .map(|rule| {
                 let (condition, text) = (rule.condition.title(), &rule.text);
-                format!("{condition} \"{text}\" → {}", space_name(rule.space, spaces))
+                format!(
+                    "{condition} \"{text}\" → {}",
+                    space_name(rule.space, spaces)
+                )
             })
             .collect();
-        let rules = if rules.is_empty() { "none".to_string() } else { rules.join(", ") };
-        format!("{rules}; everything else {}", otherwise_name(self.otherwise, spaces))
+        let rules = if rules.is_empty() {
+            "none".to_string()
+        } else {
+            rules.join(", ")
+        };
+        format!(
+            "{rules}; everything else {}",
+            otherwise_name(self.otherwise, spaces)
+        )
     }
 }
 
@@ -317,7 +344,11 @@ impl LinkRulesView {
     /// the keyboard.
     pub fn add(&mut self, cx: &mut Context<Self>) {
         let space = self.host.spaces().first().map_or(0, |(space, _)| *space);
-        let rule = Rule { condition: Condition::Contains, text: String::new(), space };
+        let rule = Rule {
+            condition: Condition::Contains,
+            text: String::new(),
+            space,
+        };
         self.rules.rules.push(rule);
         self.make_fields(cx);
         self.focus = Some(self.rules.rules.len() - 1);
@@ -374,8 +405,11 @@ impl LinkRulesView {
         };
         let spaces = self.host.spaces();
         // What a Space pop-up picks from, in its order.
-        let targets: Vec<u64> =
-            spaces.iter().map(|(space, _)| *space).chain(std::iter::once(LITTLE)).collect();
+        let targets: Vec<u64> = spaces
+            .iter()
+            .map(|(space, _)| *space)
+            .chain(std::iter::once(LITTLE))
+            .collect();
         let items: Vec<MenuEntry> = match which {
             Popup::Condition(index) => {
                 let chosen = self.rules.rules.get(index).map(|rule| rule.condition);
@@ -420,7 +454,13 @@ impl LinkRulesView {
         });
         self.choosing = Some(which);
         cx.notify();
-        self.host.show_menu(items, menu_at(which, self.rules.rules.len()), window, picked, cx);
+        self.host.show_menu(
+            items,
+            menu_at(which, self.rules.rules.len()),
+            window,
+            picked,
+            cx,
+        );
     }
 
     fn popup(
@@ -430,7 +470,13 @@ impl LinkRulesView {
         width: f32,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        popup(&Look::settings(), label, width, self.choosing == Some(which)).on_mouse_down(
+        popup(
+            &Look::settings(),
+            label,
+            width,
+            self.choosing == Some(which),
+        )
+        .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |view, _, window, cx| {
                 // A press on a control isn't the start of its row's drag.
@@ -448,8 +494,12 @@ impl LinkRulesView {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let look = Look::settings();
-        let condition =
-            self.popup(Popup::Condition(index), rule.condition.title().into(), RULE_CONDITION, cx);
+        let condition = self.popup(
+            Popup::Condition(index),
+            rule.condition.title().into(),
+            RULE_CONDITION,
+            cx,
+        );
         let field = div()
             .flex_1()
             .min_w_0()
@@ -461,8 +511,12 @@ impl LinkRulesView {
             .bg(look.control)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(self.fields[index].clone());
-        let space =
-            self.popup(Popup::Space(index), space_name(rule.space, spaces), POPUP_WIDTH, cx);
+        let space = self.popup(
+            Popup::Space(index),
+            space_name(rule.space, spaces),
+            POPUP_WIDTH,
+            cx,
+        );
         let remove = icon_button(&look, ("remove-link-rule", index), "icons/minus.svg")
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |view, _, _, cx| view.remove(index, cx)));
@@ -474,14 +528,21 @@ impl LinkRulesView {
             .flex()
             .items_center()
             .gap(px(RULE_GAP))
-            .on_drag(RuleDrag(index), move |_, _, _, cx| cx.new(|_| DraggedRule(label.clone())))
+            .on_drag(RuleDrag(index), move |_, _, _, cx| {
+                cx.new(|_| DraggedRule(label.clone()))
+            })
             .drag_over::<RuleDrag>(move |style, _, _, _| style.bg(look.control))
             .on_drop(
                 cx.listener(move |view, drag: &RuleDrag, _, cx| view.move_rule(drag.0, index, cx)),
             )
             .child(condition)
             .child(field)
-            .child(svg().path("icons/arrow-right.svg").size(px(CHEVRONS)).text_color(look.detail))
+            .child(
+                svg()
+                    .path("icons/arrow-right.svg")
+                    .size(px(CHEVRONS))
+                    .text_color(look.detail),
+            )
             .child(space)
             .child(remove);
         div().child(row)
@@ -546,10 +607,22 @@ impl Render for LinkRulesView {
         let add = icon_button(&look, "add-link-rule", "icons/plus.svg")
             .on_click(cx.listener(|view, _, _, cx| view.add(cx)));
         let otherwise = otherwise_name(self.rules.otherwise, &spaces);
-        let otherwise = self.popup(Popup::Otherwise, otherwise, POPUP_WIDTH, cx).mr(px(POPUP_END));
-        div().child(rules).child(div().mt(px(BUTTONS_TOP)).flex().child(add)).child(
-            group(&look, [row(None, "Everything else opens in", otherwise.into_any_element())])
+        let otherwise = self
+            .popup(Popup::Otherwise, otherwise, POPUP_WIDTH, cx)
+            .mr(px(POPUP_END));
+        div()
+            .child(rules)
+            .child(div().mt(px(BUTTONS_TOP)).flex().child(add))
+            .child(
+                group(
+                    &look,
+                    [row(
+                        None,
+                        "Everything else opens in",
+                        otherwise.into_any_element(),
+                    )],
+                )
                 .mt(px(SECTION_GAP)),
-        )
+            )
     }
 }

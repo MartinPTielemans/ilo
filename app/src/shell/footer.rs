@@ -3,8 +3,9 @@
 use gpui::{Context, MouseButton, MouseDownEvent, Role, div, prelude::*, px, svg};
 
 use super::{
-    FOOTER_HEIGHT, NAV, NAV_GLYPH, NAV_HOVERED, NAV_RADIUS, NAV_SIZE, PLUS_INSET, SPACE_GLYPH, SPACE_HEIGHT, SPACE_HOVERED, SPACE_ICON_SWITCHER, SPACE_OTHER, SPACE_PITCH,
-    SPACE_SHOWN, SPACE_SWATCH, SPACE_SWATCH_HOVERED, SPACE_SWATCH_SHOWN, SWITCHER_INSET, Shell,
+    FOOTER_HEIGHT, NAV, NAV_GLYPH, NAV_HOVERED, NAV_RADIUS, NAV_SIZE, PLUS_INSET, SPACE_GLYPH,
+    SPACE_HEIGHT, SPACE_HOVERED, SPACE_ICON_SWITCHER, SPACE_OTHER, SPACE_PITCH, SPACE_SHOWN,
+    SPACE_SWATCH, SPACE_SWATCH_HOVERED, SPACE_SWATCH_SHOWN, SWITCHER_INSET, Shell,
     access::Accessible,
 };
 use crate::space_icon::{GLYPHS, SpaceIcon};
@@ -62,7 +63,11 @@ impl Shell {
                 )
                 .child(match SpaceIcon::parse(&space.icon) {
                     SpaceIcon::Dot => {
-                        let size = if shown { SPACE_SWATCH_SHOWN } else { SPACE_SWATCH };
+                        let size = if shown {
+                            SPACE_SWATCH_SHOWN
+                        } else {
+                            SPACE_SWATCH
+                        };
                         (self.palette_of(id).swatch.draw(size, &behind))
                             .when(!shown, |swatch| {
                                 swatch.group_hover("space", |style| {
@@ -103,7 +108,9 @@ impl Shell {
         Some(
             div()
                 .id("switcher")
-                .when(self.a11y, |switcher| switcher.role(Role::TabList).aria_label("Spaces"))
+                .when(self.a11y, |switcher| {
+                    switcher.role(Role::TabList).aria_label("Spaces")
+                })
                 .absolute()
                 .left(px(SWITCHER_INSET))
                 .w(px(span))
@@ -120,7 +127,8 @@ impl Shell {
         div()
             .id("plus")
             .when(self.a11y, |plus| {
-                plus.button_named("New Space, Folder or Note").pressed_by_mouse_down(true, false)
+                plus.button_named("New Space, Folder or Note")
+                    .pressed_by_mouse_down(true, false)
             })
             .absolute()
             .right(px(PLUS_INSET))
@@ -138,7 +146,12 @@ impl Shell {
                     shell.plus_menu(event.position, cx)
                 }),
             )
-            .child(svg().path("icons/nav-plus.svg").size(px(NAV_GLYPH)).text_color(self.palette.glyph(NAV)))
+            .child(
+                svg()
+                    .path("icons/nav-plus.svg")
+                    .size(px(NAV_GLYPH))
+                    .text_color(self.palette.glyph(NAV)),
+            )
     }
 }
 
@@ -154,9 +167,15 @@ mod tests {
         assert_eq!(icon_opacity(true, false), 1.);
         assert_eq!(icon_opacity(true, true), 1.);
         let others = icon_opacity(false, false);
-        assert!((others - 0.35 / 0.6).abs() < 0.02, "the others are at {others}");
+        assert!(
+            (others - 0.35 / 0.6).abs() < 0.02,
+            "the others are at {others}"
+        );
         let hovered = icon_opacity(false, true);
-        assert!((hovered - 0.5 / 0.6).abs() < 0.02, "a hovered one is at {hovered}");
+        assert!(
+            (hovered - 0.5 / 0.6).abs() < 0.02,
+            "a hovered one is at {hovered}"
+        );
         assert!(others < hovered && hovered < 1.);
     }
 }

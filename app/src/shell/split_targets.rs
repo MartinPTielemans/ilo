@@ -9,8 +9,8 @@
 use std::time::Instant;
 
 use gpui::{
-    AnyElement, Bounds, Context, FontWeight, Hsla, PathBuilder, Pixels, Point, Window,
-    canvas, div, point, prelude::*, px, rgb, size,
+    AnyElement, Bounds, Context, FontWeight, Hsla, PathBuilder, Pixels, Point, Window, canvas, div,
+    point, prelude::*, px, rgb, size,
 };
 
 use super::{FAVICON_DRAWN, Place, Shell, TITLE_GAP};
@@ -33,14 +33,14 @@ const STACK_UNDER: (f32, f32) = (0.241, 0.51);
 /// cubic with no overshoot.
 const TARGET_SLIDE: f32 = 0.11;
 const TARGET_GROW: f32 = 0.12;
-use crate::tokens::shell::split_targets::TARGET_RADIUS;
 /// A target's dashed line, TARGET_DASH_INSET inside its edge: its dashes, as long as its gaps, and
 /// its width, away from the tab and under it.
 use crate::tokens::shell::split_targets::TARGET_DASH_INSET;
+use crate::tokens::shell::split_targets::TARGET_RADIUS;
 const TARGET_DASH: (f32, f32) = (6., 1.75);
 const TARGET_DASH_UNDER: (f32, f32) = (7., 2.);
-use crate::tokens::shell::split_targets::TARGET_EDGE;
 use crate::tokens::shell::split_targets::TARGET_DASHES;
+use crate::tokens::shell::split_targets::TARGET_EDGE;
 use crate::tokens::shell::split_targets::TARGET_TEXT;
 /// Dia's targets came once the pointer was 26 pt into the page from its top strip. Ours: the same
 /// past the card's left edge, until Arc's is measured.
@@ -48,13 +48,13 @@ const TARGET_TRIGGER: f32 = 26.;
 /// The picture of a window the tab becomes over the page, centred on the pointer (Dia), and ours:
 /// its corners, rim, traffic lights and the page in it.
 const PICTURE: (f32, f32) = (209., 109.5);
-use crate::tokens::shell::split_targets::PICTURE_RADIUS;
 use crate::elevation::Level;
-use crate::tokens::shell::split_targets::PICTURE_LIGHTS;
-use crate::tokens::shell::split_targets::PICTURE_LIGHT;
-use crate::tokens::shell::split_targets::PICTURE_TOP;
-use crate::tokens::shell::split_targets::PICTURE_INSET;
 use crate::tokens::shell::split_targets::HALF_GLYPH_RADIUS;
+use crate::tokens::shell::split_targets::PICTURE_INSET;
+use crate::tokens::shell::split_targets::PICTURE_LIGHT;
+use crate::tokens::shell::split_targets::PICTURE_LIGHTS;
+use crate::tokens::shell::split_targets::PICTURE_RADIUS;
+use crate::tokens::shell::split_targets::PICTURE_TOP;
 use crate::tokens::text;
 
 /// Where a target is on the card, and so where the tab joins the page.
@@ -105,13 +105,24 @@ impl OverPage {
     fn new(with: u64, edges: Vec<Edge>, pointer: Point<Pixels>) -> Self {
         log!("browser: drop targets for {with}");
         let since = Instant::now();
-        let targets = edges.into_iter().map(|edge| (edge, false, since, 0.)).collect();
-        OverPage { with, since, pointer, targets }
+        let targets = edges
+            .into_iter()
+            .map(|edge| (edge, false, since, 0.))
+            .collect();
+        OverPage {
+            with,
+            since,
+            pointer,
+            targets,
+        }
     }
 
     /// The target the tab is over.
     fn edge(&self) -> Option<Edge> {
-        self.targets.iter().find(|(_, under, ..)| *under).map(|(edge, ..)| *edge)
+        self.targets
+            .iter()
+            .find(|(_, under, ..)| *under)
+            .map(|(edge, ..)| *edge)
     }
 
     /// The pointer is at `position` over `card`: a target it's in grows toward it, and the one it
@@ -132,7 +143,10 @@ impl OverPage {
         }
         if self.edge() != edge {
             // check.sh reads this line.
-            log!("browser: drop target {}", self.edge().map_or("none", Edge::name));
+            log!(
+                "browser: drop target {}",
+                self.edge().map_or("none", Edge::name)
+            );
         }
     }
 }
@@ -161,7 +175,10 @@ impl Shell {
         }
         let space = self.shown_space()?;
         let in_space = |other: &u64| space.pinned.contains(other) || space.today.contains(other);
-        self.recent.iter().copied().find(|&other| other != tab && in_space(&other))
+        self.recent
+            .iter()
+            .copied()
+            .find(|&other| other != tab && in_space(&other))
     }
 
     /// The dragged tab is at `position` in the window. Past TARGET_TRIGGER into the card, where it
@@ -182,7 +199,9 @@ impl Shell {
         let into_page = position.x > card.left() + px(TARGET_TRIGGER);
         let listed = matches!(drag.from, Place::List(..)) && !self.sidebar_hidden;
         let tab = drag.tab;
-        if let Some(path) = (into_page && listed).then(|| self.file_of_row(tab)).flatten()
+        if let Some(path) = (into_page && listed)
+            .then(|| self.file_of_row(tab))
+            .flatten()
             && self.browser.drag_file(&path, cx)
         {
             // check.sh waits for this line.
@@ -216,7 +235,9 @@ impl Shell {
             return false;
         };
         drag.moving = true;
-        let over = drag.over_page.get_or_insert_with(|| OverPage::new(with, edges, position));
+        let over = drag
+            .over_page
+            .get_or_insert_with(|| OverPage::new(with, edges, position));
         over.point(card, position);
         cx.notify();
         true
@@ -238,7 +259,10 @@ impl Shell {
         let (frame, _) = self.page_frame(self.viewport);
         let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
         let frames = super::pane_frames(frame, panes.len(), stacked, &shares);
-        panes.iter().position(|&pane| pane == tab).map(|at| frames[at])
+        panes
+            .iter()
+            .position(|&pane| pane == tab)
+            .map(|at| frames[at])
     }
 
     /// A link to `url` is dragged over `tab`'s page, at `point` in it. Over a page shown that has
@@ -261,9 +285,16 @@ impl Shell {
         let position = page.origin + point;
         let card = self.page_frame(self.viewport).0;
         let with = self.selected;
-        if self.link_over.as_ref().is_none_or(|link| link.over.with != with) {
+        if self
+            .link_over
+            .as_ref()
+            .is_none_or(|link| link.over.with != with)
+        {
             let over = OverPage::new(with, self.edges_for(with), position);
-            self.link_over = Some(LinkOver { url: url.to_string(), over });
+            self.link_over = Some(LinkOver {
+                url: url.to_string(),
+                over,
+            });
         }
         let Some(link) = &mut self.link_over else {
             return false;
@@ -286,7 +317,11 @@ impl Shell {
     /// The link was let go at `point` in `tab`'s page. On a target, it opens in a new tab joining
     /// the page shown on that side. Returns whether it opened, else the page has the drop.
     pub fn link_dropped(&mut self, tab: u64, point: Point<Pixels>, cx: &mut Context<Self>) -> bool {
-        let url = self.link_over.as_ref().map(|link| link.url.clone()).unwrap_or_default();
+        let url = self
+            .link_over
+            .as_ref()
+            .map(|link| link.url.clone())
+            .unwrap_or_default();
         let taken = self.link_over_page(tab, point, &url, cx);
         let Some(link) = self.link_over.take() else {
             return false;
@@ -301,7 +336,8 @@ impl Shell {
         let alone = self.panes(link.over.with).len() == 1;
         // A page alone has every target, and the top and bottom ones stack its new split.
         let stacked = alone && edge.stacked();
-        self.browser.open_split_at(&link.url, link.over.with, edge.first(), stacked, cx);
+        self.browser
+            .open_split_at(&link.url, link.over.with, edge.first(), stacked, cx);
         true
     }
 
@@ -332,8 +368,8 @@ impl Shell {
     /// the card, and the tab as a picture of a window under the pointer.
     pub fn drop_targets(&self, window: &mut Window) -> AnyElement {
         // A tab's, or a link's, whose picture the system draws under the pointer.
-        let dragged = (self.drag.as_ref())
-            .and_then(|drag| Some((drag.over_page.as_ref()?, drag.tab)));
+        let dragged =
+            (self.drag.as_ref()).and_then(|drag| Some((drag.over_page.as_ref()?, drag.tab)));
         let link = self.link_over.as_ref().map(|link| (&link.over, 0));
         let Some((over, tab)) = dragged.or(link) else {
             return div().into_any_element();
@@ -342,8 +378,10 @@ impl Shell {
         let palette = self.palette;
         let fill = self.window_fill().blend(palette.plate(TARGET_PLATE));
         let t = over.since.elapsed().as_secs_f32();
-        let growing =
-            over.targets.iter().any(|(_, _, since, _)| since.elapsed().as_secs_f32() < TARGET_GROW);
+        let growing = over
+            .targets
+            .iter()
+            .any(|(_, _, since, _)| since.elapsed().as_secs_f32() < TARGET_GROW);
         if growing || t < TARGET_SLIDE + TARGET_GROW {
             window.request_animation_frame();
         }
@@ -369,8 +407,18 @@ impl Shell {
             .overflow_hidden()
             .children(targets);
         let picture = (tab != 0).then(|| {
-            let title = self.tabs.get(&tab).map(|tab| tab.title.clone()).unwrap_or_default();
-            picture(over.pointer, self.window_fill(), self.palette, self.tab_icon(tab), title)
+            let title = self
+                .tabs
+                .get(&tab)
+                .map(|tab| tab.title.clone())
+                .unwrap_or_default();
+            picture(
+                over.pointer,
+                self.window_fill(),
+                self.palette,
+                self.tab_icon(tab),
+                title,
+            )
         });
         div()
             .size_full()
@@ -395,11 +443,19 @@ fn ease_out(progress: f32) -> f32 {
 
 /// The target at `edge`'s rest and grown sizes: `(across, along, inset)`.
 fn rest_at(edge: Edge) -> (f32, f32, f32) {
-    if edge.stacked() { STACK_REST } else { TARGET_REST }
+    if edge.stacked() {
+        STACK_REST
+    } else {
+        TARGET_REST
+    }
 }
 
 fn grown_at(edge: Edge) -> (f32, f32, f32) {
-    if edge.stacked() { STACK_GROWN } else { TARGET_GROWN }
+    if edge.stacked() {
+        STACK_GROWN
+    } else {
+        TARGET_GROWN
+    }
 }
 
 /// The target at `edge`'s bounds in `card`: `(across, along, inset)`, its size across the card's
@@ -407,7 +463,11 @@ fn grown_at(edge: Edge) -> (f32, f32, f32) {
 /// along it.
 fn target_bounds(card: Bounds<Pixels>, edge: Edge, at: (f32, f32, f32)) -> Bounds<Pixels> {
     let (across, along, inset) = at;
-    let (width, height) = if edge.stacked() { (along, across) } else { (across, along) };
+    let (width, height) = if edge.stacked() {
+        (along, across)
+    } else {
+        (across, along)
+    };
     let size = size(card.size.width * width, card.size.height * height);
     let centred = card.center() - point(size.width / 2., size.height / 2.);
     let origin = match edge {
@@ -422,8 +482,16 @@ fn target_bounds(card: Bounds<Pixels>, edge: Edge, at: (f32, f32, f32)) -> Bound
 /// A target under the tab: bigger, its centre leaning across the card toward the pointer.
 fn under_bounds(card: Bounds<Pixels>, edge: Edge, pointer: Point<Pixels>) -> Bounds<Pixels> {
     let grown = target_bounds(card, edge, grown_at(edge));
-    let (across, along) = if edge.stacked() { STACK_UNDER } else { TARGET_UNDER };
-    let (width, height) = if edge.stacked() { (along, across) } else { (across, along) };
+    let (across, along) = if edge.stacked() {
+        STACK_UNDER
+    } else {
+        TARGET_UNDER
+    };
+    let (width, height) = if edge.stacked() {
+        (along, across)
+    } else {
+        (across, along)
+    };
     let size = size(card.size.width * width, card.size.height * height);
     let lean = |from: Pixels, to: Pixels| from + (to - from) * TARGET_LEAN;
     let mut centre = card.center();
@@ -458,7 +526,10 @@ fn mix_bounds(from: Bounds<Pixels>, to: Bounds<Pixels>, way: f32) -> Bounds<Pixe
     let mix = |from: Pixels, to: Pixels| from + (to - from) * way;
     Bounds::new(
         point(mix(from.left(), to.left()), mix(from.top(), to.top())),
-        size(mix(from.size.width, to.size.width), mix(from.size.height, to.size.height)),
+        size(
+            mix(from.size.width, to.size.width),
+            mix(from.size.height, to.size.height),
+        ),
     )
 }
 
@@ -485,7 +556,10 @@ fn target(
             let inset = px(TARGET_DASH_INSET);
             let inner = Bounds::new(
                 bounds.origin + point(inset, inset),
-                size(bounds.size.width - inset * 2., bounds.size.height - inset * 2.),
+                size(
+                    bounds.size.width - inset * 2.,
+                    bounds.size.height - inset * 2.,
+                ),
             );
             let mut path = PathBuilder::stroke(px(width)).dash_array(&[px(dash), px(dash)]);
             rounded_rect(&mut path, inner, px(TARGET_RADIUS - TARGET_DASH_INSET));
@@ -576,7 +650,10 @@ fn picture(
 ) -> impl IntoElement {
     let (width, height) = PICTURE;
     let lights = PICTURE_LIGHTS.map(|color| {
-        div().size(px(PICTURE_LIGHT)).rounded(px(PICTURE_LIGHT / 2.)).bg(rgb(color))
+        div()
+            .size(px(PICTURE_LIGHT))
+            .rounded(px(PICTURE_LIGHT / 2.))
+            .bg(rgb(color))
     });
     let page = div()
         .absolute()
@@ -611,7 +688,15 @@ fn picture(
         .border(px(0.5))
         .border_color(Level::Popover.rim_in(&palette))
         .shadow(Level::Popover.shadow())
-        .child(div().absolute().left(px(8.)).top(px(6.)).flex().gap(px(4.)).children(lights))
+        .child(
+            div()
+                .absolute()
+                .left(px(8.))
+                .top(px(6.))
+                .flex()
+                .gap(px(4.))
+                .children(lights),
+        )
         .child(page)
 }
 
@@ -647,16 +732,25 @@ mod tests {
     #[gpui::test]
     fn a_link_let_go_on_a_target_opens_in_a_pane_there(cx: &mut TestAppContext) {
         let url = "https://example.org/";
-        for (edge, left, stacked) in
-            [(Edge::Left, true, false), (Edge::Top, true, true), (Edge::Bottom, false, true)]
-        {
+        for (edge, left, stacked) in [
+            (Edge::Left, true, false),
+            (Edge::Top, true, true),
+            (Edge::Bottom, false, true),
+        ] {
             let (shell, host, card) = shown_alone(cx);
             let point = in_page(card, target_bounds(card, edge, grown_at(edge)).center());
             let edge = edge.name();
             let taken = shell.update(cx, |shell, cx| shell.link_over_page(10, point, url, cx));
             assert!(taken, "the {edge} target didn't take the link");
-            assert!(shell.update(cx, |shell, cx| shell.link_dropped(10, point, cx)), "{edge}");
-            assert_eq!(host.take(), [format!("open split {url} 10 {left} {stacked}")], "{edge}");
+            assert!(
+                shell.update(cx, |shell, cx| shell.link_dropped(10, point, cx)),
+                "{edge}"
+            );
+            assert_eq!(
+                host.take(),
+                [format!("open split {url} 10 {left} {stacked}")],
+                "{edge}"
+            );
             assert!(shell.read_with(cx, |shell, _| shell.link_over.is_none()));
         }
     }
@@ -669,7 +763,10 @@ mod tests {
         let middle = in_page(card, card.center());
         let url = "https://example.org/";
         assert!(!shell.update(cx, |shell, cx| shell.link_over_page(10, middle, url, cx)));
-        assert!(shell.read_with(cx, |shell, _| shell.link_over.is_some()), "no targets shown");
+        assert!(
+            shell.read_with(cx, |shell, _| shell.link_over.is_some()),
+            "no targets shown"
+        );
         assert!(!shell.update(cx, |shell, cx| shell.link_dropped(10, middle, cx)));
         assert!(host.take().is_empty());
         shell.update(cx, |shell, cx| {
@@ -679,11 +776,24 @@ mod tests {
         assert!(shell.read_with(cx, |shell, _| shell.link_over.is_none()));
 
         shell.update(cx, |shell, cx| {
-            let split = Split { tabs: vec![10, 11, 12], ..Default::default() };
-            shell.set_tabs(1, Vec::new(), vec![10, 11, 12], vec![split], Folders::default(), cx);
+            let split = Split {
+                tabs: vec![10, 11, 12],
+                ..Default::default()
+            };
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![10, 11, 12],
+                vec![split],
+                Folders::default(),
+                cx,
+            );
         });
         let left = point(px(30.), middle.y);
         assert!(!shell.update(cx, |shell, cx| shell.link_over_page(10, left, url, cx)));
-        assert!(shell.read_with(cx, |shell, _| shell.link_over.is_none()), "a full split has none");
+        assert!(
+            shell.read_with(cx, |shell, _| shell.link_over.is_none()),
+            "a full split has none"
+        );
     }
 }

@@ -81,11 +81,24 @@ fn frame(ui_view: *mut c_void) -> Option<[f64; 4]> {
     let x = server()?;
     let (connection, root) = &*x;
     // GPUI's window is in Chromium's, the browser window.
-    let window = connection.query_tree(ui_view as usize as u32).ok()?.reply().ok()?.parent;
+    let window = connection
+        .query_tree(ui_view as usize as u32)
+        .ok()?
+        .reply()
+        .ok()?
+        .parent;
     let geometry = connection.get_geometry(window).ok()?.reply().ok()?;
-    let at = (connection.translate_coordinates(window, *root, 0, 0)).ok()?.reply().ok()?;
+    let at = (connection.translate_coordinates(window, *root, 0, 0))
+        .ok()?
+        .reply()
+        .ok()?;
     let scale = unsafe { bc::bc_display_scale() };
-    let frame = [at.dst_x.into(), at.dst_y.into(), geometry.width.into(), geometry.height.into()];
+    let frame = [
+        at.dst_x.into(),
+        at.dst_y.into(),
+        geometry.width.into(),
+        geometry.height.into(),
+    ];
     Some(frame.map(|n: f64| n / scale))
 }
 
@@ -180,10 +193,22 @@ fn put_under(ui_view: *mut c_void, above_ui_view: *mut c_void) -> Option<()> {
     let (connection, root) = &*x;
     // GPUI's window is in Chromium's, the browser window.
     let window = |view: *mut c_void| {
-        Some(connection.query_tree(view as usize as u32).ok()?.reply().ok()?.parent)
+        Some(
+            connection
+                .query_tree(view as usize as u32)
+                .ok()?
+                .reply()
+                .ok()?
+                .parent,
+        )
     };
     let (window, above) = (window(ui_view)?, window(above_ui_view)?);
-    let restack = connection.intern_atom(false, b"_NET_RESTACK_WINDOW").ok()?.reply().ok()?.atom;
+    let restack = connection
+        .intern_atom(false, b"_NET_RESTACK_WINDOW")
+        .ok()?
+        .reply()
+        .ok()?
+        .atom;
     // From a pager, source 2, which is the one Openbox takes it from.
     let below = u32::from(xproto::StackMode::BELOW);
     let message = xproto::ClientMessageEvent::new(32, window, restack, [2, above, below, 0, 0]);
