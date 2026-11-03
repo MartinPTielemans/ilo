@@ -937,6 +937,9 @@ fn open(cx: &mut App) {
     // ⌘W, pressed as Ctrl+W off the Mac, as the browser's own shortcuts are.
     let close = if crate::shell::OFF_THE_MAC { "ctrl-w" } else { "cmd-w" };
     cx.bind_keys([gpui::KeyBinding::new(close, CloseSettings, Some("Settings"))]);
+    // ⌘Z, Ctrl+Z off the Mac, which has no menu bar to send it; a field's own comes first.
+    let undo = Box::new(browser::text_input::Undo);
+    cx.bind_keys([shell::view_binding("cmd-z", undo, "Settings", cx)]);
     account::bind_keys(cx);
     let synced = account::synced(cx);
     let options = WindowOptions {
@@ -1137,13 +1140,34 @@ fn windows_close_button(at: gpui::Canvas<()>) -> AnyElement {
         .into_any_element()
 }
 
-fn hide(_: &mut App) {
+fn hide(cx: &mut App) {
     // check.sh waits for this line.
     log!("browser: settings hidden");
     unsafe { platform::host_hide_settings() };
+    // Later, as it can come from inside the window's own update. What Links' ⌘Z would bring back
+    // goes with the window, as the issue's "until Settings closes" (#1377).
+    cx.defer(|cx| {
+        if let Some(window) = cx.try_global::<SettingsWindow>().map(|settings| settings.0) {
+            window.update(cx, |settings, _, cx| settings.forget_undo(cx)).ok();
+        }
+    });
 }
 
 impl Settings {
+    /// ⌘Z: on the Links tab, the last rule its trash took comes back. The other tabs' changes
+    /// show as they're made and are made back the same way.
+    fn undo(&mut self, cx: &mut Context<Self>) {
+        if let Some(links) = self.links.as_ref().filter(|_| self.tab == Tab::Links) {
+            links.update(cx, |links, cx| links.undo(cx));
+        }
+    }
+
+    fn forget_undo(&mut self, cx: &mut Context<Self>) {
+        if let Some(links) = &self.links {
+            links.update(cx, |links, _| links.forget_removed());
+        }
+    }
+
     fn show_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
         if tab == self.tab {
             return;
@@ -3283,6 +3307,9 @@ impl Render for Settings {
                 settings.record(&event.keystroke, cx)
             }))
             .on_action(|_: &CloseSettings, _, cx| hide(cx))
+            .on_action(cx.listener(|settings, _: &browser::text_input::Undo, _, cx| {
+                settings.undo(cx)
+            }))
             .size_full()
             .flex()
             .flex_col()

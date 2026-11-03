@@ -473,6 +473,10 @@ buttons-top = 12.0
 button-height = 28.0
 button-x = 12.0
 button-gap = 8.0
+# Save's ↩ and Not Now's esc after their words, fainter, as the toast's Undo names ⌘Z: the
+# dialog's chips leave no room for Never in a 320-wide card (#1386).
+key-gap = 5.0
+key = 0.6
 plate-radius = 6.0
 title = 1.0
 detail = 0.78
@@ -660,6 +664,9 @@ title = 0xa4a6a6
 tab-text = 0x9e9f9f
 text = 0xc2c2c2
 control = 0x313333
+# Under the pointer, a quiet step toward pressed, short of it, so a button shows it can be
+# clicked before it's pressed (ours, #1387).
+control-hovered = 0x3a3c3c
 control-pressed = 0x404242
 switch-off = 0x383939
 knob = 0xe1e2e2
@@ -693,6 +700,7 @@ tile-glyph-color = 0xffffff
 # over its boxes.
 on-line = 0.11
 on-control = 0.09
+on-hovered = 0.14
 on-pressed = 0.18
 on-switch-off = 0.13
 on-detail = 0.77

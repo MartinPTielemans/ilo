@@ -1770,6 +1770,7 @@ fn rows_on_a_hosts_ground_mix_its_ink() {
         (mixed.line, settings.line),
         (mixed.detail, settings.detail),
         (mixed.control, settings.control),
+        (mixed.hovered, settings.hovered),
         (mixed.pressed, settings.pressed),
         (mixed.switch_off, settings.switch_off),
     ] {
@@ -1777,6 +1778,19 @@ fn rows_on_a_hosts_ground_mix_its_ink() {
     }
     let light = Look::on(gpui::rgb(0xffffff), gpui::rgb(0x000000));
     assert!(light.line.r < 1. && light.control.r > light.detail.r);
+}
+
+/// A control under the pointer is a quiet step toward pressed and short of it, on Settings' dark
+/// boxes and on a light ground alike, so it shows it can be clicked and a press still shows more.
+#[test]
+fn a_control_under_the_pointer_is_a_step_short_of_pressed() {
+    let light = |color: gpui::Rgba| color.r + color.g + color.b;
+    let dark = Look::settings();
+    assert!(light(dark.control) < light(dark.hovered) && light(dark.hovered) < light(dark.pressed));
+    let paper = Look::on(gpui::rgb(0xffffff), gpui::rgb(0x000000));
+    assert!(
+        light(paper.control) > light(paper.hovered) && light(paper.hovered) > light(paper.pressed)
+    );
 }
 
 /// Firefox's default profile is the one its install section names, as Firefox starts with it,
