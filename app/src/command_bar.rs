@@ -1829,7 +1829,7 @@ impl CommandBar {
     }
 
     /// The pointer has come onto or left row `index`'s remove button, whose tooltip names it and its
-    /// key. It hangs under the button, inside the bar, or above it on the last row.
+    /// key. It hangs under the button, inside the bar, or above it when the bar has no room below.
     fn hover_remove(&mut self, index: usize, hovered: bool, window: Size<Pixels>, cx: &mut App) {
         match self.remove_frame.get().filter(|_| hovered) {
             Some(frame) => {
