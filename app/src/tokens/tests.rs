@@ -9,6 +9,7 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ("theme.rs", "0x9e37_79b9", "the grain's random seed, not a colour"),
     ("shell/new_space.rs", "hsla(0., 0., 1., 0.)", "the glow's white fading out, not a colour"),
     ("preview.rs", "Some(0xbf556a)", "the preview's made-up Space colour"),
+    ("preview.rs", "const MORE_COLORS", "the preview's made-up Space colours"),
     ("shell/dock_dot.rs", "0x8655BF", "a test's made-up Space colour"),
     ("shell/dock_dot.rs", "0xE0475B", "a test's made-up Space colour"),
     ("shell/undo_tests.rs", "Some(0xff0000)", "a test's made-up Space colour"),

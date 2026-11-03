@@ -66,10 +66,10 @@ fn space_one_menu(menu: &[String]) -> bool {
         "New Tab",
         "New Folder…",
         "—",
-        "Rename Space",
-        "Change Icon…",
+        "Change Space Icon…",
+        "Rename Space…",
         "Edit Theme Color…",
-        "Profile",
+        "Set Profile",
     ];
     menu.starts_with(&head.map(String::from)) && menu.last().is_some_and(|last| last == "Delete Space")
 }
@@ -96,9 +96,9 @@ fn a_right_click_on_empty_space_shows_new_tab_and_the_spaces_menu(cx: &mut TestA
     assert!(space_one_menu(&menus[0]), "{menus:?}");
     let entries = host.entries.borrow().clone();
     assert!(entries[0].shortcut.is_some(), "New Tab shows ⌘T");
-    let profile = entries.iter().position(|entry| entry.title == "Profile").unwrap();
+    let profile = entries.iter().position(|entry| entry.title == "Set Profile").unwrap();
     let mut parents = entries.iter().filter_map(|entry| entry.parent);
-    assert!(parents.all(|parent| parent == profile), "the Profile submenu moved");
+    assert!(parents.all(|parent| parent == profile), "the Set Profile submenu moved");
     assert!(new_tab(cx, &host).is_empty(), "New Tab showed another Space");
 
     let (x, top) = at_slot(&shell, cx, Slot::Divider, 30.);
@@ -123,7 +123,7 @@ fn an_empty_spaces_empty_space_shows_its_menu(cx: &mut TestAppContext) {
     let (_, new_tab_row) = at_slot(&shell, cx, Slot::NewTab, 100.);
     let menus = right_click(cx, &host, (100., new_tab_row + ROW_PITCH + 20.));
     assert_eq!(menus.len(), 1, "{menus:?}");
-    assert_eq!(menus[0][..4], ["New Tab", "New Folder…", "—", "Rename Space"]);
+    assert_eq!(menus[0][..4], ["New Tab", "New Folder…", "—", "Change Space Icon…"]);
     // Delete Space is on: Space 1 is left.
     assert!(host.menus.borrow()[0].last().is_some_and(|(title, on)| title == "Delete Space" && *on));
     assert!(new_tab(cx, &host).is_empty(), "New Tab showed another Space");
@@ -153,7 +153,7 @@ fn a_right_click_mid_swipe_is_for_the_space_under_the_pointer(cx: &mut TestAppCo
     let beside = under_rows(&shell, cx, width - 20.);
     let menus = right_click(cx, &host, beside);
     assert_eq!(menus.len(), 1, "{menus:?}");
-    assert_eq!(menus[0][..4], ["New Tab", "New Folder…", "—", "Rename Space"]);
+    assert_eq!(menus[0][..4], ["New Tab", "New Folder…", "—", "Change Space Icon…"]);
     assert_eq!(new_tab(cx, &host), [2], "New Tab went to the Space beside");
 
     let first = under_rows(&shell, cx, 20.);
@@ -171,7 +171,7 @@ fn a_right_click_mid_swipe_is_for_the_space_under_the_pointer(cx: &mut TestAppCo
     let first = under_rows(&shell, cx, 20.);
     let menus = right_click(cx, &host, first);
     assert_eq!(menus.len(), 1, "a right-click mid-slide: {menus:?}");
-    assert_eq!(menus[0][..4], ["New Tab", "New Folder…", "—", "Rename Space"]);
+    assert_eq!(menus[0][..4], ["New Tab", "New Folder…", "—", "Change Space Icon…"]);
     assert!(new_tab(cx, &host).is_empty(), "New Tab mid-slide went to Space 1");
 }
 
@@ -188,7 +188,7 @@ fn rows_keep_their_own_menus(cx: &mut TestAppContext) {
     let name = shell.read_with(cx, |shell, _| shell.drawn_list_top() + NAME_HEIGHT / 2.);
     let menus = right_click(cx, &host, (60., name));
     assert_eq!(menus.len(), 1, "{menus:?}");
-    assert_eq!(menus[0][0], "Rename Space", "{menus:?}");
+    assert_eq!(menus[0][0], "Change Space Icon…", "{menus:?}");
 
     let (x, top) = at_slot(&shell, cx, Slot::NewTab, 100.);
     assert!(right_click(cx, &host, (x, top + ROW_PITCH / 2.)).is_empty());

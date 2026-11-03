@@ -3,19 +3,21 @@
 //! while the tab shown has find in page open. The core keeps each tab's find; the bar shows the
 //! shown tab's.
 
-use std::{cell::RefCell, collections::HashMap, ffi::CString, ffi::c_void};
+use std::{cell::RefCell, collections::HashMap, ffi::CString, ffi::c_void, rc::Rc};
 
 use browser::{
     elevation::Level,
     log,
     palette::{Palette, STATE_HOVERED, STATE_PRESSED},
-    shell,
+    shell::{self, keystroke_keys},
     text_input::TextInput,
+    tooltip::{self, Anchor, Tip},
 };
 use gpui::{
     AnyWindowHandle, App, Bounds, Context, Entity, Focusable, FontWeight, Global, KeyBinding,
-    SharedString, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
-    WindowKind, WindowOptions, actions, div, point, prelude::*, px, rgb, rgba, size, svg,
+    Pixels, Point, SharedString, Size, TitlebarOptions, Window, WindowBackgroundAppearance,
+    WindowBounds, WindowHandle, WindowKind, WindowOptions, actions, canvas, div, point,
+    prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{bc, platform};
@@ -64,9 +66,40 @@ thread_local! {
     static FINDS: RefCell<HashMap<u64, Find>> = RefCell::new(HashMap::new());
 }
 
+/// Where the bar's top left is in the browser window, and that window's size, as the shell lays
+/// the page out.
+type Place = Rc<dyn Fn(&App) -> Option<(Point<Pixels>, Size<Pixels>)>>;
+
+/// A button that names itself and its key in the tooltip, as the header's buttons do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Named {
+    Previous,
+    Next,
+    Close,
+}
+
+impl Named {
+    /// Its name and the key that does what it does, as the bar binds it.
+    fn named(self) -> (&'static str, &'static str) {
+        match self {
+            Named::Previous => ("Previous", "shift-cmd-g"),
+            Named::Next => ("Next", "cmd-g"),
+            Named::Close => ("Close", "escape"),
+        }
+    }
+}
+
 pub struct FindBar {
+    /// The core's id of the browser window the bar is over.
+    browser: bc::bc_id,
     /// The UI's view of the browser window the bar is over.
     ui_view: *mut c_void,
+    place: Place,
+    /// Where each button that names itself was last drawn, in the bar.
+    frames: Rc<RefCell<HashMap<Named, Bounds<Pixels>>>>,
+    /// The button whose tooltip the bar asked for, until the pointer leaves it or something ends
+    /// it.
+    tipped: Option<Named>,
     input: Entity<TextInput>,
     /// The tab the window shows, whose find this bar is.
     tab: u64,
@@ -82,8 +115,15 @@ struct FindBars(HashMap<bc::bc_id, WindowHandle<FindBar>>);
 impl Global for FindBars {}
 
 /// Opens the find bar's window for the browser window `browser`, whose UI draws in `ui_view`,
-/// hidden, ahead of time as the command bar does, and returns its window.
-pub fn open(browser: bc::bc_id, ui_view: *mut c_void, cx: &mut App) -> Option<AnyWindowHandle> {
+/// hidden, ahead of time as the command bar does, and returns its window. `corner` gives the
+/// shell's `at_page_corner`, where the host puts the bar.
+pub fn open(
+    browser: bc::bc_id,
+    ui_view: *mut c_void,
+    corner: impl Fn(&App, f32, f32, f32) -> Option<(Point<Pixels>, Size<Pixels>)> + 'static,
+    cx: &mut App,
+) -> Option<AnyWindowHandle> {
+    let place: Place = Rc::new(move |cx| corner(cx, RIGHT, TOP, WIDTH));
     // The keys are bound once, for every window's bar.
     if !cx.has_global::<FindBars>() {
         // The browser's ⌘G, ⇧⌘G and ⌘F, for the bar while it has the keyboard.
@@ -131,7 +171,11 @@ pub fn open(browser: bc::bc_id, ui_view: *mut c_void, cx: &mut App) -> Option<An
             cx.observe(&input, |bar: &mut FindBar, _, cx| bar.edited(cx))
                 .detach();
             FindBar {
+                browser,
                 ui_view,
+                place,
+                frames: Rc::default(),
+                tipped: None,
                 input,
                 tab: 0,
                 searched: String::new(),
@@ -219,6 +263,7 @@ pub fn tab_shown(browser: bc::bc_id, tab: u64, cx: &mut App) {
                 return None;
             }
             bar.tab = tab;
+            bar.end_tip(cx);
             if let Some(find) = &find {
                 bar.searched = find.text.clone();
                 bar.input.update(cx, |input, cx| {
@@ -259,6 +304,9 @@ pub fn changed(tab: u64, find: Find, cx: &mut App) {
         let shown = window
             .update(cx, |bar, _, cx| {
                 cx.notify();
+                if bar.tab == tab && !open {
+                    bar.end_tip(cx);
+                }
                 (bar.tab == tab).then_some(bar.ui_view)
             })
             .ok()
@@ -321,7 +369,8 @@ impl FindBar {
             .update(cx, |input, cx| input.reset(text, window, cx));
     }
 
-    fn close(&mut self, _: &Close, _: &mut Window, _: &mut Context<Self>) {
+    fn close(&mut self, _: &Close, _: &mut Window, cx: &mut Context<Self>) {
+        self.end_tip(cx);
         unsafe { bc::bc_tab_find_close(self.tab) };
         FINDS.with_borrow_mut(|finds| {
             if let Some(find) = finds.get_mut(&self.tab) {
@@ -339,6 +388,57 @@ impl FindBar {
             }
             _ => None,
         })
+    }
+
+    /// The pointer has come onto or left `button`, whose tooltip names it and its key, hanging
+    /// from it in the browser window, as Peek's buttons' do.
+    fn hover(&mut self, button: Named, hovered: bool, cx: &mut Context<Self>) {
+        let frame = self.frames.borrow().get(&button).copied().filter(|_| hovered);
+        match (frame, (self.place)(cx)) {
+            (Some(frame), Some((origin, window))) => {
+                let (name, keystroke) = button.named();
+                let keys = keystroke_keys(keystroke).into_iter().map(Into::into).collect();
+                let anchor = Anchor::under(Bounds::new(origin + frame.origin, frame.size), window);
+                self.tipped = Some(button);
+                tooltip::hover(self.browser, Tip { text: name.into(), keys }, anchor, cx);
+            }
+            // Unless the pointer went from it onto another button, whose tooltip took its place.
+            _ if self.tipped == Some(button) => self.end_tip(cx),
+            _ => {}
+        }
+    }
+
+    /// Ends the tooltip of the button it asked for one for, if any: the pointer left, or a click,
+    /// a key or the bar going ends it.
+    fn end_tip(&mut self, cx: &mut App) {
+        if self.tipped.take().is_some() {
+            tooltip::dismiss(cx);
+        }
+    }
+
+    /// Makes `button`, the bar's button that names itself, say so under the pointer, and keeps
+    /// where it's drawn for its tooltip.
+    fn named(
+        &self,
+        button: gpui::Stateful<gpui::Div>,
+        named: Named,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let frames = self.frames.clone();
+        button
+            .relative()
+            .on_hover(cx.listener(move |bar, hovered: &bool, _, cx| bar.hover(named, *hovered, cx)))
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|bar, _, _, cx| bar.end_tip(cx)))
+            .child(
+                canvas(
+                    move |bounds, _, _| {
+                        frames.borrow_mut().insert(named, bounds);
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
     }
 
     /// A 28 pt button with `icon`, which dims while it can't be used.
@@ -380,11 +480,15 @@ impl Render for FindBar {
         );
         let enabled = matches.is_some();
         let not_found = found.is_some() && !enabled;
-        let previous = Self::button("previous", "icons/chevron-up.svg", enabled)
+        let previous = Self::button("previous", "icons/chevron-up.svg", enabled);
+        let previous = self
+            .named(previous, Named::Previous, cx)
             .when(enabled, |button| {
                 button.on_click(cx.listener(|bar, _, _, cx| bar.find_next(false, cx)))
             });
-        let next = Self::button("next", "icons/chevron-down.svg", enabled)
+        let next = Self::button("next", "icons/chevron-down.svg", enabled);
+        let next = self
+            .named(next, Named::Next, cx)
             .ml(px(-ARROW_OVERLAP))
             .when(enabled, |button| {
                 button.on_click(cx.listener(|bar, _, _, cx| bar.find_next(true, cx)))
@@ -407,7 +511,9 @@ impl Render for FindBar {
             .flex()
             .justify_center()
             .child(div().w(px(1.)).h_full().bg(rgba(DIVIDER)));
-        let close = Self::button("close", "icons/x.svg", true)
+        let close = Self::button("close", "icons/x.svg", true);
+        let close = self
+            .named(close, Named::Close, cx)
             .on_click(cx.listener(|bar, _, window, cx| bar.close(&Close, window, cx)));
         let search = div()
             .flex_none()
@@ -420,6 +526,8 @@ impl Render for FindBar {
         div().key_context(shell::KEY_CONTEXT).size_full().font_family(browser::face::UI).child(
             div()
                 .key_context("FindBar")
+                // A key ends a button's tooltip, as a click does.
+                .capture_key_down(cx.listener(|bar, _, _, cx| bar.end_tip(cx)))
                 .on_action(cx.listener(|bar, _: &FindNext, _, cx| bar.find_next(true, cx)))
                 .on_action(cx.listener(|bar, _: &FindPrevious, _, cx| bar.find_next(false, cx)))
                 .on_action(cx.listener(Self::select_all))
