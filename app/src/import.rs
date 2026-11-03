@@ -1890,9 +1890,8 @@ impl Render for ImportView {
                         "{} holds your passwords in plain text. Delete it once they're in.",
                         file_name(file)
                     );
-                    said_row(why)
-                        .text_color(look.detail)
-                        .child(end([delete.into_any_element()]))
+                    let why = div().flex_1().min_w_0().text_color(look.detail).child(why);
+                    frame().child(why).child(end([delete.into_any_element()]))
                 });
                 let offered = self.offered();
                 let favorites = offered.map(|tabs| self.favorites_offer(tabs, cx));
