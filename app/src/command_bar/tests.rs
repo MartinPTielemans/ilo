@@ -423,7 +423,7 @@ impl Bar {
         self.cx.run_until_parked();
     }
 
-    /// A click where row `index` shows its ✕ under the pointer, at its end.
+    /// A click where row `index` shows its trash under the pointer, at its end.
     fn click_remove(&mut self, index: usize) {
         self.point_at(index);
         let x = WIDTH - LIST_X - PLATE_INSET - ROW_END - 3. - ICON_BOX / 2.;
@@ -712,11 +712,11 @@ fn shift_delete_takes_a_page_out_of_history(cx: &mut TestAppContext) {
     assert_eq!(bar.calls(), ["open https://b.test/", "hide"]);
 }
 
-/// A page from history, or a search typed before, shows a ✕ under the pointer that takes it out,
-/// as Arc's does, and ⌥⌘⌫ takes out the selected one, as ⇧⌦ does. The search for what's typed
-/// and the well-known sites have none: there a click at the row's end takes the row.
+/// A page from history, or a search typed before, shows a trash under the pointer that takes it
+/// out, where Arc's has a ✕, and ⌥⌘⌫ takes out the selected one, as ⇧⌦ does. The search for
+/// what's typed and the well-known sites have none: there a click at the row's end takes the row.
 #[gpui::test]
-fn the_pointer_shows_a_cross_that_takes_a_suggestion_out(cx: &mut TestAppContext) {
+fn the_pointer_shows_a_trash_that_takes_a_suggestion_out(cx: &mut TestAppContext) {
     let mut bar = Bar::new(cx);
     bar.type_text("ex");
     let typed_before = Suggestion { removable: true, ..searching("example") };
