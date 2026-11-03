@@ -135,6 +135,7 @@ key_at() { grep '^browser: key drawn at ' "$log" | tail -1 | cut -d' ' -f5-6; }
 send click $(key_at)
 expect "^browser: key $tab clicked\$" "a click on the key didn't reach it"
 offered save
+skip_on_sway_xwayland "the offer's keys and the steps after them"
 send click $(offer_field)
 send key escape
 expect "^browser: offer $tab answered NotNow check@example.test\$" \
