@@ -629,9 +629,15 @@ check_buttons "with the sidebar out" hidden
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-reveal.png" || fail "no window to capture"
 send move 200 300
 send move 250 300
-check_reveal "with the pointer over the sidebar out" shown
-send move 400 300
-expect '^browser: reveal hidden$' "the pointer past the sidebar out didn't send it away"
+if [ "$(uname)" = Linux ]; then
+  # On Linux the pointer over the page is Chromium's, which the shell doesn't hear, so the panel
+  # has no hold zone there and goes as the pointer leaves it (platform/linux/reveal_window.rs).
+  expect '^browser: reveal hidden$' "the pointer leaving the sidebar out didn't send it away"
+else
+  check_reveal "with the pointer in the hold zone past the sidebar out" shown
+  send move 400 300
+  expect '^browser: reveal hidden$' "the pointer past the sidebar out didn't send it away"
+fi
 check_reveal "after the sidebar went away"
 send move 3 300
 expect '^browser: reveal shown$' "the pointer at the edge didn't bring the sidebar back out"

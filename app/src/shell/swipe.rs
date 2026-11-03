@@ -448,7 +448,9 @@ impl Shell {
             window.request_animation_frame();
         }
         for (edge, shown, name) in [
-            (&mut self.top_edge, scrolled > 0., "edge"),
+            // Within half a point of its top, as Windows' wheel ticks of a fraction of a line
+            // leave it once summed down and back, the list is at its top.
+            (&mut self.top_edge, scrolled > 0.5, "edge"),
             (&mut self.foot_edge, below, "foot edge"),
         ] {
             match edge.step(shown) {

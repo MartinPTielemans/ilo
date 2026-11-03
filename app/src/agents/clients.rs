@@ -5,6 +5,7 @@
 //! MCP client gets the bridge's command and its token to paste.
 
 use std::path::{Path, PathBuf};
+#[cfg(not(windows))]
 use std::process::Command;
 
 use serde_json::{Value, json};
@@ -164,14 +165,8 @@ const NO_CLAUDE: &str = "Claude Code's claude command isn't installed.";
 fn claude() -> Result<impl Fn(&[&str]) -> Result<(), String>, String> {
     let (program, path) = find_claude().ok_or(NO_CLAUDE)?;
     Ok(move |arguments: &[&str]| {
-        let mut command = Command::new(&program);
+        let mut command = crate::child::command(&program);
         command.env("PATH", &path).args(arguments);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            // A console program the windowed browser starts would get a console window of its own.
-            command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
-        }
         let output = command.output().map_err(|error| match error.kind() {
             std::io::ErrorKind::NotFound => NO_CLAUDE.into(),
             _ => error.to_string(),
@@ -183,15 +178,26 @@ fn claude() -> Result<impl Fn(&[&str]) -> Result<(), String>, String> {
     })
 }
 
-/// `claude` where a terminal opened now would find it, or where an installer put it (#1420),
-/// and that terminal's PATH, where npm's claude.cmd finds node. Rust runs a .cmd through cmd.exe
-/// with each argument quoted for it, the JSON's quotes doubled, which node reads back whole.
+/// `claude` where a terminal opened now would find it, or where an installer put it (#1420).
+/// Rust runs a .cmd through cmd.exe with each argument quoted for it, the JSON's quotes doubled,
+/// which node reads back whole.
 #[cfg(windows)]
 fn find_claude() -> Option<(PathBuf, String)> {
+    windows_find("claude")
+}
+
+/// `name`, as `claude` or `codex`, where a terminal opened now would find it, or where an
+/// installer put it, and that terminal's PATH, where an npm .cmd shim finds node. Connect and the
+/// task agents both look for their CLI so (#1676).
+#[cfg(windows)]
+pub fn windows_find(name: &str) -> Option<(PathBuf, String)> {
     let var = |name: &str| std::env::var(name).ok();
     let path = windows_path(&var, registry_path(false), registry_path(true));
     let folders = windows_folders(&var, &path);
-    Some((windows_claude(&folders, var("PATHEXT"))?, path.join(";")))
+    Some((
+        windows_program(name, &folders, var("PATHEXT"))?,
+        path.join(";"),
+    ))
 }
 
 /// `claude` where a terminal the user opens would find it, or where an installer put it, which
@@ -300,7 +306,7 @@ const SHELL_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 #[cfg(not(windows))]
 fn shell_path() -> Option<String> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-    let mut command = Command::new(shell);
+    let mut command = crate::child::command(shell);
     command.args(["-i", "-l", "-c", PRINT_PATH]);
     printed_path(command, SHELL_WAIT)
 }
@@ -364,8 +370,8 @@ fn windows_path(
         .collect()
 }
 
-/// Where Windows looks for `claude`: the folders on `path`, first to last, as a terminal does,
-/// then where Claude Code's own installer, winget and npm put it, which may not be on PATH.
+/// Where Windows looks for a CLI: the folders on `path`, first to last, as a terminal does, then
+/// where Claude Code's own installer, winget and npm put one, which may not be on PATH.
 #[cfg(any(windows, test))]
 fn windows_folders(var: &dyn Fn(&str) -> Option<String>, path: &[String]) -> Vec<PathBuf> {
     let installed: [(&str, &[&str]); 3] = [
@@ -380,10 +386,11 @@ fn windows_folders(var: &dyn Fn(&str) -> Option<String>, path: &[String]) -> Vec
     path.iter().map(PathBuf::from).chain(installed).collect()
 }
 
-/// The first `claude` in `folders`, trying in each the extensions in `pathext` that CreateProcess
-/// runs, in its order, as a terminal tries all of PATHEXT's.
+/// The first `name` in `folders`, trying in each the extensions in `pathext` that CreateProcess
+/// runs, in its order, as a terminal tries all of PATHEXT's. A .ps1 npm writes beside its .cmd
+/// isn't one.
 #[cfg(any(windows, test))]
-fn windows_claude(folders: &[PathBuf], pathext: Option<String>) -> Option<PathBuf> {
+fn windows_program(name: &str, folders: &[PathBuf], pathext: Option<String>) -> Option<PathBuf> {
     let pathext = pathext.unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into());
     let extensions: Vec<String> = (pathext.split(';'))
         .map(|extension| extension.trim().to_ascii_lowercase())
@@ -391,7 +398,7 @@ fn windows_claude(folders: &[PathBuf], pathext: Option<String>) -> Option<PathBu
         .collect();
     (folders.iter())
         .flat_map(|folder| {
-            (extensions.iter()).map(move |extension| folder.join(format!("claude{extension}")))
+            (extensions.iter()).map(move |extension| folder.join(format!("{name}{extension}")))
         })
         .find(|program| program.is_file())
 }
@@ -663,6 +670,11 @@ mod tests {
     /// Where Connect on Windows finds `claude` in `home`, with `path` the browser's PATH and
     /// `user` the user's in the registry.
     fn found_in(home: &Path, path: &str, user: Option<&str>) -> Option<PathBuf> {
+        cli_in("claude", home, path, user)
+    }
+
+    /// Where the browser on Windows finds the CLI `name` in `home`, as `found_in` finds `claude`.
+    fn cli_in(name: &str, home: &Path, path: &str, user: Option<&str>) -> Option<PathBuf> {
         let var = |name: &str| match name {
             "USERPROFILE" => Some(home.to_string_lossy().into_owned()),
             "LOCALAPPDATA" => Some(
@@ -681,10 +693,8 @@ mod tests {
             _ => None,
         };
         let path = windows_path(&var, None, user.map(String::from));
-        let found = windows_claude(
-            &windows_folders(&var, &path),
-            Some(".COM;.EXE;.BAT;.CMD;.VBS;.JS".into()),
-        );
+        let pathext = Some(".COM;.EXE;.BAT;.CMD;.VBS;.JS".into());
+        let found = windows_program(name, &windows_folders(&var, &path), pathext);
         found.map(|program| program.strip_prefix(home).unwrap().to_path_buf())
     }
 
@@ -744,6 +754,47 @@ mod tests {
         assert_eq!(found_in(&home, &path, None), at(&["bin", "claude.cmd"]));
         std::fs::remove_file(home.join("bin").join("claude.cmd")).unwrap();
         assert_eq!(found_in(&home, &path, None), None);
+    }
+
+    /// The task agents find Codex on Windows as Connect finds Claude Code (#1676): npm's codex.cmd,
+    /// with its codex.ps1 beside it, which CreateProcess can't run, or a codex.exe, though the
+    /// browser's PATH doesn't have its folder. A folder on PATH that isn't there is passed over.
+    #[test]
+    fn windows_finds_codex_however_it_was_installed() {
+        const NPM_CODEX: &[&str] = &["AppData", "Roaming", "npm", "codex.cmd"];
+        const NPM_PS1: &[&str] = &["AppData", "Roaming", "npm", "codex.ps1"];
+        const WINGET_CODEX: &[&str] = &[
+            "AppData",
+            "Local",
+            "Microsoft",
+            "WinGet",
+            "Links",
+            "codex.exe",
+        ];
+        const TOOLS_CODEX: &[&str] = &["tools", "codex.exe"];
+        assert_eq!(cli_in("codex", &home_with(&[NPM_PS1]), "", None), None);
+        assert_eq!(
+            cli_in("codex", &home_with(&[NPM_CODEX, NPM_PS1]), "", None),
+            at(NPM_CODEX)
+        );
+        assert_eq!(
+            cli_in("codex", &home_with(&[WINGET_CODEX]), "", None),
+            at(WINGET_CODEX)
+        );
+        // Claude Code's own isn't taken for Codex.
+        assert_eq!(cli_in("codex", &home_with(&[NATIVE, NPM]), "", None), None);
+
+        let home = home_with(&[TOOLS_CODEX, NPM_CODEX]);
+        let tools = home.join("tools").to_string_lossy().into_owned();
+        let gone = home.join("gone").to_string_lossy().into_owned();
+        // Off the browser's PATH, npm's; on it, past a folder that isn't there, the first on PATH.
+        assert_eq!(cli_in("codex", &home, &gone, None), at(NPM_CODEX));
+        assert_eq!(
+            cli_in("codex", &home, &format!("{gone};{tools}"), None),
+            at(TOOLS_CODEX)
+        );
+        // Put on the user's PATH by an install since the browser started.
+        assert_eq!(cli_in("codex", &home, &gone, Some(&tools)), at(TOOLS_CODEX));
     }
 
     /// The registry's PATH has its variables filled in, and one that isn't set is kept as it is.
@@ -912,7 +963,7 @@ mod tests {
 
     #[cfg(not(windows))]
     fn sh(script: &str) -> Command {
-        let mut command = Command::new("/bin/sh");
+        let mut command = crate::child::command("/bin/sh");
         command.args(["-c", script]);
         command
     }
@@ -929,7 +980,10 @@ mod tests {
             Some("/tools/bin:/usr/bin")
         );
         assert_eq!(printed_path(sh("echo Welcome"), wait), None);
-        assert_eq!(printed_path(Command::new("/no/such/shell"), wait), None);
+        assert_eq!(
+            printed_path(crate::child::command("/no/such/shell"), wait),
+            None
+        );
     }
 
     /// A shell still starting after the wait, as on an rc file that waits on the network, is given
