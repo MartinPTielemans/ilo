@@ -5,8 +5,8 @@
 # Windows, first, a click in the page once its window is back from minimized gives it the keyboard.
 # Settings works from the keyboard, opened by ⌘, from the page and from the UI: Tab rings the tab
 # shown, → and ← change tab, Tab goes on to Warn before quitting, which space turns off and on
-# again, and to the archive's pop-up, which space opens with its first item highlighted and escape
-# closes, giving Settings back the keyboard, where Tab goes on (#1526).
+# again, and to the archive's pop-up, which space opens on the time chosen, where ↓ goes on to the
+# next and escape closes it, giving Settings back the keyboard, where Tab goes on (#1526).
 
 engine_version= engine_version_said= minimized=
 [ "$(uname)" != Darwin ] || engine_version=yes
@@ -71,8 +71,13 @@ send key tab
 expect '^browser: settings keyed ArchiveAfter$' "Tab didn't go on to the archive's pop-up"
 send key space
 expect '^browser: menu shown 12 hours' "space on the archive's pop-up didn't open its menu"
-expect '^browser: menu highlights 12 hours (default) at ' \
-  "the archive's menu opened from the keyboard didn't highlight its first item"
+# It opens on the time chosen, as a click's does, and the keys are its: ↓ goes to the one after.
+after=$(sed -n 's/^browser: menu shown //p' "$log" | tail -1 |
+  awk -F', ' '{ for (i = 1; i < NF; i++) if ($i ~ / \(checked\)$/) { print $(i + 1); exit } }')
+[ -n "$after" ] || fail "the archive's menu had no time checked with one after it"
+send key down
+expect "^browser: menu highlights $after at " \
+  "↓ in the archive's menu opened from the keyboard didn't highlight $after, after the time chosen"
 send key escape
 expect '^browser: menu closed$' "escape didn't close the archive's menu"
 send key tab
@@ -93,7 +98,7 @@ expect '^browser: settings keyed warn before quitting$' \
   "Tab in Settings opened from the UI didn't go on to Warn before quitting"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
-keyed=" Settings went by the keyboard from the page and the UI: Tab, ← and →, space and return on a switch, and space and escape on a pop-up."
+keyed=" Settings went by the keyboard from the page and the UI: Tab, ← and →, space and return on a switch, and space, ↓ and escape on a pop-up."
 loaded=
 for row in licence:LICENSE notices:NOTICE libraries:THIRD-PARTY.txt; do
   id=${row%%:*} file=${row#*:}
