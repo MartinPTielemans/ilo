@@ -972,6 +972,11 @@ fn open(cx: &mut App) {
             // it.
             let dark = dark(window, cx);
             let look = RowLook::settings(dark);
+            // check.sh reads this line, and the one each change logs.
+            log!(
+                "browser: settings look {}",
+                if dark { "dark" } else { "light" }
+            );
             cx.observe_window_appearance(window, |settings: &mut Settings, window, cx| {
                 settings.follow_appearance(window, cx)
             })
