@@ -309,6 +309,8 @@ struct Acting {
     element: i64,
     note: String,
     reply: mpsc::Sender<ToolResult>,
+    /// The tabs its page opened meanwhile, in the agent's Space, which its answer names.
+    opened: Vec<u64>,
 }
 
 /// An action that waits on the user.
@@ -1179,7 +1181,7 @@ impl Agents {
         let request = self.next_request;
         self.next_request += 1;
         let note = String::new();
-        let acting = Acting { agent: agent.into(), tab, element: 0, note, reply };
+        let acting = Acting { agent: agent.into(), tab, element: 0, note, reply, opened: vec![] };
         self.acting.insert(request, acting);
         self.act_in_page(agent, tab, request, PageAction::Snapshot, 0, "");
     }
@@ -1744,9 +1746,17 @@ impl Agents {
         }
         let request = self.next_request;
         self.next_request += 1;
-        let acting = Acting { agent: agent.clone(), tab, element, note, reply };
+        let acting = Acting { agent: agent.clone(), tab, element, note, reply, opened: vec![] };
         self.acting.insert(request, acting);
         self.act_in_page(&agent, tab, request, page, element, &text);
+    }
+
+    /// The core put `tab`, which `opener`'s page opened, beside it: if an agent is acting there, in
+    /// its Space, behind, and its action's answer names it (#1470).
+    pub fn tab_opened(&mut self, tab: u64, opener: u64) {
+        if let Some(acting) = self.acting.values_mut().find(|acting| acting.tab == opener) {
+            acting.opened.push(tab);
+        }
     }
 
     /// The ref of the element the action `request` acts on, such as "e12", as the agent named it.
@@ -1759,9 +1769,14 @@ impl Agents {
     /// The core's answer to the action `request`: with `error`, why it couldn't; else a
     /// screenshot's JPEG in base64, or the nodes of the page's tree, which the answer outlines.
     pub fn page_done(&mut self, request: u64, text: String, error: bool, cx: &mut Context<Self>) {
-        let Some(Acting { tab, note, reply, .. }) = self.acting.remove(&request) else {
+        let Some(Acting { tab, mut note, reply, opened, .. }) = self.acting.remove(&request) else {
             return;
         };
+        if !opened.is_empty() {
+            let tabs = opened.iter().map(u64::to_string).collect::<Vec<_>>().join(", ");
+            let s = if opened.len() > 1 { "s" } else { "" };
+            note = format!("{note} It opened tab{s} {tabs} in your Space.").trim_start().into();
+        }
         if error {
             _ = reply.send(ToolResult::error(text));
             return self.advance(cx);

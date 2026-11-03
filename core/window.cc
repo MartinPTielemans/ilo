@@ -672,6 +672,22 @@ void Window::AdjustNavigate(NavigateParams& params) {
     return;
   }
   Tab* source = params.source_contents ? Tab::FromWebContents(params.source_contents) : nullptr;
+  // A page in an agent's Space the user isn't looking at opens its tabs and windows there, behind,
+  // loading at once, as the agent's own: it works in its own tabs and never changes what the user
+  // sees (#1470). Chrome gives a tab opened from a link the tab it shows as its opener, so the
+  // window keeps which. One the user is looking at opens them as any page does.
+  const bc_id source_id = source ? Tab::IdOf(params.source_contents) : 0;
+  const Space* source_space = source ? Space::Holding(source_id) : nullptr;
+  const bool for_agent = source_space && source_space->agent() && !Showing(source_id);
+  window->agent_opener_ = 0;
+  if (for_agent && (params.disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
+                    params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB ||
+                    params.disposition == WindowOpenDisposition::NEW_POPUP ||
+                    params.disposition == WindowOpenDisposition::NEW_WINDOW ||
+                    params.disposition == WindowOpenDisposition::NEW_SPLIT_VIEW)) {
+    params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
+    window->agent_opener_ = source_id;
+  }
   // ⌥⌘-click on a link opens it in a Little ilo window, as Arc's does in Little Arc (the owner's
   // call over Chrome's split, 2026-10-29). The page asks for a split view, as for ⌥-click, so the
   // press it came from tells them apart. A private window's opens beside its page, as its links
@@ -720,7 +736,7 @@ void Window::AdjustNavigate(NavigateParams& params) {
   // A link a page opens behind, as by ⌘-click, loads only once its tab is first shown (Dia). A
   // form sent to a tab behind goes at once, when the user sent it, and a window the page made
   // itself already has its page and the page's hold on it.
-  if (source && params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB &&
+  if (source && !for_agent && params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB &&
       params.url.SchemeIsHTTPOrHTTPS() && !params.post_data && !params.contents_to_insert) {
     content::WebContents* contents = window->OpenBehind(params);
     // Posted, as for the tabs Chrome opens.
@@ -2491,14 +2507,20 @@ void Window::OnTabStripModelChanged(TabStripModel* tab_strip_model,
     return;
   }
   const bc_id split_with = std::exchange(split_with_, 0);
+  const bc_id agent_opener = std::exchange(agent_opener_, 0);
   for (const TabStripModelChange::ContentsWithIndex& inserted : change.GetInsert()->contents) {
     tabs::TabInterface* opener = tab_strip_model->GetOpenerOfTabAt(inserted.index);
+    bc_id opened_by = agent_opener;
+    if (!opened_by && opener) {
+      opened_by = Tab::IdOf(opener->GetContents());
+    }
     // Posted: the app shows the tab, and a tab strip can't change while it reports a change.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(&Window::ReportTabOpened, weak_factory_.GetWeakPtr(),
-                                  Tab::IdOf(inserted.contents),
-                                  opener ? Tab::IdOf(opener->GetContents()) : 0,
-                                  tab_strip_model->active_index() == inserted.index, split_with));
+        FROM_HERE,
+        base::BindOnce(&Window::ReportTabOpened, weak_factory_.GetWeakPtr(),
+                       Tab::IdOf(inserted.contents), opened_by,
+                       !agent_opener && tab_strip_model->active_index() == inserted.index,
+                       split_with));
   }
 }
 

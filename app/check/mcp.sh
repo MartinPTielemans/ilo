@@ -4,9 +4,11 @@
 # only the tabs there: its list leaves out the user's tab, a read of the user's tab is refused, with
 # an activity-log entry, and a read of example.com, opened in its Space, gives the page's text. Ten
 # cases, each the same form in a tab of its own the user isn't looking at, move to Closed a step a
-# turn, a turn's ten calls answered at once, which logs the turns and how long they took. A
-# page with fields gives its prose and none of their values: typed, filled in or a password, in its
-# text and in its outline, and the agent can't type into the password field. It types into another.
+# turn, a turn's ten calls answered at once, which logs the turns and how long they took. A tab
+# its page opens, by a link or window.open, goes in its Space, behind, and the click's answer names
+# it. A page with fields gives its prose and none of their values: typed, filled in or a password,
+# in its text and in its outline, and the agent can't type into the password field. It types into
+# another.
 # A page's frames, of its own site and of another, are in its outline, where the agent clicks and
 # types, and not into a frame's password field. Its text leaves out a frame an extension puts in
 # the page, which isn't the page's. Its keys, typed or pressed, go to the page alone, and Escape
@@ -234,6 +236,37 @@ for n in $(seq 10); do
   grep -q "^browser: title [0-9]* case $n saved Closed\$" "$log" || fail "case $n wasn't saved Closed"
 done
 cases=$(sed -n 's/^cases: \(10 cases in .*\)/\1/p' "$out/cases.log")
+
+# A tab the agent's page opens, by a link to a new tab or a page's window.open, goes in its Space,
+# behind, with the agent's tab as its opener, and the click's answer names it. The user's tab stays
+# shown, and their Space gets none (#1470).
+printf '%s' '<!doctype html><title>Opener</title><a href="opened.html" target="_blank">Open</a>
+<button onclick="open(&quot;opened.html?popup&quot;, &quot;&quot;, &quot;popup&quot;)">Pop up</button>' \
+  > "$out/site/opener.html"
+printf '%s' '<!doctype html><title>Opened</title><p>Opened.</p>' > "$out/site/opened.html"
+opened=$(call open_tab "{\"url\":\"localhost:$port/opener.html\"}")
+opener=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+user_today=$(today)
+for target in 'link "Open"' 'button "Pop up"'; do
+  ref=$(printf '%s\n' "$opened" | sed -n "s/.*- $target \[\(e[0-9]*\)\].*/\1/p" | head -1)
+  behind=$(grep -c "^browser: tab [0-9]* opened by $opener in the background\$" "$log" || true)
+  clicked=$(call click "{\"tab\":$opener,\"ref\":\"$ref\"}")
+  await_more "^browser: tab [0-9]* opened by $opener in the background\$" "$behind" ||
+    fail "the agent's $target didn't open a tab behind, from its tab"
+  new_tab=$(sed -n "s/^browser: tab \([0-9]*\) opened by $opener in the background\$/\1/p" "$log" | tail -1)
+  case "$clicked" in
+    "Clicked "*". It opened tab $new_tab in your Space."*) ;;
+    *) fail "the agent's click on its $target answered: $clicked" ;;
+  esac
+  call list_tabs '{}' | grep -q "^. $new_tab  " || fail "the tab its $target opened isn't in its Space"
+  grep -q "^browser: selected $new_tab\( in .*\)\{0,1\}\$" "$log" &&
+    fail "the tab the agent's $target opened was shown"
+  [ "$(today)" = "$user_today" ] || fail "the agent's $target changed the user's Today: $(today)"
+  closed=$(call close_tab "{\"tab\":$new_tab}")
+  case "$closed" in "Closed tab $new_tab."*) ;; *) fail "closing the opened tab answered: $closed" ;; esac
+done
+closed=$(call close_tab "{\"tab\":$opener}")
+case "$closed" in "Closed tab $opener."*) ;; *) fail "closing the opener answered: $closed" ;; esac
 
 send click $page_point
 driven=$active
@@ -775,9 +808,9 @@ forget_login
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, is refused a tab the user took over until they hand it back and Keep answers its ask, its bar's Stop naming ⌘. in its tooltip, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow and again once that's revoked, and off takes the socket away"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, is refused a tab the user took over until they hand it back and Keep answers its ask, its bar's Stop naming ⌘. in its tooltip, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow and again once that's revoked, and off takes the socket away"
 else
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases). skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and the tabs its page opens are kept in its Space, behind. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi
 if [ -n "$msix" ]; then
   echo "ok: a Store copy's bridge, run by the alias its MSIX declares in the user's WindowsApps folder, carries a client's hello to the browser and its answer back."

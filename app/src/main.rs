@@ -7014,6 +7014,9 @@ unsafe extern "C" fn tab_opened(
 ) {
     let side = if foreground { "foreground" } else { "background" };
     log!("browser: tab {tab} opened by {opener} in the {side}");
+    if opener != 0 {
+        agents_core::update(move |agents, _| agents.tab_opened(tab, opener));
+    }
     let little = WINDOWS.with_borrow(|windows| {
         windows.iter().find(|each| each.id == window).and_then(|each| each.little)
     });
