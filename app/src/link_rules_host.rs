@@ -91,7 +91,9 @@ pub struct CoreLinkRules;
 
 impl Host for CoreLinkRules {
     fn spaces(&self) -> Vec<(u64, SharedString)> {
-        (users_spaces().into_iter()).map(|space| (space, name(bc::bc_space_name, space))).collect()
+        (users_spaces().into_iter())
+            .map(|space| (space, name(bc::bc_space_name, space)))
+            .collect()
     }
 
     fn rules(&self) -> Rules {
@@ -107,11 +109,20 @@ impl Host for CoreLinkRules {
         &self,
         items: Vec<MenuEntry>,
         at: Point<Pixels>,
+        light: bool,
         window: &Window,
         picked: Box<dyn FnOnce(Option<usize>, &mut App)>,
         cx: &mut App,
     ) {
         let picked = browser::menu::picked(picked);
-        crate::show_menu(ns_view(window), items, at, false, Look::dark(), picked, cx);
+        crate::show_menu(
+            ns_view(window),
+            items,
+            at,
+            false,
+            Look::plain(light),
+            picked,
+            cx,
+        );
     }
 }

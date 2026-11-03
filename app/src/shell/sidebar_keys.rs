@@ -8,7 +8,7 @@
 //! in the page, a press anywhere, a field taking the keyboard or the sidebar going away ends it.
 //! It moves only the user's view, so agents get no path, as with Reveal Tab in Sidebar.
 
-use std::{cell::Cell, rc::Rc};
+use std::{cell::Cell, rc::Rc, time::Duration};
 
 use gpui::{
     App, Bounds, Context, KeyBinding, Pixels, Window, actions, canvas, div, point, prelude::*, px,
@@ -21,7 +21,14 @@ use crate::tokens::shell::{KEYED, KEYED_RING};
 /// the shortcuts on the same keys, escape's Stop among them.
 pub(super) const CONTEXT: &str = "SidebarKeys";
 
-actions!(sidebar_keys, [KeyUp, KeyDown, KeyShow, KeyLeave, KeyOpen, KeyOut, KeyMenu]);
+/// How long the ring stays on the tab Close and Keep Pinned shows. Interim: Arc 1.170's was still
+/// there 2.5 s after it was drawn, in the one recording of it, which ended there.
+const ATTENTION: Duration = Duration::from_millis(2500);
+
+actions!(
+    sidebar_keys,
+    [KeyUp, KeyDown, KeyShow, KeyLeave, KeyOpen, KeyOut, KeyMenu]
+);
 
 pub(super) fn bind(cx: &mut App) {
     cx.bind_keys([
@@ -85,7 +92,9 @@ impl Shell {
     fn key_rows(&self) -> Vec<u64> {
         let (pinned, today) = self.rows();
         let space = self.shown_space();
-        let pinned = pinned.into_iter().filter(|&row| !space.is_some_and(|space| space.shut(row)));
+        let pinned = pinned
+            .into_iter()
+            .filter(|&row| !space.is_some_and(|space| space.shut(row)));
         [self.favorites.clone(), pinned.collect(), today].concat()
     }
 
@@ -230,11 +239,14 @@ impl Shell {
     /// The ring over `tab`'s row or tile, with corners of `radius`, if the keys are on it. It logs
     /// where it's drawn as that changes.
     pub(super) fn keyed_ring(&self, tab: u64, radius: f32) -> Option<impl IntoElement + use<>> {
-        if self.keyed != Some(tab) {
+        if self.ringed() != Some(tab) {
             return None;
         }
         let drawn = self.keyed_drawn.clone();
-        let frame = canvas(move |bounds, _, _| log_ring(&drawn, tab, bounds), |_, _, _, _| {});
+        let frame = canvas(
+            move |bounds, _, _| log_ring(&drawn, tab, bounds),
+            |_, _, _, _| {},
+        );
         Some(
             div()
                 .absolute()
@@ -248,9 +260,36 @@ impl Shell {
 
     /// Whether a ring drawn last frame isn't any more, which the log says.
     pub(super) fn step_keyed_drawn(&self) {
-        if self.keyed.is_none() && self.keyed_drawn.take().is_some() {
+        if self.ringed().is_none() && self.keyed_drawn.take().is_some() {
             log!("browser: sidebar ring hidden");
         }
+    }
+
+    /// The row with the ring: the keys', else the one Close and Keep Pinned showed, while it's
+    /// still the tab shown.
+    fn ringed(&self) -> Option<u64> {
+        let shown = self.tab_asked();
+        self.keyed.or_else(|| {
+            self.attention
+                .as_ref()
+                .map(|&(tab, _)| tab)
+                .filter(|&tab| tab == shown)
+        })
+    }
+
+    /// Rings `tab`'s row for a moment, as Arc 1.170 does on the tab Close and Keep Pinned shows in
+    /// the unloaded one's place, so the eye finds it. Its ring is its keyboard ring, so ours is too.
+    pub(super) fn ring_for_attention(&mut self, tab: u64, cx: &mut Context<Self>) {
+        let off = cx.spawn(async move |shell, cx| {
+            cx.background_executor().timer(ATTENTION).await;
+            shell
+                .update(cx, |shell, cx| {
+                    shell.attention = None;
+                    cx.notify();
+                })
+                .ok();
+        });
+        self.attention = Some((tab, off));
     }
 }
 
@@ -269,12 +308,12 @@ fn log_ring(drawn: &Rc<Cell<Option<(u64, Bounds<Pixels>)>>>, tab: u64, bounds: B
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, rc::Rc};
+    use std::{collections::HashMap, rc::Rc, time::Duration};
 
     use gpui::{Entity, TestAppContext, VisualTestContext};
 
     use crate::shell::{
-        Folders, Shell,
+        Folders, Page, Shell,
         commands::{Command, bind_keys},
         recorder::Recorder,
     };
@@ -288,7 +327,14 @@ mod tests {
             let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
             shell.set_spaces(vec![space], cx);
             shell.set_space(1, cx);
-            shell.set_tabs(1, vec![10, 11], vec![20, 21], Vec::new(), Folders::default(), cx);
+            shell.set_tabs(
+                1,
+                vec![10, 11],
+                vec![20, 21],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
             shell.set_selected(20, cx);
         });
         cx.update(|window, cx| window.focus(&shell.read(cx).focus_handle.clone(), cx));
@@ -312,7 +358,11 @@ mod tests {
         assert_eq!(ringed(&shell, cx), (Some(20), Some(20)));
         assert!(host.take().contains(&"focus ui".to_owned()));
         cx.simulate_keystrokes("down down");
-        assert_eq!(ringed(&shell, cx), (Some(21), Some(21)), "the ring went past the last row");
+        assert_eq!(
+            ringed(&shell, cx),
+            (Some(21), Some(21)),
+            "the ring went past the last row"
+        );
         cx.simulate_keystrokes("up up up up");
         assert_eq!(ringed(&shell, cx), (Some(10), Some(10)));
         cx.simulate_keystrokes("enter");
@@ -324,6 +374,53 @@ mod tests {
         // The root has the keyboard again, so the arrows are nobody's.
         cx.simulate_keystrokes("down");
         assert_eq!(ringed(&shell, cx), (None, None));
+    }
+
+    /// Close and Keep Pinned on the tab shown shows the tab shown before it that's still open, a
+    /// pinned one with its page ahead of the top Today tab the core would pick, and rings its row
+    /// until the moment is over or another tab shows. A pinned tab without its page is passed over,
+    /// so closing one loads no other.
+    #[gpui::test]
+    fn close_and_keep_pinned_shows_the_tab_before_and_rings_it(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx);
+        let show = |cx: &mut VisualTestContext, tab| {
+            shell.update(cx, |shell, cx| shell.set_selected(tab, cx));
+            cx.run_until_parked();
+        };
+        let close = |cx: &mut VisualTestContext| {
+            host.take();
+            shell.update(cx, |shell, cx| shell.run(Command::CloseTab, "ui", cx));
+            let calls = host.take();
+            let asked = calls
+                .iter()
+                .filter(|call| call.starts_with("select") || call.starts_with("close"));
+            asked.cloned().collect::<Vec<_>>()
+        };
+        show(cx, 11);
+        show(cx, 10);
+        assert_eq!(close(cx), ["select 11", "close 10"]);
+        show(cx, 11);
+        assert_eq!(ringed(&shell, cx), (None, Some(11)));
+        cx.executor().advance_clock(Duration::from_millis(2400));
+        cx.run_until_parked();
+        assert_eq!(ringed(&shell, cx), (None, Some(11)));
+        cx.executor().advance_clock(Duration::from_millis(100));
+        cx.run_until_parked();
+        assert_eq!(ringed(&shell, cx), (None, None), "the moment is over");
+
+        // The core let go of 10's page.
+        shell.update(cx, |shell, cx| {
+            let page = Page {
+                unloaded: true,
+                ..shell.page(10)
+            };
+            shell.set_page(10, page, cx);
+        });
+        assert_eq!(close(cx), ["select 20", "close 11"]);
+        show(cx, 20);
+        assert_eq!(ringed(&shell, cx), (None, Some(20)));
+        show(cx, 21);
+        assert_eq!(ringed(&shell, cx), (None, None), "another tab shows");
     }
 
     /// F6, Chrome's key for moving the keyboard out of the page, is Focus Sidebar's at first.
@@ -340,20 +437,30 @@ mod tests {
     #[gpui::test]
     fn escape_leaves_and_collapsed_pinned_rows_are_skipped(cx: &mut TestAppContext) {
         let (shell, cx, host) = window(cx);
-        let shut = Folders { pinned_shut: true, ..Folders::default() };
+        let shut = Folders {
+            pinned_shut: true,
+            ..Folders::default()
+        };
         shell.update(cx, |shell, cx| {
             shell.set_tabs(1, vec![10, 11], vec![20, 21], Vec::new(), shut, cx);
             shell.run(Command::FocusSidebar, "ui", cx);
         });
         cx.run_until_parked();
         cx.simulate_keystrokes("up");
-        assert_eq!(ringed(&shell, cx).0, Some(20), "the ring went to a collapsed row");
+        assert_eq!(
+            ringed(&shell, cx).0,
+            Some(20),
+            "the ring went to a collapsed row"
+        );
         host.take();
         cx.simulate_keystrokes("escape");
         cx.run_until_parked();
         let calls = host.take();
         assert!(calls.contains(&"focus page".to_owned()), "{calls:?}");
-        assert!(!calls.iter().any(|call| call.starts_with("select")), "{calls:?}");
+        assert!(
+            !calls.iter().any(|call| call.starts_with("select")),
+            "{calls:?}"
+        );
         assert_eq!(ringed(&shell, cx), (None, None));
     }
 
@@ -369,7 +476,14 @@ mod tests {
         };
         let set = |shell: &Entity<Shell>, open: bool, cx: &mut VisualTestContext| {
             shell.update(cx, |shell, cx| {
-                shell.set_tabs(1, vec![10, 5, 12, 11], vec![20, 21], Vec::new(), folders(open), cx);
+                shell.set_tabs(
+                    1,
+                    vec![10, 5, 12, 11],
+                    vec![20, 21],
+                    Vec::new(),
+                    folders(open),
+                    cx,
+                );
             });
             cx.run_until_parked();
         };
@@ -377,19 +491,30 @@ mod tests {
         shell.update(cx, |shell, cx| shell.run(Command::FocusSidebar, "ui", cx));
         cx.run_until_parked();
         cx.simulate_keystrokes("up");
-        assert_eq!(ringed(&shell, cx).0, Some(11), "the ring went into a closed folder");
+        assert_eq!(
+            ringed(&shell, cx).0,
+            Some(11),
+            "the ring went into a closed folder"
+        );
         cx.simulate_keystrokes("up");
         assert_eq!(ringed(&shell, cx), (Some(5), Some(5)));
         host.take();
         cx.simulate_keystrokes("left");
-        assert!(host.take().is_empty(), "left asked to close a closed folder");
+        assert!(
+            host.take().is_empty(),
+            "left asked to close a closed folder"
+        );
         cx.simulate_keystrokes("right");
         assert_eq!(host.take(), ["folder open 5 true"]);
         set(&shell, true, cx);
         cx.simulate_keystrokes("down");
         assert_eq!(ringed(&shell, cx).0, Some(12));
         cx.simulate_keystrokes("left");
-        assert_eq!(ringed(&shell, cx).0, Some(5), "left didn't go up to the folder");
+        assert_eq!(
+            ringed(&shell, cx).0,
+            Some(5),
+            "left didn't go up to the folder"
+        );
         assert!(host.take().is_empty());
         cx.simulate_keystrokes("left");
         assert_eq!(host.take(), ["folder open 5 false"]);
@@ -397,7 +522,11 @@ mod tests {
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         assert_eq!(host.take(), ["folder open 5 true"]);
-        assert_eq!(ringed(&shell, cx), (Some(5), Some(5)), "return on a folder left the ring");
+        assert_eq!(
+            ringed(&shell, cx),
+            (Some(5), Some(5)),
+            "return on a folder left the ring"
+        );
     }
 
     /// Close Tab closes the ringed row, not the tab shown, and the ring goes to the row after it;
@@ -413,7 +542,14 @@ mod tests {
         assert_eq!(host.take(), ["close 20"]);
         assert_eq!(ringed(&shell, cx).0, Some(21));
         shell.update(cx, |shell, cx| {
-            shell.set_tabs(1, vec![10, 11], vec![21], Vec::new(), Folders::default(), cx);
+            shell.set_tabs(
+                1,
+                vec![10, 11],
+                vec![21],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
         });
         cx.run_until_parked();
         cx.simulate_keystrokes("cmd-w");
@@ -421,7 +557,11 @@ mod tests {
         assert_eq!(ringed(&shell, cx).0, Some(11));
         cx.simulate_keystrokes("cmd-w");
         assert_eq!(host.take(), ["close 11"]);
-        assert_eq!(ringed(&shell, cx).0, Some(11), "the ring left a pinned row that stays");
+        assert_eq!(
+            ringed(&shell, cx).0,
+            Some(11),
+            "the ring left a pinned row that stays"
+        );
         cx.simulate_keystrokes("escape");
         shell.update(cx, |shell, cx| shell.set_selected(10, cx));
         cx.run_until_parked();
@@ -437,10 +577,20 @@ mod tests {
         shell.update(cx, |shell, cx| shell.run(Command::FocusSidebar, "ui", cx));
         cx.run_until_parked();
         cx.simulate_keystrokes("down shift-f10");
-        let ring = shell.read_with(cx, |shell, _| shell.keyed_drawn.get()).expect("a ring").1;
-        assert_eq!(host.menu_at.get(), Some(gpui::point(ring.left(), ring.bottom())));
+        let ring = shell
+            .read_with(cx, |shell, _| shell.keyed_drawn.get())
+            .expect("a ring")
+            .1;
+        assert_eq!(
+            host.menu_at.get(),
+            Some(gpui::point(ring.left(), ring.bottom()))
+        );
         let menu = host.menus.borrow().last().cloned().expect("a menu");
-        assert!(menu.iter().any(|(title, _)| title.as_ref() == "Archive Tab"), "{menu:?}");
+        assert!(
+            menu.iter()
+                .any(|(title, _)| title.as_ref() == "Archive Tab"),
+            "{menu:?}"
+        );
         host.take();
         cx.update(|_, cx| host.choose("Archive Tab", cx));
         cx.run_until_parked();
@@ -453,7 +603,10 @@ mod tests {
         let (shell, cx, _) = window(cx);
         shell.update(cx, |shell, cx| shell.run(Command::FocusSidebar, "ui", cx));
         cx.run_until_parked();
-        cx.simulate_click(gpui::point(gpui::px(600.), gpui::px(300.)), gpui::Modifiers::none());
+        cx.simulate_click(
+            gpui::point(gpui::px(600.), gpui::px(300.)),
+            gpui::Modifiers::none(),
+        );
         assert_eq!(ringed(&shell, cx), (None, None));
 
         shell.update(cx, |shell, cx| shell.run(Command::FocusSidebar, "ui", cx));
