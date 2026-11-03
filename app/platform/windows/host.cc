@@ -2180,10 +2180,14 @@ LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
       params->rgrc[0].top = top + (IsZoomed(hwnd) ? TopEdge(hwnd) : 0);
       return result;
     }
-    // As the window's activation changes, Windows paints the caption it would have, icon and
-    // title, where the UI now is, and nothing paints over it (#1262). It can't paint while the
-    // window isn't visible, so it isn't for the moment, as Chromium does for a frame it draws.
-    case WM_NCACTIVATE: {
+    // Answering these, Windows paints the caption the window would have, icon and title, where the
+    // UI now is, and nothing paints over it (#1262): as the activation changes, the frame
+    // repaints, or the title or icon changes. It can't paint while the window isn't visible, so it
+    // isn't for the moment, as Chromium does for a frame it draws itself.
+    case WM_NCACTIVATE:
+    case WM_NCPAINT:
+    case WM_SETTEXT:
+    case WM_SETICON: {
       const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
       if (!(style & WS_VISIBLE) || !(style & WS_CAPTION)) {
         break;
