@@ -1002,6 +1002,15 @@ bc_id bc_tab_profile(bc_id id) {
   return profile ? browser_core::ProfileId(browser_core::DirOf(profile)) : 0;
 }
 
+double bc_tab_last_seen(bc_id id) {
+  const browser_core::Tab* tab = browser_core::Tab::Get(id);
+  if (!tab) {
+    return 0;
+  }
+  const base::Time seen = browser_core::Window::Showing(id) ? base::Time::Now() : tab->last_seen();
+  return seen.InMillisecondsFSinceUnixEpoch();
+}
+
 size_t bc_favorites(bc_id* tabs, size_t capacity) {
   const std::vector<bc_id> favorites = browser_core::Favorites::All();
   std::copy_n(favorites.begin(), std::min(capacity, favorites.size()), tabs);

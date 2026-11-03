@@ -1599,6 +1599,10 @@ BC_EXPORT void bc_set_favorites_scope(int scope);
 // The profile the tab's page is in, or 0.
 BC_EXPORT bc_id bc_tab_profile(bc_id tab);
 
+// When a window last showed the tab, in milliseconds since the Unix epoch: now while one shows it,
+// else when one stopped showing it or it opened, the time auto-archive counts from. 0 for no tab.
+BC_EXPORT double bc_tab_last_seen(bc_id tab);
+
 // Copies up to |capacity| of the tabs shown with |tab| into |tabs|, left to right or top to
 // bottom, |tab| among them, and returns how many there are: those of its split view, else |tab|
 // alone. 0 for a tab in no Space. A split's tabs sit together in their list, in this order, as one

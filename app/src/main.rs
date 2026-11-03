@@ -2656,6 +2656,10 @@ impl Browser for Engine {
         starts
     }
 
+    fn last_seen(&self, tab: u64) -> f64 {
+        unsafe { bc::bc_tab_last_seen(tab) }
+    }
+
     fn go_back(&self, tab: u64, _: &mut App) {
         unsafe { bc::bc_tab_go_back(tab) };
     }
