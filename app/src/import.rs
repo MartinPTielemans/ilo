@@ -492,7 +492,7 @@ impl ImportView {
         ImportView {
             host,
             skip,
-            look: Look::settings(),
+            look: Look::settings(true),
             sources,
             step: Step::List,
             switched: None,
@@ -1220,7 +1220,7 @@ impl ImportView {
                     let pinned = format!("Pinned in {from}, and here once it's added");
                     detailed(look, extension.name.clone().into(), pinned.into(), add)
                 }
-                false => row(None, extension.name.clone(), add),
+                false => row(extension.name.clone(), add),
             }
         });
         let rows: Vec<gpui::Div> = rows.collect();
@@ -1423,7 +1423,7 @@ impl ImportView {
                 .id(("import-kind", kind as usize))
                 .on_click(cx.listener(move |view, _, _, cx| view.toggle(kind, cx)))
                 .child(switch(look, on, slid, rgb(NO_THEME_ACCENT)));
-            row(None, kind.label(), toggle.into_any_element())
+            row(kind.label(), toggle.into_any_element())
         });
         // Drawn before Choose folders, which takes the context too.
         let rows: Vec<gpui::Div> = rows.collect();

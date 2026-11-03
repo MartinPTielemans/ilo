@@ -1,7 +1,7 @@
-//! The Settings window: Arc's, a standard window of its own titled with the tab it shows, with the
-//! tabs across its toolbar and each tab's settings in boxes of rows under them (docs/ux-spec.md ›
-//! Settings). It opens on ⌘, and hides when closed, keeping its place and its tab until the
-//! browser quits.
+//! The Settings window (docs/ux-spec.md › Settings): a window of the browser's own, its sections
+//! down a column on the window's ground and the one shown on a card, as a page is, its settings in
+//! groups of rows. It opens on ⌘, and hides when closed, keeping its place and its section until
+//! the browser quits.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -28,84 +28,40 @@ use browser::text_input::{self, TextInput};
 use browser::updates::{self, NightlyRow, Track, VersionRow};
 use browser::widevine::{self, Widevine, WidevineRow};
 use gpui::{
-    AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, FontWeight,
-    Global, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, PathPromptOptions, Rgba, SharedString, Subscription,
-    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowKind, WindowOptions, actions,
-    canvas, div, point, prelude::*, px, rgb, rgba, size, svg,
+    AnyElement, App, Bounds, BoxShadow, ClipboardItem, Context, Entity, FocusHandle, Focusable,
+    FontWeight, Global, Hsla, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent,
+    PathPromptOptions, Rgba, ScrollHandle, SharedString, Subscription, TitlebarOptions, Window,
+    WindowBounds, WindowHandle, WindowKind, WindowOptions, actions, canvas, div, linear_color_stop,
+    linear_gradient, point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{bc, ns_view, platform, show_menu};
 use browser::menu::{self, Look};
-use browser::palette::{Palette, STATE_HOVERED, STATE_PRESSED, state_alpha};
+use browser::palette::{INK, OVERLAY_DARK, PAPER};
+use browser::settings_column::{self, Section};
 use browser::settings_rows::{
-    Look as RowLook, SLIDE, button, detailed_row, group, popup, row, switch, tile,
+    Look as RowLook, SLIDE, button, detailed_row, frame, glyph_plate, group, group_lined, popup,
+    row, switch, text,
 };
+use browser::tokens::palette::{DIALOG_LIGHT, LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN};
+use browser::tokens::radius;
+use browser::tokens::settings::{
+    BUTTONS_TOP, CARD_RIM, CARD_RING, CARD_SHADOW, CHIP, CHIP_FIXED, CHIP_FIXED_TEXT, CHIP_GAP,
+    CHIP_HEIGHT, CHIP_NONE_TEXT, CHIP_PADDING, CHIP_RADIUS, CHIP_TEXT, CHIP_WIDTH, COLUMN,
+    CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS, END_GAP, FADE,
+    FAVORITES_POPUP_WIDTH, FIRST_GROUP, GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM,
+    HEADING_TOP, HEIGHT, HELD_TITLE, LEDE, LEDE_LINE, LEDE_TOP, MIN_HEIGHT, MIN_WIDTH, NAME,
+    PAGE_BOTTOM, PAGE_TOP, PAGE_WIDTH, PAGE_X, POPUP_WIDTH, RESTORE_RADIUS, ROW_X, SECTION_TEXT,
+    SHORT_PADDING, SHORT_ROW, TEXT_X, TITLE, WIDTH,
+};
+use browser::tokens::shell::{
+    CARD_INSET, CARD_RADIUS, WINDOW_BUTTON_GLYPH, WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y,
+    WINDOWS_BUTTON_GLYPH, WINDOWS_BUTTON_PLATE, WINDOWS_CLOSE_HOVERED,
+};
+use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
+use browser::tokens::text;
 
 actions!(settings, [CloseSettings]);
-
-use browser::tokens::settings::WIDTH;
-use browser::tokens::settings::CONTROL;
-use browser::tokens::settings::CONTROL_RADIUS;
-use browser::tokens::settings::HEIGHT;
-use browser::tokens::settings::TITLE_BAR;
-use browser::tokens::shell::WINDOW_BUTTON_GLYPH;
-use browser::tokens::shell::WINDOW_BUTTON_SIZE;
-use browser::tokens::shell::WINDOWS_BUTTON_GLYPH;
-use browser::tokens::shell::WINDOWS_BUTTON_PLATE;
-use browser::tokens::shell::WINDOWS_CLOSE_HOVERED;
-use browser::tokens::settings::TOOLBAR;
-use browser::tokens::settings::TAB;
-use browser::tokens::settings::TAB_PADDING;
-use browser::tokens::settings::PLATE_TOP;
-use browser::tokens::settings::PLATE;
-use browser::tokens::settings::ICON;
-use browser::tokens::settings::ICON_TOP;
-use browser::tokens::settings::LABEL_TOP;
-use browser::tokens::settings::SIDE;
-use browser::tokens::settings::FIRST;
-use browser::tokens::settings::BOX_GAP;
-use browser::tokens::settings::PADDING;
-use browser::tokens::settings::RADIUS;
-use browser::tokens::settings::CONTROL_HEIGHT;
-use browser::tokens::settings::CONTROL_PADDING;
-use browser::tokens::settings::POPUP_WIDTH;
-use browser::tokens::settings::FAVORITES_POPUP_WIDTH;
-use browser::tokens::settings::POPUP_END;
-use browser::tokens::settings::BUTTONS_TOP;
-use browser::tokens::settings::HEADER_GAP;
-use browser::tokens::settings::SECTION_GAP;
-use browser::tokens::settings::CHIP_HEIGHT;
-use browser::tokens::settings::CHIP_PADDING;
-use browser::tokens::settings::CHIP_WIDTH;
-use browser::tokens::settings::CHIP_GAP;
-use browser::tokens::settings::PROFILE_ROW;
-use browser::tokens::settings::USERNAME_SIZE;
-
-use browser::tokens::settings::BAR;
-use browser::tokens::settings::BAR_LINE;
-use browser::tokens::settings::BACKGROUND;
-use browser::tokens::settings::PLATE_FILL;
-use browser::tokens::settings::PLATE_EDGE;
-use browser::tokens::settings::TITLE;
-use browser::tokens::settings::TAB_TEXT;
-use browser::tokens::settings::TEXT;
-use browser::tokens::settings::HAPTICS_TILE;
-use browser::tokens::settings::LINK_PREVIEWS_TILE;
-use browser::tokens::settings::MINI_PLAYER_TILE;
-use browser::tokens::settings::OPTION_REVEAL_TILE;
-use browser::tokens::settings::RESTORE_WINDOWS_TILE;
-use browser::tokens::settings::PROFILE_TILE;
-use browser::tokens::settings::PASSWORD_TILE;
-use browser::tokens::settings::AGENTS_TILE;
-use browser::tokens::settings::CLIENT_TILE;
-use browser::tokens::settings::EXPORT_TILE;
-use browser::tokens::settings::DETAIL;
-use browser::tokens::settings::CHIP;
-/// The chip's plate, as Paper's alpha, for the ladder to go over.
-const CHIP_ALPHA: f32 = (CHIP & 0xff) as f32 / 255.;
-use browser::tokens::settings::CHIP_RADIUS;
-use browser::tokens::settings::RESTORE_RADIUS;
-use browser::tokens::text;
 
 /// What Arc offers for how long a Today tab waits unseen before it's archived, in seconds.
 const ARCHIVE_AFTER: [(&str, f64); 4] = [
@@ -133,74 +89,16 @@ pub(crate) fn archive_after_words() -> String {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Tab {
-    General,
-    Links,
-    Sync,
-    Profiles,
-    Passwords,
-    Import,
-    Shortcuts,
-    Privacy,
-    Agents,
-    Advanced,
-    About,
-}
-
-impl Tab {
-    const ALL: [Tab; 11] = [
-        Tab::General,
-        Tab::Links,
-        Tab::Sync,
-        Tab::Profiles,
-        Tab::Passwords,
-        Tab::Import,
-        Tab::Shortcuts,
-        Tab::Privacy,
-        Tab::Agents,
-        Tab::Advanced,
-        Tab::About,
-    ];
-
-    /// The tabs this build has: Privacy only holds crash reports, which a build without a collector
-    /// never sends.
-    fn shown() -> impl Iterator<Item = Tab> {
-        let collector = !crash_reports_collector().is_empty();
-        Tab::ALL.into_iter().filter(move |&tab| tab != Tab::Privacy || collector)
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Tab::General => "General",
-            Tab::Links => "Links",
-            Tab::Sync => "Sync",
-            Tab::Profiles => "Profiles",
-            Tab::Passwords => "Passwords",
-            Tab::Import => "Import",
-            Tab::Shortcuts => "Shortcuts",
-            Tab::Privacy => "Privacy",
-            Tab::Agents => "Agents",
-            Tab::Advanced => "Advanced",
-            Tab::About => "About",
-        }
-    }
-
-    fn icon(self) -> &'static str {
-        match self {
-            Tab::General => "icons/settings.svg",
-            Tab::Links => "icons/link.svg",
-            Tab::Sync => "icons/cloud.svg",
-            Tab::Profiles => "icons/user.svg",
-            Tab::Passwords => "icons/key-round.svg",
-            Tab::Import => "icons/arrow-down-to-line.svg",
-            Tab::Shortcuts => "icons/keyboard.svg",
-            Tab::Privacy => "icons/lock.svg",
-            Tab::Agents => "icons/sparkles.svg",
-            Tab::Advanced => "icons/sliders-horizontal.svg",
-            Tab::About => "icons/info.svg",
-        }
-    }
+/// One of a page's parts, which the page spaces by what comes before it, as a heading sits 20
+/// under a group and 7 over its own.
+enum Block {
+    /// A heading over the group after it.
+    Heading(SharedString),
+    Group(gpui::Div),
+    /// Buttons under the group before, such as New Profile.
+    Under(gpui::Div),
+    /// A view that spaces its own groups, such as the import's.
+    View(AnyElement),
 }
 
 /// The keys a row of the Shortcuts tab shows: a command's shortcut, or keys the app binds itself.
@@ -394,25 +292,31 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
 /// The pop-up buttons.
 #[derive(Clone, Copy, PartialEq)]
 enum Popup {
-    ArchiveAfter,
     LittleArchiveAfter,
     Favorites,
     PasswordsProfile,
-    /// A profile's, in the Profiles tab.
+    /// A profile's, in General.
     SearchEngine(u64),
-    ProfileArchiveAfter(u64),
-    /// A profile's New Documents.
+    /// A profile's, in Tabs & Sidebar.
+    ArchiveAfter(u64),
+    /// A profile's New Note service, in Features.
     Notes(u64),
-    /// Run tasks on, in the Agents tab.
+    /// Run tasks on, in Agents.
     TaskAgent,
     /// The model a CLI runs tasks with.
     TaskModel(Cli),
 }
 
 pub struct Settings {
-    tab: Tab,
+    section: Section,
     focus: FocusHandle,
-    /// It was asked to show, or changed tab, and logs the tab it draws next.
+    /// Whether the window is dark, as View › Appearance or the system has it, which its rows,
+    /// pop-up menus and the views it shows follow.
+    dark: bool,
+    look: RowLook,
+    /// The card's scroll, which a section starts at the top of.
+    scroll: ScrollHandle,
+    /// It was asked to show, or changed section, and logs the section it draws next.
     shown: bool,
     /// Which switch last changed, and when, for its knob's slide.
     switched: Option<(&'static str, Instant)>,
@@ -422,33 +326,33 @@ pub struct Settings {
     renaming: Option<Renaming>,
     /// Whether the field takes the keyboard once its row is drawn.
     focus_renaming: bool,
-    /// The command whose next key the Shortcuts tab takes.
+    /// The command whose next key Shortcuts takes.
     recording: Option<Command>,
     /// Why the key pressed for this command wasn't given to it.
     refused: Option<(Command, SharedString)>,
-    /// The Shortcuts tab's search, which narrows its rows to what it finds.
+    /// Shortcuts' search, which narrows its rows to what it finds.
     search: Entity<TextInput>,
     default_browser: Entity<DefaultBrowser>,
     account: Entity<Account>,
-    /// The sites with ad blocking off, as General last logged them for check.sh.
+    /// The sites with ad blocking off, as Privacy last logged them for check.sh.
     off_sites_logged: Option<String>,
     /// Where each control check.sh clicks has been logged, so it logs only where it moves to.
     drawn_logged: Rc<RefCell<Vec<String>>>,
     /// Where each pop-up button's text starts, as last drawn, for its menu to put the chosen
     /// item's over.
     popup_texts: Rc<RefCell<Vec<(Popup, gpui::Point<gpui::Pixels>)>>>,
-    /// The profile whose logins the Passwords tab lists, once the user has picked one.
+    /// The profile whose logins Passwords lists, once the user has picked one.
     passwords_profile: Option<u64>,
     /// Each profile's logins, as the core last told them.
     logins: HashMap<u64, Vec<Login>>,
     /// Each profile's saved addresses and cards, as the core last told them.
     autofill: HashMap<u64, Vec<Saved>>,
-    /// The profiles whose logins were asked for since the Passwords tab showed.
+    /// The profiles whose logins were asked for since Passwords showed.
     asked: HashSet<u64>,
-    /// Made when the tab first shows, so the other browsers' files are read only once the user
-    /// asks.
+    /// Made when Import & Export first shows, so the other browsers' files are read only once the
+    /// user asks.
     import: Option<Entity<ImportView>>,
-    /// The Links tab's view, made again each time the tab shows.
+    /// Links' view, made again each time it shows.
     links: Option<Entity<LinkRulesView>>,
     /// Where it asks before deleting a profile, over all of it, as the browser window's dialog
     /// can't go over it on Linux.
@@ -459,7 +363,7 @@ pub struct Settings {
     version: Entity<VersionRow>,
     /// About's second row, where the build carries a nightly feed: Get nightly builds.
     nightly: Entity<NightlyRow>,
-    /// Draws the Agents tab again as the agents change.
+    /// Draws Agents again as the agents change.
     _agents: Option<Subscription>,
 }
 
@@ -474,7 +378,7 @@ impl dialog::Host for InWindow {
     fn hide(&self) {}
 }
 
-/// The browser's account, as the Sync tab asks the core for it.
+/// The browser's account, as Sync asks the core for it.
 struct CoreAccount {
     /// Where it asks before signing out or showing the words on Linux, which has no alert:
     /// Settings' own dialog, or for a browser window's view, the browser's.
@@ -654,7 +558,7 @@ struct Renaming {
     _watches: Vec<Subscription>,
 }
 
-/// A profile as the Profiles tab lists it.
+/// A profile as Profiles lists it, and the rows a profile keeps name it.
 struct Profile {
     id: u64,
     name: SharedString,
@@ -663,11 +567,11 @@ struct Profile {
     deletable: bool,
     /// Why it has no Delete, for the line under its name.
     kept: Option<SharedString>,
-    /// Whether one of the user's Spaces is in it, for Clear Browsing Data's tab.
+    /// Whether one of the user's Spaces is in it, for Clear Browsing Data's tab to open in.
     users_space: bool,
 }
 
-/// An address or a card a profile keeps, as the Passwords tab lists it. A card's number stays in
+/// An address or a card a profile keeps, as Passwords lists it. A card's number stays in
 /// the core.
 #[derive(Clone)]
 pub struct Saved {
@@ -680,7 +584,7 @@ pub struct Saved {
     pub key: SharedString,
 }
 
-/// A site the user turned ad blocking off on, as General lists it.
+/// A site the user turned ad blocking off on, as Privacy lists it.
 struct OffSite {
     profile: u64,
     /// The profile's name, shown only when there are others.
@@ -789,39 +693,39 @@ struct SettingsWindow(WindowHandle<Settings>);
 
 impl Global for SettingsWindow {}
 
-/// Shows the Settings window on its Shortcuts tab.
+/// Shows the Settings window on Shortcuts.
 pub fn show_shortcuts(cx: &mut App) {
-    show_on(Tab::Shortcuts, cx);
+    show_on(Section::Shortcuts, cx);
 }
 
-/// Shows the Settings window on its Agents tab, with each agent's activity.
+/// Shows the Settings window on Agents, with each agent's activity.
 pub fn show_agents(cx: &mut App) {
-    show_on(Tab::Agents, cx);
+    show_on(Section::Agents, cx);
 }
 
-/// Shows the Settings window on its About tab.
+/// Shows the Settings window on About.
 pub fn show_about(cx: &mut App) {
-    show_on(Tab::About, cx);
+    show_on(Section::About, cx);
 }
 
-/// Shows the Settings window on its Import tab.
+/// Shows the Settings window on Import & Export.
 pub fn show_import(cx: &mut App) {
-    show_on(Tab::Import, cx);
+    show_on(Section::ImportExport, cx);
 }
 
-fn show_on(tab: Tab, cx: &mut App) {
+fn show_on(section: Section, cx: &mut App) {
     cx.defer(move |cx| {
         show_now(cx);
         if let Some(window) = cx.try_global::<SettingsWindow>().map(|settings| settings.0) {
             let show = |settings: &mut Settings, window: &mut Window, cx: &mut Context<Settings>| {
-                settings.show_tab(tab, window, cx)
+                settings.show_section(section, window, cx)
             };
             window.update(cx, show).ok();
         }
     });
 }
 
-/// Shows the Settings window on its Passwords tab, with `profile`'s logins, or those it showed.
+/// Shows the Settings window on Passwords, with `profile`'s logins, or those it showed.
 pub fn show_passwords(profile: Option<u64>, cx: &mut App) {
     cx.defer(move |cx| {
         show_now(cx);
@@ -829,14 +733,14 @@ pub fn show_passwords(profile: Option<u64>, cx: &mut App) {
             let show =
                 move |settings: &mut Settings, window: &mut Window, cx: &mut Context<Settings>| {
                     settings.passwords_profile = profile.or(settings.passwords_profile);
-                    settings.show_tab(Tab::Passwords, window, cx)
+                    settings.show_section(Section::Passwords, window, cx)
                 };
             window.update(cx, show).ok();
         }
     });
 }
 
-/// The profile's logins, which the Passwords tab asked the core for, as they are now.
+/// The profile's logins, which Passwords asked the core for, as they are now.
 pub fn logins_changed(profile: u64, logins: Vec<Login>, cx: &mut App) {
     // check.sh waits for this line. The app has no passwords to log, only sites and usernames.
     log!("browser: passwords {profile}: {}", passwords::describe(&logins));
@@ -849,7 +753,7 @@ pub fn logins_changed(profile: u64, logins: Vec<Login>, cx: &mut App) {
     }
 }
 
-/// The profile's saved addresses and cards, which the Passwords tab asked the core for.
+/// The profile's saved addresses and cards, which Passwords asked the core for.
 pub fn autofill_changed(profile: u64, saved: Vec<Saved>, cx: &mut App) {
     // check.sh waits for this line, which names nothing saved.
     let cards = saved.iter().filter(|each| each.card).count();
@@ -882,7 +786,7 @@ fn show_now(cx: &mut App) {
         .update(cx, |settings, window, cx| {
             window.focus(&settings.focus, cx);
             settings.shown = true;
-            if settings.tab == Tab::Agents {
+            if settings.section == Section::Agents {
                 look_for_clients(cx);
             }
             cx.notify();
@@ -896,7 +800,7 @@ fn show_now(cx: &mut App) {
     }
 }
 
-/// Looks again for the agent clients on this computer, as the Agents tab shows.
+/// Looks again for the agent clients on this computer, as Agents shows.
 fn look_for_clients(cx: &mut App) {
     if let Some(agents) = agents::global(cx) {
         agents.update(cx, |agents, cx| {
@@ -935,14 +839,14 @@ pub fn check_default_browser(cx: &mut App) {
 }
 
 thread_local! {
-    /// The window's title, the name of the tab it shows.
-    static SHOWN_TAB: Cell<&'static str> = const { Cell::new("") };
+    /// The window's title, the name of the section it shows.
+    static SHOWN_SECTION: Cell<&'static str> = const { Cell::new("") };
 }
 
 /// The window's title, logged as the Mac's host reads it off the window.
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn title() -> &'static str {
-    SHOWN_TAB.get()
+    SHOWN_SECTION.get()
 }
 
 fn open(cx: &mut App) {
@@ -959,11 +863,11 @@ fn open(cx: &mut App) {
             point(px(0.), px(0.)),
             size(px(WIDTH), px(HEIGHT)),
         ))),
-        // The UI draws the title and the toolbar under the window's buttons.
+        // The column runs under the window's buttons, which sit where the browser window's do.
         titlebar: Some(TitlebarOptions {
-            title: Some(Tab::General.name().into()),
+            title: Some(Section::General.name().into()),
             appears_transparent: true,
-            traffic_light_position: None,
+            traffic_light_position: Some(point(px(12.), px(16.))),
         }),
         // Nor a title bar of the window manager's on Linux, where the UI draws the close button.
         #[cfg(target_os = "linux")]
@@ -971,11 +875,12 @@ fn open(cx: &mut App) {
         kind: WindowKind::Normal,
         show: false,
         focus: false,
-        is_resizable: false,
+        is_resizable: true,
         is_minimizable: false,
+        window_min_size: Some(size(px(MIN_WIDTH), px(MIN_HEIGHT))),
         ..Default::default()
     };
-    SHOWN_TAB.set(Tab::General.name());
+    SHOWN_SECTION.set(Section::General.name());
     let window = cx.open_window(options, |window, cx| {
         cx.new(|cx| {
             // Closing it hides it, so it opens again where the user left it.
@@ -983,6 +888,18 @@ fn open(cx: &mut App) {
                 hide(cx);
                 false
             });
+            // The window follows View › Appearance, else the system, and the views it shows with
+            // it.
+            let dark = dark(window, cx);
+            let look = RowLook::settings(dark);
+            cx.observe_window_appearance(window, |settings: &mut Settings, window, cx| {
+                settings.follow_appearance(window, cx)
+            })
+            .detach();
+            cx.observe_global_in::<shell::AppAppearance>(window, |settings, window, cx| {
+                settings.follow_appearance(window, cx)
+            })
+            .detach();
             let default_browser = cx.new(|_| DefaultBrowser::new(Rc::new(System), Os::current()));
             cx.observe(&default_browser, |_, _, cx| cx.notify()).detach();
             #[cfg(target_os = "linux")]
@@ -1008,21 +925,28 @@ fn open(cx: &mut App) {
             let account = cx.new(|cx| {
                 let mut account = Account::new(Rc::new(host), cx);
                 account.set_state(synced, cx);
+                account.set_look(look, cx);
                 account
             });
             cx.observe(&account, |_, _, cx| cx.notify()).detach();
             let widevine = cx.new(|_| WidevineRow::new(Rc::new(Module)));
             cx.observe(&widevine, |_, _, cx| cx.notify()).detach();
-            let version = cx.new(|cx| VersionRow::new(version(cx), cx));
-            let nightly = cx.new(NightlyRow::new);
+            let version = cx.new(|cx| {
+                let mut row = VersionRow::new(version(cx), cx);
+                row.set_look(look, cx);
+                row
+            });
+            let nightly = cx.new(|cx| {
+                let mut row = NightlyRow::new(cx);
+                row.set_look(look, cx);
+                row
+            });
             // The row shows only where the updater can follow its choice, which it says at launch.
             updates::observe_view(cx, |_, cx| cx.notify()).detach();
             let agents = agents::global(cx);
             let agents = agents.map(|agents| cx.observe(&agents, |_, _, cx| cx.notify()));
             let search = cx.new(|cx| {
-                TextInput::new("Search", cx)
-                    .placeholder_color(rgb(DETAIL))
-                    .caret_color(rgb(TEXT))
+                TextInput::new("Search", cx).placeholder_color(look.detail).caret_color(look.ink)
             });
             let mut searched = String::new();
             cx.observe(&search, move |_, search, cx| {
@@ -1043,8 +967,11 @@ fn open(cx: &mut App) {
                 version,
                 nightly,
                 _agents: agents,
-                tab: Tab::General,
+                section: Section::General,
                 focus: cx.focus_handle(),
+                dark,
+                look,
+                scroll: ScrollHandle::new(),
                 shown: false,
                 switched: None,
                 choosing: None,
@@ -1089,21 +1016,32 @@ pub fn refresh(cx: &mut App) {
     }
 }
 
-/// The window's close button, for a window without a frame to draw it: where the browser window's
-/// is on Linux, and in the top right corner on Windows, where Windows puts close. Settings can't be
-/// minimized or zoomed, so it's alone. `at` logs where it's drawn.
-fn close_button(at: gpui::Canvas<()>) -> AnyElement {
+/// Whether Settings is dark: as View › Appearance chose, else as the system is.
+fn dark(window: &Window, cx: &App) -> bool {
+    match shell::app_appearance(cx) {
+        Appearance::Light => false,
+        Appearance::Dark => true,
+        Appearance::Automatic => matches!(
+            window.appearance(),
+            gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
+        ),
+    }
+}
+
+/// The window's close button, for a window without a frame to draw it: in the column's top left,
+/// where the browser window's is, on Linux and on Windows alike, as the browser window's buttons
+/// stay top left on Windows for now. Settings can't be minimized or zoomed, so it's alone. `at`
+/// logs where it's drawn.
+fn close_button(base: Rgba, at: gpui::Canvas<()>) -> AnyElement {
     if cfg!(target_os = "windows") {
-        return windows_close_button(at);
+        return windows_close_button(base, at);
     }
     let (x, colour) = shell::WINDOW_BUTTONS[0];
-    let button = div().id("close").absolute();
-    let button = match cfg!(target_os = "windows") {
-        true => button.right(px(x - WINDOW_BUTTON_SIZE / 2.)),
-        false => button.left(px(x - WINDOW_BUTTON_SIZE / 2.)),
-    };
-    button
-        .top(px((TITLE_BAR - WINDOW_BUTTON_SIZE) / 2.))
+    div()
+        .id("close")
+        .absolute()
+        .left(px(x - WINDOW_BUTTON_SIZE / 2.))
+        .top(px(WINDOW_BUTTON_Y - WINDOW_BUTTON_SIZE / 2.))
         .size(px(WINDOW_BUTTON_SIZE))
         .rounded_full()
         .bg(rgb(colour))
@@ -1122,20 +1060,20 @@ fn close_button(at: gpui::Canvas<()>) -> AnyElement {
         .into_any_element()
 }
 
-/// Windows' close, as the browser window's (shell.rs's `windows_buttons`): Settings' title's grey
-/// glyph, on Windows' red under the pointer, as far in from the corner as the Mac's is.
-fn windows_close_button(at: gpui::Canvas<()>) -> AnyElement {
+/// Windows' close, as the browser window's (shell.rs's `windows_buttons`): the column's grey
+/// glyph, on Windows' red under the pointer, centred where the Mac's close is.
+fn windows_close_button(base: Rgba, at: gpui::Canvas<()>) -> AnyElement {
     let (x, _) = shell::WINDOW_BUTTONS[0];
     div()
         .id("close")
         .absolute()
-        .right(px(x - WINDOWS_BUTTON_PLATE / 2.))
-        .top(px((TITLE_BAR - WINDOWS_BUTTON_PLATE) / 2.))
+        .left(px(x - WINDOWS_BUTTON_PLATE / 2.))
+        .top(px(WINDOW_BUTTON_Y - WINDOWS_BUTTON_PLATE / 2.))
         .size(px(WINDOWS_BUTTON_PLATE))
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(CONTROL_RADIUS))
+        .rounded(px(radius::CONTROL))
         .group("close")
         .hover(|style| style.bg(rgb(WINDOWS_CLOSE_HOVERED)))
         // A press here closes the window, and doesn't move it.
@@ -1145,7 +1083,7 @@ fn windows_close_button(at: gpui::Canvas<()>) -> AnyElement {
             svg()
                 .path("icons/window-windows-close.svg")
                 .size(px(WINDOWS_BUTTON_GLYPH))
-                .text_color(rgb(TITLE))
+                .text_color(base.opacity(SECTION_TEXT))
                 .group_hover("close", |style| style.text_color(gpui::white())),
         )
         .child(at)

@@ -6,6 +6,7 @@ use std::cell::{Cell, RefCell};
 use gpui::{Modifiers, TestAppContext, VisualTestContext, size};
 
 use super::*;
+use crate::tokens::settings::{PAGE_WIDTH, ROW_HEIGHT};
 
 const WORK: u64 = 1;
 const HOME: u64 = 2;
@@ -117,6 +118,7 @@ impl Host for Recorder {
         &self,
         items: Vec<MenuEntry>,
         at: Point<Pixels>,
+        _: bool,
         _: &Window,
         picked: Box<dyn FnOnce(Option<usize>, &mut App)>,
         cx: &mut App,
@@ -134,7 +136,7 @@ impl Host for Recorder {
     }
 }
 
-/// The tab alone in a window as wide as Settings' boxes, on a host with two Spaces and `rules`.
+/// The section alone in a window as wide as Settings' page, on a host with two Spaces and `rules`.
 fn tab(rules: Rules, cx: &mut TestAppContext) -> (Rc<Recorder>, &mut VisualTestContext) {
     let (host, _, cx) = tab_view(rules, cx);
     (host, cx)
@@ -162,16 +164,34 @@ fn click(cx: &mut VisualTestContext, (x, y): (f32, f32)) {
     cx.run_until_parked();
 }
 
-/// The box's width in Settings, and its places at the window's top-left here: the rows 41 apart
-/// from y 21, 40 tall with the line under each, the pop-up of the condition from x 11, the
-/// arrow ending 8 before the Space's pop-up, and the trash 24 across at the end, 11 in.
-const BOX_WIDTH: f32 = WIDTH - 2. * SIDE;
-const CONDITION_X: f32 = 1. + PADDING + 40.;
-const SPACE_X: f32 = BOX_WIDTH - 1. - PADDING - CONTROL_HEIGHT - RULE_GAP - 40.;
-const ARROW_X: f32 = SPACE_X + 40. - POPUP_WIDTH - RULE_GAP - CHEVRONS / 2.;
-const REMOVE_X: f32 = BOX_WIDTH - 1. - PADDING - CONTROL_HEIGHT / 2.;
+/// The page's width in Settings, and the group's places at the window's top-left here: the rows
+/// 40 tall, their controls 8 under their tops, the pop-up of the condition 14 in, the Space's
+/// pop-up 8 before the trash, the arrow 8 before that, and the trash 24 across, 14 from the end.
+const BOX_WIDTH: f32 = PAGE_WIDTH;
+const RULE_ROW: f32 = CONTROL_HEIGHT + 2. * SHORT_PADDING;
+const CONDITION_LEFT: f32 = ROW_X;
+const SPACE_LEFT: f32 = BOX_WIDTH - ROW_X - CONTROL_HEIGHT - RULE_GAP - RULE_SPACE;
+const CONDITION_X: f32 = CONDITION_LEFT + 40.;
+const SPACE_X: f32 = SPACE_LEFT + 40.;
+const ARROW_X: f32 = SPACE_LEFT - RULE_GAP - BUTTON_GLYPH / 2.;
+const REMOVE_X: f32 = BOX_WIDTH - ROW_X - CONTROL_HEIGHT / 2.;
 fn row_y(index: usize) -> f32 {
-    1. + index as f32 * (PROFILE_ROW + 1.) + PROFILE_ROW / 2.
+    index as f32 * RULE_ROW + RULE_ROW / 2.
+}
+
+/// Where `which` pop-up's text was drawn, which its menu puts the chosen item's at.
+fn text_at(view: &Entity<LinkRulesView>, which: Popup, cx: &mut VisualTestContext) -> (f32, f32) {
+    view.read_with(cx, |view, _| {
+        let texts = view.popup_texts.borrow();
+        let at = texts.iter().find(|&&(each, _)| each == which).expect("drawn").1;
+        (f32::from(at.x), f32::from(at.y))
+    })
+}
+
+/// A click in the middle of Everything else's pop-up, wherever its row's text puts it.
+fn otherwise(view: &Entity<LinkRulesView>, cx: &mut VisualTestContext) -> (f32, f32) {
+    let (x, y) = text_at(view, Popup::Otherwise, cx);
+    (x + 40., y + CONTROL_HEIGHT / 2.)
 }
 
 /// + under the box adds a rule to the first Space, whose field takes the keyboard, and what's
@@ -179,8 +199,8 @@ fn row_y(index: usize) -> f32 {
 #[gpui::test]
 fn plus_adds_a_rule_whose_field_takes_the_typing(cx: &mut TestAppContext) {
     let (host, cx) = tab(Rules::default(), cx);
-    // Under the empty box's one line.
-    click(cx, (CONTROL_HEIGHT / 2., PROFILE_ROW + 2. + BUTTONS_TOP + CONTROL_HEIGHT / 2.));
+    // Under the empty group's one row, 4 in.
+    click(cx, (ADD_X + CONTROL_HEIGHT / 2., ROW_HEIGHT + BUTTONS_TOP + CONTROL_HEIGHT / 2.));
     assert_eq!(
         host.rules(),
         Rules { rules: vec![rule(Condition::Contains, "", WORK)], otherwise: LITTLE }
@@ -195,26 +215,33 @@ fn plus_adds_a_rule_whose_field_takes_the_typing(cx: &mut TestAppContext) {
 #[gpui::test]
 fn pop_ups_set_a_rules_condition_and_space(cx: &mut TestAppContext) {
     let rules = Rules { rules: vec![rule(Condition::Contains, "work", WORK)], otherwise: 0 };
-    let (host, cx) = tab(rules, cx);
+    let (host, view, cx) = tab_view(rules, cx);
     host.answer.set(Some(1));
     click(cx, (CONDITION_X, row_y(0)));
     click(cx, (SPACE_X, row_y(0)));
     host.answer.set(Some(2));
-    // Under the box of one rule, + and the gap, in the middle of its 44-tall row.
-    let otherwise_y = 2. + PROFILE_ROW + BUTTONS_TOP + CONTROL_HEIGHT + SECTION_GAP + 22.;
-    click(cx, (BOX_WIDTH - PADDING - POPUP_END - 40., otherwise_y));
-    let place = |which| {
-        let at = menu_at(which, 1);
-        format!("{} {}", f32::from(at.x), f32::from(at.y))
-    };
+    let everything = otherwise(&view, cx);
+    click(cx, everything);
+    // Each menu puts the chosen item's text on its button's: a rule's 10 into its pop-ups, 8
+    // under the row's top, and Everything else's at its row's end.
+    let (otherwise_x, otherwise_y) = text_at(&view, Popup::Otherwise, cx);
+    assert_eq!(otherwise_x, BOX_WIDTH - ROW_X - RULE_SPACE + CONTROL_PADDING);
+    assert!(otherwise_y > RULE_ROW + BUTTONS_TOP + CONTROL_HEIGHT + GROUP_GAP, "{otherwise_y}");
     assert_eq!(
         host.menus.take(),
         [
-            format!("{}: URL contains (checked), URL is equal to", place(Popup::Condition(0))),
-            format!("{}: Work (checked), Home, Little ilo", place(Popup::Space(0))),
             format!(
-                "{}: The Space in Front (checked), Work, Home, Little ilo",
-                place(Popup::Otherwise)
+                "{} {}: URL contains (checked), URL is equal to",
+                CONDITION_LEFT + CONTROL_PADDING,
+                SHORT_PADDING
+            ),
+            format!(
+                "{} {}: Work (checked), Home, Little ilo",
+                SPACE_LEFT + CONTROL_PADDING,
+                SHORT_PADDING
+            ),
+            format!(
+                "{otherwise_x} {otherwise_y}: The Space in Front (checked), Work, Home, Little ilo"
             ),
         ]
     );
@@ -334,11 +361,10 @@ fn little_ilo_is_the_default_and_a_rules_place() {
 #[gpui::test]
 fn the_pop_ups_pick_little_ilo_and_back(cx: &mut TestAppContext) {
     let rules = Rules { rules: vec![rule(Condition::Contains, "work", WORK)], otherwise: LITTLE };
-    let (host, cx) = tab(rules, cx);
+    let (host, view, cx) = tab_view(rules, cx);
     host.answer.set(Some(2));
     click(cx, (SPACE_X, row_y(0)));
-    let otherwise_y = 2. + PROFILE_ROW + BUTTONS_TOP + CONTROL_HEIGHT + SECTION_GAP + 22.;
-    let otherwise = (BOX_WIDTH - PADDING - POPUP_END - 40., otherwise_y);
+    let otherwise = otherwise(&view, cx);
     host.answer.set(Some(0));
     click(cx, otherwise);
     let picked = Rules { rules: vec![rule(Condition::Contains, "work", LITTLE)], otherwise: 0 };

@@ -30,7 +30,7 @@ fn register(cx: &mut App) {
 }
 
 /// `text` set in the display face at `size`, a line of its own `line` tall.
-pub(super) fn display_text(
+pub fn display_text(
     text: impl Into<SharedString>,
     size: f32,
     line: f32,

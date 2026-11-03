@@ -112,6 +112,7 @@ pub mod notes;
 pub mod offer;
 pub mod palette;
 pub mod passwords;
+pub mod settings_column;
 pub mod settings_rows;
 pub mod settling;
 pub mod shell;

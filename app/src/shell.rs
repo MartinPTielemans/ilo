@@ -137,6 +137,7 @@ pub use keys::{
 pub use history::HistoryPage;
 pub use library::{Archived, Captured, Download, DownloadAction, DownloadState};
 pub use menu_bar::{MenuBar, ProfileChoice, SidebarBackup};
+pub use display_face::display_text;
 pub use themes::{AppAppearance, app_appearance};
 pub use menus::{MenuEntry, new_profile_name, profile_kept};
 pub use page_menu::{PageMenuItem, made_up as made_up_page_menu};
