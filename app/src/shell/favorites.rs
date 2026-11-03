@@ -262,7 +262,7 @@ impl Shell {
         let now = crate::motion::start(cx);
         let tabs = self.tile_tabs();
         let places = self.tile_places(tabs.len());
-        self.tile_slides = tabs
+        let slides: Vec<_> = tabs
             .into_iter()
             .zip(places)
             .filter_map(|(tab, place)| {
@@ -271,6 +271,12 @@ impl Shell {
                 (from != [0.; 3]).then_some((tab, (from, now, curve)))
             })
             .collect();
+        // As the rows' (move_rows): slides over stay for the next frame to say the tiles settled.
+        let over = |(_, start, curve): &([f32; 3], std::time::Instant, Curve)| {
+            curve.at(start.elapsed().as_secs_f32()).is_none()
+        };
+        self.tile_slides.retain(|_, slide| over(slide));
+        self.tile_slides.extend(slides);
         let from = before.1 - self.list_top();
         self.list_slide = (from != 0.).then_some((from, now, curve));
     }

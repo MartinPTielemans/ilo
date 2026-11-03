@@ -40,7 +40,7 @@ impl Shell {
     pub(super) fn move_rows(&mut self, before: HashMap<Slot, f32>, curve: Curve, cx: &gpui::App) {
         let (now, moved) = (Instant::now(), crate::motion::start(cx));
         let after = self.layout();
-        let slides = after
+        let slides: Vec<_> = after
             .iter()
             .filter_map(|(&slot, &top)| {
                 let from = before.get(&slot)? + self.slide(slot) - top;
@@ -81,7 +81,11 @@ impl Shell {
                 });
             }
         }
-        self.slides = slides;
+        // Slides already over stay for the next frame to drop, which says the rows settled: under
+        // Reduce Motion every slide is over at once, and the core's next answer, as a ⌘Z's second
+        // and third tabs come, would otherwise take them before any frame saw them.
+        self.slides.retain(|_, (_, start, curve)| curve.at(start.elapsed().as_secs_f32()).is_none());
+        self.slides.extend(slides);
     }
 
     /// How far a row is drawn from its place: where the pointer has a dragged one, and others while
