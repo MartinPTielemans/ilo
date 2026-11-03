@@ -150,7 +150,7 @@ impl Shell {
     /// output's.
     pub(super) fn drm_note(&self) -> Option<&SharedString> {
         let playing = self.page(self.selected).system_engine;
-        let asked = self.question().is_some() || self.agent_question.is_some();
+        let asked = self.page_asks() || self.agent_question.is_some();
         self.drm_notes.get(&self.selected).filter(|key_system| {
             (key_system.as_ref() == OUTPUT_RESTRICTED) == playing && !asked
         })

@@ -742,6 +742,20 @@ impl Browser for Fake {
 
     fn cast_close(&self, _: &mut App) {}
 
+    fn choose_device(&self, tab: u64, _: SharedString, cx: &mut App) {
+        self.later(cx, move |shell, cx| shell.set_chooser(tab, None, cx));
+    }
+
+    fn cancel_chooser(&self, tab: u64, cx: &mut App) {
+        self.later(cx, move |shell, cx| shell.set_chooser(tab, None, cx));
+    }
+
+    fn scan_devices(&self, tab: u64, cx: &mut App) {
+        self.later(cx, move |shell, cx| shell.set_chooser(tab, preview_chooser("bluetooth"), cx));
+    }
+
+    fn device_settings(&self, _: u64, _: &mut App) {}
+
     // Casting starting closes the dialog, as the core's does.
     fn cast_to(&self, tab: u64, _: SharedString, cx: &mut App) {
         self.later(cx, move |shell, cx| shell.set_cast(tab, None, cx));
@@ -1416,6 +1430,40 @@ impl command_bar::Host for PreviewBar {
 }
 
 /// Opens the command bar at `at`, with the suggestions for what `mode` has typed.
+/// A made-up page's request for a device, as PREVIEW_CHOOSER names it.
+fn preview_chooser(name: &str) -> Option<shell::Chooser> {
+    use shell::{Chooser, ChooserDevice, DeviceKind, Scan};
+    let device = |id: &str, name: &str, detail: &str| ChooserDevice {
+        id: id.to_owned().into(),
+        name: name.to_owned().into(),
+        detail: detail.to_owned().into(),
+    };
+    let ports = vec![
+        device("serial:1", "Arduino Uno", "cu.usbmodem14101"),
+        device("serial:2", "CP2102 USB to UART Bridge Controller", "cu.SLAB_USBtoUART"),
+    ];
+    let paired = vec![
+        device("bt:1", "Polar H10 7E37D222", ""),
+        device("bt:2", "TICKR 4F1A", "Paired"),
+        device("bt:3", "Forerunner 255", ""),
+    ];
+    let (kind, devices, scan) = match name {
+        "hid" => (DeviceKind::Hid, vec![device("hid:1", "Keychron K2", "05ac:024f")], Scan::Live),
+        "usb" => (DeviceKind::Usb, vec![device("usb:1", "STM32 BOOTLOADER", "0483:df11")], Scan::Live),
+        "none" => (DeviceKind::Usb, Vec::new(), Scan::Live),
+        "bluetooth" => (DeviceKind::Bluetooth, paired, Scan::Scanning),
+        "stopped" => (DeviceKind::Bluetooth, Vec::new(), Scan::Stopped),
+        "off" => (DeviceKind::Bluetooth, Vec::new(), Scan::Off),
+        "denied" => (DeviceKind::Bluetooth, Vec::new(), Scan::Denied),
+        _ => (DeviceKind::Serial, ports, Scan::Live),
+    };
+    let site = match kind {
+        DeviceKind::Bluetooth => "heartrate.example.com",
+        _ => "flasher.example.com",
+    };
+    Some(Chooser { site: site.into(), kind, devices, scan })
+}
+
 /// PREVIEW_THEME=#RRGGBB gives the first Space a theme of that colour alone, and
 /// PREVIEW_THEME="x=… y=… colors=3 …" the theme as the core keeps it.
 fn preview_theme() -> Option<Theme> {
@@ -1721,6 +1769,11 @@ fn main() {
                 // engine, so its note shows.
                 if std::env::var_os("PREVIEW_DRM").is_some() {
                     shell.set_media_unsupported(1, "com.widevine.alpha", cx);
+                }
+                // PREVIEW_CHOOSER=serial, hid, usb, bluetooth, stopped, none, off or denied has the
+                // first tab's page ask for a device, so its chooser shows.
+                if let Ok(chooser) = std::env::var("PREVIEW_CHOOSER") {
+                    shell.set_chooser(1, preview_chooser(&chooser), cx);
                 }
                 // The second in a folder, and the last two in a split view.
                 let pinned = vec![1, folder, 2];
