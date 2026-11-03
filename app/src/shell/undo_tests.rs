@@ -657,7 +657,7 @@ fn a_change_of_orientation_is_its_own_step(cx: &mut TestAppContext) {
     let (shell, host) = window(cx, Vec::new(), vec![10, 11], Folders::default(), vec![split]);
     shell.update(cx, |shell, cx| shell.stack_split(10, true, cx));
     assert!(host.take().contains(&"split stacked 10 true".to_string()));
-    assert_eq!(titles(&shell, cx).0, Some("Change Orientation"));
+    assert_eq!(titles(&shell, cx).0, Some("Convert to Vertical Split View"));
     report_split(&shell, cx, vec![10, 11], vec![10, 11], true);
     assert!(undo(&shell, cx));
     assert!(host.take().contains(&"split stacked 10 false".to_string()));

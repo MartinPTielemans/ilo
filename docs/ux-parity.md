@@ -280,7 +280,7 @@ Dia's New Tab page isn't ours (decision 6). ⌘T opens the command bar over the 
 | [x] | Close pane, Separate | MVP | Close this Split Pane, Separate Page from Split View | Arc menus |
 | [x] | Expand Current Split | MVP | the focused pane takes the card, the other keeps 220 pt at any width; one frame; again does nothing; kept after a quit. A flag in the core's split, worked out at each layout so a resize holds the 220, and saved with the session. In View after Developer and in the command bar, no key; dragging or double-clicking the gap, or a pane joining or leaving, ends it *interim* | Arc 1.170.0 ax, rec |
 | [x] | Commands | MVP | Flip, Move Pane Left/Right, Separate All, in the command bar | Dia P§6 |
-| [x] | Change Orientation | MVP | the panes stacked top to bottom, kept after a quit; drop targets at the top and bottom | Dia P§6 |
+| [x] | Change Orientation | MVP | the panes stacked top to bottom, kept after a quit; drop targets at the top and bottom; named Convert to Vertical or Horizontal Split View, as Arc's split menu, and Separate All Tabs, with Dia's names finding them | Dia P§6, Arc 1.171 |
 
 ## Settings
 

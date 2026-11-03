@@ -136,13 +136,14 @@ impl Shell {
         handles
     }
 
-    /// The menu of `tab`'s split controls, under its handle at `position`: Change Orientation for
-    /// the split, and Separate Page from Split View and Close this Split Pane for `tab`, as the View
-    /// menu's commands do for the focused page.
+    /// The menu of `tab`'s split controls, under its handle at `position`: Convert to Vertical or
+    /// Horizontal Split View for the split, and Separate Page from Split View and Close this Split
+    /// Pane for `tab`, as the View menu's commands do for the focused page.
     pub(super) fn split_controls(&mut self, tab: u64, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let turn = super::commands::orientation_title(self.stacked(tab));
         let items: Vec<(MenuEntry, MenuAction)> = vec![
             (
-                MenuEntry::new("Change Orientation", true),
+                MenuEntry::new(turn, true),
                 Box::new(move |shell, cx| {
                     // check.sh waits for this line.
                     log!("browser: command change-orientation via split controls");
@@ -683,7 +684,7 @@ mod tests {
         assert_eq!(handles(cx), 3);
         host.take();
         for (title, call) in [
-            ("Change Orientation", "split stacked 11 true"),
+            ("Convert to Vertical Split View", "split stacked 11 true"),
             ("Separate Page from Split View", "separate 11"),
             ("Close this Split Pane", "close 11"),
         ] {
@@ -697,6 +698,34 @@ mod tests {
         assert_eq!(handles(cx), 0, "a page full screen has the whole window");
         let (alone, _) = split_of(&[10], 10, 0, 1200., cx);
         assert_eq!(alone.update(cx, |shell, cx| shell.pane_handles(cx).len()), 0);
+    }
+
+    /// The command bar and the split controls name the orientation's turn as Arc does: Convert to
+    /// Vertical Split View for a split side by side and Horizontal for a stacked one, which
+    /// Dia's Change Orientation still finds, as Separate All Pages finds Separate All Tabs.
+    #[gpui::test]
+    fn the_orientations_turn_has_arcs_name(cx: &mut TestAppContext) {
+        use crate::shell::commands::{ShellHandle, bar_commands};
+        let (shell, host) = split_of(&[10, 11], 10, 0, 1200., cx);
+        cx.update(|cx| cx.set_global(ShellHandle(shell.downgrade())));
+        let names = |typed: &str, cx: &mut TestAppContext| {
+            let rows = cx.update(|cx| bar_commands(typed, cx));
+            rows.into_iter().map(|row| row.name.to_string()).collect::<Vec<_>>()
+        };
+        let controls = |cx: &mut TestAppContext| {
+            shell.update(cx, |shell, cx| shell.split_controls(11, point(px(600.), px(10.)), cx));
+            let titles = host.menus.borrow().last().cloned().unwrap_or_default();
+            titles.first().map(|(title, _)| title.to_string())
+        };
+        assert_eq!(names("change orientation", cx), ["Convert to Vertical Split View"]);
+        assert_eq!(controls(cx).as_deref(), Some("Convert to Vertical Split View"));
+        shell.update(cx, |shell, cx| {
+            let split = Split { tabs: vec![10, 11], stacked: true, ..Default::default() };
+            shell.set_tabs(1, Vec::new(), vec![10, 11], vec![split], Folders::default(), cx);
+        });
+        assert_eq!(names("convert", cx), ["Convert to Horizontal Split View"]);
+        assert_eq!(controls(cx).as_deref(), Some("Convert to Horizontal Split View"));
+        assert_eq!(names("separate all pages", cx), ["Separate All Tabs"]);
     }
 
     /// A click on a page's split controls opens their menu where it pressed, which the menu takes
@@ -724,7 +753,8 @@ mod tests {
         cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
         cx.run_until_parked();
         let titles = host.menus.borrow().last().cloned().unwrap_or_default();
-        assert_eq!(titles.first().map(|(title, _)| title.as_ref()), Some("Change Orientation"));
+        let first = titles.first().map(|(title, _)| title.as_ref());
+        assert_eq!(first, Some("Convert to Vertical Split View"));
         assert_eq!(host.menu_at.get(), Some(at));
     }
 

@@ -57,7 +57,8 @@ impl What {
     pub const DELETE_FOLDER: What = What::said("Delete Folder", "Folder Deleted");
     pub const REMOVE_FROM_SPLIT: What = What::quiet("Remove from Split");
     pub const SPLIT: What = What::quiet("Split View");
-    pub const CHANGE_ORIENTATION: What = What::quiet("Change Orientation");
+    pub const CONVERT_VERTICAL: What = What::quiet("Convert to Vertical Split View");
+    pub const CONVERT_HORIZONTAL: What = What::quiet("Convert to Horizontal Split View");
     pub const RENAME_TAB: What = What::quiet("Rename Tab");
     pub const RENAME_FOLDER: What = What::quiet("Rename Folder");
     pub const RENAME_SPACE: What = What::quiet("Rename Space");
@@ -966,7 +967,8 @@ impl Shell {
     pub(super) fn stack_split(&mut self, tab: u64, stacked: bool, cx: &mut Context<Self>) {
         let undo = self.split_of(tab).map(|(_, now)| Edit::Stack { tab, stacked: now });
         self.browser.set_split_stacked(tab, stacked, cx);
-        self.keep(What::CHANGE_ORIENTATION, undo, cx);
+        let what = if stacked { What::CONVERT_VERTICAL } else { What::CONVERT_HORIZONTAL };
+        self.keep(what, undo, cx);
     }
 
     /// Gives a name, an icon or a colour its new value, remembering the old, unless it's the same.
