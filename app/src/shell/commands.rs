@@ -366,6 +366,16 @@ pub(super) fn developer_mode_title(on: bool) -> &'static str {
     if on { DEVELOPER_MODE_OFF } else { DEVELOPER_MODE_ON }
 }
 
+/// The split's orientation's rows in the command bar, Arc's names, of which it lists the one that
+/// would turn it: horizontal is side by side, vertical stacked (Arc 1.171).
+const CONVERT_VERTICAL: &str = "Convert to Vertical Split View";
+const CONVERT_HORIZONTAL: &str = "Convert to Horizontal Split View";
+
+/// What turns a split the other way, for one `stacked` or side by side.
+pub(super) fn orientation_title(stacked: bool) -> &'static str {
+    if stacked { CONVERT_HORIZONTAL } else { CONVERT_VERTICAL }
+}
+
 /// The commands the command bar finds, with the words besides their names' that find them, in
 /// lowercase: Arc's bar's names and words where they're known, else its menus' names and ours
 /// (docs/ux-spec.md › Command bar › Commands). Among equal matches, the first here comes first.
@@ -416,10 +426,12 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
     ("Expand Current Split", Command::ExpandSplit, &[]),
     // Dia's (docs/ux-spec.md › Split view).
     ("Flip Split View", Command::FlipSplit, &[]),
-    ("Change Orientation", Command::ChangeOrientation, &[]),
+    // Arc's names, with Dia's among the words.
+    (CONVERT_VERTICAL, Command::ChangeOrientation, &["change orientation", "stack"]),
+    (CONVERT_HORIZONTAL, Command::ChangeOrientation, &["change orientation", "side by side"]),
     ("Move Pane Left", Command::MovePaneLeft, &[]),
     ("Move Pane Right", Command::MovePaneRight, &[]),
-    ("Separate All Pages", Command::SeparateSplit, &[]),
+    ("Separate All Tabs", Command::SeparateSplit, &["separate all pages"]),
     ("New Note", Command::NewNote, &["document", "notion", "google docs", "word", "confluence"]),
     ("New Note Split", Command::NewNoteSplit, &["document", "side by side"]),
     ("Toggle Sidebar", Command::ToggleSidebar, &["hide", "show"]),
@@ -1685,6 +1697,9 @@ impl Shell {
             Command::ToggleDeveloperMode => {
                 let on = self.page(self.selected).developer_mode;
                 (name == developer_mode_title(on)).then_some(name)
+            }
+            Command::ChangeOrientation => {
+                (name == orientation_title(self.stacked(self.selected))).then_some(name)
             }
             Command::RecordTrace => (name == trace::title(trace::recording(cx))).then_some(name),
             Command::CheckForUpdates => (name == crate::updates::command_title(cx)).then_some(name),
