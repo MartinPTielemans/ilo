@@ -6280,9 +6280,10 @@ unsafe extern "C" fn stopping(_: *mut c_void) {
     // Tasks live for the run: their CLIs stop and their Spaces go while the core still answers,
     // on every way out, the Dock's Quit and logging out included. A crash leaves them for the
     // next launch.
+    let spaces = WINDOWS.with_borrow(|windows| !windows.is_empty());
     update_app(|cx| {
         if let Some(agents) = browser::agents::global(cx) {
-            agents.update(cx, |agents, cx| agents.end_tasks(cx));
+            agents.update(cx, |agents, cx| agents.end_tasks(spaces, cx));
         }
     });
 }

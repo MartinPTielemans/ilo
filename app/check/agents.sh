@@ -626,7 +626,10 @@ PY
         fail "the task on $task_cli at $cli ended badly: $(grep "^browser: task $task " "$log" | tail -1)"
       ../tools/window-screenshot.sh "$pid" "$out/task-$3-$task_cli.png" || fail "no window to capture"
     done
+    # Closing the last window quits, and each task ends without the browser crashing on its Space.
     quit
+    [ "$(grep -c '^browser: task task-[0-9]* dropped$' "$log")" = 2 ] ||
+      fail "quitting didn't end both tasks: $(grep '^browser: task ' "$log" | tail -2)"
   }
   task_clis "$native/claude.exe" "$npm/codex.cmd" check-cmd
   task_clis "$npm/claude.cmd" "$winget/codex.exe" check-exe

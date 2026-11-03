@@ -1740,9 +1740,21 @@ mod tasks {
         let card = card_of(&agents, cx);
         assert_eq!((card.title.as_ref(), card.status.as_ref(), card.dot), ("Find a flight to Lisbon", "Thinking", Dot::Working));
         // Dropped, its CLI ends and its Space goes.
-        agents.update(cx, |agents, cx| agents.end_tasks(cx));
+        agents.update(cx, |agents, cx| agents.end_tasks(true, cx));
         assert_eq!(*browser.deleted.borrow(), vec![100]);
         assert!(agents.read_with(cx, |agents, _| agents.tokens.lock().unwrap().is_empty() || !agents.tokens.lock().unwrap().contains_key(&token)));
+    }
+
+    /// At a quit with no window left, its CLI ends and its token with it, and its Space stays for
+    /// the next launch to delete, as the core can't then (#1676).
+    #[gpui::test]
+    fn a_task_ended_with_no_window_left_keeps_its_space(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(Some(fake_cli("first")), cx);
+        start(&agents, "Find a flight to Lisbon", cx);
+        agents.update(cx, |agents, cx| agents.end_tasks(false, cx));
+        assert!(browser.deleted.borrow().is_empty());
+        assert!(agents.read_with(cx, |agents, _| agents.task("task-1").is_none()));
+        assert!(agents.read_with(cx, |agents, _| agents.tokens.lock().unwrap().is_empty()));
     }
 
     #[gpui::test]
