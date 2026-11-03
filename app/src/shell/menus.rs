@@ -1494,7 +1494,7 @@ impl Shell {
 }
 
 /// `space`'s folders, in the sidebar's order, each named by its path, "Docs / Old".
-fn folder_paths(space: &super::Space) -> Vec<(u64, String)> {
+pub(super) fn folder_paths(space: &super::Space) -> Vec<(u64, String)> {
     let name = |folder: u64| space.folders.folders.get(&folder).map(|(name, _)| name.clone());
     let path = |folder: u64| {
         let mut path = vec![name(folder).unwrap_or_default()];

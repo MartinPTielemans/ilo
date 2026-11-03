@@ -875,6 +875,7 @@ impl Browser for Fake {
     fn command_bar(
         &self,
         editing: Option<(u64, SharedString)>,
+        _: Vec<SharedString>,
         _: Vec<BarTab>,
         _: Option<Bounds<Pixels>>,
         cx: &mut App,
@@ -1459,6 +1460,7 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
         title: title.into(),
         url: url.into(),
         favicon: None,
+        renamed: false,
     })
     .collect();
     let (typed, rows) = match mode {
@@ -1535,8 +1537,11 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
     let tone = forced.or(preview_tone()).unwrap_or_default();
     palette::set_current(Palette::of(theme.as_ref(), tone), cx);
     match typed {
-        "" => command_bar::show(None, tabs, None, cx),
-        typed => command_bar::show(Some((0, typed.to_string().into())), Vec::new(), None, cx),
+        "" => command_bar::show(None, Vec::new(), tabs, None, cx),
+        typed => {
+            let editing = Some((0, typed.to_string().into()));
+            command_bar::show(editing, Vec::new(), Vec::new(), None, cx)
+        }
     }
     let icons = [Icon::Envelope, Icon::Blocks, Icon::Play, Icon::Disc([0.9, 0.5, 0.1])];
     let favicons: Vec<_> = rows
