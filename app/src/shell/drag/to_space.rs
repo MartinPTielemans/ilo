@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use gpui::{AppContext, TestAppContext};
 
-use super::{EDGE_WAIT, SPLIT_REST};
 use super::detents::{X, drag_to, press, row_y};
+use super::{EDGE_WAIT, SPLIT_REST};
 use crate::shell::{Folders, Place, Shell, Slot, recorder::Recorder};
 
 /// The Spaces One, Two and an agent's, One shown with Today 3 and 4, Two with 5 pinned and 6.
@@ -16,10 +16,21 @@ fn shell(cx: &mut TestAppContext) -> (gpui::Entity<Shell>, std::rc::Rc<Recorder>
         let space = |id, name: &str, agent: &str| {
             (id, name.into(), None, 0, "".into(), agent.into(), "".into())
         };
-        let spaces = vec![space(1, "One", ""), space(2, "Two", ""), space(9, "Agent", "claude")];
+        let spaces = vec![
+            space(1, "One", ""),
+            space(2, "Two", ""),
+            space(9, "Agent", "claude"),
+        ];
         shell.set_spaces(spaces, cx);
         shell.set_space(1, cx);
-        shell.set_tabs(1, Vec::new(), vec![3, 4], Vec::new(), Folders::default(), cx);
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            vec![3, 4],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
         shell.set_tabs(2, vec![5], vec![6], Vec::new(), Folders::default(), cx);
     });
     (shell, host)
@@ -68,7 +79,9 @@ fn a_row_held_at_the_edge_over_another_rests_on_no_split(cx: &mut TestAppContext
     let width = shell.read_with(cx, |shell, _| shell.width());
     let three = shell.read_with(cx, |shell, _| row_y(shell, 3));
     let onto = |cx: &mut TestAppContext| {
-        shell.read_with(cx, |shell, _| shell.drag.as_ref().and_then(|drag| drag.onto))
+        shell.read_with(cx, |shell, _| {
+            shell.drag.as_ref().and_then(|drag| drag.onto)
+        })
     };
     drag_to(&shell, cx, X, y + 10.);
     // Resting on 3's middle for part of the split's wait, then on to the edge, still on it.
@@ -141,7 +154,10 @@ fn a_folder_held_at_the_edge_goes_under_the_next_spaces_pinned_tabs(cx: &mut Tes
     let today = shell.read_with(cx, |shell, _| row_y(shell, 6));
     drag_to(&shell, cx, X, today);
     let to = shell.read_with(cx, |shell, _| shell.drag.as_ref().map(|drag| drag.to));
-    assert!(to == Some(Place::List(true, 1)), "not under the pinned tabs");
+    assert!(
+        to == Some(Place::List(true, 1)),
+        "not under the pinned tabs"
+    );
     host.take_edits();
     shell.update(cx, |shell, cx| shell.drop_row(cx));
     assert_eq!(host.take_edits(), ["space folder 7 2"]);
@@ -155,7 +171,9 @@ fn a_row_dragged_over_the_page_pages_nowhere(cx: &mut TestAppContext) {
     let (shell, host) = shell(cx);
     let width = shell.read_with(cx, |shell, _| shell.width());
     let over_page = |cx: &mut TestAppContext| {
-        shell.read_with(cx, |shell, _| shell.drag.as_ref().map(|drag| drag.over_page.is_some()))
+        shell.read_with(cx, |shell, _| {
+            shell.drag.as_ref().map(|drag| drag.over_page.is_some())
+        })
     };
     // With no tab shown there's no page to join, so no targets.
     let y = press(&shell, cx, 4);

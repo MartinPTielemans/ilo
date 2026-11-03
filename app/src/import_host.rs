@@ -7,10 +7,10 @@ use std::collections::VecDeque;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
 
-use browser::import::{Exported, Passwords};
 use browser::import::found::{Address, Page, Tab};
 use browser::import::plan::{Existing, ExistingSpace, Row};
 use browser::import::sources::{Os, Roots};
+use browser::import::{Exported, Passwords};
 use browser::link_rules::{Host as _, Rule};
 use browser::theme::Theme;
 use gpui::{App, PathPromptOptions};
@@ -158,7 +158,11 @@ impl browser::import::Host for CoreImport {
     fn existing(&self, cx: &App) -> Existing {
         // Every window's shell has every tab's page, as the core tells them all.
         let shell = crate::shell_with_view(front().1).upgrade();
-        let url = |tab: u64| shell.as_ref().map(|shell| shell.read(cx).page(tab).url.to_string());
+        let url = |tab: u64| {
+            shell
+                .as_ref()
+                .map(|shell| shell.read(cx).page(tab).url.to_string())
+        };
         let profiles = ids(bc::bc_profiles)
             .into_iter()
             .map(|profile| (profile, name(bc::bc_profile_name, profile).to_string()))

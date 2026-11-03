@@ -22,7 +22,9 @@ struct Reveal {
 
 impl Render for Reveal {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let panel = self.shell.update(cx, |shell, cx| shell.render_reveal(window, cx));
+        let panel = self
+            .shell
+            .update(cx, |shell, cx| shell.render_reveal(window, cx));
         // On Linux the page is Chromium's, whose pointer the host doesn't hear, so this window
         // says where the pointer is over it, and as it leaves, that it's past the panel.
         #[cfg(target_os = "linux")]
@@ -125,5 +127,7 @@ pub fn open(shell: Entity<Shell>, ui_view: *mut c_void, cx: &mut App) -> Option<
 }
 
 extern "C" fn pointer_moved(ui_view: *mut c_void, x: f64) {
-    update_window(window_with_view(ui_view), |shell, cx| shell.pointer_at(x as f32, cx));
+    update_window(window_with_view(ui_view), |shell, cx| {
+        shell.pointer_at(x as f32, cx)
+    });
 }
