@@ -2097,8 +2097,7 @@ mod tests {
     }
 
     /// Under the pointer the row is lit, its chevron in the icon's place and its ••• showing, all
-    /// at once; the menu the ••• opens keeps them while it's up. Collapsed, the chevron stays with
-    /// the pointer gone, so the way back shows.
+    /// at once; the menu the ••• opens keeps them while it's up.
     #[gpui::test]
     fn the_name_row_lights_under_the_pointer_and_keeps_it_for_its_menu(cx: &mut TestAppContext) {
         let (shell, cx, host) = header_shell(cx);
@@ -2154,9 +2153,23 @@ mod tests {
         assert!(!lit(cx), "the row stayed lit after its menu closed");
         let library = shell.read_with(cx, |shell, _| shell.library_open);
         assert!(library, "Manage Spaces… didn't open the Library");
-        // The pinned rows collapsed, the chevron stays drawn with the pointer away.
+    }
+
+    /// Collapsed, the name row's chevron stays with the pointer gone, so the way back shows. The
+    /// sidebar is at rest here: closing the Library just before would leave it faded out, and
+    /// undrawn, for as long as the fade back waits, which reads the wall clock.
+    #[gpui::test]
+    fn the_chevron_stays_for_collapsed_rows_with_the_pointer_gone(cx: &mut TestAppContext) {
+        let (shell, cx, _) = header_shell(cx);
+        let row = shell
+            .read_with(cx, |shell, _| shell.name_row_drawn.get())
+            .expect("a name row");
+        cx.simulate_mouse_move(row.center(), None, Modifiers::none());
+        cx.run_until_parked();
+        cx.simulate_mouse_move(point(px(600.), px(400.)), None, Modifiers::none());
+        cx.run_until_parked();
+        assert!(!shell.read_with(cx, |shell, _| shell.name_hovered));
         shell.update(cx, |shell, cx| {
-            shell.set_library(false, cx);
             shell.set_tabs(1, vec![5, 6], vec![2], Vec::new(), folded(true), cx)
         });
         cx.run_until_parked();
