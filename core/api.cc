@@ -2215,3 +2215,13 @@ void bc_sync_remove_device(const char* id) {
     browser_core::sync::RemoveDevice(id);
   }
 }
+
+void bc_sync_read_activity(bc_sync_activity* activity) {
+  if (activity) {
+    browser_core::sync::ReadActivity(activity);
+  }
+}
+
+void bc_sync_delete_account(void) {
+  browser_core::sync::DeleteAccount();
+}

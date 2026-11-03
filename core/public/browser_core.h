@@ -626,6 +626,26 @@ typedef struct bc_sync_device {
   bool current;
 } bc_sync_device;
 
+// What stops sync from keeping up with the server, in bc_sync_activity.
+#define BC_SYNC_TROUBLE_NONE 0
+// Its last try couldn't reach the server, or the server answered with an error. It tries again by
+// itself.
+#define BC_SYNC_TROUBLE_UNREACHABLE 1
+// The server asked this device to wait before it syncs again, as one does when an account commits
+// more than it allows. It tries again once the wait is over.
+#define BC_SYNC_TROUBLE_THROTTLED 2
+// Sync stopped after an error it doesn't recover from while the browser runs.
+#define BC_SYNC_TROUBLE_STOPPED 3
+
+// How sync is keeping up with the server, as Settings › Sync says while it shows.
+typedef struct bc_sync_activity {
+  // When this device last finished syncing with the server, in milliseconds since the Unix epoch,
+  // kept across launches; 0 if it hasn't yet.
+  double last_synced;
+  // A BC_SYNC_TROUBLE_ value.
+  int trouble;
+} bc_sync_activity;
+
 // What the app gives the core when it starts Chromium. Any callback may be null, and a string it's
 // passed lasts only for the call.
 // A backup of a profile's sidebar: its Spaces, with their folders and tabs, and its favorites.
@@ -2664,6 +2684,17 @@ BC_EXPORT void bc_sync_read_devices(void);
 // It keeps what synced, and syncs again only once it signs in and gets the secret. Then
 // sync_devices_changed.
 BC_EXPORT void bc_sync_remove_device(const char* id);
+
+// Reads how sync is keeping up with the server into |activity|, with BC_SYNC_ON, else zero. Read
+// as Settings shows it: nothing tells the app as it changes, which would wake it at each sync.
+BC_EXPORT void bc_sync_read_activity(bc_sync_activity* activity);
+
+// Deletes the account on its server, while signed in, with everything the server keeps of it: the
+// account, its synced data, which the server only ever had encrypted, and its devices, which are
+// signed out. What this device and the others have synced stays on them. Then sync_changed, with
+// BC_SYNC_SIGNED_OUT once the server has deleted it, or the status it had and
+// BC_SYNC_PROBLEM_SERVER if it couldn't.
+BC_EXPORT void bc_sync_delete_account(void);
 
 // On Linux, the title of the window of Chromium's own with the keys in |window|
 // (bc_window_keyboard_in_child), such as a tab's dialog, copied into |title| as bc_space_name does,

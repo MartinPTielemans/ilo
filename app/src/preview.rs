@@ -2613,38 +2613,43 @@ impl gpui::Render for AccountPage {
         _: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
-        use browser::palette::PAPER;
+        use browser::palette::{INK, PAPER};
         use browser::settings_card::Colors;
         use browser::settings_column::{self, Section};
         use browser::settings_rows::Look;
-        use browser::tokens::palette::STAND_IN;
+        use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
         use browser::tokens::settings::NAME;
         use browser::tokens::text;
         use gpui::{ParentElement, Styled, div, rgb};
-        let look = Look::settings(true);
+        // Dark, as Settings is in a dark system, unless PREVIEW_APPEARANCE=light.
+        let dark = preview_tone() != Some(Tone::Light);
+        let look = Look::settings(dark);
+        self.account
+            .update(cx, |account, cx| account.set_look(look, cx));
         let column = settings_column::column(
             Section::Sync,
-            true,
+            dark,
             Rc::default(),
             Rc::new(|_, _, _| {}),
             Rc::new(|_, _| {}),
         );
+        let base = if dark { rgb(PAPER) } else { rgb(INK) };
         let colors = Colors {
             line: look.line,
-            name: rgb(PAPER).opacity(NAME),
+            name: base.opacity(NAME),
             heading: look.heading,
         };
         let card = self.card.draw(
             Section::Sync.name(),
             div().child(self.account.clone()),
-            true,
+            dark,
             colors,
         );
         div()
             .relative()
             .size_full()
             .flex()
-            .bg(rgb(STAND_IN))
+            .bg(rgb(if dark { STAND_IN } else { LIGHT_STAND_IN }))
             .font_family(browser::face::UI)
             .text_size(px(text::BODY))
             .text_color(look.ink)
@@ -2679,6 +2684,22 @@ impl account::Host for PreviewAccount {
     fn request_pairing(&self) {}
     fn read_devices(&self) {}
     fn remove_device(&self, _: &str) {}
+    // PREVIEW_SYNC=never, unreachable, throttled or stopped shows that line, else synced at 15:04.
+    fn activity(&self) -> account::Activity {
+        let shown = std::env::var("PREVIEW_SYNC").unwrap_or_default();
+        let trouble = match shown.as_str() {
+            "unreachable" => Some(account::Trouble::Unreachable),
+            "throttled" => Some(account::Trouble::Throttled),
+            "stopped" => Some(account::Trouble::Stopped),
+            _ => None,
+        };
+        let synced = if shown == "never" { "" } else { "at 15:04" };
+        account::Activity {
+            synced: synced.into(),
+            trouble,
+        }
+    }
+    fn delete_account(&self) {}
     fn copy_secret(&self, _: &str, _: Duration, _: &mut App) {}
     fn confirm(
         &self,

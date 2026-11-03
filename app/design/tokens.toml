@@ -742,6 +742,12 @@ short-padding = 8.0
 words-columns = 4
 word-number = 24.0
 word-gap = 6.0
+# Ours: the account's status line starts with a dot, ilo green while it syncs and the destructive
+# red while something stops it, 6 before the line, which says what stops it in that red, 4 before
+# the rest.
+status-dot = 7.0
+status-dot-gap = 6.0
+word-space = 4.0
 # Ours: rows drawn on another view's ground, the first launch's, take its fill and text colour,
 # and their lines, controls and grey text are that text over the fill by as much as Settings' are
 # over its boxes.

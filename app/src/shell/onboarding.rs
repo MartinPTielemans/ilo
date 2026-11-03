@@ -194,7 +194,7 @@ impl Step {
             // Its button only while signed out; the view's own buttons are the step's after.
             Step::Account => (
                 "Your Spaces on every computer.",
-                "Spaces, bookmarks, passwords and open tabs sync encrypted end to end, and \
+                "Spaces, bookmarks and passwords sync encrypted end to end, and \
                  Settings has it too.",
                 "Sign In",
             ),

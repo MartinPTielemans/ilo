@@ -1496,6 +1496,14 @@ impl crate::account::Host for Account {
         self.calls.borrow_mut().push("start over".into());
     }
 
+    fn activity(&self) -> crate::account::Activity {
+        crate::account::Activity::default()
+    }
+
+    fn delete_account(&self) {
+        self.calls.borrow_mut().push("delete account".into());
+    }
+
     fn request_pairing(&self) {
         self.calls.borrow_mut().push("request pairing".into());
     }
