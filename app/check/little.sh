@@ -89,6 +89,8 @@ send key w cmd
 expect '^browser: command close-tab via ' "⌘W didn't run in the Little ilo window"
 expect "^browser: window closed $little\$" "⌘W didn't close the Little ilo window"
 # The main window was behind it, and has the keyboard, as the window manager may hand it on late.
+# The driver needs a window that's open, and driving it mustn't bring it forward.
+send window 1 behind
 for _ in $(seq 20); do
   send order
   case "$(grep '^browser: order ' "$log" | tail -1)" in *", key window 1") break ;; esac
