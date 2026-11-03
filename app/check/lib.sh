@@ -401,13 +401,15 @@ expect_tabs() {
   expect "^browser: today $1\$" "$3: Today is \"$(today)\", not \"$1\""
   expect "^browser: selected $2\( in .*\)\{0,1\}\$" "$3: tab $2 isn't shown"
 }
-# Opens a tab from the command bar, to https://$1.
+# Opens a tab from the command bar, to https://$1. The scheme is typed: a bare host goes to http
+# and Chrome's HTTPS-Upgrades takes it to https, falling back to http when the runner's https is
+# slow or fails (#1261), and the runs that follow expect https. history checks the upgrade itself.
 open_from_bar() {
   before=$(today)
   send key t cmd
   expect '^browser: command bar shown$' "⌘T didn't open the command bar"
   expect '^browser: new tab plate 1$' "⌘T didn't give New Tab the selected plate"
-  send type "$1"
+  send type "https://$1"
   send key return
   expect "^browser: today [0-9][0-9]*${before:+ $before}\$" "the tab for $1 didn't open at the top of Today"
   tab=$(today | cut -d' ' -f1)
