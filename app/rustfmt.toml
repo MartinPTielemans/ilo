@@ -1,0 +1,3 @@
+# rustfmt run on a file, as CI and the format recipe do, takes edition 2015 unless told; the crates
+# here are 2024 (Cargo.toml), which also picks rustfmt's 2024 style.
+edition = "2024"

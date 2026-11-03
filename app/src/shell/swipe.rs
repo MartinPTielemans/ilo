@@ -431,15 +431,17 @@ impl Shell {
 
     /// Moves the list on along its glide, then fades the edge under the favorites in once the list
     /// is past its top and out back there, and the one at its foot in while rows are hidden under
-    /// it, the room after the last row not counting, and out once they're in view (Arc).
-    pub(super) fn step_scroll_edge(&mut self, window: &mut Window) {
-        self.step_list_glide(window);
+    /// it, the room after the last row not counting, and out once they're in view (Arc), and
+    /// brings the knob as the user scrolls.
+    pub(super) fn step_scroll_edge(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let glided = self.step_list_glide(window);
         let most = f32::from(self.list_scroll.max_offset().y).max(0.);
         let scrolled = (-f32::from(self.list_scroll.offset().y)).clamp(0., most);
         // As the list was last laid out: none before its first layout.
         let height = f32::from(self.list_scroll.bounds().size.height);
         let rows_end = self.layout().into_values().fold(0., f32::max) + ROW_PITCH;
-        let below = height > 0. && rows_end + self.tiles_room() > scrolled + height + 0.5;
+        let rows_end = rows_end + self.tiles_room() - self.fixed_head();
+        let below = height > 0. && rows_end > scrolled + height + 0.5;
         // The list's bounds are the last frame's: when what it's laid out from changes, as in the
         // frame a resize draws, one more frame decides again once this one has measured it.
         let measured = (window.viewport_size(), self.pages_top(), self.list_bottom());
@@ -448,7 +450,9 @@ impl Shell {
             window.request_animation_frame();
         }
         for (edge, shown, name) in [
-            (&mut self.top_edge, scrolled > 0., "edge"),
+            // Within half a point of its top, as Windows' wheel ticks of a fraction of a line
+            // leave it once summed down and back, the list is at its top.
+            (&mut self.top_edge, scrolled > 0.5, "edge"),
             (&mut self.foot_edge, below, "foot edge"),
         ] {
             match edge.step(shown) {
@@ -463,15 +467,15 @@ impl Shell {
                 None => {}
             }
         }
+        self.step_scroller(scrolled, glided, window, cx);
     }
 
-    /// The edge across the sidebar 2 over the rows' top, under the favorites, or the URL field
-    /// without them or while they scroll with the list, while the rows go under it (Dia).
+    /// The edge across the sidebar 2 over the scrolled rows' top, under the name row that stays
+    /// put (Arc 1.170), or under the URL field while the tiles scroll with the list and the name
+    /// row with them, while the rows go under it.
     pub(super) fn scroll_edge_line(&self) -> Option<impl IntoElement + use<>> {
-        Some(
-            self.edge_line(self.top_edge.at())?
-                .top(px(self.pages_top() - 2.)),
-        )
+        let top = self.pages_top() + self.fixed_head() - 2.;
+        Some(self.edge_line(self.top_edge.at())?.top(px(top)))
     }
 
     /// The edge across the sidebar 1 under the list's foot while rows are hidden under it (Arc).

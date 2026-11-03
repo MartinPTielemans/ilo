@@ -21,6 +21,7 @@
 #include <winrt/Windows.Storage.Streams.h>
 
 #include <algorithm>
+#include <cstdarg>
 #include <cmath>
 #include <cstdio>
 #include <ctime>
@@ -47,8 +48,42 @@ extern "C" void browser_fade_none(void*, double, double, double) {}
 #pragma comment(linker, "/alternatename:browser_fade=browser_fade_none")
 // What check.sh calls a window the host floats over a browser window (below).
 extern "C" const char* host_floating_name(void* hwnd);
+// The app's (src/logging.rs), in the browser and the preview: whether BROWSER_LOG turns on |area|.
+extern "C" bool browser_log_on(const char* area);
 
 namespace {
+
+// A line in |area| of BROWSER_LOG (src/logging.rs), "browser: [area] ...", in one write, if it's
+// on. Never what the user browses or types.
+void LogIn(const char* area, const char* format, ...) {
+  if (!browser_log_on(area)) {
+    return;
+  }
+  char line[512];
+  int length = snprintf(line, sizeof(line), "browser: [%s] ", area);
+  va_list args;
+  va_start(args, format);
+  vsnprintf(line + length, sizeof(line) - length - 1, format, args);
+  va_end(args);
+  length = static_cast<int>(strlen(line));
+  line[length] = '\n';
+  fwrite(line, 1, length + 1, stderr);
+}
+
+// The window class of |hwnd|, for the focus area's lines.
+std::string ClassName(HWND hwnd) {
+  char name[64] = "none";
+  if (hwnd) {
+    GetClassNameA(hwnd, name, sizeof(name));
+  }
+  return name;
+}
+
+// What check.sh calls the floating window |hwnd|, for the focus area's lines.
+const char* FloatingName(HWND hwnd) {
+  const char* name = host_floating_name(hwnd);
+  return name ? name : "a floating window";
+}
 
 std::wstring Wide(const char* utf8) {
   if (!utf8) {
@@ -298,6 +333,9 @@ LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpa
       // from it only then.
       if (LOWORD(wparam) == WA_INACTIVE && !floating->hiding && floating->shown) {
         const HWND to = reinterpret_cast<HWND>(lparam);
+        LogIn("focus", "%s loses the keyboard to %p %s%s, pressed %d", FloatingName(hwnd),
+              static_cast<void*>(to), ClassName(to).c_str(),
+              to && to == GetWindow(hwnd, GW_OWNER) ? " (its browser window)" : "", Pressed());
         // ilo's menu, opened over this overlay, isn't the user leaving it.
         if (g_menu.shown && to == g_menu.hwnd) {
           break;
@@ -306,6 +344,7 @@ LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpa
         // view replaces the one that had focus. That isn't the user leaving, who would have pressed
         // on it, so this one takes the keyboard back as the window has it (#1363).
         if (floating->keyboard && to && to == GetWindow(hwnd, GW_OWNER) && !Pressed()) {
+          LogIn("focus", "%s takes the keyboard back", FloatingName(hwnd));
           break;
         }
         floating->keyboard = false;
@@ -1702,6 +1741,11 @@ class FileDropSource : public IDropSource {
     return refs;
   }
   HRESULT STDMETHODCALLTYPE QueryContinueDrag(BOOL escape, DWORD keys) override {
+    // Each change only, as Windows asks on every move.
+    if (keys != keys_ || escape) {
+      keys_ = keys;
+      LogIn("drag", "buttons %lu escape %d", keys, escape);
+    }
     if (escape || (keys & MK_RBUTTON)) {
       return DRAGDROP_S_CANCEL;
     }
@@ -1710,12 +1754,18 @@ class FileDropSource : public IDropSource {
     }
     return S_OK;
   }
-  HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD) override {
+  HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD effect) override {
+    if (effect != effect_) {
+      effect_ = effect;
+      LogIn("drag", "the target takes effect %lu", effect);
+    }
     return DRAGDROP_S_USEDEFAULTCURSORS;
   }
 
  private:
   ULONG refs_ = 1;
+  DWORD keys_ = ~0ul;
+  DWORD effect_ = ~0ul;
 };
 
 // The shell's own data object for the file at |path|, so a drag carries it as Explorer does, with
@@ -3936,7 +3986,13 @@ bool host_drag_file(const char* path, void (*ended)(bool)) {
     source.Attach(new FileDropSource());
     // On the UI thread GPUI has made an OLE apartment, as Explorer's drag is.
     DWORD effect = DROPEFFECT_NONE;
+    POINT at{};
+    GetCursorPos(&at);
+    const HWND over = WindowFromPoint(at);
+    LogIn("drag", "starts at %ld %ld over %p %s", at.x, at.y, static_cast<void*>(over),
+          ClassName(over).c_str());
     const HRESULT dropped = DoDragDrop(data.Get(), source.Get(), DROPEFFECT_COPY, &effect);
+    LogIn("drag", "ends: %lx, effect %lu", static_cast<unsigned long>(dropped), effect);
     if (ended) {
       ended(dropped == DRAGDROP_S_DROP && effect != DROPEFFECT_NONE);
     }
