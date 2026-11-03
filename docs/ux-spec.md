@@ -1035,7 +1035,7 @@ Each system's own updater downloads an update in the background and then says it
 - **Agents.** The core has no update state, so agents can't see one; none is added.
 - ilo needs macOS 15 (Sequoia) or later, the owner's call (#678); Arc needs 13 (Ventura). The bundle says so (`LSMinimumSystemVersion`), so macOS won't open it on an older Mac and the feed offers that Mac no update. README.md and each release's notes name it.
 - An install never starts by itself while ilo runs: it waits for Restart to Update or a quit, so a window in full screen is never interrupted, and Sparkle's alert for a check it shows waits until no window is in full screen.
-- The first launch after an update opens its release notes.
+- The first launch after an update opens its release notes, its entry in the site's changelog, as a tab in the main window, as What's New does. The Mac's and Windows' updaters keep the notes as they install the update, for its first launch. On Linux, where the update can come from outside ilo (GNOME Software, `flatpak update`), the profile keeps the last version that ran, and a newer one opens its notes. A first run or a downgrade opens nothing (#1495).
 - Measure Arc's update prompt, if one can still be triggered.
 
 ### Sync

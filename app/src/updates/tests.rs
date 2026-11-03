@@ -172,6 +172,25 @@ fn a_launch_older_than_the_update_installed_says_it_didn_t_install(cx: &mut Test
     assert_eq!(about.reads(), (Some("Checking…".into()), None));
 }
 
+/// On Linux, a profile's launches, each of a version: the first launch of a newer one opens its
+/// changelog entry, once, and a new profile's first launch and a downgrade open nothing (#1495).
+#[test]
+fn only_the_first_launch_of_a_newer_version_opens_its_notes() {
+    let dir = std::env::temp_dir().join(format!("ilo-last-version-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("last-version");
+    let launch = |version: &str| first_launch_notes(&file, version);
+    let notes = |version: &str| Some(format!("{}#{version}", crate::build_info::WHATS_NEW));
+    assert_eq!(launch("0.1.9"), None, "a new profile's first launch");
+    assert_eq!(launch("0.1.9"), None, "the same version again");
+    assert_eq!(launch("0.1.10"), notes("0.1.10"), "an update, numbered past 0.1.9");
+    assert_eq!(launch("0.1.10"), None, "the update's next launch");
+    assert_eq!(launch("0.1.9"), None, "a downgrade");
+    assert_eq!(launch("0.2.0"), notes("0.2.0"), "an update after the downgrade");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// The ways back: a failed check says so and tries again; a failed download or install says the
 /// update didn't install; and when the user closes the updater's own window, the row offers the
 /// check again.

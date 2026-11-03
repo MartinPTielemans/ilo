@@ -782,7 +782,9 @@ void host_install_update(void);
 // Mac, nothing: Sparkle installs on quit by itself.
 void host_finish_update(void);
 
-// On the Mac: calls |notes| with the release notes' URL of the update this launch is the first of, once.
+// On the Mac and Windows: calls |notes| with the release notes' URL of the update this launch is
+// the first of, once, as the updater kept them when it installed it. Windows' are kept with the
+// build host_take_install reads, so they're taken before it.
 void host_take_update_notes(void (*notes)(const char* url));
 
 // For the test driver: presses the button titled |title| in the alert shown. False if none shows.

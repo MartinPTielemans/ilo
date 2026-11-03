@@ -138,6 +138,28 @@ pub fn went_in(build: u64, own: u64) -> bool {
     own >= build
 }
 
+/// The release notes the launch of version `own` opens on a profile whose last version is kept in
+/// `file`, which it then keeps: the version's changelog entry when it's newer than the last, and
+/// nothing on the profile's first launch or a downgrade. Linux's, where an update can come from
+/// outside ilo, as from GNOME Software or `flatpak update` (#1495).
+pub fn first_launch_notes(file: &std::path::Path, own: &str) -> Option<String> {
+    let last = std::fs::read_to_string(file).ok();
+    let last = last.as_deref().map(str::trim);
+    if last == Some(own) {
+        return None;
+    }
+    _ = std::fs::write(file, own);
+    newer(own, last?).then(|| format!("{}#{own}", crate::build_info::WHATS_NEW))
+}
+
+/// Whether version `own` comes after `last`, number by number: 0.1.10 after 0.1.9.
+fn newer(own: &str, last: &str) -> bool {
+    let numbers = |version: &str| -> Option<Vec<u64>> {
+        version.split('.').map(|number| number.parse().ok()).collect()
+    };
+    matches!((numbers(own), numbers(last)), (Some(own), Some(last)) if own > last)
+}
+
 /// The update the last quit started installing didn't go in, so the row says so, with Try Again,
 /// as for a failed download.
 pub fn didnt_install(cx: &mut App) {

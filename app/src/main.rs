@@ -489,7 +489,7 @@ mod platform {
         pub fn host_install_update();
         #[cfg(not(target_os = "linux"))]
         pub fn host_finish_update();
-        #[cfg(target_os = "macos")]
+        #[cfg(not(target_os = "linux"))]
         pub fn host_take_update_notes(notes: extern "C" fn(url: *const c_char));
         #[cfg(target_os = "windows")]
         pub fn host_take_install(installed: extern "C" fn(build: u64, own: u64) -> bool);
@@ -4275,7 +4275,7 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
     // The rules name the Spaces by their places, so they're read once the Spaces are back.
     link_rules_host::read();
     let links = LAUNCH_LINKS.take().unwrap_or_default();
-    let notes = UPDATE_NOTES.take();
+    let notes = UPDATE_NOTES.take().or_else(first_launch_notes);
     match std::env::var("BROWSER_URL") {
         Ok(url) => open_tab(window, &url),
         Err(_) if !restored && links.is_empty() && notes.is_none() => {
@@ -4300,6 +4300,28 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
     }
     open_links_in(window, &links);
     restored
+}
+
+/// The release notes of the update this launch is the first of, where the Mac's main hasn't kept
+/// them before Chromium starts: taken with the first window, so a second launch, which hands its
+/// links to the browser running and exits, never takes them.
+fn first_launch_notes() -> Option<String> {
+    #[cfg(target_os = "windows")]
+    unsafe { platform::host_take_update_notes(keep_update_notes) };
+    // On Linux, where an update can come from outside ilo, a version newer than the profile's
+    // last. Only a release's, the Flatpak: a dev build's moves on under the checks' profiles.
+    #[cfg(target_os = "linux")]
+    if cfg!(feature = "prod") {
+        let file = std::path::PathBuf::from(profile_dir()).join("last-version");
+        return updates::first_launch_notes(&file, env!("CARGO_PKG_VERSION"));
+    }
+    UPDATE_NOTES.take()
+}
+
+#[cfg(not(target_os = "linux"))]
+extern "C" fn keep_update_notes(url: *const c_char) {
+    let url = unsafe { CStr::from_ptr(url) }.to_string_lossy().into_owned();
+    UPDATE_NOTES.set(Some(url));
 }
 
 /// Logs where the window is, for check.sh.
@@ -7737,11 +7759,7 @@ fn main() {
     }
     // The first launch of an update opens its release notes, over the Spaces it brings back. Only
     // a build that carries Sparkle keeps them, and check.sh's links run, for its own build.
-    extern "C" fn update_notes(url: *const c_char) {
-        let url = unsafe { CStr::from_ptr(url) }.to_string_lossy().into_owned();
-        UPDATE_NOTES.set(Some(url));
-    }
-    unsafe { platform::host_take_update_notes(update_notes) };
+    unsafe { platform::host_take_update_notes(keep_update_notes) };
     let (args, host) = switches_and_host(std::env::args().collect());
     let mut argv: Vec<*const c_char> = args.iter().map(|arg| arg.as_ptr()).collect();
     let code = unsafe { bc::bc_main(argv.len() as c_int, argv.as_mut_ptr(), &host) };
