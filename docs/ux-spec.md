@@ -786,6 +786,7 @@ Arc 1.170.0's values where measured (cap, ax, rec), Dia's (P§6, D›Dragging ta
   - The picture of the window: radius 10 with a white 0.25 rim, traffic lights 6 pt, and the tab's favicon and title on a page under them. Dia's picture has the page's image.
   - The tab becomes the picture at once, not after a frame or two.
   - On a drop, the split shows at once, focused on the tab dropped. Away from a target, the tab goes back to its row until there are windows to open.
+  - While the targets are up, the page under them is the one the tab would join. Where the press showed the tab in that page's place, the page shows again as they come, and the tab once they go without it let go on one: back over the sidebar or let go off them (#1467).
   - A split has one orientation, so a page alone has all four targets, a split side by side the left and right ones, and a stacked split the top and bottom ones. Let go on the top or bottom one, a page alone stacks with the tab (Arc).
   - The top and bottom targets are the side ones turned, each as long as 0.28 of the card's width at rest, 0.45 grown and 0.51 under the tab, so they fit between the side targets, and their centre leans toward the pointer's y.
   - Targets are at the card's sides only, not at each pane's. Favorites, folders and split rows get none, and neither does a tab of the split shown or a split that is full.

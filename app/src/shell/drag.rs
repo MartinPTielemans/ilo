@@ -874,7 +874,9 @@ impl Shell {
         }
         // The release that ends the drag isn't a click.
         self.dragged = true;
+        let back = self.drag.as_ref().and_then(|drag| drag.over_page.as_ref()?.back());
         self.settle_drag();
+        self.show_back(back, cx);
         self.putting_back = true;
         cx.notify();
         true
