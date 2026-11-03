@@ -265,3 +265,58 @@ fn a_stop_that_goes_gives_the_keyboard_back(cx: &mut TestAppContext) {
     let pressed = panel.read_with(cx, |panel, _| panel.pressed.borrow().clone());
     assert_eq!(pressed, ["closed"]);
 }
+
+/// A foot drawn before the page, as Settings' column's is, and a button on the page.
+struct Ordered {
+    focus: FocusHandle,
+    stops: Stops,
+}
+
+impl Render for Ordered {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.stops.begin();
+        let look = Look::settings(true);
+        div()
+            .key_context("Ordered")
+            .track_focus(&self.focus)
+            .size_full()
+            .on_action(cx.listener(|view, _: &NextStop, window, cx| {
+                view.stops.go(true, true, window, cx);
+            }))
+            .child(super::button(&look, "Foot", "Foot").stop_in(
+                &self.stops,
+                Ring::Inside(CONTROL_RADIUS),
+                true,
+                cx,
+            ))
+            .child(super::button(&look, "Page", "Page").button_stop(&self.stops, cx))
+    }
+}
+
+/// A stop marked last goes after the others though it's drawn first, as Chromium settings at
+/// the column's foot comes after the page beside it, then round to the first.
+#[gpui::test]
+fn a_last_stop_goes_after_the_page(cx: &mut TestAppContext) {
+    cx.update(|cx| bind_stop_keys("Ordered", cx));
+    let (view, cx) = cx.add_window_view(|_, cx| Ordered {
+        focus: cx.focus_handle(),
+        stops: Stops::default(),
+    });
+    cx.update(|window, cx| window.focus(&view.read(cx).focus.clone(), cx));
+    cx.run_until_parked();
+    let keyed = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| {
+            let focused = window.focused(cx)?;
+            let view = view.read(cx);
+            ["Foot", "Page"]
+                .into_iter()
+                .find(|name| view.stops.handle(*name, cx) == focused)
+        })
+    };
+    let mut order = Vec::new();
+    for _ in 0..3 {
+        press(cx, "tab");
+        order.push(keyed(cx));
+    }
+    assert_eq!(order, [Some("Page"), Some("Foot"), Some("Page")]);
+}

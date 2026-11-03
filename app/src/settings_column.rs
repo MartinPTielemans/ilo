@@ -164,7 +164,8 @@ pub fn column(
         .id("chromium-settings")
         .text_color(base.opacity(FOOT_TEXT))
         .child(drawn("chromium settings".into(), logged))
-        .stop(stops, Ring::Inside(radius::ROW), cx)
+        // Last, after the page beside it, though drawn before it.
+        .stop_in(stops, Ring::Inside(radius::ROW), true, cx)
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, window, cx| foot(window, cx))
         .child(glyph(

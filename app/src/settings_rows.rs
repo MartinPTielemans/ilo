@@ -95,6 +95,8 @@ pub struct Drawn {
     pub handle: FocusHandle,
     pub frame: Bounds<Pixels>,
     pub shown: Bounds<Pixels>,
+    /// It goes after the others, as Settings' column's foot comes after the page beside it.
+    pub last: bool,
 }
 
 impl Stops {
@@ -172,9 +174,14 @@ impl Stops {
     ) -> Option<Drawn> {
         let next = {
             let drawn = self.shared.drawn.borrow();
+            let (first, last): (Vec<&Drawn>, Vec<&Drawn>) =
+                drawn.iter().partition(|each| !each.last);
+            let order: Vec<&Drawn> = first.into_iter().chain(last).collect();
             let from = window.focused(cx);
-            let at = from.and_then(|from| drawn.iter().position(|each| each.handle == from));
-            drawn.get(step(at, drawn.len(), forward, round)?).cloned()
+            let at = from.and_then(|from| order.iter().position(|each| each.handle == from));
+            order
+                .get(step(at, order.len(), forward, round)?)
+                .map(|each| (*each).clone())
         }?;
         // check.sh waits for this line.
         crate::log!("browser: settings keyed {}", next.id);
@@ -191,6 +198,18 @@ impl Stops {
         id: impl Into<ElementId>,
         handle: FocusHandle,
         ring: Ring,
+    ) -> gpui::Canvas<()> {
+        self.mark_in(id, handle, ring, false)
+    }
+
+    /// As `mark`, going after all the other stops with `last`, though drawn before some, as
+    /// Chromium settings at the column's foot is drawn before the page beside it.
+    pub fn mark_in(
+        &self,
+        id: impl Into<ElementId>,
+        handle: FocusHandle,
+        ring: Ring,
+        last: bool,
     ) -> gpui::Canvas<()> {
         let (id, shared, keyed) = (id.into(), self.shared.clone(), self.shared.clone());
         let painted = handle.clone();
@@ -209,6 +228,7 @@ impl Stops {
                     handle,
                     frame,
                     shown,
+                    last,
                 });
             },
             move |frame, _, window, _| {
@@ -304,14 +324,19 @@ pub(crate) fn revealed(
 pub trait Stop: InteractiveElement + ParentElement + Styled + Sized {
     /// Makes this, by its id, a stop of `stops`, with `ring` while the keyboard is on it. It's
     /// made relative, to hold the ring.
-    fn stop(mut self, stops: &Stops, ring: Ring, cx: &App) -> Self {
+    fn stop(self, stops: &Stops, ring: Ring, cx: &App) -> Self {
+        self.stop_in(stops, ring, false, cx)
+    }
+
+    /// As `stop`, after all the others with `last` (`Stops::mark_in`).
+    fn stop_in(mut self, stops: &Stops, ring: Ring, last: bool, cx: &App) -> Self {
         let Some(id) = self.interactivity().element_id.clone() else {
             return self;
         };
         let handle = stops.handle(id.clone(), cx);
         self.track_focus(&handle)
             .relative()
-            .child(stops.mark(id, handle, ring))
+            .child(stops.mark_in(id, handle, ring, last))
     }
 
     /// A stop ringed inside its plate, as a button's.
