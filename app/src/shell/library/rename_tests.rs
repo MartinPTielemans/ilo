@@ -453,14 +453,16 @@ fn a_card_s_more_button_opens_its_space_s_menu(cx: &mut TestAppContext) {
     let at = more(1, cx);
     move_to(cx, at);
     click(cx, at);
-    let menus = host.menus.borrow();
-    assert_eq!(menus.len(), 1, "no menu, or more than one");
-    assert!(
-        menus[0]
-            .iter()
-            .any(|(title, _)| title.as_ref() == "Rename Space"),
-        "not the Space's"
-    );
+    {
+        let menus = host.menus.borrow();
+        assert_eq!(menus.len(), 1, "no menu, or more than one");
+        assert!(
+            menus[0]
+                .iter()
+                .any(|(title, _)| title.as_ref() == "Rename Space…"),
+            "not the Space's"
+        );
+    }
     assert_eq!(
         host.menu_at.get(),
         Some(at),
@@ -468,4 +470,11 @@ fn a_card_s_more_button_opens_its_space_s_menu(cx: &mut TestAppContext) {
     );
     assert!(host.shown.borrow().is_empty(), "the ••• showed the Space");
     assert!(library_open(&shell, cx), "the Library closed");
+    // It's the second card's Space's menu: its Rename Space… names Work, in the sidebar.
+    cx.update(|_, cx| host.choose("Rename Space…", cx));
+    cx.run_until_parked();
+    let renamed = shell.read_with(cx, |shell, _| {
+        shell.renaming.as_ref().map(|renaming| renaming.naming)
+    });
+    assert!(matches!(renamed, Some(Naming::Space(2))), "not Work's menu");
 }
