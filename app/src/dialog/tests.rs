@@ -75,6 +75,14 @@ fn escape_cancels(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn asked_to_close_it_cancels_and_its_window_stays(cx: &mut TestAppContext) {
+    let mut dialog = Asking::new(cx);
+    // As Windows asks for Alt+F4 (#1362).
+    assert!(!dialog.cx.simulate_close(), "the dialog's window let itself be closed");
+    assert_eq!(dialog.calls(), ["show", "hide"]);
+}
+
+#[gpui::test]
 fn return_deletes_once_the_dialog_has_gone(cx: &mut TestAppContext) {
     let mut dialog = Asking::new(cx);
     dialog.keys("enter");

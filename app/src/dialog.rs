@@ -342,7 +342,17 @@ pub fn open_at(
         window_background: WindowBackgroundAppearance::Transparent,
         ..Default::default()
     };
-    let window = cx.open_window(options, |_, cx| cx.new(|cx| Dialog::new(host, cx)));
+    let window = cx.open_window(options, |window, cx| {
+        let dialog = cx.new(|cx| Dialog::new(host, cx));
+        // Asked to close, as Windows asks the window with the keyboard on Alt+F4, it cancels as Esc
+        // does and stays, as the app shows it again for the next question (#1362).
+        let asked = dialog.downgrade();
+        window.on_window_should_close(cx, move |_, cx| {
+            asked.update(cx, |dialog, cx| dialog.answer(Answer::Cancel, cx)).ok();
+            false
+        });
+        dialog
+    });
     match window {
         Ok(window) => {
             cx.set_global(DialogWindow(window));

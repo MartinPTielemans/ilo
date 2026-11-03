@@ -336,15 +336,18 @@ pub fn showing(text: &str, cx: &App) -> bool {
         .is_some_and(|shown| shown.leaving.is_none() && shown.text == text)
 }
 
-/// The undo it offered has been done some other way: its toast goes, if it shows.
+/// The undo it offered has been done some other way: its toast goes, if it shows, whether it
+/// offers the undo with its button or names its key, as "Space deleted! Use ⌘Z to undo." does.
 pub fn hide_undo(cx: &mut App) {
     let Some(window) = cx.try_global::<ToastWindow>().map(|toast| toast.0) else {
         return;
     };
+    let undo_key = crate::shell::keystroke_label("cmd-z");
     window
         .update(cx, |toast, _, cx| {
             let undoing = toast.shown.as_ref().is_some_and(|shown| {
                 shown.buttons.iter().any(|button| button.name == UNDO_BUTTON)
+                    || shown.key.as_ref().is_some_and(|(key, _)| **key == *undo_key)
             });
             if undoing {
                 toast.leave(cx);
