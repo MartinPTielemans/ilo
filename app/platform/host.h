@@ -435,7 +435,8 @@ void host_hide_capture(void);
 void host_copy_png(const uint8_t* png, size_t size);
 
 // Asks where to save the PNG |png|, |size| bytes long, in a save panel on |ui_view|'s window, named
-// for when it was taken, and saves it there.
+// for when it was taken, and saves it there. It returns at once, before the panel shows, since the
+// UI calls it from an event its panel can't wait in.
 void host_save_png(void* ui_view, const uint8_t* png, size_t size);
 
 // Shares the PNG |png|, |size| bytes long, as a file named for when it was taken: in the system's
@@ -728,6 +729,19 @@ bool host_updates_available(void);
 // Whether the Microsoft Store updates this copy: on Windows, an MSIX from it.
 bool host_updated_by_store(void);
 
+// Whether this build is a nightly, each night's build of main (APP_TRACK=nightly at build time),
+// rather than a release.
+bool host_nightly_build(void);
+
+// Whether this build's updater can take nightly builds instead of its own: it updates itself and
+// carries a nightly feed beside its feed (branding/update-feed-nightly).
+bool host_nightly_feed(void);
+
+// Has the updater read the nightly feed, or with false its own, from its next check on: before
+// host_start_updater, from its first. Either way it installs only a build numbered above the one
+// running, so a nightly that goes back to its own feed keeps its build until a release passes it.
+void host_follow_nightly(bool nightly);
+
 // Where host_start_updater's |changed| says the update stands, for Settings › About's row and
 // Restart to Update at the sidebar's foot.
 enum {
@@ -755,6 +769,12 @@ enum {
 // host_updates_available is false.
 void host_start_updater(void (*quit)(void), void (*changed)(int stage, const char* version));
 
+// On Windows, before host_start_updater: if a quit since the last launch started installing an
+// update, calls |installed| with the update's build number and this copy's own, once. Where it
+// answers that the update didn't go in, the updater's first check waits its 8 hours, so the app
+// can say so and offer Try Again until the user asks.
+void host_take_install(bool (*installed)(uint64_t build, uint64_t own));
+
 // The app menu's Check for Updates…, which checks now: on the Mac, Sparkle's check, which shows
 // what it finds in Sparkle's window; on Windows, the same quiet check as Settings › About's,
 // which the app shows there, as the updater has no window.
@@ -776,7 +796,9 @@ void host_install_update(void);
 // Mac, nothing: Sparkle installs on quit by itself.
 void host_finish_update(void);
 
-// On the Mac: calls |notes| with the release notes' URL of the update this launch is the first of, once.
+// On the Mac and Windows: calls |notes| with the release notes' URL of the update this launch is
+// the first of, once, as the updater kept them when it installed it. Windows' are kept with the
+// build host_take_install reads, so they're taken before it.
 void host_take_update_notes(void (*notes)(const char* url));
 
 // For the test driver: presses the button titled |title| in the alert shown. False if none shows.

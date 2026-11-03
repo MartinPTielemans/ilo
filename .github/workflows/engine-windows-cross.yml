@@ -4,18 +4,21 @@
 # recompiles only what changed. Microsoft's compiler and SDK come from a zip the owner packaged on a
 # Windows machine, which Microsoft's licence lets no one redistribute: it stays on that machine, in
 # $ILO_ENGINE_ROOT/windows-toolchain, and nothing here uploads it (engine/README.md, Windows). Run
-# by hand, nightly on main, and on main when the pin, the series, the cross build's scripts or
-# ilo's Windows icon change. Not for each core change: that rebuilt it on every merge, on the one
-# runner the Linux engines wait for, so a Windows lane that needs today's core from main dispatches
-# it by hand. Never on branches or pull requests, as the repository is public. engine-windows.yml
-# builds the same engine on GitHub's Windows runners, by hand only.
+# by hand, each night on main when its core or engine changed since the newest Windows engine
+# (#871), and on main when the pin, the series, the cross build's scripts or ilo's Windows icon
+# change. Not for each core change: that rebuilt it on every merge, on the one runner the Linux
+# engines wait for, so a Windows lane that needs today's core from main dispatches it by hand. Never
+# on branches or pull requests, as the repository is public. engine-windows.yml builds the same
+# engine on GitHub's Windows runners, by hand only.
 name: Engine on Windows (cross-compiled)
 
 on:
   workflow_dispatch:
-  # Main's core, once a day, at 02:00 UTC.
+  # Main's core, once a day, at 02:00 UTC, when it changed (tools/engine-changed.sh).
   schedule:
     - cron: '0 2 * * *'
+  # Not on a change to this file, so a change to how it builds never starts a build, or replaces
+  # one waiting. These paths, and the core, are the night's inputs (engine-changed.sh).
   push:
     branches: [main]
     paths:
@@ -26,18 +29,44 @@ on:
       - engine/windows/cross/**
       - engine/icons.py
       - app/platform/windows/package/Assets/ilo.ico
-      - .github/workflows/engine-windows-cross.yml
 
 # The runner takes one job at a time, so this never builds beside the Linux engine. Of this
-# workflow's waiting runs only the newest is kept. Sharing the Linux engine's group would instead
+# workflow's waiting runs only the newest is kept, but the night has a group of its own, so it never
+# replaces a waiting dispatch, nor one of those it. Sharing the Linux engine's group would instead
 # let each platform's waiting run cancel the other's.
 concurrency:
-  group: ilo-engine-windows
+  group: ilo-engine-windows${{ github.event_name == 'schedule' && '-night' || '' }}
   cancel-in-progress: false
 
 jobs:
-  build:
+  # On GitHub's runners, so a night with nothing to build never takes the engine's runner. A push or
+  # a dispatch always builds.
+  changes:
+    name: Changes
     if: github.repository == 'MartinPTielemans/ilo'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+    steps:
+      - if: github.event_name == 'schedule'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: decide
+        run: |
+          status=0
+          if [ "$GITHUB_EVENT_NAME" = schedule ]; then
+            tools/engine-changed.sh windows > "$RUNNER_TEMP/changed" || status=$?
+            tee -a "$GITHUB_STEP_SUMMARY" < "$RUNNER_TEMP/changed"
+          fi
+          if [ "$status" = 3 ]; then echo build=false; else echo build=true; fi >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     # Microsoft's toolchain zip stays on the owner's machine, so a second Linux engine runner must
     # never take this job.
     runs-on: [self-hosted, linux, x64, ilo-engine, ilo-engine-windows]

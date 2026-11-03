@@ -49,7 +49,6 @@ send click 600 60
 if [ "$active" != 1 ]; then
   exec 3>&- 5>&-
   quit
-  kill "$server"
   echo "skip: passwords. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi

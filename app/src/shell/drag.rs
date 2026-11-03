@@ -308,6 +308,10 @@ impl Shell {
         if !drag.moving && !incoming && moved.x.abs().max(moved.y.abs()) < px(DRAG_START) {
             return;
         }
+        let pointer = in_sidebar(position, drag.origin);
+        // Ahead of the page's targets, which take the drag: one that crossed the edge to get over
+        // the page is no longer held there (#1466).
+        self.watch_edge(pointer.x, cx);
         if !incoming && self.drag_over_page(position, cx) {
             return;
         }
@@ -317,7 +321,6 @@ impl Shell {
         let (tab, to, grab, span, kept_depth) =
             (drag.tab, drag.to, drag.grab, drag.span, drag.depth);
         let (from, from_depth) = (drag.from, drag.from_depth);
-        let pointer = in_sidebar(position, drag.origin);
         // Rows in, from where it was, by how far the pointer has gone right. Links dragged in go
         // in as far as the row under them.
         let moved_in = (pointer.x - in_sidebar(drag.press, drag.origin).x) / FOLDER_INDENT;
@@ -332,7 +335,6 @@ impl Shell {
         // Its own Space's, which may not be the one shown.
         let folder = self.is_folder_anywhere(tab);
         let away = drag.space != self.space;
-        self.watch_edge(pointer.x, cx);
         // A favorite stays one in an agent's Space, which it can't move into.
         let kept = self.favorites.contains(&tab) && self.agents_space_shown();
         // Past the most, a row stays one.
@@ -462,10 +464,12 @@ impl Shell {
 
     /// Whether a dragged tab at `x` across the sidebar is held at its left or right edge, where it
     /// pages to the user's Space on that side once it has waited there, as Arc's does. Only a tab
-    /// Move to takes: not a favorite, a folder, a split view or links dragged in.
+    /// Move to takes: not a favorite, a folder, a split view or links dragged in. Past the right
+    /// edge it's over the page, which isn't the edge.
     fn watch_edge(&mut self, x: f32, cx: &mut Context<Self>) {
         let width = self.width();
-        let side = (x < EDGE).then_some(false).or((x > width - EDGE).then_some(true));
+        let right = x > width - EDGE && x <= width;
+        let side = (x < EDGE).then_some(false).or(right.then_some(true));
         let Some(drag) = &self.drag else {
             return;
         };
@@ -874,7 +878,9 @@ impl Shell {
         }
         // The release that ends the drag isn't a click.
         self.dragged = true;
+        let back = self.drag.as_ref().and_then(|drag| drag.over_page.as_ref()?.back());
         self.settle_drag();
+        self.show_back(back, cx);
         self.putting_back = true;
         cx.notify();
         true

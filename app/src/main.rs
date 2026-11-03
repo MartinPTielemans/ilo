@@ -482,6 +482,12 @@ mod platform {
             changed: extern "C" fn(stage: c_int, version: *const c_char),
         );
         #[cfg(not(target_os = "linux"))]
+        pub fn host_nightly_build() -> bool;
+        #[cfg(not(target_os = "linux"))]
+        pub fn host_nightly_feed() -> bool;
+        #[cfg(not(target_os = "linux"))]
+        pub fn host_follow_nightly(nightly: bool);
+        #[cfg(not(target_os = "linux"))]
         pub fn host_check_for_updates();
         #[cfg(not(target_os = "linux"))]
         pub fn host_check_for_updates_quietly();
@@ -489,8 +495,10 @@ mod platform {
         pub fn host_install_update();
         #[cfg(not(target_os = "linux"))]
         pub fn host_finish_update();
-        #[cfg(target_os = "macos")]
+        #[cfg(not(target_os = "linux"))]
         pub fn host_take_update_notes(notes: extern "C" fn(url: *const c_char));
+        #[cfg(target_os = "windows")]
+        pub fn host_take_install(installed: extern "C" fn(build: u64, own: u64) -> bool);
     }
 
     /// Where host_start_updater's `changed` says the update stands (host.h's HOST_UPDATE_*).
@@ -570,6 +578,8 @@ thread_local! {
     // The links other apps sent before the first window had brought back the Spaces, which they
     // open over; None after.
     static LAUNCH_LINKS: RefCell<Option<Vec<String>>> = const { RefCell::new(Some(Vec::new())) };
+    // The release notes of the update this launch is the first of, which the first window opens.
+    static UPDATE_NOTES: RefCell<Option<String>> = const { RefCell::new(None) };
     // The account as the core last said, which it says first as it starts, before GPUI has: the
     // first window hands it to Settings.
     static SYNC_STATE: RefCell<Option<account::State>> = const { RefCell::new(None) };
@@ -4249,12 +4259,13 @@ fn open_saved_windows(cx: &mut App) {
 }
 
 /// Shows the Spaces as the user left them in `window`, else a first Space, and says whether it
-/// brought them back. A page given in BROWSER_URL, and the links from other apps that launched the
-/// browser, open on top either way, in this window, the one in front. With nothing to bring back
-/// and nothing to open, it's a new profile's first run: `shell` plays the onboarding, then shows
-/// the welcome on the empty card. This is its only way in at launch, so a launch that brings Spaces
-/// back never reads more than `restored` for it. check.sh sets BROWSER_ONBOARDING to "skip" for
-/// every run but the onboarding run's, which sets "light" or "dark".
+/// brought them back. A page given in BROWSER_URL, an update's notes, and the links from other apps
+/// that launched the browser, open on top either way, in this window, the one in front, the links
+/// where Settings › Links sends them. With nothing to bring back and nothing to open, it's a new
+/// profile's first run: `shell` plays the onboarding, then shows the welcome on the empty card. This
+/// is its only way in at launch, so a launch that brings Spaces back never reads more than
+/// `restored` for it. check.sh sets BROWSER_ONBOARDING to "skip" for every run but the onboarding
+/// run's, which sets "light" or "dark".
 fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -> bool {
     let start = Instant::now();
     let restored = unsafe { bc::bc_window_restore(window) };
@@ -4270,9 +4281,10 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
     // The rules name the Spaces by their places, so they're read once the Spaces are back.
     link_rules_host::read();
     let links = LAUNCH_LINKS.take().unwrap_or_default();
+    let notes = UPDATE_NOTES.take().or_else(first_launch_notes);
     match std::env::var("BROWSER_URL") {
         Ok(url) => open_tab(window, &url),
-        Err(_) if !restored && links.is_empty() => {
+        Err(_) if !restored && links.is_empty() && notes.is_none() => {
             let onboarding = std::env::var("BROWSER_ONBOARDING").ok();
             shell
                 .update(cx, |shell, _, cx| {
@@ -4285,8 +4297,37 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
         }
         Err(_) => {}
     }
+    // An update's notes are ilo's own page, What's New, so they open here as the command's does,
+    // whatever Settings › Links says of links from other apps (#1484), and the links over them.
+    if let Some(url) = notes {
+        let (window, tab, space) = open_link_in(window, &url, 0);
+        // check.sh reads this line.
+        log!("browser: update notes {url}: tab {tab} in space {space} of window {window}");
+    }
     open_links_in(window, &links);
     restored
+}
+
+/// The release notes of the update this launch is the first of, where the Mac's main hasn't kept
+/// them before Chromium starts: taken with the first window, so a second launch, which hands its
+/// links to the browser running and exits, never takes them.
+fn first_launch_notes() -> Option<String> {
+    #[cfg(target_os = "windows")]
+    unsafe { platform::host_take_update_notes(keep_update_notes) };
+    // On Linux, where an update can come from outside ilo, a version newer than the profile's
+    // last. Only a release's, the Flatpak: a dev build's moves on under the checks' profiles.
+    #[cfg(target_os = "linux")]
+    if cfg!(feature = "prod") {
+        let file = std::path::PathBuf::from(profile_dir()).join("last-version");
+        return updates::first_launch_notes(&file, browser::build_info::VERSION);
+    }
+    UPDATE_NOTES.take()
+}
+
+#[cfg(not(target_os = "linux"))]
+extern "C" fn keep_update_notes(url: *const c_char) {
+    let url = unsafe { CStr::from_ptr(url) }.to_string_lossy().into_owned();
+    UPDATE_NOTES.set(Some(url));
 }
 
 /// Logs where the window is, for check.sh.
@@ -5401,10 +5442,33 @@ fn start_updates(cx: &mut App) {
     .detach();
     #[cfg(not(target_os = "linux"))]
     {
+        // A nightly, or a release, and where the build carries a nightly feed, the builds the user
+        // chose, else this one's: the updater reads that feed from its first check.
+        let built = match unsafe { platform::host_nightly_build() } {
+            true => updates::Track::Nightly,
+            false => updates::Track::Release,
+        };
+        let own = updater == updates::Updater::Own;
+        let followed = (own && unsafe { platform::host_nightly_feed() })
+            .then(|| followed_track().unwrap_or(built));
+        updates::tracks(built, followed, cx);
+        unsafe { platform::host_follow_nightly(followed == Some(updates::Track::Nightly)) };
         // Restart to Update on Windows, whose installer runs once the browser has gone, which needs
         // no asking.
         extern "C" fn quit() {
             quit_because("the updater's install");
+        }
+        // An installer that failed after the last quit left this launch the old build (#1459).
+        #[cfg(target_os = "windows")]
+        {
+            extern "C" fn installed(build: u64, own: u64) -> bool {
+                let went_in = updates::went_in(build, own);
+                if !went_in {
+                    update_app_later(updates::didnt_install);
+                }
+                went_in
+            }
+            unsafe { platform::host_take_install(installed) };
         }
         unsafe { platform::host_start_updater(quit, update_changed) };
     }
@@ -5433,6 +5497,22 @@ fn start_updates(cx: &mut App) {
             .await;
         })
         .detach();
+    }
+}
+
+/// Where the builds the user chose in Settings › About are kept: "nightly" or "release", for the
+/// app, not a profile, as its updates are. Without it, the updater takes this build's own.
+#[cfg(not(target_os = "linux"))]
+fn followed_track_path() -> String {
+    format!("{}/update-track", profile_dir())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn followed_track() -> Option<updates::Track> {
+    match std::fs::read_to_string(followed_track_path()).ok()?.trim() {
+        "nightly" => Some(updates::Track::Nightly),
+        "release" => Some(updates::Track::Release),
+        _ => None,
     }
 }
 
@@ -5488,6 +5568,24 @@ impl updates::Host for SystemUpdater {
         }
         #[cfg(target_os = "linux")]
         flatpak::restart(cx);
+    }
+
+    /// Kept for the next launch, which reads it before the updater's first check. Linux offers no
+    /// choice: a Flatpak updates only the branch it's installed from.
+    fn follow(&self, track: updates::Track, _: &mut App) {
+        #[cfg(not(target_os = "linux"))]
+        {
+            let name = match track {
+                updates::Track::Nightly => "nightly",
+                updates::Track::Release => "release",
+            };
+            if let Err(error) = std::fs::write(followed_track_path(), name) {
+                log!("browser: the update track wasn't kept: {error}");
+            }
+            unsafe { platform::host_follow_nightly(track == updates::Track::Nightly) };
+        }
+        #[cfg(target_os = "linux")]
+        let _ = track;
     }
 }
 
@@ -7709,13 +7807,10 @@ fn main() {
         if !unsafe { platform::host_keep_keychain_key() } {
             return;
         }
-        // The first launch of an update opens its release notes, over the Spaces it brings back.
-        extern "C" fn update_notes(url: *const c_char) {
-            let url = unsafe { CStr::from_ptr(url) }.to_string_lossy().into_owned();
-            LAUNCH_LINKS.with_borrow_mut(|links| links.as_mut().map(|links| links.push(url)));
-        }
-        unsafe { platform::host_take_update_notes(update_notes) };
     }
+    // The first launch of an update opens its release notes, over the Spaces it brings back. Only
+    // a build that carries Sparkle keeps them, and check.sh's links run, for its own build.
+    unsafe { platform::host_take_update_notes(keep_update_notes) };
     let (args, host) = switches_and_host(std::env::args().collect());
     let mut argv: Vec<*const c_char> = args.iter().map(|arg| arg.as_ptr()).collect();
     let code = unsafe { bc::bc_main(argv.len() as c_int, argv.as_mut_ptr(), &host) };

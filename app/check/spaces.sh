@@ -119,11 +119,13 @@ expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on s
 at=$(grep '^browser: theme picker at' "$log" | tail -1 | cut -d' ' -f5-)
 [ "$(echo "$at" | awk '{ print $3, $4 }')" = "370 509" ] ||
   fail "the theme picker opened at $at, not 370 by 509"
-# Half way from the field's middle to its right edge is red: hue 0 at lightness 0.5. A whole
-# pixel's click lands half a point right of it and below.
+# Half way from the field's middle to its right edge is red: hue 0 at lightness 0.5. X11's and
+# Windows' drivers click on whole pixels, which lands half a point right of it and below, a little
+# less on Windows, whose picker opens a fraction of a point to the right (#1368).
 red_at="x=0.5000 y=0.0000"
 red_color=ff0000
 [ -z "$x11" ] || { red_at="x=0.5030 y=0.0030"; red_color=ff0302; }
+! windows || { red_at="x=0.5029 y=0.0029"; red_color=ff0302; }
 rest="intensity=0.810 grain=0.000 appearance=automatic"
 red="$red_at colors=1 $rest"
 send clickkey 276.5 178.5
@@ -235,6 +237,18 @@ expect "^browser: space $first in " "the first Space's dot didn't show it"
 expect "^browser: settled space $first\$" "the first Space's page didn't settle"
 expect_tabs "$c $a" "$a" "back in the first Space, its last-used tab"
 ../tools/window-screenshot.sh "$pid" "$out/space-last-used.png" || fail "no window to capture"
+# A row carried across the sidebar's right edge out over the page is no longer at the edge, and
+# held there past the edge's 0.5 s wait, the hand's hold the sleep is, it pages nowhere (#1466).
+send press $(row 0)
+send dragto 110 $(row 0 | cut -d' ' -f2)
+send dragto 220 $(row 0 | cut -d' ' -f2)
+send dragto $page_point
+expect "^browser: drop targets for $a\$" "a row dragged over the page didn't bring the targets"
+sleep 1
+none_since '^browser: drag paged to space' || fail "a row held over the page paged to the next Space"
+send dragto $(row 0)
+expect '^browser: drop targets gone$' "the targets stayed with the row back over the sidebar"
+send release $(row 0)
 # A row held at the sidebar's right edge pages to the next Space, and let go there it moves to it.
 # Held on another row's middle half, it doesn't join that row in a split on the way, whose rest is
 # shorter than the edge's wait (#1089). ⌘Z puts it back in its Space, where the window doesn't go

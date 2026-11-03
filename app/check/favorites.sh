@@ -37,7 +37,6 @@ send click $page_point
 if [ "$active" != 1 ]; then
   exec 3>&-
   quit
-  kill "$server"
   echo "skip: favorites. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
@@ -331,7 +330,6 @@ send click $page_point
 if [ "$active" != 1 ]; then
   exec 3>&-
   quit
-  kill "$server"
   echo "skip: the restored favorite's menu. Browser wasn't the active app, so the page ignored"
   echo "  the click."
   exit 0
@@ -623,7 +621,6 @@ send click $page_point
 if [ "$active" != 1 ]; then
   exec 3>&-
   quit
-  kill "$server"
   echo "skip: the most favorites. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
