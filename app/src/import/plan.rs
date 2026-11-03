@@ -292,9 +292,8 @@ pub fn plan(found: &Found, names: &[(String, String)], existing: &Existing) -> P
             },
             here => here,
         };
-        let same = |condition: Condition, text: &str| {
-            condition == rule.condition && text == rule.text
-        };
+        let same =
+            |condition: Condition, text: &str| condition == rule.condition && text == rule.text;
         let here = match space {
             SpaceRef::Existing(id) => (existing.link_rules.iter())
                 .any(|each| each.space == id && same(each.condition, &each.text)),
