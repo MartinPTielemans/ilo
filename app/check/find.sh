@@ -78,6 +78,7 @@ check_find_bar() {
 # first one comes, when there are none to hold (#905). All of it in the bar, which finds it, is
 # none of it in the page. On the Mac nothing that forks, such as uname, comes between ⌘F and the
 # keys, as the driver starts a command as its line comes.
+skip_on_sway_xwayland "the find bar's keys and the steps after them"
 post key f cmd
 # The app can handle ⌘F before the driver reads the next line, so its lines are looked for from
 # ⌘F's step.

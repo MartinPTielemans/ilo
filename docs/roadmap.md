@@ -50,6 +50,8 @@ Per platform: the platform layer, packaging, updater, signing. Linux first runs 
 
 **Done when** each platform's build passes the parity checklist's MVP items and the performance gate, and on Linux that holds on native Wayland as well as X11.
 
+Known gap on Linux: on a wlroots compositor such as sway, ilo run on X11 through Xwayland can't keep the keys in its panels, the password offer and the find bar, since the compositor's window manager sends the X focus back from child windows; there, use the native Wayland session (#1646).
+
 ## Performance gate
 
 Measured on every release against Chrome, Helium and Ardia, following the method in Ardia's `docs/perf/vs-browsers.md`.

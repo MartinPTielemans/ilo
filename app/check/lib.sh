@@ -273,6 +273,17 @@ quit() {
   quit_app
   exited "$@"
 }
+# On X11 through sway's Xwayland, the steps from here on, $1, need a child window, such as the
+# password offer or the find bar, to keep the X focus, which wlroots' window manager sends back to
+# the browser window (#1646). There they're skipped and the run ends; Wayland and Xvfb run them.
+skip_on_sway_xwayland() {
+  [ "$(uname)" = Linux ] && [ "${BROWSER_HEADLESS:-xvfb}" != xvfb ] &&
+    [ -z "${WAYLAND_DISPLAY:-}" ] || return 0
+  exec 3>&-
+  quit
+  echo "skip: $1: sway's Xwayland sends child windows' X focus back (#1646)"
+  exit 0
+}
 
 # Sends a command to the app's driver (platform/mac/drive.mm, platform/windows/drive.cc,
 # platform/linux/drive.rs) and waits
