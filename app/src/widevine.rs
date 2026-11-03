@@ -3,8 +3,9 @@
 //! protected-media note offers to download it from Google the first time a page needs it, and
 //! Settings › Advanced shows it and removes it, or downloads it for a site whose note was closed.
 //! Linux loads it at launch, so a page plays with it once the browser restarts, which brings the
-//! page back: the note and the row both offer the restart. Elsewhere the core offers none, and neither do the note and Settings. Agents get no
-//! path to the yes: the core takes it from the user's click alone.
+//! page back: the note and the row both offer the restart. Elsewhere the core offers none, and
+//! neither do the note and Settings. Agents get no path to the yes: the core takes it from the
+//! user's click alone.
 
 use std::rc::Rc;
 
