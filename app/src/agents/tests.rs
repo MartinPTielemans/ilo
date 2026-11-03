@@ -2142,10 +2142,15 @@ mod tasks {
     use crate::agents::runner::{self, Cli, Failure, Out};
     use crate::agents::task::{AskedOn, Dot, State, TaskAction};
 
-    /// A stand-in for `claude` that keeps what it's sent beside itself, and never answers.
+    /// A stand-in for `claude` that keeps what it's sent beside itself, and never answers. Each
+    /// is in a folder of its own: tests running at once that shared one would rewrite the script
+    /// under each other's CLI, and each CLI's start would empty the other's `.in`.
     #[cfg(unix)]
     fn fake_cli(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ilo-tasks-{}-{name}", std::process::id()));
+        static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("ilo-tasks-{}-{name}-{made}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let program = dir.join("claude");
         std::fs::write(&program, "#!/bin/sh\nexec cat > \"$0.in\"\n").unwrap();
