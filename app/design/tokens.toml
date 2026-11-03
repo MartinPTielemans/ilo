@@ -859,6 +859,13 @@ space-height = 34.0
 space-swatch-shown = 14.0
 space-swatch = 10.0
 space-swatch-hovered = 12.0
+# More Spaces than fit at the pitch share the switcher's span in half points; once a share would be
+# under 22, the Space shown keeps 22 and the others share the rest: 17.5, 13 and 9 with 12, 16
+# and 22 Spaces in a sidebar 300 wide (Arc 1.171 ax). A squeezed item's ink keeps 4 clear of its
+# neighbours, and never goes under 4 (ours).
+space-shown-least = 22.0
+space-clear = 4.0
+space-least = 4.0
 form-title-top = 140.0
 form-title-height = 20.0
 form-inset = 14.0
@@ -1150,9 +1157,9 @@ spaces-inset = 48.0
 card-width = 240.0
 card-radius = 16.0
 card-gap = 24.0
-# Ours (*interim*, as Arc's recording never ran out of room): the section grows until the page
-# beside it would be narrower than this, and its cards scroll across past that.
-spaces-page = 400.0
+# Once its cards don't fit, the section leaves the page this much of the window, however narrow,
+# and its cards scroll across (Arc 1.171 ax: 500 → 444, 1100 → 1044, live as the window resizes).
+spaces-page = 56.0
 # The name's row in the card, 33 down to its middle as in Arc, with the rows 52 down.
 card-name-top = 14.0
 card-name-height = 38.0

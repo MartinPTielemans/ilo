@@ -30,6 +30,7 @@ use crate::{
 #[cfg(test)]
 mod agent_spaces;
 mod beside;
+mod card_strip;
 #[cfg(test)]
 mod link_previews;
 #[cfg(test)]
@@ -376,6 +377,9 @@ use crate::tokens::shell::SPACE_HEIGHT;
 use crate::tokens::shell::SPACE_SWATCH_SHOWN;
 use crate::tokens::shell::SPACE_SWATCH;
 use crate::tokens::shell::SPACE_SWATCH_HOVERED;
+use crate::tokens::shell::SPACE_SHOWN_LEAST;
+use crate::tokens::shell::SPACE_CLEAR;
+use crate::tokens::shell::SPACE_LEAST;
 // A Space's icon in the switcher takes its dot's place in the same item. Its glyph is 16 pt, a
 // favicon's size (ours, *interim*).
 const SPACE_ICON_SWITCHER: f32 = EMOJI_SIZE;
@@ -905,6 +909,9 @@ struct Swipe {
     /// changed.
     ready: bool,
     turned: Option<Instant>,
+    /// Where they've taken the Library's Spaces cards, before the rubber band, while they scroll
+    /// them rather than move the Library (`card_strip`).
+    cards: Option<f32>,
 }
 
 /// A Space's page settling on its place, after a swipe or a switch.
@@ -1342,6 +1349,8 @@ pub struct Shell {
     library_motion: Option<(f32, f32, Instant)>,
     /// While the sidebar under the Library fades: its opacity when it started, and when.
     sidebar_fade: Option<(f32, Instant)>,
+    /// How far the Library's Spaces cards have scrolled across, when they don't fit.
+    card_strip: card_strip::CardStrip,
     /// While the circle goes back after a pull made a Space.
     circle_exit: Option<new_space::CircleExit>,
     /// What the tabs' pages ask, such as for the camera: only shown tabs ask.
@@ -1653,6 +1662,7 @@ impl Shell {
             library_resize: None,
             library_motion: None,
             sidebar_fade: None,
+            card_strip: Default::default(),
             circle_exit: None,
             questions: HashMap::new(),
             question_drawn: Rc::default(),
