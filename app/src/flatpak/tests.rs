@@ -315,7 +315,7 @@ fn the_wait_for_the_profile_runs_the_build_with_its_arguments() {
         })
     };
     let started = std::time::Instant::now();
-    let out = std::process::Command::new("/bin/sh")
+    let out = crate::child::command("/bin/sh")
         .args([
             "-c",
             RESTART,

@@ -182,10 +182,12 @@ expect "^browser: today $b\$" "⌘Z didn't close the copy and put the tab back: 
 # The copy closing may have shown the favorite already.
 send click $tile
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "the favorite isn't shown again" "$undone"
-# ⌘W unloads a favorite and keeps its tile, showing the top Today tab, and ⌘1 loads it again.
+# ⌘W unloads a favorite and keeps its tile, showing the tab shown before it and ringing its row,
+# and ⌘1 loads it again.
 send click $page_point
 send key w cmd
-expect "^browser: selected $b\$" "⌘W on a favorite didn't show the top Today tab"
+expect "^browser: selected $b in " "⌘W on a favorite didn't show the tab shown before it"
+expect "^browser: sidebar ring $b at " "⌘W on a favorite didn't ring the row of the tab it showed"
 expect "^browser: page $a unloaded 1\$" "⌘W on a favorite didn't unload it"
 none_since "^browser: tab $a closed\$" || fail "⌘W closed a favorite"
 [ "$(favorites)" = "$a" ] ||
@@ -233,8 +235,13 @@ expect "^browser: loaded $c $site\$" "the copy didn't load the favorite's page"
 # The row under the copy slides down to make room, and until it's there the list is only as long as
 # where the row is drawn, too short to scroll in the window below.
 expect '^browser: rows settled$' "the row under the copy didn't settle"
-# Past its top in a window too short for its rows, the list shows a line across the sidebar 6 under
-# the tile, 2 over the rows' top, and back at the top it hides it.
+# Past its top in a window too short for its rows, the list shows a line across the sidebar under
+# the Space's name, which stays put, 2 over the rows' top, and back at the top it hides it. The
+# knob comes at the sidebar's edge as the list scrolls, and fades once it has stopped (Arc 1.170),
+# or with the system's scroll bars shown always, as the hosted runners have them, it's there while
+# the rows overflow.
+legacy=0
+grep -q '^browser: scroll bars always$' "$log" && legacy=1
 send layout
 size=$(grep '^browser: layout content' "$log" | tail -1 |
   sed 's/^browser: layout content \([0-9]*\)x\([0-9]*\),.*/\1 \2/')
@@ -245,12 +252,19 @@ expect '^browser: drawn at 1000x340$' "the window didn't draw at its new size"
 expect '^browser: scroll foot edge shown$' "the rows under the list's foot didn't show its edge"
 send scroll 100 200 10 5
 expect '^browser: scroll edge shown$' "the list scrolled past its top didn't show its edge"
+if [ $legacy = 1 ]; then
+  grep -q '^browser: legacy scroller shown$' "$log" || fail "the rows overflowing didn't show the knob"
+else
+  expect '^browser: scroller shown$' "the list scrolled didn't show its knob"
+fi
 ../tools/window-screenshot.sh "$pid" "$out/scroll-edge.png" || fail "no window to capture"
-edge=$(pixel "$out/scroll-edge.png" 0.1 $(awk 'BEGIN { print 143.5 / 340 }'))
-gap=$(pixel "$out/scroll-edge.png" 0.1 $(awk 'BEGIN { print 141.5 / 340 }'))
+# Near each row's top, as Windows' capture is a row taller than the window.
+edge=$(pixel "$out/scroll-edge.png" 0.1 $(awk 'BEGIN { print 187.2 / 340 }'))
+gap=$(pixel "$out/scroll-edge.png" 0.1 $(awk 'BEGIN { print 185.2 / 340 }'))
 # A light sidebar, as an opaque window's is, draws its edge darker.
 brighter "$edge" "$gap" || brighter "$gap" "$edge" ||
   fail "the edge is $edge over the sidebar's $gap"
+[ $legacy = 1 ] || expect '^browser: scroller hidden$' "the knob stayed once the list had stopped"
 send scroll 100 200 -10 5
 expect '^browser: scroll edge hidden$' "the list back at its top didn't hide its edge"
 # There, showing the last tab glides the list the least that shows its row whole, recorded for
