@@ -106,10 +106,15 @@ jobs:
           *) exit "$status" ;;
           esac
 
-      # The runner's 1024 by 768 screen is too small for the windows the checks lay out for the VMs'
+      # The runner's 1024 by 768 screen is too small for the windows the checks lay out for the VMs',
+      # and it reduces transparency, which draws the window's material opaque over any backdrop
       # (#1554). Before the build, which the Dock and the windows' layout settle over.
       - if: ${{ steps.engine.outputs.found == 'true' }}
-        run: swift ../.github/scripts/display-mode.swift 1920 1080
+        run: |
+          swift ../.github/scripts/display-mode.swift 1920 1080
+          defaults write com.apple.universalaccess reduceTransparency -bool false
+          [ "$(defaults read com.apple.universalaccess reduceTransparency)" = 0 ] ||
+            { echo "::error::Reduce Transparency stayed on"; exit 1; }
 
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: rustup update stable --no-self-update
