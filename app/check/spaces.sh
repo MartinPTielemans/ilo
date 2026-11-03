@@ -389,12 +389,15 @@ Export as Markdown…, Delete Space")\$" \
 none_since '^browser: library space ' || fail "a right-click on a card showed its Space"
 send dismiss
 # The ••• at the second card's foot, its middle 22 in from the card's right and 21.5 above its foot,
-# shows the same menu and leaves the Library open on the Space shown (#1401).
-post click $((404 + 240 - 22)) $((${content#*x} - 48 - 22))
+# shows with the pointer on the card, here on the ••• itself, which the capture shows before the
+# menu covers it. It shows the same menu and leaves the Library open on the Space shown (#1401).
+more_point="$((404 + 240 - 22)) $((${content#*x} - 48 - 22))"
+send move $more_point
+../tools/window-screenshot.sh "$pid" "$out/library-card-more.png" || fail "no window to capture"
+post click $more_point
 expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $themed, $profile, \
 Export as Markdown…, Delete Space")\$" \
   "a click on the second card's ••• didn't show its menu"
-../tools/window-screenshot.sh "$pid" "$out/library-card-more.png" || fail "no window to capture"
 none_since '^browser: library space ' || fail "a click on a card's ••• showed its Space"
 send dismiss
 # The card's field is 8 in from its sides and 36 tall around the middle of its name's row, 25
