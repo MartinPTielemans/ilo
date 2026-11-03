@@ -953,6 +953,7 @@ impl Shell {
         let look = Look::on(
             colors.ground.blend(colors.ink(IMPORT_SURFACE)),
             colors.ink(1.),
+            rgb(SIGNAL),
         );
         let embedded = |view: gpui::AnyView| {
             div()
@@ -1043,7 +1044,7 @@ impl Shell {
         let frames = onboarding.frames.clone();
         // The import step's boxes, the ink a little over the ground.
         let surface = colors.ground.blend(colors.ink(IMPORT_SURFACE));
-        let look = Look::on(surface, colors.ink(1.));
+        let look = Look::on(surface, colors.ink(1.), rgb(SIGNAL));
         let rows = self.opt_ins(cx).into_iter().map(|(opt_in, on)| {
             let slid = match switched {
                 Some((turned, at)) if turned == opt_in => {
@@ -1064,7 +1065,7 @@ impl Shell {
                 .relative()
                 .flex_none()
                 .ml(px(PADDING))
-                .child(switch(&look, on, slid, rgb(SIGNAL)))
+                .child(switch(&look, on, slid, look.accent))
                 .child(opt_in_frame(frames.clone(), opt_in, "switch", settled));
             let row = div()
                 .id(opt_in.name())
@@ -1089,7 +1090,7 @@ impl Shell {
 
     /// The favorites offered, a row each with its box ticked in the green, which a click unticks.
     fn favorite_rows(&self, colors: Colors, cx: &mut Context<Self>) -> gpui::Div {
-        let look = Look::on(colors.ground, colors.ink(1.));
+        let look = Look::on(colors.ground, colors.ink(1.), rgb(SIGNAL));
         let unticked = self
             .onboarding
             .as_ref()
@@ -1123,7 +1124,7 @@ impl Shell {
                         .on_click(
                             cx.listener(move |shell, _, _, cx| shell.onboarding_tick(&tab.url, cx)),
                         )
-                        .child(checked_row(&look, on, name, rgb(SIGNAL), rgb(PAPER)))
+                        .child(checked_row(&look, on, name, look.accent, rgb(PAPER)))
                 }),
         )
     }

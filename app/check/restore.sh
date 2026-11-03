@@ -9,8 +9,9 @@
 # icon, picked in its icon picker, comes back too. A tab closed before the quit stays closed,
 # in the archive, from which the Library reopens it at its page. A page's downloads go in the
 # check's folder, on the Mac with macOS's quarantine flag, a new one's icon flies
-# into the Library button, none of those a relaunch reads does, and ⇧⌘J opens the Library on
-# Downloads, which lists them. While one runs, the button keeps
+# from the pointer into a bin on the Library button, recorded with the recent downloads coming and
+# going, none of those a relaunch reads does, and ⇧⌘J opens the Library on Downloads, which lists
+# them. While one runs, the button keeps
 # its name and resting on it shows the running one with the finished one. With one running, ⌘Q
 # asks first: Continue Downloading shows the Library's Downloads, and Quit quits, cancelling it.
 # After the relaunch, Remove from List and Clear List take them off the list and keep their files.
@@ -43,7 +44,8 @@ if command -v sqlite3 > /dev/null && [ -f "$history_db" ]; then
   sqlite3 "$history_db" "delete from downloads; delete from downloads_url_chains;
     delete from downloads_slices;" || { echo "FAIL: the downloads wouldn't clear" >&2; exit 1; }
 fi
-BROWSER_DRIVE=1 BROWSER_URL="$site" "$browser" < "$out/drive" > "$log" 2>&1 &
+# With the motion GitHub's hosted Mac and Windows reduce, for the download's flight recorded below.
+BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL="$site" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -80,15 +82,19 @@ if [ "$(uname)" = Darwin ]; then
     fail "the download has no quarantine flag: $flag"
   [ -n "$(echo "$flag" | cut -d';' -f3)" ] || fail "the download's quarantine flag names no app: $flag"
 fi
+# Its icon flies from the pointer, over the page, into a bin on the Library button. The window is
+# captured only between recordings: on the hosted Mac a capture ends the recording's stream.
+record download-flight 3
 send type s
 expect '^browser: download [0-9]* running slow.bin$' "the page's slow download didn't start"
-# Its icon flies into the Library button.
 d=$(grep -m1 '^browser: download [0-9]* running slow.bin$' "$log" | cut -d' ' -f3)
 expect "^browser: download flying $d\$" "the new download's icon didn't fly"
-../tools/window-screenshot.sh "$pid" "$out/download-flying.png" || fail "no window to capture"
 expect "^browser: download landed $d\$" "the new download's icon didn't land"
+recorded
+../tools/window-screenshot.sh "$pid" "$out/download-bin.png" || fail "no window to capture"
 # While it runs, the Library button keeps its name and keys, and resting on it shows the running
-# download over the finished one.
+# download over the finished one, and sends the bin away. Rested on again, recorded, the rows come
+# up from the bottom and go bottom first.
 check_layout "with a download running"
 send move 24 $((height - 25))
 library_keys=⇧⌘L
@@ -101,6 +107,12 @@ expect '^browser: recent downloads shown 2$' \
   fail "no window to capture"
 send move $page_point
 expect '^browser: recent downloads hidden$' "the recent downloads stayed after the pointer left"
+record recent-downloads 3
+send move 24 $((height - 25))
+expect '^browser: recent downloads shown 2$' "resting on the Library button again didn't show them"
+send move $page_point
+expect '^browser: recent downloads hidden$' "the recent downloads stayed after the pointer left again"
+recorded
 send key j cmd shift
 expect '^browser: command view-downloads via page$' "⇧⌘J with the page focused didn't reach the UI"
 expect '^browser: library section downloads$' "⇧⌘J didn't open the Library on Downloads"
@@ -441,10 +453,18 @@ send press 300 111
 send dragto 300 140
 expect "^browser: download $t drag\$" "dragging the download's row didn't start the system's drag"
 # Off the Mac a user holds the drag until the Library has gone, as the release waits for it there.
-# On the Mac the release lands as the Library closes, where nothing takes the file, not on the page.
-[ "$(uname)" = Darwin ] ||
+# On the Mac nothing waits: with no real button down, the system's drag ends at the next event the
+# driver posts, with the Library on its way out, and on GitHub's hosted Mac the page under the row
+# took the file there (#1690). So that event is a move to the sidebar's top, above its tab list,
+# which takes no file, and left of the page, where it's then let go.
+let_go="300 140"
+if [ "$(uname)" = Darwin ]; then
+  let_go="100 60"
+  send dragto $let_go
+else
   expect '^browser: library hidden$' "the Library didn't close for the download's drag"
-send release 300 140
+fi
+send release $let_go
 # No real button holds the system's drag, so it may end before the release reaches it.
 dragged() {
   for _ in $(seq 100); do

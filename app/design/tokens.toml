@@ -393,7 +393,11 @@ height = 24.0
 margin = 8.0
 # The pointer this near the plate, in points, sends it to the other side.
 near = 16.0
-window-width = 480.0
+# The most a plate is wide until it shows the whole address.
+resting-width = 480.0
+# Its window, as wide as a whole address grows: about 200 characters at 11 pt, past which one still
+# loses the middle of its path.
+window-width = 1200.0
 pad-x = 10.0
 radius = 6.0
 # The rim's thickness, 0.5 pt.
@@ -1317,6 +1321,11 @@ progress-fill = 0.6
 button-progress-width = 16.0
 button-progress-height = 2.0
 button-progress-bottom = 4.0
+# Arc's: a new download's icon lands in a bin on the footer button, its file's icon this big, its
+# centre right of and above the glyph's, until it leaves.
+bin = 32.0
+bin-right = 9.0
+bin-up = 12.0
 
 [shell.link]
 # The least a plate may be wide, in a card too narrow for the half it is.
@@ -1449,6 +1458,10 @@ preview-radius = 8.0
 # Ours: a row's plate under the pointer, as the Library's rows have one.
 plate-inset = 4.0
 plate-radius = 12.0
+# Arc's: the tab list behind is hidden from this far above the top row, and comes back over the
+# shade's height above that.
+shade-gap = 3.0
+shade = 170.0
 
 [shell.scroller]
 # The list's scroller is Arc 1.170's, AppKit's own: a knob and no track, this far in from the

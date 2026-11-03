@@ -19,8 +19,7 @@ fn rule(condition: Condition, text: &str, space: u64) -> Rule {
     }
 }
 
-/// The first rule a link meets sends it to its Space: a URL holding the text, whatever its case,
-/// or one that is exactly it. A rule whose Space is gone, or without text, sends nothing, and
+/// The first rule a link meets sends it to its Space: a URL holding the text, or one that is it. A rule whose Space is gone, or without text, sends nothing, and
 /// everything else goes to its Space, else to the Space in front.
 #[test]
 fn rules_send_links_to_their_spaces() {
@@ -43,9 +42,9 @@ fn rules_send_links_to_their_spaces() {
         rules.route("https://home.example/", &spaces),
         (HOME, Some(2))
     );
-    // Not exactly it, so the rule after it, as its Space 9 is gone.
+    // A longer path isn't it, so the rule after it, as its Space 9 is gone.
     assert_eq!(
-        rules.route("https://www.home.example/", &spaces),
+        rules.route("https://home.example/more", &spaces),
         (WORK, Some(4))
     );
     assert_eq!(rules.route("https://news.example/", &spaces), (0, None));
@@ -62,6 +61,86 @@ fn rules_send_links_to_their_spaces() {
         ..rules
     };
     assert_eq!(gone.route("https://news.example/", &spaces), (0, None));
+}
+
+/// "Is equal to" compares host and path alone, as Arc 1.170's was measured to (#692): the query,
+/// the fragment, the scheme, www., case and a trailing slash don't count, a longer path does.
+#[test]
+fn is_equal_to_compares_host_and_path() {
+    let rule = rule(Condition::Is, "example.com/atc-eq", WORK);
+    for url in [
+        "https://example.com/atc-eq",
+        "https://example.com/atc-eq?x=1",
+        "https://example.com/atc-eq#frag",
+        "http://example.com/atc-eq",
+        "https://www.example.com/atc-eq",
+        "https://EXAMPLE.com/ATC-EQ",
+        "https://example.com/atc-eq/",
+        "https://user@example.com/atc-eq",
+    ] {
+        assert!(rule.matches(url), "{url}");
+    }
+    for url in [
+        "https://example.com/atc-eq/more",
+        "https://example.com/atc",
+        "https://example.com/",
+        "https://sub.example.com/atc-eq",
+        "https://example.com:8080/atc-eq",
+        "https://other.example/?u=https://example.com/atc-eq",
+    ] {
+        assert!(!rule.matches(url), "{url}");
+    }
+    // The text is read the same way, so a URL pasted whole, its query and all, is its page.
+    let pasted = Rule {
+        text: "HTTPS://www.example.com/atc-eq/?from=mail#top".into(),
+        ..rule.clone()
+    };
+    assert!(pasted.matches("http://example.com/atc-eq"));
+    // A host alone is its home page, and a text with no host left meets nothing.
+    let home = Rule {
+        text: "example.com".into(),
+        ..rule.clone()
+    };
+    assert!(home.matches("https://www.example.com/"));
+    assert!(!home.matches("https://example.com/atc-eq"));
+    for text in ["https://", "www.", "?x=1"] {
+        let empty = Rule {
+            text: text.into(),
+            ..rule.clone()
+        };
+        assert!(!empty.matches("https://example.com/"), "{text}");
+    }
+}
+
+/// "Contains" looks for the text without its scheme or a leading www., on the link too, and
+/// ignores case, as Arc 1.170's was measured to (#692); it sees the query and the fragment.
+#[test]
+fn contains_ignores_the_scheme_www_and_case() {
+    let rule = rule(Condition::Contains, "https://example.com/atc-scheme", WORK);
+    for url in [
+        "http://example.com/atc-scheme",
+        "https://www.example.com/atc-scheme",
+        "https://EXAMPLE.com/ATC-SCHEME/more",
+    ] {
+        assert!(rule.matches(url), "{url}");
+    }
+    let query = Rule {
+        text: "tab=Work".into(),
+        ..rule.clone()
+    };
+    assert!(query.matches("https://example.com/?tab=work"));
+    assert!(query.matches("https://example.com/#TAB=WORK"));
+    // A "://" in the query isn't a scheme.
+    let inner = Rule {
+        text: "u=https://example.com".into(),
+        ..rule.clone()
+    };
+    assert!(inner.matches("https://other.example/?u=https://example.com/x"));
+    let empty = Rule {
+        text: "www.".into(),
+        ..rule
+    };
+    assert!(!empty.matches("https://www.example.com/"));
 }
 
 /// A link that would open in a link preview goes by the rules too, but only to another Space than

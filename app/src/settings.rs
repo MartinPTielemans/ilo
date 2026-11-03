@@ -93,6 +93,8 @@ pub(crate) fn archive_after_words() -> String {
 enum Block {
     /// A heading over the group after it.
     Heading(SharedString),
+    /// A heading with what's inside it after a ›, quieter, as Import › Arc.
+    Crumb(SharedString, SharedString),
     Group(gpui::Div),
     /// Buttons under the group before, such as New Profile.
     Under(gpui::Div),
@@ -398,6 +400,10 @@ pub struct Settings {
     /// Made when Import & Export first shows, so the other browsers' files are read only once the
     /// user asks.
     import: Option<Entity<ImportView>>,
+    /// Draws the page again as the import changes, for its heading's crumb.
+    _import: Option<Subscription>,
+    /// The window's size as last drawn, logged as it changes for check.sh.
+    drawn_size: Option<(f32, f32)>,
     /// Links' view, made again each time it shows.
     links: Option<Entity<LinkRulesView>>,
     /// Where it asks before deleting a profile, over all of it, as the browser window's dialog
@@ -966,6 +972,11 @@ fn open(cx: &mut App) {
             // it.
             let dark = dark(window, cx);
             let look = RowLook::settings(dark);
+            // check.sh reads this line, and the one each change logs.
+            log!(
+                "browser: settings look {}",
+                if dark { "dark" } else { "light" }
+            );
             cx.observe_window_appearance(window, |settings: &mut Settings, window, cx| {
                 settings.follow_appearance(window, cx)
             })
@@ -1069,6 +1080,8 @@ fn open(cx: &mut App) {
                 autofill: HashMap::new(),
                 asked: HashSet::new(),
                 import: None,
+                _import: None,
+                drawn_size: None,
                 links: None,
             }
         })
@@ -1248,11 +1261,15 @@ impl Settings {
             Some(import) => import.update(cx, |import, cx| import.refresh(cx)),
             None => {
                 let (host, look) = (Rc::new(crate::import_host::CoreImport), self.look);
-                self.import = Some(cx.new(|cx| {
-                    let mut import = ImportView::new(host, false);
+                // Its heading is the page's, naming the browser it's inside of, and it takes Esc.
+                let import = cx.new(|cx| {
+                    let mut import = ImportView::new(host, false).headed();
                     import.set_look(look, cx);
+                    import.take_keys(cx);
                     import
-                }));
+                });
+                self._import = Some(cx.observe(&import, |_, _, cx| cx.notify()));
+                self.import = Some(import);
             }
         }
     }
@@ -1327,14 +1344,24 @@ impl Settings {
         let blocks = blocks.into_iter().map(|block| {
             let top = match (after_heading, &block) {
                 (None, _) => FIRST_GROUP,
-                (_, Block::Heading(_)) => HEADING_TOP,
+                (_, Block::Heading(_) | Block::Crumb(..)) => HEADING_TOP,
                 (Some(true), _) => HEADING_BOTTOM,
                 (_, Block::Under(_)) => BUTTONS_TOP,
                 _ => GROUP_GAP,
             };
-            after_heading = Some(matches!(block, Block::Heading(_)));
+            after_heading = Some(matches!(block, Block::Heading(_) | Block::Crumb(..)));
             let block = match block {
                 Block::Heading(heading) => self.heading(heading).into_any_element(),
+                Block::Crumb(heading, inside) => {
+                    let inside = div()
+                        .text_color(self.look.detail)
+                        .font_weight(FontWeight::NORMAL)
+                        .child(format!(" › {inside}"));
+                    self.heading(heading)
+                        .flex()
+                        .child(inside)
+                        .into_any_element()
+                }
                 Block::Group(group) | Block::Under(group) => group.into_any_element(),
                 Block::View(view) => view,
             };
@@ -3351,14 +3378,23 @@ impl Settings {
             Some("Each Space's favorites and pinned tabs, as a list of links.".into()),
             vec![export.into_any_element()],
         );
-        let mut blocks = vec![Block::Heading("Import".into())];
+        let import = self.import.as_ref().map(|import| import.read(cx));
+        // Inside an import, the heading names the browser it's from, and Export waits for its end.
+        let heading = match import.and_then(ImportView::crumb) {
+            Some(inside) => Block::Crumb("Import".into(), inside),
+            None => Block::Heading("Import".into()),
+        };
+        let under_way = import.is_some_and(ImportView::under_way);
+        let mut blocks = vec![heading];
         blocks.extend(
             self.import
                 .clone()
                 .map(|import| Block::View(import.into_any_element())),
         );
-        blocks.push(Block::Heading("Export".into()));
-        blocks.push(Block::Group(group(look, [export])));
+        if !under_way {
+            blocks.push(Block::Heading("Export".into()));
+            blocks.push(Block::Group(group(look, [export])));
+        }
         self.page(
             Section::ImportExport.name(),
             "Bring tabs, bookmarks, history and passwords from another browser, or take your \
@@ -3918,6 +3954,15 @@ impl Render for Settings {
             // check.sh waits for this line, the section each show or switch draws, whichever
             // window was key.
             log!("browser: settings drew {}", self.section.name());
+        }
+        let size = window.viewport_size();
+        let size = (
+            f32::from(size.width).round(),
+            f32::from(size.height).round(),
+        );
+        if self.drawn_size.replace(size) != Some(size) {
+            // check.sh waits for this line after it resizes the window.
+            log!("browser: settings drawn at {}x{}", size.0, size.1);
         }
         let page = match self.section {
             Section::General => self.general(&profiles(), accent, cx),

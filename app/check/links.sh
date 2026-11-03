@@ -12,7 +12,7 @@
 # instead to the Space in front, one opens as a new tab in the Space the window in front shows. With
 # an agent's Space shown, it goes in the user's Space the window showed before, which comes back;
 # with a private window in front, in the regular window, which comes to the front. Settings › Links
-# makes rules: a link whose URL holds a rule's text, or is it exactly, opens in the rule's Space, or
+# makes rules: a link whose URL holds a rule's text, or is its page, opens in the rule's Space, or
 # Little ilo, the first rule that matches winning, a drag reorders them, everything else goes to
 # the Space picked, and the trash takes a rule away, which ⌘Z brings back until Settings closes;
 # the rules are kept for the launches after. Settings › General says the browser isn't the
@@ -389,24 +389,26 @@ if [ "$driven" = 1 ]; then
   # A link whose URL holds the text goes to the rule's Space, which the regular window switches to.
   open_link "?work" "$second" "$window"
   expect "^browser: link rule 0 sends ${site}?work to space $second\$" "the rule didn't send the link"
-  # A second rule, for a URL exactly, to the Space in front, here the second, which a URL longer
-  # than it doesn't meet.
+  # A second rule, for a page, to the Space in front, here the second. "Is equal to" compares host
+  # and path alone, as Arc's (#692): the page with a query meets it, and the site's home with the
+  # page in its query doesn't.
   send menu Settings…
   expect '^browser: settings shown Links$' "Settings… didn't show Settings on its Links tab"
   settings_drew Links
   send clickkey $(drawn "link add")
   expect '^browser: link rule 1 field has the keyboard$' "+ didn't give the second rule's field the keyboard"
-  send insert "${site}?exact"
+  send insert "${site}index.html"
   post clickkey $(drawn "link condition 1")
   expect '^browser: menu shown URL contains (checked), URL is equal to$' \
     "the rule's condition pop-up didn't offer contains and is equal to"
   send choose "URL is equal to"
-  exact="URL is equal to \"${site}?exact\" → [^,;]*"
+  exact="URL is equal to \"${site}index.html\" → [^,;]*"
   expect "$(rules_drawn "URL contains \"work\" → work, $exact" "$front")" "the second rule didn't draw"
-  open_link "?exactly" "$second" "$window"
-  none_since "^browser: link rule [0-9]" || fail "a URL longer than the rule's went by the rule"
-  open_link "?exact" "$second" "$window"
-  expect "^browser: link rule 1 sends ${site}?exact to the space in front\$" "the exact rule didn't send its link"
+  open_link "?index.html" "$second" "$window"
+  none_since "^browser: link rule [0-9]" || fail "a link to another path went by the is-equal-to rule"
+  open_link "index.html?exact" "$second" "$window"
+  expect "^browser: link rule 1 sends ${site}index.html?exact to the space in front\$" \
+    "the is-equal-to rule didn't send its page with a query"
   # Dragged by its arrow onto the first row, the second rule goes first.
   send menu Settings…
   expect '^browser: settings shown Links$' "Settings… didn't show Settings on its Links tab"
@@ -669,7 +671,7 @@ fi
 if [ "$driven" = 1 ]; then
   [ -z "$again" ] ||
     echo "ok: a launch with no link while the window is minimized brings it back and to the front."
-  echo "ok: links from another app open once, in Little ilo by default, the same link again bringing its window back, and sent to the Space in front as new tabs in the front window's Space and load there, in the user's Space when an agent's is shown, and in the regular window, brought to the front, over a private one; Settings says the browser isn't the default. Settings › Links starts with the Meet rule, which sends a Meet link to the Space in front and which the trash takes; its rules send a link whose URL holds a rule's text, or is it exactly, to the rule's Space or Little ilo, the first that matches winning, a drag reorders them, everything else goes to the Space picked, the trash takes a rule away and ⌘Z brings it back until Settings closes, and the rules come back with the launch. Windows: $out/links-little.png, $out/links-settings.png, $out/links-rules-meet.png, $out/links-rules-empty.png, $out/links-rules.png, $out/links-rule-back.png"
+  echo "ok: links from another app open once, in Little ilo by default, the same link again bringing its window back, and sent to the Space in front as new tabs in the front window's Space and load there, in the user's Space when an agent's is shown, and in the regular window, brought to the front, over a private one; Settings says the browser isn't the default. Settings › Links starts with the Meet rule, which sends a Meet link to the Space in front and which the trash takes; its rules send a link whose URL holds a rule's text, or is its page whatever the query, to the rule's Space or Little ilo, the first that matches winning, a drag reorders them, everything else goes to the Space picked, the trash takes a rule away and ⌘Z brings it back until Settings closes, and the rules come back with the launch. Windows: $out/links-little.png, $out/links-settings.png, $out/links-rules-meet.png, $out/links-rules-empty.png, $out/links-rules.png, $out/links-rule-back.png"
 else
   echo "ok: a link from another app opens once, in Little ilo by default, and loads there."
   echo "skip: the launch with no link while the window is minimized, the agent's Space, the private window, Settings and the link rules. Browser wasn't the active app, so the page ignored the click."

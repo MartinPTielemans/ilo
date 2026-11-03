@@ -10,9 +10,11 @@
 # password importer: the view says how many came in, deletes the file when asked, and a second file
 # with a login's password changed says it conflicted and kept the saved one. Settings' Passwords
 # tab lists what came in, and the app menu's Import from Other Browsers… shows Import again. With
-# the sidebar hidden, Arc's Spaces say so in a toast. Each step is captured. Arc has no Linux build,
-# so off the Mac the fixture's Arc isn't found, its steps are left out, and Chrome and Firefox are
-# where Linux keeps them.
+# the sidebar hidden, Arc's Spaces say so in a toast. Each step is captured, and the list and the
+# first browser's choices, under Import › its name with Import in the accent, at Settings' first
+# size and its least, dark and light; Esc goes back from the choices to the list. Arc has no Linux
+# build, so off the Mac the fixture's Arc isn't found, its steps are left out, and Chrome and Firefox
+# are where Linux keeps them.
 
 serve
 printf '%s' '<title>import ready</title>' > "$out/site/import.html"
@@ -165,6 +167,53 @@ expect "^browser: import found $found\$" \
   "the import didn't find the fixture's $found, and only them: $(grep 'import found' "$log")"
 expect '^browser: import drawn list$' "Settings › Import & Export didn't draw its list"
 ../tools/window-screenshot.sh "$pid" "$out/import-list.png" || fail "no window to capture"
+# Settings at its first size and at its least, in its look and then the other, as
+# $out/import-settings-$1-<width>-<dark|light>.png, and back at its first size in its own look.
+settings_tone() {
+  case "$(grep '^browser: settings look ' "$log" | tail -1)" in
+    *light) echo light ;;
+    *) echo dark ;;
+  esac
+}
+settings_at() {
+  for _ in $(seq 100); do
+    [ "$(grep '^browser: settings drawn at ' "$log" | tail -1)" = "browser: settings drawn at $1x$2" ] &&
+      return 0
+    sleep 0.1
+  done
+  fail "Settings didn't draw at $1 by $2: $(grep '^browser: settings drawn at ' "$log" | tail -1)"
+}
+settings_shots() {
+  for size in "820 660" "720 480"; do
+    send resizekey $size
+    settings_at $size
+    was=$(settings_tone)
+    ../tools/window-screenshot.sh "$pid" "$out/import-settings-$1-${size% *}-$was.png" ||
+      fail "no window to capture"
+    if [ "$was" = light ]; then other=Dark; else other=Light; fi
+    send menu "$(cased "Appearance › $other")"
+    expect "^browser: settings look $(echo "$other" | tr DL dl)\$" \
+      "View › Appearance › $other didn't change Settings' look"
+    ../tools/window-screenshot.sh "$pid" "$out/import-settings-$1-${size% *}-$(settings_tone).png" ||
+      fail "no window to capture"
+    send menu "$(cased 'Appearance › Automatic')"
+    expect "^browser: settings look $was\$" \
+      "View › Appearance › Automatic didn't give Settings its look back"
+  done
+  send resizekey 820 660
+  settings_at 820 660
+}
+settings_shots list
+# The first browser's choices, under the heading Import › its name, with Import in the accent;
+# Esc goes back to the list.
+if [ -n "$arc" ]; then first_found=Arc; else first_found=Chrome; fi
+send clickkey $(drawn "import-from $first_found")
+expect "^browser: import pick $first_found\$" "Import… on $first_found's row didn't show its choices"
+expect '^browser: import drawn pick$' "$first_found's choices didn't draw"
+settings_shots choose
+send key escape
+expect '^browser: import escape$' "Esc in $first_found's choices didn't reach the import"
+expect '^browser: import drawn list$' "Esc didn't go back from $first_found's choices to the list"
 if [ -n "$arc" ]; then
   send clickkey $(drawn "import-from Arc")
   expect '^browser: import pick Arc$' "Import… on Arc's row didn't show what comes from it"
@@ -343,7 +392,10 @@ echo "  A passwords file comes in, says how many, and is deleted when asked; a s
 echo "  changed login conflicted and kept the saved one; Settings' Passwords tab lists the three,"
 echo "  and the app menu's Import from Other Browsers… shows Import again."
 echo "  With the sidebar hidden, Arc's two Spaces say so in a toast."
-echo "  Windows: $out/import-list.png, $out/import-pick.png, $out/import-done.png,"
+echo "  Settings' list and $first_found's choices, under Import › $first_found, at 820 by 660 and"
+echo "  720 by 480, dark and light, and Esc goes back from the choices to the list."
+echo "  Windows: $out/import-settings-{list,choose}-{820,720}-{dark,light}.png,"
+echo "  $out/import-list.png, $out/import-pick.png, $out/import-done.png,"
 echo "  $out/import-again.png, $out/import-chrome.png, $out/import-firefox.png,"
 echo "  $out/import-bookmarks.png, $out/import-passwords.png,"
 echo "  $out/import-passwords-conflict.png, $out/import-personal.png"

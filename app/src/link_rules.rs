@@ -23,8 +23,9 @@ use crate::tokens::settings::{
 #[cfg(test)]
 mod tests;
 
-/// What a rule asks of a link's URL: to hold its text anywhere, ignoring case, or to be it exactly,
-/// scheme and www included, as Arc's "is equal to".
+/// What a rule asks of a link's URL, as Arc 1.170's routes were measured to ask it (#692): to hold
+/// its text anywhere, query and fragment too, or to be it, by host and path alone. Both ignore case,
+/// the scheme and a leading www., on the URL and the text alike.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Condition {
     Contains,
@@ -84,13 +85,48 @@ pub struct Rule {
 impl Rule {
     /// Whether a link to `url` meets it. A rule without text yet meets none.
     pub fn matches(&self, url: &str) -> bool {
-        let text = self.text.trim();
+        let text = match self.condition {
+            Condition::Contains => bare(&self.text),
+            Condition::Is => host_and_path(&self.text),
+        };
         !text.is_empty()
             && match self.condition {
-                Condition::Contains => url.to_lowercase().contains(&text.to_lowercase()),
-                Condition::Is => url == text,
+                Condition::Contains => bare(url).contains(&text),
+                Condition::Is => host_and_path(url) == text,
             }
     }
+}
+
+/// `url` in lower case without its scheme or a leading www., as a rule's text is often typed
+/// without them: Arc's "contains https://example.com/" meets http:// and www. links.
+fn bare(url: &str) -> String {
+    let url = url.trim().to_lowercase();
+    let rest = match url.split_once("://") {
+        Some((scheme, rest)) if is_scheme(scheme) => rest,
+        _ => &url,
+    };
+    rest.strip_prefix("www.").unwrap_or(rest).to_string()
+}
+
+/// Whether `text` is a URL's scheme, so a "://" further on, in a query, isn't taken for one.
+fn is_scheme(text: &str) -> bool {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
+/// What Arc's "is equal to" compares of `url`: its host, without a user or www., and its path,
+/// without a trailing slash, in lower case. The query and the fragment don't count, nor does the
+/// scheme, but a port does, as one typed names another server.
+fn host_and_path(url: &str) -> String {
+    let rest = bare(url);
+    let rest = &rest[..rest.find(['?', '#']).unwrap_or(rest.len())];
+    let (host, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+    let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
+    let host = host.strip_prefix("www.").unwrap_or(host);
+    format!("{host}{}", path.trim_end_matches('/'))
 }
 
 /// The rules, top to bottom, and the Space everything else opens in, 0 for the Space in front:
