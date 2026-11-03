@@ -3,9 +3,10 @@
 # that box to a pasteboard of the run's own and shows the toast with Save and Share. Save to
 # Library, the menu's first row, saves it into the profile's Media and says so, and the Library's
 # Media shows it first, opens it in a tab and deletes it from its menu, and then says it is empty
-# in a line that wraps in its list, narrow and wide, light and dark. Escape and a second ⇧⌘2
-# leave capture mode and give the page the keyboard back. File › Capture Full Page copies a
-# picture of the whole long page, past its view.
+# in a line that wraps in its list, narrow and wide, light and dark. On Windows the toast's Save
+# saves it where the system's save dialog is told, and the page has the keyboard back after.
+# Escape and a second ⇧⌘2 leave capture mode and give the page the keyboard back. File › Capture
+# Full Page copies a picture of the whole long page, past its view.
 
 # The line saying the PNG was copied to the run's own pasteboard, and the toast's buttons after it.
 # On Linux check.sh runs in a display of its own, whose clipboard is the run's, and there's no share
@@ -88,6 +89,38 @@ expect "^browser: toast shown Screenshot Copied to Clipboard \\[$buttons\\]\$" \
 expect '^browser: capture hidden$' "capture mode's window didn't hide after Copy"
 send state
 in_browser RenderWidgetHostViewCocoa "after Copy"
+
+# Windows: the toast's Save asks where in the system's save dialog and saves the picture there.
+# The dialog's loop runs the UI's tasks, such as the toast's leaving, which crashed the app while
+# the dialog opened inside the click (#1358). Save is the toast's first button: the toast ends 18
+# in from the window's edge, Share 13.5 in from its own and 31 wide, and Save, about 46 wide, 8
+# before it, all 41 down.
+saved_to=
+if windows; then
+  bytes=$(grep -m1 '^browser: clipboard png ' "$log" |
+    sed 's/^browser: clipboard png \([0-9]*\) bytes$/\1/')
+  await '^browser: toast settled$' || fail "Copy's toast didn't settle"
+  send layout
+  width=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
+    sed 's/^browser: layout content \([0-9]*\)x.*/\1/')
+  toast_save="$((width - 18 - 76)) 41"
+  send move $toast_save
+  send click $toast_save
+  expect '^browser: toast button save$' "Save wasn't pressed at $toast_save"
+  expect '^browser: toast hidden$' "the toast didn't leave once its Save was pressed"
+  expect '^browser: capture save panel shown$' "the toast's Save didn't ask where to save"
+  ../tools/window-screenshot.sh "$pid" "$out/capture-save-dialog.png" || fail "no window to capture"
+  picture="$out/capture-saved.png"
+  rm -f "$picture"
+  send savepanel "$(cygpath -w "$picture")"
+  expect '^browser: save panel answered$' "no save dialog showed for the toast's Save"
+  expect '^browser: capture saved ' "the save dialog didn't save the picture"
+  [ "$(wc -c < "$picture" | tr -d ' ')" = "$bytes" ] ||
+    fail "the save dialog saved $(wc -c < "$picture" 2>/dev/null) bytes, not the $bytes copied"
+  send state
+  in_browser RenderWidgetHostViewCocoa "after the save dialog"
+  saved_to=" The toast's Save saved it to $picture, from $out/capture-save-dialog.png."
+fi
 
 # Save to Library, 37 to 61 down, saves the box's picture without a question and says so.
 capture_mode page
@@ -282,7 +315,7 @@ expect "^browser: toast shown Screenshot Copied to Clipboard \\[$buttons\\]\$" \
 
 exec 3>&-
 quit
-echo "ok: capture. The box's picture is $size, the full page's $full. Media's empty line, in" \
+echo "ok: capture. The box's picture is $size, the full page's $full.$saved_to Media's empty line, in" \
   "lines: ${empty_lines%, }." \
   "Windows: $out/capture-element.png, $out/capture-chosen.png, $out/capture-library.png," \
   "$out/library-media.png, $out/media-menu.png, $out/media-empty-narrow-light.png," \

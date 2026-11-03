@@ -435,7 +435,8 @@ void host_hide_capture(void);
 void host_copy_png(const uint8_t* png, size_t size);
 
 // Asks where to save the PNG |png|, |size| bytes long, in a save panel on |ui_view|'s window, named
-// for when it was taken, and saves it there.
+// for when it was taken, and saves it there. It returns at once, before the panel shows, since the
+// UI calls it from an event its panel can't wait in.
 void host_save_png(void* ui_view, const uint8_t* png, size_t size);
 
 // Shares the PNG |png|, |size| bytes long, as a file named for when it was taken: in the system's
