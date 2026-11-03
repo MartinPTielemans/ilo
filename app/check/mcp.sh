@@ -8,7 +8,8 @@
 # page with fields gives its prose and none of their values: typed, filled in or a password, in its
 # text and in its outline, and the agent can't type into the password field. It types into another.
 # A page's frames, of its own site and of another, are in its outline, where the agent clicks and
-# types, and not into a frame's password field. Its text leaves out a frame an extension puts in
+# types, each answered with what changed in the outline alone, and not into a frame's password
+# field. Its text leaves out a frame an extension puts in
 # the page, which isn't the page's. Its keys, typed or pressed, go to the page alone, and Escape
 # the page doesn't keep runs no Stop of ilo's. Where it acts in the page shown, its pointer and a
 # ring with the element's ref show it. It opens a page, clicks its link, scrolls, takes a screenshot
@@ -368,7 +369,8 @@ painted(() => document.title = "fields");
     fail "the frames' buttons had the refs '$inner' and '$cross'"
   clicked=$(call click "{\"tab\":$frames_tab,\"ref\":\"$cross\"}")
   case "$clicked" in
-    "Clicked button “Cross button”."*"cross clicked"*) ;;
+    *"Top text"*) fail "the click answered with the whole outline: $clicked" ;;
+    "Clicked button “Cross button”."*"What changed since"*"cross clicked"*) ;;
     *) fail "clicking in the other site's frame answered: $clicked" ;;
   esac
   await_log "^browser: agent activity mcp-client $frames_tab click\$" \
