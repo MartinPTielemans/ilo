@@ -339,10 +339,25 @@ post swipe $swipe_point 60 0 10 1500
 expect '^browser: library past its end$' "fingers past the Library's end didn't reach it"
 ../tools/window-screenshot.sh "$pid" "$out/library-end.png" || fail "no window to capture"
 # awk, as Git Bash on Windows has no bc.
-column=$(pixel "$out/library-end.png" "$(awk "BEGIN { print 6 / ${content%x*} }")" 0.85)
-beside=$(pixel "$out/library-end.png" "$(awk "BEGIN { print 200 / ${content%x*} }")" 0.85)
-brighter "$column" "$beside" ||
-  fail "past its end the Library's column left the window's edge: $column at it, $beside beside"
+end_at() { pixel "$out/library-end.png" "$(awk "BEGIN { print $1 / ${content%x*} }")" 0.85; }
+column=$(end_at 6)
+beside=$(end_at 200)
+if windows; then
+  # Windows draws the column darker than the section beside it, so there the fill reaching the edge
+  # is the edge being the column's colour further in, 40 across, and not the section's.
+  inside=$(end_at 40)
+  alike() {
+    set -- $1 $2
+    for d in $(($1 - $4)) $(($2 - $5)) $(($3 - $6)); do
+      [ "${d#-}" -le 4 ] || return 1
+    done
+  }
+  { alike "$column" "$inside" && ! alike "$column" "$beside"; } || fail "past its end the \
+Library's column left the window's edge: $column at it, $inside in it, $beside beside"
+else
+  brighter "$column" "$beside" ||
+    fail "past its end the Library's column left the window's edge: $column at it, $beside beside"
+fi
 await "^browser: drive $step done" || fail "the driver didn't finish the swipe"
 none_since '^browser: command view-library' || fail "fingers past the Library's end closed it"
 expect '^browser: library shown$' "the Library didn't settle back where it opens"
