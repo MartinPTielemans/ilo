@@ -1070,6 +1070,22 @@ fn stacked() -> Option<Vec<Browser>> {
     )
 }
 
+/// Whether (`x`, `y`) in browser window `id`'s content is on one of its pages.
+/// shortcut: where the shell lays them out, as `pages` has them.
+pub(super) fn over_page(id: bc::bc_id, x: f64, y: f64) -> bool {
+    let shell = WINDOWS.with_borrow(|windows| {
+        windows.iter().find(|w| w.id == id).map(|w| w.shell.clone())
+    });
+    let (Some(shell), Some(cx)) = (shell, CX.with_borrow(Clone::clone)) else {
+        return false;
+    };
+    let at = gpui::point(gpui::px(x as f32), gpui::px(y as f32));
+    cx.update(|cx| {
+        let Some(shell) = shell.upgrade() else { return false };
+        shell.read(cx).shown_pages().iter().any(|(_, page)| page.contains(&at))
+    })
+}
+
 /// The pages of browser window `id`, as drive.mm lists their views: from the bottom-left corner of
 /// content `width` by `height`, with the radius of their corners if they're round.
 /// shortcut: where the shell lays them out and the radius it gives their corners, which the core
