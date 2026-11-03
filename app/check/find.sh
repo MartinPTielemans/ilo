@@ -435,7 +435,7 @@ fi
 if [ -n "$shown" ]; then
   expect "$managed" "Open Task Manager didn't show Chrome's"
   send key w cmd
-  if [ "$(uname)" = Linux ]; then
+  if [ "$(uname)" != Darwin ]; then
     # Off the Mac the Task Manager is Chromium's own window, which takes Ctrl+W itself, as
     # Chrome's, and the window manager gives the keyboard back once it's gone.
     for _ in $(seq 100); do
