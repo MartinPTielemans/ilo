@@ -6,13 +6,16 @@
 use std::{cell::RefCell, rc::Rc};
 
 use gpui::{
-    Entity, EntityInputHandler, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels,
-    Point, TestAppContext, VisualTestContext, point, px,
+    AppContext, Empty, Entity, EntityInputHandler, Modifiers, MouseButton, MouseDownEvent,
+    MouseUpEvent, Pixels, Point, TestAppContext, VisualTestContext, WindowOptions, point, px,
 };
 
 use crate::{
     menu::Closed,
-    shell::{Folders, Naming, ROW_HEIGHT, Shell, Slot, commands::bind_keys, recorder::Recorder},
+    shell::{
+        Folders, NAME_HEIGHT, Naming, ROW_HEIGHT, Shell, Slot, commands::bind_keys,
+        recorder::Recorder,
+    },
     text_input::{self, Chosen, FieldMenu},
 };
 
@@ -160,6 +163,46 @@ fn a_space_name_is_kept_at_a_press_on_a_row(cx: &mut TestAppContext) {
     press(cx, at, MouseButton::Left, 1);
     assert!(naming(&shell, cx).is_none(), "the field stayed");
     assert_eq!(host.take_edits(), ["rename space 1 Work"]);
+}
+
+/// Rename Space, chosen in the Space's menu, opens the name's field, which stays open as the menu's
+/// window gives the browser window the keyboard back. GPUI hears of each key window change later,
+/// in order, so the change from the menu taking the keyboard can arrive once the field is open,
+/// with the one giving it back right behind it, as when the choice comes before GPUI has heard of
+/// the menu showing (#1589). A window still inactive once both have arrived ends the field.
+#[gpui::test]
+fn a_name_field_opened_from_a_menu_outlasts_the_menu_giving_back_the_keyboard(
+    cx: &mut TestAppContext,
+) {
+    let (shell, cx, host) = window(cx);
+    let menu = cx.update(|_, cx| {
+        cx.open_window(WindowOptions::default(), |_, cx| cx.new(|_| Empty)).unwrap()
+    });
+    let name =
+        shell.read_with(cx, |shell, _| point(px(60.), px(shell.drawn_list_top() + NAME_HEIGHT / 2.)));
+    for user_left in [false, true] {
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        press(cx, name, MouseButton::Right, 1);
+        // The menu's window takes the keyboard, and the user chooses before GPUI hears of it.
+        menu.update(cx, |_, window, _| window.activate_window()).unwrap();
+        cx.update(|_, cx| host.choose("Rename Space…", cx));
+        assert!(naming(&shell, cx) == Some(Naming::Space(1)), "Rename Space opened no field");
+        // Closed, the menu gives the browser window the keyboard back, unless the user went on to
+        // another window.
+        if !user_left {
+            cx.update(|window, _| window.activate_window());
+        }
+        cx.run_until_parked();
+        if user_left {
+            assert!(naming(&shell, cx).is_none(), "going to another window left the field open");
+        } else {
+            assert!(naming(&shell, cx) == Some(Naming::Space(1)), "the menu closing ended the field");
+            cx.simulate_input("Work");
+            cx.simulate_keystrokes("enter");
+            assert_eq!(host.take_edits(), ["rename space 1 Work"]);
+        }
+    }
 }
 
 /// A pinned tab's Edit… field takes a URL only on purpose: losing the keyboard undoes it.

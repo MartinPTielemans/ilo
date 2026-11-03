@@ -144,7 +144,7 @@ impl Shell {
             // The tasks' lines and chips at the foot wrap to the new width.
             self.reshape_foot(cx);
         }
-        self.width_motion = (from != to).then(|| (from, Instant::now()));
+        self.width_motion = (from != to).then(|| (from, crate::motion::start(cx)));
         if self.width_motion.is_none() {
             // check.sh waits for these lines, then reads where the page is.
             self.logged_once_laid.push(format!("browser: sidebar width {to}"));
@@ -174,7 +174,7 @@ impl Shell {
         }
         let from = self.card_left();
         self.sidebar_hidden = !self.sidebar_hidden;
-        self.sidebar_motion = Some((from, Instant::now()));
+        self.sidebar_motion = Some((from, crate::motion::start(cx)));
         self.sidebar_hover(false, cx);
         self.recent_downloads_gone(cx);
         self.update_menus(cx);
@@ -573,7 +573,7 @@ impl Shell {
         if revealed == self.revealed || (revealed && self.little.is_some()) {
             return;
         }
-        self.reveal_motion = Some((self.reveal_out(), Instant::now()));
+        self.reveal_motion = Some((self.reveal_out(), crate::motion::start(cx)));
         self.revealed = revealed;
         self.revealed_by_option = false;
         if revealed {

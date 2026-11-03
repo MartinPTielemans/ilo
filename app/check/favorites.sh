@@ -6,7 +6,8 @@
 # says what it does. A click on the tile shows it, and ⌘1–⌘9 count favorites first. Past its top, the list shows an
 # edge under the tile, and showing a tab under its bottom scrolls to the tab's row. Scrolled out of
 # the list, the shown tab's row has a marker at the edge it's past, which scrolls back to it. Away
-# from its URL, a double-click on the tile goes back there. ⌘W unloads it and keeps the tile,
+# from its URL, a double-click on the tile goes back there. ⌥-click on a Today row with it shown
+# joins that tab to a copy of it in Today, which ⌘Z closes. ⌘W unloads it and keeps the tile,
 # showing the top Today tab. The tile's menu hangs the icon picker under the tile, whose pick is the
 # tile's icon until Remove Icon, and duplicates it to the top of Today. Launched again, the app
 # brings the favorite back, shown, with the icon it was given before the quit, and Remove from
@@ -166,6 +167,21 @@ expect '^browser: command back-to-pinned-url via favorite$' \
   "a double-click on the tile didn't run Back to Favorite URL"
 expect "^browser: loaded $a $site\$" "a double-click on the tile didn't load the favorite's URL"
 expect "^browser: page $a away 0\$" "the favorite still read as away at its URL"
+# ⌥-click on a Today row with the favorite shown joins that tab to a copy of the favorite at the
+# top of Today, as no Space holds a favorite (Arc), and ⌘Z closes the copy and puts the tab back.
+send click $(tiled_row 0) alt
+expect '^browser: command split via sidebar$' "⌥-click on the Today row didn't reach the sidebar"
+expect "^browser: splits [0-9][0-9]*+$b\$" \
+  "the Today tab didn't join a copy of the favorite: $(grep '^browser: splits' "$log" | tail -1)"
+[ "$(favorites)" = "$a" ] || fail "joining the favorite took its tile: \"$(favorites)\""
+../tools/window-screenshot.sh "$pid" "$out/favorite-split.png" || fail "no window to capture"
+send key z cmd
+undone=$step
+expect '^browser: splits $' "⌘Z didn't undo the split with the favorite's copy"
+expect "^browser: today $b\$" "⌘Z didn't close the copy and put the tab back: \"$(today)\""
+# The copy closing may have shown the favorite already.
+send click $tile
+expect "^browser: selected $a\( in .*\)\{0,1\}\$" "the favorite isn't shown again" "$undone"
 # ⌘W unloads a favorite and keeps its tile, showing the top Today tab, and ⌘1 loads it again.
 send click $page_point
 send key w cmd
@@ -269,12 +285,16 @@ send click $marker
 expect "^browser: list scrolled to [1-9][0-9.]* for $b\$" \
   "a click on the marker didn't scroll the list to the shown tab's row"
 expect '^browser: shown tab marker hidden$' "the marker stayed with the shown tab's row back in view"
+# The page gets the keyboard for the ⌘, below before the window goes back to its size. On Wayland a
+# click right after a resize can reach the UI: Chromium's surface takes clicks at the page's new
+# place only once it has drawn at the new size, which can be after the UI has (#1577).
+send click 600 150
+in_browser RenderWidgetHostViewCocoa "a click on the page didn't give it the keyboard"
 send resize $size
 expect "^browser: drawn at ${size% *}x${size#* }\$" "the window didn't draw back at its size"
 # ⌘, from the page opens Settings on General. Its switch turns the warning before quitting off, the
 # menu of its pop-up button sets how long Today tabs wait for the archive, the switch on its
 # Advanced tab turns the haptics off, and ⌘W hides it.
-send click $page_point
 send key , cmd
 expect '^browser: command settings via page$' "⌘, from the page didn't run Settings"
 expect '^browser: settings shown General$' "⌘, didn't show Settings on its General tab"
@@ -462,15 +482,25 @@ send resize 1000 220
 expect '^browser: tiles scroll with the list$' \
   "two rows of tiles in a window 220 tall didn't scroll with the list"
 ../tools/window-screenshot.sh "$pid" "$out/tiles-tall.png" || fail "no window to capture"
+# Scrolls the list $1 points down, twice, at 100, 150, as the Mac's and X11's scroll does in GPUI.
+# Wayland's driver makes each scroll a notch of the wheel, which takes the list past the tiles, so
+# there two fingers on the touchpad move it, by the points given (#1577).
+scroll_tiles() {
+  if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    send swipe 100 150 0 $((0 - $1)) 2
+  else
+    send scroll 100 150 "$1" 2
+  fi
+}
 # Scrolled 40, the tiles went up 40 with the rows, and the first tile's place holds the third's.
-send scroll 100 150 20 2
+scroll_tiles 20
 expect '^browser: scroll edge shown$' "the list scrolled with the tiles didn't show its edge"
 ../tools/window-screenshot.sh "$pid" "$out/tiles-scrolled.png" || fail "no window to capture"
 send click 40 117
 expect '^browser: command select via favorite$' "a click on the scrolled tiles didn't reach one"
 expect "^browser: selected $y\( in .*\)\{0,1\}\$" \
   "the third tile isn't 40 up with the list: a click there didn't show its favorite"
-send scroll 100 150 -20 2
+scroll_tiles -20
 expect '^browser: scroll edge hidden$' "the list back at its top didn't hide its edge"
 send resize $size
 expect '^browser: tiles stay put$' "the tiles in a window back at its height still scroll"

@@ -662,7 +662,7 @@ dependencies = [
 
 [[package]]
 name = "browser"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-io",
  "base64 0.22.1",
@@ -684,6 +684,7 @@ dependencies = [
  "raw-window-handle",
  "rusqlite",
  "serde_json",
+ "unicode-properties",
  "unicode-segmentation",
  "wayland-client",
  "wayland-protocols-misc",

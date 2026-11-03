@@ -998,6 +998,14 @@ void Tab::DidFinishNavigation(content::NavigationHandle* navigation) {
       LayOutSoon();
     }
   }
+  // Back or forward to a page whose entry kept its title changes the tab's title with no
+  // TitleWasSet, as Chromium tells of a title only when it differs from the entry's (#1469). A new
+  // page's entry has none yet, and its title comes once the page sets it.
+  const content::NavigationEntry* entry = web_contents()->GetController().GetLastCommittedEntry();
+  if (navigation->HasCommitted() && !system_page_ && entry && !entry->GetTitle().empty() &&
+      Title() != reported_title_) {
+    ReportTitle();
+  }
   StateChanged();
 }
 
@@ -1266,8 +1274,9 @@ std::string Tab::Title() {
 }
 
 void Tab::ReportTitle() {
+  reported_title_ = Title();
   if (Host().tab_title_changed) {
-    Host().tab_title_changed(Host().context, id_, Title().c_str());
+    Host().tab_title_changed(Host().context, id_, reported_title_.c_str());
   }
 }
 

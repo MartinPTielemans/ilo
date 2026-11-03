@@ -17,10 +17,12 @@
 // windows on screen over the app's browser windows; stack, which lists every app's windows over the
 // driven one, front first; and reshow, which shows those of the UI's that are hidden again, as
 // Windows does. window <n> behind drives a window without bringing it forward, as drive.mm's does.
-// The Mac's modifiers are
-// pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl with Alt, but Ctrl for
-// ⌃Tab, and alt with both. A trackpad's scrolls and swipes are wheel messages with the pixels in
-// their deltas, as a precision touchpad sends them. choose and dismiss work on ilo's menu and the
+// The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl
+// with Alt, but Ctrl for ⌃Tab, and alt with both. A click's or a drag's are held as a Windows user
+// holds them, cmd with Ctrl and alt with Alt. A trackpad's scrolls, and its swipes over a page, are
+// wheel messages with the pixels in their deltas, going the way drive.mm's go, which Chromium
+// scrolls by. Its swipes over GPUI's view are handed to GPUI as Direct Manipulation hands it a
+// precision touchpad's, with their touch and lift. choose and dismiss work on ilo's menu and the
 // alerts host_ask shows. savepanel <path> picks <path> in the dialog host_save_png shows, as
 // drive.mm's does in the Mac's save panel, logging "browser: save panel answered", or "browser: no
 // save panel" if none shows. dragover, dragdrop and dragleave hand a drag from another app, a shell
@@ -29,8 +31,8 @@
 // unsupported. ime on types as drive.mm's scripted input method does, in the UI's fields alone, as
 // Linux's driver does. fullscreen puts the window full screen or takes it out through the core, as
 // Linux's driver does. The others, pageswipe, displays, hide, backdrop and openmenu, Windows has
-// nothing the driver can stand in for yet: each logs "browser: drive: unsupported
-// <command>" before drive.mm's "can't do that", so a run fails at once.
+// nothing the driver can stand in for yet: each logs "browser: drive: unsupported <command>" before
+// drive.mm's "can't do that", so a run fails at once.
 //
 // It logs as drive.mm does: "browser: drive <n>: <command>" as command n arrives, and "browser:
 // drive <n> done, key <window>, focus <view>, active <0|1>, marked <none|start,length>" once
@@ -76,6 +78,8 @@ bool host_save_dialog_answer(const char* path);
 bool browser_drive_compose(void* hwnd, const char* text, size_t start, size_t end, bool selected);
 bool browser_drive_commit(void* hwnd, const char* text);
 bool browser_drive_marked(void* hwnd, size_t* start, size_t* length);
+// The app's, on GPUI's window |hwnd|, for two fingers as a precision touchpad's.
+bool browser_drive_fingers(void* hwnd, float x, float y, float dx, float dy, int phase);
 void* host_drop_target(void* hwnd);
 }
 
@@ -461,13 +465,25 @@ int Modifiers(std::istringstream& words, const std::string& key = "") {
   return modifiers;
 }
 
+// The Mac's modifiers named in |words| for a click or a drag, as the page and the UI read a click's
+// here: cmd with Ctrl and alt with Alt, so ⌥-click is Alt+click and ⌥⌘-click Ctrl+Alt+click.
+int PointerModifiers(std::istringstream& words) {
+  int modifiers = 0;
+  std::string word;
+  while (words >> word) {
+    modifiers |= word == "cmd" ? kCtrl : word == "shift" ? kShift : word == "alt" ? kAlt : 0;
+  }
+  return modifiers;
+}
+
 // The virtual key of drive.mm's |key|, and the modifiers this keyboard types it with, or 0.
 UINT VirtualKey(const std::string& key, int* modifiers) {
   static const std::pair<const char*, UINT> named[] = {
       {"return", VK_RETURN},  {"escape", VK_ESCAPE}, {"tab", VK_TAB},      {"space", VK_SPACE},
       {"backspace", VK_BACK}, {"delete", VK_DELETE}, {"pageup", VK_PRIOR}, {"pagedown", VK_NEXT},
       {"up", VK_UP},          {"down", VK_DOWN},     {"left", VK_LEFT},    {"right", VK_RIGHT},
-      {"f4", VK_F4},          {"f6", VK_F6},         {"f10", VK_F10},      {"f12", VK_F12}};
+      {"home", VK_HOME},      {"f4", VK_F4},         {"f6", VK_F6},        {"f10", VK_F10},
+      {"f12", VK_F12}};
   for (const auto& [name, vk] : named) {
     if (key == name) {
       return vk;
@@ -1200,7 +1216,8 @@ bool Run(const std::string& line) {
     const UINT button = action.rfind("right", 0) == 0    ? MK_RBUTTON
                         : action.rfind("middle", 0) == 0 ? MK_MBUTTON
                                                          : MK_LBUTTON;
-    AddClick(target, button, in_key ? 0 : Modifiers(words), action.rfind("double", 0) == 0);
+    AddClick(target, button, in_key ? 0 : PointerModifiers(words),
+             action.rfind("double", 0) == 0);
     return true;
   }
   if (action == "drag") {
@@ -1244,7 +1261,7 @@ bool Run(const std::string& line) {
     const std::string step = right ? action.substr(5) : action;
     const UINT button = right ? MK_RBUTTON : MK_LBUTTON;
     // The keys named after the point, such as ⌥ for a drag that drops a copy.
-    const int keys = Modifiers(words);
+    const int keys = PointerModifiers(words);
     if (step == "press") {
       Target target;
       if (!TargetAt(x, y, &target)) {
@@ -1302,9 +1319,32 @@ bool Run(const std::string& line) {
     if (count < 1 || !TargetAt(x, y, &target)) {
       return false;
     }
-    // A mouse's tick is a notch; a trackpad's points, content moving up for scrolling down.
-    const int across = action == "wheel" ? static_cast<int>(dx * WHEEL_DELTA)
-                                         : static_cast<int>(std::lround(dx * 1.2));
+    // Two fingers over GPUI's view reach it as Direct Manipulation hands it a precision
+    // touchpad's: a touch, its moves and its lift, which no wheel message carries (#1212). At
+    // drive.mm's pace, the lift <pause> ms after the last move. Over a page they stay wheel
+    // messages, which Chromium scrolls by.
+    if (action == "swipe" && IsGpui(target.hwnd)) {
+      const float at_x = static_cast<float>(target.client.x);
+      const float at_y = static_cast<float>(target.client.y);
+      const float across = static_cast<float>(dx);
+      const float along = static_cast<float>(dy);
+      g_steps.push_back({[=] { Move(target, 0, 0); }});
+      for (int event = 0; event < count; event++) {
+        g_steps.push_back(
+            {[=] {
+               HoldKeys(0);
+               browser_drive_fingers(target.hwnd, at_x, at_y, across, along, event == 0 ? 0 : 1);
+             },
+             event + 1 < count ? 8u : static_cast<UINT>(pause > 0 ? pause : 0)});
+      }
+      g_steps.push_back({[=] { browser_drive_fingers(target.hwnd, at_x, at_y, 0, 0, 2); }});
+      return true;
+    }
+    // A mouse's tick is a notch; a trackpad's points, content moving up for scrolling down. Across,
+    // drive.mm's dx moves the content right, where Windows' positive delta scrolls right, so
+    // content moves left: a positive dx goes back a Space, as on the Mac.
+    const int across = action == "wheel" ? static_cast<int>(-dx * WHEEL_DELTA)
+                                         : static_cast<int>(std::lround(-dx * 1.2));
     const int along = static_cast<int>(std::lround(-dy * 1.2));
     g_steps.push_back({[=] { Move(target, 0, 0); }});
     for (int event = 0; event < count; event++) {

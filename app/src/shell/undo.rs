@@ -57,7 +57,8 @@ impl What {
     pub const DELETE_FOLDER: What = What::said("Delete Folder", "Folder Deleted");
     pub const REMOVE_FROM_SPLIT: What = What::quiet("Remove from Split");
     pub const SPLIT: What = What::quiet("Split View");
-    pub const CHANGE_ORIENTATION: What = What::quiet("Change Orientation");
+    pub const CONVERT_VERTICAL: What = What::quiet("Convert to Vertical Split View");
+    pub const CONVERT_HORIZONTAL: What = What::quiet("Convert to Horizontal Split View");
     pub const RENAME_TAB: What = What::quiet("Rename Tab");
     pub const RENAME_FOLDER: What = What::quiet("Rename Folder");
     pub const RENAME_SPACE: What = What::quiet("Rename Space");
@@ -983,11 +984,48 @@ impl Shell {
         stacked: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.favorites.contains(&with) {
+            return self.join_favorite(tab, with, left, stacked, cx);
+        }
         self.keep_split(tab, with, cx);
         self.browser.split_with(tab, with, left, cx);
         if stacked {
             self.browser.set_split_stacked(with, true, cx);
         }
+    }
+
+    /// `tab` joins `favorite`, which no Space holds, so a split view of them is made of a copy of
+    /// the favorite at the top of the shown Space's Today, as Arc's is. A pinned tab or a favorite
+    /// joins as a copy too, leaving both in their places, and a Today tab moves into the split, as
+    /// it does to join any other. ⌘Z closes the copies and puts a Today tab back in its place.
+    fn join_favorite(
+        &mut self,
+        tab: u64,
+        favorite: u64,
+        left: bool,
+        stacked: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let kept = self.favorites.contains(&tab) || self.pinned().contains(&tab);
+        let back = if kept { None } else { self.put_back(tab) };
+        // The copies show as they open, so the favorite's last, which the window then shows.
+        let joining = if kept { self.browser.duplicate(tab, cx) } else { tab };
+        let copy = self.browser.duplicate(favorite, cx);
+        if joining == 0 || copy == 0 {
+            return;
+        }
+        self.browser.split_with(joining, copy, left, cx);
+        if stacked {
+            self.browser.set_split_stacked(copy, true, cx);
+        }
+        // The copies close first, the favorite's last so the joining one's goes back beside it on
+        // Redo, and then the Today tab, alone again, goes back to its place.
+        let close = Edit::Close(if kept { vec![copy, joining] } else { vec![copy] });
+        let undo = match back {
+            Some(back) => Edit::Many(vec![close, back]),
+            None => close,
+        };
+        self.keep(What::SPLIT, Some(undo), cx);
     }
 
     /// `tab` is joining `with` in a split view, which ⌘Z takes it back out of. A pinned tab
@@ -1032,7 +1070,8 @@ impl Shell {
     pub(super) fn stack_split(&mut self, tab: u64, stacked: bool, cx: &mut Context<Self>) {
         let undo = self.split_of(tab).map(|(_, now)| Edit::Stack { tab, stacked: now });
         self.browser.set_split_stacked(tab, stacked, cx);
-        self.keep(What::CHANGE_ORIENTATION, undo, cx);
+        let what = if stacked { What::CONVERT_VERTICAL } else { What::CONVERT_HORIZONTAL };
+        self.keep(what, undo, cx);
     }
 
     /// Gives a name, an icon or a colour its new value, remembering the old, unless it's the same.
