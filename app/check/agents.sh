@@ -13,7 +13,8 @@
 # needs it to find node. It gives claude the browser's server whole, which runs and reaches the
 # browser as Claude Code. Disconnect takes it out again. With claude gone, the row says so in words.
 # Each claude is a stand-in that records its arguments, in a home folder of the run's own, never the
-# user's.
+# user's. On Windows the task agents find claude and codex as each installer puts them, and read
+# them signed in, with no console window shown (#1676).
 
 log="$out/agents.log"
 step=0
@@ -389,8 +390,193 @@ PY
     connected="; Connect finds Claude Code's claude in ~/.local/bin, on the PATH only through ~/.zshrc, runs it with that PATH, gives it the server whole, which runs as Claude Code's, Disconnect takes it out, and with claude gone the row says it isn't installed"
   fi
 fi
+# On Windows the task agents find claude and codex however each was installed, off the browser's
+# PATH, and read that each is signed in (#1676): Claude Code's claude.exe and npm's codex.cmd, then
+# npm's claude.cmd and winget's codex.exe, each a stand-in that answers the status calls and lists
+# a model of its own, never a real account. No console window shows meanwhile, which a watcher of
+# every window Windows shows sees, once it has seen the one it opens itself.
+tasks_found=
+if windows; then
+  home="$PWD/$out/task-home"
+  rm -rf "$home"
+  python=$(python3 -I -c 'import sys; print(sys.executable)')
+  # What a stand-in answers, as the CLI named first: claude's and codex's status, and codex's
+  # app-server's initialize and model/list, its model named for the kind of program it is.
+  cat > "$out/task-cli.py" << 'EOF'
+import json, sys
+cli, args = sys.argv[1], sys.argv[2:]
+if cli == "claude" and args == ["auth", "status", "--json"]:
+    print(json.dumps({"loggedIn": True, "authMethod": "check"}))
+elif cli == "codex" and args == ["login", "status"]:
+    print("Logged in using ChatGPT")
+elif cli == "codex" and args == ["app-server"]:
+    for line in sys.stdin:
+        method = json.loads(line).get("method")
+        if method == "initialize":
+            print(json.dumps({"id": 1, "result": {}}), flush=True)
+        elif method == "model/list":
+            print(json.dumps({"id": 2, "result": {"data": [{"id": "check-cmd", "displayName": "Check cmd"}]}}), flush=True)
+else:
+    sys.exit(2)
+EOF
+  cat > "$out/task-cli.rs" << 'EOF'
+use std::io::{BufRead, Write};
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let exe = std::env::current_exe().unwrap();
+    let cli = exe.file_stem().unwrap().to_string_lossy().to_lowercase();
+    match (cli.as_str(), args.as_slice()) {
+        ("claude", ["auth", "status", "--json"]) => println!("{{\"loggedIn\":true,\"authMethod\":\"check\"}}"),
+        ("codex", ["login", "status"]) => println!("Logged in using ChatGPT"),
+        ("codex", ["app-server"]) => {
+            let mut out = std::io::stdout();
+            for line in std::io::stdin().lock().lines() {
+                let line = line.unwrap();
+                if line.contains("\"method\":\"initialize\"") {
+                    writeln!(out, "{{\"id\":1,\"result\":{{}}}}").unwrap();
+                } else if line.contains("\"method\":\"model/list\"") {
+                    writeln!(out, "{{\"id\":2,\"result\":{{\"data\":[{{\"id\":\"check-exe\",\"displayName\":\"Check exe\"}}]}}}}").unwrap();
+                }
+                out.flush().unwrap();
+            }
+        }
+        _ => std::process::exit(2),
+    }
+}
+EOF
+  rustc -O -o "$out/task-cli.exe" "$out/task-cli.rs" || fail "rustc couldn't build the stand-in CLI"
+  # An npm shim for the CLI $1, as npm writes one, that runs the Python stand-in.
+  npm_shim() {
+    printf '%s\n' '@ECHO off' 'GOTO start' ':find_dp0' 'SET dp0=%~dp0' 'EXIT /b' ':start' 'SETLOCAL' \
+      'CALL :find_dp0' "SET \"_prog=$python\"" \
+      "endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\task-cli.py\" $1 %*" |
+      sed 's/$/\r/'
+  }
+  # Every console window Windows shows, from a WinEvent hook, written to $2 once $1 is there. It
+  # first opens one of its own and writes "ready" to $3 once it has seen it.
+  cat > "$out/consoles.py" << 'EOF'
+import ctypes, ctypes.wintypes as w, os, subprocess, sys, time
+stop, report, ready = sys.argv[1:]
+user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+EVENT_OBJECT_SHOW, OBJID_WINDOW, CREATE_NEW_CONSOLE = 0x8002, 0, 0x10
+user32.SetWinEventHook.restype = w.HANDLE
+user32.GetClassNameW.argtypes = [w.HWND, w.LPWSTR, ctypes.c_int]
+shown = []
+def name_of(pid):
+    process = kernel32.OpenProcess(0x1000, False, pid)
+    if not process:
+        return "?"
+    name, size = ctypes.create_unicode_buffer(1024), w.DWORD(1024)
+    found = kernel32.QueryFullProcessImageNameW(process, 0, name, ctypes.byref(size))
+    kernel32.CloseHandle(process)
+    return os.path.basename(name.value) if found else "?"
+Hook = ctypes.WINFUNCTYPE(None, w.HANDLE, w.DWORD, w.HWND, w.LONG, w.LONG, w.DWORD, w.DWORD)
+def shows(hook, event, hwnd, object, child, thread, when):
+    if object != OBJID_WINDOW or not hwnd:
+        return
+    kind = ctypes.create_unicode_buffer(64)
+    user32.GetClassNameW(hwnd, kind, 64)
+    if kind.value == "ConsoleWindowClass":
+        pid = w.DWORD()
+        user32.GetWindowThreadProcessId(w.HWND(hwnd), ctypes.byref(pid))
+        shown.append(f"{hwnd} {pid.value} {name_of(pid.value)}")
+hook_function = Hook(shows)
+if not user32.SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_SHOW, 0, hook_function, 0, 0, 0):
+    sys.exit("no WinEvent hook")
+message = w.MSG()
+def pump(done, seconds):
+    end = time.time() + seconds
+    while not done() and time.time() < end:
+        while user32.PeekMessageW(ctypes.byref(message), 0, 0, 0, 1):
+            user32.TranslateMessage(ctypes.byref(message))
+            user32.DispatchMessageW(ctypes.byref(message))
+        time.sleep(0.01)
+own = subprocess.Popen(["cmd", "/c", "ping -n 3 127.0.0.1 > nul"], creationflags=CREATE_NEW_CONSOLE)
+pump(lambda: shown, 20)
+own.wait()
+seen_own = len(shown)
+shown.clear()
+with open(ready, "w") as file:
+    file.write(f"ready {seen_own}\n")
+pump(lambda: os.path.exists(stop), 600)
+pump(lambda: False, 1)
+with open(report, "w") as file:
+    file.write("".join(line + "\n" for line in shown))
+EOF
+  rm -f "$out/consoles-stop" "$out/consoles-ready" "$out/consoles"
+  "$python" -I "$out/consoles.py" "$(cygpath -w "$out/consoles-stop")" "$(cygpath -w "$out/consoles")" \
+    "$(cygpath -w "$out/consoles-ready")" &
+  watcher=$!
+  for _ in $(seq 300); do
+    [ -s "$out/consoles-ready" ] && break
+    kill -0 "$watcher" 2>/dev/null || break
+    sleep 0.1
+  done
+  grep -q '^ready [1-9]' "$out/consoles-ready" 2>/dev/null ||
+    fail "the console watcher didn't see the console window it opened: $(cat "$out/consoles-ready" 2>/dev/null)"
+  agents_file="$(dirname "$saved")/Agents"
+  native="$home/.local/bin"
+  winget="$home/AppData/Local/Microsoft/WinGet/Links"
+  npm="$home/AppData/Roaming/npm"
+  # Launches the browser with the CLIs $1 and $2, at the paths given, and expects each signed in
+  # there, and Codex's model $3 listed.
+  task_clis() {
+    log="$out/agents-tasks-$3.log"
+    step=0
+    rm -rf "$home" "$agents_file" "$saved" "$launch_frame"
+    mkdir -p "$home/.claude" "$(dirname "$1")" "$(dirname "$2")"
+    for cli in "$1" "$2"; do
+      case $cli in
+        *.exe) cp "$out/task-cli.exe" "$cli" ;;
+        *.cmd)
+          npm_shim "$(basename "$cli" .cmd)" > "$cli"
+          cp "$out/task-cli.py" "$(dirname "$cli")/"
+          ;;
+      esac
+    done
+    printf '{"on":true,"agents":[]}' > "$agents_file"
+    # The PATH stays the run's, which has none of these folders.
+    USERPROFILE=$(cygpath -w "$home") LOCALAPPDATA=$(cygpath -w "$home/AppData/Local") \
+      APPDATA=$(cygpath -w "$home/AppData/Roaming") \
+      BROWSER_PROFILE_DIR=$(cygpath -w "${BROWSER_PROFILE_DIR:-$profile_dir}") BROWSER_DRIVE=1 \
+      "$browser" < "$out/drive" > "$log" 2>&1 &
+    pid=$!
+    exec 3> "$out/drive"
+    await '^browser: agents server on ' || fail "the saved switch didn't start the server"
+    send menu Settings…
+    expect '^browser: settings shown ' "Settings… didn't show Settings"
+    settings_drew
+    send clickkey $(drawn "toolbar Agents")
+    expect '^browser: settings tab Agents$' "a click on Agents didn't show its tab"
+    for cli in "$1" "$2"; do
+      task_cli=$(basename "$cli"); task_cli=${task_cli%.*}
+      line="browser: task agent $task_cli is SignedIn at $(cygpath -w "$cli")"
+      for _ in $(seq 300); do
+        grep -qxF "$line" "$log" && break
+        sleep 0.1
+      done
+      grep -qxF "$line" "$log" ||
+        fail "the task agent $task_cli wasn't found signed in at $cli: $(grep "^browser: task agent $task_cli " "$log" | tail -1)"
+    done
+    for _ in $(seq 300); do
+      grep -q "\"$3\"" "$agents_file" 2>/dev/null && break
+      sleep 0.1
+    done
+    grep -q "\"$3\"" "$agents_file" || fail "Codex at $2 didn't list its model $3: $(cat "$agents_file")"
+    ../tools/window-screenshot.sh "$pid" "$out/task-agents-$3.png" || fail "no window to capture"
+    quit
+  }
+  task_clis "$native/claude.exe" "$npm/codex.cmd" check-cmd
+  task_clis "$npm/claude.cmd" "$winget/codex.exe" check-exe
+  touch "$out/consoles-stop"
+  wait "$watcher" || fail "the console watcher failed"
+  [ -s "$out/consoles" ] && fail "console windows showed as the task agents were looked for: $(tr '\n' ';' < "$out/consoles")"
+  rm -rf "$home" "$agents_file"
+  tasks_found="; on Windows the task agents find claude.exe and codex.cmd, then claude.cmd and codex.exe, off the PATH, each signed in, Codex's models listed, and no console window shows"
+fi
 if [ "$driven" = 1 ]; then
-  echo "ok: $made; an agent's Space shows and switches as the user's, keeps the user's tabs out, refuses an agent ad blocking, passwords, DevTools, a profile's settings and any action agents lack, with why in the activity log, gets a tab the user gives it until they move it back, clears its mark as each session ends, and comes back the agent's$connected; a task's Space is in no list of Spaces"
+  echo "ok: $made; an agent's Space shows and switches as the user's, keeps the user's tabs out, refuses an agent ad blocking, passwords, DevTools, a profile's settings and any action agents lack, with why in the activity log, gets a tab the user gives it until they move it back, clears its mark as each session ends, and comes back the agent's$connected$tasks_found; a task's Space is in no list of Spaces"
 else
-  echo "ok: $made; an agent's Space comes back the agent's$connected; a task's Space is in no list of Spaces. skip: switching to it and its tab. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: $made; an agent's Space comes back the agent's$connected$tasks_found; a task's Space is in no list of Spaces. skip: switching to it and its tab. Browser wasn't the active app, so the page ignored the click."
 fi

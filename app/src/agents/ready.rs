@@ -5,8 +5,10 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::{OnceLock, mpsc};
+use std::process::Stdio;
+
+use crate::child::command;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -88,14 +90,13 @@ impl Found {
 
 /// Looks for `cli` and asks it whether the user is signed in. Blocks: runs the CLI.
 pub fn look(cli: Cli) -> Found {
-    let path = login_path().clone();
-    let search = path.clone().or_else(|| std::env::var("PATH").ok()).unwrap_or_default();
-    let Some(program) = find(cli.program(), &search) else {
+    let (found, path) = locate(cli);
+    let Some(program) = found else {
         // check.sh reads this line.
         log!("browser: task agent {} is NotFound", cli.id());
         return Found { ready: Ready::NotFound, program: None, path, models: Vec::new() };
     };
-    let mut command = Command::new(&program);
+    let mut command = command(&program);
     match cli {
         Cli::Claude => command.args(["auth", "status", "--json"]),
         Cli::Codex => command.args(["login", "status"]),
@@ -126,10 +127,27 @@ pub fn look(cli: Cli) -> Found {
     Found { ready, program: Some(program), path, models }
 }
 
+/// Where `cli` is, and the PATH it runs with: the login shell's, or on Windows, where it may be
+/// claude.exe, claude.cmd, codex.cmd or codex.exe, the one a terminal opened now has (#1676).
+#[cfg(not(windows))]
+fn locate(cli: Cli) -> (Option<PathBuf>, Option<String>) {
+    let path = login_path().clone();
+    let search = path.clone().or_else(|| std::env::var("PATH").ok()).unwrap_or_default();
+    (find(cli.program(), &search), path)
+}
+
+#[cfg(windows)]
+fn locate(cli: Cli) -> (Option<PathBuf>, Option<String>) {
+    match super::clients::windows_find(cli.program()) {
+        Some((program, path)) => (Some(program), Some(path)),
+        None => (None, None),
+    }
+}
+
 /// The models Codex lists for the signed-in user, which change with their plan and Codex's
 /// version: asked of its app-server, which starts no thread for it, and left after 10 s.
 fn codex_models(program: &Path, path: Option<&str>) -> Vec<(String, String)> {
-    let mut command = Command::new(program);
+    let mut command = command(program);
     command.arg("app-server").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
     if let Some(path) = path {
         command.env("PATH", path);
@@ -173,6 +191,9 @@ fn codex_models(program: &Path, path: Option<&str>) -> Vec<(String, String)> {
             }
         }
     })();
+    // Its input closes first: killing an npm shim's cmd.exe leaves the node it started, which
+    // ends as its input does.
+    drop(stdin);
     _ = child.kill();
     _ = child.wait();
     models.unwrap_or_default()
@@ -221,16 +242,13 @@ fn is_executable(path: &Path) -> bool {
 
 /// The PATH of the user's login shell, which an app opened from the Dock doesn't have: where npm,
 /// Homebrew and the CLIs' own installers put them. Asked once a run, of the shell alone: the CLI
-/// itself never runs through it, as an alias there could change its flags. Windows apps have the
-/// user's PATH already.
+/// itself never runs through it, as an alias there could change its flags.
+#[cfg(not(windows))]
 fn login_path() -> &'static Option<String> {
-    static PATH: OnceLock<Option<String>> = OnceLock::new();
+    static PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     PATH.get_or_init(|| {
-        if cfg!(windows) {
-            return None;
-        }
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-        let output = Command::new(shell)
+        let output = command(shell)
             .args(["-l", "-c", r#"printf "%s" "$PATH""#])
             .stdin(Stdio::null())
             .stderr(Stdio::null())
