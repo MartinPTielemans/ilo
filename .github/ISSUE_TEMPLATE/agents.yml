@@ -62,16 +62,17 @@ body:
   - type: input
     id: version
     attributes:
-      label: ilo commit
-      description: ilo has no releases yet. The commit you built (`git rev-parse --short HEAD`).
+      label: ilo version
+      description: Help › Troubleshooting › Copy Build Info copies it, with the Chromium version and the system. Built from source, the commit (`git rev-parse --short HEAD`).
+      placeholder: 0.1.4 (4321)
     validations:
       required: true
 
   - type: input
     id: os
     attributes:
-      label: macOS version and chip
-      description: "`sw_vers -productVersion` and `uname -m`."
-      placeholder: 26.1, arm64
+      label: System and chip
+      description: "Help › Troubleshooting › Copy Build Info has both. On Linux, say whether it is the Flatpak or a build from source."
+      placeholder: macOS 15.1, Apple M2 Pro
     validations:
       required: true
