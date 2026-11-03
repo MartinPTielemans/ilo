@@ -1,4 +1,5 @@
-//! An element painted smaller or larger than it's laid out, as a layer's transform would.
+//! An element painted smaller or larger than it's laid out, as a layer's transform would. Under
+//! Reduce Motion it's painted at its own size (`motion::scale`).
 
 use gpui::{
     AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
@@ -87,7 +88,8 @@ impl Element for Scaled {
         window: &mut Window,
         cx: &mut App,
     ) {
-        if self.factor == 1. {
+        let factor = crate::motion::scale(self.factor, cx);
+        if factor == 1. {
             return self.child.paint(window, cx);
         }
         let origin = match self.origin {
@@ -95,6 +97,6 @@ impl Element for Scaled {
             Origin::Top => point(bounds.center().x, bounds.top()),
             Origin::Middle => bounds.center(),
         };
-        window.with_scale(self.factor, origin, |window| self.child.paint(window, cx));
+        window.with_scale(factor, origin, |window| self.child.paint(window, cx));
     }
 }

@@ -232,6 +232,7 @@ mod platform {
         pub fn host_set_overlay_radius(overlay: c_int, radius: f64);
         pub fn host_set_overlay_growth(overlay: c_int, x: f64, y: f64);
         pub fn host_set_overlay_shrink(overlay: c_int);
+        pub fn host_set_overlays_still(still: bool);
         pub fn host_show_overlay(
             overlay: c_int,
             ui_view: *mut c_void,
@@ -457,7 +458,13 @@ mod platform {
         pub fn host_show_toast(ui_view: *mut c_void);
         pub fn host_hide_toast();
         pub fn host_add_tooltip(tooltip_view: *mut c_void, margin: f64, away: extern "C" fn());
-        pub fn host_show_tooltip(ui_view: *mut c_void, left: f64, top: f64, fade: f64);
+        pub fn host_show_tooltip(
+            ui_view: *mut c_void,
+            overlay: c_int,
+            left: f64,
+            top: f64,
+            fade: f64,
+        );
         pub fn host_hide_tooltip(fade: f64);
         pub fn host_add_hover_card(card_view: *mut c_void, margin: f64, away: extern "C" fn());
         pub fn host_show_hover_card(ui_view: *mut c_void, left: f64, top: f64, width: f64, height: f64);
@@ -2001,6 +2008,16 @@ impl command_bar::Host for Bar {
     fn set_up_agents(&self, cx: &mut App) {
         settings::show_agents(cx);
     }
+
+    fn tooltip(&self, tip: Option<(tooltip::Tip, tooltip::Anchor)>, cx: &mut App) {
+        match tip {
+            // Its buttons are in the bar's window, which the tooltip goes over.
+            Some((tip, anchor)) => {
+                tooltip::hover_over(tooltip::Over::Overlay(COMMAND_BAR), tip, anchor, cx)
+            }
+            None => tooltip::dismiss(cx),
+        }
+    }
 }
 
 /// `color` as the host takes a colour, 0xRRGGBBAA.
@@ -2122,12 +2139,17 @@ extern "C" fn theme_picker_dismissed() {
 struct TooltipHost;
 
 impl tooltip::Host for TooltipHost {
-    fn show(&self, window: u64, left: f32, top: f32) {
-        let Some(view) = ui_view_of(window) else {
+    fn show(&self, over: tooltip::Over, left: f32, top: f32) {
+        let (view, overlay) = match over {
+            tooltip::Over::Window(window) => (ui_view_of(window), -1),
+            // The overlays show over the window in front.
+            tooltip::Over::Overlay(overlay) => (Some(front().1), overlay),
+        };
+        let Some(view) = view.filter(|view| !view.is_null()) else {
             return;
         };
         let fade = tooltip::FADE_IN.as_secs_f64();
-        unsafe { platform::host_show_tooltip(view, left.into(), top.into(), fade) };
+        unsafe { platform::host_show_tooltip(view, overlay, left.into(), top.into(), fade) };
     }
 
     fn hide(&self) {
@@ -3513,11 +3535,12 @@ impl Browser for Engine {
     fn command_bar(
         &self,
         editing: Option<(u64, SharedString)>,
+        shown: Vec<SharedString>,
         tabs: Vec<BarTab>,
         field: Option<Bounds<Pixels>>,
         cx: &mut App,
     ) {
-        with_overlays(move |cx| command_bar::show(editing, tabs, field, cx), cx);
+        with_overlays(move |cx| command_bar::show(editing, shown, tabs, field, cx), cx);
     }
 
     fn search_tabs(&self, tabs: Vec<BarTab>, cx: &mut App) {
@@ -6240,6 +6263,8 @@ fn set_reduce_motion(reduce: bool, cx: &mut App) {
         // check.sh reads this line.
         log!("browser: reduce motion {}", if reduce { "on" } else { "off" });
         cx.set_reduce_motion(reduce);
+        // The pickers' grow and shrink are the platform's to draw.
+        unsafe { platform::host_set_overlays_still(reduce) };
     }
 }
 
@@ -7976,6 +8001,28 @@ pub extern "C" fn browser_drive_marked(
         *length = marked.len();
     }
     true
+}
+
+/// The Windows driver's two fingers (platform/windows/drive.cc), in GPUI's window `hwnd`: at `x`,
+/// `y` in its client area's pixels, moving the content `dx` points right and `dy` down, as a
+/// precision touchpad's come through Direct Manipulation: touching for `phase` 0, moving for 1 and
+/// lifting for 2. Returns whether the window was GPUI's.
+#[cfg(target_os = "windows")]
+#[unsafe(no_mangle)]
+pub extern "C" fn browser_drive_fingers(
+    hwnd: *mut c_void,
+    x: f32,
+    y: f32,
+    dx: f32,
+    dy: f32,
+    phase: c_int,
+) -> bool {
+    let phase = match phase {
+        0 => gpui::TouchPhase::Started,
+        1 => gpui::TouchPhase::Moved,
+        _ => gpui::TouchPhase::Ended,
+    };
+    gpui_windows::drive_fingers(hwnd, x, y, gpui::point(gpui::px(dx), gpui::px(dy)), phase)
 }
 
 /// On Windows and Linux the browser is this library, which the core in Chromium's own executable

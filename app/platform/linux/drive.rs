@@ -28,12 +28,12 @@
 //! another app's drag is, to the browser window's top-level window or its proxy, and wait for its
 //! answer. swipe is Wayland's alone, as X11 sends no touchpad's phases. The others, such as
 //! displays, the driver can't do yet, and says so as drive.mm does. pip, which drive.mm doesn't
-//! have yet, finds a video's Picture in Picture window, the Mini Player, and logs "browser: pip at
-//! <x> <y> <width> <height>" as it is and each time it moves or resizes, then "browser: pip gone",
-//! or "browser: pip none" without one. pip doubleclick, pip wheel, and pip press, dragto and
-//! release work in it, at points from its top-left corner as the command finds it, or as it was
-//! at the press. pip press, dragto and release alone move the display's pointer, through XTest,
-//! onto the Mini Player only, and the release puts it back.
+//! have yet, finds a video's Picture in Picture window, the Mini Player, or a page's, as a call
+//! floats in, and logs "browser: pip at <x> <y> <width> <height>" as it is and each time it moves
+//! or resizes, then "browser: pip gone", or "browser: pip none" without one. pip doubleclick, pip
+//! wheel, and pip press, dragto and release work in it, at points from its top-left corner as the
+//! command finds it, or as it was at the press. pip press, dragto and release alone move the
+//! display's pointer, through XTest, onto the window only, and the release puts it back.
 //!
 //! It logs as drive.mm does: "browser: drive <n>: <command>" as command n arrives, "browser: drive
 //! <n>: can't do that" for one it can't, and "browser: drive <n> done, key <window>, focus <view>,
@@ -2210,17 +2210,26 @@ fn run_command(line: &str) -> Option<()> {
     }
 }
 
-/// Chromium's Picture in Picture window for a video, the Mini Player, if it shows: a window of the
-/// X client's that made the driven browser window, titled as Chrome titles it.
+/// Chromium's Picture in Picture window, if one shows: a window of the X client's that made the
+/// driven browser window, kept over the others, as Chrome keeps a video's, the Mini Player, and a
+/// page's, as a call floats in. The page's is titled as its opener, so the title alone won't do.
 fn mini_player() -> Option<xproto::Window> {
     let browser = driven()?;
     let x = server()?;
     let (connection, root) = &*x;
     let client = !connection.setup().resource_id_mask;
+    let (state, above) = (atom("_NET_WM_STATE")?, atom("_NET_WM_STATE_ABOVE")?);
+    let floats = |window: xproto::Window| {
+        (connection.get_property(false, window, state, xproto::AtomEnum::ATOM, 0, 64).ok())
+            .and_then(|cookie| cookie.reply().ok())
+            .and_then(|property| Some(property.value32()?.any(|each| each == above)))
+            .unwrap_or(false)
+    };
     let ours = |window: xproto::Window| {
         window & client == browser.window & client
-            && (text_property(window, "_NET_WM_NAME"))
+            && ((text_property(window, "_NET_WM_NAME"))
                 .is_some_and(|title| title.eq_ignore_ascii_case("Picture in Picture"))
+                || floats(window))
             && (connection.get_window_attributes(window).ok())
                 .and_then(|cookie| cookie.reply().ok())
                 .is_some_and(|a| a.map_state == xproto::MapState::VIEWABLE)

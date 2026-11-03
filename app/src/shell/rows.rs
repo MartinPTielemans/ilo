@@ -463,6 +463,7 @@ impl Shell {
                     folder_glyph(open),
                     FAVICON_DRAWN,
                     self.palette.text(SECONDARY).into(),
+                    cx,
                 )
                 .into_any_element(),
         };
@@ -658,6 +659,7 @@ impl Shell {
                     icon,
                     SPEAKER_DRAWN,
                     self.palette.text(SECONDARY).into(),
+                    cx,
                 ))
                 // Not the row's press, which would show the tab, nor a double-click's rename.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -1352,7 +1354,7 @@ impl Shell {
             let room = room.unwrap_or(if arrow == NONE { 0. } else { 1. });
             // Fading out, it takes no click and doesn't light up.
             let color = if live && self.clear_hovered { CLEAR_HOVERED } else { CLEAR };
-            let glyph = self.swaps.glyph(what, arrow, CLEAR_ARROW, self.palette.text(color));
+            let glyph = self.swaps.glyph(what, arrow, CLEAR_ARROW, self.palette.text(color), cx);
             let clear = clear_label(&self.palette, glyph, room, color).id("clear").opacity(self.tools_opacity());
             let clear = clear.when(self.a11y, |clear| {
                 clear.accessibility_id("clear").button_named("Clear Today")
@@ -2066,6 +2068,25 @@ mod tests {
         assert_eq!(arrow(&shell, cx), (Some(false), true));
         report(&shell, cx, vec![2], 2);
         assert_eq!(arrow(&shell, cx), (Some(true), true));
+    }
+
+    /// Under Reduce Motion the rows are in their places at once, and the frame after a move still
+    /// sees it end, which check.sh waits for, when the core's next answer with the same lists
+    /// comes before that frame, as a ⌘Z's for each tab it brings back do (#1380).
+    #[gpui::test]
+    fn under_reduce_motion_rows_moved_before_a_frame_still_settle(cx: &mut TestAppContext) {
+        let (shell, cx, _) = window(cx, vec![10, 11], vec![20, 21], 20);
+        shell.update(cx, |shell, cx| {
+            cx.set_reduce_motion(true);
+            for _ in 0..2 {
+                shell.set_tabs(1, vec![10], vec![11, 20, 21], Vec::new(), Folders::default(), cx);
+            }
+            assert_eq!(shell.slide(Slot::Tab(11)), 0., "the row slid under Reduce Motion");
+            assert!(!shell.slides.is_empty(), "the second answer took the move from its frame");
+            cx.notify();
+        });
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, _| assert!(shell.slides.is_empty(), "the rows didn't settle"));
     }
 
     /// A window showing one Space with `pinned` and `today` tabs and `shown`.

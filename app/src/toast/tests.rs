@@ -332,3 +332,30 @@ fn a_toast_too_long_for_its_page_shortens_its_words(cx: &mut TestAppContext) {
     assert_eq!(f32::from(plate.origin.y), TOP);
     assert_eq!(f32::from(plate.size.height), HEIGHT);
 }
+
+/// Under Reduce Motion the toast doesn't grow from 0.7: it's drawn at its size once it has faded
+/// in, where it otherwise still springs (#1380).
+#[gpui::test]
+fn under_reduce_motion_the_toast_only_fades_in(cx: &mut TestAppContext) {
+    let host = open_toast(cx);
+    let faded_in = |cx: &mut TestAppContext| {
+        let window = cx.update(|cx| cx.global::<ToastWindow>().0);
+        cx.update(|cx| {
+            window
+                .update(cx, |toast, _, _| {
+                    let shown = toast.shown.as_mut().unwrap();
+                    shown.shown = Some(Instant::now() - Duration::from_secs_f32(FADE_IN * 2.));
+                })
+                .unwrap()
+        });
+        draw(cx);
+        host.1.take().pop()
+    };
+    show_deleted(cx);
+    assert_eq!(faded_in(cx), None, "the toast came to rest while still growing");
+    cx.update(|cx| cx.set_reduce_motion(true));
+    show_deleted(cx);
+    let plate = faded_in(cx).expect("the toast wasn't at rest once faded in");
+    assert_eq!(f32::from(plate.origin.y), TOP);
+    assert_eq!(f32::from(plate.size.height), HEIGHT);
+}
