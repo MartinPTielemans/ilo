@@ -7908,6 +7908,11 @@ unsafe extern "C" fn window_resized(_: *mut c_void, window: bc::bc_id, width: f6
         gpui_linux::resize_embedded(ui_view, width as f32, height as f32);
         frames::sized(ui_view, [width, height]);
     }
+    // The core tells the size again once the window has gone full screen or maximized, or back,
+    // which a window already its screen's size does at that size, with no resize to ask (#1220).
+    update_app_later(move |cx| {
+        update_window_in(window, cx, |shell, cx| shell.bounds_changed(cx));
+    });
 }
 
 /// The browser window became active, as GPUI's window in it doesn't hear under X11 when a click
