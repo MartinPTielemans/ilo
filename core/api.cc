@@ -306,6 +306,25 @@ bool bc_window_dialog(bc_id id, bc_rect* frame) {
 #endif
 }
 
+bool bc_window_devtools(bc_id id, bc_rect* devtools, bc_rect* page) {
+#if BUILDFLAG(IS_LINUX)
+  views::Widget* widget = OpenWidget(id);
+  const auto frames = widget ? browser_core::platform::DevToolsFrames(widget) : std::nullopt;
+  if (!frames) {
+    return false;
+  }
+  const auto put = [](const gfx::Rect& rect, bc_rect* out) {
+    *out = {static_cast<double>(rect.x()), static_cast<double>(rect.y()),
+            static_cast<double>(rect.width()), static_cast<double>(rect.height())};
+  };
+  put(frames->first, devtools);
+  put(frames->second, page);
+  return true;
+#else
+  return false;
+#endif
+}
+
 size_t bc_window_child_title(bc_id id, char* title, size_t capacity) {
 #if BUILDFLAG(IS_LINUX)
   views::Widget* widget = OpenWidget(id);
@@ -1002,6 +1021,15 @@ bc_id bc_tab_profile(bc_id id) {
   return profile ? browser_core::ProfileId(browser_core::DirOf(profile)) : 0;
 }
 
+double bc_tab_last_seen(bc_id id) {
+  const browser_core::Tab* tab = browser_core::Tab::Get(id);
+  if (!tab) {
+    return 0;
+  }
+  const base::Time seen = browser_core::Window::Showing(id) ? base::Time::Now() : tab->last_seen();
+  return seen.InMillisecondsFSinceUnixEpoch();
+}
+
 size_t bc_favorites(bc_id* tabs, size_t capacity) {
   const std::vector<bc_id> favorites = browser_core::Favorites::All();
   std::copy_n(favorites.begin(), std::min(capacity, favorites.size()), tabs);
@@ -1097,6 +1125,26 @@ bool bc_tab_set_split_expanded(bc_id id, bool expanded) {
   }
   browser_core::Window::PanesChanged();
   return true;
+}
+
+size_t bc_tab_split_name(bc_id id, char* name, size_t capacity) {
+  browser_core::Space* space = browser_core::Space::Holding(id);
+  return CopyString(space ? space->SplitName(id) : std::string(), name, capacity);
+}
+
+bool bc_tab_set_split_name(bc_id id, const char* name) {
+  browser_core::Space* space = browser_core::Space::Holding(id);
+  return space && space->SetSplitName(id, name ? name : "");
+}
+
+size_t bc_tab_split_icon(bc_id id, char* icon, size_t capacity) {
+  browser_core::Space* space = browser_core::Space::Holding(id);
+  return CopyString(space ? space->SplitIcon(id) : std::string(), icon, capacity);
+}
+
+bool bc_tab_set_split_icon(bc_id id, const char* icon) {
+  browser_core::Space* space = browser_core::Space::Holding(id);
+  return space && space->SetSplitIcon(id, icon ? icon : "");
 }
 
 bool bc_tab_set_split_stacked(bc_id id, bool stacked) {
@@ -1450,11 +1498,19 @@ void bc_window_suggest(bc_id window_id, const char* keyword, const char* text, b
   }
 }
 
-void bc_window_remove_suggestion(bc_id window_id, const char* url) {
+bc_id bc_window_remove_suggestion(bc_id window_id, const char* url) {
   browser_core::Window* window = browser_core::Window::FromId(window_id);
-  if (window && url) {
-    window->RemoveSuggestion(GURL(url));
-  }
+  return window && url ? window->RemoveSuggestion(GURL(url)) : 0;
+}
+
+bool bc_window_undo_remove_suggestion(bc_id window_id, bc_id removal) {
+  browser_core::Window* window = browser_core::Window::FromId(window_id);
+  return window && window->UndoRemoveSuggestion(removal);
+}
+
+bool bc_window_redo_remove_suggestion(bc_id window_id, bc_id removal) {
+  browser_core::Window* window = browser_core::Window::FromId(window_id);
+  return window && window->RedoRemoveSuggestion(removal);
 }
 
 bc_id bc_tab_open(bc_id window_id, const char* url, bool when_shown) {

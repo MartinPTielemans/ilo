@@ -29,6 +29,7 @@
 #include "browser_core/host.h"
 #include "browser_core/idle_unload.h"
 #include "browser_core/install_question.h"
+#include "browser_core/mini_player.h"
 #include "browser_core/password_offer.h"
 #include "browser_core/platform/window_views.h"
 #include "browser_core/profiles.h"
@@ -129,10 +130,12 @@ struct ClosedTab {
   size_t index = 0;
   SavedTab saved;
   // A tab of the split view it was in, else 0, its place in the split, and whether the split was
-  // stacked.
+  // stacked, with its name and icon.
   bc_id split_with = 0;
   size_t split_index = 0;
   bool stacked = false;
+  std::string split_name;
+  std::string split_icon;
   // Whether it closed in a Little ilo window, which ⇧⌘T reopens it in a new one of, in the profile
   // in the directory |profile| (window_reopen_little).
   bool little = false;
@@ -219,6 +222,8 @@ void KeepClosed(bc_id id) {
                           .split_with = panes.size() < 2 ? 0 : panes[split_index == 0 ? 1 : 0],
                           .split_index = split_index,
                           .stacked = space->Stacked(id),
+                          .split_name = space->SplitName(id),
+                          .split_icon = space->SplitIcon(id),
                           .little = space->little(),
                           .profile = space->profile()});
   if (ClosedTabs().size() > kMaxClosedTabs) {
@@ -236,6 +241,19 @@ std::optional<ClosedTab> TakeClosed(bc_id id) {
   ClosedTabs().erase(closed);
   Unarchive(id);
   return tab;
+}
+
+// Gives the split |tab| is back in what it had when |closed| closed: stacked, a name, an icon.
+void RemakeSplit(Space& space, bc_id tab, const ClosedTab& closed) {
+  if (closed.stacked) {
+    space.SetStacked(tab, true);
+  }
+  if (!closed.split_name.empty()) {
+    space.SetSplitName(tab, closed.split_name);
+  }
+  if (!closed.split_icon.empty()) {
+    space.SetSplitIcon(tab, closed.split_icon);
+  }
 }
 
 // A new tab in |dir|'s profile with |tab|'s history, name and mute, in no Space and without its
@@ -417,6 +435,13 @@ Window* Window::Showing(bc_id tab) {
     }
   }
   return nullptr;
+}
+
+// static
+void Window::MiniPlayerTookKeyboard() {
+  for (auto& [id, window] : Windows()) {
+    window->left_ = false;
+  }
 }
 
 // static
@@ -1262,10 +1287,16 @@ void Window::LetProfileGo(Profile* profile) {
   }
 }
 
-void Window::RemoveSuggestion(const GURL& url) {
-  if (suggestions_) {
-    suggestions_->Remove(url);
-  }
+bc_id Window::RemoveSuggestion(const GURL& url) {
+  return suggestions_ ? suggestions_->Remove(url) : 0;
+}
+
+bool Window::UndoRemoveSuggestion(bc_id removal) {
+  return suggestions_ && suggestions_->Restore(removal);
+}
+
+bool Window::RedoRemoveSuggestion(bc_id removal) {
+  return suggestions_ && suggestions_->RemoveAgain(removal);
 }
 
 content::WebContents* Window::OpenTab(Profile* profile, const GURL& url, bool when_shown) {
@@ -1814,8 +1845,8 @@ size_t Window::UndoClear(bc_id clear) {
       ++reopened;
       // Back in its split, if the tab beside it came back too.
       if (Space* space = Space::Holding(id);
-          space && cleared.split && above && space->Split(id, above, GURL()) && tab->stacked) {
-        space->SetStacked(id, true);
+          space && cleared.split && above && space->Split(id, above, GURL())) {
+        RemakeSplit(*space, id, *tab);
       }
       if (cleared.selected) {
         shown = id;
@@ -1940,8 +1971,8 @@ bc_id Window::ReopenClosed(bc_id id, bool show) {
       space->Split(tab, closed.split_with, Tab::Get(tab)->Url(), /*left=*/false)) {
     space->MoveInSplit(tab, closed.split_index);
     // A split it remakes is as it was. One still open keeps how it's shown now.
-    if (remade && closed.stacked) {
-      space->SetStacked(tab, true);
+    if (remade) {
+      RemakeSplit(*space, tab, closed);
     }
     PanesChanged();
   }
@@ -2508,6 +2539,9 @@ void Window::OnWidgetActivationChanged(views::Widget* widget, bool active) {
   // core shows pages outside views. Without this, a page that commits while the window isn't key
   // leaves the keyboard with nothing: Chromium gives none to its new view, and the old one is gone.
   if (active) {
+    if (std::exchange(left_, false)) {
+      CameBackTo(*this);
+    }
     FocusPageSoon();
     // The session keeps the Space of the window active last.
     if (ToFront(id_)) {
@@ -2524,6 +2558,17 @@ void Window::OnWidgetActivationChanged(views::Widget* widget, bool active) {
     if (little()) {
       ScheduleAutoArchive();
     }
+    // Posted: on the Mac, an overlay's window is key only once the window has let go.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(
+                       [](base::WeakPtr<Window> window) {
+                         if (window && !window->active() &&
+                             !platform::OverlayHasKeyboard(window->widget_.get()) &&
+                             !MiniPlayerHasKeyboard()) {
+                           window->left_ = true;
+                         }
+                       },
+                       weak_factory_.GetWeakPtr()));
   }
   ReportActiveBrowser();
 }

@@ -64,8 +64,9 @@ struct SidePanelPage {
 // Shows |panes| in place of the pages shown, with corners of |corner_radius|, and |side_panel| in
 // place of the side panel shown. With more than one pane, as in a split view, the one at |focused|
 // has a ring of |ring_color|, 0xRRGGBB, inside its edge. No panes shows no page. While |widget|
-// isn't visible, the pages stay hidden. On the Mac, the pages a switch replaces stay over the ones
-// it shows until those have drawn, as a page shown again shows nothing until then.
+// isn't visible, the pages stay hidden. On the Mac and Linux, the pages a switch replaces stay over
+// the ones it shows until those have drawn, as a page shown again shows nothing until then: on
+// Linux as a copy of their layers.
 void ShowPages(views::Widget* widget,
                base::span<const Pane> panes,
                double corner_radius,
@@ -109,6 +110,11 @@ bool KeyboardForPage(views::Widget* widget);
 // Gives the keyboard in |widget|'s window to the window itself, which KeyboardForPage counts as
 // the page's.
 void ReleaseKeyboard(views::Widget* widget);
+
+// Whether an overlay of the app's over |widget|'s window, such as the command bar or a menu, has
+// the keyboard, which takes it from the window on every platform: on the Mac a child window, key;
+// on Windows an owned window, in front; on Linux lent (bc_window_overlay_takes_keyboard).
+bool OverlayHasKeyboard(views::Widget* widget);
 
 // On Linux and Windows: the app's UI takes the keyboard in |widget|'s window, to keep
 // (bc_window_ui_takes_keyboard) or until a page shows (bc_window_ui_holds_keyboard), which

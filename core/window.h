@@ -85,6 +85,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // The window that shows |tab|'s page, focused or beside the tab it shows in a split view, else
   // null. A window whose page another window took doesn't show it.
   static Window* Showing(bc_id tab);
+  // A video's Mini Player took the keyboard, so the window that let it go wasn't left for another
+  // app or window. On Linux it can take it after that window asked (OnWidgetActivationChanged).
+  static void MiniPlayerTookKeyboard();
   // The window |tab|'s page goes back to once no window shows it: of those that show a picture of
   // it in its place, as another window took it, the one the user was in last. Else null.
   static Window* Picturing(bc_id tab);
@@ -305,7 +308,11 @@ class Window : public web_modal::WebContentsModalDialogHost,
                bool complete);
 
   // Takes a suggestion out of the profile's history. See bc_window_remove_suggestion.
-  void RemoveSuggestion(const GURL& url);
+  bc_id RemoveSuggestion(const GURL& url);
+  // Puts back what RemoveSuggestion took out, or takes it out again. See
+  // bc_window_undo_remove_suggestion and bc_window_redo_remove_suggestion.
+  bool UndoRemoveSuggestion(bc_id removal);
+  bool RedoRemoveSuggestion(bc_id removal);
   // Lets go of what each window built on |profile|, which is about to go.
   static void LetProfileGo(Profile* profile);
 
@@ -484,6 +491,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   std::unique_ptr<Suggestions> suggestions_;
   bool closing_ = false;
   base::Time inactive_since_ = base::Time::Now();
+  // Whether the user left the window for another app or window since it was last key, rather than
+  // for an overlay of the app's or the Mini Player, so coming back takes the Mini Player back.
+  bool left_ = false;
   // While closing, for a page's Stay or the downloads question, which keeps the window open.
   base::CallbackListSubscription close_stopped_;
   bool off_the_record_ = false;

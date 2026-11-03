@@ -19,6 +19,7 @@
 #include "base/scoped_multi_source_observation.h"
 #include "base/scoped_observation.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "browser_core/host.h"
 #include "browser_core/platform/focus_ring_aura.h"
 #include "browser_core/platform/linux/ui_text_input.h"
@@ -26,6 +27,7 @@
 #include "browser_core/window.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/ui/views/native_widget_factory.h"
+#include "content/public/browser/frame_shown.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/aura/client/focus_change_observer.h"
@@ -36,6 +38,7 @@
 #include "ui/aura/window_tree_host_platform.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_solid_color.h"
+#include "ui/compositor/layer_tree_owner.h"
 #include "ui/events/event.h"
 #include "ui/events/event_handler.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
@@ -77,8 +80,8 @@
 // keyboard (bc_window_ui_takes_keyboard) and asks whose it is.
 // The app's overlays, such as the command bar, show over the pages: on Wayland as subsurfaces over
 // the window's, on X11 as X windows of their own over it, which GPUI places.
-// One that has the keyboard has it lent (bc_window_overlay_takes_keyboard): the page or UI that had
-// it keeps its focus, and has it back as the overlay closes.
+// One that has the keyboard has it lent (bc_window_overlay_takes_keyboard), and the page or UI that
+// had it has it back as the overlay closes. The page is told it lost it meanwhile, as on the Mac.
 
 namespace browser_core::platform {
 
@@ -167,7 +170,30 @@ struct Slot {
   bool bottom_corners_only = false;
   // Its corners' own, for a link preview's page, else the window's.
   std::optional<double> corner_radius;
+  // A copy of the pages a switch took out, over the ones it put in until those have drawn. After
+  // |holder|, so it leaves the holder's layer before that goes.
+  std::unique_ptr<ui::LayerTreeOwner> left;
 };
+
+// How long a slot keeps a copy of the pages a switch took out over one that hasn't drawn, such as
+// one whose renderer is stuck.
+constexpr base::TimeDelta kLeftAtMost = base::Seconds(1);
+
+// A copy of |layer| and its shown children, drawing what they draw now, even once they've gone.
+// Never opaque, or the compositor would leave out the page under it, whose frame would then never
+// reach the screen to let the copy go.
+std::unique_ptr<ui::Layer> CopyOf(ui::Layer* layer) {
+  std::unique_ptr<ui::Layer> copy = layer->Clone();
+  if (copy->type() != ui::LAYER_SOLID_COLOR) {
+    copy->SetFillsBoundsOpaquely(false);
+  }
+  for (ui::Layer* child : layer->children()) {
+    if (child->GetTargetVisibility()) {
+      copy->Add(CopyOf(child).release());
+    }
+  }
+  return copy;
+}
 
 // The pages and DevTools a window shows once it changes, which move between its slots unhidden.
 using Staying = std::vector<aura::Window*>;
@@ -319,9 +345,94 @@ class WindowViews : public views::WidgetObserver,
     Detach(slot.holder.get(), slot.devtools, staying);
     slot.page = nullptr;
     slot.devtools = nullptr;
+    slot.left.reset();
     if (slot.holder) {
       slot.holder->Hide();
     }
+  }
+
+  // Keeps a copy of the pages |slot| shows that aren't |staying|, unless it has one, to put over the
+  // ones a switch puts in. An aura page draws nothing before its first frame there, so the slot
+  // would show its empty holder until then, for 40 to 360 ms on CI (#1438). The copy is only
+  // layers: the pages leave the window, the keyboard and the occlusion tracker as before.
+  void KeepCopy(Slot& slot, const Staying& staying) {
+    if (slot.left || !slot.holder || !slot.holder->IsVisible()) {
+      return;
+    }
+    std::unique_ptr<ui::Layer> copy = ui::Layer::Create(ui::LAYER_NOT_DRAWN);
+    copy->SetName("BrowserCoreLeft");
+    copy->SetBounds(gfx::Rect(slot.holder->bounds().size()));
+    bool any = false;
+    for (aura::Window* child : slot.holder->children()) {
+      if (child->IsVisible() && !std::ranges::contains(staying, child)) {
+        copy->Add(CopyOf(child->layer()).release());
+        any = true;
+      }
+    }
+    if (any) {
+      slot.left = std::make_unique<ui::LayerTreeOwner>(std::move(copy));
+    }
+  }
+
+  // Puts |slot|'s copy over the pages it holds, which go over it as they're added.
+  static void StackCopy(Slot& slot) {
+    if (!slot.left) {
+      return;
+    }
+    ui::Layer* copy = slot.left->root();
+    if (copy->parent() != slot.holder->layer()) {
+      slot.holder->layer()->Add(copy);
+    }
+    slot.holder->layer()->StackAtTop(copy);
+  }
+
+  bool HasCopies() const {
+    return std::ranges::any_of(panes_, [](const Slot& slot) { return !!slot.left; });
+  }
+
+  // The slots show their own pages.
+  void DropCopies() {
+    for (Slot& slot : panes_) {
+      slot.left.reset();
+    }
+    awaited_.RemoveAll();
+  }
+
+  // Whether a page a switch put in hasn't drawn yet, so the copies stay as the window changes again.
+  bool Awaiting() const { return !awaited_.windows().empty(); }
+
+  // A page put in again, or taken out before it drew, is no longer awaited.
+  void StopAwaiting(const Staying& staying) {
+    // A copy, as Remove changes the list.
+    const aura::WindowTracker::WindowList pages = awaited_.windows();
+    for (aura::Window* page : pages) {
+      if (!std::ranges::contains(staying, page)) {
+        awaited_.Remove(page);
+      }
+    }
+  }
+
+  // Keeps the copies until each of |arrivals| has drawn. Asked once they're in their slots, so the
+  // frame each waits for is one drawn there.
+  void HoldCopies(base::span<const Pane> panes, const std::vector<aura::Window*>& arrivals) {
+    const uint64_t hold = ++holds_;
+    const base::TimeTicks since = base::TimeTicks::Now();
+    // check.sh's switch-frames run reads these lines.
+    fprintf(stderr, "browser: switch keeps the page it left\n");
+    for (const Pane& pane : panes) {
+      if (!std::ranges::contains(arrivals, pane.page)) {
+        continue;
+      }
+      awaited_.Add(pane.page);
+      auto page = std::make_unique<aura::WindowTracker>();
+      page->Add(pane.page);
+      content::CallWhenFrameShown(
+          pane.widget, base::BindOnce(&WindowViews::Drew, weak_factory_.GetWeakPtr(),
+                                      std::move(page), since));
+    }
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, base::BindOnce(&WindowViews::LetGoAtLimit, weak_factory_.GetWeakPtr(), hold),
+        kLeftAtMost);
   }
 
   // Shows |page|, a link preview's, at |frame| over the pages shown, in place of the preview it
@@ -467,8 +578,36 @@ class WindowViews : public views::WidgetObserver,
     overlay_has_keyboard_ = takes;
     early_keys_.clear();
     ui_text_input_.SetKeyboard(ui_has_keyboard_ || overlay_has_keyboard_);
+    if (OnWayland()) {
+      PageLendsFocusToOverlay(takes);
+    }
     if (!takes && ui_ != x11::Window::None && !ui_has_keyboard_ && IsWithin(InputFocus(), ui_)) {
       UITakesKeyboard();
+    }
+  }
+
+  // On Wayland an overlay is a subsurface of the window, which keeps the compositor's keyboard, so
+  // a page with the focus would never be told it lost it, as a game that pauses on blur keeps going
+  // under the command bar (#1608). The page gives its focus to the window while the overlay has the
+  // keyboard, as the window no longer being key or having the input focus does on the Mac and X11,
+  // and has it back as the overlay lets go, unless a page or the UI took it meanwhile.
+  void PageLendsFocusToOverlay(bool takes) {
+    aura::client::FocusClient* client = aura::client::GetFocusClient(content());
+    aura::Window* focused = client ? client->GetFocusedWindow() : nullptr;
+    if (takes) {
+      overlay_lent_.RemoveAll();
+      if (focused && InSlot(focused)) {
+        overlay_lent_.Add(focused);
+        client->ResetFocusWithinActiveWindow(content());
+      }
+      return;
+    }
+    if (overlay_lent_.windows().empty()) {
+      return;
+    }
+    aura::Window* page = overlay_lent_.Pop();
+    if (client && !ui_has_keyboard_ && focused == content() && InSlot(page)) {
+      client->FocusWindow(page);
     }
   }
 
@@ -828,6 +967,25 @@ class WindowViews : public views::WidgetObserver,
   }
 
  private:
+  // |page|'s frame since a switch put it in, the switch at |since|, has reached the screen.
+  void Drew(std::unique_ptr<aura::WindowTracker> page, base::TimeTicks since) {
+    if (!page->windows().empty()) {
+      awaited_.Remove(page->windows().front());
+    }
+    if (!Awaiting() && HasCopies()) {
+      fprintf(stderr, "browser: switch let the page it left go after %.1f ms\n",
+              (base::TimeTicks::Now() - since).InMillisecondsF());
+      DropCopies();
+    }
+  }
+
+  void LetGoAtLimit(uint64_t hold) {
+    if (hold == holds_ && HasCopies()) {
+      fprintf(stderr, "browser: switch let the page it left go at the limit\n");
+      DropCopies();
+    }
+  }
+
   // The page a window of Chromium's took the keyboard from has it back, if it's still shown and the
   // window still has it.
   void PageTakesBackKeyboard() {
@@ -890,6 +1048,8 @@ class WindowViews : public views::WidgetObserver,
   // A window of Chromium's own has the keyboard the UI or a page had, and gives it back as it goes.
   bool ui_lent_ = false;
   aura::WindowTracker page_lent_;
+  // On Wayland, the page that gave its focus to the window while an overlay has the keyboard.
+  aura::WindowTracker overlay_lent_;
   // The keys typed while the overlay with the keyboard didn't have the input focus yet.
   std::vector<x11::KeyEvent> early_keys_;
   // Whether the core took the input focus back down to the UI's window since the focus last left or
@@ -902,6 +1062,11 @@ class WindowViews : public views::WidgetObserver,
   UITextInput ui_text_input_;
   // The pages DrawUnseen holds.
   aura::WindowTracker unseen_;
+  // The pages a switch put in that haven't drawn there, while the slots keep copies of the ones it
+  // took out.
+  aura::WindowTracker awaited_;
+  // The switches that kept copies, so the limit lets go of the latest one's only.
+  uint64_t holds_ = 0;
   base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
   base::ScopedMultiSourceObservation<aura::Window, aura::WindowObserver> kept_{this};
   base::ScopedObservation<aura::client::FocusClient, aura::client::FocusChangeObserver>
@@ -998,6 +1163,20 @@ void ShowPages(views::Widget* widget,
     staying.push_back(side_panel->page);
   }
 
+  // The pages put in the slots, each drawing nothing until its renderer has drawn there, even one
+  // that was drawing unseen for a picture or in another window. The pages they replace stay as
+  // copies over them until then, as do the copies an earlier switch kept while its pages haven't.
+  views->StopAwaiting(staying);
+  std::vector<aura::Window*> arrivals;
+  for (const Pane& pane : panes) {
+    if (!hidden && pane.widget && !views->InSlot(pane.page)) {
+      arrivals.push_back(pane.page);
+    }
+  }
+  if (arrivals.empty() && !views->Awaiting()) {
+    views->DropCopies();
+  }
+
   // A link preview's page kept as a tab shows in a pane now.
   Slot& preview = views->preview();
   if (preview.page && std::ranges::contains(staying, preview.page.get())) {
@@ -1017,6 +1196,9 @@ void ShowPages(views::Widget* widget,
     Slot& slot = slots[i];
     aura::Window* holder = views->HolderFor(slot);
     aura::Window* devtools = pane.devtools ? pane.devtools->view : nullptr;
+    if (!arrivals.empty()) {
+      views->KeepCopy(slot, staying);
+    }
     DetachOthers(holder, pane.page, devtools, staying);
     if (devtools) {
       Hold(holder, devtools, hidden);
@@ -1030,6 +1212,7 @@ void ShowPages(views::Widget* widget,
         holder->StackChildAbove(pane.page, devtools);
       }
     }
+    WindowViews::StackCopy(slot);
     views->Keep(slot, pane.page, devtools);
     SkColor4f color = SkColors::kTransparent;
     if (pane.color) {
@@ -1067,6 +1250,9 @@ void ShowPages(views::Widget* widget,
   if (panes.empty()) {
     views->UITakesKeyboard();
   }
+  if (!arrivals.empty() && views->HasCopies()) {
+    views->HoldCopies(panes, arrivals);
+  }
 }
 
 void HoldPagesForResize(views::Widget* widget) {
@@ -1085,6 +1271,7 @@ void HidePages(views::Widget* widget) {
   if (!views) {
     return;
   }
+  views->DropCopies();
   for (Slot& slot : views->panes()) {
     if (slot.holder) {
       slot.holder->Hide();
@@ -1162,6 +1349,11 @@ void ReleaseKeyboard(views::Widget* widget) {
   if (WindowViews* views = ViewsOf(widget)) {
     views->PageTakesKeyboard();
   }
+}
+
+bool OverlayHasKeyboard(views::Widget* widget) {
+  WindowViews* views = widget ? ViewsOf(widget) : nullptr;
+  return views && views->overlay_has_keyboard();
 }
 
 void KeepKeyboard(views::Widget* widget, base::OnceClosure change) {
@@ -1293,6 +1485,21 @@ std::optional<gfx::Rect> DialogFrame(views::Widget* widget) {
         frame.Inset(dialog->non_client_view()->frame_view()->GetInsets());
       }
       return frame;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::pair<gfx::Rect, gfx::Rect>> DevToolsFrames(views::Widget* widget) {
+  // Aura windows in the slot's holder, which the X server doesn't see.
+  WindowViews* views = ViewsOf(widget);
+  if (!views) {
+    return std::nullopt;
+  }
+  for (Slot& slot : views->panes()) {
+    if (slot.holder && slot.page && slot.devtools && slot.devtools->IsVisible()) {
+      const gfx::Vector2d at = slot.holder->bounds().OffsetFromOrigin();
+      return std::pair(slot.devtools->bounds() + at, slot.page->bounds() + at);
     }
   }
   return std::nullopt;

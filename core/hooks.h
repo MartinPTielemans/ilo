@@ -78,6 +78,10 @@ class SyncInvalidationsService;
 class SyncService;
 }
 
+namespace gfx {
+class Rect;
+}
+
 namespace ui {
 class Event;
 class SimpleMenuModel;
@@ -286,6 +290,14 @@ extern bool (*g_browser_core_passkey_normal_wording)(content::WebContents* conte
 // once the core has handled it. While it's set, the window's background isn't a draggable caption,
 // which would keep a double-click from it, and the core moves the window itself.
 extern bool (*g_browser_core_mini_player_event)(VideoOverlayWindowViews* window, ui::Event* event);
+// The same file: where the Mini Player |window| goes, given |bounds|, Chrome's size for it at its
+// present place, whether it's been |shown| yet, and the |work_area| of the screen Chrome puts it on.
+// And the Mini Player |window| as it closes or hides, where it is still.
+extern gfx::Rect (*g_browser_core_mini_player_place)(VideoOverlayWindowViews* window,
+                                                     const gfx::Rect& bounds,
+                                                     bool shown,
+                                                     const gfx::Rect& work_area);
+extern void (*g_browser_core_mini_player_left)(VideoOverlayWindowViews* window);
 
 // chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc: |contents|
 // asked to be the tab shown, as Picture in Picture's way back to its tab does, once Chrome has made

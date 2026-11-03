@@ -1118,6 +1118,11 @@ BC_EXPORT bool bc_window_focus_ring(bc_id window, bc_rect* frame);
 // as the Mac's sees it as a child window.
 BC_EXPORT bool bc_window_dialog(bc_id window, bc_rect* frame);
 
+// On Linux, whether DevTools are docked in a page |window| shows, the first pane's with them, and
+// if so their frame in |devtools| and the page's beside them in |page|, from the top-left of the
+// window's content. For the test driver, which can't see them, as the Mac's sees their views.
+BC_EXPORT bool bc_window_devtools(bc_id window, bc_rect* devtools, bc_rect* page);
+
 // On Linux, while an overlay of the app's over |window|, such as the command bar, has the keyboard:
 // neither the window's pages nor its UI get keys, and the page or UI that had them keeps its focus,
 // to have them back once the overlay gives them up (|takes| false).
@@ -1381,8 +1386,8 @@ BC_EXPORT bool bc_profile_rename(bc_id profile, const char* name);
 // then spaces_changed.
 BC_EXPORT bc_id bc_profile_create(const char* name);
 
-// Deletes the profile, with everything Chrome keeps in it, and returns whether it will. Not one a
-// Space or a favorite is in, the one the core started with or the last. Then spaces_changed.
+// Deletes the profile, with everything Chrome keeps in it and its favorites, and returns whether
+// it will. Not one a Space is in, the one the core started with or the last. Then spaces_changed.
 BC_EXPORT bool bc_profile_delete(bc_id profile);
 
 // The settings below are the profile's own, as Arc's Settings › Profiles keeps them, and the
@@ -1604,6 +1609,10 @@ BC_EXPORT void bc_set_favorites_scope(int scope);
 // The profile the tab's page is in, or 0.
 BC_EXPORT bc_id bc_tab_profile(bc_id tab);
 
+// When a window last showed the tab, in milliseconds since the Unix epoch: now while one shows it,
+// else when one stopped showing it or it opened, the time auto-archive counts from. 0 for no tab.
+BC_EXPORT double bc_tab_last_seen(bc_id tab);
+
 // Copies up to |capacity| of the tabs shown with |tab| into |tabs|, left to right or top to
 // bottom, |tab| among them, and returns how many there are: those of its split view, else |tab|
 // alone. 0 for a tab in no Space. A split's tabs sit together in their list, in this order, as one
@@ -1656,6 +1665,24 @@ BC_EXPORT bc_id bc_tab_split_expanded(bc_id tab);
 // is false ends that and leaves the pages even: a window showing it lays it out so. Returns false,
 // doing nothing, if |tab| is in no split view. Then space_changed.
 BC_EXPORT bool bc_tab_set_split_expanded(bc_id tab, bool expanded);
+
+// Copies the name the user gave |tab|'s split view into |name| as bc_space_name does, or an empty
+// string if it has none or |tab| is in no split view. A split with a name or an icon shows them in
+// its row in place of its pages' titles and favicons. Kept after a quit, through ⇧⌘T of its pages
+// and with what moves it, such as a folder; it goes when the split does.
+BC_EXPORT size_t bc_tab_split_name(bc_id tab, char* name, size_t capacity);
+
+// Names |tab|'s split view, or takes its name away if |name| is empty. Returns false, doing
+// nothing, if |tab| is in no split view. Then space_changed.
+BC_EXPORT bool bc_tab_set_split_name(bc_id tab, const char* name);
+
+// Copies the icon the user gave |tab|'s split view, an emoji, UTF-8, into |icon| as
+// bc_tab_split_name does, or an empty string if it has none.
+BC_EXPORT size_t bc_tab_split_icon(bc_id tab, char* icon, size_t capacity);
+
+// Gives |tab|'s split view |icon|, an emoji, UTF-8, or takes its icon away if |icon| is empty.
+// Returns false, doing nothing, if |tab| is in no split view. Then space_changed.
+BC_EXPORT bool bc_tab_set_split_icon(bc_id tab, const char* icon);
 
 // Makes |space| the one the window shows: its tabs are the ones bc_window_select shows, and the
 // window's new tabs go in it. The window shows the tab it last showed there, else the Space's top
@@ -1967,7 +1994,21 @@ BC_EXPORT void bc_window_suggest(bc_id window, const char* keyword, const char* 
 
 // Takes the window's removable suggestion going to |url| out of the profile's history and
 // bookmarks' suggestions, as ⇧⌦ does in Chrome's address bar. Then window_suggestions without it.
-BC_EXPORT void bc_window_remove_suggestion(bc_id window, const char* url);
+// Returns the removal's id, for bc_window_undo_remove_suggestion, or 0 if there was none to take
+// out, as while the last removal of |url| is still being taken out.
+BC_EXPORT bc_id bc_window_remove_suggestion(bc_id window, const char* url);
+
+// Puts back what the window's removal |removal| took out of the profile's history, as it was: a
+// page with each of its visits, and so its visit and typed counts, or a search with its term and
+// the pages it searched. Then window_suggestions with it, for the text last asked, if any. One
+// still being taken out, as while history loads, comes back once it's out. Whether it could: false
+// while it's back, once ten other removals have come after it in the window, and once the window's
+// suggestions have been for another profile since.
+BC_EXPORT bool bc_window_undo_remove_suggestion(bc_id window, bc_id removal);
+
+// Takes out again what bc_window_undo_remove_suggestion put back for |removal|, as the removal
+// did, with the visits since. Whether it could, as bc_window_undo_remove_suggestion says.
+BC_EXPORT bool bc_window_redo_remove_suggestion(bc_id window, bc_id removal);
 
 // Opens a tab in the window, loading |url|, in the default profile, at the top of the Today tabs of
 // the Space it shows. It isn't shown until bc_window_select or bc_tab_show. With |when_shown|, an

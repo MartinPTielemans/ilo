@@ -605,6 +605,36 @@ bool Space::SetStacked(bc_id tab, bool stacked) {
   return true;
 }
 
+std::string Space::SplitName(bc_id tab) const {
+  auto split = SplitOf(tab);
+  return split != splits_.end() ? split->name : std::string();
+}
+
+std::string Space::SplitIcon(bc_id tab) const {
+  auto split = SplitOf(tab);
+  return split != splits_.end() ? split->icon : std::string();
+}
+
+bool Space::SetSplitName(bc_id tab, std::string name) {
+  auto split = SplitOf(tab);
+  if (split == splits_.end()) {
+    return false;
+  }
+  split->name = std::move(name);
+  ReportChanged();
+  return true;
+}
+
+bool Space::SetSplitIcon(bc_id tab, std::string icon) {
+  auto split = SplitOf(tab);
+  if (split == splits_.end()) {
+    return false;
+  }
+  split->icon = std::move(icon);
+  ReportChanged();
+  return true;
+}
+
 std::vector<double> Space::Shares(bc_id tab) const {
   auto split = SplitOf(tab);
   return split != splits_.end() ? split->shares : std::vector<double>();

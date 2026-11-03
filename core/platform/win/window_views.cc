@@ -891,6 +891,20 @@ void ReleaseKeyboard(views::Widget* widget) {
   }
 }
 
+bool OverlayHasKeyboard(views::Widget* widget) {
+  if (!widget) {
+    return false;
+  }
+  const HWND window = views::HWNDForWidget(widget);
+  for (HWND owner = GetWindow(GetForegroundWindow(), GW_OWNER); owner;
+       owner = GetWindow(owner, GW_OWNER)) {
+    if (owner == window) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void UITakesKeyboard(views::Widget* widget, bool until_page) {
   WindowViews* views = ViewsOf(widget);
   if (!views) {
