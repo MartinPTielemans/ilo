@@ -21,7 +21,7 @@
 
 use std::{
     cell::{Cell, RefCell},
-    ffi::c_void,
+    ffi::{c_int, c_void},
 };
 
 use gpui::{Bounds, Pixels, Point, point, px, size};
@@ -73,6 +73,8 @@ thread_local! {
     /// The tooltip's and the link target's margins, and what runs as the user leaves the tooltip's
     /// window.
     static TOOLTIP: RefCell<(f64, Option<extern "C" fn()>)> = const { RefCell::new((0., None)) };
+    /// The overlay holding what the tooltip names, which it shows over, and that overlay's view.
+    static TOOLTIP_OVERLAY: Cell<Option<(c_int, *mut c_void)>> = const { Cell::new(None) };
     static LINK_MARGIN: RefCell<f64> = const { RefCell::new(0.) };
     /// Where the link target tells the UI the pointer is, over the window it shows over.
     static LINK_POINTER: Cell<Option<extern "C" fn(f64, f64)>> = const { Cell::new(None) };
@@ -478,9 +480,40 @@ pub extern "C" fn host_add_tooltip(tooltip_view: *mut c_void, margin: f64, away:
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn host_show_tooltip(ui_view: *mut c_void, left: f64, top: f64, fade: f64) {
-    find(Kind::Tooltip, |float| (float.left, float.top) = (left, top));
-    // check.sh reads this line: where it is, to compare with where the UI asked.
+pub extern "C" fn host_show_tooltip(
+    ui_view: *mut c_void,
+    overlay: c_int,
+    left: f64,
+    top: f64,
+    fade: f64,
+) {
+    let owner = match overlay {
+        -1 => None,
+        overlay => match crate::overlays::shown_at(overlay) {
+            Some((view, bounds)) => Some((overlay, view, bounds)),
+            None => return,
+        },
+    };
+    let Some(view) = find(Kind::Tooltip, |float| float.view) else {
+        return;
+    };
+    // An overlay goes over a tooltip from the browser window, as a new overlay shows over those
+    // that show, but the one holding what it names goes directly under it.
+    let was = TOOLTIP_OVERLAY.replace(owner.map(|(overlay, view, _)| (overlay, view)));
+    if let Some((_, under)) = was.filter(|was| Some(was.0) != owner.map(|owner| owner.0)) {
+        gpui_linux::set_overlay_under(under, std::ptr::null_mut());
+    }
+    if let Some((_, under, _)) = owner {
+        gpui_linux::set_overlay_under(under, view);
+    }
+    let (x, y) = owner.map_or((0., 0.), |(_, _, bounds)| {
+        (f64::from(bounds.origin.x), f64::from(bounds.origin.y))
+    });
+    find(Kind::Tooltip, |float| {
+        (float.left, float.top) = (x + left, y + top)
+    });
+    // check.sh reads this line: where it is, in the window it shows over, to compare with where
+    // the UI asked.
     eprintln!("browser: tooltip window at {left} {top}");
     fade_in(
         Kind::Tooltip,
@@ -488,11 +521,31 @@ pub extern "C" fn host_show_tooltip(ui_view: *mut c_void, left: f64, top: f64, f
         fade,
         "browser: tooltip window shown",
     );
+    // On X11 a window put over the browser window goes directly over it, under the overlays, so the
+    // overlay is put under the tooltip again, and its shadow under it.
+    if let Some((overlay, ..)) = owner {
+        crate::overlays::restack(overlay);
+    }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_hide_tooltip(fade: f64) {
     fade_out(Kind::Tooltip, fade);
+}
+
+/// Overlay `overlay` is hiding: the tooltip over it, if it shows, goes at once.
+pub(crate) fn overlay_hiding(overlay: c_int) {
+    if let Some((owner, under)) = TOOLTIP_OVERLAY.get()
+        && owner == overlay
+    {
+        TOOLTIP_OVERLAY.set(None);
+        gpui_linux::set_overlay_under(under, std::ptr::null_mut());
+        if hide(Kind::Tooltip)
+            && let Some(away) = TOOLTIP.with_borrow(|(_, away)| *away)
+        {
+            away();
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
