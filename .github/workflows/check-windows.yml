@@ -238,8 +238,15 @@ jobs:
       - if: ${{ steps.server.outcome == 'success' }}
         working-directory: app/.deps/ilo-server
         run: |
+          # The server's passkeys link OpenSSL, which the runner's image has, or Chocolatey does.
+          ssl="/c/Program Files/OpenSSL"
+          [ -d "$ssl/include" ] || choco install openssl -y --no-progress > /dev/null
+          [ -d "$ssl/include" ] || ssl="/c/Program Files/OpenSSL-Win64"
+          export OPENSSL_DIR="$(cygpath -w "$ssl")"
           cargo build --release --locked
           echo "ILO_SERVER=$PWD/target/release/ilo-server.exe" >> "$GITHUB_ENV"
+          # Its DLLs, for the server to start.
+          cygpath -w "$ssl/bin" >> "$GITHUB_PATH"
 
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       - name: Runs
