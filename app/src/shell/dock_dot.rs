@@ -26,8 +26,24 @@ fn window(cx: &mut TestAppContext, color: u32, space: u64) -> Entity<Shell> {
     let shell = cx.new(|cx| Shell::new(Rc::new(Recorder::default()), cx));
     shell.update(cx, |shell, cx| {
         let spaces = vec![
-            (1, "Space 1".into(), Some(color), 0, "".into(), "".into(), "".into()),
-            (2, "Space 2".into(), None, 0, "".into(), "".into(), "".into()),
+            (
+                1,
+                "Space 1".into(),
+                Some(color),
+                0,
+                "".into(),
+                "".into(),
+                "".into(),
+            ),
+            (
+                2,
+                "Space 2".into(),
+                None,
+                0,
+                "".into(),
+                "".into(),
+                "".into(),
+            ),
         ];
         shell.set_spaces(spaces, cx);
         shell.set_space(space, cx);
@@ -61,8 +77,24 @@ fn the_dot_follows_the_key_windows_space(cx: &mut TestAppContext) {
     // A new color for the Space shown recolors it, and a switch back to a green Space too.
     first.update(cx, |shell, cx| {
         let spaces = vec![
-            (1, "Space 1".into(), Some(RED), 0, "".into(), "".into(), "".into()),
-            (2, "Space 2".into(), None, 0, "".into(), "".into(), "".into()),
+            (
+                1,
+                "Space 1".into(),
+                Some(RED),
+                0,
+                "".into(),
+                "".into(),
+                "".into(),
+            ),
+            (
+                2,
+                "Space 2".into(),
+                None,
+                0,
+                "".into(),
+                "".into(),
+                "".into(),
+            ),
         ];
         shell.set_spaces(spaces, cx);
     });
@@ -89,8 +121,24 @@ fn a_window_opened_behind_leaves_the_key_window_in_charge(cx: &mut TestAppContex
         cx.add_window_view(|_, cx| Shell::new(browser, cx));
     front.update(cx, |shell, cx| {
         let spaces = vec![
-            (1, "Space 1".into(), Some(PURPLE), 0, "".into(), "".into(), "".into()),
-            (2, "Space 2".into(), Some(RED), 0, "".into(), "".into(), "".into()),
+            (
+                1,
+                "Space 1".into(),
+                Some(PURPLE),
+                0,
+                "".into(),
+                "".into(),
+                "".into(),
+            ),
+            (
+                2,
+                "Space 2".into(),
+                Some(RED),
+                0,
+                "".into(),
+                "".into(),
+                "".into(),
+            ),
         ];
         shell.set_spaces(spaces, cx);
         shell.set_space(1, cx);

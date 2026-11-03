@@ -23,7 +23,9 @@ fn path() -> String {
 /// Reads the file the first time it's needed.
 fn read() {
     if !READ.replace(true) {
-        SITES.set(Sites::parse(&std::fs::read_to_string(path()).unwrap_or_default()));
+        SITES.set(Sites::parse(
+            &std::fs::read_to_string(path()).unwrap_or_default(),
+        ));
     }
 }
 
@@ -38,7 +40,8 @@ fn save() {
 pub fn remember(url: &str, profile: u64) {
     read();
     let profile_name = name(bc::bc_profile_name, profile);
-    if !profile_name.is_empty() && SITES.with_borrow_mut(|sites| sites.remember(url, &profile_name)) {
+    if !profile_name.is_empty() && SITES.with_borrow_mut(|sites| sites.remember(url, &profile_name))
+    {
         save();
     }
 }
@@ -47,7 +50,9 @@ pub fn remember(url: &str, profile: u64) {
 pub fn profile(url: &str) -> Option<u64> {
     read();
     let kept = SITES.with_borrow(|sites| sites.profile(url).map(str::to_string))?;
-    ids(bc::bc_profiles).into_iter().find(|&profile| name(bc::bc_profile_name, profile) == kept)
+    ids(bc::bc_profiles)
+        .into_iter()
+        .find(|&profile| name(bc::bc_profile_name, profile) == kept)
 }
 
 /// The profiles changed: a renamed one's sites follow it, and a deleted one's are forgotten.

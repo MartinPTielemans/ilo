@@ -33,7 +33,12 @@ pub(crate) struct Track {
 impl Track {
     /// Where it is at once.
     pub(crate) fn at(value: f32) -> Self {
-        Track { from: value, to: value, seconds: 0., curve: LINEAR }
+        Track {
+            from: value,
+            to: value,
+            seconds: 0.,
+            curve: LINEAR,
+        }
     }
 
     fn value(self, elapsed: f32) -> f32 {
@@ -57,7 +62,11 @@ pub(crate) struct Motion {
 impl Motion {
     /// Its opacity alone on its way, at full size.
     pub(crate) fn fade(opacity: Track) -> Self {
-        Motion { scale: Track::at(1.), origin: point(px(0.), px(0.)), opacity }
+        Motion {
+            scale: Track::at(1.),
+            origin: point(px(0.), px(0.)),
+            opacity,
+        }
     }
 
     fn look(self, elapsed: f32) -> RootLook {
@@ -83,7 +92,12 @@ fn now(view: usize) -> RootLook {
         (moving.iter().find(|(each, ..)| *each == view))
             .map(|(_, motion, started)| motion.look(started.elapsed().as_secs_f32()))
     });
-    look.unwrap_or(RootLook { scale: 1., origin: point(px(0.), px(0.)), opacity: 1., moving: false })
+    look.unwrap_or(RootLook {
+        scale: 1.,
+        origin: point(px(0.), px(0.)),
+        opacity: 1.,
+        moving: false,
+    })
 }
 
 /// The window of `view` moves as it's told from now on. Each frame it draws reads its motion
@@ -134,7 +148,9 @@ pub(crate) fn hold(view: *mut c_void, look: RootLook) {
 /// Runs `then` once `seconds` have gone by, as a motion ends.
 pub(crate) fn after(seconds: f32, then: impl FnOnce() + 'static) {
     if let Some(cx) = crate::CX.with_borrow(Clone::clone) {
-        let timer = cx.background_executor().timer(Duration::from_secs_f32(seconds));
+        let timer = cx
+            .background_executor()
+            .timer(Duration::from_secs_f32(seconds));
         cx.foreground_executor()
             .spawn(async move {
                 timer.await;
