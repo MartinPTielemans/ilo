@@ -314,6 +314,12 @@ if windows; then
   expect '^browser: dialog hidden$' "the page's dialog didn't leave on Alt+F4"
   expect "^browser: title $page confirm false\$" "the page didn't hear Cancel from Alt+F4"
   ask c Confirm after-close
+  # The browser window's activation went and came back with the dialog's window, and behind the
+  # window buttons the sidebar shows as it does further down, not Windows' caption (#1262).
+  top=$(pixel "$out/dialog-after-close.png" 0.15 0.008)
+  below=$(pixel "$out/dialog-after-close.png" 0.15 0.8)
+  ! brighter "$top" "$below" ||
+    fail "Windows' caption showed behind the window buttons, $top over the sidebar's $below"
   answer return accept "confirm true"
   closed_dialog=1
 fi
@@ -410,7 +416,8 @@ echo "  and hides 20 times, between the command bar and a tab's menu, with no pa
   "window ($background_dialog) went under that app's window and over ilo's, and took the keyboard" \
   "as ilo's window came to the front: $out/dialog-background.png"
 [ -z "$closed_dialog" ] || echo "  Alt+F4 in a page's dialog cancels it as Esc does, and the" \
-  "dialog asks again: $out/dialog-after-close.png"
+  "dialog asks again, with no caption of Windows' behind the window buttons:" \
+  "$out/dialog-after-close.png"
 [ -z "$two_windows" ] || echo "  With two windows side by side, a row of the one behind shows its" \
   "card over that window, and a row of the one in front over the one in front:" \
   "$out/hover-card-window-behind.png"
