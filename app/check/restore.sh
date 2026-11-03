@@ -599,8 +599,13 @@ BROWSER_DRIVE=1 BROWSER_URL="${site}?c" "$browser" --archive-tabs-after=8 < "$ou
   > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
+# At once is from the Spaces put back, not from the launch, which takes 4 s or more on a slow
+# runner: archived only once unseen for 8 s from there, a would be 8 s after.
+await '^browser: restored in ' || fail "the launch past a's 8 s didn't restore the Spaces"
+restored=$(date +%s)
 await '^browser: archive 1 tabs$' || fail "tab a, unseen for 8 s across the quit, wasn't archived"
-[ $(($(date +%s) - start)) -lt 6 ] || fail "tab a was archived 8 s after the launch, not at once"
+[ $(($(date +%s) - restored)) -lt 6 ] ||
+  fail "tab a was archived $(($(date +%s) - restored)) s after the Spaces were put back, not at once"
 await "^browser: loaded [0-9]* ${site}?c\$" || fail "tab c didn't load"
 c=$(sed -n "s|^browser: loaded \([0-9]*\) ${site}?c\$|\1|p" "$log" | head -1)
 await '^browser: archive 2 tabs$' || fail "tab b, unseen for 8 s after c showed, wasn't archived"
