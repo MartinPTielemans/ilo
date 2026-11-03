@@ -32,7 +32,7 @@ pub(crate) fn open_browser_window(
             Some(after) => unsafe {
                 platform::host_cascaded(after, &mut x, &mut y, &mut width, &mut height)
             },
-            None => unsafe { platform::host_centered(width, height, &mut x, &mut y) },
+            None => (x, y) = platform::centered(width, height),
         }
         bc::bc_rect {
             x,
@@ -536,6 +536,7 @@ pub(crate) fn finish_opening(
         platform::host_watch_active(became_active);
     }
     follow_reduce_motion(cx);
+    browser::shell::follow_scroll_bars(cx);
     #[cfg(not(target_os = "linux"))]
     unsafe {
         platform::host_watch_reduce_motion(reduce_motion_changed)

@@ -549,8 +549,7 @@ unsafe extern "C" fn launching(_: *mut c_void) {
         maximized,
     ) = saved.unwrap_or_else(|| {
         let (width, height) = WINDOW_SIZE;
-        let (mut x, mut y) = (0., 0.);
-        unsafe { platform::host_centered(width, height, &mut x, &mut y) };
+        let (x, y) = platform::centered(width, height);
         (
             bc::bc_rect {
                 x,
@@ -574,12 +573,13 @@ unsafe extern "C" fn launching(_: *mut c_void) {
 }
 
 /// Back from another app, such as System Settings, where the user may have changed the default
-/// browser or given the app Full Disk Access.
+/// browser, given the app Full Disk Access or changed when scroll bars show.
 extern "C" fn became_active() {
     // Later: AppKit can say so from inside the update that activated the app to show a window.
     update_app_later(|cx| {
         settings::check_default_browser(cx);
         import_host::became_active(cx);
+        browser::shell::follow_scroll_bars(cx);
         // GTK's settings file, Linux's last word, says nothing as it changes.
         #[cfg(target_os = "linux")]
         follow_reduce_motion(cx);
@@ -600,8 +600,11 @@ extern "C" fn reduce_motion_changed() {
     update_app_later(follow_reduce_motion);
 }
 
-/// What GPUI's animations and the UI's own motion follow (`App::reduce_motion`).
+/// What GPUI's animations and the UI's own motion follow (`App::reduce_motion`). A check that
+/// records motion on a runner whose system reduces it, as GitHub's hosted Mac and Windows do,
+/// launches with BROWSER_MOTION=full.
 fn set_reduce_motion(reduce: bool, cx: &mut App) {
+    let reduce = reduce && std::env::var_os("BROWSER_MOTION").is_none_or(|motion| motion != "full");
     if reduce != cx.reduce_motion() {
         // check.sh reads this line.
         log!(
