@@ -886,6 +886,7 @@ New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
 send choose "$(cased 'Change Space Icon…')"
 expect "^browser: icon picker for $first on icon\$" "Change Icon… didn't open the icon picker"
 expect '^browser: icon picker shown$' "the icon picker didn't show"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 at=$(grep '^browser: icon picker at' "$log" | tail -1 | cut -d' ' -f5-)
 # 273 wide, with the arrow's tip 13 in, under the icon's middle at x 26.
 [ "$(echo "$at" | awk '{ print $1, $3, $4 }')" = "13 273 286" ] ||
@@ -899,6 +900,7 @@ New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on the Space's name offered Remove Icon without an icon"
 send choose "$(cased 'Change Space Icon…')"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 ../tools/window-screenshot.sh "$pid" "$out/space-icon-picker.png" || fail "no window to capture"
 # A click on a glyph is the Space's icon at once and closes the picker: the bolt, fifth in the first
 # row, the grid's first column 27.75 in and its first row 76.25 down.
@@ -914,6 +916,7 @@ send click 23 112
 expect "^browser: icon picker for $first on icon\$" \
   "a click on the Space's icon didn't open the picker"
 expect '^browser: icon picker shown$' "a click on the Space's icon didn't show the picker"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 send clickkey 92.5 39.5
 expect '^browser: icon picker on emoji$' "a click on Emoji didn't show the Emoji tab"
 send insert fox
@@ -931,6 +934,7 @@ send choose "$(cased 'Change Space Icon…')"
 expect "^browser: icon picker for $first on emoji\$" \
   "Change Icon… didn't open the picker on the Emoji tab for a Space with an emoji"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 ../tools/window-screenshot.sh "$pid" "$out/space-emoji-grid.png" all || fail "no window to capture"
 send clickkey 197 39.5
 expect "^browser: iconed space $first none\$" "the icon picker's trash didn't take the icon away"
@@ -942,6 +946,7 @@ New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the Space's menu offered Remove Icon after the trash"
 send choose "$(cased 'Change Space Icon…')"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 send clickkey 151.75 76.25
 expect "^browser: iconed space $first glyph:bolt\$" \
   "a click on a glyph didn't become the Space's icon"

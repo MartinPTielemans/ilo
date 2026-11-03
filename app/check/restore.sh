@@ -174,6 +174,7 @@ New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" "the S
 send choose "$(cased 'Change Space Icon…')"
 expect "^browser: icon picker for $second on icon\$" "Change Icon… didn't open the icon picker"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 # Emoji, the left half of Emoji | Icon at the picker's top.
 send clickkey 92.5 39.5
 send insert seedling
@@ -210,6 +211,7 @@ send choose "$(cased 'Change Icon…')"
 expect "^browser: icon picker for tab $c on emoji\$" \
   "Change Icon… didn't open the icon picker on the Emoji tab for the tab"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker under the tab"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 ../tools/window-screenshot.sh "$pid" "$out/tab-icon-picker.png" all || fail "no window to capture"
 send insert fox
 send key return
@@ -341,6 +343,7 @@ send choose "$(cased 'Change Icon…')"
 expect "^browser: icon picker for tab $c on emoji\$" \
   "Change Icon… didn't open the icon picker again"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker again"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 send ime on
 send type nihongo
 send key space
