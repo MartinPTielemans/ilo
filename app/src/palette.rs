@@ -377,6 +377,13 @@ impl Palette {
         Hsla::from(self.ink).opacity(alpha.max(self.text_floor))
     }
 
+    /// Text at `alpha`, `lit` of the way to the ink at `high`, as a shimmer's highlight passes. It
+    /// goes from where the floor puts the text, so the highlight shows however far that raises it.
+    pub fn lit(&self, alpha: f32, high: f32, lit: f32) -> Hsla {
+        let rest = self.text(alpha);
+        Hsla { a: rest.a + (high.max(rest.a) - rest.a) * lit, ..rest }
+    }
+
     /// Ink or Paper at `alpha`, or as much more as a glyph or boundary needs.
     pub fn glyph(&self, alpha: f32) -> Hsla {
         Hsla::from(self.ink).opacity(alpha.max(self.glyph_floor))

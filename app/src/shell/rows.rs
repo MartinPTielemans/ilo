@@ -201,7 +201,7 @@ impl Shell {
         ghost: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        let selected = row == self.selected_row();
+        let selected = Some(row) == self.selected_row();
         let (id, slot) = match row {
             Row::NewTab => (("new-tab", 0), Slot::NewTab),
             Row::Tab(tab) => (("tab", tab), Slot::Tab(tab)),
@@ -352,7 +352,7 @@ impl Shell {
         {
             return Some(1.);
         }
-        let selected = row == self.selected_row();
+        let selected = Some(row) == self.selected_row();
         let left = self.unhovered.iter().find(|&&(old, _)| old == row).filter(|_| selected);
         left.map(|(_, start)| {
             let t = (start.elapsed().as_secs_f32() / SELECTED_UNHOVER).min(1.);
@@ -921,7 +921,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let first = panes[0];
-        let row_selected = self.selected_row() == Row::Tab(first);
+        let row_selected = self.selected_row() == Some(Row::Tab(first));
         let hovered = self.pointer_row() == Some(Row::Tab(first)) && drop.is_none();
         // A pinned tab closed already has nothing to close.
         let pinned = self.pinned().contains(&first);
@@ -1033,7 +1033,7 @@ impl Shell {
         let away = page.away_from_pinned_url;
         let back = away && self.pointer_favicon() == Some(tab);
         let label = if back { "Back to Pinned URL".into() } else { self.title(tab) };
-        let bright = Row::Tab(tab) == self.selected_row() || page.developer_mode;
+        let bright = Some(Row::Tab(tab)) == self.selected_row() || page.developer_mode;
         let title = title(&self.palette, label, bright);
         // The row's button shows under the pointer, and the title truncates before it.
         let button = hovered.then(|| self.row_button(vec![tab], closable, cx)).flatten();

@@ -274,7 +274,7 @@ impl Shell {
     /// Whether the selected tab's row is scrolled wholly out past the list's top (true) or its
     /// bottom (false), as the list was last drawn. None while any of it shows.
     fn selected_row_past(&self) -> Option<bool> {
-        let Row::Tab(row) = self.selected_row() else {
+        let Some(Row::Tab(row)) = self.selected_row() else {
             return None;
         };
         let top = *self.layout().get(&Slot::Tab(row))? + self.tiles_room();

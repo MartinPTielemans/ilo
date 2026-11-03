@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use gpui::{
     Bounds, Context, Corners, ElementId, Entity, Focusable, FontStyle, FontWeight, HighlightStyle,
-    Image, InteractiveText, IntoElement, MouseButton, ObjectFit, Pixels, Radians, Render,
+    Hsla, Image, InteractiveText, IntoElement, MouseButton, ObjectFit, Pixels, Radians, Render,
     RenderImage, ScrollHandle, SharedString, Size, StyledText, Transformation, UnderlineStyle,
     WeakEntity, Window, actions, canvas, div, img, point, prelude::*, px, rgb, size, svg,
 };
@@ -1373,16 +1373,16 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         Fold::Step(key) => (("trace-step", key).into(), format!("trace-step-{key}").into()),
         Fold::Group(key) => (("trace-group", key).into(), format!("trace-group-{key}").into()),
     };
-    // A failed line with no glyph to say so says it in why it failed.
-    let note = match failed && glyph.is_none() {
-        true => rgb(NOT_FOUND).into(),
-        false => palette.text(TRACE_NOTE),
+    // A failed line is red, its glyph, its words and why, under the pointer too.
+    let red: Hsla = rgb(NOT_FOUND).into();
+    let note = if failed { red } else { palette.text(TRACE_NOTE) };
+    let words = match (failed, shimmers) {
+        (true, _) => red,
+        (false, Some(None)) => palette.text(TITLE),
+        (false, _) => palette.text(TRACE_TITLE),
     };
     let glyph = glyph.map(|glyph| {
-        let color = match failed {
-            true => rgb(NOT_FOUND).into(),
-            false => palette.glyph(TRACE_GLYPH_ALPHA),
-        };
+        let color = if failed { red } else { palette.glyph(TRACE_GLYPH_ALPHA) };
         svg().flex_none().path(glyph).size(px(TRACE_GLYPH)).text_color(color)
     });
     let opens = chevron.is_some();
@@ -1431,11 +1431,8 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
                 .min_w_0()
                 .truncate()
                 .opacity(alpha)
-                .text_color(palette.text(match shimmers {
-                    Some(None) => TITLE,
-                    _ => TRACE_TITLE,
-                }))
-                .when(opens, |title| {
+                .text_color(words)
+                .when(opens && !failed, |title| {
                     title.group_hover(hover, move |style| style.text_color(palette.text(TITLE)))
                 })
                 .child(match shimmers {
@@ -1447,7 +1444,7 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         .children(chevron)
 }
 
-/// A title a band of near-white sweeps across, `phase` of the way through a pass.
+/// A title a band of the full ink sweeps across, `phase` of the way through a pass.
 fn shimmering(palette: &super::Palette, title: SharedString, phase: f32) -> StyledText {
     let count = title.chars().count().max(1) as f32;
     let middle = -SHIMMER_BAND + (1. + 2. * SHIMMER_BAND) * phase;
@@ -1455,8 +1452,8 @@ fn shimmering(palette: &super::Palette, title: SharedString, phase: f32) -> Styl
         .map(|(index, (at, char))| {
             let along = (index as f32 + 0.5) / count;
             let near = (1. - (along - middle).abs() / SHIMMER_BAND).max(0.);
-            let alpha = TRACE_TITLE + (SHIMMER - TRACE_TITLE) * near;
-            let style = HighlightStyle { color: Some(palette.text(alpha)), ..Default::default() };
+            let color = palette.lit(TRACE_TITLE, SHIMMER, near);
+            let style = HighlightStyle { color: Some(color), ..Default::default() };
             (at..at + char.len_utf8(), style)
         })
         .collect();

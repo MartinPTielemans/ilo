@@ -511,3 +511,18 @@ fn a_palette_takes_well_under_a_frame() {
     let each = start.elapsed() / 10;
     assert!(each < std::time::Duration::from_millis(4), "{each:?}");
 }
+
+/// A shimmer's highlight goes from where the floor puts the text to the ink, so it shows on a
+/// window that raises the text near the ink, as the dark default does: there 0.5 to 0.95 drew
+/// 0.88 to 0.95, a highlight hardly seen.
+#[test]
+fn a_shimmer_shows_however_far_the_floor_raises_the_text() {
+    let palette = Palette::of(None, Tone::Dark);
+    let rest = palette.text(0.5).a;
+    eprintln!("the dark default's text floor puts 0.5 at {rest:.3}");
+    assert!(rest > 0.8, "the dark default's floor no longer raises the text: {rest}");
+    assert_eq!(palette.lit(0.5, 1., 0.).a, rest);
+    assert_eq!(palette.lit(0.5, 1., 1.).a, 1.);
+    let half = palette.lit(0.5, 1., 0.5).a;
+    assert!((half - (rest + 1.) / 2.).abs() < 1e-4, "half lit is {half}, not half way from {rest}");
+}

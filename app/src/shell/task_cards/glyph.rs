@@ -16,7 +16,8 @@ use super::motion::{Curve, Ease};
 use crate::agents::task::Dot;
 use crate::tokens::shell::task::motion::{CROSSFADE, DOT_FADE, ORBIT, RING as RING_MOTION, TICK, TICK_DELAY};
 use crate::tokens::shell::task::{
-    DOT, DOT_ASKS, DOT_DONE, RING, RING_DONE, RING_STOPPED, RING_STROKE, RING_WORKING, TICK_STROKE,
+    DOT, DOT_ASKS, DOT_DONE, RING, RING_DONE, RING_STOPPED, RING_STROKE, RING_WORKING,
+    RING_WORKING_SELECTED, TICK_STROKE,
 };
 
 /// What the glyph says.
@@ -195,8 +196,18 @@ pub(super) struct Drawn {
 const TICK_POINTS: [(f32, f32); 3] = [(5.2, 9.3), (7.8, 11.8), (12.8, 6.4)];
 const TICK_DASH: f32 = 12.;
 
-/// Paints `drawn` in `bounds`, the glyph's box, in Signal, the stopped ring in `stopped`.
-pub(super) fn paint(drawn: &Drawn, bounds: Bounds<Pixels>, signal: Hsla, stopped: Hsla, window: &mut Window) {
+/// Paints `drawn` in `bounds`, the glyph's box, in Signal, the stopped ring in `stopped`. On the
+/// selected plate's fill, which Signal stands out from less, the ring is as much brighter as the
+/// working ring's `ring-working-selected` is.
+pub(super) fn paint(
+    drawn: &Drawn,
+    bounds: Bounds<Pixels>,
+    signal: Hsla,
+    stopped: Hsla,
+    selected: bool,
+    window: &mut Window,
+) {
+    let lift = if selected { RING_WORKING_SELECTED / RING_WORKING } else { 1. };
     let centre = bounds.center();
     let at = |x: f32, y: f32| point(bounds.origin.x + px(x), bounds.origin.y + px(y));
     for &(look, alpha) in &drawn.looks {
@@ -211,7 +222,7 @@ pub(super) fn paint(drawn: &Drawn, bounds: Bounds<Pixels>, signal: Hsla, stopped
                 point(centre.x - px(outer), centre.y - px(outer)),
                 gpui::size(px(2. * outer), px(2. * outer)),
             );
-            let colour = colour.opacity(look.ring * alpha);
+            let colour = colour.opacity((look.ring * lift).min(1.) * alpha);
             window.paint_quad(quad(square, px(outer), transparent_black(), px(RING_STROKE), colour, BorderStyle::Solid));
         }
         if look.dot > 0. {
