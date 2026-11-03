@@ -8,6 +8,7 @@
 #include "base/functional/bind.h"
 #include "base/notreached.h"
 #include "base/strings/escape.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/favorites.h"
@@ -28,6 +29,7 @@
 #include "components/omnibox/browser/autocomplete_result.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_service.h"
+#include "components/search_engines/template_url_starter_pack_data.h"
 #include "components/url_formatter/url_formatter.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 #include "url/gurl.h"
@@ -50,6 +52,26 @@ GURL Stripped(const GURL& url, const TemplateURLService* engines) {
   return AutocompleteMatch::GURLToStrippedGURL(url, AutocompleteInput(), engines,
                                                /*keyword=*/std::u16string(),
                                                /*keep_search_intent_params=*/true);
+}
+
+// The site search whose keyword |text| starts, as Arc offers one by its host rather than by what the
+// field completes: "twit" offers X's, twitter.com, while it completes twitch.tv, and "gm" none, as
+// Gmail's is mail.google.com (#1397). The shortest keyword, as Chrome ranks them, and none for one
+// letter, which would offer one for nearly anything typed. Null if none.
+const TemplateURL* SiteStarted(TemplateURLService* engines, const std::u16string& text) {
+  const std::u16string prefix = AutocompleteInput::CleanUserInputKeyword(engines, text);
+  if (prefix.size() < 2) {
+    return nullptr;
+  }
+  TemplateURLService::TemplateURLVector started;
+  engines->AddMatchingKeywords(prefix, /*supports_replacement_only=*/true, &started);
+  // Chrome's @-keywords search its own pages, and the engines it adds by itself stay inactive.
+  auto engine = std::ranges::find_if(started, [](const TemplateURL* engine) {
+    return engine->type() == TemplateURL::NORMAL && engine->CanBeUsedForKeywordMatching() &&
+           engine->starter_pack_id() == template_url_starter_pack_data::StarterPackId::kNone &&
+           !engine->featured_by_policy();
+  });
+  return engine == started.end() ? nullptr : *engine;
 }
 
 // A tab at |url|, stripped, other than |shown|: a favorite first, which every Space of its profile
@@ -154,7 +176,7 @@ void Suggestions::Report() {
   if (!window || !Host().window_suggestions) {
     return;
   }
-  const TemplateURLService* engines = TemplateURLServiceFactory::GetForProfile(profile_);
+  TemplateURLService* engines = TemplateURLServiceFactory::GetForProfile(profile_);
   struct Row {
     std::string url, text, detail, completion;
     bc_id tab = 0;
@@ -207,6 +229,14 @@ void Suggestions::Report() {
   if (auto search = std::ranges::find_if(rows, &Row::typed_search);
       search != rows.end() && search != rows.begin()) {
     std::rotate(rows.begin() + 1, search, search + 1);
+  }
+  // A word typed hints the site search it starts on the first row, where Tab looks, whatever that
+  // row is; one with a space keeps Chrome's, whose first word is the keyword itself.
+  if (!rows.empty() && keyword_.empty() &&
+      std::ranges::none_of(text_, [](char16_t c) { return base::IsUnicodeWhitespace(c); })) {
+    const TemplateURL* engine = SiteStarted(engines, text_);
+    rows.front().keyword = engine ? base::UTF16ToUTF8(engine->keyword()) : std::string();
+    rows.front().site = engine ? base::UTF16ToUTF8(engine->short_name()) : std::string();
   }
   // Then well-known sites, in the rows Chrome's address bar leaves empty, so a new profile lists
   // more than the search. They never go above the profile's own, or first, where ↩ goes, and a
