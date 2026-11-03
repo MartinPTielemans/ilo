@@ -165,14 +165,15 @@ check_layout "at launch"
 check_buttons "at launch"
 
 # A page shows the card's colour until its first frame, never white, and its tab is loading from the
-# start. The page's w opens one whose server never answers, so it never commits, and its URL, which
-# a page asked for, stays hidden until it does.
+# start. The page's w opens one whose server never answers, so it never commits. Its URL may show as
+# it loads, or not yet, as Chromium shows the URL a page opened in a new tab nothing else has
+# touched once its navigation has started (the hosted Mac's run, #1554).
 first=$(today)
 send click $page_point
 send key w
 expect "^browser: tab [0-9]* opened by $first in the foreground\$" "the page didn't open a tab"
 tab=$(grep '^browser: tab [0-9]* opened by' "$log" | tail -1 | cut -d' ' -f3)
-expect "^browser: page $tab back 0 forward 0 loading 1 \$" \
+expect "^browser: page $tab back 0 forward 0 loading 1 " \
   "a tab opened to a page that hasn't come doesn't say it's loading"
 # Whether the colour "r g b" is the card's (tokens.toml › shell › card): dark on a dark window, as
 # the Mac's check VM runs it, and on a light one, as Linux's is, white at 0.7 over any colour, but
