@@ -1955,7 +1955,7 @@ void DiagCaption(HWND root, const char* when) {
   if (!root || !GetWindowRect(root, &window)) {
     return;
   }
-  const int width = std::min<int>(400, window.right - window.left), height = 40;
+  const int width = (std::min)(400, static_cast<int>(window.right - window.left)), height = 40;
   BITMAPINFO info{};
   info.bmiHeader.biSize = sizeof info.bmiHeader;
   info.bmiHeader.biWidth = width;
@@ -1977,7 +1977,7 @@ void DiagCaption(HWND root, const char* when) {
     for (int i = 0; i < width * height; ++i) {
       const int v = (bits[i * 4] + bits[i * 4 + 1] + bits[i * 4 + 2]) / 3;
       sum += v;
-      high = std::max(high, v);
+      high = (std::max)(high, v);
       light += v >= 230;
       dark += v < 120;
     }
