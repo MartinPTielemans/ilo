@@ -28,11 +28,22 @@ fn window(cx: &mut TestAppContext, tab: bool) -> (Entity<Shell>, Rc<Recorder>) {
 /// What Edit › AutoFill's three items asked of the host, each after the one before.
 fn autofill(shell: &Entity<Shell>, host: &Recorder, cx: &mut TestAppContext) -> Vec<String> {
     let mut asked = Vec::new();
-    for command in [Command::AutoFill, Command::AutoFillPasswords, Command::AutoFill] {
+    for command in [
+        Command::AutoFill,
+        Command::AutoFillPasswords,
+        Command::AutoFill,
+    ] {
         shell.update(cx, |shell, cx| shell.run(command, "menu", cx));
         let calls = host.take();
         let ours = |call: &&String| call.starts_with("autofill ") || call.starts_with("passwords ");
-        asked.push(calls.iter().filter(ours).cloned().collect::<Vec<_>>().join(", "));
+        asked.push(
+            calls
+                .iter()
+                .filter(ours)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
     }
     asked
 }
@@ -44,7 +55,14 @@ fn autofill_opens_chromes_dropdown_at_the_focused_field(cx: &mut TestAppContext)
     let (shell, host) = window(cx, true);
     host.field_focused.set(true);
     let asked = autofill(&shell, &host, cx);
-    assert_eq!(asked, ["autofill 11 field", "autofill 11 logins", "autofill 11 field"]);
+    assert_eq!(
+        asked,
+        [
+            "autofill 11 field",
+            "autofill 11 logins",
+            "autofill 11 field"
+        ]
+    );
 }
 
 /// With no field of the page focused, or no page, each opens Settings › Passwords on the Space's
