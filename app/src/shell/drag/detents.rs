@@ -36,7 +36,11 @@ pub(super) fn at(x: f32, y: f32) -> Point<Pixels> {
 pub(in crate::shell) const X: f32 = 80.;
 
 /// Presses `tab`'s row, in the middle.
-pub(in crate::shell) fn press(shell: &gpui::Entity<Shell>, cx: &mut TestAppContext, tab: u64) -> f32 {
+pub(in crate::shell) fn press(
+    shell: &gpui::Entity<Shell>,
+    cx: &mut TestAppContext,
+    tab: u64,
+) -> f32 {
     shell.update(cx, |shell, _| {
         let y = row_y(shell, tab);
         shell.press_row(tab, at(X, y));
@@ -44,7 +48,12 @@ pub(in crate::shell) fn press(shell: &gpui::Entity<Shell>, cx: &mut TestAppConte
     })
 }
 
-pub(in crate::shell) fn drag_to(shell: &gpui::Entity<Shell>, cx: &mut TestAppContext, x: f32, y: f32) {
+pub(in crate::shell) fn drag_to(
+    shell: &gpui::Entity<Shell>,
+    cx: &mut TestAppContext,
+    x: f32,
+    y: f32,
+) {
     shell.update(cx, |shell, cx| shell.drag_to(at(x, y), cx));
 }
 
@@ -106,7 +115,10 @@ fn crossing_the_pinned_line_gives_a_click(cx: &mut TestAppContext) {
     assert_eq!(host.detents.get(), down);
     // And back up over the line.
     drag_to(&shell, cx, X, y);
-    assert!(host.detents.get() > down, "no click crossing back to the pinned tabs");
+    assert!(
+        host.detents.get() > down,
+        "no click crossing back to the pinned tabs"
+    );
 }
 
 /// The pointer going right takes a row into the folder above, which is a new place for it, so a
@@ -114,7 +126,10 @@ fn crossing_the_pinned_line_gives_a_click(cx: &mut TestAppContext) {
 #[gpui::test]
 fn going_into_a_folder_gives_a_click(cx: &mut TestAppContext) {
     let docs = [(20, ("Docs".into(), true))];
-    let folders = Folders { folders: docs.into(), ..Default::default() };
+    let folders = Folders {
+        folders: docs.into(),
+        ..Default::default()
+    };
     let (shell, host) = shell_with(cx, &[20, 21, 22], &[4], folders);
     let y = press(&shell, cx, 22);
     // Up past 21 to the gap under the folder.
@@ -135,12 +150,17 @@ fn going_into_a_folder_gives_a_click(cx: &mut TestAppContext) {
 #[gpui::test]
 fn each_tile_passed_gives_a_click(cx: &mut TestAppContext) {
     let (shell, host) = shell_with(cx, &[], &[1, 2], Folders::default());
-    shell.update(cx, |shell, cx| shell.set_favorites(vec![(10, 0), (11, 0), (12, 0)], cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_favorites(vec![(10, 0), (11, 0), (12, 0)], cx)
+    });
     // Where the middle of the tile at `index` of the three is.
     let middle = |shell: &gpui::Entity<Shell>, cx: &mut TestAppContext, index: usize| {
         shell.update(cx, |shell, _| {
             let [left, top, width] = shell.tile_places(3)[index];
-            (left + width / 2., shell.tiles_top() + top + TILE_HEIGHT / 2.)
+            (
+                left + width / 2.,
+                shell.tiles_top() + top + TILE_HEIGHT / 2.,
+            )
         })
     };
     let (x, y) = middle(&shell, cx, 0);

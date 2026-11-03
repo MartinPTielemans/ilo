@@ -64,7 +64,10 @@ pub fn place(saved: Frame, screens: &[Frame]) -> Option<Frame> {
 /// (ux-spec.md › Little Arc). Unmoved with no screens, as under Wayland, or when the host didn't
 /// centre it, leaving the window manager to place it, as on X11.
 pub fn raised(centered: Frame, screens: &[Frame]) -> Frame {
-    let (x, y) = (centered.x + centered.width / 2., centered.y + centered.height / 2.);
+    let (x, y) = (
+        centered.x + centered.width / 2.,
+        centered.y + centered.height / 2.,
+    );
     let Some(screen) = screens.iter().find(|screen| screen.holds(x, y)) else {
         return centered;
     };
@@ -74,17 +77,31 @@ pub fn raised(centered: Frame, screens: &[Frame]) -> Frame {
     let room = (screen.height - centered.height).max(0.);
     // At whole points: the core makes a frame the whole points around it, so a fractional one
     // would open a point bigger, and each window after it bigger again, at the last one's size.
-    Frame { x: centered.x.round(), y: (screen.y + room * 0.4).round(), ..centered }
+    Frame {
+        x: centered.x.round(),
+        y: (screen.y + room * 0.4).round(),
+        ..centered
+    }
 }
 
 /// Where a Little ilo window of `size` opens on the screen holding `pointer`, as Arc's opens on the
 /// pointer's screen: across its middle, and as `raised` puts it. None off every screen.
 pub fn on_screen_of(pointer: (f64, f64), size: (f64, f64), screens: &[Frame]) -> Option<Frame> {
-    let screen = screens.iter().find(|screen| screen.holds(pointer.0, pointer.1))?;
+    let screen = screens
+        .iter()
+        .find(|screen| screen.holds(pointer.0, pointer.1))?;
     let (width, height) = size;
     let x = screen.x + (screen.width - width) / 2.;
     let y = screen.y + (screen.height - height) / 2.;
-    Some(raised(Frame { x, y, width, height }, screens))
+    Some(raised(
+        Frame {
+            x,
+            y,
+            width,
+            height,
+        },
+        screens,
+    ))
 }
 
 #[cfg(test)]
@@ -92,13 +109,28 @@ mod tests {
     use super::*;
 
     fn frame(x: f64, y: f64, width: f64, height: f64) -> Frame {
-        Frame { x, y, width, height }
+        Frame {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     // A 1512 by 982 laptop screen under a 25-point menu bar, with a 2560 by 1440 display to its
     // right, its top level with the laptop's.
-    const LAPTOP: Frame = Frame { x: 0., y: 25., width: 1512., height: 957. };
-    const DISPLAY: Frame = Frame { x: 1512., y: 25., width: 2560., height: 1415. };
+    const LAPTOP: Frame = Frame {
+        x: 0.,
+        y: 25.,
+        width: 1512.,
+        height: 957.,
+    };
+    const DISPLAY: Frame = Frame {
+        x: 1512.,
+        y: 25.,
+        width: 2560.,
+        height: 1415.,
+    };
 
     #[test]
     fn a_frame_on_its_screen_stays_where_it_was() {
@@ -124,18 +156,30 @@ mod tests {
     fn a_frame_hanging_off_its_screen_comes_back_on_it() {
         // Mostly on the display, partly below it.
         let saved = frame(3000., 1000., 1200., 800.);
-        assert_eq!(place(saved, &[LAPTOP, DISPLAY]), Some(frame(2872., 640., 1200., 800.)));
+        assert_eq!(
+            place(saved, &[LAPTOP, DISPLAY]),
+            Some(frame(2872., 640., 1200., 800.))
+        );
         // Above the top of every screen, as AppKit never puts a window.
         let saved = frame(100., -400., 800., 600.);
-        assert_eq!(place(saved, &[LAPTOP, DISPLAY]), Some(frame(100., 25., 800., 600.)));
+        assert_eq!(
+            place(saved, &[LAPTOP, DISPLAY]),
+            Some(frame(100., 25., 800., 600.))
+        );
     }
 
     #[test]
     fn a_frame_across_two_screens_goes_to_the_one_with_more_of_it() {
         let saved = frame(1312., 100., 1000., 600.);
-        assert_eq!(place(saved, &[LAPTOP, DISPLAY]), Some(frame(1512., 100., 1000., 600.)));
+        assert_eq!(
+            place(saved, &[LAPTOP, DISPLAY]),
+            Some(frame(1512., 100., 1000., 600.))
+        );
         let saved = frame(812., 100., 1000., 600.);
-        assert_eq!(place(saved, &[LAPTOP, DISPLAY]), Some(frame(512., 100., 1000., 600.)));
+        assert_eq!(
+            place(saved, &[LAPTOP, DISPLAY]),
+            Some(frame(512., 100., 1000., 600.))
+        );
     }
 
     /// A maximized window's frame as Windows gives it, 8 pixels past each edge of its work area, is
@@ -144,8 +188,18 @@ mod tests {
     /// monitor to its left, each over a 48-pixel taskbar.
     #[test]
     fn a_maximized_frame_past_its_work_area_fills_its_screen() {
-        const PRIMARY: Frame = Frame { x: 0., y: 0., width: 1920., height: 1168. };
-        const LEFT: Frame = Frame { x: -2560., y: 0., width: 2560., height: 1408. };
+        const PRIMARY: Frame = Frame {
+            x: 0.,
+            y: 0.,
+            width: 1920.,
+            height: 1168.,
+        };
+        const LEFT: Frame = Frame {
+            x: -2560.,
+            y: 0.,
+            width: 2560.,
+            height: 1408.,
+        };
         let maximized = frame(-3848. / 1.5, -8. / 1.5, 3856. / 1.5, 2128. / 1.5);
         assert_eq!(place(maximized, &[PRIMARY, LEFT]), Some(LEFT));
         // Its monitor unplugged since, on the primary.
@@ -166,7 +220,10 @@ mod tests {
         assert_eq!(on_display, Some(frame(2342., 25. + 775. * 0.4, 900., 640.)));
         let on_laptop = on_screen_of((10., 900.), (900., 640.), &[LAPTOP, DISPLAY]);
         assert_eq!(on_laptop, Some(frame(306., 152., 900., 640.)));
-        assert_eq!(on_screen_of((-50., 700.), (900., 640.), &[LAPTOP, DISPLAY]), None);
+        assert_eq!(
+            on_screen_of((-50., 700.), (900., 640.), &[LAPTOP, DISPLAY]),
+            None
+        );
         assert_eq!(on_screen_of((10., 900.), (900., 640.), &[]), None);
     }
 
@@ -181,7 +238,10 @@ mod tests {
         // 900 by 640, centred on the laptop: 158.5 of room above and below it, 126.8 above it
         // raised, to the nearest point.
         let centered = frame(306., 183.5, 900., 640.);
-        assert_eq!(raised(centered, &[LAPTOP, DISPLAY]), frame(306., 152., 900., 640.));
+        assert_eq!(
+            raised(centered, &[LAPTOP, DISPLAY]),
+            frame(306., 152., 900., 640.)
+        );
         let centered = frame(2342., 412.5, 900., 640.);
         assert_eq!(raised(centered, &[LAPTOP, DISPLAY]).y, 25. + 775. * 0.4);
         assert_eq!(raised(centered, &[]), centered);
@@ -194,7 +254,12 @@ mod tests {
     /// raised to 44.6 down opened 900 by 641, and an odd 1023 wide, which centres it at 61.5 across.
     #[test]
     fn a_little_window_opens_at_whole_points() {
-        const SMALL: Frame = Frame { x: 0., y: 31., width: 1023., height: 674. };
+        const SMALL: Frame = Frame {
+            x: 0.,
+            y: 31.,
+            width: 1023.,
+            height: 674.,
+        };
         let opened = on_screen_of((500., 300.), (900., 640.), &[SMALL]);
         assert_eq!(opened, Some(frame(62., 45., 900., 640.)));
     }

@@ -11,7 +11,18 @@ fn window_with_a_tab(cx: &mut TestAppContext) -> (gpui::Entity<Shell>, Rc<Record
     let host = Rc::new(Recorder::default());
     let shell = cx.new(|cx| Shell::new(host.clone(), cx));
     shell.update(cx, |shell, cx| {
-        shell.set_spaces(vec![(1, "Space 1".into(), None, 0, "".into(), "".into(), "".into())], cx);
+        shell.set_spaces(
+            vec![(
+                1,
+                "Space 1".into(),
+                None,
+                0,
+                "".into(),
+                "".into(),
+                "".into(),
+            )],
+            cx,
+        );
         shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
         shell.set_space(1, cx);
     });
@@ -42,9 +53,19 @@ fn close_tab_closes_the_tab_and_not_the_window_when_one_is_selected(cx: &mut Tes
 fn close_tab_closes_a_pinned_split_whole_and_a_today_splits_page(cx: &mut TestAppContext) {
     let (shell, host) = window_with_a_tab(cx);
     shell.update(cx, |shell, cx| {
-        let split = |tabs: Vec<u64>| crate::shell::Split { tabs, ..Default::default() };
+        let split = |tabs: Vec<u64>| crate::shell::Split {
+            tabs,
+            ..Default::default()
+        };
         let splits = vec![split(vec![10, 11]), split(vec![12, 13])];
-        shell.set_tabs(1, vec![10, 11], vec![12, 13], splits, Folders::default(), cx);
+        shell.set_tabs(
+            1,
+            vec![10, 11],
+            vec![12, 13],
+            splits,
+            Folders::default(),
+            cx,
+        );
         shell.set_selected(11, cx);
     });
     host.take();
