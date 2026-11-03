@@ -720,6 +720,13 @@ impl Shell {
         self.show_section(section, cx);
     }
 
+    /// Manage Spaces… in a Space's menu: the Library on its Spaces, left there if it shows them.
+    pub(super) fn manage_spaces(&mut self, cx: &mut Context<Self>) {
+        if !(self.library_open && self.section == Section::Spaces) {
+            self.view_section(Section::Spaces, cx);
+        }
+    }
+
     /// Opens the Library on its Spaces, for the preview, which has no pointer to pick it with.
     pub fn show_spaces(&mut self, cx: &mut Context<Self>) {
         self.view_section(Section::Spaces, cx);
@@ -2726,7 +2733,7 @@ mod tests {
         cx.simulate_mouse_up(card, MouseButton::Right, Modifiers::none());
         cx.run_until_parked();
         let titles = host.menus.borrow().last().cloned().unwrap_or_default();
-        assert!(titles.iter().any(|(title, _)| title == "Rename Space"), "no Space menu");
+        assert!(titles.iter().any(|(title, _)| title == "Rename Space…"), "no Space menu");
         assert!(host.shown.borrow().is_empty(), "the right-click showed the Space");
         assert!(shell.read_with(cx, |shell, _| shell.library_open), "the Library closed");
         cx.update(|_, cx| host.choose("Remove Theme Color", cx));

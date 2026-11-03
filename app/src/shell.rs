@@ -240,6 +240,9 @@ const LIST_GLIDE_POWER: i32 = 18;
 // Clear and the URL field's button fade in as the pointer comes onto the sidebar and out as it
 // leaves, on the scroll edge's curve. Arc's fade isn't recorded (docs/ux-spec.md › Clear divider).
 const TOOLS_FADE: f32 = 0.15;
+// The Space's chevron turns a quarter as its pinned rows collapse or expand, ease-in-out (Arc
+// 1.171's 0.12 s; the curve is ours).
+const PINNED_TURN: f32 = 0.12;
 // Two fingers across the sidebar page between Spaces (docs/ux-spec.md › Spaces › Switching). The
 // pages follow at half the fingers' way and rubber-band past the ends. Let go, they settle
 // critically damped on the next Space if the last 100 ms moved them faster than a flick, else on
@@ -301,6 +304,7 @@ use crate::tokens::shell::SPACE_ICON_PLATE;
 use crate::tokens::shell::PINNED_CARET;
 use crate::tokens::shell::PINNED_CARET_PLATE;
 use crate::tokens::shell::PINNED_CARET_GAP;
+use crate::tokens::shell::{SPACE_DONE_HEIGHT, SPACE_DONE_WIDTH, SPACE_MORE, SPACE_MORE_INSET};
 // While the icon picker shows for a Space with no icon, a dashed square holds the icon's place,
 // centred in its frame (Arc 1.170 cap at 1×): 24 across, its corners rounded by about 6, a 1 pt
 // line of 4 pt dashes and 2 pt gaps, in black at 0.30, seen over a red Space (*interim* over the
@@ -1119,6 +1123,14 @@ pub struct Shell {
     marker_drawn: Cell<Option<(bool, Bounds<Pixels>)>>,
     /// Whether the pinned rows' chevron was last drawn for collapsed ones, and where.
     caret_drawn: Rc<Cell<Option<(bool, Bounds<Pixels>)>>>,
+    /// Whether the pointer is over the Space's name row, which then shows its fill, chevron and
+    /// •••, and whether the menu up is the one it opened, which keeps them while it's up.
+    name_hovered: bool,
+    name_menu: bool,
+    /// The Space and whether its pinned rows were collapsed when last drawn, and when they last
+    /// changed there, for the chevron's turn.
+    pinned_seen: Option<(u64, bool)>,
+    pinned_turn: Option<Instant>,
     /// The row whose ring the keys move while the sidebar has the keyboard (sidebar_keys.rs), the
     /// focus it takes them with, whether it takes them at the next draw, and where the ring was
     /// last drawn.
@@ -1567,6 +1579,10 @@ impl Shell {
             list_glide: Cell::new(None),
             marker_drawn: Cell::new(None),
             caret_drawn: Rc::default(),
+            name_hovered: false,
+            name_menu: false,
+            pinned_seen: None,
+            pinned_turn: None,
             keyed: None,
             sidebar_keys: cx.focus_handle(),
             focus_keys: false,
@@ -3406,6 +3422,7 @@ impl Render for Shell {
         self.step_form_going(cx);
         self.step_scroll_edge(window);
         self.step_tools(window);
+        self.step_pinned_turn(window);
         self.step_empty(window);
         self.step_crash_cards(window);
         let drop_targets = self.drag.as_ref().is_some_and(|drag| drag.over_page.is_some())
@@ -3969,6 +3986,7 @@ impl Shell {
         self.step_form_going(cx);
         self.step_scroll_edge(window);
         self.step_tools(window);
+        self.step_pinned_turn(window);
         self.step_foot(window, cx);
         let left = REVEAL_INSET - (REVEAL_INSET + self.width()) * (1. - self.reveal_out());
         // Unless a field in the panel has it.
