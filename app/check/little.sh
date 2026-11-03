@@ -345,9 +345,9 @@ send window "$look_window"
 # window where it was, behind it, where the main window went in front of it on the Mac (#1689).
 # The other app is a stand-in of the run's own over the main window: on the Mac check/cover.m, on
 # Windows app-windows.py's cover, over the window's lower half, and on Linux ImageMagick's display,
-# which the window manager puts in front with the keyboard as it opens, so there it opens once the
-# Little ilo window has, which then comes back in front of it, as the user going back to it does.
-# Openbox then gives the keyboard to the window that had it last, the stand-in's.
+# which the window manager puts in front with the keyboard as it opens. The Little ilo window then
+# comes back in front of it, as the user going back to it does. Openbox then gives the keyboard to
+# the window that had it last, the stand-in's.
 send window 1
 send order
 main_frame=$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)
@@ -422,17 +422,13 @@ uncover() {
 # Closes a Little ilo window over the stand-in's window by $1, ⌘W or escape, named $2 in its
 # captures.
 give_way() {
-  [ "$(uname)" = Linux ] || {
-    cover_main
-    await_cover "the other app's window didn't open in front of the main window ($1)"
-  }
   send key n cmd alt
   expect "^browser: little window opened [0-9]* profile [0-9]* home $home\$" \
     "⌥⌘N didn't open a Little ilo window over the other app's ($1)"
   little=$(opened)
   expect "^browser: window opened $little\$" "the Little ilo window didn't open ($1)"
   number=$(grep -c '^browser: window opened ' "$log")
-  send window "$number" behind
+  send window "$number"
   if [ "$2" = escape ]; then
     send key l cmd
     expect '^browser: command bar shown$' "⌘L didn't open the Little ilo window's command bar ($1)"
@@ -442,15 +438,22 @@ give_way() {
     page=$(sed -n "s|^browser: window $little shows \([0-9]*\)\$|\1|p" "$log" | tail -1)
     expect "^browser: title $page ready\$" "the Little ilo window's page didn't draw ($1)"
   fi
-  if [ "$(uname)" = Linux ]; then
-    cover_main
-    await_cover "the other app's window didn't open in front of the main window ($1)"
-    send window "$number"
-  fi
+  # The stand-in opens once the Little ilo window has, as a key the driver sends brings the window
+  # driven to the front on Windows, and the Little ilo window then comes back in front of it.
+  cover_main
+  await_cover "the other app's window didn't open in front of the main window ($1)"
+  send window "$number"
   send window "$number" behind
   send stack
   [ "$(stack)" = driven ] ||
     fail "the Little ilo window isn't in front of the other app's ($1): $(stack)"
+  send window 1 behind
+  send stack
+  case "$(stack)" in
+    "window $number, other "*cover*) ;;
+    *) fail "the other app's window isn't between the Little ilo window and the main window ($1): $(stack)" ;;
+  esac
+  send window "$number" behind
   ../tools/window-screenshot.sh "$pid" "$out/little-over-other-app.png" all ||
     fail "no window to capture"
   if [ "$2" = escape ]; then
@@ -461,7 +464,8 @@ give_way() {
     send key w cmd
   fi
   expect "^browser: window closed $little\$" "$1 didn't close the Little ilo window over the other app's"
-  [ "$(uname)" != Darwin ] || expect '^browser: little window gave way to cover$' \
+  # Linux's window manager gives the keyboard on by itself.
+  [ "$(uname)" = Linux ] || expect '^browser: little window gave way to cover$' \
     "the Little ilo window didn't give way to the other app's window behind it ($1)"
   covered || fail "closing the Little ilo window by $1 put a window of ilo's in front of the other app's: $(stack)"
   await_active 0 "closing the Little ilo window by $1 left ilo the active app, not the other app"
