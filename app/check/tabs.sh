@@ -7,9 +7,10 @@
 # URL field over the field. ⇧⌘A opens it for Search Tabs, listing the open tabs alone, which typing
 # filters, and ↩ switches to the one left. ⌘T or ⌘L closes the open bar again, ⌘L's field holds the
 # whole address, and ↩ on it as it opened reloads the page. Tab in the empty field, or "/ ", lists
-# only the commands, which typing filters, until Esc or ⌫ at the start leaves. ⌘1–⌘9, ⌥⌘↓, ⌥⌘↑ and
-# clicks on rows show tabs. ⌃Tab, with the page or the UI focused, shows the tab shown before, and
-# with ⌃ held goes on back through the tabs in the order they were shown, and ⌃⇧Tab the other way,
+# only the commands, which typing filters, until Esc or ⌫ at the start leaves, and "2. tab" goes to
+# the second sidebar item. ⌘1–⌘9, ⌥⌘↓, ⌥⌘↑ and clicks on rows show tabs. ⌃Tab, with the page or
+# the UI focused, shows the tab shown before, and with ⌃ held goes on back through the tabs in the
+# order they were shown, and ⌃⇧Tab the other way,
 # until ⌃ goes up or a click. A tab a page opens goes under it and closing it goes back there, and
 # ⌘W otherwise shows the tab below, or above at the bottom. Tabs opened behind close to their
 # sibling, then their opener; after a switch to an unrelated tab, a tab opened in front closes to
@@ -444,6 +445,17 @@ expect '^browser: command new-tab via sidebar$' "a click on \"+ New Tab\" didn't
 expect '^browser: command bar shown$' "a click on \"+ New Tab\" didn't open the command bar"
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
+# "2. tab", Arc's words for its numbered rows, finds Go to Sidebar Item 2 first, and ↩ shows the
+# second item, b, as ⌘2 does (#1396). After the walk, so the order the tabs were shown in is its.
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send type 2. tab
+expect '^browser: command bar commands "2. tab": Go to Sidebar Item 2' \
+  "the command bar didn't find Go to Sidebar Item 2 first for \"2. tab\": $(grep '^browser: command bar commands ' "$log" | tail -1)"
+../tools/window-screenshot.sh "$pid" "$out/numbered.png" || fail "no window to capture"
+send key return
+expect '^browser: command select-tab via command bar$' "↩ on Go to Sidebar Item 2 didn't run it"
+expect "^browser: selected $b\( in .*\)\{0,1\}\$" "Go to Sidebar Item 2 didn't show the second item, $b"
 
 switch "3 cmd" "$a"
 send click 290 34
@@ -1315,4 +1327,4 @@ echo "ok: new tabs open at the top and show, the command bar lists the Space's o
   "moves with its window and the window's menu closes, and the bar stays open over a page that" \
   "commits in another site's renderer and $committed: $out/command-bar-moved.png"
 echo "  Switch to a loaded tab, tab strip to frame shown (Chrome's measure; gate 16 ms): $chrome_ms."
-echo "  Switch, key to the core's report: $app_ms. Windows: $out/muted.png, $out/tabs.png, $out/bar-close.png, $out/suggestions.png, $out/completion.png, $out/search-tabs.png, $out/url-field-bar.png, $out/commands-only.png, $out/listed.png, $out/popular.png, $out/site-hint.png, $out/site-search.png, $out/field-menu.png, $out/empty.png, $out/remove-suggestion.png, $out/site-search-settings.png, $out/idle-unloaded.png, $out/back-held.png, $out/back-menu.png, $out/back-behind.png, $out/chosen.png, $out/chosen-menu.png"
+echo "  Switch, key to the core's report: $app_ms. Windows: $out/muted.png, $out/tabs.png, $out/bar-close.png, $out/suggestions.png, $out/completion.png, $out/search-tabs.png, $out/url-field-bar.png, $out/commands-only.png, $out/numbered.png, $out/listed.png, $out/popular.png, $out/site-hint.png, $out/site-search.png, $out/field-menu.png, $out/empty.png, $out/remove-suggestion.png, $out/site-search-settings.png, $out/idle-unloaded.png, $out/back-held.png, $out/back-menu.png, $out/back-behind.png, $out/chosen.png, $out/chosen-menu.png"
