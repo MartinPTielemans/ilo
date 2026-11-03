@@ -4,8 +4,8 @@
 #
 # `main-check.sh seen` writes seen=true to GITHUB_OUTPUT when another run of this workflow on this
 # branch already checked this commit, so a night with no new merge costs no runner. A run checked
-# it when its job named "check", the one with the default runs, failed, or passed with its "Runs"
-# step done: one with no engine for the commit, or cancelled, checked nothing.
+# it when its job named "check", the one with the default runs, failed past its "Engine" step, or
+# passed with its "Runs" step done: one with no engine for the commit, or cancelled, checked nothing.
 #
 # `main-check.sh report <result> <found>` keeps one open issue per workflow, "<workflow> fails on
 # main": a run that fails opens it, or comments on it if it's open, and one that passes with an
@@ -31,7 +31,8 @@ seen)
   for id in $(gh api "repos/$repo/actions/workflows/$workflow/runs?head_sha=$GITHUB_SHA&branch=$GITHUB_REF_NAME&status=completed&per_page=100" \
     --jq ".workflow_runs[] | select(.id != $GITHUB_RUN_ID) | .id"); do
     checked=$(gh api "repos/$repo/actions/runs/$id/jobs" --jq 'any(.jobs[]; .name == "check" and
-      (.conclusion == "failure" or (.conclusion == "success" and any(.steps[]; .name == "Runs" and .conclusion == "success"))))')
+      ((.conclusion == "failure" and (any(.steps[]; .name == "Engine" and .conclusion == "failure") | not))
+        or (.conclusion == "success" and any(.steps[]; .name == "Runs" and .conclusion == "success"))))')
     if [ "$checked" = true ]; then
       echo "$runs/$id already checked ${GITHUB_SHA:0:12} on $GITHUB_REF_NAME." | tee -a "$GITHUB_STEP_SUMMARY"
       echo "seen=true" >> "$GITHUB_OUTPUT"

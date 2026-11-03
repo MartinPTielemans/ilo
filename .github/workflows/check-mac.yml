@@ -3,11 +3,11 @@
 # public repository. It runs on main each night and by hand, which the integrator does on main
 # after each merge train (#871): never a pull request. It never builds an engine: it takes the
 # newest engine-mac release in this commit's history (engine/fetch.sh), which the owner's Mac
-# publishes each night main's core or engine changed (tools/mac-nightly.sh), and a commit whose
-# core/public/browser_core.h no published engine has is skipped, as nothing can run it, and checked
-# the night after one is. Every run in app/check/ shows in the summary: passed, failed, or skipped
-# and why, with the lines a run that passed skipped. A failure on main opens an issue, which the
-# next run that passes closes (.github/scripts/main-check.sh).
+# publishes each night main's core or engine changed (tools/mac-nightly.sh). A commit whose
+# core/public/browser_core.h no published engine has fails, saying so, as nothing can run it, and
+# is checked the night after one is. Every run in app/check/ shows in the summary: passed, failed,
+# or skipped and why, with the lines a run that passed skipped. A failure on main opens an issue,
+# which the next run that passes closes (.github/scripts/main-check.sh).
 # The 2026-10-28 trial (branch ci/mac-check) found the runner a VM of 3 cores and 7.5 GB with a
 # 1024 by 768 screen, which the job sets to 1920 by 1080, where Metal, windows, making an app
 # active, window captures, IME, keys and focus work, but scrolling drew 35-41 frames a second: it
@@ -76,7 +76,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      # A run with no engine checks nothing, so it fails rather than pass, and the night after takes
+      # it as not checked (main-check.sh seen) (#1563).
       - id: engine
+        name: Engine
         run: |
           status=0
           ../engine/fetch.sh > /dev/null 2> "$RUNNER_TEMP/fetch.log" || status=$?
@@ -85,9 +88,10 @@ jobs:
           0) echo "found=true" >> "$GITHUB_OUTPUT" ;;
           2)
             why=$(tail -1 "$RUNNER_TEMP/fetch.log")
-            echo "::notice::No Mac engine fits this commit, so nothing is built or checked. $why"
-            printf 'Skipped: no Mac engine fits this commit, so nothing is built or checked.\n\n%s\n' "$why" >> "$GITHUB_STEP_SUMMARY"
             echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::error::No Mac engine fits this commit: nothing was checked. $why"
+            printf 'Failed: no Mac engine fits this commit: nothing was checked.\n\n%s\n' "$why" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
             ;;
           *) exit "$status" ;;
           esac
