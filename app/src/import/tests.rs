@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, SystemTime};
 
-use gpui::{App, AppContext, TestAppContext};
+use gpui::{App, AppContext, Entity, TestAppContext};
 
 use super::arc;
 use super::chromium;
@@ -19,7 +19,7 @@ use super::found::{Address, Field, Found, FromProfile, LinkRule, Node, Page, Tab
 use super::plan::{self, Counts, Existing, ExistingSpace, Row};
 use super::read::{self, Kind, ReadError};
 use super::sources::{self, Os, Roots};
-use super::{Exported, Host, ImportEvent, ImportView, Look, Passwords};
+use super::{Exported, Host, ImportEvent, ImportView, Look, Passwords, STALL};
 use super::{firefox, safari};
 use crate::link_rules::{Condition, Rule};
 use crate::theme::{Appearance, Texture, Theme};
@@ -1102,6 +1102,126 @@ fn the_view_imports_what_the_user_picks(cx: &mut TestAppContext) {
         };
         assert_eq!(said.as_ref(), "Everything from Arc is here already.");
     });
+}
+
+/// What the view says, as the user reads it: how the import under way goes, or what came in.
+fn says(view: &Entity<ImportView>, cx: &mut TestAppContext) -> String {
+    view.read_with(cx, |view, _| match &view.step {
+        super::Step::Running { name, run, .. } => super::progress(name, run).to_string(),
+        super::Step::Done(said) => said.to_string(),
+        _ => panic!("neither importing nor done"),
+    })
+}
+
+/// Picks the browser the view found first and imports all it offers.
+fn import_first(view: &Entity<ImportView>, cx: &mut TestAppContext) {
+    view.update(cx, |view, cx| {
+        view.pick(0, cx);
+        view.import(cx);
+    });
+    cx.run_until_parked();
+}
+
+/// Cancel while the import reads stops it, and what it read never comes in.
+#[gpui::test]
+fn cancel_stops_an_import_while_it_reads(cx: &mut TestAppContext) {
+    let browser = Rc::new(Browser::new(None));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    let spaces = browser.spaces().len();
+    view.update(cx, |view, cx| {
+        view.pick(0, cx);
+        view.import(cx);
+    });
+    assert_eq!(says(&view, cx), "Importing from Arc…");
+    view.update(cx, |view, cx| view.cancel(cx));
+    cx.run_until_parked();
+    assert_eq!(says(&view, cx), "Stopped. Nothing came in from Arc.");
+    assert_eq!(browser.spaces().len(), spaces);
+}
+
+/// Cancel while the import waits for the profile it made stops it with the Spaces it made empty,
+/// even once the profile opens, and importing again fills them.
+#[gpui::test]
+fn cancel_while_a_profile_opens_leaves_its_spaces_to_fill(cx: &mut TestAppContext) {
+    let browser = Rc::new(Browser::new(None));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    import_first(&view, cx);
+    assert_eq!(says(&view, cx), "Importing from Arc…");
+    view.update(cx, |view, cx| view.cancel(cx));
+    let stopped = "Stopped. 2 Spaces from Arc are here, empty: import again to fill them.";
+    assert_eq!(says(&view, cx), stopped);
+    cx.update(|cx| browser.load(cx));
+    cx.run_until_parked();
+    assert_eq!(says(&view, cx), stopped);
+    assert!(browser.spaces()[1..].iter().all(|space| space.rows.is_empty()));
+    view.update(cx, |view, cx| view.done(cx));
+    import_first(&view, cx);
+    assert_eq!(
+        says(&view, cx),
+        "6 pinned tabs, 3 favorites and 3 link rules came in from Arc."
+    );
+    assert_eq!(browser.spaces()[2].rows.len(), 1);
+}
+
+/// A profile the import made that hasn't opened after STALL ends the wait with Try Again, which
+/// asks for it again; once it opens, the import goes on, and the wait's end no longer comes.
+#[gpui::test]
+fn a_profile_that_doesnt_open_offers_try_again(cx: &mut TestAppContext) {
+    let browser = Rc::new(Browser::new(None));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    import_first(&view, cx);
+    cx.executor().advance_clock(STALL - Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(says(&view, cx), "Importing from Arc…");
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    let stalled = "The Work profile hasn't opened, so the import can't go on.";
+    assert_eq!(says(&view, cx), stalled);
+    view.read_with(cx, |view, _| assert_eq!(view.running().as_deref(), Some(stalled)));
+    let asked = browser.state.borrow().loading.len();
+    view.update(cx, |view, cx| view.try_again(cx));
+    assert_eq!(browser.state.borrow().loading.len(), asked + 1);
+    assert_eq!(says(&view, cx), "Importing from Arc…");
+    cx.update(|cx| browser.load(cx));
+    let said = "2 Spaces, 6 pinned tabs, 3 favorites and 3 link rules came in from Arc.";
+    assert_eq!(says(&view, cx), said);
+    cx.executor().advance_clock(STALL);
+    cx.run_until_parked();
+    assert_eq!(says(&view, cx), said);
+}
+
+/// While the core adds the history and addresses, the view says what came in so far, and what
+/// it's still adding, each as it comes; then there's nothing left to cancel.
+#[gpui::test]
+fn counts_show_as_they_come_in(cx: &mut TestAppContext) {
+    let home = chrome("chrome-progress", &[("Default", "Me")], SystemTime::now());
+    let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Linux))));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    import_first(&view, cx);
+    assert_eq!(
+        says(&view, cx),
+        "1 Space, 3 pinned tabs and 1 open tab came in from Chrome. Adding its history and \
+         addresses…"
+    );
+    let (added, then) = browser.adding.borrow_mut().remove(0);
+    cx.update(|cx| then(added, cx));
+    assert_eq!(
+        says(&view, cx),
+        "1 Space, 3 pinned tabs, 1 open tab and 2 pages of history came in from Chrome. Adding \
+         its addresses…"
+    );
+    view.update(cx, |view, cx| view.cancel(cx));
+    cx.update(|cx| browser.added(cx));
+    assert_eq!(
+        says(&view, cx),
+        "1 Space, 3 pinned tabs, 1 open tab, 2 pages of history and 1 address came in from \
+         Chrome."
+    );
+    fs::remove_dir_all(home).unwrap();
 }
 
 /// A Chromium `Bookmarks` file with `bar` on its bookmarks bar, a folder of other bookmarks and
