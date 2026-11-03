@@ -206,7 +206,9 @@ mod tests {
 
     /// The row's labels, left to right.
     fn labels(row: &Entity<WidevineRow>, cx: &mut TestAppContext) -> Vec<&'static str> {
-        row.read_with(cx, |row, _| row.actions().iter().map(|(_, label)| *label).collect())
+        row.read_with(cx, |row, _| {
+            row.actions().iter().map(|(_, label)| *label).collect()
+        })
     }
 
     /// A click on `action`'s button, as Settings passes it on.
@@ -236,7 +238,10 @@ mod tests {
     /// says it's downloading and offers nothing until the core says where it got to.
     #[gpui::test]
     fn the_row_downloads_the_module_and_follows_the_core(cx: &mut TestAppContext) {
-        let core = Rc::new(Core { state: Cell::new(Widevine::Absent), ..Core::default() });
+        let core = Rc::new(Core {
+            state: Cell::new(Widevine::Absent),
+            ..Core::default()
+        });
         let row = row(&core, cx);
         row.read_with(cx, |row, _| {
             assert!(row.shown());
@@ -260,7 +265,10 @@ mod tests {
     /// restart beside Remove, in the note's words; loaded, there's nothing to restart for.
     #[gpui::test]
     fn the_row_restarts_for_the_module_it_downloaded(cx: &mut TestAppContext) {
-        let core = Rc::new(Core { state: Cell::new(Widevine::Restart), ..Core::default() });
+        let core = Rc::new(Core {
+            state: Cell::new(Widevine::Restart),
+            ..Core::default()
+        });
         let row = row(&core, cx);
         row.read_with(cx, |row, _| assert!(row.detail().contains("restarts")));
         assert_eq!(labels(&row, cx), ["Remove", RESTART]);
@@ -270,14 +278,21 @@ mod tests {
         moves(&core, &row, Widevine::Ready, cx);
         assert_eq!(labels(&row, cx), ["Remove"]);
         click(&row, Action::Restart, cx);
-        assert_eq!(core.asked.borrow().len(), 1, "a loaded module restarted the browser");
+        assert_eq!(
+            core.asked.borrow().len(),
+            1,
+            "a loaded module restarted the browser"
+        );
     }
 
     /// The way back: a module downloaded is removed from the row, which then offers it again, and
     /// Settings, which watches the row, draws it so.
     #[gpui::test]
     fn the_row_removes_the_module(cx: &mut TestAppContext) {
-        let core = Rc::new(Core { state: Cell::new(Widevine::Ready), ..Core::default() });
+        let core = Rc::new(Core {
+            state: Cell::new(Widevine::Ready),
+            ..Core::default()
+        });
         let row = row(&core, cx);
         let redrawn = Rc::new(Cell::new(0));
         let _watch = cx.update(|cx| {

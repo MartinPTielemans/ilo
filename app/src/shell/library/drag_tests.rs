@@ -19,9 +19,21 @@ fn library(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, R
     cx.update(|window, _| window.activate_window());
     shell.update(cx, |shell, cx| {
         let space = |id: u64, name: &str, agent: &str| {
-            (id, name.to_string().into(), None, 1, "".into(), agent.into(), "".into())
+            (
+                id,
+                name.to_string().into(),
+                None,
+                1,
+                "".into(),
+                agent.into(),
+                "".into(),
+            )
         };
-        let spaces = vec![space(1, "Home", ""), space(2, "Work", ""), space(9, "Agent", "claude")];
+        let spaces = vec![
+            space(1, "Home", ""),
+            space(2, "Work", ""),
+            space(9, "Agent", "claude"),
+        ];
         shell.set_spaces(spaces, cx);
         shell.set_space(2, cx);
         shell.set_tabs(1, vec![3], Vec::new(), Vec::new(), Folders::default(), cx);
@@ -47,7 +59,11 @@ fn first_row(index: usize) -> Point<Pixels> {
 /// Presses at `from`, drags to `to` and lets go there.
 fn drag(cx: &mut VisualTestContext, from: Point<Pixels>, to: Point<Pixels>) {
     cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
-    cx.simulate_mouse_move(from + point(px(10.), px(0.)), MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(
+        from + point(px(10.), px(0.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
     cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
     cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
     cx.run_until_parked();
@@ -75,7 +91,10 @@ fn its_own_card_and_an_agents_take_no_tab(cx: &mut TestAppContext) {
     let (shell, cx, host) = library(cx);
     drag(cx, first_row(0), first_row(0) + point(px(0.), px(40.)));
     assert!(host.take_edits().is_empty());
-    assert!(host.shown.take().is_empty(), "the drag was a click on its card");
+    assert!(
+        host.shown.take().is_empty(),
+        "the drag was a click on its card"
+    );
     assert!(library_open(&shell, cx));
     drag(cx, first_row(0), first_row(2));
     assert!(host.take_edits().is_empty());
