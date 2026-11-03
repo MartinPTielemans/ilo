@@ -10,6 +10,16 @@ BROWSER_URL='https://en.wikipedia.org/wiki/Arc_(web_browser)' "$browser" \
 pid=$!
 await_load
 ../tools/window-screenshot.sh "$pid" "$out/load.png" || fail "no window to capture"
+# DIAG (#1257): a topmost window of another app over ours, which the capture must leave out.
+if [ "$(uname -o)" = Msys ]; then
+  powershell.exe -NoProfile -Command 'Add-Type -AssemblyName System.Windows.Forms; $f = New-Object Windows.Forms.Form; $f.TopMost = $true; $f.Text = "cover"; $f.BackColor = "Magenta"; $f.StartPosition = "Manual"; $f.Location = New-Object Drawing.Point(600, 300); $f.Size = New-Object Drawing.Size(500, 300); $f.ShowDialog()' &
+  cover=$!
+  sleep 4
+  ../tools/window-screenshot.sh "$pid" "$out/load-covered.png" 2> "$out/load-covered.txt" || fail "no window to capture under the cover"
+  kill "$cover" 2>/dev/null; taskkill //F //IM powershell.exe //FI "WINDOWTITLE eq cover" > /dev/null 2>&1 || true
+  sleep 1
+  ../tools/window-screenshot.sh "$pid" "$out/load-uncovered.png" 2> "$out/load-uncovered.txt" || fail "no window to capture after the cover"
+fi
 icons=
 if windows; then
   # The window takes chrome.dll's icon. An engine from before #1350 has Chromium's, which its
