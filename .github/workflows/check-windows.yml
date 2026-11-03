@@ -218,6 +218,29 @@ jobs:
           "Installed $($package.PackageFullName) in $($package.InstallLocation)"
           "CHECK_MSIX=$($package.PackageFullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      # The sync-account run signs in to an ilo-server of its own, on SQLite with a throwaway
+      # account, never the hosted one: built from the server's repo at the commit check-linux.yml
+      # builds, only when a run asks for it.
+      - id: server
+        if: ${{ steps.build.outcome == 'success' && (inputs.runs == 'all' || contains(format(' {0} ', inputs.runs), ' sync-account ')) }}
+        uses: actions/checkout@v4
+        with:
+          repository: MartinPTielemans/ilo-server
+          ref: 882f2736e5a3b228543ae33b821aeeb52f80426d
+          path: app/.deps/ilo-server
+
+      - if: ${{ steps.server.outcome == 'success' }}
+        uses: actions/cache@v4
+        with:
+          path: app/.deps/ilo-server/target
+          key: ilo-server-windows-882f2736e5a3b228543ae33b821aeeb52f80426d
+
+      - if: ${{ steps.server.outcome == 'success' }}
+        working-directory: app/.deps/ilo-server
+        run: |
+          cargo build --release --locked
+          echo "ILO_SERVER=$PWD/target/release/ilo-server.exe" >> "$GITHUB_ENV"
+
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       - name: Runs
         env:
