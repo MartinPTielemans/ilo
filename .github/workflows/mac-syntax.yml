@@ -1,0 +1,61 @@
+# The Mac host's code, which a branch pushed from Linux can't compile, checked for errors in
+# minutes on GitHub's hosted Mac rather than hours later on the owner's: clang -fsyntax-only on
+# app/platform/mac with the flags build.rs gives it, against the runner's macOS SDK. The core's Mac
+# files compile only against a Chromium tree, so this doesn't check them.
+name: Mac syntax
+
+on:
+  push:
+    # Main and the merge queue's branches were checked on the branch they came from.
+    branches-ignore: [main, 'gh-readonly-queue/**']
+    paths:
+      - app/platform/mac/**
+      - app/platform/host.h
+      - core/public/**
+      - .github/workflows/mac-syntax.yml
+
+concurrency:
+  group: mac-syntax-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            app/platform
+            app/setup.sh
+            core/public
+
+      # Sparkle's headers, for updates.mm, at the version and hash app/setup.sh pins.
+      - name: Fetch Sparkle
+        run: |
+          eval "$(grep -E '^  SPARKLE(_SHA256)?=' app/setup.sh)"
+          curl -sSfL "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE/Sparkle-$SPARKLE.tar.xz" -o "$RUNNER_TEMP/sparkle.tar.xz"
+          echo "$SPARKLE_SHA256  $RUNNER_TEMP/sparkle.tar.xz" | shasum -a 256 -c
+          mkdir "$RUNNER_TEMP/Sparkle"
+          tar xJf "$RUNNER_TEMP/sparkle.tar.xz" -C "$RUNNER_TEMP/Sparkle"
+
+      # build.rs's flags for the Mac host, with the cc crate's warnings and Rust's default target.
+      # Each error also shows on the commit as an annotation at its line.
+      - name: Check
+        run: |
+          status=0
+          for file in app/platform/mac/*.mm; do
+            echo "::group::$file"
+            if ! xcrun clang++ -fsyntax-only -target arm64-apple-macos11 -std=c++20 -fobjc-arc \
+                -Wall -Wextra -DNDEBUG -Icore/public -F"$RUNNER_TEMP/Sparkle" "$file" 2> "$RUNNER_TEMP/out"; then
+              status=1
+            fi
+            cat "$RUNNER_TEMP/out"
+            echo "::endgroup::"
+            sed -nE 's/^([^:]+):([0-9]+):([0-9]+): (fatal )?error: (.*)$/::error file=\1,line=\2,col=\3::\5/p' "$RUNNER_TEMP/out"
+          done
+          exit $status

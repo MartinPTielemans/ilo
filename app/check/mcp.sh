@@ -794,12 +794,11 @@ if [ "$driven" = 1 ]; then
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings"
   settings_drew
-  # The seventh tab, and the switch at the end of the first row.
   send clickkey $(drawn "toolbar Agents")
-  expect '^browser: settings tab Agents$' "a click on Agents didn't show its tab"
+  expect '^browser: settings tab Agents$' "a click on Agents didn't show its section"
   settings_drew Agents
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents.png" || fail "no window to capture"
-  send clickkey 592 134
+  send clickkey $(drawn "switch agents")
   expect '^browser: agents off$' "a click on the switch didn't turn agents off"
   for _ in $(seq 30); do [ -e "$socket" ] || break; sleep 0.1; done
   [ -e "$socket" ] && fail "the socket stayed once agents were off"

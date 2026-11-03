@@ -132,7 +132,7 @@ impl Shell {
         let row = [
             PLATE_INSET + indent,
             row_top + (ROW_HEIGHT - PLATE_HEIGHT) / 2.,
-            self.width() - 2. * PLATE_INSET - indent,
+            self.rows_width() - 2. * PLATE_INSET - indent,
             PLATE_HEIGHT,
             PLATE_RADIUS,
         ];
@@ -184,7 +184,8 @@ impl Shell {
         let Some(&top) = self.layout().get(&slot) else {
             return;
         };
-        let top = top + self.tiles_room();
+        // In the scrolled part's own place, under the name row that stays put.
+        let top = top + self.tiles_room() - self.fixed_head();
         let height = f32::from(self.list_scroll.bounds().size.height);
         let offset = -f32::from(self.list_scroll.offset().y);
         let scrolled = self.list_glide.get().map_or(offset, |glide| glide.to);
@@ -209,15 +210,16 @@ impl Shell {
         }
     }
 
-    /// Moves the list on along its glide to a row, which a scroll of the user's ends.
-    pub(super) fn step_list_glide(&mut self, window: &mut Window) {
+    /// Moves the list on along its glide to a row, which a scroll of the user's ends. Returns
+    /// whether it moved the list.
+    pub(super) fn step_list_glide(&mut self, window: &mut Window) -> bool {
         let Some(glide) = self.list_glide.get() else {
-            return;
+            return false;
         };
         let offset = self.list_scroll.offset();
         if (-f32::from(offset.y) - glide.set).abs() > 0.5 {
             self.list_glide.set(None);
-            return;
+            return false;
         }
         let t = (glide.start.elapsed().as_secs_f32() / LIST_GLIDE).min(1.);
         let at = glide.from + (glide.to - glide.from) * (1. - (1. - t).powi(LIST_GLIDE_POWER));
@@ -228,6 +230,7 @@ impl Shell {
         } else {
             self.list_glide.set(None);
         }
+        true
     }
 
     /// Lands the list's glide at the next frame, as the app's frames have by the time a test
@@ -243,6 +246,22 @@ impl Shell {
     /// Where `y`, down from the sidebar's top, is in the list, scrolled as it is.
     pub(super) fn list_y(&self, y: f32) -> f32 {
         y - self.drawn_list_top() - f32::from(self.list_scroll.offset().y)
+    }
+
+    /// How much of the list's top stays put while its rows scroll under it: the Space's name row,
+    /// as Arc 1.170's, or what a lone unnamed Space leaves of it, unless the tiles scroll with the
+    /// list, which takes the row along.
+    pub(super) fn fixed_head(&self) -> f32 {
+        if self.tiles_scroll() {
+            0.
+        } else {
+            self.list_head()
+        }
+    }
+
+    /// Whether `y`, down from the sidebar's top, is on the part of the list's top that stays put.
+    pub(super) fn on_fixed_head(&self, y: f32) -> bool {
+        (0. ..self.fixed_head()).contains(&(y - self.drawn_list_top()))
     }
 
     /// The row the pointer drags, once it has come away.
@@ -673,7 +692,7 @@ impl Shell {
     /// (`SidebarDropTargetRegion`).
     fn left_half(&self, row: u64, x: f32) -> bool {
         let left = PLATE_INSET + self.depth(row) as f32 * FOLDER_INDENT;
-        x < (left + self.width() - PLATE_INSET) / 2.
+        x < (left + self.rows_width() - PLATE_INSET) / 2.
     }
 
     /// The tab whose row's middle half is at `y` down the sidebar, which a dragged `tab` would join
