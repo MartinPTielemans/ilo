@@ -2401,49 +2401,6 @@ void host_close_launch_window(void) {
   g_launch = {};
 }
 
-// diag(#1262): the old launch picture, a PrintWindow of the browser window, timed beside the new.
-void host_diag_print_picture(void* ui_view, double width) {
-  HWND root = Root(ui_view);
-  if (!root) {
-    return;
-  }
-  LARGE_INTEGER start, end, rate;
-  QueryPerformanceFrequency(&rate);
-  QueryPerformanceCounter(&start);
-  RECT client{};
-  GetClientRect(root, &client);
-  const LONG wide = (std::min)(static_cast<LONG>(std::lround(width * Scale(root))), client.right);
-  BITMAPINFO info{};
-  info.bmiHeader.biSize = sizeof info.bmiHeader;
-  info.bmiHeader.biWidth = client.right;
-  info.bmiHeader.biHeight = -client.bottom;
-  info.bmiHeader.biPlanes = 1;
-  info.bmiHeader.biBitCount = 32;
-  info.bmiHeader.biCompression = BI_RGB;
-  uint8_t* bits = nullptr;
-  HDC screen = GetDC(nullptr);
-  HDC dc = CreateCompatibleDC(screen);
-  ReleaseDC(nullptr, screen);
-  HBITMAP bitmap =
-      CreateDIBSection(dc, &info, DIB_RGB_COLORS, reinterpret_cast<void**>(&bits), nullptr, 0);
-  if (bitmap) {
-    HGDIOBJ old = SelectObject(dc, bitmap);
-    PrintWindow(root, dc, PW_CLIENTONLY | 0x00000002);
-    GdiFlush();
-    std::vector<uint8_t> pixels(static_cast<size_t>(wide) * client.bottom * 4);
-    for (LONG y = 0; y < client.bottom; ++y) {
-      memcpy(pixels.data() + static_cast<size_t>(y) * wide * 4,
-             bits + static_cast<size_t>(y) * client.right * 4, static_cast<size_t>(wide) * 4);
-    }
-    SelectObject(dc, old);
-    DeleteObject(bitmap);
-  }
-  DeleteDC(dc);
-  QueryPerformanceCounter(&end);
-  fprintf(stderr, "browser: diag printwindow picture in %.1f ms\n",
-          (end.QuadPart - start.QuadPart) * 1000.0 / rate.QuadPart);
-}
-
 bool host_save_launch_pixels(void* ui_view, const char* profile_dir, const uint8_t* pixels,
                              size_t columns, size_t rows) {
   HWND root = Root(ui_view);

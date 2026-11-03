@@ -50,8 +50,6 @@ unsafe extern "C" {
         width: f64,
     ) -> bool;
     #[cfg(target_os = "windows")]
-    pub fn host_diag_print_picture(ui_view: *mut c_void, width: f64);
-    #[cfg(target_os = "windows")]
     pub fn host_save_launch_pixels(
         ui_view: *mut c_void,
         profile_dir: *const c_char,

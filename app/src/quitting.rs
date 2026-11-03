@@ -145,11 +145,6 @@ pub(crate) fn save_launch_picture(cx: &mut App) {
             )
         }
     });
-    // diag(#1262): the old picture's cost, beside the new one's.
-    #[cfg(target_os = "windows")]
-    unsafe {
-        platform::host_diag_print_picture(window.ui_view, width.into())
-    };
     // check.sh reads this line.
     log!(
         "browser: launch picture {}",
