@@ -36,9 +36,9 @@ Each principle has what was **seen**, with the spec section it comes from, our *
 
 ## Wait for intent before acting
 
-- **Seen.** The reveal waits about 100 ms after the pointer reaches the window's edge, so a pointer passing on its way to another display leaves it shut. A swipe let go short of halfway goes back. The New Space pull makes a Space only if it's let go once readied, which a glow and a click on the trackpad announce (Spaces › Switching). A dragged row's neighbours stay put while it's held, and a line marks the gap it would drop into; the rows move only once it's let go (Tab rows › Reorder).
+- **Seen.** The reveal waits about 100 ms after the pointer reaches the window's edge, and after a fling there until it moves a few points (Sidebar reveal), so a pointer passing on its way to another display leaves it shut. A swipe let go short of halfway goes back. The New Space pull makes a Space only if it's let go once readied (Spaces › Switching). A dragged row's neighbours stay put while it's held, and a line marks the gap it would drop into; the rows move only once it's let go (Tab rows › Reorder).
 - **Reading.** An accidental trigger costs more than a short wait or a threshold. And a list that rearranges while the pointer aims moves the target it's aiming at, so every row passed on the way costs a reflow and a second look.
-- **Applies.** A gesture or a hover that opens something gets a threshold, and a visible, felt ready state before it commits. While something is dragged, what the drop would change is marked where it would happen, not done: the change runs once it's let go.
+- **Applies.** A gesture or a hover that opens something gets a threshold, and a visible, felt ready state before it commits. While something is dragged, what the drop would change is marked where it would happen; the change runs once it's let go.
 
 ## Quiet controls, loud thresholds
 
@@ -66,7 +66,7 @@ Each principle has what was **seen**, with the spec section it comes from, our *
 
 ## Delight on rare paths only
 
-- **Seen.** Making a Space plays an illustration for about 2 s, and the pull glows. Switching, closing and clearing tabs have no flourish, and Clear has no toast. A press on a row shows its tab, and one on a folder opens or closes it, before the release, 100 to 300 ms sooner than a click would (Sidebar › Behavior › Showing a tab).
+- **Seen.** Making a Space plays an illustration for about 2 s, and the pull glows. Switching, closing and clearing tabs have no flourish. A press on a row shows its tab, and one on a folder opens or closes it, before the release, 100 to 300 ms sooner than a click would (Sidebar › Behavior › Showing a tab).
 - **Reading.** What you do a hundred times a day has to be instant. What you do once a month can be a moment.
 - **Applies.** Decoration goes on rare paths. Hot paths stay plain and fast (the performance gate in [roadmap.md](roadmap.md)), and act on the press when a drag that follows can carry what it did. We skip Arc's illustrations and their waits: the art is Arc's, and a 2 s wait isn't how we want it to feel.
 

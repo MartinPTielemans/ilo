@@ -1410,6 +1410,32 @@ preview-radius = 8.0
 plate-inset = 4.0
 plate-radius = 12.0
 
+[shell.scroller]
+# The list's scroller is Arc 1.170's, AppKit's own: a knob and no track, this far in from the
+# sidebar's edge. While the system shows scroll bars only as they're used, it's the overlay knob,
+# 4 wide, the ink at 0.49 (white 49 % measured on a dark theme; the light theme's ink is ours).
+edge = 3.0
+knob = 4.0
+knob-alpha = 0.49
+# With the system's scroll bars shown always, it's AppKit's legacy knob, 5 wide and the ink at 0.5
+# (AppKit's light one is black 0.5), always there while the rows overflow, and the rows give up
+# this much for it. Its rect is 3 in from the rows' part's top and bottom, and the knob 1 inside
+# that. The overlay knob's ends are the same 3 in (ours: Arc's aren't measured).
+knob-shown = 5.0
+knob-shown-alpha = 0.5
+gutter = 8.0
+end = 3.0
+knob-inset = 1.0
+# Ours, *interim* (Arc's isn't measured): the shortest knob.
+knob-min = 18.0
+
+[shell.scroller.motion]
+# Seconds: the design file has no motion, so tools/design-sync.md leaves this table out. Ours,
+# *interim* (Arc's aren't measured): how long the overlay knob stays after the last scroll, and
+# then fades.
+hold = 0.8
+fade = 0.25
+
 [shell.side-panel]
 # The panel's width until the user gives it one, Chrome's, and the range they can give it,
 # Ardia's.
