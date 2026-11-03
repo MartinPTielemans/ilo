@@ -80,7 +80,6 @@ pub(crate) extern "C" fn launch_picture_on_resigning() {
 // the caption under the UI, on screen too (#1262), so the picture comes from GPUI's own frame.
 #[cfg(target_os = "windows")]
 fn sidebar_pixels(window: AnyWindowHandle, width: f64, cx: &mut App) -> Option<(Vec<u8>, usize)> {
-    let started = std::time::Instant::now();
     let (image, scale) = cx
         .update_window(window, |_, window, _| {
             (window.render_to_image(), window.scale_factor())
@@ -98,10 +97,6 @@ fn sidebar_pixels(window: AnyWindowHandle, width: f64, cx: &mut App) -> Option<(
             pixels.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
         }
     }
-    log!(
-        "browser: launch picture drawn in {:.1} ms",
-        started.elapsed().as_secs_f64() * 1000.
-    );
     Some((pixels, columns))
 }
 
