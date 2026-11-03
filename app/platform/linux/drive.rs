@@ -1053,6 +1053,17 @@ pub(super) fn ring(id: bc::bc_id, height: f64) -> Option<String> {
     Some(format!(", BrowserCoreFocusRing {x:.0},{y:.0} {width:.0}x{high:.0}"))
 }
 
+/// The page of `id` with the keyboard, by its pane's frame from the bottom-left corner of content
+/// `height` high, as the pages are, which tells a split view's pages apart, or "none".
+pub(super) fn keyboard_page(id: bc::bc_id, height: f64) -> String {
+    let mut page = bc::bc_rect { x: 0., y: 0., width: 0., height: 0. };
+    if !unsafe { bc::bc_window_keyboard_page(id, &mut page) } {
+        return "none".into();
+    }
+    let bc::bc_rect { x, y, width, height: high } = page;
+    format!("{x:.0},{:.0} {width:.0}x{high:.0}", height - (y + high))
+}
+
 /// A tab's dialog over `id`, such as print preview, from the content's top-left corner, and its
 /// size, as the Mac's driver lists a child window.
 pub(super) fn dialog(id: bc::bc_id) -> Option<String> {
@@ -1987,19 +1998,7 @@ fn run_command(line: &str) -> Option<()> {
                     y - top
                 );
             }
-            // The page with the keyboard, by its pane's frame from the content's bottom-left
-            // corner, as the pages are, which tells a split view's pages apart.
-            let mut page = bc::bc_rect { x: 0., y: 0., width: 0., height: 0. };
-            match unsafe { bc::bc_window_keyboard_page(browser.id, &mut page) } {
-                true => log!(
-                    "browser: layout keyboard {:.0},{:.0} {:.0}x{:.0}",
-                    page.x,
-                    height - (page.y + page.height),
-                    page.width,
-                    page.height
-                ),
-                false => log!("browser: layout keyboard none"),
-            }
+            log!("browser: layout keyboard {}", keyboard_page(browser.id, height));
             log!(
                 "browser: layout full screen {}",
                 full_screen(browser.window)? as u8
