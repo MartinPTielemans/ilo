@@ -14,8 +14,9 @@
 # form's new-password field offers Chrome's strong password, where Choose Your Own leaves the field
 # to the user and Use Strong Password fills it and saves it, with no offer. Last, Settings' Offer
 # to save passwords, switched off, keeps the next login from bringing the offer, and Save and fill
-# addresses switches off and on. Each run has a profile of its own, which no other run or the
-# owner's copy reaches.
+# addresses switches off and on. A form's address brings Chrome's offer to save it, which return
+# saves, and a card's, which escape declines. Each run has a profile of its own, which no other run
+# or the owner's copy reaches.
 
 # The login page, in a new profile, whose passwords start empty, with a DevTools client that sees
 # the eye in its password field (check/cdp.py).
@@ -25,17 +26,7 @@ cdp_log="$out/passwords-cdp.log"
 step=0
 passwords_profile="$PWD/$out/passwords-profile"
 scratch=$(mktemp -d)
-mkfifo "$scratch/to-browser" "$scratch/from-browser" "$scratch/cdp"
-# Each end of a pipe waits for the other to open, in this order: the driver's, the browser's
-# DevTools pipe, then cdp.py's input.
-BROWSER_DRIVE=1 BROWSER_URL="${site}login.html" BROWSER_PROFILE_DIR="$passwords_profile" \
-  "$browser" --remote-debugging-pipe < "$out/drive" 3< "$scratch/to-browser" \
-  4> "$scratch/from-browser" > "$log" 2>&1 &
-pid=$!
-python3 -I -u check/cdp.py "$scratch/to-browser" "$scratch/from-browser" /login.html \
-  < "$scratch/cdp" > "$cdp_log" 2>&1 &
-exec 3> "$out/drive"
-exec 5> "$scratch/cdp"
+start_with_cdp "${site}login.html" "$passwords_profile" /login.html
 await_load
 await '^browser: title [0-9]* login$' || fail "the login page didn't draw"
 tab=$(today)
@@ -58,7 +49,6 @@ send click 600 60
 if [ "$active" != 1 ]; then
   exec 3>&- 5>&-
   quit
-  kill "$server"
   echo "skip: passwords. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
@@ -77,6 +67,10 @@ offered() {
   expect "^browser: offer $tab $1 check@example.test " "the login brought no offer to $1"
   expect '^browser: offer shown$' "the offer to $1 wasn't shown"
   expect "^browser: offer $tab takes input\$" "the offer to $1 never took input"
+  offer_place
+}
+# Sets $ox and $oy to where the offer's card is in the browser window.
+offer_place() {
   send layout
   child=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: layout child' |
     grep ' 320x180$' | head -1 | sed 's/^browser: layout child //')
@@ -85,7 +79,7 @@ offered() {
   oy=${child#*,}
   oy=${oy%% *}
 }
-# The offer's window has the keyboard, in its username field.
+# The offer's window has the keyboard, in its username field for a login.
 in_offer() {
   [ "$key" = GPUIPanel ] && [ "$focus" = GPUIView ] ||
     fail "$1: the keyboard is in $key, on $focus"
@@ -277,14 +271,15 @@ expect "^browser: menu shown $(cased 'Remove “check@example.test”…, All Pa
 send choose "$(cased 'All Passwords…')"
 expect '^browser: site controls run passwords$' "All Passwords… didn't run"
 expect '^browser: settings tab Passwords$' "All Passwords… didn't show Settings' Passwords tab"
+settings_drew Passwords
 expect "^browser: passwords [0-9]*: 127.0.0.1:$port check@example.test\$" \
   "Settings didn't list the saved login alone: $(grep '^browser: passwords ' "$log" | tail -1)"
 ../tools/window-screenshot.sh "$pid" "$out/settings-passwords.png" || fail "no window to capture"
 post clickkey $(drawn "remove login 0")
-# Settings asks in an alert, and off the Mac, which has none, in its dialog, where escape cancels.
-# The dialog covers Settings, taking its keys, until it has gone.
+# Settings asks in an alert, the Mac's or Windows' task dialog, and on Linux, which has none, in its
+# dialog, where escape cancels. The dialog covers Settings, taking its keys, until it has gone.
 asks=alert
-[ "$(uname)" = Darwin ] || asks=dialog
+[ "$(uname)" = Linux ] && asks=dialog
 expect "^browser: $asks shown Remove the password for “check@example.test” on 127.0.0.1:$port?\$" \
   "Remove in Settings didn't ask first"
 if [ "$asks" = dialog ]; then
@@ -398,6 +393,7 @@ expect "^browser: menu shown $(cased 'Remove “new@example.test”…, All Pass
 send choose "$(cased 'All Passwords…')"
 expect '^browser: site controls run passwords$' "All Passwords… didn't run again"
 expect '^browser: settings shown Passwords$' "All Passwords… didn't show Settings' Passwords tab again"
+settings_drew Passwords
 send clickkey $(drawn "switch offer to save passwords")
 expect '^browser: offer to save passwords off$' "a click on Offer to save passwords didn't switch it off"
 ../tools/window-screenshot.sh "$pid" "$out/settings-passwords-off.png" || fail "no window to capture"
@@ -420,7 +416,56 @@ send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 sed -n "/^browser: drive $off: /,\$p" "$log" | grep -q "^browser: offer $tab " &&
   fail "the login brought an offer with Offer to save passwords off"
+
+# A form's address brings Chrome's offer to save it, in the same card with its lines to read,
+# which takes the keyboard when clicked, and return saves it; the form then offers it in Chrome's
+# dropdown.
+# A card's offer names it by its last four digits, and escape declines it. Made-up data only.
+# Types $1 in the form's first field, then each of the rest after a tab, and submits it.
+submit_form() {
+  send click 600 60
+  send type "$1"
+  shift
+  for value in "$@"; do
+    send key tab
+    send type "$value"
+  done
+  send key return
+}
+# Waits for the page's form to bring an offer of kind $1, and for its card to take input, then
+# gives the card the keyboard with a click on its title, as the login's takes it.
+offered_to_save() {
+  expect "^browser: offer $tab $1 [0-9]*\$" "the $1 form brought no offer to save it"
+  expect '^browser: offer shown$' "the offer to save the $1 wasn't shown"
+  expect "^browser: offer $tab takes input\$" "the offer to save the $1 never took input"
+  offer_place
+  send click $((ox + 160)) $((oy + 24))
+  in_offer "after a click on the offer to save the $1"
+}
+go_from_bar "${site#http://}address.html"
+expect "^browser: title $tab address\$" "the address page didn't load"
+submit_form 'Ada Lovelace' '1 Check Street' Springfield IL 62701 'United States' ada@example.test
+offered_to_save address
+../tools/window-screenshot.sh "$pid" "$out/address-offer.png" || fail "no window to capture"
+send key return
+expect "^browser: offer $tab answered Accept \$" "return didn't save the address"
+expect "^browser: offer $tab gone\$" "saving the address left Chrome's offer open"
+go_from_bar "${site#http://}address.html"
+expect "^browser: title $tab address\$" "the address page didn't load again"
+send click 600 60
+send key down
+expect "^browser: title $tab filled\$" "Chrome's dropdown didn't offer the saved address"
+../tools/window-screenshot.sh "$pid" "$out/address-fill.png" || fail "no window to capture"
+send key escape
+go_from_bar "${site#http://}card.html"
+expect "^browser: title $tab card\$" "the card page didn't load"
+submit_form 'Ada Lovelace' 4111111111111111 12 2030
+offered_to_save card
+../tools/window-screenshot.sh "$pid" "$out/card-offer.png" || fail "no window to capture"
+send key escape
+expect "^browser: offer $tab answered NotNow \$" "escape didn't decline the card"
+expect "^browser: offer $tab gone\$" "declining the card left Chrome's offer open"
 exec 3>&- 5>&-
 quit
 rm -rf "$scratch"
-echo "ok: a submitted login offers to save its password in a card 18 from the page's top right, through a resize; another tab closes it, and the key after the host brings it back; Japanese input composes in its username field and return commits it without saving; return saves the username as left, and the login page fills the saved password in, with a key that opens the Site Controls, and Chrome's dropdown fills it in again; the eye shows in the password field once one is typed, never for the one filled in, and goes with the field's focus; a changed password offers to update it, which escape declines; and Never answers on another site, whose Site Controls take it off Never; the first site's Site Controls name its login, All Passwords… lists it in Settings, where Remove asks and Cancel keeps it and Manage Passwords… opens Chrome's password manager page listing it, and the row's Remove asks in the dialog and removes it, which Settings hears; a sign-up form offers Chrome's strong password, which Choose Your Own leaves to the user and Use Strong Password fills in and saves, with no offer; and Settings' Offer to save passwords switched off keeps the next login from bringing an offer, and Save and fill addresses switches off and on. Windows: $out/password-offer.png, $out/password-key.png, $out/password-fill.png, $out/password-reveal.png, $out/password-offer-ime.png, $out/password-update.png, $out/site-controls-never.png, $out/site-controls-passwords.png, $out/settings-passwords.png, $out/password-manager.png, $out/password-remove.png, $out/password-generation.png, $out/settings-passwords-off.png"
+echo "ok: a submitted login offers to save its password in a card 18 from the page's top right, through a resize; another tab closes it, and the key after the host brings it back; Japanese input composes in its username field and return commits it without saving; return saves the username as left, and the login page fills the saved password in, with a key that opens the Site Controls, and Chrome's dropdown fills it in again; the eye shows in the password field once one is typed, never for the one filled in, and goes with the field's focus; a changed password offers to update it, which escape declines; and Never answers on another site, whose Site Controls take it off Never; the first site's Site Controls name its login, All Passwords… lists it in Settings, where Remove asks and Cancel keeps it and Manage Passwords… opens Chrome's password manager page listing it, and the row's Remove asks in the dialog and removes it, which Settings hears; a sign-up form offers Chrome's strong password, which Choose Your Own leaves to the user and Use Strong Password fills in and saves, with no offer; and Settings' Offer to save passwords switched off keeps the next login from bringing an offer, and Save and fill addresses switches off and on; a form's address offers to save it in the card, return saves it and Chrome's dropdown then offers it, and a card's offer declines with escape. Windows: $out/password-offer.png, $out/password-key.png, $out/password-fill.png, $out/password-reveal.png, $out/password-offer-ime.png, $out/password-update.png, $out/site-controls-never.png, $out/site-controls-passwords.png, $out/settings-passwords.png, $out/password-manager.png, $out/password-remove.png, $out/password-generation.png, $out/settings-passwords-off.png, $out/address-offer.png, $out/address-fill.png, $out/card-offer.png"

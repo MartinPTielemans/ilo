@@ -194,6 +194,15 @@ bool SignedLikeThisApp(NSURL* app) {
   return alike;
 }
 
+// Whether the updater reads the nightly feed (host_follow_nightly).
+bool g_follow_nightly = false;
+
+// The nightly feed the build carries, if it carries one.
+NSString* NightlyFeed() {
+  id feed = [NSBundle.mainBundle objectForInfoDictionaryKey:@"NightlyFeedURL"];
+  return [feed isKindOfClass:NSString.class] && [feed length] ? feed : nil;
+}
+
 }  // namespace
 
 // Sparkle's delegate, for both its updater and its alerts.
@@ -201,6 +210,16 @@ bool SignedLikeThisApp(NSURL* app) {
 @property(nonatomic) SPUStandardUpdaterController* controller;
 // A scheduled update's alert held back while a window was full screen.
 @property(nonatomic) BOOL waiting;
+// Told where the update stands, for Settings › About.
+@property(nonatomic) void (*changed)(int stage, const char* version);
+// Sparkle's install now, of the update downloaded to install on quit.
+@property(nonatomic, copy) dispatch_block_t installNow;
+// Restarts the browser, for Install and Relaunch.
+@property(nonatomic) void (*restart)(void);
+// Sparkle's Install and Relaunch, and the version it's of, held until the restart goes ahead.
+@property(nonatomic, copy) dispatch_block_t relaunch;
+@property(nonatomic, copy) NSString* relaunchVersion;
+- (void)restartOnceWarm;
 @end
 
 @implementation Updates {
@@ -209,6 +228,8 @@ bool SignedLikeThisApp(NSURL* app) {
   NSString* _warming;
   NSTask* _task;
   NSMutableArray<dispatch_block_t>* _afterWarming;
+  // The stage last told.
+  int _stage;
 }
 
 - (instancetype)init {
@@ -300,18 +321,73 @@ bool SignedLikeThisApp(NSURL* app) {
   if (_task.running) kill(_task.processIdentifier, SIGKILL);
 }
 
+// Tells Settings › About the update is at |stage|, of |item| if it's named.
+- (void)tell:(int)stage item:(SUAppcastItem*)item {
+  _stage = stage;
+  if (self.changed) self.changed(stage, (item.displayVersionString ?: @"").UTF8String);
+}
+
+// The feed each check reads: the nightly one while the user takes nightly builds, else
+// Info.plist's, which nil leaves Sparkle to read. The log names it for the nightly run.
+- (NSString*)feedURLStringForUpdater:(SPUUpdater*)updater {
+  NSString* nightly = g_follow_nightly ? NightlyFeed() : nil;
+  NSString* feed = nightly ?: [NSBundle.mainBundle objectForInfoDictionaryKey:@"SUFeedURL"];
+  Log([NSString stringWithFormat:@"update feed %@", feed]);
+  return nightly;
+}
+
+// Before each check, Sparkle's own every 8 hours too.
+- (BOOL)updater:(SPUUpdater*)updater
+    mayPerformUpdateCheck:(SPUUpdateCheck)updateCheck
+                    error:(NSError* __autoreleasing*)error {
+  [self tell:HOST_UPDATE_CHECKING item:nil];
+  return YES;
+}
+
 // An update downloaded in the background, to install when the app quits: macOS checks it now,
-// while the user goes on browsing.
+// while the user goes on browsing, and Settings › About offers to restart into it. Taking the
+// install over (YES) is what gives Restart to Update Sparkle's install now; Sparkle still installs
+// it when the app quits, and runs no more checks until then, as there's nothing newer to show.
 - (BOOL)updater:(SPUUpdater*)updater
     willInstallUpdateOnQuit:(SUAppcastItem*)item
     immediateInstallationBlock:(void (^)(void))immediateInstallHandler {
   [self keepNotes:item];
   [self warm:item.versionString then:nil];
-  return NO;
+  self.installNow = immediateInstallHandler;
+  [self tell:HOST_UPDATE_READY item:item];
+  return YES;
 }
 
 - (void)updater:(SPUUpdater*)updater didFindValidUpdate:(SUAppcastItem*)item {
   Log([NSString stringWithFormat:@"update %@ found", item.versionString]);
+  [self tell:HOST_UPDATE_FOUND item:item];
+}
+
+- (void)updater:(SPUUpdater*)updater
+    willDownloadUpdate:(SUAppcastItem*)item
+           withRequest:(NSMutableURLRequest*)request {
+  [self tell:HOST_UPDATE_DOWNLOADING item:item];
+}
+
+- (void)updater:(SPUUpdater*)updater
+    failedToDownloadUpdate:(SUAppcastItem*)item
+                     error:(NSError*)error {
+  Log([NSString stringWithFormat:@"update %@ download failed: %@", item.versionString,
+                                 error.localizedDescription]);
+  [self tell:HOST_UPDATE_FAILED item:item];
+}
+
+- (void)userDidCancelDownload:(SPUUpdater*)updater {
+  [self tell:HOST_UPDATE_IDLE item:nil];
+}
+
+// Skipped, or put off from Sparkle's alert: the row offers the check again. An update dismissed
+// while installing installs on quit, which the next check finds ready.
+- (void)updater:(SPUUpdater*)updater
+    userDidMakeChoice:(SPUUserUpdateChoice)choice
+            forUpdate:(SUAppcastItem*)item
+                state:(SPUUserUpdateState*)state {
+  if (choice != SPUUserUpdateChoiceInstall) [self tell:HOST_UPDATE_IDLE item:nil];
 }
 
 // A check that finds no update says why, with Sparkle's reason (SPUNoUpdateFoundReason) and the
@@ -322,6 +398,7 @@ bool SignedLikeThisApp(NSURL* app) {
                                  error.userInfo[@"SUNoUpdateFoundReason"],
                                  latest.versionString ?: @"none",
                                  [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleVersion"]]);
+  [self tell:HOST_UPDATE_CURRENT item:nil];
 }
 
 // Any other end to a check, such as a feed that doesn't parse, with what Sparkle says went wrong.
@@ -332,6 +409,8 @@ bool SignedLikeThisApp(NSURL* app) {
   Log([NSString stringWithFormat:@"update failed: %@ %ld, %@%@", error.domain, (long)error.code,
                                  error.localizedDescription,
                                  cause ? [@" " stringByAppendingString:cause.description] : @""]);
+  // SUInstallationCanceledError: the user said no to macOS's authorization.
+  [self tell:error.code == 4007 ? HOST_UPDATE_IDLE : HOST_UPDATE_FAILED item:nil];
 }
 
 // The feed parsed and the check's end, which a check that shows no outcome says it got to.
@@ -348,6 +427,8 @@ bool SignedLikeThisApp(NSURL* app) {
                                                          error.localizedDescription]
                             : @"no error";
   Log([NSString stringWithFormat:@"update cycle ended: %@", outcome]);
+  // A check that ended without saying what it found, so the row doesn't stay at Checking….
+  if (_stage == HOST_UPDATE_CHECKING) [self tell:HOST_UPDATE_IDLE item:nil];
 }
 
 - (void)updater:(SPUUpdater*)updater willScheduleUpdateCheckAfterDelay:(NSTimeInterval)delay {
@@ -358,22 +439,32 @@ bool SignedLikeThisApp(NSURL* app) {
   [self keepNotes:item];
 }
 
-// Install and Relaunch: the restart waits for macOS's check of the new version, up to 15 s.
+// Install and Relaunch, Restart to Update's or Sparkle's own window's: Sparkle's installer learns
+// it relaunches only once the restart goes ahead (host_relaunch_into_update), as it can't be told
+// otherwise after, so a quit a page stops leaves it to install on quit alone. Sparkle asks this
+// once, so Restart to Update, which About and the sidebar offer from now on, tries it again.
 - (BOOL)updater:(SPUUpdater*)updater
     shouldPostponeRelaunchForUpdate:(SUAppcastItem*)item
                  untilInvokingBlock:(void (^)(void))installHandler {
   [self keepNotes:item];
-  if ([_warmed containsObject:item.versionString]) return NO;
-  __block BOOL installed = NO;
-  dispatch_block_t install = ^{
-    if (installed) return;
-    installed = YES;
-    installHandler();
-  };
-  [self warm:item.versionString then:install];
-  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, kInstallWait * NSEC_PER_SEC),
-                 dispatch_get_main_queue(), install);
+  self.relaunch = installHandler;
+  self.relaunchVersion = item.versionString;
+  if (_stage != HOST_UPDATE_READY) [self tell:HOST_UPDATE_READY item:item];
+  [self restartOnceWarm];
   return YES;
+}
+
+// The restart waits for macOS's check of the new version, up to 15 s.
+- (void)restartOnceWarm {
+  __block BOOL restarted = NO;
+  dispatch_block_t restart = ^{
+    if (restarted) return;
+    restarted = YES;
+    if (self.restart) self.restart();
+  };
+  [self warm:self.relaunchVersion then:restart];
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, kInstallWait * NSEC_PER_SEC),
+                 dispatch_get_main_queue(), restart);
 }
 
 // A scheduled update's alert waits while a window is full screen (ux-spec), and shows when none is.
@@ -510,8 +601,25 @@ bool host_updates_available(void) {
          [NSFileManager.defaultManager fileExistsAtPath:sparkle];
 }
 
-// Sparkle quits the app itself, for Install and Relaunch.
-void host_start_updater(void (*)(void)) {
+bool host_updated_by_store(void) {
+  return false;
+}
+
+// build.sh marks a nightly's Info.plist.
+bool host_nightly_build(void) {
+  return [[NSBundle.mainBundle objectForInfoDictionaryKey:@"NightlyBuild"] boolValue];
+}
+
+bool host_nightly_feed(void) {
+  return host_updates_available() && NightlyFeed();
+}
+
+// Sparkle asks for the feed at each check (feedURLStringForUpdater:).
+void host_follow_nightly(bool nightly) {
+  g_follow_nightly = nightly;
+}
+
+void host_start_updater(void (*restart)(void), void (*changed)(int stage, const char* version)) {
   if (g_updates || !host_updates_available()) return;
   NSString* path =
       [NSBundle.mainBundle.privateFrameworksPath stringByAppendingPathComponent:@"Sparkle.framework"];
@@ -522,6 +630,8 @@ void host_start_updater(void (*)(void)) {
     return;
   }
   g_updates = [[Updates alloc] init];
+  g_updates.changed = changed;
+  g_updates.restart = restart;
   g_updates.controller = [[NSClassFromString(@"SPUStandardUpdaterController") alloc]
       initWithStartingUpdater:YES
               updaterDelegate:g_updates
@@ -531,6 +641,36 @@ void host_start_updater(void (*)(void)) {
 
 void host_check_for_updates(void) {
   [g_updates.controller checkForUpdates:nil];
+}
+
+void host_check_for_updates_quietly(void) {
+  SPUUpdater* updater = g_updates.controller.updater;
+  // A background check does nothing while Sparkle shows an update, which this brings forward.
+  if (updater.sessionInProgress) {
+    [g_updates.controller checkForUpdates:nil];
+  } else {
+    [updater checkForUpdatesInBackground];
+  }
+}
+
+// Sparkle's install now comes back through shouldPostponeRelaunchForUpdate, which restarts.
+void host_install_update(void) {
+  if (g_updates.relaunch) {
+    Log(@"update installs now");
+    [g_updates restartOnceWarm];
+  } else if (g_updates.installNow) {
+    Log(@"update installs now");
+    g_updates.installNow();
+  }
+}
+
+bool host_relaunch_into_update(void) {
+  dispatch_block_t relaunch = g_updates.relaunch;
+  if (!relaunch) return false;
+  g_updates.relaunch = nil;
+  Log(@"update relaunches once installed");
+  relaunch();
+  return true;
 }
 
 void host_take_update_notes(void (*notes)(const char* url)) {
@@ -544,3 +684,6 @@ void host_take_update_notes(void (*notes)(const char* url)) {
   NSString* url = kept[@"url"];
   if ([url isKindOfClass:NSString.class]) notes(url.UTF8String);
 }
+
+// Sparkle installs a ready update as the app quits by itself.
+void host_finish_update(void) {}

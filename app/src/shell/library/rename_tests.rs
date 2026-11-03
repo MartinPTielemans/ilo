@@ -1,6 +1,6 @@
 //! A Space card's name, typed over in place in the Library, and the icon slot and brush beside it.
 
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 use gpui::{Entity, Modifiers, Pixels, Point, TestAppContext, VisualTestContext, point, px};
 
@@ -8,8 +8,10 @@ use super::{
     CARD_BRUSH, CARD_BRUSH_INSET, CARD_FIELD_INSET, CARD_NAME_GAP, CARD_NAME_HEIGHT, CARD_NAME_TOP,
     CARD_SLOT, CARD_SLOT_X, CARD_WIDTH, SPACES_INSET, card_x,
 };
-use crate::icon_picker::Subject;
+use crate::icon_picker::{self, Recents, Subject};
 use crate::shell::{Command, Naming, Pending, Section, Shell, recorder::Recorder};
+use crate::theme_picker;
+use crate::tokens::icon_picker::ARROW_X;
 
 /// A window with the Library open on Spaces, at rest, over the Spaces Home and Work, Home shown.
 fn library(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
@@ -165,27 +167,136 @@ fn closing_the_library_keeps_the_name(cx: &mut TestAppContext) {
     assert_eq!(renaming_in_card(&shell, cx), None, "the field stayed");
 }
 
-/// The icon slot names itself on hover and opens the icon picker for its Space, without renaming.
+/// Where a picker's window was put each time it showed: its top left in the browser window.
+type Placed = Rc<RefCell<Vec<(f32, f32)>>>;
+
+struct IconHost(Placed);
+
+impl icon_picker::Host for IconHost {
+    fn show(&self, _: u64, left: f32, top: f32) {
+        self.0.borrow_mut().push((left, top));
+    }
+
+    fn hide(&self) {}
+
+    fn keep_recents(&self, _: &str) {}
+}
+
+struct ThemeHost(Placed);
+
+impl theme_picker::Host for ThemeHost {
+    fn show(&self, _: u64, left: f32, top: f32, _: &[(f32, f32, f32)]) {
+        self.0.borrow_mut().push((left, top));
+    }
+
+    fn hide(&self) {}
+
+    fn detent(&self) {}
+}
+
+/// The icon and theme pickers' windows, for `library` to open over, and where each was put.
+fn pickers(cx: &mut TestAppContext) -> (Placed, Placed) {
+    let (icons, themes) = (Placed::default(), Placed::default());
+    let (icon_host, theme_host) = (IconHost(icons.clone()), ThemeHost(themes.clone()));
+    cx.update(|cx| {
+        icon_picker::open(Rc::new(icon_host), Recents::default(), cx);
+        theme_picker::open(Rc::new(theme_host), cx);
+    });
+    (icons, themes)
+}
+
+fn shown(cx: &mut VisualTestContext) -> (Option<Subject>, Option<u64>) {
+    cx.update(|_, cx| (icon_picker::open_for(cx), theme_picker::open_for(cx)))
+}
+
+/// The icon slot names itself on hover and hangs the icon picker for its Space from itself, the
+/// Library staying open and the Space shown where it was, so another can be changed next (#1074).
 #[gpui::test]
-fn the_icon_slot_opens_the_icon_picker(cx: &mut TestAppContext) {
+fn the_icon_slot_hangs_the_icon_picker_from_itself(cx: &mut TestAppContext) {
+    let (icons, _) = pickers(cx);
     let (shell, cx, host) = library(cx);
     cx.simulate_mouse_move(slot(1), None, Modifiers::none());
     cx.run_until_parked();
     assert!(host.take().iter().any(|line| line == "tooltip Edit Space icon "), "no tooltip");
     click(cx, slot(1));
-    let pending = shell.read_with(cx, |shell, _| shell.picker_pending.map(|(picker, _)| picker));
-    assert_eq!(pending, Some(Pending::Icon(Subject::Space(2))));
+    assert_eq!(shown(cx), (Some(Subject::Space(2)), None));
+    let left = icons.borrow().last().map(|&(left, _)| left);
+    assert_eq!(left.map(|left| left + ARROW_X), Some(f32::from(slot(1).x)), "not at the slot");
+    assert!(library_open(&shell, cx), "the Library closed");
+    assert!(host.shown.borrow().is_empty(), "the slot showed the Space");
     assert_eq!(renaming_in_card(&shell, cx), None, "the slot renamed");
+    let pending = shell.read_with(cx, |shell, _| shell.picker_pending.is_some());
+    assert!(!pending, "the sidebar's picker is waiting too");
 }
 
-/// The brush opens the theme picker for its Space, without renaming.
+/// The brush opens the theme picker for its Space beside itself, the Library staying open.
 #[gpui::test]
-fn the_brush_opens_the_theme_picker(cx: &mut TestAppContext) {
-    let (shell, cx, _) = library(cx);
+fn the_brush_opens_the_theme_picker_beside_itself(cx: &mut TestAppContext) {
+    let (_, themes) = pickers(cx);
+    let (shell, cx, host) = library(cx);
     click(cx, brush(0));
-    let pending = shell.read_with(cx, |shell, _| shell.picker_pending.map(|(picker, _)| picker));
-    assert_eq!(pending, Some(Pending::Theme(1)));
+    assert_eq!(shown(cx), (None, Some(1)));
+    let height = cx.update(|window, _| f32::from(window.viewport_size().height));
+    let end = point(f32::from(brush(0).x) + CARD_BRUSH / 2., f32::from(brush(0).y));
+    let (left, top, _) = theme_picker::placed(end, height);
+    assert_eq!(themes.borrow().last().copied(), Some((left, top)), "not beside the brush");
+    assert!(library_open(&shell, cx), "the Library closed");
+    assert!(host.shown.borrow().is_empty(), "the brush showed the Space");
     assert_eq!(renaming_in_card(&shell, cx), None, "the brush renamed");
+}
+
+/// A click on another card's brush or slot moves the picker there, once the press has closed it,
+/// whichever the picker hears of first. One on the brush whose picker shows closes it, as the
+/// press outside the picker does, rather than opening it again.
+#[gpui::test]
+fn another_card_s_brush_or_slot_moves_the_picker_and_its_own_closes_it(cx: &mut TestAppContext) {
+    let (icons, themes) = pickers(cx);
+    let (_, cx, _) = library(cx);
+    let dismiss_theme = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| theme_picker::dismissed(cx));
+        cx.run_until_parked();
+    };
+    click(cx, brush(0));
+    // The host closes the picker on the press, which the picker hears after the click on Linux,
+    click(cx, brush(1));
+    assert_eq!(themes.borrow().len(), 1, "the picker moved before it had closed");
+    dismiss_theme(cx);
+    assert_eq!(shown(cx), (None, Some(2)));
+    assert_eq!(themes.borrow().len(), 2);
+    // and before it on the Mac.
+    dismiss_theme(cx);
+    click(cx, brush(0));
+    assert_eq!(shown(cx), (None, Some(1)));
+    click(cx, brush(0));
+    assert_eq!(themes.borrow().len(), 3, "the press on the picker's own brush opened it again");
+    dismiss_theme(cx);
+    assert_eq!(shown(cx), (None, None));
+    click(cx, slot(0));
+    click(cx, slot(1));
+    cx.update(|_, cx| icon_picker::dismissed(cx));
+    cx.run_until_parked();
+    assert_eq!(shown(cx), (Some(Subject::Space(2)), None));
+    assert_eq!(icons.borrow().len(), 2);
+}
+
+/// While a picker shows for a card, its field stays lit, though the pointer has left it for the
+/// picker; and once the picker closes, Esc closes the Library (the owner, #1074).
+#[gpui::test]
+fn a_card_s_field_stays_lit_while_its_picker_shows_and_escape_then_closes_the_library(
+    cx: &mut TestAppContext,
+) {
+    let _ = pickers(cx);
+    let (shell, cx, _) = library(cx);
+    click(cx, brush(1));
+    move_to(cx, point(px(card_x(1) + CARD_WIDTH / 2.), px(SPACES_INSET + 150.)));
+    assert_eq!(fields_shown(&shell, cx), (false, true), "the picker's card went to rest");
+    cx.update(|_, cx| theme_picker::dismissed(cx));
+    cx.run_until_parked();
+    assert_eq!(fields_shown(&shell, cx), (false, false), "the card stayed lit");
+    assert!(library_open(&shell, cx), "closing the picker closed the Library");
+    shell.update(cx, |shell, cx| shell.run(Command::Stop, "key", cx));
+    cx.run_until_parked();
+    assert!(!library_open(&shell, cx), "Esc left the Library open");
 }
 
 /// The command bar's Edit Theme…, Arc's, is the first command "theme" finds, and opens the theme
@@ -215,13 +326,18 @@ fn move_to(cx: &mut VisualTestContext, at: Point<Pixels>) {
 }
 
 /// A card's field draws its plate, the slot's dashes and the brush only under the pointer, its own
-/// and not the card's, and keeps them while its name is typed over (#811).
+/// and not the card's, the slot and the brush included (#1074), and keeps them while its name is
+/// typed over (#811).
 #[gpui::test]
 fn a_card_s_field_shows_its_plate_under_the_pointer_or_while_renamed(cx: &mut TestAppContext) {
     let (shell, cx, _) = library(cx);
     assert_eq!(fields_shown(&shell, cx), (false, false), "at rest");
+    move_to(cx, name(1));
+    assert_eq!(fields_shown(&shell, cx), (false, true), "the pointer on the second's name");
     move_to(cx, brush(1));
     assert_eq!(fields_shown(&shell, cx), (false, true), "the pointer on the second's brush");
+    move_to(cx, slot(1));
+    assert_eq!(fields_shown(&shell, cx), (false, true), "the pointer on the second's slot");
     move_to(cx, point(px(card_x(1) + CARD_WIDTH / 2.), px(SPACES_INSET + 150.)));
     assert_eq!(fields_shown(&shell, cx), (false, false), "the pointer on the card, off its field");
     click(cx, name(0));

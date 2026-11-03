@@ -8,6 +8,7 @@ Exec=ilo %U
 Icon=app.ilo.browser
 Terminal=false
 StartupNotify=true
+StartupWMClass=app.ilo.browser
 Categories=Network;WebBrowser;
 Keywords=web;browser;internet;
 MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;

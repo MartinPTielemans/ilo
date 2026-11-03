@@ -1,0 +1,41 @@
+From Chromium (https://chromium.googlesource.com/chromium/src, BSD-3-Clause, Copyright The Chromium
+Authors), commit 564344ab9eb89b305366e60b4b4f8ab2f70e791c, "Guard XKB state accesses in
+XkbKeyboardLayoutEngine" (https://chromium-review.googlesource.com/c/chromium/src/+/8378881,
+refs/heads/main@{#1718872}), landed after Chromium 156. Its change to
+xkb_keyboard_layout_engine.cc, unchanged; its test sits after one 156 doesn't have, so core's
+xkb_no_keymap_unittest.cc checks the same two calls instead. Drop it once the pin has the commit.
+
+On Wayland the seat's keyboard can come with no keymap, as fcitx5's virtual one does while it's
+the seat's only keyboard, and the modifiers it sends then crashed the engine in
+xkb_state_update_mask (#1138). UpdateModifiers and GetDomCodeByKeysym now return nothing while
+there's no XKB state, as XkbLookup already does.
+
+--- a/ui/events/ozone/layout/xkb/xkb_keyboard_layout_engine.cc
++++ b/ui/events/ozone/layout/xkb/xkb_keyboard_layout_engine.cc
+@@ -966,6 +966,14 @@ int XkbKeyboardLayoutEngine::UpdateModifiers(uint32_t depressed,
+                                              uint32_t latched,
+                                              uint32_t locked,
+                                              uint32_t group) {
++  if (!xkb_state_) {
++    // The first XKB keymap may arrive after GTK IM events that depend on
++    // modifier state (e.g. fcitx5 firing on first input activation).
++    // Guard like XkbLookup does to avoid xkb_state_update_mask(NULL).
++    LOG(ERROR) << "No current XKB state";
++    return 0;
++  }
++
+   auto* state = xkb_state_.get();
+   xkb_state_update_mask(state, depressed, latched, locked, 0, 0, group);
+   auto component = static_cast<xkb_state_component>(XKB_STATE_MODS_DEPRESSED |
+@@ -985,6 +993,11 @@ int XkbKeyboardLayoutEngine::UpdateModifiers(uint32_t depressed,
+ DomCode XkbKeyboardLayoutEngine::GetDomCodeByKeysym(
+     uint32_t keysym,
+     const std::optional<std::vector<std::string_view>>& modifiers) const {
++  if (!xkb_state_) {
++    LOG(ERROR) << "No current XKB state";
++    return DomCode::NONE;
++  }
++
+   // Look up all candidates.
+   auto range = std::equal_range(
+       xkb_keysym_map_.begin(), xkb_keysym_map_.end(), XkbKeysymMapEntry{keysym},

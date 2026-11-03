@@ -4,19 +4,22 @@
 # Instead, which moves the share there. The marks go once the call ends. A call floats in Picture in
 # Picture while its tab is hidden, and comes back with it, unless its Site Controls block that, or
 # Settings turns it off for the sites they don't allow. A tab playing music out of sight has a
-# player at the sidebar's foot, whose button pauses it, whose click shows the tab, and whose × puts
-# it away. View › Cast… and the page menu's Cast… open the tab's Cast card, and × closes it. A
-# video's page menu floats it in Picture in Picture, the Mini Player, which a scroll or a drag
-# moves, ⌘ or Ctrl with a scroll sizes, and a double-click puts back in its tab, shown. Chromium's
-# fake camera and microphone stand in for real ones, and the share takes the tab titled Shared
-# without its picker; the question for the camera is answered with Allow, as the user would, since
-# the fake question Chromium can put in its place never tells the browser what's captured.
+# player at the sidebar's foot, whose buttons pause it and float it in Picture in Picture, whose
+# click shows the tab, and whose × puts it away. A private window's music has a player in that
+# window alone. View › Cast… and the page menu's Cast… open the tab's Cast card, and × closes it.
+# A video's page menu floats it in Picture in Picture, the Mini Player, which a scroll or a drag
+# moves, ⌘ or Ctrl with a scroll sizes, and a double-click puts back in its tab, shown.
+# Chromium's fake camera and microphone stand in for real ones, and the share takes the tab titled
+# Shared without its picker; the question for the camera is answered with Allow, as the user
+# would, since the fake question Chromium can put in its place never tells the browser what's
+# captured.
 
 serve
 # "c" calls with the camera and microphone, "s" shares the tab titled Shared, "e" ends both, "o"
 # opens that tab, the same page with ?Shared, whose title is what follows the ?, "p" one titled
 # Other, and "m" plays ten seconds of silence over and over, as music titled Quiet with a next
-# track: long enough for Chrome to give it controls, and no sound.
+# track: long enough for Chrome to give it controls, and no sound. Asked to float in Picture in
+# Picture through its media session, it opens a floating window, which closes as its tab shows.
 printf '%s' '<title>loading</title><body style="background:#333">
 <script>
 const name = decodeURIComponent(location.search.slice(1));
@@ -50,6 +53,12 @@ onkeydown = async e => {
       music.onpause = () => document.title = "paused";
       navigator.mediaSession.metadata = new MediaMetadata({title: "Quiet", artist: "Check"});
       navigator.mediaSession.setActionHandler("nexttrack", () => document.title = "next track");
+      navigator.mediaSession.setActionHandler("enterpictureinpicture", async () => {
+        const floating = await documentPictureInPicture.requestWindow({width: 320, height: 180});
+        floating.onpagehide = () => document.title = "landed";
+        document.onvisibilitychange = () => document.hidden || floating.close();
+        document.title = "floating";
+      });
       await music.play();
     } else if (e.key == "o" || e.key == "p") {
       window.open(e.key == "o" ? "call.html?Shared" : "call.html?Other");
@@ -62,7 +71,8 @@ onkeydown = async e => {
 # The same pages over https, for the floating call: Chrome floats a call on https or a file alone,
 # and its page info, the Site Controls, lists no permissions for a file. The certificate is made
 # for this run, and the browser takes it by its key alone, so no other site's errors are let by.
-openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=127.0.0.1 \
+# Git Bash would pass the subject to Windows' openssl as a path under its own folder (#872).
+MSYS2_ARG_CONV_EXCL=/CN= openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=127.0.0.1 \
   -addext subjectAltName=IP:127.0.0.1 -keyout "$out/tls.key" -out "$out/tls.pem" 2> /dev/null ||
   fail "openssl didn't make the floating call's certificate"
 spki=$(openssl x509 -in "$out/tls.pem" -pubkey -noout | openssl pkey -pubin -outform der |
@@ -76,7 +86,8 @@ server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
 tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 tls.load_cert_chain(sys.argv[2], sys.argv[3])
 server.socket = tls.wrap_socket(server.socket, server_side=True)
-print(server.server_address[1])
+# As bytes: text stdout on Windows ends a line with \r, which the driver typed as return (#1196).
+sys.stdout.buffer.write(b"%d\n" % server.server_address[1])
 sys.stdout.close()
 server.serve_forever()
 ' "$out/site" "$out/tls.pem" "$out/tls.key" > "$out/tls.port" 2> "$out/tls.log" 3>&- 4>&- 5>&- &
@@ -149,6 +160,10 @@ expect "^browser: page $a camera 1 microphone 1 sharing 1 shared 0\$" \
 expect "^browser: page $b camera 0 microphone 0 sharing 0 shared 1\$" \
   "the tab shared didn't show it's shared"
 expect "^browser: page $c share instead 1\$" "the other tab wasn't offered to share instead"
+# Chrome shows the tab a page starts sharing, unless the page asks it not to, once, up to a second
+# later, and whichever tab is shared by then. So it does before the share moves, or it shows the
+# other tab under the call's "e" (#1166).
+expect "^browser: selected $b\( in .*\)\{0,1\}\$" "Chrome didn't show the tab shared"
 ../tools/window-screenshot.sh "$pid" "$out/media-sharing.png" || fail "no window to capture"
 
 # The other tab's menu, from its row, moves the share there.
@@ -161,9 +176,8 @@ expect "^browser: page $c camera 0 microphone 0 sharing 0 shared 1\$" \
 expect "^browser: page $b camera 0 microphone 0 sharing 0 shared 0\$" \
   "Share This Tab Instead left the first tab shared"
 
-# Chrome shows the tab a page starts sharing, unless the page asks it not to, so the call's tab is
-# shown again for its "e".
-[ "$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)" = "$a" ] || shown "$a"
+# The call's tab is shown again for its "e".
+shown "$a"
 send click $page_point
 send key e
 expect "^browser: page $a camera 0 microphone 0 sharing 0 shared 0\$" \
@@ -173,18 +187,23 @@ expect "^browser: page $c camera 0 microphone 0 sharing 0 shared 0\$" \
 
 # A call floats once its tab is hidden, as Arc's does: Chrome's automatic Picture in Picture for a
 # page using the camera that asks for it with its media session, on https or a file alone. So a
-# page from the https server, from the command bar, whose "c" calls and which says when its window
-# floats and lands, and whose "k" puts how often it was asked to float in its title. Showing its
-# tab again brings the call back.
+# page from the https server, from the command bar, whose "c" calls and which says when Chrome
+# asks it to float, when its window floats and lands or why it was refused, and whose "k" puts how
+# often it was asked to float in its title. Showing its tab again brings the call back.
 printf '%s' '<title>loading</title><body style="background:#333">
 <script>
 requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
 let asked = 0;
 navigator.mediaSession.setActionHandler("enterpictureinpicture", async () => {
   asked++;
-  const floating = await documentPictureInPicture.requestWindow({width: 320, height: 180});
-  document.title = "floating";
-  floating.addEventListener("pagehide", () => document.title = "landed");
+  document.title = "asked to float";
+  try {
+    const floating = await documentPictureInPicture.requestWindow({width: 320, height: 180});
+    document.title = "floating";
+    floating.addEventListener("pagehide", () => document.title = "landed");
+  } catch (error) {
+    document.title = "not floating: " + error.name;
+  }
 });
 onkeydown = async e => {
   if (e.key == "c") {
@@ -258,8 +277,9 @@ mini_player() {
   expect '^browser: settings drew ' "Settings didn't draw"
   # Settings opens at the tab it last showed.
   if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Advanced$'; then
-    send clickkey 519 60
+    send clickkey $(drawn "toolbar Advanced")
     expect '^browser: settings tab Advanced$' "a click on Advanced didn't show its tab"
+    settings_drew Advanced
   fi
   send clickkey 592 208
   expect "^browser: mini player $1\$" "a click on the Mini Player's switch didn't turn it $1"
@@ -299,7 +319,7 @@ shown_again "$a"
 # Music in the call's tab, then another tab shown: the tab playing out of sight has a player.
 send key m
 expect "^browser: title $a playing\$" "m in the page didn't play its silence"
-expect "^browser: page $a media 1 playing 1 next 1 Quiet\$" "the page's music had no controls"
+expect "^browser: page $a media 1 playing 1 next 1 pip 1 Quiet\$" "the page's music had no controls"
 none_since "^browser: media players [0-9]" || fail "the tab shown had a player"
 shown "$b"
 expect "^browser: media players $a\$" "the tab playing out of sight had no player"
@@ -308,20 +328,79 @@ read -r mx my mw mh <<EOF
 $(grep "^browser: media player $a at " "$log" | tail -1 | cut -d' ' -f6-)
 EOF
 ../tools/window-screenshot.sh "$pid" "$out/media-player.png" || fail "no window to capture"
-# Its buttons from the right, 8 in, 24 wide and 6 apart: ×, the next track, then pause.
+# Its buttons from the right, 8 in, 24 wide and 6 apart: ×, the next track, pause, then Picture in
+# Picture, as Arc's Back to PiP, there while the page can float and doesn't.
 button_x() { echo $((mx + mw - 8 - 12 - $1 * 30)); }
 send click "$(button_x 2)" $((my + mh / 2))
 expect '^browser: command media-pause via player$' "the player's pause didn't take the click"
 expect "^browser: title $a paused\$" "the player's pause didn't pause the page"
-expect "^browser: page $a media 1 playing 0 next 1 Quiet\$" "the player didn't show it paused"
+expect "^browser: page $a media 1 playing 0 next 1 pip 1 Quiet\$" "the player didn't show it paused"
+send click "$(button_x 3)" $((my + mh / 2))
+expect '^browser: command media-picture-in-picture via player$' \
+  "the player's Picture in Picture didn't take the click"
+expect "^browser: title $a floating\$" "the player's Picture in Picture didn't float the page"
+expect "^browser: page $a media 1 playing 0 next 1 pip 0 Quiet\$" \
+  "the player kept Picture in Picture while the page floated"
 send click $((mx + 60)) $((my + mh / 2))
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "a click on the player didn't show its tab"
+expect "^browser: title $a landed\$" "the floating page didn't land as its tab showed"
 expect '^browser: media players $' "the tab shown kept its player"
 shown "$b"
 expect "^browser: media players $a\$" "the paused tab out of sight had no player"
 send click "$(button_x 0)" $((my + mh / 2))
 expect '^browser: command media-dismiss via player$' "the player's × didn't take the click"
 expect '^browser: media players $' "× didn't put the player away"
+
+# A private window's music out of sight has a player there alone. Every window hears every tab,
+# but the regular window's players are its Spaces' tabs, so its music, playing again, is its one.
+# The private window logs a Today of its own, so the regular one's keys are taken first.
+key_a=$(($(today | tr ' ' '\n' | grep -nx "$a" | cut -d: -f1) + $(pinned | wc -w)))
+key_b=$(($(today | tr ' ' '\n' | grep -nx "$b" | cut -d: -f1) + $(pinned | wc -w)))
+send key n cmd shift
+expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
+private=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
+expect "^browser: window opened $private\$" "the private window didn't open"
+send window 2
+# private_page <name>: opens the call page named <name> in the private window, as $p.
+private_page() {
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar in the private window"
+  send insert "${site}call.html?$1"
+  send key return
+  expect "^browser: title [0-9]* $1\$" "the private window's $1 page didn't draw"
+  p=$(sed -n "s/^browser: title \([0-9]*\) $1\$/\1/p" "$log" | tail -1)
+}
+private_page Private
+music=$p
+send click $page_point
+send key m
+expect "^browser: title $music playing\$" "m in the private page didn't play its silence"
+played=$step
+# Its player comes as ⌘T's new tab hides the page, before the next page is shown.
+private_page Hidden
+players=$(sed -n "/^browser: drive $played: /,\$p" "$log" | grep '^browser: media players' |
+  tail -1)
+[ "$players" = "browser: media players $music" ] ||
+  fail "the private window's music out of sight had no player alone: ${players:-none}"
+expect "^browser: media player $music at " "the private window's player wasn't drawn" "$played"
+../tools/window-screenshot.sh "$pid" "$out/media-player-private.png" || fail "no window to capture"
+send window 1
+switch "$key_a cmd" "$a"
+send click $page_point
+send key m
+expect "^browser: title $a playing\$" "m in the page didn't play its silence again"
+switch "$key_b cmd" "$b"
+expect "^browser: media players $a\$" "the regular window's players weren't its music alone"
+expect "^browser: media player $a at " "the regular window's player wasn't drawn again"
+../tools/window-screenshot.sh "$pid" "$out/media-player-own.png" || fail "no window to capture"
+send click "$(button_x 2)" $((my + mh / 2))
+expect "^browser: title $a paused\$" "the player's pause didn't pause the page"
+send click "$(button_x 0)" $((my + mh / 2))
+expect '^browser: media players $' "× didn't put the player away"
+send window 2
+send key w cmd shift
+expect "^browser: window closed $private\$" "⇧⌘W didn't close the private window"
+send window 1
 
 # The Cast card, from View › Cast… and from the page menu, with whatever devices the network has,
 # none clicked. Linux alone: the Mac asks for the local network on the screen as Chrome looks with
@@ -444,4 +523,4 @@ fi
 exec 3>&-
 quit
 
-echo "ok: a tab in a call marks its row with the camera, then the screen while it shares a tab, the tab it shares shows the screen too, another tab's Share This Tab Instead moves the share there, and the marks go when the call ends; a call floats while its tab is hidden, unless its Site Controls or Settings turn that off; music playing out of sight has a player that pauses it, shows its tab and goes on ×; the Cast card opens from View and the page menu and closes on ×; a video's menu floats it in Picture in Picture, where a scroll or a drag moves it, Ctrl with a scroll sizes it and a double-click shows its tab."
+echo "ok: a tab in a call marks its row with the camera, then the screen while it shares a tab, the tab it shares shows the screen too, another tab's Share This Tab Instead moves the share there, and the marks go when the call ends; a call floats while its tab is hidden, unless its Site Controls or Settings turn that off; music playing out of sight has a player that pauses it, floats it in Picture in Picture, shows its tab and goes on ×, and a private window's music has one there alone; the Cast card opens from View and the page menu and closes on ×; a video's menu floats it in Picture in Picture, where a scroll or a drag moves it, Ctrl with a scroll sizes it and a double-click shows its tab."

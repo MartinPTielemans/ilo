@@ -572,7 +572,7 @@ impl Shell {
             also,
             fields: Vec::new(),
             check: None,
-            return_cancels: false,
+            on_return: crate::dialog::Return::Action,
         };
         let browser = self.browser.clone();
         let turn_on = id.clone();

@@ -85,6 +85,7 @@ pub fn log_handover(stage: &str, detail: &str) {
     }
 }
 
+pub mod account;
 pub mod agents;
 pub mod build_info;
 pub mod capture;
@@ -104,6 +105,7 @@ pub mod launch;
 pub mod link_preview;
 pub mod link_rules;
 pub mod link_target;
+pub mod little_sites;
 pub mod menu;
 pub mod notes;
 pub mod offer;
@@ -120,6 +122,7 @@ pub mod theme_picker;
 pub mod toast;
 pub mod tokens;
 pub mod tooltip;
+pub mod updates;
 pub mod widevine;
 pub mod window_frames;
 pub mod zoom_hud;

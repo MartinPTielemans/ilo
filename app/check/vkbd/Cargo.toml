@@ -1,0 +1,13 @@
+[package]
+name = "vkbd"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-or-later"
+
+# A keyboard and a pointer under Wayland, for check/ime.sh: src/main.rs says how.
+[dependencies]
+libc = "0.2"
+wayland-client = "0.31"
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }

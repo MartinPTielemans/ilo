@@ -8,8 +8,10 @@
 //! screen, so the host shows and hides it at once. On X11 with no compositor, which draws an
 //! overlay's pixels opaque, its window is cut to its plate, without the shadow round it.
 //!
-//! shortcut: a scroll over the page doesn't end the hover card, as the Mac's does; one over the
-//! sidebar's rows does, in the UI.
+//! A scroll over the page doesn't end the hover card at once, as the Mac's does, and needn't: the
+//! card shows only while the pointer rests on a row or on the card, and goes 150 ms after it leaves
+//! them (hover_card.rs's LEAVE), so the pointer is over the page only for that long. A scroll over
+//! the sidebar's rows ends it, in the UI.
 //!
 //! The tooltip and the link target fade in and out as the UI asks, as the Mac's do, drawn by GPUI
 //! (motion.rs).
@@ -106,12 +108,23 @@ pub(crate) fn shown() -> Vec<*mut c_void> {
     })
 }
 
+/// The browser window the float of `view` shows over, by its UI's view, and where in its content,
+/// for the Wayland driver's layout, as overlays::placed says it for the overlays.
+pub(crate) fn placed(view: *mut c_void) -> Option<(*mut c_void, Bounds<Pixels>)> {
+    let (kind, over) = FLOATS.with_borrow(|floats| {
+        (floats.iter())
+            .find(|float| float.view == view && !float.over.is_null())
+            .map(|float| (float.kind, float.over))
+    })?;
+    Some((over, bounds(kind, over)?))
+}
+
 fn find<R>(kind: Kind, f: impl FnOnce(&mut Float) -> R) -> Option<R> {
     FLOATS.with_borrow_mut(|floats| floats.iter_mut().find(|float| float.kind == kind).map(f))
 }
 
 /// Where the float `kind` goes over `ui_view`'s window, at its own size but for the drop targets,
-/// which cover the window's content.
+/// which cover the window's content, and the toast, as wide as the page.
 fn bounds(kind: Kind, ui_view: *mut c_void) -> Option<Bounds<Pixels>> {
     let (view, left, top) = find(kind, |float| (float.view, float.left, float.top))?;
     let content = gpui_linux::embedder_size(ui_view)?;
@@ -119,10 +132,16 @@ fn bounds(kind: Kind, ui_view: *mut c_void) -> Option<Bounds<Pixels>> {
     let width = f64::from(content.width);
     let (x, y) = match kind {
         Kind::DropTargets => return Some(Bounds::new(point(px(0.), px(0.)), content)),
-        // At the focused page's corner, which in a split view is its pane's.
+        // At the focused page's corner, which in a split view is its pane's, and as wide as that
+        // page from its left edge, so no toast runs past its window (#1462).
         Kind::Toast => {
             let (page_right, page_top) = crate::panels::page_corner(ui_view);
-            (width - page_right - f64::from(own.width), page_top)
+            let left = crate::panels::page_left(ui_view);
+            let across = (width - page_right - left).max(0.);
+            return Some(Bounds::new(
+                point(px(left as f32), px(page_top as f32)),
+                size(px(across as f32), own.height),
+            ));
         }
         Kind::Hud => {
             let (page_right, page_top) = crate::panels::page_corner(ui_view);
@@ -337,6 +356,28 @@ pub extern "C" fn host_add_toast(toast_view: *mut c_void) {
     add(Kind::Toast, toast_view);
 }
 
+/// Where its window can't blend with the page under it (X11 with no compositor), the toast over
+/// `ui_view` is cut to its `plate` once the UI says where that is, at rest, as the hover card is,
+/// since its margin, as wide as the page, would draw opaque over it. As it arrives, all of its
+/// window shows, as any float's does: one with no shape at all is never seen, and never arrives.
+fn toast_outline(ui_view: *mut c_void, plate: Option<Bounds<Pixels>>) {
+    if gpui_linux::overlays_blend() {
+        return;
+    }
+    let view = find(Kind::Toast, |float| float.view);
+    let (Some(view), Some(bounds)) = (view, bounds(Kind::Toast, ui_view)) else {
+        return;
+    };
+    let whole = Bounds::new(point(px(0.), px(0.)), bounds.size);
+    let radius = browser::tokens::toast::RADIUS;
+    let (outline, radius) = plate.map_or((whole, 0.), |plate| (plate, radius));
+    let (left, top) = (f32::from(outline.left()), f32::from(outline.top()));
+    let (right, bottom) = (f32::from(outline.right()), f32::from(outline.bottom()));
+    let corners = [(left, top), (right, top), (right, bottom), (left, bottom)];
+    gpui_linux::set_overlay_outline(view, &corners.map(|(x, y)| (x, y, radius)));
+    gpui_linux::move_overlay(view, bounds, px(0.));
+}
+
 /// The toast takes the pointer on its plate while it has buttons, and lets it through elsewhere.
 fn toast_pointer() {
     let Some(view) = find(Kind::Toast, |float| float.view) else { return };
@@ -366,6 +407,9 @@ pub extern "C" fn host_set_toast_plate(x: f64, y: f64, width: f64, height: f64) 
     );
     TOAST.with_borrow_mut(|toast| toast.plate = Some(plate));
     toast_pointer();
+    if let Some(over) = find(Kind::Toast, |float| float.over).filter(|over| !over.is_null()) {
+        toast_outline(over, Some(plate));
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -373,6 +417,7 @@ pub extern "C" fn host_show_toast(ui_view: *mut c_void) {
     if find(Kind::Toast, |float| float.over == ui_view) == Some(true) {
         return;
     }
+    toast_outline(ui_view, None);
     if show(Kind::Toast, ui_view).is_some() {
         // check.sh reads this line.
         eprintln!("browser: toast window shown");

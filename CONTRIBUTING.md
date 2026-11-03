@@ -17,7 +17,7 @@ agreed to, rewrites and unrelated cleanup are not.
 | A crash or a hang | The **Crash or hang** form, with the crash report or a `sample` |
 | An agent or the MCP server misbehaving | The **Agents and MCP** form |
 | An idea | The **Feature request** form, after reading [docs/decisions.md](docs/decisions.md) and [docs/ux-principles.md](docs/ux-principles.md) |
-| A security vulnerability in ilo | [Private vulnerability reporting](https://github.com/MartinPTielemans/browser/security/advisories/new), never an issue. See [SECURITY.md](.github/SECURITY.md) |
+| A security vulnerability in ilo | [Private vulnerability reporting](https://github.com/MartinPTielemans/ilo/security/advisories/new), never an issue. See [SECURITY.md](.github/SECURITY.md) |
 | A bug that happens in Chrome too | [Chromium's tracker](https://issues.chromium.org) |
 
 Reproduce on public pages. Never put private URLs, cookies, account data or what a logged-in page

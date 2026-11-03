@@ -135,3 +135,19 @@ fn the_hang_note_follows_the_tab_shown(cx: &mut TestAppContext) {
     report(&shell, cx, 12, Trouble::Fine);
     assert_eq!(host.take(), ["hang note 12 hidden"]);
 }
+
+/// A window behind another notes its page's hang once it comes in front, as the note shows over
+/// the window in front (#1432).
+#[gpui::test]
+fn a_window_behind_notes_its_hang_once_in_front(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_tabs(cx, false);
+    host.behind.set(true);
+    report(&shell, cx, 10, Trouble::Hung);
+    assert!(host.take().iter().all(|call| !call.starts_with("hang note")), "it's behind");
+    host.behind.set(false);
+    shell.update(cx, |shell, cx| shell.became_key(cx));
+    assert!(host.take().contains(&"hang note 10 shown".to_string()));
+    host.behind.set(true);
+    report(&shell, cx, 10, Trouble::Fine);
+    assert_eq!(host.take(), ["hang note 10 hidden"]);
+}

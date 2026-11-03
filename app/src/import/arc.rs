@@ -1,5 +1,6 @@
 //! Arc's sidebar, read from its `StorableSidebar.json`: the Spaces with their names, icons,
-//! themes and profiles, each Space's pinned tabs and folders, and each profile's favorites.
+//! themes and profiles, each Space's pinned tabs and folders, and each profile's favorites; and
+//! its Air Traffic Control rules, from `StorableLinkRouting.json` beside it.
 //!
 //! The file is Swift's Codable encoding, as the public readers of it describe it (radian,
 //! notarc): a dictionary is a flat array of key, value, key, value; an enum is an object with one
@@ -11,11 +12,13 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
-use super::found::{Found, FromProfile, Node, Space, Tab, opens_here};
+use super::found::{Found, FromProfile, LinkRule, Node, Space, Tab, opens_here};
+use crate::link_rules::Condition;
 use crate::theme::{Appearance, MAX_COLORS, Place, Texture, Theme, place_of};
 
-/// The sidebar `json` holds, or why it can't be read.
-pub fn parse(json: &str) -> Result<Found, String> {
+/// The sidebar `json` holds, with the link rules of `routing`, Arc's routing file, if it has one,
+/// or why the sidebar can't be read.
+pub fn parse(json: &str, routing: Option<&str>) -> Result<Found, String> {
     let root: Value = serde_json::from_str(json).map_err(|error| error.to_string())?;
     let containers = root
         .pointer("/sidebar/containers")
@@ -28,9 +31,12 @@ pub fn parse(json: &str) -> Result<Found, String> {
         .filter_map(|item| Some((item.get("id")?.as_str()?, item)))
         .collect();
     let reader = Reader { items };
-    let spaces = objects(container.get("spaces"))
-        .map(|space| reader.space(space))
+    let spaces: Vec<&Value> = objects(container.get("spaces")).collect();
+    let ids: Vec<&str> = spaces
+        .iter()
+        .map(|space| space.get("id").and_then(Value::as_str).unwrap_or_default())
         .collect();
+    let spaces = spaces.into_iter().map(|space| reader.space(space)).collect();
     let tops = container
         .get("topAppsContainerIDs")
         .and_then(Value::as_array);
@@ -46,9 +52,57 @@ pub fn parse(json: &str) -> Result<Found, String> {
     Ok(Found {
         spaces,
         favorites,
-        history: Vec::new(),
-        extensions: Vec::new(),
+        link_rules: routing.map(|routing| link_rules(routing, &ids)).unwrap_or_default(),
+        ..Found::default()
     })
+}
+
+/// The rules of Arc's routing file `json` that can be ours, in its order, each to the Space of
+/// `spaces`, Arc's Spaces' ids, it names. Ours match a link's URL alone and open it in a Space, so
+/// a rule that matches the app a link came from, or sends it to Little Arc or the Space in front,
+/// stays out, as does a file that can't be read.
+///
+/// A rule is `{"sourceComponents": [{"componentType": {"urlMatch": {"_0": {"contains": {}}, "_1":
+/// "text"}}}], "destination": {"space": {"_0": …}}}`, as the public readers of it describe it
+/// (vane, notarc), who read a Space's id either as `{"specific": {"_0": id}}` or as the key itself
+/// and "is equal to" as `isEqualTo` or `exact`, so either comes.
+fn link_rules(json: &str, spaces: &[&str]) -> Vec<LinkRule> {
+    let Ok(root) = serde_json::from_str::<Value>(json) else {
+        return Vec::new();
+    };
+    let rule = |rule: &Value| -> Option<LinkRule> {
+        let [component] = rule.get("sourceComponents")?.as_array()?.as_slice() else {
+            return None;
+        };
+        let url = component.pointer("/componentType/urlMatch")?;
+        let condition = match only_key(url.get("_0")?)? {
+            "contains" => Condition::Contains,
+            "isEqualTo" | "exact" => Condition::Is,
+            _ => return None,
+        };
+        let text = url.get("_1")?.as_str()?.trim();
+        let to = rule.pointer("/destination/space/_0")?;
+        let id = match only_key(to)? {
+            "specific" => {
+                let id = to.pointer("/specific/_0")?;
+                id.as_str().or_else(|| id.get("_0")?.as_str())?
+            }
+            key => key,
+        };
+        Some(LinkRule {
+            condition,
+            text: text.into(),
+            space: spaces.iter().position(|each| !each.is_empty() && *each == id)?,
+        })
+    };
+    let rules = root.get("rules").and_then(Value::as_array).into_iter().flatten();
+    rules.filter_map(rule).filter(|rule| !rule.text.is_empty()).collect()
+}
+
+/// The one key of an enum's object, as Swift encodes a case.
+fn only_key(value: &Value) -> Option<&str> {
+    let object = value.as_object()?;
+    (object.len() == 1).then(|| object.keys().next().map(String::as_str))?
 }
 
 /// The objects of a flat array of ids and objects, skipping the ids.
@@ -100,6 +154,8 @@ impl Reader<'_> {
             pinned: pinned_container(space)
                 .map(|id| self.nodes(id, &mut HashSet::new()))
                 .unwrap_or_default(),
+            // Today tabs stay in Arc.
+            today: Vec::new(),
         }
     }
 

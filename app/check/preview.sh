@@ -1,12 +1,17 @@
-# The link preview. A link to another site in a pinned tab's page opens in a card over the window,
-# its page in a tab of no Space, and the pinned tab stays on its page. Esc closes it and its page.
+# The link preview. ⇧-click on a link in any tab's page, here a Today tab's, opens it in a card over
+# the window, and so does Open Link in Peek in the link's menu, with no tab opened and the tab on its
+# page (#1370). A link to another site in a pinned tab's page opens in one too, its page in a tab of
+# no Space, and the pinned tab stays on its page. Esc closes it and its page.
 # ⌘↩ keeps it as the top Today tab, shown, without loading it again. A click on the dim closes it,
-# and the page behind doesn't get the click. ⌘W with its page focused closes it, and not the tab
-# behind. ⌘Z reopens a closed one over its tab at its page, and so does ⇧⌘T while no tab has closed
-# since. A favorite's link opens it too. A call's link, such as Google Meet's, opens as a tab
-# instead. With the Settings switch off, the link goes in the pinned tab. Back on, a link rule to
-# another Space sends the link there as a tab instead. Reports how long the first preview took to
-# draw its first frame.
+# and the page behind doesn't get the click, and so does Settings taking the keyboard. ⌘W with its
+# page focused closes it, and not the tab behind. ⌘Z reopens a closed one over its tab at its page,
+# and so does ⇧⌘T while no tab has closed since. A favorite's link opens it too. A call's link, such
+# as Google Meet's, opens as a tab instead. With the Settings switch off, the link goes in the
+# pinned tab, ⇧-click opens it in a new tab, and the link's menu has no Open Link in Peek. Back on,
+# a link rule to another Space sends the link there as a tab instead. Reports how long the first
+# preview took to draw its first frame. Captures it at rest in a light and a dark Space theme, and
+# records it opening and growing into a tab, for its look (#1373). Resting on its keep button names
+# it and its key in the tooltip, over the preview (#1410).
 
 serve
 # The test page's top 40% is a link to the same server under another name, localhost, which is
@@ -50,7 +55,6 @@ send click $page_point
 if [ "$active" != 1 ]; then
   exec 3>&-
   quit
-  kill "$server"
   echo "skip: link preview. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
@@ -58,7 +62,7 @@ fi
 send click $page_point
 expect "^browser: title $a pressed [0-9]*\$" "a click on the test page's lower part didn't reach it"
 # The link, in the page's top 40%, and a point of the dim over the page's lower part, left of the
-# card, which is 5% of the page's height in from its edges.
+# card, which is 10% of the page's height in from its edges.
 link_point="600 200"
 dim_point="240 600"
 # Clicks the link, and waits for its preview to settle, setting $p to the preview's tab.
@@ -93,11 +97,58 @@ still_home() {
     fail "$1: the pinned tab isn't at its page"
 }
 
-# The pinned tab's row, 47 down once the favorite's row of tiles is over the Space's rows.
+# The pinned tab's row, 55 down once the favorite's row of tiles is over the Space's rows.
 tiles=0
 home_row() {
   echo "100 $(($(pinned_row 0 | cut -d' ' -f2) + tiles))"
 }
+
+# Where Settings last drew what $1 names, as the platforms' fonts move its tabs and rows.
+settings_at() {
+  await "^browser: settings $1 at " || fail "Settings didn't draw its $1"
+  grep "^browser: settings $1 at " "$log" | tail -1 | sed "s/^browser: settings $1 at //"
+}
+
+# A link's menu, with Open Link in Peek after Open Link in New Tab. Off the Mac its items are in
+# sentence case, as Chrome's are there, and Peek keeps its capital, as ilo's name for the preview.
+if windows || [ "$(uname)" = Linux ]; then
+  in_tab='Open link in new tab' in_peek='Open link in Peek' in_window='Open link in new window'
+else
+  in_tab='Open Link in New Tab' in_peek='Open Link in Peek' in_window='Open Link in New Window'
+fi
+# Waits for the preview the user asked for from the test page's tab to settle, setting $p to its
+# tab. $1 says how they asked.
+asked_preview() {
+  expect "^browser: link preview asked from $a\$" "$1 didn't ask for the link in a preview"
+  expect "^browser: link preview [1-9][0-9]* $target\$" "$1 didn't open the link in a preview"
+  p=$(grep "^browser: link preview [1-9][0-9]* $target\$" "$log" | tail -1 | cut -d' ' -f4)
+  expect '^browser: link preview shown$' "$1: the preview's window didn't show"
+  expect '^browser: link preview settled$' "$1: the preview didn't settle"
+  expect "^browser: loaded $p $target\$" "$1: the preview's page didn't load"
+}
+# Asked for, a link opens in the preview from any tab, here a Today tab, whose plain click opens it
+# in the tab (#1370): ⇧-click, which Chrome opens in a new window, and Open Link in Peek in the
+# link's menu. No tab opens, and the tab stays on its page.
+send click $link_point shift
+asked_preview "⇧-click on the Today tab's link"
+[ "$(today)" = "$a" ] || fail "⇧-click on the link opened a tab too: Today is \"$(today)\""
+../tools/window-screenshot.sh "$pid" "$out/preview-shift-click.png" || fail "no window to capture"
+send key escape
+in_order "after Esc on the ⇧-click's preview" '^browser: link preview closing (escape)$' \
+  "^browser: tab $p closed\$"
+post rightclick $link_point
+expect "^browser: menu shown $in_tab, $in_peek, $in_window, " \
+  "a right-click on the link didn't show $in_peek after $in_tab: \
+$(grep '^browser: menu shown' "$log" | tail -1)"
+../tools/window-screenshot.sh "$pid" "$out/preview-menu.png" || fail "no window to capture"
+send choose "$in_peek"
+asked_preview "$in_peek"
+[ "$(today)" = "$a" ] || fail "$in_peek opened a tab too: Today is \"$(today)\""
+../tools/window-screenshot.sh "$pid" "$out/preview-menu-chosen.png" || fail "no window to capture"
+send key escape
+in_order "after Esc on $in_peek's preview" '^browser: link preview closing (escape)$' \
+  "^browser: tab $p closed\$"
+still_home "after the previews asked for"
 
 # Pinned, the tab's links to other sites open in the preview, which grows from the link.
 send key d cmd
@@ -114,8 +165,53 @@ in_order "after Esc" '^browser: link preview closing (escape)$' '^browser: link 
   '^browser: link preview hidden$' "^browser: tab $p closed\$"
 still_home "after Esc"
 
+# Its look in a light and a dark Space theme: the theme picker's first swatch, then the sun, and
+# later the moon, each 13 right of its appearance-x token, as cards.sh and little.sh pick them.
+peek_look() { # <light|dark> <the appearance button's x> [swatch]
+  post rightclick 100 112
+  expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors")" \
+    "the Space's menu didn't offer its theme"
+  send choose "$(cased 'Edit Theme Color…')"
+  expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
+  expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
+  if [ -n "${3:-}" ]; then
+    send clickkey "$(swatch_x 0)" $swatch_y
+    expect '^browser: colored space [0-9]* [0-9a-f]*$' "the first swatch didn't colour the Space"
+  fi
+  send clickkey "$2" 49
+  expect "^browser: themed space [0-9]* .*appearance=$1" "the Space's theme didn't turn $1"
+  send key escape
+  expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
+  open_preview "in a $1 Space"
+  ../tools/window-screenshot.sh "$pid" "$out/preview-$1.png" || fail "no window to capture"
+  send key escape
+  expect "^browser: tab $p closed\$" "Esc didn't close the preview in a $1 Space"
+}
+peek_look light 191.3 swatch
+peek_look dark 231.7
+
+# Resting on the keep button names it and its key under it, in the tooltip's window, which shows
+# over the preview's, so it lies over the card's page; the pointer leaving ends it.
+open_preview "for the keep button's tooltip"
+keep_at=$(grep '^browser: link preview keep button at ' "$log" | tail -1 | sed 's/.* at //')
+[ -n "$keep_at" ] || fail "the preview didn't say where its keep button is"
+send move $keep_at
+# Off the Mac the keys are named as Chrome names them there.
+keep_keys=⌘↩
+[ "$(uname)" = Darwin ] || keep_keys=Ctrl+Enter
+expect "^browser: tooltip shown Open as Tab $keep_keys\$" \
+  "resting on the keep button didn't show Open as Tab and $keep_keys"
+expect '^browser: tooltip window shown$' "the keep button's tooltip didn't fade in"
+../tools/window-screenshot.sh "$pid" "$out/preview-tooltip.png" || fail "no window to capture"
+send move $dim_point
+expect '^browser: tooltip hidden$' "the pointer leaving the keep button didn't hide its tooltip"
+send key escape
+expect "^browser: tab $p closed\$" "Esc didn't close the preview after its keep button's tooltip"
+
 # ⇧⌘C copies the preview's address, not the pinned tab's under it, as Arc's Peek does, and the
 # preview stays. ⌘↩ keeps it as the top Today tab, shown, as it is: its page doesn't load again.
+# Recorded, from the click on the link to the tab it grows into.
+record preview-motion 3
 open_preview "for ⌘↩"
 kept=$p
 send key c cmd shift
@@ -125,6 +221,8 @@ in_order "after ⌘↩" '^browser: link preview keeping (cmd-enter)$' "^browser:
 expect "^browser: today $p\$" "⌘↩ didn't put the preview's tab at the top of Today: Today is \"$(today)\""
 expect "^browser: selected $p\( in .*\)\{0,1\}\$" "⌘↩ didn't show the preview's tab"
 expect '^browser: link preview hidden$' "⌘↩ didn't hide the preview"
+# A screenshot while the window records ends the recording with ReplayKit's -5814, so it waits.
+recorded
 check_layout "the kept tab"
 ../tools/window-screenshot.sh "$pid" "$out/preview-kept.png" || fail "no window to capture"
 [ "$(grep -c "^browser: loaded $p " "$log")" = 1 ] || fail "the kept tab's page loaded again"
@@ -139,6 +237,18 @@ send click $dim_point
 in_order "after a click on the dim" '^browser: link preview closing (click outside)$' \
   "^browser: tab $p closed\$"
 none_since "^browser: title $a pressed" || fail "the click on the dim reached the page behind"
+
+# Settings taking the keyboard is the user leaving it for another window, which closes it, and
+# Settings keeps the keyboard.
+open_preview "for Settings"
+# The preview's page takes no window's keys but its own, so Settings comes from the menu.
+send menu Settings…
+expect '^browser: settings shown General$' "Settings… didn't show Settings over the preview"
+in_order "after Settings took the keyboard" '^browser: link preview released$' \
+  '^browser: link preview closing (dismissed)$' "^browser: tab $p closed\$"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings, so it didn't keep the keyboard"
+none_since '^browser: command close-tab' || fail "⌘W after Settings left the preview closed a tab"
 
 # ⌘W in its page closes it, not the pinned tab behind.
 open_preview "for ⌘W"
@@ -187,7 +297,7 @@ send dragto 114 112
 expect '^browser: drag shape tile$' "the copy's row dragged onto the Space's name didn't turn into a tile"
 send release 114 112
 expect "^browser: favorites $b\$" "the copy's row didn't become a favorite: \"$(grep '^browser: favorites' "$log" | tail -1)\""
-tiles=47
+tiles=55
 open_preview "from the favorite"
 send key escape
 expect "^browser: tab $p closed\$" "Esc didn't close the favorite's preview"
@@ -223,10 +333,12 @@ send click $page_point
 expect "^browser: title $a pressed [0-9]*\$" "a click on the test page's lower part didn't reach it"
 send key , cmd
 expect '^browser: settings shown General$' "⌘, didn't show Settings on its General tab"
-send clickkey 519 60
+# Settings takes no click until it has drawn, nor a tab's rows until the tab has (#1101, #1133).
+expect '^browser: settings drew General$' "Settings didn't draw General"
+send clickkey $(settings_at "toolbar Advanced")
 expect '^browser: settings tab Advanced$' "a click on Advanced didn't show its tab"
-# Its switch is the row under the haptics', as General's rows are 42 apart.
-send clickkey 592 168
+settings_drew Advanced
+send clickkey $(settings_at "switch link previews")
 expect '^browser: link previews off$' "a click on the link previews switch didn't turn them off"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -237,6 +349,24 @@ none_since '^browser: link preview ' || fail "with previews off, the link opened
 send key left cmd
 expect "^browser: command back via " "⌘← in the pinned tab didn't reach the UI"
 expect "^browser: loaded $a ${site}preview.html\$" "⌘← didn't take the pinned tab back to its page"
+# Off, the link's menu has no Open Link in Peek, and ⇧-click opens the link in a new tab, as
+# before.
+post rightclick $link_point
+expect "^browser: menu shown $in_tab, $in_window, " \
+  "with previews off, the link's menu didn't go from $in_tab to $in_window: \
+$(grep '^browser: menu shown' "$log" | tail -1)"
+send key escape
+expect '^browser: menu closed$' "Esc didn't close the link's menu"
+send click $link_point shift
+opened="^browser: loaded [1-9][0-9]* $target\$"
+expect "$opened" "with previews off, ⇧-click on the link didn't open it in a tab"
+o=$(grep "$opened" "$log" | tail -1 | cut -d' ' -f3)
+[ "$o" != "$a" ] || fail "with previews off, ⇧-click on the link loaded it in the pinned tab"
+none_since '^browser: link preview ' || fail "with previews off, ⇧-click opened the link in a preview"
+expect "^browser: selected $o\( in .*\)\{0,1\}\$" "with previews off, ⇧-click's tab didn't show"
+send key w cmd
+expect "^browser: tab $o closed\$" "⌘W didn't close the tab ⇧-click opened"
+expect "^browser: selected $a\( in .*\)\{0,1\}\$" "⌘W didn't show the pinned tab again"
 
 # Back on, a link rule to another Space sends the link there as a tab, as it sends one from another
 # app, and the preview doesn't open (#692). Settings' Links tab adds the rule, as ./check.sh links
@@ -253,15 +383,19 @@ expect "^browser: space $first\( in .*\)\{0,1\}\$" "⌃1 didn't show the first S
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "the first Space didn't show the pinned tab again"
 send key , cmd
 expect '^browser: settings shown Advanced$' "⌘, didn't show Settings on its Advanced tab"
-send clickkey 592 168
+expect '^browser: settings drew Advanced$' "Settings didn't draw Advanced"
+send clickkey $(settings_at "switch link previews")
 expect '^browser: link previews on$' "a click on the link previews switch didn't turn them on"
-send clickkey 162 60
+send clickkey $(settings_at "toolbar Links")
 expect '^browser: settings tab Links$' "a click on Links didn't show its tab"
+settings_drew Links
+expect '^browser: link rules drawn ' "the Links tab didn't draw its rules"
 send clickkey 76 173
 expect '^browser: link rule 0 field has the keyboard$' "+ didn't give the new rule's field the keyboard"
 send type preview-target
 post clickkey 500 129
-expect '^browser: menu shown [^,]* (checked), work$' "the rule's Space pop-up didn't list the user's Spaces"
+expect '^browser: menu shown [^,]* (checked), work, Little ilo$' \
+  "the rule's Space pop-up didn't list the user's Spaces and Little ilo"
 send choose work
 expect '^browser: link rules drawn URL contains "preview-target" → work; ' \
   "the rule's pop-up didn't set its Space"
@@ -280,5 +414,6 @@ none_since "^browser: loaded $a " || fail "the link a rule sent loaded in the pi
 
 exec 3>&-
 quit
-echo "ok: a link to another site in a pinned tab or a favorite opens in a preview over the window, which Esc, a click on the dim and ⌘W close, with its page, leaving the tab and the page behind as they were, ⇧⌘C copies the address of, and ⌘↩ keeps as the top Today tab, shown, without loading it again. ⌘Z reopens a closed one over its tab, and so does ⇧⌘T. A Google Meet link opens as a tab of the Space shown instead. With the Settings switch off, the link goes in the pinned tab, and back on, a link rule to another Space sends it there as a tab instead. Windows: $out/preview-open.png, $out/preview-kept.png, $out/preview-reopened.png, $out/preview-meeting.png, $out/preview-ruled.png"
+echo "ok: ⇧-click on a Today tab's link and $in_peek in its menu open it in a preview, with no tab opened. A link to another site in a pinned tab or a favorite opens in a preview over the window, which Esc, a click on the dim and ⌘W close, with its page, leaving the tab and the page behind as they were, ⇧⌘C copies the address of, and ⌘↩ keeps as the top Today tab, shown, without loading it again. ⌘Z reopens a closed one over its tab, and so does ⇧⌘T. A Google Meet link opens as a tab of the Space shown instead. With the Settings switch off, the link goes in the pinned tab, ⇧-click opens it in a new tab and its menu has no $in_peek, and back on, a link rule to another Space sends it there as a tab instead. Resting on its keep button shows Open as Tab and its key in a tooltip over it. Windows: $out/preview-shift-click.png, $out/preview-menu.png, $out/preview-menu-chosen.png, $out/preview-open.png, $out/preview-light.png, $out/preview-dark.png, $out/preview-tooltip.png, $out/preview-kept.png, $out/preview-reopened.png, $out/preview-meeting.png, $out/preview-ruled.png"
 echo "  The first preview's first frame came $first_frame after the click reached the UI."
+[ -z "$recording" ] || echo "  Its motion, opening and kept: $recording"

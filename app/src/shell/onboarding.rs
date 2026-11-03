@@ -3,15 +3,18 @@
 //! starts it, and Help › Welcome to ilo plays it again, so a normal launch never draws or loads any
 //! of it. Any key or click skips the intro; Esc or Skip goes on from a step, and the last step's
 //! leaves the flow for the first Space's welcome. A page shown ends it, as the page would cover it.
-//! A step's button does what it offers, such as asking the system to make ilo the default browser
-//! or giving the first Space its colour; Skip doesn't. The flow ends with the command bar up over
-//! the first Space, and a line on the card under it saying what the bar is.
+//! A step's button does what it offers, such as asking the system to make ilo the default browser,
+//! giving the first Space its colour or signing in to sync; Skip doesn't. The flow ends with the
+//! command bar up over the first Space, and a line on the card under it saying what the bar is.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, Bounds, Context, Entity, Keystroke, MouseButton, PathBuilder, Rgba, Subscription,
-    Window, canvas, div, fill, point, prelude::*, px, rgb, size,
+    AnyElement, Bounds, Context, Entity, KeystrokeEvent, MouseButton, PathBuilder, Pixels, Rgba,
+    Subscription, Window, canvas, div, fill, point, prelude::*, px, rgb, size,
 };
 
 use super::{
@@ -19,9 +22,10 @@ use super::{
     display_face::{cap_top, display_text},
     cubic_bezier, fade_at,
 };
+use crate::account::{self, Account, AccountEvent, Status};
 use crate::default_browser::{self, Os};
 use crate::import::{ImportEvent, ImportView, Look};
-use crate::settings_rows::{SLIDE, checked_row, switch};
+use crate::settings_rows::{SLIDE, checked_row, group, switch};
 use crate::theme::Theme;
 use crate::theme_picker::SWATCHES;
 use crate::tokens::palette::{INK, PAPER};
@@ -40,9 +44,7 @@ use crate::tokens::shell::onboarding::CHIP_RADIUS;
 use crate::tokens::shell::onboarding::LINE_GAP;
 use crate::tokens::shell::onboarding::LINE_LINE;
 use crate::tokens::shell::onboarding::LINE_SIZE;
-use crate::tokens::shell::onboarding::OPT_IN_GAP;
 use crate::tokens::shell::onboarding::OPT_IN_LINE;
-use crate::tokens::shell::onboarding::OPT_IN_SWITCH_GAP;
 use crate::tokens::shell::onboarding::OPT_IN_WIDTH;
 use crate::tokens::shell::onboarding::QUIET;
 use crate::tokens::shell::onboarding::SHIFT;
@@ -61,6 +63,7 @@ use crate::tokens::shell::onboarding::TAGLINE_SIZE;
 use crate::tokens::shell::onboarding::TITLE_LINE;
 use crate::tokens::shell::onboarding::TITLE_SIZE;
 use crate::tokens::shell::onboarding::WORDMARK_SCALE;
+use crate::tokens::settings::PADDING;
 
 /// The flow's steps, in the order they come.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -70,27 +73,31 @@ pub(super) enum Step {
     /// Import shows too; left out when it finds no browser to import from.
     Import,
     /// The sites visited most in the history an import read, ticked, to make favorites (owner,
-    /// 2026-10-29); there only once an import begins, and left out when it offers none.
+    /// 2026-10-29); there only once an import has read them, and left out when it offers none.
     Favorites,
     /// Asks the system to open links with ilo; left out when it already does.
     DefaultBrowser,
     /// The first Space's colour, from the theme picker's swatches.
     Color,
+    /// Signing in to sync: Settings › Sync's view (crate::account); left out in a build that names
+    /// no sync server, and once the browser is signed in.
+    Account,
     /// Settings' opt-in switches, both off; left out when neither is offered.
     OptIns,
 }
 
-const STEPS: [Step; 6] = [
+const STEPS: [Step; 7] = [
     Step::Intro,
     Step::Import,
     Step::Favorites,
     Step::DefaultBrowser,
     Step::Color,
+    Step::Account,
     Step::OptIns,
 ];
 
 /// The opt-ins the first launch offers, each Settings' own switch.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(super) enum OptIn {
     CrashReports,
     Agents,
@@ -137,6 +144,7 @@ impl Step {
             Step::Favorites => "favorites",
             Step::DefaultBrowser => "default-browser",
             Step::Color => "color",
+            Step::Account => "account",
             Step::OptIns => "opt-ins",
         }
     }
@@ -182,6 +190,13 @@ impl Step {
                 "Pick a colour for your first Space.",
                 "The window takes it. Each Space can have its own, from its name in the sidebar.",
                 "Continue",
+            ),
+            // Its button only while signed out; the view's own buttons are the step's after.
+            Step::Account => (
+                "Your Spaces on every computer.",
+                "Spaces, bookmarks, passwords and open tabs sync encrypted end to end, and \
+                 Settings has it too.",
+                "Sign In",
             ),
             Step::OptIns => (
                 "Up to you.",
@@ -253,6 +268,12 @@ impl Drawn {
     }
 }
 
+/// The account isn't signed in, only waiting perhaps for the sign-in window, as the core said last,
+/// or before it has said.
+fn signed_out(state: &account::State) -> bool {
+    matches!(state.status, Status::SignedOut | Status::SigningIn)
+}
+
 /// The check draw's curve, CSS's ease-in-out.
 fn ease_in_out(x: f32) -> f32 {
     cubic_bezier(0.42, 0., 0.58, 1., x)
@@ -276,6 +297,13 @@ pub(super) struct Importing {
     _events: Subscription,
 }
 
+/// The account step's view, and what it tells the flow.
+struct Signing {
+    view: Entity<Account>,
+    _events: Subscription,
+    _synced: Subscription,
+}
+
 /// The flow while it shows.
 pub(super) struct Onboarding {
     /// The steps this launch shows, in order: STEPS but for those already done.
@@ -289,6 +317,8 @@ pub(super) struct Onboarding {
     os: Os,
     /// The opt-in switch last turned, and when, for its knob's slide.
     switched: Option<(OptIn, Instant)>,
+    /// Where the opt-ins' rows and switches are drawn (opt_in_frame).
+    frames: Frames,
     /// When the step came, which its motion runs from.
     pub(super) since: Instant,
     /// The step before, leaving as this one comes, and how far into it it was when it left.
@@ -305,6 +335,8 @@ pub(super) struct Onboarding {
     keyboard: bool,
     /// Wakes the window at the intro's end, which holds still until then.
     hold: Option<gpui::Task<()>>,
+    /// The account step's view, while the step is offered.
+    account: Option<Signing>,
 }
 
 impl Shell {
@@ -330,6 +362,7 @@ impl Shell {
         });
         let default_browser = self.browser.is_default_browser();
         let opt_ins = !self.opt_ins(cx).is_empty();
+        let account = self.signing(cx);
         let steps: Vec<Step> = STEPS
             .into_iter()
             .filter(|&step| match step {
@@ -337,6 +370,7 @@ impl Shell {
                 // An import begun brings it in (import_event).
                 Step::Favorites => false,
                 Step::DefaultBrowser => !default_browser,
+                Step::Account => account.is_some(),
                 Step::OptIns => opt_ins,
                 _ => true,
             })
@@ -353,6 +387,7 @@ impl Shell {
             unticked: Vec::new(),
             os: self.browser.os(),
             switched: None,
+            frames: Frames::default(),
             since: Instant::now(),
             leaving: None,
             ending: None,
@@ -365,8 +400,52 @@ impl Shell {
             keys: None,
             keyboard: false,
             hold: None,
+            account,
         });
         cx.notify();
+    }
+
+    /// Settings › Sync's view for the account step, following the account as the core says it is;
+    /// none in a build that names no server, or with the browser signed in already.
+    fn signing(&mut self, cx: &mut Context<Self>) -> Option<Signing> {
+        let synced = account::synced(cx);
+        let host = self.browser.account_host().filter(|_| signed_out(&synced))?;
+        account::bind_keys(cx);
+        let view = cx.new(|cx| {
+            let mut view = Account::new(host, cx).as_step();
+            view.set_state(synced, cx);
+            view
+        });
+        let events = cx.subscribe(&view, |shell, _, event, cx| match event {
+            AccountEvent::Finished if shell.onboarding_on(Step::Account) => {
+                shell.onboarding_next("account", cx)
+            }
+            AccountEvent::Finished => {}
+        });
+        let synced = cx.observe_global::<account::Synced>(|shell, cx| {
+            if let Some(view) = shell.account_view() {
+                let state = account::synced(cx);
+                view.update(cx, |view, cx| view.set_state(state, cx));
+            }
+            cx.notify();
+        });
+        Some(Signing { view, _events: events, _synced: synced })
+    }
+
+    fn account_view(&self) -> Option<Entity<Account>> {
+        let signing = self.onboarding.as_ref()?.account.as_ref()?;
+        Some(signing.view.clone())
+    }
+
+    /// The flow shows `step`, and isn't ending.
+    fn onboarding_on(&self, step: Step) -> bool {
+        self.onboarding.as_ref().is_some_and(|o| o.step == step && o.ending.is_none())
+    }
+
+    /// The account's recovery words show at its step, which show once, so only Done goes on.
+    fn keeping_words(&self, cx: &gpui::App) -> bool {
+        self.onboarding_on(Step::Account)
+            && self.account_view().is_some_and(|view| view.read(cx).keeping_words())
     }
 
     /// Help › Welcome to ilo: the flow again, here if the window shows no page, which GPUI can't
@@ -381,11 +460,13 @@ impl Shell {
     /// Goes on from the step shown, to the next or out of the flow after the last, `how` saying
     /// what did it for check.sh.
     pub(super) fn onboarding_next(&mut self, how: &str, cx: &mut Context<Self>) {
-        // The favorites come only while an import has some to offer, or is reading its history.
+        // The favorites come only while an import has some to offer.
         let favorites = self.importing.as_ref().is_some_and(|importing| {
-            let view = importing.view.read(cx);
-            view.suggesting() || view.suggested().is_some_and(|tabs| !tabs.is_empty())
+            importing.view.read(cx).suggested().is_some_and(|tabs| !tabs.is_empty())
         });
+        // The core reads the account after the flow may have started, and it can be signed in by
+        // then.
+        let signed_in = !signed_out(&account::synced(cx));
         let Some(onboarding) = self.onboarding.as_mut().filter(|o| o.ending.is_none()) else {
             return;
         };
@@ -393,6 +474,9 @@ impl Shell {
         log!("browser: onboarding left {} via {how}", step.name());
         if !favorites {
             onboarding.steps.retain(|&each| each != Step::Favorites || each == step);
+        }
+        if signed_in {
+            onboarding.steps.retain(|&each| each != Step::Account || each == step);
         }
         let at = onboarding.steps.iter().position(|&each| each == step);
         match at.and_then(|at| onboarding.steps.get(at + 1)).copied() {
@@ -410,18 +494,28 @@ impl Shell {
     }
 
     /// The step's button: what it offers, then on, as Skip goes.
-    fn onboarding_continue(&mut self, how: &str, cx: &mut Context<Self>) {
+    fn onboarding_continue(&mut self, how: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(onboarding) = self.onboarding.as_ref().filter(|o| o.ending.is_none()) else {
             return;
         };
         match (onboarding.step, onboarding.picked) {
+            // Signed in, the view says so and the flow goes on (signing); until then it stays.
+            (Step::Account, _) => {
+                if let Some(view) = self.account_view()
+                    && view.read(cx).state().status == Status::SignedOut
+                {
+                    log!("browser: onboarding sign in via {how}");
+                    view.update(cx, |view, cx| view.sign_in(window, cx));
+                }
+                return;
+            }
             (Step::DefaultBrowser, _) if default_browser::offers(onboarding.os, false) => {
                 self.browser.make_default_browser(cx)
             }
             (Step::Favorites, _) => {
-                let ticked = self.favorites_ticked(cx);
-                if let Some(importing) = self.importing.as_ref().filter(|_| !ticked.is_empty()) {
-                    importing.view.read(cx).add_favorites(self.space, &ticked);
+                let (ticked, space) = (self.favorites_ticked(cx), self.space);
+                if let Some(importing) = self.importing.as_ref() {
+                    importing.view.update(cx, |view, _| view.add_offered(space, &ticked));
                 }
             }
             (Step::Color, Some(picked)) => {
@@ -435,8 +529,10 @@ impl Shell {
         self.onboarding_next(how, cx);
     }
 
-    /// What the import view says: an import began, so the flow goes on while it runs, or ended,
-    /// which the flow's quiet line then says; or the user is done with it, which goes on too.
+    /// What the import view says: an import read what it brings, so the flow goes on while the
+    /// rest runs, or ended, which the flow's quiet line then says; or the user is done with it,
+    /// which goes on too. Until it has read, the step stays, as the view may ask the user for Full
+    /// Disk Access, and a passwords file's end offers to delete the file.
     fn import_event(&mut self, event: &ImportEvent, cx: &mut Context<Self>) {
         if let Some(importing) = self.importing.as_mut() {
             importing.said = match event {
@@ -453,18 +549,9 @@ impl Shell {
             let at = onboarding.steps.iter().position(|&each| each == Step::Import);
             onboarding.steps.insert(at.map_or(0, |at| at + 1), Step::Favorites);
         }
-        // Waiting for what to offer, the step goes on by itself once it's none.
-        let none = self.importing.as_ref().is_some_and(|importing| {
-            importing.view.read(cx).suggested().is_some_and(|tabs| tabs.is_empty())
-        });
         match event {
             ImportEvent::Started | ImportEvent::Done if on_it => self.onboarding_next("import", cx),
             ImportEvent::Skipped if on_it => self.onboarding_next("skip", cx),
-            ImportEvent::Suggested | ImportEvent::Finished(_)
-                if step == Some(Step::Favorites) && none =>
-            {
-                self.onboarding_next("none", cx)
-            }
             _ => cx.notify(),
         }
     }
@@ -538,11 +625,22 @@ impl Shell {
     /// A key in the window: any skips the intro, and in a step Esc skips it and return is its
     /// button; at the colour step the arrows go along the swatches. A shortcut still does its own
     /// thing first.
-    fn onboarding_key(&mut self, key: &Keystroke, cx: &mut Context<Self>) {
+    fn onboarding_key(
+        &mut self,
+        event: &KeystrokeEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some((step, picked)) = self.onboarding.as_ref().map(|o| (o.step, o.picked)) else {
             return;
         };
+        let key = &event.keystroke;
         if ["shift", "control", "alt", "platform", "function"].contains(&key.key.as_str()) {
+            return;
+        }
+        // The account's fields keep their own ↩ and Esc, and its words go only with Done.
+        let field = event.context_stack.iter().any(|context| context.contains("AccountField"));
+        if step == Step::Account && (field || self.keeping_words(cx)) {
             return;
         }
         match (step, key.key.as_str()) {
@@ -555,7 +653,9 @@ impl Shell {
             }
             // The import's buttons are its own.
             (Step::Import, _) => {}
-            (_, "enter") if !key.modifiers.modified() => self.onboarding_continue("return", cx),
+            (_, "enter") if !key.modifiers.modified() => {
+                self.onboarding_continue("return", window, cx)
+            }
             _ => {}
         }
     }
@@ -585,7 +685,7 @@ impl Shell {
             let id = window.window_handle().window_id();
             onboarding.keys = Some(cx.observe_keystrokes(move |shell, event, window, cx| {
                 if window.window_handle().window_id() == id {
-                    shell.onboarding_key(&event.keystroke, cx);
+                    shell.onboarding_key(event, window, cx);
                 }
             }));
         }
@@ -656,7 +756,9 @@ impl Shell {
                 .left(px(-shift * eased))
                 .opacity(1. - eased)
         });
-        let skip = (step != Step::Intro).then(|| self.skip_button(colors, cx));
+        // The recovery words show once, so only their Done goes on from them.
+        let skip = (step != Step::Intro && !self.keeping_words(cx))
+            .then(|| self.skip_button(colors, cx));
         // The import under way, or what it brought, quiet at the bottom left once its step is left.
         let import_line = (step != Step::Import && step != Step::Intro)
             .then(|| self.import_line(cx))
@@ -730,9 +832,17 @@ impl Shell {
         let (title, line, button) = step.message(os);
         let switches = (step == Step::OptIns).then(|| self.opt_in_rows(colors, cx));
         let favorites = (step == Step::Favorites).then(|| self.favorite_rows(colors, cx));
+        let account = (step == Step::Account).then(|| self.account_view()).flatten();
         // Add Favorites with some ticked, else Continue, as ↩ then adds none.
         let button = match step {
             Step::Favorites if self.favorites_ticked(cx).is_empty() => "Continue",
+            Step::Account
+                if account.as_ref().is_none_or(|view| {
+                    view.read(cx).state().status != Status::SignedOut
+                }) =>
+            {
+                ""
+            }
             _ => button,
         };
         let swatches = (step == Step::Color).then(|| {
@@ -749,19 +859,29 @@ impl Shell {
                 .bg(fill)
                 .child(keys)
         };
-        let import = (step == Step::Import).then(|| {
-            // Its boxes a little into the ink from the ground, in the ink, as Settings' are.
-            let view = self.importing.as_ref().map(|importing| importing.view.clone());
-            let surface = colors.ground.blend(colors.ink(IMPORT_SURFACE));
-            if let Some(view) = &view {
-                view.update(cx, |view, cx| view.set_look(Look::on(surface, colors.ink(1.)), cx));
-            }
+        // A view of Settings' own, its boxes a little into the ink from the ground, in the ink, as
+        // Settings' are.
+        let look = Look::on(colors.ground.blend(colors.ink(IMPORT_SURFACE)), colors.ink(1.));
+        let embedded = |view: gpui::AnyView| {
             div()
                 .mt(px(BUTTON_GAP))
                 .w(px(IMPORT_WIDTH))
                 .text_size(px(crate::tokens::text::BODY))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .children(view)
+                .child(view)
+        };
+        let import = (step == Step::Import)
+            .then(|| self.importing.as_ref().map(|importing| importing.view.clone()))
+            .flatten()
+            .map(|view| {
+                view.update(cx, |view, cx| view.set_look(look, cx));
+                embedded(view.into())
+            });
+        // Under the step's Sign In, its server's line close by, as it names where Sign In goes.
+        let signed_out = !button.is_empty();
+        let account = account.map(|view| {
+            view.update(cx, |view, cx| view.set_look(look, cx));
+            embedded(view.into()).when(signed_out, |body| body.mt(px(LINE_GAP)))
         });
         let button = (!button.is_empty()).then(|| {
             div()
@@ -780,7 +900,9 @@ impl Shell {
                     // The dialog's Delete darkens as much under the pointer.
                     .hover(|style| style.opacity(0.9))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(|shell, _, _, cx| shell.onboarding_continue("button", cx)))
+                    .on_click(cx.listener(|shell, _, window, cx| {
+                        shell.onboarding_continue("button", window, cx)
+                    }))
                     .child(button)
                     .child(chip(
                         super::key_name("enter", super::OFF_THE_MAC),
@@ -807,15 +929,25 @@ impl Shell {
                 .children(switches)
                 .children(favorites)
                 .children(import)
-                .children(button),
+                .children(button)
+                .children(account),
         )
     }
 
-    /// The opt-ins offered, a row each: its name and sentence, and Settings' switch, in the green.
+    /// The opt-ins offered in one box, as Settings' Privacy has them: a row each of its name over
+    /// its sentence, wrapping in the box, and Settings' switch in the green at the box's right edge,
+    /// centred on the row. A click anywhere on a row, the switch included, turns it.
     fn opt_in_rows(&self, colors: Colors, cx: &mut Context<Self>) -> gpui::Div {
-        let switched = self.onboarding.as_ref().and_then(|onboarding| onboarding.switched);
-        // Off, the ink over the ground, as Settings' is over its box.
-        let look = Look::on(colors.ground, colors.ink(1.));
+        let Some(onboarding) = self.onboarding.as_ref() else {
+            return div();
+        };
+        let switched = onboarding.switched;
+        // Where they're drawn is kept once the step has come, not while it slides in.
+        let settled = onboarding.step == Step::OptIns && onboarding.settled;
+        let frames = onboarding.frames.clone();
+        // The import step's boxes, the ink a little over the ground.
+        let surface = colors.ground.blend(colors.ink(IMPORT_SURFACE));
+        let look = Look::on(surface, colors.ink(1.));
         let rows = self.opt_ins(cx).into_iter().map(|(opt_in, on)| {
             let slid = match switched {
                 Some((turned, at)) if turned == opt_in => {
@@ -824,39 +956,42 @@ impl Shell {
                 _ => 1.,
             };
             let (name, sentence) = opt_in.words();
-            div()
+            // Its text may take the row's width but the switch's, so a long sentence wraps rather
+            // than pushing the switch out of the row, where a click on it would miss (#1286).
+            let words = div()
+                .flex_1()
+                .min_w_0()
+                .line_height(px(OPT_IN_LINE))
+                .child(div().font_weight(gpui::FontWeight::MEDIUM).child(name))
+                .child(div().text_color(colors.ink(QUIET)).child(sentence));
+            let control = div()
+                .relative()
+                .flex_none()
+                .ml(px(PADDING))
+                .child(switch(&look, on, slid, rgb(SIGNAL)))
+                .child(opt_in_frame(frames.clone(), opt_in, "switch", settled));
+            let row = div()
                 .id(opt_in.name())
+                .relative()
+                .p(px(PADDING))
                 .flex()
                 .items_center()
-                .gap(px(OPT_IN_SWITCH_GAP))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |shell, _, _, cx| shell.onboarding_switch(opt_in, cx)))
-                .child(
-                    div()
-                        .flex_1()
-                        .text_size(px(crate::tokens::text::BODY))
-                        .line_height(px(OPT_IN_LINE))
-                        .child(
-                            div()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(colors.ink(1.))
-                                .child(name),
-                        )
-                        .child(div().text_color(colors.ink(QUIET)).child(sentence)),
-                )
-                .child(div().flex_none().child(switch(&look, on, slid, rgb(SIGNAL))))
+                .child(words)
+                .child(control)
+                .child(opt_in_frame(frames.clone(), opt_in, "row", settled));
+            div().child(row)
         });
         div()
             .mt(px(BUTTON_GAP))
             .w(px(OPT_IN_WIDTH))
-            .flex()
-            .flex_col()
-            .gap(px(OPT_IN_GAP))
-            .children(rows)
+            .text_size(px(crate::tokens::text::BODY))
+            .text_color(look.ink)
+            .child(group(&look, rows))
     }
 
-    /// The favorites offered, a row each with its box ticked in the green, which a click unticks;
-    /// a quiet line while the import is still reading its history.
+    /// The favorites offered, a row each with its box ticked in the green, which a click unticks.
     fn favorite_rows(&self, colors: Colors, cx: &mut Context<Self>) -> gpui::Div {
         let look = Look::on(colors.ground, colors.ink(1.));
         let unticked = self.onboarding.as_ref().map(|o| o.unticked.clone()).unwrap_or_default();
@@ -864,11 +999,7 @@ impl Shell {
             importing.view.read(cx).suggested().map(<[crate::import::found::Tab]>::to_vec)
         });
         let list = div().mt(px(BUTTON_GAP)).w(px(OPT_IN_WIDTH)).flex().flex_col();
-        let Some(offered) = offered else {
-            let reading = div().text_center().text_color(colors.ink(QUIET));
-            return list.child(reading.child("Reading your history…"));
-        };
-        list.children(offered.into_iter().enumerate().map(|(index, tab)| {
+        list.children(offered.unwrap_or_default().into_iter().enumerate().map(|(index, tab)| {
             let on = !unticked.contains(&tab.url);
             let name = crate::import::suggested::site_name(&tab.url);
             div()
@@ -908,6 +1039,26 @@ impl Shell {
             .child("Skip")
             .child(chip)
     }
+}
+
+/// Where each opt-in's row and switch is drawn, by the opt-in and "row" or "switch".
+type Frames = Rc<RefCell<HashMap<(OptIn, &'static str), Bounds<Pixels>>>>;
+
+/// Keeps where an opt-in's `part` is drawn once the step has `settled`, and logs where its switch
+/// is each time it moves, as "browser: onboarding agents at x y", for check.sh to click it there.
+fn opt_in_frame(frames: Frames, opt_in: OptIn, part: &'static str, settled: bool) -> impl IntoElement {
+    canvas(
+        move |bounds, _, _| {
+            let moved = settled && frames.borrow_mut().insert((opt_in, part), bounds) != Some(bounds);
+            if moved && part == "switch" {
+                let at = bounds.center();
+                log!("browser: onboarding {} at {:.0} {:.0}", opt_in.name(), f32::from(at.x), f32::from(at.y));
+            }
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .inset_0()
 }
 
 /// The theme picker's swatches in a row, the one picked ringed in the ink, each with a hairline

@@ -109,10 +109,13 @@ impl Shell {
                         .child(format!("{} wants to {}", question.agent, question.what)),
                 )
                 .child(div().text_color(rgba(DETAIL)).child(question.why.clone()))
+                // Three labels don't fit a row of the sidebar at its default width, so the last
+                // takes a row of its own, as wide as the card, rather than running past its edge.
                 .child(
                     div()
                         .mt(px(BUTTONS_TOP))
                         .flex()
+                        .flex_wrap()
                         .gap(px(BUTTON_GAP))
                         .child(button("agent-question-never", "Never", Answer::Never))
                         .child(button("agent-question-once", "Allow Once", Answer::Once))
@@ -132,12 +135,13 @@ mod tests {
 
     use crate::agents::Question;
     use crate::shell::{Folders, Page, Question as PageQuestion, Shell, recorder::Recorder};
-    use crate::tokens::shell::permission::{BUTTON_HEIGHT, PADDING};
+    use crate::tokens::shell::permission::{BUTTON_GAP, BUTTON_HEIGHT, PADDING};
 
     fn question(id: u64) -> Question {
         Question {
             id,
             agent: "Claude Code".into(),
+            from: "claude-code".into(),
             what: "click “Place order” on shop.example".into(),
             why: "It looks like a payment or an order.".into(),
             handoff: None,
@@ -146,7 +150,8 @@ mod tests {
     }
 
     /// The card asks whatever tab the window shows, a page's own question goes first, and its
-    /// buttons answer: Allow Once in the middle, Always Allow at the end.
+    /// buttons answer, all inside it at the sidebar's width: Never and Allow Once side by side,
+    /// and Always Allow in the row under them, from the card's left edge to its right.
     #[gpui::test]
     fn the_card_asks_and_its_buttons_answer(cx: &mut TestAppContext) {
         let host = Rc::new(Recorder::default());
@@ -163,13 +168,15 @@ mod tests {
             shell.set_agent_question(Some(question(7)), cx);
         });
         cx.run_until_parked();
-        let row = |shell: &gpui::Entity<Shell>, cx: &mut gpui::VisualTestContext| {
+        // The card and the middles of its last row and the row above it.
+        let rows = |shell: &gpui::Entity<Shell>, cx: &mut gpui::VisualTestContext| {
             let card = shell.read_with(cx, |shell, _| shell.agent_question_drawn.get());
             let card = card.expect("the card wasn't drawn");
-            (card, card.bottom() - px(PADDING + BUTTON_HEIGHT / 2.))
+            let last = card.bottom() - px(PADDING + BUTTON_HEIGHT / 2.);
+            (card, last, last - px(BUTTON_HEIGHT + BUTTON_GAP))
         };
-        let (card, y) = row(&shell, cx);
-        cx.simulate_click(point(card.center().x, y), Modifiers::none());
+        let (card, _, above) = rows(&shell, cx);
+        cx.simulate_click(point(card.left() + card.size.width * 0.75, above), Modifiers::none());
         cx.run_until_parked();
         assert!(host.take().contains(&"answer agent 7 Once".to_string()));
         shell.read_with(cx, |shell, _| assert!(shell.agent_question().is_none()));
@@ -183,9 +190,15 @@ mod tests {
             assert_eq!(shell.agent_question().map(|question| question.id), Some(8));
         });
         cx.run_until_parked();
-        let (card, y) = row(&shell, cx);
-        cx.simulate_click(point(card.right() - px(PADDING + 4.), y), Modifiers::none());
+        let (card, last, above) = rows(&shell, cx);
+        cx.simulate_click(point(card.left() + px(PADDING + 4.), last), Modifiers::none());
         cx.run_until_parked();
         assert!(host.take().contains(&"answer agent 8 Always".to_string()));
+
+        shell.update(cx, |shell, cx| shell.set_agent_question(Some(question(9)), cx));
+        cx.run_until_parked();
+        cx.simulate_click(point(card.left() + card.size.width * 0.25, above), Modifiers::none());
+        cx.run_until_parked();
+        assert!(host.take().contains(&"answer agent 9 Never".to_string()));
     }
 }

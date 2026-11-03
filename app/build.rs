@@ -28,6 +28,7 @@ fn main() {
             host.file("platform/windows/host.cc")
                 .file("platform/windows/drive.cc")
                 .file("platform/windows/updates.cc")
+                .file("platform/windows/ed25519.cc")
                 .flag("/std:c++20")
                 .flag("/utf-8")
                 // C++/WinRT (the share sheet) throws, and its projection headers overflow the
@@ -36,28 +37,55 @@ fn main() {
                 .flag("/bigobj")
                 .define("UNICODE", None)
                 .define("_UNICODE", None);
-            // A release build updates itself with WinSparkle, given the key its updates are signed
-            // with, as build.sh gives the Mac's: what Info.plist holds there is defined here. It's
-            // branding/update-key's unless UPDATE_PUBLIC_KEY is set, and a fork that empties the
-            // file builds a copy with no updater.
-            println!("cargo:rerun-if-env-changed=UPDATE_PUBLIC_KEY");
+            // A release build updates itself (platform/windows/updates.cc), given the feed and the
+            // key its updates are signed with, as build.sh gives the Mac's: what Info.plist holds
+            // there is defined here. They're branding/update-feed's and branding/update-key's
+            // unless UPDATE_FEED or UPDATE_PUBLIC_KEY is set, as the updates run sets them for its
+            // own feed, and a fork that empties the key's file builds a copy with no updater. The
+            // nightly feed beside it is branding/update-feed-nightly's, or UPDATE_FEED_NIGHTLY's,
+            // where there is one. A check build has an updater only for a feed on the check's own
+            // server (check/nightly.sh), as build.sh updates gives the Mac's copy.
+            for name in ["UPDATE_PUBLIC_KEY", "UPDATE_FEED", "UPDATE_FEED_NIGHTLY", "APP_TRACK"] {
+                println!("cargo:rerun-if-env-changed={name}");
+            }
             let key_file = root.join("branding/update-key");
             println!("cargo:rerun-if-changed={}", key_file.display());
+            // The folder, so a nightly feed's file that comes or goes is seen too.
+            println!("cargo:rerun-if-changed={}", root.join("branding").display());
             let key = match std::env::var("UPDATE_PUBLIC_KEY") {
                 Ok(key) if !key.is_empty() => key,
                 _ => std::fs::read_to_string(&key_file)
                     .map(|key| key.split_whitespace().collect())
                     .unwrap_or_default(),
             };
-            if std::env::var_os("CARGO_FEATURE_PROD").is_some() && !key.is_empty() {
-                let feed = std::fs::read_to_string(root.join("branding/update-feed"))
-                    .expect("no branding/update-feed");
+            let env = |name| std::env::var(name).ok().filter(|value: &String| !value.is_empty());
+            let prod = std::env::var_os("CARGO_FEATURE_PROD").is_some();
+            let local = |feed: String| feed.starts_with("http://127.0.0.1:");
+            let check = !prod && env("UPDATE_FEED").is_some_and(local);
+            if (prod || check) && !key.is_empty() {
+                let feed = env("UPDATE_FEED").unwrap_or_else(|| {
+                    std::fs::read_to_string(root.join("branding/update-feed"))
+                        .expect("no branding/update-feed")
+                });
+                let nightly = match check {
+                    true => env("UPDATE_FEED_NIGHTLY").unwrap_or_default(),
+                    false => env("UPDATE_FEED_NIGHTLY").unwrap_or_else(|| {
+                        std::fs::read_to_string(root.join("branding/update-feed-nightly"))
+                            .unwrap_or_default()
+                    }),
+                };
                 let quoted = |value: &str| format!("\"{value}\"");
                 host.define("UPDATE_FEED", quoted(feed.trim()).as_str())
+                    .define("UPDATE_FEED_NIGHTLY", quoted(nightly.trim()).as_str())
                     .define("UPDATE_PUBLIC_KEY", quoted(&key).as_str())
                     .define("APP_VERSION", quoted(env!("CARGO_PKG_VERSION")).as_str())
                     .define("APP_BUILD", quoted(&build_number(&root)).as_str());
-                println!("cargo:rerun-if-changed={}", root.join("branding/update-feed").display());
+                if check {
+                    host.define("UPDATE_CHECK_BUILD", None);
+                }
+            }
+            if env("APP_TRACK").as_deref() == Some("nightly") {
+                host.define("APP_NIGHTLY", None);
             }
         }
         // Only what the preview asks of the host so far; the browser doesn't build here yet.
@@ -92,10 +120,10 @@ fn main() {
         let engine = root.join(".deps/engine");
         println!("cargo:rustc-link-arg-bin=Browser={}", engine.join("chrome.dll.lib").display());
         // windowscodecs is WIC, for host_file_preview's thumbnails; uuid carries the COM GUIDs it
-        // and host_drag_file name; windowsapp is WinRT, for the share sheet; advapi32 reads the
-        // registry, for WinSparkle's settings.
+        // and host_drag_file name; windowsapp is WinRT, for the share sheet; advapi32 keeps when
+        // updates.cc last checked, which downloads with winhttp and hashes with bcrypt.
         for lib in ["user32", "gdi32", "dwmapi", "shell32", "ole32", "comctl32", "comdlg32",
-                    "windowscodecs", "uuid", "windowsapp", "advapi32"] {
+                    "windowscodecs", "uuid", "windowsapp", "advapi32", "winhttp", "bcrypt"] {
             println!("cargo:rustc-link-lib={lib}");
         }
     } else if os == "macos" {
@@ -142,6 +170,12 @@ fn main() {
         println!("cargo:rustc-env={variable}={}", url.trim());
         println!("cargo:rerun-if-changed={}", path.display());
     }
+    // The sync server the build signs in to unless the user names another (main.rs): ilo's, in
+    // branding/sync-server, which a fork changes or deletes. With no file the build has none. The
+    // folder is watched, as a file that isn't there would have this run on every build.
+    let sync_server = std::fs::read_to_string(root.join("branding/sync-server"));
+    println!("cargo:rustc-env=SYNC_SERVER={}", sync_server.unwrap_or_default().trim());
+    println!("cargo:rerun-if-changed={}", root.join("branding").display());
     println!("cargo:rerun-if-changed=platform");
     println!("cargo:rerun-if-changed={}", header.display());
 

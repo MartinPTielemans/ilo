@@ -24,7 +24,7 @@ name=$(cat "$app/branding/name")
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$app/Cargo.toml" | head -1)
 id=$(git config -f "$app/branding/winget.ini" winget.identifier)
 publisher=$(git config -f "$app/branding/winget.ini" winget.publisher)
-repository=$(git config -f "$root/engine/prebuilt.ini" prebuilt.repository)
+repository=$(cat "$app/branding/repository")
 [ "$(basename "$installer")" = "$name-$version-x64-setup.exe" ] ||
   fail "$installer isn't $name-$version-x64-setup.exe, a release's installer from package.sh."
 case $url in

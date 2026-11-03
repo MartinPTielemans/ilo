@@ -7,8 +7,12 @@
 # Back, forward, reload and stop. stuck.test leads to a server that takes connections and never
 # answers, so its page keeps loading until it's stopped, and $plain to the check's own, which has no
 # https. The profile remembers a host that fell back to http, so each run names a new one.
+# $nearby is a local name for the check's server that no run typed before: Chrome's bar fills in a
+# page typed once under the host and port typed, such as tabs' back.html under 127.0.0.1:$port, as
+# one check.sh's runs share its server (#1148).
 serve
 plain="plain-$(date +%s).example.com"
+nearby="history-$(date +%s).localhost"
 python3 -I -c '
 import socket, time
 server = socket.socket()
@@ -31,7 +35,7 @@ step=0
 rm -f "$saved" "$launch_frame"
 BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" \
   --host-resolver-rules="MAP stuck.test 127.0.0.1:$(cat "$out/port"), \
-MAP $plain 127.0.0.1:$port" < "$out/drive" > "$log" 2>&1 &
+MAP $plain 127.0.0.1:$port, MAP $nearby 127.0.0.1:$port" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -130,10 +134,10 @@ expect "^browser: page $tab back 1 forward 0 loading 0 http://$plain/\$" \
   "$plain didn't come over http: $(grep "^browser: page $tab" "$log" | tail -1)"
 [ "$(tls)" -gt "$before" ] || fail "$plain came over http without trying https first"
 before=$(tls)
-go_from_bar "127.0.0.1:$port"
-expect "^browser: page $tab back 1 forward 0 loading 0 http://127.0.0.1:$port/\$" \
-  "127.0.0.1:$port didn't come over http: $(grep "^browser: page $tab" "$log" | tail -1)"
-[ "$(tls)" = "$before" ] || fail "127.0.0.1:$port was tried over https"
+go_from_bar "$nearby:$port"
+expect "^browser: page $tab back 1 forward 0 loading 0 http://$nearby:$port/\$" \
+  "$nearby:$port didn't come over http: $(grep "^browser: page $tab" "$log" | tail -1)"
+[ "$(tls)" = "$before" ] || fail "$nearby:$port was tried over https"
 exec 3>&-
 quit
 kill "$stuck"

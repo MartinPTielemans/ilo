@@ -36,9 +36,10 @@ pub const MOST_ROWS: usize = 8;
 
 /// What the preview asks of its window.
 pub trait Host {
-    /// Shows the preview's window, `height` tall, with its top left at (`left`, `top`) in the
-    /// browser window, with the keyboard, or moves it there if it shows.
-    fn show(&self, left: f32, top: f32, height: f32);
+    /// Shows the preview's window, `height` tall, with its top left at (`left`, `top`) in browser
+    /// window `window`, the one whose row it's for, with the keyboard, or moves it there if it
+    /// shows.
+    fn show(&self, window: u64, left: f32, top: f32, height: f32);
     /// Hides it, and the browser window gets the keyboard back.
     fn hide(&self);
 }
@@ -53,10 +54,12 @@ pub struct Item {
     pub icon: Icon,
 }
 
-/// The pointer rests on a closed folder's row: what its preview lists, where, and who hears which
-/// tab the user chose.
+/// The pointer rests on a closed folder's row: in which browser window, what its preview lists,
+/// where, and who hears which tab the user chose.
 #[derive(Clone)]
 pub struct Rest {
+    /// The browser window whose sidebar has the row, which the preview shows over (#1432).
+    pub window: u64,
     pub folder: u64,
     pub name: SharedString,
     pub items: Vec<Item>,
@@ -329,7 +332,7 @@ impl FolderPreview {
             let text = field.read(cx).text().to_string();
             preview.searched(&text, cx);
         });
-        let folder = rest.folder;
+        let (over, folder) = (rest.window, rest.folder);
         self.shown = Some(Shown {
             rest,
             query: String::new(),
@@ -343,7 +346,7 @@ impl FolderPreview {
         window.focus(&self.search.focus_handle(cx), cx);
         // check.sh reads this line, to see the preview is beside its row.
         log!("browser: folder preview shown {folder} at {left} {top} {WIDTH} {height}");
-        self.host.show(left, top, height);
+        self.host.show(over, left, top, height);
         cx.notify();
     }
 
@@ -561,6 +564,8 @@ impl Render for FolderPreview {
         // The rim is its own layer, so the border doesn't shift what the fill's box holds.
         let rim = div()
             .absolute()
+            .top_0()
+            .left_0()
             .size_full()
             .rounded(px(RADIUS))
             .border(px(RIM))

@@ -46,16 +46,16 @@ if [ -z "$run" ]; then
   shift 2
   log=${out%.*}.log
 fi
-for tool in sway grim magick; do
+for tool in sway grim; do
   command -v "$tool" >/dev/null || { echo "Needs sway, grim and ImageMagick: no $tool." >&2; exit 1; }
 done
 # ImageMagick 7's magick, or 6's convert and compare (Ubuntu's).
 if command -v magick >/dev/null; then
   convert=(magick) compare=(magick compare)
-elif command -v compare >/dev/null; then
+elif command -v convert >/dev/null && command -v compare >/dev/null; then
   convert=(convert) compare=(compare)
 else
-  echo "Needs sway, grim and ImageMagick: no magick." >&2; exit 1
+  echo "Needs sway, grim and ImageMagick: no magick, or convert and compare." >&2; exit 1
 fi
 # How many pixels differ between two pictures.
 differ() {

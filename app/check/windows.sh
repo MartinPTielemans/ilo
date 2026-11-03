@@ -109,6 +109,7 @@ send window 2
 # GPUI's update, and the app aborted).
 send key , cmd
 expect '^browser: settings shown ' "⌘, in the second window didn't show Settings"
+settings_drew
 # The driver's done for a click that closes its window can be lost with the window, as in
 # favorites.sh, so Settings going is waited for.
 settings_close
@@ -395,7 +396,7 @@ mark() {
 }
 # Writes the handover lines since the mark to handover.txt as "<$1>|<stage>|<ms>", the first of
 # each stage, leaving out those of a tab other than $2, such as the one the window switched to.
-record() {
+record_handover() {
   tail -n +$((marked_at + 1)) "$log" |
     sed -n 's/^browser: handover \(.*\) +\([0-9.]*\) ms (\(.*\))$/\1|\2|\3/p' |
     awk -F'|' -v way="$1" -v tab="$2" '
@@ -423,7 +424,7 @@ moves() {
   drew "$1" "$2: the page didn't draw in the second window"
   expect "^browser: window $first picture rests\$" "$2: the first window's picture of the page didn't come"
   expect "^browser: window $first pictures tab $1\$" "$2: the first window's fresh picture didn't come"
-  record "$2, row, no picture" "$1"
+  record_handover "$2, row, no picture" "$1"
   # The first window takes it back by a click on its picture, once coming forward has taken it again.
   send window 1
   expect "^browser: window $first pictures tab $1\$" "$2: the first window took no new picture as it came forward"
@@ -433,7 +434,7 @@ moves() {
   drew "$1" "$2: the page didn't draw back in the first window"
   expect "^browser: window $fourth picture rests\$" "$2: the second window's picture of the page didn't come"
   expect "^browser: window $fourth pictures tab $1\$" "$2: the second window's fresh picture didn't come"
-  record "$2, picture" "$1"
+  record_handover "$2, picture" "$1"
   # The second window takes it again by its row, from the window it just gave its picture to.
   send window $driven_fourth
   expect "^browser: window $fourth pictures tab $1\$" "$2: the second window took no new picture as it came forward"
@@ -443,14 +444,14 @@ moves() {
   drew "$1" "$2: the page didn't draw in the second window again"
   expect "^browser: window $first picture rests\$" "$2: the first window's picture of the page didn't come again"
   expect "^browser: window $first pictures tab $1\$" "$2: the first window's fresh picture didn't come"
-  record "$2, row" "$1"
+  record_handover "$2, row" "$1"
   # The second window shows another tab, which gives the page back to the first.
   mark
   send click $(row_of $b)
   expect "^browser: window $fourth shows $b\$" "$2: a click on another row didn't show its tab"
   expect "^browser: window $first shows $1\$" "$2: the page didn't go back to the first window"
   drew "$1" "$2: the page didn't draw back in the first window"
-  record "$2, let go" "$1"
+  record_handover "$2, let go" "$1"
 }
 send layout
 first_size=$(grep '^browser: layout content ' "$log" | tail -1 | sed 's/^browser: layout content \([0-9]*\)x\([0-9]*\).*/\1 \2/')

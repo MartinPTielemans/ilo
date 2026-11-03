@@ -738,6 +738,8 @@ impl Capture {
             .child(
                 div()
                     .absolute()
+                    .top_0()
+                    .left_0()
                     .size_full()
                     .rounded(px(RADIUS))
                     .border_1()

@@ -32,6 +32,9 @@ pkill() {
 # in a run's data: URL for one, so the page the app opened never ran its script (#872). The URLs a
 # run opens are never paths.
 export MSYS2_ENV_CONV_EXCL=BROWSER_URL
+# It rewrites a switch's value that starts with a slash too, and took adblock's filter /check-ad.js
+# for a path under its own folder, so the ad script loaded (#872). The filters are never paths.
+export MSYS2_ARG_CONV_EXCL=--ad-block-filters=
 # Runs the app. A native program can't read Git Bash's fifo, so cat passes the driver's commands on
 # through a pipe, and exec keeps $! the app's, whose Windows id is in /proc/$!/winpid. chrome_elf
 # starts Crashpad before the app adds its profile, in the folder chrome.exe's own --user-data-dir
@@ -53,4 +56,19 @@ to_bmp() {
       $image = [System.Drawing.Image]::FromFile($env:IN)
       $image.Save($env:OUT, [System.Drawing.Imaging.ImageFormat]::Bmp)
       $image.Dispose()'
+}
+# Turns Windows' "Show animations in Windows" on with 1 and off with 0, in the profile, as
+# Settings' switch does: the system's, so only a check VM's runs turn it.
+windows_animations() {
+  ON="$1" powershell.exe -NoProfile -NonInteractive -Command '
+    Add-Type -Namespace Check -Name User32 -MemberDefinition @"
+[DllImport("user32.dll")]
+public static extern bool SystemParametersInfoW(
+  uint action, uint param, System.IntPtr value, uint ini);
+"@
+    # SPI_SETCLIENTAREAANIMATION, its value the pointer itself, and SPIF_UPDATEINIFILE with
+    # SPIF_SENDCHANGE, as Windows broadcasts WM_SETTINGCHANGE only once the profile has the value.
+    if (-not [Check.User32]::SystemParametersInfoW(0x1043, 0, [System.IntPtr][int]$env:ON, 3)) {
+      exit 1
+    }'
 }

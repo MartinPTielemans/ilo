@@ -12,8 +12,13 @@ namespace browser_core {
 // longest, on the wall clock, so it keeps time through sleep and a quit (the Spaces keep when each
 // tab was last seen).
 //
-// Looks again for that tab, from a task of its own, as the Spaces, the tabs windows show or the
-// time chosen change.
+// Little ilo windows go the same way, as Arc's Little Arc windows do: one that hasn't been the
+// active window for 6 hours, or the time chosen in Settings › General (bc_little_archive_after),
+// closes into the archive with its tab, but for one whose page plays sound. The same timer waits
+// for the one due first.
+//
+// Looks again for that tab, from a task of its own, as the Spaces, the tabs windows show, a Little
+// ilo window that stops being active or the time chosen change.
 void ScheduleAutoArchive();
 
 // Registers the pref that keeps each profile's time. Before the first profile is made.

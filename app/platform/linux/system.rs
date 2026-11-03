@@ -18,6 +18,11 @@ pub fn copy(text: &str, cx: &mut App) {
     cx.write_to_clipboard(ClipboardItem::new_string(text.to_owned()));
 }
 
+/// The clipboard's text, as host_paste reads it on the Mac.
+pub fn pasted(cx: &App) -> Option<String> {
+    cx.read_from_clipboard()?.text()
+}
+
 /// Puts the capture on the clipboard, as host_copy_png does on the Mac.
 pub fn copy_png(png: &[u8]) {
     let image = Image::from_bytes(ImageFormat::Png, png.to_vec());
@@ -60,8 +65,26 @@ pub fn watch_activation<T: 'static>(
     whole_window: bool,
     cx: &mut Context<T>,
 ) {
-    cx.observe_window_activation(window, move |_, window, _| unsafe {
-        platform::host_window_active(ui_view, window.is_window_active(), whole_window)
+    cx.observe_window_activation(window, move |_, window, _| {
+        let active = window.is_window_active();
+        if active {
+            crate::link_preview_window::took_keyboard(ui_view);
+        }
+        unsafe { platform::host_window_active(ui_view, active, whole_window) }
+    })
+    .detach();
+}
+
+/// Tells the link preview each time Settings, whose view is `view`, takes the keyboard.
+pub fn watch_settings_activation<T: 'static>(
+    window: &mut Window,
+    view: *mut c_void,
+    cx: &mut Context<T>,
+) {
+    cx.observe_window_activation(window, move |_, window, _| {
+        if window.is_window_active() {
+            crate::link_preview_window::took_keyboard(view);
+        }
     })
     .detach();
 }

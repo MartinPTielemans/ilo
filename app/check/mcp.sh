@@ -2,12 +2,15 @@
 # it's connected, as the saved settings say here. The socket is the user's alone, and the bridge
 # gets nowhere without the agent's token. Its first call makes its Space, and it may list and read
 # only the tabs there: its list leaves out the user's tab, a read of the user's tab is refused, with
-# an activity-log entry, and a read of example.com, opened in its Space, gives the page's text. A
+# an activity-log entry, and a read of example.com, opened in its Space, gives the page's text. Ten
+# cases, each the same form in a tab of its own the user isn't looking at, move to Closed a step a
+# turn, a turn's ten calls answered at once, which logs the turns and how long they took. A
 # page with fields gives its prose and none of their values: typed, filled in or a password, in its
 # text and in its outline, and the agent can't type into the password field. It types into another.
 # A page's frames, of its own site and of another, are in its outline, where the agent clicks and
 # types, and not into a frame's password field. Its text leaves out a frame an extension puts in
-# the page, which isn't the page's. Where it acts in the page shown, its pointer and a
+# the page, which isn't the page's. Its keys, typed or pressed, go to the page alone, and Escape
+# the page doesn't keep runs no Stop of ilo's. Where it acts in the page shown, its pointer and a
 # ring with the element's ref show it. It opens a page, clicks its link, scrolls, takes a screenshot
 # and closes a tab, and a bank's site asks first, in a card whose Allow Once opens it. Always Allow
 # opens it from then on, until Revoke Permission in the Space's menu takes that back. A login the
@@ -95,6 +98,28 @@ if BROWSER_AGENT_TOKEN=0 "$bridge" "$socket" < /dev/null > /dev/null 2> "$out/mc
   fail "the bridge got in without the agent's token"
 fi
 grep -q 'Settings › Agents' "$out/mcp-refused" || fail "a refused bridge said: $(cat "$out/mcp-refused")"
+# A copy from the Store names its bridge to clients by the alias its MSIX declares, which Windows
+# keeps in the user's WindowsApps folder across updates, as the package's own folder is named for
+# its version (#1442). check-windows.yml installs an MSIX of this build and names it in CHECK_MSIX.
+# A client starts the alias as Claude Code and Codex start a command, and it carries the client's
+# hello to this browser's pipe and the answer back.
+msix=
+if windows && [ -n "${CHECK_MSIX:-}" ]; then
+  alias=$(cygpath -w "$(cygpath -u "$LOCALAPPDATA")/Microsoft/WindowsApps/$(cat branding/name)-mcp-bridge.exe")
+  python3 -I - "$alias" "$socket" "$token" > "$out/mcp-alias.log" 2>&1 << 'PY' ||
+import os, subprocess, sys
+alias, socket, token = sys.argv[1:]
+hello = (b'{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18",'
+         b'"capabilities":{},"clientInfo":{"name":"msix","version":"1"}}}\n')
+run = subprocess.run([alias, socket], input=hello, capture_output=True, timeout=30,
+                     env={**os.environ, "BROWSER_AGENT_TOKEN": token})
+print(run.stdout.decode(errors="replace"), run.stderr.decode(errors="replace"))
+sys.exit(b'"protocolVersion":"2025-06-18"' not in run.stdout)
+PY
+    fail "the MSIX's bridge, by its alias, didn't answer: $(tr '\n' ' ' < "$out/mcp-alias.log")"
+  await_log '^browser: agent mcp-client hello from msix$' "the app didn't hear the hello the MSIX's bridge carried"
+  msix=1
+fi
 
 # The client: the bridge on two pipes, which stay open until the session ends, its stderr added to
 # mcp-bridge.log.
@@ -172,6 +197,43 @@ refused=$(call read_page "{\"tab\":$user_tab}")
 await_log "^browser: agent activity mcp-client $user_tab read_page refused: The tab isn't in the agent's own Space\.\$" \
   "the refused read didn't reach the activity log"
 grep -q "^browser: tab text $user_tab " "$log" && fail "the core read the user's tab"
+
+# Ten cases of a web toolkit, each the same form on a page of its own, which an agent moves to
+# Closed in tabs the user isn't looking at, each step on all ten in one turn: cases.py, through a
+# bridge of its own. The server answers a turn's calls at once (#1476). The form says Ready once
+# it has painted (painted.js, site.sh). Its status list opens on the next frame, as an animated
+# one does, which a tab drawing no frames never shows, and closes once focus leaves its button for
+# anything but the list, as the page losing focus takes it. Save saves on a timer, as a request
+# would, which a hidden page may throttle.
+serve
+printf '%s' '<script src="painted.js"></script>
+<h1 id=heading>Case</h1>
+<p>Status <button id=pick aria-haspopup=listbox aria-expanded=false>Open</button></p>
+<ul id=list role=listbox aria-label=Status hidden>
+<li role=option tabindex=-1>Open<li role=option tabindex=-1>Pending<li role=option tabindex=-1>Closed
+</ul>
+<p><button id=save>Save</button> <span id=state></span></p>
+<script>
+const n = new URLSearchParams(location.search).get("n");
+heading.textContent = "Case " + n;
+const show = open => { list.hidden = !open; pick.ariaExpanded = open; };
+pick.onclick = () => requestAnimationFrame(() => show(list.hidden));
+pick.onblur = event => list.contains(event.relatedTarget) || show(false);
+list.onclick = event => { pick.textContent = event.target.textContent; show(false); };
+save.onclick = () => setTimeout(() => {
+  state.textContent = "Saved " + pick.textContent;
+  document.title = "case " + n + " saved " + pick.textContent;
+}, 300);
+painted(() => { state.textContent = "Ready"; document.title = "case " + n; });
+</script>' > "$out/site/case.html"
+BROWSER_AGENT_TOKEN=$token python3 -I check/cases.py "$(app_path "$bridge")" "$socket" \
+  "localhost:$port/case.html" > "$out/cases.log" 2>&1 || fail "$(tail -1 "$out/cases.log")"
+await_log '^browser: agent mcp-client answered 10 calls at once$' \
+  "the server answered a turn's ten calls one after another"
+for n in $(seq 10); do
+  grep -q "^browser: title [0-9]* case $n saved Closed\$" "$log" || fail "case $n wasn't saved Closed"
+done
+cases=$(sed -n 's/^cases: \(10 cases in .*\)/\1/p' "$out/cases.log")
 
 send click $page_point
 driven=$active
@@ -334,6 +396,76 @@ painted(() => document.title = "fields");
     *"Top text"*"Inner text"*"Cross text"*) ;;
     *) fail "reading the frames page answered: $read" ;;
   esac
+
+  # Its keys go to the page alone: type with submit and press_key's Enter submit the form, Tab
+  # moves the keyboard to the next field, and Escape reaches the page. Escape the page doesn't keep
+  # is ilo's Stop while a page loads, and the agent's runs no shortcut of ilo's: the page goes on
+  # loading, and the tabs and the app stay as they were.
+  printf '%s' '<script src="painted.js"></script>
+<form id=form><input id=first aria-label="First field"><input id=second aria-label="Second field">
+<button>Send</button></form>
+<script>
+let sent = 0;
+form.onsubmit = event => {
+  event.preventDefault();
+  document.title = "submitted " + ++sent + " " + first.value;
+};
+// Tab brings the keyboard here, and a moment later the page that loads until its tab closes.
+second.onfocus = () => {
+  document.title = "second focused";
+  setTimeout(() => location = "keys-loading.html", 2000);
+};
+painted(() => document.title = "keys");
+</script>' > "$out/site/keys.html"
+  # Its picture never comes, so the page loads until its tab closes, with its field focused.
+  printf '%s' '<title>still loading</title><input id=field aria-label="Loading field">
+<script>
+field.focus();
+// Heard, and not kept.
+addEventListener("keydown", event => event.key == "Escape" && (document.title = "escape heard"));
+</script><img src="wait">' > "$out/site/keys-loading.html"
+  tabs() { call list_tabs '{}' | grep -c '^. [0-9]*  '; }
+  outline=$(call open_tab "{\"url\":\"localhost:$port/keys.html\"}")
+  keys_tab=$(printf '%s\n' "$outline" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$keys_tab" ] || fail "open_tab of the keys page answered: $outline"
+  await_log "^browser: title $keys_tab keys\$" "the keys page didn't paint"
+  outline=$(call snapshot "{\"tab\":$keys_tab}")
+  first=$(ref_of textbox "First field")
+  [ -n "$first" ] || fail "the keys page's outline had no ref for its first field: $outline"
+  typed=$(call type "{\"tab\":$keys_tab,\"ref\":\"$first\",\"text\":\"by-the-agent\",\"submit\":true}")
+  case "$typed" in
+    "Typed into “First field” and pressed Enter."*) ;;
+    *) fail "type with submit answered: $typed" ;;
+  esac
+  await_log "^browser: title $keys_tab submitted 1 by-the-agent\$" "type with submit didn't submit the form"
+  pressed=$(call press_key "{\"tab\":$keys_tab,\"key\":\"Enter\"}")
+  case "$pressed" in "Pressed Enter."*) ;; *) fail "press_key Enter answered: $pressed" ;; esac
+  await_log "^browser: title $keys_tab submitted 2 by-the-agent\$" "press_key Enter didn't submit the form"
+  await_log "^browser: agent activity mcp-client $keys_tab press_key\$" \
+    "press_key didn't reach the activity log"
+  pressed=$(call press_key "{\"tab\":$keys_tab,\"key\":\"Tab\"}")
+  case "$pressed" in "Pressed Tab."*) ;; *) fail "press_key Tab answered: $pressed" ;; esac
+  await_log "^browser: title $keys_tab second focused\$" "press_key Tab didn't move the keyboard on"
+  await_log "^browser: title $keys_tab still loading\$" "the page that keeps loading didn't come"
+  await_log "^browser: page $keys_tab back 1 forward 0 loading 1 http://localhost:$port/keys-loading\\.html\$" \
+    "the page that keeps loading didn't show as loading"
+  stopped="^browser: page $keys_tab back [01] forward [01] loading 0 "
+  stops=$(grep -c "$stopped" "$log" || true)
+  before=$(tabs)
+  # The agent waits out the load before it presses and again after, 15 s each (kLoadTimeout in
+  # agent_page.cc), so the answer comes after the 30 s next_answer waits.
+  request press_key "{\"tab\":$keys_tab,\"key\":\"Escape\"}" >&4
+  await_log "^browser: title $keys_tab escape heard\$" "press_key Escape didn't reach the page"
+  pressed=$(perl -e 'alarm 60; exec @ARGV' sh -c 'read -r line && printf "%s\n" "$line"' <&5) ||
+    fail "the browser didn't answer press_key Escape"
+  pressed=$(printf '%s\n' "$pressed" | answered)
+  case "$pressed" in "Pressed Escape."*) ;; *) fail "press_key Escape answered: $pressed" ;; esac
+  kill -0 "$pid" 2>/dev/null || fail "the app exited as the agent pressed Escape"
+  [ "$(grep -c "$stopped" "$log" || true)" = "$stops" ] ||
+    fail "the agent's Escape, which the page didn't keep, ran ilo's Stop"
+  [ "$(tabs)" = "$before" ] || fail "the agent's Escape changed the tabs in its Space"
+  closed=$(call close_tab "{\"tab\":$keys_tab}")
+  case "$closed" in "Closed tab $keys_tab."*) ;; *) fail "closing the keys page answered: $closed" ;; esac
 
   # It opens a page in its Space, clicks its link, scrolls and takes a screenshot.
   opened=$(call open_tab '{"url":"example.com"}')
@@ -552,8 +684,9 @@ BAR
   # A bank's site asks first, in a card in the window, and Allow Once opens it.
   bank="{\"url\":\"bank.localhost:$port/fields.html\"}"
   asks='^browser: agent mcp-client asks [0-9]*: open bank\.localhost$'
-  # Opens the bank's site, which asks, and answers $1 with a click at the card's foot: Allow Once
-  # in the middle of the buttons' row, Always Allow at its right end. Sets allowed to the answer.
+  # Opens the bank's site, which asks, and answers $1 with a click: Always Allow is the card's last
+  # row, across its width, and Allow Once the right of the row above, beside Never. Sets allowed
+  # to the answer.
   answer_bank() {
     before=$(grep -c "$asks" "$log" || true)
     request open_tab "$bank" >&4
@@ -564,8 +697,9 @@ BAR
 $(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
 CARD
     ../tools/window-screenshot.sh "$pid" "$out/agent-question.png" || fail "no window to capture"
-    case "$1" in Once) x=$((qw / 2)) ;; Always) x=$((qw - 16)) ;; esac
-    send click $((qx + x)) $((qy + qh - 26))
+    # A button is 28 high and 8 from the next row.
+    case "$1" in Once) x=$((qw * 3 / 4)) y=$((qh - 26 - 36)) ;; Always) x=$((qw / 2)) y=$((qh - 26)) ;; esac
+    send click $((qx + x)) $((qy + y))
     await_log "^browser: agent mcp-client answered $q $1\$" "$1 didn't answer the question"
     allowed=$(next_answer) || fail "the browser didn't answer the bank's open_tab"
     allowed=$(printf '%s\n' "$allowed" | answered)
@@ -617,9 +751,11 @@ if [ "$driven" = 1 ]; then
   await_more "$hello" "$hellos" || fail "the app didn't hear the second client's hello"
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings"
+  settings_drew
   # The seventh tab, and the switch at the end of the first row.
-  send clickkey 461 60
+  send clickkey $(drawn "toolbar Agents")
   expect '^browser: settings tab Agents$' "a click on Agents didn't show its tab"
+  settings_drew Agents
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents.png" || fail "no window to capture"
   send clickkey 592 134
   expect '^browser: agents off$' "a click on the switch didn't turn agents off"
@@ -639,7 +775,12 @@ forget_login
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, without its fields' values, acts by ref but never in a password field, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, is refused a tab the user took over until they hand it back and Keep answers its ask, its bar's Stop naming ⌘. in its tooltip, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow and again once that's revoked, and off takes the socket away"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, is refused a tab the user took over until they hand it back and Keep answers its ask, its bar's Stop naming ⌘. in its tooltip, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow and again once that's revoked, and off takes the socket away"
 else
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases). skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
+fi
+if [ -n "$msix" ]; then
+  echo "ok: a Store copy's bridge, run by the alias its MSIX declares in the user's WindowsApps folder, carries a client's hello to the browser and its answer back."
+elif windows; then
+  echo "skip: a Store copy's bridge, by its alias. No MSIX of this build is installed here; CHECK_MSIX names one."
 fi

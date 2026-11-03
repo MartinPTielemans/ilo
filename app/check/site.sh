@@ -8,11 +8,15 @@
 # "corner" in the title. "x" and "z" each open check.crx, an extension the
 # extensions run puts there, which Chrome installs from. "a" asks to manage windows on all the
 # displays, a permission with no question from macOS, and puts the answer in the title. Keys with
-# ⌘, ⌃ or ⌥ are the browser's. /wait is a page that never comes. login.html is a login form, its
-# username field across the page's top half and its password field across the bottom, that posts
-# to /login, which sends the browser on to welcome.html, as a site that took the login would.
+# ⌘, ⌃ or ⌥ are the browser's. /wait is a page that never comes, and /held one that comes once the
+# run has made held.go in the site's folder. login.html is a login form, its username field
+# across the page's top half and its password field across the bottom, that posts to /login,
+# which sends the browser on to welcome.html, as a site that took the login would.
 # signup.html is the same form asking for a new password, which posts to /signup, as /login.
 # /sign-in, with any query, asks for HTTP basic sign-in and takes ada with the password lovelace.
+# address.html and card.html are an address's form and a card's, their first field across the
+# page's top 40%, which post as the login does and put "filled" in the title while Chrome fills
+# that field.
 mkdir "$out/site"
 # A page that a run types into once its title says so sets that title with painted(): Chromium
 # drops a key that comes before a page it loaded first shows, for up to half a second while it
@@ -139,9 +143,37 @@ setInterval(() => {
 </script>' > "$out/site/signup.html"
 printf '%s' '<title>welcome</title><p style="font:24px system-ui">Welcome</p>' \
   > "$out/site/welcome.html"
+# $1 is the form's name, $2 its first field's autocomplete and $3 its other fields'.
+autofill_form() {
+  printf '<title>loading</title><form method="post" action="%s">' "$1"
+  printf '<input id=first name=%s autocomplete=%s style="position:fixed;left:0;top:0;' "$2" "$2"
+  printf 'width:100%%;height:40%%;font:24px system-ui"><div style="position:fixed;top:45%%">'
+  for field in $3; do
+    printf '<input name=%s autocomplete=%s>' "$field" "$field"
+  done
+  printf '</div><button style="position:fixed;right:0;bottom:0;width:1px;height:1px">'
+  printf '</button></form><script>
+requestAnimationFrame(() => setTimeout(() => document.title = "%s"));
+let filled = false;
+setInterval(() => {
+  if (first.matches(":autofill") != filled) {
+    filled = !filled;
+    document.title = filled ? "filled" : "cleared";
+  }
+}, 100);
+</script>' "$1"
+}
+autofill_form address name 'address-line1 address-level2 address-level1 postal-code country email' \
+  > "$out/site/address.html"
+autofill_form card cc-name 'cc-number cc-exp-month cc-exp-year' > "$out/site/card.html"
 # The dialogs page asks with "a" alert(), "c" confirm() and "p" prompt(), each from a key in the
-# page, and puts what the user answered in the title. "u" has it ask before it's left, and "o" goes
-# to a maps: link, which macOS opens in Maps.
+# page, and puts what the user answered in the title. "l" alerts once /held comes, which the run
+# lets go of later, as a page that asks while the user is in another app. "u" has it ask before
+# it's left, and "o" goes to a link another app opens: maps:, which macOS opens in Maps, or on
+# Windows, which no longer has a Maps app, ms-settings:, which every Windows 10 and 11 opens in
+# Settings.
+app_link=maps:?q=check
+! windows || app_link=ms-settings:
 printf '%s' '<title>loading</title>
 <script>
 requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
@@ -159,12 +191,19 @@ onkeydown = e => {
   if (e.key == "p") {
     document.title = "prompt " + prompt("Your name?", "Ada");
   }
+  if (e.key == "l") {
+    document.title = "waiting";
+    fetch("held").then(() => {
+      alert("The check says hello, later.");
+      document.title = "alerted later";
+    });
+  }
   if (e.key == "u") {
     onbeforeunload = e => e.preventDefault();
     document.title = "armed";
   }
   if (e.key == "o") {
-    location = "maps:?q=check";
+    location = "'"$app_link"'";
   }
 };
 </script>' > "$out/site/dialogs.html"
@@ -303,7 +342,7 @@ Promise.all([document.fonts.ready, ...[...document.images].map(image => image.de
 # The server logs each GET as "GET <engine> <host><path> cookie <cookies sorted, or none>", the
 # engine named by the user agent as the engine page does.
 python3 -I -u -c '
-import base64, functools, http.server, sys, time, urllib.parse
+import base64, functools, http.server, os, socketserver, sys, time, urllib.parse
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     sent = 0
@@ -350,6 +389,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if self.path == "/wait":
             time.sleep(3600)
             return
+        if path == "/held":
+            # Every request waiting is let go at once, so one Chrome asked for ahead is no matter.
+            while not os.path.exists(sys.argv[1] + "/held.go"):
+                time.sleep(0.05)
+            body = b"<title>held</title>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if path == "/sign-in":
             signed_in = self.headers.get("Authorization") == "Basic " + base64.b64encode(
                 b"ada:lovelace").decode()
@@ -382,8 +432,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+# HTTPServer.server_bind names the server by a reverse lookup of 127.0.0.1, which takes 35 s on
+# the macos-26 runners, so the server binds as TCPServer does and takes its name as given.
+class Server(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "127.0.0.1"
+        self.server_port = self.server_address[1]
+
 handler = functools.partial(Handler, directory=sys.argv[1])
-server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+server = Server(("127.0.0.1", 0), handler)
 print("Serving HTTP on 127.0.0.1 port", server.server_address[1], "...")
 server.serve_forever()
 ' "$out/site" > "$out/site.log" 2>&1 3>&- 4>&- 5>&- &

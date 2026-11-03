@@ -102,8 +102,8 @@ bool EndTabSession(bc_id tab, int why) {
 }
 
 std::string RefusedAction(std::string_view action) {
-  // The tools that act on a tab, the reference agent's (prototypes/arcish/agent.js) and the MCP
-  // server's, each something the user does in the page, or handing the tab to the user.
+  // The tools that act on a tab, the MCP server's, each something the user does in the page, or
+  // handing the tab to the user.
   static constexpr auto kAllowed = base::MakeFixedFlatSet<std::string_view>(
       {"back", "click", "close_tab", "forward", "hand_off", "navigate", "press_key", "read_page",
        "screenshot", "scroll", "select_option", "snapshot", "type"});

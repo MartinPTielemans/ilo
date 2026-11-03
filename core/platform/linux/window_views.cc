@@ -24,6 +24,9 @@
 #include "browser_core/platform/linux/ui_text_input.h"
 #include "browser_core/platform/linux/wayland.h"
 #include "browser_core/window.h"
+#include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
+#include "chrome/browser/ui/views/native_widget_factory.h"
+#include "content/public/browser/web_contents.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/aura/client/focus_change_observer.h"
 #include "ui/aura/client/focus_client.h"
@@ -52,6 +55,7 @@
 #include "ui/base/hit_test.h"
 #include "ui/platform_window/platform_window.h"
 #include "ui/platform_window/wm/wm_move_resize_handler.h"
+#include "ui/views/views_delegate.h"
 #include "ui/views/widget/desktop_aura/desktop_native_widget_aura.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
@@ -954,9 +958,9 @@ void DetachOthers(aura::Window* holder,
 }  // namespace
 
 views::NativeWidget* NewNativeWidget(views::Widget* widget, base::RepeatingClosure) {
-  // shortcut: keeps the window manager's title bar, where the Mac's UI fills it; draw the app's
-  // own once the header row is ported. The window manager reports a state it has already left
-  // full screen for, as a show state change, so the page leaves with it and nothing runs early.
+  // Framed by none of the window manager's (wayland.cc's SetUpWindow): the app's header draws the
+  // window's buttons and moves it. The window manager reports a state it has already left full
+  // screen for, as a show state change, so the page leaves with it and nothing runs early.
   return new views::DesktopNativeWidgetAura(widget);
 }
 
@@ -1317,6 +1321,32 @@ void AnswerClipboardRequests() {
     connection->DispatchEvent(request);
   }
   connection->Flush();
+}
+
+void FloatPictureInPictureBubbles() {
+  if (OnWayland()) {
+    return;
+  }
+  // Chrome keeps a bubble on screen, and grows the Picture in Picture window to hold a child one
+  // (PipChildDialogObserverHelper): dragged partly off the screen, the window would jump back on
+  // it, taller, and stay so. A window of its own, the bubble needs no room in it.
+  views::ViewsDelegate::GetInstance()->set_native_widget_factory(base::BindRepeating(
+      [](const views::Widget::InitParams& params,
+         views::internal::NativeWidgetDelegate* delegate) -> views::NativeWidget* {
+        if (params.type != views::Widget::InitParams::TYPE_BUBBLE || !params.parent) {
+          return nullptr;
+        }
+        content::WebContents* floating =
+            PictureInPictureWindowManager::GetInstance()->GetChildWebContents();
+        if (!floating ||
+            views::Widget::GetTopLevelWidgetForNativeView(params.parent) !=
+                views::Widget::GetTopLevelWidgetForNativeView(floating->GetNativeView())) {
+          return nullptr;
+        }
+        // It only reads where the widget goes.
+        return ::CreateNativeWidget(NativeWidgetType::kDesktopNativeWidgetAura,
+                                    const_cast<views::Widget::InitParams*>(&params), delegate);
+      }));
 }
 
 }  // namespace browser_core::platform

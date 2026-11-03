@@ -137,3 +137,33 @@ fn the_numbers_can_leave_the_favorites_out(cx: &mut TestAppContext) {
     cx.update(|cx| change_keys(cx, |keys| keys.set_favorites_numbered(true)));
     assert_eq!(first_tab(&shell, &host, cx, 1), "select 40");
 }
+
+/// With Last Tab Goes to the Ninth Tab turned on (Settings › Shortcuts), ⌘9 is the ninth tab,
+/// counted as ⌘1–⌘8 count, with the favorites or past them, and asks for nothing in a Space with
+/// fewer. Turned off, the default, it's the last tab.
+#[gpui::test]
+fn the_last_tab_can_be_the_ninth(cx: &mut TestAppContext) {
+    let (shell, host) = shell_with_spaces(cx);
+    let today = |count: u64| (100..100 + count).collect::<Vec<u64>>();
+    let ninth = |shell: &Entity<Shell>, cx: &mut TestAppContext| {
+        host.take();
+        shell.update(cx, |shell, cx| shell.run(Command::SelectLastTab, "page", cx));
+        host.take().join(", ")
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_favorites(vec![(40, 7), (41, 7)], cx);
+        shell.set_tabs(1, Vec::new(), today(10), Vec::new(), Folders::default(), cx);
+    });
+    assert_eq!(ninth(&shell, cx), "select 109");
+    cx.update(|cx| change_keys(cx, |keys| keys.set_last_tab_ninth(true)));
+    // The two favorites, then the Space's first seven tabs.
+    assert_eq!(ninth(&shell, cx), "select 106");
+    cx.update(|cx| change_keys(cx, |keys| keys.set_favorites_numbered(false)));
+    assert_eq!(ninth(&shell, cx), "select 108");
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(1, Vec::new(), today(5), Vec::new(), Folders::default(), cx);
+    });
+    assert_eq!(ninth(&shell, cx), "");
+    cx.update(|cx| change_keys(cx, |keys| keys.reset_all()));
+    assert_eq!(ninth(&shell, cx), "select 104");
+}

@@ -38,9 +38,8 @@ use crate::tokens::toast::CHIP_FILL;
 use crate::tokens::toast::CHIP_GLYPH;
 use crate::tokens::toast::KEY_GAP;
 use crate::tokens::toast::KEY_COLOR;
-use crate::elevation::Level;
+use crate::elevation::{Level, WINDOW_MARGIN};
 use crate::tokens::toast::SHADE;
-pub use crate::tokens::toast::WINDOW_WIDTH;
 pub use crate::tokens::toast::WINDOW_HEIGHT;
 /// Arc's motion: it grows from 0.7 of its size about the middle of its top edge on a spring of
 /// 0.32 s and ζ 0.52, fading in over the first 0.1 s, and leaves the way it came over 0.07 s,
@@ -87,8 +86,6 @@ pub enum Label {
     Glyph(&'static str),
     /// Words and a key's name after them, in the button's chip: Undo ⌘Z.
     Keyed(SharedString, SharedString),
-    /// No chip: the toast itself is the button, as Arc's New Tab Created is.
-    Plate,
 }
 
 /// A button after the toast's words, such as Capture's Save. A click runs it with where the
@@ -187,7 +184,8 @@ struct ToastWindow(WindowHandle<Toast>);
 impl Global for ToastWindow {}
 
 /// Opens the toast's window, hidden, for `host` to show over the browser window, ahead of time as
-/// the find bar's is. The toast takes `look`'s colour and palette.
+/// the find bar's is. The toast takes `look`'s colour and palette. The host makes the window as
+/// wide as the page it shows over, and a toast too long for that shortens its words.
 pub fn open(
     host: Rc<dyn Host>,
     look: impl Fn(&App) -> (Hsla, Palette) + 'static,
@@ -196,7 +194,7 @@ pub fn open(
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
             point(px(0.), px(0.)),
-            size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)),
+            size(px(WINDOW_HEIGHT), px(WINDOW_HEIGHT)),
         ))),
         titlebar: Some(TitlebarOptions {
             title: None,
@@ -331,15 +329,18 @@ pub fn showing(text: &str, cx: &App) -> bool {
         .is_some_and(|shown| shown.leaving.is_none() && shown.text == text)
 }
 
-/// The undo it offered has been done some other way: its toast goes, if it shows.
+/// The undo it offered has been done some other way: its toast goes, if it shows, whether it
+/// offers the undo with its button or names its key, as "Space deleted! Use ⌘Z to undo." does.
 pub fn hide_undo(cx: &mut App) {
     let Some(window) = cx.try_global::<ToastWindow>().map(|toast| toast.0) else {
         return;
     };
+    let undo_key = crate::shell::keystroke_label("cmd-z");
     window
         .update(cx, |toast, _, cx| {
             let undoing = toast.shown.as_ref().is_some_and(|shown| {
                 shown.buttons.iter().any(|button| button.name == UNDO_BUTTON)
+                    || shown.key.as_ref().is_some_and(|(key, _)| **key == *undo_key)
             });
             if undoing {
                 toast.leave(cx);
@@ -509,6 +510,10 @@ impl Render for Toast {
             false => (HEIGHT, TOP, RIGHT),
         };
         let root = root.pt(px(top)).pr(px(right)).font_family(crate::face::UI);
+        // Its window is the page's width, and it keeps the margin its shadow falls in from the
+        // window's left edge too: words that would make it wider shorten, where the window's edge
+        // cut them (#1462).
+        let widest = (window.viewport_size().width - px(right + WINDOW_MARGIN)).max(px(0.));
         // AppKit puts the window on screen some frames after it's asked to, and only then does
         // GPUI draw it, so the motion starts there rather than skip its start.
         if shown.shown.is_none() && window.is_visible() {
@@ -526,9 +531,7 @@ impl Render for Toast {
         let (fill, palette) = (self.look)(cx);
         let bottom = Hsla { l: fill.l * SHADE, ..fill };
         let a11y = window.is_a11y_active();
-        let plate = shown.buttons.iter().position(|button| button.label == Label::Plate);
         let buttons: Vec<_> = (shown.buttons.iter().enumerate())
-            .filter(|(_, button)| button.label != Label::Plate)
             .map(|(index, button)| {
                 let chip = div()
                     .id(("toast-button", index))
@@ -546,7 +549,7 @@ impl Render for Toast {
                             // A keyed button goes by its words: Undo.
                             Label::Text(text) | Label::Keyed(text, _) => text.to_string(),
                             // A glyph's button goes by its name, "share" read as Share.
-                            Label::Glyph(_) | Label::Plate => {
+                            Label::Glyph(_) => {
                                 let mut name = button.name.to_owned();
                                 name[..1].make_ascii_uppercase();
                                 name
@@ -559,8 +562,6 @@ impl Render for Toast {
                     }));
                 match &button.label {
                     Label::Text(text) => chip.child(text.clone()),
-                    // Left out above: the toast itself is its button.
-                    Label::Plate => chip,
                     Label::Glyph(path) => chip.child(
                         svg().path(*path).size(px(CHIP_GLYPH)).text_color(palette.ink),
                     ),
@@ -579,21 +580,14 @@ impl Render for Toast {
         let toast = div()
             .id("toast")
             .when(a11y, |toast| {
-                let toast = match plate {
-                    Some(_) => toast.role(Role::Button).aria_label(said),
-                    None => toast.role(Role::Status).aria_value(said),
-                };
-                toast.a11y_synthetic_children(|builder| {
+                toast.role(Role::Status).aria_value(said).a11y_synthetic_children(|builder| {
                     builder.parent_node().set_live(Live::Polite)
                 })
             })
-            .when_some(plate, |toast, index| {
-                toast.on_click(cx.listener(move |toast, event: &ClickEvent, _, cx| {
-                    toast.press(index, event.position(), cx)
-                }))
-            })
             .on_hover(cx.listener(|toast, hovered: &bool, _, cx| toast.hover(*hovered, cx)))
             .h(px(height))
+            .flex_none()
+            .max_w(widest)
             .pl(px(TEXT_LEFT))
             .pr(px(TEXT_RIGHT))
             .flex()
@@ -608,7 +602,8 @@ impl Render for Toast {
             .text_size(px(TEXT_SIZE))
             .font_weight(FontWeight::MEDIUM)
             .text_color(palette.ink)
-            .child(shown.text.clone())
+            // Only the words give way; the buttons after them keep their size.
+            .child(div().min_w_0().truncate().child(shown.text.clone()))
             .children(shown.key.clone().map(|(key, rest)| {
                 div()
                     .flex()
@@ -634,10 +629,22 @@ impl Render for Toast {
             .child(canvas(
                 {
                     let (host, told) = (self.host.clone(), self.plate.clone());
-                    move |bounds, _, _| {
+                    move |bounds, window, _| {
                         // Inside the plate's 0.5 border.
                         let bounds = bounds.dilate(px(0.5));
                         if at_rest && told.replace(Some(bounds)) != Some(bounds) {
+                            let (x, y) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+                            let (width, height) = (bounds.size.width, bounds.size.height);
+                            let window = window.viewport_size();
+                            // check.sh reads this line, to click just outside the plate and to see
+                            // the window holds it whole.
+                            log!(
+                                "browser: toast plate {x:.0} {y:.0} {:.0} {:.0} in {:.0} {:.0}",
+                                f32::from(width),
+                                f32::from(height),
+                                f32::from(window.width),
+                                f32::from(window.height)
+                            );
                             host.plate(bounds);
                         }
                     }

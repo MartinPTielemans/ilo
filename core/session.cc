@@ -1,6 +1,8 @@
 #include "browser_core/session.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -10,16 +12,19 @@
 
 #include "base/base64.h"
 #include "base/callback_list.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/i18n/time_formatting.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/no_destructor.h"
 #include "base/path_service.h"
 #include "base/pickle.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
@@ -29,12 +34,16 @@
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/favorites.h"
+#include "browser_core/host.h"
 #include "browser_core/profiles.h"
+#include "browser_core/sidebar_backups.h"
 #include "browser_core/space.h"
+#include "browser_core/sync_spaces.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "chrome/browser/lifetime/application_lifetime_desktop.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/chrome_paths.h"
 #include "components/sessions/content/content_serialized_navigation_builder.h"
@@ -211,6 +220,7 @@ SavedSpace SaveSpace(const Space& space, bc_id shown, std::vector<bc_id>* today)
   to.color = space.color();
   to.icon = space.icon();
   to.theme = space.theme();
+  to.touched = space.touched();
   to.profile = space.profile();
   to.agent = space.agent();
   to.pinned_open = space.pinned_open();
@@ -288,9 +298,9 @@ namespace {
 
 Saved Collect() {
   Saved saved;
-  // The regular windows, as nothing of a private one is saved.
+  // The regular windows, as nothing of a window with a Space of its own is saved.
   std::vector<Window*> windows = Window::All();
-  std::erase_if(windows, [](const Window* each) { return each->off_the_record(); });
+  std::erase_if(windows, [](const Window* each) { return each->own_space(); });
   saved.settings = UserSettings();
   // Each Space saved, by its place among them.
   std::map<bc_id, int> spaces;
@@ -434,6 +444,9 @@ std::optional<std::string> ToJson(const Saved& saved) {
     if (!space.pinned_open) {
       dict.Set("pinned_open", false);
     }
+    if (!space.touched) {
+      dict.Set("untouched", true);
+    }
     if (!space.profile.empty()) {
       dict.Set("profile", space.profile);
     }
@@ -470,11 +483,14 @@ std::optional<std::string> ToJson(const Saved& saved) {
     archive.Append(base::DictValue()
                        .Set("url", tab.url.spec())
                        .Set("title", tab.title)
-                       .Set("archived", tab.archived.InMillisecondsFSinceUnixEpochIgnoringNull()));
+                       .Set("archived", tab.archived.InMillisecondsFSinceUnixEpochIgnoringNull())
+                       .Set("little", tab.little));
   }
   root.Set("archive", std::move(archive));
   root.Set("settings", base::DictValue()
                            .Set("archive_after", saved.settings.archive_after.InSecondsF())
+                           .Set("little_archive_after",
+                                saved.settings.little_archive_after.InSecondsF())
                            .Set("haptics", saved.settings.haptics)
                            .Set("warn_before_quitting", saved.settings.warn_before_quitting)
                            .Set("archive_noted", saved.settings.archive_noted)
@@ -584,6 +600,7 @@ std::optional<Saved> Read(const base::FilePath& path) {
       to.theme = *theme;
     }
     to.pinned_open = space->FindBool("pinned_open").value_or(true);
+    to.touched = !space->FindBool("untouched").value_or(false);
     if (const std::string* profile = space->FindString("profile")) {
       to.profile = *profile;
     }
@@ -708,7 +725,8 @@ std::optional<Saved> Read(const base::FilePath& path) {
         saved.archive.push_back(
             {.url = GURL(*url),
              .title = *title,
-             .archived = base::Time::FromMillisecondsSinceUnixEpoch(*archived)});
+             .archived = base::Time::FromMillisecondsSinceUnixEpoch(*archived),
+             .little = tab->FindBool("little").value_or(false)});
       }
     }
   }
@@ -716,6 +734,10 @@ std::optional<Saved> Read(const base::FilePath& path) {
     const double archive_after = settings->FindDouble("archive_after").value_or(0);
     if (archive_after > 0) {
       saved.settings.archive_after = base::Seconds(archive_after);
+    }
+    const double little_archive_after = settings->FindDouble("little_archive_after").value_or(0);
+    if (little_archive_after > 0) {
+      saved.settings.little_archive_after = base::Seconds(little_archive_after);
     }
     saved.settings.haptics = settings->FindBool("haptics").value_or(true);
     saved.settings.warn_before_quitting =
@@ -742,6 +764,182 @@ std::optional<Saved> Read(const base::FilePath& path) {
     saved.settings.widevine = settings->FindBool("widevine").value_or(false);
   }
   return saved;
+}
+
+base::FilePath BackupsDir(Profile* profile) {
+  return profile->GetPath().Append(FILE_PATH_LITERAL("Sidebar Backups"));
+}
+
+// Named by when it was taken, so listing them reads no file.
+base::FilePath BackupPath(const base::FilePath& dir, base::Time time) {
+  return dir.AppendASCII(base::NumberToString(time.InMillisecondsSinceUnixEpoch()) + ".json");
+}
+
+// The backups in |dir|, newest first.
+std::vector<base::Time> ListBackups(const base::FilePath& dir) {
+  std::vector<base::Time> times;
+  base::FileEnumerator files(dir, /*recursive=*/false, base::FileEnumerator::FILES,
+                             FILE_PATH_LITERAL("*.json"));
+  for (base::FilePath file = files.Next(); !file.empty(); file = files.Next()) {
+    int64_t milliseconds = 0;
+    if (base::StringToInt64(file.BaseName().RemoveExtension().MaybeAsASCII(), &milliseconds)) {
+      times.push_back(base::Time::FromMillisecondsSinceUnixEpoch(milliseconds));
+    }
+  }
+  std::ranges::sort(times, std::greater());
+  return times;
+}
+
+// On the writer's sequence: writes |saved| as a backup in |dir| at |now| if |force|, or if it's
+// the first or the newest is kBackupGap old, then deletes those Arc's schedule doesn't keep.
+// Returns those left, newest first.
+std::vector<base::Time> BackUp(const base::FilePath& dir,
+                               std::optional<Saved> saved,
+                               base::Time now,
+                               bool force) {
+  std::vector<base::Time> times = ListBackups(dir);
+  // To the millisecond, as its name has it.
+  now = base::Time::FromMillisecondsSinceUnixEpoch(now.InMillisecondsSinceUnixEpoch());
+  if (saved && (force || times.empty() || (now - times.front()).magnitude() >= kBackupGap)) {
+    std::optional<std::string> json = ToJson(*saved);
+    if (json && base::CreateDirectory(dir) &&
+        base::ImportantFileWriter::WriteFileAtomically(BackupPath(dir, now), *json)) {
+      times.insert(times.begin(), now);
+    }
+  }
+  std::vector<base::Time> kept = BackupsKept(times, now);
+  for (base::Time time : times) {
+    if (!std::ranges::contains(kept, time)) {
+      base::DeleteFile(BackupPath(dir, time));
+    }
+  }
+  return kept;
+}
+
+// On the writer's sequence: reads the backup in |dir| taken at |chosen|, then backs up |current|.
+std::pair<std::optional<Saved>, std::vector<base::Time>> ReadBackup(const base::FilePath& dir,
+                                                                    base::Time chosen,
+                                                                    Saved current,
+                                                                    base::Time now) {
+  std::optional<Saved> saved = Read(BackupPath(dir, chosen));
+  return {std::move(saved), BackUp(dir, std::move(current), now, /*force=*/true)};
+}
+
+// The directory of the profile |dir| names, the one the core started with for none.
+std::string SidebarProfile(const std::string& dir) {
+  Profile* start = dir.empty() ? StartProfile() : nullptr;
+  return start ? DirOf(start) : dir;
+}
+
+// The sidebar of the profile in |dir| in |saved|: its user's Spaces and its favorites, those of a
+// Space being saved with it.
+Saved ProfileSidebar(const Saved& saved, const std::string& dir) {
+  Saved sidebar;
+  // Where each favorite went among those kept, or -1.
+  std::vector<int> favorites;
+  for (const SavedTab& favorite : saved.favorites) {
+    const bool kept = SidebarProfile(favorite.profile) == dir;
+    favorites.push_back(kept ? static_cast<int>(sidebar.favorites.size()) : -1);
+    if (kept) {
+      sidebar.favorites.push_back(favorite);
+    }
+  }
+  for (const SavedSpace& space : saved.spaces) {
+    if (!space.agent && SidebarProfile(space.profile) == dir) {
+      SavedSpace& to = sidebar.spaces.emplace_back(space);
+      if (to.shown_favorite >= 0) {
+        to.shown_favorite = favorites[to.shown_favorite];
+      }
+    }
+  }
+  return sidebar;
+}
+
+// Tells the app which backups the profile in |dir| has, newest first.
+void ReportBackups(const std::string& dir, const std::vector<base::Time>& times) {
+  // check.sh reads this line.
+  fprintf(stderr, "browser: sidebar backups of %s: %zu\n", dir.c_str(), times.size());
+  if (!Host().sidebar_backups_changed) {
+    return;
+  }
+  std::vector<std::string> labels;
+  for (base::Time time : times) {
+    // Dates, not "Today", which would be wrong by the next day, in the user's locale and clock.
+    labels.push_back(base::UTF16ToUTF8(base::TimeFormatFriendlyDate(time) + u", " +
+                                       base::TimeFormatTimeOfDay(time)));
+  }
+  std::vector<bc_sidebar_backup> backups;
+  for (size_t i = 0; i < times.size(); ++i) {
+    backups.push_back({.time = times[i].InMillisecondsFSinceUnixEpoch(),
+                       .label = labels[i].c_str()});
+  }
+  Host().sidebar_backups_changed(Host().context, ProfileId(dir), backups.data(), backups.size());
+}
+
+// Puts |saved|, a backup of the sidebar of the profile in |dir|, in place of that profile's, and
+// has |window| show the Space it showed if the backup has it.
+void PutBackSidebar(Window& window, const std::string& dir, const Saved& saved) {
+  Profile* profile = ProfileFor(dir);
+  const bool any = std::ranges::any_of(saved.spaces, [](const SavedSpace& space) {
+    return !space.agent;
+  });
+  if (!profile || DirOf(profile) != dir || !any) {
+    return;
+  }
+  std::vector<bc_id> old;
+  for (Space* space : Space::All()) {
+    if (!space->agent() && SidebarProfile(space->profile()) == dir) {
+      old.push_back(space->id());
+    }
+  }
+  const Space* shown = Space::FromId(window.space());
+  const base::Uuid shown_node = shown ? shown->node().id : base::Uuid();
+  // Under One Profile the profile's favorites are its sidebar's. Under Every Space they're every
+  // profile's, which they stay, and under Each Space they come with their Spaces.
+  std::vector<bc_id> favorites;
+  if (Favorites::scope() == BC_FAVORITES_PROFILE) {
+    for (bc_id tab : Favorites::Of(dir)) {
+      if (!Favorites::SpaceOf(tab)) {
+        Window::CloseTab(tab);
+      }
+    }
+    for (const SavedTab& saved_tab : saved.favorites) {
+      const bc_id tab = favorites.emplace_back(Tab::Restore(profile, saved_tab));
+      if (tab) {
+        Favorites::Restore(tab,
+                           saved_tab.pinned_url.is_valid()
+                               ? saved_tab.pinned_url
+                               : saved_tab.history[saved_tab.current].virtual_url(),
+                           /*space=*/0, saved_tab.site);
+      }
+    }
+  }
+  bc_id show = 0;
+  for (const SavedSpace& saved_space : saved.spaces) {
+    if (saved_space.agent) {
+      continue;
+    }
+    Space* space = RestoreSpace(window, profile, saved_space);
+    const int favorite = saved_space.shown_favorite;
+    if (favorite >= 0 && static_cast<size_t>(favorite) < favorites.size() &&
+        favorites[favorite]) {
+      window.SetSelectedIn(space->id(), favorites[favorite]);
+    }
+    if (!show || (shown_node.is_valid() && saved_space.node.id == shown_node)) {
+      show = space->id();
+    }
+  }
+  // Under Every Space, the profile gets a tab for each site its Spaces came back without.
+  Favorites::Complete();
+  window.ShowSpace(show);
+  // Once the backup's are in, as the last Space isn't deleted. The sidebar they made up is the
+  // newest backup, which brings them back.
+  for (bc_id space : old) {
+    Window::DeleteSpace(space);
+  }
+  // check.sh waits for this line.
+  fprintf(stderr, "browser: sidebar of %s restored, %zu Spaces\n", dir.c_str(),
+          saved.spaces.size());
 }
 
 class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
@@ -788,10 +986,99 @@ class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
   base::ImportantFileWriter::BackgroundDataProducerCallback
   GetSerializedDataProducerForBackgroundSequence() override {
     // What's in the Spaces is read here, and written out as JSON on the writer's sequence.
-    return base::BindOnce(&ToJson, Collect());
+    Saved saved = Collect();
+    BackUpSidebars(saved);
+    return base::BindOnce(&ToJson, std::move(saved));
+  }
+
+  // Lists the backups of the profiles the Spaces are in, for the app's menu.
+  void ListSidebars() {
+    for (const Space* space : Space::All()) {
+      const std::string dir = SidebarProfile(space->profile());
+      if (!space->agent() && !sidebars_.contains(dir)) {
+        PostBackUp(dir, std::nullopt);
+      }
+    }
+  }
+
+  bool RestoreSidebar(Window& window, base::Time time) {
+    const Space* shown = Space::FromId(window.space());
+    if (!shown || shown->agent() || window.off_the_record()) {
+      return false;
+    }
+    const std::string dir = SidebarProfile(shown->profile());
+    Profile* profile = ProfileFor(dir);
+    if (!profile || DirOf(profile) != dir) {
+      return false;
+    }
+    sidebars_[dir].busy = true;
+    task_runner_->PostTaskAndReplyWithResult(
+        FROM_HERE,
+        base::BindOnce(&ReadBackup, BackupsDir(profile), time, ProfileSidebar(Collect(), dir),
+                       base::Time::Now()),
+        base::BindOnce(&Saver::OnReadBackup, base::Unretained(this), window.id(), dir));
+    return true;
   }
 
  private:
+  // A profile's backups, newest first, once listed, and whether a backup or a listing is on the
+  // writer's sequence.
+  struct Sidebar {
+    std::vector<base::Time> backups;
+    bool busy = false;
+  };
+
+  // Backs up the sidebar of each profile in |saved| whose newest backup is kBackupGap old. One not
+  // listed yet is listed, and backed up if it's due.
+  void BackUpSidebars(const Saved& saved) {
+    const base::Time now = base::Time::Now();
+    std::set<std::string> dirs;
+    for (const SavedSpace& space : saved.spaces) {
+      if (!space.agent) {
+        dirs.insert(SidebarProfile(space.profile));
+      }
+    }
+    for (const std::string& dir : dirs) {
+      auto it = sidebars_.find(dir);
+      if (it != sidebars_.end() &&
+          (it->second.busy || (!it->second.backups.empty() &&
+                               (now - it->second.backups.front()).magnitude() < kBackupGap))) {
+        continue;
+      }
+      PostBackUp(dir, ProfileSidebar(saved, dir));
+    }
+  }
+
+  void PostBackUp(const std::string& dir, std::optional<Saved> saved) {
+    Profile* profile = ProfileFor(dir);
+    if (!profile || DirOf(profile) != dir) {
+      return;
+    }
+    sidebars_[dir].busy = true;
+    task_runner_->PostTaskAndReplyWithResult(
+        FROM_HERE,
+        base::BindOnce(&BackUp, BackupsDir(profile), std::move(saved), base::Time::Now(),
+                       /*force=*/false),
+        base::BindOnce(&Saver::OnBackedUp, base::Unretained(this), dir));
+  }
+
+  void OnBackedUp(const std::string& dir, std::vector<base::Time> backups) {
+    sidebars_[dir] = {.backups = backups};
+    ReportBackups(dir, backups);
+  }
+
+  void OnReadBackup(bc_id window,
+                    const std::string& dir,
+                    std::pair<std::optional<Saved>, std::vector<base::Time>> read) {
+    OnBackedUp(dir, std::move(read.second));
+    Window* showing = Window::FromId(window);
+    if (!showing || !read.first) {
+      fprintf(stderr, "browser: sidebar of %s not restored\n", dir.c_str());
+      return;
+    }
+    PutBackSidebar(*showing, dir, *read.first);
+  }
+
   // At logout, restart or SIGTERM, Chrome writes what it must and exits without waiting for the
   // writer's sequence, so the Spaces are written here, as it allows.
   void OnClosingAll(bool closing) {
@@ -841,6 +1128,8 @@ class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
   base::CallbackListSubscription closing_all_;
   std::optional<Saved> loaded_;
   bool kept_ = false;
+  // By profile directory.
+  std::map<std::string, Sidebar> sidebars_;
 };
 
 // Made by LoadSession and never deleted, as Chrome's shutdown may still be writing its file.
@@ -860,6 +1149,7 @@ void SessionChanged() {
   if (g_saver) {
     g_saver->Changed();
   }
+  sync_spaces::Changed();
 }
 
 void KeepSession() {
@@ -930,6 +1220,7 @@ Space* RestoreSpace(Window& window,
   space->SetIcon(saved_space.icon);
   space->SetTheme(saved_space.theme);
   space->SetPinnedOpen(saved_space.pinned_open);
+  space->SetTouched(saved_space.touched);
   space->SetProfile(DirOf(profile));
   // Else the Space comes back as a new window shows it: its pinned tabs, none shown, and no Today
   // tabs, which go in the archive.
@@ -1074,7 +1365,12 @@ bool RestoreSession(Window& window) {
   if (!RestoreSavedWindow(window, 0)) {
     window.ShowSpace(RestoredSpaces().front(), /*page=*/UserSettings().restore_windows);
   }
+  g_saver->ListSidebars();
   return true;
+}
+
+bool RestoreSidebar(Window& window, base::Time time) {
+  return g_saver && g_saver->RestoreSidebar(window, time);
 }
 
 }  // namespace browser_core

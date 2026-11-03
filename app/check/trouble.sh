@@ -46,8 +46,9 @@ if [ "$active" != 1 ]; then
   exit 0
 fi
 
-# expect, for up to 30 s: Chrome calls a page hung only 15 s after the input it hasn't answered.
-expect_late() {
+# expect_late, failing at once if the app exits: Chrome calls a page hung only 15 s after the input
+# it hasn't answered.
+expect_hung() {
   for _ in $(seq 300); do
     sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q "$1" && return 0
     kill -0 "$pid" 2>/dev/null || fail "the app exited"
@@ -67,7 +68,7 @@ toast_wait="$((width - 18 - 106)) 41"
 hang() {
   send click $page_point
   send key w
-  expect_late "browser: tab $tab page hung" "$1: the busy page wasn't called hung"
+  expect_hung "browser: tab $tab page hung" "$1: the busy page wasn't called hung"
   expect "^browser: page $tab trouble hung\$" "$1: the app didn't hear the page hung"
   expect '^browser: toast shown Not responding \[wait, reload\]$' "$1: the toast didn't say Not responding"
   expect '^browser: toast settled$' "$1: the toast didn't settle"
@@ -76,7 +77,7 @@ hang() {
 # Hung, the note shows with the row's mark, and goes by itself once the page answers.
 hang "hung"
 ../tools/window-screenshot.sh "$pid" "$out/hung.png" || fail "no window to capture"
-expect_late "^browser: title $tab woke 1\$" "the busy page didn't wake"
+expect_hung "^browser: title $tab woke 1\$" "the busy page didn't wake"
 expect "^browser: page $tab trouble fine\$" "the page answering didn't make it fine"
 expect '^browser: toast hidden$' "the note stayed once the page answered"
 
@@ -86,7 +87,7 @@ send move $toast_wait
 send click $toast_wait
 expect '^browser: toast button wait$' "Wait wasn't pressed at $toast_wait"
 expect "^browser: page $tab trouble fine\$" "Wait didn't make the page fine"
-expect_late "^browser: title $tab woke 2\$" "the busy page didn't wake after Wait"
+expect_hung "^browser: title $tab woke 2\$" "the busy page didn't wake after Wait"
 none_since "page $tab trouble hung" || fail "the page was called hung again within Wait's time"
 
 # Reload ends the renderer and loads the page again, without the crash card.
@@ -168,7 +169,7 @@ send key return
 expect "^browser: page $tab trouble network -102\$" "a port with no server wasn't refused"
 python3 -I -m http.server "$free" --bind 127.0.0.1 --directory "$out/site" > "$out/late-server.log" 2>&1 &
 stuck=$!
-expect_late "^browser: loaded $tab http://127.0.0.1:$free/\$" "the refused page didn't load once the server was there"
+expect_hung "^browser: loaded $tab http://127.0.0.1:$free/\$" "the refused page didn't load once the server was there"
 expect "^browser: page $tab trouble fine\$" "the page that came wasn't fine"
 kill "$stuck"
 stuck=

@@ -5,6 +5,8 @@
 import("//build/config/sanitizers/sanitizers.gni")
 import("//mojo/public/tools/bindings/mojom.gni")
 import("//testing/test.gni")
+import("//third_party/protobuf/proto_library.gni")
+import("//ui/base/ui_features.gni")
 
 # What a page tells the core about the key system it asks for. Blink's encrypted media module calls
 # it (engine/patches/ours/chromium-drm-request.patch), so it has a Blink variant.
@@ -38,6 +40,11 @@ source_set("search_default") {
   ]
 }
 
+# What the Spaces sync type's entities hold (sync_spaces.cc).
+proto_library("sync_spaces_proto") {
+  sources = [ "sync_spaces.proto" ]
+}
+
 config("exports") {
   # The framework exports only what chrome/app/framework.exports lists. This adds the C API.
   ldflags = [ "-Wl,-exported_symbols_list," + rebase_path("exports.txt", root_build_dir) ]
@@ -64,11 +71,65 @@ config("app_calls") {
   }
 }
 
+# The account secret's words and pairing's cryptography and rules, which need no browser, so
+# browser_core_unittests tests them alone.
+source_set("sync_keys") {
+  sources = [
+    "sync_pairing.cc",
+    "sync_pairing.h",
+    "sync_words.cc",
+    "sync_words.h",
+    "sync_words_list.cc",
+  ]
+  deps = [
+    "//base",
+    "//crypto",
+    "//third_party/boringssl",
+  ]
+}
+
+# What the account's sync lets go to its server, on sync's own sequences, apart so
+# browser_core_unittests tests it alone.
+source_set("sync_guard") {
+  sources = [
+    "sync_guard.cc",
+    "sync_guard.h",
+  ]
+  deps = [
+    ":sync_keys",
+    "//base",
+    "//components/sync",
+    "//components/sync/protocol",
+    "//crypto",
+  ]
+}
+
+# Whether a device's first Space gives way to the account's, apart so browser_core_unittests
+# tests the rule alone.
+source_set("space_default") {
+  sources = [
+    "space_default.cc",
+    "space_default.h",
+  ]
+}
+
+# Which sidebar backups Arc's schedule keeps, apart so browser_core_unittests tests the rule
+# alone.
+source_set("sidebar_backups") {
+  sources = [
+    "sidebar_backups.cc",
+    "sidebar_backups.h",
+  ]
+  deps = [ "//base" ]
+}
+
 source_set("browser_core") {
   configs += [ ":app_calls" ]
   sources = [
     "ad_block.cc",
     "ad_block.h",
+    "address_import.cc",
+    "address_import.h",
     "agent_autofill.cc",
     "agent_autofill.h",
     "agent_page.cc",
@@ -82,6 +143,8 @@ source_set("browser_core") {
     "auto_archive.h",
     "autofill_data.cc",
     "autofill_data.h",
+    "autofill_offer.cc",
+    "autofill_offer.h",
     "browser_window_stand_in.cc",
     "browser_window_stand_in.h",
     "capture.cc",
@@ -169,6 +232,12 @@ source_set("browser_core") {
     "space.h",
     "suggest.cc",
     "suggest.h",
+    "sync.cc",
+    "sync.h",
+    "sync_relay.cc",
+    "sync_relay.h",
+    "sync_spaces.cc",
+    "sync_spaces.h",
     "system_engine.cc",
     "system_engine.h",
     "tab.cc",
@@ -183,7 +252,12 @@ source_set("browser_core") {
   deps = [
     ":drm_request",
     ":search_default",
+    ":sidebar_backups",
+    ":space_default",
+    ":sync_guard",
+    ":sync_keys",
     "//base",
+    "//base:i18n",
     "//chrome/app:command_ids",
     "//chrome/app:generated_resources",
     "//chrome/browser",
@@ -266,6 +340,8 @@ source_set("browser_core") {
     "//components/keyed_service/core",
     "//components/media_router/browser",
     "//components/media_router/common",
+    "//components/os_crypt/async/browser",
+    "//components/os_crypt/async/common",
     "//components/find_in_page",
     "//components/input",
     "//components/keep_alive_registry",
@@ -290,6 +366,12 @@ source_set("browser_core") {
     "//components/sync/base",
     "//components/strings:components_branded_strings_grit",
     "//components/strings:components_strings_grit",
+    "//components/signin/public/identity_manager",
+    "//components/sync",
+    "//components/sync/invalidations",
+    "//components/sync/protocol",
+    ":sync_spaces_proto",
+    "//components/sync_device_info",
     "//components/tabs:public",
     "//components/update_client",
     "//components/url_formatter",
@@ -298,9 +380,12 @@ source_set("browser_core") {
     "//components/zoom",
     "//content/public/browser",
     "//content/public/common",
+    "//crypto",
     "//extensions/browser",
     "//extensions/common",
+    "//google_apis",
     "//mojo/public/cpp/bindings",
+    "//mojo/public/cpp/system",
     "//net",
     "//services/media_session/public/mojom",
     "//services/network/public/cpp",
@@ -308,6 +393,7 @@ source_set("browser_core") {
     "//skia",
     "//third_party/blink/public/common",
     "//third_party/blink/public/mojom:mojom_core",
+    "//third_party/boringssl",
     "//third_party/crashpad/crashpad/client",
     "//third_party/widevine/cdm:buildflags",
     "//ui/accessibility",
@@ -401,6 +487,7 @@ source_set("browser_core") {
       "platform/linux/window_views.cc",
     ]
     deps += [
+      "//chrome/browser/ui/views:native_widget_factory",
       "//third_party/wayland:wayland_client",
       "//ui/aura",
       "//ui/base/ime",
@@ -423,16 +510,40 @@ source_set("browser_core") {
 # The core's tests that run without the browser. engine/linux/build.sh builds them, and the Linux
 # engine's run runs them.
 test("browser_core_unittests") {
-  sources = [ "search_default_unittest.cc" ]
+  sources = [
+    "search_default_unittest.cc",
+    "sidebar_backups_unittest.cc",
+
+    # Space alone, with what it asks of the rest of the core stubbed in its test.
+    "space.cc",
+    "space_default_unittest.cc",
+    "space_unittest.cc",
+    "sync_guard_unittest.cc",
+    "sync_pairing_unittest.cc",
+  ]
   deps = [
     ":search_default",
+    ":sidebar_backups",
+    ":space_default",
+    ":sync_guard",
+    ":sync_keys",
     "//base",
     "//base/test:run_all_unittests",
     "//base/test:test_support",
     "//components/search_engines",
     "//components/search_engines:test_support",
+    "//components/sync",
+    "//components/sync/protocol",
     "//components/sync_preferences:test_support",
     "//components/variations:test_support",
     "//testing/gtest",
+    "//url",
   ]
+  if (use_xkbcommon) {
+    sources += [ "xkb_no_keymap_unittest.cc" ]
+    deps += [
+      "//ui/events:dom_keycode_converter",
+      "//ui/events/ozone/layout",
+    ]
+  }
 }

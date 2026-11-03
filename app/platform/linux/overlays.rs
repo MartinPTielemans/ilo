@@ -77,6 +77,8 @@ pub(crate) fn lend_keyboard(window: bc::bc_id, view: *mut c_void, takes: bool) {
     // The keys typed in the page since the shortcut that opened it are its.
     if takes {
         crate::give_held_keys(view);
+        // Wayland leaves GPUI's window active under it, so a field there would stay open.
+        crate::ui_keyboard_left_in(window);
     }
 }
 
@@ -240,6 +242,25 @@ pub extern "C" fn host_set_overlay_height(overlay: c_int, height: f64) {
 #[unsafe(no_mangle)]
 pub extern "C" fn host_hide_overlay(overlay: c_int) {
     hide(overlay);
+}
+
+/// Wayland lets no window move by itself, so the bar hides where it is and the card comes in.
+#[unsafe(no_mangle)]
+pub extern "C" fn host_fold_overlay(
+    overlay: c_int,
+    _x: f64,
+    _y: f64,
+    _width: f64,
+    _height: f64,
+    _radius: f64,
+    _from: u32,
+    _to: u32,
+    _duration: f64,
+    _fade: f64,
+    _fade_only: bool,
+) -> bool {
+    hide(overlay);
+    false
 }
 
 #[unsafe(no_mangle)]

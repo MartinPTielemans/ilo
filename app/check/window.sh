@@ -52,6 +52,8 @@ page=$(base64 << 'HTML' | tr -d '\n'
     if (last && time - lastScroll < 20) intervals.push(time - last);
     last = time;
     if (performance.now() - lastScroll < 300) return requestAnimationFrame(frame);
+    // A scroll after the pause, as when the session stalls mid-scroll, counts on from here.
+    measuring = false;
     const sorted = [...intervals].sort((a, b) => a - b);
     const at = q => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))].toFixed(1);
     const fps = Math.round(1000 * intervals.length / intervals.reduce((a, b) => a + b, 0));
@@ -197,7 +199,9 @@ scroll="10 300"
 [ "$(uname)" = Linux ] && scroll="1 25"
 send scroll $page_point $scroll
 expect '^browser: title [0-9]* frames' "scrolling didn't move the page"
-timing=$(grep -m1 '^browser: title [0-9]* frames' "$log" | sed 's/^browser: title [0-9]* //')
+# The page says its count after each pause of 300 ms, so the last is the whole scroll's.
+await '^browser: title [0-9]* frames .* scrolled 3000$' || true
+timing=$(grep '^browser: title [0-9]* frames' "$log" | tail -1 | sed 's/^browser: title [0-9]* //')
 echo "$timing" | grep -q ' scrolled 3000$' || fail "the page didn't scroll by exactly 3000 points: $timing"
 frames=$(echo "$timing" | sed 's/^frames \([0-9]*\) .*/\1/')
 slow=$(echo "$timing" | sed 's/.* slow \([0-9]*\) .*/\1/')
@@ -252,7 +256,9 @@ send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar in full screen"
 # The footer is at the screen's bottom in full screen, so the +'s menu flips up over the pointer.
 post click 204 $((height - 25))
-expect "^browser: menu shown $(cased 'New Space…, New Folder…, New Split View, New Note')\$" "the footer's + in full screen showed no menu"
+plus="New Space…, New Folder…, New Split View, New Note, $(plus_adds)"
+expect "^browser: menu shown $(cased "$plus")\$" \
+  "the footer's + in full screen showed no menu"
 expect '^browser: menu window at ' "the +'s menu in full screen didn't open its window"
 top=$(grep '^browser: menu window at' "$log" | tail -1 | cut -d' ' -f5 | cut -d, -f2)
 [ "$top" -lt $((height - 65)) ] ||
@@ -690,8 +696,8 @@ none_since '^browser: reveal by option$' ||
   fail "⌥ let go after a key with the page focused brought the sidebar out"
 send key s cmd
 toggle page shown "⌘S from the page after ⌥"
-# With the sidebar hidden, a tab opening says so in a toast, as its row isn't seen, and a click on
-# the toast, which is its own button, brings the sidebar back.
+# With the sidebar hidden, a tab opening says so in a toast, as its row isn't seen, and its Show
+# brings the sidebar back.
 send key s cmd
 toggle page hidden "⌘S from the page before opening a tab"
 before=$(today)
@@ -704,18 +710,19 @@ expect '^browser: toast shown New Tab Created \[show\]$' \
   "a tab opened with the sidebar hidden had no toast"
 expect '^browser: toast settled$' "the new tab's toast didn't settle"
 ../tools/window-screenshot.sh "$pid" "$out/new-tab-toast.png" || fail "no window to capture"
-# A click 20 in from the plate's left, on its words, as there's no chip. The plate is logged in the
-# toast's window, 420 wide at the content's right.
-expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]*$' "the new tab's toast didn't tell where its plate is"
-set -- $(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //')
+# A click on Show, the chip at the plate's right end: 13.5 in from it and about 50 wide. The plate is
+# logged in the toast's window, whose width comes after it, at the content's right.
+expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]* in [0-9]* [0-9]*$' \
+  "the new tab's toast didn't tell where its plate is"
+set -- $(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //; s/ in / /')
 send layout
 content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
   sed 's/^browser: layout content \([0-9]*\)x[0-9]*,.*/\1/')
-show="$((content - 420 + $1 + 20)) $(($2 + $4 / 2))"
+show="$((content - $5 + $1 + $3 - 14 - 25)) $(($2 + $4 / 2))"
 send move $show
 send click $show
-expect '^browser: toast button show$' "a click on the new tab's toast at $show didn't take"
-expect '^browser: sidebar shown$' "a click on the new tab's toast didn't bring the sidebar back"
+expect '^browser: toast button show$' "a click on the new tab's toast's Show at $show didn't take"
+expect '^browser: sidebar shown$' "the new tab's toast's Show didn't bring the sidebar back"
 check_layout "after a click on the new tab's toast"
 # The sidebar's edge, the 6 pt right of its rows, drags its width between 164 and 500, Arc's, and
 # stops at them. Dragged on past half the narrowest, it hides the sidebar at once, which keeps the
@@ -758,7 +765,7 @@ if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
   # faint and known: stops at 0.06 in dark and 0.09 in light, from black at the top to 0.25 · 255
   # at the bottom.
   post rightclick 100 112
-  expect '^browser: menu shown Rename Space' "a right-click on the Space's name showed no menu"
+  expect "^browser: menu shown $(cased 'Change Space Icon…')" "a right-click on the Space's name showed no menu"
   send choose "$(cased 'Edit Theme Color…')"
   expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
   expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
@@ -780,7 +787,7 @@ if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
       expect '^browser: window light true$' "the window didn't turn light with the Mac"
       ../tools/window-screenshot.sh "$pid" "$out/light.png" || fail "no window to capture"
       post rightclick 100 112
-      expect '^browser: menu shown Rename Space' "a right-click on the Space's name showed no menu"
+      expect "^browser: menu shown $(cased 'Change Space Icon…')" "a right-click on the Space's name showed no menu"
       ../tools/window-screenshot.sh "$pid" "$out/light-menu.png" || fail "no window to capture"
       send key escape
       expect '^browser: menu closed$' "escape didn't close the Space's menu"

@@ -1,7 +1,7 @@
-diff --git i/crates/gpui_wgpu/Cargo.toml w/crates/gpui_wgpu/Cargo.toml
+diff --git a/crates/gpui_wgpu/Cargo.toml b/crates/gpui_wgpu/Cargo.toml
 index 3ce9dcecc4..ce6de4149b 100644
---- i/crates/gpui_wgpu/Cargo.toml
-+++ w/crates/gpui_wgpu/Cargo.toml
+--- a/crates/gpui_wgpu/Cargo.toml
++++ b/crates/gpui_wgpu/Cargo.toml
 @@ -42,7 +42,9 @@ gpui_util.workspace = true
  font-kit = { workspace = true, optional = true }
  
@@ -13,3 +13,187 @@ index 3ce9dcecc4..ce6de4149b 100644
  
  [target.'cfg(not(any(target_os = "linux", target_os = "freebsd")))'.dependencies]
  wgpu = { workspace = true, default-features = true }
+diff --git a/crates/gpui_wgpu/src/wgpu_context.rs b/crates/gpui_wgpu/src/wgpu_context.rs
+index 16d451f008..bb3d226cf2 100644
+--- a/crates/gpui_wgpu/src/wgpu_context.rs
++++ b/crates/gpui_wgpu/src/wgpu_context.rs
+@@ -17,6 +17,8 @@ pub struct WgpuContext {
+     dual_source_blending: bool,
+     color_texture_format: wgpu::TextureFormat,
+     errors: Arc<DeviceErrorState>,
++    /// The pipelines the device's renderers share, so a window opens without compiling its own.
++    pub(crate) pipelines: Arc<crate::wgpu_renderer::PipelineCache>,
+ }
+ 
+ /// Errors reported by wgpu's device-wide callbacks.
+@@ -313,6 +315,7 @@ impl WgpuContext {
+             dual_source_blending,
+             color_texture_format,
+             errors,
++            pipelines: Default::default(),
+         }
+     }
+ 
+@@ -412,6 +415,7 @@ impl WgpuContext {
+             dual_source_blending,
+             color_texture_format,
+             errors,
++            pipelines: Default::default(),
+         };
+         Ok(PreparedWebGraphics { context, surface })
+     }
+diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
+index a148a4ccfb..f7b2e000a2 100644
+--- a/crates/gpui_wgpu/src/wgpu_renderer.rs
++++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
+@@ -178,12 +178,72 @@ enum InstanceData {
+     },
+ }
+ 
++/// What a set of pipelines is built for: a renderer with the same can use them.
++#[derive(Clone, Copy, PartialEq)]
++struct PipelineKey {
++    surface_format: wgpu::TextureFormat,
++    alpha_mode: wgpu::CompositeAlphaMode,
++    path_sample_count: u32,
++    dual_source_blending: bool,
++}
++
++/// The bind group layouts and pipelines of a device, built once for all its renderers. Compiling
++/// them takes long on a software rasterizer such as llvmpipe, and each window built its own, twice
++/// for a transparent one (#1028).
++#[derive(Default)]
++pub(crate) struct PipelineCache {
++    layouts: parking_lot::Mutex<Option<Arc<WgpuBindGroupLayouts>>>,
++    pipelines: parking_lot::Mutex<Vec<(PipelineKey, Arc<WgpuPipelines>)>>,
++}
++
++impl PipelineCache {
++    fn layouts(
++        &self,
++        device: &wgpu::Device,
++        uses_webgl_instance_data: bool,
++    ) -> Arc<WgpuBindGroupLayouts> {
++        self.layouts
++            .lock()
++            .get_or_insert_with(|| {
++                Arc::new(WgpuRendererCore::create_bind_group_layouts(
++                    device,
++                    uses_webgl_instance_data,
++                ))
++            })
++            .clone()
++    }
++
++    fn pipelines(
++        &self,
++        device: &wgpu::Device,
++        layouts: &WgpuBindGroupLayouts,
++        key: PipelineKey,
++        uses_webgl_instance_data: bool,
++    ) -> Arc<WgpuPipelines> {
++        let mut pipelines = self.pipelines.lock();
++        if let Some((_, shared)) = pipelines.iter().find(|(built, _)| *built == key) {
++            return shared.clone();
++        }
++        let built = Arc::new(WgpuRendererCore::create_pipelines(
++            device,
++            layouts,
++            key.surface_format,
++            key.alpha_mode,
++            key.path_sample_count,
++            key.dual_source_blending,
++            uses_webgl_instance_data,
++        ));
++        pipelines.push((key, built.clone()));
++        built
++    }
++}
++
+ /// GPU resources that must be dropped together during device recovery.
+ struct WgpuResources {
+     device: Arc<wgpu::Device>,
+     queue: Arc<wgpu::Queue>,
+-    pipelines: WgpuPipelines,
+-    bind_group_layouts: WgpuBindGroupLayouts,
++    pipelines: Arc<WgpuPipelines>,
++    bind_group_layouts: Arc<WgpuBindGroupLayouts>,
+     atlas_sampler: wgpu::Sampler,
+     atlas_texture_bind_groups: FxHashMap<AtlasTextureId, CachedTextureBindGroup>,
+     globals_buffer: wgpu::Buffer,
+@@ -1063,19 +1123,42 @@ impl WgpuRenderer {
+         self.surface_config.alpha_mode = new_alpha_mode;
+         let format = self.surface_config.format;
+ 
++        let gpu_context = self.context.clone();
+         let Some(core) = self.core_mut() else {
+             return;
+         };
++        let key = PipelineKey {
++            surface_format: format,
++            alpha_mode: new_alpha_mode,
++            path_sample_count: core.rendering_params.path_sample_count,
++            dual_source_blending: core.dual_source_blending,
++        };
++        let uses_webgl_instance_data = core.uses_webgl_instance_data;
+         let resources = &mut core.resources;
+-        resources.pipelines = WgpuRendererCore::create_pipelines(
+-            &resources.device,
+-            &resources.bind_group_layouts,
+-            format,
+-            new_alpha_mode,
+-            core.rendering_params.path_sample_count,
+-            core.dual_source_blending,
+-            core.uses_webgl_instance_data,
+-        );
++        // The device's shared pipelines, unless this renderer's device is no longer the context's.
++        let shared = gpu_context.as_ref().and_then(|gpu_context| {
++            let gpu_context = gpu_context.borrow();
++            let context = gpu_context.as_ref()?;
++            Arc::ptr_eq(&context.device, &resources.device).then(|| {
++                context.pipelines.pipelines(
++                    &resources.device,
++                    &resources.bind_group_layouts,
++                    key,
++                    uses_webgl_instance_data,
++                )
++            })
++        });
++        resources.pipelines = shared.unwrap_or_else(|| {
++            Arc::new(WgpuRendererCore::create_pipelines(
++                &resources.device,
++                &resources.bind_group_layouts,
++                format,
++                new_alpha_mode,
++                key.path_sample_count,
++                key.dual_source_blending,
++                uses_webgl_instance_data,
++            ))
++        });
+ 
+         if let RendererState::Ready { surface, core } = &self.state {
+             surface.configure(&core.resources.device, &self.surface_config);
+@@ -1219,14 +1302,17 @@ impl WgpuRendererCore {
+         let uses_webgl_instance_data = context.uses_webgl_instance_data();
+         let dual_source_blending =
+             context.supports_dual_source_blending() && !uses_webgl_instance_data;
+-        let bind_group_layouts = Self::create_bind_group_layouts(&device, uses_webgl_instance_data);
+-        let pipelines = Self::create_pipelines(
+-            &device,
+-            &bind_group_layouts,
+-            target_format,
++        let bind_group_layouts = context.pipelines.layouts(&device, uses_webgl_instance_data);
++        let key = PipelineKey {
++            surface_format: target_format,
+             alpha_mode,
+-            rendering_params.path_sample_count,
++            path_sample_count: rendering_params.path_sample_count,
+             dual_source_blending,
++        };
++        let pipelines = context.pipelines.pipelines(
++            &device,
++            &bind_group_layouts,
++            key,
+             uses_webgl_instance_data,
+         );
+         let atlas_sampler = device.create_sampler(&wgpu::SamplerDescriptor {

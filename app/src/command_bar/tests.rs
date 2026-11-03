@@ -21,8 +21,18 @@ struct Recorder {
     /// What the core was asked to suggest for, the text and whether it may complete it.
     asked: RefCell<Vec<(String, bool)>>,
     shown: RefCell<Vec<String>>,
+    /// Each show's level and the height last asked for as it showed, and every height asked for.
+    levels: RefCell<Vec<(Level, Option<f32>)>>,
+    heights: RefCell<Vec<f32>>,
     commands: bool,
+    /// Commands that do nothing now, so the bar isn't offered them, such as a split's outside one.
+    idle: Vec<shell::Command>,
     elsewhere: RefCell<HashMap<u64, u64>>,
+    /// The agents ⇥ asks, None while tasks are off, and the page the user is on.
+    agents: RefCell<Option<TaskAgents>>,
+    page: Option<(SharedString, SharedString)>,
+    /// The bar shows over a private window.
+    private: bool,
 }
 
 impl Recorder {
@@ -99,15 +109,18 @@ impl Host for Recorder {
         self.record(format!("copy {text}"));
     }
 
-    fn show(&self, centered: bool, left: f32, top: f32, width: f32, radius: f32) {
+    fn show(&self, centered: bool, left: f32, top: f32, width: f32, radius: f32, level: Level) {
         let place = match centered {
             true => format!("centred {top} above the middle"),
             false => format!("at {left} {top}"),
         };
         self.shown.borrow_mut().push(format!("{place}, {width} wide, radius {radius}"));
+        self.levels.borrow_mut().push((level, self.heights.borrow().last().copied()));
     }
 
-    fn set_height(&self, _: f32) {}
+    fn set_height(&self, height: f32) {
+        self.heights.borrow_mut().push(height);
+    }
 
     fn hide(&self) {
         self.record("hide".into());
@@ -117,13 +130,66 @@ impl Host for Recorder {
         self.record("dismiss".into());
     }
 
+    fn take_keyboard(&self) {
+        self.record("take keyboard".into());
+    }
+
     /// Every command, as if each did something now, with its default key.
     fn commands(&self, text: &str, _: &App) -> Vec<shell::BarCommand> {
         if !self.commands {
             return Vec::new();
         }
-        shell::find_commands(text, &shell::UserKeys::default(), |name, _| Some(name))
+        let keys = shell::UserKeys::default();
+        shell::find_commands(text, &keys, |name, command| {
+            (!self.idle.contains(&command)).then_some(name)
+        })
     }
+
+    fn task_agents(&self, _: &App) -> Option<TaskAgents> {
+        self.agents.borrow().clone()
+    }
+
+    fn over_private(&self) -> bool {
+        self.private
+    }
+
+    fn asking(&self, shown: bool, _: &mut App) {
+        self.record(format!("asking {shown}"));
+    }
+
+    fn task_page(&self, _: &App) -> Option<(SharedString, SharedString)> {
+        self.page.clone()
+    }
+
+    fn run_task(
+        &self,
+        agent: &str,
+        asked: &str,
+        page: Option<(SharedString, SharedString)>,
+        _: &mut App,
+    ) {
+        let page = page.map_or(String::new(), |(url, _)| format!(" on {url}"));
+        self.record(format!("task {agent} {asked}{page}"));
+    }
+
+    fn set_up_agents(&self, _: &mut App) {
+        self.record("set up agents".into());
+    }
+}
+
+/// The agents the host offers: each ready, at its limit if it has a reset time. Claude runs on
+/// Haiku, and Codex on its own default.
+fn agents(listed: &[(&str, Option<&str>)]) -> Option<TaskAgents> {
+    let agents = (listed.iter())
+        .map(|&(id, resets)| TaskAgent {
+            id: id.to_string().into(),
+            name: id.to_string().into(),
+            glyph: if id == "claude" { "icons/terminal.svg" } else { "icons/square-terminal.svg" },
+            model: (id == "claude").then(|| "Haiku".into()),
+            resets: resets.map(|at| at.to_string().into()),
+        })
+        .collect();
+    Some(TaskAgents { agents, known: true })
 }
 
 /// The bar, opened for a new tab.
@@ -141,6 +207,12 @@ impl Bar {
     /// The bar, opened for a new tab, finding the browser's commands.
     fn with_commands(cx: &mut TestAppContext) -> Self {
         Bar::open(cx, Vec::new(), Recorder { commands: true, ..Recorder::default() })
+    }
+
+    /// The bar, opened for a new tab, finding the browser's commands but `idle`.
+    fn with_commands_but(cx: &mut TestAppContext, idle: &[shell::Command]) -> Self {
+        let host = Recorder { commands: true, idle: idle.to_vec(), ..Recorder::default() };
+        Bar::open(cx, Vec::new(), host)
     }
 
     /// The bar, opened for a new tab in a Space with `tabs`.
@@ -241,6 +313,20 @@ impl Bar {
             .unwrap()
     }
 
+    /// The bar's window becoming the key one, as the host makes it when it shows the bar.
+    fn activate(&mut self) {
+        (self.window.update(&mut self.cx.cx, |_, window, _| window.activate_window())).unwrap();
+        self.cx.run_until_parked();
+    }
+
+    fn field_focused(&mut self) -> bool {
+        (self.window)
+            .update(&mut self.cx.cx, |bar, window, cx| {
+                bar.input.read(cx).focus_handle(cx).is_focused(window)
+            })
+            .unwrap()
+    }
+
     /// What the bar asked of the host since the last time.
     fn calls(&self) -> Vec<String> {
         self.host.calls.take()
@@ -272,8 +358,37 @@ impl Bar {
         self.cx.run_until_parked();
     }
 
+    /// Whether the bar is open, as the shell asks.
+    fn is_open(&mut self) -> bool {
+        self.cx.cx.update(|cx| is_open(cx))
+    }
+
     fn over_field(&mut self) -> bool {
         self.window.read_with(&self.cx.cx, |bar, _| bar.over_field).unwrap()
+    }
+
+    /// The height the bar last asked its window to be.
+    fn asked_height(&self) -> f32 {
+        *self.host.heights.borrow().last().expect("the bar asked for no height")
+    }
+
+    /// How tall the bar's panel over the field reads in a window the height it last asked for, as
+    /// the host makes it: the input row, and with rows, to the list's foot and the space under it.
+    fn drawn_over_field(&mut self) -> f32 {
+        let asked = self.asked_height();
+        self.cx.simulate_resize(size(px(FIELD_WIDTH), px(asked)));
+        self.cx.run_until_parked();
+        (self.window)
+            .read_with(&self.cx.cx, |bar, _| match bar.rows.is_empty() {
+                true => FIELD_INPUT,
+                false => f32::from(bar.scroll.bounds().bottom()) + LIST_END,
+            })
+            .unwrap()
+    }
+
+    /// The level the bar last showed at, and the height it had asked for by then.
+    fn last_show(&self) -> (Level, Option<f32>) {
+        *self.host.levels.borrow().last().expect("the bar didn't show")
     }
 
     /// A right-click in the input: the items of the menu it shows, " (disabled)" after those
@@ -302,7 +417,7 @@ impl Bar {
     /// Chooses `title` in the menu a right-click showed.
     fn choose(&mut self, (items, chosen): (Vec<String>, Chosen), title: &str) {
         let index = items.iter().position(|item| item == title).expect("no such item");
-        self.cx.update(|window, cx| chosen(index, window, cx));
+        self.cx.update(|window, cx| chosen(crate::menu::Closed::Chose(index), window, cx));
         self.cx.run_until_parked();
     }
 
@@ -319,7 +434,7 @@ impl Bar {
         self.cx.run_until_parked();
     }
 
-    /// A click where row `index` shows its ✕ under the pointer, at its end.
+    /// A click where row `index` shows its trash under the pointer, at its end.
     fn click_remove(&mut self, index: usize) {
         self.point_at(index);
         let x = WIDTH - LIST_X - PLATE_INSET - ROW_END - 3. - ICON_BOX / 2.;
@@ -425,6 +540,25 @@ fn right_keeps_the_completion_as_typed(cx: &mut TestAppContext) {
     // Before the rows for it come, ↩ goes where the text now names.
     bar.keys("enter");
     assert_eq!(bar.calls(), ["open https://example.com/", "hide"]);
+}
+
+/// A host and port typed on to the end of a completion to a page under it keeps that completion
+/// only until the core answers. Then the bar fills in what the core's first row does, as Chrome's
+/// omnibox does: nothing when the host's root comes first, so ↩ goes to the root, not to the page
+/// below it in the rows (#1148).
+#[gpui::test]
+fn a_typed_host_and_port_completes_only_as_the_core_says(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    bar.type_text("127.0.0.1:5835");
+    let back = "http://127.0.0.1:58351/back.html";
+    bar.suggest("127.0.0.1:5835", vec![completing(back, "1/back.html")]);
+    assert_eq!(bar.input(), ("127.0.0.1:58351/back.html".into(), 14..25));
+    bar.type_text("1");
+    assert_eq!(bar.input(), ("127.0.0.1:58351/back.html".into(), 15..25));
+    bar.suggest("127.0.0.1:58351", vec![page("http://127.0.0.1:58351/"), page(back)]);
+    assert_eq!(bar.input(), ("127.0.0.1:58351".into(), 15..15));
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["open http://127.0.0.1:58351/", "hide"]);
 }
 
 #[gpui::test]
@@ -589,11 +723,11 @@ fn shift_delete_takes_a_page_out_of_history(cx: &mut TestAppContext) {
     assert_eq!(bar.calls(), ["open https://b.test/", "hide"]);
 }
 
-/// A page from history, or a search typed before, shows a ✕ under the pointer that takes it out,
-/// as Arc's does, and ⌥⌘⌫ takes out the selected one, as ⇧⌦ does. The search for what's typed
-/// and the well-known sites have none: there a click at the row's end takes the row.
+/// A page from history, or a search typed before, shows a trash under the pointer that takes it
+/// out, where Arc's has a ✕, and ⌥⌘⌫ takes out the selected one, as ⇧⌦ does. The search for
+/// what's typed and the well-known sites have none: there a click at the row's end takes the row.
 #[gpui::test]
-fn the_pointer_shows_a_cross_that_takes_a_suggestion_out(cx: &mut TestAppContext) {
+fn the_pointer_shows_a_trash_that_takes_a_suggestion_out(cx: &mut TestAppContext) {
     let mut bar = Bar::new(cx);
     bar.type_text("ex");
     let typed_before = Suggestion { removable: true, ..searching("example") };
@@ -1158,6 +1292,7 @@ fn a_command_has_its_own_glyph_where_lucide_names_it_and_each_is_built_in() {
         Command::ViewHistory, Command::Settings, Command::KeyboardShortcuts, Command::About,
         Command::Import, Command::NewSpace, Command::SiteSearchSettings, Command::ClearBrowsingData,
         Command::HelpCenter, Command::WhatsNew, Command::ReportProblem, Command::CopyBuildInfo,
+        Command::PrivacyPolicy, Command::RestoreEarlierSidebar,
     ];
     for command in commands {
         let Icon::Glyph(path) = glyph(command) else {
@@ -1218,6 +1353,58 @@ fn a_click_on_the_url_field_opens_the_bar_over_it_and_cmd_l_centred(cx: &mut Tes
     assert!(!bar.over_field());
 }
 
+/// Over the URL field the window is as tall as what the bar draws, asked for before it shows: with
+/// no rows, as rows come, as they go, and on opening again after a taller panel or the centred one
+/// (#1306).
+#[gpui::test]
+fn over_the_field_the_window_is_as_tall_as_what_the_bar_draws(cx: &mut TestAppContext) {
+    let tabs = vec![titled(4, "Projects", CONVEX), titled(2, "Inbox", "https://mail.test/")];
+    let mut bar = Bar::with_tabs(cx, tabs);
+    assert_eq!(bar.asked_height(), height(2), "centred, with the Space's tabs");
+    let field = Bounds::new(point(px(8.), px(46.)), size(px(244.), px(36.)));
+    let url = "https://example.com/";
+    bar.edit(url, Some(field));
+    assert_eq!(bar.last_show(), (FIELD_LEVEL, Some(FIELD_INPUT)), "the input row, before it shows");
+    assert_eq!(bar.drawn_over_field(), FIELD_INPUT);
+    bar.type_text("ex");
+    bar.suggest("ex", vec![searching("ex"), page("https://a.test/")]);
+    assert_eq!(bar.drawn_over_field(), bar.asked_height());
+    assert_eq!(bar.asked_height(), field_height(2));
+    let many: Vec<_> = (0..7).map(|at| page(&format!("https://{at}.test/"))).collect();
+    bar.type_text("x");
+    bar.suggest("exx", many);
+    assert_eq!(bar.drawn_over_field(), bar.asked_height());
+    assert_eq!(bar.asked_height(), field_height(ROWS_SHOWN));
+    bar.type_text("q");
+    bar.suggest("exxq", Vec::new());
+    assert_eq!(bar.asked_height(), FIELD_INPUT, "no rows left");
+    assert_eq!(bar.drawn_over_field(), FIELD_INPUT);
+    bar.type_text("z");
+    bar.suggest("exxqz", (0..7).map(|at| page(&format!("https://{at}.test/"))).collect());
+    bar.keys("escape");
+    bar.edit(url, Some(field));
+    assert_eq!(bar.last_show(), (FIELD_LEVEL, Some(FIELD_INPUT)), "after the taller panel");
+    bar.edit(url, None);
+    assert_eq!(bar.last_show(), (Level::Modal, Some(height(0))));
+    bar.edit(url, Some(field));
+    assert_eq!(bar.last_show(), (FIELD_LEVEL, Some(FIELD_INPUT)), "after the centred one");
+    assert_eq!(bar.drawn_over_field(), FIELD_INPUT);
+}
+
+/// Over the URL field the panel is a row tall, and its shadow can't be seen a row below it. The
+/// centred bar's modal shadow, 24 down at a 64 blur, reached twice that, and over a light page
+/// read as a blank grey bar under the panel (#1306).
+#[gpui::test]
+fn over_the_field_the_shadow_ends_within_a_row_below_the_panel(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    let field = Bounds::new(point(px(8.), px(46.)), size(px(244.), px(36.)));
+    bar.edit("https://example.com/", Some(field));
+    let (level, _) = bar.last_show();
+    assert!(level.reach().below < FIELD_INPUT, "{level:?} reaches {:?}", level.reach());
+    bar.edit("https://example.com/", None);
+    assert_eq!(bar.last_show().0, Level::Modal, "the centred bar keeps its modal shadow");
+}
+
 /// ⌘T or ⌘L closes the bar, whichever opened it, as Arc's do, and the browser's other shortcuts go
 /// on to the browser.
 #[gpui::test]
@@ -1238,6 +1425,26 @@ fn cmd_t_or_cmd_l_closes_the_open_bar(cx: &mut TestAppContext) {
     bar.run(shell::Command::CopyUrl);
     assert_eq!(bar.calls(), Vec::<String>::new());
     assert_eq!(*browser.borrow(), [shell::Command::CopyUrl]);
+}
+
+/// The bar is closed once it asks the host to close it, on Esc or ⌘T again, not only once the
+/// host says it went, which on Windows comes a message later or, before #1346, not at all: a Space
+/// shown since found it open and put the new tab's plate back in the sidebar, with no bar.
+#[gpui::test]
+fn the_bar_is_closed_as_it_asks_to_go(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    bar.keys("escape");
+    assert_eq!(bar.calls(), ["dismiss"]);
+    assert!(!bar.is_open());
+    assert!(!bar.follow(Vec::new()), "a Space shown since opens no new tab");
+
+    let mut bar = Bar::new(cx);
+    assert!(bar.follow(Vec::new()), "the open bar opens a new tab in the Space shown");
+    bar.calls();
+    bar.run(shell::Command::NewTab);
+    assert_eq!(bar.calls(), ["dismiss"]);
+    assert!(!bar.is_open());
+    assert!(!bar.follow(Vec::new()), "a Space shown since opens no new tab");
 }
 
 /// ↩ on the URL ⌘L opened the bar on loads the page again, as Arc's does; typed over, it goes
@@ -1348,6 +1555,8 @@ fn a_word_of_the_name_puts_the_best_first_and_the_rest_after(cx: &mut TestAppCon
         "Separate Page from Split View".into(),
         "Expand Current Split".into(),
         "Flip Split View".into(),
+        "Convert to Vertical Split View".into(),
+        "Convert to Horizontal Split View".into(),
         "New Note Split".into(),
     ];
     assert_eq!(bar.listed(), expected);
@@ -1373,6 +1582,8 @@ fn tab_in_an_empty_field_lists_only_the_commands(cx: &mut TestAppContext) {
         "Separate Page from Split View",
         "Expand Current Split",
         "Flip Split View",
+        "Convert to Vertical Split View",
+        "Convert to Horizontal Split View",
         "New Note Split",
     ];
     assert_eq!(bar.listed(), only);
@@ -1541,6 +1752,27 @@ fn a_hidden_word_finds_its_command(cx: &mut TestAppContext) {
         "Toggle Sidebar ⌘S".into(),
     ];
     assert_eq!(bar.listed(), expected);
+}
+
+/// "close" archives the tab, as Arc lists Archive Tab above Close Window for it, and so does
+/// "clos": the window's close comes first only once what's typed goes past its first word.
+#[gpui::test]
+fn close_archives_the_tab_until_the_window_is_named(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_commands_but(cx, &[shell::Command::CloseSplitPane]);
+    for typed in ["close", "clos"] {
+        type_and_suggest(&mut bar, typed, suggestions(typed, &[]));
+        let listed = bar.listed();
+        assert_eq!(listed[..2], ["Archive Tab ⌘W".to_string(), search(typed)], "{typed}");
+        assert!(listed[2..].contains(&"Close Window ⇧⌘W".to_string()), "{typed}: {listed:?}");
+        bar.keys("cmd-a");
+    }
+    type_and_suggest(&mut bar, "close", suggestions("close", &[]));
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["hide"]);
+
+    let mut bar = Bar::with_commands_but(cx, &[shell::Command::CloseSplitPane]);
+    type_and_suggest(&mut bar, "close w", suggestions("close w", &[]));
+    assert_eq!(bar.listed(), ["Close Window ⇧⌘W".to_string(), search("close w")]);
 }
 
 /// Arc's "tab", where a site completes what's typed: the site first, then the core's rows, then
@@ -1754,4 +1986,239 @@ fn cmd_and_option_backspace_ask_again_and_leave_a_site_search(cx: &mut TestAppCo
         bar.keys(key);
         assert_eq!(bar.input(), ("duck.test".into(), 9..9), "{key}");
     }
+}
+
+/// Chromium makes the browser window key by itself, such as when a page commits behind the bar,
+/// and the bar shows on, deaf, unless it gets the keyboard back (#1314). It asks for it as its
+/// window stops being key, the host saying no if the user left it, and the keys typed once it's
+/// back go to its field.
+#[gpui::test]
+fn the_bar_takes_the_keyboard_back_while_it_shows(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    bar.activate();
+    assert_eq!(bar.calls(), Vec::<String>::new());
+    bar.cx.deactivate_window();
+    assert_eq!(bar.calls(), ["take keyboard"]);
+    bar.activate();
+    assert!(bar.field_focused());
+    bar.type_text("cats");
+    assert_eq!(bar.input(), ("cats".into(), 4..4));
+    assert_eq!(bar.calls(), Vec::<String>::new());
+
+    // Once the user has left it, the keyboard stays where they took it.
+    bar.keys("escape");
+    assert_eq!(bar.calls(), ["dismiss"]);
+    bar.cx.cx.update(dismissed);
+    bar.cx.deactivate_window();
+    assert_eq!(bar.calls(), Vec::<String>::new());
+}
+
+/// The field has the focus whenever the bar shows: GPUI gives the input method's text only to the
+/// focused field, so a bar without it shows deaf. Something taking the focus while the bar shows,
+/// as an assistive app can, gives it back, and a bar that lost it while closed has it again as it
+/// opens.
+#[gpui::test]
+fn the_bar_keeps_the_focus_in_its_field(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    bar.activate();
+    let blur = |bar: &mut Bar| {
+        (bar.window.update(&mut bar.cx.cx, |_, window, cx| window.blur(cx))).unwrap();
+        bar.cx.run_until_parked();
+    };
+    blur(&mut bar);
+    assert!(bar.field_focused());
+    bar.type_text("cats");
+    assert_eq!(bar.input(), ("cats".into(), 4..4));
+
+    bar.keys("escape");
+    bar.cx.cx.update(dismissed);
+    blur(&mut bar);
+    assert!(!bar.field_focused(), "a closed bar leaves the focus be");
+    bar.edit("https://cats.test/", None);
+    assert!(bar.field_focused());
+    bar.type_text("dogs");
+    assert_eq!(bar.input(), ("dogs".into(), 4..4));
+}
+
+impl Bar {
+    /// The bar, opened for a new tab, with tasks on and `listed` agents ready, on `page`.
+    fn with_agents(
+        cx: &mut TestAppContext,
+        listed: &[(&str, Option<&str>)],
+        page: Option<(&str, &str)>,
+    ) -> Self {
+        let page = page.map(|(url, title)| (url.to_string().into(), title.to_string().into()));
+        let host = Recorder { agents: RefCell::new(agents(listed)), page, ..Recorder::default() };
+        Bar::open(cx, Vec::new(), host)
+    }
+
+    /// The rows' names, each with what its end says: its model, or when its limit resets.
+    fn agent_rows(&mut self) -> Vec<String> {
+        self.window
+            .read_with(&self.cx.cx, |bar, _| {
+                (bar.rows.iter())
+                    .map(|row| match row.task.as_ref().and_then(TaskRow::end) {
+                        Some(end) => format!("{} · {end}", row.text),
+                        None => row.text.to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap()
+    }
+
+    /// The chip before the input, and the hint at its end.
+    fn chip_and_hint(&mut self) -> (Option<String>, bool, bool) {
+        self.window
+            .update(&mut self.cx.cx, |bar, _, cx| {
+                let chip = bar.mode_name().map(String::from);
+                (chip, bar.ask.is_some(), bar.offers_ask(cx))
+            })
+            .unwrap()
+    }
+}
+
+/// ⇥ after typing makes it a task: the page the user is on goes with it as a chip, the agents
+/// ready are the rows, the default first, and ↩ closes the bar, then runs the task on the one
+/// selected. Nothing about tasks runs as the bar opens or takes keys: the host is asked only
+/// what it last learned.
+#[gpui::test]
+fn tab_makes_what_is_typed_a_task(cx: &mut TestAppContext) {
+    let page = Some(("https://lisbon.example/guide", "Lisbon guide"));
+    let mut bar = Bar::with_agents(cx, &[("claude", None), ("codex", None)], page);
+    bar.type_text("flight here next friday");
+    assert_eq!(bar.chip_and_hint(), (None, false, true), "⇥ isn't offered");
+    let asked = bar.host.asked.borrow().len();
+    bar.keys("tab");
+    assert_eq!(bar.chip_and_hint(), (Some("Lisbon guide".into()), true, false));
+    assert_eq!(bar.agent_rows(), ["claude · Haiku", "codex"]);
+    let icons = bar.window.read_with(&bar.cx.cx, |bar, _| {
+        bar.rows.iter().map(Suggestion::icon).collect::<Vec<_>>()
+    });
+    assert_eq!(
+        icons.unwrap(),
+        [Icon::Glyph("icons/terminal.svg"), Icon::Glyph("icons/square-terminal.svg")],
+        "each agent has its CLI's glyph"
+    );
+    assert_eq!(bar.calls(), ["asking true"]);
+    // What's typed now is the task's, which the core isn't asked to suggest for.
+    bar.type_text(" under 150");
+    assert_eq!(bar.host.asked.borrow().len(), asked);
+    assert_eq!(bar.input().0, "flight here next friday under 150");
+    bar.keys("down enter");
+    assert_eq!(
+        bar.calls(),
+        ["task codex flight here next friday under 150 on https://lisbon.example/guide"]
+    );
+    assert!(!bar.is_open());
+}
+
+/// Esc and ⇧⇥ leave the ask with what was typed, closing Today's slot, and ⌫ at the start takes
+/// the page's chip off before it leaves.
+#[gpui::test]
+fn the_ask_is_left_as_site_search_is(cx: &mut TestAppContext) {
+    let page = Some(("https://lisbon.example/guide", ""));
+    let mut bar = Bar::with_agents(cx, &[("claude", None)], page);
+    bar.type_text("book it");
+    bar.keys("tab");
+    // A page without a title is named by its site.
+    assert_eq!(bar.chip_and_hint().0.as_deref(), Some("lisbon.example"));
+    bar.calls();
+    bar.keys("escape");
+    assert_eq!(bar.chip_and_hint(), (None, false, true));
+    assert_eq!(bar.calls(), ["asking false"]);
+    assert_eq!(bar.input().0, "book it");
+    assert!(bar.is_open(), "Esc closed the bar rather than leaving the ask");
+
+    bar.keys("tab");
+    bar.keys("shift-tab");
+    assert_eq!(bar.chip_and_hint().1, false);
+    assert!(bar.calls().contains(&"asking false".to_string()));
+
+    bar.keys("tab");
+    bar.keys("home backspace");
+    assert_eq!(bar.chip_and_hint(), (None, true, false), "⌫ didn't take the chip off first");
+    bar.keys("backspace");
+    assert_eq!(bar.chip_and_hint().1, false);
+    assert_eq!(bar.input().0, "book it");
+    // Run without the page: nothing goes with the task.
+    bar.keys("tab");
+    bar.keys("home backspace enter");
+    assert!(bar.calls().contains(&"task claude book it".to_string()));
+}
+
+/// An agent at its plan's limit is dimmed with its reset time, and not selected; with none ready
+/// once the browser knows, ⇥ offers to set one up, and with tasks off ⇥ selects the next row as
+/// it did.
+#[gpui::test]
+fn agents_at_their_limit_or_none_ready(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_agents(cx, &[("claude", Some("18:00")), ("codex", None)], None);
+    bar.type_text("summarise this");
+    bar.keys("tab");
+    assert_eq!(bar.agent_rows(), ["claude · Limit resets 18:00", "codex"]);
+    bar.keys("up enter");
+    // ↩ on the agent at its limit runs nothing.
+    assert!(!bar.calls().iter().any(|call| call.starts_with("task")));
+    assert!(bar.is_open());
+
+    let mut bar = Bar::with_agents(cx, &[], None);
+    bar.type_text("summarise this");
+    // ⇥ doesn't say Ask, as no agent is ready, but leads to setting one up.
+    assert_eq!(bar.chip_and_hint(), (None, false, false));
+    bar.keys("tab");
+    assert_eq!(bar.agent_rows(), [SET_UP]);
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["asking true", "hide", "set up agents"]);
+
+    let mut bar = Bar::new(cx);
+    bar.type_text("summarise this");
+    bar.suggest("summarise this", vec![searching("summarise this"), page("https://a.test/")]);
+    bar.keys("tab");
+    assert_eq!(bar.chip_and_hint(), (None, false, false));
+    assert_eq!(bar.plates().0, 1);
+}
+
+/// A private window offers no task, as agents get no path into private windows: with agents
+/// ready, a question typed there says no Ask ⇥, ⇥ selects the next row as with tasks off, and ↩
+/// opens it. Nothing of tasks shows, even as the browser learns the agents again.
+#[gpui::test]
+fn a_private_window_offers_no_task(cx: &mut TestAppContext) {
+    let host = Recorder {
+        agents: RefCell::new(agents(&[("claude", None), ("codex", None)])),
+        page: Some(("https://rijksmuseum.nl/".into(), "Rijksmuseum".into())),
+        private: true,
+        ..Recorder::default()
+    };
+    let mut bar = Bar::open(cx, Vec::new(), host);
+    let asked = "when does the rijksmuseum open";
+    bar.type_text(asked);
+    bar.suggest(asked, vec![searching(asked), page("https://www.rijksmuseum.nl/en/visit")]);
+    assert_eq!(bar.chip_and_hint(), (None, false, false), "Ask ⇥ is offered");
+    bar.keys("tab");
+    bar.cx.cx.update(task_agents_changed);
+    bar.cx.run_until_parked();
+    assert_eq!(bar.chip_and_hint(), (None, false, false), "⇥ asked an agent");
+    let tasks = bar.window.read_with(&bar.cx.cx, |bar, _| bar.rows.iter().any(|row| row.task.is_some()));
+    assert!(!tasks.unwrap(), "a row is a task's");
+    assert_eq!(bar.plates().0, 1);
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["open https://www.rijksmuseum.nl/en/visit", "hide"]);
+}
+
+/// While the browser hasn't learned which agents are ready, the ask lists none, then lists them
+/// as it learns.
+#[gpui::test]
+fn the_ask_lists_the_agents_as_the_browser_learns(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_agents(cx, &[], None);
+    *bar.host.agents.borrow_mut() = Some(TaskAgents::default());
+    bar.edit("", None);
+    bar.type_text("book a table");
+    assert_eq!(bar.chip_and_hint(), (None, false, true), "Ask ⇥ isn't offered while unknown");
+    bar.keys("tab");
+    assert!(bar.agent_rows().is_empty());
+    *bar.host.agents.borrow_mut() = agents(&[("codex", None)]);
+    bar.cx.cx.update(task_agents_changed);
+    bar.cx.run_until_parked();
+    assert_eq!(bar.agent_rows(), ["codex"]);
+    bar.keys("enter");
+    assert!(bar.calls().contains(&"task codex book a table".to_string()));
 }
