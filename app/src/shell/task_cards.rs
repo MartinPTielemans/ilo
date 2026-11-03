@@ -49,7 +49,7 @@ use crate::tokens::shell::task::{
     GHOST_RADIUS, GLYPH, GLYPH_TOP, HEIGHT, LINE, QUESTION_LINE, SHIMMER_FROM, SHIMMER_HIGH,
     SHIMMER_LOW, SHIMMER_REACH, SHIMMER_TO, SLOT_DASH, STATUS_GAP, STATUS_LINE, STOPPED, TOP,
 };
-use crate::tokens::shell::{MEDIA_BUTTON, MEDIA_GAP, MEDIA_HEIGHT, URL_FIELD};
+use crate::tokens::shell::{MEDIA_BUTTON, URL_FIELD};
 use crate::tokens::text;
 use crate::tooltip::text_width;
 use glyph::{Glyph, State};
@@ -78,8 +78,8 @@ const CHIP_ROWS: usize = 2;
 /// The column the title and the status start on, from the plate's left edge.
 const COLUMN: f32 = FAVICON_X - PLATE_INSET + FAVICON_SIZE + TITLE_GAP;
 
-/// ✕'s inset from the plate's top and right edges, a player's button's.
-const CLOSE_INSET: f32 = (MEDIA_HEIGHT - MEDIA_BUTTON) / 2.;
+/// ✕'s inset from the plate's top and right edges, as a row's.
+const CLOSE_INSET: f32 = (ROW_HEIGHT - MEDIA_BUTTON) / 2.;
 
 /// Where the title ends under the pointer, clear of ✕.
 const HOVER_END: f32 = CLOSE_INSET + MEDIA_BUTTON;
@@ -834,8 +834,7 @@ impl Shell {
 
     /// Where the media players end, over Restart to Update, the foot's plates over them.
     pub(super) fn media_top(&self) -> f32 {
-        let players = self.media_players().len() as f32 * (MEDIA_HEIGHT + MEDIA_GAP);
-        FOOTER_HEIGHT + self.update_sign_room() + players
+        FOOTER_HEIGHT + self.update_sign_room() + self.media_room()
     }
 
     /// The most room the opened foot takes before it scrolls: the closed foot never does.

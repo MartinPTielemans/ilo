@@ -1491,6 +1491,7 @@ pub struct Shell {
     media_dismissed: HashSet<u64>,
     /// The players last drawn, as the log has them, and where the bottom one is.
     media_logged: RefCell<Vec<u64>>,
+    media_stack: media_player::MediaStack,
     media_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Whether an update waits for a restart, which Restart to Update at the sidebar's foot says,
     /// where that's drawn, and the watch on the updater.
@@ -1792,6 +1793,7 @@ impl Shell {
             task_strip_drawn: Rc::default(),
             media_dismissed: HashSet::new(),
             media_logged: RefCell::default(),
+            media_stack: Default::default(),
             media_drawn: Rc::default(),
             update_waiting: crate::updates::ready(cx),
             update_drawn: Rc::default(),
@@ -2956,6 +2958,8 @@ impl Shell {
         self.tab_changed(tab, changed, cx);
         // A player is for a tab out of sight, whose row may not be drawn.
         if media_changed && self.lists(tab) {
+            // So the stack's order is when each player came, not when it was next drawn.
+            self.media_players();
             cx.notify();
         }
         if let Some(trouble) = trouble {
@@ -3647,6 +3651,7 @@ impl Render for Shell {
         self.step_foot(window, cx);
         self.step_picture(window);
         self.step_recent_downloads(window, cx);
+        self.step_media_stack(window, cx);
         if let Some((_, left)) = &self.leaving_form {
             if left.elapsed().as_secs_f32() < FORM_LEAVE_TITLE + FORM_LEAVE {
                 window.request_animation_frame();
@@ -3952,9 +3957,10 @@ impl Shell {
                     .children(self.cast_card(cx))
                     .children(self.agent_question_card(cx))
                     .children(self.update_sign())
-                    .children(self.media_player_cards(cx))
                     .children(self.task_foot(cx))
                     .children(self.task_ghosts())
+                    // Over the tasks' plates, which its open grows over.
+                    .children(self.media_player_cards(cx))
                     .children(self.agent_bar_card(cx))
                     .children(self.drm_note_card(cx))
             }

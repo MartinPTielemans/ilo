@@ -800,14 +800,23 @@ tile-radius = 12.0
 # or is shared, or plays sound (ours).
 tile-mark = 12.0
 tile-mark-inset = 4.0
-# The players at the sidebar's foot for tabs playing out of sight, as Arc's mini player and media
-# tray (ours: Arc's aren't measured): each a row's height on a tile's fill, 6 apart and over the
-# footer, its title 13 pt over its artist at 11, and buttons a row's ✕ square holding 14 pt glyphs.
-media-height = 40.0
+# The players at the sidebar's foot for tabs playing out of sight, as Arc 1.171's stack (an outside
+# measurement, #700): at rest only the newest card shows, this tall, 8 in from the sidebar's sides
+# and its bottom where the list ends, and up to two older ones peek out behind it, each this much
+# higher, this much narrower on each side and this much fainter. Under the pointer every card grows
+# to media-open, this far apart, the oldest on top. Ours: the list ends media-gap over the stack at
+# rest; the title row's 12 pt title and artist and its buttons, a row's ✕ square; the controls'
+# plates and 14 pt glyphs.
+media-rest = 33.0
+media-peek = 7.0
+media-peek-inset = 5.0
+media-peek-fade = 0.2
+media-open = 65.5
+media-open-gap = 5.0
 media-gap = 6.0
-media-title = 13.0
-media-artist = 11.0
+media-title = 12.0
 media-button = 24.0
+media-control = 28.0
 media-glyph = 14.0
 # Favorites taller than this much of the window scroll with the list instead of staying put
 # (Ardia), so they never leave the rows too little room.
@@ -1520,6 +1529,15 @@ dots-hovered = 0.8
 check-box = 24.0
 # The check is Lucide's, so it draws at the icons' one stroke, `shell::assets::ICON_STROKE`.
 check-stroke = 2.25
+
+[shell.media.motion]
+# Seconds, on an ease-out: the design file has no motion, so tools/design-sync.md leaves this table
+# out. The stack opens and closes over `open` both ways (Arc 1.171), opening once the pointer has
+# rested on it `wait` (ours, as the sidebar's reveal waits), and a card put away folds and fades
+# over `fold` as the ones above close up (ours).
+open = 0.2
+wait = 0.1
+fold = 0.2
 
 [shell.task]
 # Ours, as Arc had no tasks: the window's agent tasks at the sidebar's foot, over the media
