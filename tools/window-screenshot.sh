@@ -82,6 +82,13 @@ public static class Capture {
     return Marshal.GetObjectForIUnknown(items.CreateForWindow(hwnd, ref iid));
   }
 
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hwnd, System.Text.StringBuilder name, int size);
+  public static string ClassOf(IntPtr hwnd) {
+    var name = new System.Text.StringBuilder(256);
+    GetClassName(hwnd, name, name.Capacity);
+    return name.ToString();
+  }
+
   // The |width| by |height| at the top left of |pixels|, premultiplied BGRA |across| wide.
   public static Bitmap FromBgra(byte[] pixels, int across, int width, int height) {
     var image = new Bitmap(width, height, PixelFormat.Format32bppPArgb);
@@ -257,8 +264,10 @@ $grab = [Func[IntPtr, System.Drawing.Bitmap]] {
       return $null
     }
     $item = [Capture]::Item($hwnd)
-    $pool = [Windows.Graphics.Capture.Direct3D11CaptureFramePool]::CreateFreeThreaded([Capture]::Device(),
-      [Windows.Graphics.DirectX.DirectXPixelFormat]::B8G8R8A8UIntNormalized, 1, $item.Size)
+    # By reflection, which has the runtime ask the device for IDirect3DDevice, as PowerShell does not.
+    $pool = [Windows.Graphics.Capture.Direct3D11CaptureFramePool].GetMethod("CreateFreeThreaded").Invoke(
+      $null, @([Capture]::Device(), [Windows.Graphics.DirectX.DirectXPixelFormat]::B8G8R8A8UIntNormalized,
+      1, $item.Size))
     $session = $pool.CreateCaptureSession($item)
     try { $session.IsCursorCaptureEnabled = $false } catch {}
     $session.StartCapture()
@@ -288,7 +297,8 @@ $grab = [Func[IntPtr, System.Drawing.Bitmap]] {
     $bitmap.Dispose(); $frame.Dispose(); $session.Dispose(); $pool.Dispose()
     return $image
   } catch {
-    [Console]::Error.WriteLine("Windows.Graphics.Capture failed: " + $_.Exception.Message)
+    [Console]::Error.WriteLine("Windows.Graphics.Capture failed for " + [Capture]::ClassOf($hwnd) +
+      ": " + $_.Exception.Message)
     return $null
   }
 }
