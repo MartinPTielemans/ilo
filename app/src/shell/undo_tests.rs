@@ -416,6 +416,33 @@ fn pin_to_space_pins_the_tab_before_it_moves_and_one_undo_puts_it_back_in_today(
     assert_eq!(host.take_edits(), ["space 11 2"]);
 }
 
+/// A tab in a split view moves to a Space with the rest of its split, joined again in its order
+/// and orientation, and one undo brings the split back to its row (Arc 1.171).
+#[gpui::test]
+fn a_split_moves_to_a_space_whole_and_comes_back_whole(cx: &mut TestAppContext) {
+    let split = Split { tabs: vec![10, 11], stacked: true, ..Default::default() };
+    let (shell, host) = window(cx, Vec::new(), vec![12, 10, 11], Folders::default(), vec![split]);
+    host.take();
+    shell.update(cx, |shell, cx| shell.send_to_space(11, 2, false, cx));
+    assert_eq!(host.take_edits(), ["space 10 2", "space 11 2", "split 11 10 false"]);
+    assert!(host.take().contains(&"split stacked 10 true".to_string()));
+    report(&shell, cx, Vec::new(), vec![12]);
+    shell.update(cx, |shell, cx| {
+        let split = Split { tabs: vec![10, 11], stacked: true, ..Default::default() };
+        shell.set_tabs(2, Vec::new(), vec![10, 11], vec![split], Folders::default(), cx)
+    });
+    assert!(undo(&shell, cx));
+    let back = ["space 10 1", "space 11 1", "split 11 10 false", "move 10 false 0 1"];
+    assert_eq!(host.take_edits(), back);
+
+    // Into another profile's Space the core makes each page a new tab, in a row of its own.
+    let split = Split { tabs: vec![10, 11], ..Default::default() };
+    let (shell, host) = window(cx, Vec::new(), vec![10, 11], Folders::default(), vec![split]);
+    shell.update(cx, |shell, cx| shell.send_to_space(10, 3, false, cx));
+    assert_eq!(host.take_edits(), ["space 10 3", "space 11 3"]);
+    assert!(!undo(&shell, cx));
+}
+
 /// New Space… makes the Space right after the one shown, as Arc's does, not after the others.
 #[gpui::test]
 fn a_new_space_goes_right_after_the_space_shown(cx: &mut TestAppContext) {
