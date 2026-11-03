@@ -692,7 +692,8 @@ mod tests {
     }
 
     /// A tab opening while the sidebar is hidden gets a toast whose Show, as the Spaces' toast has,
-    /// brings the sidebar back at its row; tabs moving, or opening with the sidebar shown, get none.
+    /// brings the sidebar back at its row; tabs moving, or opening with the sidebar shown, get
+    /// none.
     #[gpui::test]
     fn a_tab_opened_with_the_sidebar_hidden_is_toasted(cx: &mut TestAppContext) {
         let (shell, host) = shell_with(cx, &[], &[1], Folders::default());
