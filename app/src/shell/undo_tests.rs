@@ -909,9 +909,9 @@ fn a_removal_from_history_is_undone_and_done_again(cx: &mut TestAppContext) {
     assert!(undo(&shell, cx));
     assert_eq!(host.take_edits(), ["reopen 11 as 1001"]);
 
-    // Nothing is kept for a removal that took nothing out.
+    // Nothing is kept for a removal that took nothing out, so the redo stays.
     shell.update(cx, |shell, cx| shell.suggestion_removed(0, cx));
-    assert_eq!(titles(&shell, cx).0, Some("Remove from History"));
+    assert_eq!(titles(&shell, cx), (Some("Remove from History"), Some("Close Tab")));
 }
 
 fn archived(id: u64) -> Archived {
