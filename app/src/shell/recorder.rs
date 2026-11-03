@@ -858,6 +858,10 @@ impl Browser for Recorder {
         true
     }
 
+    fn move_space(&self, space: u64, after: u64, _: &mut App) {
+        self.edit(format!("move space {space} after {after}"));
+    }
+
     fn set_space_color(&self, space: u64, color: Option<u32>, _: &mut App) {
         self.edit(format!("color {space} {color:?}"));
         let color = color.map_or("none".to_string(), |color| format!("{color:06x}"));

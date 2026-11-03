@@ -1,11 +1,14 @@
 //! The sidebar's footer: the Space switcher and the plus button beside it.
 
-use gpui::{Context, MouseButton, MouseDownEvent, Role, div, prelude::*, px, svg};
+use gpui::{
+    AnyElement, Context, DragMoveEvent, MouseButton, MouseDownEvent, Rgba, Role, div, prelude::*,
+    px, svg,
+};
 
 use super::{
     FOOTER_HEIGHT, NAV, NAV_GLYPH, NAV_HOVERED, NAV_RADIUS, NAV_SIZE, PLUS_INSET, SPACE_CLEAR, SPACE_GLYPH, SPACE_HEIGHT, SPACE_HOVERED, SPACE_ICON_SWITCHER, SPACE_LEAST, SPACE_OTHER, SPACE_PITCH,
     SPACE_SHOWN, SPACE_SHOWN_LEAST, SPACE_SWATCH, SPACE_SWATCH_HOVERED, SPACE_SWATCH_SHOWN, SWITCHER_INSET, Shell,
-    access::Accessible,
+    SPACE_DRAGGED, Space, access::Accessible, space_order::DraggedSpace,
 };
 use crate::space_icon::{GLYPHS, SpaceIcon};
 
@@ -53,14 +56,12 @@ impl Shell {
             return None;
         }
         let span = self.width() - 2. * SWITCHER_INSET;
-        let shown_at = self.spaces.iter().position(|space| space.id == self.space);
-        let cells = space_cells(span, self.spaces.len(), shown_at.unwrap_or(usize::MAX));
-        // What the swatches lie on: the window at the footer, over whatever is behind it.
-        let window = f32::from(self.viewport.height).max(1.);
-        let at = self.gradient_color((window - FOOTER_HEIGHT / 2.) / window);
-        let behind = self.palette.over_backdrops(at);
+        let cells = self.switcher_cells(span);
+        let behind = self.switcher_behind();
+        let shell = cx.weak_entity();
         let dots = self.spaces.iter().zip(cells).map(|(space, cell)| {
             let (id, shown) = (space.id, space.id == self.space);
+            let shell = shell.clone();
             div()
                 .id(("space", id))
                 .when(self.a11y, |dot| {
@@ -72,11 +73,14 @@ impl Shell {
                 })
                 .group("space")
                 .flex_none()
+                .relative()
+                .left(px(self.dot_slide(id)))
                 .w(px(cell))
                 .h_full()
                 .flex()
                 .items_center()
                 .justify_center()
+                .when(self.space_dragged(id), |dot| dot.opacity(SPACE_DRAGGED))
                 .block_mouse_except_scroll()
                 .on_click(cx.listener(move |shell, _, _, cx| {
                     log!("browser: command select-space via sidebar");
@@ -88,46 +92,11 @@ impl Shell {
                         shell.space_menu(id, event.position, cx)
                     }),
                 )
-                .child(match SpaceIcon::parse(&space.icon) {
-                    SpaceIcon::Dot => {
-                        let size = if shown { SPACE_SWATCH_SHOWN } else { SPACE_SWATCH };
-                        // Under the pointer it grows as far again past its squeezed size.
-                        let room = cell + SPACE_SWATCH_HOVERED - SPACE_SWATCH;
-                        let hovered = squeezed(SPACE_SWATCH_HOVERED, room);
-                        (self.palette_of(id).swatch.draw(squeezed(size, cell), &behind))
-                            .when(!shown, |swatch| {
-                                swatch.group_hover("space", |style| style.size(px(hovered)))
-                            })
-                            .into_any_element()
-                    }
-                    // The Space shown's in its accent, as its dot is in its colour, or the ink
-                    // without one; the others' in the dots' greys.
-                    SpaceIcon::Glyph(index) => svg()
-                        .path(GLYPHS[index].1)
-                        .size(px(squeezed(SPACE_GLYPH * GLYPH_INK, cell) / GLYPH_INK))
-                        .text_color(match (shown, self.space_theme(id).is_some()) {
-                            (true, true) => self.palette_of(id).accent.into(),
-                            (true, false) => self.palette.glyph(1.),
-                            (false, _) => self.palette.glyph(SPACE_OTHER),
-                        })
-                        .when(!shown, |glyph| {
-                            glyph.group_hover("space", |style| {
-                                style.text_color(self.palette.glyph(SPACE_HOVERED))
-                            })
-                        })
-                        .into_any_element(),
-                    // The item's box is the dot's, so the strip doesn't move with an icon.
-                    SpaceIcon::Emoji(emoji) => div()
-                        .text_size(px(squeezed(SPACE_ICON_SWITCHER, cell)))
-                        .opacity(icon_opacity(shown, false))
-                        .when(!shown, |icon| {
-                            icon.group_hover("space", |style| {
-                                style.opacity(icon_opacity(false, true))
-                            })
-                        })
-                        .child(emoji.to_string())
-                        .into_any_element(),
+                // Along the switcher it moves the Space (#1580).
+                .on_drag(DraggedSpace, move |_, grab, _, cx| {
+                    Shell::start_space_drag(&shell, id, cell, grab, cx)
                 })
+                .child(self.space_mark(space, shown, cell, &behind))
         });
         Some(
             div()
@@ -140,7 +109,79 @@ impl Shell {
                 .h(px(SPACE_HEIGHT))
                 .flex()
                 .justify_center()
-                .children(dots),
+                .on_drag_move(cx.listener(|shell, event: &DragMoveEvent<DraggedSpace>, _, cx| {
+                    shell.drag_space_over(event, cx)
+                }))
+                .children(dots)
+                .children(self.space_drop_line(span))
+                .child(self.space_drop_listener(cx)),
+        )
+    }
+
+    /// What the switcher's swatches lie on: the window at the footer, over whatever is behind it.
+    fn switcher_behind(&self) -> [Rgba; 2] {
+        let window = f32::from(self.viewport.height).max(1.);
+        let at = self.gradient_color((window - FOOTER_HEIGHT / 2.) / window);
+        self.palette.over_backdrops(at)
+    }
+
+    /// A Space's dot, glyph or emoji in its switcher cell `cell` wide.
+    fn space_mark(&self, space: &Space, shown: bool, cell: f32, behind: &[Rgba; 2]) -> AnyElement {
+        let id = space.id;
+        match SpaceIcon::parse(&space.icon) {
+            SpaceIcon::Dot => {
+                let size = if shown { SPACE_SWATCH_SHOWN } else { SPACE_SWATCH };
+                // Under the pointer it grows as far again past its squeezed size.
+                let room = cell + SPACE_SWATCH_HOVERED - SPACE_SWATCH;
+                let hovered = squeezed(SPACE_SWATCH_HOVERED, room);
+                (self.palette_of(id).swatch.draw(squeezed(size, cell), behind))
+                    .when(!shown, |swatch| {
+                        swatch.group_hover("space", |style| style.size(px(hovered)))
+                    })
+                    .into_any_element()
+            }
+            // The Space shown's in its accent, as its dot is in its colour, or the ink without
+            // one; the others' in the dots' greys.
+            SpaceIcon::Glyph(index) => svg()
+                .path(GLYPHS[index].1)
+                .size(px(squeezed(SPACE_GLYPH * GLYPH_INK, cell) / GLYPH_INK))
+                .text_color(match (shown, self.space_theme(id).is_some()) {
+                    (true, true) => self.palette_of(id).accent.into(),
+                    (true, false) => self.palette.glyph(1.),
+                    (false, _) => self.palette.glyph(SPACE_OTHER),
+                })
+                .when(!shown, |glyph| {
+                    glyph.group_hover("space", |style| {
+                        style.text_color(self.palette.glyph(SPACE_HOVERED))
+                    })
+                })
+                .into_any_element(),
+            // The item's box is the dot's, so the strip doesn't move with an icon.
+            SpaceIcon::Emoji(emoji) => div()
+                .text_size(px(squeezed(SPACE_ICON_SWITCHER, cell)))
+                .opacity(icon_opacity(shown, false))
+                .when(!shown, |icon| {
+                    icon.group_hover("space", |style| style.opacity(icon_opacity(false, true)))
+                })
+                .child(emoji.to_string())
+                .into_any_element(),
+        }
+    }
+
+    /// The copy of a dragged dot that follows the pointer: its cell `cell` wide, as it's drawn in
+    /// the switcher.
+    pub(super) fn dot_ghost(&self, space: u64, cell: f32) -> Option<AnyElement> {
+        let space = self.spaces.iter().find(|each| each.id == space)?;
+        let mark = self.space_mark(space, space.id == self.space, cell, &self.switcher_behind());
+        Some(
+            div()
+                .w(px(cell))
+                .h(px(SPACE_HEIGHT))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(mark)
+                .into_any_element(),
         )
     }
 

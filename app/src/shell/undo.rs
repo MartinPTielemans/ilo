@@ -61,6 +61,7 @@ impl What {
     pub const RENAME_TAB: What = What::quiet("Rename Tab");
     pub const RENAME_FOLDER: What = What::quiet("Rename Folder");
     pub const RENAME_SPACE: What = What::quiet("Rename Space");
+    pub const MOVE_SPACE: What = What::quiet("Move Space");
     pub const CHANGE_ICON: What = What::quiet("Change Icon");
     pub const CHANGE_PINNED_URL: What = What::quiet("Change Pinned URL");
     pub const CHANGE_THEME: What = What::quiet("Change Theme Color");
@@ -197,6 +198,11 @@ pub(super) enum Edit {
     /// Brings back the Space, which `DeleteSpace` deleted.
     UndoDeleteSpace(u64),
     DeleteSpace(u64),
+    /// Moves the Space to right after the Space `after`, or first if it's 0.
+    MoveSpace {
+        space: u64,
+        after: u64,
+    },
     /// Puts back what the archive removal `removal` took out: the archived tab `id`, or all.
     UndoArchive {
         removal: u64,
@@ -318,6 +324,7 @@ impl Edit {
             | Edit::Clear(_)
             | Edit::UndoDeleteSpace(_)
             | Edit::DeleteSpace(_)
+            | Edit::MoveSpace { .. }
             | Edit::UndoArchive { .. }
             | Edit::Archive(_) => {}
             Edit::Many(edits) => edits.iter_mut().for_each(|edit| edit.rekey(from, to)),
@@ -537,6 +544,10 @@ impl Edit {
                 .browser
                 .delete_space(space, cx)
                 .then_some(Edit::UndoDeleteSpace(space)),
+            Edit::MoveSpace { space, after } => {
+                let back = shell.move_space(space, after, cx)?;
+                Some(Edit::MoveSpace { space, after: back })
+            }
             Edit::UndoArchive { removal, id } => {
                 (shell.browser.undo_archive_remove(removal, cx) > 0).then_some(Edit::Archive(id))
             }

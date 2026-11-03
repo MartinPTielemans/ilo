@@ -1208,6 +1208,12 @@ BC_EXPORT void bc_window_activate(bc_id window);
 // gone. Any window can show it. It's the user's. Then spaces_changed.
 BC_EXPORT bc_id bc_space_create(const char* name, bc_id after);
 
+// Moves the Space to right after the Space |after|, or first if |after| is 0, as a dot dragged
+// along the switcher or a card along the Library's Spaces moves it. Sync gives it alone a new
+// place. Then spaces_changed, unless it was there already or |after| is gone. The user's: agents
+// get none, as the order is the user's.
+BC_EXPORT void bc_space_move(bc_id space, bc_id after);
+
 // A Space is the user's or an agent's, from when it's made for as long as it lives, and saved with
 // it (decision 8). An agent is an AI client, such as Claude Code, driving the browser through the
 // core. The rules its calls keep, once there are any:

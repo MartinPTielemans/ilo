@@ -308,6 +308,9 @@ pub trait Browser {
     fn set_icon(&self, tab: u64, icon: &str, cx: &mut App);
     /// Deletes a Space, closing its tabs, and returns whether it will, as the last can't go.
     fn delete_space(&self, space: u64, cx: &mut App) -> bool;
+    /// Moves a Space to right after the Space `after`, or first if it's 0, as a dot dragged along
+    /// the switcher or a card along the Library's Spaces moves it.
+    fn move_space(&self, _space: u64, _after: u64, _cx: &mut App) {}
     /// Brings back the sidebar of the profile of the Space the window shows from its backup taken
     /// at `time`, in milliseconds since 1970, keeping the one it has as a backup.
     fn restore_sidebar(&self, time: u64, cx: &mut App);

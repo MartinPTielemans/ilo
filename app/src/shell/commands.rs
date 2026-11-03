@@ -988,9 +988,12 @@ impl Shell {
         let space = self.spaces.iter().position(|space| space.id == self.space);
         // Next and previous wrap around for tabs, as in Chrome, and stop at the ends for Spaces, as
         // in Arc.
-        // Escape puts back a dragged row, or lets chosen rows go, before it stops the page
+        // Escape puts back a dragged row or dot, or lets chosen rows go, before it stops the page
         // (docs/ux-spec.md › Tab list).
-        if matches!(command, Command::Stop) && (self.cancel_drag(cx) || self.unchoose(cx)) {
+        let put_back = |shell: &mut Self, cx: &mut Context<Self>| {
+            shell.cancel_drag(cx) || shell.cancel_space_drag(cx) || shell.unchoose(cx)
+        };
+        if matches!(command, Command::Stop) && put_back(self, cx) {
             return;
         }
         if self.run_in_task_area(command, from, cx) {

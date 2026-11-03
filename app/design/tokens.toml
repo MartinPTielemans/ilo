@@ -885,6 +885,11 @@ space-swatch-hovered = 12.0
 space-shown-least = 22.0
 space-clear = 4.0
 space-least = 4.0
+# A Space's dot dragged along the switcher: its place dims to half while its copy follows the
+# pointer, and the gap it would go into shows the rows' drop line stood up, 16 tall on the dots'
+# middle, without the ring, which would be a dot's size (ours: Arc's isn't recorded).
+space-dragged = 0.5
+space-drop-line = 16.0
 form-title-top = 140.0
 form-title-height = 20.0
 form-inset = 14.0

@@ -45,6 +45,8 @@ mod access;
 #[cfg(test)]
 mod undo_tests;
 #[cfg(test)]
+mod space_order_tests;
+#[cfg(test)]
 mod help_tests;
 mod assets;
 mod browser;
@@ -102,6 +104,7 @@ mod sidebar;
 mod sidebar_backups;
 mod sidebar_keys;
 mod space_form;
+mod space_order;
 mod split_targets;
 mod swap;
 mod swipe;
@@ -387,6 +390,8 @@ use crate::tokens::shell::SPACE_SWATCH_HOVERED;
 use crate::tokens::shell::SPACE_SHOWN_LEAST;
 use crate::tokens::shell::SPACE_CLEAR;
 use crate::tokens::shell::SPACE_LEAST;
+use crate::tokens::shell::SPACE_DRAGGED;
+use crate::tokens::shell::SPACE_DROP_LINE;
 // A Space's icon in the switcher takes its dot's place in the same item. Its glyph is 16 pt, a
 // favicon's size (ours, *interim*).
 const SPACE_ICON_SWITCHER: f32 = EMOJI_SIZE;
@@ -1160,6 +1165,11 @@ pub struct Shell {
     drag: Option<Drag>,
     /// A drag just ended, so the release isn't a click on the row.
     dragged: bool,
+    /// A Space's dot dragged along the switcher, the dots gliding to their places after the
+    /// Spaces' order changed, and where the one let go was, which glides from there.
+    space_drag: Option<space_order::SpaceDrag>,
+    dot_slides: space_order::DotSlides,
+    dot_landing: Option<(u64, f32)>,
     /// Escape put a dragged tab back, and the frame that shows it all put back isn't drawn yet.
     putting_back: bool,
     swipe: Option<Swipe>,
@@ -1583,6 +1593,9 @@ impl Shell {
             bar_follows: false,
             drag: None,
             dragged: false,
+            space_drag: None,
+            dot_slides: HashMap::new(),
+            dot_landing: None,
             putting_back: false,
             swipe: None,
             settle: None,
@@ -2093,6 +2106,8 @@ impl Shell {
         log!("browser: spaces {}", ids.join(" "));
         let width = self.library_width();
         let filled = !self.spaces.is_empty();
+        let dots = self.dot_places();
+        let order: Vec<u64> = self.spaces.iter().map(|space| space.id).collect();
         let listed = &mut self.spaces_listed;
         let made: Vec<u64> =
             spaces.iter().map(|&(id, ..)| id).filter(|&id| listed.insert(id)).collect();
@@ -2165,6 +2180,12 @@ impl Shell {
                 }
             })
             .collect();
+        // Only the Spaces in both lists say whether the order changed.
+        let now: Vec<u64> = self.spaces.iter().map(|space| space.id).collect();
+        let kept = |of: &[u64], with: &[u64]| -> Vec<u64> {
+            of.iter().copied().filter(|id| with.contains(id)).collect()
+        };
+        self.glide_dots(dots, kept(&order, &now) != kept(&now, &order));
         self.settle_theme_preview();
         if let Some(form) = &self.form
             && !self.spaces.iter().any(|space| space.id == form.space)
@@ -3393,6 +3414,7 @@ impl Render for Shell {
         self.step_drag_shape(window, cx);
         self.step_held_row(window);
         self.step_held_nav(window);
+        self.step_dot_slides(window);
         self.step_form_going(cx);
         self.step_scroll_edge(window);
         self.step_tools(window);
@@ -3951,6 +3973,7 @@ impl Shell {
         self.step_drag_shape(window, cx);
         self.step_held_row(window);
         self.step_held_nav(window);
+        self.step_dot_slides(window);
         self.step_form_going(cx);
         self.step_scroll_edge(window);
         self.step_tools(window);
