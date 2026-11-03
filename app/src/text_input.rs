@@ -535,7 +535,7 @@ impl TextInput {
     fn word_at(&self, offset: usize) -> Range<usize> {
         match self.secure {
             true => 0..self.content.len(),
-            false => words::at(&self.content, offset, cfg!(target_os = "windows")),
+            false => words::at(&self.content, offset, Keys::HERE == Keys::Windows),
         }
     }
 
