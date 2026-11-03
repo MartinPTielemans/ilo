@@ -164,7 +164,7 @@ impl Shell {
         if self.private {
             return;
         }
-        let items = self.space_items(space, cx);
+        let items = self.space_items(space, true, cx);
         self.show_menu(items, position, None, cx);
     }
 
@@ -199,7 +199,7 @@ impl Shell {
             items.push((MenuEntry::line(), Box::new(|_, _| {})));
             // Its Profile submenu's items name their parent by where it is, now further down.
             let after = items.len();
-            items.extend(self.space_items(space, cx).into_iter().map(|(entry, action)| {
+            items.extend(self.space_items(space, false, cx).into_iter().map(|(entry, action)| {
                 let parent = entry.parent.map(|parent| parent + after);
                 (MenuEntry { parent, ..entry }, action)
             }));
@@ -207,8 +207,10 @@ impl Shell {
         self.show_menu(items, position, None, cx);
     }
 
-    /// The Space's menu's items, for its name, its dot and the sidebar's empty space.
-    fn space_items(&self, space: u64, cx: &App) -> Vec<(MenuEntry, MenuAction)> {
+    /// The Space's menu's items, for its name, its dot and the sidebar's empty space, in Arc
+    /// 1.171's order. The empty space's menu leads with its own New Folder…, so `new_folder` is
+    /// false there.
+    fn space_items(&self, space: u64, new_folder: bool, cx: &App) -> Vec<(MenuEntry, MenuAction)> {
         let entry = self.spaces.iter().find(|each| each.id == space);
         let icon = entry.is_some_and(|each| has_icon(&each.icon));
         let theme = entry.is_some_and(|each| each.color.is_some() || each.theme.is_some());
@@ -221,7 +223,7 @@ impl Shell {
             items = agent;
         }
         let at = items.len();
-        items.push((MenuEntry::new("Profile", true), Box::new(|_, _| {})));
+        items.push((MenuEntry::new("Set Profile", true), Box::new(|_, _| {})));
         let mut profiles = self.profile_items(space);
         let deletes = self.delete_profile_items();
         if !deletes.is_empty() {
@@ -229,13 +231,37 @@ impl Shell {
         }
         profiles.extend(deletes);
         items.extend(profiles.into_iter().map(|(entry, action)| (entry.under(at), action)));
-        // Ours: Arc exports every Space at once, from Settings.
+        items.push((MenuEntry::line(), Box::new(|_, _| {})));
+        if new_folder {
+            let entry =
+                MenuEntry::new("New Folder…", true).shortcut(Command::NewFolder, user_keys(cx));
+            items.push((
+                entry,
+                // Into the Space it was asked in, from its dot or its Library card too.
+                Box::new(move |shell, cx| {
+                    shell.show_space(space, cx);
+                    shell.run(Command::NewFolder, "space menu", cx)
+                }),
+            ));
+            items.push((MenuEntry::line(), Box::new(|_, _| {})));
+        }
+        // Ours, where Arc shares and exports a Space into a folder: Arc exports every Space at
+        // once, from Settings.
         items.push((
             MenuEntry::new("Export as Markdown…", true),
             Box::new(move |shell, cx| {
                 // check.sh waits for this line.
                 log!("browser: command export-space via space menu");
                 shell.export_space(space, cx)
+            }),
+        ));
+        items.push((MenuEntry::line(), Box::new(|_, _| {})));
+        items.push((
+            MenuEntry::new("Manage Spaces…", true),
+            Box::new(|shell, cx| {
+                // check.sh waits for this line.
+                log!("browser: command manage-spaces via space menu");
+                shell.manage_spaces(cx)
             }),
         ));
         items.push((MenuEntry::line(), Box::new(|_, _| {})));
@@ -309,6 +335,8 @@ impl Shell {
     ) {
         let look = self.menu_look();
         self.menu_open = true;
+        // The name row says so after this if the menu is its own.
+        self.name_menu = false;
         let shell = cx.weak_entity();
         self.browser.context_menu(
             entries,
@@ -1465,8 +1493,6 @@ impl Shell {
     }
 }
 
-/// The top of a Space's menu, above its profiles: Rename Space, Change Icon…, Remove Icon once it
-/// has one, Edit Theme Color…, and Remove Theme Color once it has a colour.
 /// `space`'s folders, in the sidebar's order, each named by its path, "Docs / Old".
 fn folder_paths(space: &super::Space) -> Vec<(u64, String)> {
     let name = |folder: u64| space.folders.folders.get(&folder).map(|(name, _)| name.clone());
@@ -1480,17 +1506,14 @@ fn folder_paths(space: &super::Space) -> Vec<(u64, String)> {
     folders.map(|&folder| (folder, path(folder))).collect()
 }
 
+/// The top of a Space's menu, above its profiles, in Arc 1.171's order: Change Space Icon…, Rename
+/// Space… and Edit Theme Color…, with Remove Icon and Remove Theme Color (ours) after what they
+/// undo once the Space has an icon or a colour.
 fn space_menu_head(space: u64, has_icon: bool, has_theme: bool) -> Vec<(MenuEntry, MenuAction)> {
-    let mut items: Vec<(MenuEntry, MenuAction)> = vec![
-        (
-            MenuEntry::new("Rename Space", true),
-            Box::new(move |shell, cx| shell.rename_space(space, cx)),
-        ),
-        (
-            MenuEntry::new("Change Icon…", true),
-            Box::new(move |shell, cx| shell.change_space_icon(space, cx)),
-        ),
-    ];
+    let mut items: Vec<(MenuEntry, MenuAction)> = vec![(
+        MenuEntry::new("Change Space Icon…", true),
+        Box::new(move |shell, cx| shell.change_space_icon(space, cx)),
+    )];
     if has_icon {
         items.push((
             MenuEntry::new("Remove Icon", true),
@@ -1499,7 +1522,10 @@ fn space_menu_head(space: u64, has_icon: bool, has_theme: bool) -> Vec<(MenuEntr
             }),
         ));
     }
-    // After the icon and the name, as in Arc's.
+    items.push((
+        MenuEntry::new("Rename Space…", true),
+        Box::new(move |shell, cx| shell.rename_space(space, cx)),
+    ));
     items.push((
         MenuEntry::new("Edit Theme Color…", true),
         Box::new(move |shell, cx| shell.edit_space_theme(space, cx)),
@@ -1610,13 +1636,13 @@ mod tests {
         items.into_iter().map(|(entry, _)| entry.title.to_string()).collect()
     }
 
-    /// A Space's menu offers Change Icon… always and Remove Icon only once it has an icon, after
-    /// Rename, as a tab's menu does.
+    /// A Space's menu leads with Change Space Icon… and Rename Space…, as Arc 1.171's does, and
+    /// offers Remove Icon after Change Space Icon… only once the Space has an icon.
     #[test]
     fn remove_icon_is_offered_once_the_space_has_one() {
-        let theme = "Edit Theme Color…";
-        assert_eq!(titles(false, false), ["Rename Space", "Change Icon…", theme]);
-        assert_eq!(titles(true, false), ["Rename Space", "Change Icon…", "Remove Icon", theme]);
+        let (icon, name, theme) = ("Change Space Icon…", "Rename Space…", "Edit Theme Color…");
+        assert_eq!(titles(false, false), [icon, name, theme]);
+        assert_eq!(titles(true, false), [icon, "Remove Icon", name, theme]);
     }
 
     /// Remove Theme Color follows Edit Theme Color… only once the Space has a colour, as Remove
