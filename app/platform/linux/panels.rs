@@ -199,6 +199,7 @@ fn name(kind: Kind) -> &'static str {
 /// to another window. It keeps showing, and gives the keyboard back, unless another of the app's
 /// overlays took it, which gives it back to the panel as it closes.
 fn left(view: *mut c_void) {
+    diag_focus("left", view);
     let Some((window, keyboard)) =
         with_panel(|p| p.view == view && p.shown, |p| (p.window, p.keyboard))
     else {
@@ -229,6 +230,7 @@ fn left(view: *mut c_void) {
 /// A press in the panel of `view` while it hasn't the keyboard, which gives it them, as a click
 /// makes its window key on the Mac.
 fn pressed(view: *mut c_void) {
+    diag_focus("pressed", view);
     let Some((ui_view, kind)) = with_panel(|p| p.view == view && p.shown, |p| (p.ui_view, p.kind))
     else {
         return;
@@ -321,4 +323,28 @@ pub extern "C" fn host_forget_window(ui_view: *mut c_void) {
     crate::reveal_window::forget_window(ui_view);
     CORNERS.with_borrow_mut(|corners| corners.retain(|(each, ..)| *each != ui_view));
     unsafe { crate::platform::host_window_closed(ui_view) };
+}
+
+/// Diagnostic for #1646, never to be merged: the X input focus as the panel is left or pressed.
+fn diag_focus(what: &str, view: *mut c_void) {
+    use x11rb::{connection::Connection as _, protocol::xproto::ConnectionExt as _};
+    thread_local! {
+        static X: Option<x11rb::rust_connection::RustConnection> =
+            x11rb::connect(None).ok().map(|(connection, _)| connection);
+    }
+    X.with(|x| {
+        let Some(x) = x else { return };
+        let focus = x.get_input_focus().ok().and_then(|c| c.reply().ok());
+        let tree = x
+            .query_tree(view as usize as u32)
+            .ok()
+            .and_then(|c| c.reply().ok());
+        let _ = x.flush();
+        eprintln!(
+            "browser: diag {what} panel {:#x} parent {:?} focus {:?}",
+            view as usize,
+            tree.map(|t| format!("{:#x}", t.parent)),
+            focus.map(|f| format!("{:#x} revert {:?}", f.focus, f.revert_to))
+        );
+    });
 }
