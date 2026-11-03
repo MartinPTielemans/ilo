@@ -474,6 +474,21 @@ impl Preview {
         }
     }
 
+    /// Where it's drawn: as its motion has it, or under Reduce Motion at its size, and in the
+    /// tab's place from the moment it's kept, fading.
+    fn drawn(&self, cx: &App) -> Pose {
+        let pose = self.pose();
+        let kept = match self.leaving {
+            Some((_, Leave::Keep, _)) => 1. - crate::motion::offset(1. - pose.kept, cx),
+            _ => pose.kept,
+        };
+        Pose {
+            scale: crate::motion::scale(pose.scale, cx),
+            kept,
+            ..pose
+        }
+    }
+
     fn moving(&self) -> bool {
         self.leaving.is_some()
             || self
@@ -892,7 +907,7 @@ impl Render for LinkPreview {
             let ms = shown.asked.elapsed().as_secs_f64() * 1000.;
             log!("browser: link preview first frame in {ms:.1} ms");
         }
-        let pose = shown.pose();
+        let pose = shown.drawn(cx);
         let moving = shown.moving();
         let settling = !moving && !shown.settled;
         shown.settled |= settling;
