@@ -9,7 +9,7 @@ use gpui::{
 };
 
 use super::{
-    SCROLL_EDGE, SCROLL_EDGE_FADE, SWIPE_FLICK, SWIPE_HISTORY, SWIPE_TRACKING,
+    ROW_PITCH, SCROLL_EDGE, SCROLL_EDGE_FADE, SWIPE_FLICK, SWIPE_HISTORY, SWIPE_TRACKING,
     Settle, Shell, Space, Swipe, WHEEL_BURST, WHEEL_LINE, WHEEL_REST, fade_at, rubber_band,
     library::library_band,
 };
@@ -19,7 +19,8 @@ impl Shell {
     /// while a swipe or a settle moves one, it and the page beside it.
     pub(super) fn pages(&self) -> Vec<(u64, f32)> {
         let swipe = self.swipe.as_ref().filter(|swipe| {
-            swipe.across == Some(true) && self.library_swiped(swipe).is_none()
+            let paging = swipe.across == Some(true) && swipe.cards.is_none();
+            paging && self.library_swiped(swipe).is_none()
         });
         let (space, x, beside) = match (swipe, &self.settle) {
             (Some(swipe), _) => (swipe.from, self.swiped_to(swipe), None),
@@ -109,7 +110,7 @@ impl Shell {
 
     /// How far out a swipe has taken the Library (`library_out`), while it moves the Library.
     pub(super) fn library_swiped(&self, swipe: &Swipe) -> Option<f32> {
-        if swipe.across != Some(true) {
+        if swipe.across != Some(true) || swipe.cards.is_some() {
             return None;
         }
         let x = self.swiped_to(swipe);
@@ -133,7 +134,8 @@ impl Shell {
     }
 
     /// Fingers or a wheel over the sidebar. Across it they page between Spaces, and along it they
-    /// scroll the list. Returns whether paging took the event.
+    /// scroll the list. Over the Library's Spaces cards they scroll them across, if they don't
+    /// fit. Returns whether paging, or the cards, took the event.
     fn scroll(&mut self, event: &ScrollEvent, window: &mut Window, cx: &mut Context<Self>) -> bool {
         // The form pages back to the Space it was made from, but not while another Space shows.
         let form_hidden = self.form.is_some() && self.form().is_none();
@@ -142,11 +144,14 @@ impl Shell {
         }
         let delta = match event.delta {
             ScrollDelta::Pixels(delta) => delta.map(f32::from),
-            ScrollDelta::Lines(lines) => return self.wheel(lines, window, cx),
+            ScrollDelta::Lines(lines) => {
+                return self.wheel(lines, f32::from(event.position.x), window, cx);
+            }
         };
         match event.touch_phase {
             TouchPhase::Started => {
                 self.swiped = false;
+                let cards = self.fingers_down(f32::from(event.position.x));
                 self.swipe = Some(Swipe {
                     from: self.space,
                     library: self.library_open || self.library_motion.is_some(),
@@ -156,12 +161,17 @@ impl Shell {
                     nearest: self.space,
                     ready: false,
                     turned: None,
+                    cards,
                 });
             }
             TouchPhase::Ended | TouchPhase::Cancelled => return self.release(window, cx),
             TouchPhase::Moved => {}
         }
         let Some(mut swipe) = self.swipe.take() else {
+            // The momentum after fingers lift from the cards carries them on.
+            if self.coast_cards(delta.x, cx) {
+                return true;
+            }
             // A page swipe's momentum, across, doesn't scroll the list.
             return self.swiped && delta.x.abs() > delta.y.abs();
         };
@@ -173,6 +183,13 @@ impl Shell {
             // The page moves from under what floats over it, and no click outside closes it.
             if across {
                 self.leave_popovers(cx);
+            }
+            // Over the Spaces cards, fingers scroll them, unless the cards are at the end they
+            // push past, where the swipe is the Library's (Arc 1.171).
+            swipe.cards = swipe.cards.filter(|_| across).and_then(|_| self.catch_cards(delta.x));
+            if swipe.cards.is_some() {
+                // check.sh waits for this line.
+                log!("browser: swipe cards");
             }
             // Fingers catch a page, or the Library, that's still settling where it is.
             if across && swipe.library {
@@ -186,7 +203,9 @@ impl Shell {
             }
         }
         let across = swipe.across == Some(true);
-        if across {
+        if across && let Some(cards) = swipe.cards {
+            swipe.cards = Some(self.move_cards(cards, delta.x, cx));
+        } else if across {
             let library_near = |shell: &Self, swipe: &Swipe| {
                 shell.library_swiped(swipe).map(|out| out > 0.5)
             };
@@ -234,6 +253,10 @@ impl Shell {
             return false;
         };
         self.swiped = true;
+        if let Some(cards) = swipe.cards {
+            self.release_cards(cards, cx);
+            return true;
+        }
         let (now, x) = (Instant::now(), self.swiped_to(&swipe));
         let recent = swipe.samples.iter().filter(|&&(at, _)| now - at <= SWIPE_HISTORY);
         let velocity = match (recent.clone().next(), recent.last()) {
@@ -280,10 +303,21 @@ impl Shell {
     }
 
     /// A wheel's ticks across the sidebar page once per burst, then rest. Past the first Space they
-    /// open the Library, and back they close it. Back off the form they cancel it.
-    fn wheel(&mut self, lines: Point<f32>, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    /// open the Library, and back they close it. Back off the form they cancel it. Over the
+    /// Library's Spaces cards at `x`, they scroll them first.
+    fn wheel(
+        &mut self,
+        lines: Point<f32>,
+        x: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if lines.x.abs() <= lines.y.abs() {
             return false;
+        }
+        if self.wheel_cards(lines.x, x, cx) {
+            self.wheel = None;
+            return true;
         }
         let now = Instant::now();
         if self.wheel_paged.is_some_and(|paged| now - paged < WHEEL_REST) {
@@ -356,46 +390,93 @@ impl Shell {
         .size_full()
     }
 
-    /// Fades the edge under the favorites in once the list is past its top, and out back there.
+    /// Moves the list on along its glide, then fades the edge under the favorites in once the list
+    /// is past its top and out back there, and the one at its foot in while rows are hidden under
+    /// it, the room after the last row not counting, and out once they're in view (Arc).
     pub(super) fn step_scroll_edge(&mut self, window: &mut Window) {
-        let scrolled = self.list_scroll.offset().y < px(0.);
-        if scrolled != self.scrolled {
-            self.scroll_edge_fade = Some((Instant::now(), self.scroll_edge()));
-            self.scrolled = scrolled;
+        self.step_list_glide(window);
+        let most = f32::from(self.list_scroll.max_offset().y).max(0.);
+        let scrolled = (-f32::from(self.list_scroll.offset().y)).clamp(0., most);
+        // As the list was last laid out: none before its first layout.
+        let height = f32::from(self.list_scroll.bounds().size.height);
+        let rows_end = self.layout().into_values().fold(0., f32::max) + ROW_PITCH;
+        let below = height > 0. && rows_end + self.tiles_room() > scrolled + height + 0.5;
+        // The list's bounds are the last frame's: when what it's laid out from changes, as in the
+        // frame a resize draws, one more frame decides again once this one has measured it.
+        let measured = (window.viewport_size(), self.pages_top(), self.list_bottom());
+        if self.list_measured != measured {
+            self.list_measured = measured;
+            window.request_animation_frame();
         }
-        if let Some((start, _)) = self.scroll_edge_fade {
-            if start.elapsed().as_secs_f32() < SCROLL_EDGE_FADE {
-                window.request_animation_frame();
-            } else {
-                self.scroll_edge_fade = None;
+        for (edge, shown, name) in [
+            (&mut self.top_edge, scrolled > 0., "edge"),
+            (&mut self.foot_edge, below, "foot edge"),
+        ] {
+            match edge.step(shown) {
+                Some(true) => window.request_animation_frame(),
                 // check.sh waits for these lines.
-                log!("browser: scroll edge {}", if scrolled { "shown" } else { "hidden" });
+                Some(false) => {
+                    log!("browser: scroll {name} {}", if shown { "shown" } else { "hidden" })
+                }
+                None => {}
             }
         }
-    }
-
-    /// How far the edge under the favorites has faded in.
-    fn scroll_edge(&self) -> f32 {
-        let to = if self.scrolled { 1. } else { 0. };
-        self.scroll_edge_fade.map_or(to, |(start, from)| {
-            fade_at(from, to, start.elapsed().as_secs_f32(), SCROLL_EDGE_FADE)
-        })
     }
 
     /// The edge across the sidebar 4 under the favorites, or the URL field without them or while
     /// they scroll with the list, while the rows go under it (Dia).
     pub(super) fn scroll_edge_line(&self) -> Option<impl IntoElement + use<>> {
-        let shown = self.scroll_edge();
+        Some(self.edge_line(self.top_edge.at())?.top(px(self.pages_top() - 2.)))
+    }
+
+    /// The edge across the sidebar 1 under the list's foot while rows are hidden under it (Arc).
+    pub(super) fn foot_edge_line(&self) -> Option<impl IntoElement + use<>> {
+        let line = self.edge_line(self.foot_edge.at())?;
+        Some(line.bottom(px(self.list_bottom() - 2.)))
+    }
+
+    fn edge_line(&self, shown: f32) -> Option<gpui::Div> {
         (shown > 0.).then(|| {
             div()
                 .absolute()
-                .top(px(self.pages_top() - 2.))
                 .left_0()
                 .w(px(self.width()))
                 .h(px(1.))
                 .bg(self.palette.faint(SCROLL_EDGE))
                 .opacity(shown)
         })
+    }
+}
+
+/// A line at an edge of the list, which fades in while it's shown and out once it isn't.
+#[derive(Default)]
+pub(super) struct EdgeLine {
+    pub(super) shown: bool,
+    /// Its fade since it last turned, from how far in it was then.
+    fade: Option<(Instant, f32)>,
+}
+
+impl EdgeLine {
+    /// How far it has faded in.
+    fn at(&self) -> f32 {
+        let to = if self.shown { 1. } else { 0. };
+        self.fade.map_or(to, |(start, from)| {
+            fade_at(from, to, start.elapsed().as_secs_f32(), SCROLL_EDGE_FADE)
+        })
+    }
+
+    /// Turns it to `shown`: Some(true) while it's fading, Some(false) the frame it ends.
+    fn step(&mut self, shown: bool) -> Option<bool> {
+        if shown != self.shown {
+            self.fade = Some((Instant::now(), self.at()));
+            self.shown = shown;
+        }
+        let (start, _) = self.fade?;
+        let fading = start.elapsed().as_secs_f32() < SCROLL_EDGE_FADE;
+        if !fading {
+            self.fade = None;
+        }
+        Some(fading)
     }
 }
 

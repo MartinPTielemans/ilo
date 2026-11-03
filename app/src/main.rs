@@ -3389,9 +3389,7 @@ impl Browser for Engine {
     }
 
     fn restart(&self, cx: &mut App) {
-        // As Quit does: once the shell that asked is done, and before Chromium's posted quit.
-        cx.defer(save_launch_picture);
-        unsafe { bc::bc_restart() };
+        restart_browser(cx);
     }
 
     fn playready_needs(&self) -> shell::PlayReady {
@@ -3453,14 +3451,14 @@ impl Browser for Engine {
     fn toast_button(
         &self,
         text: &str,
-        (label, name): (Option<&'static str>, &'static str),
+        (label, name): (&'static str, &'static str),
         run: Rc<dyn Fn(&mut App)>,
         time: Duration,
         cx: &mut App,
     ) {
         let text = text.to_string();
         let button = toast::Button {
-            label: label.map_or(toast::Label::Plate, |label| toast::Label::Text(label.into())),
+            label: toast::Label::Text(label.into()),
             name,
             run: Rc::new(move |_, cx| run(cx)),
         };
@@ -6262,6 +6260,14 @@ unsafe extern "C" fn stopping(_: *mut c_void) {
             agents.update(cx, |agents, cx| agents.end_tasks(cx));
         }
     });
+}
+
+/// Quits and starts again, bringing back the windows and their Spaces: the protected-media note's
+/// and Settings' way to load Google's Widevine module.
+fn restart_browser(cx: &mut App) {
+    // As Quit does: once the view that asked is done, and before Chromium's posted quit.
+    cx.defer(save_launch_picture);
+    unsafe { bc::bc_restart() };
 }
 
 // The next launch's first window opens where the regular window in front is, showing its sidebar

@@ -30,6 +30,7 @@ use crate::{
 #[cfg(test)]
 mod agent_spaces;
 mod beside;
+mod card_strip;
 #[cfg(test)]
 mod link_previews;
 #[cfg(test)]
@@ -228,9 +229,14 @@ const TURN_TITLE_FADE: f32 = 0.5;
 // Folder close).
 const FOLD_OPEN: f32 = 0.2;
 const FOLD_CLOSE_OMEGA: f32 = 25.;
-// The edge under the favorites fades in once the list scrolls past its top and out back there, on
-// Dia's Scroll edge curve (docs/ux-spec.md › Motion).
-const SCROLL_EDGE_FADE: f32 = 0.1;
+// The edge under the favorites fades in once the list scrolls past its top and out back there, and
+// the one at its foot while rows are hidden under it, as long as Arc's take, on Dia's Scroll edge
+// curve (docs/ux-spec.md › Motion).
+const SCROLL_EDGE_FADE: f32 = 0.25;
+// The list glides to a row it scrolls to, most of the way in its first frame and still at the end,
+// as Arc's (docs/ux-spec.md › Tab rows).
+const LIST_GLIDE: f32 = 0.22;
+const LIST_GLIDE_POWER: i32 = 18;
 // Clear and the URL field's button fade in as the pointer comes onto the sidebar and out as it
 // leaves, on the scroll edge's curve. Arc's fade isn't recorded (docs/ux-spec.md › Clear divider).
 const TOOLS_FADE: f32 = 0.15;
@@ -254,13 +260,13 @@ const WHEEL_REST: Duration = Duration::from_millis(250);
 
 use crate::tokens::shell::NAV_TOP;
 use crate::tokens::shell::SIDEBAR_BUTTON_X;
-use crate::tokens::shell::BACK_X;
-use crate::tokens::shell::FORWARD_X;
-use crate::tokens::shell::RELOAD_X;
+use crate::tokens::shell::FULL_SCREEN_SIDEBAR_BUTTON_X;
+use crate::tokens::shell::NAV_TRAIL;
+use crate::tokens::shell::NAV_PITCH;
+use crate::tokens::shell::NAV_AFTER_SIDEBAR;
 use crate::tokens::shell::NAV_SIZE;
 use crate::tokens::shell::NAV_RADIUS;
 use crate::tokens::shell::NAV_GLYPH;
-use crate::tokens::shell::NAV_END;
 
 use crate::tokens::shell::URL_FIELD_TOP;
 use crate::tokens::shell::URL_FIELD_HEIGHT;
@@ -304,6 +310,7 @@ use crate::tokens::shell::ICON_PLACEHOLDER_LINE;
 const ICON_PLACEHOLDER_DASH: (f32, f32) = (4., 2.);
 use crate::tokens::shell::ICON_PLACEHOLDER_COLOR;
 const SPACE_ICON_TEXT: f32 = EMOJI_SIZE;
+use crate::tokens::shell::LIST_TRAIL;
 use crate::tokens::shell::SPACE_GLYPH;
 use crate::tokens::shell::ROW_PITCH;
 use crate::tokens::shell::ROW_HEIGHT;
@@ -376,6 +383,9 @@ use crate::tokens::shell::SPACE_HEIGHT;
 use crate::tokens::shell::SPACE_SWATCH_SHOWN;
 use crate::tokens::shell::SPACE_SWATCH;
 use crate::tokens::shell::SPACE_SWATCH_HOVERED;
+use crate::tokens::shell::SPACE_SHOWN_LEAST;
+use crate::tokens::shell::SPACE_CLEAR;
+use crate::tokens::shell::SPACE_LEAST;
 // A Space's icon in the switcher takes its dot's place in the same item. Its glyph is 16 pt, a
 // favicon's size (ours, *interim*).
 const SPACE_ICON_SWITCHER: f32 = EMOJI_SIZE;
@@ -717,6 +727,15 @@ enum Slot {
     NewTab,
 }
 
+/// The list on its way to a row, from `from` down its top at `start` to `to`, last set at `set`.
+#[derive(Clone, Copy)]
+struct ListGlide {
+    start: Instant,
+    from: f32,
+    to: f32,
+    set: f32,
+}
+
 /// Tabs' rows new in the list, fading in since `start`: a new tab's plate, or whole rows when
 /// several come at once, as after Undo.
 struct Opened {
@@ -905,6 +924,9 @@ struct Swipe {
     /// changed.
     ready: bool,
     turned: Option<Instant>,
+    /// Where they've taken the Library's Spaces cards, before the rubber band, while they scroll
+    /// them rather than move the Library (`card_strip`).
+    cards: Option<f32>,
 }
 
 /// A Space's page settling on its place, after a swipe or a switch.
@@ -1078,10 +1100,14 @@ pub struct Shell {
     fields_drawn: Rc<RefCell<HashMap<u64, bool>>>,
     /// Where the Library's empty line was last laid out, for its log line.
     empty_drawn: Rc<RefCell<String>>,
-    /// Whether the list is past its top, and the edge under the favorites' fade since it last
-    /// went past or back, from how far in it was then.
-    scrolled: bool,
-    scroll_edge_fade: Option<(Instant, f32)>,
+    /// The line under the favorites, shown while the list is past its top, and the one at its
+    /// foot, while rows are hidden under it.
+    top_edge: swipe::EdgeLine,
+    foot_edge: swipe::EdgeLine,
+    /// What the list was last laid out from: the window's size and where the list starts and ends.
+    list_measured: (Size<Pixels>, f32, f32),
+    /// The list's glide to a row it scrolls to, if it's on its way.
+    list_glide: Cell<Option<ListGlide>>,
     /// The edge the selected tab's marker was last drawn at, true for the top, and its frame in
     /// the window (`shown_marker`).
     marker_drawn: Cell<Option<(bool, Bounds<Pixels>)>>,
@@ -1342,6 +1368,8 @@ pub struct Shell {
     library_motion: Option<(f32, f32, Instant)>,
     /// While the sidebar under the Library fades: its opacity when it started, and when.
     sidebar_fade: Option<(f32, Instant)>,
+    /// How far the Library's Spaces cards have scrolled across, when they don't fit.
+    card_strip: card_strip::CardStrip,
     /// While the circle goes back after a pull made a Space.
     circle_exit: Option<new_space::CircleExit>,
     /// What the tabs' pages ask, such as for the camera: only shown tabs ask.
@@ -1526,8 +1554,10 @@ impl Shell {
             card_press_closes: false,
             fields_drawn: Rc::default(),
             empty_drawn: Rc::default(),
-            scrolled: false,
-            scroll_edge_fade: None,
+            top_edge: Default::default(),
+            foot_edge: Default::default(),
+            list_measured: Default::default(),
+            list_glide: Cell::new(None),
             marker_drawn: Cell::new(None),
             caret_drawn: Rc::default(),
             keyed: None,
@@ -1653,6 +1683,7 @@ impl Shell {
             library_resize: None,
             library_motion: None,
             sidebar_fade: None,
+            card_strip: Default::default(),
             circle_exit: None,
             questions: HashMap::new(),
             question_drawn: Rc::default(),
@@ -2550,12 +2581,16 @@ impl Shell {
         }
     }
 
-    /// Gives "New Tab" the selected plate while ⌘T's command bar is open, or gives it back.
+    /// Gives "New Tab" the selected plate while ⌘T's command bar is open, scrolling the list to
+    /// its row as Arc's does, or gives it back.
     fn set_new_tab(&mut self, new_tab: bool, cx: &mut Context<Self>) {
         if self.new_tab != new_tab {
             self.new_tab = new_tab;
             // check.sh reads this line.
             log!("browser: new tab plate {}", new_tab as u8);
+            if new_tab {
+                self.scroll_to_slot(Slot::NewTab, "new tab");
+            }
             cx.notify();
         }
     }
@@ -2848,7 +2883,8 @@ impl Shell {
         }
     }
 
-    /// Deletes the Space, asking first if it has tabs, which close with it.
+    /// Deletes the Space, asking first if it has tabs, which go with it: its Today tabs to the
+    /// archive, its pinned tabs with the Space, and ⌘Z brings them all back.
     fn delete_space(&mut self, space: u64, cx: &mut Context<Self>) {
         let Some(found) = self.spaces.iter().find(|each| each.id == space) else {
             return;
@@ -2859,12 +2895,13 @@ impl Shell {
             return;
         }
         let shell = cx.weak_entity();
+        let undo = keystroke_label("cmd-z");
         self.browser.confirm(
             format!("Delete “{}”?", found.name),
             if tabs == 1 {
-                "Its tab closes too.".into()
+                format!("Its tab goes with it. {undo} brings it back.")
             } else {
-                format!("Its {tabs} tabs close too.")
+                format!("Its {tabs} tabs go with it. {undo} brings them back.")
             },
             "Delete",
             Box::new(move |cx| {
@@ -3496,6 +3533,8 @@ impl Render for Shell {
                     shell.browser.start_window_move(cx);
                 }
                 shell.pointer_at(event.position.x.into(), cx);
+                // A tooltip shows once the pointer rests (tooltip.rs).
+                crate::tooltip::moved(cx);
             }))
             .on_scroll(cx.listener(|shell, _, _, cx| shell.end_hovers(cx)))
             .on_mouse_up(
@@ -3598,6 +3637,7 @@ impl Shell {
                 sidebar
                     .child(self.with_page(self.url_field(cx)))
                     .children(self.scroll_edge_line().map(|line| self.with_page(line)))
+                    .children(self.foot_edge_line().map(|line| self.with_page(line)))
                     .child(self.space_pages(cx))
                     // Over the pages, which they scroll with when they're tall.
                     .children(self.tiles(cx).map(|tiles| self.with_page(tiles)))
@@ -3846,6 +3886,7 @@ impl Shell {
             .when(!under.is_empty(), |list| {
                 list.child(div().flex_none().flex().flex_col().overflow_hidden().children(under))
             })
+            .child(div().flex_none().h(px(LIST_TRAIL)))
             .children(line)
             .children(dragged)
             .child(self.drag_listeners(cx))
