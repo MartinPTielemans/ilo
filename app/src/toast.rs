@@ -156,9 +156,14 @@ impl Shown {
         }
     }
 
-    fn moving(&self) -> bool {
+    /// Whether it's still on its way in or out. Under Reduce Motion it's in once it has faded in,
+    /// as it's drawn at its size.
+    fn moving(&self, cx: &App) -> bool {
         match (self.shown, self.leaving) {
             (_, Some(_)) | (None, _) => true,
+            (Some(shown), None) if crate::motion::still(cx) => {
+                shown.elapsed().as_secs_f32() < FADE_IN
+            }
             (Some(shown), None) => {
                 spring(shown.elapsed().as_secs_f32(), RESPONSE, DAMPING).is_some()
             }
@@ -539,7 +544,7 @@ impl Render for Toast {
         if shown.shown.is_none() && window.is_visible() {
             shown.shown = Some(Instant::now());
         }
-        let at_rest = !shown.moving();
+        let at_rest = !shown.moving(cx);
         if !at_rest {
             window.request_animation_frame();
         } else if !shown.settled {

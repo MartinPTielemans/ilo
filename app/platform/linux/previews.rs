@@ -12,7 +12,7 @@ use std::{
     fs,
     io::Cursor,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
     sync::{Arc, LazyLock},
     thread,
     time::{Duration, Instant},
@@ -453,7 +453,7 @@ fn run(exec: &str, input: &Path, out: &Path) -> bool {
     let Some(program) = args.next() else {
         return false;
     };
-    let Ok(mut child) = Command::new(program)
+    let Ok(mut child) = browser::child::command(program)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
