@@ -162,7 +162,7 @@ fn system() -> String {
 /// The processor's name, else the architecture's.
 fn chip() -> String {
     #[cfg(target_os = "macos")]
-    let name = (std::process::Command::new("/usr/sbin/sysctl")
+    let name = (crate::child::command("/usr/sbin/sysctl")
         .args(["-n", "machdep.cpu.brand_string"])
         .output()
         .ok())

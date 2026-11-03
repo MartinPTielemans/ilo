@@ -738,8 +738,6 @@ impl Render for HoverCard {
             log!("browser: hover card settled");
         }
         let pose = self.pose();
-        // Under Reduce Motion nothing scales, and the fades stay (docs/ux-spec.md › Motion).
-        let scale = if cx.reduce_motion() { 1. } else { pose.scale };
         let holds = match (&drawn.picture, drawn.card.pictured) {
             (Some(_), _) => "picture",
             (None, true) => "favicon",
@@ -879,7 +877,7 @@ impl Render for HoverCard {
                 .child(host)
                 .child(buttons)
                 .child(rim),
-            scale,
+            pose.scale,
             corner,
         ))
     }

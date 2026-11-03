@@ -22,6 +22,7 @@
 #include "base/time/time.h"
 #include "browser_core/ad_block.h"
 #include "browser_core/agent_autofill.h"
+#include "browser_core/agent_page.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/cast_dialog.h"
 #include "browser_core/crash_reports.h"
@@ -360,10 +361,12 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
       const net::IsolationInfo& isolation_info,
       mojo::PendingRemote<network::mojom::URLLoaderFactory>* out_factory) override {
     // A page in an agent's Space opens no other app, as one Chrome's own agent acts on doesn't,
-    // and a saved "Always allow" doesn't count there.
+    // and a saved "Always allow" doesn't count there. Handled, the navigation stops where it was,
+    // with no error page in place of the page, and the agent hears why (#1443).
     content::WebContents* contents = web_contents_getter.Run();
     if (contents && !OpenAppDialog::MayOpen(contents)) {
-      return false;
+      AgentPage::AppRefused(contents, url);
+      return true;
     }
     return ChromeContentBrowserClient::HandleExternalProtocol(
         url, std::move(web_contents_getter), frame_tree_node_id, navigation_data,

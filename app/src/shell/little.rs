@@ -375,6 +375,7 @@ impl Shell {
                 },
                 LITTLE_GLYPH,
                 glyph,
+                cx,
             ));
         let main = button(
             "little-main",
