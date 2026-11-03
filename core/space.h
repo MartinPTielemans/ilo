@@ -234,6 +234,15 @@ class Space {
   // is false ends that, leaving the pages even. False, doing nothing, if it's in no split.
   bool SetExpanded(bc_id tab, bool expanded);
 
+  // The name and the icon, an emoji, the user gave |tab|'s split, which its row shows in place of
+  // its pages' titles and favicons, else empty.
+  std::string SplitName(bc_id tab) const;
+  std::string SplitIcon(bc_id tab) const;
+  // Gives |tab|'s split |name| or |icon|, or none if empty. False, doing nothing, if it's in no
+  // split.
+  bool SetSplitName(bc_id tab, std::string name);
+  bool SetSplitIcon(bc_id tab, std::string icon);
+
   // The lowest pinned tab still |loaded|, else 0: the one to show once no Today tab is left.
   bc_id LastLoadedPinned(base::FunctionRef<bool(bc_id)> loaded) const;
   // The tab to show once |leaving| closes or, pinned, unloads. For a Today tab it's Chrome's order:
@@ -260,6 +269,9 @@ class Space {
     std::vector<double> shares;
     // The tab that took the card, else 0, while the others are kept at 220 pt.
     bc_id expanded = 0;
+    // What the user named it and the emoji they gave it, else empty. They go with the split.
+    std::string name;
+    std::string icon;
   };
 
   // The split holding |tab|, or splits_.end().

@@ -2393,6 +2393,16 @@ impl Browser for Engine {
         unsafe { bc::bc_tab_set_split_stacked(tab, stacked) };
     }
 
+    fn set_split_name(&self, tab: u64, name: &str, _: &mut App) {
+        let name = CString::new(name).unwrap_or_default();
+        unsafe { bc::bc_tab_set_split_name(tab, name.as_ptr()) };
+    }
+
+    fn set_split_icon(&self, tab: u64, icon: &str, _: &mut App) {
+        let icon = CString::new(icon).unwrap_or_default();
+        unsafe { bc::bc_tab_set_split_icon(tab, icon.as_ptr()) };
+    }
+
     fn set_split_shares(&self, tab: u64, shares: Option<&[f64]>, _: &mut App) {
         let (shares, count) = shares.map_or((std::ptr::null(), 0), |shares| {
             (shares.as_ptr(), shares.len())
@@ -6501,6 +6511,8 @@ unsafe extern "C" fn space_changed(_: *mut c_void, space: bc::bc_id) {
                 stacked: unsafe { bc::bc_tab_split_stacked(tab) },
                 shares: if even { Vec::new() } else { shares },
                 expanded: unsafe { bc::bc_tab_split_expanded(tab) },
+                name: name(bc::bc_tab_split_name, tab),
+                icon: name(bc::bc_tab_split_icon, tab),
             });
         }
     }

@@ -266,18 +266,16 @@ impl Shell {
     }
 
     /// Duplicate on a split's row copies the whole split, as Arc's does: each page with its history,
-    /// joined again in the same order and orientation. A tab alone is copied alone.
+    /// joined again in the same order and orientation, with the split's name and icon. A tab alone
+    /// is copied alone.
     pub(super) fn duplicate_row(&mut self, tab: u64, cx: &mut Context<Self>) {
-        let (panes, stacked) = (self.panes(tab), self.stacked(tab));
-        let copies: Vec<u64> = panes.iter().map(|&pane| self.browser.duplicate(pane, cx)).collect();
-        if copies.len() < 2 || copies.contains(&0) {
+        let Some((panes, look)) = self.split_of(tab) else {
+            self.browser.duplicate(tab, cx);
             return;
-        }
-        for pair in copies.windows(2) {
-            self.browser.split_with(pair[1], pair[0], false, cx);
-        }
-        if stacked {
-            self.browser.set_split_stacked(copies[0], true, cx);
+        };
+        let copies: Vec<u64> = panes.iter().map(|&pane| self.browser.duplicate(pane, cx)).collect();
+        if !copies.contains(&0) {
+            self.join_again(&copies, &look, cx);
         }
     }
 
@@ -537,7 +535,7 @@ mod tests {
     ) {
         shell.update(cx, |shell, cx| {
             let (tabs, shares) = (tabs.to_vec(), shares.to_vec());
-            let split = Split { tabs: tabs.clone(), stacked: false, shares, expanded };
+            let split = Split { tabs: tabs.clone(), shares, expanded, ..Split::default() };
             shell.set_tabs(1, Vec::new(), tabs, vec![split], Folders::default(), cx);
         });
     }

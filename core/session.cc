@@ -259,6 +259,10 @@ SavedSpace SaveSpace(const Space& space, bc_id shown, std::vector<bc_id>* today)
       }
       tab.split = above && std::ranges::contains(space.Panes(id), above);
       tab.stacked = tab.split && space.Stacked(id);
+      if (tab.split) {
+        tab.split_name = space.SplitName(id);
+        tab.split_icon = space.SplitIcon(id);
+      }
       if (std::vector<double> shares = space.Shares(id); !shares.empty()) {
         std::vector<bc_id> panes = space.Panes(id);
         tab.share = shares[std::ranges::find(panes, id) - panes.begin()];
@@ -383,6 +387,12 @@ std::optional<std::string> ToJson(const Saved& saved) {
       }
       if (tab.stacked) {
         dict.Set("stacked", true);
+      }
+      if (!tab.split_name.empty()) {
+        dict.Set("split_name", tab.split_name);
+      }
+      if (!tab.split_icon.empty()) {
+        dict.Set("split_icon", tab.split_icon);
       }
       if (tab.share) {
         dict.Set("share", tab.share);
@@ -548,6 +558,12 @@ std::optional<SavedTab> ReadTab(const base::Value& value) {
   }
   tab.split = dict->FindBool("split").value_or(false);
   tab.stacked = tab.split && dict->FindBool("stacked").value_or(false);
+  if (const std::string* name = dict->FindString("split_name"); name && tab.split) {
+    tab.split_name = *name;
+  }
+  if (const std::string* icon = dict->FindString("split_icon"); icon && tab.split) {
+    tab.split_icon = *icon;
+  }
   tab.share = dict->FindDouble("share").value_or(0);
   tab.expanded = dict->FindBool("expanded").value_or(false);
   if (const std::string* profile = dict->FindString("profile")) {
@@ -1310,9 +1326,16 @@ Space* RestoreSpace(Window& window,
       if (!tab.split || j == 0) {
         shares.clear();
         expanded = 0;
-      } else if ((*ids)[j] && (*ids)[j - 1] && space->Split((*ids)[j], (*ids)[j - 1], GURL()) &&
-                 tab.stacked) {
-        space->SetStacked((*ids)[j], true);
+      } else if ((*ids)[j] && (*ids)[j - 1] && space->Split((*ids)[j], (*ids)[j - 1], GURL())) {
+        if (tab.stacked) {
+          space->SetStacked((*ids)[j], true);
+        }
+        if (!tab.split_name.empty()) {
+          space->SetSplitName((*ids)[j], tab.split_name);
+        }
+        if (!tab.split_icon.empty()) {
+          space->SetSplitIcon((*ids)[j], tab.split_icon);
+        }
       }
       if ((*ids)[j]) {
         shares.push_back(tab.share);

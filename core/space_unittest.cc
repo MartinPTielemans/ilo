@@ -112,6 +112,28 @@ TEST_F(SpaceTest, AFolderMovesWholeAndInOrderToTheBottomOfThePinnedTabs) {
   EXPECT_TRUE(home_->NodeOf(7)->position.LessThan(home_->NodeOf(docs_)->position));
 }
 
+// A split's name and icon are the split's, given by any of its tabs: they go where it goes, and
+// they go once it does, so a split made again of the same tabs has none.
+TEST_F(SpaceTest, ASplitsNameAndIconAreItsOwnAndGoWithIt) {
+  Fill();
+  EXPECT_TRUE(work_->SetSplitName(4, "Reading"));
+  EXPECT_TRUE(work_->SetSplitIcon(3, "📚"));
+  EXPECT_FALSE(work_->SetSplitName(1, "Alone"));
+  EXPECT_EQ(work_->SplitName(3), "Reading");
+  EXPECT_EQ(work_->SplitIcon(4), "📚");
+  EXPECT_EQ(work_->SplitName(1), "");
+
+  home_->TakeFolder(*work_, docs_, {});
+  EXPECT_EQ(home_->SplitName(3), "Reading");
+  EXPECT_EQ(home_->SplitIcon(4), "📚");
+
+  home_->Separate(4);
+  EXPECT_EQ(home_->SplitName(3), "");
+  ASSERT_TRUE(home_->Split(4, 3, GURL()));
+  EXPECT_EQ(home_->SplitName(3), "");
+  EXPECT_EQ(home_->SplitIcon(4), "");
+}
+
 // Into another profile's Space each tab goes as the new one standing in for it.
 TEST_F(SpaceTest, TabsCopiedToAnotherProfileTakeTheirPlaces) {
   Fill();

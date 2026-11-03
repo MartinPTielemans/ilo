@@ -74,6 +74,10 @@ pub trait Browser {
     fn move_in_split(&self, tab: u64, index: usize, cx: &mut App);
     /// Stacks the pages of `tab`'s split view top to bottom, or puts them side by side.
     fn set_split_stacked(&self, tab: u64, stacked: bool, cx: &mut App);
+    /// Names `tab`'s split view, or takes its name away for an empty one.
+    fn set_split_name(&self, tab: u64, name: &str, cx: &mut App);
+    /// Gives `tab`'s split view `icon`, an emoji, or takes its icon away for an empty one.
+    fn set_split_icon(&self, tab: u64, icon: &str, cx: &mut App);
     /// Gives the pages of `tab`'s split view `shares` of it, in their order, or even shares.
     fn set_split_shares(&self, tab: u64, shares: Option<&[f64]>, cx: &mut App);
     /// Gives `tab`'s page its split's card, the other pages kept at 220 pt however wide it is, or
@@ -832,6 +836,10 @@ pub struct Split {
     /// The tab whose page took the card with the others kept at 220 pt, else 0. The shares then
     /// stay even, as the core works the widths out from this at every layout.
     pub expanded: u64,
+    /// The name and the emoji the user gave it, which its row shows in place of its pages' titles
+    /// and favicons, else empty.
+    pub name: SharedString,
+    pub icon: SharedString,
 }
 
 /// A Space's folders in its pinned tabs. What's in each follows it there.

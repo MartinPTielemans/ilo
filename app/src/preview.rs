@@ -301,6 +301,17 @@ impl Fake {
             shell.update(cx, change).ok();
         });
     }
+
+    /// Changes `tab`'s split view, as the core reports it changed.
+    fn change_split(&self, tab: u64, cx: &mut App, change: impl Fn(&mut Split) + 'static) {
+        self.later(cx, move |shell, cx| {
+            let mut splits = shell.splits();
+            splits.iter_mut().filter(|split| split.tabs.contains(&tab)).for_each(&change);
+            let (pinned, today) = (shell.pinned().to_vec(), shell.today().to_vec());
+            let folders = shell.folders();
+            shell.set_tabs(shell.space(), pinned, today, splits, folders, cx);
+        });
+    }
 }
 
 impl Browser for Fake {
@@ -1125,6 +1136,16 @@ impl Browser for Fake {
             let folders = shell.folders();
             shell.set_tabs(shell.space(), pinned, today, splits, folders, cx);
         });
+    }
+
+    fn set_split_name(&self, tab: u64, name: &str, cx: &mut App) {
+        let name: SharedString = name.to_string().into();
+        self.change_split(tab, cx, move |split| split.name = name.clone());
+    }
+
+    fn set_split_icon(&self, tab: u64, icon: &str, cx: &mut App) {
+        let icon: SharedString = icon.to_string().into();
+        self.change_split(tab, cx, move |split| split.icon = icon.clone());
     }
 
     fn set_split_shares(&self, tab: u64, shares: Option<&[f64]>, cx: &mut App) {

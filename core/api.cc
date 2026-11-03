@@ -1099,6 +1099,26 @@ bool bc_tab_set_split_expanded(bc_id id, bool expanded) {
   return true;
 }
 
+size_t bc_tab_split_name(bc_id id, char* name, size_t capacity) {
+  browser_core::Space* space = browser_core::Space::Holding(id);
+  return CopyString(space ? space->SplitName(id) : std::string(), name, capacity);
+}
+
+bool bc_tab_set_split_name(bc_id id, const char* name) {
+  browser_core::Space* space = browser_core::Space::Holding(id);
+  return space && space->SetSplitName(id, name ? name : "");
+}
+
+size_t bc_tab_split_icon(bc_id id, char* icon, size_t capacity) {
+  browser_core::Space* space = browser_core::Space::Holding(id);
+  return CopyString(space ? space->SplitIcon(id) : std::string(), icon, capacity);
+}
+
+bool bc_tab_set_split_icon(bc_id id, const char* icon) {
+  browser_core::Space* space = browser_core::Space::Holding(id);
+  return space && space->SetSplitIcon(id, icon ? icon : "");
+}
+
 bool bc_tab_set_split_stacked(bc_id id, bool stacked) {
   browser_core::Space* space = browser_core::Space::Holding(id);
   if (!space || !space->SetStacked(id, stacked)) {

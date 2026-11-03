@@ -103,17 +103,25 @@ impl Shell {
         cx.notify();
     }
 
-    /// Shows the tab's title in a field, all selected, to type a name over.
+    /// Shows the tab's title in a field, all selected, to type a name over. A split view's tab
+    /// names its split instead, as Arc's split menu's Rename… does, in a field holding the split's
+    /// name, else empty.
     pub(super) fn rename_tab(&mut self, tab: u64, cx: &mut Context<Self>) {
-        log!("browser: rename tab {tab}");
-        let title = self.title(tab);
+        let (naming, placeholder, text) = match self.split_of(tab) {
+            Some((tabs, look)) => (Naming::Split(tabs[0]), "Split View", look.name),
+            None => (Naming::Tab(tab), "Tab name", self.title(tab)),
+        };
+        match naming {
+            Naming::Split(first) => log!("browser: rename split {first}"),
+            _ => log!("browser: rename tab {tab}"),
+        }
         let name = cx.new(|cx| {
-            TextInput::new("Tab name", cx)
+            TextInput::new(placeholder, cx)
                 .placeholder_color(self.palette.text(FORM_PLACEHOLDER))
-                .with_text(title)
+                .with_text(text)
         });
         self.renaming = Some(Renaming {
-            naming: Naming::Tab(tab),
+            naming,
             name,
             in_library: false,
             _watches: Vec::new(),
@@ -148,8 +156,10 @@ impl Shell {
     }
 
     /// Shows the icon picker under the tab's favicon, once its row has stopped moving, with the
-    /// sidebar docked.
+    /// sidebar docked. A split view's tab gives its split the icon, as Arc's split menu's Change
+    /// Icon… does, from the split's first tab, where its row has its one icon.
     pub(super) fn change_icon(&mut self, tab: u64, cx: &mut Context<Self>) {
+        let tab = self.split_of(tab).map_or(tab, |(tabs, _)| tabs[0]);
         self.pick_icon_from_row(Subject::Tab(tab), cx);
     }
 
@@ -362,14 +372,16 @@ impl Shell {
                     }
                 };
                 let anchor = point(x, f32::from(row.center().y));
+                let split = self.split_of(tab).map(|(_, look)| look.icon);
+                let prop = if split.is_some() { Prop::SplitIcon(tab) } else { Prop::TabIcon(tab) };
                 let picked: Picked = Rc::new(move |icon, cx| {
                     shell
                         .update(cx, |shell, cx| {
-                            shell.change(Prop::TabIcon(tab), Value::Text(icon.to_string()), cx)
+                            shell.change(prop, Value::Text(icon.to_string()), cx)
                         })
                         .ok();
                 });
-                (self.page(tab).icon, anchor, picked)
+                (split.unwrap_or_else(|| self.page(tab).icon), anchor, picked)
             }
             Subject::Folder(folder) => {
                 // The folder's middle, in from the row by the folders it's in.
@@ -529,6 +541,8 @@ impl Shell {
             // Left as it was, the title stays the page's, which changes with it.
             Naming::Tab(tab) if *name == *self.title(tab) => {}
             Naming::Tab(tab) => self.change(Prop::TabName(tab), Value::Text(name), cx),
+            // Kept empty, it shows its pages' titles again.
+            Naming::Split(tab) => self.change(Prop::SplitName(tab), Value::Text(name), cx),
             // Kept empty, it stays where it went back to.
             Naming::PinnedUrl(tab) => {
                 if let Some(url) = self.browser.typed_url(&name).filter(|_| !name.is_empty()) {
@@ -620,6 +634,9 @@ impl Shell {
 
 #[cfg(test)]
 mod leave_tests;
+
+#[cfg(test)]
+mod split_tests;
 
 #[cfg(test)]
 mod tests {

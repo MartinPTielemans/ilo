@@ -393,6 +393,14 @@ impl Browser for Recorder {
         self.record(format!("split stacked {tab} {stacked}"))
     }
 
+    fn set_split_name(&self, tab: u64, name: &str, _: &mut App) {
+        self.edit(format!("split name {tab} {name}"))
+    }
+
+    fn set_split_icon(&self, tab: u64, icon: &str, _: &mut App) {
+        self.edit(format!("split icon {tab} {icon}"))
+    }
+
     fn set_split_shares(&self, tab: u64, shares: Option<&[f64]>, _: &mut App) {
         self.page_events.borrow_mut().push("shares");
         let shares = shares.map_or_else(
