@@ -382,8 +382,8 @@ impl Shell {
         })
     }
 
-    /// The edge across the sidebar 4 under the favorites, or the URL field without them or while
-    /// they scroll with the list, while the rows go under it (Dia).
+    /// The edge across the sidebar 2 over the rows' top, under the favorites, or the URL field
+    /// without them or while they scroll with the list, while the rows go under it (Dia).
     pub(super) fn scroll_edge_line(&self) -> Option<impl IntoElement + use<>> {
         let shown = self.scroll_edge();
         (shown > 0.).then(|| {
