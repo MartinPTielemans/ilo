@@ -920,7 +920,7 @@ Settings › Passwords' Offer to save passwords turns the offer off for every si
   - From its left edge, all 28 pt squares 2 pt from the top: the search glyph at 2; the field at 31, 152.5 wide and 18 tall; the count ("1/12") at 185.5; previous and next at 212 and 238; a divider; close at 270.
   - With no match, "NOT FOUND" in capitals and red (219,25,41) takes the place of the count and the arrows.
   - It opens and closes in one frame, with no animation.
-- Ours: Arc's layout and fill, (19,29,50), a navy unlike the window's colour beside it in Arc's capture, the one Space captured; whether it follows the Space isn't recorded. AppKit's window shadow stands in for Arc's: one drawn in the bar's window would need room round the bar that takes the page's clicks. The glyphs are Lucide's search, chevrons and x at 14 pt, in the header's colours, on the ladder's white 0.12 under the pointer and 0.065 pressed; the count is 12 pt and NOT FOUND 11 pt semibold.
+- Ours: Arc's layout and fill, (19,29,50), a navy unlike the window's colour beside it in Arc's capture, the one Space captured; whether it follows the Space isn't recorded. AppKit's window shadow stands in for Arc's: one drawn in the bar's window would need room round the bar that takes the page's clicks. The glyphs are Lucide's search, chevrons and x at 14 pt, in the header's colours, on the ladder's white 0.12 under the pointer and 0.065 pressed; the count is 12 pt and NOT FOUND 11 pt semibold. Previous, next and close name themselves and their keys in the shared tooltip, hung under the button as the header's are: Previous ⇧⌘G, Next ⌘G, Close ⎋; a click or a key ends it.
 
 ### Zoom
 
