@@ -14,12 +14,14 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
 #include "browser_core/public/browser_core.h"
 #include "content/public/browser/devtools_agent_host_client.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect_f.h"
 
 namespace content {
@@ -58,6 +60,10 @@ class AgentPage : public content::WebContentsObserver,
     int action;
     int64_t element;
     std::string text;
+    // When waiting for its element, or for the page to settle, gives up.
+    base::TimeTicks deadline;
+    // Whether the page was still busy when it stopped waiting for it to settle.
+    bool busy = false;
   };
   using Reply = base::OnceCallback<void(const base::DictValue* result)>;
   using Then = base::OnceCallback<void(std::optional<gfx::RectF>)>;
@@ -86,22 +92,43 @@ class AgentPage : public content::WebContentsObserver,
   bool IsWebPage();
   // Runs |then| once the page has stopped loading, or after a while.
   void AfterLoad(base::OnceClosure then);
-  // Waits a moment for what an input starts, such as a navigation, then for it to load, then
-  // answers with the tree.
+
+  // Waits until the job's element is on screen, has held still for two frames and, with
+  // |enabled|, isn't disabled, then gives its box; or at the deadline the box it has, if any. One
+  // that's gone, or still disabled at the deadline, fails the job.
+  void Ready(bool enabled, Then then);
+  void Look(bool enabled, std::optional<gfx::RectF> last, int still, Then then);
+  // Hears of the page's requests from now until the job answers, so an input's answer waits for
+  // what it starts, then runs |then|.
+  void Listen(base::OnceClosure then);
+  void Unlisten();
+  // A request started or ended in the session |session|, or "" for the main frame's.
+  void Heard(const std::string& session, const std::string& method, const base::DictValue& event);
+  // Waits for the page to settle after an input, then answers with the tree.
   void Settle();
+  // Waits until the page has stopped loading and has had no request for a while.
+  void Quiet();
+  // Reads the main frame's tree until it's the same twice, a frame apart, then the snapshot.
+  void Still(base::ListValue last);
 
   void Click();
+  // Moves the mouse to |point|, then presses and lets go there.
+  void Press(gfx::PointF point);
   void Mouse(const char* type, std::pair<double, double> at, base::OnceClosure then);
   void Type(bool submit);
   void Focus(int64_t element, bool submit);
   void PressKey(const std::string& key, base::OnceClosure then);
   void Scroll(bool down);
+  // Scrolls the page by most of its view with the mouse's wheel.
+  void Wheel(bool down);
   void History(bool forward);
   void Screenshot();
 
   // The tree, as bc_agent_page answers it: the main frame's, with each frame agents may see under
   // the element it's in.
   void Snapshot();
+  // The snapshot, from the main frame's tree in |nodes|.
+  void Read(base::ListValue nodes);
   // The frames whose trees a snapshot reads, each after the frame it's in, the main frame first.
   std::vector<Frame> Frames();
   // Reads the tree of each frame from |next| on, then puts each under its frame's element.
@@ -163,6 +190,15 @@ class AgentPage : public content::WebContentsObserver,
   std::vector<Target> targets_;
   // The frames the snapshot running reads.
   std::vector<Frame> frames_;
+  // Whether the job hears of the page's requests, and waits for them to end.
+  bool listening_ = false;
+  bool settling_ = false;
+  // The requests under way that the job heard start, by session and id, and the streams, as an
+  // EventSource's, which never end, so the job doesn't wait for them.
+  std::set<std::string> requests_;
+  std::set<std::string> streams_;
+  // When a request last started or ended, or the job started listening.
+  base::TimeTicks last_request_;
   // Keeps the page drawing while it's hidden, for the agent's input and screenshots.
   base::ScopedClosureRunner drawing_;
   base::WeakPtrFactory<AgentPage> weak_factory_{this};

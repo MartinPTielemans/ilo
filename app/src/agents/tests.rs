@@ -787,7 +787,7 @@ fn the_switch_and_the_agents_come_back(cx: &mut TestAppContext) {
 /// The tree the core gives for tab 20's page: a heading, a field, a password field and a button
 /// that orders.
 fn shop_tree() -> String {
-    json!([
+    json!({ "nodes": [
         { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" },
           "childIds": ["2", "3", "4", "5"] },
         { "nodeId": "2", "role": { "value": "heading" }, "name": { "value": "Basket" } },
@@ -797,7 +797,7 @@ fn shop_tree() -> String {
           "backendDOMNodeId": 41, "password": true },
         { "nodeId": "5", "role": { "value": "button" }, "name": { "value": "Place order" },
           "backendDOMNodeId": 51 },
-    ])
+    ]})
     .to_string()
 }
 
@@ -836,7 +836,8 @@ fn an_agent_opens_a_page_and_acts_by_ref(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
     let answer = call(&agents, "claude-code", "open_tab", json!({ "url": "example.com" }), cx);
     let (tab, _, action, _, _) = browser.pages.borrow()[0].clone();
-    assert_eq!((tab, action), (30, PageAction::Snapshot));
+    // It answers once the page has settled, as an action does.
+    assert_eq!((tab, action), (30, PageAction::Quiet));
     let opened = page_done(&agents, &browser, answer, shop_tree(), cx);
     assert!(
         opened.text.starts_with("Opened tab 30.\n\nTab 30: Shop\nURL: https://example.com/"),
@@ -1142,6 +1143,117 @@ fn shop_done(agents: &Entity<Agents>, browser: &Made, cx: &mut TestAppContext) {
     agents.update(cx, |agents, cx| agents.page_done(request, shop_tree(), false, cx));
 }
 
+/// A page that hadn't settled when the core stopped waiting for it says so, after what the action
+/// did, so a run's list of steps says it too.
+#[gpui::test]
+fn an_action_says_when_its_page_was_still_busy(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = call(&agents, "claude-code", "scroll", json!({ "tab": 20 }), cx);
+    let busy = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" } },
+    ], "busy": true })
+    .to_string();
+    let scrolled = page_done(&agents, &browser, answer, busy, cx);
+    assert!(!scrolled.error);
+    assert!(
+        scrolled.text.starts_with(
+            "Scrolled down. The page was still busy after 5 s, so it may change yet.\n\nTab 20"
+        ),
+        "{}",
+        scrolled.text
+    );
+}
+
+/// A wait step until "quiet" asks the core for the page once it has settled, again while it was
+/// still busy, and once its time is up goes on with the run, as a page that polls never settles.
+#[gpui::test]
+fn a_wait_step_waits_for_the_page_to_settle(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let busy = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" } },
+    ], "busy": true })
+    .to_string();
+    let look = |tree: String, cx: &mut TestAppContext| {
+        let request = browser.pages.borrow().last().unwrap().1;
+        agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
+        cx.run_until_parked();
+    };
+    let last = || browser.pages.borrow().last().unwrap().2;
+    let looks = || browser.pages.borrow().len();
+
+    let steps = json!({ "tab": 20, "steps": [{ "action": "wait", "until": "quiet", "seconds": 2 }] });
+    let run = call(&agents, "claude-code", "run_steps", steps, cx);
+    assert_eq!((looks(), last()), (1, PageAction::Quiet));
+    look(busy.clone(), cx);
+    assert!(run.try_recv().is_err(), "a busy page ended the wait before its time");
+    assert_eq!((looks(), last()), (2, PageAction::Quiet));
+    look(shop_tree(), cx);
+    let ran = run.recv().unwrap();
+    assert!(ran.text.starts_with("Ran 1 steps.\n1. The page settled.\n\nTab 20"), "{}", ran.text);
+    assert_eq!(browser.checked.borrow().last().unwrap(), "snapshot");
+    let entry = agents.read_with(cx, |agents, _| agents.recent().next().unwrap().clone());
+    let steps: Vec<&str> = entry.steps.iter().map(|step| step.action.as_ref()).collect();
+    assert_eq!(steps, ["wait"]);
+
+    let steps = json!({ "tab": 20, "steps": [{ "action": "wait", "until": "quiet", "seconds": 1 }] });
+    let run = call(&agents, "claude-code", "run_steps", steps, cx);
+    look(busy.clone(), cx);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    look(busy, cx);
+    let ran = run.recv().unwrap();
+    assert!(!ran.error, "a page still busy stopped the run");
+    assert!(
+        ran.text.starts_with("Ran 1 steps.\n1. The page was still busy after 1 s.\n\nTab 20"),
+        "{}",
+        ran.text
+    );
+}
+
+/// A wait step for gone text looks at the page until the text has gone from it, and fails once its
+/// time is up with the text still there.
+#[gpui::test]
+fn a_wait_step_waits_for_text_to_go(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let look = |tree: String, cx: &mut TestAppContext| {
+        let request = browser.pages.borrow().last().unwrap().1;
+        agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
+        cx.run_until_parked();
+    };
+    let looks = || browser.pages.borrow().len();
+    let thanks = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" },
+          "childIds": ["2"] },
+        { "nodeId": "2", "role": { "value": "heading" }, "name": { "value": "Thanks for your order" } },
+    ]})
+    .to_string();
+
+    let steps = json!({ "tab": 20, "steps": [{ "action": "wait", "gone": "basket" }] });
+    let run = call(&agents, "claude-code", "run_steps", steps, cx);
+    assert_eq!(browser.pages.borrow().last().unwrap().2, PageAction::Snapshot);
+    look(shop_tree(), cx);
+    assert!(run.try_recv().is_err());
+    cx.executor().advance_clock(Duration::from_millis(500));
+    assert_eq!(looks(), 2);
+    look(thanks, cx);
+    let ran = run.recv().unwrap();
+    assert!(ran.text.starts_with("Ran 1 steps.\n1. “basket” went.\n\nTab 20"), "{}", ran.text);
+
+    let steps = json!({ "tab": 20, "steps": [{ "action": "wait", "gone": "Basket", "seconds": 1 }] });
+    let run = call(&agents, "claude-code", "run_steps", steps, cx);
+    for _ in 0..2 {
+        look(shop_tree(), cx);
+        cx.executor().advance_clock(Duration::from_millis(500));
+    }
+    look(shop_tree(), cx);
+    let failed = run.recv().unwrap();
+    assert!(failed.error);
+    assert!(
+        failed.text.starts_with("Step 1 failed: “Basket” was still there after 1 s."),
+        "{}",
+        failed.text
+    );
+}
+
 /// hand_off holds the tab for the user and asks them in the card, and its call waits: the agent's
 /// calls on the tab are refused meanwhile. Hand Back gives the tab back and answers it.
 #[gpui::test]
@@ -1371,13 +1483,21 @@ fn a_wait_step_waits_for_its_text_in_the_page(cx: &mut TestAppContext) {
         agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
     };
     let looks = || browser.pages.borrow().len();
-    let thanks = json!([
+    let thanks = json!({ "nodes": [
         { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" },
           "childIds": ["2"] },
         { "nodeId": "2", "role": { "value": "heading" }, "name": { "value": "Thanks for your order" } },
-    ])
+    ]})
     .to_string();
-    for wrong in [json!({}), json!({ "seconds": 31 }), json!({ "text": "Thanks", "seconds": 0 })] {
+    let wrongs = [
+        json!({}),
+        json!({ "seconds": 31 }),
+        json!({ "text": "Thanks", "seconds": 0 }),
+        json!({ "text": "Thanks", "gone": "Basket" }),
+        json!({ "until": "idle" }),
+        json!({ "until": "quiet", "text": "Thanks" }),
+    ];
+    for wrong in wrongs {
         let mut step = json!({ "action": "wait" });
         step.as_object_mut().unwrap().extend(wrong.as_object().unwrap().clone());
         let steps = json!({ "tab": 20, "steps": [step] });
@@ -2141,6 +2261,9 @@ mod tasks {
             (did("scroll", "maat.pt", "“Opening hours”", ""), Tense::Now, "Scrolling to “Opening hours”"),
             (did("wait", "", "2s", ""), Tense::Done, "Waited 2s"),
             (did("wait", "", "“Tickets”", ""), Tense::Failed, "Didn't see “Tickets”"),
+            (did("wait", "", "“Loading” to go", ""), Tense::Now, "Waiting for “Loading” to go"),
+            (did("wait", "", "“Loading” to go", ""), Tense::Failed, "Didn't see “Loading” go"),
+            (did("wait", "", tools::SETTLE, ""), Tense::Done, "Waited for the page to settle"),
             (did("list_tabs", "", "", ""), Tense::Done, "Looked over its tabs"),
             (did("close_tab", "maat.pt", "", ""), Tense::Done, "Closed maat.pt"),
             (did("ask", "", "", ""), Tense::Done, "Asked you"),

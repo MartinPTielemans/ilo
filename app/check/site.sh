@@ -8,8 +8,8 @@
 # "corner" in the title. "x" and "z" each open check.crx, an extension the
 # extensions run puts there, which Chrome installs from. "a" asks to manage windows on all the
 # displays, a permission with no question from macOS, and puts the answer in the title. Keys with
-# ⌘, ⌃ or ⌥ are the browser's. /wait is a page that never comes, and /held one that comes once the
-# run has made held.go in the site's folder. login.html is a login form, its username field
+# ⌘, ⌃ or ⌥ are the browser's. /wait is a page that never comes, /slow text that comes after a
+# second, and /held one that comes once the run has made held.go in the site's folder. login.html is a login form, its username field
 # across the page's top half and its password field across the bottom, that posts to /login,
 # which sends the browser on to welcome.html, as a site that took the login would.
 # signup.html is the same form asking for a new password, which posts to /signup, as /login.
@@ -379,6 +379,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         if self.path == "/wait":
             time.sleep(3600)
+            return
+        if path == "/slow":
+            time.sleep(1)
+            body = b"slow"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if path == "/held":
             # Every request waiting is let go at once, so one Chrome asked for ahead is no matter.
