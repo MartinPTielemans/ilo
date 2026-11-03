@@ -31,9 +31,15 @@ fn the_list_scrolls_the_least_that_shows_the_stop() {
     let at = |top: f32, height: f32| bounds(point(px(0.), px(top)), size(px(100.), px(height)));
     let max = px(1000.);
     // 24 tall, its bottom 34 under the list's: up by that and the room.
-    assert_eq!(revealed(px(-50.), at(510., 24.), view, max), px(-50. - 34. - PADDING));
+    assert_eq!(
+        revealed(px(-50.), at(510., 24.), view, max),
+        px(-50. - 34. - PADDING)
+    );
     // Its top 20 over the list's: down by that and the room.
-    assert_eq!(revealed(px(-50.), at(80., 24.), view, max), px(-50. + 20. + PADDING));
+    assert_eq!(
+        revealed(px(-50.), at(80., 24.), view, max),
+        px(-50. + 20. + PADDING)
+    );
     assert_eq!(revealed(px(-50.), at(200., 24.), view, max), px(-50.));
     assert_eq!(revealed(px(-5.), at(80., 24.), view, max), px(0.));
     assert_eq!(revealed(px(-990.), at(510., 24.), view, max), px(-1000.));
@@ -63,7 +69,10 @@ impl Render for Panel {
             .w(px(200.))
             .relative()
             .child(self.field.clone())
-            .child(self.stops.mark("field", handle, Ring::Inside(CONTROL_RADIUS)));
+            .child(
+                self.stops
+                    .mark("field", handle, Ring::Inside(CONTROL_RADIUS)),
+            );
         div()
             .key_context("Panel")
             .track_focus(&self.focus)
@@ -130,7 +139,10 @@ fn keyed(panel: &Entity<Panel>, cx: &mut VisualTestContext) -> Option<String> {
             return Some("panel".into());
         }
         let handles = panel.stops.handles.borrow();
-        handles.iter().find(|(_, handle)| **handle == focused).map(|(id, _)| id.to_string())
+        handles
+            .iter()
+            .find(|(_, handle)| **handle == focused)
+            .map(|(id, _)| id.to_string())
     })
 }
 
@@ -145,17 +157,30 @@ fn tab_rings_each_stop_and_space_presses_it(cx: &mut TestAppContext) {
     assert_eq!(keyed(&panel, cx).as_deref(), Some("Back"));
     assert!(panel.read_with(cx, |panel, _| panel.stops.keyed()));
     press(cx, "space");
-    assert_eq!(*panel.read_with(cx, |panel, _| panel.pressed.clone()).borrow(), ["Back"]);
+    assert_eq!(
+        *panel
+            .read_with(cx, |panel, _| panel.pressed.clone())
+            .borrow(),
+        ["Back"]
+    );
     press(cx, "tab");
     assert_eq!(keyed(&panel, cx).as_deref(), Some("field"));
     // Typed into the field, a space is the field's.
     cx.simulate_input("a b");
-    assert_eq!(panel.read_with(cx, |panel, cx| panel.field.read(cx).text().to_string()), "a b");
+    assert_eq!(
+        panel.read_with(cx, |panel, cx| panel.field.read(cx).text().to_string()),
+        "a b"
+    );
     press(cx, "tab");
     press(cx, "tab");
     assert_eq!(keyed(&panel, cx).as_deref(), Some("Done"));
     press(cx, "enter");
-    assert_eq!(*panel.read_with(cx, |panel, _| panel.pressed.clone()).borrow(), ["Back", "Done"]);
+    assert_eq!(
+        *panel
+            .read_with(cx, |panel, _| panel.pressed.clone())
+            .borrow(),
+        ["Back", "Done"]
+    );
     press(cx, "tab");
     assert_eq!(keyed(&panel, cx).as_deref(), Some("Back"));
     press(cx, "shift-tab");
@@ -163,7 +188,12 @@ fn tab_rings_each_stop_and_space_presses_it(cx: &mut TestAppContext) {
     // A press on Next takes the ring away, and gives it the keyboard.
     let next = panel.read_with(cx, |panel, _| {
         let drawn = panel.stops.shared.drawn.borrow();
-        drawn.iter().find(|each| each.id.to_string() == "Next").unwrap().frame.center()
+        drawn
+            .iter()
+            .find(|each| each.id.to_string() == "Next")
+            .unwrap()
+            .frame
+            .center()
     });
     cx.simulate_click(next, Modifiers::none());
     cx.run_until_parked();

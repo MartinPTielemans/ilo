@@ -29,8 +29,8 @@ pub mod suggested;
 #[cfg(test)]
 pub(crate) mod tests;
 
-use std::path::{Path, PathBuf};
 use std::cell::RefCell;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -257,7 +257,11 @@ impl Job {
             (self.spaces.iter()).all(|&(space, profile)| host.space_profile(space) == profile);
         let loaded = |profile: &ProfileRef| host.profile_loaded(self.profile(*profile));
         let history = self.plan.history.iter().all(|(profile, _)| loaded(profile));
-        let addresses = self.plan.addresses.iter().all(|(profile, _)| loaded(profile));
+        let addresses = self
+            .plan
+            .addresses
+            .iter()
+            .all(|(profile, _)| loaded(profile));
         spaces && history && addresses
     }
 
@@ -273,9 +277,14 @@ impl Job {
         let open = |profile: u64| {
             let spaces = self.spaces.iter().filter(|&&(_, each)| each == profile);
             host.profile_loaded(profile)
-                && spaces.clone().all(|&(space, _)| host.space_profile(space) == profile)
+                && spaces
+                    .clone()
+                    .all(|&(space, _)| host.space_profile(space) == profile)
         };
-        names.filter(|&(_, &id)| !open(id)).map(|(name, _)| name.as_str()).collect()
+        names
+            .filter(|&(_, &id)| !open(id))
+            .map(|(name, _)| name.as_str())
+            .collect()
     }
 
     /// Asks again to put each Space not yet in its profile there, which loads the profile.
@@ -554,7 +563,9 @@ impl ImportView {
         if matches!(self.step, Step::List | Step::Done(_)) {
             let (suggested, runs) = (self.suggested.take(), self.runs);
             let stops = std::mem::take(&mut self.stops);
-            *self = ImportView::new(self.host.clone(), self.skip).look(self.look).with_stops(stops);
+            *self = ImportView::new(self.host.clone(), self.skip)
+                .look(self.look)
+                .with_stops(stops);
             (self.suggested, self.runs) = (suggested, runs);
             cx.notify();
         }
@@ -677,7 +688,10 @@ impl ImportView {
         let ticked = self.ticked();
         let existing = self.host.existing(cx);
         let start = existing.profiles.first().map(|(id, _)| *id);
-        let space = existing.spaces.iter().find(|space| Some(space.profile) == start);
+        let space = existing
+            .spaces
+            .iter()
+            .find(|space| Some(space.profile) == start);
         let (Some(space), Step::Done(said)) = (space, &self.step) else {
             return;
         };
@@ -728,7 +742,10 @@ impl ImportView {
         self.step = Step::Running {
             source: Some(source),
             name: from.name(),
-            run: Run { id, ..Run::default() },
+            run: Run {
+                id,
+                ..Run::default()
+            },
         };
         self.suggested = None;
         cx.notify();
@@ -830,9 +847,17 @@ impl ImportView {
         // What's read is all the import needs of the user; the rest goes on by itself.
         cx.emit(ImportEvent::Started);
         // Another ad blocker is left off the list, which says so once (extensions_box).
-        let listed = found.extensions.iter().filter(|each| !each.blocks_ads()).count();
+        let listed = found
+            .extensions
+            .iter()
+            .filter(|each| !each.blocks_ads())
+            .count();
         if !found.extensions.is_empty() {
-            let ids: Vec<&str> = found.extensions.iter().map(|each| each.id.as_str()).collect();
+            let ids: Vec<&str> = found
+                .extensions
+                .iter()
+                .map(|each| each.id.as_str())
+                .collect();
             // check.sh reads this line.
             log!("browser: import lists extensions {}", ids.join(" "));
             extensions::list(&name, found.extensions);
@@ -849,7 +874,10 @@ impl ImportView {
             counts.addresses
         );
         // check.sh reads this line.
-        log!("browser: import from {name}: {} link rules", counts.link_rules);
+        log!(
+            "browser: import from {name}: {} link rules",
+            counts.link_rules
+        );
         let Step::Running { run, .. } = &mut self.step else {
             return;
         };
@@ -905,7 +933,8 @@ impl ImportView {
         let then = |count: Count, cx: &mut Context<Self>| {
             let view = cx.entity().downgrade();
             Box::new(move |added, cx: &mut App| {
-                view.update(cx, |view, cx| view.added(count, added, cx)).ok();
+                view.update(cx, |view, cx| view.added(count, added, cx))
+                    .ok();
             })
         };
         for (profile, pages) in later.history {
@@ -1038,7 +1067,8 @@ impl ImportView {
         let view = cx.entity().downgrade();
         let then = Box::new(move |file: Option<PathBuf>, cx: &mut App| {
             if let Some(file) = file {
-                view.update(cx, |view, cx| view.import_passwords(file, cx)).ok();
+                view.update(cx, |view, cx| view.import_passwords(file, cx))
+                    .ok();
             }
         });
         self.host.clone().choose_file(Exported::Passwords, then, cx);
@@ -1049,7 +1079,8 @@ impl ImportView {
         let view = cx.entity().downgrade();
         let then = Box::new(move |file: Option<PathBuf>, cx: &mut App| {
             if let Some(file) = file {
-                view.update(cx, |view, cx| view.import_bookmarks(file, cx)).ok();
+                view.update(cx, |view, cx| view.import_bookmarks(file, cx))
+                    .ok();
             }
         });
         self.host.clone().choose_file(Exported::Bookmarks, then, cx);
@@ -1068,7 +1099,10 @@ impl ImportView {
         self.step = Step::Running {
             source: None,
             name: name.clone(),
-            run: Run { id, ..Run::default() },
+            run: Run {
+                id,
+                ..Run::default()
+            },
         };
         self.suggested = None;
         cx.notify();
@@ -1115,8 +1149,10 @@ impl ImportView {
         let view = cx.entity().downgrade();
         let chosen = file.clone();
         let then = Box::new(move |passwords: Passwords, cx: &mut App| {
-            view.update(cx, |view, cx| view.passwords_imported(&chosen, passwords, cx))
-                .ok();
+            view.update(cx, |view, cx| {
+                view.passwords_imported(&chosen, passwords, cx)
+            })
+            .ok();
         });
         if !self.host.import_passwords(&file, then) {
             return self.finish("The passwords couldn't be imported.", cx);
@@ -1205,11 +1241,15 @@ impl ImportView {
     fn list(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let list = div().flex().flex_col().gap(px(BOX_GAP));
         let list = match self.sources.is_empty() {
-            true => list.child(line("No browser to import from was found on this computer.")),
+            true => list.child(line(
+                "No browser to import from was found on this computer.",
+            )),
             false => list.child(self.browsers(cx)),
         };
         let extensions = self.extensions_box(cx);
-        list.children(extensions).child(self.files(cx)).into_any_element()
+        list.children(extensions)
+            .child(self.files(cx))
+            .into_any_element()
     }
 
     /// The extensions the last import listed, each with Add…, which opens its Web Store page, and
@@ -1299,7 +1339,12 @@ impl ImportView {
             .on_click(cx.listener(|view, _, _, cx| view.choose_folders(cx)))
             .stop(&self.stops, Ring::Inside(CONTROL_RADIUS), cx)
             .child("Choose folders")
-            .child(svg().path(glyph).size(px(DISCLOSURE_GLYPH)).text_color(look.detail));
+            .child(
+                svg()
+                    .path(glyph)
+                    .size(px(DISCLOSURE_GLYPH))
+                    .text_color(look.detail),
+            );
         let names = folders.open.then_some(folders.names.as_deref());
         let chosen = match names {
             None => None,
@@ -1311,9 +1356,9 @@ impl ImportView {
                     let toggled = name.clone();
                     div()
                         .id(("import-folder", index))
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            view.toggle_folder(&toggled, cx)
-                        }))
+                        .on_click(
+                            cx.listener(move |view, _, _, cx| view.toggle_folder(&toggled, cx)),
+                        )
                         .stop(&self.stops, Ring::Inside(CONTROL_RADIUS), cx)
                         .child(checked_row(
                             look,
@@ -1417,11 +1462,13 @@ impl ImportView {
             "A bookmarks file, in HTML, which every browser exports.".into(),
             choose.into_any_element(),
         );
-        let places = export_places(&self.sources, self.os).into_iter().map(|place| {
-            line(place)
-                .text_size(px(text::SMALL))
-                .text_color(look.detail)
-        });
+        let places = export_places(&self.sources, self.os)
+            .into_iter()
+            .map(|place| {
+                line(place)
+                    .text_size(px(text::SMALL))
+                    .text_color(look.detail)
+            });
         div()
             .flex()
             .flex_col()
@@ -1478,10 +1525,12 @@ impl ImportView {
                     .justify_end()
                     .gap(px(PADDING))
                     .child(back)
-                    .child(div().relative().child(import).child(drawn(
-                        "import-go".into(),
-                        self.drawn_at.clone(),
-                    ))),
+                    .child(
+                        div()
+                            .relative()
+                            .child(import)
+                            .child(drawn("import-go".into(), self.drawn_at.clone())),
+                    ),
             )
             .into_any_element()
     }
@@ -1785,10 +1834,12 @@ impl Render for ImportView {
                             .gap(px(PADDING))
                             .children(delete)
                             .children(add)
-                            .child(div().relative().child(done).child(drawn(
-                                "import-done".into(),
-                                self.drawn_at.clone(),
-                            ))),
+                            .child(
+                                div()
+                                    .relative()
+                                    .child(done)
+                                    .child(drawn("import-done".into(), self.drawn_at.clone())),
+                            ),
                     )
                     .into_any_element()
             }

@@ -11,7 +11,18 @@ fn window_with_a_tab(cx: &mut TestAppContext) -> (gpui::Entity<Shell>, Rc<Record
     let host = Rc::new(Recorder::default());
     let shell = cx.new(|cx| Shell::new(host.clone(), cx));
     shell.update(cx, |shell, cx| {
-        shell.set_spaces(vec![(1, "Space 1".into(), None, 0, "".into(), "".into(), "".into())], cx);
+        shell.set_spaces(
+            vec![(
+                1,
+                "Space 1".into(),
+                None,
+                0,
+                "".into(),
+                "".into(),
+                "".into(),
+            )],
+            cx,
+        );
         shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
         shell.set_space(1, cx);
     });

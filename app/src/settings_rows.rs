@@ -80,13 +80,19 @@ pub struct Drawn {
 impl Stops {
     /// Stops of another view that join this one's order, with ids of their own.
     pub fn share(&self) -> Stops {
-        Stops { handles: RefCell::default(), shared: self.shared.clone() }
+        Stops {
+            handles: RefCell::default(),
+            shared: self.shared.clone(),
+        }
     }
 
     /// The focus handle of the stop `id`.
     pub fn handle(&self, id: impl Into<ElementId>, cx: &App) -> FocusHandle {
         let mut handles = self.handles.borrow_mut();
-        handles.entry(id.into()).or_insert_with(|| cx.focus_handle()).clone()
+        handles
+            .entry(id.into())
+            .or_insert_with(|| cx.focus_handle())
+            .clone()
     }
 
     /// Starts the order again, as the window renders a frame.
@@ -142,7 +148,12 @@ impl Stops {
                 let shown = window.content_mask().bounds;
                 let mut drawn = shared.drawn.borrow_mut();
                 drawn.retain(|each| each.handle != handle);
-                drawn.push(Drawn { id, handle, frame, shown });
+                drawn.push(Drawn {
+                    id,
+                    handle,
+                    frame,
+                    shown,
+                });
             },
             move |frame, _, window, _| {
                 if !keyed.keyed.get() || !painted.is_focused(window) {
@@ -172,9 +183,21 @@ pub fn step(at: Option<usize>, len: usize, forward: bool, round: bool) -> Option
     Some(match (at, forward) {
         (None, true) => 0,
         (None, false) => last,
-        (Some(at), true) if at >= last => if round { 0 } else { last },
+        (Some(at), true) if at >= last => {
+            if round {
+                0
+            } else {
+                last
+            }
+        }
         (Some(at), true) => at + 1,
-        (Some(0), false) => if round { last } else { 0 },
+        (Some(0), false) => {
+            if round {
+                last
+            } else {
+                0
+            }
+        }
         (Some(at), false) => at - 1,
     })
 }
@@ -224,7 +247,9 @@ pub trait Stop: InteractiveElement + ParentElement + Styled + Sized {
             return self;
         };
         let handle = stops.handle(id.clone(), cx);
-        self.track_focus(&handle).relative().child(stops.mark(id, handle, ring))
+        self.track_focus(&handle)
+            .relative()
+            .child(stops.mark(id, handle, ring))
     }
 
     /// A stop ringed inside its plate, as a button's.
@@ -360,7 +385,12 @@ pub fn detailed_row(
                 .flex_1()
                 .min_w_0()
                 .child(div().truncate().child(name.into()))
-                .child(div().text_size(px(SMALL)).text_color(rgb(DETAIL)).child(detail.into())),
+                .child(
+                    div()
+                        .text_size(px(SMALL))
+                        .text_color(rgb(DETAIL))
+                        .child(detail.into()),
+                ),
         )
         .children(control.map(|control| div().flex_none().ml(px(PADDING)).child(control)))
 }
@@ -456,7 +486,12 @@ pub fn popup(look: &Look, label: impl Into<SharedString>, width: f32, open: bool
             popup.hover(move |popup| popup.bg(hovered))
         })
         .child(div().min_w_0().truncate().child(label.into()))
-        .child(svg().path("icons/chevrons-up-down.svg").size(px(CHEVRONS)).text_color(look.ink))
+        .child(
+            svg()
+                .path("icons/chevrons-up-down.svg")
+                .size(px(CHEVRONS))
+                .text_color(look.ink),
+        )
 }
 
 /// A switch, on or off, with its knob `slid` of the way to that side.
@@ -483,7 +518,10 @@ pub fn switch(look: &Look, on: bool, slid: f32, accent: Rgba) -> impl IntoElemen
 
 /// A checkbox, ticked in `accent` with a `tick`, else a line round the switch's off fill.
 pub fn checkbox(look: &Look, on: bool, accent: Rgba, tick: Rgba) -> gpui::Div {
-    let tick = svg().path("icons/check.svg").size(px(CHECK_GLYPH)).text_color(tick);
+    let tick = svg()
+        .path("icons/check.svg")
+        .size(px(CHECK_GLYPH))
+        .text_color(tick);
     div()
         .flex_none()
         .size(px(CHECK_BOX))
@@ -492,7 +530,9 @@ pub fn checkbox(look: &Look, on: bool, accent: Rgba, tick: Rgba) -> gpui::Div {
         .justify_center()
         .rounded(px(CHECK_RADIUS))
         .when(on, |ticked| ticked.bg(accent).child(tick))
-        .when(!on, |empty| empty.border_1().border_color(look.line).bg(look.switch_off))
+        .when(!on, |empty| {
+            empty.border_1().border_color(look.line).bg(look.switch_off)
+        })
 }
 
 /// A row with a checkbox before its name, as a list to tick from has.
