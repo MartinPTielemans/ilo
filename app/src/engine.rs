@@ -1353,10 +1353,7 @@ impl Browser for Engine {
         cx: &mut App,
     ) {
         match plate {
-            Some((plate, frame, _)) => {
-                let (left, top) = (frame.origin.x.into(), frame.origin.y.into());
-                link_target::show(self.window, plate, left, top, cx)
-            }
+            Some((plate, frame, side)) => link_target::show(self.window, plate, frame, side, cx),
             None => link_target::hide(cx),
         }
     }
