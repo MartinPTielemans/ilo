@@ -167,6 +167,9 @@ expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 send menu Settings…
 expect '^browser: settings shown General$' "Settings… didn't show General"
 settings_drew General
+send clickkey $(drawn "toolbar Privacy")
+expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"
+settings_drew Privacy
 expect '^browser: settings ad blocking off on 127\.0\.0\.1$' \
   "Settings didn't list the site ad blocking is off on, alone"
 expect '^browser: settings turn on 127\.0\.0\.1 at ' "Settings didn't draw the site's Turn On"
@@ -180,12 +183,12 @@ expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 send click $page_point
 reload_until "$blocked" "turned on again in Settings' list, the page didn't block its ad"
 
-# Off everywhere in Settings, whose fifth row of General is Block ads and trackers, under
-# Favorites, its switch's middle at 592 296: 87 under Unload's at 209, past a pop-up's row.
+# Off everywhere in Settings, whose Privacy, where it opens again, leads with Block ads and
+# trackers.
 send menu Settings…
-expect '^browser: settings shown General$' "Settings… didn't show General again"
-settings_drew General
-send clickkey 592 296
+expect '^browser: settings shown Privacy$' "Settings… didn't show Privacy again"
+settings_drew Privacy
+send clickkey $(drawn "switch ad blocking")
 expect '^browser: ad blocking off$' "a click on Block ads and trackers' switch didn't turn it off"
 expect '^browser: extensions menu $' "turned off, uBlock Origin stayed in the Extensions menu"
 ../tools/window-screenshot.sh "$pid" "$out/adblock-settings.png" all || fail "no window to capture"
@@ -201,9 +204,9 @@ none_since "${controls}Ad blocking" || fail "turned off in Settings, the Site Co
 send key escape
 expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 send menu Settings…
-expect '^browser: settings shown General$' "Settings… didn't show General a third time"
-settings_drew General
-send clickkey 592 296
+expect '^browser: settings shown Privacy$' "Settings… didn't show Privacy a third time"
+settings_drew Privacy
+send clickkey $(drawn "switch ad blocking")
 expect '^browser: ad blocking on$' "a second click on the switch didn't turn it on"
 expect "^browser: extensions menu .*$ublock\$" "turned on, uBlock Origin didn't come back"
 send key w cmd

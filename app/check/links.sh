@@ -323,7 +323,7 @@ if [ "$driven" = 1 ]; then
   settings_drew Links
   expect "$(rules_drawn none "Little ilo")" "the Links tab didn't draw its empty box, everything else to Little ilo"
   ../tools/window-screenshot.sh "$pid" "$out/links-rules-empty.png" || fail "no window to capture"
-  post clickkey 510 228
+  post clickkey $(drawn "link otherwise")
   expect "^browser: menu shown $front, [^,]*, Little ilo (checked)\$" \
     "everything else's pop-up didn't offer the Space in front, the user's Space and Little ilo"
   send choose "$front"
@@ -362,11 +362,11 @@ if [ "$driven" = 1 ]; then
   send menu Settings…
   expect '^browser: settings shown Links$' "Settings… didn't show Settings on its Links tab"
   settings_drew Links
-  send clickkey 76 173
+  send clickkey $(drawn "link add")
   expect '^browser: link rule 0 field has the keyboard$' "+ didn't give the new rule's field the keyboard"
   send type work
   expect "$(rules_drawn 'URL contains "work" → [^,;]*' "$front")" "the rule didn't take the text typed"
-  post clickkey 500 129
+  post clickkey $(drawn "link space 0")
   expect '^browser: menu shown [^,]* (checked), work, Little ilo$' \
     "the rule's Space pop-up didn't list the user's Spaces and Little ilo"
   send choose work
@@ -378,10 +378,10 @@ if [ "$driven" = 1 ]; then
   send menu Settings…
   expect '^browser: settings shown Links$' "Settings… didn't show Settings on its Links tab"
   settings_drew Links
-  send clickkey 76 173
+  send clickkey $(drawn "link add")
   expect '^browser: link rule 1 field has the keyboard$' "+ didn't give the second rule's field the keyboard"
   send insert "${site}?exact"
-  post clickkey 142 170
+  post clickkey $(drawn "link condition 1")
   expect '^browser: menu shown URL contains (checked), URL is equal to$' \
     "the rule's condition pop-up didn't offer contains and is equal to"
   send choose "URL is equal to"
@@ -395,11 +395,11 @@ if [ "$driven" = 1 ]; then
   send menu Settings…
   expect '^browser: settings shown Links$' "Settings… didn't show Settings on its Links tab"
   settings_drew Links
-  send dragkey 407 170 407 129
+  send dragkey $(drawn "link arrow 1") $(drawn "link arrow 0")
   expect "$(rules_drawn "$exact, URL contains \"work\" → work" "$front")" "the drag didn't put the second rule first"
   ../tools/window-screenshot.sh "$pid" "$out/links-rules.png" || fail "no window to capture"
   # Everything else, now to the second Space.
-  post clickkey 510 269
+  post clickkey $(drawn "link otherwise")
   expect "^browser: menu shown $front (checked), [^,]*, work, Little ilo\$" \
     "everything else's pop-up didn't offer the Space in front, the user's Spaces and Little ilo"
   send choose work
@@ -409,17 +409,17 @@ if [ "$driven" = 1 ]; then
   send menu Settings…
   expect '^browser: settings shown Links$' "Settings… didn't show Settings on its Links tab"
   settings_drew Links
-  send clickkey 597 129
+  send clickkey $(drawn "link remove 0")
   expect "$(rules_drawn 'URL contains "work" → work' work)" "the trash didn't take the rule away"
   send key z cmd
   expect "$(rules_drawn "$exact, URL contains \"work\" → work" work)" \
     "⌘Z didn't bring the rule the trash took back to its place"
   ../tools/window-screenshot.sh "$pid" "$out/links-rule-back.png" || fail "no window to capture"
-  send clickkey 597 129
+  send clickkey $(drawn "link remove 0")
   expect "$(rules_drawn 'URL contains "work" → work' work)" "the trash didn't take the rule away again"
   # A rule to Little ilo opens its links in one, for the Space in front: the second, the last link
   # to the window having shown it.
-  post clickkey 500 129
+  post clickkey $(drawn "link space 0")
   expect '^browser: menu shown [^,]*, work (checked), Little ilo$' \
     "the rule's Space pop-up didn't offer Little ilo"
   send choose "Little ilo"
@@ -436,7 +436,7 @@ if [ "$driven" = 1 ]; then
   settings_drew Links
   send key z cmd
   none_since '^browser: link rules drawn' || fail "⌘Z brought back a rule after Settings closed"
-  post clickkey 500 129
+  post clickkey $(drawn "link space 0")
   expect '^browser: menu shown [^,]*, work, Little ilo (checked)$' \
     "the rule's Space pop-up didn't check Little ilo"
   send choose work
