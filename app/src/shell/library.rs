@@ -2604,7 +2604,7 @@ fn text_line(text: SharedString, size: f32, height: f32, color: Hsla) -> gpui::D
 }
 
 /// A size as Finder writes it, in powers of 1000.
-fn bytes(bytes: i64) -> String {
+pub(crate) fn bytes(bytes: i64) -> String {
     let bytes = bytes.max(0) as f64;
     match bytes {
         b if b < 1e3 => format!("{b} bytes"),

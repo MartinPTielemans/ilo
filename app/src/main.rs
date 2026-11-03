@@ -6075,6 +6075,39 @@ unsafe extern "C" fn agent_page_element(_: *mut c_void, tab: bc::bc_id, request:
     });
 }
 
+/// A download a page in an agent's Space started, which the core holds for the user's answer, or
+/// how one it let go on ended.
+unsafe extern "C" fn agent_download(_: *mut c_void, d: *const bc::bc_agent_download) {
+    use browser::agents::{Download, DownloadEnd};
+    let d = unsafe { &*d };
+    let text = |text: *const c_char| unsafe { CStr::from_ptr(text) }.to_string_lossy().into_owned();
+    let (id, name) = (d.download, text(d.name));
+    // check.sh reads this line.
+    let (tab, request, state, bytes) = (d.tab, d.request, d.state, d.bytes);
+    log!("browser: agent download {id} {tab} {request} state {state} {bytes} bytes: {name}");
+    let end = match d.state as u32 {
+        bc::BC_DOWNLOAD_PAUSED => None,
+        bc::BC_DOWNLOAD_DONE => {
+            Some(DownloadEnd::Done { name, bytes: d.bytes, path: text(d.path) })
+        }
+        bc::BC_DOWNLOAD_CANCELLED => Some(DownloadEnd::Cancelled),
+        _ => Some(DownloadEnd::Failed),
+    };
+    let Some(end) = end else {
+        let download = Download {
+            agent: text(d.agent),
+            tab: d.tab,
+            request: d.request,
+            id,
+            name: text(d.name),
+            url: text(d.url),
+            tab_empty: d.tab_empty,
+        };
+        return agents_core::update(move |agents, cx| agents.download_started(download, cx));
+    };
+    agents_core::update(move |agents, cx| agents.download_ended(id, end, cx));
+}
+
 /// The text of a tab's page that bc_tab_read_text asked for, or null if it had none.
 unsafe extern "C" fn tab_text(_: *mut c_void, tab: bc::bc_id, request: u64, text: *const c_char) {
     let text = (!text.is_null())
@@ -7828,6 +7861,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_text: Some(tab_text),
         agent_page_done: Some(agent_page_done),
         agent_page_element: Some(agent_page_element),
+        agent_download: Some(agent_download),
         window_downloads_question: Some(window_downloads_question),
         archive_note_changed: Some(archive_note_changed),
         #[cfg(target_os = "linux")]

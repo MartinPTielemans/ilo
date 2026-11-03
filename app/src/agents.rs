@@ -186,6 +186,9 @@ pub trait Browser {
     fn hand_back(&self, tab: u64) -> bool;
     /// Closes `tab` as the user would (bc_tab_close): a Today tab goes to the archive.
     fn close_tab(&self, tab: u64, cx: &mut App);
+    /// Answers for the user about a download an agent's page started, which the core holds
+    /// (bc_agent_download_answer): `keep` lets it go on, else it's cancelled and its file gone.
+    fn answer_download(&self, download: u64, keep: bool);
     /// The user gives the agent whose Space is `space` their `tab`, which moves there
     /// (bc_tab_give_to_agent). Whether it did.
     fn give(&self, tab: u64, space: u64, cx: &mut App) -> bool;
@@ -293,11 +296,44 @@ struct Act {
     url: String,
     page: PageAction,
     element: i64,
+    /// What it types, or a download's file name.
     text: String,
     /// What the answer says it did, before the outline.
     note: String,
     /// What it would do, as a question has it.
     what: String,
+    /// The download it lets go on, for "download", else 0.
+    download: u64,
+    reply: mpsc::Sender<ToolResult>,
+}
+
+/// A download a page in an agent's Space started, which the core holds until the user answers
+/// (agent_download).
+pub struct Download {
+    pub agent: String,
+    pub tab: u64,
+    /// The action that started it, which it answers, or 0.
+    pub request: u64,
+    pub id: u64,
+    pub name: String,
+    pub url: String,
+    /// The tab has no page of its own, as one open_tab opened at the file's URL: the download is
+    /// all it did.
+    pub tab_empty: bool,
+}
+
+/// How a download an agent's page started ended (agent_download).
+pub enum DownloadEnd {
+    /// With its file's name, which may have changed to keep another, its size and where it is.
+    Done { name: String, bytes: i64, path: String },
+    Failed,
+    Cancelled,
+}
+
+/// A download the user let an agent's page make, until it ends.
+struct Downloading {
+    agent: String,
+    name: String,
     reply: mpsc::Sender<ToolResult>,
 }
 
@@ -379,6 +415,8 @@ pub struct Agents {
     refs: HashMap<u64, page::Refs>,
     /// The actions waiting on the user, the first asked now.
     asking: Vec<Asking>,
+    /// The downloads the user let agents' pages make, by download.
+    downloading: HashMap<u64, Downloading>,
     /// The sites where each agent may (true) or may never (false) do what asks first.
     grants: HashMap<String, HashMap<String, bool>>,
     /// What each agent did last, as the log says it.
@@ -484,6 +522,7 @@ impl Agents {
             acting: HashMap::new(),
             refs: HashMap::new(),
             asking: Vec::new(),
+            downloading: HashMap::new(),
             grants: HashMap::new(),
             doing: HashMap::new(),
             held: HashMap::new(),
@@ -900,6 +939,7 @@ impl Agents {
                     element: 0,
                     text: String::new(),
                     note: String::new(),
+                    download: 0,
                     reply,
                 };
                 if !is_web(&act.url) {
@@ -1428,6 +1468,7 @@ impl Agents {
             text: String::new(),
             note: String::new(),
             what: String::new(),
+            download: 0,
             reply,
         };
         let mut risk = None;
@@ -1681,7 +1722,14 @@ impl Agents {
     /// The agent went: what waits for it goes unanswered, its questions with it.
     fn forget_waiting(&mut self, agent: &str, cx: &mut Context<Self>) {
         let asked = self.question().map(|question| question.id);
+        // A download nobody's left to answer for leaves no file.
+        for asking in self.asking.iter().filter(|asking| asking.act.agent == agent) {
+            if asking.act.download != 0 {
+                self.browser.answer_download(asking.act.download, false);
+            }
+        }
         self.asking.retain(|asking| asking.act.agent != agent);
+        self.downloading.retain(|_, downloading| downloading.agent != agent);
         self.acting.retain(|_, acting| acting.agent != agent);
         self.runs.retain(|run| run.agent != agent);
         for held in self.held.values_mut().filter(|held| held.agent == agent) {
@@ -1694,6 +1742,9 @@ impl Agents {
 
     /// Answers the action with why it's refused, which the log has.
     fn refuse(&mut self, act: Act, site: &str, why: &str, cx: &mut Context<Self>) {
+        if act.download != 0 {
+            self.browser.answer_download(act.download, false);
+        }
         self.note(&act.agent, act.action, site, why);
         cx.notify();
         let answer = match why {
@@ -1708,6 +1759,9 @@ impl Agents {
 
     /// Does the action: the core checks it and logs it, and answers with the page.
     fn run(&mut self, act: Act, cx: &mut Context<Self>) {
+        if act.download != 0 {
+            return self.download(act, cx);
+        }
         let Act {
             agent,
             action,
@@ -1747,6 +1801,81 @@ impl Agents {
         let acting = Acting { agent: agent.clone(), tab, element, note, reply };
         self.acting.insert(request, acting);
         self.act_in_page(&agent, tab, request, page, element, &text);
+    }
+
+    /// A download a page in an agent's Space started, held by the core. It puts a file on the
+    /// user's disk, so it asks first, as other actions that reach outside the page do, and
+    /// answers the action that started it, if one did, once it ends.
+    pub fn download_started(&mut self, download: Download, cx: &mut Context<Self>) {
+        let Download { agent, tab, request, id, name, url, tab_empty } = download;
+        let reply = match self.acting.remove(&request) {
+            Some(acting) => acting.reply,
+            // A page's own download, with no action of the agent's to answer, still asks.
+            None => mpsc::channel().0,
+        };
+        if tab_empty {
+            self.browser.close_tab(tab, cx);
+        }
+        let host = site(&url);
+        let act = Act {
+            agent,
+            action: "download",
+            // The question is about the file, wherever its tab is.
+            tab: 0,
+            what: format!("download {name} from {host}"),
+            url,
+            page: PageAction::Snapshot,
+            element: 0,
+            text: name,
+            note: String::new(),
+            download: id,
+            reply,
+        };
+        self.check(act, host, Some(DOWNLOADS), cx);
+    }
+
+    /// Lets the download the user said yes to go on. Its end answers, or a while if it's slow.
+    fn download(&mut self, act: Act, cx: &mut Context<Self>) {
+        let Act { agent, url, text: name, download, reply, .. } = act;
+        self.note(&agent, "download", &site(&url), "");
+        cx.notify();
+        self.browser.answer_download(download, true);
+        self.downloading.insert(download, Downloading { agent, name, reply });
+        cx.spawn(async move |agents, cx| {
+            cx.background_executor().timer(DOWNLOAD_WAIT).await;
+            _ = agents.update(cx, |agents, cx| {
+                let Some(Downloading { name, reply, .. }) = agents.downloading.remove(&download)
+                else {
+                    return;
+                };
+                _ = reply.send(ToolResult::text(format!(
+                    "{name} is still downloading, to the user's downloads. {NO_FILES}"
+                )));
+                agents.advance(cx);
+            });
+        })
+        .detach();
+    }
+
+    /// How a download the user let an agent's page make ended, which answers its action.
+    pub fn download_ended(&mut self, download: u64, end: DownloadEnd, cx: &mut Context<Self>) {
+        let Some(Downloading { name, reply, .. }) = self.downloading.remove(&download) else {
+            return;
+        };
+        _ = reply.send(match end {
+            DownloadEnd::Done { name, bytes, path } => {
+                let folder = std::path::Path::new(&path).parent().and_then(|dir| dir.file_name());
+                let folder = folder.map(|dir| dir.to_string_lossy());
+                let folder = folder.unwrap_or("the user's downloads".into());
+                let size = crate::shell::bytes(bytes);
+                ToolResult::text(format!("Downloaded {name} ({size}) to {folder}. {NO_FILES}"))
+            }
+            DownloadEnd::Failed => ToolResult::error(format!("The download of {name} failed.")),
+            DownloadEnd::Cancelled => {
+                ToolResult::error(format!("The download of {name} was cancelled."))
+            }
+        });
+        self.advance(cx);
     }
 
     /// The ref of the element the action `request` acts on, such as "e12", as the agent named it.
@@ -1984,6 +2113,13 @@ const NOT_HELD: &str = "The user doesn't have that tab from you, so there's noth
 /// What the log says of an action the user refused, now or for good on its site.
 const SAID_NO: &str = "You said no.";
 const SAID_NEVER: &str = "You said never on this site.";
+/// Why an agent's download asks first.
+const DOWNLOADS: &str = "It saves a file to your computer.";
+/// What an agent's download answers with, as it can't read the file.
+const NO_FILES: &str = "Agents can't open files; ask the user if you need it.";
+/// Ours: how long an agent's download waits to answer with its file, as a large one or one Chrome
+/// holds as dangerous may take a while.
+const DOWNLOAD_WAIT: Duration = Duration::from_secs(30);
 /// Why an agent can't open a page that isn't on the web.
 const WEB_ONLY: &str = "Agents may open only http and https pages.";
 /// Why an agent can't type into a password field.

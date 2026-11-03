@@ -15,7 +15,11 @@
 #include "base/task/cancelable_task_tracker.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
+#include "browser_core/agent_page.h"
 #include "browser_core/host.h"
+#include "browser_core/space.h"
+#include "browser_core/tab.h"
+#include "browser_core/window.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/download/download_crx_util.h"
 #include "chrome/browser/download/download_item_model.h"
@@ -28,7 +32,10 @@
 #include "components/download/public/common/download_item.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/pref_registry/pref_registry_syncable.h"
+#include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/download_manager.h"
+#include "content/public/browser/web_contents.h"
+#include "net/base/filename_util.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
@@ -45,6 +52,13 @@ constexpr size_t kMaxListed = 500;
 struct DownloadId : base::SupportsUserData::Data {
   static constexpr char kKey[] = "browser_core::DownloadId";
   bc_id id = NewId();
+};
+
+// Kept on a download a page in an agent's Space started, until it ends (#1446).
+struct AgentDownload : base::SupportsUserData::Data {
+  static constexpr char kKey[] = "browser_core::AgentDownload";
+  std::string agent;
+  bc_id tab = 0;
 };
 
 bc_id IdOf(download::DownloadItem* item) {
@@ -116,6 +130,23 @@ class Downloads : public download::AllDownloadItemNotifier::Observer {
     return nullptr;
   }
 
+  // Of every download, as one held for an agent may not be listed yet, before its file is named.
+  download::DownloadItem* FindAny(bc_id id) {
+    for (const auto& notifier : notifiers_) {
+      content::DownloadManager* manager = notifier->GetManager();
+      content::DownloadManager::DownloadVector all;
+      if (manager) {
+        manager->GetAllDownloads(&all);
+      }
+      for (download::DownloadItem* item : all) {
+        if (IdOf(item) == id) {
+          return item;
+        }
+      }
+    }
+    return nullptr;
+  }
+
  private:
   // download::AllDownloadItemNotifier::Observer:
   void OnManagerInitialized(content::DownloadManager* manager) override { Changed(); }
@@ -123,11 +154,101 @@ class Downloads : public download::AllDownloadItemNotifier::Observer {
   void OnManagerGoingDown(content::DownloadManager* manager) override { Changed(); }
   void OnDownloadCreated(content::DownloadManager* manager,
                          download::DownloadItem* item) override {
+    HoldForAgent(item);
     Changed();
   }
   void OnDownloadUpdated(content::DownloadManager* manager,
                          download::DownloadItem* item) override {
+    auto* held = static_cast<AgentDownload*>(item->GetUserData(AgentDownload::kKey));
+    const int state = StateOf(*item);
+    if (held && state != BC_DOWNLOAD_RUNNING && state != BC_DOWNLOAD_PAUSED) {
+      std::string agent = std::move(held->agent);
+      const bc_id tab = held->tab;
+      item->RemoveUserData(AgentDownload::kKey);
+      const bool done = state == BC_DOWNLOAD_DONE;
+      ReportAgentDownload({.agent = std::move(agent),
+                           .tab = tab,
+                           .download = IdOf(item),
+                           .name = item->GetFileNameToReportUser().AsUTF8Unsafe(),
+                           .url = item->GetURL().spec(),
+                           .state = state,
+                           .bytes = done ? item->GetReceivedBytes() : 0,
+                           .path = done ? item->GetTargetFilePath().AsUTF8Unsafe() : ""});
+    }
     Changed();
+  }
+
+  // What agent_download tells, kept until the posted call.
+  struct AgentReport {
+    std::string agent;
+    bc_id tab = 0;
+    uint64_t request = 0;
+    bc_id download = 0;
+    std::string name;
+    std::string url;
+    int state = BC_DOWNLOAD_PAUSED;
+    int64_t bytes = 0;
+    std::string path;
+    bool tab_empty = false;
+  };
+
+  // A download a page in an agent's Space starts puts a file on the user's disk, so it waits on
+  // them, paused, and the agent hears of it in place of the action it came from, which would
+  // otherwise answer that its tab has no web page (#1446). One the user starts there, in the tab
+  // they're looking at with no action of the agent's in it, is theirs.
+  void HoldForAgent(download::DownloadItem* item) {
+    content::WebContents* contents = content::DownloadItemUtils::GetWebContents(item);
+    const bc_id tab = contents ? Tab::IdOf(contents) : 0;
+    const Space* space = tab ? Space::Holding(tab) : nullptr;
+    if (!space || !space->agent() || item->GetState() != download::DownloadItem::IN_PROGRESS) {
+      return;
+    }
+    const uint64_t request = AgentPage::TakeJob(contents);
+    if (!request && Window::Showing(tab)) {
+      return;
+    }
+    item->Pause();
+    auto held = std::make_unique<AgentDownload>();
+    held->agent = space->agent()->id;
+    held->tab = tab;
+    item->SetUserData(AgentDownload::kKey, std::move(held));
+    // Its file isn't named until Chrome picks where it goes: the name the server gives, as Chrome
+    // finds it.
+    const base::FilePath name = net::GenerateFileName(
+        item->GetURL(), item->GetContentDisposition(), std::string(),
+        item->GetSuggestedFilename(), item->GetMimeType(), "download");
+    ReportAgentDownload({.agent = space->agent()->id,
+                         .tab = tab,
+                         .request = request,
+                         .download = IdOf(item),
+                         .name = name.AsUTF8Unsafe(),
+                         .url = item->GetURL().spec(),
+                         .tab_empty = !contents->GetLastCommittedURL().SchemeIsHTTPOrHTTPS()});
+  }
+
+  // Posted, so the app never hears inside its own bc_agent_download_answer.
+  void ReportAgentDownload(AgentReport report) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(
+                       [](const AgentReport& report) {
+                         if (!Host().agent_download) {
+                           return;
+                         }
+                         const bc_agent_download download = {
+                             .agent = report.agent.c_str(),
+                             .tab = report.tab,
+                             .request = report.request,
+                             .download = report.download,
+                             .name = report.name.c_str(),
+                             .url = report.url.c_str(),
+                             .state = report.state,
+                             .bytes = report.bytes,
+                             .path = report.path.c_str(),
+                             .tab_empty = report.tab_empty,
+                         };
+                         Host().agent_download(Host().context, &download);
+                       },
+                       std::move(report)));
   }
   void OnDownloadRemoved(content::DownloadManager* manager,
                          download::DownloadItem* item) override {
@@ -274,6 +395,20 @@ void ClearDownloads() {
       item->Remove();
     }
   }
+}
+
+void AnswerAgentDownload(bc_id id, bool keep) {
+  download::DownloadItem* item = TheDownloads().FindAny(id);
+  if (!item || !item->GetUserData(AgentDownload::kKey)) {
+    return;
+  }
+  if (keep) {
+    item->Resume(/*user_resume=*/true);
+    return;
+  }
+  // Cancelling deletes what it had written. Off the list, it leaves nothing behind.
+  item->Cancel(/*user_cancel=*/true);
+  item->Remove();
 }
 
 void FindDownloadIcon(bc_id id) {

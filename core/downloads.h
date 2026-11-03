@@ -25,6 +25,9 @@ void ClearDownloads();
 // Finds the icon the system shows for the download's file. Then download_icon.
 void FindDownloadIcon(bc_id id);
 
+// What bc_agent_download_answer does to the download |id| a page in an agent's Space started.
+void AnswerAgentDownload(bc_id id, bool keep);
+
 }  // namespace browser_core
 
 #endif  // BROWSER_CORE_DOWNLOADS_H_

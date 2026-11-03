@@ -114,6 +114,7 @@ mod undo;
 
 pub use assets::Assets;
 pub use favorites::FavoritesScope;
+pub(crate) use library::bytes;
 pub use browser::{
     AgentGrants, Browser, Folders, MediaAction, Page, Split, Trouble, WindowButton,
     WindowButtonGeometry,

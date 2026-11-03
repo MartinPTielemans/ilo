@@ -295,6 +295,30 @@ typedef struct bc_download {
   double started;
 } bc_download;
 
+// A download a page in an agent's Space started, which waits on the user (agent_download).
+typedef struct bc_agent_download {
+  // The agent whose Space has the tab it came from, by its id, and the tab.
+  const char* agent;
+  bc_id tab;
+  // The bc_agent_page request running in the tab as it started, as a click on its link or the
+  // load open_tab waits for, which the agent code answers in the core's stead, or 0.
+  uint64_t request;
+  // For bc_agent_download_answer.
+  bc_id download;
+  // Its file's name, and the URL it comes from.
+  const char* name;
+  const char* url;
+  // BC_DOWNLOAD_PAUSED as it starts, held. Then, as it ends, BC_DOWNLOAD_DONE, BC_DOWNLOAD_FAILED
+  // or BC_DOWNLOAD_CANCELLED.
+  int state;
+  // Once it's done, the bytes it has and where its file is, a full path in UTF-8, else 0 and "".
+  int64_t bytes;
+  const char* path;
+  // The tab has no page of its own, as one open_tab opened at the file's URL: the download is all
+  // it did.
+  bool tab_empty;
+} bc_agent_download;
+
 // The values a site's permission takes in the Site Controls, as Chrome's page info words them: the
 // site may, it may not, or it asks first.
 #define BC_SITE_ALLOW 0
@@ -967,6 +991,10 @@ typedef struct bc_host {
   // The element bc_agent_page's |request| for |tab| is about to click or type in, scrolled into
   // view: its box in points from the top-left of the tab's page view, for the agent's pointer.
   void (*agent_page_element)(void* context, bc_id tab, uint64_t request, bc_rect box);
+  // A page in an agent's Space started a download, which puts a file on the user's disk: it's held,
+  // and agent code asks the user, then answers with bc_agent_download_answer. Called once as it
+  // starts and once as it ends.
+  void (*agent_download)(void* context, const bc_agent_download* download);
   // On Linux and Windows, the browser is quitting, or with |last_private| the last window of a
   // private profile closing, with |count| downloads running, which it would cancel: ask the user
   // over |window|, and answer with bc_window_answer_downloads. A window asks one at a time. The Mac
@@ -1945,6 +1973,10 @@ BC_EXPORT void bc_download_act(bc_id download, int action);
 // Takes the downloads that aren't running or paused off the list, keeping their files. Then
 // downloads_changed.
 BC_EXPORT void bc_downloads_clear(void);
+
+// Answers agent_download, for a download it holds: |keep| lets it go on, else it's cancelled and
+// off the list, its file gone. Agent code calls it with the user's answer, never the agent's.
+BC_EXPORT void bc_agent_download_answer(bc_id download, bool keep);
 
 // Asks for the icon the system shows for the download's file. Then download_icon.
 BC_EXPORT void bc_download_icon(bc_id download);

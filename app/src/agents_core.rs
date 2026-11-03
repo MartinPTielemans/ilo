@@ -194,6 +194,10 @@ impl Browser for Core {
         unsafe { bc::bc_tab_close(tab, false) };
     }
 
+    fn answer_download(&self, download: u64, keep: bool) {
+        unsafe { bc::bc_agent_download_answer(download, keep) };
+    }
+
     fn give(&self, tab: u64, space: u64, _: &mut App) -> bool {
         unsafe { bc::bc_tab_give_to_agent(tab, space) }
     }

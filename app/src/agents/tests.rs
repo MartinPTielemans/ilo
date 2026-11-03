@@ -41,6 +41,8 @@ struct Made {
     /// The tasks' Spaces made, and the Spaces deleted.
     task_spaces: RefCell<Vec<u64>>,
     deleted: RefCell<Vec<u64>>,
+    /// The downloads the agents answered for the user, and whether each goes on.
+    downloads: RefCell<Vec<(u64, bool)>>,
 }
 
 impl Made {
@@ -182,6 +184,10 @@ impl Browser for Made {
 
     fn close_tab(&self, tab: u64, _: &mut App) {
         self.tabs.borrow_mut().retain(|each| each.0 != tab);
+    }
+
+    fn answer_download(&self, download: u64, keep: bool) {
+        self.downloads.borrow_mut().push((download, keep));
     }
 
     // As the core does: only a tab of the user's, into an agent's Space.
@@ -1045,6 +1051,95 @@ fn a_permission_given_for_good_is_listed_and_revoked(cx: &mut TestAppContext) {
     assert_eq!(log(&agents, "claude-code", cx).len(), entries, "revoking nothing was logged");
     call(&agents, "claude-code", "open_tab", json!({ "url": "chase.com" }), cx);
     assert!(browser.asked.borrow().is_some(), "a revoked Never didn't ask again");
+}
+
+/// The core's report of a download the page in tab `tab` started, held, as the answer to
+/// `request`.
+fn download_started(
+    agents: &Entity<Agents>,
+    tab: u64,
+    request: u64,
+    id: u64,
+    cx: &mut TestAppContext,
+) {
+    let download = Download {
+        agent: "claude-code".into(),
+        tab,
+        request,
+        id,
+        name: "report.docx".into(),
+        url: "https://files.example.com/report.docx".into(),
+        tab_empty: tab == 30,
+    };
+    agents.update(cx, |agents, cx| agents.download_started(download, cx));
+}
+
+/// open_tab at a file's URL downloads it (#1446): the user says yes on the card first, the empty
+/// tab closes, and the answer names the file, with no error.
+#[gpui::test]
+fn an_agents_download_asks_and_answers_with_its_file(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let url = json!({ "url": "https://files.example.com/report.docx" });
+    let answer = call(&agents, "claude-code", "open_tab", url, cx);
+    let request = browser.pages.borrow().last().unwrap().1;
+    download_started(&agents, 30, request, 900, cx);
+    let question = browser.asked.borrow().clone().expect("the download didn't ask");
+    assert_eq!(question.what, "download report.docx from files.example.com");
+    assert!(browser.tabs.borrow().iter().all(|tab| tab.0 != 30), "the empty tab stayed");
+    assert!(browser.downloads.borrow().is_empty(), "it went on before the user's yes");
+
+    agents.update(cx, |agents, cx| agents.answer(question.id, Answer::Once, cx));
+    assert_eq!(*browser.downloads.borrow(), [(900, true)]);
+    let done = DownloadEnd::Done {
+        name: "report.docx".into(),
+        bytes: 48_213,
+        path: "/Users/someone/Downloads/report.docx".into(),
+    };
+    agents.update(cx, |agents, cx| agents.download_ended(900, done, cx));
+    assert_eq!(
+        answer.recv().unwrap(),
+        ToolResult::text(
+            "Downloaded report.docx (48 KB) to Downloads. Agents can't open files; ask the user \
+             if you need it."
+        )
+    );
+    assert_eq!(
+        log(&agents, "claude-code", cx)[0],
+        ("download".into(), "files.example.com".into(), "".into())
+    );
+}
+
+/// A download the user says no to is cancelled, which leaves no file, and so is one whose agent
+/// went before the user answered. A page's own, with no action to answer, asks all the same.
+#[gpui::test]
+fn a_denied_download_leaves_no_file(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = call(&agents, "claude-code", "screenshot", json!({ "tab": 20 }), cx);
+    let request = browser.pages.borrow().last().unwrap().1;
+    download_started(&agents, 20, request, 900, cx);
+    let question = browser.asked.borrow().clone().unwrap();
+    agents.update(cx, |agents, cx| agents.answer(question.id, Answer::Dismiss, cx));
+    assert_eq!(*browser.downloads.borrow(), [(900, false)]);
+    assert_eq!(
+        answer.recv().unwrap(),
+        ToolResult::error(
+            "The user said no: you can't download report.docx from files.example.com. Don't try \
+             again."
+        )
+    );
+    assert_eq!(
+        log(&agents, "claude-code", cx)[0],
+        ("download".into(), "files.example.com".into(), "You said no.".into())
+    );
+    assert!(browser.tabs.borrow().iter().any(|tab| tab.0 == 20), "a tab with a page closed");
+
+    download_started(&agents, 20, 0, 901, cx);
+    assert!(browser.asked.borrow().is_some(), "a page's own download didn't ask");
+    agents.update(cx, |agents, cx| {
+        agents.handle(Event::Bye { agent: "claude-code".into() }, cx);
+    });
+    assert_eq!(*browser.downloads.borrow(), [(900, false), (901, false)]);
+    assert_eq!(*browser.asked.borrow(), None);
 }
 
 /// A bank's site asks before it opens. No, or the ×, refuses it, and Never refuses it from then

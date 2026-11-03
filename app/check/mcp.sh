@@ -12,11 +12,12 @@
 # the page, which isn't the page's. Its keys, typed or pressed, go to the page alone, and Escape
 # the page doesn't keep runs no Stop of ilo's. Where it acts in the page shown, its pointer and a
 # ring with the element's ref show it. It opens a page, clicks its link, scrolls, takes a screenshot
-# and closes a tab, and a bank's site asks first, in a card whose Allow Once opens it. Always Allow
-# opens it from then on, until Revoke Permission in the Space's menu takes that back. A login the
-# user saved fills in neither as the agent's tab loads it nor from a dropdown, and fills once the
-# user takes the tab over, without a reload. Closing the client's end ends its session with the tab,
-# and turning Settings › Agents off takes the socket away and drops a client connected.
+# and closes a tab. Its download asks first, and Allow Once downloads the file, which the answer
+# names, and Never leaves none. A bank's site asks first, in a card whose Allow Once opens it.
+# Always Allow opens it from then on, until Revoke Permission in the Space's menu takes that back. A
+# login the user saved fills in neither as the agent's tab loads it nor from a dropdown, and fills
+# once the user takes the tab over, without a reload. Closing the client's end ends its session with
+# the tab, and turning Settings › Agents off takes the socket away and drops a client connected.
 
 log="$out/mcp.log"
 step=0
@@ -681,6 +682,49 @@ BAR
   send click $((bx + 30)) $((by + bh - 26))
   await_more "$handed" "$before" || fail "the bar's Hand Back didn't hand the filled tab back"
 
+  # open_tab at a file downloads it once the user says yes on the card (#1446), and answers with
+  # its name and size, its empty tab closed. Never cancels the next, which leaves no file.
+  rm -f "$out/downloads/report"*
+  printf 'report\n' > "$out/site/report.docx"
+  file="{\"url\":\"files.localhost:$port/report.docx\"}"
+  wants='^browser: agent mcp-client asks [0-9]*: download report\.docx from files\.localhost$'
+  # Opens the file, which asks, and answers $1 with a click, as answer_bank below does. Sets
+  # downloaded to the answer.
+  answer_download() {
+    before=$(grep -c "$wants" "$log" || true)
+    request open_tab "$file" >&4
+    await_more "$wants" "$before" || fail "an agent's download didn't ask first"
+    q=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
+    await_log "^browser: agent question $q at " "the download's question wasn't drawn"
+    read -r qx qy qw qh <<CARD
+$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
+CARD
+    # Allow Once and Never share the row above Always Allow, Never at the left.
+    case "$1" in Once) x=$((qw * 3 / 4)) ;; Never) x=$((qw / 4)) ;; esac
+    send click $((qx + x)) $((qy + qh - 26 - 36))
+    await_log "^browser: agent mcp-client answered $q $1\$" "$1 didn't answer the download"
+    downloaded=$(next_answer) || fail "the browser didn't answer the download's open_tab"
+    downloaded=$(printf '%s\n' "$downloaded" | answered)
+  }
+  answer_download Once
+  [ "$downloaded" = "Downloaded report.docx (7 bytes) to downloads. Agents can't open files; ask the user if you need it." ] ||
+    fail "the allowed download answered: $downloaded"
+  [ -f "$out/downloads/report.docx" ] || fail "the allowed download isn't in the check's folder"
+  file_tab=$(grep '^browser: agent download [0-9]* [0-9]* [0-9]* state ' "$log" | tail -1 |
+    cut -d' ' -f5)
+  listed=$(call list_tabs '{}')
+  printf '%s\n' "$listed" | grep -q "^. $file_tab  " && fail "the download's empty tab stayed open"
+  answer_download Never
+  [ "$downloaded" = "error: The user said no: you can't download report.docx from files.localhost. Don't try again." ] ||
+    fail "the refused download answered: $downloaded"
+  # Chrome deletes what a cancelled download wrote on its own sequence, a moment after.
+  for _ in $(seq 50); do
+    [ "$(ls -A "$out/downloads" | grep -c '^report')" = 1 ] && break
+    sleep 0.1
+  done
+  [ "$(ls -A "$out/downloads" | grep -c '^report')" = 1 ] ||
+    fail "the refused download left a file: $(ls -A "$out/downloads" | tr '\n' ' ')"
+
   # A bank's site asks first, in a card in the window, and Allow Once opens it.
   bank="{\"url\":\"bank.localhost:$port/fields.html\"}"
   asks='^browser: agent mcp-client asks [0-9]*: open bank\.localhost$'
@@ -775,7 +819,7 @@ forget_login
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, is refused a tab the user took over until they hand it back and Keep answers its ask, its bar's Stop naming ⌘. in its tooltip, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow and again once that's revoked, and off takes the socket away"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, is refused a tab the user took over until they hand it back and Keep answers its ask, its bar's Stop naming ⌘. in its tooltip, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow and again once that's revoked, and off takes the socket away"
 else
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases). skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi
