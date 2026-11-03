@@ -44,7 +44,12 @@ pub enum Texture {
 }
 
 impl Texture {
-    pub const ALL: [Texture; 4] = [Texture::Noise, Texture::Dust, Texture::Weave, Texture::Fleck];
+    pub const ALL: [Texture; 4] = [
+        Texture::Noise,
+        Texture::Dust,
+        Texture::Weave,
+        Texture::Fleck,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -161,16 +166,59 @@ impl Theme {
 
     /// The theme's own look, the one a light window draws.
     pub fn look(&self) -> Look {
-        let Theme { x, y, saturation, count, intensity, grain, texture, third, places, .. } = *self;
-        Look { x, y, saturation, count, intensity, grain, texture, third, places }
+        let Theme {
+            x,
+            y,
+            saturation,
+            count,
+            intensity,
+            grain,
+            texture,
+            third,
+            places,
+            ..
+        } = *self;
+        Look {
+            x,
+            y,
+            saturation,
+            count,
+            intensity,
+            grain,
+            texture,
+            third,
+            places,
+        }
     }
 
     /// The theme as a window draws it, `dark` or light: its dark look on a dark window where it
     /// has one, as a theme of one look.
     pub fn shown(self, dark: bool) -> Theme {
         let look = self.dark.filter(|_| dark).unwrap_or(self.look());
-        let Look { x, y, saturation, count, intensity, grain, texture, third, places } = look;
-        Theme { x, y, saturation, count, intensity, grain, texture, third, places, dark: None, ..self }
+        let Look {
+            x,
+            y,
+            saturation,
+            count,
+            intensity,
+            grain,
+            texture,
+            third,
+            places,
+        } = look;
+        Theme {
+            x,
+            y,
+            saturation,
+            count,
+            intensity,
+            grain,
+            texture,
+            third,
+            places,
+            dark: None,
+            ..self
+        }
     }
 
     /// A theme of `color`, 0xRRGGBB, alone: in the field at its hue and HSL lightness, and at its
@@ -180,7 +228,10 @@ impl Theme {
         let hsla = Hsla::from(rgb(color));
         let angle = hsla.h * std::f32::consts::TAU;
         let theme = Theme::at(hsla.l * angle.cos(), hsla.l * angle.sin());
-        Theme { saturation: hsla.s, ..theme }
+        Theme {
+            saturation: hsla.s,
+            ..theme
+        }
     }
 
     /// How far round from the main colour each colour is, in degrees.
@@ -197,7 +248,10 @@ impl Theme {
     pub fn place(&self, index: usize) -> Place {
         match self.places {
             Some(places) if (1..MAX_COLORS).contains(&index) => places[index - 1],
-            _ => Place { turn: Self::offsets(self.count).get(index).copied().unwrap_or(0.), lift: 0. },
+            _ => Place {
+                turn: Self::offsets(self.count).get(index).copied().unwrap_or(0.),
+                lift: 0.,
+            },
         }
     }
 
@@ -241,17 +295,33 @@ impl Theme {
             return self;
         }
         if index == 0 {
-            return Theme { x, y, saturation: 1., third: None, ..self };
+            return Theme {
+                x,
+                y,
+                saturation: 1.,
+                third: None,
+                ..self
+            };
         }
         let mut places = [self.place(1), self.place(2)];
         places[index.min(MAX_COLORS - 1) - 1] = place_of(self.x, self.y, x, y);
-        Theme { places: Some(places), saturation: 1., third: None, ..self }
+        Theme {
+            places: Some(places),
+            saturation: 1.,
+            third: None,
+            ..self
+        }
     }
 
     /// The theme with `count` colours, from 1 to MAX_COLORS, back at the set angles round the main
     /// one, each in its place in the field.
     pub fn with_count(self, count: usize) -> Theme {
-        Theme { count: count.clamp(1, MAX_COLORS), third: None, places: None, ..self }
+        Theme {
+            count: count.clamp(1, MAX_COLORS),
+            third: None,
+            places: None,
+            ..self
+        }
     }
 
     /// The text the core keeps; the saturation only once a swatch has set it, so a theme from the
@@ -281,10 +351,20 @@ impl Theme {
         if let Some(places) = self.places {
             text += &format!(" places={}", places_text(places, ","));
         }
-        if let Some(Look { x, y, saturation, count, intensity, grain, texture, third, places }) =
-            self.dark
+        if let Some(Look {
+            x,
+            y,
+            saturation,
+            count,
+            intensity,
+            grain,
+            texture,
+            third,
+            places,
+        }) = self.dark
         {
-            text += &format!(" dark={x:.4},{y:.4},{count},{intensity:.3},{grain:.3},{saturation:.4}");
+            text +=
+                &format!(" dark={x:.4},{y:.4},{count},{intensity:.3},{grain:.3},{saturation:.4}");
             if texture != Texture::Noise || third.is_some() {
                 text += &format!(",{}", texture.name());
             }
@@ -318,9 +398,7 @@ impl Theme {
                 }
                 "intensity" => theme.intensity = number.unwrap_or(theme.intensity).clamp(0., 1.),
                 "grain" => theme.grain = number.unwrap_or(theme.grain).clamp(0., 1.),
-                "saturation" => {
-                    theme.saturation = number.unwrap_or(theme.saturation).clamp(0., 1.)
-                }
+                "saturation" => theme.saturation = number.unwrap_or(theme.saturation).clamp(0., 1.),
                 "appearance" => {
                     if let Some(appearance) = Appearance::named(value) {
                         theme.appearance = appearance;
@@ -361,7 +439,17 @@ fn parse_look(text: &str) -> Option<Look> {
             places = parse_places(text, ':');
         }
     }
-    Some(Look { x, y, saturation, count, intensity, grain, texture, third, places })
+    Some(Look {
+        x,
+        y,
+        saturation,
+        count,
+        intensity,
+        grain,
+        texture,
+        third,
+        places,
+    })
 }
 
 /// The second colour's turn and lift, then the third's, between `between`.
@@ -380,13 +468,18 @@ fn parse_places(text: &str, between: char) -> Option<[Place; 2]> {
     let [turn, lift, third_turn, third_lift] = numbers[..] else {
         return None;
     };
-    let place = |turn: f32, lift: f32| Place { turn: turn.rem_euclid(360.), lift: lift.clamp(-1., 1.) };
+    let place = |turn: f32, lift: f32| Place {
+        turn: turn.rem_euclid(360.),
+        lift: lift.clamp(-1., 1.),
+    };
     Some([place(turn, lift), place(third_turn, third_lift)])
 }
 
 /// 0xRRGGBB of six hex digits.
 fn hex(text: &str) -> Option<u32> {
-    (text.len() == 6).then(|| u32::from_str_radix(text, 16).ok()).flatten()
+    (text.len() == 6)
+        .then(|| u32::from_str_radix(text, 16).ok())
+        .flatten()
 }
 
 /// Where `place` is from a main colour at (x, y): turned round the field's centre, and moved out
@@ -399,14 +492,23 @@ pub fn placed(x: f32, y: f32, place: Place) -> (f32, f32) {
 
 /// The place of (x, y) from a main colour at (main_x, main_y).
 pub fn place_of(main_x: f32, main_y: f32, x: f32, y: f32) -> Place {
-    let turn = (y.atan2(x) - main_y.atan2(main_x)).to_degrees().rem_euclid(360.);
-    Place { turn, lift: x.hypot(y) - main_x.hypot(main_y) }
+    let turn = (y.atan2(x) - main_y.atan2(main_x))
+        .to_degrees()
+        .rem_euclid(360.);
+    Place {
+        turn,
+        lift: x.hypot(y) - main_x.hypot(main_y),
+    }
 }
 
 /// (x, y), brought in to the field's disc.
 fn in_disc(x: f32, y: f32) -> (f32, f32) {
     let distance = x.hypot(y);
-    if distance > 1. { (x / distance, y / distance) } else { (x, y) }
+    if distance > 1. {
+        (x / distance, y / distance)
+    } else {
+        (x, y)
+    }
 }
 
 /// The colour at (x, y) in the field, at HSL `saturation` (the field's own is 1), 0xRRGGBB.
@@ -426,16 +528,29 @@ pub fn mix_oklab(from: Rgba, to: Rgba, t: f32) -> Rgba {
     let (a, b) = (oklab(from), oklab(to));
     let mixed = std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t);
     let [r, g, bl] = from_oklab(mixed);
-    Rgba { r, g, b: bl, a: from.a + (to.a - from.a) * t }
+    Rgba {
+        r,
+        g,
+        b: bl,
+        a: from.a + (to.a - from.a) * t,
+    }
 }
 
 pub(crate) fn to_linear(c: f32) -> f32 {
-    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
 }
 
 fn from_linear(c: f32) -> f32 {
     let c = c.clamp(0., 1.);
-    if c <= 0.0031308 { c * 12.92 } else { 1.055 * c.powf(1. / 2.4) - 0.055 }
+    if c <= 0.0031308 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1. / 2.4) - 0.055
+    }
 }
 
 pub(crate) fn oklab(color: Rgba) -> [f32; 3] {
@@ -492,7 +607,12 @@ impl Texture {
                 .get_or_init(|| {
                     let data = self.pixels().into_iter().flat_map(|(white, alpha)| {
                         let shade = if white { 255 } else { 0 };
-                        [shade, shade, shade, (alpha.clamp(0., 1.) * 255.).round() as u8]
+                        [
+                            shade,
+                            shade,
+                            shade,
+                            (alpha.clamp(0., 1.) * 255.).round() as u8,
+                        ]
                     });
                     let image =
                         RgbaImage::from_raw(GRAIN_TILE as u32, GRAIN_TILE as u32, data.collect())
@@ -518,7 +638,11 @@ impl Texture {
                 .map(|_| {
                     let (white, alpha) = noise(&mut random);
                     // One pixel in about twelve is a speck, the rest clear.
-                    if alpha < 1. / 12. { (white, 0.6 + 0.4 * random.unit()) } else { (white, 0.) }
+                    if alpha < 1. / 12. {
+                        (white, 0.6 + 0.4 * random.unit())
+                    } else {
+                        (white, 0.)
+                    }
                 })
                 .collect(),
             Texture::Weave => {
@@ -547,7 +671,11 @@ impl Texture {
                     let across = random.next() & 1 == 0;
                     let alpha = 0.7 + 0.3 * random.unit();
                     for step in 0..length {
-                        let (x, y) = if across { ((x + step) % SIDE, y) } else { (x, (y + step) % SIDE) };
+                        let (x, y) = if across {
+                            ((x + step) % SIDE, y)
+                        } else {
+                            (x, (y + step) % SIDE)
+                        };
                         pixels[y * SIDE + x] = (white, alpha);
                     }
                 }
