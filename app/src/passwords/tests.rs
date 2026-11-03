@@ -12,11 +12,17 @@ fn saved(site: &str, username: &str) -> Login {
 }
 
 fn never(site: &str) -> Login {
-    Login { never: true, ..saved(site, "") }
+    Login {
+        never: true,
+        ..saved(site, "")
+    }
 }
 
 fn titles(items: &[(MenuEntry, Option<Action>)]) -> Vec<String> {
-    items.iter().map(|(item, _)| item.title.to_string()).collect()
+    items
+        .iter()
+        .map(|(item, _)| item.title.to_string())
+        .collect()
 }
 
 /// No row for a site with none; the username for one; a count for more; Never on its own.
@@ -25,10 +31,19 @@ fn the_row_says_what_the_site_keeps() {
     assert_eq!(state(&[]), None);
     let one = [saved("example.com", "me@example.com")];
     assert_eq!(state(&one), Some(("me@example.com".into(), true)));
-    assert_eq!(state(&[saved("example.com", "")]), Some(("1 saved".into(), true)));
-    let two = [saved("example.com", "me"), saved("login.example.com", "you")];
+    assert_eq!(
+        state(&[saved("example.com", "")]),
+        Some(("1 saved".into(), true))
+    );
+    let two = [
+        saved("example.com", "me"),
+        saved("login.example.com", "you"),
+    ];
     assert_eq!(state(&two), Some(("2 saved".into(), true)));
-    assert_eq!(state(&[never("example.com")]), Some(("Never saved".into(), false)));
+    assert_eq!(
+        state(&[never("example.com")]),
+        Some(("Never saved".into(), false))
+    );
     // A login saved on another of the domain's sites says more than Never on this one.
     let both = [saved("login.example.com", "me"), never("example.com")];
     assert_eq!(state(&both), Some(("me".into(), true)));
@@ -37,7 +52,11 @@ fn the_row_says_what_the_site_keeps() {
 /// Each login is removed on its own, Never has its way back, and Settings lists them all.
 #[test]
 fn the_menu_removes_each_login_and_takes_back_never() {
-    let logins = [saved("example.com", "me"), saved("example.com", ""), never("example.com")];
+    let logins = [
+        saved("example.com", "me"),
+        saved("example.com", ""),
+        never("example.com"),
+    ];
     let items = menu(&logins);
     let expected = [
         "Remove “me”…",
@@ -75,6 +94,13 @@ fn settings_lists_the_site_over_the_username() {
 #[test]
 fn the_log_names_logins_without_passwords() {
     assert_eq!(describe(&[]), "none");
-    let logins = [saved("example.com", "me"), saved("a.com", ""), never("b.com")];
-    assert_eq!(describe(&logins), "example.com me, a.com (no username), never b.com");
+    let logins = [
+        saved("example.com", "me"),
+        saved("a.com", ""),
+        never("b.com"),
+    ];
+    assert_eq!(
+        describe(&logins),
+        "example.com me, a.com (no username), never b.com"
+    );
 }

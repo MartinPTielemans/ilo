@@ -91,7 +91,9 @@ pub struct CoreLinkRules;
 
 impl Host for CoreLinkRules {
     fn spaces(&self) -> Vec<(u64, SharedString)> {
-        (users_spaces().into_iter()).map(|space| (space, name(bc::bc_space_name, space))).collect()
+        (users_spaces().into_iter())
+            .map(|space| (space, name(bc::bc_space_name, space)))
+            .collect()
     }
 
     fn rules(&self) -> Rules {

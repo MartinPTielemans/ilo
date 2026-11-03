@@ -18,8 +18,24 @@ fn two_spaces(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>) {
     shell.update(cx, |shell, cx| {
         shell.set_spaces(
             vec![
-                (1, "Space 1".into(), None, 0, "".into(), "".into(), "".into()),
-                (2, "Space 2".into(), None, 0, "".into(), "".into(), "".into()),
+                (
+                    1,
+                    "Space 1".into(),
+                    None,
+                    0,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                ),
+                (
+                    2,
+                    "Space 2".into(),
+                    None,
+                    0,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                ),
             ],
             cx,
         );
@@ -32,7 +48,10 @@ fn two_spaces(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>) {
 
 /// What the shell asked of the note since the last time.
 fn notes(host: &Recorder) -> Vec<String> {
-    host.take().into_iter().filter(|call| call.starts_with("full screen note")).collect()
+    host.take()
+        .into_iter()
+        .filter(|call| call.starts_with("full screen note"))
+        .collect()
 }
 
 #[gpui::test]
@@ -74,7 +93,18 @@ fn window(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>, &mut VisualT
     let host = Rc::new(Recorder::default());
     let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(host.clone(), cx));
     shell.update(cx, |shell, cx| {
-        shell.set_spaces(vec![(1, "Space 1".into(), None, 0, "".into(), "".into(), "".into())], cx);
+        shell.set_spaces(
+            vec![(
+                1,
+                "Space 1".into(),
+                None,
+                0,
+                "".into(),
+                "".into(),
+                "".into(),
+            )],
+            cx,
+        );
         shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
         shell.set_space(1, cx);
         shell.set_selected(10, cx);
@@ -109,7 +139,9 @@ fn window_manager_takes(
 
 /// The core says the page went full screen, or left.
 fn page_goes(full_screen: bool, shell: &Entity<Shell>, cx: &mut VisualTestContext) {
-    shell.update_in(cx, |shell, window, cx| shell.set_page_fullscreen(full_screen, window, cx));
+    shell.update_in(cx, |shell, window, cx| {
+        shell.set_page_fullscreen(full_screen, window, cx)
+    });
 }
 
 /// Where the page goes at the window's size: None while it's held for the window's resize, else
@@ -132,7 +164,11 @@ fn page(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<&'static st
 /// The page goes full screen in the windowed window, which follows it.
 fn page_takes_the_window(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
     page_goes(true, shell, cx);
-    assert_eq!(page(shell, cx), None, "the page moved before the window went full screen");
+    assert_eq!(
+        page(shell, cx),
+        None,
+        "the page moved before the window went full screen"
+    );
     window_goes(true, cx);
     shell.update(cx, |shell, cx| shell.set_full_screen(true, cx));
     assert_eq!(page(shell, cx), Some("fills"));
@@ -152,7 +188,11 @@ fn a_page_leaving_after_its_window_left_full_screen_brings_the_card_back(cx: &mu
     // The page's full screen takes the window again, and its own exit brings both back.
     page_takes_the_window(&shell, cx);
     page_goes(false, &shell, cx);
-    assert_eq!(page(&shell, cx), None, "the page moved before the window's resize");
+    assert_eq!(
+        page(&shell, cx),
+        None,
+        "the page moved before the window's resize"
+    );
     window_goes(false, cx);
     assert_eq!(page(&shell, cx), Some("at the sidebar"));
 }
@@ -164,7 +204,11 @@ fn a_page_leaving_as_its_window_starts_out_waits_for_the_resize(cx: &mut TestApp
     // The core lets the page go as AppKit starts taking the window out, while it's still full
     // screen, so the page stays put until the window's resize lays it out, once.
     page_goes(false, &shell, cx);
-    assert_eq!(page(&shell, cx), None, "the page moved before the window's resize");
+    assert_eq!(
+        page(&shell, cx),
+        None,
+        "the page moved before the window's resize"
+    );
     window_goes(false, cx);
     assert_eq!(page(&shell, cx), Some("at the sidebar"));
     shell.update(cx, |shell, cx| shell.set_full_screen(false, cx));
@@ -189,11 +233,19 @@ fn window_goes_in_place(full_screen: bool, shell: &Entity<Shell>, cx: &mut Visua
 fn a_window_that_keeps_its_size_lays_the_page_out_once_there(cx: &mut TestAppContext) {
     let (shell, _, cx) = window(cx);
     page_goes(true, &shell, cx);
-    assert_eq!(page(&shell, cx), None, "the page moved before the window went full screen");
+    assert_eq!(
+        page(&shell, cx),
+        None,
+        "the page moved before the window went full screen"
+    );
     window_goes_in_place(true, &shell, cx);
     assert_eq!(page(&shell, cx), Some("fills"));
     page_goes(false, &shell, cx);
-    assert_eq!(page(&shell, cx), None, "the page moved before the window left full screen");
+    assert_eq!(
+        page(&shell, cx),
+        None,
+        "the page moved before the window left full screen"
+    );
     window_goes_in_place(false, &shell, cx);
     assert_eq!(page(&shell, cx), Some("at the sidebar"));
 
@@ -203,7 +255,9 @@ fn a_window_that_keeps_its_size_lays_the_page_out_once_there(cx: &mut TestAppCon
         shell.set_library(true, cx);
         // At rest.
         shell.library_motion = None;
-        shell.window_page_frame(viewport).map(|(frame, _)| frame.origin.x)
+        shell
+            .window_page_frame(viewport)
+            .map(|(frame, _)| frame.origin.x)
     });
     assert_eq!(left, Some(px(LIBRARY_WIDTH)));
 }
@@ -220,7 +274,11 @@ fn a_page_leaving_before_its_window_is_there_waits_for_the_resize(cx: &mut TestA
     // for the way back, so the page is laid out once, windowed.
     page_goes(false, &shell, cx);
     shell.update(cx, |shell, cx| shell.set_full_screen(true, cx));
-    assert_eq!(page(&shell, cx), None, "the page moved before the window's resize");
+    assert_eq!(
+        page(&shell, cx),
+        None,
+        "the page moved before the window's resize"
+    );
     window_goes(false, cx);
     assert_eq!(page(&shell, cx), Some("at the sidebar"));
 }
@@ -238,7 +296,10 @@ fn the_note_waits_to_hear_whether_a_page_took_the_window(cx: &mut TestAppContext
     window_manager_takes(true, &shell, &host, cx);
     page_goes(true, &shell, cx);
     cx.run_until_parked();
-    assert!(notes(&host).is_empty(), "a page's full screen showed the window's note");
+    assert!(
+        notes(&host).is_empty(),
+        "a page's full screen showed the window's note"
+    );
 }
 
 #[gpui::test]
@@ -256,5 +317,9 @@ fn a_page_whose_window_comes_back_first_goes_to_the_card_with_the_resize(cx: &mu
 
     // From there, the page's full screen takes the window again.
     page_goes(true, &shell, cx);
-    assert_eq!(page(&shell, cx), None, "the page moved before the window went full screen");
+    assert_eq!(
+        page(&shell, cx),
+        None,
+        "the page moved before the window went full screen"
+    );
 }

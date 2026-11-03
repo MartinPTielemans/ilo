@@ -6,13 +6,21 @@ use std::rc::Rc;
 use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px};
 
 use crate::shell::{
-    Folders, NAME_HEIGHT, ROW_PITCH, Shell, SpaceEntry, Slot, recorder::Recorder, rows::given_name,
+    Folders, NAME_HEIGHT, ROW_PITCH, Shell, Slot, SpaceEntry, recorder::Recorder, rows::given_name,
 };
 use crate::theme_picker;
 
 /// A Space `id` named `name`, with `icon`.
 fn space(id: u64, name: &str, icon: &str) -> SpaceEntry {
-    (id, name.to_string().into(), None, 1, icon.to_string().into(), "".into(), "".into())
+    (
+        id,
+        name.to_string().into(),
+        None,
+        1,
+        icon.to_string().into(),
+        "".into(),
+        "".into(),
+    )
 }
 
 /// A window on `spaces`, showing the first, which has pinned tab 10 and Today tab 11.
@@ -27,7 +35,14 @@ fn window(
         let first = spaces[0].0;
         shell.set_spaces(spaces, cx);
         shell.set_space(first, cx);
-        shell.set_tabs(first, vec![10], vec![11], Vec::new(), Folders::default(), cx);
+        shell.set_tabs(
+            first,
+            vec![10],
+            vec![11],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
         shell.set_selected(10, cx);
     });
     cx.run_until_parked();
@@ -51,8 +66,16 @@ fn empty_space_menu(
         shell.drawn_list_top() + last + ROW_PITCH + 40.
     });
     host.menus.borrow_mut().clear();
-    cx.simulate_mouse_down(point(px(100.), px(y)), MouseButton::Right, Modifiers::none());
-    cx.simulate_mouse_up(point(px(100.), px(y)), MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_down(
+        point(px(100.), px(y)),
+        MouseButton::Right,
+        Modifiers::none(),
+    );
+    cx.simulate_mouse_up(
+        point(px(100.), px(y)),
+        MouseButton::Right,
+        Modifiers::none(),
+    );
     cx.run_until_parked();
     let menus = host.menus.borrow();
     let Some(menu) = menus.last() else {
@@ -68,23 +91,44 @@ fn empty_space_menu(
 #[gpui::test]
 fn a_lone_unnamed_space_hides_its_name_row_until_show_space_header(cx: &mut TestAppContext) {
     let (shell, cx, host) = window(cx, vec![space(1, "Space 1", "")]);
-    assert!(shell.read_with(cx, |shell, _| shell.name_row_hidden()), "the name row shows");
-    assert_eq!(first_row(&shell, cx), NAME_HEIGHT - 39., "the rows didn't rise as Arc's do");
+    assert!(
+        shell.read_with(cx, |shell, _| shell.name_row_hidden()),
+        "the name row shows"
+    );
+    assert_eq!(
+        first_row(&shell, cx),
+        NAME_HEIGHT - 39.,
+        "the rows didn't rise as Arc's do"
+    );
 
     let menu = empty_space_menu(&shell, cx, &host);
-    let theme = menu.iter().position(|title| title == "Edit Theme Color…").expect("no Edit Theme");
+    let theme = menu
+        .iter()
+        .position(|title| title == "Edit Theme Color…")
+        .expect("no Edit Theme");
     assert_eq!(menu[theme + 1], "Show Space Header", "{menu:?}");
     cx.update(|_, cx| host.choose("Show Space Header", cx));
     cx.run_until_parked();
     assert_eq!(host.lone_header.get(), Some(true), "the choice isn't kept");
-    assert_eq!(first_row(&shell, cx), NAME_HEIGHT, "the name row didn't come back");
+    assert_eq!(
+        first_row(&shell, cx),
+        NAME_HEIGHT,
+        "the name row didn't come back"
+    );
 
     let menu = empty_space_menu(&shell, cx, &host);
-    assert!(menu.iter().any(|title| title == "Hide Space Header"), "{menu:?}");
+    assert!(
+        menu.iter().any(|title| title == "Hide Space Header"),
+        "{menu:?}"
+    );
     cx.update(|_, cx| host.choose("Hide Space Header", cx));
     cx.run_until_parked();
     assert_eq!(host.lone_header.get(), Some(false));
-    assert_eq!(first_row(&shell, cx), NAME_HEIGHT - 39., "the name row didn't hide again");
+    assert_eq!(
+        first_row(&shell, cx),
+        NAME_HEIGHT - 39.,
+        "the name row didn't hide again"
+    );
 }
 
 /// Under the favorites the rows rise 36, as Arc's do.
@@ -108,9 +152,16 @@ fn a_named_space_or_one_of_two_keeps_its_name_row(cx: &mut TestAppContext) {
     for spaces in cases {
         let what = format!("{spaces:?}");
         let (shell, cx, host) = window(cx, spaces);
-        assert_eq!(first_row(&shell, cx), NAME_HEIGHT, "{what} hid its name row");
+        assert_eq!(
+            first_row(&shell, cx),
+            NAME_HEIGHT,
+            "{what} hid its name row"
+        );
         let menu = empty_space_menu(&shell, cx, &host);
-        assert!(!menu.iter().any(|title| title.ends_with("Space Header")), "{what}: {menu:?}");
+        assert!(
+            !menu.iter().any(|title| title.ends_with("Space Header")),
+            "{what}: {menu:?}"
+        );
     }
 }
 
@@ -148,8 +199,15 @@ fn edit_theme_color_opens_with_the_name_row_hidden(cx: &mut TestAppContext) {
         cx.update(|window, _| window.refresh());
         cx.run_until_parked();
     }
-    assert_eq!(cx.update(|_, cx| theme_picker::open_for(cx)), Some(1), "the picker didn't open");
-    assert!(shell.read_with(cx, |shell, _| shell.name_row_hidden()), "the name row showed for it");
+    assert_eq!(
+        cx.update(|_, cx| theme_picker::open_for(cx)),
+        Some(1),
+        "the picker didn't open"
+    );
+    assert!(
+        shell.read_with(cx, |shell, _| shell.name_row_hidden()),
+        "the name row showed for it"
+    );
 }
 
 #[test]

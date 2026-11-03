@@ -100,33 +100,31 @@ impl Shell {
         };
         let float = page.media_picture_in_picture.then(|| {
             let glyph = "icons/picture-in-picture-2.svg";
-            self.media_button("media-pip", tab, glyph).on_click(cx.listener(
-                move |shell, _, _, cx| {
+            self.media_button("media-pip", tab, glyph)
+                .on_click(cx.listener(move |shell, _, _, cx| {
                     log!("browser: command media-picture-in-picture via player");
                     shell.browser.media(tab, MediaAction::PictureInPicture, cx);
-                },
-            ))
+                }))
         });
-        let play = self.media_button("media-play", tab, glyph).on_click(cx.listener(
-            move |shell, _, _, cx| {
+        let play = self
+            .media_button("media-play", tab, glyph)
+            .on_click(cx.listener(move |shell, _, _, cx| {
                 log!("browser: command media-{} via player", label(action));
                 shell.browser.media(tab, action, cx);
-            },
-        ));
+            }));
         let next = page.media_next.then(|| {
-            self.media_button("media-next", tab, "icons/skip-forward.svg").on_click(
-                cx.listener(move |shell, _, _, cx| {
+            self.media_button("media-next", tab, "icons/skip-forward.svg")
+                .on_click(cx.listener(move |shell, _, _, cx| {
                     log!("browser: command media-next via player");
                     shell.browser.media(tab, MediaAction::Next, cx);
-                }),
-            )
+                }))
         });
-        let close = self.media_button("media-close", tab, "icons/x.svg").on_click(cx.listener(
-            move |shell, _, _, cx| {
+        let close = self
+            .media_button("media-close", tab, "icons/x.svg")
+            .on_click(cx.listener(move |shell, _, _, cx| {
                 log!("browser: command media-dismiss via player");
                 shell.dismiss_media(tab, cx);
-            },
-        ));
+            }));
         // Over Restart to Update, while an update waits.
         let bottom =
             FOOTER_HEIGHT + self.update_sign_room() + index as f32 * (MEDIA_HEIGHT + MEDIA_GAP);
@@ -176,7 +174,12 @@ impl Shell {
     }
 
     /// A player's button, which a task's plate at the foot has for its ✕ too.
-    pub(super) fn media_button(&self, id: &'static str, tab: u64, glyph: &'static str) -> Stateful<Div> {
+    pub(super) fn media_button(
+        &self,
+        id: &'static str,
+        tab: u64,
+        glyph: &'static str,
+    ) -> Stateful<Div> {
         div()
             .id((id, tab))
             .flex_none()
@@ -186,7 +189,12 @@ impl Shell {
             .flex()
             .items_center()
             .justify_center()
-            .child(svg().path(glyph).size(px(MEDIA_GLYPH)).text_color(self.palette.text(SECONDARY)))
+            .child(
+                svg()
+                    .path(glyph)
+                    .size(px(MEDIA_GLYPH))
+                    .text_color(self.palette.text(SECONDARY)),
+            )
             // Not the player's click, which would show the tab.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
     }
@@ -219,14 +227,25 @@ mod tests {
             let space = (1, "Home".into(), None, 1, "".into(), "".into(), "".into());
             shell.set_spaces(vec![space], cx);
             shell.set_space(1, cx);
-            shell.set_tabs(1, Vec::new(), vec![1, 2, 3], Vec::new(), Folders::default(), cx);
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![1, 2, 3],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
             shell.set_selected(1, cx);
         });
         (shell, host)
     }
 
     fn playing(shell: &mut Shell, tab: u64, media_playing: bool, cx: &mut gpui::Context<Shell>) {
-        let page = Page { media: true, media_playing, ..shell.page(tab) };
+        let page = Page {
+            media: true,
+            media_playing,
+            ..shell.page(tab)
+        };
         shell.set_page(tab, page, cx);
     }
 
@@ -264,7 +283,14 @@ mod tests {
             let other = (5, "Work".into(), None, 1, "".into(), "".into(), "".into());
             let home = (1, "Home".into(), None, 1, "".into(), "".into(), "".into());
             shell.set_spaces(vec![home, other], cx);
-            shell.set_tabs(1, Vec::new(), vec![1, 2, 3], Vec::new(), Folders::default(), cx);
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![1, 2, 3],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
             shell.set_tabs(5, vec![6], Vec::new(), Vec::new(), Folders::default(), cx);
             shell.set_tabs(9, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
             shell.set_favorites(vec![(7, 1)], cx);
@@ -298,10 +324,18 @@ mod tests {
             shell.set_selected(1, cx);
         });
         cx.run_until_parked();
-        assert!(shell.read_with(cx, |shell, _| shell.media_drawn.get()).is_none());
+        assert!(
+            shell
+                .read_with(cx, |shell, _| shell.media_drawn.get())
+                .is_none()
+        );
         shell.update(cx, |shell, cx| playing(shell, 6, true, cx));
         cx.run_until_parked();
-        assert!(shell.read_with(cx, |shell, _| shell.media_drawn.get()).is_some());
+        assert!(
+            shell
+                .read_with(cx, |shell, _| shell.media_drawn.get())
+                .is_some()
+        );
     }
 
     /// A page that can float has Picture in Picture before play, as Arc's Back to PiP, which asks
@@ -312,34 +346,54 @@ mod tests {
         let browser = host.clone();
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
         let floats = |shell: &mut Shell, can: bool, cx: &mut gpui::Context<Shell>| {
-            let page = Page { media: true, media_picture_in_picture: can, ..shell.page(2) };
+            let page = Page {
+                media: true,
+                media_picture_in_picture: can,
+                ..shell.page(2)
+            };
             shell.set_page(2, page, cx);
         };
         shell.update(cx, |shell, cx| {
             let space = (1, "Home".into(), None, 1, "".into(), "".into(), "".into());
             shell.set_spaces(vec![space], cx);
             shell.set_space(1, cx);
-            shell.set_tabs(1, Vec::new(), vec![1, 2], Vec::new(), Folders::default(), cx);
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![1, 2],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
             shell.set_selected(1, cx);
             floats(shell, true, cx);
         });
         cx.run_until_parked();
         // From the right, 8 in and 30 apart: ×, play, then Picture in Picture.
-        let plate = shell.read_with(cx, |shell, _| shell.media_drawn.get()).expect("no player");
-        let x = plate.right() - px((MEDIA_HEIGHT - MEDIA_BUTTON) / 2. + MEDIA_BUTTON / 2.)
+        let plate = shell
+            .read_with(cx, |shell, _| shell.media_drawn.get())
+            .expect("no player");
+        let x = plate.right()
+            - px((MEDIA_HEIGHT - MEDIA_BUTTON) / 2. + MEDIA_BUTTON / 2.)
             - px(2. * (MEDIA_BUTTON + MEDIA_GAP));
         let button = point(x, plate.center().y);
         host.take();
         cx.simulate_click(button, Modifiers::none());
         cx.run_until_parked();
         let calls = host.take();
-        assert!(calls.contains(&"media 2 PictureInPicture".to_owned()), "{calls:?}");
+        assert!(
+            calls.contains(&"media 2 PictureInPicture".to_owned()),
+            "{calls:?}"
+        );
         shell.update(cx, |shell, cx| floats(shell, false, cx));
         cx.run_until_parked();
         cx.simulate_click(button, Modifiers::none());
         cx.run_until_parked();
         let calls = host.take();
-        assert!(!calls.iter().any(|call| call.starts_with("media ")), "{calls:?}");
+        assert!(
+            !calls.iter().any(|call| call.starts_with("media ")),
+            "{calls:?}"
+        );
         assert!(calls.contains(&"select 2".to_owned()), "{calls:?}");
     }
 }

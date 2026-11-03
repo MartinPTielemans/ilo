@@ -11,18 +11,20 @@ use gpui::{
     point,
 };
 
-use crate::theme::Appearance;
 use crate::build_info::{self, BuildInfo};
+use crate::theme::Appearance;
 
 use super::{
-    COPIED_TIME, Edit, Section, Shell, Space, Swapped, UserKeys, What,
+    COPIED_TIME, Edit, Section, Shell, Space, Swapped, UserKeys, What, agent_bar,
     browser::WindowButton,
-    agent_bar, clean_link, drag::dropped_urls, drm_note, extensions, keys, little::little_runs,
-    sidebar_keys,
+    clean_link,
+    drag::dropped_urls,
+    drm_note, extensions, keys,
+    little::little_runs,
     panes::pane_frames,
-    trace,
+    sidebar_keys,
     swap::{CHECK, LINK},
-    user_keys,
+    trace, user_keys,
 };
 
 /// A browser command, from a key or the sidebar.
@@ -366,7 +368,11 @@ const DEVELOPER_MODE_OFF: &str = "Turn off Developer Mode for this site";
 
 /// What turns Developer Mode the other way, for a page in it or not.
 pub(super) fn developer_mode_title(on: bool) -> &'static str {
-    if on { DEVELOPER_MODE_OFF } else { DEVELOPER_MODE_ON }
+    if on {
+        DEVELOPER_MODE_OFF
+    } else {
+        DEVELOPER_MODE_ON
+    }
 }
 
 /// The split's orientation's rows in the command bar, Arc's names, of which it lists the one that
@@ -376,7 +382,11 @@ const CONVERT_HORIZONTAL: &str = "Convert to Horizontal Split View";
 
 /// What turns a split the other way, for one `stacked` or side by side.
 pub(super) fn orientation_title(stacked: bool) -> &'static str {
-    if stacked { CONVERT_HORIZONTAL } else { CONVERT_VERTICAL }
+    if stacked {
+        CONVERT_HORIZONTAL
+    } else {
+        CONVERT_VERTICAL
+    }
 }
 
 /// The commands the command bar finds, with the words besides their names' that find them, in
@@ -385,40 +395,92 @@ pub(super) fn orientation_title(stacked: bool) -> &'static str {
 pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
     ("Pin Tab", Command::TogglePin, &["unpin"]),
     ("Next Tab", Command::NextTab, &[]),
-    ("Search Tabs…", Command::SearchTabs, &["switch tab", "open tabs"]),
+    (
+        "Search Tabs…",
+        Command::SearchTabs,
+        &["switch tab", "open tabs"],
+    ),
     ("Archive Tab", Command::CloseTab, &["close tab"]),
     ("Clear Today", Command::Clear, &["unpinned tabs"]),
-    ("Clear Cache and Refresh", Command::ClearCacheAndRefresh, &[]),
-    ("Clear Cookies and Refresh", Command::ClearCookiesAndRefresh, &[]),
+    (
+        "Clear Cache and Refresh",
+        Command::ClearCacheAndRefresh,
+        &[],
+    ),
+    (
+        "Clear Cookies and Refresh",
+        Command::ClearCookiesAndRefresh,
+        &[],
+    ),
     ("Clear Archive", Command::ClearArchive, &[]),
     ("Favorite Tab", Command::FavoriteTab, &["add to favorites"]),
     ("Collapse All Folders", Command::CollapseFolders, &[]),
-    ("Collapse Pinned Tabs", Command::CollapsePinned, &["hide pinned"]),
-    ("Expand Pinned Tabs", Command::ExpandPinned, &["show pinned"]),
+    (
+        "Collapse Pinned Tabs",
+        Command::CollapsePinned,
+        &["hide pinned"],
+    ),
+    (
+        "Expand Pinned Tabs",
+        Command::ExpandPinned,
+        &["show pinned"],
+    ),
     ("Expand All Folders", Command::ExpandFolders, &[]),
     ("Reveal Tab in Sidebar", Command::RevealTab, &["locate"]),
-    ("Focus Sidebar", Command::FocusSidebar, &["keyboard", "arrow keys"]),
+    (
+        "Focus Sidebar",
+        Command::FocusSidebar,
+        &["keyboard", "arrow keys"],
+    ),
     ("New Folder…", Command::NewFolder, &[]),
-    ("Back to Pinned URL", Command::BackToPinnedUrl, &["reset tab"]),
+    (
+        "Back to Pinned URL",
+        Command::BackToPinnedUrl,
+        &["reset tab"],
+    ),
     ("Mute/Unmute Tab", Command::ToggleMute, &["sound", "audio"]),
     ("Copy URL", Command::CopyUrl, &["link"]),
     ("Copy URL as Markdown", Command::CopyMarkdownLink, &["link"]),
-    ("Paste URL as New Tab", Command::PasteUrlAsTab, &["clipboard", "open"]),
+    (
+        "Paste URL as New Tab",
+        Command::PasteUrlAsTab,
+        &["clipboard", "open"],
+    ),
     ("Share…", Command::Share, &["send"]),
     ("New Window", Command::NewWindow, &["duplicate", "copy"]),
     ("Duplicate Current Tab", Command::DuplicateTab, &["copy"]),
-    ("New Incognito Window", Command::NewPrivateWindow, &["private"]),
-    ("New Little ilo Window", Command::NewLittleWindow, &["little arc", "small window"]),
-    ("Open in Main Window", Command::OpenInMainWindow, &["little", "move"]),
+    (
+        "New Incognito Window",
+        Command::NewPrivateWindow,
+        &["private"],
+    ),
+    (
+        "New Little ilo Window",
+        Command::NewLittleWindow,
+        &["little arc", "small window"],
+    ),
+    (
+        "Open in Main Window",
+        Command::OpenInMainWindow,
+        &["little", "move"],
+    ),
     ("Close Window", Command::CloseWindow, &[]),
-    ("Restore Last Closed Tab", Command::ReopenClosedTab, &["reopen", "undo close"]),
+    (
+        "Restore Last Closed Tab",
+        Command::ReopenClosedTab,
+        &["reopen", "undo close"],
+    ),
     ("Find…", Command::Find, &[]),
     ("Site Controls", Command::SiteControls, &["permissions"]),
     ("Cast…", Command::Cast, &["chromecast", "tv", "mirror"]),
     ("Go Back", Command::Back, &[]),
     ("Go Forward", Command::Forward, &[]),
     ("Refresh the Page", Command::Reload, &["reload"]),
-    ("Force Refresh the Page", Command::ForceReload, &["reload", "hard reload"]),
+    (
+        "Force Refresh the Page",
+        Command::ForceReload,
+        &["reload", "hard reload"],
+    ),
     ("Stop Loading", Command::Stop, &[]),
     ("Zoom In", Command::ZoomIn, &[]),
     ("Zoom Out", Command::ZoomOut, &[]),
@@ -430,39 +492,103 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
     // Dia's (docs/ux-spec.md › Split view).
     ("Flip Split View", Command::FlipSplit, &[]),
     // Arc's names, with Dia's among the words.
-    (CONVERT_VERTICAL, Command::ChangeOrientation, &["change orientation", "stack"]),
-    (CONVERT_HORIZONTAL, Command::ChangeOrientation, &["change orientation", "side by side"]),
+    (
+        CONVERT_VERTICAL,
+        Command::ChangeOrientation,
+        &["change orientation", "stack"],
+    ),
+    (
+        CONVERT_HORIZONTAL,
+        Command::ChangeOrientation,
+        &["change orientation", "side by side"],
+    ),
     ("Move Pane Left", Command::MovePaneLeft, &[]),
     ("Move Pane Right", Command::MovePaneRight, &[]),
-    ("Separate All Tabs", Command::SeparateSplit, &["separate all pages"]),
-    ("New Note", Command::NewNote, &["document", "notion", "google docs", "word", "confluence"]),
-    ("New Note Split", Command::NewNoteSplit, &["document", "side by side"]),
+    (
+        "Separate All Tabs",
+        Command::SeparateSplit,
+        &["separate all pages"],
+    ),
+    (
+        "New Note",
+        Command::NewNote,
+        &["document", "notion", "google docs", "word", "confluence"],
+    ),
+    (
+        "New Note Split",
+        Command::NewNoteSplit,
+        &["document", "side by side"],
+    ),
     ("Toggle Sidebar", Command::ToggleSidebar, &["hide", "show"]),
-    ("Automatic Appearance", Command::Appearance(Appearance::Automatic), &["system", "app theme"]),
-    ("Light Appearance", Command::Appearance(Appearance::Light), &["light mode", "app theme"]),
-    ("Dark Appearance", Command::Appearance(Appearance::Dark), &["dark mode", "app theme"]),
+    (
+        "Automatic Appearance",
+        Command::Appearance(Appearance::Automatic),
+        &["system", "app theme"],
+    ),
+    (
+        "Light Appearance",
+        Command::Appearance(Appearance::Light),
+        &["light mode", "app theme"],
+    ),
+    (
+        "Dark Appearance",
+        Command::Appearance(Appearance::Dark),
+        &["dark mode", "app theme"],
+    ),
     (HIDE_SIDEBAR, Command::ToggleSidebar, &[]),
     ("Capture…", Command::CapturePortion, &["screenshot"]),
-    ("Capture Full Page", Command::CaptureFullPage, &["screenshot"]),
+    (
+        "Capture Full Page",
+        Command::CaptureFullPage,
+        &["screenshot"],
+    ),
     ("Save Page As", Command::SavePage, &[]),
     ("Print", Command::Print, &["pdf"]),
     ("View Source", Command::ViewSource, &[]),
     ("Developer Tools", Command::DevTools, &["devtools"]),
     ("Inspect Elements", Command::InspectElements, &[]),
     ("JavaScript Console", Command::JavaScriptConsole, &[]),
-    (DEVELOPER_MODE_ON, Command::ToggleDeveloperMode, &["dev mode", "localhost"]),
-    (DEVELOPER_MODE_OFF, Command::ToggleDeveloperMode, &["dev mode", "localhost"]),
+    (
+        DEVELOPER_MODE_ON,
+        Command::ToggleDeveloperMode,
+        &["dev mode", "localhost"],
+    ),
+    (
+        DEVELOPER_MODE_OFF,
+        Command::ToggleDeveloperMode,
+        &["dev mode", "localhost"],
+    ),
     ("Open Task Manager", Command::TaskManager, &[]),
-    (trace::RECORD, Command::RecordTrace, &["performance", "tracing"]),
-    (trace::STOP_RECORDING, Command::RecordTrace, &["performance", "tracing"]),
-    ("Manage Extensions…", Command::ManageExtensions, &["plugins"]),
+    (
+        trace::RECORD,
+        Command::RecordTrace,
+        &["performance", "tracing"],
+    ),
+    (
+        trace::STOP_RECORDING,
+        Command::RecordTrace,
+        &["performance", "tracing"],
+    ),
+    (
+        "Manage Extensions…",
+        Command::ManageExtensions,
+        &["plugins"],
+    ),
     ("Add Extension…", Command::AddExtension, &[]),
     ("New Space…", Command::NewSpace, &[]),
     ("Rename Space", Command::RenameSpace, &[]),
     // Arc's bar's name, where its Space menu says Edit Theme Color…. "theme" finds it before the
     // Appearance rows, whose "app theme" it finds as a later word.
-    ("Edit Theme…", Command::EditTheme, &["theme", "color", "colour"]),
-    ("Export Space as Markdown…", Command::ExportSpace, &["save", "links", "backup"]),
+    (
+        "Edit Theme…",
+        Command::EditTheme,
+        &["theme", "color", "colour"],
+    ),
+    (
+        "Export Space as Markdown…",
+        Command::ExportSpace,
+        &["save", "links", "backup"],
+    ),
     ("Rename Current Tab…", Command::RenameTab, &["title"]),
     ("Next Space", Command::NextSpace, &[]),
     ("Previous Space", Command::PreviousSpace, &[]),
@@ -470,31 +596,87 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
     ("Open Library…", Command::ViewLibrary, &["view library"]),
     ("View Archive…", Command::ViewArchive, &[]),
     ("View Downloads…", Command::ViewDownloads, &[]),
-    ("View Media…", Command::ViewMedia, &["screenshots", "captures"]),
+    (
+        "View Media…",
+        Command::ViewMedia,
+        &["screenshots", "captures"],
+    ),
     ("View History", Command::ViewHistory, &[]),
-    ("Site Search Settings", Command::SiteSearchSettings, &["search engines", "keywords"]),
-    ("Clear Browsing Data…", Command::ClearBrowsingData, &["history", "cookies", "cache"]),
+    (
+        "Site Search Settings",
+        Command::SiteSearchSettings,
+        &["search engines", "keywords"],
+    ),
+    (
+        "Clear Browsing Data…",
+        Command::ClearBrowsingData,
+        &["history", "cookies", "cache"],
+    ),
     ("Settings", Command::Settings, &["preferences"]),
-    ("Essential Keyboard Shortcuts", Command::KeyboardShortcuts, &["keys"]),
-    (concat!("About ", env!("APP_NAME")), Command::About, &["version", "credits", "licence"]),
+    (
+        "Essential Keyboard Shortcuts",
+        Command::KeyboardShortcuts,
+        &["keys"],
+    ),
+    (
+        concat!("About ", env!("APP_NAME")),
+        Command::About,
+        &["version", "credits", "licence"],
+    ),
     // The app menu's, which Linux shows no bar for, and its name once an update is ready.
-    (crate::updates::CHECK_FOR_UPDATES, Command::CheckForUpdates, &["update", "upgrade"]),
-    (crate::updates::RESTART, Command::CheckForUpdates, &["update", "upgrade", "relaunch"]),
-    ("Import from Other Browsers…", Command::Import, &["bookmarks"]),
-    ("Privacy Policy", Command::PrivacyPolicy, &["data", "tracking"]),
+    (
+        crate::updates::CHECK_FOR_UPDATES,
+        Command::CheckForUpdates,
+        &["update", "upgrade"],
+    ),
+    (
+        crate::updates::RESTART,
+        Command::CheckForUpdates,
+        &["update", "upgrade", "relaunch"],
+    ),
+    (
+        "Import from Other Browsers…",
+        Command::Import,
+        &["bookmarks"],
+    ),
+    (
+        "Privacy Policy",
+        Command::PrivacyPolicy,
+        &["data", "tracking"],
+    ),
     ("Passwords", Command::Passwords, &["logins", "keychain"]),
-    (concat!("Welcome to ", env!("APP_NAME")), Command::Welcome, &["onboarding", "intro"]),
+    (
+        concat!("Welcome to ", env!("APP_NAME")),
+        Command::Welcome,
+        &["onboarding", "intro"],
+    ),
     ("Help Center", Command::HelpCenter, &["help", "support"]),
-    ("What's New", Command::WhatsNew, &["release notes", "changelog"]),
-    ("Report a Problem…", Command::ReportProblem, &["bug", "feedback", "issue"]),
-    ("Restore Earlier Sidebar…", Command::RestoreEarlierSidebar, &["backup", "restore data"]),
+    (
+        "What's New",
+        Command::WhatsNew,
+        &["release notes", "changelog"],
+    ),
+    (
+        "Report a Problem…",
+        Command::ReportProblem,
+        &["bug", "feedback", "issue"],
+    ),
+    (
+        "Restore Earlier Sidebar…",
+        Command::RestoreEarlierSidebar,
+        &["backup", "restore data"],
+    ),
     ("Copy Build Info", Command::CopyBuildInfo, &["version"]),
     (concat!("Quit ", env!("APP_NAME")), Command::Quit, &[]),
 ];
 
 /// BAR_COMMANDS' names in lowercase, made once, since the bar matches them on every key.
-static LOWERCASE_NAMES: LazyLock<Vec<String>> =
-    LazyLock::new(|| BAR_COMMANDS.iter().map(|(name, ..)| name.to_lowercase()).collect());
+static LOWERCASE_NAMES: LazyLock<Vec<String>> = LazyLock::new(|| {
+    BAR_COMMANDS
+        .iter()
+        .map(|(name, ..)| name.to_lowercase())
+        .collect()
+});
 
 /// The most rows the command bar lists, five shown and the rest scrolled (Arc), so the most
 /// commands it's given.
@@ -540,13 +722,17 @@ pub struct BarTab {
 
 /// The commands that do something now that match `typed`, best first.
 pub fn bar_commands(typed: &str, cx: &App) -> Vec<BarCommand> {
-    let shell = cx.try_global::<ShellHandle>().and_then(|handle| handle.0.upgrade());
+    let shell = cx
+        .try_global::<ShellHandle>()
+        .and_then(|handle| handle.0.upgrade());
     let Some(shell) = shell else {
         return Vec::new();
     };
     let shell = shell.read(cx);
     let keys = user_keys(cx);
-    let found = find_commands(typed, keys, |name, command| shell.bar_name(name, command, cx));
+    let found = find_commands(typed, keys, |name, command| {
+        shell.bar_name(name, command, cx)
+    });
     let mut named = shell.named_bar_rows();
     named.extend(shell.numbered_bar_row(typed, cx));
     with_named_rows(found, typed, &named, keys)
@@ -599,7 +785,9 @@ pub fn with_named_rows(
     if typed.is_empty() {
         return found;
     }
-    let found = found.into_iter().map(|row| (row.matched, row.name, row.command));
+    let found = found
+        .into_iter()
+        .map(|row| (row.matched, row.name, row.command));
     let named = rows.iter().filter_map(|(name, words, command)| {
         let words: Vec<String> = words.iter().map(|word| word.to_lowercase()).collect();
         let words: Vec<&str> = words.iter().map(String::as_str).collect();
@@ -645,9 +833,13 @@ fn match_of(name: &str, keywords: &[&str], typed: &str) -> Option<Match> {
     let first = typed.chars().next()?;
     let in_order = |word: &str| {
         let mut letters = word.chars();
-        typed.chars().all(|letter| letters.any(|other| other == letter))
+        typed
+            .chars()
+            .all(|letter| letters.any(|other| other == letter))
     };
-    words(name).any(|word| word.starts_with(first) && in_order(word)).then_some(Match::Letters)
+    words(name)
+        .any(|word| word.starts_with(first) && in_order(word))
+        .then_some(Match::Letters)
 }
 
 /// `text` from each of its words' starts on, a word starting after a space or a slash.
@@ -725,7 +917,10 @@ pub fn key_name(key: &str, off_the_mac: bool) -> String {
 /// Copies `text`, a sum's result chosen in the command bar, once the bar has gone, and says so in
 /// the toast.
 pub fn copy_from_bar(text: &str, cx: &mut App) {
-    if let Some(shell) = cx.try_global::<ShellHandle>().map(|handle| handle.0.clone()) {
+    if let Some(shell) = cx
+        .try_global::<ShellHandle>()
+        .map(|handle| handle.0.clone())
+    {
         shell
             .update(cx, |shell, cx| {
                 shell.command_bar_dismissed(cx);
@@ -739,17 +934,25 @@ pub fn copy_from_bar(text: &str, cx: &mut App) {
 /// does, with the toast ⇧⌘C shows.
 pub fn copy_url_of_preview(url: &str, cx: &mut App) {
     let url = clean_link(url);
-    let Some(shell) = cx.try_global::<ShellHandle>().map(|handle| handle.0.clone()) else {
+    let Some(shell) = cx
+        .try_global::<ShellHandle>()
+        .map(|handle| handle.0.clone())
+    else {
         return;
     };
     if !url.is_empty() {
-        shell.update(cx, |shell, cx| shell.copy(&url, "Copied Current URL", cx)).ok();
+        shell
+            .update(cx, |shell, cx| shell.copy(&url, "Copied Current URL", cx))
+            .ok();
     }
 }
 
 /// Runs `command`, whose row in the command bar was chosen, once the bar has gone.
 pub fn run_from_bar(command: Command, cx: &mut App) {
-    if let Some(shell) = cx.try_global::<ShellHandle>().map(|handle| handle.0.clone()) {
+    if let Some(shell) = cx
+        .try_global::<ShellHandle>()
+        .map(|handle| handle.0.clone())
+    {
         shell
             .update(cx, |shell, cx| {
                 shell.command_bar_dismissed(cx);
@@ -945,7 +1148,10 @@ pub fn bind_keys(cx: &mut App) {
         if run.0.opens_field() {
             gpui_linux::hold_keys(None);
         }
-        if let Some(shell) = cx.try_global::<ShellHandle>().map(|handle| handle.0.clone()) {
+        if let Some(shell) = cx
+            .try_global::<ShellHandle>()
+            .map(|handle| handle.0.clone())
+        {
             shell
                 .update(cx, |shell, cx| shell.run(run.0, "ui", cx))
                 .ok();
@@ -961,7 +1167,10 @@ pub fn bind_keys(cx: &mut App) {
 /// room of the pane being added, if one is, so the split view shows at its place at once. ⌘Z takes
 /// `tab` back out, or closes it if it was `opened` for the split.
 pub fn pane_added(tab: u64, with: u64, opened: bool, cx: &mut App) {
-    if let Some(shell) = cx.try_global::<ShellHandle>().map(|handle| handle.0.clone()) {
+    if let Some(shell) = cx
+        .try_global::<ShellHandle>()
+        .map(|handle| handle.0.clone())
+    {
         shell
             .update(cx, |shell, cx| {
                 if shell.adding_pane.take().is_some() {
@@ -979,14 +1188,18 @@ pub fn pane_added(tab: u64, with: u64, opened: bool, cx: &mut App) {
 
 /// The tab the window shows, or 0.
 pub fn shown_tab(cx: &App) -> u64 {
-    let shell = cx.try_global::<ShellHandle>().and_then(|handle| handle.0.upgrade());
+    let shell = cx
+        .try_global::<ShellHandle>()
+        .and_then(|handle| handle.0.upgrade());
     shell.map_or(0, |shell| shell.read(cx).selected)
 }
 
 /// Whether `tab` is a task's page the window shows in place, which the user may edit the address
 /// of but which stays in the task's Space.
 pub fn task_page_shown(tab: u64, cx: &App) -> bool {
-    let shell = cx.try_global::<ShellHandle>().and_then(|handle| handle.0.upgrade());
+    let shell = cx
+        .try_global::<ShellHandle>()
+        .and_then(|handle| handle.0.upgrade());
     shell.is_some_and(|shell| shell.read(cx).task_page_live() == Some(tab))
 }
 
@@ -1008,7 +1221,9 @@ impl Shell {
             return;
         }
         let rows = self.sidebar_rows();
-        let position = rows.iter().position(|&row| row == self.row_of(self.selected));
+        let position = rows
+            .iter()
+            .position(|&row| row == self.row_of(self.selected));
         let count = rows.len();
         let space = self.spaces.iter().position(|space| space.id == self.space);
         // Next and previous wrap around for tabs, as in Chrome, and stop at the ends for Spaces, as
@@ -1037,7 +1252,9 @@ impl Shell {
             Command::NewTab => {
                 self.set_new_tab(true, cx);
                 let shown = self.shown_urls();
-                return self.browser.command_bar(None, shown, self.bar_tabs(), None, cx);
+                return self
+                    .browser
+                    .command_bar(None, shown, self.bar_tabs(), None, cx);
             }
             Command::SearchTabs => {
                 self.set_new_tab(false, cx);
@@ -1055,7 +1272,9 @@ impl Shell {
                     None => None,
                 };
                 let shown = self.shown_urls();
-                return self.browser.command_bar(editing, shown, self.bar_tabs(), field, cx);
+                return self
+                    .browser
+                    .command_bar(editing, shown, self.bar_tabs(), field, cx);
             }
             // A Little ilo window's page closes with it (Arc).
             Command::CloseTab if self.little.is_some() => {
@@ -1250,7 +1469,10 @@ impl Shell {
             Command::ExpandSplit => return self.expand_split(cx),
             Command::MovePaneLeft | Command::MovePaneRight => {
                 let panes = self.panes(self.selected);
-                let at = panes.iter().position(|&tab| tab == self.selected).unwrap_or_default();
+                let at = panes
+                    .iter()
+                    .position(|&tab| tab == self.selected)
+                    .unwrap_or_default();
                 let to = match command {
                     Command::MovePaneLeft => at.checked_sub(1),
                     _ => Some(at + 1).filter(|&to| to < panes.len()),
@@ -1279,7 +1501,11 @@ impl Shell {
             Command::SelectSpace(index) => return self.show_space_at(Some(index), cx),
             // As the chosen rows' menu moves them (#1353).
             Command::MoveToSpace(space) if !self.chosen.is_empty() => {
-                if self.spaces_for_chosen().iter().any(|&(each, ..)| each == space) {
+                if self
+                    .spaces_for_chosen()
+                    .iter()
+                    .any(|&(each, ..)| each == space)
+                {
                     self.move_chosen_to_space(space, cx);
                 }
                 return;
@@ -1342,13 +1568,21 @@ impl Shell {
     fn walk(&mut self, rows: Vec<u64>, forward: bool, cx: &mut Context<Self>) {
         // Then the rows not shown yet, in the sidebar's order.
         let mut order: Vec<u64> = Vec::new();
-        for row in self.recent.iter().map(|&tab| self.row_of(tab)).chain(rows.iter().copied()) {
+        for row in self
+            .recent
+            .iter()
+            .map(|&tab| self.row_of(tab))
+            .chain(rows.iter().copied())
+        {
             if rows.contains(&row) && !order.contains(&row) {
                 order.push(row);
             }
         }
         let count = order.len();
-        let next = match order.iter().position(|&row| row == self.row_of(self.selected)) {
+        let next = match order
+            .iter()
+            .position(|&row| row == self.row_of(self.selected))
+        {
             Some(at) if forward => (at + 1) % count,
             Some(at) => (at + count - 1) % count,
             // With no tab shown, the tab shown last (Arc).
@@ -1459,7 +1693,8 @@ impl Shell {
             }
         };
         let title = self.title(self.selected);
-        self.browser.show_share_sheet(self.selected, &link, &title, at, cx);
+        self.browser
+            .show_share_sheet(self.selected, &link, &title, at, cx);
     }
 
     /// `tab`'s link to copy, as a Markdown link if `markdown`, and the toast to say so with.
@@ -1488,14 +1723,17 @@ impl Shell {
         };
         self.copy(&text, toast, cx);
         if self.url_copied.is_none() {
-            self.swaps.start(Swapped::CopyUrl, LINK, CHECK, Instant::now());
+            self.swaps
+                .start(Swapped::CopyUrl, LINK, CHECK, Instant::now());
         }
         self.url_copied = Some(cx.spawn(async move |shell, cx| {
             cx.background_executor().timer(COPIED_TIME).await;
             shell
                 .update(cx, |shell, cx| {
                     shell.url_copied = None;
-                    shell.swaps.start(Swapped::CopyUrl, CHECK, LINK, Instant::now());
+                    shell
+                        .swaps
+                        .start(Swapped::CopyUrl, CHECK, LINK, Instant::now());
                     cx.notify();
                 })
                 .ok();
@@ -1564,7 +1802,10 @@ impl Shell {
 
     /// The pages shown, the tab's and what shows with it, whose rows the command bar puts last.
     fn shown_urls(&self) -> Vec<SharedString> {
-        let pages = self.panes(self.selected).into_iter().map(|tab| self.url(tab));
+        let pages = self
+            .panes(self.selected)
+            .into_iter()
+            .map(|tab| self.url(tab));
         pages.filter(|url| !url.is_empty()).collect()
     }
 
@@ -1575,11 +1816,22 @@ impl Shell {
         }
         let (frame, radius) = self.page_frame(self.viewport);
         let panes = self.panes(self.selected);
-        let focused = panes.iter().position(|&pane| pane == self.selected).unwrap_or(0);
+        let focused = panes
+            .iter()
+            .position(|&pane| pane == self.selected)
+            .unwrap_or(0);
         let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
         let pane = pane_frames(frame, panes.len(), stacked, &shares)[focused];
         let look = self.menu_look();
-        self.browser.capture(self.selected, pane, radius, full_page, !self.private, look, cx);
+        self.browser.capture(
+            self.selected,
+            pane,
+            radius,
+            full_page,
+            !self.private,
+            look,
+            cx,
+        );
     }
 
     /// Whether `tab`'s page is in Developer Mode, or None where the user can't change it: a page
@@ -1619,22 +1871,30 @@ impl Shell {
             Command::MovePaneLeft => self.panes(self.selected).first() != Some(&self.selected),
             Command::MovePaneRight => self.panes(self.selected).last() != Some(&self.selected),
             Command::CollapseFolders => self.shown_space().is_some_and(|space| {
-                space.folders.folders.keys().any(|&folder| space.is_open(folder))
+                space
+                    .folders
+                    .folders
+                    .keys()
+                    .any(|&folder| space.is_open(folder))
             }),
             // Only when they'd hide or show a row now (docs/ux-principles.md: a control with nothing
             // to act on is noise).
-            Command::CollapsePinned => self.shown_space().is_some_and(|space| {
-                !space.folders.pinned_shut && space.collapsing_hides()
-            }),
-            Command::ExpandPinned => self.shown_space().is_some_and(|space| {
-                space.folders.pinned_shut && space.collapsing_hides()
-            }),
+            Command::CollapsePinned => self
+                .shown_space()
+                .is_some_and(|space| !space.folders.pinned_shut && space.collapsing_hides()),
+            Command::ExpandPinned => self
+                .shown_space()
+                .is_some_and(|space| space.folders.pinned_shut && space.collapsing_hides()),
             // The Library and a page's full screen keep the sidebar away.
             Command::FocusSidebar => {
                 self.library.is_none() && !self.page_fullscreen && !self.sidebar_rows().is_empty()
             }
             Command::ExpandFolders => self.shown_space().is_some_and(|space| {
-                space.folders.folders.keys().any(|&folder| !space.is_open(folder))
+                space
+                    .folders
+                    .folders
+                    .keys()
+                    .any(|&folder| !space.is_open(folder))
             }),
             Command::Clear => !self.today().is_empty(),
             Command::FavoriteTab => {
@@ -1700,12 +1960,20 @@ impl Shell {
     /// from their pinned URL. An unloaded one waits until it's shown, as loading it unseen would
     /// cost what showing it does.
     fn tabs_to_reset(&self) -> Vec<u64> {
-        let Some(space) = self.shown_space() else { return Vec::new() };
+        let Some(space) = self.shown_space() else {
+            return Vec::new();
+        };
         let away = |tab: &u64| {
             let page = self.page(*tab);
             page.away_from_pinned_url && !page.unloaded
         };
-        space.pinned.iter().copied().filter(|&row| !space.is_folder(row)).filter(away).collect()
+        space
+            .pinned
+            .iter()
+            .copied()
+            .filter(|&row| !space.is_folder(row))
+            .filter(away)
+            .collect()
     }
 
     /// What the command bar calls `command`, listed as `name`, if it offers it now: a toggle's row
@@ -1749,7 +2017,11 @@ impl Shell {
         let chosen = !self.chosen.is_empty();
         let tab = !chosen && self.selected != 0 && !self.favorites.contains(&self.selected);
         let for_chosen: Vec<u64> = match chosen {
-            true => self.spaces_for_chosen().into_iter().map(|(space, ..)| space).collect(),
+            true => self
+                .spaces_for_chosen()
+                .into_iter()
+                .map(|(space, ..)| space)
+                .collect(),
             false => Vec::new(),
         };
         let mut rows = Vec::new();
@@ -1800,8 +2072,15 @@ impl Shell {
         let number = typed.chars().find(|c| ('1'..='9').contains(c))?;
         let index = number as usize - '1' as usize;
         self.numbered(index, self.sidebar_rows().len(), cx)?;
-        let words = vec![format!("{number}. tab").into(), format!("{number}. item").into()];
-        Some((format!("Go to Sidebar Item {number}").into(), words, Command::SelectTab(index)))
+        let words = vec![
+            format!("{number}. tab").into(),
+            format!("{number}. item").into(),
+        ];
+        Some((
+            format!("Go to Sidebar Item {number}").into(),
+            words,
+            Command::SelectTab(index),
+        ))
     }
 }
 
@@ -1881,7 +2160,10 @@ mod tests {
     #[test]
     fn no_key_is_bound_twice() {
         for (at, &(key, ..)) in SHORTCUTS.iter().enumerate() {
-            assert!(SHORTCUTS[..at].iter().all(|&(each, ..)| each != key), "{key} is bound twice");
+            assert!(
+                SHORTCUTS[..at].iter().all(|&(each, ..)| each != key),
+                "{key} is bound twice"
+            );
         }
     }
 
@@ -1908,7 +2190,10 @@ mod tests {
         assert_eq!(keys_named("escape", false), ["⎋"]);
         assert_eq!(keys_named("escape", true), ["Esc"]);
         assert_eq!(keys_named("alt-left", true), ["Alt", "Left Arrow"]);
-        assert_eq!(keys_named("ctrl-alt-backspace", true), ["Ctrl", "Alt", "Backspace"]);
+        assert_eq!(
+            keys_named("ctrl-alt-backspace", true),
+            ["Ctrl", "Alt", "Backspace"]
+        );
         assert_eq!(keys_named("ctrl-pagedown", true), ["Ctrl", "Page Down"]);
         assert_eq!(key_name("enter", false), "↩");
         assert_eq!(key_name("enter", true), "Enter");
@@ -1929,8 +2214,14 @@ mod tests {
     fn window_keys_are_reserved() {
         let keys = UserKeys::default();
         assert_eq!(keys.command_for("cmd-n", true), Some(Command::NewWindow));
-        assert_eq!(keys.command_for("shift-cmd-n", true), Some(Command::NewPrivateWindow));
-        assert_eq!(keys.command_for("shift-cmd-w", true), Some(Command::CloseWindow));
+        assert_eq!(
+            keys.command_for("shift-cmd-n", true),
+            Some(Command::NewPrivateWindow)
+        );
+        assert_eq!(
+            keys.command_for("shift-cmd-w", true),
+            Some(Command::CloseWindow)
+        );
     }
 
     /// ⇧⌘A is a page's to keep, as Chrome's Search Tabs is, and the keys typed right after it wait
@@ -1938,7 +2229,10 @@ mod tests {
     #[test]
     fn search_tabs_is_not_a_reserved_key() {
         let keys = UserKeys::default();
-        assert_eq!(keys.command_for("shift-cmd-a", false), Some(Command::SearchTabs));
+        assert_eq!(
+            keys.command_for("shift-cmd-a", false),
+            Some(Command::SearchTabs)
+        );
         assert_eq!(keys.command_for("shift-cmd-a", true), None);
         assert!(keys.holds_keys("shift-cmd-a"));
         assert_eq!(keys.label(Command::SearchTabs).as_deref(), Some("⇧⌘A"));
@@ -1960,12 +2254,30 @@ mod tests {
         let (shell, cx): (gpui::Entity<Shell>, &mut VisualTestContext) =
             cx.add_window_view(|_, cx| Shell::new(browser, cx));
         shell.update(cx, |shell, cx| {
-            let space = |id, name: &str| (id, name.into(), None, 1, "".into(), "".into(), "".into());
+            let space =
+                |id, name: &str| (id, name.into(), None, 1, "".into(), "".into(), "".into());
             shell.set_spaces(vec![space(1, "One"), space(2, "Two")], cx);
-            shell.set_tabs(1, vec![10], vec![11, 12], Vec::new(), Folders::default(), cx);
-            shell.set_tabs(2, Vec::new(), vec![20, 21], Vec::new(), Folders::default(), cx);
+            shell.set_tabs(
+                1,
+                vec![10],
+                vec![11, 12],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
+            shell.set_tabs(
+                2,
+                Vec::new(),
+                vec![20, 21],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
             for tab in [10, 11, 12, 20, 21] {
-                let page = Page { url: format!("https://{tab}.test/").into(), ..Page::default() };
+                let page = Page {
+                    url: format!("https://{tab}.test/").into(),
+                    ..Page::default()
+                };
                 shell.set_page(tab, page, cx);
             }
             shell.set_space(2, cx);
@@ -1977,7 +2289,10 @@ mod tests {
         cx.update(|window, cx| window.focus(&shell.read(cx).focus_handle.clone(), cx));
         cx.simulate_keystrokes("shift-cmd-a");
         assert_eq!(host.searched_tabs.take(), [vec![12, 10, 21, 20]]);
-        assert!(host.command_bars.take().is_empty(), "it opened the bar for a new tab too");
+        assert!(
+            host.command_bars.take().is_empty(),
+            "it opened the bar for a new tab too"
+        );
     }
 
     /// Reset all tabs in this Space takes back the pinned tabs away from their pinned URL, in a
@@ -2005,7 +2320,11 @@ mod tests {
             shell.set_tabs(1, vec![2, 3, 5, 4, 6], vec![7], Vec::new(), folders, cx);
             for tab in [2, 3, 4, 7] {
                 let unloaded = tab == 3;
-                let page = Page { away_from_pinned_url: true, unloaded, ..Page::default() };
+                let page = Page {
+                    away_from_pinned_url: true,
+                    unloaded,
+                    ..Page::default()
+                };
                 shell.set_page(tab, page, cx);
             }
             shell.set_space(1, cx);
@@ -2013,7 +2332,10 @@ mod tests {
             host.take();
             shell.run(Command::ResetSpaceTabs, "ui", cx);
         });
-        assert_eq!(host.take(), ["back to pinned url 2", "back to pinned url 4"]);
+        assert_eq!(
+            host.take(),
+            ["back to pinned url 2", "back to pinned url 4"]
+        );
     }
 
     /// Another Space shown while the command bar is open gives the bar that Space's tabs once its
@@ -2029,12 +2351,30 @@ mod tests {
         let browser = host.clone();
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
         shell.update(cx, |shell, cx| {
-            let space = |id, name: &str| (id, name.into(), None, 1, "".into(), "".into(), "".into());
+            let space =
+                |id, name: &str| (id, name.into(), None, 1, "".into(), "".into(), "".into());
             shell.set_spaces(vec![space(1, "One"), space(2, "Two")], cx);
-            shell.set_tabs(1, Vec::new(), vec![11, 12], Vec::new(), Folders::default(), cx);
-            shell.set_tabs(2, Vec::new(), vec![21, 22], Vec::new(), Folders::default(), cx);
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![11, 12],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
+            shell.set_tabs(
+                2,
+                Vec::new(),
+                vec![21, 22],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
             for tab in [11, 12, 21, 22] {
-                let page = Page { url: format!("https://{tab}.test/").into(), ..Page::default() };
+                let page = Page {
+                    url: format!("https://{tab}.test/").into(),
+                    ..Page::default()
+                };
                 shell.set_page(tab, page, cx);
             }
             shell.set_space(1, cx);
@@ -2044,7 +2384,10 @@ mod tests {
             shell.set_selected(21, cx);
         });
         assert_eq!(host.followed_tabs.take(), [vec![22]]);
-        assert!(shell.read_with(cx, |shell, _| shell.new_tab), "New Tab keeps its plate");
+        assert!(
+            shell.read_with(cx, |shell, _| shell.new_tab),
+            "New Tab keeps its plate"
+        );
         // A tab selected in the same Space isn't another Space.
         shell.update(cx, |shell, cx| shell.set_selected(22, cx));
         assert!(host.followed_tabs.take().is_empty());
@@ -2073,8 +2416,7 @@ mod tests {
         let host = Rc::new(Recorder::default());
         let browser: Rc<dyn Browser> = host.clone();
         let regular = cx.new(|cx| Shell::new(browser.clone(), cx));
-        let private =
-            cx.new(|cx| Shell::private_window(browser, 1, "Incognito".into(), 1, cx));
+        let private = cx.new(|cx| Shell::private_window(browser, 1, "Incognito".into(), 1, cx));
         let found = |shell: &gpui::Entity<Shell>, typed: &str, cx: &mut gpui::TestAppContext| {
             shell.read_with(cx, |shell, cx| {
                 find_commands(typed, &UserKeys::default(), |name, command| {
@@ -2091,10 +2433,18 @@ mod tests {
             assert!(!found(&private, typed, cx).contains(&name), "{typed}");
         }
 
-        regular.update(cx, |shell, cx| shell.run(Command::SiteSearchSettings, "bar", cx));
+        regular.update(cx, |shell, cx| {
+            shell.run(Command::SiteSearchSettings, "bar", cx)
+        });
         assert_eq!(host.site_search_settings.get(), 1);
-        private.update(cx, |shell, cx| shell.run(Command::SiteSearchSettings, "bar", cx));
-        assert_eq!(host.site_search_settings.get(), 1, "a private window opened it");
+        private.update(cx, |shell, cx| {
+            shell.run(Command::SiteSearchSettings, "bar", cx)
+        });
+        assert_eq!(
+            host.site_search_settings.get(),
+            1,
+            "a private window opened it"
+        );
     }
 
     /// ⇧⌘⌫ and the bar open Chrome's Clear browsing data dialog for the Space's profile, as Dia's
@@ -2112,15 +2462,20 @@ mod tests {
 
         let keys = UserKeys::default();
         let key = "shift-cmd-backspace";
-        assert_eq!(keys.command_for(key, false), Some(Command::ClearBrowsingData));
+        assert_eq!(
+            keys.command_for(key, false),
+            Some(Command::ClearBrowsingData)
+        );
         assert_eq!(keys.command_for(key, true), None);
-        assert_eq!(keys.label(Command::ClearBrowsingData).as_deref(), Some("⇧⌘⌫"));
+        assert_eq!(
+            keys.label(Command::ClearBrowsingData).as_deref(),
+            Some("⇧⌘⌫")
+        );
 
         let host = Rc::new(Recorder::default());
         let browser: Rc<dyn Browser> = host.clone();
         let regular = cx.new(|cx| Shell::new(browser.clone(), cx));
-        let private =
-            cx.new(|cx| Shell::private_window(browser, 1, "Incognito".into(), 1, cx));
+        let private = cx.new(|cx| Shell::private_window(browser, 1, "Incognito".into(), 1, cx));
         let found = |shell: &gpui::Entity<Shell>, typed: &str, cx: &mut gpui::TestAppContext| {
             shell.read_with(cx, |shell, cx| {
                 find_commands(typed, &UserKeys::default(), |name, command| {
@@ -2137,10 +2492,18 @@ mod tests {
             assert!(!found(&private, typed, cx).contains(&name), "{typed}");
         }
 
-        regular.update(cx, |shell, cx| shell.run(Command::ClearBrowsingData, "key", cx));
+        regular.update(cx, |shell, cx| {
+            shell.run(Command::ClearBrowsingData, "key", cx)
+        });
         assert_eq!(host.clear_browsing_data.get(), 1);
-        private.update(cx, |shell, cx| shell.run(Command::ClearBrowsingData, "key", cx));
-        assert_eq!(host.clear_browsing_data.get(), 1, "a private window opened it");
+        private.update(cx, |shell, cx| {
+            shell.run(Command::ClearBrowsingData, "key", cx)
+        });
+        assert_eq!(
+            host.clear_browsing_data.get(),
+            1,
+            "a private window opened it"
+        );
     }
 
     /// ⌥⌘V opens the clipboard's web link as a tab at the top of Today, and text that isn't one
@@ -2150,20 +2513,35 @@ mod tests {
     fn paste_url_as_new_tab_opens_only_a_web_link(cx: &mut gpui::TestAppContext) {
         let shell_with = crate::shell::drag::detents::shell_with;
         let (shell, host) = shell_with(cx, &[], &[2], Default::default());
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string("https://example.org/gpui".into()));
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+            "https://example.org/gpui".into(),
+        ));
         let paste = |text: &str, cx: &mut gpui::TestAppContext| {
             host.copied.borrow_mut().push(text.into());
             host.take();
-            shell.update(cx, |shell, cx| shell.run(Command::PasteUrlAsTab, "page", cx));
-            host.take().into_iter().filter(|call| call.starts_with("open ")).collect::<Vec<_>>()
+            shell.update(cx, |shell, cx| {
+                shell.run(Command::PasteUrlAsTab, "page", cx)
+            });
+            host.take()
+                .into_iter()
+                .filter(|call| call.starts_with("open "))
+                .collect::<Vec<_>>()
         };
         let opened = paste(" https://example.com/a?b \n", cx);
         assert_eq!(opened, ["open https://example.com/a?b false 0 0"]);
-        for text in ["javascript:alert(1)", "file:///etc/passwd", "some words", ""] {
+        for text in [
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "some words",
+            "",
+        ] {
             assert!(paste(text, cx).is_empty(), "{text:?} opened a tab");
         }
         let keys = UserKeys::default();
-        assert_eq!(keys.command_for("alt-cmd-v", false), Some(Command::PasteUrlAsTab));
+        assert_eq!(
+            keys.command_for("alt-cmd-v", false),
+            Some(Command::PasteUrlAsTab)
+        );
     }
 
     /// The command bar offers to turn Developer Mode on for a web page and off for one in it, and
@@ -2180,7 +2558,13 @@ mod tests {
             let named = |name, command| shell.bar_name(name, command, cx);
             (find_commands("developer mode", &UserKeys::default(), named).into_iter())
                 .filter(|found| found.command == Command::ToggleDeveloperMode)
-                .map(|found| if found.name == DEVELOPER_MODE_ON { "on" } else { "off" })
+                .map(|found| {
+                    if found.name == DEVELOPER_MODE_ON {
+                        "on"
+                    } else {
+                        "off"
+                    }
+                })
                 .collect()
         };
         let page = |url: &str, developer_mode| Page {
@@ -2209,8 +2593,14 @@ mod tests {
             assert!(listed(shell, cx).is_empty());
         });
         let calls = host.take();
-        let changes: Vec<&String> = calls.iter().filter(|call| call.contains("developer")).collect();
-        assert_eq!(changes, ["developer mode 10 true", "developer mode 10 false"]);
+        let changes: Vec<&String> = calls
+            .iter()
+            .filter(|call| call.contains("developer"))
+            .collect();
+        assert_eq!(
+            changes,
+            ["developer mode 10 true", "developer mode 10 false"]
+        );
 
         let browser = host.clone();
         let private = cx.new(|cx| {
@@ -2237,7 +2627,13 @@ mod tests {
             let named = |name, command| shell.bar_name(name, command, cx);
             (find_commands("trace", &UserKeys::default(), named).into_iter())
                 .filter(|found| found.command == Command::RecordTrace)
-                .map(|found| if found.name == trace::RECORD { "record" } else { "stop" })
+                .map(|found| {
+                    if found.name == trace::RECORD {
+                        "record"
+                    } else {
+                        "stop"
+                    }
+                })
                 .collect()
         };
         let host = Rc::new(Recorder::default());
@@ -2256,7 +2652,15 @@ mod tests {
         assert_eq!(host.menu_bar.borrow().trace_title(), trace::RECORD);
         let calls = host.take();
         let traced: Vec<&String> = calls.iter().filter(|call| call.contains("trace")).collect();
-        assert_eq!(traced, ["start trace", "trace note shown", "trace note hidden", "stop trace"]);
+        assert_eq!(
+            traced,
+            [
+                "start trace",
+                "trace note shown",
+                "trace note hidden",
+                "stop trace"
+            ]
+        );
     }
 
     /// ⌃⇧N opens a new note in the Space's profile's service, New Note Split opens it beside the
@@ -2271,7 +2675,10 @@ mod tests {
 
         use crate::shell::{Browser, Folders, recorder::Recorder};
 
-        assert_eq!(UserKeys::default().command_for("ctrl-shift-n", false), Some(Command::NewNote));
+        assert_eq!(
+            UserKeys::default().command_for("ctrl-shift-n", false),
+            Some(Command::NewNote)
+        );
         let host = Rc::new(Recorder::default());
         let browser: Rc<dyn Browser> = host.clone();
         let regular = cx.new(|cx| Shell::new(browser.clone(), cx));
@@ -2288,6 +2695,10 @@ mod tests {
 
         let private = cx.new(|cx| Shell::private_window(browser, 1, "Incognito".into(), 1, cx));
         private.update(cx, |shell, cx| shell.run(Command::NewNote, "keys", cx));
-        assert_eq!(host.notes.borrow().len(), 2, "a private window opened a note");
+        assert_eq!(
+            host.notes.borrow().len(),
+            2,
+            "a private window opened a note"
+        );
     }
 }
