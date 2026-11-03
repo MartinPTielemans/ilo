@@ -161,6 +161,8 @@ pub struct FolderPreview {
     wait: Option<Task<()>>,
     /// The pointer is on the preview, which keeps it.
     on_card: bool,
+    /// The pointer is on the shown preview's row, which keeps it too.
+    on_row: bool,
 }
 
 struct PreviewWindow(WindowHandle<FolderPreview>);
@@ -205,6 +207,7 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<FolderPrevi
             resting: None,
             wait: None,
             on_card: false,
+            on_row: false,
         })
     });
     match window {
@@ -245,6 +248,7 @@ pub fn dismissed(cx: &mut App) {
     update(cx, |preview, _, cx| {
         preview.wait = None;
         preview.on_card = false;
+        preview.on_row = false;
         if preview.shown.take().is_some() {
             // check.sh reads this line.
             log!("browser: folder preview dismissed");
@@ -270,6 +274,7 @@ impl FolderPreview {
         if let Some(shown) = &self.shown {
             if shown.rest.folder == rest.folder {
                 self.wait = None;
+                self.on_row = true;
                 return;
             }
             self.resting = None;
@@ -300,8 +305,11 @@ impl FolderPreview {
             self.wait = None;
         }
         let leaves = self.shown.as_ref().is_some_and(|shown| shown.rest.folder == folder);
-        if leaves && !self.on_card {
-            self.leave_after(cx);
+        if leaves {
+            self.on_row = false;
+            if !self.on_card {
+                self.leave_after(cx);
+            }
         }
     }
 
@@ -322,11 +330,13 @@ impl FolderPreview {
         }));
     }
 
+    /// The pointer came onto the preview or left it. Leaving it onto its row keeps it, as does
+    /// the window, as it comes up, hearing the pointer come and go at the place it last had.
     fn on_card(&mut self, hovered: bool, cx: &mut Context<Self>) {
         self.on_card = hovered && self.shown.is_some();
         match hovered {
             true => self.wait = None,
-            false if self.shown.is_some() => self.leave_after(cx),
+            false if self.shown.is_some() && !self.on_row => self.leave_after(cx),
             false => {}
         }
     }
@@ -358,6 +368,8 @@ impl FolderPreview {
             height,
             _edit: edit,
         });
+        // It shows for the row the pointer rests on.
+        self.on_row = true;
         self.scroll.scroll_to_item(0, ScrollStrategy::Top);
         window.focus(&self.search.focus_handle(cx), cx);
         // check.sh reads this line, to see the preview is beside its row.
@@ -449,6 +461,7 @@ impl FolderPreview {
         self.wait = None;
         self.resting = None;
         self.on_card = false;
+        self.on_row = false;
         if self.shown.take().is_some() {
             self.host.hide();
             // check.sh reads this line.

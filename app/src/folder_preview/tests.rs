@@ -186,6 +186,19 @@ fn the_pointer_on_the_preview_keeps_it(cx: &mut TestAppContext) {
     assert_eq!(preview.after(LEAVE, cx), ["hide"]);
 }
 
+// As the preview's window comes up it can hear the pointer come and go at a place it last had, the
+// pointer still on the folder's row; so it goes only once the pointer has left both.
+#[gpui::test]
+fn the_pointer_off_the_preview_but_on_its_row_keeps_it(cx: &mut TestAppContext) {
+    let preview = open_preview(cx);
+    preview.shown(1, cx);
+    preview.pointer_at(point(px(20.), px(20.)), cx);
+    preview.pointer_at(OFF, cx);
+    assert!(preview.after(LEAVE * 4, cx).is_empty(), "it stays while the pointer is on its row");
+    preview.ask(Ask::Left(1), cx);
+    assert_eq!(preview.after(LEAVE, cx), ["hide"]);
+}
+
 #[gpui::test]
 fn the_next_folder_s_preview_takes_its_place_at_once(cx: &mut TestAppContext) {
     let preview = open_preview(cx);
