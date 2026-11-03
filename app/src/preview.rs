@@ -1222,7 +1222,7 @@ impl Browser for Fake {
     fn toast_button(
         &self,
         _: &str,
-        _: (Option<&'static str>, &'static str),
+        _: (&'static str, &'static str),
         _: Rc<dyn Fn(&mut App)>,
         _: Duration,
         _: &mut App,

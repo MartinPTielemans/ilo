@@ -1820,6 +1820,8 @@ impl CommandBar {
                     .absolute()
                     .size_full()
             })
+            // Its tooltip waits for the pointer to rest, as a tile's does.
+            .on_mouse_move(|_, _, cx| crate::tooltip::moved(cx))
             .on_hover(cx.listener(move |bar, hovered, window, cx| {
                 bar.hover_remove(index, *hovered, window.viewport_size(), cx);
             }))

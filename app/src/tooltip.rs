@@ -17,10 +17,9 @@ use gpui::{
     WindowOptions, WindowTextSystem, div, font, point, prelude::*, px, rgb, size,
 };
 
-// Arc's delay was seen once at 0.73 s from the hover plate, and again at 1.03 s with the pointer
-// still moving, so it's ours (*interim*); its placement under a tile isn't measured either.
-/// How long the pointer rests on a tile, row or button before its tooltip shows.
-pub const DELAY: Duration = Duration::from_millis(730);
+/// How long the pointer rests on a tile, row or button, from its last move, before its tooltip
+/// shows (Arc 1.170, twice), so a pointer passing over on its way somewhere brings none.
+pub const DELAY: Duration = Duration::from_millis(1600);
 /// How soon after a tooltip went the next shows at once, as the pointer crosses the gap between
 /// two tiles (ours: the system's half second).
 pub const GRACE: Duration = Duration::from_millis(500);
@@ -28,6 +27,7 @@ pub const GRACE: Duration = Duration::from_millis(500);
 pub const FADE_IN: Duration = Duration::ZERO;
 pub const FADE_OUT: Duration = Duration::from_millis(270);
 pub use crate::tokens::tooltip::GAP;
+pub use crate::tokens::tooltip::{BUTTON_X, BUTTON_Y};
 pub use crate::tokens::tooltip::EDGE_INSET;
 pub use crate::tokens::tooltip::BESIDE;
 use crate::tokens::tooltip::HEIGHT;
@@ -90,9 +90,9 @@ impl Tip {
 /// Where a tooltip goes from what it names.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Align {
-    /// Under it, the tooltip's square corner at the anchor's x, the top left with the tooltip
-    /// going right from there, or the top right with it going left if it would cross the
-    /// window's right edge. That corner is the pointer.
+    /// Off the bottom right of its glyph, the tooltip's square top left corner BUTTON_X right of
+    /// the anchor's middle and BUTTON_Y below it, or its top right corner as far left of the
+    /// middle, going left, if it would cross the window's right edge. That corner is the pointer.
     Under,
     /// Under it, the tooltip's text starting at the anchor's x, so it lines up with the row's
     /// title and its plate hangs outside.
@@ -115,7 +115,7 @@ pub struct Anchor {
 }
 
 impl Anchor {
-    /// Under a tile or button whose frame is `frame`, its square corner under the middle of it.
+    /// Off a tile or button whose frame is `frame`, its square corner off the middle of it.
     pub fn under(frame: Bounds<Pixels>, window: Size<Pixels>) -> Self {
         Anchor {
             x: f32::from(frame.origin.x + frame.size.width / 2.),
@@ -144,23 +144,27 @@ impl Anchor {
 /// want of room to its right: it goes left from the anchor then, if there's room that side.
 fn mirrored(anchor: Anchor, width: f32) -> bool {
     anchor.align == Align::Under
-        && anchor.x + width > anchor.window.0 - EDGE_INSET
-        && anchor.x - width >= EDGE_INSET
+        && anchor.x + BUTTON_X + width > anchor.window.0 - EDGE_INSET
+        && anchor.x - BUTTON_X - width >= EDGE_INSET
 }
 
-/// Where a tooltip of `size` has its top left: under what it hangs from, or above it with the same
-/// gap if there's no room below, or beside it, and inside the window, EDGE_INSET from its sides.
+/// Where a tooltip of `size` has its top left: off the bottom right of a button's glyph, under a
+/// row, or above either the same way if there's no room below, or beside a button, and inside the
+/// window, EDGE_INSET from its sides.
 pub fn place(anchor: Anchor, (width, height): (f32, f32)) -> (f32, f32) {
     let left = match anchor.align {
-        Align::Under if mirrored(anchor, width) => anchor.x - width,
-        Align::Under => anchor.x,
+        Align::Under if mirrored(anchor, width) => anchor.x - BUTTON_X - width,
+        Align::Under => anchor.x + BUTTON_X,
         Align::Text => anchor.x - TEXT_X,
         Align::Beside => anchor.x + BESIDE,
     };
     // Past the edges it keeps EDGE_INSET from them, the left one first if it can't be both.
     let left = left.min(anchor.window.0 - width - EDGE_INSET).max(EDGE_INSET);
+    let middle = (anchor.top + anchor.bottom) / 2.;
     let top = match anchor.align {
-        Align::Beside => (anchor.top + anchor.bottom - height) / 2.,
+        Align::Beside => middle - height / 2.,
+        Align::Under if above(anchor, height) => middle - BUTTON_Y - height,
+        Align::Under => middle + BUTTON_Y,
         _ if above(anchor, height) => anchor.top - GAP - height,
         _ => anchor.bottom + GAP,
     };
@@ -169,13 +173,17 @@ pub fn place(anchor: Anchor, (width, height): (f32, f32)) -> (f32, f32) {
 
 /// Whether a tooltip `height` tall goes above what it hangs from, for want of room below.
 fn above(anchor: Anchor, height: f32) -> bool {
-    anchor.align != Align::Beside && anchor.bottom + GAP + height > anchor.window.1
+    match anchor.align {
+        Align::Beside => false,
+        Align::Under => (anchor.top + anchor.bottom) / 2. + BUTTON_Y + height > anchor.window.1,
+        Align::Text => anchor.bottom + GAP + height > anchor.window.1,
+    }
 }
 
 /// Which corner of a tooltip is nearly square: the one at what it names. Arc's is the top left,
-/// toward the button the tooltip is beside. Ours, *interim* as only that one is recorded: under a
-/// tile or button it's the top left at the middle of it, the top right if the tooltip goes left
-/// from there, and the bottom ones when it goes above; a row's is the top left.
+/// toward the button the tooltip is beside, and off a button's glyph it's the top left, at the
+/// glyph's bottom right. Ours, *interim*: the top right if the tooltip goes left from there, and
+/// the bottom ones when it goes above; a row's is the top left.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Near {
     TopLeft,
@@ -269,11 +277,15 @@ pub struct Tooltip {
     shown: Option<Tip>,
     /// What the window draws, which stays as it fades out after the tooltip went.
     drawn: Option<(Tip, Layout, Near)>,
-    /// The one-shot timer a tooltip waits on. Dropping it cancels it.
-    wait: Option<Task<()>>,
+    /// The one-shot timer a tooltip waits on, and what it shows when it fires. Dropping it
+    /// cancels it.
+    wait: Option<(Task<()>, Waiting)>,
     /// When a tooltip last went.
     went: Option<Instant>,
 }
+
+/// A tooltip waiting to show: the window it shows over, what it says and what it hangs from.
+type Waiting = (Over, Tip, Anchor);
 
 struct TooltipWindow(WindowHandle<Tooltip>);
 
@@ -321,8 +333,9 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<Tooltip>> {
 
 /// The pointer has come onto the tile, row or button that says `tip` in browser window `window`,
 /// which the tooltip hangs from at `anchor` in that window, wherever the pointer is on it. The
-/// tooltip shows after DELAY, one timer that `dismiss` cancels, or at once if another showed less
-/// than GRACE ago, as the system's does when the pointer moves from one tile to the next.
+/// tooltip shows DELAY after the pointer last moved (`moved`), one timer that `dismiss` cancels,
+/// or at once if another showed less than GRACE ago, as the system's does when the pointer moves
+/// from one tile to the next.
 pub fn hover(window: u64, tip: Tip, anchor: Anchor, cx: &mut App) {
     hover_over(Over::Window(window), tip, anchor, cx);
 }
@@ -341,15 +354,26 @@ pub fn hover_over(over: Over, tip: Tip, anchor: Anchor, cx: &mut App) {
                 tooltip.show(over, tip, anchor, cx);
                 return;
             }
-            tooltip.wait = Some(cx.spawn(async move |tooltip, cx| {
-                cx.background_executor().timer(DELAY).await;
-                tooltip
-                    .update(cx, |tooltip, cx| {
-                        tooltip.wait = None;
-                        tooltip.show(over, tip, anchor, cx)
-                    })
-                    .ok();
-            }));
+            tooltip.wait_for((over, tip, anchor), cx);
+        })
+        .ok();
+}
+
+/// The pointer has moved over a browser window: a tooltip waiting to show waits DELAY again, so it
+/// shows once the pointer rests, as Arc's does. One showing stays.
+pub fn moved(cx: &mut App) {
+    let Some(tooltip) = cx.try_global::<TooltipWindow>().map(|tooltip| tooltip.0) else {
+        return;
+    };
+    // Most moves have no tooltip waiting, and a read costs the window nothing.
+    if tooltip.read(cx).is_ok_and(|tooltip| tooltip.wait.is_none()) {
+        return;
+    }
+    tooltip
+        .update(cx, |tooltip, _, cx| {
+            if let Some((_, waiting)) = tooltip.wait.take() {
+                tooltip.wait_for(waiting, cx);
+            }
         })
         .ok();
 }
@@ -364,6 +388,21 @@ pub fn dismiss(cx: &mut App) {
 }
 
 impl Tooltip {
+    /// Shows `waiting` after DELAY, on a new timer that drops any before it.
+    fn wait_for(&mut self, waiting: Waiting, cx: &mut Context<Self>) {
+        let (over, tip, anchor) = waiting.clone();
+        let timer = cx.spawn(async move |tooltip, cx| {
+            cx.background_executor().timer(DELAY).await;
+            tooltip
+                .update(cx, |tooltip, cx| {
+                    tooltip.wait = None;
+                    tooltip.show(over, tip, anchor, cx)
+                })
+                .ok();
+        });
+        self.wait = Some((timer, waiting));
+    }
+
     fn show(&mut self, over: Over, tip: Tip, anchor: Anchor, cx: &mut Context<Self>) {
         let layout = measure(&tip, &self.system);
         let (left, top) = place(anchor, (layout.width, HEIGHT));

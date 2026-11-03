@@ -14,9 +14,10 @@ use gpui::{
 };
 
 use super::{
-    Closing, Curve, DRAG_START, Drag, Edit, FOLDER_INDENT, HeldRow, NAME_HEIGHT, Opened,
-    PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS, PRESS_SCALE, PRESS_TIME, Place, ROW_HEIGHT, ROW_PITCH,
-    Shape, Shell, Slot, TILE_HEIGHT, TILE_RADIUS, What, files, slots,
+    Closing, Curve, DRAG_START, Drag, Edit, FOLDER_INDENT, HeldRow, LIST_GLIDE, LIST_GLIDE_POWER,
+    ListGlide, NAME_HEIGHT, Opened, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS, PRESS_SCALE,
+    PRESS_TIME, Place, ROW_HEIGHT, ROW_PITCH, Shape, Shell, Slot, TILE_HEIGHT, TILE_RADIUS, What,
+    files, slots,
 };
 
 /// The tab that links or files dragged in stand for until they're dropped: none, as the core
@@ -145,13 +146,19 @@ impl Shell {
     /// Scrolls the list the least that shows `tab`'s row whole, if it has one: for a new tab's row,
     /// as Dia's does for a tab opened behind, and for the tab shown, as Chrome's tab strip does.
     pub(super) fn scroll_to_row(&self, tab: u64) {
-        let Some(&top) = self.layout().get(&Slot::Tab(self.row_of(tab))) else {
+        self.scroll_to_slot(Slot::Tab(self.row_of(tab)), &tab.to_string());
+    }
+
+    /// Glides the list the least that shows `slot` whole, if the Space shown has it, from where it
+    /// is or is gliding to. `what` names it in the log.
+    pub(super) fn scroll_to_slot(&self, slot: Slot, what: &str) {
+        let Some(&top) = self.layout().get(&slot) else {
             return;
         };
         let top = top + self.tiles_room();
         let height = f32::from(self.list_scroll.bounds().size.height);
-        let offset = self.list_scroll.offset();
-        let scrolled = -f32::from(offset.y);
+        let offset = -f32::from(self.list_scroll.offset().y);
+        let scrolled = self.list_glide.get().map_or(offset, |glide| glide.to);
         let to = if top < scrolled {
             top
         } else if top + ROW_PITCH > scrolled + height {
@@ -162,8 +169,40 @@ impl Shell {
         // Not before the list's first layout.
         if height > 0. {
             // check.sh reads this line.
-            log!("browser: list scrolled to {to} for {tab}");
-            self.list_scroll.set_offset(point(offset.x, px(-to)));
+            log!("browser: list scrolled to {to} for {what}");
+            let glide = ListGlide { start: Instant::now(), from: offset, to, set: offset };
+            self.list_glide.set(Some(glide));
+        }
+    }
+
+    /// Moves the list on along its glide to a row, which a scroll of the user's ends.
+    pub(super) fn step_list_glide(&mut self, window: &mut Window) {
+        let Some(glide) = self.list_glide.get() else {
+            return;
+        };
+        let offset = self.list_scroll.offset();
+        if (-f32::from(offset.y) - glide.set).abs() > 0.5 {
+            self.list_glide.set(None);
+            return;
+        }
+        let t = (glide.start.elapsed().as_secs_f32() / LIST_GLIDE).min(1.);
+        let at = glide.from + (glide.to - glide.from) * (1. - (1. - t).powi(LIST_GLIDE_POWER));
+        self.list_scroll.set_offset(point(offset.x, px(-at)));
+        if t < 1. {
+            self.list_glide.set(Some(ListGlide { set: at, ..glide }));
+            window.request_animation_frame();
+        } else {
+            self.list_glide.set(None);
+        }
+    }
+
+    /// Lands the list's glide at the next frame, as the app's frames have by the time a test
+    /// looks.
+    #[cfg(test)]
+    pub(super) fn land_list_glide(&self) {
+        if let Some(glide) = self.list_glide.get() {
+            let start = Instant::now() - Duration::from_secs_f32(LIST_GLIDE);
+            self.list_glide.set(Some(ListGlide { start, ..glide }));
         }
     }
 
