@@ -3252,7 +3252,7 @@ index 86dc7da97b..91362b8937 100644
          if let Some(text) = self
              .primary_contents
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
-index 8d92234ef1..b007fc1997 100644
+index 8d92234ef1..dcf58a6cdd 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
 +++ b/crates/gpui_linux/src/linux/wayland/window.rs
 @@ -11,12 +11,13 @@ use calloop::ping::Ping;
@@ -3772,7 +3772,7 @@ index 8d92234ef1..b007fc1997 100644
      pub fn get_ime_area(&self) -> Option<Bounds<Pixels>> {
          let mut state = self.state.borrow_mut();
          let mut bounds: Option<Bounds<Pixels>> = None;
-@@ -1598,6 +1975,23 @@ impl WaylandWindowStatePtr {
+@@ -1598,6 +1975,26 @@ impl WaylandWindowStatePtr {
          }
      }
  
@@ -3791,12 +3791,15 @@ index 8d92234ef1..b007fc1997 100644
 +        if let Some(region) = region {
 +            region.destroy();
 +        }
++        // The region applies with the surface's next commit, which an overlay at rest never makes,
++        // such as the toast whose buttons come after its last frame: so now, as upstream's does.
++        state.surface.commit();
 +    }
 +
      pub fn set_focused(&self, focus: bool) {
          self.state.borrow_mut().active = focus;
          let callback = self.callbacks.borrow_mut().active_status_change.take();
-@@ -1888,9 +2282,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -1888,9 +2285,11 @@ impl PlatformWindow for WaylandWindow {
      }
  
      fn set_title(&mut self, title: &str) {
@@ -3809,7 +3812,7 @@ index 8d92234ef1..b007fc1997 100644
      }
  
      fn set_app_id(&mut self, app_id: &str) {
-@@ -2011,6 +2407,13 @@ impl PlatformWindow for WaylandWindow {
+@@ -2011,6 +2410,13 @@ impl PlatformWindow for WaylandWindow {
      fn draw(&self, scene: &Scene) {
          let mut state = self.borrow_mut();
          let state = &mut *state;
@@ -3823,7 +3826,7 @@ index 8d92234ef1..b007fc1997 100644
          let Some(renderer) = &mut state.renderer else {
              return;
          };
-@@ -2046,6 +2449,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -2046,6 +2452,11 @@ impl PlatformWindow for WaylandWindow {
          if renderer.draw(scene) {
              state.presentation = PresentationState::Presented;
              self.0.frame_loop.set(FrameLoop::AwaitingCallback);
@@ -3835,7 +3838,7 @@ index 8d92234ef1..b007fc1997 100644
          } else {
              state.presentation = state.presentation.failed();
              self.0.frame_loop.set(FrameLoop::PresentationFailed);
-@@ -2208,6 +2616,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -2208,6 +2619,11 @@ impl PlatformWindow for WaylandWindow {
      }
  
      fn update_ime_position(&self, bounds: Bounds<Pixels>) {
