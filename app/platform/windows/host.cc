@@ -3252,6 +3252,18 @@ LRESULT CALLBACK SaveDialogEvent(int code, WPARAM wparam, LPARAM lparam) {
   return CallNextHookEx(nullptr, code, wparam, lparam);
 }
 
+// Overlay |index| is closing: the tooltip over it goes at once, not left over the page as it fades.
+void TooltipOverlayHiding(int index) {
+  if (g_tooltip_overlay == index) {
+    g_tooltip_overlay = -1;
+    const bool shown = g_tooltip.hwnd && IsWindowVisible(g_tooltip.hwnd);
+    FadeOut(g_tooltip, 0, [] {});
+    if (shown && g_tooltip_away) {
+      g_tooltip_away();
+    }
+  }
+}
+
 }  // namespace
 
 extern "C" {
@@ -3402,18 +3414,6 @@ void host_show_tooltip(void* ui_view, int overlay, double left, double top, doub
   }
   g_tooltip_overlay = overlay;
   FadeIn(g_tooltip, ui_view, left - g_tooltip_margin, top - g_tooltip_margin, fade, "tooltip");
-}
-
-// Overlay |index| is closing: the tooltip over it goes at once, not left over the page as it fades.
-void TooltipOverlayHiding(int index) {
-  if (g_tooltip_overlay == index) {
-    g_tooltip_overlay = -1;
-    const bool shown = g_tooltip.hwnd && IsWindowVisible(g_tooltip.hwnd);
-    FadeOut(g_tooltip, 0, [] {});
-    if (shown && g_tooltip_away) {
-      g_tooltip_away();
-    }
-  }
 }
 
 void host_hide_tooltip(double fade) {
