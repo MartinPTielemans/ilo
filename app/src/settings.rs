@@ -25,7 +25,7 @@ use browser::notes;
 use browser::passwords::{self, Login};
 use browser::shell::{self, CancelName, Command, Holder, KeepName, MenuEntry, Refused, UserKeys};
 use browser::text_input::{self, TextInput};
-use browser::updates::VersionRow;
+use browser::updates::{self, NightlyRow, Track, VersionRow};
 use browser::widevine::{self, Widevine, WidevineRow};
 use gpui::{
     AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, FontWeight,
@@ -457,6 +457,8 @@ pub struct Settings {
     widevine: Entity<WidevineRow>,
     /// About's first row, which says where the update stands.
     version: Entity<VersionRow>,
+    /// About's second row, where the build carries a nightly feed: Get nightly builds.
+    nightly: Entity<NightlyRow>,
     /// Draws the Agents tab again as the agents change.
     _agents: Option<Subscription>,
 }
@@ -996,7 +998,10 @@ fn open(cx: &mut App) {
             cx.observe(&account, |_, _, cx| cx.notify()).detach();
             let widevine = cx.new(|_| WidevineRow::new(Rc::new(Module)));
             cx.observe(&widevine, |_, _, cx| cx.notify()).detach();
-            let version = cx.new(|cx| VersionRow::new(version(), cx));
+            let version = cx.new(|cx| VersionRow::new(version(cx), cx));
+            let nightly = cx.new(NightlyRow::new);
+            // The row shows only where the updater can follow its choice, which it says at launch.
+            updates::observe_view(cx, |_, cx| cx.notify()).detach();
             let agents = agents::global(cx);
             let agents = agents.map(|agents| cx.observe(&agents, |_, _, cx| cx.notify()));
             let search = cx.new(|cx| {
@@ -1021,6 +1026,7 @@ fn open(cx: &mut App) {
                 default_browser,
                 widevine,
                 version,
+                nightly,
                 _agents: agents,
                 tab: Tab::General,
                 focus: cx.focus_handle(),
@@ -2917,20 +2923,26 @@ thread_local! {
     static ABOUT_LOGGED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
-/// The app's version and its engine's.
-fn version() -> String {
-    let version = format!("Version {}", build_info::version());
+/// The app's version and its engine's: a nightly's says so first, as long as a release's says
+/// Version, so About's first row reads the same width.
+fn version(cx: &App) -> String {
+    let built = match updates::built(cx) {
+        Track::Nightly => "Nightly",
+        Track::Release => "Version",
+    };
+    let version = format!("{built} {}", build_info::version());
     match build_info::ENGINE_VERSION.as_deref() {
         Some(engine) => format!("{version}, on Chromium {engine}"),
         None => version,
     }
 }
 
-/// The app's version and its engine's, where its update stands, the licence it's under, and the
-/// notices of what it's built from, each of which opens in a tab.
-fn about(version_row: &Entity<VersionRow>) -> AnyElement {
+/// The app's version and its engine's, where its update stands and, where the build carries a
+/// nightly feed, whether it takes nightly builds, then the licence it's under and the notices of
+/// what it's built from, each of which opens in a tab.
+fn about(version_row: &Entity<VersionRow>, nightly: &Entity<NightlyRow>, cx: &App) -> AnyElement {
     // check.sh reads the engine's version here.
-    let line = format!("browser: settings about {}", version());
+    let line = format!("browser: settings about {}", version(cx));
     ABOUT_LOGGED.with_borrow_mut(|logged| {
         if logged.insert(line.clone()) {
             log!("{line}");
@@ -2957,6 +2969,7 @@ fn about(version_row: &Entity<VersionRow>) -> AnyElement {
             open.on_click(move |_, _, cx| open_notice(&url, cx)).into_any_element()
         })
     };
+    let offered = updates::followed(cx).is_some();
     let notices = [
         detailed_row(
             "Licence",
@@ -2984,7 +2997,12 @@ fn about(version_row: &Entity<VersionRow>) -> AnyElement {
         ),
     ];
     div()
-        .child(group(&RowLook::settings(), [div().child(version_row.clone())]))
+        .child(group(
+            &RowLook::settings(),
+            [Some(div().child(version_row.clone())), offered.then(|| div().child(nightly.clone()))]
+                .into_iter()
+                .flatten(),
+        ))
         .child(group(&RowLook::settings(), notices).mt(px(BOX_GAP)))
         .into_any_element()
 }
@@ -3255,7 +3273,7 @@ impl Render for Settings {
                 None => div().into_any_element(),
             },
             Tab::Advanced => self.advanced(accent, cx),
-            Tab::About => about(&self.version),
+            Tab::About => about(&self.version, &self.nightly, cx),
         };
         div()
             // While a command's key is recorded, every key is the recording's, ⌘W too.

@@ -182,14 +182,14 @@ fn a_file_that_isnt_arcs_sidebar_says_so() {
 }
 
 /// A folder the test makes, empty, for one test's browsers.
-fn home(name: &str) -> PathBuf {
+pub(crate) fn home(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("ilo-import-{}-{name}", std::process::id()));
     _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir
 }
 
-fn write(path: PathBuf, text: &str) -> PathBuf {
+pub(crate) fn write(path: PathBuf, text: &str) -> PathBuf {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, text).unwrap();
     path
@@ -454,7 +454,7 @@ fn the_passwords_box_names_exports_for_the_system() {
 /// The browser as the import sees it: profiles, Spaces with their pinned rows, and favorites.
 /// A Space's profile changes only once `load` stands in for the profile having loaded.
 #[derive(Default)]
-struct Browser {
+pub(crate) struct Browser {
     roots: Option<Roots>,
     state: RefCell<State>,
     waiting: RefCell<Vec<Box<dyn FnOnce(&mut App)>>>,
@@ -463,7 +463,7 @@ struct Browser {
     /// What waits for the app to come back to the front.
     active: RefCell<Vec<Box<dyn FnOnce(&mut App)>>>,
     /// The file of passwords the user picks in the open panel, or none to cancel it.
-    passwords_file: RefCell<Option<PathBuf>>,
+    pub(crate) passwords_file: RefCell<Option<PathBuf>>,
     /// The bookmarks file the user picks.
     bookmarks_file: RefCell<Option<PathBuf>>,
     /// The passwords file the core is importing, and what waits to hear what came of it.
@@ -539,7 +539,7 @@ fn folder_rows(rows: &mut Vec<FakeRow>, folder: u64) -> Option<&mut Vec<FakeRow>
 
 impl Browser {
     /// A browser as a first launch leaves it: one profile and one empty Space.
-    fn new(roots: Option<Roots>) -> Browser {
+    pub(crate) fn new(roots: Option<Roots>) -> Browser {
         let browser = Browser {
             roots,
             ..Browser::default()
@@ -582,14 +582,14 @@ impl Browser {
     }
 
     /// The user came back to the app.
-    fn activate(&self, cx: &mut App) {
+    pub(crate) fn activate(&self, cx: &mut App) {
         for then in self.active.take() {
             then(cx);
         }
     }
 
     /// The core is done with the passwords file it was given.
-    fn imported(&self, passwords: Passwords, cx: &mut App) {
+    pub(crate) fn imported(&self, passwords: Passwords, cx: &mut App) {
         let (_, then) = self.importing.take().unwrap();
         then(passwords, cx);
     }
@@ -1036,7 +1036,8 @@ fn a_profile_of_arcs_name_is_the_one_used() {
 
 /// The view, as the first launch shows it: the browsers found, Arc's choices, the import, which
 /// reads Arc's files away from the UI and waits for the new profile, then what came in, and Done.
-/// The view says when it starts and finishes, for a host to show while the view doesn't.
+/// The view says once it has read and goes on by itself, and when it finishes, for a host to show
+/// while the view doesn't.
 #[gpui::test]
 fn the_view_imports_what_the_user_picks(cx: &mut TestAppContext) {
     let browser = Rc::new(Browser::new(None));
@@ -1085,7 +1086,6 @@ fn the_view_imports_what_the_user_picks(cx: &mut TestAppContext) {
         *events.borrow(),
         [
             ImportEvent::Started,
-            ImportEvent::Suggested,
             ImportEvent::Finished(said.into()),
             ImportEvent::Done
         ]
@@ -2063,7 +2063,7 @@ fn safaris_history_is_the_last_90_days_of_pages() {
 /// Safari's folder as the tests make it on the Mac, its bookmarks file kept from the app as macOS
 /// keeps it without Full Disk Access, unless the tests run where nothing can be kept from them.
 #[cfg(unix)]
-fn safari(name: &str) -> Option<PathBuf> {
+pub(crate) fn safari(name: &str) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
     let home = home(name);
     let safari = home.join("Library/Safari");
@@ -2086,7 +2086,7 @@ fn safari(name: &str) -> Option<PathBuf> {
 }
 
 #[cfg(unix)]
-fn let_read(home: &Path) {
+pub(crate) fn let_read(home: &Path) {
     use std::os::unix::fs::PermissionsExt;
     let bookmarks = home.join("Library/Safari/Bookmarks.plist");
     fs::set_permissions(bookmarks, fs::Permissions::from_mode(0o644)).unwrap();
@@ -2132,12 +2132,10 @@ fn safari_waits_for_full_disk_access(cx: &mut TestAppContext) {
     };
     import(cx);
     assert!(waiting(cx));
+    // It needs the user still, so it hasn't started going on by itself.
     assert_eq!(
         *events.borrow(),
-        [
-            ImportEvent::Started,
-            ImportEvent::Finished("Safari needs Full Disk Access.".into())
-        ]
+        [ImportEvent::Finished("Safari needs Full Disk Access.".into())]
     );
     view.update(cx, |view, cx| view.back(cx));
     cx.update(|cx| browser.activate(cx));
@@ -2194,12 +2192,12 @@ fn a_file_kept_from_the_app_is_no_access() {
 }
 
 /// A passwords export as Chrome writes one, of made-up logins.
-const PASSWORDS: &str = "name,url,username,password,note\n\
+pub(crate) const PASSWORDS: &str = "name,url,username,password,note\n\
     example.com,https://example.com/,check@example.test,not-a-real-password,\n";
 
 /// Passwords come from a file the user chooses: the view gives it to the core, says how many came
 /// in and how many conflicted, and offers to delete the file, which holds them in plain text. The
-/// view says when it starts and finishes, as for a browser's import.
+/// view says when it finishes, never that it goes on without the view, as its end is the offer.
 #[gpui::test]
 fn a_passwords_file_comes_in_and_the_view_offers_to_delete_it(cx: &mut TestAppContext) {
     let browser = Rc::new(Browser::new(None));
@@ -2242,10 +2240,8 @@ fn a_passwords_file_comes_in_and_the_view_offers_to_delete_it(cx: &mut TestAppCo
         assert_eq!(shown.as_ref(), said);
         assert_eq!(view.passwords_file.as_ref(), Some(&file));
     });
-    assert_eq!(
-        *events.borrow(),
-        [ImportEvent::Started, ImportEvent::Finished(said.into())]
-    );
+    // Its end offers to delete the file, so it never goes on without the view.
+    assert_eq!(*events.borrow(), [ImportEvent::Finished(said.into())]);
     assert!(file.exists());
     view.update(cx, |view, cx| view.delete_passwords_file(cx));
     assert!(!file.exists());
@@ -2500,13 +2496,12 @@ fn an_import_offers_favorites_from_its_history(cx: &mut TestAppContext) {
         assert_eq!(view.suggested(), None);
         view.pick(0, cx);
         view.import(cx);
-        assert!(view.suggesting());
+        assert_eq!(view.suggested(), None, "not until it's read the history");
     });
     cx.run_until_parked();
     view.read_with(cx, |view, _| {
         let urls: Vec<&str> = view.suggested().unwrap().iter().map(|t| t.url.as_str()).collect();
         assert_eq!(urls, ["https://example.com/"]);
-        assert!(!view.suggesting());
     });
     fs::remove_dir_all(home).unwrap();
 

@@ -73,7 +73,7 @@ pub(super) enum Step {
     /// Import shows too; left out when it finds no browser to import from.
     Import,
     /// The sites visited most in the history an import read, ticked, to make favorites (owner,
-    /// 2026-10-29); there only once an import begins, and left out when it offers none.
+    /// 2026-10-29); there only once an import has read them, and left out when it offers none.
     Favorites,
     /// Asks the system to open links with ilo; left out when it already does.
     DefaultBrowser,
@@ -460,10 +460,9 @@ impl Shell {
     /// Goes on from the step shown, to the next or out of the flow after the last, `how` saying
     /// what did it for check.sh.
     pub(super) fn onboarding_next(&mut self, how: &str, cx: &mut Context<Self>) {
-        // The favorites come only while an import has some to offer, or is reading its history.
+        // The favorites come only while an import has some to offer.
         let favorites = self.importing.as_ref().is_some_and(|importing| {
-            let view = importing.view.read(cx);
-            view.suggesting() || view.suggested().is_some_and(|tabs| !tabs.is_empty())
+            importing.view.read(cx).suggested().is_some_and(|tabs| !tabs.is_empty())
         });
         // The core reads the account after the flow may have started, and it can be signed in by
         // then.
@@ -530,8 +529,10 @@ impl Shell {
         self.onboarding_next(how, cx);
     }
 
-    /// What the import view says: an import began, so the flow goes on while it runs, or ended,
-    /// which the flow's quiet line then says; or the user is done with it, which goes on too.
+    /// What the import view says: an import read what it brings, so the flow goes on while the
+    /// rest runs, or ended, which the flow's quiet line then says; or the user is done with it,
+    /// which goes on too. Until it has read, the step stays, as the view may ask the user for Full
+    /// Disk Access, and a passwords file's end offers to delete the file.
     fn import_event(&mut self, event: &ImportEvent, cx: &mut Context<Self>) {
         if let Some(importing) = self.importing.as_mut() {
             importing.said = match event {
@@ -548,18 +549,9 @@ impl Shell {
             let at = onboarding.steps.iter().position(|&each| each == Step::Import);
             onboarding.steps.insert(at.map_or(0, |at| at + 1), Step::Favorites);
         }
-        // Waiting for what to offer, the step goes on by itself once it's none.
-        let none = self.importing.as_ref().is_some_and(|importing| {
-            importing.view.read(cx).suggested().is_some_and(|tabs| tabs.is_empty())
-        });
         match event {
             ImportEvent::Started | ImportEvent::Done if on_it => self.onboarding_next("import", cx),
             ImportEvent::Skipped if on_it => self.onboarding_next("skip", cx),
-            ImportEvent::Suggested | ImportEvent::Finished(_)
-                if step == Some(Step::Favorites) && none =>
-            {
-                self.onboarding_next("none", cx)
-            }
             _ => cx.notify(),
         }
     }
@@ -999,8 +991,7 @@ impl Shell {
             .child(group(&look, rows))
     }
 
-    /// The favorites offered, a row each with its box ticked in the green, which a click unticks;
-    /// a quiet line while the import is still reading its history.
+    /// The favorites offered, a row each with its box ticked in the green, which a click unticks.
     fn favorite_rows(&self, colors: Colors, cx: &mut Context<Self>) -> gpui::Div {
         let look = Look::on(colors.ground, colors.ink(1.));
         let unticked = self.onboarding.as_ref().map(|o| o.unticked.clone()).unwrap_or_default();
@@ -1008,11 +999,7 @@ impl Shell {
             importing.view.read(cx).suggested().map(<[crate::import::found::Tab]>::to_vec)
         });
         let list = div().mt(px(BUTTON_GAP)).w(px(OPT_IN_WIDTH)).flex().flex_col();
-        let Some(offered) = offered else {
-            let reading = div().text_center().text_color(colors.ink(QUIET));
-            return list.child(reading.child("Reading your history…"));
-        };
-        list.children(offered.into_iter().enumerate().map(|(index, tab)| {
+        list.children(offered.unwrap_or_default().into_iter().enumerate().map(|(index, tab)| {
             let on = !unticked.contains(&tab.url);
             let name = crate::import::suggested::site_name(&tab.url);
             div()

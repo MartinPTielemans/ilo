@@ -728,6 +728,19 @@ bool host_updates_available(void);
 // Whether the Microsoft Store updates this copy: on Windows, an MSIX from it.
 bool host_updated_by_store(void);
 
+// Whether this build is a nightly, each night's build of main (APP_TRACK=nightly at build time),
+// rather than a release.
+bool host_nightly_build(void);
+
+// Whether this build's updater can take nightly builds instead of its own: it updates itself and
+// carries a nightly feed beside its feed (branding/update-feed-nightly).
+bool host_nightly_feed(void);
+
+// Has the updater read the nightly feed, or with false its own, from its next check on: before
+// host_start_updater, from its first. Either way it installs only a build numbered above the one
+// running, so a nightly that goes back to its own feed keeps its build until a release passes it.
+void host_follow_nightly(bool nightly);
+
 // Where host_start_updater's |changed| says the update stands, for Settings › About's row and
 // Restart to Update at the sidebar's foot.
 enum {
