@@ -513,11 +513,10 @@ impl Shell {
             (Step::DefaultBrowser, _) if default_browser::offers(onboarding.os, false) => {
                 self.browser.make_default_browser(cx)
             }
-            // The offer ends here, so Done at the import's end doesn't make it again.
             (Step::Favorites, _) => {
                 let (ticked, space) = (self.favorites_ticked(cx), self.space);
                 if let Some(importing) = self.importing.as_ref() {
-                    importing.view.update(cx, |view, _| view.add_favorites(space, &ticked));
+                    importing.view.update(cx, |view, _| view.add_offered(space, &ticked));
                 }
             }
             (Step::Color, Some(picked)) => {

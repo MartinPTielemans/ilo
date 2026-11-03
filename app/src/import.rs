@@ -419,11 +419,11 @@ pub struct ImportView {
     os: Os,
     /// The bookmark folders of the browser picked, to choose from.
     folders: Folders,
-    /// The favorites the last import offers from its history, once it's read, until they're
-    /// added.
-    suggested: Option<Vec<Tab>>,
-    /// Those the user unticked, by URL, which its end leaves out when it adds them.
+    /// The favorites offered that the user unticked, by URL, which its end leaves out when it
+    /// adds them.
     unticked: Vec<String>,
+    /// The favorites the last import offers from its history, once it's read.
+    suggested: Option<Vec<Tab>>,
 }
 
 impl EventEmitter<ImportEvent> for ImportView {}
@@ -457,9 +457,9 @@ impl ImportView {
             drawn: None,
             drawn_at: Rc::default(),
             os: roots.os,
+            unticked: Vec::new(),
             folders: Folders::default(),
             suggested: None,
-            unticked: Vec::new(),
         }
     }
 
@@ -519,57 +519,14 @@ impl ImportView {
         cx.emit(ImportEvent::Suggested);
     }
 
-    /// Makes `tabs` favorites of `space`, as the user ticked them, which ends the offer.
-    pub fn add_favorites(&mut self, space: u64, tabs: &[Tab]) {
+    /// Makes `tabs` favorites of `space`, as the user ticked them.
+    pub fn add_favorites(&self, space: u64, tabs: &[Tab]) {
         let urls: Vec<&str> = tabs.iter().map(|tab| tab.url.as_str()).collect();
         // check.sh reads this line.
         log!("browser: import favorites {}", urls.join(" "));
         for tab in tabs {
             self.host.add_favorite(space, tab);
         }
-        self.suggested = Some(Vec::new());
-        self.unticked.clear();
-    }
-
-    /// The favorites offered that are still ticked.
-    fn ticked(&self) -> Vec<Tab> {
-        let offered = self.suggested.iter().flatten();
-        let ticked = offered.filter(|tab| !self.unticked.contains(&tab.url));
-        ticked.cloned().collect()
-    }
-
-    /// Ticks or unticks the favorite offered at `url`.
-    fn toggle_favorite(&mut self, url: &str, cx: &mut Context<Self>) {
-        match self.unticked.iter().position(|each| each == url) {
-            Some(at) => {
-                self.unticked.remove(at);
-            }
-            None => self.unticked.push(url.into()),
-        }
-        cx.notify();
-    }
-
-    /// Adds the favorites still ticked to the first Space of the profile the browser started
-    /// with, whose history they come from, as the first launch adds them to its first Space, and
-    /// says so after what came in.
-    fn add_ticked(&mut self, cx: &mut Context<Self>) {
-        let ticked = self.ticked();
-        let existing = self.host.existing(cx);
-        let start = existing.profiles.first().map(|(id, _)| *id);
-        let space = existing.spaces.iter().find(|space| Some(space.profile) == start);
-        let (Some(space), Step::Done(said)) = (space, &self.step) else {
-            return;
-        };
-        if ticked.is_empty() {
-            return;
-        }
-        let added = match ticked.len() {
-            1 => format!("{said} 1 favorite added."),
-            count => format!("{said} {count} favorites added."),
-        };
-        self.add_favorites(space.id, &ticked);
-        self.step = Step::Done(added.into());
-        cx.notify();
     }
 
     fn pick(&mut self, source: usize, cx: &mut Context<Self>) {
@@ -578,6 +535,7 @@ impl ImportView {
         let picked = read::kinds(&self.sources[source]).to_vec();
         self.step = Step::Pick { source, picked };
         self.folders = Folders::default();
+        self.unticked.clear();
         cx.notify();
     }
 
@@ -622,6 +580,57 @@ impl ImportView {
             None => left_out.push(name.into()),
         }
         log!("browser: import leaves out {}", left_out.join(", "));
+        cx.notify();
+    }
+
+    /// Makes those of the favorites offered that the user ticked, `tabs`, favorites of `space`,
+    /// which ends the offer, so the import's end doesn't make it again.
+    pub fn add_offered(&mut self, space: u64, tabs: &[Tab]) {
+        if !tabs.is_empty() {
+            self.add_favorites(space, tabs);
+        }
+        self.suggested = Some(Vec::new());
+        self.unticked.clear();
+    }
+
+    /// The favorites offered that are still ticked.
+    fn ticked(&self) -> Vec<Tab> {
+        let offered = self.suggested.iter().flatten();
+        let ticked = offered.filter(|tab| !self.unticked.contains(&tab.url));
+        ticked.cloned().collect()
+    }
+
+    /// Ticks or unticks the favorite offered at `url`.
+    fn toggle_favorite(&mut self, url: &str, cx: &mut Context<Self>) {
+        match self.unticked.iter().position(|each| each == url) {
+            Some(at) => {
+                self.unticked.remove(at);
+            }
+            None => self.unticked.push(url.into()),
+        }
+        cx.notify();
+    }
+
+    /// Adds the favorites still ticked to the first Space of the profile the browser started
+    /// with, whose history they come from, as the first launch adds them to its first Space, and
+    /// says how many after what came in.
+    fn add_ticked(&mut self, cx: &mut Context<Self>) {
+        let ticked = self.ticked();
+        let existing = self.host.existing(cx);
+        let start = existing.profiles.first().map(|(id, _)| *id);
+        let space = existing.spaces.iter().find(|space| Some(space.profile) == start);
+        let (Some(space), Step::Done(said)) = (space, &self.step) else {
+            return;
+        };
+        if ticked.is_empty() {
+            return;
+        }
+        let added = match ticked.len() {
+            1 => format!("{said} 1 favorite added."),
+            count => format!("{said} {count} favorites added."),
+        };
+        self.add_offered(space.id, &ticked);
+        self.step = Step::Done(added.into());
         cx.notify();
     }
 
@@ -753,7 +762,7 @@ impl ImportView {
         let urls: Vec<&str> = suggested.iter().map(|tab| tab.url.as_str()).collect();
         // check.sh reads this line.
         log!("browser: import suggests {}", urls.join(" "));
-        (self.suggested, self.unticked) = (Some(suggested), Vec::new());
+        self.suggested = Some(suggested);
         cx.emit(ImportEvent::Suggested);
         // Another ad blocker is left off the list, which says so once (extensions_box).
         let listed = found.extensions.iter().filter(|each| !each.blocks_ads()).count();
@@ -938,6 +947,8 @@ impl ImportView {
         if !matches!(self.step, Step::List) {
             return;
         }
+        // An earlier import's favorites aren't offered at this one's end.
+        self.suggested = None;
         let view = cx.entity().downgrade();
         let chosen = file.clone();
         let then = Box::new(move |passwords: Passwords, cx: &mut App| {
@@ -950,8 +961,6 @@ impl ImportView {
         // check.sh waits for this line.
         log!("browser: import passwords");
         self.step = Step::Passwords;
-        // An earlier import's favorites aren't offered at this one's end.
-        self.suggested = None;
         cx.emit(ImportEvent::Started);
         cx.notify();
     }
