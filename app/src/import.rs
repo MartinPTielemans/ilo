@@ -27,14 +27,14 @@ pub mod session;
 pub mod sources;
 pub mod suggested;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::path::{Path, PathBuf};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
-use gpui::{App, Context, EventEmitter, SharedString, div, prelude::*, px, rgb, svg};
+use gpui::{App, Context, EventEmitter, SharedString, Task, div, prelude::*, px, rgb, svg};
 
 use crate::palette::NO_THEME_ACCENT;
 pub use crate::settings_rows::Look;
@@ -258,6 +258,32 @@ impl Job {
         spaces && history && addresses
     }
 
+    /// How many Spaces it made, which stay, empty, if it stops before they're filled.
+    fn made(&self) -> usize {
+        let new = |space: &&plan::SpacePlan| matches!(space.into, Target::New { .. });
+        self.plan.spaces.iter().filter(new).count()
+    }
+
+    /// The profiles it made that haven't opened with their Spaces in them, by name.
+    fn unopened(&self, host: &dyn Host) -> Vec<&str> {
+        let names = self.plan.new_profiles.iter().zip(&self.profiles);
+        let open = |profile: u64| {
+            let spaces = self.spaces.iter().filter(|&&(_, each)| each == profile);
+            host.profile_loaded(profile)
+                && spaces.clone().all(|&(space, _)| host.space_profile(space) == profile)
+        };
+        names.filter(|&(_, &id)| !open(id)).map(|(name, _)| name.as_str()).collect()
+    }
+
+    /// Asks again to put each Space not yet in its profile there, which loads the profile.
+    fn retry(&self, host: &dyn Host) {
+        for &(space, profile) in &self.spaces {
+            if host.space_profile(space) != profile {
+                host.set_space_profile(space, profile);
+            }
+        }
+    }
+
     /// Adds the pinned tabs, folders, Today tabs and favorites, and returns the history and
     /// addresses for each profile, which the core adds away from the UI.
     pub fn finish(mut self, host: &dyn Host, cx: &App) -> Later {
@@ -337,7 +363,8 @@ pub struct Later {
 /// What the view tells whoever shows it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ImportEvent {
-    /// An import began, which goes on while the view isn't shown; running() says so.
+    /// An import read what it brings, and goes on by itself while the view isn't shown; running()
+    /// says so. Until then the view may still need the user, as for Full Disk Access.
     Started,
     /// The import that began is over, and this says what came in, or why nothing did.
     Finished(SharedString),
@@ -345,8 +372,6 @@ pub enum ImportEvent {
     Done,
     /// The user went on without importing.
     Skipped,
-    /// The import read the history, and suggested() has the favorites it offers.
-    Suggested,
 }
 
 enum Step {
@@ -381,14 +406,30 @@ struct Folders {
     left_out: Vec<String>,
 }
 
+/// How long an import waits for the profiles it made to open before it says one hasn't. Chrome
+/// makes and loads one in a second or two, so this is far past a slow Mac's.
+const STALL: Duration = Duration::from_secs(20);
+
 /// An import under way.
 #[derive(Default)]
 struct Run {
+    /// Which run it is, so what an earlier one waited for, such as its files, doesn't reach it.
+    id: u64,
     counts: Counts,
-    /// Made once the browser's files are read.
+    /// Made once the browser's files are read, until what it adds is in.
     job: Option<Job>,
-    /// The profiles whose history the core is still adding.
-    waiting: usize,
+    /// Whether the job waits for the next change of the Spaces, so it waits once at a time.
+    watching: bool,
+    /// Ends the wait for the profiles after STALL; dropped with the run, which cancels it.
+    stall: Option<Task<()>>,
+    /// What the view says once that wait has gone on too long.
+    stalled: Option<SharedString>,
+    /// Whether the job's Spaces, tabs, favorites and link rules are in, so the history and
+    /// addresses the core adds, which it can't stop, are all that's left.
+    placed: bool,
+    /// The profiles whose history, and whose addresses, the core is still adding.
+    history_left: usize,
+    addresses_left: usize,
     /// Pages and addresses the core added, which leaves out those that were here.
     pages: usize,
     addresses: usize,
@@ -421,6 +462,8 @@ pub struct ImportView {
     folders: Folders,
     /// The favorites the last import offers from its history, once it's read.
     suggested: Option<Vec<Tab>>,
+    /// How many imports it ran, which numbers each run.
+    runs: u64,
 }
 
 impl EventEmitter<ImportEvent> for ImportView {}
@@ -456,6 +499,7 @@ impl ImportView {
             os: roots.os,
             folders: Folders::default(),
             suggested: None,
+            runs: 0,
         }
     }
 
@@ -481,7 +525,10 @@ impl ImportView {
     /// the view isn't.
     pub fn running(&self) -> Option<SharedString> {
         match &self.step {
-            Step::Running { name, .. } => Some(format!("Importing from {name}…").into()),
+            Step::Running { name, run, .. } => match &run.stalled {
+                Some(stalled) => Some(stalled.clone()),
+                None => Some(format!("Importing from {name}…").into()),
+            },
             Step::Passwords => Some("Importing passwords…".into()),
             _ => None,
         }
@@ -490,9 +537,9 @@ impl ImportView {
     /// Lists the browsers found again, as Settings does each time it shows the tab.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         if matches!(self.step, Step::List | Step::Done(_)) {
-            let suggested = self.suggested.take();
+            let (suggested, runs) = (self.suggested.take(), self.runs);
             *self = ImportView::new(self.host.clone(), self.skip).look(self.look);
-            self.suggested = suggested;
+            (self.suggested, self.runs) = (suggested, runs);
             cx.notify();
         }
     }
@@ -503,16 +550,16 @@ impl ImportView {
         self.suggested.as_deref()
     }
 
-    /// Whether an import is reading what it'll offer, so suggested() comes later.
-    pub fn suggesting(&self) -> bool {
-        matches!(self.step, Step::Running { .. }) && self.suggested.is_none()
-    }
-
     /// Offers `tabs` as an import's history would, for the first launch's tests.
     #[cfg(test)]
-    pub(crate) fn offer(&mut self, tabs: Vec<Tab>, cx: &mut Context<Self>) {
+    pub(crate) fn offer(&mut self, tabs: Vec<Tab>) {
         self.suggested = Some(tabs);
-        cx.emit(ImportEvent::Suggested);
+    }
+
+    /// The step last drawn, as check.sh reads it from the log.
+    #[cfg(test)]
+    pub(crate) fn drawn(&self) -> Option<&'static str> {
+        self.drawn
     }
 
     /// Makes `tabs` favorites of `space`, as the user ticked them.
@@ -525,7 +572,7 @@ impl ImportView {
         }
     }
 
-    fn pick(&mut self, source: usize, cx: &mut Context<Self>) {
+    pub(crate) fn pick(&mut self, source: usize, cx: &mut Context<Self>) {
         // check.sh waits for this line.
         log!("browser: import pick {}", self.sources[source].name());
         let picked = read::kinds(&self.sources[source]).to_vec();
@@ -602,20 +649,20 @@ impl ImportView {
     }
 
     /// Reads what was picked from the browser, away from the UI, then brings it in.
-    fn import(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn import(&mut self, cx: &mut Context<Self>) {
         let (Step::Pick { source, picked } | Step::NoAccess { source, picked }) = &self.step else {
             return;
         };
         let (source, picked) = (*source, picked.clone());
         let from = self.sources[source].clone();
         let left_out = self.folders.left_out.clone();
+        let id = self.new_run();
         self.step = Step::Running {
             source: Some(source),
             name: from.name(),
-            run: Run::default(),
+            run: Run { id, ..Run::default() },
         };
         self.suggested = None;
-        cx.emit(ImportEvent::Started);
         cx.notify();
         let read = cx.background_spawn(async move {
             let mut found = read::read(&from, &picked, SystemTime::now());
@@ -626,8 +673,13 @@ impl ImportView {
         });
         cx.spawn(async move |view, cx| {
             let (from, picked, found) = read.await;
-            view.update(cx, |view, cx| view.read(from, picked, found, cx))
-                .ok();
+            view.update(cx, |view, cx| {
+                // Unless the user stopped it meanwhile.
+                if view.is_run(id) {
+                    view.read(from, picked, found, cx)
+                }
+            })
+            .ok();
         })
         .detach();
     }
@@ -707,7 +759,8 @@ impl ImportView {
         // check.sh reads this line.
         log!("browser: import suggests {}", urls.join(" "));
         self.suggested = Some(suggested);
-        cx.emit(ImportEvent::Suggested);
+        // What's read is all the import needs of the user; the rest goes on by itself.
+        cx.emit(ImportEvent::Started);
         // Another ad blocker is left off the list, which says so once (extensions_box).
         let listed = found.extensions.iter().filter(|each| !each.blocks_ads()).count();
         if !found.extensions.is_empty() {
@@ -741,51 +794,153 @@ impl ImportView {
         self.advance(cx);
     }
 
-    /// Adds what goes in once the Spaces are in their profiles, else waits for the next change.
+    /// A number for an import starting now.
+    fn new_run(&mut self) -> u64 {
+        self.runs += 1;
+        self.runs
+    }
+
+    /// Whether the import under way is the run `id`.
+    fn is_run(&self, id: u64) -> bool {
+        matches!(&self.step, Step::Running { run, .. } if run.id == id)
+    }
+
+    /// Adds what goes in once the Spaces are in their profiles, else waits for the next change,
+    /// and for STALL at most before saying so.
     fn advance(&mut self, cx: &mut Context<Self>) {
         let Step::Running { run, .. } = &mut self.step else {
             return;
         };
         let Some(job) = run.job.take_if(|job| job.ready(&*self.host)) else {
-            let view = cx.entity().downgrade();
-            self.host.when_spaces_change(Box::new(move |cx| {
-                view.update(cx, |view, cx| view.advance(cx)).ok();
-            }));
+            if run.job.is_none() {
+                return;
+            }
+            if !run.watching {
+                run.watching = true;
+                let (view, id) = (cx.entity().downgrade(), run.id);
+                self.host.when_spaces_change(Box::new(move |cx| {
+                    view.update(cx, |view, cx| view.spaces_changed(id, cx)).ok();
+                }));
+            }
+            if run.stall.is_none() && run.stalled.is_none() {
+                run.stall = Some(cx.spawn(async move |view, cx| {
+                    cx.background_executor().timer(STALL).await;
+                    view.update(cx, |view, cx| view.stall(cx)).ok();
+                }));
+            }
             return;
         };
+        (run.stall, run.stalled, run.placed) = (None, None, true);
         let later = job.finish(&*self.host, cx);
-        // What the core says it added, into the run's count of it.
-        let then = |count: fn(&mut Run) -> &mut usize, cx: &mut Context<Self>| {
+        // What the core says it added, into the run's count of it and of what it has left.
+        type Count = fn(&mut Run) -> (&mut usize, &mut usize);
+        let then = |count: Count, cx: &mut Context<Self>| {
             let view = cx.entity().downgrade();
             Box::new(move |added, cx: &mut App| {
                 view.update(cx, |view, cx| view.added(count, added, cx)).ok();
             })
         };
         for (profile, pages) in later.history {
-            let then = then(|run| &mut run.pages, cx);
+            let then = then(|run| (&mut run.pages, &mut run.history_left), cx);
             if self.host.add_history(profile, &pages, then) {
-                run.waiting += 1;
+                run.history_left += 1;
             }
         }
         for (profile, addresses) in later.addresses {
-            let then = then(|run| &mut run.addresses, cx);
+            let then = then(|run| (&mut run.addresses, &mut run.addresses_left), cx);
             if self.host.add_addresses(profile, &addresses, then) {
-                run.waiting += 1;
+                run.addresses_left += 1;
             }
         }
-        if run.waiting == 0 {
-            self.complete(cx);
+        match run.history_left + run.addresses_left {
+            0 => self.complete(cx),
+            _ => cx.notify(),
         }
     }
 
-    fn added(&mut self, count: fn(&mut Run) -> &mut usize, added: usize, cx: &mut Context<Self>) {
+    /// The Spaces changed while the run `id` waited for its profiles.
+    fn spaces_changed(&mut self, id: u64, cx: &mut Context<Self>) {
         let Step::Running { run, .. } = &mut self.step else {
             return;
         };
-        *count(run) += added;
-        run.waiting = run.waiting.saturating_sub(1);
-        if run.waiting == 0 {
-            self.complete(cx);
+        if run.id == id {
+            run.watching = false;
+            self.advance(cx);
+        }
+    }
+
+    /// The profiles haven't opened in STALL, so the view says which, with Try Again.
+    fn stall(&mut self, cx: &mut Context<Self>) {
+        let Step::Running { run, .. } = &mut self.step else {
+            return;
+        };
+        let Some(job) = &run.job else {
+            return;
+        };
+        let said = match job.unopened(&*self.host)[..] {
+            [] => "A profile hasn't opened, so the import can't go on.".to_string(),
+            [one] => format!("The {one} profile hasn't opened, so the import can't go on."),
+            [ref rest @ .., last] => format!(
+                "The {} and {last} profiles haven't opened, so the import can't go on.",
+                rest.join(", ")
+            ),
+        };
+        // check.sh can wait for this line.
+        log!("browser: import stalled: {said}");
+        run.stalled = Some(said.into());
+        cx.notify();
+    }
+
+    /// Asks again for the profiles that haven't opened, and waits for them as long again.
+    fn try_again(&mut self, cx: &mut Context<Self>) {
+        let Step::Running { run, .. } = &mut self.step else {
+            return;
+        };
+        let Some(job) = run.job.as_ref().filter(|_| run.stalled.is_some()) else {
+            return;
+        };
+        log!("browser: import tries again");
+        job.retry(&*self.host);
+        (run.stall, run.stalled) = (None, None);
+        cx.notify();
+        self.advance(cx);
+    }
+
+    /// Stops the import while nothing it brings is in yet, and says so, with the Spaces it made,
+    /// empty, which importing again fills. Once they're in, the history the core adds can't stop.
+    fn cancel(&mut self, cx: &mut Context<Self>) {
+        let Step::Running { name, run, .. } = &self.step else {
+            return;
+        };
+        if run.placed {
+            return;
+        }
+        let said = match run.job.as_ref().map_or(0, Job::made) {
+            0 => format!("Stopped. Nothing came in from {name}."),
+            1 => format!("Stopped. 1 Space from {name} is here, empty: import again to fill it."),
+            made => format!(
+                "Stopped. {made} Spaces from {name} are here, empty: import again to fill them."
+            ),
+        };
+        log!("browser: import stopped");
+        self.finish(said, cx);
+    }
+
+    fn added(
+        &mut self,
+        count: fn(&mut Run) -> (&mut usize, &mut usize),
+        added: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let Step::Running { run, .. } = &mut self.step else {
+            return;
+        };
+        let (count, left) = count(run);
+        *count += added;
+        *left = left.saturating_sub(1);
+        match run.history_left + run.addresses_left {
+            0 => self.complete(cx),
+            _ => cx.notify(),
         }
     }
 
@@ -805,19 +960,13 @@ impl ImportView {
         let said = said.into();
         // check.sh waits for this line.
         log!("browser: import done: {said}");
-        // An import from a browser that ended before reading its history offers nothing.
-        let reading = matches!(self.step, Step::Running { .. });
         self.step = Step::Done(said.clone());
-        if reading && self.suggested.is_none() {
-            self.suggested = Some(Vec::new());
-            cx.emit(ImportEvent::Suggested);
-        }
         cx.emit(ImportEvent::Finished(said));
         cx.notify();
     }
 
     /// Asks for the file of passwords, and imports it.
-    fn choose_passwords(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn choose_passwords(&mut self, cx: &mut Context<Self>) {
         let view = cx.entity().downgrade();
         let then = Box::new(move |file: Option<PathBuf>, cx: &mut App| {
             if let Some(file) = file {
@@ -847,13 +996,13 @@ impl ImportView {
         let name = file_name(&file);
         // check.sh waits for this line.
         log!("browser: import bookmarks file {name}");
+        let id = self.new_run();
         self.step = Step::Running {
             source: None,
             name: name.clone(),
-            run: Run::default(),
+            run: Run { id, ..Run::default() },
         };
         self.suggested = None;
-        cx.emit(ImportEvent::Started);
         cx.notify();
         let read = cx.background_spawn(async move {
             let bytes = std::fs::read(&file).map_err(|error| error.to_string())?;
@@ -862,6 +1011,8 @@ impl ImportView {
         cx.spawn(async move |view, cx| {
             let pinned = read.await;
             view.update(cx, |view, cx| match pinned {
+                // The user stopped it meanwhile.
+                _ if !view.is_run(id) => {}
                 Ok(pinned) => {
                     let space = found::Space {
                         name: "Bookmarks".into(),
@@ -902,8 +1053,8 @@ impl ImportView {
         }
         // check.sh waits for this line.
         log!("browser: import passwords");
+        // No Started: its end offers to delete the file, which the user sees there.
         self.step = Step::Passwords;
-        cx.emit(ImportEvent::Started);
         cx.notify();
     }
 
@@ -919,7 +1070,7 @@ impl ImportView {
     }
 
     /// Deletes the passwords file the import read, as the user asked.
-    fn delete_passwords_file(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn delete_passwords_file(&mut self, cx: &mut Context<Self>) {
         let (Some(file), Step::Done(said)) = (self.passwords_file.take(), &self.step) else {
             return;
         };
@@ -936,7 +1087,7 @@ impl ImportView {
         cx.notify();
     }
 
-    fn done(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn done(&mut self, cx: &mut Context<Self>) {
         self.passwords_file = None;
         self.step = Step::List;
         cx.emit(ImportEvent::Done);
@@ -1345,8 +1496,33 @@ fn passwords_summary(file: &Path, passwords: Passwords, into: Option<&str>) -> S
     said.into()
 }
 
-/// What an import brought in, as the view says it, with the `listed` extensions it lists to add.
-fn summary(name: &str, counts: Counts, listed: usize) -> SharedString {
+/// What an import under way says: that it's reading, then what came in so far while the core adds
+/// the history and addresses, or that a profile it waits for hasn't opened.
+fn progress(name: &str, run: &Run) -> SharedString {
+    if let Some(stalled) = &run.stalled {
+        return stalled.clone();
+    }
+    if !run.placed {
+        return format!("Importing from {name}…").into();
+    }
+    let adding = match (run.history_left > 0, run.addresses_left > 0) {
+        (true, true) => "history and addresses",
+        (true, false) => "history",
+        _ => "addresses",
+    };
+    let counts = Counts {
+        pages: run.pages,
+        addresses: run.addresses,
+        ..run.counts
+    };
+    match came(counts) {
+        Some(what) => format!("{what} came in from {name}. Adding its {adding}…").into(),
+        None => format!("Adding {name}'s {adding}…").into(),
+    }
+}
+
+/// How much of each thing came in, such as "1 Space and 3 pinned tabs", or none for nothing.
+fn came(counts: Counts) -> Option<String> {
     let count = |count: usize, one: &str, many: &str| match count {
         0 => None,
         1 => Some(format!("1 {one}")),
@@ -1364,17 +1540,26 @@ fn summary(name: &str, counts: Counts, listed: usize) -> SharedString {
     .into_iter()
     .flatten()
     .collect();
-    let extensions = count(listed, "extension", "extensions");
-    let what = match parts.as_slice() {
-        [] => {
-            let said = match extensions {
-                None => format!("Everything from {name} is here already."),
-                Some(them) => format!("{them} from {name} to add from the Chrome Web Store."),
-            };
-            return said.into();
-        }
-        [one] => one.clone(),
-        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    match parts.as_slice() {
+        [] => None,
+        [one] => Some(one.clone()),
+        [rest @ .., last] => Some(format!("{} and {last}", rest.join(", "))),
+    }
+}
+
+/// What an import brought in, as the view says it, with the `listed` extensions it lists to add.
+fn summary(name: &str, counts: Counts, listed: usize) -> SharedString {
+    let extensions = match listed {
+        0 => None,
+        1 => Some("1 extension".to_string()),
+        listed => Some(format!("{listed} extensions")),
+    };
+    let Some(what) = came(counts) else {
+        let said = match extensions {
+            None => format!("Everything from {name} is here already."),
+            Some(them) => format!("{them} from {name} to add from the Chrome Web Store."),
+        };
+        return said.into();
     };
     let with = extensions.map(|them| format!(", with {them} to add from the Chrome Web Store"));
     format!("{what} came in from {name}{}.", with.unwrap_or_default()).into()
@@ -1406,9 +1591,34 @@ impl Render for ImportView {
         let content = match &self.step {
             Step::List => self.list(cx),
             Step::Pick { source, picked } => self.picking(*source, &picked.clone(), cx),
-            Step::Running { .. } | Step::Passwords => {
-                line(self.running().unwrap_or_default()).into_any_element()
+            Step::Running { name, run, .. } => {
+                // Cancel where Done goes, while there's still something it stops.
+                let cancel = (!run.placed).then(|| {
+                    button(&look, "import-cancel", "Cancel")
+                        .on_click(cx.listener(|view, _, _, cx| view.cancel(cx)))
+                });
+                let again = run.stalled.is_some().then(|| {
+                    button(&look, "import-try-again", "Try Again")
+                        .on_click(cx.listener(|view, _, _, cx| view.try_again(cx)))
+                });
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(BOX_GAP))
+                    .child(line(progress(name, run)))
+                    .when(cancel.is_some(), |column| {
+                        column.child(
+                            div()
+                                .flex()
+                                .justify_end()
+                                .gap(px(PADDING))
+                                .children(cancel)
+                                .children(again),
+                        )
+                    })
+                    .into_any_element()
             }
+            Step::Passwords => line(self.running().unwrap_or_default()).into_any_element(),
             Step::NoAccess { source, .. } => self.no_access(*source, cx),
             Step::Done(said) => {
                 let done = button(&look, "import-done", "Done")
