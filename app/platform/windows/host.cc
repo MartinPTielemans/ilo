@@ -2172,6 +2172,14 @@ LRESULT CALLBACK FrameChildProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM l
 
 LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR,
                            DWORD_PTR) {
+  // diag(#1262): which messages the browser window gets as Windows' caption shows.
+  if (message != WM_NCHITTEST && message != WM_SETCURSOR && message != WM_NCMOUSEMOVE &&
+      message != WM_MOUSEMOVE && message != WM_TIMER && message != WM_GETICON &&
+      message != WM_GETTEXT && message != WM_GETTEXTLENGTH && message != WM_GETOBJECT &&
+      message != WM_NCMOUSELEAVE && message != WM_MOUSELEAVE) {
+    fprintf(stderr, "browser: frame diag 0x%04x %llx %llx\n", message,
+            static_cast<unsigned long long>(wparam), static_cast<unsigned long long>(lparam));
+  }
   switch (message) {
     case WM_NCCALCSIZE: {
       if (!wparam || !(GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CAPTION)) {

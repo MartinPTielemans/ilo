@@ -265,6 +265,7 @@ if windows; then
   send key l
   expect "^browser: title $page waiting\$" "\"l\" in the page didn't start waiting for /held"
   served "127.0.0.1:$port/held" "the page didn't ask for /held"
+  echo "browser: diag waiting" >&2; ../tools/window-screenshot.sh "$pid" "$out/diag-waiting.png" || true
   python3 -I -u check/app-windows.py cover "$(cat "/proc/$pid/winpid")" away "$out/front" \
     > "$out/cover-asking.log" 2>&1 &
   helper=$!
@@ -275,6 +276,7 @@ if windows; then
   grep -q '^cover ' "$out/cover-asking.log" ||
     fail "another app's window didn't open over ilo's: $(cat "$out/cover-asking.log")"
   foreground=$(sed -n 's/^cover .*, foreground //p' "$out/cover-asking.log")
+  ../tools/window-screenshot.sh "$pid" "$out/diag-covered.png" || true
   touch "$out/site/held.go"
   expect "^browser: page $page dialog Alert .* says\$" "the page didn't alert once /held came"
   expect '^browser: dialog settled$' "the page's alert didn't settle with another app in front"
