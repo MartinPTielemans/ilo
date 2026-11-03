@@ -485,16 +485,19 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
   case "$scrolled" in "Scrolled down."*) ;; *) fail "scroll answered: $scrolled" ;; esac
   picture=$(call screenshot "{\"tab\":$opened_tab}")
   case "$picture" in "image/jpeg "[1-9]*) ;; *) fail "screenshot answered: $picture" ;; esac
-  # close_tab closes a tab of its own, which goes to the archive.
+  # close_tab closes a tab of its own, which stays out of the user's archive (#1408).
   opened=$(call open_tab '{"url":"example.com"}')
   closing=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  archived=$(sed -n 's/^browser: archive \([0-9]*\) tabs$/\1/p' "$log" | tail -1)
   closed=$(call close_tab "{\"tab\":$closing}")
-  [ "$closed" = "Closed tab $closing. The user can still find it in the archive." ] ||
-    fail "close_tab answered: $closed"
+  [ "$closed" = "Closed tab $closing." ] || fail "close_tab answered: $closed"
   await_log "^browser: agent activity mcp-client $closing close_tab\$" \
     "the close didn't reach the activity log"
+  # A round trip, by which the core has told the app of an archive the close changed.
   listed=$(call list_tabs '{}')
   printf '%s\n' "$listed" | grep -q "^. $closing  " && fail "list_tabs listed the closed tab"
+  [ "$(sed -n 's/^browser: archive \([0-9]*\) tabs$/\1/p' "$log" | tail -1)" = "$archived" ] ||
+    fail "the tab the agent closed went in the user's archive"
 
   # run_steps takes several actions in one call, in order, and waits for a page's text.
   ran=$(call run_steps "{\"tab\":$opened_tab,\"steps\":[{\"action\":\"scroll\",\"direction\":\"up\"},{\"action\":\"snapshot\"},{\"action\":\"wait\",\"text\":\"example domain\"}]}")

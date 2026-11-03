@@ -172,7 +172,7 @@ fn shared() -> Value {
         {
             "name": "close_tab",
             "title": "Close tab",
-            "description": "Close a tab in your Space. It goes to the archive, where the user can still find it.",
+            "description": "Close a tab in your Space.",
             "inputSchema": { "type": "object", "properties": { "tab": tab } },
             "annotations": {
                 "readOnlyHint": false,

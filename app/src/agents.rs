@@ -995,9 +995,7 @@ impl Agents {
                         "Tab {tab} stays open: the user pinned it, or its page asks them before \
                          it's left."
                     ),
-                    false => {
-                        format!("Closed tab {tab}. The user can still find it in the archive.")
-                    }
+                    false => format!("Closed tab {tab}."),
                 }));
             }
             "ask_for_tab" => {
