@@ -8,7 +8,7 @@ use gpui::{
 use super::{
     FOOTER_HEIGHT, NAV, NAV_GLYPH, NAV_HOVERED, NAV_RADIUS, NAV_SIZE, PLUS_INSET, SPACE_CLEAR, SPACE_GLYPH, SPACE_HEIGHT, SPACE_HOVERED, SPACE_ICON_SWITCHER, SPACE_LEAST, SPACE_OTHER, SPACE_PITCH,
     SPACE_SHOWN, SPACE_SHOWN_LEAST, SPACE_SWATCH, SPACE_SWATCH_HOVERED, SPACE_SWATCH_SHOWN, SWITCHER_INSET, Shell,
-    SPACE_DRAGGED, Space, access::Accessible, space_order::DraggedSpace,
+    SPACE_DRAGGED, Space, access::Accessible, space_order::{Along, DraggedSpace},
 };
 use crate::space_icon::{GLYPHS, SpaceIcon};
 
@@ -74,7 +74,7 @@ impl Shell {
                 .group("space")
                 .flex_none()
                 .relative()
-                .left(px(self.dot_slide(id)))
+                .left(px(self.space_slide(Along::Switcher, id)))
                 .w(px(cell))
                 .h_full()
                 .flex()
@@ -94,7 +94,8 @@ impl Shell {
                 )
                 // Along the switcher it moves the Space (#1580).
                 .on_drag(DraggedSpace, move |_, grab, _, cx| {
-                    Shell::start_space_drag(&shell, id, cell, grab, cx)
+                    let grab = f32::from(grab.x);
+                    Shell::start_space_drag(&shell, id, Along::Switcher, cell, grab, cx)
                 })
                 .child(self.space_mark(space, shown, cell, &behind))
         });
@@ -110,11 +111,11 @@ impl Shell {
                 .flex()
                 .justify_center()
                 .on_drag_move(cx.listener(|shell, event: &DragMoveEvent<DraggedSpace>, _, cx| {
-                    shell.drag_space_over(event, cx)
+                    shell.drag_space_over(Along::Switcher, event, cx)
                 }))
                 .children(dots)
-                .children(self.space_drop_line(span))
-                .child(self.space_drop_listener(cx)),
+                .children(self.space_drop_line(Along::Switcher))
+                .child(self.space_drop_listener(Along::Switcher, cx)),
         )
     }
 

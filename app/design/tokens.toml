@@ -896,9 +896,10 @@ space-swatch-hovered = 12.0
 space-shown-least = 22.0
 space-clear = 4.0
 space-least = 4.0
-# A Space's dot dragged along the switcher: its place dims to half while its copy follows the
-# pointer, and the gap it would go into shows the rows' drop line stood up, 16 tall on the dots'
-# middle, without the ring, which would be a dot's size (ours: Arc's isn't recorded).
+# A Space's dot dragged along the switcher, or its card by its handle along the Library's: its place
+# dims to half while its copy follows the pointer, and the gap it would go into shows the rows' drop
+# line stood up, among the dots 16 tall on their middle without the ring, which would be a dot's
+# size, and among the cards with it, as the rows' (ours: Arc's isn't recorded).
 space-dragged = 0.5
 space-drop-line = 16.0
 form-title-top = 140.0
@@ -1217,6 +1218,11 @@ card-brush = 28.0
 card-brush-inset = 4.0
 card-brush-glyph = 14.0
 card-brush-color = 0.35
+# The ••• at the card's foot, which shows the Space's menu: its middle 22 in from the card's right
+# and 21.5 above its foot (Arc 1.170 rec; Arc 1.171's 21). Ours: the sidebar's ••• button, with the
+# pointer on the card, as the brush shows only with it on the field.
+card-more-x = 22.0
+card-more-y = 21.5
 plus-gap = 33.0
 plus-size = 30.0
 # Ours: the + is the Space's accent where Arc's is blue (#319), with the palette's hovered and

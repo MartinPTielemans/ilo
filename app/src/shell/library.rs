@@ -10,8 +10,8 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, ClickEvent, Context, DispatchPhase, Div, Entity, Focusable, FontWeight,
-    HitboxBehavior, Hsla, Image, ListAlignment, ListState, MouseButton, MouseDownEvent,
+    AnyElement, ClickEvent, Context, DispatchPhase, Div, DragMoveEvent, Entity, Focusable,
+    FontWeight, HitboxBehavior, Hsla, Image, ListAlignment, ListState, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, RenderImage, SharedString, Stateful,
     StyledText, Subscription, WeakEntity, Window,
     canvas, div, img, linear_color_stop, linear_gradient, list,
@@ -23,12 +23,15 @@ use super::{
     Command, DRAG_START, Edit, FAVICON_SIZE, FAVICON_X, What,
     task_cards::number as task_number, FOLDER_INDENT, FOOTER_HEIGHT, FORM_TEXT, MenuEntry, NAV,
     NAV_RADIUS, NAV_SIZE, PLATE_INSET, SECONDARY, SEGMENT_FAVICON_X, Shell, Space, UNSELECTED_TITLE,
+    URL_BUTTON_GLYPH, URL_BUTTON_SIZE,
     clean_link, divider_box, favicon, file_url, folder_icon, host, SPACE_SWATCH_SHOWN,
     dashed_square,
     plate, row_box, space_icon_drawn, spring_to, split_plate, still_clear, title, Naming,
     PLATE_HEIGHT, PLATE_RADIUS, selected_plate,
     header::TipSide, keystroke_label,
     display_face::{cap_top, display_text},
+    SPACE_DRAGGED,
+    space_order::{Along, DraggedSpace},
 };
 use crate::{
     icon_picker::{self, Subject},
@@ -114,6 +117,7 @@ use crate::tokens::shell::library::CARD_BRUSH;
 use crate::tokens::shell::library::CARD_BRUSH_INSET;
 use crate::tokens::shell::library::CARD_BRUSH_GLYPH;
 use crate::tokens::shell::library::CARD_BRUSH_COLOR;
+use crate::tokens::shell::library::{CARD_MORE_X, CARD_MORE_Y};
 use crate::elevation::Level;
 use crate::tokens::shell::library::PLUS_GAP;
 use crate::tokens::shell::library::PLUS_SIZE;
@@ -1350,7 +1354,18 @@ impl Shell {
     /// order, and the + after them, which scroll across together if they don't fit (`card_strip`),
     /// clipped at the Library's edge.
     fn space_cards(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let cards: Vec<_> = self.spaces.iter().map(|space| self.space_card(space, cx)).collect();
+        // A card dragged by its handle dims in its place, and the cards glide to their places once
+        // the Spaces' order changes, as the switcher's dots do (#1580).
+        let cards: Vec<_> = self
+            .spaces
+            .iter()
+            .map(|space| {
+                let id = space.id;
+                self.space_card(space, cx)
+                    .left(px(self.space_slide(Along::Cards, id)))
+                    .when(self.space_dragged(id), |card| card.opacity(SPACE_DRAGGED))
+            })
+            .collect();
         let plus = div()
             .id("library-new-space")
             .flex_none()
@@ -1400,11 +1415,16 @@ impl Shell {
                     .children(cards)
                     .child(plus),
             )
+            .on_drag_move(cx.listener(|shell, event: &DragMoveEvent<DraggedSpace>, _, cx| {
+                shell.drag_space_over(Along::Cards, event, cx)
+            }))
+            .children(self.space_drop_line(Along::Cards))
+            .child(self.space_drop_listener(Along::Cards, cx))
     }
 
     /// A Space's card: its name's field over the rows the sidebar would show, in its colour. A
     /// click shows the Space, and a right-click shows its menu.
-    fn space_card(&self, space: &Space, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn space_card(&self, space: &Space, cx: &mut Context<Self>) -> Stateful<Div> {
         let id = space.id;
         // An agent's Space keeps its tabs, and takes none, as the sidebar's drag leaves it.
         let user = space.agent.is_empty();
@@ -1496,6 +1516,67 @@ impl Shell {
             )
             .child(field)
             .child(div().children(rows))
+            .child(self.card_handle(id, &palette, cx))
+    }
+
+    /// The handle at the card's foot, on the •••'s line and as far in from the card's left (Arc),
+    /// that drags the card along the others to move the Space (#1580), shown with the pointer on
+    /// the card as the ••• is. Its press stops there, so the card sees no click to pick the Space,
+    /// and a tab's row still drags the tab.
+    fn card_handle(
+        &self,
+        id: u64,
+        palette: &Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let half = URL_BUTTON_SIZE / 2.;
+        let shell = cx.weak_entity();
+        div()
+            .id(("space-card-handle", id))
+            .absolute()
+            .left(px(CARD_MORE_X - half))
+            .bottom(px(CARD_MORE_Y - half))
+            .size(px(URL_BUTTON_SIZE))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(NAV_RADIUS))
+            .opacity(0.)
+            .group_hover("space-card", |style| style.opacity(1.))
+            .hover(|style| style.bg(palette.plate(STATE_HOVERED)))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            // GPUI holds the handle where it was pressed; the card is held that far into it.
+            .on_drag(DraggedSpace, move |_, grab, _, cx| {
+                let grab = CARD_MORE_X - half + f32::from(grab.x);
+                Shell::start_space_drag(&shell, id, Along::Cards, CARD_WIDTH, grab, cx)
+            })
+            .child(
+                svg()
+                    .path("icons/grip-vertical.svg")
+                    .size(px(URL_BUTTON_GLYPH))
+                    .text_color(palette.glyph(NAV)),
+            )
+    }
+
+    /// The card dragged by its handle, whole, as it follows the pointer, lifted with a popover's
+    /// shadow as a card's dragged tab is. GPUI draws the drag from the handle's corner, so the
+    /// card hangs from there.
+    pub(super) fn space_card_ghost(
+        &self,
+        space: u64,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let space = self.spaces.iter().find(|each| each.id == space)?;
+        let height = f32::from(self.viewport.height) - 2. * SPACES_INSET;
+        let half = URL_BUTTON_SIZE / 2.;
+        let card = self
+            .space_card(space, cx)
+            .absolute()
+            .left(px(half - CARD_MORE_X))
+            .top(px(CARD_MORE_Y + half - height))
+            .h(px(height))
+            .shadow(Level::Popover.shadow());
+        Some(div().child(card).into_any_element())
     }
 
     /// The field across the top of a Space's card (Arc): its icon in a dashed slot, which the icon

@@ -1,5 +1,6 @@
-//! A Space's dot dragged along the sidebar's switcher moves the Space, ⌘Z puts it back, and the
-//! dots glide to their places once the core reports the new order (#1580).
+//! A Space's dot dragged along the sidebar's switcher, or its card dragged by its handle along the
+//! Library's, moves the Space, ⌘Z puts it back, and the dots and cards glide to their places once
+//! the core reports the new order (#1580).
 
 use std::rc::Rc;
 
@@ -7,7 +8,13 @@ use gpui::{
     Entity, Modifiers, MouseButton, Pixels, Point, TestAppContext, VisualTestContext, point, px,
 };
 
-use crate::shell::{Command, FOOTER_HEIGHT, SWITCHER_INSET, Shell, SpaceEntry, recorder::Recorder};
+use crate::shell::{
+    Command, FOOTER_HEIGHT, SWITCHER_INSET, Section, Shell, SpaceEntry, recorder::Recorder,
+    space_order::Along,
+};
+use crate::tokens::shell::library::{
+    CARD_GAP, CARD_MORE_X, CARD_MORE_Y, CARD_WIDTH, COLUMN_WIDTH, SPACES_INSET,
+};
 
 fn entry(id: u64) -> SpaceEntry {
     (id, format!("Space {id}").into(), None, 1, "".into(), "".into(), "".into())
@@ -37,7 +44,7 @@ fn report(shell: &Entity<Shell>, cx: &mut VisualTestContext, order: &[u64]) {
 /// The middle of `space`'s dot in the window, as drawn now.
 fn dot(shell: &Entity<Shell>, cx: &mut VisualTestContext, space: u64) -> Point<Pixels> {
     shell.read_with(cx, |shell, _| {
-        let x = SWITCHER_INSET + shell.dot_places()[&space];
+        let x = SWITCHER_INSET + shell.space_places()[&(Along::Switcher, space)];
         point(px(x), shell.viewport.height - px(FOOTER_HEIGHT / 2.))
     })
 }
@@ -118,7 +125,9 @@ fn the_dots_glide_to_their_new_places(cx: &mut TestAppContext) {
     hold(cx, second, to);
     let_go(cx, to);
     report(&shell, cx, &[2, 1, 3]);
-    let slides = shell.read_with(cx, |shell, _| (shell.dot_slide(2), shell.dot_slide(1)));
+    let slides = shell.read_with(cx, |shell, _| {
+        (shell.space_slide(Along::Switcher, 2), shell.space_slide(Along::Switcher, 1))
+    });
     let pitch = f32::from(second.x - first.x);
     assert!((slides.0 + 18.).abs() < 1., "the dot let go starts at its copy: {slides:?}");
     assert!((slides.1 + pitch).abs() < 1., "the dot passed starts at its old place: {slides:?}");
@@ -135,4 +144,101 @@ fn a_flick_with_one_move_still_moves_the_space(cx: &mut TestAppContext) {
     cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
     cx.run_until_parked();
     assert_eq!(host.take_edits(), ["move space 1 after 3"]);
+}
+
+/// The window with the Library open on its Spaces, at rest.
+fn library(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
+    let (shell, cx, host) = window(cx);
+    shell.update(cx, |shell, cx| {
+        shell.section = Section::Spaces;
+        shell.set_library(true, cx);
+        shell.library_motion = None;
+        shell.sidebar_fade = None;
+    });
+    cx.run_until_parked();
+    host.take_edits();
+    host.shown.take();
+    (shell, cx, host)
+}
+
+/// The middle of the handle on `space`'s card, at its foot 22 in from its left, as drawn now.
+fn handle(shell: &Entity<Shell>, cx: &mut VisualTestContext, space: u64) -> Point<Pixels> {
+    shell.read_with(cx, |shell, _| {
+        let middle = shell.space_places()[&(Along::Cards, space)] - shell.cards_at();
+        let x = COLUMN_WIDTH + middle - CARD_WIDTH / 2. + CARD_MORE_X;
+        point(px(x), shell.viewport.height - px(SPACES_INSET + CARD_MORE_Y))
+    })
+}
+
+/// Draws a frame, as the screen would while the pointer holds a card, so its copy is drawn whole.
+fn frame(cx: &mut VisualTestContext) {
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
+/// The third Space's card dragged by its handle and let go over the first card's left half moves
+/// it first, with the Library left open and no Space shown; ⌘Z moves it back.
+#[gpui::test]
+fn a_card_dragged_by_its_handle_moves_its_space(cx: &mut TestAppContext) {
+    let (shell, cx, host) = library(cx);
+    let (from, to) = (handle(&shell, cx, 3), handle(&shell, cx, 1));
+    hold(cx, from, to);
+    frame(cx);
+    assert!(shell.read_with(cx, |shell, _| shell.space_dragged(3)));
+    let_go(cx, to);
+    assert_eq!(host.take_edits(), ["move space 3 after 0"]);
+    assert!(host.shown.take().is_empty(), "the drag was a click on the card");
+    assert!(shell.read_with(cx, |shell, _| shell.library_open && !shell.space_dragged(3)));
+
+    report(&shell, cx, &[3, 1, 2]);
+    assert!(shell.update(cx, |shell, cx| shell.undo(cx)));
+    assert_eq!(host.take_edits(), ["move space 3 after 2"]);
+}
+
+/// Let go between two cards, it goes after the left one; a click on the handle, or a card let go
+/// on its own place, over the Library's column, or after Esc, moves nothing and shows nothing.
+#[gpui::test]
+fn a_card_goes_into_the_gap_it_was_let_go_over_and_nowhere_else(cx: &mut TestAppContext) {
+    let (shell, cx, host) = library(cx);
+    let between = handle(&shell, cx, 3) - point(px(CARD_MORE_X + CARD_GAP / 2.), px(0.));
+    let from = handle(&shell, cx, 1);
+    hold(cx, from, between);
+    let_go(cx, between);
+    assert_eq!(host.take_edits(), ["move space 1 after 2"]);
+    report(&shell, cx, &[2, 1, 3]);
+
+    let at = handle(&shell, cx, 3);
+    cx.simulate_click(at, Modifiers::none());
+    cx.run_until_parked();
+    let own = handle(&shell, cx, 1) + point(px(40.), px(0.));
+    let from = handle(&shell, cx, 1);
+    hold(cx, from, own);
+    let_go(cx, own);
+    let column = point(px(COLUMN_WIDTH / 2.), from.y);
+    hold(cx, from, column);
+    let_go(cx, column);
+    let last = handle(&shell, cx, 3) + point(px(CARD_WIDTH), px(0.));
+    hold(cx, from, last);
+    shell.update(cx, |shell, cx| shell.run(Command::Stop, "key", cx));
+    let_go(cx, last);
+    assert!(host.take_edits().is_empty());
+    assert!(host.shown.take().is_empty());
+    assert!(shell.read_with(cx, |shell, _| shell.library_open));
+}
+
+/// Once the core reports the order, the card let go glides from where its copy was, held as
+/// the drag began 6 past the press on its handle, and the card it passed from its old place.
+#[gpui::test]
+fn the_cards_glide_to_their_new_places(cx: &mut TestAppContext) {
+    let (shell, cx, _) = library(cx);
+    let (first, second) = (handle(&shell, cx, 1), handle(&shell, cx, 2));
+    let to = first - point(px(12.), px(0.));
+    hold(cx, second, to);
+    let_go(cx, to);
+    report(&shell, cx, &[2, 1, 3]);
+    let slides = shell.read_with(cx, |shell, _| {
+        (shell.space_slide(Along::Cards, 2), shell.space_slide(Along::Cards, 1))
+    });
+    assert!((slides.0 + 18.).abs() < 1., "the card let go starts at its copy: {slides:?}");
+    let pitch = CARD_WIDTH + CARD_GAP;
+    assert!((slides.1 + pitch).abs() < 1., "the card passed starts at its old place: {slides:?}");
 }

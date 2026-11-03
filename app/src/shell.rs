@@ -1182,11 +1182,12 @@ pub struct Shell {
     drag: Option<Drag>,
     /// A drag just ended, so the release isn't a click on the row.
     dragged: bool,
-    /// A Space's dot dragged along the switcher, the dots gliding to their places after the
-    /// Spaces' order changed, and where the one let go was, which glides from there.
+    /// A Space's dot or card dragged along the switcher or the Library, the dots and cards gliding
+    /// to their places after the Spaces' order changed, and where the one let go was along its
+    /// row, which glides from there.
     space_drag: Option<space_order::SpaceDrag>,
-    dot_slides: space_order::DotSlides,
-    dot_landing: Option<(u64, f32)>,
+    space_slides: space_order::SpaceSlides,
+    space_landing: Option<(space_order::Along, u64, f32)>,
     /// Escape put a dragged tab back, and the frame that shows it all put back isn't drawn yet.
     putting_back: bool,
     swipe: Option<Swipe>,
@@ -1616,8 +1617,8 @@ impl Shell {
             drag: None,
             dragged: false,
             space_drag: None,
-            dot_slides: HashMap::new(),
-            dot_landing: None,
+            space_slides: HashMap::new(),
+            space_landing: None,
             putting_back: false,
             swipe: None,
             settle: None,
@@ -2128,7 +2129,7 @@ impl Shell {
         log!("browser: spaces {}", ids.join(" "));
         let width = self.library_width();
         let filled = !self.spaces.is_empty();
-        let dots = self.dot_places();
+        let places = self.space_places();
         let order: Vec<u64> = self.spaces.iter().map(|space| space.id).collect();
         let listed = &mut self.spaces_listed;
         let made: Vec<u64> =
@@ -2207,7 +2208,7 @@ impl Shell {
         let kept = |of: &[u64], with: &[u64]| -> Vec<u64> {
             of.iter().copied().filter(|id| with.contains(id)).collect()
         };
-        self.glide_dots(dots, kept(&order, &now) != kept(&now, &order));
+        self.glide_spaces(places, kept(&order, &now) != kept(&now, &order));
         self.settle_theme_preview();
         if let Some(form) = &self.form
             && !self.spaces.iter().any(|space| space.id == form.space)
@@ -3440,7 +3441,7 @@ impl Render for Shell {
         self.step_drag_shape(window, cx);
         self.step_held_row(window);
         self.step_held_nav(window);
-        self.step_dot_slides(window);
+        self.step_space_slides(window);
         self.step_form_going(cx);
         self.step_scroll_edge(window);
         self.step_tools(window);
@@ -4005,7 +4006,7 @@ impl Shell {
         self.step_drag_shape(window, cx);
         self.step_held_row(window);
         self.step_held_nav(window);
-        self.step_dot_slides(window);
+        self.step_space_slides(window);
         self.step_form_going(cx);
         self.step_scroll_edge(window);
         self.step_tools(window);
