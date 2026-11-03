@@ -20,6 +20,7 @@
 #include "content/public/browser/devtools_agent_host_client.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "url/gurl.h"
 
@@ -96,7 +97,10 @@ class AgentPage : public content::WebContentsObserver,
   void Settle();
 
   void Click();
-  void Mouse(const char* type, std::pair<double, double> at, base::OnceClosure then);
+  // As a user's click at |at|, in the viewport of the frame of the session at |slot|: the pointer
+  // comes, presses and lets go, from |step| on, each once the last is in, then the page settles.
+  void ClickAt(int slot, gfx::PointF at, size_t step);
+  void Mouse(const char* type, gfx::PointF at, int slot, base::OnceClosure then);
   void Type(bool submit);
   void Focus(int64_t element, bool submit);
   void PressKey(const std::string& key, base::OnceClosure then);
@@ -119,8 +123,11 @@ class AgentPage : public content::WebContentsObserver,
   void Answer(std::string text, bool error);
   void Fail(std::string why);
 
-  // Scrolls the job's element into view and gives its box, in the viewport's CSS pixels.
+  // Scrolls the job's element into view and gives its box, in the main frame's viewport's CSS
+  // pixels.
   void Center(Then then);
+  // The same in the viewport of the frame whose session has the element.
+  void Locate(Then then);
   // Moves |box|, in the session at |slot|, into the main frame's viewport, through the elements
   // its frame is in.
   void Offset(int slot, gfx::RectF box, Then then);
