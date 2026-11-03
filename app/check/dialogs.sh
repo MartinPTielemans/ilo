@@ -293,8 +293,6 @@ if windows; then
   launch_picture=$(ls -t "$profile_dir"/launch-picture-*.png 2>/dev/null | head -1)
   [ -n "$launch_picture" ] || fail "going to the background, the app kept no launch picture"
   cp "$launch_picture" "$out/dialog-launch-picture.png"
-  no_caption "$out/dialog-background.png" 0.15 "with the alert in the background"
-  no_caption "$out/dialog-launch-picture.png" 0.4 "in the launch picture"
   [ "$foreground" != away ] ||
     expect '^browser: dialog shown in the background, its window asking for attention$' \
       "the alert shown in the background didn't have its window ask for attention"
@@ -333,6 +331,11 @@ if windows; then
   # A copy of the screen, with nothing in front: a caption painted under the UI at the background
   # step would still show, as no activation change since paints over it.
   no_caption "$out/dialog-after-close.png" 0.15 "once the dialog came back"
+  # And in the pictures of the background step, PrintWindow's, the capture's and the launch picture.
+  [ -z "$background_dialog" ] || {
+    no_caption "$out/dialog-background.png" 0.15 "with the alert in the background"
+    no_caption "$out/dialog-launch-picture.png" 0.4 "in the launch picture"
+  }
   answer return accept "confirm true"
   closed_dialog=1
 fi
