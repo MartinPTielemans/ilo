@@ -372,19 +372,19 @@ expect "^browser: library spaces 2 wide $spaces_wide\$" \
 expect "^browser: library resized $spaces_wide\$" "the Library didn't settle at its Spaces' width"
 ../tools/window-screenshot.sh "$pid" "$out/library-spaces.png" || fail "no window to capture"
 # At rest a card's field is its icon and name alone; its plate, the slot's dashes and the brush
-# come with the pointer on the field, here the second card's, 33 down its 48 from the top, and go
+# come with the pointer on the field, here the second card's, 25 down its 48 from the top, and go
 # with the pointer on the card below the field. The capture above is at rest, the pointer on the
 # Spaces button.
 grep -q "^browser: library field $second at rest drawn\$" "$log" ||
   fail "the second card's field wasn't drawn at rest"
-send move $((404 + 120)) $((48 + 33))
+send move $((404 + 120)) $((48 + 25))
 expect "^browser: library field $second shown drawn\$" "the pointer on the second card's field didn't show its plate"
 ../tools/window-screenshot.sh "$pid" "$out/library-field-hover.png" || fail "no window to capture"
 send move 524 $((${content#*x} / 2))
 expect "^browser: library field $second at rest drawn\$" "the pointer leaving the second card's field left its plate"
 # The brush, 4 in from the field's end and 28 wide, and the icon's slot, 6 in and 24 wide, are on
 # the field, and light it too (#1074).
-card_y=$((48 + 33))
+card_y=$((48 + 25))
 brush_x=$((404 + 240 - 8 - 4 - 14))
 slot_x=$((404 + 8 + 6 + 12))
 send move $brush_x $card_y
@@ -398,12 +398,22 @@ expect "^browser: library field $second at rest drawn\$" "the pointer leaving th
 # A right-click on the second card, 404 in and half its 240 wide, shows that Space's menu, with
 # the colour it was given, and leaves the Library open on the Space shown.
 post rightclick 524 $((${content#*x} / 2))
-expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
-  "a right-click on the second Space's card didn't show its menu"
+card_menu="^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
+New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$"
+expect "$card_menu" "a right-click on the second Space's card didn't show its menu"
 none_since '^browser: library space ' || fail "a right-click on a card showed its Space"
 send dismiss
-# The card's field is 8 in from its sides and 36 tall around the middle of its name's row, 33
+# The ••• at the second card's foot, its middle 22 in from the card's right and 21.5 above its foot,
+# shows with the pointer on the card, here on the ••• itself, which the capture shows before the
+# menu covers it. It shows the same menu and leaves the Library open on the Space shown (#1401).
+more_point="$((404 + 240 - 22)) $((${content#*x} - 48 - 22))"
+send move $more_point
+../tools/window-screenshot.sh "$pid" "$out/library-card-more.png" || fail "no window to capture"
+post click $more_point
+expect "$card_menu" "a click on the second card's ••• didn't show its menu"
+none_since '^browser: library space ' || fail "a click on a card's ••• showed its Space"
+send dismiss
+# The card's field is 8 in from its sides and 36 tall around the middle of its name's row, 25
 # down. Its brush opens the theme picker for the Space beside itself, over the Library, which
 # stays open (#1074), where the second gets its light and its dark appearance in turn, and then
 # automatic again. The capture comes while it's dark, the card taking the theme as it's made and
@@ -733,6 +743,7 @@ send key s cmd
 expect '^browser: sidebar hidden$' "⌘S didn't hide the sidebar for the … out over the page"
 send move $page_point
 send move 3 300
+send move 3 306
 expect '^browser: reveal shown$' "the pointer at the window's edge didn't bring the sidebar out"
 expect '^browser: reveal window shown$' "the sidebar out didn't come on screen"
 reveal_edit="207 117"
