@@ -26,7 +26,8 @@
 # chevron after the Space's name collapses the pinned rows but the tab shown's, which the tabs'
 # order then skips, and the command bar and the View menu expand and collapse them. Launched again,
 # the app brings them back collapsed. Focus Sidebar rings the tab shown's row, whose ring the arrows
-# move past the collapsed rows and return shows, and a key in the page or escape ends it. A folder
+# move past the collapsed rows and return shows, and a key in the page or escape ends it; ⇧F10
+# opens the ringed row's menu and ⌘W closes the ringed row, not the tab shown. A folder
 # from the desktop dropped on the list becomes a folder of its files' tabs, none shown, a file's
 # row dragged onto the page hands the file to the system's drag, and the +'s Add File or Folder…
 # opens a file at the top of Today.
@@ -285,17 +286,20 @@ expect "^browser: loaded $n ${site}notes.txt\$" "the link didn't load in the pan
 # The outline comes as the rows are drawn.
 expect '^browser: outline ' "the pinned split's row wasn't drawn"
 ../tools/window-screenshot.sh "$pid" "$out/pinned-split.png" || fail "no window to capture"
-bar_command separate-split "Separate All Pages" "separate all"
-expect '^browser: splits $' "Separate All Pages didn't end the pinned split"
-expect "^browser: panes $n\$" "Separate All Pages didn't leave the focused pane's tab shown alone"
+bar_command separate-split "Separate All Tabs" "separate all"
+expect '^browser: splits $' "Separate All Tabs didn't end the pinned split"
+expect "^browser: panes $n\$" "Separate All Tabs didn't leave the focused pane's tab shown alone"
 # A split made by dragging inside Pinned stays pinned too, as Arc's: the pane's tab, a pinned row
-# of its own now, rested on the pinned tab's row joins it there, and ⌘Z takes it back to its row.
-expect_lists "$c $n" "$a" "after Separate All Pages on the pinned split"
+# of its own now, rested on the pinned tab's row's right half joins it there on the right, and ⌘Z
+# takes it back to its row.
+expect_lists "$c $n" "$a" "after Separate All Tabs on the pinned split"
+y0=$(pinned_row 0 | cut -d' ' -f2)
 send press $(pinned_row 1)
 send dragto 110 $(pinned_row 1 | cut -d' ' -f2)
-send dragto $(pinned_row 0)
-expect "^browser: drop onto $c\$" "a pinned tab rested on another pinned tab's row didn't take it as the drop"
-send release $(pinned_row 0)
+send dragto 170 $y0
+expect "^browser: drop onto $c right\$" \
+  "a pinned tab rested on a pinned row didn't take it as the drop"
+send release 170 $y0
 expect "^browser: dragged $n onto $c\$" "the pinned tab let go on another pinned tab's row didn't join it"
 expect "^browser: splits $c+$n\$" "the pinned tabs dragged together aren't a split: $(grep '^browser: splits' "$log" | tail -1)"
 expect_lists "$c $n" "$a" "after dragging a pinned tab onto another inside Pinned"
@@ -778,10 +782,12 @@ expect "^browser: loaded $s https://duckduckgo.com/?q=dogs+and+cats" \
   "the dropped text didn't load a search for it: $(grep "^browser: loaded $s " "$log" | tail -1)"
 ../tools/window-screenshot.sh "$pid" "$out/dropped-text.png" || fail "no window to capture"
 
-# The chevron after the Space's name, there while the pointer is over the sidebar, collapses the
-# pinned rows as it's pressed, and the name lights: they fold away, but for the tab shown's, as
-# a closed folder's do, and ⌘1–⌘9 count Today's tabs first. The command bar's Expand Pinned Tabs
-# brings them back, and View › Collapse Pinned Tabs folds them again.
+# Under the pointer the Space's name row lights as a tab row does, with its chevron after the name
+# (in the icon's slot with an icon) and its ••• at its end, and a press anywhere on it but the •••
+# collapses the pinned rows, the chevron turning a quarter, and the name lights (Arc 1.171): they
+# fold away, but for the tab shown's, as a closed folder's do, and ⌘1–⌘9 count Today's tabs first.
+# The command bar's Expand Pinned Tabs brings them back, and View › Collapse Pinned Tabs folds them
+# again.
 # The middle of the chevron the app last drew for pinned rows open or shut ($1).
 caret() {
   grep "^browser: pinned caret $1 at " "$log" | tail -1 |
@@ -791,12 +797,20 @@ caret() {
 away
 send move $(caret open)
 expect '^browser: sidebar hovered 1$' "the sidebar didn't see the pointer come over the chevron"
-expect '^browser: sidebar tools shown$' "the chevron didn't fade in with Clear"
+expect '^browser: space name hovered$' "the Space's name row didn't light under the pointer"
+settled
 ../tools/window-screenshot.sh "$pid" "$out/pinned-caret.png" || fail "no window to capture"
-send click $(caret open)
-expect '^browser: command collapse-pinned via sidebar$' "a click on the chevron didn't run collapse-pinned"
-expect "^browser: outline -\\[$e $c\\]\$" "the chevron didn't collapse the pinned rows: $(outline)"
+# On the row past the name, not the chevron.
+name_y=$(caret open | cut -d' ' -f2)
+send move 150 "$name_y"
+record pinned-turn 2
+send click 150 "$name_y"
+expect '^browser: command collapse-pinned via sidebar$' "a click on the Space's name row didn't run collapse-pinned"
+expect "^browser: outline -\\[$e $c\\]\$" "the name row didn't collapse the pinned rows: $(outline)"
 expect '^browser: pinned caret shut at ' "the chevron didn't turn for collapsed rows"
+recorded
+away
+expect '^browser: space name left$' "the Space's name row stayed lit with the pointer away"
 settled
 ../tools/window-screenshot.sh "$pid" "$out/pinned-collapsed.png" || fail "no window to capture"
 switch "1 cmd" "$t"
@@ -843,6 +857,26 @@ send key escape
 expect '^browser: sidebar keys left by escape$' "escape didn't end the ring"
 none_since '^browser: selected' || fail "escape showed another tab"
 in_browser RenderWidgetHostViewCocoa "escape didn't give the page the keyboard"
+# ⇧F10 opens the ringed row's menu, its first item highlighted, and escape closes it with the ring
+# kept. ⌘W then closes the ringed row, the last, rather than the tab shown, and the ring goes to
+# the row before it.
+send menu Focus Sidebar
+expect "^browser: sidebar keyed $d\$" "Focus Sidebar didn't ring the tab shown's row again"
+send key f10 shift
+expect "^browser: menu shown $(cased 'Copy Link, ')" "⇧F10 didn't open the ringed row's menu"
+expect '^browser: menu highlights .* at ' "the row's menu from ⇧F10 didn't highlight its first item"
+send key escape
+expect '^browser: menu closed$' "escape didn't close the row's menu"
+none_since '^browser: sidebar keys left' || fail "closing the row's menu ended the ring"
+send key down
+expect "^browser: sidebar keyed $s\$" "↓ didn't move the ring to the last row"
+send key w cmd
+expect '^browser: command close-tab via sidebar keys$' "⌘W didn't reach the ringed row"
+expect "^browser: today $t $d\$" "⌘W didn't close the ringed row $s: Today is \"$(today)\""
+expect "^browser: sidebar keyed $d\$" "the ring didn't go to the row before the closed one"
+none_since '^browser: selected' || fail "⌘W on the ringed row showed another tab"
+send key escape
+expect '^browser: sidebar keys left by escape$' "escape didn't end the ring after ⌘W"
 quit_by_key
 await '^browser: command quit via ' || fail "⌘Q didn't reach the UI"
 exited
@@ -893,25 +927,30 @@ none_since '^browser: selected' || fail "a file of the dropped folder showed"
 settled
 ../tools/window-screenshot.sh "$pid" "$out/dropped-folder.png" || fail "no window to capture"
 # The dropped file's row, under the folder's four, dragged onto the page hands the file to the
-# system's drag, to upload it there, as a download's row does, and goes back to its place.
-press=$((step + 1))
-send press $(pinned_row 4)
-send dragto 150 $(($(pinned_row 4 | cut -d' ' -f2) + 10))
-send dragto 600 300
-expect "^browser: tab $e file drag\$" \
-  "a file's row dragged onto the page didn't start the system's drag"
-send release 600 300
-# No real button holds the system's drag, so it may end before the release reaches it.
-for _ in $(seq 100); do
-  sed -n "/^browser: drive $press: /,\$p" "$log" | grep -q '^browser: file drag ended ' && break
-  sleep 0.1
-done
-sed -n "/^browser: drive $press: /,\$p" "$log" | grep -q '^browser: file drag ended ' ||
-  fail "the file row's drag didn't end"
-case "$(outline)" in
-  "$n+["*"] $e $c") ;;
-  *) fail "the file's row didn't go back to its place: $(outline)" ;;
-esac
+# system's drag, to upload it there, as a download's row does, and goes back to its place. On
+# Windows the app stops in DoDragDrop under the driver (#1583).
+if windows; then
+  echo "skip: a file's row dragged onto the page: Windows' system drag stops under the driver (#1583)."
+else
+  press=$((step + 1))
+  send press $(pinned_row 4)
+  send dragto 150 $(($(pinned_row 4 | cut -d' ' -f2) + 10))
+  send dragto 600 300
+  expect "^browser: tab $e file drag\$" \
+    "a file's row dragged onto the page didn't start the system's drag"
+  send release 600 300
+  # No real button holds the system's drag, so it may end before the release reaches it.
+  for _ in $(seq 100); do
+    sed -n "/^browser: drive $press: /,\$p" "$log" | grep -q '^browser: file drag ended ' && break
+    sleep 0.1
+  done
+  sed -n "/^browser: drive $press: /,\$p" "$log" | grep -q '^browser: file drag ended ' ||
+    fail "the file row's drag didn't end"
+  case "$(outline)" in
+    "$n+["*"] $e $c") ;;
+    *) fail "the file's row didn't go back to its place: $(outline)" ;;
+  esac
+fi
 # The +'s menu ends with Add File or Folder… (Add Files… and Add Folder… off the Mac, whose
 # panels pick one kind), whose file, named at launch, opens at the top of Today and shows. Today is
 # read here, as the drag before may have dropped its file on the page, which opens it as a tab.
@@ -934,4 +973,4 @@ expect "^browser: selected $added\$" "the added file's tab didn't show"
 expect "^browser: loaded $added file:///.*/Notes/A.txt\$" "the added file didn't load in its tab"
 exec 3>&-
 quit
-echo "ok: ⌘D pins and unpins from the page and the UI, and ⌘1–⌘9 count pinned tabs first. A middle-click on a row closes its tab as its ✕ or − does. Dragging a row moves its tab in the pinned tabs, pins it and unpins it, without showing it, and escape puts it back. ⌘W and − unload a pinned tab, shown or not, and keep its row, showing the top Today tab, else a pinned tab still loaded, else no page, and an unloaded pinned tab loads once shown. An unloaded pinned row's remove button, named by its tooltip, takes the tab out of the pinned tabs without loading it and not into Today, offering Undo in a toast, and ⌘Z pins it again at its place, while a second click on the − that unloaded it shows the tab. Away from its pinned URL, ⌘↩ from the page and the UI, and a click on its favicon, go back there. Pinned tabs come back pinned, unloaded and at their page, still away. New Folder makes a folder its field names, a drag right and left takes a tab in and out of it, a folder drags as a row, a click closes and opens it, and the command bar finds Collapse All Folders, which closes it, and Expand All Folders, which opens it. Resting on it closed previews its tab, and typing the tab's title in the preview's search and ↩ show it, the folder kept closed. It comes back closed, a double-click renames it, its menu's Copy All Links is Copy All Links as Markdown with ⌥ held, which copies them, Change Icon… gives it an emoji and offers Remove Icon after, and Delete Folder leaves its tab in place. A link and a file dragged onto the list open as tabs where they're let go, Today or pinned, and show, text that isn't a link opens a search for it there, and a link that isn't a web link doesn't open. Delete Folder offers Undo, ⌘Z remakes the folder around its tab and ⇧⌘Z deletes it again. Settings' Export… writes the folder and its pinned tab as Markdown links. ⌥-click on a pinned tab's link opens a pinned split. Away from its pinned URL, Pinned URL › Replace Pinned URL with Current and Edit… change the pinned URL, which ⌘Z and ⇧⌘Z undo and redo, and ⌘-click on its favicon goes back after opening the page in a new tab. The chevron after the Space's name collapses the pinned rows, which ⌘1 then skips, Expand Pinned Tabs and Collapse Pinned Tabs in the command bar and the View menu bring them back and fold them, and they come back collapsed. Focus Sidebar from the command bar and the View menu rings the tab shown's row, ↑ and ↓ move the ring past the collapsed rows, return shows its tab with the page holding the keyboard, and a key in the page and escape end it. A folder from the desktop dropped on the list becomes an open folder of its folder, closed, and its files' tabs, none shown, a file's row dragged onto the page starts the system's drag of its file, and the +'s Add File or Folder… opens a file at the top of Today. Windows: $out/pinned-close.png, $out/pinned-remove.png, $out/pinned-removed.png, $out/pinned-remove-undone.png, $out/pinned-split.png, $out/pinned-url-menu.png, $out/pinned-url-edit.png, $out/pinned-kept-page.png, $out/drag.png, $out/pinned.png, $out/pinned-unloaded.png, $out/pinned-away.png, $out/pinned-restored.png, $out/folder.png, $out/folder-preview.png, $out/folder-preview-search.png, $out/folder-restored.png, $out/export.png, $out/folder-menu.png, $out/folder-menu-option.png, $out/folder-icon.png, $out/folder-motion.mp4, $out/drop-before.png, $out/drop-line.png, $out/dropped.png, $out/dropped-text.png, $out/command-bar-commands.png, $out/pinned-caret.png, $out/pinned-collapsed.png, $out/sidebar-keyed.png, $out/sidebar-keyed-down.png, $out/pinned-expanded.png, $out/dropped-folder.png, $out/plus-add.png"
+echo "ok: ⌘D pins and unpins from the page and the UI, and ⌘1–⌘9 count pinned tabs first. A middle-click on a row closes its tab as its ✕ or − does. Dragging a row moves its tab in the pinned tabs, pins it and unpins it, without showing it, and escape puts it back. ⌘W and − unload a pinned tab, shown or not, and keep its row, showing the top Today tab, else a pinned tab still loaded, else no page, and an unloaded pinned tab loads once shown. An unloaded pinned row's remove button, named by its tooltip, takes the tab out of the pinned tabs without loading it and not into Today, offering Undo in a toast, and ⌘Z pins it again at its place, while a second click on the − that unloaded it shows the tab. Away from its pinned URL, ⌘↩ from the page and the UI, and a click on its favicon, go back there. Pinned tabs come back pinned, unloaded and at their page, still away. New Folder makes a folder its field names, a drag right and left takes a tab in and out of it, a folder drags as a row, a click closes and opens it, and the command bar finds Collapse All Folders, which closes it, and Expand All Folders, which opens it. Resting on it closed previews its tab, and typing the tab's title in the preview's search and ↩ show it, the folder kept closed. It comes back closed, a double-click renames it, its menu's Copy All Links is Copy All Links as Markdown with ⌥ held, which copies them, Change Icon… gives it an emoji and offers Remove Icon after, and Delete Folder leaves its tab in place. A link and a file dragged onto the list open as tabs where they're let go, Today or pinned, and show, text that isn't a link opens a search for it there, and a link that isn't a web link doesn't open. Delete Folder offers Undo, ⌘Z remakes the folder around its tab and ⇧⌘Z deletes it again. Settings' Export… writes the folder and its pinned tab as Markdown links. ⌥-click on a pinned tab's link opens a pinned split. Away from its pinned URL, Pinned URL › Replace Pinned URL with Current and Edit… change the pinned URL, which ⌘Z and ⇧⌘Z undo and redo, and ⌘-click on its favicon goes back after opening the page in a new tab. A press on the Space's name row, lit under the pointer with its chevron and •••, collapses the pinned rows, the chevron turning, which ⌘1 then skips, Expand Pinned Tabs and Collapse Pinned Tabs in the command bar and the View menu bring them back and fold them, and they come back collapsed. Focus Sidebar from the command bar and the View menu rings the tab shown's row, ↑ and ↓ move the ring past the collapsed rows, return shows its tab with the page holding the keyboard, and a key in the page and escape end it. A folder from the desktop dropped on the list becomes an open folder of its folder, closed, and its files' tabs, none shown, a file's row dragged onto the page starts the system's drag of its file, and the +'s Add File or Folder… opens a file at the top of Today. Windows: $out/pinned-close.png, $out/pinned-remove.png, $out/pinned-removed.png, $out/pinned-remove-undone.png, $out/pinned-split.png, $out/pinned-url-menu.png, $out/pinned-url-edit.png, $out/pinned-kept-page.png, $out/drag.png, $out/pinned.png, $out/pinned-unloaded.png, $out/pinned-away.png, $out/pinned-restored.png, $out/folder.png, $out/folder-preview.png, $out/folder-preview-search.png, $out/folder-restored.png, $out/export.png, $out/folder-menu.png, $out/folder-menu-option.png, $out/folder-icon.png, $out/folder-motion.mp4, $out/drop-before.png, $out/drop-line.png, $out/dropped.png, $out/dropped-text.png, $out/command-bar-commands.png, $out/pinned-caret.png, $out/pinned-collapsed.png, $out/sidebar-keyed.png, $out/sidebar-keyed-down.png, $out/pinned-expanded.png, $out/dropped-folder.png, $out/plus-add.png"

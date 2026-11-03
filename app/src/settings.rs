@@ -339,9 +339,9 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
             ("Previous Pane", Keys::Of(Command::PreviousPane)),
             ("Separate Page from Split View", Keys::Of(Command::SeparatePane)),
             ("Expand Current Split", Keys::Of(Command::ExpandSplit)),
-            ("Separate All Pages", Keys::Of(Command::SeparateSplit)),
+            ("Separate All Tabs", Keys::Of(Command::SeparateSplit)),
             ("Flip Split View", Keys::Of(Command::FlipSplit)),
-            ("Change Orientation", Keys::Of(Command::ChangeOrientation)),
+            ("Convert to Vertical/Horizontal Split View", Keys::Of(Command::ChangeOrientation)),
             ("Move Pane Left", Keys::Of(Command::MovePaneLeft)),
             ("Move Pane Right", Keys::Of(Command::MovePaneRight)),
         ],
@@ -661,6 +661,8 @@ struct Profile {
     spaces: usize,
     /// As the core has it: not the one it started with, nor one a Space or a favorite is in.
     deletable: bool,
+    /// Why it has no Delete, for the line under its name.
+    kept: Option<SharedString>,
     /// Whether one of the user's Spaces is in it, for Clear Browsing Data's tab.
     users_space: bool,
 }
@@ -722,14 +724,20 @@ fn profiles() -> Vec<Profile> {
     let users: Vec<u64> = users.map(in_space).collect();
     let of_tab = |tab| unsafe { bc::bc_tab_profile(tab) };
     let favorites: Vec<u64> = crate::ids(bc::bc_favorites).into_iter().map(of_tab).collect();
-    (crate::ids(bc::bc_profiles).into_iter().enumerate())
+    let ids = crate::ids(bc::bc_profiles);
+    let total = ids.len();
+    (ids.into_iter().enumerate())
         .map(|(index, id)| {
             let count = spaces.iter().filter(|&&each| each == id).count();
+            let listed = listed.iter().filter(|&&each| each == id).count();
+            let favorites = favorites.contains(&id);
+            let kept = shell::profile_kept(index == 0, total, listed, count > listed, favorites);
             Profile {
                 id,
                 name: crate::name(bc::bc_profile_name, id),
-                spaces: listed.iter().filter(|&&each| each == id).count(),
-                deletable: index > 0 && count == 0 && !favorites.contains(&id),
+                spaces: listed,
+                deletable: index > 0 && count == 0 && !favorites,
+                kept: kept.map(Into::into),
                 users_space: users.contains(&id),
             }
         })
@@ -1457,7 +1465,7 @@ impl Settings {
                 // check.sh waits for this line.
                 log!("browser: {name} {}", if on { "off" } else { "on" });
                 set(!on, cx);
-                settings.switched = Some((name, Instant::now()));
+                settings.switched = Some((name, browser::motion::start(cx)));
                 cx.notify();
             }))
             .relative()
@@ -1611,17 +1619,16 @@ impl Settings {
         cx.notify();
     }
 
-    /// A row for each profile, with how many Spaces are in it and Delete for one nothing is in, and
-    /// New Profile under them, then each profile's New Documents. A double-click on a profile's name
-    /// renames it, as on a Space's.
+    /// A row for each profile, with how many Spaces are in it, Rename, and Delete for one nothing is
+    /// in, else a line under its name saying why it has none, and New Profile under them, then each
+    /// profile's New Documents. A double-click on a profile's name renames it too, as on a Space's.
     fn profiles(&self, profiles: &[Profile], cx: &mut Context<Self>) -> AnyElement {
         let services: Vec<_> = profiles.iter().map(|profile| self.notes_row(profile, cx)).collect();
         let rows = profiles.iter().map(|profile| {
             let (id, name) = (profile.id, profile.name.clone());
+            let naming = self.renaming.as_ref().is_some_and(|renaming| renaming.profile == id);
             let label = match &self.renaming {
                 Some(renaming) if renaming.profile == id => div()
-                    .flex_1()
-                    .min_w_0()
                     .key_context("Naming")
                     .on_action(cx.listener(|settings, _: &KeepName, window, cx| {
                         settings.keep_name(window, cx)
@@ -1632,8 +1639,6 @@ impl Settings {
                     .child(renaming.name.clone()),
                 _ => div()
                     .relative()
-                    .flex_1()
-                    .min_w_0()
                     .truncate()
                     .child(self.drawn(format!("profile {id}")))
                     .on_mouse_down(
@@ -1646,11 +1651,26 @@ impl Settings {
                     )
                     .child(profile.name.clone()),
             };
+            // Under the name in its row, as a login's username is under its site in Passwords.
+            let kept = profile.kept.clone().map(|why| {
+                div().truncate().text_size(px(USERNAME_SIZE)).text_color(rgb(DETAIL)).child(why)
+            });
+            let label = div().flex_1().min_w_0().flex().flex_col().child(label).children(kept);
             let spaces: SharedString = match profile.spaces {
                 0 => "No Spaces".into(),
                 1 => "1 Space".into(),
                 count => format!("{count} Spaces").into(),
             };
+            let rename = (!naming).then(|| {
+                let name = profile.name.clone();
+                let button = button(&RowLook::settings(), ("rename-profile", id), "Rename");
+                let button = button.relative().child(self.drawn(format!("rename profile {id}")));
+                button
+                    .ml(px(PADDING))
+                    .on_click(cx.listener(move |settings, _, _, cx| {
+                        settings.rename(id, name.clone(), cx)
+                    }))
+            });
             let name = profile.name.clone();
             let delete = profile.deletable.then(|| {
                 let button = button(&RowLook::settings(), ("delete-profile", id), "Delete");
@@ -1669,6 +1689,7 @@ impl Settings {
                 .child(tile("icons/user.svg", PROFILE_TILE))
                 .child(label)
                 .child(div().flex_none().ml(px(PADDING)).text_color(rgb(DETAIL)).child(spaces))
+                .children(rename)
                 .children(delete.map(|delete| delete.ml(px(PADDING))));
             // Its own settings under it, as Arc's Settings › Profiles keeps them: none to show
             // until the core has loaded it.
