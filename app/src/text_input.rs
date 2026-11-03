@@ -373,6 +373,20 @@ impl TextInput {
         self
     }
 
+    /// The placeholder's colour as the ground under the field changes, such as with the appearance.
+    pub fn set_placeholder_color(&mut self, color: impl Into<Hsla>, cx: &mut Context<Self>) {
+        let color = color.into();
+        if color != self.placeholder_color {
+            self.placeholder_color = color;
+            cx.notify();
+        }
+    }
+
+    /// The placeholder's colour now.
+    pub fn placeholder_hsla(&self) -> Hsla {
+        self.placeholder_color
+    }
+
     /// The placeholder's, caret's and selection's colours, for an input whose ground and accent
     /// change with the Space.
     pub fn set_colors(&mut self, placeholder: Hsla, caret: Hsla, selection: Hsla) {
