@@ -248,7 +248,7 @@ Dia's New Tab page isn't ours (decision 6). ⌘T opens the command bar over the 
 
 | Done | Item | Phase | Target | Source |
 |---|---|---|---|---|
-| [x] | Panes | MVP | up to 3 side by side or stacked, sharing the card; a page asked to join a full split shows Arc's "Cannot Add New Pane" toast; Arc's max: owner's call (1.171's `maxNumberPanes` isn't read) | Arc rec, Dia P§6, Arc 1.171 |
+| [x] | Panes | MVP | up to 3 side by side or stacked, sharing the card; a page asked to join a full split shows Arc's "Cannot Add New Pane" toast; Arc's max is unmeasured (4 is only inferred), so 3, the core's cap, stays (orchestrator, 2026-11-03) | Arc rec, Dia P§6, Arc 1.171 |
 | [ ] | The focused pane's URL, keyboard and toasts | MVP | the URL field shows the focused pane's URL, and ⌘L, a click on it and Copy URL act on that page, as Arc's address bar is its panel's (no toolbar, decision 6); a pane's page has the keyboard as it's focused or opens; toasts go at the focused pane's corner, as the find bar does. Built, and the URL field checked by `cargo test`'s `the_url_field_is_the_focused_pages`; to tick: `./check.sh split`'s `layout keyboard` steps, its ⌘L step and `split-toast.png`, run on the Mac | Arc help |
 | [x] | Gap, focus indicator | MVP | 10 pt gap; 2 pt ring inside the focused pane, ≈ 8 pt glow outside, in the Space's colour (Arc's read P3 (49, 57, 251)) | Arc 1.170.0 rec |
 | [x] | Unfocused dim | MVP | none *interim*; Arc's: measure | — |
