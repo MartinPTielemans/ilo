@@ -282,12 +282,13 @@ expect '^browser: loaded [0-9]* https://example.org/$' "the first tab didn't loa
 # of it, from the frame's left, through a resize. Each tab has its own. Sets $views to the frames
 # of the views shown, DevTools' first, once there are $1 of them. DevTools fill the frame at once,
 # and the page moves aside once they've loaded, as in Arc, so with two it waits for that too.
-# Linux's driver lists the pages the UI lays out, and DevTools are an aura window in Chromium's,
-# which the X server doesn't see (drive.rs), so there neither checks the views.
+# Off the Mac the drivers list the pages the UI lays out, and DevTools are an aura window in the
+# same Chromium window as the page, which neither the X server (drive.rs) nor Windows sees, so
+# there neither checks the views; devtools.png shows them.
 sees_devtools=1
-if [ "$(uname)" = Linux ]; then
+if [ "$(uname)" != Darwin ]; then
   sees_devtools=
-  echo "skip: where DevTools dock beside the page: Linux's driver can't see aura windows."
+  echo "skip: where DevTools dock beside the page: off the Mac the driver can't see aura windows."
 fi
 await_views() {
   [ -n "$sees_devtools" ] || return 0
