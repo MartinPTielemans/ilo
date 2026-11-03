@@ -55,10 +55,13 @@ pub const MAX_TEXT: usize = 40_000;
 /// The tools `agent` may call, for tools/list: a task's own too.
 pub fn list(agent: &str) -> Value {
     let mut tools = shared();
-    if super::is_task(agent)
-        && let Some(tools) = tools.as_array_mut()
-    {
-        tools.extend(task_tools());
+    if let Some(tools) = tools.as_array_mut() {
+        match super::is_task(agent) {
+            true => tools.extend(task_tools()),
+            // A task's pages live in the task, in a Space the user doesn't see, so only an agent
+            // from outside pins.
+            false => tools.extend(pin_tools()),
+        }
     }
     tools
 }
@@ -69,6 +72,40 @@ pub fn names(agent: &str) -> Vec<String> {
     (list.as_array().into_iter().flatten())
         .filter_map(|tool| Some(tool.get("name")?.as_str()?.to_string()))
         .collect()
+}
+
+/// Pinning, as the user pins in the sidebar: an agent pins its own tabs, and unpins or removes
+/// only those it pinned.
+fn pin_tools() -> Vec<Value> {
+    let tab = tab_schema();
+    let tabs = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false });
+    vec![
+        json!({
+            "name": "pin_tab",
+            "title": "Pin tab",
+            "description": "Pin a tab in your Space at the page it's at, where it stays, even closed, until you unpin or remove it.",
+            "inputSchema": { "type": "object", "properties": { "tab": tab } },
+            "annotations": tabs,
+        }),
+        json!({
+            "name": "unpin_tab",
+            "title": "Unpin tab",
+            "description": "Unpin a tab you pinned, to the top of your Today tabs. Tabs the user pinned stay pinned.",
+            "inputSchema": { "type": "object", "properties": { "tab": tab } },
+            "annotations": tabs,
+        }),
+        json!({
+            "name": "remove_tab",
+            "title": "Remove pinned tab",
+            "description": "Remove a tab you pinned from your Space: it's unpinned and closed, and goes to the archive, where the user can still find it. Tabs the user pinned stay.",
+            "inputSchema": { "type": "object", "properties": { "tab": tab } },
+            "annotations": {
+                "readOnlyHint": false,
+                "destructiveHint": true,
+                "openWorldHint": false,
+            },
+        }),
+    ]
 }
 
 /// A task's own tools: its title, a question for the user, and finishing.
@@ -139,12 +176,17 @@ fn task_tools() -> Vec<Value> {
     ]
 }
 
-/// The tools every agent may call.
-fn shared() -> Value {
-    let tab = json!({
+/// A tool's tab argument.
+fn tab_schema() -> Value {
+    json!({
         "type": "integer",
         "description": "The tab's id, from list_tabs or open_tab. Without it, the tab you used last, else your first."
-    });
+    })
+}
+
+/// The tools every agent may call.
+fn shared() -> Value {
+    let tab = tab_schema();
     let element = json!({
         "type": "string",
         "description": "The element's ref, from the latest outline, like e12."
@@ -154,7 +196,7 @@ fn shared() -> Value {
         {
             "name": "list_tabs",
             "title": "List tabs",
-            "description": "List the tabs in your Space: each one's id, title and URL. * marks the tab you used last.",
+            "description": "List the tabs in your Space, pinned first: each one's id, title and URL, then who pinned it if it's pinned. * marks the tab you used last.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": { "readOnlyHint": true, "openWorldHint": false },
         },
@@ -340,13 +382,18 @@ pub const WAIT: f64 = 5.0;
 pub const MAX_WAIT: f64 = 30.0;
 
 /// list_tabs' answer.
-pub fn tab_list(tabs: &[TabInfo], current: Option<u64>) -> String {
+pub fn tab_list(tabs: &[TabInfo], current: Option<u64>, mine: &[u64]) -> String {
     if tabs.is_empty() {
         return "Your Space has no tabs yet. The user can open pages in it for you.".into();
     }
     let lines = tabs.iter().map(|tab| {
         let mark = if Some(tab.id) == current { '*' } else { ' ' };
-        format!("{mark} {}  {}  {}", tab.id, tab.title, tab.url)
+        let pinned = match (tab.pinned, mine.contains(&tab.id)) {
+            (false, _) => "",
+            (true, true) => "  pinned by you",
+            (true, false) => "  pinned by the user",
+        };
+        format!("{mark} {}  {}  {}{pinned}", tab.id, tab.title, tab.url)
     });
     lines.collect::<Vec<_>>().join("\n")
 }
@@ -458,6 +505,9 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
         },
         "list_tabs" => ("Looking over", "Looked over", "Couldn't look over", "its tabs".to_string()),
         "close_tab" => ("Closing", "Closed", "Couldn't close", site("a tab")),
+        "pin_tab" => ("Pinning", "Pinned", "Couldn't pin", site("a tab")),
+        "unpin_tab" => ("Unpinning", "Unpinned", "Couldn't unpin", site("a tab")),
+        "remove_tab" => ("Removing", "Removed", "Couldn't remove", site("a pinned tab")),
         "hand_off" => ("Handing you", "Handed you", "Couldn't hand you", site("a tab")),
         "ask_for_tab" => {
             let tab = site("a tab");
@@ -491,7 +541,9 @@ pub fn group_title(did: &Did, pages: usize, tense: Tense) -> String {
             step_title(&on("pages"), tense)
         }
         "scroll" if matches!(did.target.as_str(), "up" | "down" | "") => step_title(&on("pages"), tense),
-        "close_tab" | "hand_off" | "ask_for_tab" => step_title(&on("tabs"), tense),
+        "close_tab" | "pin_tab" | "unpin_tab" | "remove_tab" | "hand_off" | "ask_for_tab" => {
+            step_title(&on("tabs"), tense)
+        }
         _ => format!("{} on {pages} pages", step_title(did, tense)),
     }
 }
@@ -506,7 +558,10 @@ pub fn step_glyph(tool: &str) -> &'static str {
         "scroll" => "icons/arrow-down.svg",
         "screenshot" => "icons/eye.svg",
         "wait" => "icons/clock.svg",
-        "list_tabs" | "close_tab" | "hand_off" | "ask_for_tab" => "icons/app-window.svg",
+        "list_tabs" | "close_tab" | "remove_tab" | "hand_off" | "ask_for_tab" => {
+            "icons/app-window.svg"
+        }
+        "pin_tab" | "unpin_tab" => "icons/pin.svg",
         "ask" => "icons/circle-question-mark.svg",
         "thought" => "icons/lightbulb.svg",
         _ => "icons/globe.svg",
@@ -577,6 +632,9 @@ pub fn describe(action: &str) -> &'static str {
         "stopped" => "You stopped it",
         "hand_off" => "Handed you a tab",
         "close_tab" => "Closed a tab",
+        "pin_tab" => "Pinned a tab",
+        "unpin_tab" => "Unpinned a tab",
+        "remove_tab" => "Removed a pinned tab",
         "passkey" => "Handed you a tab for your passkey",
         "ask_for_tab" => "Asked for a tab back",
         "kept" => "You kept the tab",

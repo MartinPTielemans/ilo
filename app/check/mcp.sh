@@ -12,8 +12,9 @@
 # the page, which isn't the page's. Its keys, typed or pressed, go to the page alone, and Escape
 # the page doesn't keep runs no Stop of ilo's. Where it acts in the page shown, its pointer and a
 # ring with the element's ref show it. It opens a page, clicks its link, scrolls, takes a screenshot
-# and closes a tab, and a bank's site asks first, in a card whose Allow Once opens it. Always Allow
-# opens it from then on, until Revoke Permission in the Space's menu takes that back. A login the
+# and closes a tab. It pins a tab of its own, unpins it and removes it. A bank's site asks first,
+# in a card whose Allow Once opens it. Always Allow opens it from then on, until Revoke Permission
+# in the Space's menu takes that back. A login the
 # user saved fills in neither as the agent's tab loads it nor from a dropdown, and fills once the
 # user takes the tab over, without a reload. Closing the client's end ends its session with the tab,
 # and turning Settings › Agents off takes the socket away and drops a client connected.
@@ -496,6 +497,35 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
   listed=$(call list_tabs '{}')
   printf '%s\n' "$listed" | grep -q "^. $closing  " && fail "list_tabs listed the closed tab"
 
+  # It pins a tab of its own, which list_tabs says it pinned, unpins it, pins it again and removes
+  # it, to the archive. The user's tab isn't its to pin.
+  opened=$(call open_tab '{"url":"example.com"}')
+  pinning=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  pinned=$(call pin_tab "{\"tab\":$pinning}")
+  case "$pinned" in
+    "Pinned tab $pinning at the page it's at."*) ;;
+    *) fail "pin_tab answered: $pinned" ;;
+  esac
+  await_log "^browser: agent activity mcp-client $pinning pin_tab\$" \
+    "the pin didn't reach the activity log"
+  call list_tabs '{}' | grep -q "^. $pinning  .*  pinned by you\$" ||
+    fail "list_tabs didn't say the agent pinned its tab"
+  unpinned=$(call unpin_tab "{\"tab\":$pinning}")
+  [ "$unpinned" = "Unpinned tab $pinning. It's at the top of your Today tabs." ] ||
+    fail "unpin_tab answered: $unpinned"
+  call list_tabs '{}' | grep "^. $pinning  " | grep -q '  pinned by ' &&
+    fail "list_tabs listed the unpinned tab as pinned"
+  call pin_tab "{\"tab\":$pinning}" > /dev/null
+  removed=$(call remove_tab "{\"tab\":$pinning}")
+  [ "$removed" = "Removed tab $pinning. The user can still find it in the archive." ] ||
+    fail "remove_tab answered: $removed"
+  await_log "^browser: agent activity mcp-client $pinning remove_tab\$" \
+    "the removal didn't reach the activity log"
+  call list_tabs '{}' | grep -q "^. $pinning  " && fail "list_tabs listed the removed tab"
+  refused=$(call pin_tab "{\"tab\":$user_tab}")
+  [ "$refused" = "error: The tab isn't in the agent's own Space." ] ||
+    fail "pinning the user's tab answered: $refused"
+
   # run_steps takes several actions in one call, in order, and waits for a page's text.
   ran=$(call run_steps "{\"tab\":$opened_tab,\"steps\":[{\"action\":\"scroll\",\"direction\":\"up\"},{\"action\":\"snapshot\"},{\"action\":\"wait\",\"text\":\"example domain\"}]}")
   case "$ran" in
@@ -775,7 +805,7 @@ forget_login
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, is refused a tab the user took over until they hand it back and Keep answers its ask, its bar's Stop naming ⌘. in its tooltip, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow and again once that's revoked, and off takes the socket away"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, runs steps in one call, waits on a handoff until Hand Back, is refused a tab the user took over until they hand it back and Keep answers its ask, its bar's Stop naming ⌘. in its tooltip, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow and again once that's revoked, and off takes the socket away"
 else
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases). skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi

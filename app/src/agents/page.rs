@@ -301,6 +301,7 @@ mod tests {
             id: 20,
             title: "Shop".into(),
             url: "https://shop.example/".into(),
+            ..TabInfo::default()
         }
     }
 
