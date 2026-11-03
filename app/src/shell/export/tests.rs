@@ -29,13 +29,41 @@ fn work(cx: &mut TestAppContext) -> (Rc<Recorder>, gpui::Entity<Shell>) {
             parents: HashMap::from([(12, 50), (13, 50)]),
             ..Default::default()
         };
-        let split = Split { tabs: vec![21, 22], ..Default::default() };
-        shell.set_tabs(1, vec![10, 50, 12, 13], vec![20, 21, 22], vec![split], folders, cx);
+        let split = Split {
+            tabs: vec![21, 22],
+            ..Default::default()
+        };
+        shell.set_tabs(
+            1,
+            vec![10, 50, 12, 13],
+            vec![20, 21, 22],
+            vec![split],
+            folders,
+            cx,
+        );
         shell.set_space(1, cx);
-        for (tab, url) in [(20, "https://news.example/"), (21, "https://a.example/"), (22, "https://b.example/")] {
-            shell.set_page(tab, Page { url: url.into(), ..Page::default() }, cx);
+        for (tab, url) in [
+            (20, "https://news.example/"),
+            (21, "https://a.example/"),
+            (22, "https://b.example/"),
+        ] {
+            shell.set_page(
+                tab,
+                Page {
+                    url: url.into(),
+                    ..Page::default()
+                },
+                cx,
+            );
         }
-        for (tab, title) in [(10, "Draft"), (12, "Plan"), (13, "Notes"), (20, "*News*"), (21, "A"), (22, "B")] {
+        for (tab, title) in [
+            (10, "Draft"),
+            (12, "Plan"),
+            (13, "Notes"),
+            (20, "*News*"),
+            (21, "A"),
+            (22, "B"),
+        ] {
             shell.set_title(tab, title.into(), cx);
         }
     });
@@ -47,7 +75,9 @@ fn work(cx: &mut TestAppContext) -> (Rc<Recorder>, gpui::Entity<Shell>) {
 #[gpui::test]
 fn the_space_menu_exports_its_tabs_as_markdown(cx: &mut TestAppContext) {
     let (host, shell) = work(cx);
-    shell.update(cx, |shell, cx| shell.space_menu(1, point(px(100.), px(112.)), cx));
+    shell.update(cx, |shell, cx| {
+        shell.space_menu(1, point(px(100.), px(112.)), cx)
+    });
     cx.update(|cx| host.choose("Export as Markdown…", cx));
     let saved = host.saved_markdown.take();
     let markdown = "# Work\n\n## Pinned\n\n- [Draft](https://docs.example/a%20%28draft%29)\n\
@@ -67,7 +97,10 @@ fn the_command_exports_the_space_shown(cx: &mut TestAppContext) {
         shell.set_space(2, cx);
         shell.run(Command::ExportSpace, "command bar", cx);
     });
-    assert_eq!(host.saved_markdown.take(), [("Home.md".into(), "# Home\n".into(), 0)]);
+    assert_eq!(
+        host.saved_markdown.take(),
+        [("Home.md".into(), "# Home\n".into(), 0)]
+    );
 }
 
 /// A private window's Space is kept nowhere, so it has nothing to export.
@@ -76,7 +109,9 @@ fn a_private_window_doesnt_export(cx: &mut TestAppContext) {
     let host = Rc::new(Recorder::default());
     let browser = host.clone();
     let shell = cx.new(|cx| Shell::private_window(browser, 7, "Private".into(), 0, cx));
-    shell.update(cx, |shell, cx| shell.run(Command::ExportSpace, "command bar", cx));
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::ExportSpace, "command bar", cx)
+    });
     assert!(host.saved_markdown.take().is_empty());
 }
 
@@ -107,7 +142,15 @@ fn settings_exports_every_space(cx: &mut TestAppContext) {
         shell.set_spaces(
             vec![
                 (1, "Work".into(), None, 0, "".into(), "".into(), "".into()),
-                (2, "Research".into(), None, 0, "".into(), "Claude Code".into(), "".into()),
+                (
+                    2,
+                    "Research".into(),
+                    None,
+                    0,
+                    "".into(),
+                    "Claude Code".into(),
+                    "".into(),
+                ),
                 (3, "Home".into(), None, 2, "".into(), "".into(), "".into()),
             ],
             cx,
@@ -129,5 +172,8 @@ fn settings_exports_every_space(cx: &mut TestAppContext) {
     let markdown = "# Spaces\n\n## Work\n\n### Favorites\n\n- [Mail](https://mail.example/)\n\n\
                     ### Pinned\n\n- [Draft](https://docs.example/a%20%28draft%29)\n- Q3 \\[plans\\]\n  \
                     - [Plan](https://plan.example/)\n  - [Notes](https://notes.example/)\n\n## Home\n";
-    assert_eq!(host.saved_markdown.take(), [("Spaces.md".into(), markdown.into(), 4)]);
+    assert_eq!(
+        host.saved_markdown.take(),
+        [("Spaces.md".into(), markdown.into(), 4)]
+    );
 }

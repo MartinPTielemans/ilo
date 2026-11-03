@@ -36,18 +36,28 @@ fn words(text: &str) -> impl DoubleEndedIterator<Item = Range<usize>> + '_ {
 /// Where ⌥← goes from `offset`: the start of the word it's in or of the one before it, else the
 /// text's start.
 pub(super) fn start_before(text: &str, offset: usize) -> usize {
-    words(text).rev().map(|word| word.start).find(|&start| start < offset).unwrap_or(0)
+    words(text)
+        .rev()
+        .map(|word| word.start)
+        .find(|&start| start < offset)
+        .unwrap_or(0)
 }
 
 /// Where ⌥→ goes from `offset`, and Ctrl+→ on Linux: the end of the word it's in or of the
 /// one after it, else the text's end.
 pub(super) fn end_after(text: &str, offset: usize) -> usize {
-    words(text).map(|word| word.end).find(|&end| end > offset).unwrap_or(text.len())
+    words(text)
+        .map(|word| word.end)
+        .find(|&end| end > offset)
+        .unwrap_or(text.len())
 }
 
 /// Where Ctrl+→ goes from `offset` on Windows: the start of the next word, else the text's end.
 pub(super) fn next_start(text: &str, offset: usize) -> usize {
-    words(text).map(|word| word.start).find(|&start| start > offset).unwrap_or(text.len())
+    words(text)
+        .map(|word| word.start)
+        .find(|&start| start > offset)
+        .unwrap_or(text.len())
 }
 
 /// What a double-click at `offset` selects: the word there, or the run of spaces or the mark of
@@ -59,7 +69,9 @@ pub(super) fn at(text: &str, offset: usize, trailing_spaces: bool) -> Range<usiz
         if range.end <= offset && range.end < text.len() {
             continue;
         }
-        let spaces = segments.peek().filter(|(next, _)| text[next.clone()].trim().is_empty());
+        let spaces = segments
+            .peek()
+            .filter(|(next, _)| text[next.clone()].trim().is_empty());
         return match spaces {
             Some((spaces, _)) if word && trailing_spaces => range.start..spaces.end,
             _ => range,
@@ -101,21 +113,42 @@ mod tests {
         assert_eq!(back("example.com/some/path"), [17, 12, 0]);
         assert_eq!(forward("hello world  foo"), [5, 11, 16]);
         assert_eq!(back("hello world  foo"), [13, 6, 0]);
-        assert_eq!((forward("can't stop"), back("can't stop")), (vec![5, 10], vec![6, 0]));
-        assert_eq!((forward("3.14 pi"), back("3.14 pi")), (vec![4, 7], vec![5, 0]));
-        assert_eq!((forward("foo_bar-baz"), back("foo_bar-baz")), (vec![7, 11], vec![8, 0]));
-        assert_eq!(forward("https://www.example.com/a?b=c"), [5, 23, 25, 27, 28, 29]);
-        assert_eq!(back("https://www.example.com/a?b=c"), [28, 27, 26, 24, 8, 0]);
+        assert_eq!(
+            (forward("can't stop"), back("can't stop")),
+            (vec![5, 10], vec![6, 0])
+        );
+        assert_eq!(
+            (forward("3.14 pi"), back("3.14 pi")),
+            (vec![4, 7], vec![5, 0])
+        );
+        assert_eq!(
+            (forward("foo_bar-baz"), back("foo_bar-baz")),
+            (vec![7, 11], vec![8, 0])
+        );
+        assert_eq!(
+            forward("https://www.example.com/a?b=c"),
+            [5, 23, 25, 27, 28, 29]
+        );
+        assert_eq!(
+            back("https://www.example.com/a?b=c"),
+            [28, 27, 26, 24, 8, 0]
+        );
         assert_eq!(forward("a+b $5 x"), [1, 2, 3, 5, 6, 8]);
         assert_eq!((forward(" x "), back(" x ")), (vec![2, 3], vec![1, 0]));
-        assert_eq!((forward("e.g. this"), back("e.g. this")), (vec![3, 9], vec![5, 0]));
+        assert_eq!(
+            (forward("e.g. this"), back("e.g. this")),
+            (vec![3, 9], vec![5, 0])
+        );
     }
 
     /// Bytes, where AppKit counts UTF-16: "über" is 5 bytes and 4 units, the thumb with its tone
     /// 8 and 4, and "テキスト" 12 and 4.
     #[test]
     fn a_word_is_whole_characters_in_any_script() {
-        assert_eq!((forward("über café"), back("über café")), (vec![5, 11], vec![6, 0]));
+        assert_eq!(
+            (forward("über café"), back("über café")),
+            (vec![5, 11], vec![6, 0])
+        );
         assert_eq!(forward("👍🏽 ok"), [8, 11]);
         assert_eq!(forward("テキスト「本」"), [12, 18, 21]);
     }
@@ -129,15 +162,23 @@ mod tests {
     /// What `doubleClick(at:)` printed for each offset, as `start+length`.
     fn double_clicks(text: &str) -> String {
         let each = (0..text.len()).map(|offset| at(text, offset, false));
-        each.map(|word| format!("{}+{}", word.start, word.len())).collect::<Vec<_>>().join(" ")
+        each.map(|word| format!("{}+{}", word.start, word.len()))
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     #[test]
     fn a_double_click_selects_the_word_the_spaces_or_the_mark_under_it() {
         let clicks = "0+5 0+5 0+5 0+5 0+5 5+1 6+5 6+5 6+5 6+5 6+5 11+2 11+2 13+3 13+3 13+3";
         assert_eq!(double_clicks("hello world  foo"), clicks);
-        assert_eq!(double_clicks("e.g. this"), "0+3 0+3 0+3 3+1 4+1 5+4 5+4 5+4 5+4");
-        assert_eq!(double_clicks("foo_bar-baz"), "0+7 0+7 0+7 0+7 0+7 0+7 0+7 7+1 8+3 8+3 8+3");
+        assert_eq!(
+            double_clicks("e.g. this"),
+            "0+3 0+3 0+3 3+1 4+1 5+4 5+4 5+4 5+4"
+        );
+        assert_eq!(
+            double_clicks("foo_bar-baz"),
+            "0+7 0+7 0+7 0+7 0+7 0+7 0+7 7+1 8+3 8+3 8+3"
+        );
         assert_eq!(at("https://www.example.com", 5, false), 5..6);
         assert_eq!(at("https://www.example.com", 9, false), 8..23);
         assert_eq!(at("hello world  foo", 16, false), 13..16);
