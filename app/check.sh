@@ -71,7 +71,7 @@ runs="load keys tabs window popup history spaces agents profiles restore relaunc
 runs="$runs split favorites cards extensions adblock adblock-lists windows private little capture media"
 runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp"
 runs="$runs appearance about sync sync-account sync-devices switch-frames devices filled"
-named="store adblock-live widevine updates nightly keychain shots"
+named="store adblock-live widevine updates nightly keychain shots renameloop"
 for run in "$@"; do
   case " $runs $named " in
     *" $run "*) ;;

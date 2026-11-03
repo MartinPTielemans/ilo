@@ -117,8 +117,14 @@ pub fn on_lose_keyboard<T: 'static>(
     let input = field.downgrade();
     let focus = field.focus_handle(cx);
     vec![
-        on_leave(&focus, window, cx, move |view, window, cx| left(view, window, cx)),
-        cx.subscribe_in(field, window, move |view, _, _: &Away, window, cx| away(view, window, cx)),
+        on_leave(&focus, window, cx, move |view, window, cx| {
+            log!("browser: field left, the keyboard elsewhere in its window");
+            left(view, window, cx)
+        }),
+        cx.subscribe_in(field, window, move |view, _, _: &Away, window, cx| {
+            log!("browser: field left, a press away from it");
+            away(view, window, cx)
+        }),
         cx.observe_window_activation(window, move |_, window, cx| {
             if !left_window(&input, window, cx) {
                 return;
@@ -131,6 +137,7 @@ pub fn on_lose_keyboard<T: 'static>(
             cx.spawn_in(window, async move |view, cx| {
                 view.update_in(cx, |view, window, cx| {
                     if left_window(&input, window, cx) {
+                        log!("browser: field left with its window");
                         deactivated(view, window, cx)
                     }
                 })
