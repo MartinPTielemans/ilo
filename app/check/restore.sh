@@ -761,10 +761,12 @@ expect '^browser: window opened [0-9]*$' "⌘N didn't open a second window"
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
 settings_drew
-send clickkey $(drawn "toolbar Advanced")
-expect '^browser: settings tab Advanced$' "a click on Advanced didn't show its tab"
-settings_drew Advanced
-# Where Settings drew the switch, as the Mini Player's row above it moves it.
+# General's first row is the switch.
+if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' General$'; then
+  send clickkey $(drawn "toolbar General")
+  expect '^browser: settings tab General$' "a click on General didn't show its section"
+  settings_drew General
+fi
 at=$(drawn "switch restore windows") || fail "Restore windows from last session has no switch"
 send clickkey $at
 expect '^browser: restore windows off$' \

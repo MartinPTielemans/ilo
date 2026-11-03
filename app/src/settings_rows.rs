@@ -14,8 +14,8 @@ use crate::tokens::settings::{
     CHEVRONS_END, CONTROL, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_HOVERED, CONTROL_HOVERED_LIGHT,
     CONTROL_LIGHT, CONTROL_PADDING, CONTROL_PRESSED, CONTROL_PRESSED_LIGHT, CONTROL_RADIUS, DETAIL,
     DETAIL_LINE, DETAIL_TOP, END_GAP, GLYPH, GLYPH_OFF, GLYPH_ON, GLYPH_PLATE, GLYPH_PLATE_FILL,
-    GLYPH_PLATE_GAP, GROUP, GROUP_LIGHT, HEADING, KNOB, KNOB_ALPHA, KNOB_INSET, KNOB_SHADOW, LINE, NAME,
-    NAME_OFF, ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE, ON_PRESSED, ON_SWITCH_OFF, PADDING,
+    GLYPH_PLATE_GAP, GROUP, GROUP_LIGHT, HEADING, KNOB, KNOB_ALPHA, KNOB_INSET, KNOB_SHADOW, LINE,
+    NAME, NAME_OFF, ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE, ON_PRESSED, ON_SWITCH_OFF, PADDING,
     ROW_HEIGHT, ROW_X, SWITCH_HEIGHT, SWITCH_OFF, SWITCH_OFF_LIGHT, SWITCH_WIDTH,
 };
 use crate::tokens::text::SMALL;
@@ -147,8 +147,17 @@ pub fn group(look: &Look, rows: impl IntoIterator<Item = gpui::Div>) -> gpui::Di
 /// have theirs from where their text starts under its name.
 pub fn group_lined(look: &Look, rows: impl IntoIterator<Item = (gpui::Div, f32)>) -> gpui::Div {
     let rows = rows.into_iter().enumerate().map(|(index, (row, x))| {
-        let line = div().absolute().top_0().left(px(x)).right(px(ROW_X)).h(px(1.)).bg(look.line);
-        div().relative().child(row).when(index > 0, |below| below.child(line))
+        let line = div()
+            .absolute()
+            .top_0()
+            .left(px(x))
+            .right(px(ROW_X))
+            .h(px(1.))
+            .bg(look.line);
+        div()
+            .relative()
+            .child(row)
+            .when(index > 0, |below| below.child(line))
     });
     div()
         .flex()
@@ -161,7 +170,12 @@ pub fn group_lined(look: &Look, rows: impl IntoIterator<Item = (gpui::Div, f32)>
 
 /// A row's frame: at least as tall as a row with a line, its text 14 in and its content centred.
 pub fn frame() -> gpui::Div {
-    div().min_h(px(ROW_HEIGHT)).px(px(ROW_X)).py(px(PADDING)).flex().items_center()
+    div()
+        .min_h(px(ROW_HEIGHT))
+        .px(px(ROW_X))
+        .py(px(PADDING))
+        .flex()
+        .items_center()
 }
 
 /// A row's text: its name, and the line under it that says more, if any, which wraps.
@@ -174,17 +188,29 @@ pub fn text(look: &Look, name: impl Into<SharedString>, line: Option<SharedStrin
             .text_color(look.detail)
             .child(line)
     });
-    div().flex_1().min_w_0().child(div().truncate().child(name.into())).children(line)
+    div()
+        .flex_1()
+        .min_w_0()
+        .child(div().truncate().child(name.into()))
+        .children(line)
 }
 
 /// A row's end, its controls 20 after its text and 8 apart.
 pub fn end(controls: impl IntoIterator<Item = gpui::AnyElement>) -> gpui::Div {
-    div().flex_none().ml(px(END_GAP)).flex().items_center().gap(px(CONTROL_GAP)).children(controls)
+    div()
+        .flex_none()
+        .ml(px(END_GAP))
+        .flex()
+        .items_center()
+        .gap(px(CONTROL_GAP))
+        .children(controls)
 }
 
 /// A row: its name, and its control at the end.
 pub fn row(name: impl Into<SharedString>, control: gpui::AnyElement) -> gpui::Div {
-    frame().child(div().flex_1().min_w_0().truncate().child(name.into())).child(end([control]))
+    frame()
+        .child(div().flex_1().min_w_0().truncate().child(name.into()))
+        .child(end([control]))
 }
 
 /// A row with a grey line under its name, and its control, if any, at the end.
@@ -194,12 +220,18 @@ pub fn detailed_row(
     detail: impl Into<SharedString>,
     control: Option<gpui::AnyElement>,
 ) -> gpui::Div {
-    frame().child(text(look, name, Some(detail.into()))).children(control.map(|c| end([c])))
+    frame()
+        .child(text(look, name, Some(detail.into())))
+        .children(control.map(|c| end([c])))
 }
 
 /// A feature's glyph on its quiet plate, 12 before its name, quieter while it's off.
 pub fn glyph_plate(look: &Look, glyph: &'static str, on: bool) -> gpui::Div {
-    let color = if on { look.glyph } else { look.surface.blend(look.ink.opacity(GLYPH_OFF)) };
+    let color = if on {
+        look.glyph
+    } else {
+        look.surface.blend(look.ink.opacity(GLYPH_OFF))
+    };
     div()
         .flex_none()
         .size(px(GLYPH_PLATE))
@@ -227,8 +259,12 @@ pub fn icon_button(
     id: impl Into<gpui::ElementId>,
     glyph: &'static str,
 ) -> gpui::Stateful<gpui::Div> {
-    lit(look, div().id(id).w(px(CONTROL_HEIGHT)).justify_center())
-        .child(svg().path(glyph).size(px(BUTTON_GLYPH)).text_color(look.ink))
+    lit(look, div().id(id).w(px(CONTROL_HEIGHT)).justify_center()).child(
+        svg()
+            .path(glyph)
+            .size(px(BUTTON_GLYPH))
+            .text_color(look.ink),
+    )
 }
 
 /// A control's plate, lit under the pointer and pressed.
@@ -283,6 +319,7 @@ pub fn switch(look: &Look, on: bool, slid: f32, accent: Rgba) -> impl IntoElemen
         offset: point(px(0.), px(1.)),
         blur_radius: px(2.),
         spread_radius: px(0.),
+        inset: false,
     };
     div()
         .flex_none()
@@ -305,7 +342,10 @@ pub fn switch(look: &Look, on: bool, slid: f32, accent: Rgba) -> impl IntoElemen
 
 /// A checkbox, ticked in `accent` with a `tick`, else a line round the switch's off fill.
 pub fn checkbox(look: &Look, on: bool, accent: Rgba, tick: Rgba) -> gpui::Div {
-    let tick = svg().path("icons/check.svg").size(px(CHECK_GLYPH)).text_color(tick);
+    let tick = svg()
+        .path("icons/check.svg")
+        .size(px(CHECK_GLYPH))
+        .text_color(tick);
     div()
         .flex_none()
         .size(px(CHECK_BOX))
@@ -314,7 +354,9 @@ pub fn checkbox(look: &Look, on: bool, accent: Rgba, tick: Rgba) -> gpui::Div {
         .justify_center()
         .rounded(px(CHECK_RADIUS))
         .when(on, |ticked| ticked.bg(accent).child(tick))
-        .when(!on, |empty| empty.border_1().border_color(look.line).bg(look.switch_off))
+        .when(!on, |empty| {
+            empty.border_1().border_color(look.line).bg(look.switch_off)
+        })
 }
 
 /// A row with a checkbox before its name, as a list to tick from has.
@@ -346,9 +388,19 @@ mod tests {
     fn each_step_stands_further_off_the_group() {
         for dark in [true, false] {
             let look = Look::settings(dark);
-            let steps = [look.line, look.control, look.hovered, look.pressed, look.detail, look.ink];
+            let steps = [
+                look.line,
+                look.control,
+                look.hovered,
+                look.pressed,
+                look.detail,
+                look.ink,
+            ];
             for pair in steps.windows(2) {
-                assert!(contrast(&look, pair[0]) < contrast(&look, pair[1]), "{dark} {pair:?}");
+                assert!(
+                    contrast(&look, pair[0]) < contrast(&look, pair[1]),
+                    "{dark} {pair:?}"
+                );
             }
             assert!(contrast(&look, look.off()) < contrast(&look, look.ink));
         }

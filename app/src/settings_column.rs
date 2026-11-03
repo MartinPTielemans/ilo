@@ -109,29 +109,47 @@ pub fn column(
     foot: Foot,
 ) -> gpui::Div {
     let base = if dark { rgb(PAPER) } else { rgb(INK) };
-    let groups = Section::GROUPS.into_iter().enumerate().map(|(index, sections)| {
-        let plates = sections.iter().map(|&section| {
-            let selected = section == shown;
-            let pick = pick.clone();
-            plate(base, selected, dark)
-                .id(section.name())
-                .child(drawn(format!("toolbar {}", section.name()), logged.clone()))
-                .on_click(move |_, window, cx| pick(section, window, cx))
-                .child(glyph(section.glyph(), SECTION_GLYPH, base.opacity(match selected {
-                    true => NAME,
-                    false => SECTION_GLYPH_ALPHA,
-                })))
-                .child(section.name())
+    let groups = Section::GROUPS
+        .into_iter()
+        .enumerate()
+        .map(|(index, sections)| {
+            let plates = sections.iter().map(|&section| {
+                let selected = section == shown;
+                let pick = pick.clone();
+                plate(base, selected, dark)
+                    .id(section.name())
+                    .child(drawn(format!("toolbar {}", section.name()), logged.clone()))
+                    // A press on a plate is its click's, not the window's move.
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(move |_, window, cx| pick(section, window, cx))
+                    .child(glyph(
+                        section.glyph(),
+                        SECTION_GLYPH,
+                        base.opacity(match selected {
+                            true => NAME,
+                            false => SECTION_GLYPH_ALPHA,
+                        }),
+                    ))
+                    .child(section.name())
+            });
+            div()
+                .when(index > 0, |group| group.mt(px(SECTION_GROUP_GAP)))
+                .children(plates)
         });
-        div().when(index > 0, |group| group.mt(px(SECTION_GROUP_GAP))).children(plates)
-    });
+    // Drawn now, as the foot takes `logged` after them.
+    let groups: Vec<gpui::Div> = groups.collect();
     let chromium = plate(base, false, dark)
         .mb_0()
         .id("chromium-settings")
         .text_color(base.opacity(FOOT_TEXT))
         .child(drawn("chromium settings".into(), logged))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, window, cx| foot(window, cx))
-        .child(glyph("icons/external-link.svg", FOOT_GLYPH, base.opacity(FOOT_GLYPH_ALPHA)))
+        .child(glyph(
+            "icons/external-link.svg",
+            FOOT_GLYPH,
+            base.opacity(FOOT_GLYPH_ALPHA),
+        ))
         .child("Chromium settings");
     div()
         .flex_none()
@@ -141,7 +159,14 @@ pub fn column(
         .pt(px(COLUMN_TOP))
         .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
         .children(groups)
-        .child(div().absolute().left_0().bottom(px(FOOT_BOTTOM)).w(px(COLUMN)).child(chromium))
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .bottom(px(FOOT_BOTTOM))
+                .w(px(COLUMN))
+                .child(chromium),
+        )
 }
 
 /// A section's plate: the sidebar's row, 8 in, lit under the pointer, and on the sidebar's
@@ -152,6 +177,7 @@ fn plate(base: Rgba, selected: bool, dark: bool) -> gpui::Div {
         offset: point(px(0.), px(1.)),
         blur_radius: px(2.),
         spread_radius: px(0.),
+        inset: false,
     };
     let hovered = base.opacity(SECTION_HOVERED);
     div()
@@ -167,11 +193,22 @@ fn plate(base: Rgba, selected: bool, dark: bool) -> gpui::Div {
         .text_color(base.opacity(if selected { 1. } else { SECTION_TEXT }))
         // A press on a plate picks it, and doesn't move the window.
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .when(selected && dark, |plate| plate.bg(base.opacity(SECTION_SELECTED)))
-        .when(selected && !dark, |plate| plate.bg(rgba(SECTION_SELECTED_LIGHT)).shadow(vec![shadow]))
-        .when(!selected, |plate| plate.hover(move |plate| plate.bg(hovered)))
+        .when(selected && dark, |plate| {
+            plate.bg(base.opacity(SECTION_SELECTED))
+        })
+        .when(selected && !dark, |plate| {
+            plate.bg(rgba(SECTION_SELECTED_LIGHT)).shadow(vec![shadow])
+        })
+        .when(!selected, |plate| {
+            plate.hover(move |plate| plate.bg(hovered))
+        })
 }
 
 fn glyph(path: &'static str, size: f32, color: Rgba) -> gpui::Svg {
-    svg().flex_none().path(path).size(px(size)).mr(px(SECTION_GLYPH_GAP)).text_color(color)
+    svg()
+        .flex_none()
+        .path(path)
+        .size(px(size))
+        .mr(px(SECTION_GLYPH_GAP))
+        .text_color(color)
 }

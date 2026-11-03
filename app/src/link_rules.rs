@@ -11,13 +11,13 @@ use gpui::{
     Window, canvas, div, point, prelude::*, px, rgb, svg,
 };
 
-use crate::settings_rows::{Look, detailed_row, frame, group, icon_button, popup};
+use crate::settings_rows::{Look, detailed_row, drawn, frame, group, icon_button, popup};
 use crate::shell::MenuEntry;
 use crate::text_input::TextInput;
 use crate::tokens::palette::{NO_THEME_ACCENT, SELECTION};
 use crate::tokens::settings::{
     ADD_X, BUTTON_GLYPH, BUTTONS_TOP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS,
-    FIELD_PADDING, GROUP_GAP, ROW_X, RULE_CONDITION, RULE_GAP, SHORT_PADDING, RULE_SPACE,
+    FIELD_PADDING, GROUP_GAP, ROW_X, RULE_CONDITION, RULE_GAP, RULE_SPACE, SHORT_PADDING,
 };
 
 #[cfg(test)]
@@ -87,7 +87,10 @@ pub struct Rules {
 
 impl Default for Rules {
     fn default() -> Rules {
-        Rules { rules: Vec::new(), otherwise: LITTLE }
+        Rules {
+            rules: Vec::new(),
+            otherwise: LITTLE,
+        }
     }
 }
 
@@ -97,10 +100,20 @@ impl Rules {
     /// the Space in front.
     pub fn route(&self, url: &str, spaces: &[u64]) -> (u64, Option<usize>) {
         let there = |space: u64| space == LITTLE || spaces.contains(&space);
-        let rule = self.rules.iter().position(|rule| there(rule.space) && rule.matches(url));
+        let rule = self
+            .rules
+            .iter()
+            .position(|rule| there(rule.space) && rule.matches(url));
         match rule {
             Some(index) => (self.rules[index].space, Some(index)),
-            None => (if there(self.otherwise) { self.otherwise } else { 0 }, None),
+            None => (
+                if there(self.otherwise) {
+                    self.otherwise
+                } else {
+                    0
+                },
+                None,
+            ),
         }
     }
 
@@ -136,7 +149,11 @@ impl Rules {
                         continue;
                     };
                     let space = space(place).unwrap_or(0);
-                    rules.rules.push(Rule { condition, text: text.to_string(), space });
+                    rules.rules.push(Rule {
+                        condition,
+                        text: text.to_string(),
+                        space,
+                    });
                 }
                 (Some("otherwise"), Some(place), None, None) => {
                     rules.otherwise = space(place).unwrap_or(0);
@@ -173,11 +190,21 @@ impl Rules {
         let rules: Vec<String> = (self.rules.iter())
             .map(|rule| {
                 let (condition, text) = (rule.condition.title(), &rule.text);
-                format!("{condition} \"{text}\" → {}", space_name(rule.space, spaces))
+                format!(
+                    "{condition} \"{text}\" → {}",
+                    space_name(rule.space, spaces)
+                )
             })
             .collect();
-        let rules = if rules.is_empty() { "none".to_string() } else { rules.join(", ") };
-        format!("{rules}; everything else {}", otherwise_name(self.otherwise, spaces))
+        let rules = if rules.is_empty() {
+            "none".to_string()
+        } else {
+            rules.join(", ")
+        };
+        format!(
+            "{rules}; everything else {}",
+            otherwise_name(self.otherwise, spaces)
+        )
     }
 }
 
@@ -266,6 +293,8 @@ pub struct LinkRulesView {
     focus: Option<usize>,
     /// What the last draw showed, which check.sh reads once each time it changes.
     drawn: Option<String>,
+    /// Where each control was logged as drawn, for check.sh to click.
+    drawn_at: Rc<RefCell<Vec<String>>>,
     /// The rules the trash took, the last at the end, each with its place, which ⌘Z brings back
     /// until Settings closes. A rule with no text goes without one: there's nothing to lose.
     removed: Vec<(usize, Rule)>,
@@ -283,6 +312,7 @@ impl LinkRulesView {
             popup_texts: Rc::default(),
             focus: None,
             drawn: None,
+            drawn_at: Rc::default(),
             removed: Vec::new(),
             _typed: Vec::new(),
         };
@@ -346,7 +376,11 @@ impl LinkRulesView {
     /// the keyboard.
     pub fn add(&mut self, cx: &mut Context<Self>) {
         let space = self.host.spaces().first().map_or(0, |(space, _)| *space);
-        let rule = Rule { condition: Condition::Contains, text: String::new(), space };
+        let rule = Rule {
+            condition: Condition::Contains,
+            text: String::new(),
+            space,
+        };
         self.rules.rules.push(rule);
         self.make_fields(cx);
         self.focus = Some(self.rules.rules.len() - 1);
@@ -423,8 +457,11 @@ impl LinkRulesView {
         };
         let spaces = self.host.spaces();
         // What a Space pop-up picks from, in its order.
-        let targets: Vec<u64> =
-            spaces.iter().map(|(space, _)| *space).chain(std::iter::once(LITTLE)).collect();
+        let targets: Vec<u64> = spaces
+            .iter()
+            .map(|(space, _)| *space)
+            .chain(std::iter::once(LITTLE))
+            .collect();
         let items: Vec<MenuEntry> = match which {
             Popup::Condition(index) => {
                 let chosen = self.rules.rules.get(index).map(|rule| rule.condition);
@@ -468,13 +505,18 @@ impl LinkRulesView {
             .ok();
         });
         let texts = self.popup_texts.borrow();
-        let Some(at) = texts.iter().find(|&&(each, _)| each == which).map(|&(_, at)| at) else {
+        let Some(at) = texts
+            .iter()
+            .find(|&&(each, _)| each == which)
+            .map(|&(_, at)| at)
+        else {
             return;
         };
         drop(texts);
         self.choosing = Some(which);
         cx.notify();
-        self.host.show_menu(items, at, self.look.light(), window, picked, cx);
+        self.host
+            .show_menu(items, at, self.look.light(), window, picked, cx);
     }
 
     fn popup(
@@ -496,9 +538,15 @@ impl LinkRulesView {
         )
         .absolute()
         .inset_0();
+        let name = match which {
+            Popup::Condition(index) => format!("link condition {index}"),
+            Popup::Space(index) => format!("link space {index}"),
+            Popup::Otherwise => "link otherwise".into(),
+        };
         popup(&self.look, label, width, self.choosing == Some(which))
             .relative()
             .child(at)
+            .child(drawn(name, self.drawn_at.clone()))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, _, window, cx| {
@@ -517,8 +565,12 @@ impl LinkRulesView {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let look = self.look;
-        let condition =
-            self.popup(Popup::Condition(index), rule.condition.title().into(), RULE_CONDITION, cx);
+        let condition = self.popup(
+            Popup::Condition(index),
+            rule.condition.title().into(),
+            RULE_CONDITION,
+            cx,
+        );
         let field = div()
             .flex_1()
             .min_w_0()
@@ -530,9 +582,15 @@ impl LinkRulesView {
             .bg(look.control)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(self.fields[index].clone());
-        let space =
-            self.popup(Popup::Space(index), space_name(rule.space, spaces), RULE_SPACE, cx);
+        let space = self.popup(
+            Popup::Space(index),
+            space_name(rule.space, spaces),
+            RULE_SPACE,
+            cx,
+        );
         let remove = icon_button(&look, ("remove-link-rule", index), "icons/trash.svg")
+            .relative()
+            .child(drawn(format!("link remove {index}"), self.drawn_at.clone()))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |view, _, _, cx| view.remove(index, cx)));
         let label: SharedString = format!("{} {}", rule.condition.title(), rule.text).into();
@@ -553,7 +611,15 @@ impl LinkRulesView {
             .child(condition)
             .child(field)
             .child(
-                svg().path("icons/arrow-right.svg").size(px(BUTTON_GLYPH)).text_color(look.detail),
+                div()
+                    .relative()
+                    .child(
+                        svg()
+                            .path("icons/arrow-right.svg")
+                            .size(px(BUTTON_GLYPH))
+                            .text_color(look.detail),
+                    )
+                    .child(drawn(format!("link arrow {index}"), self.drawn_at.clone())),
             )
             .child(space)
             .child(remove);
@@ -591,6 +657,8 @@ impl Render for LinkRulesView {
             false => group(&look, rows),
         };
         let add = icon_button(&look, "add-link-rule", "icons/plus.svg")
+            .relative()
+            .child(drawn("link add".into(), self.drawn_at.clone()))
             .on_click(cx.listener(|view, _, _, cx| view.add(cx)));
         let otherwise = otherwise_name(self.rules.otherwise, &spaces);
         let otherwise = self.popup(Popup::Otherwise, otherwise, RULE_SPACE, cx);
