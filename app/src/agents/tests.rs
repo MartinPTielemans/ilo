@@ -1405,7 +1405,7 @@ fn a_pages_passkey_hands_its_tab_to_the_user(cx: &mut TestAppContext) {
     assert_eq!(log(&agents, "claude-code", cx)[0].0, "handed back");
 }
 
-/// close_tab closes the agent's own tab, which goes to the archive, with its entry in the log.
+/// close_tab closes the agent's own tab, with its entry in the log.
 /// The user's tab, and one the user holds, are refused.
 #[gpui::test]
 fn an_agent_closes_only_its_own_tabs(cx: &mut TestAppContext) {
@@ -1420,7 +1420,7 @@ fn an_agent_closes_only_its_own_tabs(cx: &mut TestAppContext) {
     let closed = call(&agents, "claude-code", "close_tab", json!({ "tab": 20 }), cx);
     let closed = closed.recv().unwrap();
     assert!(!closed.error);
-    assert_eq!(closed.text, "Closed tab 20. The user can still find it in the archive.");
+    assert_eq!(closed.text, "Closed tab 20.");
     assert!(browser.tabs.borrow().iter().all(|tab| tab.0 != 20));
     let entry = log(&agents, "claude-code", cx).remove(0);
     assert_eq!(entry, ("close_tab".into(), "example.com".into(), "".into()));
