@@ -267,6 +267,10 @@ NSStatusBarButton* HostLittleStatusButton();
 - (BOOL)applySettings:(CGVirtualDisplaySettings*)settings;
 @end
 
+// host.mm's: where this driver's pointer last was, which host_pointer answers.
+extern NSPoint g_driven_pointer;
+extern bool g_driven_pointer_known;
+
 namespace {
 
 // A character typed with ⇧, such as + or ?, has its key's code on a US keyboard.
@@ -459,12 +463,20 @@ NSWindow* MainWindow() {
   return window.visible ? window : nil;
 }
 
+// Where the driver's pointer last was, on screen, AppKit's way up, which host_pointer answers in a
+// driven run: its events move no real pointer, which stays wherever the desktop's is.
+void Pointed(NSWindow* window, NSPoint location) {
+  g_driven_pointer = [window convertPointToScreen:location];
+  g_driven_pointer_known = true;
+}
+
 void PostMouse(NSWindow* window,
                NSEventType type,
                double x,
                double y,
                int count,
                NSEventModifierFlags flags = 0) {
+  Pointed(window, NSMakePoint(x, NSHeight(window.frame) - y));
   NSEvent* event = [NSEvent mouseEventWithType:type
                                       location:NSMakePoint(x, NSHeight(window.frame) - y)
                                  modifierFlags:flags
@@ -1390,6 +1402,7 @@ bool Run(const std::string& line, void (^done)(void)) {
     NSView* content = target.contentView;
     NSView* hit = [content hitTest:[content.superview convertPoint:move.locationInWindow
                                                           fromView:nil]];
+    Pointed(target, move.locationInWindow);
     [hit mouseMoved:move];
     TrackMove(content, move, hit);
     [NSApp postEvent:move atStart:NO];

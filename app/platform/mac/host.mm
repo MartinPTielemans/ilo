@@ -1598,8 +1598,13 @@ size_t host_screens(double* frames, size_t count) {
   return screens.count;
 }
 
+// Where drive.mm's pointer last was, which a driven run's pointer is, as its events move no real
+// one.
+NSPoint g_driven_pointer;
+bool g_driven_pointer_known = false;
+
 bool host_pointer(double* x, double* y) {
-  const NSPoint point = NSEvent.mouseLocation;
+  const NSPoint point = g_driven_pointer_known ? g_driven_pointer : NSEvent.mouseLocation;
   *x = point.x;
   // AppKit's y runs up from the bottom of the main display, the core's down from its top.
   *y = NSHeight(NSScreen.screens.firstObject.frame) - point.y;
