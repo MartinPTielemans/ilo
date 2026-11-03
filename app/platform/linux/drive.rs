@@ -1008,6 +1008,17 @@ fn code_events(code: u8, state: u16, kinds: &[u8]) -> Option<()> {
         // A window of Chromium's own, such as the Task Manager, else none of the app's has it.
         None => chromium_focus().or_else(|| driven().map(|browser| browser.window))?,
     };
+    {
+        let focus = connection.get_input_focus().ok().and_then(|f| f.reply().ok()).map(|f| f.focus);
+        let kind = match keyboard_window() {
+            Some(Keyboard::Overlay(_)) => "overlay",
+            Some(Keyboard::Settings(..)) => "settings",
+            Some(Keyboard::Browser(..)) => "browser",
+            None => "none",
+        };
+        let browsers: Vec<u32> = (0..4).filter_map(browser).map(|b| b.window).collect();
+        log!("browser: diag key {code} to {window:#x}, focus {focus:x?} ({kind}), browsers {browsers:x?}");
+    }
     for &kind in kinds {
         let event = KeyPressEvent {
             response_type: kind,

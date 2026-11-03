@@ -71,6 +71,7 @@ pub(crate) fn lend_keyboard(window: bc::bc_id, view: *mut c_void, takes: bool) {
         }
         (before, lent.iter().any(|&(each, _)| each == window))
     });
+    eprintln!("browser: diag lend {window} {view:?} takes {takes}: {before} -> {after}");
     if before != after {
         unsafe { bc::bc_window_overlay_takes_keyboard(window, after) };
     }

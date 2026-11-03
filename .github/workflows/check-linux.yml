@@ -214,6 +214,19 @@ jobs:
             esac
             dir=$out/$where
             mkdir -p "$dir"
+            if [ "${RUNS%% *}" = repeat ]; then
+              for i in $(seq 10); do
+                for run in ${RUNS#repeat }; do
+                  status=0
+                  timeout 20m ./check.sh "$run" > "$dir/$run-$i.log" 2>&1 || status=$?
+                  [ ! -d build/check ] || mv build/check "$dir/$run-$i"
+                  pkill -9 -f "$PWD/build/Browser/" || true
+                  echo "| $run $i | $status $(grep -m1 '^FAIL' "$dir/$run-$i.log" | cut -c7- | tr '|' '/') |" | tee -a "$GITHUB_STEP_SUMMARY"
+                  [ "$status" = 0 ] || failed=1
+                done
+              done
+              continue
+            fi
             case $RUNS in
             '') runs=$passing ;;
             all) runs=$all ;;
