@@ -1346,12 +1346,13 @@ opt-in-line = 18.0
 
 [shell.permission]
 # Ours, as Arc's wasn't recorded: under the URL field, as wide as it, with the dialog's corners
-# and the header's plates. The text is the dialog's detail colour.
+# and the header's plates. The detail is the dialog's: the palette's ink at its alpha, dark in
+# light mode, as the card is the window's fill.
 gap = 6.0
 padding = 12.0
 radius = 16.0
 line = 18.0
-detail = 0xffff_ffc7
+detail = 0.78
 button-height = 28.0
 button-gap = 8.0
 buttons-top = 12.0

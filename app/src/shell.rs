@@ -930,8 +930,9 @@ struct Swipe {
     way: f32,
     /// Where that page was over the last SWIPE_HISTORY, for how fast it's let go.
     samples: VecDeque<(Instant, f32)>,
-    /// The Space nearest its place, for the detent as it changes.
-    nearest: u64,
+    /// Where letting go would take the pages, for the detent as it changes. None until they
+    /// first move across.
+    landing: Option<swipe::Landing>,
     /// Whether they've pulled the last Space far enough to ready a new Space, and when that last
     /// changed.
     ready: bool,
@@ -1230,7 +1231,8 @@ pub struct Shell {
     /// Whether the window went full screen for the page, so it comes back with it.
     window_for_page: bool,
     /// While the window goes full screen with the page, or back: its content size before. The page
-    /// stays where it is until the window's resize lays it out, once, at its new size.
+    /// stays where it is until the window's resize lays it out, once, at its new size, or until the
+    /// window is there, for one that keeps its size.
     page_held: Option<Size<Pixels>>,
     /// While a page's full screen resizes the window: the steps check.sh has yet to time.
     full_screen_timing: Option<FullScreenTiming>,
@@ -2866,6 +2868,14 @@ impl Shell {
     /// unless a page took it there, and leaving takes that away.
     pub fn set_full_screen(&mut self, entered: bool, cx: &mut Context<Self>) {
         self.full_screen = entered;
+        // There for the page, or back, with no resize to end the hold, as a window already its
+        // screen's size goes: held on, the page stayed put for good, under the Library (#1633).
+        if entered == self.page_fullscreen && self.page_held.take().is_some() {
+            // check.sh waits for this line, which comes after the frame that lays the page out.
+            let line = format!("browser: page laid in place, full screen {}", entered as u8);
+            self.logged_once_laid.push(line);
+            cx.notify();
+        }
         if !entered || !self.page_fullscreen {
             self.browser.full_screen_note(entered, cx);
         }
