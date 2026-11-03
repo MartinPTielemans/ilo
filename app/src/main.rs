@@ -3381,9 +3381,7 @@ impl Browser for Engine {
     }
 
     fn restart(&self, cx: &mut App) {
-        // As Quit does: once the shell that asked is done, and before Chromium's posted quit.
-        cx.defer(save_launch_picture);
-        unsafe { bc::bc_restart() };
+        restart_browser(cx);
     }
 
     fn playready_needs(&self) -> shell::PlayReady {
@@ -6148,6 +6146,14 @@ unsafe extern "C" fn stopping(_: *mut c_void) {
             agents.update(cx, |agents, cx| agents.end_tasks(cx));
         }
     });
+}
+
+/// Quits and starts again, bringing back the windows and their Spaces: the protected-media note's
+/// and Settings' way to load Google's Widevine module.
+fn restart_browser(cx: &mut App) {
+    // As Quit does: once the view that asked is done, and before Chromium's posted quit.
+    cx.defer(save_launch_picture);
+    unsafe { bc::bc_restart() };
 }
 
 // The next launch's first window opens where the regular window in front is, showing its sidebar

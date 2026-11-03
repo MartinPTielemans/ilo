@@ -639,6 +639,10 @@ impl widevine::Module for Module {
     fn remove(&self) {
         unsafe { bc::bc_widevine_remove() };
     }
+
+    fn restart(&self, cx: &mut App) {
+        crate::restart_browser(cx);
+    }
 }
 
 struct Renaming {
@@ -2565,18 +2569,25 @@ impl Settings {
             .into_any_element()
     }
 
-    /// Google's Widevine module, where the core offers it: where it is, and the way to get it or
-    /// remove it. The user's, as the note's yes is.
+    /// Google's Widevine module, where the core offers it: where it is, and the ways to get it,
+    /// load it or remove it. The user's, as the note's yes is.
     fn widevine_row(&self, cx: &mut Context<Self>) -> gpui::Div {
         let row = self.widevine.read(cx);
-        let action = row.action().map(|(action, title)| {
+        let (title, detail, actions) = (row.title(), row.detail(), row.actions());
+        let buttons = actions.iter().enumerate().map(|(index, &(action, title))| {
             let act = cx.listener(move |settings: &mut Self, _, _, cx| {
                 log!("browser: settings widevine {action:?}");
-                settings.widevine.read(cx).act(action);
+                settings.widevine.update(cx, |row, cx| row.act(action, cx));
             });
-            button(&RowLook::settings(), "widevine", title).on_click(act)
+            let what = format!("widevine {}", format!("{action:?}").to_lowercase());
+            button(&RowLook::settings(), ("widevine", index), title)
+                .relative()
+                .child(self.drawn(what))
+                .on_click(act)
         });
-        detailed_row(row.title(), row.detail(), action.map(IntoElement::into_any_element))
+        let buttons = div().flex().items_center().gap(px(PADDING)).children(buttons);
+        let control = (!actions.is_empty()).then(|| buttons.into_any_element());
+        detailed_row(title, detail, control)
     }
 
     /// Gives the renaming field the keyboard once its profile is listed, which a new one is once
