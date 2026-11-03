@@ -1222,11 +1222,13 @@ impl Shell {
                     .pressed_by_mouse_down(false, true)
             })
             .block_mouse_except_scroll()
-            .on_hover(cx.listener(|shell, hovered: &bool, _, cx| {
+            .on_hover(cx.listener(|shell, hovered: &bool, window, cx| {
                 if shell.name_hovered != *hovered {
                     shell.name_hovered = *hovered;
                     // check.sh waits for this line.
                     log!("browser: space name {}", if *hovered { "hovered" } else { "left" });
+                    log!("browser: space name hover, window active {} at {:.1} ms",
+                        window.is_window_active(), crate::uptime_ms());
                     cx.notify();
                 }
             }))

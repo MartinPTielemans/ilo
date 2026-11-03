@@ -575,6 +575,8 @@ impl Shell {
     pub fn keyboard_left(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let renaming = self.renaming.as_ref();
         if !renaming.is_some_and(|renaming| renaming.name.read(cx).menu_shown()) {
+            log!("browser: field left, the host says a press left the UI at {:.1} ms",
+                crate::uptime_ms());
             self.name_left(window, cx)
         }
     }

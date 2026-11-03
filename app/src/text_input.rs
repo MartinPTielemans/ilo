@@ -126,6 +126,8 @@ pub fn on_lose_keyboard<T: 'static>(
             away(view, window, cx)
         }),
         cx.observe_window_activation(window, move |_, window, cx| {
+            log!("browser: field's window active {} at {:.1} ms", window.is_window_active(),
+                crate::uptime_ms());
             if !left_window(&input, window, cx) {
                 return;
             }
