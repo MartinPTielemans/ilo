@@ -93,6 +93,7 @@ base::OnceClosure DeviceChooser::Show(content::RenderFrameHost* owner,
   content::WebContents* contents = content::WebContents::FromRenderFrameHost(owner);
   const bc_id tab = contents ? Tab::IdOf(contents) : 0;
   const int kind = KindOf(*controller);
+  LOG(ERROR) << "browser: device chooser " << tab << " " << KindName(kind) << " asked";
   if (!tab) {
     controller->Cancel();
     return base::DoNothing();
@@ -100,7 +101,7 @@ base::OnceClosure DeviceChooser::Show(content::RenderFrameHost* owner,
   if (const Space* space = Space::Holding(tab); space && space->agent()) {
     // A device is the user's alone to give, and an agent's Space has no user watching it, so the
     // page hears a cancel, as from Chrome's Cancel, and the activity log says why.
-    LOG(INFO) << "browser_core: device chooser " << tab << " " << KindName(kind)
+    LOG(ERROR) << "browser: device chooser " << tab << " " << KindName(kind)
               << " ended: an agent's tab";
     if (Host().agent_activity) {
       const std::string action = std::string("request_device ") + KindName(kind);
@@ -121,7 +122,7 @@ base::OnceClosure DeviceChooser::Show(content::RenderFrameHost* owner,
   auto chooser = base::WrapUnique(new DeviceChooser(contents, tab, kind, std::move(controller)));
   base::WeakPtr<DeviceChooser> weak = chooser->weak_factory_.GetWeakPtr();
   Choosers()[tab] = std::move(chooser);
-  LOG(INFO) << "browser_core: device chooser " << tab << " " << KindName(kind) << " shown";
+  LOG(ERROR) << "browser: device chooser " << tab << " " << KindName(kind) << " shown";
   return base::BindOnce(
       [](bc_id tab, base::WeakPtr<DeviceChooser> chooser) {
         if (chooser) {
@@ -140,7 +141,7 @@ void DeviceChooser::Choose(bc_id tab, const char* id) {
   const DeviceChooser& chooser = *found->second;
   for (size_t index = 0; index < chooser.controller_->NumOptions(); ++index) {
     if (chooser.IdOf(index) == id) {
-      LOG(INFO) << "browser_core: device chooser " << tab << " chose " << index;
+      LOG(ERROR) << "browser: device chooser " << tab << " chose " << index;
       End(tab, &chooser,
           base::BindOnce(
               [](size_t index, permissions::ChooserController* controller) {
@@ -154,7 +155,7 @@ void DeviceChooser::Choose(bc_id tab, const char* id) {
 
 // static
 void DeviceChooser::Cancel(bc_id tab) {
-  LOG(INFO) << "browser_core: device chooser " << tab << " cancelled";
+  LOG(ERROR) << "browser: device chooser " << tab << " cancelled";
   End(tab, nullptr, base::BindOnce(&permissions::ChooserController::Cancel));
 }
 
@@ -311,6 +312,8 @@ void DeviceChooser::Report() {
     return;
   }
   const size_t count = controller_->NumOptions();
+  LOG(ERROR) << "browser: device chooser " << tab_ << " reports " << count << " scan "
+             << ScanState();
   // The strings first, as a device's point into them.
   std::vector<std::string> ids, names, details;
   for (size_t index = 0; index < count; ++index) {
