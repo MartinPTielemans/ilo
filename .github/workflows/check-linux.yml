@@ -215,6 +215,8 @@ jobs:
             dir=$out/$where
             mkdir -p "$dir"
             if [ "${RUNS%% *}" = repeat ]; then
+              hogs=
+              for _ in $(seq "$(nproc)"); do (while :; do :; done) & hogs="$hogs $!"; done
               for i in $(seq 10); do
                 for run in ${RUNS#repeat }; do
                   status=0
@@ -225,6 +227,7 @@ jobs:
                   [ "$status" = 0 ] || failed=1
                 done
               done
+              kill $hogs || true
               continue
             fi
             case $RUNS in
