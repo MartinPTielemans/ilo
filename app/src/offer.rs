@@ -55,6 +55,8 @@ use crate::tokens::offer::BUTTONS_TOP;
 use crate::tokens::offer::BUTTON_HEIGHT;
 use crate::tokens::offer::BUTTON_X;
 use crate::tokens::offer::BUTTON_GAP;
+use crate::tokens::offer::KEY_GAP;
+use crate::tokens::offer::KEY;
 use crate::tokens::offer::PLATE_RADIUS;
 use crate::tokens::offer::TITLE;
 use crate::tokens::offer::DETAIL;
@@ -380,6 +382,29 @@ impl OfferPrompt {
     }
 }
 
+/// The key that answers as the button for `answer` does, which the button names after its words,
+/// so the keyboard's way is learned where it's used.
+fn key(answer: Answer) -> Option<&'static str> {
+    match answer {
+        Answer::Accept => Some("enter"),
+        Answer::NotNow => Some("escape"),
+        Answer::Never => None,
+    }
+}
+
+/// How a button names `key`: ↩ as the dialog's glyph, which every OS's face can draw, and escape
+/// as onboarding's Skip writes it.
+fn key_mark(key: &str, color: Hsla) -> gpui::AnyElement {
+    match key {
+        "enter" => svg()
+            .path("icons/corner-down-left.svg")
+            .size(px(GLYPH))
+            .text_color(color)
+            .into_any_element(),
+        _ => div().text_color(color).child("esc").into_any_element(),
+    }
+}
+
 /// Where the username field's bottom left corner is in the window, where its menu shows.
 fn field_bottom_left() -> Point<Pixels> {
     point(px(INSET), px(INSET + TITLE_LINE + SITE_LINE + HEADER_GAP + ROW))
@@ -400,10 +425,12 @@ impl Render for OfferPrompt {
         });
         // Save or Update stands out in the Space's accent, as a dialog's action does.
         let button = |id: &'static str, label: SharedString, answer: Answer, default: bool| {
-            let (rest, hovered, pressed) = if default {
-                (palette.accent.into(), palette.accent_hovered(), palette.accent_pressed())
+            let (rest, hovered, pressed, text) = if default {
+                let label = Hsla::from(palette.accent_label);
+                (palette.accent.into(), palette.accent_hovered(), palette.accent_pressed(), label)
             } else {
-                (palette.plate(PLATE), palette.state(PLATE, STATE_HOVERED), palette.state(PLATE, STATE_PRESSED))
+                let states = (palette.state(PLATE, STATE_HOVERED), palette.state(PLATE, STATE_PRESSED));
+                (palette.plate(PLATE), states.0, states.1, palette.text(TITLE))
             };
             div()
                 .id(id)
@@ -412,13 +439,15 @@ impl Render for OfferPrompt {
                 .px(px(BUTTON_X))
                 .flex()
                 .items_center()
+                .gap(px(KEY_GAP))
                 .rounded(px(PLATE_RADIUS))
                 .bg(rest)
-                .when(default, |button| button.text_color(palette.accent_label))
+                .text_color(text)
                 .hover(move |style| style.bg(hovered))
                 .active(move |style| style.bg(pressed))
                 .font_weight(FontWeight::MEDIUM)
                 .child(label)
+                .children(key(answer).map(|key| key_mark(key, text.opacity(KEY))))
                 .on_click(cx.listener(move |prompt, _, _, cx| prompt.answer(answer, cx)))
         };
         let row = || {
