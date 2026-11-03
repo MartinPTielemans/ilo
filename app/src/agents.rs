@@ -78,6 +78,7 @@ pub enum PageAction {
     Key,
     ScrollDown,
     ScrollUp,
+    ScrollTo,
     Back,
     Forward,
     Screenshot,
@@ -1507,12 +1508,20 @@ impl Agents {
                 act.text = key;
             }
             _ => {
-                let up = string("direction").as_deref() == Some("up");
+                let direction = string("direction");
+                let up = direction.as_deref() == Some("up");
+                let way = if up { "up" } else { "down" };
+                let wheel = if up { PageAction::ScrollUp } else { PageAction::ScrollDown };
                 act.action = "scroll";
-                act.page = if up { PageAction::ScrollUp } else { PageAction::ScrollDown };
-                act.note = match &element {
-                    Some(element) => format!("Scrolled to {}.", label(element)),
-                    None => format!("Scrolled {}.", if up { "up" } else { "down" }),
+                // A ref alone is brought into view; with a direction, the wheel turns over it.
+                (act.page, act.note) = match (&element, direction) {
+                    (Some(element), None) => {
+                        (PageAction::ScrollTo, format!("Scrolled to {}.", label(element)))
+                    }
+                    (Some(element), Some(_)) => {
+                        (wheel, format!("Scrolled {way} in {}.", label(element)))
+                    }
+                    (None, _) => (wheel, format!("Scrolled {way}.")),
                 };
             }
         }

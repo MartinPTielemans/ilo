@@ -249,7 +249,7 @@ fn shared() -> Value {
         {
             "name": "scroll",
             "title": "Scroll",
-            "description": "Scroll a page down or up most of its height, or to bring an element into view by its ref. Answers with the page's outline.",
+            "description": "Scroll down or up by most of what shows, with the wheel, as a trackpad does. With a ref and a direction, within that element: a scrolling panel, a document's pane or a frame, or whatever holds it. With a direction alone, whatever is under the middle of the page. Says when nothing moved, as at the end. A ref alone brings that element into view instead. Answers with the page's outline.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -292,7 +292,7 @@ fn shared() -> Value {
                             },
                             "required": ["action"],
                         },
-                        "description": "Each step is an action and what that tool takes: click and scroll a ref, type a ref and text, press_key a key, navigate a url. wait waits for text to show in the page, up to seconds (5 if not given), or without text, waits the seconds.",
+                        "description": "Each step is an action and what that tool takes: click a ref, scroll a direction, a ref or both, type a ref and text, press_key a key, navigate a url. wait waits for text to show in the page, up to seconds (5 if not given), or without text, waits the seconds.",
                     },
                     "tab": tab,
                 },
@@ -394,8 +394,9 @@ pub struct Did {
     /// What on the page: an element by its name in quotes or its role, a key, a direction, or a
     /// wait's text in quotes or its seconds.
     pub target: String,
-    /// A thought's text, the address it opened, whole, or what it typed when that may show: never
-    /// into a password field, and at most `TYPED_SHOWN` characters.
+    /// A thought's text, the address it opened, whole, what it typed when that may show: never
+    /// into a password field, and at most `TYPED_SHOWN` characters, or the way it scrolled within
+    /// an element.
     pub text: String,
     /// The tab it acted on, by which a turn's same step on several tabs is one line (#1476). None
     /// for a page it opens, whose tab it makes, and for what isn't on a tab.
@@ -446,9 +447,10 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
         }
         "press_key" => ("Pressing", "Pressed", "Couldn't press", target("a key")),
         "scroll" => {
-            let to = match did.target.as_str() {
-                "up" | "down" | "" => format!("{} on {}", target("down"), site("the page")),
-                element => format!("to {element}"),
+            let to = match (did.target.as_str(), did.text.as_str()) {
+                ("up" | "down" | "", _) => format!("{} on {}", target("down"), site("the page")),
+                (element, "") => format!("to {element}"),
+                (element, way) => format!("{way} in {element}"),
             };
             ("Scrolling", "Scrolled", "Couldn't scroll", to)
         }

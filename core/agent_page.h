@@ -18,6 +18,7 @@
 #include "base/values.h"
 #include "browser_core/public/browser_core.h"
 #include "content/public/browser/devtools_agent_host_client.h"
+#include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "ui/gfx/geometry/rect_f.h"
@@ -37,7 +38,8 @@ namespace browser_core {
 // session of its own, and an element's id carries its session's slot above its DOM node's id.
 class AgentPage : public content::WebContentsObserver,
                   public content::WebContentsUserData<AgentPage>,
-                  public content::DevToolsAgentHostClient {
+                  public content::DevToolsAgentHostClient,
+                  public content::RenderWidgetHost::InputEventObserver {
  public:
   AgentPage(const AgentPage&) = delete;
   AgentPage& operator=(const AgentPage&) = delete;
@@ -96,6 +98,13 @@ class AgentPage : public content::WebContentsObserver,
   void Focus(int64_t element, bool submit);
   void PressKey(const std::string& key, base::OnceClosure then);
   void Scroll(bool down);
+  // Turns the wheel down, or up, at the middle of |area|, in the viewport's CSS pixels, by most of
+  // its height, then answers with the tree, or that nothing moved.
+  void Wheel(const gfx::RectF& area, bool down);
+  // Hears whether what the page's widgets do with input scrolls anything, from now until Unwatch,
+  // which says whether something did.
+  void Watch();
+  bool Unwatch();
   void History(bool forward);
   void Screenshot();
 
@@ -141,6 +150,12 @@ class AgentPage : public content::WebContentsObserver,
   void DispatchProtocolMessage(content::DevToolsAgentHost* agent_host,
                                base::span<const uint8_t> message) override;
   void AgentHostClosed(content::DevToolsAgentHost* agent_host) override;
+
+  // content::RenderWidgetHost::InputEventObserver:
+  void OnInputEventAck(const content::RenderWidgetHost& widget,
+                       blink::mojom::InputEventResultSource source,
+                       blink::mojom::InputEventResultState state,
+                       const blink::WebInputEvent& event) override;
   // A frame's session started, as Target.attachedToTarget tells, or ended.
   void Attached(const std::string& session, const base::DictValue& event);
   void Detached(const std::string& session);
@@ -163,6 +178,10 @@ class AgentPage : public content::WebContentsObserver,
   std::vector<Target> targets_;
   // The frames the snapshot running reads.
   std::vector<Frame> frames_;
+  // The widgets Watch hears, by their process's and their own ids, as one may go meanwhile, and
+  // whether any scrolled.
+  std::vector<std::pair<int, int>> watched_;
+  bool moved_ = false;
   // Keeps the page drawing while it's hidden, for the agent's input and screenshots.
   base::ScopedClosureRunner drawing_;
   base::WeakPtrFactory<AgentPage> weak_factory_{this};

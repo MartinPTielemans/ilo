@@ -1290,12 +1290,11 @@ impl Agents {
                 }
             }
             "press_key" => did.target = string("key"),
-            "scroll" => {
-                did.target = match &element {
-                    Some(element) => named(element),
-                    None => string("direction"),
-                }
-            }
+            "scroll" => match &element {
+                // Within the element, by the way it went, or to it.
+                Some(element) => (did.target, did.text) = (named(element), string("direction")),
+                None => did.target = string("direction"),
+            },
             "wait" => {
                 let text = string("text");
                 let seconds = arguments.get("seconds").and_then(Value::as_f64);

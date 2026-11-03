@@ -1319,6 +1319,38 @@ fn the_user_takes_back_all_of_an_agents_tabs(cx: &mut TestAppContext) {
     assert_eq!(to_take, [20]);
 }
 
+/// scroll with a ref and a direction turns the wheel within that element, a ref alone brings it
+/// into view, and a direction alone turns the wheel over the page. The core's answer that nothing
+/// moved is the call's.
+#[gpui::test]
+fn scroll_goes_within_an_element_or_to_it(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    page_done(&agents, &browser, answer, shop_tree(), cx);
+    let last = || {
+        let (_, _, action, element, _) = browser.pages.borrow().last().unwrap().clone();
+        (action, element)
+    };
+
+    let within = json!({ "tab": 20, "ref": "e3", "direction": "up" });
+    let answer = call(&agents, "claude-code", "scroll", within, cx);
+    assert_eq!(last(), (PageAction::ScrollUp, 51));
+    let scrolled = page_done(&agents, &browser, answer, shop_tree(), cx);
+    assert!(scrolled.text.starts_with("Scrolled up in “Place order”.\n\nTab 20"), "{scrolled:?}");
+
+    let to = call(&agents, "claude-code", "scroll", json!({ "tab": 20, "ref": "e3" }), cx);
+    assert_eq!(last(), (PageAction::ScrollTo, 51));
+    let scrolled = page_done(&agents, &browser, to, shop_tree(), cx);
+    assert!(scrolled.text.starts_with("Scrolled to “Place order”."), "{scrolled:?}");
+
+    let page = call(&agents, "claude-code", "scroll", json!({ "tab": 20 }), cx);
+    assert_eq!(last(), (PageAction::ScrollDown, 0));
+    let request = browser.pages.borrow().last().unwrap().1;
+    let end = "Nothing scrolled down: it's at its end, or nothing there scrolls.";
+    agents.update(cx, |agents, cx| agents.page_done(request, end.into(), true, cx));
+    assert_eq!(page.recv().unwrap(), ToolResult::error(end));
+}
+
 /// run_steps takes its steps one at a time, each checked and logged as alone, under the run's one
 /// entry, and answers with what each did and the last one's page. It stops at a step that asks
 /// the user first, leaving no question.
@@ -2142,6 +2174,7 @@ mod tasks {
             (did("press_key", "", "Enter", ""), Tense::Done, "Pressed Enter"),
             (did("scroll", "maat.pt", "down", ""), Tense::Done, "Scrolled down on maat.pt"),
             (did("scroll", "maat.pt", "“Opening hours”", ""), Tense::Now, "Scrolling to “Opening hours”"),
+            (did("scroll", "maat.pt", "“Programme”", "down"), Tense::Done, "Scrolled down in “Programme”"),
             (did("wait", "", "2s", ""), Tense::Done, "Waited 2s"),
             (did("wait", "", "“Tickets”", ""), Tense::Failed, "Didn't see “Tickets”"),
             (did("list_tabs", "", "", ""), Tense::Done, "Looked over its tabs"),

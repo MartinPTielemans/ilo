@@ -964,8 +964,9 @@ typedef struct bc_host {
   // for the agent; else a screenshot's JPEG in base64, or for every other action the page's
   // accessibility tree, DevTools' Accessibility.getFullAXTree nodes as a JSON array.
   void (*agent_page_done)(void* context, bc_id tab, uint64_t request, const char* text, bool error);
-  // The element bc_agent_page's |request| for |tab| is about to click or type in, scrolled into
-  // view: its box in points from the top-left of the tab's page view, for the agent's pointer.
+  // The element bc_agent_page's |request| for |tab| is about to click, type or scroll in, scrolled
+  // into view: its box in points from the top-left of the tab's page view, for the agent's pointer.
+  // For a scroll, the part of it that shows.
   void (*agent_page_element)(void* context, bc_id tab, uint64_t request, bc_rect box);
   // On Linux and Windows, the browser is quitting, or with |last_private| the last window of a
   // private profile closing, with |count| downloads running, which it would cancel: ask the user
@@ -1299,7 +1300,10 @@ BC_EXPORT size_t bc_agent_list_tabs(const char* agent, bc_id* tabs, size_t capac
 // Presses the key |text| names: Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp, ArrowDown,
 // ArrowLeft, ArrowRight, PageUp, PageDown, Home or End.
 #define BC_AGENT_PAGE_KEY 4
-// Scrolls the element into view, or with no element the page by most of a screen.
+// Scrolls down, or up, by most of what shows, with the wheel at the middle of what shows of the
+// element, as a user's trackpad over it does: so within it, a scrolling one or a frame, or within
+// what holds it, a frame of another site too. With no element, whatever is under the middle of the
+// page. Fails, saying so, when nothing moved, as at the end.
 #define BC_AGENT_PAGE_SCROLL_DOWN 5
 #define BC_AGENT_PAGE_SCROLL_UP 6
 // Goes back, or forward, in the tab's history.
@@ -1307,6 +1311,8 @@ BC_EXPORT size_t bc_agent_list_tabs(const char* agent, bc_id* tabs, size_t capac
 #define BC_AGENT_PAGE_FORWARD 8
 // A JPEG of what the page's view shows.
 #define BC_AGENT_PAGE_SCREENSHOT 9
+// Scrolls the element into view.
+#define BC_AGENT_PAGE_SCROLL_TO 10
 
 // Does |action|, a BC_AGENT_PAGE_ value, in |tab| for the agent with the id |agent|, to |element|,
 // a backendDOMNodeId from the tree, or 0, with |text| as the action says, else null. Then

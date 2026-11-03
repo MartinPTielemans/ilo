@@ -1,6 +1,6 @@
 //! A page as an agent sees it and acts on it: the outline of its accessibility tree, as the core's
-//! bc_agent_page gives it without any field's value, with a ref for each element it can act on,
-//! and which actions ask the user first.
+//! bc_agent_page gives it without any field's value, with a ref for each element it shows, to act
+//! on or scroll within, and which actions ask the user first.
 
 use std::collections::HashMap;
 
@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use super::TabInfo;
 
-/// Roles an agent can act on, each given a ref.
+/// Roles an agent can act on, which have a line even without a name.
 const INTERACTIVE: &[&str] = &[
     "button", "link", "textbox", "searchbox", "combobox", "checkbox", "radio", "switch", "slider",
     "spinbutton", "listbox", "option", "menuitem", "menuitemcheckbox", "menuitemradio", "tab",
@@ -74,7 +74,7 @@ impl Refs {
     }
 }
 
-/// The page's outline, from the nodes of its tree, which names each element it can act on in
+/// The page's outline, from the nodes of its tree, which names each element it shows in
 /// `refs`: a line for each, as `- role "name" [e12] (states)`, and `- text: …` for its text.
 pub fn outline(tab: &TabInfo, nodes: &[Value], refs: &mut Refs) -> String {
     let by_id: HashMap<&str, &Value> = (nodes.iter())
@@ -172,7 +172,8 @@ impl Walk<'_> {
                 line.push_str(&format!(" \"{}\"", clip(&name, 160)));
             }
             let backend = node.get("backendDOMNodeId").and_then(Value::as_i64);
-            if let (true, Some(backend)) = (INTERACTIVE.contains(&role), backend) {
+            // Any element shown, as a scroll goes within a frame, a heading's section or a pane.
+            if let Some(backend) = backend {
                 let password = node.get("password").and_then(Value::as_bool).unwrap_or(false);
                 let element = Element {
                     node: backend,
@@ -356,6 +357,31 @@ mod tests {
         nodes.swap(4, 5);
         let again = super::outline(&tab(), &nodes, &mut refs);
         assert!(again.contains("- textbox \"Coupon\" [e2]"));
+    }
+
+    /// Every element shown has a ref, a heading or a frame too, as a scroll goes within one.
+    #[test]
+    fn every_element_shown_has_a_ref() {
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Programme", &["2", "3", "4"]),
+            node("2", "heading", "Opening hours", &[]),
+            node("3", "Iframe", "Calendar", &["5"]),
+            node("4", "paragraph", "", &["6"]),
+            node("5", "button", "Next month", &[]),
+            node("6", "StaticText", "Open daily", &[]),
+        ];
+        nodes[1]["backendDOMNodeId"] = json!(20);
+        nodes[2]["backendDOMNodeId"] = json!(30);
+        nodes[4]["backendDOMNodeId"] = json!(50);
+        nodes[5]["backendDOMNodeId"] = json!(60);
+        let mut refs = Refs::default();
+        let outline = outline(&tab(), &nodes, &mut refs);
+        assert!(outline.ends_with(
+            "- heading \"Opening hours\" [e1]\n\
+             - Iframe \"Calendar\" [e2]\n  - button \"Next month\" [e3]\n\
+             - text: Open daily"
+        ));
+        assert_eq!(refs.get("e2").map(|element| element.node), Some(30));
     }
 
     /// A page bigger than an agent should take in is cut, and says so.

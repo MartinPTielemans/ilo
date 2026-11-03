@@ -4,6 +4,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <set>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -27,7 +28,9 @@
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
 #include "ui/gfx/geometry/size.h"
 #include "url/gurl.h"
@@ -222,6 +225,7 @@ AgentPage::AgentPage(content::WebContents* contents)
       tab_(Tab::IdOf(contents)) {}
 
 AgentPage::~AgentPage() {
+  Unwatch();
   Detach();
 }
 
@@ -290,6 +294,21 @@ void AgentPage::Run() {
     case BC_AGENT_PAGE_SCROLL_DOWN:
     case BC_AGENT_PAGE_SCROLL_UP:
       Scroll(action == BC_AGENT_PAGE_SCROLL_DOWN);
+      return;
+    case BC_AGENT_PAGE_SCROLL_TO:
+      Center(base::BindOnce(
+          [](base::WeakPtr<AgentPage> page, std::optional<gfx::RectF> box) {
+            if (!page) {
+              return;
+            }
+            if (!box) {
+              page->Fail(
+                  "The element isn't on the page any more, or is hidden. Take a new snapshot.");
+              return;
+            }
+            page->Settle();
+          },
+          weak_factory_.GetWeakPtr()));
       return;
     case BC_AGENT_PAGE_BACK:
     case BC_AGENT_PAGE_FORWARD:
@@ -496,52 +515,122 @@ void AgentPage::PressKey(const std::string& name, base::OnceClosure then) {
 }
 
 void AgentPage::Scroll(bool down) {
-  if (job_->element) {
-    Center(base::BindOnce(
-        [](base::WeakPtr<AgentPage> page, std::optional<gfx::RectF> box) {
-          if (!page) {
-            return;
-          }
-          if (!box) {
-            page->Fail(
-                "The element isn't on the page any more, or is hidden. Take a new snapshot.");
-            return;
-          }
-          page->Settle();
-        },
-        weak_factory_.GetWeakPtr()));
-    return;
-  }
   Send("Page.getLayoutMetrics", base::DictValue(),
        base::BindOnce(
-           [](base::WeakPtr<AgentPage> page, bool down, const base::DictValue* metrics) {
+           [](base::WeakPtr<AgentPage> page, bool down, bool within,
+              const base::DictValue* metrics) {
              if (!page) {
                return;
              }
              const base::DictValue* viewport =
                  metrics ? metrics->FindDict("cssLayoutViewport") : nullptr;
-             const double width = viewport ? viewport->FindDouble("clientWidth").value_or(0) : 0;
-             const double height = viewport ? viewport->FindDouble("clientHeight").value_or(0) : 0;
-             if (width <= 0 || height <= 0) {
+             const gfx::RectF view(
+                 0, 0,
+                 static_cast<float>(viewport ? viewport->FindDouble("clientWidth").value_or(0) : 0),
+                 static_cast<float>(viewport ? viewport->FindDouble("clientHeight").value_or(0)
+                                             : 0));
+             if (view.IsEmpty()) {
                page->Fail("The page has no view to scroll.");
                return;
              }
-             page->Send("Input.dispatchMouseEvent",
-                        base::DictValue()
-                            .Set("type", "mouseWheel")
-                            .Set("x", width / 2)
-                            .Set("y", height / 2)
-                            .Set("deltaX", 0)
-                            .Set("deltaY", (down ? 0.8 : -0.8) * height),
-                        base::BindOnce(
-                            [](base::WeakPtr<AgentPage> page, const base::DictValue*) {
-                              if (page) {
-                                page->Settle();
-                              }
-                            },
-                            page));
+             if (!within) {
+               page->Wheel(view, down);
+               return;
+             }
+             page->Center(base::BindOnce(
+                 [](base::WeakPtr<AgentPage> page, gfx::RectF view, bool down,
+                    std::optional<gfx::RectF> box) {
+                   if (!page) {
+                     return;
+                   }
+                   // Of an element taller than the view, such as a frame or a document's pane,
+                   // only what shows takes the wheel.
+                   const gfx::RectF shown = box ? gfx::IntersectRects(*box, view) : gfx::RectF();
+                   if (shown.IsEmpty()) {
+                     page->Fail(
+                         "The element isn't on the page any more, or is hidden. Take a new "
+                         "snapshot.");
+                     return;
+                   }
+                   page->Point(shown);
+                   page->Wheel(shown, down);
+                 },
+                 page, view, down));
+           },
+           weak_factory_.GetWeakPtr(), down, job_->element != 0));
+}
+
+void AgentPage::Wheel(const gfx::RectF& area, bool down) {
+  Watch();
+  Send("Input.dispatchMouseEvent",
+       base::DictValue()
+           .Set("type", "mouseWheel")
+           .Set("x", area.CenterPoint().x())
+           .Set("y", area.CenterPoint().y())
+           .Set("deltaX", 0)
+           .Set("deltaY", (down ? 0.8 : -0.8) * area.height()),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, bool down, const base::DictValue*) {
+             if (!page) {
+               return;
+             }
+             // DevTools answers once the wheel is in, before the scroll it starts has run.
+             page->wait_.Start(
+                 FROM_HERE, kSettle,
+                 base::BindOnce(
+                     [](AgentPage* page, bool down) {
+                       if (!page->Unwatch()) {
+                         page->Fail(down ? "Nothing scrolled down: it's at its end, or nothing "
+                                           "there scrolls."
+                                         : "Nothing scrolled up: it's at its top, or nothing "
+                                           "there scrolls.");
+                         return;
+                       }
+                       page->AfterLoad(base::BindOnce(&AgentPage::Snapshot,
+                                                      page->weak_factory_.GetWeakPtr()));
+                     },
+                     base::Unretained(page.get()), down));
            },
            weak_factory_.GetWeakPtr(), down));
+}
+
+void AgentPage::Watch() {
+  Unwatch();
+  // Each frame in a process of its own has a widget of its own, which hears its input.
+  std::set<content::RenderWidgetHost*> widgets;
+  GetWebContents().GetPrimaryMainFrame()->ForEachRenderFrameHost(
+      [&widgets](content::RenderFrameHost* host) {
+        if (content::RenderWidgetHost* widget = host->GetRenderWidgetHost()) {
+          widgets.insert(widget);
+        }
+      });
+  for (content::RenderWidgetHost* widget : widgets) {
+    widget->AddInputEventObserver(this);
+    watched_.emplace_back(widget->GetProcess()->GetDeprecatedID(), widget->GetRoutingID());
+  }
+}
+
+bool AgentPage::Unwatch() {
+  for (const auto& [process, routing] : std::exchange(watched_, {})) {
+    if (content::RenderWidgetHost* widget = content::RenderWidgetHost::FromID(process, routing)) {
+      widget->RemoveInputEventObserver(this);
+    }
+  }
+  return std::exchange(moved_, false);
+}
+
+void AgentPage::OnInputEventAck(const content::RenderWidgetHost& widget,
+                                blink::mojom::InputEventResultSource source,
+                                blink::mojom::InputEventResultState state,
+                                const blink::WebInputEvent& event) {
+  // A scroll that moves nothing, at its end, comes back with no consumer, and one that moves
+  // something consumed. A page that scrolls itself takes the wheel, as a document editor does.
+  const blink::WebInputEvent::Type type = event.GetType();
+  if (state == blink::mojom::InputEventResultState::kConsumed &&
+      (type == blink::WebInputEvent::Type::kGestureScrollUpdate ||
+       type == blink::WebInputEvent::Type::kMouseWheel)) {
+    moved_ = true;
+  }
 }
 
 void AgentPage::History(bool forward) {
@@ -920,6 +1009,7 @@ void AgentPage::Answer(std::string text, bool error) {
   job_.reset();
   frames_.clear();
   wait_.Stop();
+  Unwatch();
   loaded_.Reset();
   // Posted, so the app never hears inside its own bc_agent_page.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -952,6 +1042,7 @@ void AgentPage::LetGo() {
   weak_factory_.InvalidateWeakPtrs();
   wait_.Stop();
   rest_.Stop();
+  Unwatch();
   loaded_.Reset();
   drawing_.RunAndReset();
   Detach();

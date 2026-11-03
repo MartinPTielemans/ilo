@@ -152,6 +152,7 @@ impl Browser for Core {
             PageAction::Key => bc::BC_AGENT_PAGE_KEY,
             PageAction::ScrollDown => bc::BC_AGENT_PAGE_SCROLL_DOWN,
             PageAction::ScrollUp => bc::BC_AGENT_PAGE_SCROLL_UP,
+            PageAction::ScrollTo => bc::BC_AGENT_PAGE_SCROLL_TO,
             PageAction::Back => bc::BC_AGENT_PAGE_BACK,
             PageAction::Forward => bc::BC_AGENT_PAGE_FORWARD,
             PageAction::Screenshot => bc::BC_AGENT_PAGE_SCREENSHOT,

@@ -11,7 +11,8 @@
 # types, and not into a frame's password field. Its text leaves out a frame an extension puts in
 # the page, which isn't the page's. Its keys, typed or pressed, go to the page alone, and Escape
 # the page doesn't keep runs no Stop of ilo's. Where it acts in the page shown, its pointer and a
-# ring with the element's ref show it. It opens a page, clicks its link, scrolls, takes a screenshot
+# ring with the element's ref show it. It scrolls a panel and a frame of another site by their refs
+# until each says it's at its end. It opens a page, clicks its link, scrolls, takes a screenshot
 # and closes a tab, and a bank's site asks first, in a card whose Allow Once opens it. Always Allow
 # opens it from then on, until Revoke Permission in the Space's menu takes that back. A login the
 # user saved fills in neither as the agent's tab loads it nor from a dropdown, and fills once the
@@ -466,6 +467,61 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
   [ "$(tabs)" = "$before" ] || fail "the agent's Escape changed the tabs in its Space"
   closed=$(call close_tab "{\"tab\":$keys_tab}")
   case "$closed" in "Closed tab $keys_tab."*) ;; *) fail "closing the keys page answered: $closed" ;; esac
+
+  # scroll goes within an element by its ref, as a trackpad over it does: a panel that scrolls in a
+  # page that doesn't, and a frame of another site, each a step a call until its answer says
+  # nothing moved, at its end, where the page under it doesn't move either. With no ref, the wheel
+  # at the page's middle, under both, moves nothing and says so (#1445).
+  printf '%s' '<p style="height:900px">Feed top</p><p>Feed end</p><script>
+onscroll = () => {
+  if (scrollY + innerHeight >= document.documentElement.scrollHeight - 1) {
+    top.postMessage("feed", "*");
+  }
+};</script>' > "$out/site/feed.html"
+  printf '%s' "<title>loading</title><div style='display:flex;gap:8px;align-items:start'>
+<div id=panel role=region aria-label=Panel style='width:200px;height:120px;overflow:auto'>
+<p style='height:600px'>Panel top</p><p>Panel end</p></div>
+<iframe title=Feed src=http://127.0.0.1:$port/feed.html style='height:150px'></iframe></div>
+<script>const ends = new Set();
+const end = (what) => { ends.add(what); document.title = [...ends].sort().join(' ') + ' end'; };
+panel.onscroll = () => {
+  if (panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 1) end('panel');
+};
+addEventListener('message', (event) => end(event.data));
+onload = () => document.title = 'scrolling';</script>" > "$out/site/scroll.html"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/scroll.html\"}")
+  scroll_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  await_log "^browser: title $scroll_tab scrolling\$" "the scrolling page didn't load"
+  outline=$(call snapshot "{\"tab\":$scroll_tab}")
+  printf '%s\n' "$outline" > "$out/mcp-scroll.txt"
+  scroll_to_end() {
+    ref=$(ref_of "$1" "$2")
+    [ -n "$ref" ] || fail "the scrolling page's outline had no ref for $2: $outline"
+    for step in 1 2 3 4 5 6 7 8 9 10 11 12; do
+      answer=$(call scroll "{\"tab\":$scroll_tab,\"ref\":\"$ref\",\"direction\":\"down\"}")
+      printf '%s\n\n' "$answer" >> "$out/mcp-scroll-$2.txt"
+      case "$answer" in
+        "error: Nothing scrolled down: it's at its end"*) [ "$step" -gt 1 ] && return ;;
+        "Scrolled down in “$2”."*) continue ;;
+      esac
+      fail "scrolling in $2 answered: $answer"
+    done
+    fail "scrolling in $2 never reached its end"
+  }
+  scroll_to_end region Panel
+  scroll_to_end Iframe Feed
+  await_log "^browser: title $scroll_tab feed panel end\$" \
+    "the panel and the frame didn't scroll to their ends"
+  answer=$(call scroll "{\"tab\":$scroll_tab}")
+  case "$answer" in
+    "error: Nothing scrolled down"*) ;;
+    *) fail "scrolling the page that doesn't scroll answered: $answer" ;;
+  esac
+  closed=$(call close_tab "{\"tab\":$scroll_tab}")
+  case "$closed" in
+    "Closed tab $scroll_tab."*) ;;
+    *) fail "closing the scrolling page answered: $closed" ;;
+  esac
 
   # It opens a page in its Space, clicks its link, scrolls and takes a screenshot.
   opened=$(call open_tab '{"url":"example.com"}')
