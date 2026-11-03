@@ -76,9 +76,20 @@ fn a_field_has_its_caret_after_what_it_holds(cx: &mut TestAppContext) {
 /// The field and its text run, as an assistive app reads them.
 fn read(cx: &mut VisualTestContext) -> (Node, Node, NodeId) {
     let tree: TreeUpdate = cx.a11y_tree().expect("GPUI built a tree");
-    let node = |id: NodeId| tree.nodes.iter().find(|(each, _)| *each == id).unwrap().1.clone();
+    let node = |id: NodeId| {
+        tree.nodes
+            .iter()
+            .find(|(each, _)| *each == id)
+            .unwrap()
+            .1
+            .clone()
+    };
     let field = node(tree.focus);
-    let run = field.children().iter().copied().find(|&id| node(id).role() == Role::TextRun);
+    let run = field
+        .children()
+        .iter()
+        .copied()
+        .find(|&id| node(id).role() == Role::TextRun);
     let run = run.expect("the field has no text run");
     (field, node(run), run)
 }
@@ -91,12 +102,24 @@ fn an_assistive_app_reads_the_text_and_the_selection_in_it(cx: &mut TestAppConte
     cx.simulate_a11y_activation();
     cx.simulate_keystrokes("shift-left shift-left");
     let (field, run, id) = read(&mut cx);
-    assert_eq!((field.role(), field.value()), (Role::TextInput, Some("née 👍🏽")));
+    assert_eq!(
+        (field.role(), field.value()),
+        (Role::TextInput, Some("née 👍🏽"))
+    );
     assert_eq!(run.value(), Some("née 👍🏽"));
     assert_eq!(run.character_lengths(), [1, 2, 1, 1, 8]);
-    let at = |character_index| accesskit::TextPosition { node: id, character_index };
+    let at = |character_index| accesskit::TextPosition {
+        node: id,
+        character_index,
+    };
     // Selected leftwards from the end, so the caret, the focus, is before the space.
-    assert_eq!(field.text_selection(), Some(&TextSelection { anchor: at(5), focus: at(3) }));
+    assert_eq!(
+        field.text_selection(),
+        Some(&TextSelection {
+            anchor: at(5),
+            focus: at(3)
+        })
+    );
 }
 
 // A password field reads as one, and gives the dots it shows, never what was typed.
@@ -105,10 +128,18 @@ fn an_assistive_app_reads_a_secure_fields_dots(cx: &mut TestAppContext) {
     let (_, mut cx) = shown_as("hunter2", true, cx);
     cx.simulate_a11y_activation();
     let (field, run, _) = read(&mut cx);
-    assert_eq!((field.role(), field.value()), (Role::PasswordInput, Some("•••••••")));
+    assert_eq!(
+        (field.role(), field.value()),
+        (Role::PasswordInput, Some("•••••••"))
+    );
     assert_eq!(run.value(), Some("•••••••"));
     let tree = cx.a11y_tree().unwrap();
-    assert!(!tree.nodes.iter().any(|(_, node)| format!("{node:?}").contains("hunter2")));
+    assert!(
+        !tree
+            .nodes
+            .iter()
+            .any(|(_, node)| format!("{node:?}").contains("hunter2"))
+    );
 }
 
 /// ⌘⌫ deletes what's before the caret and ⌥⌫ the word before it, as in any Mac field, or the
@@ -122,7 +153,10 @@ fn cmd_and_option_backspace_delete_back_to_the_start_and_a_word(cx: &mut TestApp
         input.read_with(cx, |input, _| (input.text().to_string(), input.selection()))
     };
     let cx = &mut cx;
-    assert_eq!(keys("alt-backspace", cx), ("example.com/some/".into(), 17..17));
+    assert_eq!(
+        keys("alt-backspace", cx),
+        ("example.com/some/".into(), 17..17)
+    );
     assert_eq!(keys("alt-backspace", cx), ("example.com/".into(), 12..12));
     assert_eq!(keys("left left cmd-backspace", cx), ("m/".into(), 0..0));
     // At the start there's nothing before the caret to delete.
@@ -171,13 +205,18 @@ fn a_long_text_scrolls_to_keep_the_caret_in_view(cx: &mut TestAppContext) {
         input.update_in(cx, |input, window, cx| {
             let field = input.last_bounds.expect("drawn");
             let at = input.cursor_offset();
-            let caret = input.bounds_for_range(at..at, field, window, cx).expect("a caret");
+            let caret = input
+                .bounds_for_range(at..at, field, window, cx)
+                .expect("a caret");
             (caret.left() - field.left(), field.size.width, input.scroll)
         })
     };
     let (x, width, scroll) = caret(cx);
     assert!(scroll > px(0.), "the line didn't scroll");
-    assert!(x > px(0.) && x + CARET <= width, "the caret is at {x:?} of {width:?}");
+    assert!(
+        x > px(0.) && x + CARET <= width,
+        "the caret is at {x:?} of {width:?}"
+    );
 
     cx.simulate_keystrokes("home");
     cx.run_until_parked();
@@ -192,7 +231,10 @@ fn a_long_text_scrolls_to_keep_the_caret_in_view(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let (x, width, scroll) = caret(cx);
     assert!(scroll > px(0.), "the line didn't follow the caret");
-    assert!(x <= width - px(24.) - CARET + px(0.5), "the caret is under the fade, at {x:?}");
+    assert!(
+        x <= width - px(24.) - CARET + px(0.5),
+        "the caret is under the fade, at {x:?}"
+    );
 }
 
 /// The line moves only as far as it must: a caret already in view leaves it, one past an edge
@@ -200,10 +242,29 @@ fn a_long_text_scrolls_to_keep_the_caret_in_view(cx: &mut TestAppContext) {
 #[test]
 fn a_line_scrolls_no_further_than_it_must() {
     let (width, fade) = (px(100.), px(24.));
-    assert_eq!(scrolled(px(0.), px(50.), px(80.), width, fade), px(0.), "it fits");
-    assert_eq!(scrolled(px(0.), px(50.), px(300.), width, fade), px(0.), "in view");
+    assert_eq!(
+        scrolled(px(0.), px(50.), px(80.), width, fade),
+        px(0.),
+        "it fits"
+    );
+    assert_eq!(
+        scrolled(px(0.), px(50.), px(300.), width, fade),
+        px(0.),
+        "in view"
+    );
     assert_eq!(scrolled(px(0.), px(90.), px(300.), width, fade), px(16.));
-    assert_eq!(scrolled(px(16.), px(300.), px(300.), width, fade), px(202.), "at the end");
-    assert_eq!(scrolled(px(202.), px(150.), px(300.), width, fade), px(126.));
-    assert_eq!(scrolled(px(202.), px(150.), px(120.), width, fade), px(22.), "text deleted");
+    assert_eq!(
+        scrolled(px(16.), px(300.), px(300.), width, fade),
+        px(202.),
+        "at the end"
+    );
+    assert_eq!(
+        scrolled(px(202.), px(150.), px(300.), width, fade),
+        px(126.)
+    );
+    assert_eq!(
+        scrolled(px(202.), px(150.), px(120.), width, fade),
+        px(22.),
+        "text deleted"
+    );
 }
