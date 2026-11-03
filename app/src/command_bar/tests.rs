@@ -33,6 +33,9 @@ struct Recorder {
     page: Option<(SharedString, SharedString)>,
     /// The bar shows over a private window.
     private: bool,
+    /// The tooltips asked for and ended, apart from the rest, and where each hangs from.
+    tips: RefCell<Vec<String>>,
+    anchors: RefCell<Vec<Anchor>>,
 }
 
 impl Recorder {
@@ -174,6 +177,14 @@ impl Host for Recorder {
 
     fn set_up_agents(&self, _: &mut App) {
         self.record("set up agents".into());
+    }
+
+    fn tooltip(&self, tip: Option<(Tip, Anchor)>, _: &mut App) {
+        let Some((tip, anchor)) = tip else {
+            return self.tips.borrow_mut().push("no tooltip".into());
+        };
+        self.tips.borrow_mut().push(format!("tooltip {} {}", tip.text, tip.keys.join(" ")));
+        self.anchors.borrow_mut().push(anchor);
     }
 }
 
@@ -332,6 +343,11 @@ impl Bar {
         self.host.calls.take()
     }
 
+    /// The tooltips asked for and ended since the last time.
+    fn tips(&self) -> Vec<String> {
+        self.host.tips.take()
+    }
+
     /// Where the host was asked to show the bar since the last time.
     fn shown(&self) -> Vec<String> {
         self.host.shown.take()
@@ -437,9 +453,14 @@ impl Bar {
     /// A click where row `index` shows its trash under the pointer, at its end.
     fn click_remove(&mut self, index: usize) {
         self.point_at(index);
-        let x = WIDTH - LIST_X - PLATE_INSET - ROW_END - 3. - ICON_BOX / 2.;
-        let y = height(0) + LINE + LIST_TOP + (index as f32 + 0.5) * ROW_HEIGHT;
-        self.cx.simulate_click(point(px(x), px(y)), Modifiers::none());
+        self.cx.simulate_click(remove_button(index), Modifiers::none());
+        self.cx.run_until_parked();
+    }
+
+    /// The pointer comes onto row `index`, then onto the remove button it shows at its end.
+    fn point_at_remove(&mut self, index: usize) {
+        self.point_at(index);
+        self.cx.simulate_mouse_move(remove_button(index), None, Modifiers::none());
         self.cx.run_until_parked();
     }
 
@@ -452,6 +473,13 @@ impl Bar {
             })
             .unwrap()
     }
+}
+
+/// The middle of the remove button at the end of row `index`, in the bar's window.
+fn remove_button(index: usize) -> gpui::Point<gpui::Pixels> {
+    let x = WIDTH - LIST_X - PLATE_INSET - ROW_END - 3. - ICON_BOX / 2.;
+    let y = height(0) + LINE + LIST_TOP + (index as f32 + 0.5) * ROW_HEIGHT;
+    point(px(x), px(y))
 }
 
 /// A row for a page from the profile's history, which ⇧⌦ can take out.
@@ -748,6 +776,48 @@ fn the_pointer_shows_a_trash_that_takes_a_suggestion_out(cx: &mut TestAppContext
     bar.suggest("ex", vec![searching("ex"), page("https://a.test/")]);
     bar.click_remove(0);
     assert_eq!(bar.calls(), [format!("open {}", search("ex")), "hide".into()]);
+}
+
+/// A history row's remove button names itself and its key in a tooltip, Arc's ⌥⌘⌫ on the Mac and
+/// ⇧⌦ off it, which hangs from the button in the bar's window and stays inside it. The tooltip goes
+/// as the pointer leaves the button, as another row takes the row's place, and as it's clicked.
+#[gpui::test]
+fn the_remove_button_names_itself_and_its_key(cx: &mut TestAppContext) {
+    let keys = if shell::OFF_THE_MAC { "Shift Del" } else { "⌥ ⌘ ⌫" };
+    let named = format!("tooltip Remove from History {keys}");
+    let rows = || vec![searching("ex"), page("https://a.test/"), page("https://b.test/")];
+    let mut bar = Bar::new(cx);
+    bar.type_text("ex");
+    bar.suggest("ex", rows());
+    bar.point_at_remove(1);
+    assert_eq!(bar.tips(), [named.clone()]);
+    let anchor = bar.host.anchors.take().pop().expect("no tooltip asked for");
+    let button = remove_button(1);
+    let (middle, row) = (f32::from(button.x), f32::from(button.y));
+    assert!((anchor.x - middle).abs() < 1., "it hangs from {}, not the button's middle", anchor.x);
+    let (top, bottom) = (row - ICON_BOX / 2., row + ICON_BOX / 2.);
+    assert!((anchor.top - top).abs() < 1. && (anchor.bottom - bottom).abs() < 1.);
+    assert_eq!(anchor.window, (WIDTH, height(ROWS_SHOWN)), "it isn't kept inside the bar");
+
+    // Off the button onto its row, the tooltip goes.
+    bar.point_at(1);
+    assert_eq!(bar.tips(), ["no tooltip"]);
+
+    // More suggestions for what's typed keep it, and another page in the row's place ends it.
+    bar.point_at_remove(1);
+    bar.suggest("ex", rows());
+    assert_eq!(bar.tips(), [named.clone()]);
+    bar.suggest("ex", vec![searching("ex"), page("https://c.test/")]);
+    assert_eq!(bar.tips(), ["no tooltip"]);
+
+    // A click on the button ends it before the page goes.
+    bar.suggest("ex", rows());
+    bar.point_at_remove(2);
+    assert_eq!(bar.tips(), [named]);
+    bar.cx.simulate_click(remove_button(2), Modifiers::none());
+    bar.cx.run_until_parked();
+    assert_eq!(bar.tips(), ["no tooltip"]);
+    assert_eq!(bar.calls(), ["remove https://b.test/"]);
 }
 
 #[gpui::test]
@@ -1555,6 +1625,8 @@ fn a_word_of_the_name_puts_the_best_first_and_the_rest_after(cx: &mut TestAppCon
         "Separate Page from Split View".into(),
         "Expand Current Split".into(),
         "Flip Split View".into(),
+        "Convert to Vertical Split View".into(),
+        "Convert to Horizontal Split View".into(),
         "New Note Split".into(),
     ];
     assert_eq!(bar.listed(), expected);
@@ -1580,6 +1652,8 @@ fn tab_in_an_empty_field_lists_only_the_commands(cx: &mut TestAppContext) {
         "Separate Page from Split View",
         "Expand Current Split",
         "Flip Split View",
+        "Convert to Vertical Split View",
+        "Convert to Horizontal Split View",
         "New Note Split",
     ];
     assert_eq!(bar.listed(), only);

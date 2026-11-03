@@ -356,7 +356,7 @@ impl IconPicker {
             return;
         };
         if picking.tab != tab {
-            picking.slide = Some((picking.tab, Instant::now()));
+            picking.slide = Some((picking.tab, crate::motion::start(cx)));
         }
         picking.tab = tab;
         picking.tones = false;

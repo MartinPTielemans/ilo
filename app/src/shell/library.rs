@@ -626,6 +626,13 @@ impl Shell {
         if done >= 1. { shown } else { from + (shown - from) * done.max(0.) }
     }
 
+    /// Whether a click's fade of the sidebar is still under way, which outlasts the card's motion
+    /// under Reduce Motion.
+    fn sidebar_fading(&self) -> bool {
+        let shown = if self.library_open { 0. } else { 1. };
+        self.clicked_fade().is_some() && self.sidebar_opacity() != shown
+    }
+
     /// The sidebar's size under the Library, about `RECEDE_X` right of its edge: receding with the
     /// card, or full while a click fades it.
     pub(super) fn sidebar_scale(&self) -> f32 {
@@ -696,9 +703,9 @@ impl Shell {
         opacity: Option<f32>,
         cx: &mut Context<Self>,
     ) {
-        let now = Instant::now();
-        self.library_motion = Some((out, speed, now));
-        self.sidebar_fade = opacity.map(|opacity| (opacity, now));
+        // Under Reduce Motion the card is where it goes at once, and the sidebar still fades.
+        self.library_motion = Some((out, speed, crate::motion::start(cx)));
+        self.sidebar_fade = opacity.map(|opacity| (opacity, Instant::now()));
         self.library_open = open;
         if open {
             self.conceal_now(cx);
@@ -722,6 +729,13 @@ impl Shell {
         self.show_section(section, cx);
     }
 
+    /// Manage Spaces… in a Space's menu: the Library on its Spaces, left there if it shows them.
+    pub(super) fn manage_spaces(&mut self, cx: &mut Context<Self>) {
+        if !(self.library_open && self.section == Section::Spaces) {
+            self.view_section(Section::Spaces, cx);
+        }
+    }
+
     /// Opens the Library on its Spaces, for the preview, which has no pointer to pick it with.
     pub fn show_spaces(&mut self, cx: &mut Context<Self>) {
         self.view_section(Section::Spaces, cx);
@@ -740,7 +754,7 @@ impl Shell {
         // Ours: the Library goes to the new section's width on the push's spring, as Arc's
         // isn't recorded.
         if self.library.is_some() && self.section_width(section) != self.library_width() {
-            self.library_resize = Some((self.library_width(), Instant::now()));
+            self.library_resize = Some((self.library_width(), crate::motion::start(cx)));
         }
         self.section = section;
         let placeholder = match section {
@@ -820,7 +834,7 @@ impl Shell {
             }
             return;
         }
-        if self.library_step().is_some() {
+        if self.library_step().is_some() || self.sidebar_fading() {
             window.request_animation_frame();
             return;
         }
@@ -2761,7 +2775,7 @@ mod tests {
         cx.simulate_mouse_up(card, MouseButton::Right, Modifiers::none());
         cx.run_until_parked();
         let titles = host.menus.borrow().last().cloned().unwrap_or_default();
-        assert!(titles.iter().any(|(title, _)| title == "Rename Space"), "no Space menu");
+        assert!(titles.iter().any(|(title, _)| title == "Rename Space…"), "no Space menu");
         assert!(host.shown.borrow().is_empty(), "the right-click showed the Space");
         assert!(shell.read_with(cx, |shell, _| shell.library_open), "the Library closed");
         cx.update(|_, cx| host.choose("Remove Theme Color", cx));

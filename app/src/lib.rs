@@ -107,6 +107,7 @@ pub mod link_rules;
 pub mod link_target;
 pub mod little_sites;
 pub mod menu;
+pub mod motion;
 pub mod notes;
 pub mod offer;
 pub mod palette;

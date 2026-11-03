@@ -132,9 +132,12 @@ impl Browser for Made {
         self.disconnected.borrow_mut().push(agent.into());
     }
 
-    /// The new tab is 30.
+    /// The new tab is 30. As the core, none opens for an agent without a Space.
     fn open_tab(&self, agent: &str, url: &str, _: &mut App) -> u64 {
         let space = self.agent_space(agent);
+        if space == 0 {
+            return 0;
+        }
         let url: &'static str = Box::leak(url.to_string().into_boxed_str());
         self.tabs.borrow_mut().push((30, space, "Opened", url));
         30
@@ -562,6 +565,25 @@ fn list_tabs_lists_only_the_agents_own_tabs(cx: &mut TestAppContext) {
         log(&agents, "claude-code", cx)[0],
         ("list_tabs".into(), "".into(), "".into())
     );
+}
+
+/// An agent whose first call is open_tab gets its Space then, and the tab opens there (#1468).
+#[gpui::test]
+fn open_tab_as_the_first_call_makes_the_agents_space(cx: &mut TestAppContext) {
+    let (browser, configs) = (Rc::new(Made::default()), Arc::new(Configs::default()));
+    let agents = agents(&browser, &configs, None, cx);
+    agents.update(cx, |agents, cx| agents.connect(Client::ClaudeCode, cx));
+    cx.run_until_parked();
+
+    let answer = call(&agents, "claude-code", "open_tab", json!({ "url": "example.com" }), cx);
+    assert_eq!(*browser.made.borrow(), [("claude-code".to_string(), "Claude Code".to_string())]);
+    let (tab, ..) = browser.pages.borrow()[0].clone();
+    assert_eq!(tab, 30);
+    let opened = page_done(&agents, &browser, answer, shop_tree(), cx);
+    assert!(opened.text.starts_with("Opened tab 30."), "{}", opened.text);
+    let listed = call(&agents, "claude-code", "list_tabs", json!({}), cx).recv().unwrap();
+    assert!(listed.text.contains("30  Opened  https://example.com/"), "{}", listed.text);
+    assert_eq!(browser.made.borrow().len(), 1, "the agent got a second Space");
 }
 
 /// Two agents each list their own Space's tabs, as the core lists the calling agent's, and neither
@@ -1545,6 +1567,11 @@ mod tasks {
 
     /// Agents on, with Claude signed in at `program`, and the user's Space 1.
     fn ready(program: Option<PathBuf>, cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>) {
+        // A real CLI's thread says when it ends, whenever that is, which wakes the test's tasks from
+        // a thread GPUI doesn't run: unless told the test has real I/O, GPUI fails the test for it.
+        if program.is_some() {
+            cx.executor().allow_parking();
+        }
         let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
         let agents = agents(&browser, &configs, None, cx);
         agents.update(cx, |agents, cx| {
@@ -1859,8 +1886,6 @@ mod tasks {
         cx.executor().advance_clock(NO_ANSWER * 2);
         cx.run_until_parked();
         assert_eq!(card_of(&agents, cx).dot, Dot::Done, "a timer ended a task that had answered");
-        // Its CLI ends with the test's app, not before: ended here, the thread that reads it would
-        // wake the test's scheduler, which takes that for a test that isn't deterministic.
     }
 
     /// A CLI that never answers, or goes before it does, never leaves Thinking going: the line

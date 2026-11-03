@@ -57,7 +57,8 @@ impl What {
     pub const DELETE_FOLDER: What = What::said("Delete Folder", "Folder Deleted");
     pub const REMOVE_FROM_SPLIT: What = What::quiet("Remove from Split");
     pub const SPLIT: What = What::quiet("Split View");
-    pub const CHANGE_ORIENTATION: What = What::quiet("Change Orientation");
+    pub const CONVERT_VERTICAL: What = What::quiet("Convert to Vertical Split View");
+    pub const CONVERT_HORIZONTAL: What = What::quiet("Convert to Horizontal Split View");
     pub const RENAME_TAB: What = What::quiet("Rename Tab");
     pub const RENAME_FOLDER: What = What::quiet("Rename Folder");
     pub const RENAME_SPACE: What = What::quiet("Rename Space");
@@ -171,6 +172,13 @@ pub(super) enum Edit {
         with: u64,
         left: bool,
         stacked: bool,
+    },
+    /// Puts a split view, by its tabs in order, at a spot, in another Space too, joined there
+    /// again and stacked if `stacked`, as the core moves a tab to another Space alone.
+    MoveSplit {
+        tabs: Vec<u64>,
+        stacked: bool,
+        spot: Spot,
     },
     /// Takes a tab out of the split view it joined, with `back`: the `Put` back to its row and
     /// place, or the `Join` back to the split it was in. The tab shown stays shown.
@@ -290,6 +298,12 @@ impl Edit {
             Edit::Unsplit { tab, back } => {
                 id(tab);
                 back.rekey(from, to);
+            }
+            Edit::MoveSplit { tabs, spot, .. } => {
+                ids(tabs);
+                if let At::Pinned { folder, .. } = &mut spot.at {
+                    id(folder);
+                }
             }
             Edit::ReopenPreview(closed) | Edit::ClosePreview(closed) => id(&mut closed.over),
             Edit::RestoreTask(_) | Edit::DismissTask(_) | Edit::UndeleteTask(_) | Edit::DeleteTask(_) => {}
@@ -428,6 +442,21 @@ impl Edit {
                 }
                 shell.browser.split_with(tab, with, left, cx);
                 Some(Edit::Separate(tab))
+            }
+            Edit::MoveSplit { tabs, stacked, spot } => {
+                let first = *tabs.first()?;
+                let now = shell.spot_of(first)?;
+                if now.space != spot.space {
+                    shell.move_split(&tabs, stacked, spot.space, cx);
+                }
+                match spot.at {
+                    At::Pinned { folder, index } => {
+                        shell.browser.move_tab(first, true, folder, index, cx)
+                    }
+                    At::Today(index) => shell.browser.move_tab(first, false, 0, index, cx),
+                    At::Favorite(_) => {}
+                }
+                Some(Edit::MoveSplit { tabs, stacked, spot: now })
             }
             Edit::Separate(tab) => {
                 let join = shell.join_of(tab)?;
@@ -859,9 +888,9 @@ impl Shell {
         self.keep(what, before, cx);
     }
 
-    /// Moves `tab` to `space`, pinning it first if `pin`, which the one undo takes back too, or a
-    /// folder with what's in it. Into another profile's Space it goes as a new tab, which has
-    /// nothing to give back, as the tabs of a folder do.
+    /// Moves `tab` to `space`, pinning it first if `pin`, which the one undo takes back too, with
+    /// the rest of its split view, or a folder with what's in it. Into another profile's Space it
+    /// goes as a new tab, which has nothing to give back, as the tabs of a folder do.
     pub(super) fn send_to_space(
         &mut self,
         tab: u64,
@@ -879,18 +908,48 @@ impl Shell {
             let from = this.spot_of(tab).and_then(|spot| profile(spot.space));
             from.is_some() && from == profile(space)
         };
-        let before = same_profile(self).then(|| self.put_back(tab)).flatten();
+        let same_profile = same_profile(self);
+        let before = same_profile.then(|| self.put_back(tab)).flatten();
         if self.is_folder_anywhere(tab) {
             self.browser.move_folder_to_space(tab, space, cx);
             return self.keep(What::MOVE_FOLDER_TO_SPACE, before, cx);
         }
-        // The core moves a pinned tab pinned, into another profile's Space too.
+        // The core moves a pinned tab pinned, into another profile's Space too, and pins a split
+        // whole.
         let pinned = matches!(self.spot_of(tab).map(|spot| spot.at), Some(At::Pinned { .. }));
         if pin && !pinned {
             self.browser.set_pinned(tab, true, cx);
         }
+        // A split moves whole, as its row does in its Space (Arc).
+        if let Some((tabs, stacked)) = self.split_of(tab) {
+            if !same_profile {
+                // There the core makes each page a new tab, in a row of its own.
+                for &each in &tabs {
+                    self.browser.move_to_space(each, space, cx);
+                }
+                return self.keep(What::MOVE_TO_SPACE, None, cx);
+            }
+            let spot = self.spot_of(tab);
+            let before = spot.map(|spot| Edit::MoveSplit { tabs: tabs.clone(), stacked, spot });
+            self.move_split(&tabs, stacked, space, cx);
+            return self.keep(What::MOVE_TO_SPACE, before, cx);
+        }
         self.browser.move_to_space(tab, space, cx);
         self.keep(What::MOVE_TO_SPACE, before, cx);
+    }
+
+    /// Moves a split view's `tabs` to `space` and joins them again there, in their order and
+    /// orientation, at even sizes.
+    fn move_split(&mut self, tabs: &[u64], stacked: bool, space: u64, cx: &mut Context<Self>) {
+        for &tab in tabs {
+            self.browser.move_to_space(tab, space, cx);
+        }
+        for pair in tabs.windows(2) {
+            self.browser.split_with(pair[1], pair[0], false, cx);
+        }
+        if stacked {
+            self.browser.set_split_stacked(tabs[0], true, cx);
+        }
     }
 
     /// Deletes `folder`, leaving what's in it where it is.
@@ -907,6 +966,14 @@ impl Shell {
         self.keep(What::REMOVE_FROM_SPLIT, join, cx);
     }
 
+    /// Takes every tab of `tab`'s split view out of it, each a step to undo, from the right, so
+    /// the pages keep their order in the list.
+    pub(super) fn separate_all(&mut self, tab: u64, cx: &mut Context<Self>) {
+        for &each in self.panes(tab)[1..].iter().rev() {
+            self.separate_tab(each, cx);
+        }
+    }
+
     /// Puts `tab` in a split view with `with`, at its left end if `left`, else its right end, and
     /// stacks the split if `stacked`: one step, which ⌘Z takes back to where `tab` was.
     pub(super) fn join_split(
@@ -917,11 +984,48 @@ impl Shell {
         stacked: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.favorites.contains(&with) {
+            return self.join_favorite(tab, with, left, stacked, cx);
+        }
         self.keep_split(tab, with, cx);
         self.browser.split_with(tab, with, left, cx);
         if stacked {
             self.browser.set_split_stacked(with, true, cx);
         }
+    }
+
+    /// `tab` joins `favorite`, which no Space holds, so a split view of them is made of a copy of
+    /// the favorite at the top of the shown Space's Today, as Arc's is. A pinned tab or a favorite
+    /// joins as a copy too, leaving both in their places, and a Today tab moves into the split, as
+    /// it does to join any other. ⌘Z closes the copies and puts a Today tab back in its place.
+    fn join_favorite(
+        &mut self,
+        tab: u64,
+        favorite: u64,
+        left: bool,
+        stacked: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let kept = self.favorites.contains(&tab) || self.pinned().contains(&tab);
+        let back = if kept { None } else { self.put_back(tab) };
+        // The copies show as they open, so the favorite's last, which the window then shows.
+        let joining = if kept { self.browser.duplicate(tab, cx) } else { tab };
+        let copy = self.browser.duplicate(favorite, cx);
+        if joining == 0 || copy == 0 {
+            return;
+        }
+        self.browser.split_with(joining, copy, left, cx);
+        if stacked {
+            self.browser.set_split_stacked(copy, true, cx);
+        }
+        // The copies close first, the favorite's last so the joining one's goes back beside it on
+        // Redo, and then the Today tab, alone again, goes back to its place.
+        let close = Edit::Close(if kept { vec![copy, joining] } else { vec![copy] });
+        let undo = match back {
+            Some(back) => Edit::Many(vec![close, back]),
+            None => close,
+        };
+        self.keep(What::SPLIT, Some(undo), cx);
     }
 
     /// `tab` is joining `with` in a split view, which ⌘Z takes it back out of. A pinned tab
@@ -966,7 +1070,8 @@ impl Shell {
     pub(super) fn stack_split(&mut self, tab: u64, stacked: bool, cx: &mut Context<Self>) {
         let undo = self.split_of(tab).map(|(_, now)| Edit::Stack { tab, stacked: now });
         self.browser.set_split_stacked(tab, stacked, cx);
-        self.keep(What::CHANGE_ORIENTATION, undo, cx);
+        let what = if stacked { What::CONVERT_VERTICAL } else { What::CONVERT_HORIZONTAL };
+        self.keep(what, undo, cx);
     }
 
     /// Gives a name, an icon or a colour its new value, remembering the old, unless it's the same.
