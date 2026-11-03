@@ -78,7 +78,11 @@ impl Shell {
 
     /// Another tab shown closes the card, as the dialog is the tab's.
     pub(super) fn cast_for_shown(&mut self, cx: &mut Context<Self>) {
-        if self.cast.as_ref().is_some_and(|(tab, _)| *tab != self.selected) {
+        if self
+            .cast
+            .as_ref()
+            .is_some_and(|(tab, _)| *tab != self.selected)
+        {
             self.cast = None;
             self.browser.cast_close(cx);
         }
@@ -94,19 +98,25 @@ impl Shell {
             return None;
         }
         let tab = *tab;
-        let close = card_close(&self.palette, "cast-close").on_click(cx.listener(|shell, _, _, cx| {
-            log!("browser: command cast-close via card");
-            shell.cast = None;
-            shell.browser.cast_close(cx);
-            cx.notify();
-        }));
+        let close =
+            card_close(&self.palette, "cast-close").on_click(cx.listener(|shell, _, _, cx| {
+                log!("browser: command cast-close via card");
+                shell.cast = None;
+                shell.browser.cast_close(cx);
+                cx.notify();
+            }));
         // Chrome's words while it looks, as no device answered yet.
         let looking = cast.devices.is_empty().then(|| {
-            div().mt(px(ROW_GAP)).text_color(rgba(DETAIL)).child("Looking for devices…")
+            div()
+                .mt(px(ROW_GAP))
+                .text_color(rgba(DETAIL))
+                .child("Looking for devices…")
         });
-        let devices = cast.devices.iter().enumerate().map(|(index, device)| {
-            self.cast_row(tab, index, device, cx)
-        });
+        let devices = cast
+            .devices
+            .iter()
+            .enumerate()
+            .map(|(index, device)| self.cast_row(tab, index, device, cx));
         Some(
             self.plate("cast")
                 .child(card_listener("cast", &self.cast_drawn, tab))
@@ -137,7 +147,10 @@ impl Shell {
                 .text_color(self.palette.text(SECONDARY))
                 .child(device.status.clone())
         });
-        let busy = matches!(device.state, CastState::Connecting | CastState::Disconnecting);
+        let busy = matches!(
+            device.state,
+            CastState::Connecting | CastState::Disconnecting
+        );
         let row = div()
             .id(("cast-device", index))
             .mt(px(ROW_GAP))
@@ -201,7 +214,14 @@ mod tests {
             let space = (1, "Home".into(), None, 1, "".into(), "".into(), "".into());
             shell.set_spaces(vec![space], cx);
             shell.set_space(1, cx);
-            shell.set_tabs(1, Vec::new(), vec![1, 2], Vec::new(), Folders::default(), cx);
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![1, 2],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
             shell.set_selected(1, cx);
         });
         host.take();
@@ -215,7 +235,10 @@ mod tests {
             state: CastState::Available,
             status: "".into(),
         };
-        Cast { header: "Cast tab".into(), devices: vec![device] }
+        Cast {
+            header: "Cast tab".into(),
+            devices: vec![device],
+        }
     }
 
     /// View › Cast… asks the core for the tab shown's dialog, and again closes it; the core's

@@ -52,7 +52,14 @@ fn report(shell: &Entity<Shell>, cx: &mut VisualTestContext, name: &str, icon: &
             icon: icon.to_string().into(),
             ..Split::default()
         };
-        shell.set_tabs(1, Vec::new(), vec![3, 4, 5], vec![split], Folders::default(), cx);
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            vec![3, 4, 5],
+            vec![split],
+            Folders::default(),
+            cx,
+        );
     });
     cx.run_until_parked();
 }
@@ -74,14 +81,22 @@ fn press(cx: &mut VisualTestContext, position: Point<Pixels>, clicks: usize) {
         click_count: clicks,
         first_mouse: false,
     });
-    cx.simulate_event(MouseUpEvent { position, button, modifiers, click_count: clicks });
+    cx.simulate_event(MouseUpEvent {
+        position,
+        button,
+        modifiers,
+        click_count: clicks,
+    });
     cx.run_until_parked();
 }
 
 /// The text in the field naming `tab`'s split, if one is.
 fn field(shell: &Entity<Shell>, cx: &mut VisualTestContext, tab: u64) -> Option<String> {
     shell.read_with(cx, |shell, cx| {
-        let renaming = shell.renaming.as_ref().filter(|r| r.naming == Naming::Split(tab))?;
+        let renaming = shell
+            .renaming
+            .as_ref()
+            .filter(|r| r.naming == Naming::Split(tab))?;
         Some(renaming.name.read(cx).text().to_string())
     })
 }
@@ -98,7 +113,10 @@ fn a_double_click_on_a_split_names_the_split(cx: &mut TestAppContext) {
     let (shell, cx, host) = window(cx, "");
     let second = split_row(&shell, cx, 0.75);
     press(cx, second, 1);
-    assert!(host.take().contains(&"select 4".to_string()), "the right half is the second page");
+    assert!(
+        host.take().contains(&"select 4".to_string()),
+        "the right half is the second page"
+    );
     shell.update(cx, |shell, cx| shell.set_selected(4, cx));
     press(cx, second, 2);
     assert_eq!(field(&shell, cx, 3).as_deref(), Some(""));
@@ -112,12 +130,18 @@ fn a_double_click_on_a_split_names_the_split(cx: &mut TestAppContext) {
     host.take();
     press(cx, second, 1);
     let calls = host.take();
-    assert!(calls.contains(&"select 4".to_string()), "the page shown last: {calls:?}");
+    assert!(
+        calls.contains(&"select 4".to_string()),
+        "the page shown last: {calls:?}"
+    );
     shell.update(cx, |shell, cx| shell.set_selected(3, cx));
     shell.update(cx, |shell, cx| shell.set_selected(5, cx));
     host.take();
     press(cx, second, 1);
-    assert!(host.take().contains(&"select 3".to_string()), "the row's one plate");
+    assert!(
+        host.take().contains(&"select 3".to_string()),
+        "the row's one plate"
+    );
     press(cx, second, 2);
     assert_eq!(field(&shell, cx, 3).as_deref(), Some("Planning"));
     cx.simulate_keystrokes("escape");
@@ -140,7 +164,10 @@ fn an_empty_name_is_taken_off_only_by_return(cx: &mut TestAppContext) {
     shell.update_in(cx, |shell, window, cx| shell.keyboard_left(window, cx));
     cx.run_until_parked();
     assert!(!naming(&shell, cx), "the field stayed");
-    assert!(host.take_edits().is_empty(), "leaving it empty took the name off");
+    assert!(
+        host.take_edits().is_empty(),
+        "leaving it empty took the name off"
+    );
 
     shell.update(cx, |shell, cx| shell.rename_tab(4, cx));
     cx.run_until_parked();
@@ -156,13 +183,18 @@ fn change_icon_on_a_split_gives_the_split_its_icon(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| shell.change_icon(4, cx));
     cx.run_until_parked();
     let (pending, row) = shell.read_with(cx, |shell, _| {
-        (shell.picker_pending.map(|(picker, _)| picker), shell.tab_row_drawn.get())
+        (
+            shell.picker_pending.map(|(picker, _)| picker),
+            shell.tab_row_drawn.get(),
+        )
     });
     assert_eq!(pending, Some(Pending::Icon(Subject::Tab(3))));
     assert!(row.is_some(), "the split's row didn't say where it is");
 
     // What the picker gives back for what's picked.
-    shell.update(cx, |shell, cx| shell.change(Prop::SplitIcon(3), Value::Text("📅".into()), cx));
+    shell.update(cx, |shell, cx| {
+        shell.change(Prop::SplitIcon(3), Value::Text("📅".into()), cx)
+    });
     assert_eq!(host.take_edits(), ["split icon 3 📅"]);
     report(&shell, cx, "Planning", "📅");
     shell.update(cx, |shell, cx| shell.run(Command::Undo, "ui", cx));
@@ -189,8 +221,22 @@ fn a_splits_look_goes_with_its_copy_and_comes_back_with_it(cx: &mut TestAppConte
     shell.update(cx, |shell, cx| shell.separate_tab(4, cx));
     assert_eq!(host.take_edits(), ["separate 4"]);
     shell.update(cx, |shell, cx| {
-        shell.set_tabs(1, Vec::new(), vec![3, 4, 5], Vec::new(), Folders::default(), cx)
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            vec![3, 4, 5],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        )
     });
     shell.update(cx, |shell, cx| shell.run(Command::Undo, "ui", cx));
-    assert_eq!(host.take_edits(), ["split 4 3 false", "split name 3 Planning", "split icon 3 📅"]);
+    assert_eq!(
+        host.take_edits(),
+        [
+            "split 4 3 false",
+            "split name 3 Planning",
+            "split icon 3 📅"
+        ]
+    );
 }

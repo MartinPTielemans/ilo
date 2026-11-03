@@ -13,7 +13,11 @@ const LEAST_VISITS: u32 = 3;
 /// the most visits first: but for those visited fewer than LEAST_VISITS times, those among `skip`,
 /// such as the favorites here, and the user's own machine and network, which no one favorites.
 pub fn favorites(history: &[Page], skip: &[String]) -> Vec<Tab> {
-    let skip: Vec<String> = skip.iter().filter_map(|url| site(url)).map(|(_, site)| site).collect();
+    let skip: Vec<String> = skip
+        .iter()
+        .filter_map(|url| site(url))
+        .map(|(_, site)| site)
+        .collect();
     // Each site with its visits, and the root it opens at, in the order first visited.
     let mut sites: Vec<(String, String, u32)> = Vec::new();
     for page in history {
@@ -28,7 +32,11 @@ pub fn favorites(history: &[Page], skip: &[String]) -> Vec<Tab> {
     sites.retain(|(_, site, visits)| *visits >= LEAST_VISITS && !skip.contains(site));
     sites.sort_by(|a, b| b.2.cmp(&a.2));
     let tabs = sites.into_iter().take(MOST);
-    tabs.map(|(url, _, _)| Tab { url, name: String::new() }).collect()
+    tabs.map(|(url, _, _)| Tab {
+        url,
+        name: String::new(),
+    })
+    .collect()
 }
 
 /// A site's name as the row offering it says it: its host, without `www.`.
@@ -45,7 +53,10 @@ fn site(url: &str) -> Option<(String, String)> {
         return None;
     }
     let host = rest.split(['/', '?', '#']).next()?;
-    let host = host.rsplit_once('@').map_or(host, |(_, host)| host).to_ascii_lowercase();
+    let host = host
+        .rsplit_once('@')
+        .map_or(host, |(_, host)| host)
+        .to_ascii_lowercase();
     let name = host.split(':').next()?;
     let numeric = name.chars().all(|c| c.is_ascii_digit() || c == '.');
     let local = !name.contains('.') || name.ends_with(".local") || name.ends_with(".localhost");
