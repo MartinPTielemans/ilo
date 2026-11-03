@@ -97,7 +97,7 @@ still_home() {
     fail "$1: the pinned tab isn't at its page"
 }
 
-# The pinned tab's row, 47 down once the favorite's row of tiles is over the Space's rows.
+# The pinned tab's row, 55 down once the favorite's row of tiles is over the Space's rows.
 tiles=0
 home_row() {
   echo "100 $(($(pinned_row 0 | cut -d' ' -f2) + tiles))"
@@ -169,7 +169,7 @@ still_home "after Esc"
 # later the moon, each 13 right of its appearance-x token, as cards.sh and little.sh pick them.
 peek_look() { # <light|dark> <the appearance button's x> [swatch]
   post rightclick 100 112
-  expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $colors")" \
+  expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors")" \
     "the Space's menu didn't offer its theme"
   send choose "$(cased 'Edit Theme Color…')"
   expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
@@ -297,7 +297,7 @@ send dragto 114 112
 expect '^browser: drag shape tile$' "the copy's row dragged onto the Space's name didn't turn into a tile"
 send release 114 112
 expect "^browser: favorites $b\$" "the copy's row didn't become a favorite: \"$(grep '^browser: favorites' "$log" | tail -1)\""
-tiles=47
+tiles=55
 open_preview "from the favorite"
 send key escape
 expect "^browser: tab $p closed\$" "Esc didn't close the favorite's preview"

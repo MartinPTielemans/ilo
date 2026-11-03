@@ -20,7 +20,8 @@ use super::{
     PLATE_INSET, ROW_HEIGHT, Row, Slot,
     CARD_INSET, PRIVATE_SHADE, REVEAL_HOLD, REVEAL_INSET, REVEAL_IN_DAMPING, REVEAL_IN_RESPONSE, REVEAL_OUT_DAMPING,
     REVEAL_OUT_RESPONSE, REVEAL_OVERSHOOT, REVEAL_WAIT, SIDEBAR_EDGE, SIDEBAR_HIDE, SIDEBAR_MAX,
-    SIDEBAR_MIN, SIDEBAR_SHOW, SIDEBAR_WIDTH, Settle, Shell, Space, settle_progress, spring,
+    SIDEBAR_MIN, SIDEBAR_SHOW, SIDEBAR_WIDTH, Settle, Shell, ShellHandle, Space, settle_progress,
+    spring,
 };
 
 /// What the toast says when a tab opens with the sidebar hidden, Arc's words, and for how long,
@@ -207,7 +208,7 @@ impl Shell {
     }
 
     /// Tabs opened in the Space shown while the sidebar is hidden, whose rows aren't seen: a toast
-    /// says so, and a click on it reveals the top one's row (Arc's release notes).
+    /// says so, and its Show reveals the top one's row (Arc's release notes), as the Spaces' does.
     pub(super) fn toast_opened(&mut self, tabs: &[u64], cx: &mut Context<Self>) {
         let Some(&tab) = tabs.first().filter(|_| self.unseen_sidebar()) else {
             return;
@@ -220,7 +221,7 @@ impl Shell {
         let show = Rc::new(move |cx: &mut App| {
             shell.update(cx, |shell, cx| shell.reveal_row(tab, cx)).ok();
         });
-        self.browser.toast_button(&text, (None, "show"), show, OPENED_TIME, cx);
+        self.browser.toast_button(&text, ("Show", "show"), show, OPENED_TIME, cx);
     }
 
     /// Whether what's added to the sidebar goes unseen: it's hidden, its reveal isn't out, and the
@@ -257,7 +258,7 @@ impl Shell {
         let show = Rc::new(move |cx: &mut App| {
             shell.update(cx, |shell, cx| shell.show_made_space(first, cx)).ok();
         });
-        self.browser.toast_button(&text, (Some("Show"), "show"), show, OPENED_TIME, cx);
+        self.browser.toast_button(&text, ("Show", "show"), show, OPENED_TIME, cx);
     }
 
     /// The Space toast's Show: the Space, if it's still there, with the sidebar back.
@@ -519,15 +520,16 @@ impl Shell {
                 self.set_revealed(false, cx);
                 self.browser.hover_card(crate::hover_card::Hover::Close, cx);
             }
-        } else if !self.revealed && self.reveal_wait.is_none() {
+        } else if !self.revealed && self.reveal_wait.is_none() && self.is_key_window(cx) {
             // Arc waits a moment, so a pointer passing the edge on its way to another window or
-            // display leaves the sidebar where it is.
+            // display leaves the sidebar where it is. Only the key window's comes out, as Arc's:
+            // a window behind leaves its edge to the pointer on its way to the one in front.
             self.reveal_wait = Some(cx.spawn(async move |shell, cx| {
                 cx.background_executor().timer(REVEAL_WAIT).await;
                 shell
                     .update(cx, |shell, cx| {
                         shell.reveal_wait = None;
-                        if shell.can_reveal() {
+                        if shell.can_reveal() && shell.is_key_window(cx) {
                             shell.set_revealed(true, cx);
                         }
                     })
@@ -552,6 +554,12 @@ impl Shell {
             self.set_revealed(true, cx);
             self.revealed_by_option = true;
         }
+    }
+
+    /// Whether this is the window the user last made key, which stays the one while the app is
+    /// behind another's.
+    fn is_key_window(&self, cx: &Context<Self>) -> bool {
+        cx.try_global::<ShellHandle>().is_none_or(|key| key.0 == cx.weak_entity())
     }
 
     /// Whether the sidebar is hidden and still, so the reveal can bring it out.
@@ -652,9 +660,11 @@ mod tests {
         WindowOptions, point, prelude::*, px, size,
     };
 
+    use std::ops::DerefMut as _;
+
     use super::super::{
-        Folders, SIDEBAR_MAX, SIDEBAR_MIN, SIDEBAR_WIDTH, Shell, drag::detents::shell_with,
-        recorder::Recorder,
+        Folders, PLATE_HEIGHT, ROW_HEIGHT, SIDEBAR_MAX, SIDEBAR_MIN, SIDEBAR_WIDTH, Shell, Slot,
+        drag::detents::shell_with, recorder::Recorder,
     };
 
     /// A Space made while the sidebar is hidden gets a toast whose Show shows it with the sidebar
@@ -685,14 +695,16 @@ mod tests {
         assert_eq!(*host.toasts.borrow(), ["Added the Space “Space 4”"]);
         shell.update(cx, spaces(&[1, 2, 3, 4, 5]));
         assert_eq!(host.toasts.borrow().last().unwrap(), "Added 2 Spaces");
-        let show = host.toast_run.borrow_mut().take().expect("no Show");
+        let (label, show) = host.toast_run.borrow_mut().take().expect("no Show");
+        assert_eq!(label, "Show");
         cx.update(|cx| show(cx));
         assert!(!shell.read_with(cx, |shell, _| shell.sidebar_hidden), "Show left it hidden");
         assert_eq!(host.shown.borrow().last(), Some(&4), "Show didn't show the first Space");
     }
 
-    /// A tab opening while the sidebar is hidden gets a toast whose click brings the sidebar back at
-    /// its row; tabs moving, or opening with the sidebar shown, get none.
+    /// A tab opening while the sidebar is hidden gets a toast whose Show, as the Spaces' toast has,
+    /// brings the sidebar back at its row; tabs moving, or opening with the sidebar shown, get
+    /// none.
     #[gpui::test]
     fn a_tab_opened_with_the_sidebar_hidden_is_toasted(cx: &mut TestAppContext) {
         let (shell, host) = shell_with(cx, &[], &[1], Folders::default());
@@ -710,9 +722,10 @@ mod tests {
         assert_eq!(*host.toasts.borrow(), ["2 New Tabs Created"]);
         shell.update(cx, tabs(vec![5, 3, 4, 1, 2]));
         assert_eq!(host.toasts.borrow().last().unwrap(), super::OPENED);
-        let click = host.toast_run.borrow_mut().take().expect("the toast can't be clicked");
-        cx.update(|cx| click(cx));
-        assert!(!shell.read_with(cx, |shell, _| shell.sidebar_hidden), "the click left it hidden");
+        let (label, show) = host.toast_run.borrow_mut().take().expect("the toast has no Show");
+        assert_eq!(label, "Show");
+        cx.update(|cx| show(cx));
+        assert!(!shell.read_with(cx, |shell, _| shell.sidebar_hidden), "Show left it hidden");
     }
 
     /// ⌥ tapped alone brings the hidden sidebar out wherever the pointer is, which keeps it out
@@ -782,17 +795,21 @@ mod tests {
         });
         cx.run_until_parked();
         // Tab 4's row fits in the browser window but is past the bottom of the reveal's list.
-        let offset = shell.update(cx, |shell, cx| {
+        shell.update(cx, |shell, cx| {
             shell.set_tabs(1, Vec::new(), vec![2, 3, 4], Vec::new(), Folders::default(), cx);
             shell.set_selected(4, cx);
-            shell.list_scroll.offset().y
         });
-        assert_eq!(offset, px(0.));
+        draw(&shell, cx);
+        assert_eq!(shell.read_with(cx, |shell, _| shell.list_scroll.offset().y), px(0.));
     }
 
-    /// Draws the shell again, as the app's next frame does.
+    /// Draws the shell again, as the app's next frame does, by when the list's glide to a row has
+    /// landed.
     fn draw(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
-        shell.update(cx, |_, cx| cx.notify());
+        shell.update(cx, |shell, cx| {
+            shell.land_list_glide();
+            cx.notify();
+        });
         cx.run_until_parked();
     }
 
@@ -938,5 +955,105 @@ mod tests {
         let (hidden, width) =
             shell.read_with(cx, |shell, _| (shell.sidebar_hidden, shell.sidebar_width));
         assert_eq!((hidden, width), (true, SIDEBAR_WIDTH));
+    }
+
+    /// A shell in a window 340 tall, showing a Space with `today` tabs, drawn.
+    fn list_shell(
+        today: Vec<u64>,
+        cx: &mut TestAppContext,
+    ) -> (Entity<Shell>, &mut VisualTestContext) {
+        let host = Rc::new(Recorder::default());
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(host, cx));
+        cx.simulate_resize(size(px(1000.), px(340.)));
+        shell.update(cx, |shell, cx| {
+            let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space], cx);
+            shell.set_space(1, cx);
+            shell.set_tabs(1, Vec::new(), today, Vec::new(), Folders::default(), cx);
+        });
+        draw(&shell, cx);
+        (shell, cx)
+    }
+
+    /// Rows hidden under the list's foot bring its edge line, and the list scrolled all the way
+    /// takes it away, though the room after the last row is still under it: there the last row's
+    /// plate ends 121 above the foot, as Arc's.
+    #[gpui::test]
+    fn the_foot_edge_shows_only_while_rows_are_hidden_under_it(cx: &mut TestAppContext) {
+        let (shell, cx) = list_shell((10..30).collect(), cx);
+        let edges = |cx: &mut VisualTestContext| {
+            shell.read_with(cx, |shell, _| (shell.top_edge.shown, shell.foot_edge.shown))
+        };
+        assert_eq!(edges(cx), (false, true), "the rows under the foot brought no edge");
+        shell.update(cx, |shell, _| shell.list_scroll.set_offset(point(px(0.), px(-1e4))));
+        draw(&shell, cx);
+        draw(&shell, cx);
+        assert_eq!(edges(cx), (true, false), "the list scrolled all the way kept its foot's edge");
+        let ends = shell.read_with(cx, |shell, _| {
+            let last = shell.layout()[&Slot::Tab(29)] + shell.tiles_room();
+            let plate_end = last + (ROW_HEIGHT + PLATE_HEIGHT) / 2.;
+            let height = f32::from(shell.list_scroll.bounds().size.height);
+            height - (plate_end + f32::from(shell.list_scroll.offset().y))
+        });
+        assert!((ends - 121.).abs() < 0.5, "the last row's plate ends {ends} above the foot");
+        // Rows that all fit bring no edge at the foot.
+        let (shell, cx) = list_shell(vec![10, 11], cx.deref_mut());
+        let foot = shell.read_with(cx, |shell, _| shell.foot_edge.shown);
+        assert!(!foot, "rows that fit brought the foot's edge");
+    }
+
+    /// The list glides to the row of a tab shown under its foot, and a scroll of the user's on the
+    /// way ends the glide where the user has it.
+    #[gpui::test]
+    fn a_scroll_on_the_way_to_a_row_ends_the_glide(cx: &mut TestAppContext) {
+        let (shell, cx) = list_shell((10..70).collect(), cx);
+        shell.update(cx, |shell, cx| shell.set_selected(69, cx));
+        let to = shell.read_with(cx, |shell, _| shell.list_glide.get().map(|glide| glide.to));
+        assert!(to.is_some_and(|to| to > 0.), "showing the last tab didn't glide to its row");
+        shell.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        shell.update(cx, |shell, _| shell.list_scroll.set_offset(point(px(0.), px(-37.))));
+        draw(&shell, cx);
+        let (glide, offset) = shell.read_with(cx, |shell, _| {
+            (shell.list_glide.get(), shell.list_scroll.offset().y)
+        });
+        assert!(glide.is_none(), "the glide went on past the user's scroll");
+        assert_eq!(offset, px(-37.), "the glide moved the list from where the user had it");
+    }
+
+    /// ⌘T's command bar, with the list scrolled down to its last row, scrolls it back up to the
+    /// New Tab row, which ends at the list's top, as Arc's.
+    #[gpui::test]
+    fn new_tab_scrolls_the_list_to_its_row(cx: &mut TestAppContext) {
+        let (shell, cx) = list_shell((10..70).collect(), cx);
+        shell.update(cx, |shell, cx| shell.set_selected(69, cx));
+        draw(&shell, cx);
+        shell.update(cx, |shell, cx| shell.set_new_tab(true, cx));
+        draw(&shell, cx);
+        let (top, offset) = shell.read_with(cx, |shell, _| {
+            let top = shell.layout()[&Slot::NewTab] + shell.tiles_room();
+            (top, -f32::from(shell.list_scroll.offset().y))
+        });
+        assert_eq!(offset, top, "the New Tab row isn't at the list's top");
+    }
+
+    /// With two windows, the pointer at the edge of the one behind leaves its sidebar hidden, and
+    /// at the key window's brings it out.
+    #[gpui::test]
+    fn only_the_key_windows_edge_reveals(cx: &mut TestAppContext) {
+        let (behind, _) = shell_with(cx, &[], &[1], Default::default());
+        let (key, _) = shell_with(cx, &[], &[2], Default::default());
+        for shell in [&behind, &key] {
+            shell.update(cx, |shell, cx| {
+                shell.sidebar_hidden = true;
+                shell.pointer_at(1., cx);
+            });
+        }
+        cx.executor().advance_clock(super::REVEAL_WAIT * 2);
+        let revealed = |shell: &Entity<Shell>, cx: &mut TestAppContext| {
+            shell.read_with(cx, |shell, _| shell.revealed)
+        };
+        assert!(!revealed(&behind, cx), "the window behind brought its sidebar out");
+        assert!(revealed(&key, cx), "the key window's edge didn't bring its sidebar out");
     }
 }

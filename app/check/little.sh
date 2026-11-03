@@ -296,7 +296,7 @@ expect "^browser: title [0-9]* value $long\$" "the autofocus page didn't take th
 look_theme() {
   send window 1
   post rightclick 100 112
-  expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $colors")" \
+  expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors")" \
     "the Space's menu didn't offer its theme"
   send choose "$(cased 'Edit Theme Color…')"
   expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"

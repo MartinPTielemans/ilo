@@ -119,17 +119,17 @@ expect '^browser: space form gone$' "the form didn't leave after return"
 name_point="100 112"
 tiled_name="100 159"
 post rightclick $name_point
-expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $themed, Profile › Default, \
-Profile › Profile 2 (checked), Profile › New Profile, Export as Markdown…, Delete Space")\$" \
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, Set Profile › Default, \
+Set Profile › Profile 2 (checked), Set Profile › New Profile, New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the empty Space's menu didn't offer its profiles"
 ../tools/window-screenshot.sh "$pid" "$out/profile-menu.png" || fail "no window to capture"
 send choose Default
 expect "^browser: profiled space $second $default\$" "Default didn't take the Space back"
 expect "^browser: favorites $a\$" "the first profile's favorite didn't show in its Space again"
 post rightclick $tiled_name
-expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $themed, Profile › Default (checked), \
-Profile › Profile 2, Profile › New Profile, Profile › Delete “Profile 2”, \
-Export as Markdown…, Delete Space")\$" \
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, Set Profile › Default (checked), \
+Set Profile › Profile 2, Set Profile › New Profile, Set Profile › Delete “Profile 2”, \
+New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the menu didn't offer the unused profile back"
 send choose Profile 2
 expect "^browser: profiled space $second $work\$" "Profile 2 didn't take the Space again"
@@ -175,9 +175,9 @@ else
 fi
 # Its menu, with a tab, can't change its profile.
 post rightclick $name_point
-expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $themed, Profile › Default (disabled), \
-Profile › Profile 2 (checked), Profile › New Profile (disabled), \
-Export as Markdown…, Delete Space")\$" \
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, Set Profile › Default (disabled), \
+Set Profile › Profile 2 (checked), Set Profile › New Profile (disabled), \
+New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the menu of a Space with a tab offered another profile"
 send choose Profile 2
 none_since '^browser: profiled space' || fail "choosing its own profile changed the Space's"
@@ -291,7 +291,7 @@ expect "^browser: space $first\$" "the window didn't go with the moved tab"
 expect '^browser: today [0-9][0-9]*$' "the moved tab isn't in the first Space"
 c=$(today)
 expect "^browser: title $c cookie p\$" "the moved tab didn't load with the first profile's cookie"
-post rightclick 100 $(($(row 0 | cut -d' ' -f2) + 47))
+post rightclick 100 $(($(row 0 | cut -d' ' -f2) + 55))
 expect '^browser: menu shown .*, Move to › Space 1 (checked), Move to › work, ' \
   "the moved tab's menu didn't offer its old Space"
 send choose work
@@ -522,7 +522,7 @@ expect '^browser: download [0-9]* done profile.txt$' "the second profile's page 
 # Deleted, the Space leaves its profile unused, which the first Space's menu then deletes, once the
 # user confirms.
 post rightclick $name_point
-expect "^browser: menu shown Rename Space, " \
+expect "^browser: menu shown $(cased 'Change Space Icon…'), " \
   "a right-click on the Space's name didn't show its menu"
 post choose Delete Space
 expect '^browser: dialog settled$' "Delete Space didn't ask first"
@@ -531,9 +531,9 @@ expect "^browser: spaces $first\$" "Delete didn't delete the second Space"
 expect "^browser: space $first\( in .*\)\{0,1\}\$" "deleting the second Space didn't show the first"
 expect "^browser: settled space $first\$" "the first Space's page didn't settle"
 post rightclick $tiled_name
-expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $colors, Profile › Default (checked), \
-Profile › personal, Profile › New Profile, Profile › Delete “personal”, \
-Export as Markdown…, Delete Space (disabled)")\$" \
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, Set Profile › Default (checked), \
+Set Profile › personal, Set Profile › New Profile, Set Profile › Delete “personal”, \
+New Folder…, Export as Markdown…, Manage Spaces…, Delete Space (disabled)")\$" \
   "the menu didn't offer to delete the unused profile by the name Settings gave it"
 post choose Delete “personal”
 expect '^browser: dialog shown Delete “personal”?$' "Delete didn't ask before deleting the profile"

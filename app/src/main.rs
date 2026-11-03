@@ -3451,14 +3451,14 @@ impl Browser for Engine {
     fn toast_button(
         &self,
         text: &str,
-        (label, name): (Option<&'static str>, &'static str),
+        (label, name): (&'static str, &'static str),
         run: Rc<dyn Fn(&mut App)>,
         time: Duration,
         cx: &mut App,
     ) {
         let text = text.to_string();
         let button = toast::Button {
-            label: label.map_or(toast::Label::Plate, |label| toast::Label::Text(label.into())),
+            label: toast::Label::Text(label.into()),
             name,
             run: Rc::new(move |_, cx| run(cx)),
         };
@@ -7884,6 +7884,7 @@ fn main() {
 unsafe extern "C" fn window_resized(_: *mut c_void, window: bc::bc_id, width: f64, height: f64) {
     if let Some(ui_view) = ui_view_of(window) {
         gpui_linux::resize_embedded(ui_view, width as f32, height as f32);
+        frames::sized(ui_view, [width, height]);
     }
 }
 

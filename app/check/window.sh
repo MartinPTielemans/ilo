@@ -719,7 +719,7 @@ toggle page shown "⌘S from the page after ⌥"
 # With the sidebar hidden, a tab opening says so in a toast, as its row isn't seen. A second asked
 # for while it's in place, as Arc's second ⌘↩ is, keeps it there and bumps it, unless motion is
 # reduced; recorded on the Mac, and the window captured after, as a capture ends a recording on
-# GitHub's hosted Mac. A click on the toast, which is its own button, brings the sidebar back.
+# GitHub's hosted Mac. Its Show brings the sidebar back.
 send key s cmd
 toggle page hidden "⌘S from the page before opening a tab"
 record new-tab-toast 6
@@ -744,19 +744,19 @@ else
 fi
 recorded
 ../tools/window-screenshot.sh "$pid" "$out/new-tab-toast.png" || fail "no window to capture"
-# A click 20 in from the plate's left, on its words, as there's no chip. The plate is logged in the
-# toast's window, whose width comes after it, at the content's right.
+# A click on Show, the chip at the plate's right end: 13.5 in from it and about 50 wide. The plate is
+# logged in the toast's window, whose width comes after it, at the content's right.
 expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]* in [0-9]* [0-9]*$' \
   "the new tab's toast didn't tell where its plate is" "$toast_step"
 set -- $(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //; s/ in / /')
 send layout
 content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
   sed 's/^browser: layout content \([0-9]*\)x[0-9]*,.*/\1/')
-show="$((content - $5 + $1 + 20)) $(($2 + $4 / 2))"
+show="$((content - $5 + $1 + $3 - 14 - 25)) $(($2 + $4 / 2))"
 send move $show
 send click $show
-expect '^browser: toast button show$' "a click on the new tab's toast at $show didn't take"
-expect '^browser: sidebar shown$' "a click on the new tab's toast didn't bring the sidebar back"
+expect '^browser: toast button show$' "a click on the new tab's toast's Show at $show didn't take"
+expect '^browser: sidebar shown$' "the new tab's toast's Show didn't bring the sidebar back"
 check_layout "after a click on the new tab's toast"
 # The sidebar's edge, the 6 pt right of its rows, drags its width between 164 and 500, Arc's, and
 # stops at them. Dragged on past half the narrowest, it hides the sidebar at once, which keeps the
@@ -799,7 +799,7 @@ if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
   # faint and known: stops at 0.06 in dark and 0.09 in light, from black at the top to 0.25 · 255
   # at the bottom.
   post rightclick 100 112
-  expect '^browser: menu shown Rename Space' "a right-click on the Space's name showed no menu"
+  expect "^browser: menu shown $(cased 'Change Space Icon…')" "a right-click on the Space's name showed no menu"
   send choose "$(cased 'Edit Theme Color…')"
   expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
   expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
@@ -821,7 +821,7 @@ if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
       expect '^browser: window light true$' "the window didn't turn light with the Mac"
       ../tools/window-screenshot.sh "$pid" "$out/light.png" || fail "no window to capture"
       post rightclick 100 112
-      expect '^browser: menu shown Rename Space' "a right-click on the Space's name showed no menu"
+      expect "^browser: menu shown $(cased 'Change Space Icon…')" "a right-click on the Space's name showed no menu"
       ../tools/window-screenshot.sh "$pid" "$out/light-menu.png" || fail "no window to capture"
       send key escape
       expect '^browser: menu closed$' "escape didn't close the Space's menu"
