@@ -1800,8 +1800,6 @@ impl Agents {
         self.advance(cx);
     }
 
-    /// Asks the core whether the agent may do `action` to `tab`, and logs the answer. A refusal
-    /// answers the call with why.
     /// Pins the agent's tab, or unpins or removes one it pinned (#1360). The core keeps every one
     /// to the agent's own Space; a pinned tab the agent didn't pin is the user's, and stays.
     fn pin(
@@ -1815,12 +1813,14 @@ impl Agents {
         let pinned = self.browser.tab(tab, cx).pinned;
         let theirs = pinned && self.pins.get(&tab).is_none_or(|by| by != agent);
         let checked = self.browser.may_act(agent, tab, action, cx).and_then(|()| {
-            match (action, theirs) {
-                ("unpin_tab" | "remove_tab", true) => Err(format!(
+            match (action, pinned, theirs) {
+                ("pin_tab", _, _) => Ok(()),
+                (_, false, _) => Err(format!("Tab {tab} isn't pinned.")),
+                (_, true, true) => Err(format!(
                     "The user pinned tab {tab}, so only they {} it.",
                     action.trim_end_matches("_tab")
                 )),
-                _ => Ok(()),
+                (_, true, false) => Ok(()),
             }
         });
         let site = site(&self.browser.tab(tab, cx).url);
@@ -1832,27 +1832,26 @@ impl Agents {
         }
         self.current.insert(agent.into(), tab);
         let answer = match (action, pinned) {
-            ("pin_tab", true) => Ok(format!("Tab {tab} is pinned already.")),
+            ("pin_tab", true) => format!("Tab {tab} is pinned already."),
             ("pin_tab", false) => {
                 self.browser.set_pinned(tab, true, cx);
                 self.pins.insert(tab, agent.into());
-                Ok(format!(
+                format!(
                     "Pinned tab {tab} at the page it's at. It stays in your Space's pinned tabs, \
                      even closed, until you unpin or remove it."
-                ))
+                )
             }
-            (_, false) => Err(format!("Tab {tab} isn't pinned.")),
-            ("unpin_tab", true) => {
+            ("unpin_tab", _) => {
                 self.browser.set_pinned(tab, false, cx);
                 self.pins.remove(&tab);
-                Ok(format!("Unpinned tab {tab}. It's at the top of your Today tabs."))
+                format!("Unpinned tab {tab}. It's at the top of your Today tabs.")
             }
             _ => {
                 self.browser.remove_pinned(tab, cx);
                 self.pins.remove(&tab);
                 let space = self.browser.agent_space(agent);
                 let open = (self.browser.space_tabs(space, cx).iter()).any(|each| each.id == tab);
-                Ok(match open {
+                match open {
                     true => format!(
                         "Tab {tab} is unpinned but stays open: its page asks the user before it's \
                          left."
@@ -1860,13 +1859,10 @@ impl Agents {
                     false => {
                         format!("Removed tab {tab}. The user can still find it in the archive.")
                     }
-                })
+                }
             }
         };
-        _ = reply.send(match answer {
-            Ok(text) => ToolResult::text(text),
-            Err(why) => ToolResult::error(why),
-        });
+        _ = reply.send(ToolResult::text(answer));
     }
 
     /// The user pinned, unpinned or moved `tab`, which makes its pin theirs.
@@ -1874,6 +1870,8 @@ impl Agents {
         self.pins.remove(&tab);
     }
 
+    /// Asks the core whether the agent may do `action` to `tab`, and logs the answer. A refusal
+    /// answers the call with why.
     fn act(
         &mut self,
         agent: &str,

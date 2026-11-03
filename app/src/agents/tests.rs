@@ -1350,8 +1350,14 @@ fn agents_pin_their_own_tabs_and_leave_the_users_pins(cx: &mut TestAppContext) {
         .map(|(action, site, refused)| (action, site, refused.is_empty()))
         .collect();
     let did: Vec<_> = did.into_iter().take(5).rev().collect();
-    let expected = ["pin_tab", "unpin_tab", "unpin_tab", "pin_tab", "remove_tab"];
-    assert_eq!(did, expected.map(|action| (action.into(), "example.com".into(), true)));
+    let expected = [
+        ("pin_tab", true),
+        ("unpin_tab", true),
+        ("unpin_tab", false),
+        ("pin_tab", true),
+        ("remove_tab", true),
+    ];
+    assert_eq!(did, expected.map(|(action, done)| (action.into(), "example.com".into(), done)));
     assert_eq!(tools::describe("remove_tab"), "Removed a pinned tab");
 
     browser.tabs.borrow_mut().push((21, 2, "Docs", "https://docs.example.com/"));
