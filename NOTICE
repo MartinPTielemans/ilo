@@ -33,11 +33,11 @@ paintbrush, palette, panel-left, paw-print, pencil, piano, picture-in-picture-2,
 plus, printer, puzzle, receipt, rotate-ccw-clock, rotate-ccw, rotate-cw, save, search, settings,
 shapes, share, shield, shopping-basket, skull, sliders-horizontal, sparkles, speaker, square-check,
 square-mouse-pointer, square-terminal, square, star, sun, terminal, text-align-start, text-search,
-thumbs-up, train-front, trash, triangle, type, undo-2, usb, user, users, utensils, vibrate, video,
-volume-2, volume-x, wrench, x, zap, zoom-in and zoom-out, and rotate-cw and x scaled as nav-reload
-and nav-stop; and camera's path, drawn as Capture's pointer, in app/platform/mac/host.mm; at commit
-7faf87628a1ad6175975bc595344337ce14a7db4. Each icon's stroke width is 2.25 where Lucide's is 2
-(app/design/tokens.toml); palette's four dots and key-round's one lose their fill.
+thumbs-up, train-front, trash, triangle, type, undo-2, ungroup, usb, user, users, utensils, vibrate,
+video, volume-2, volume-x, wrench, x, zap, zoom-in and zoom-out, and rotate-cw and x scaled as
+nav-reload and nav-stop; and camera's path, drawn as Capture's pointer, in app/platform/mac/host.mm;
+at commit 7faf87628a1ad6175975bc595344337ce14a7db4. Each icon's stroke width is 2.25 where Lucide's
+is 2 (app/design/tokens.toml); palette's four dots and key-round's one lose their fill.
 
   ISC License
 
