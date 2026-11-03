@@ -54,9 +54,9 @@ def read_answer():
     return json.loads(line)
 
 
-def turn(calls):
+def turn(calls, errors=False):
     """Sends a turn's calls at once and gives their answers' texts in the calls' order, failing
-    on an error."""
+    on an error unless |errors|, when an error's text is its answer."""
     global next_id
     ids = []
     for tool, arguments in calls:
@@ -74,7 +74,7 @@ def turn(calls):
     for (tool, arguments), id in zip(calls, ids):
         result = answers[id]["result"]
         text = result["content"][0].get("text", "")
-        if result["isError"]:
+        if result["isError"] and not errors:
             fail(f"{tool} {json.dumps(arguments)} answered: {text}")
         texts.append(text)
     return texts
@@ -97,10 +97,10 @@ started = time.monotonic()
 turns = calls = 0
 
 
-def timed(name, step):
+def timed(name, step, errors=False):
     global turns, calls
     began = time.monotonic()
-    texts = turn(step)
+    texts = turn(step, errors)
     turns += 1
     calls += len(step)
     print(f"cases: turn {turns} {name}, {len(step)} calls, {time.monotonic() - began:.1f} s",
@@ -128,12 +128,16 @@ if not all(picks):
 outlines = timed("open the status", [
     ("click", {"tab": tab, "ref": pick}) for tab, pick in zip(tabs, picks)
 ])
-# The list opens on the next frame, which the click's own outline may come before.
+# The list opens on the next frame, which the click's own outline may come before. On Linux a
+# snapshot straight after has come before it too, as a hidden page there may draw a frame only
+# every second or so. An agent that doesn't see it yet waits for it with run_steps' wait.
 options = [ref(outline, "option", "Closed") for outline in outlines]
 if not all(options):
-    outlines = timed("look again", [
-        ("snapshot", {"tab": tab}) for tab, option in zip(tabs, options) if not option
-    ])
+    outlines = timed("wait for the list", [
+        ("run_steps", {"tab": tab, "steps": [{"action": "wait", "text": "Closed"},
+                                             {"action": "snapshot"}]})
+        for tab, option in zip(tabs, options) if not option
+    ], errors=True)
     looked = iter(outlines)
     options = [option or ref(next(looked), "option", "Closed") for option in options]
 if not all(options):

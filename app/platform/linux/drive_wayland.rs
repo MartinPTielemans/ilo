@@ -503,7 +503,7 @@ fn hold(state: u16) -> Option<()> {
 }
 
 /// What the keyboard holds between commands: what flags holds, and Control after a key with it,
-/// for the ⌃Tab walk, as drive.rs's X server holds it.
+/// for the ⌃Tab walk, as drive.rs's X server holds it, until a pointer event lets it go.
 fn held() -> u16 {
     FLAGS.get() | KEY_FLAGS.get() & CONTROL
 }
@@ -551,9 +551,12 @@ fn first_press(x: f64, y: f64, which: u32, again: bool) {
 /// Has the pointer do `events` with the modifiers `state`, and those flags holds. Control held
 /// after a key for the ⌃Tab walk isn't one: drive.rs's X events each carry their own state, but
 /// Wayland gives a pointer's the keyboard's, so it goes up for them, ending the walk as a click
-/// would. With it, a wheel zoomed the page (#1219) and a drag pressed as a ⌃-click (#1221).
+/// would. With it, a wheel zoomed the page (#1219) and a drag pressed as a ⌃-click (#1221). It
+/// stays up after, as a hand's has: put back down, the next pointer event's lift made it a press
+/// of ⌃ alone, a key, which ended a hover card under the pointer before its click (#1223).
 fn with_modifiers(state: u16, events: impl FnOnce() -> Option<()>) -> Option<()> {
     hold(state | FLAGS.get())?;
+    KEY_FLAGS.set(KEY_FLAGS.get() & !CONTROL);
     let done = events();
     hold(held())?;
     done
