@@ -568,10 +568,11 @@ fn key_events(key: &str, state: u16, kinds: &[bool]) -> Option<()> {
     hold(held())
 }
 
-/// Commits `text` to the field of the UI, Settings or the overlay with the keys, or types it into
-/// the page with them, as drive.rs's insert does.
+/// Commits `text` to the field of the UI, Settings or the overlay with the keys, as drive.rs's
+/// insert does.
 fn insert(text: &str) -> Option<()> {
-    // A page's field is Chromium's, which no GPUI keystroke reaches.
+    // A page with the keys gets the text typed, as drive.rs's insert types it there: its field is
+    // Chromium's, which no GPUI keystroke reaches.
     if keyboard().1 == "RenderWidgetHostViewCocoa" {
         return text.chars().try_for_each(|c| key_events(&c.to_string(), 0, &[true, false]));
     }
