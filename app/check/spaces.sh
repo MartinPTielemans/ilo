@@ -558,11 +558,12 @@ expect_soon "^browser: space $second in " "⌃2 didn't show the second Space"
 post rightclick 12 $(row 0 | cut -d' ' -f2)
 expect "^browser: menu shown $(cased 'Copy Link, ')" "a right-click while the second Space's rows slid in showed no menu"
 # Settled before the menu showed, and the press came too late to be a test of the slide. The
-# slide's 0.3 s is the clock's, and a GPU-less Linux runner may draw frames slower than that, which
-# the press waits behind (#732).
+# slide's 0.3 s is the clock's, and a GPU-less Linux or Windows runner may draw frames slower than
+# that, which the press waits behind (#732).
 if ! sed -n "/^browser: drive $slide: /,\$p" "$log" |
   awk '/^browser: settled space/ { late = 1 } /^browser: menu shown/ { exit late }'; then
-  [ "$(uname)" = Linux ] || fail "the rows had settled before the right-click, so it didn't press mid-slide"
+  { [ "$(uname)" = Linux ] || windows; } ||
+    fail "the rows had settled before the right-click, so it didn't press mid-slide"
   echo "skip: a right-click mid-slide: the rows had settled before the app had the press (#732)."
 fi
 send choose Rename…
