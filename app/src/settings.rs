@@ -1651,10 +1651,11 @@ impl Settings {
                     )
                     .child(profile.name.clone()),
             };
+            // Under the name in its row, as a login's username is under its site in Passwords.
             let kept = profile.kept.clone().map(|why| {
-                div().truncate().text_size(px(text::SMALL)).text_color(rgb(DETAIL)).child(why)
+                div().truncate().text_size(px(USERNAME_SIZE)).text_color(rgb(DETAIL)).child(why)
             });
-            let label = div().flex_1().min_w_0().child(label).children(kept);
+            let label = div().flex_1().min_w_0().flex().flex_col().child(label).children(kept);
             let spaces: SharedString = match profile.spaces {
                 0 => "No Spaces".into(),
                 1 => "1 Space".into(),
@@ -1680,12 +1681,9 @@ impl Settings {
                     }),
                 )
             });
-            // As tall as a button's row, and a button's padding above and below a line under the
-            // name, so the head grows only by what that line adds.
             let head = div()
-                .min_h(px(PROFILE_ROW))
+                .h(px(PROFILE_ROW))
                 .px(px(PADDING))
-                .py(px((PROFILE_ROW - CONTROL_HEIGHT) / 2.))
                 .flex()
                 .items_center()
                 .child(tile("icons/user.svg", PROFILE_TILE))
