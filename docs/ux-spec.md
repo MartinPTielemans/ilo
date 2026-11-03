@@ -310,14 +310,14 @@ Arc's layout: the URL field and back, forward and reload live in the sidebar, an
 
 **Sections, top to bottom.** Header, URL field, favorites, then the Space's pinned tabs, the Clear divider, the Today tabs and "+ New Tab". At the foot, the window's tasks (Agent task) over its media players, and under them Restart to Update while an update waits (Updates), all of which stay where they are as the Spaces change and the list scrolls. The footer holds the Space switcher (Arc structure). The Space's name starts at x 41 after its icon, 2 before the titles (Arc 1.170.0 ax, on a Space with an icon); with no icon it starts on the favicons' left edge, x 18 (ours), and at 41 again while the icon picker's placeholder holds the icon's place (Spaces › Icon). Measure what the footer holds. The favorites stay put while the list scrolls. A favorites block taller than 40 % of the sidebar scrolls with the list instead (Ardia).
 
-**Favorites** (Arc's favorites are Dia's Top Apps dock, so these values are *interim*)
+**Favorites** (Arc's favorites are Dia's Top Apps dock, so the values without an Arc source are *interim*)
 
 | Item | Value | Source |
 |---|---|---|
-| Tile height / gap | 41 / 6 | Dia 1.50.1 bin and cap (1.49: 40) |
+| Tile height / gap | 47 / 8, at every width. Dia's are 41 / 6 | Arc 1.170 cap 2× (outside measurement, #1399) |
 | Side inset | 8, the rows' plates' and the URL field's. Dia's is 6 | ours |
 | First row top | 90 below the window top, 9 under the URL field. Dia's is 54 under its header, and Arc's favorites area starts at 82 (ax): re-measure with favorites in Arc | ours |
-| Columns | as many as fit at least 48 wide, all as wide; fewer favorites share the row, and the last row starts on the left. That gives Dia's 3 across at 190 pt (x 6, 67, 128) and 4 at 228. Arc's rule: measure | Dia, P§2; the rule ours |
+| Columns | the most, up to 4, that keep a tile at least 47 wide; then the fewest that need no more rows, so 5 go 3 + 2, 6 3 × 2, 7 4 + 3, 9 3 × 3, and 4 at 200 go 2 × 2. Every tile is as wide, a short last row keeps that width and starts on the left, and a tile's x is on the half point, its width not rounded. At 228 that's 4 across, 47 wide | Arc 1.171 ax, 41 cases of 1–9 favorites at 347, 230, 200, 140 and 100 (outside measurement, #1399) |
 | Radius | 10 | Dia bin |
 | Resting | fill white 0.10, 0.5 pt stroke white 0.14. Under the pointer white 0.20, the ladder's hover over it, coming and going in one frame as a row's does (ours) | Dia 1.50.1 bin |
 | Favicon | centred, as a row's: 16 in an 18 box, at half opacity while unloaded. Size: measure | Dia cap |

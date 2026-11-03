@@ -45,11 +45,11 @@ fi
 favorites() {
   grep '^browser: favorites' "$log" | tail -1 | sed 's/^browser: favorites *//'
 }
-# One favorite is one tile across the sidebar, 41 tall and 90 below the window's top, under the URL
-# field, and its row of tiles takes the Space's rows 47 down.
+# One favorite is one tile across the sidebar, 47 tall and 90 below the window's top, under the URL
+# field, and its row of tiles takes the Space's rows 55 down, with the 8 under it.
 tile="114 110"
 tiled_row() {
-  echo "100 $(($(row "$1" | cut -d' ' -f2) + 47))"
+  echo "100 $(($(row "$1" | cut -d' ' -f2) + 55))"
 }
 open_from_bar example.org
 b=$tab
@@ -435,7 +435,7 @@ none_since '^browser: dragged' || fail "a tile's drag escape put back dropped it
 [ "$(favorites)" = "$a" ] || fail "a tile's drag escape put back moved it: \"$(favorites)\""
 # A press hits the frame drawn, so the next drag waits for the put-back's.
 expect '^browser: drag put back$' "Escape's put-back didn't finish" "$escaped"
-# Three tiles in the sidebar at its narrowest take two rows, 94 points, more than 40 % of a window
+# Three tiles in the sidebar at its narrowest take two rows, 110 points, more than 40 % of a window
 # 220 tall, so they scroll with the list, under the URL field (Ardia).
 send drag $(tiled_row 0) 200 112
 expect "^browser: dragged $x to favorites 1\$" "a row dragged right of the tile didn't go there"
@@ -639,13 +639,13 @@ expect "^browser: today $r\( \|\$\)" "Remove from Favorites didn't put the tab a
 expect '^browser: tiles settled$' "the 12 tiles didn't settle"
 expect '^browser: rows settled$' "the rows didn't settle under the 12 tiles"
 twelve=$(favorites)
-# Three rows of tiles take the Space's rows 141 down.
-send click 100 $(($(row 0 | cut -d' ' -f2) + 141))
+# Three rows of tiles take the Space's rows 165 down.
+send click 100 $(($(row 0 | cut -d' ' -f2) + 165))
 expect "^browser: selected $r\( in .*\)\{0,1\}\$" "a click on Today's top row didn't show the tab taken out"
 send key d cmd
 expect "^browser: pinned $r\$" "⌘D didn't pin the tab taken out of the favorites"
 expect '^browser: rows settled$' "the rows didn't settle after ⌘D"
-pinned_full="100 $(($(pinned_row 0 | cut -d' ' -f2) + 141))"
+pinned_full="100 $(($(pinned_row 0 | cut -d' ' -f2) + 165))"
 post rightclick $pinned_full
 expect "^browser: menu shown $(cased 'Unpin Tab, Add to Favorites (disabled), ')" \
   "with 12 favorites, a pinned tab's menu didn't dim Add to Favorites"

@@ -274,6 +274,7 @@ const LIST_TOP: f32 = URL_FIELD_TOP + URL_FIELD_HEIGHT + 8.;
 use crate::tokens::shell::TILE_HEIGHT;
 use crate::tokens::shell::TILE_GAP;
 use crate::tokens::shell::TILE_MIN;
+use crate::tokens::shell::TILE_COLUMNS;
 use crate::tokens::shell::TILE_RADIUS;
 use crate::tokens::shell::{TILE_MARK, TILE_MARK_INSET};
 use crate::tokens::shell::TALL_FAVORITES;
