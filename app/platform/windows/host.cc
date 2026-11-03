@@ -2056,45 +2056,6 @@ LRESULT CALLBACK LaunchProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
   return DefWindowProcW(hwnd, message, wparam, lparam);
 }
 
-// diag(#1262): what the browser window's own surface holds where Windows' caption would be, read
-// through its window DC, which holds that surface and not DirectComposition's.
-void DiagCaption(HWND root, const char* when) {
-  RECT window{};
-  if (!root || !GetWindowRect(root, &window)) {
-    return;
-  }
-  const int width = (std::min)(400, static_cast<int>(window.right - window.left)), height = 40;
-  BITMAPINFO info{};
-  info.bmiHeader.biSize = sizeof info.bmiHeader;
-  info.bmiHeader.biWidth = width;
-  info.bmiHeader.biHeight = -height;
-  info.bmiHeader.biPlanes = 1;
-  info.bmiHeader.biBitCount = 32;
-  info.bmiHeader.biCompression = BI_RGB;
-  uint8_t* bits = nullptr;
-  HDC source = GetWindowDC(root);
-  HDC dc = CreateCompatibleDC(source);
-  HBITMAP bitmap =
-      CreateDIBSection(dc, &info, DIB_RGB_COLORS, reinterpret_cast<void**>(&bits), nullptr, 0);
-  if (bitmap) {
-    HGDIOBJ old = SelectObject(dc, bitmap);
-    BitBlt(dc, 0, 0, width, height, source, 0, 0, SRCCOPY);
-    GdiFlush();
-    long sum = 0, dark = 0;
-    for (int i = 0; i < width * height; ++i) {
-      const int v = (bits[i * 4] + bits[i * 4 + 1] + bits[i * 4 + 2]) / 3;
-      sum += v;
-      dark += v < 120;
-    }
-    fprintf(stderr, "browser: caption diag %s: mean %ld dark %ld\n", when,
-            sum / (width * height), dark);
-    SelectObject(dc, old);
-    DeleteObject(bitmap);
-  }
-  DeleteDC(dc);
-  ReleaseDC(root, source);
-}
-
 // The left |width| pixels of |window|'s content, top-down BGRX, filling |high|.
 bool Sidebar(HWND window, LONG width, std::vector<uint8_t>* pixels, LONG* high) {
   RECT client{};
@@ -2122,14 +2083,7 @@ bool Sidebar(HWND window, LONG width, std::vector<uint8_t>* pixels, LONG* high) 
     HGDIOBJ old = SelectObject(dc, bitmap);
     // The full content, as GPUI draws through DirectComposition, which a plain copy of the
     // window's DC misses.
-    wchar_t name[64] = L"";
-    GetClassNameW(window, name, 64);
-    const HWND top = GetAncestor(window, GA_ROOT);
-    fprintf(stderr, "browser: diag print %ls %s begin\n", name, top == window ? "top" : "child");
-    DiagCaption(top, "before print");
     ok = PrintWindow(window, dc, PW_CLIENTONLY | PW_RENDERFULLCONTENT);
-    DiagCaption(top, "after print");
-    fprintf(stderr, "browser: diag print end\n");
     GdiFlush();
     if (ok) {
       pixels->resize(static_cast<size_t>(width) * *high * 4);
@@ -2266,33 +2220,8 @@ LRESULT CALLBACK FrameChildProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM l
   return DefSubclassProc(hwnd, message, wparam, lparam);
 }
 
-LRESULT FrameMessage(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
-
-// diag(#1262): the painting messages the browser window gets, and its surface after each.
 LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR,
                            DWORD_PTR) {
-  const char* name = message == WM_NCPAINT        ? "WM_NCPAINT"
-                     : message == WM_NCACTIVATE   ? "WM_NCACTIVATE"
-                     : message == WM_PAINT        ? "WM_PAINT"
-                     : message == WM_ERASEBKGND   ? "WM_ERASEBKGND"
-                     : message == WM_PRINT        ? "WM_PRINT"
-                     : message == WM_PRINTCLIENT  ? "WM_PRINTCLIENT"
-                     : message == WM_SETTEXT      ? "WM_SETTEXT"
-                     : message == kDrawCaption    ? "WM_NCUAHDRAWCAPTION"
-                     : message == kDrawFrame      ? "WM_NCUAHDRAWFRAME"
-                                                  : nullptr;
-  if (!name) {
-    return FrameMessage(hwnd, message, wparam, lparam);
-  }
-  fprintf(stderr, "browser: frame diag %s %llx\n", name, static_cast<unsigned long long>(wparam));
-  const LRESULT result = FrameMessage(hwnd, message, wparam, lparam);
-  char after[48];
-  snprintf(after, sizeof after, "after %s", name);
-  DiagCaption(hwnd, after);
-  return result;
-}
-
-LRESULT FrameMessage(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
   switch (message) {
     case WM_NCCALCSIZE: {
       if (!wparam || !(GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CAPTION)) {
