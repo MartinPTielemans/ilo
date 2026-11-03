@@ -332,8 +332,10 @@ pub trait Browser {
     fn account_host(&self) -> Option<Rc<dyn crate::account::Host>> {
         None
     }
-    /// Deletes a profile no Space or favorite is in, with everything the browser keeps in it.
+    /// Deletes a profile no Space is in, with its favorites and everything the browser keeps in it.
     fn delete_profile(&self, profile: u64, cx: &mut App);
+    /// Who shares the favorites, as Settings has it.
+    fn favorites_scope(&self, cx: &mut App) -> super::FavoritesScope;
     /// Shows ilo's own menu of `items` at `position` in the window, or in the reveal's panel if
     /// `in_reveal`, in `look`, as a right-click there does, or with the item marked `over` on
     /// `position`, its title's top left there, as a pop-up button's menu does. Then calls `chosen`

@@ -1376,8 +1376,8 @@ BC_EXPORT bool bc_profile_rename(bc_id profile, const char* name);
 // then spaces_changed.
 BC_EXPORT bc_id bc_profile_create(const char* name);
 
-// Deletes the profile, with everything Chrome keeps in it, and returns whether it will. Not one a
-// Space or a favorite is in, the one the core started with or the last. Then spaces_changed.
+// Deletes the profile, with everything Chrome keeps in it and its favorites, and returns whether
+// it will. Not one a Space is in, the one the core started with or the last. Then spaces_changed.
 BC_EXPORT bool bc_profile_delete(bc_id profile);
 
 // The settings below are the profile's own, as Arc's Settings › Profiles keeps them, and the

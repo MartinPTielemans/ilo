@@ -6,7 +6,8 @@ use std::sync::Arc;
 use gpui::{App, Context, Hsla, Image, Pixels, Point, Rgba, SharedString, rgb};
 
 use super::{
-    AgentGrants, Command, MAX_PANES, ProfileChoice, Row, Shell, UserKeys, clean_link, files,
+    AgentGrants, Command, FavoritesScope, MAX_PANES, ProfileChoice, Row, Shell, UserKeys,
+    clean_link, files,
     commands::markdown_text,
     undo::{Prop, Value},
     user_keys,
@@ -133,6 +134,17 @@ impl MenuEntry {
     fn shortcut(self, command: Command, keys: &UserKeys) -> Self {
         let shortcut = keys.keys(command).first().map(|&key| key.to_string());
         MenuEntry { shortcut, ..self }
+    }
+}
+
+/// What a profile's Delete confirmation says goes with it, counting the `favorites` its tabs hold.
+/// A profile with no Space can hold favorites no Space shows (#1524). Under Every Space the other
+/// profiles keep those sites, so none of them goes.
+pub fn profile_goes_with(scope: FavoritesScope, favorites: usize) -> String {
+    match if scope == FavoritesScope::Every { 0 } else { favorites } {
+        0 => "Its history, cookies and logins go with it.".into(),
+        1 => "Its history, cookies, logins and 1 favorite go with it.".into(),
+        count => format!("Its history, cookies, logins and {count} favorites go with it."),
     }
 }
 
@@ -416,14 +428,11 @@ impl Shell {
         }
     }
 
-    /// A Delete item for each profile nothing is in.
+    /// A Delete item for each profile no Space is in. Its favorites go with it.
     fn delete_profile_items(&self) -> Vec<(MenuEntry, MenuAction)> {
         // The one the browser started with stays, as the browser needs one.
         (self.profiles.iter().skip(1))
-            .filter(|(profile, _)| {
-                !self.spaces.iter().any(|each| each.profile == *profile)
-                    && !self.favorite_holders.values().any(|each| each == profile)
-            })
+            .filter(|(profile, _)| !self.spaces.iter().any(|each| each.profile == *profile))
             .map(|(profile, name)| {
                 let (profile, name) = (*profile, name.clone());
                 let entry = MenuEntry::named(format!("Delete “{name}”"), true).destructive();
@@ -437,9 +446,11 @@ impl Shell {
     /// Deletes the profile once the user confirms, as nothing brings it back.
     fn delete_profile(&mut self, profile: u64, name: SharedString, cx: &mut Context<Self>) {
         let shell = cx.weak_entity();
+        // Under Each Space a favorite's holder is its Space, never a profile.
+        let favorites = self.favorite_holders.values().filter(|&&each| each == profile).count();
         self.browser.confirm(
             format!("Delete “{name}”?"),
-            "Its history, cookies and logins go with it.".into(),
+            profile_goes_with(self.browser.favorites_scope(cx), favorites),
             "Delete",
             Box::new(move |cx| {
                 shell.update(cx, |shell, cx| shell.browser.delete_profile(profile, cx)).ok();
@@ -1385,8 +1396,40 @@ mod tests {
 
     use super::{MenuEntry, sentence_case, space_menu_head, space_menu_label};
     use crate::shell::{
-        Command, Folders, Page, Shell, drag::detents::shell_with, recorder::Recorder,
+        Command, FavoritesScope, Folders, Page, Shell, drag::detents::shell_with,
+        recorder::Recorder,
     };
+
+    /// A profile no Space is in can be deleted, favorites and all, from a Space's menu, and its
+    /// confirmation counts the favorites that go with it: none under Every Space, where the other
+    /// profiles keep the sites, and none under Each Space, where favorites close with their Space
+    /// (#1524).
+    #[gpui::test]
+    fn a_profile_with_favorites_alone_is_deleted_with_them(cx: &mut TestAppContext) {
+        let (shell, host) = shell_with(cx, &[], &[10], Folders::default());
+        shell.update(cx, |shell, cx| {
+            let profiles = vec![(0, "Default".into()), (5, "Work".into()), (6, "Spare".into())];
+            shell.set_profiles(profiles, cx);
+            // Work has no Space to show its favorites in.
+            shell.set_favorites(vec![(20, 0), (21, 5), (22, 5), (23, 6)], cx);
+        });
+        let says = |scope, profile: &str, cx: &mut TestAppContext| {
+            host.favorites_scope.set(scope);
+            shell.update(cx, |shell, cx| shell.space_menu(1, point(px(100.), px(200.)), cx));
+            cx.update(|cx| host.choose(&format!("Delete “{profile}”"), cx));
+            let (message, detail, _) = host.confirming.take().expect("Delete to ask first");
+            format!("{message} {detail}")
+        };
+        let work = "Delete “Work”? Its history, cookies, logins and 2 favorites go with it.";
+        assert_eq!(says(FavoritesScope::Profile, "Work", cx), work);
+        let spare = "Delete “Spare”? Its history, cookies, logins and 1 favorite go with it.";
+        assert_eq!(says(FavoritesScope::Profile, "Spare", cx), spare);
+        let kept = "Delete “Work”? Its history, cookies and logins go with it.";
+        assert_eq!(says(FavoritesScope::Every, "Work", cx), kept);
+        // Under Each Space a favorite is its Space's, so no profile holds one.
+        shell.update(cx, |shell, cx| shell.set_favorites(vec![(21, 1)], cx));
+        assert_eq!(says(FavoritesScope::Space, "Work", cx), kept);
+    }
 
     /// Off the Mac, ilo's items are in sentence case, keeping its nouns Space and Library and
     /// acronyms capitalized.

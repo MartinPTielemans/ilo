@@ -498,14 +498,14 @@ bool DeleteProfile(bc_id profile) {
       return false;
     }
   }
-  if (!Favorites::Of(dir).empty()) {
-    return false;
-  }
   // Nor while a private window of it is open.
   if (Profile* loaded = ProfileFor(dir);
       DirOf(loaded) == dir && loaded->HasPrimaryOTRProfile()) {
     return false;
   }
+  // Its favorites go with it: with no Space of its own they may show nowhere, so the user
+  // couldn't take them out first (#1524).
+  Favorites::ProfileDeleting(dir);
   // Let go first: Chrome deletes it once it's unloaded, and a window may have built on it.
   if (Profile* loaded = ProfileFor(dir); DirOf(loaded) == dir) {
     Window::LetProfileGo(loaded);

@@ -720,6 +720,21 @@ void Favorites::SpaceDeleting(bc_id space) {
 }
 
 // static
+void Favorites::ProfileDeleting(const std::string& profile) {
+  State& state = Get();
+  const std::vector<bc_id> going = Of(profile);
+  for (bc_id tab : going) {
+    state.favs.at(tab).doomed = true;
+  }
+  if (!going.empty()) {
+    ReportChanged();
+  }
+  for (bc_id tab : going) {
+    Retire(tab);
+  }
+}
+
+// static
 void Favorites::Complete() {
   if (CurrentScope() == BC_FAVORITES_EVERY) {
     FillIn(Get());
