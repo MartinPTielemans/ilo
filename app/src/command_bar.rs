@@ -417,7 +417,7 @@ struct Site {
     color: Option<u32>,
 }
 
-/// The colours of the site searches a new profile has (core/search.cc), by keyword, for those
+/// The colours of the site searches a new profile has (core/site_searches.cc), by keyword, for those
 /// whose brand has one.
 pub(crate) const SITE_COLORS: [(&str, u32); 15] = [
     ("drive.google.com", site_colors::GOOGLE_DRIVE),

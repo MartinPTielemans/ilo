@@ -40,6 +40,21 @@ source_set("search_default") {
   ]
 }
 
+# The site searches a new profile has, and the one a word typed starts (#1397).
+source_set("site_searches") {
+  sources = [
+    "site_searches.cc",
+    "site_searches.h",
+  ]
+  deps = [
+    "//base",
+    "//base:i18n",
+    "//components/pref_registry",
+    "//components/prefs",
+    "//components/search_engines",
+  ]
+}
+
 # What the Spaces sync type's entities hold (sync_spaces.cc).
 proto_library("sync_spaces_proto") {
   sources = [ "sync_spaces.proto" ]
@@ -253,6 +268,7 @@ source_set("browser_core") {
     ":drm_request",
     ":search_default",
     ":sidebar_backups",
+    ":site_searches",
     ":space_default",
     ":sync_guard",
     ":sync_keys",
@@ -513,6 +529,7 @@ test("browser_core_unittests") {
   sources = [
     "search_default_unittest.cc",
     "sidebar_backups_unittest.cc",
+    "site_searches_unittest.cc",
 
     # Space alone, with what it asks of the rest of the core stubbed in its test.
     "space.cc",
@@ -524,6 +541,7 @@ test("browser_core_unittests") {
   deps = [
     ":search_default",
     ":sidebar_backups",
+    ":site_searches",
     ":space_default",
     ":sync_guard",
     ":sync_keys",

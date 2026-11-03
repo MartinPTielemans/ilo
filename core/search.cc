@@ -2,7 +2,6 @@
 
 #include <memory>
 #include <string>
-#include <string_view>
 #include <vector>
 
 #include "base/callback_list.h"
@@ -12,6 +11,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/supports_user_data.h"
 #include "browser_core/search_default.h"
+#include "browser_core/site_searches.h"
 #include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_keyed_service_factory.h"
@@ -20,9 +20,7 @@
 #include "components/omnibox/browser/autocomplete_classifier.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/pref_registry/pref_registry_syncable.h"
-#include "components/prefs/pref_service.h"
 #include "components/search_engines/template_url.h"
-#include "components/search_engines/template_url_data.h"
 #include "components/search_engines/template_url_service.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 
@@ -32,42 +30,6 @@ namespace {
 
 // ungoogled-chromium's engine in Google's place, which "searches" by going to http://<the words>.
 constexpr char16_t kNoSearch[] = u"nosearch";
-
-// Whether a profile has had kSiteSearches, once, so one the user deletes stays deleted.
-constexpr char kSiteSearchesSeeded[] = "browser_core.site_searches_seeded";
-
-// A site search a new profile has, so Tab after the start of its host searches it.
-struct SiteSearch {
-  std::string_view name;
-  // The site's host, as Chrome names a site's search, and what Tab is offered for.
-  std::string_view keyword;
-  std::string_view url;
-};
-
-// Arc's 19, which it seeds active into Chromium's keywords table (#1397). X has twitter.com's too,
-// so a search typed by its old name finds it.
-constexpr SiteSearch kSiteSearches[] = {
-    {"Google Drive", "drive.google.com", "https://drive.google.com/drive/search?q={searchTerms}"},
-    {"Gmail", "mail.google.com", "https://mail.google.com/mail/u/0/#search/{searchTerms}"},
-    {"Google Maps", "maps.google.com", "https://www.google.com/maps/search/{searchTerms}"},
-    {"Google Calendar", "calendar.google.com",
-     "https://calendar.google.com/calendar/r/search?q={searchTerms}"},
-    {"Google Docs", "docs.google.com", "https://docs.google.com/document/u/0/?q={searchTerms}"},
-    {"Dropbox", "dropbox.com", "https://www.dropbox.com/search/personal?query={searchTerms}"},
-    {"Amazon", "amazon.com", "https://www.amazon.com/s?k={searchTerms}"},
-    {"GitHub", "github.com", "https://github.com/search?q={searchTerms}"},
-    {"Figma", "figma.com", "https://www.figma.com/files/search?q={searchTerms}"},
-    {"X", "x.com", "https://x.com/search?q={searchTerms}"},
-    {"X", "twitter.com", "https://x.com/search?q={searchTerms}"},
-    {"YouTube", "youtube.com", "https://www.youtube.com/results?search_query={searchTerms}"},
-    {"Wikipedia", "wikipedia.org", "https://en.wikipedia.org/wiki/Special:Search?search={searchTerms}"},
-    {"Reddit", "reddit.com", "https://www.reddit.com/search/?q={searchTerms}"},
-    {"SoundCloud", "soundcloud.com", "https://soundcloud.com/search?q={searchTerms}"},
-    {"Asana", "asana.com", "https://app.asana.com/0/search?q={searchTerms}"},
-    {"LinkedIn", "linkedin.com", "https://www.linkedin.com/search/results/all/?keywords={searchTerms}"},
-    {"Apple Music", "music.apple.com", "https://music.apple.com/search?term={searchTerms}"},
-    {"Spotify", "spotify.com", "https://open.spotify.com/search/{searchTerms}"},
-};
 
 // A profile's wait for its engines to load, held on the profile.
 struct SeedOnLoad : base::SupportsUserData::Data {
@@ -93,7 +55,7 @@ class PrefsFactory : public ProfileKeyedServiceFactory {
 
   void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) override {
     RegisterSearchDefaultPrefs(registry);
-    registry->RegisterBooleanPref(kSiteSearchesSeeded, false);
+    RegisterSiteSearchesPrefs(registry);
   }
 };
 
@@ -114,33 +76,10 @@ bool IsChoice(TemplateURLService* engines, const TemplateURL* engine) {
              : engines->CanMakeDefault(engine);
 }
 
-// Gives |profile| kSiteSearches, once its engines have loaded. One whose keyword it has already keeps
-// its own page, and one Chrome made as the site's own search was used, which it keeps inactive
-// until the user turns it on, is turned on, as Arc's are; one the user turned off stays off.
-void SeedSiteSearches(Profile* profile) {
-  PrefService* prefs = profile->GetPrefs();
-  TemplateURLService* engines = LoadedEngines(profile);
-  if (!engines || prefs->GetBoolean(kSiteSearchesSeeded)) {
-    return;
-  }
-  prefs->SetBoolean(kSiteSearchesSeeded, true);
-  for (const SiteSearch& site : kSiteSearches) {
-    const std::u16string keyword = base::UTF8ToUTF16(site.keyword);
-    if (TemplateURL* engine = engines->GetTemplateURLForKeyword(keyword)) {
-      if (engine->is_active() == TemplateURLData::ActiveStatus::kUnspecified &&
-          !engine->CanBeUsedForKeywordMatching()) {
-        engines->SetIsActiveTemplateURL(engine, true);
-      }
-      continue;
-    }
-    TemplateURLData data;
-    data.SetShortName(base::UTF8ToUTF16(site.name));
-    data.SetKeyword(keyword);
-    data.SetURL(std::string(site.url));
-    // As one the user added, which Chrome never replaces with the site's own.
-    data.safe_for_autoreplace = false;
-    data.is_active = TemplateURLData::ActiveStatus::kTrue;
-    engines->Add(std::make_unique<TemplateURL>(data));
+// Gives |profile| its site searches once its engines have loaded (site_searches.h).
+void SeedOnceLoaded(Profile* profile) {
+  if (TemplateURLService* engines = LoadedEngines(profile)) {
+    SeedSiteSearches(profile->GetPrefs(), engines);
   }
 }
 
@@ -162,12 +101,12 @@ void SetUpSearch(Profile* profile) {
     return;
   }
   if (engines->loaded()) {
-    SeedSiteSearches(profile);
+    SeedOnceLoaded(profile);
     return;
   }
   auto wait = std::make_unique<SeedOnLoad>();
   wait->loaded =
-      engines->RegisterOnLoadedCallback(base::BindOnce(&SeedSiteSearches, base::Unretained(profile)));
+      engines->RegisterOnLoadedCallback(base::BindOnce(&SeedOnceLoaded, base::Unretained(profile)));
   profile->SetUserData(kSeedOnLoad, std::move(wait));
 }
 

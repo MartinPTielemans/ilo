@@ -726,7 +726,7 @@ expect '^browser: command bar hidden$' "↩ in the site search didn't close the 
 expect '^browser: title [0-9]* .*dogs' "the search for dogs didn't reach DuckDuckGo"
 # A new profile has Arc's 19 site searches, and a word that starts one's host hints it on the first
 # row, whatever that row is; Tab enters it, in YouTube's red (#1397). It needs an engine built with
-# this core (core/search.cc).
+# this core (core/site_searches.cc).
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send type yout

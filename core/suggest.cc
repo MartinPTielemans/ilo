@@ -15,6 +15,7 @@
 #include "browser_core/host.h"
 #include "browser_core/popular_sites.h"
 #include "browser_core/search.h"
+#include "browser_core/site_searches.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
@@ -29,7 +30,6 @@
 #include "components/omnibox/browser/autocomplete_result.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_service.h"
-#include "components/search_engines/template_url_starter_pack_data.h"
 #include "components/url_formatter/url_formatter.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 #include "url/gurl.h"
@@ -52,26 +52,6 @@ GURL Stripped(const GURL& url, const TemplateURLService* engines) {
   return AutocompleteMatch::GURLToStrippedGURL(url, AutocompleteInput(), engines,
                                                /*keyword=*/std::u16string(),
                                                /*keep_search_intent_params=*/true);
-}
-
-// The site search whose keyword |text| starts, as Arc offers one by its host rather than by what the
-// field completes: "twit" offers X's, twitter.com, while it completes twitch.tv, and "gm" none, as
-// Gmail's is mail.google.com (#1397). The shortest keyword, as Chrome ranks them, and none for one
-// letter, which would offer one for nearly anything typed. Null if none.
-const TemplateURL* SiteStarted(TemplateURLService* engines, const std::u16string& text) {
-  const std::u16string prefix = AutocompleteInput::CleanUserInputKeyword(engines, text);
-  if (prefix.size() < 2) {
-    return nullptr;
-  }
-  TemplateURLService::TemplateURLVector started;
-  engines->AddMatchingKeywords(prefix, /*supports_replacement_only=*/true, &started);
-  // Chrome's @-keywords search its own pages, and the engines it adds by itself stay inactive.
-  auto engine = std::ranges::find_if(started, [](const TemplateURL* engine) {
-    return engine->type() == TemplateURL::NORMAL && engine->CanBeUsedForKeywordMatching() &&
-           engine->starter_pack_id() == template_url_starter_pack_data::StarterPackId::kNone &&
-           !engine->featured_by_policy();
-  });
-  return engine == started.end() ? nullptr : *engine;
 }
 
 // A tab at |url|, stripped, other than |shown|: a favorite first, which every Space of its profile
