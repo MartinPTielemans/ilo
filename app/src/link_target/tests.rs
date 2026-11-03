@@ -1,6 +1,8 @@
 use gpui::{Bounds, point, px, size};
 
-use super::{HEIGHT, MARGIN, NEAR, PAD_X, Side, Target, near, place, plate};
+use super::{
+    HEIGHT, MARGIN, NEAR, PAD_X, Side, Target, WINDOW_WIDTH, near, place, plate, window_left,
+};
 
 /// Every character 7 points wide, so a test counts characters.
 fn measure(text: &str) -> f32 {
@@ -151,4 +153,25 @@ fn the_pointer_near_the_plate_is_near_and_far_from_it_is_not() {
     assert!(!near(frame, x - NEAR - 1., y + 5.));
     assert!(!near(frame, x + 50., y - NEAR - 1.));
     assert!(!near(frame, x + 500., y + 5.));
+}
+
+#[test]
+fn the_plates_window_stays_inside_a_card_wider_than_it_from_either_corner() {
+    let card = Bounds::new(
+        point(px(240.), px(10.)),
+        size(px(WINDOW_WIDTH + 100.), px(600.)),
+    );
+    for side in [Side::Left, Side::Right] {
+        let frame = place(card, 200., side);
+        let left = window_left(frame, side);
+        assert!(
+            left >= f32::from(card.left()),
+            "{side:?}: the window starts left of the card"
+        );
+        assert!(
+            left + WINDOW_WIDTH <= f32::from(card.right()),
+            "{side:?}: it goes past the card"
+        );
+        assert!(left <= f32::from(frame.left()) && left + WINDOW_WIDTH >= f32::from(frame.right()));
+    }
 }

@@ -27,6 +27,7 @@ One file per area, so lanes working on different areas edit different files. A n
 - [Downloads](downloads.md)
 - [Find in page](find-in-page.md)
 - [Zoom](zoom.md)
+- [Link target](link-target.md)
 - [DevTools](devtools.md)
 - [Developer Mode](developer-mode.md)
 - [Capture](capture.md)
