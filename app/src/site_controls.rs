@@ -18,7 +18,9 @@ use gpui::{
     MouseDownEvent, PathBuilder, Pixels, Point, SharedString, Size, Task, TitlebarOptions, Window,
     WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
     accesskit::{HasPopup, Role, Toggled},
-    actions, canvas, div, img, linear_color_stop, linear_gradient, point, prelude::*, px, size, svg,
+    actions, canvas, div, img, linear_color_stop, linear_gradient, point,
+    prelude::*,
+    px, size, svg,
 };
 
 use crate::{
@@ -34,34 +36,34 @@ actions!(site_controls, [Close]);
 // Arc 1.170.0 cap, in a dark Space, 1 pt a pixel, except where a comment says ours.
 /// The body's width: a row of four tiles inside the padding.
 pub const WIDTH: f32 = 4. * TILE_WIDTH + 3. * GAP + 2. * PADDING;
-use crate::tokens::site_controls::PADDING;
-use crate::tokens::site_controls::RADIUS;
-use crate::tokens::site_controls::GAP;
-use crate::tokens::site_controls::BEAK;
-use crate::tokens::site_controls::BEAK_TIP_RADIUS;
-use crate::tokens::site_controls::BEAK_FOOT_RADIUS;
-use crate::tokens::site_controls::BELOW_FIELD;
-use crate::tokens::site_controls::WINDOW_MARGIN;
 use crate::elevation::Level;
-use crate::tokens::site_controls::TEXT;
-use crate::tokens::site_controls::SECONDARY;
-use crate::tokens::site_controls::LINK;
-use crate::tokens::site_controls::TILE_WIDTH;
-use crate::tokens::site_controls::TILE_HEIGHT;
-use crate::tokens::site_controls::TILE_RADIUS;
-use crate::tokens::site_controls::TILE_TOP;
-use crate::tokens::site_controls::TILE_BOTTOM;
-use crate::tokens::site_controls::TILE_HIGHLIGHT;
-use crate::tokens::site_controls::PLATE;
-use crate::tokens::site_controls::EXTENSION_ICON;
 use crate::tokens::shell::extensions::ACTION_DIMMED;
-use crate::tokens::site_controls::PLUS_GLYPH;
+use crate::tokens::site_controls::BEAK;
+use crate::tokens::site_controls::BEAK_FOOT_RADIUS;
+use crate::tokens::site_controls::BEAK_TIP_RADIUS;
+use crate::tokens::site_controls::BELOW_FIELD;
+use crate::tokens::site_controls::CIRCLE;
+use crate::tokens::site_controls::EXTENSION_ICON;
+use crate::tokens::site_controls::GAP;
 use crate::tokens::site_controls::HEADING_SIZE;
+use crate::tokens::site_controls::LINK;
 use crate::tokens::site_controls::LINK_SIZE;
 use crate::tokens::site_controls::NAME_SIZE;
-use crate::tokens::site_controls::STATE_SIZE;
-use crate::tokens::site_controls::CIRCLE;
+use crate::tokens::site_controls::PADDING;
+use crate::tokens::site_controls::PLATE;
+use crate::tokens::site_controls::PLUS_GLYPH;
+use crate::tokens::site_controls::RADIUS;
 use crate::tokens::site_controls::ROW_PITCH;
+use crate::tokens::site_controls::SECONDARY;
+use crate::tokens::site_controls::STATE_SIZE;
+use crate::tokens::site_controls::TEXT;
+use crate::tokens::site_controls::TILE_BOTTOM;
+use crate::tokens::site_controls::TILE_HEIGHT;
+use crate::tokens::site_controls::TILE_HIGHLIGHT;
+use crate::tokens::site_controls::TILE_RADIUS;
+use crate::tokens::site_controls::TILE_TOP;
+use crate::tokens::site_controls::TILE_WIDTH;
+use crate::tokens::site_controls::WINDOW_MARGIN;
 /// The text's left edge, past the circle.
 const ROW_TEXT: f32 = PADDING + CIRCLE + 8.;
 use crate::tokens::site_controls::OFF;
@@ -82,17 +84,17 @@ const PASSWORDS: &str = "icons/key-round.svg";
 const DEVELOPER_MODE: &str = "icons/square-code.svg";
 const DEVELOPER_MODE_NAME: &str = "Developer Mode";
 const PASSWORDS_NAME: &str = "Passwords";
-use crate::tokens::site_controls::MANAGED_OPACITY;
+use crate::tokens::site_controls::DISABLED_OPACITY;
 use crate::tokens::site_controls::DIVIDER;
 use crate::tokens::site_controls::FOOTER;
-use crate::tokens::site_controls::LOCK_RADIUS;
-use crate::tokens::site_controls::LOCK_LEFT;
-use crate::tokens::site_controls::LOCK_SLOT;
-use crate::tokens::site_controls::LOCK_GLYPH;
-use crate::tokens::site_controls::LOCK_TEXT_GAP;
-use crate::tokens::site_controls::LOCK_RIGHT;
 use crate::tokens::site_controls::LOCK_CAP;
-use crate::tokens::site_controls::DISABLED_OPACITY;
+use crate::tokens::site_controls::LOCK_GLYPH;
+use crate::tokens::site_controls::LOCK_LEFT;
+use crate::tokens::site_controls::LOCK_RADIUS;
+use crate::tokens::site_controls::LOCK_RIGHT;
+use crate::tokens::site_controls::LOCK_SLOT;
+use crate::tokens::site_controls::LOCK_TEXT_GAP;
+use crate::tokens::site_controls::MANAGED_OPACITY;
 use crate::tokens::site_controls::MORE_FILL;
 use crate::tokens::site_controls::MORE_GLYPH;
 // Down the body, each from the top of what's above it.
@@ -105,8 +107,8 @@ use crate::tokens::site_controls::DIVIDER_TO_FOOTER;
 /// Ours: the extensions' rows are as far apart as their tiles.
 const EXTENSIONS_PER_ROW: usize = 4;
 use crate::tokens::site_controls::ASCENT;
-use crate::tokens::site_controls::DESCENT;
 use crate::tokens::site_controls::CAP;
+use crate::tokens::site_controls::DESCENT;
 use crate::tokens::site_controls::LINE;
 /// Ours, as before: it opens in 0.15 s and closes in 0.1 s, growing from the beak's tip and
 /// shrinking back into it, from and to this much of its size, as it fades.
@@ -233,19 +235,22 @@ impl ExtensionItem {
 
     /// Whether the panel stays to show the grid it changes; the others close it for what they open.
     fn stays(self) -> bool {
-        matches!(self, ExtensionItem::MoveToTop | ExtensionItem::Pin | ExtensionItem::Unpin)
+        matches!(
+            self,
+            ExtensionItem::MoveToTop | ExtensionItem::Pin | ExtensionItem::Unpin
+        )
     }
 }
 
 /// The menu of the extension at `index` in the grid: Move to Top, which the first tile has done,
 /// then the pinned action's items, with Pin for an unpinned one.
-fn extension_items(
-    extension: &Extension,
-    index: usize,
-) -> Vec<(MenuEntry, Option<ExtensionItem>)> {
+fn extension_items(extension: &Extension, index: usize) -> Vec<(MenuEntry, Option<ExtensionItem>)> {
     let item = |title: &'static str, run: ExtensionItem| (MenuEntry::new(title, true), Some(run));
     let mut items = vec![
-        (MenuEntry::new("Move to Top", index > 0), Some(ExtensionItem::MoveToTop)),
+        (
+            MenuEntry::new("Move to Top", index > 0),
+            Some(ExtensionItem::MoveToTop),
+        ),
         (MenuEntry::line(), None),
         match extension.pinned {
             true => item("Unpin", ExtensionItem::Unpin),
@@ -256,7 +261,10 @@ fn extension_items(
         items.push(item("Options", ExtensionItem::Options));
     }
     if extension.removable {
-        items.push((MenuEntry::new("Remove", true).destructive(), Some(ExtensionItem::Remove)));
+        items.push((
+            MenuEntry::new("Remove", true).destructive(),
+            Some(ExtensionItem::Remove),
+        ));
     }
     items.push(item("Manage Extension", ExtensionItem::Manage));
     items
@@ -266,7 +274,10 @@ fn extension_items(
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Place {
     /// Its button in the URL field: the beak at the button's middle, the body under the field.
-    Button { field: Bounds<Pixels>, button: Bounds<Pixels> },
+    Button {
+        field: Bounds<Pixels>,
+        button: Bounds<Pixels>,
+    },
     /// With the sidebar hidden, the page's top left corner, without a beak.
     Corner(Point<Pixels>),
 }
@@ -390,7 +401,9 @@ pub fn site_settings_url(url: &str) -> Option<String> {
         return None;
     }
     let authority = rest.split(['/', '?', '#']).next()?;
-    let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
     if host.is_empty() {
         return None;
     }
@@ -507,7 +520,9 @@ impl Open {
 
     fn moving(&self) -> bool {
         self.closing.is_some()
-            || self.shown.is_none_or(|shown| shown.elapsed().as_secs_f32() < OPEN)
+            || self
+                .shown
+                .is_none_or(|shown| shown.elapsed().as_secs_f32() < OPEN)
     }
 
     /// Where it grows from in its window: the beak's tip, else its top left.
@@ -552,7 +567,11 @@ fn layout(site: &Site, extensions: usize, beak: bool) -> Layout {
         rows => {
             let cap = grid_bottom - TILE_HEIGHT + TILES_TO_HEADING;
             let first = cap + HEADING_TO_ROWS;
-            (Some(cap), first, first + (rows - 1) as f32 * ROW_PITCH + ROWS_TO_DIVIDER)
+            (
+                Some(cap),
+                first,
+                first + (rows - 1) as f32 * ROW_PITCH + ROWS_TO_DIVIDER,
+            )
         }
     };
     let footer = divider + DIVIDER_TO_FOOTER;
@@ -583,7 +602,12 @@ fn rows(site: &Site) -> usize {
 fn corners(beak: Option<f32>, height: f32) -> Vec<(f32, f32, f32)> {
     let Some(tip) = beak else {
         let corner = |x: f32, y: f32| (x, y, RADIUS);
-        return vec![corner(0., 0.), corner(WIDTH, 0.), corner(WIDTH, height), corner(0., height)];
+        return vec![
+            corner(0., 0.),
+            corner(WIDTH, 0.),
+            corner(WIDTH, height),
+            corner(0., height),
+        ];
     };
     vec![
         (tip, 0., BEAK_TIP_RADIUS),
@@ -663,7 +687,12 @@ pub fn open_at(
         ..Default::default()
     };
     let window = cx.open_window(options, |_, cx| {
-        cx.new(|cx| SiteControls { host, focus: cx.focus_handle(), open: None, a11y: false })
+        cx.new(|cx| SiteControls {
+            host,
+            focus: cx.focus_handle(),
+            open: None,
+            a11y: false,
+        })
     });
     match window {
         Ok(window) => {
@@ -697,7 +726,11 @@ pub fn show(
     cx: &mut App,
 ) {
     update(cx, |panel, _, cx| {
-        if panel.open.as_ref().is_some_and(|open| open.closing.is_none()) {
+        if panel
+            .open
+            .as_ref()
+            .is_some_and(|open| open.closing.is_none())
+        {
             return panel.close("toggle", cx);
         }
         let (at, beak) = placed(place, window);
@@ -739,7 +772,9 @@ pub fn changed(tab: u64, site: Site, cx: &mut App) {
         if first {
             open.height = height;
             window.focus(&panel.focus, cx);
-            panel.host.show(open.at, size(px(WIDTH), px(height)), &shape);
+            panel
+                .host
+                .show(open.at, size(px(WIDTH), px(height)), &shape);
         } else if height != open.height {
             open.height = height;
             panel.host.set_height(height, &shape);
@@ -757,7 +792,10 @@ pub fn set_extensions(tab: u64, extensions: Vec<Extension>, cx: &mut App) {
             return;
         };
         let ids = |extensions: &[Extension]| -> Vec<SharedString> {
-            extensions.iter().map(|extension| extension.id.clone()).collect()
+            extensions
+                .iter()
+                .map(|extension| extension.id.clone())
+                .collect()
         };
         if ids(&extensions) != ids(&open.extensions) {
             log_extensions(&extensions);
@@ -776,7 +814,10 @@ pub fn set_extensions(tab: u64, extensions: Vec<Extension>, cx: &mut App) {
 
 /// The extensions' grid for the log, by id.
 fn log_extensions(extensions: &[Extension]) {
-    let ids: Vec<&str> = extensions.iter().map(|extension| extension.id.as_ref()).collect();
+    let ids: Vec<&str> = extensions
+        .iter()
+        .map(|extension| extension.id.as_ref())
+        .collect();
     // check.sh reads this line.
     log!("browser: site controls extensions {}", ids.join(" "));
 }
@@ -814,7 +855,11 @@ fn describe(site: &Site) -> String {
         "{}: {}; {}{}{}",
         site.site,
         site.connection_summary,
-        if permissions.is_empty() { "no permissions".into() } else { permissions.join(", ") },
+        if permissions.is_empty() {
+            "no permissions".into()
+        } else {
+            permissions.join(", ")
+        },
         match site.system_engine {
             Some(on) => format!("; {ENGINE_NAME} {}", if on { "on" } else { "off" }),
             None => String::new(),
@@ -841,9 +886,15 @@ fn more_items() -> Vec<(MenuEntry, Option<Run>)> {
     let item = |title: &'static str, run: Run| (MenuEntry::new(title, true), Some(run));
     vec![
         item("Clear Cache", Run::Command(Command::ClearCacheAndRefresh)),
-        item("Clear Cookies", Run::Command(Command::ClearCookiesAndRefresh)),
+        item(
+            "Clear Cookies",
+            Run::Command(Command::ClearCookiesAndRefresh),
+        ),
         (MenuEntry::line(), None),
-        item("Manage Extensions…", Run::Command(Command::ManageExtensions)),
+        item(
+            "Manage Extensions…",
+            Run::Command(Command::ManageExtensions),
+        ),
         // The browser has no add path of its own: Chrome's extensions page links its store.
         item("Add Extension…", Run::Command(Command::ManageExtensions)),
         (MenuEntry::line(), None),
@@ -859,24 +910,30 @@ fn button_named<E: StatefulInteractiveElement>(
     name: impl Into<SharedString>,
     (menu, enabled, context_menu): (bool, bool, bool),
 ) -> E {
-    element.role(Role::Button).aria_label(name).a11y_synthetic_children(move |builder| {
-        let node = builder.parent_node();
-        if menu {
-            node.set_has_popup(HasPopup::Menu);
-        }
-        if !enabled {
-            node.set_disabled();
-        }
-        if context_menu {
-            node.add_action(gpui::accesskit::Action::ShowContextMenu);
-        }
-    })
+    element
+        .role(Role::Button)
+        .aria_label(name)
+        .a11y_synthetic_children(move |builder| {
+            let node = builder.parent_node();
+            if menu {
+                node.set_has_popup(HasPopup::Menu);
+            }
+            if !enabled {
+                node.set_disabled();
+            }
+            if context_menu {
+                node.add_action(gpui::accesskit::Action::ShowContextMenu);
+            }
+        })
 }
 
 /// A Settings row that turns its setting on or off, read as a switch called `name`.
 fn switch_named<E: StatefulInteractiveElement>(element: E, name: &'static str, on: bool) -> E {
     let toggled = if on { Toggled::True } else { Toggled::False };
-    element.role(Role::Switch).aria_label(name).aria_toggled(toggled)
+    element
+        .role(Role::Switch)
+        .aria_label(name)
+        .aria_toggled(toggled)
 }
 
 /// A row's name and its state, as VoiceOver reads a tab's row: "Location, Ask".
@@ -898,11 +955,17 @@ impl SiteControls {
         // check.sh reads this line.
         log!("browser: site controls closing ({why})");
         open._leave = Some(cx.spawn(async move |panel, cx| {
-            cx.background_executor().timer(Duration::from_secs_f32(CLOSE)).await;
+            cx.background_executor()
+                .timer(Duration::from_secs_f32(CLOSE))
+                .await;
             panel
                 .update(cx, |panel, cx| {
                     // Unless it opened again meanwhile.
-                    if panel.open.as_ref().is_some_and(|open| open.closing.is_some()) {
+                    if panel
+                        .open
+                        .as_ref()
+                        .is_some_and(|open| open.closing.is_some())
+                    {
                         panel.open = None;
                         panel.host.hide();
                         cx.notify();
@@ -916,7 +979,11 @@ impl SiteControls {
     /// Closes the panel, then has the host do `run`, so what it opens gets the keyboard from the
     /// browser window.
     fn run(&mut self, name: &str, run: Run, cx: &mut Context<Self>) {
-        let Some(tab) = self.open.as_ref().filter(|open| open.closing.is_none()).map(|o| o.tab)
+        let Some(tab) = self
+            .open
+            .as_ref()
+            .filter(|open| open.closing.is_none())
+            .map(|o| o.tab)
         else {
             return;
         };
@@ -965,7 +1032,11 @@ impl SiteControls {
                     let still = open.is_some_and(|open| open.tab == tab && open.closing.is_none());
                     if still && value != permission.value {
                         // check.sh reads this line.
-                        log!("browser: site controls set {} {}", permission.name, value.label());
+                        log!(
+                            "browser: site controls set {} {}",
+                            permission.name,
+                            value.label()
+                        );
                         panel.host.set_permission(tab, permission.kind, value);
                     }
                 })
@@ -999,8 +1070,14 @@ impl SiteControls {
             return;
         };
         let items = [
-            MenuEntry { checked: on, ..MenuEntry::new("On", true) },
-            MenuEntry { checked: !on, ..MenuEntry::new("Off", true) },
+            MenuEntry {
+                checked: on,
+                ..MenuEntry::new("On", true)
+            },
+            MenuEntry {
+                checked: !on,
+                ..MenuEntry::new("Off", true)
+            },
         ];
         let panel = cx.weak_entity();
         let chosen = Box::new(move |chosen: Option<usize>, cx: &mut App| {
@@ -1110,7 +1187,10 @@ impl SiteControls {
     fn toggle_ad_blocking(&mut self, on: bool, cx: &mut Context<Self>) {
         if let Some(open) = self.open.as_ref().filter(|open| open.closing.is_none()) {
             // check.sh reads this line.
-            log!("browser: site controls set ad blocking {}", if on { "on" } else { "off" });
+            log!(
+                "browser: site controls set ad blocking {}",
+                if on { "on" } else { "off" }
+            );
             self.host.set_ad_blocking(open.tab, on);
             cx.notify();
         }
@@ -1121,7 +1201,10 @@ impl SiteControls {
     fn toggle_developer_mode(&mut self, on: bool, cx: &mut Context<Self>) {
         if let Some(open) = self.open.as_ref().filter(|open| open.closing.is_none()) {
             // check.sh reads this line.
-            log!("browser: site controls set developer mode {}", if on { "on" } else { "off" });
+            log!(
+                "browser: site controls set developer mode {}",
+                if on { "on" } else { "off" }
+            );
             self.host.set_developer_mode(open.tab, on);
             cx.notify();
         }
@@ -1171,11 +1254,14 @@ impl SiteControls {
         let palette = palette::current(cx);
         div()
             .id(tile.name)
-            .when(self.a11y, |plate| button_named(plate, tile.label, (false, true, false)))
+            .when(self.a11y, |plate| {
+                button_named(plate, tile.label, (false, true, false))
+            })
             .absolute()
             .left(frame.origin.x)
             .top(frame.origin.y)
-            .w(frame.size.width).h(frame.size.height)
+            .w(frame.size.width)
+            .h(frame.size.height)
             .rounded(px(TILE_RADIUS))
             .bg(linear_gradient(
                 180.,
@@ -1201,7 +1287,10 @@ impl SiteControls {
                     .active(move |style| style.bg(palette.plate(STATE_PRESSED))),
             )
             .child(
-                svg().path(tile.glyph).size(px(tile.glyph_size)).text_color(palette.on_overlay_glyph(TEXT)),
+                svg()
+                    .path(tile.glyph)
+                    .size(px(tile.glyph_size))
+                    .text_color(palette.on_overlay_glyph(TEXT)),
             )
             .into_any_element()
     }
@@ -1218,7 +1307,8 @@ impl SiteControls {
                 .absolute()
                 .left(frame.origin.x)
                 .top(frame.origin.y)
-                .w(frame.size.width).h(frame.size.height)
+                .w(frame.size.width)
+                .h(frame.size.height)
                 .rounded(px(TILE_RADIUS))
                 .bg(palette.plate(PLATE))
                 .hover(move |style| style.bg(palette.state(PLATE, STATE_HOVERED)))
@@ -1259,15 +1349,20 @@ impl SiteControls {
             .collect();
         let (plus, frame) = plate("add-extension".into(), open.extensions.len());
         tiles.push(
-            plus.when(self.a11y, |plus| button_named(plus, "Add Extension", (false, true, false)))
-                .on_hover(cx.listener(move |panel, hovered: &bool, _, cx| {
+            plus.when(self.a11y, |plus| {
+                button_named(plus, "Add Extension", (false, true, false))
+            })
+            .on_hover(cx.listener(move |panel, hovered: &bool, _, cx| {
                 panel.tooltip("Add Extension".into(), frame, *hovered, cx)
             }))
             .on_click(cx.listener(|panel, _, _, cx| {
                 panel.run("add-extension", Run::Command(Command::ManageExtensions), cx)
             }))
             .child(
-                svg().path("icons/plus.svg").size(px(PLUS_GLYPH)).text_color(palette.on_overlay_glyph(TEXT)),
+                svg()
+                    .path("icons/plus.svg")
+                    .size(px(PLUS_GLYPH))
+                    .text_color(palette.on_overlay_glyph(TEXT)),
             )
             .into_any_element(),
         );
@@ -1283,9 +1378,11 @@ impl SiteControls {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let (title, link, run) = match heading {
-            Heading::Extensions => {
-                ("Extensions", "Manage", Run::Command(Command::ManageExtensions))
-            }
+            Heading::Extensions => (
+                "Extensions",
+                "Manage",
+                Run::Command(Command::ManageExtensions),
+            ),
             Heading::Settings => ("Settings", "More", Run::SiteSettings),
         };
         // The heading's line, from the gap above it to the gap below.
@@ -1302,7 +1399,10 @@ impl SiteControls {
         let name = link.to_lowercase();
         let palette = palette::current(cx);
         div()
-            .id(SharedString::from(format!("heading-{}", title.to_lowercase())))
+            .id(SharedString::from(format!(
+                "heading-{}",
+                title.to_lowercase()
+            )))
             .when(self.a11y, |row| row.role(Role::Heading).aria_label(title))
             .absolute()
             .left_0()
@@ -1323,13 +1423,15 @@ impl SiteControls {
                 row.child(
                     text(link_cap, LINK_SIZE)
                         .id(SharedString::from(format!("link-{name}")))
-                        .when(self.a11y, |text| button_named(text, link, (false, true, false)))
+                        .when(self.a11y, |text| {
+                            button_named(text, link, (false, true, false))
+                        })
                         .right(px(PADDING))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(palette.on_overlay(LINK))
-                        .on_click(cx.listener(move |panel, _, _, cx| {
-                            panel.run(&name, run.clone(), cx)
-                        }))
+                        .on_click(
+                            cx.listener(move |panel, _, _, cx| panel.run(&name, run.clone(), cx)),
+                        )
                         .child(link),
                 )
             })
@@ -1376,19 +1478,18 @@ impl SiteControls {
                     .absolute()
                     .size(px(CIRCLE))
                     .rounded_full()
-                    .bg(if on { palette.accent.into() } else { palette.plate(OFF) })
+                    .bg(if on {
+                        palette.accent.into()
+                    } else {
+                        palette.plate(OFF)
+                    })
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(
-                        svg()
-                            .path(glyph)
-                            .size(px(ROW_GLYPH))
-                            .text_color(match on {
-                                true => palette.accent_label.into(),
-                                false => palette.on_overlay_glyph(OFF_GLYPH),
-                            }),
-                    ),
+                    .child(svg().path(glyph).size(px(ROW_GLYPH)).text_color(match on {
+                        true => palette.accent_label.into(),
+                        false => palette.on_overlay_glyph(OFF_GLYPH),
+                    })),
             )
             .child(
                 text(name_cap, NAME_SIZE)
@@ -1422,7 +1523,9 @@ impl SiteControls {
         // A row a policy sets takes no click, so it reads as dimmed.
         let managed = permission.choices.is_empty();
         let name = said(&permission.name, &permission.state);
-        let row = row.when(self.a11y, |row| button_named(row, name, (!managed, !managed, false)));
+        let row = row.when(self.a11y, |row| {
+            button_named(row, name, (!managed, !managed, false))
+        });
         match managed {
             true => row.opacity(MANAGED_OPACITY).into_any_element(),
             false => {
@@ -1465,7 +1568,12 @@ impl SiteControls {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(svg().path(lock).size(px(LOCK_GLYPH)).text_color(palette.on_overlay_glyph(TEXT))),
+                    .child(
+                        svg()
+                            .path(lock)
+                            .size(px(LOCK_GLYPH))
+                            .text_color(palette.on_overlay_glyph(TEXT)),
+                    ),
             )
             .child(
                 div()
@@ -1491,7 +1599,9 @@ impl SiteControls {
             });
         let more = div()
             .id("site-more")
-            .when(self.a11y, |more| button_named(more, "More", (true, true, false)))
+            .when(self.a11y, |more| {
+                button_named(more, "More", (true, true, false))
+            })
             .absolute()
             .left(px(WIDTH - PADDING - FOOTER))
             .top(px(y))
@@ -1503,11 +1613,14 @@ impl SiteControls {
             .flex()
             .items_center()
             .justify_center()
-            .on_click(cx.listener(|panel, event: &ClickEvent, _, cx| {
-                panel.more(event.position(), cx)
-            }))
+            .on_click(
+                cx.listener(|panel, event: &ClickEvent, _, cx| panel.more(event.position(), cx)),
+            )
             .child(
-                svg().path("icons/ellipsis.svg").size(px(MORE_GLYPH)).text_color(palette.on_overlay_glyph(TEXT)),
+                svg()
+                    .path("icons/ellipsis.svg")
+                    .size(px(MORE_GLYPH))
+                    .text_color(palette.on_overlay_glyph(TEXT)),
             );
         [button.into_any_element(), more.into_any_element()]
     }
@@ -1552,7 +1665,9 @@ impl Render for SiteControls {
             // check.sh reads this line.
             log!("browser: site controls settled");
         }
-        let ids: Vec<SharedString> = (open.extensions.iter()).map(|each| each.id.clone()).collect();
+        let ids: Vec<SharedString> = (open.extensions.iter())
+            .map(|each| each.id.clone())
+            .collect();
         if ids != open.drawn {
             // check.sh reads this line.
             log!("browser: site controls drew extensions {}", ids.join(" "));
@@ -1653,8 +1768,15 @@ impl Render for SiteControls {
             if let Some((state, on)) = logins {
                 let name = PASSWORDS_NAME.into();
                 let said = said(PASSWORDS_NAME, &state);
-                let row =
-                    Self::row(&palette, "site-passwords".into(), y, PASSWORDS, on, name, Some(state));
+                let row = Self::row(
+                    &palette,
+                    "site-passwords".into(),
+                    y,
+                    PASSWORDS,
+                    on,
+                    name,
+                    Some(state),
+                );
                 let row = row.when(a11y, |row| button_named(row, said, (true, true, false)));
                 let logins = site.logins.clone();
                 let row = row.on_click(cx.listener(move |panel, event: &ClickEvent, _, cx| {

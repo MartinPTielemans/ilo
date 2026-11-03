@@ -4,24 +4,23 @@
 use std::{collections::HashMap, rc::Rc, time::Instant};
 
 use gpui::{
-    Context, Hsla, MouseButton, MouseDownEvent, Role, canvas, div, hsla, img, prelude::*, px,
-    rgba, svg,
+    Context, Hsla, MouseButton, MouseDownEvent, Role, canvas, div, hsla, img, prelude::*, px, rgba,
+    svg,
 };
 
 use crate::elevation::Level;
-use crate::tooltip::{self, Anchor, Tip};
 use crate::icon_picker::Subject;
+use crate::tooltip::{self, Anchor, Tip};
 
-use crate::palette::{Palette, Tone};
 use super::{
-    access::Accessible,
-    Curve, DEVELOPER_TILE, FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X, FOLDER_TITLE_X, FOOTER_HEIGHT, HAIRLINE,
-    HOVERED, LIST_TOP,
-    PLATE_INSET, Place, Row, SECONDARY, SLEEPING_FAVICON, Shell, Slot, Space, TALL_FAVORITES, TILE,
-    TILE_COLUMNS, TILE_GAP, TILE_HEIGHT, TILE_HOVERED, TILE_MARK, TILE_MARK_INSET, TILE_MIN, TILE_RADIUS,
-    TILE_RING, TILE_UNTHEMED, TILE_UNTHEMED_LIGHT, TITLE_END_INSET, TITLE_GAP, TURN_TITLE_FADE,
-    TileTheme, developer_outline, rows::capture_glyph, tile_theme::RING_WIDTH, title,
+    Curve, DEVELOPER_TILE, FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X, FOLDER_TITLE_X, FOOTER_HEIGHT,
+    HAIRLINE, HOVERED, LIST_TOP, PLATE_INSET, Place, Row, SECONDARY, SLEEPING_FAVICON, Shell, Slot,
+    Space, TALL_FAVORITES, TILE, TILE_COLUMNS, TILE_GAP, TILE_HEIGHT, TILE_HOVERED, TILE_MARK,
+    TILE_MARK_INSET, TILE_MIN, TILE_RADIUS, TILE_RING, TILE_UNTHEMED, TILE_UNTHEMED_LIGHT,
+    TITLE_END_INSET, TITLE_GAP, TURN_TITLE_FADE, TileTheme, access::Accessible, developer_outline,
+    rows::capture_glyph, tile_theme::RING_WIDTH, title,
 };
+use crate::palette::{Palette, Tone};
 
 /// The most favorites a Space shows, as Arc's 12 a profile. Past it a tab doesn't become one,
 /// and a list longer already, from before or an import, is kept.
@@ -61,7 +60,10 @@ impl FavoritesScope {
 
     /// The scope the core reports. One it doesn't know is the default.
     pub fn from_core(scope: i32) -> Self {
-        Self::ALL.into_iter().find(|each| each.to_core() == scope).unwrap_or_default()
+        Self::ALL
+            .into_iter()
+            .find(|each| each.to_core() == scope)
+            .unwrap_or_default()
     }
 }
 
@@ -86,7 +88,9 @@ impl Shell {
         (!tiles.is_empty()).then(|| {
             div()
                 .id("favorites")
-                .when(self.a11y, |tiles| tiles.role(Role::TabList).aria_label("Favorites"))
+                .when(self.a11y, |tiles| {
+                    tiles.role(Role::TabList).aria_label("Favorites")
+                })
                 .absolute()
                 .top(px(LIST_TOP))
                 .left_0()
@@ -115,7 +119,11 @@ impl Shell {
     pub(super) fn turning_drag(&self) -> Option<impl IntoElement + use<>> {
         let (tab, [left, top, width, height, radius], turned) = self.turning_shape()?;
         let selected = tab == self.selected && !self.new_tab;
-        let row_fill = if selected { self.palette.selected(0.) } else { self.palette.plate(HOVERED) };
+        let row_fill = if selected {
+            self.palette.selected(0.)
+        } else {
+            self.palette.plate(HOVERED)
+        };
         let row_fill = self.window_fill().blend(row_fill);
         let theme = selected.then(|| self.tile_theme(tab)).flatten();
         let (shown, ring_width, ring) = shown_look(theme.as_deref(), &self.palette);
@@ -142,10 +150,14 @@ impl Shell {
             .left(px(icon_left))
             .top(px((height - FAVICON_SIZE) / 2.))
             .size(px(FAVICON_SIZE))
-            .when(self.page(tab).unloaded, |icon| icon.opacity(SLEEPING_FAVICON))
+            .when(self.page(tab).unloaded, |icon| {
+                icon.opacity(SLEEPING_FAVICON)
+            })
             .child(centred().opacity(favicon).child(self.tab_icon(tab)))
             .children(template.map(|template| {
-                centred().opacity(turned).child(img(template).size(px(FAVICON_DRAWN)))
+                centred()
+                    .opacity(turned)
+                    .child(img(template).size(px(FAVICON_DRAWN)))
             }));
         Some(
             div()
@@ -157,10 +169,19 @@ impl Shell {
                 .rounded(px(radius))
                 .overflow_hidden()
                 .bg(self.window_fill().blend(tile_fill))
-                .children(theme.as_deref().and_then(TileTheme::layers).map(|layers| {
-                    div().absolute().size_full().opacity(turned).child(layers)
-                }))
-                .child(div().absolute().size_full().bg(row_fill).opacity(1. - turned))
+                .children(
+                    theme
+                        .as_deref()
+                        .and_then(TileTheme::layers)
+                        .map(|layers| div().absolute().size_full().opacity(turned).child(layers)),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .size_full()
+                        .bg(row_fill)
+                        .opacity(1. - turned),
+                )
                 .child(
                     div()
                         .absolute()
@@ -229,9 +250,14 @@ impl Shell {
             .zip(places)
             .map(|(tab, place)| {
                 let way = self.tile_slides.get(&tab).map_or(0., |&(_, start, curve)| {
-                    curve.at(start.elapsed().as_secs_f32()).map_or(0., |done| 1. - done)
+                    curve
+                        .at(start.elapsed().as_secs_f32())
+                        .map_or(0., |done| 1. - done)
                 });
-                let from = self.tile_slides.get(&tab).map_or([0.; 3], |&(from, ..)| from);
+                let from = self
+                    .tile_slides
+                    .get(&tab)
+                    .map_or([0.; 3], |&(from, ..)| from);
                 (tab, std::array::from_fn(|i| place[i] + from[i] * way))
             })
             .collect();
@@ -276,7 +302,10 @@ impl Shell {
 
     /// Where the Space's pages start with `count` tiles: under them, else under the URL field.
     pub(super) fn list_top_with(&self, count: usize) -> f32 {
-        let rows = self.tile_places(count).last().map_or(0., |&[_, top, _]| top + TILE_HEIGHT);
+        let rows = self
+            .tile_places(count)
+            .last()
+            .map_or(0., |&[_, top, _]| top + TILE_HEIGHT);
         LIST_TOP + if count > 0 { rows + TILE_GAP } else { 0. }
     }
 
@@ -289,7 +318,9 @@ impl Shell {
     pub(super) fn drawn_list_top(&self) -> f32 {
         self.list_top()
             + self.list_slide.map_or(0., |(from, start, curve)| {
-                curve.at(start.elapsed().as_secs_f32()).map_or(0., |done| from * (1. - done))
+                curve
+                    .at(start.elapsed().as_secs_f32())
+                    .map_or(0., |done| from * (1. - done))
             })
     }
 
@@ -315,7 +346,11 @@ impl Shell {
     /// Where the Space's pages are drawn from: under the tiles, or under the URL field while the
     /// tiles scroll with them.
     pub(super) fn pages_top(&self) -> f32 {
-        if self.tiles_scroll() { LIST_TOP } else { self.drawn_list_top() }
+        if self.tiles_scroll() {
+            LIST_TOP
+        } else {
+            self.drawn_list_top()
+        }
     }
 
     /// Where the sidebar under the tiles starts, as they're drawn.
@@ -422,12 +457,18 @@ impl Shell {
         let theme = selected.then(|| self.tile_theme(tab)).flatten();
         let (shown, ring_width, ring) = shown_look(theme.as_deref(), &self.palette);
         // The outline takes the ring's place.
-        let ring = if selected && developer { gpui::transparent_black() } else { ring };
+        let ring = if selected && developer {
+            gpui::transparent_black()
+        } else {
+            ring
+        };
         if selected && !developer {
             self.developer_outline_gone();
         }
         let fill = match dragging == Some(Slot::Tab(tab)) {
-            true => self.window_fill().blend(if selected { shown } else { fill }),
+            true => self
+                .window_fill()
+                .blend(if selected { shown } else { fill }),
             false if selected => shown,
             false => fill,
         };
@@ -447,7 +488,11 @@ impl Shell {
             .justify_center()
             .rounded(px(TILE_RADIUS))
             .border(px(if selected { ring_width } else { HAIRLINE }))
-            .border_color(if selected { ring } else { Level::Resting.rim_in(&self.palette).into() })
+            .border_color(if selected {
+                ring
+            } else {
+                Level::Resting.rim_in(&self.palette).into()
+            })
             .bg(fill)
             .block_mouse_except_scroll()
             .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
@@ -560,11 +605,13 @@ impl Shell {
             .flex()
             .items_center()
             .justify_center()
-            .when(self.page(tab).unloaded, |icon| icon.opacity(SLEEPING_FAVICON))
+            .when(self.page(tab).unloaded, |icon| {
+                icon.opacity(SLEEPING_FAVICON)
+            })
             .child(match theme {
-                Some(TileTheme::Flat { template, .. }) => {
-                    img(template.clone()).size(px(FAVICON_DRAWN)).into_any_element()
-                }
+                Some(TileTheme::Flat { template, .. }) => img(template.clone())
+                    .size(px(FAVICON_DRAWN))
+                    .into_any_element(),
                 _ => self.tab_icon(tab),
             })
     }
@@ -580,7 +627,11 @@ impl Shell {
         let held_by = [space.id, space.profile];
         let holders = &self.favorite_holders;
         (self.all_favorites.iter().copied())
-            .filter(|tab| holders.get(tab).is_some_and(|holder| held_by.contains(holder)))
+            .filter(|tab| {
+                holders
+                    .get(tab)
+                    .is_some_and(|holder| held_by.contains(holder))
+            })
             .collect()
     }
 
@@ -588,40 +639,56 @@ impl Shell {
     /// as they show once it's shown, `selected`'s filled and ringed. They take no input.
     pub(super) fn still_tiles(&self, favorites: &[u64], selected: u64) -> Option<gpui::Div> {
         let places = self.tile_places(favorites.len());
-        let tiles = places.into_iter().zip(favorites).map(|([left, top, width], &tab)| {
-            let selected = tab == selected;
-            let developer = self.page(tab).developer_mode;
-            let theme = selected.then(|| self.tile_theme(tab)).flatten();
-            let (shown, ring_width, ring) = shown_look(theme.as_deref(), &self.palette);
-            let ring = if selected && developer { gpui::transparent_black() } else { ring };
-            let tile = div()
-                .absolute()
-                .left(px(left))
-                .top(px(top))
-                .w(px(width))
-                .h(px(TILE_HEIGHT))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(TILE_RADIUS))
-                .border(px(if selected { ring_width } else { HAIRLINE }))
-                .border_color(match selected {
-                    true => ring,
-                    false => Level::Resting.rim_in(&self.palette).into(),
-                })
-                .bg(if selected { shown } else { tile_fill(&self.palette, developer, 0.) })
-                .children(theme.as_deref().and_then(TileTheme::layers))
-                .child(self.tile_icon(tab, theme.as_deref()))
-                .when(selected && developer, |tile| {
-                    tile.child(developer_outline(&self.palette, TILE_RADIUS))
-                });
-            #[cfg(test)]
-            let tile =
-                tile.child(self.beside_framed(tab, if selected { ring_width } else { HAIRLINE }));
-            tile
-        });
+        let tiles = places
+            .into_iter()
+            .zip(favorites)
+            .map(|([left, top, width], &tab)| {
+                let selected = tab == selected;
+                let developer = self.page(tab).developer_mode;
+                let theme = selected.then(|| self.tile_theme(tab)).flatten();
+                let (shown, ring_width, ring) = shown_look(theme.as_deref(), &self.palette);
+                let ring = if selected && developer {
+                    gpui::transparent_black()
+                } else {
+                    ring
+                };
+                let tile = div()
+                    .absolute()
+                    .left(px(left))
+                    .top(px(top))
+                    .w(px(width))
+                    .h(px(TILE_HEIGHT))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(TILE_RADIUS))
+                    .border(px(if selected { ring_width } else { HAIRLINE }))
+                    .border_color(match selected {
+                        true => ring,
+                        false => Level::Resting.rim_in(&self.palette).into(),
+                    })
+                    .bg(if selected {
+                        shown
+                    } else {
+                        tile_fill(&self.palette, developer, 0.)
+                    })
+                    .children(theme.as_deref().and_then(TileTheme::layers))
+                    .child(self.tile_icon(tab, theme.as_deref()))
+                    .when(selected && developer, |tile| {
+                        tile.child(developer_outline(&self.palette, TILE_RADIUS))
+                    });
+                #[cfg(test)]
+                let tile = tile
+                    .child(self.beside_framed(tab, if selected { ring_width } else { HAIRLINE }));
+                tile
+            });
         (!favorites.is_empty()).then(|| {
-            div().absolute().top(px(LIST_TOP)).left_0().w(px(self.width())).children(tiles)
+            div()
+                .absolute()
+                .top(px(LIST_TOP))
+                .left_0()
+                .w(px(self.width()))
+                .children(tiles)
         })
     }
 }
@@ -643,16 +710,27 @@ fn shown_look(theme: Option<&TileTheme>, palette: &Palette) -> (Hsla, f32, Hsla)
             (rgba(fill).into(), RING_WIDTH, rgba(ring).into())
         }
         // The black tile is the ring's ground, whatever the theme.
-        None if palette.tone == Tone::Light => {
-            (rgba(TILE_UNTHEMED_LIGHT).into(), HAIRLINE, hsla(0., 0., 1., TILE_RING))
-        }
-        None => (rgba(TILE_UNTHEMED).into(), HAIRLINE, hsla(0., 0., 1., TILE_RING)),
+        None if palette.tone == Tone::Light => (
+            rgba(TILE_UNTHEMED_LIGHT).into(),
+            HAIRLINE,
+            hsla(0., 0., 1., TILE_RING),
+        ),
+        None => (
+            rgba(TILE_UNTHEMED).into(),
+            HAIRLINE,
+            hsla(0., 0., 1., TILE_RING),
+        ),
     }
 }
 
 /// A favicon's square, its icon in the middle.
 fn centred() -> gpui::Div {
-    div().absolute().size_full().flex().items_center().justify_center()
+    div()
+        .absolute()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
 }
 
 #[cfg(test)]

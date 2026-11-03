@@ -8,7 +8,9 @@ use std::{f32::consts::PI, time::Instant};
 use gpui::{
     Bounds, BoxShadow, Context, Hsla, PathBuilder, Window,
     accesskit::{Live, Role},
-    canvas, div, fill, hsla, linear_color_stop, linear_gradient, point, prelude::*, px, size,
+    canvas, div, fill, hsla, linear_color_stop, linear_gradient, point,
+    prelude::*,
+    px, size,
 };
 
 use super::{Command, Shell, Swipe};
@@ -18,8 +20,8 @@ use super::{Command, Shell, Swipe};
 const NEW_SPACE_READY: f32 = 22.7;
 const RING_FULL: f32 = 22.;
 use crate::tokens::shell::new_space::CIRCLE;
-use crate::tokens::shell::new_space::RING;
 use crate::tokens::shell::new_space::CUT;
+use crate::tokens::shell::new_space::RING;
 /// The circle's centre at rest, right of the page's edge, how much faster than the page it comes
 /// out, and how far left of the edge it stops, while the page goes on.
 const CIRCLE_START: f32 = 20.;
@@ -42,8 +44,8 @@ const UNREADY: f32 = 0.12;
 /// Let go readied, the circle goes back under the edge over 100 ms.
 const EXIT: f32 = 0.1;
 use crate::tokens::shell::new_space::GLOW;
-use crate::tokens::shell::new_space::GLOW_WIDTH;
 use crate::tokens::shell::new_space::GLOW_STRIP;
+use crate::tokens::shell::new_space::GLOW_WIDTH;
 use crate::tokens::shell::new_space::SHADOW;
 
 /// The circle going back under the page's edge after a pull made `space`, and where the fingers
@@ -84,7 +86,10 @@ impl Shell {
         swipe.ready = ready;
         swipe.turned = Some(Instant::now());
         // check.sh waits for these lines.
-        log!("browser: new space {}", if ready { "ready" } else { "unready" });
+        log!(
+            "browser: new space {}",
+            if ready { "ready" } else { "unready" }
+        );
         self.browser.detent(cx);
     }
 
@@ -95,7 +100,12 @@ impl Shell {
         self.run(Command::NewSpace, "swipe", cx);
         if let Some(form) = &self.form {
             let (space, start) = (form.space, Instant::now());
-            self.circle_exit = Some(CircleExit { space, accent, start, held });
+            self.circle_exit = Some(CircleExit {
+                space,
+                accent,
+                start,
+                held,
+            });
         }
     }
 
@@ -156,7 +166,11 @@ impl Shell {
                 if t >= 1. {
                     return None;
                 }
-                (TRAVEL * (1. - smoothstep(t)), exit.accent, Look::Readying(1.))
+                (
+                    TRAVEL * (1. - smoothstep(t)),
+                    exit.accent,
+                    Look::Readying(1.),
+                )
             }
             None => {
                 let (space, pulled) = self.pulled()?;
@@ -169,7 +183,11 @@ impl Shell {
                     (false, Some(t)) if t < UNREADY => Look::Unreadying(t, way),
                     _ => Look::Pulling(way),
                 };
-                ((CIRCLE_SPEED * pulled).min(TRAVEL), self.circle_accent(space), look)
+                (
+                    (CIRCLE_SPEED * pulled).min(TRAVEL),
+                    self.circle_accent(space),
+                    look,
+                )
             }
         };
         let (accent, label) = accent;
@@ -225,12 +243,16 @@ impl Shell {
             Look::Readying(_) => Some("Let go to make it"),
             _ => Some("Pull further to make one"),
         };
-        let disc = disc.id("new-space-circle").when_some(said.filter(|_| self.a11y), |disc, said| {
-            disc.role(Role::Status)
-                .aria_label("New Space")
-                .aria_value(said)
-                .a11y_synthetic_children(|builder| builder.parent_node().set_live(Live::Polite))
-        });
+        let disc =
+            disc.id("new-space-circle")
+                .when_some(said.filter(|_| self.a11y), |disc, said| {
+                    disc.role(Role::Status)
+                        .aria_label("New Space")
+                        .aria_value(said)
+                        .a11y_synthetic_children(|builder| {
+                            builder.parent_node().set_live(Live::Polite)
+                        })
+                });
         let width = self.width();
         let centre = width + CIRCLE_START - travel;
         Some(

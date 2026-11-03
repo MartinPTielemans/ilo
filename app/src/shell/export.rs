@@ -37,8 +37,10 @@ impl Shell {
         let mut markdown = format!("# {}\n", text(space_name(space)));
         let mut links = 0;
         let today = self.rows_in(space, &space.today, 0);
-        for (heading, items) in [("Pinned", self.rows_in(space, &space.pinned, 0)), ("Today", today)]
-        {
+        for (heading, items) in [
+            ("Pinned", self.rows_in(space, &space.pinned, 0)),
+            ("Today", today),
+        ] {
             if !items.is_empty() {
                 markdown.push_str(&format!("\n## {heading}\n\n"));
                 links += write(&mut markdown, &items, 0);
@@ -54,8 +56,11 @@ impl Shell {
         let mut links = 0;
         for space in self.spaces.iter().filter(|space| space.agent.is_empty()) {
             markdown.push_str(&format!("\n## {}\n", text(space_name(space))));
-            let favorites: Vec<Item> =
-                self.favorites_of(space).into_iter().filter_map(|tab| self.link(tab)).collect();
+            let favorites: Vec<Item> = self
+                .favorites_of(space)
+                .into_iter()
+                .filter_map(|tab| self.link(tab))
+                .collect();
             let pinned = self.rows_in(space, &space.pinned, 0);
             for (heading, items) in [("Favorites", favorites), ("Pinned", pinned)] {
                 if !items.is_empty() {
@@ -70,13 +75,27 @@ impl Shell {
     /// The rows of `rows` that `folder` holds, or those outside folders for 0, top to bottom, each
     /// tab of a split view a link of its own.
     fn rows_in(&self, space: &Space, rows: &[u64], folder: u64) -> Vec<Item> {
-        let later = |row: &u64| space.splits.iter().any(|split| split.tabs[1..].contains(row));
-        let rows = rows.iter().filter(|row| !later(row) && space.folder_of(**row) == folder);
+        let later = |row: &u64| {
+            space
+                .splits
+                .iter()
+                .any(|split| split.tabs[1..].contains(row))
+        };
+        let rows = rows
+            .iter()
+            .filter(|row| !later(row) && space.folder_of(**row) == folder);
         rows.flat_map(|&row| match space.folders.folders.get(&row) {
             Some((name, _)) => {
-                vec![Item::Folder(name.to_string(), self.rows_in(space, &space.pinned, row))]
+                vec![Item::Folder(
+                    name.to_string(),
+                    self.rows_in(space, &space.pinned, row),
+                )]
             }
-            None => space.panes(row).into_iter().filter_map(|tab| self.link(tab)).collect(),
+            None => space
+                .panes(row)
+                .into_iter()
+                .filter_map(|tab| self.link(tab))
+                .collect(),
         })
         .collect()
     }
@@ -93,7 +112,11 @@ impl Shell {
 }
 
 fn space_name(space: &Space) -> &str {
-    if space.name.is_empty() { "Space" } else { space.name.as_ref() }
+    if space.name.is_empty() {
+        "Space"
+    } else {
+        space.name.as_ref()
+    }
 }
 
 /// Writes `items` as a list, nested `depth` deep, and returns how many links it wrote.
@@ -143,7 +166,13 @@ fn href(url: &str) -> String {
 /// systems, then .md.
 fn file_name(name: &str) -> String {
     let name: String = (name.chars())
-        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '-' } else { c })
+        .map(|c| {
+            if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                '-'
+            } else {
+                c
+            }
+        })
         .collect();
     let name = name.trim().trim_start_matches('.');
     format!("{}.md", if name.is_empty() { "Space" } else { name })

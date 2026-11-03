@@ -9,9 +9,9 @@ use gpui::{
 };
 
 use super::{
-    ROW_PITCH, SCROLL_EDGE, SCROLL_EDGE_FADE, SWIPE_FLICK, SWIPE_HISTORY, SWIPE_TRACKING,
-    Settle, Shell, Space, Swipe, WHEEL_BURST, WHEEL_LINE, WHEEL_REST, fade_at, rubber_band,
-    library::library_band,
+    ROW_PITCH, SCROLL_EDGE, SCROLL_EDGE_FADE, SWIPE_FLICK, SWIPE_HISTORY, SWIPE_TRACKING, Settle,
+    Shell, Space, Swipe, WHEEL_BURST, WHEEL_LINE, WHEEL_REST, fade_at, library::library_band,
+    rubber_band,
 };
 
 impl Shell {
@@ -42,7 +42,9 @@ impl Shell {
     pub(super) fn paging_frame(&self, started: Instant) -> Option<impl IntoElement + use<>> {
         let frames = self.paging_frames.clone();
         let paint = move |_, _, _: &mut Window, _: &mut gpui::App| {
-            frames.borrow_mut().push(started.elapsed().as_secs_f32() * 1000.)
+            frames
+                .borrow_mut()
+                .push(started.elapsed().as_secs_f32() * 1000.)
         };
         (self.pages().len() > 1).then(|| canvas(|_, _, _| {}, paint).absolute().size_0())
     }
@@ -53,7 +55,10 @@ impl Shell {
         frames.sort_by(f32::total_cmp);
         let median = frames.get(frames.len().saturating_sub(1) / 2);
         if let (Some(median), Some(max)) = (median, frames.last()) {
-            log!("browser: paged frames {}, median {median:.2} ms, max {max:.2} ms", frames.len());
+            log!(
+                "browser: paged frames {}, median {median:.2} ms, max {max:.2} ms",
+                frames.len()
+            );
         }
     }
 
@@ -68,7 +73,11 @@ impl Shell {
         if swipe.library {
             return rubber_band(swipe.way, -self.library_width(), 0.);
         }
-        let index = self.spaces.iter().position(|space| space.id == swipe.from).unwrap_or(0);
+        let index = self
+            .spaces
+            .iter()
+            .position(|space| space.id == swipe.from)
+            .unwrap_or(0);
         let width = self.width();
         let library = index == 0 && self.library_beside(swipe.from);
         // From the first Space, fingers that brought the Library out and go on meet its band too.
@@ -186,7 +195,10 @@ impl Shell {
             }
             // Over the Spaces cards, fingers scroll them, unless the cards are at the end they
             // push past, where the swipe is the Library's (Arc 1.171).
-            swipe.cards = swipe.cards.filter(|_| across).and_then(|_| self.catch_cards(delta.x));
+            swipe.cards = swipe
+                .cards
+                .filter(|_| across)
+                .and_then(|_| self.catch_cards(delta.x));
             if swipe.cards.is_some() {
                 // check.sh waits for this line.
                 log!("browser: swipe cards");
@@ -206,9 +218,8 @@ impl Shell {
         if across && let Some(cards) = swipe.cards {
             swipe.cards = Some(self.move_cards(cards, delta.x, cx));
         } else if across {
-            let library_near = |shell: &Self, swipe: &Swipe| {
-                shell.library_swiped(swipe).map(|out| out > 0.5)
-            };
+            let library_near =
+                |shell: &Self, swipe: &Swipe| shell.library_swiped(swipe).map(|out| out > 0.5);
             let past_end = |shell: &Self, swipe: &Swipe| {
                 shell.library_swiped(swipe).is_some_and(|out| out > 1.)
             };
@@ -221,7 +232,11 @@ impl Shell {
             }
             let (now, x) = (Instant::now(), self.swiped_to(&swipe));
             swipe.samples.push_back((now, x));
-            while swipe.samples.front().is_some_and(|&(at, _)| now - at > SWIPE_HISTORY) {
+            while swipe
+                .samples
+                .front()
+                .is_some_and(|&(at, _)| now - at > SWIPE_HISTORY)
+            {
                 swipe.samples.pop_front();
             }
             self.ready_new_space(&mut swipe, cx);
@@ -258,7 +273,10 @@ impl Shell {
             return true;
         }
         let (now, x) = (Instant::now(), self.swiped_to(&swipe));
-        let recent = swipe.samples.iter().filter(|&&(at, _)| now - at <= SWIPE_HISTORY);
+        let recent = swipe
+            .samples
+            .iter()
+            .filter(|&&(at, _)| now - at <= SWIPE_HISTORY);
         let velocity = match (recent.clone().next(), recent.last()) {
             (Some(&(start, from)), Some(&(end, to))) if end > start => {
                 (to - from) / (end - start).as_secs_f32()
@@ -266,7 +284,11 @@ impl Shell {
             _ => 0.,
         };
         if let Some(out) = self.library_swiped(&swipe) {
-            let open = if velocity.abs() >= SWIPE_FLICK { velocity > 0. } else { out > 0.5 };
+            let open = if velocity.abs() >= SWIPE_FLICK {
+                velocity > 0.
+            } else {
+                out > 0.5
+            };
             if open != self.library_open {
                 // check.sh waits for this line.
                 log!("browser: command view-library via swipe");
@@ -285,12 +307,22 @@ impl Shell {
         let Some(space) = self.nearest(swipe.from, toward) else {
             return true;
         };
-        let from = if space == swipe.from { x } else { x - toward.signum() * self.width() };
+        let from = if space == swipe.from {
+            x
+        } else {
+            x - toward.signum() * self.width()
+        };
         let velocity = if velocity * from < 0. { velocity } else { 0. };
         let cancel = space != swipe.from && self.form().is_some();
         let beside = cancel.then_some(swipe.from);
-        self.settle =
-            Some(Settle { space, beside, from, velocity, start: now, next_door: false });
+        self.settle = Some(Settle {
+            space,
+            beside,
+            from,
+            velocity,
+            start: now,
+            next_door: false,
+        });
         if cancel {
             self.form_going = self.close_form(window, cx);
         } else if space != self.space {
@@ -320,7 +352,10 @@ impl Shell {
             return true;
         }
         let now = Instant::now();
-        if self.wheel_paged.is_some_and(|paged| now - paged < WHEEL_REST) {
+        if self
+            .wheel_paged
+            .is_some_and(|paged| now - paged < WHEEL_REST)
+        {
             return true;
         }
         let sum = match self.wheel {
@@ -416,7 +451,10 @@ impl Shell {
                 Some(true) => window.request_animation_frame(),
                 // check.sh waits for these lines.
                 Some(false) => {
-                    log!("browser: scroll {name} {}", if shown { "shown" } else { "hidden" })
+                    log!(
+                        "browser: scroll {name} {}",
+                        if shown { "shown" } else { "hidden" }
+                    )
                 }
                 None => {}
             }
@@ -426,7 +464,10 @@ impl Shell {
     /// The edge across the sidebar 2 over the rows' top, under the favorites, or the URL field
     /// without them or while they scroll with the list, while the rows go under it (Dia).
     pub(super) fn scroll_edge_line(&self) -> Option<impl IntoElement + use<>> {
-        Some(self.edge_line(self.top_edge.at())?.top(px(self.pages_top() - 2.)))
+        Some(
+            self.edge_line(self.top_edge.at())?
+                .top(px(self.pages_top() - 2.)),
+        )
     }
 
     /// The edge across the sidebar 1 under the list's foot while rows are hidden under it (Arc).
@@ -489,7 +530,11 @@ fn beside(spaces: &[Space], form: Option<(u64, u64)>, space: u64, x: f32) -> Opt
         return (x > 0. && made_from).then_some(from);
     }
     let index = spaces.iter().position(|other| other.id == space)?;
-    let index = if x > 0. { index.checked_sub(1)? } else { index + 1 };
+    let index = if x > 0. {
+        index.checked_sub(1)?
+    } else {
+        index + 1
+    };
     spaces.get(index).map(|other| other.id)
 }
 
@@ -512,7 +557,11 @@ fn nearest(
 /// Where a page let go at `x`, going at `velocity` a second, heads: a page `width` that way on a
 /// flick, else where it is.
 fn heading(x: f32, velocity: f32, width: f32) -> f32 {
-    if velocity.abs() >= SWIPE_FLICK { velocity.signum() * width } else { x }
+    if velocity.abs() >= SWIPE_FLICK {
+        velocity.signum() * width
+    } else {
+        x
+    }
 }
 
 #[cfg(test)]
@@ -554,7 +603,13 @@ mod tests {
     /// made from Space 1, pages 200 wide.
     fn lands(from: u64, x: f32, velocity: f32) -> Option<u64> {
         let spaces = spaces(&[1, 2, 3, 4]);
-        nearest(&spaces, Some((4, 1)), from, heading(x, velocity, 200.), 200.)
+        nearest(
+            &spaces,
+            Some((4, 1)),
+            from,
+            heading(x, velocity, 200.),
+            200.,
+        )
     }
 
     /// Back off the form, fingers land on the Space it was made from, not the one before it, past
@@ -586,7 +641,15 @@ mod tests {
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(host.clone(), cx));
         shell.update(cx, |shell, cx| {
             let space = |id: u64| {
-                (id, format!("Space {id}").into(), None, 1, "".into(), "".into(), "".into())
+                (
+                    id,
+                    format!("Space {id}").into(),
+                    None,
+                    1,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                )
             };
             shell.set_spaces(vec![space(1), space(2), space(3)], cx);
             shell.set_space(shown, cx);
@@ -623,8 +686,11 @@ mod tests {
 
     /// AppKit's buttons as macOS 26 and later draw them in an app built with an older SDK, as
     /// 0.1.0 was: 12 across on a pitch of 20, where an app built with macOS 26's has 14 on 23.
-    const OLDER_SDK: WindowButtonGeometry =
-        WindowButtonGeometry { centres: [20., 40., 60.], y: 24., diameter: 12. };
+    const OLDER_SDK: WindowButtonGeometry = WindowButtonGeometry {
+        centres: [20., 40., 60.],
+        y: 24.,
+        diameter: 12.,
+    };
 
     /// A window of three Spaces on the first, whose host draws its buttons as `OLDER_SDK`.
     fn older_sdk_window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext) {
@@ -633,7 +699,15 @@ mod tests {
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(host.clone(), cx));
         shell.update(cx, |shell, cx| {
             let space = |id: u64| {
-                (id, format!("Space {id}").into(), None, 1, "".into(), "".into(), "".into())
+                (
+                    id,
+                    format!("Space {id}").into(),
+                    None,
+                    1,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                )
             };
             shell.set_spaces(vec![space(1), space(2), space(3)], cx);
             shell.set_space(1, cx);
@@ -668,8 +742,10 @@ mod tests {
     /// The copy the Library's panel draws of the window's buttons, where it is in the window.
     fn panel_copy(shell: &Shell) -> [Bounds<Pixels>; 3] {
         let left = px(shell.library_column_left());
-        let moved =
-            |frame: Bounds<Pixels>| Bounds { origin: frame.origin + point(left, px(0.)), ..frame };
+        let moved = |frame: Bounds<Pixels>| Bounds {
+            origin: frame.origin + point(left, px(0.)),
+            ..frame
+        };
         shell.window_button_frames().map(moved)
     }
 
@@ -692,8 +768,15 @@ mod tests {
         let (shell, cx) = older_sdk_window(cx);
         let own = OLDER_SDK.frames();
         shell.update_in(cx, |shell, window, cx| {
-            assert!(shell.window_buttons_shown(), "the window's own aren't up at rest");
-            assert_eq!(shell.window_button_frames(), own, "the copies aren't the system's");
+            assert!(
+                shell.window_buttons_shown(),
+                "the window's own aren't up at rest"
+            );
+            assert_eq!(
+                shell.window_button_frames(),
+                own,
+                "the copies aren't the system's"
+            );
             let (mut was_own, mut swapped, mut receded) = (true, false, false);
             let way = 1.2 * shell.library_width();
             fingers_by_steps(shell, way, 600, window, cx, |shell| {
@@ -702,16 +785,26 @@ mod tests {
                 assert!(own_up != panel, "drawn twice or not at all");
                 if panel {
                     let copy = panel_copy(shell);
-                    assert!(copy.iter().all(|frame| frame.size == own[0].size), "{copy:?}");
+                    assert!(
+                        copy.iter().all(|frame| frame.size == own[0].size),
+                        "{copy:?}"
+                    );
                 }
                 if sidebar && was_own {
                     // Where the sidebar's copy takes over, it hasn't begun to recede.
-                    assert!(shell.sidebar_scale() > 0.999, "at {}", shell.sidebar_scale());
+                    assert!(
+                        shell.sidebar_scale() > 0.999,
+                        "at {}",
+                        shell.sidebar_scale()
+                    );
                     receded = true;
                 }
                 if own_up && !was_own {
                     // Where the panel stops, to within a pixel's half.
-                    assert!(same(panel_copy(shell), own, 0.5), "swapped off the window's own");
+                    assert!(
+                        same(panel_copy(shell), own, 0.5),
+                        "swapped off the window's own"
+                    );
                     swapped = true;
                 }
                 was_own = own_up;
@@ -735,7 +828,10 @@ mod tests {
         });
         cx.run_until_parked();
         shell.update_in(cx, |shell, window, cx| {
-            assert!(shell.window_buttons_shown(), "the window's own aren't up over the Library");
+            assert!(
+                shell.window_buttons_shown(),
+                "the window's own aren't up over the Library"
+            );
             let mut swapped = false;
             let (way, steps) = (-shell.library_width(), 600);
             // The window's own go once the panel has left them by a pixel's half: the copy is
@@ -744,7 +840,10 @@ mod tests {
             fingers_by_steps(shell, way, steps, window, cx, |shell| {
                 if shell.library_buttons() {
                     let copy = panel_copy(shell);
-                    assert!(copy.iter().all(|frame| frame.size == own[0].size), "{copy:?}");
+                    assert!(
+                        copy.iter().all(|frame| frame.size == own[0].size),
+                        "{copy:?}"
+                    );
                     if !swapped {
                         assert!(same(copy, own, step + 0.5), "swapped off the window's own");
                         swapped = true;
@@ -781,7 +880,10 @@ mod tests {
         shell.update_in(cx, |shell, window, cx| {
             let way = shell.width() + 0.8 * shell.library_width();
             swipe(shell, way, window, cx);
-            assert!(!shell.library_open, "the swipe went on past the first Space into the Library");
+            assert!(
+                !shell.library_open,
+                "the swipe went on past the first Space into the Library"
+            );
             shell.set_space(1, cx);
             swipe(shell, 0.9 * shell.library_width(), window, cx);
             assert!(shell.library_open, "the next swipe left the Library closed");
@@ -803,7 +905,11 @@ mod tests {
         };
         shell.update_in(cx, |shell, window, cx| {
             fingers(shell, 0.2 * shell.library_width(), false, window, cx);
-            assert!(crossing(shell, Instant::now()), "fingers: the sidebar {}", shell.sidebar_opacity());
+            assert!(
+                crossing(shell, Instant::now()),
+                "fingers: the sidebar {}",
+                shell.sidebar_opacity()
+            );
             fingers(shell, 0.9 * shell.library_width(), true, window, cx);
             assert!(shell.library_open, "the swipe left the Library closed");
             shell.library_motion = None;
@@ -813,7 +919,11 @@ mod tests {
             let start = Instant::now();
             shell.sidebar_fade = shell.sidebar_fade.map(|(from, _)| (from, start));
             let halfway = start + Duration::from_millis(145);
-            assert!(crossing(shell, halfway), "a click: the sidebar {}", shell.sidebar_opacity_at(halfway));
+            assert!(
+                crossing(shell, halfway),
+                "a click: the sidebar {}",
+                shell.sidebar_opacity_at(halfway)
+            );
         });
     }
 
@@ -827,18 +937,34 @@ mod tests {
         // The fourth Space's form, made from the third, in a profile with a favorite.
         shell.update(cx, |shell, cx| {
             let space = |id: u64| {
-                (id, format!("Space {id}").into(), None, 1, "".into(), "".into(), "".into())
+                (
+                    id,
+                    format!("Space {id}").into(),
+                    None,
+                    1,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                )
             };
             shell.set_spaces((1..=4).map(space).collect(), cx);
             shell.set_space(4, cx);
             let name = cx.new(|cx| TextInput::new("Space name", cx));
-            shell.form = Some(SpaceForm { space: 4, from: 3, name, tab: None });
+            shell.form = Some(SpaceForm {
+                space: 4,
+                from: 3,
+                name,
+                tab: None,
+            });
             shell.set_favorites(vec![(10, 1)], cx);
         });
         cx.run_until_parked();
         let rest = shell.read_with(cx, |shell, _| shell.drawn_tiles()[&10]);
         let tile = |shell: &Shell| shell.tip_frames.borrow().get(&10).copied();
-        assert!(shell.read_with(cx, |shell, _| tile(shell).is_none()), "the form left a tile up");
+        assert!(
+            shell.read_with(cx, |shell, _| tile(shell).is_none()),
+            "the form left a tile up"
+        );
 
         // Fingers 0.7 of the way back, down: the Space's page is 0.3 in from the left.
         shell.update_in(cx, |shell, window, cx| {
@@ -857,14 +983,21 @@ mod tests {
         assert!((at - centre).abs() < 0.5, "the tile isn't with the rows");
         // The field is where the page puts it: a press in its drawn part opens the command bar.
         cx.simulate_click(point(px(100.), px(64.)), Modifiers::none());
-        assert_eq!(host.command_bars.take().len(), 1, "the URL field wasn't drawn");
+        assert_eq!(
+            host.command_bars.take().len(),
+            1,
+            "the URL field wasn't drawn"
+        );
 
         // Fingers up past halfway: Cancel, and the page settles in with the form's going out.
         shell.update_in(cx, |shell, window, cx| {
             let way = 0.7 * shell.width();
             fingers(shell, way, true, window, cx);
             shell.tip_frames.borrow_mut().clear();
-            assert!(shell.form_going.is_some(), "the swipe didn't cancel the form");
+            assert!(
+                shell.form_going.is_some(),
+                "the swipe didn't cancel the form"
+            );
             cx.notify();
         });
         cx.run_until_parked();
@@ -883,7 +1016,15 @@ mod tests {
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(host.clone(), cx));
         shell.update(cx, |shell, cx| {
             let space = |id: u64| {
-                (id, format!("Space {id}").into(), None, id, "".into(), "".into(), "".into())
+                (
+                    id,
+                    format!("Space {id}").into(),
+                    None,
+                    id,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                )
             };
             shell.set_spaces(vec![space(1), space(2)], cx);
             shell.set_space(1, cx);
@@ -906,15 +1047,22 @@ mod tests {
             cx.run_until_parked();
             shell.read_with(cx, |shell, _| {
                 let left = |frame: Option<&Bounds<Pixels>>| frame.map(|f| f32::from(f.left()));
-                let drawn = before.iter().zip(shell.pages()).map(|(&(space, x), (_, after))| {
-                    let xs = (x.min(after), x.max(after));
-                    if space == shell.space {
-                        (xs, left(shell.tip_frames.borrow().get(&favorite(space))), None)
-                    } else {
-                        let frames = shell.beside_frames.borrow();
-                        (xs, left(frames.get(&favorite(space))), left(frames.get(&0)))
-                    }
-                });
+                let drawn = before
+                    .iter()
+                    .zip(shell.pages())
+                    .map(|(&(space, x), (_, after))| {
+                        let xs = (x.min(after), x.max(after));
+                        if space == shell.space {
+                            (
+                                xs,
+                                left(shell.tip_frames.borrow().get(&favorite(space))),
+                                None,
+                            )
+                        } else {
+                            let frames = shell.beside_frames.borrow();
+                            (xs, left(frames.get(&favorite(space))), left(frames.get(&0)))
+                        }
+                    });
                 (before.len(), drawn.collect())
             })
         };
@@ -922,9 +1070,15 @@ mod tests {
             let near = |at: f32, (low, high): (f32, f32)| at > low - 0.5 && at < high + 0.5;
             for (xs, tile, field) in drawn {
                 let tile = tile.expect("a page drew no tile");
-                assert!(near(tile - rest, xs), "a tile at {tile} isn't with its page at {xs:?}");
+                assert!(
+                    near(tile - rest, xs),
+                    "a tile at {tile} isn't with its page at {xs:?}"
+                );
                 if let Some(field) = field {
-                    assert!(near(field - PLATE_INSET, xs), "the field beside isn't at {xs:?}");
+                    assert!(
+                        near(field - PLATE_INSET, xs),
+                        "the field beside isn't at {xs:?}"
+                    );
                 }
             }
         };
@@ -950,7 +1104,11 @@ mod tests {
         // The shown field's part still in the sidebar, at its left.
         let x = shell.read_with(cx, |shell, _| shell.top_offset());
         cx.simulate_click(point(px((x + width) / 2.), px(64.)), Modifiers::none());
-        assert_eq!(host.command_bars.take().len(), 1, "the URL field isn't with its page");
+        assert_eq!(
+            host.command_bars.take().len(),
+            1,
+            "the URL field isn't with its page"
+        );
         move_by(&shell, cx, TouchPhase::Ended, 0.);
         cx.run_until_parked();
 
@@ -975,7 +1133,10 @@ mod tests {
                 }
             });
         }
-        assert!(frames > 5, "the slide drew {frames} frames with a page beside");
+        assert!(
+            frames > 5,
+            "the slide drew {frames} frames with a page beside"
+        );
 
         // Past the last Space, its page rubber-bands under the URL field and favorites.
         shell.update(cx, |shell, cx| shell.set_space(2, cx));
@@ -988,9 +1149,15 @@ mod tests {
         move_by(&shell, cx, TouchPhase::Moved, -0.5 * width);
         let (pages, drawn) = frame(&shell, cx);
         assert_eq!(pages, 1, "a page came in past the last Space");
-        assert!(drawn[0].0.1 < 0., "the last Space's page didn't rubber-band");
+        assert!(
+            drawn[0].0.1 < 0.,
+            "the last Space's page didn't rubber-band"
+        );
         let tile = drawn[0].1.expect("no tile past the last Space");
-        assert!((tile - rest).abs() < 0.5, "the favorites left their place past the last Space");
+        assert!(
+            (tile - rest).abs() < 0.5,
+            "the favorites left their place past the last Space"
+        );
     }
 
     /// A window showing Space 1 of two, back from Space 2 as a click on its dot brings it, its
@@ -1003,8 +1170,17 @@ mod tests {
         let browser = host.clone();
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
         shell.update(cx, |shell, cx| {
-            let space =
-                |id| (id, format!("Space {id}").into(), None, 0, "".into(), "".into(), "".into());
+            let space = |id| {
+                (
+                    id,
+                    format!("Space {id}").into(),
+                    None,
+                    0,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                )
+            };
             shell.set_spaces(vec![space(1), space(2)], cx);
             shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
             shell.set_tabs(2, Vec::new(), vec![20], Vec::new(), Folders::default(), cx);
@@ -1028,7 +1204,11 @@ mod tests {
         };
         shell.update_in(cx, |shell, window, cx| {
             for step in 0..count {
-                let phase = if step == 0 { TouchPhase::Started } else { TouchPhase::Moved };
+                let phase = if step == 0 {
+                    TouchPhase::Started
+                } else {
+                    TouchPhase::Moved
+                };
                 shell.scroll(&event(phase, dx), window, cx);
             }
             let held = Instant::now() - Duration::from_millis(1500);
@@ -1063,14 +1243,20 @@ mod tests {
         let circle = |cx: &mut VisualTestContext| {
             cx.run_until_parked();
             let tree = cx.a11y_tree().expect("GPUI built a tree");
-            let found = tree.nodes.into_iter().find(|(_, node)| {
-                node.role() == Role::Status && node.label() == Some("New Space")
-            });
+            let found = tree
+                .nodes
+                .into_iter()
+                .find(|(_, node)| node.role() == Role::Status && node.label() == Some("New Space"));
             found.map(|(_, node)| (node.value().map(str::to_owned), node.live()))
         };
         assert_eq!(circle(cx), None, "a circle before the fingers");
-        shell.update_in(cx, |shell, window, cx| fingers(shell, -8., false, window, cx));
-        let pulling = Some((Some("Pull further to make one".to_owned()), Some(Live::Polite)));
+        shell.update_in(cx, |shell, window, cx| {
+            fingers(shell, -8., false, window, cx)
+        });
+        let pulling = Some((
+            Some("Pull further to make one".to_owned()),
+            Some(Live::Polite),
+        ));
         assert_eq!(circle(cx), pulling);
         // On, without letting go, against the page's rubber band.
         shell.update_in(cx, |shell, window, cx| {
