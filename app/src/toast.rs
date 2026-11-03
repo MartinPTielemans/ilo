@@ -515,6 +515,10 @@ impl Toast {
         let Some(shown) = self.shown.as_mut().filter(|shown| shown.leaving.is_none()) else {
             return;
         };
+        if shown.hovered != hovered {
+            // check.sh reads this line: a toast with the pointer on it stays past its time.
+            log!("browser: toast hovered {hovered}");
+        }
         shown.hovered = hovered;
         if !hovered && shown.expired {
             self.leave(cx);

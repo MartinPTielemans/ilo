@@ -765,10 +765,10 @@ if [ "$(last 'reduce motion')" = on ]; then
 else
   logged '^browser: toast bumped$' || fail "the toast asked for again while in place didn't bump"
 fi
-recorded
-../tools/window-screenshot.sh "$pid" "$out/new-tab-toast.png" || fail "no window to capture"
-# A click on Show, the chip at the plate's right end: 13.5 in from it and about 50 wide. The plate is
-# logged in the toast's window, whose width comes after it, at the content's right.
+# Show, the chip at the plate's right end: 13.5 in from it and about 50 wide. The plate is logged
+# in the toast's window, whose width comes after it, at the content's right. The pointer goes on it
+# before the recording's end is waited for, which outlasts the toast's 4.8 s, as a toast with the
+# pointer on its buttons stays past its time; the window is captured with it there.
 expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]* in [0-9]* [0-9]*$' \
   "the new tab's toast didn't tell where its plate is" "$toast_step"
 set -- $(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //; s/ in / /')
@@ -777,6 +777,9 @@ content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: la
   sed 's/^browser: layout content \([0-9]*\)x[0-9]*,.*/\1/')
 show="$((content - $5 + $1 + $3 - 14 - 25)) $(($2 + $4 / 2))"
 send move $show
+expect '^browser: toast hovered true$' "the pointer at $show wasn't on the new tab's toast"
+recorded
+../tools/window-screenshot.sh "$pid" "$out/new-tab-toast.png" || fail "no window to capture"
 send click $show
 expect '^browser: toast button show$' "a click on the new tab's toast's Show at $show didn't take"
 expect '^browser: sidebar shown$' "the new tab's toast's Show didn't bring the sidebar back"
