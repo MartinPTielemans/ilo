@@ -220,6 +220,8 @@ pub enum Hover {
     Rest(Rest),
     /// It has left that tab's row.
     Left(u64),
+    /// What a tab's card shows changed, as a rename changes its name.
+    Changed(Card),
     /// A press, a scroll, a drag, a menu, a Space switch or a key ends the card at once.
     Close,
 }
@@ -235,6 +237,7 @@ impl Hover {
                 format!("card rest {} {} {picture}", card.tab, actions.join(" "))
             }
             Hover::Left(tab) => format!("card left {tab}"),
+            Hover::Changed(card) => format!("card changed {} {}", card.tab, card.title),
             Hover::Close => "card close".into(),
         }
     }
@@ -371,11 +374,13 @@ fn update(cx: &mut App, f: impl FnOnce(&mut HoverCard, &mut Context<HoverCard>))
 
 /// What the shell asks: a card for the row the pointer rests on, after DWELL, or at once while
 /// one shows, as the pointer moves from row to row; the pointer leaving that row, which ends it
-/// after LEAVE unless it's onto the card; or the card's end.
+/// after LEAVE unless it's onto the card; what a tab's card shows, as it changes; or the card's
+/// end.
 pub fn hover(hover: Hover, cx: &mut App) {
     update(cx, |card, cx| match hover {
         Hover::Rest(rest) => card.rest(rest, cx),
         Hover::Left(tab) => card.left(tab, cx),
+        Hover::Changed(changed) => card.changed(changed, cx),
         Hover::Close => card.close(cx),
     });
 }
@@ -476,6 +481,19 @@ impl HoverCard {
         }
         if self.shown.as_ref().is_some_and(|rest| rest.card.tab == tab) && !self.on_card {
             self.leave_after(cx);
+        }
+    }
+
+    /// The tab of the card that shows, or waits for its dwell, changed: it shows it as it is now,
+    /// not as it was when the pointer came onto its row (#1452).
+    fn changed(&mut self, card: Card, cx: &mut Context<Self>) {
+        let tab = card.tab;
+        if let Some(resting) = self.resting.as_mut().filter(|rest| rest.card.tab == tab) {
+            resting.card = card.clone();
+        }
+        if let Some(shown) = self.shown.as_mut().filter(|rest| rest.card.tab == tab) {
+            shown.card = card;
+            self.draw(cx);
         }
     }
 

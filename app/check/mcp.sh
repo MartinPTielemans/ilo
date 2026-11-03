@@ -98,6 +98,28 @@ if BROWSER_AGENT_TOKEN=0 "$bridge" "$socket" < /dev/null > /dev/null 2> "$out/mc
   fail "the bridge got in without the agent's token"
 fi
 grep -q 'Settings › Agents' "$out/mcp-refused" || fail "a refused bridge said: $(cat "$out/mcp-refused")"
+# A copy from the Store names its bridge to clients by the alias its MSIX declares, which Windows
+# keeps in the user's WindowsApps folder across updates, as the package's own folder is named for
+# its version (#1442). check-windows.yml installs an MSIX of this build and names it in CHECK_MSIX.
+# A client starts the alias as Claude Code and Codex start a command, and it carries the client's
+# hello to this browser's pipe and the answer back.
+msix=
+if windows && [ -n "${CHECK_MSIX:-}" ]; then
+  alias=$(cygpath -w "$(cygpath -u "$LOCALAPPDATA")/Microsoft/WindowsApps/$(cat branding/name)-mcp-bridge.exe")
+  python3 -I - "$alias" "$socket" "$token" > "$out/mcp-alias.log" 2>&1 << 'PY' ||
+import os, subprocess, sys
+alias, socket, token = sys.argv[1:]
+hello = (b'{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18",'
+         b'"capabilities":{},"clientInfo":{"name":"msix","version":"1"}}}\n')
+run = subprocess.run([alias, socket], input=hello, capture_output=True, timeout=30,
+                     env={**os.environ, "BROWSER_AGENT_TOKEN": token})
+print(run.stdout.decode(errors="replace"), run.stderr.decode(errors="replace"))
+sys.exit(b'"protocolVersion":"2025-06-18"' not in run.stdout)
+PY
+    fail "the MSIX's bridge, by its alias, didn't answer: $(tr '\n' ' ' < "$out/mcp-alias.log")"
+  await_log '^browser: agent mcp-client hello from msix$' "the app didn't hear the hello the MSIX's bridge carried"
+  msix=1
+fi
 
 # The client: the bridge on two pipes, which stay open until the session ends, its stderr added to
 # mcp-bridge.log.
@@ -756,4 +778,9 @@ if [ "$driven" = 1 ]; then
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, is refused a tab the user took over until they hand it back and Keep answers its ask, its bar's Stop naming ⌘. in its tooltip, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow and again once that's revoked, and off takes the socket away"
 else
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases). skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
+fi
+if [ -n "$msix" ]; then
+  echo "ok: a Store copy's bridge, run by the alias its MSIX declares in the user's WindowsApps folder, carries a client's hello to the browser and its answer back."
+elif windows; then
+  echo "skip: a Store copy's bridge, by its alias. No MSIX of this build is installed here; CHECK_MSIX names one."
 fi
