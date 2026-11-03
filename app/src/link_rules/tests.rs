@@ -194,7 +194,7 @@ fn the_file_keeps_spaces_by_their_place() {
     assert_eq!(
         text,
         "rule\tcontains\t2\twork example\nrule\tis\t1\thttps://home.example/\n\
-         rule\tcontains\t-\tgone\notherwise\t2\n"
+         rule\tcontains\t-\tgone\notherwise\t2\nseeded\tmeet\n"
     );
     let back = Rules::parse(&text, &[15, 17]);
     assert_eq!(
@@ -319,11 +319,15 @@ fn otherwise(view: &Entity<LinkRulesView>, cx: &mut VisualTestContext) -> (f32, 
     (x + 40., y + CONTROL_HEIGHT / 2.)
 }
 
-/// + under the box adds a rule to the first Space, whose field takes the keyboard, and what's
-/// typed there is the rule's text.
+/// + under the box adds a rule to the Space in front, as Arc's New Route goes to Most Recent
+/// Space, whose field takes the keyboard, and what's typed there is the rule's text.
 #[gpui::test]
 fn plus_adds_a_rule_whose_field_takes_the_typing(cx: &mut TestAppContext) {
-    let (host, cx) = tab(Rules::default(), cx);
+    let none = Rules {
+        rules: Vec::new(),
+        otherwise: LITTLE,
+    };
+    let (host, cx) = tab(none, cx);
     // Under the empty group's one row, 4 in.
     click(
         cx,
@@ -335,7 +339,7 @@ fn plus_adds_a_rule_whose_field_takes_the_typing(cx: &mut TestAppContext) {
     assert_eq!(
         host.rules(),
         Rules {
-            rules: vec![rule(Condition::Contains, "", WORK)],
+            rules: vec![rule(Condition::Contains, "", FRONT)],
             otherwise: LITTLE
         }
     );
@@ -343,12 +347,12 @@ fn plus_adds_a_rule_whose_field_takes_the_typing(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(
         host.rules().rules,
-        [rule(Condition::Contains, "work.example", WORK)]
+        [rule(Condition::Contains, "work.example", FRONT)]
     );
 }
 
 /// A rule's pop-ups open on its condition and Space, checked, and set what's picked; a Space's
-/// offers Little ilo after the Spaces, and Everything else's the Space in front first.
+/// offers the Space in front, the Spaces, then Little ilo, as Everything else's does.
 #[gpui::test]
 fn pop_ups_set_a_rules_condition_and_space(cx: &mut TestAppContext) {
     let rules = Rules {
@@ -358,8 +362,8 @@ fn pop_ups_set_a_rules_condition_and_space(cx: &mut TestAppContext) {
     let (host, view, cx) = tab_view(rules, cx);
     host.answer.set(Some(1));
     click(cx, (CONDITION_X, row_y(0)));
-    click(cx, (SPACE_X, row_y(0)));
     host.answer.set(Some(2));
+    click(cx, (SPACE_X, row_y(0)));
     let everything = otherwise(&view, cx);
     click(cx, everything);
     // Each menu puts the chosen item's text on its button's: a rule's 10 into its pop-ups, 8
@@ -382,7 +386,7 @@ fn pop_ups_set_a_rules_condition_and_space(cx: &mut TestAppContext) {
                 SHORT_PADDING
             ),
             format!(
-                "{} {}: Work (checked), Home, Little ilo",
+                "{} {}: The Space in Front, Work (checked), Home, Little ilo",
                 SPACE_LEFT + CONTROL_PADDING,
                 SHORT_PADDING
             ),
@@ -509,10 +513,16 @@ fn little_ilo_is_the_default_and_a_rules_place() {
         rules.route("https://news.example/", &spaces),
         (LITTLE, None)
     );
-    assert_eq!(rules.to_text(&spaces), "");
+    assert_eq!(
+        rules.to_text(&spaces),
+        "rule\tcontains\tfront\tmeet.google.com\nseeded\tmeet\n"
+    );
     assert_eq!(Rules::parse("", &spaces), rules);
     let names = [(WORK, SharedString::from("Work"))];
-    assert_eq!(rules.describe(&names), "none; everything else Little ilo");
+    assert_eq!(
+        rules.describe(&names),
+        "URL contains \"meet.google.com\" → The Space in Front; everything else Little ilo"
+    );
     let little = Rules {
         rules: vec![rule(Condition::Contains, "doc", LITTLE)],
         otherwise: 0,
@@ -527,7 +537,10 @@ fn little_ilo_is_the_default_and_a_rules_place() {
         None
     );
     let text = little.to_text(&spaces);
-    assert_eq!(text, "rule\tcontains\tLittle ilo\tdoc\notherwise\t-\n");
+    assert_eq!(
+        text,
+        "rule\tcontains\tLittle ilo\tdoc\notherwise\t-\nseeded\tmeet\n"
+    );
     assert_eq!(Rules::parse(&text, &[15, 17]), little);
 }
 
@@ -540,7 +553,7 @@ fn the_pop_ups_pick_little_ilo_and_back(cx: &mut TestAppContext) {
         otherwise: LITTLE,
     };
     let (host, view, cx) = tab_view(rules, cx);
-    host.answer.set(Some(2));
+    host.answer.set(Some(3));
     click(cx, (SPACE_X, row_y(0)));
     let otherwise = otherwise(&view, cx);
     host.answer.set(Some(0));
@@ -563,4 +576,62 @@ fn the_pop_ups_pick_little_ilo_and_back(cx: &mut TestAppContext) {
         "{menus:?}"
     );
     assert_eq!(host.rules().otherwise, LITTLE);
+}
+
+/// A rule can send its links to the Space in front, as Arc's to Most Recent Space: a link from
+/// another app opens as a tab in the Space the front window shows, and a preview's link stays in
+/// the preview, as that's the Space shown. The file names it.
+#[test]
+fn a_rule_sends_links_to_the_space_in_front() {
+    let spaces = [WORK, HOME];
+    let rules = Rules {
+        rules: vec![
+            rule(Condition::Contains, "call.example", FRONT),
+            rule(Condition::Contains, "example", HOME),
+        ],
+        otherwise: LITTLE,
+    };
+    assert_eq!(
+        rules.route("https://call.example/room", &spaces),
+        (0, Some(0))
+    );
+    assert_eq!(
+        rules.preview_route("https://call.example/room", &spaces, WORK),
+        None
+    );
+    let text = rules.to_text(&spaces);
+    assert_eq!(
+        text,
+        "rule\tcontains\tfront\tcall.example\nrule\tcontains\t2\texample\nseeded\tmeet\n"
+    );
+    assert_eq!(Rules::parse(&text, &spaces), rules);
+    let names = [(WORK, SharedString::from("Work"))];
+    assert!(
+        (rules.describe(&names)).starts_with("URL contains \"call.example\" → The Space in Front,")
+    );
+}
+
+/// A profile gets the Meet rule once, as Arc seeds its Google Meet route: a new one starts with
+/// it, one from before gets it after its own rules, and once the trash has taken it, it stays
+/// gone across launches.
+#[test]
+fn the_meet_rule_is_added_once() {
+    let spaces = [WORK, HOME];
+    let meet = rule(Condition::Contains, "meet.google.com", FRONT);
+    assert_eq!(Rules::parse("", &spaces).rules, [meet.clone()]);
+    assert_eq!(
+        Rules::default().route("https://meet.google.com/abc-defg-hij", &spaces),
+        (0, Some(0))
+    );
+    assert_eq!(
+        Rules::parse("rule\tcontains\t1\twork\n", &spaces).rules,
+        [rule(Condition::Contains, "work", WORK), meet]
+    );
+    let trashed = Rules {
+        rules: Vec::new(),
+        otherwise: LITTLE,
+    };
+    let text = trashed.to_text(&spaces);
+    assert_eq!(text, "seeded\tmeet\n");
+    assert_eq!(Rules::parse(&text, &spaces), trashed);
 }
