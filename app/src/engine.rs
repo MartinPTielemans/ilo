@@ -240,6 +240,23 @@ impl Browser for Engine {
         unsafe { bc::bc_tab_cast_to(tab, id.as_ptr()) };
     }
 
+    fn choose_device(&self, tab: u64, id: SharedString, _: &mut App) {
+        let id = CString::new(id.as_ref()).unwrap_or_default();
+        unsafe { bc::bc_tab_choose_device(tab, id.as_ptr()) };
+    }
+
+    fn cancel_chooser(&self, tab: u64, _: &mut App) {
+        unsafe { bc::bc_tab_cancel_chooser(tab) };
+    }
+
+    fn scan_devices(&self, tab: u64, _: &mut App) {
+        unsafe { bc::bc_tab_scan_devices(tab) };
+    }
+
+    fn device_settings(&self, tab: u64, _: &mut App) {
+        unsafe { bc::bc_tab_device_settings(tab) };
+    }
+
     fn clear(&self, _: &mut App) -> u64 {
         unsafe { bc::bc_window_clear(self.window) }
     }

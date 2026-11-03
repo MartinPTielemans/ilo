@@ -27,6 +27,7 @@
 #include "components/content_settings/core/browser/website_settings_info.h"
 #include "components/content_settings/core/browser/website_settings_registry.h"
 #include "components/content_settings/core/common/content_settings.h"
+#include "components/permissions/object_permission_context_base.h"
 #include "components/strings/grit/components_branded_strings.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/url_formatter/elide_url.h"
@@ -46,6 +47,20 @@ namespace {
 
 using content_settings::SettingSource;
 using media_session::mojom::MediaSessionAction;
+
+// A BC_DEVICE_ value for a chosen device's kind, which picks its glyph.
+int DeviceTypeOf(ContentSettingsType type) {
+  switch (type) {
+    case ContentSettingsType::SERIAL_CHOOSER_DATA:
+      return BC_DEVICE_SERIAL;
+    case ContentSettingsType::HID_CHOOSER_DATA:
+      return BC_DEVICE_HID;
+    case ContentSettingsType::BLUETOOTH_CHOOSER_DATA:
+      return BC_DEVICE_BLUETOOTH;
+    default:
+      return BC_DEVICE_USB;
+  }
+}
 
 // The panel's tab's, while it shows.
 std::unique_ptr<SiteControls>& Shown() {
@@ -200,6 +215,20 @@ void SiteControls::SetPermission(bc_id tab, int type, int value) {
                                                 /*is_one_time=*/false);
 }
 
+void SiteControls::RemoveDevice(bc_id tab, size_t index) {
+  SiteControls* controls = ShownFor(tab);
+  if (!controls || !controls->page_info_ || index >= controls->devices_.size()) {
+    return;
+  }
+  const PageInfoUI::ChosenObjectInfo& device = *controls->devices_[index];
+  if (device.chooser_object->source == content_settings::SettingSource::kPolicy) {
+    return;
+  }
+  // As Chrome's page info's delete button. PageInfo lists them again, which replaces |device|.
+  const base::Value value(device.chooser_object->value.Clone());
+  controls->page_info_->OnSiteChosenObjectDeleted(*device.ui_info, value);
+}
+
 void SiteControls::Reset(bc_id tab) {
   SiteControls* controls = ShownFor(tab);
   if (!controls || !controls->page_info_) {
@@ -320,6 +349,7 @@ void SiteControls::Read() {
 void SiteControls::SetPermissionInfo(const PermissionInfoList& permission_info_list,
                                      ChosenObjectInfoList chosen_object_info_list) {
   permissions_ = permission_info_list;
+  devices_ = std::move(chosen_object_info_list);
   Changed();
 }
 
@@ -409,6 +439,26 @@ void SiteControls::Report() {
     permissions[i].name = names[i].c_str();
     permissions[i].state = states[i].c_str();
   }
+  std::vector<std::string> device_names;
+  std::vector<std::string> device_kinds;
+  std::vector<bc_site_device> devices;
+  for (const std::unique_ptr<PageInfoUI::ChosenObjectInfo>& device : devices_) {
+    permissions::ObjectPermissionContextBase* context =
+        page_info_ ? page_info_->GetChooserContextFromUIInfo(*device->ui_info) : nullptr;
+    device_names.push_back(context ? base::UTF16ToUTF8(context->GetObjectDisplayNameForUI(
+                                         device->chooser_object->value))
+                                   : std::string());
+    device_kinds.push_back(
+        base::UTF16ToUTF8(l10n_util::GetStringUTF16(device->ui_info->description_string_id)));
+    devices.push_back({
+        .type = DeviceTypeOf(device->ui_info->content_settings_type),
+        .removable = device->chooser_object->source != content_settings::SettingSource::kPolicy,
+    });
+  }
+  for (size_t i = 0; i < devices.size(); ++i) {
+    devices[i].name = device_names[i].c_str();
+    devices[i].kind = device_kinds[i].c_str();
+  }
   const std::string connection = base::UTF16ToUTF8(connection_summary_);
   // Chrome counts every row it lists in its button's words.
   const std::string reset =
@@ -432,6 +482,8 @@ void SiteControls::Report() {
       .ad_blocking = SystemPageOf(web_contents()) ? BC_AD_BLOCKING_NONE
                                                   : AdBlockingOf(web_contents()),
       .developer_mode = DeveloperModeOf(web_contents()),
+      .devices = devices.data(),
+      .device_count = devices.size(),
   };
   Host().tab_site_controls(Host().context, tab_, &controls);
 }

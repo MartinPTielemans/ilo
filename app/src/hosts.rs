@@ -135,6 +135,10 @@ impl site_controls::Host for SiteControlsHost {
         unsafe { bc::bc_tab_reset_site_permissions(tab) };
     }
 
+    fn remove_device(&self, tab: u64, index: usize) {
+        unsafe { bc::bc_tab_remove_site_device(tab, index) };
+    }
+
     fn set_system_engine(&self, tab: u64, on: bool) {
         match on {
             // As the protected-video note's button does.

@@ -1593,7 +1593,6 @@ impl command_bar::Host for PreviewBar {
     fn tooltip(&self, _: Option<(browser::tooltip::Tip, browser::tooltip::Anchor)>, _: &mut App) {}
 }
 
-/// Opens the command bar at `at`, with the suggestions for what `mode` has typed.
 /// A made-up page's request for a device, as PREVIEW_CHOOSER names it.
 fn preview_chooser(name: &str) -> Option<shell::Chooser> {
     use shell::{Chooser, ChooserDevice, DeviceKind, Scan};
@@ -1665,6 +1664,7 @@ fn preview_tone() -> Option<Tone> {
     }
 }
 
+/// Opens the command bar at `at`, with the suggestions for what `mode` has typed.
 fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
     let page = |text: &str, detail: &str, url: &str, tab: u64| Suggestion {
         url: url.into(),
@@ -2485,6 +2485,8 @@ impl site_controls::Host for PreviewSiteControls {
 
     fn reset_permissions(&self, _: u64) {}
 
+    fn remove_device(&self, _: u64, _: usize) {}
+
     fn set_system_engine(&self, _: u64, _: bool) {}
 
     fn allow_saving(&self, _: u64, _: &browser::passwords::Login) {}
@@ -2557,6 +2559,7 @@ fn preview_site() -> Site {
         reset: Some("Reset permissions".into()),
         system_engine: None,
         logins: Vec::new(),
+        devices: Vec::new(),
         ad_blocking: Some(true),
         developer_mode: Some(false),
     }

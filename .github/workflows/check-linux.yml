@@ -191,6 +191,20 @@ jobs:
           cargo build --release --locked
           echo "ILO_SERVER=$PWD/target/release/ilo-server" >> "$GITHUB_ENV"
 
+      # The devices run grants a HID device, a fake one the kernel's uhid makes (check/uhid.py),
+      # which stays plugged in for the job.
+      - if: ${{ steps.engine.outputs.found == 'true' && (inputs.runs == '' || inputs.runs == 'all' || contains(format(' {0} ', inputs.runs), ' devices ')) }}
+        run: |
+          sudo modprobe uhid
+          sudo setsid nohup python3 check/uhid.py > "$RUNNER_TEMP/uhid.log" 2>&1 &
+          for _ in $(seq 100); do
+            grep -q '^/dev/hidraw' "$RUNNER_TEMP/uhid.log" && break
+            sleep 0.1
+          done
+          cat "$RUNNER_TEMP/uhid.log"
+          grep -q '^/dev/hidraw' "$RUNNER_TEMP/uhid.log"
+          echo "BROWSER_CHECK_HID=ilo check HID" >> "$GITHUB_ENV"
+
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       - name: Runs
         if: ${{ steps.engine.outputs.found == 'true' }}

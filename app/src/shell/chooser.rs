@@ -10,14 +10,16 @@
 //! tab's request while another tab is shown, as it keeps a question, and cancels one an agent's
 //! tab makes, as a device is the user's alone to give.
 
-use std::time::Instant;
+use std::{cell::Cell, rc::Rc, time::Instant};
 
-use gpui::{Context, FontWeight, SharedString, div, prelude::*, px, svg};
+use gpui::{Bounds, Context, FontWeight, Pixels, SharedString, div, prelude::*, px, svg};
 
 use super::{
     NAV, SECONDARY, Shell, TITLE,
     cast::{clickable, device_list, device_row, foot_row},
-    permission::{BESIDE_CLOSE, BUTTONS_TOP, card_button, card_close, card_listener},
+    permission::{
+        BESIDE_CLOSE, BUTTONS_TOP, card_button, card_close, card_listener, part_listener,
+    },
 };
 use crate::settling::{SETTLING, Settling};
 use crate::tokens::shell::cast::{GLYPH, LIST_TOP};
@@ -54,7 +56,8 @@ impl DeviceKind {
         }
     }
 
-    fn glyph(self) -> &'static str {
+    /// Its glyph, in the chooser's rows and the Site Controls'.
+    pub fn glyph(self) -> &'static str {
         match self {
             DeviceKind::Bluetooth => "icons/bluetooth.svg",
             _ => "icons/usb.svg",
@@ -104,6 +107,8 @@ struct Row {
     /// When it takes a click: a moment after it came, as a row that appears under a click on its
     /// way somewhere else mustn't take it.
     from: Instant,
+    /// Where it was last drawn, which check.sh reads.
+    drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
 impl Asked {
@@ -135,6 +140,7 @@ impl Asked {
                     device,
                     here: true,
                     from: now + SETTLING,
+                    drawn: Rc::default(),
                 });
             }
         }
@@ -262,7 +268,13 @@ impl Shell {
                 asked.kind.glyph(),
                 device.name.clone(),
                 device.detail.clone(),
-            );
+            )
+            .relative()
+            .child(part_listener(
+                format!("chooser row {index}"),
+                &row.drawn,
+                tab,
+            ));
             if !row.here {
                 rows.push(item.opacity(0.5).into_any_element());
                 continue;
@@ -287,8 +299,9 @@ impl Shell {
             }
             _ => {}
         }
+        // Linux has no one place where Bluetooth is turned on, so there it's the note alone.
         let settings = match asked.scan {
-            Scan::Off => Some("Bluetooth Settings…"),
+            Scan::Off if cfg!(not(target_os = "linux")) => Some("Bluetooth Settings…"),
             Scan::Denied => Some("System Settings…"),
             _ => None,
         };

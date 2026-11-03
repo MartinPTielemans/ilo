@@ -60,6 +60,9 @@ impl Host for Recorder {
     fn reset_permissions(&self, tab: u64) {
         self.push(format!("reset {tab}"));
     }
+    fn remove_device(&self, tab: u64, index: usize) {
+        self.push(format!("remove device {tab} {index}"));
+    }
     fn set_system_engine(&self, tab: u64, on: bool) {
         self.push(format!("system engine {tab} {on}"));
     }
@@ -157,6 +160,7 @@ fn site() -> Site {
         ad_blocking: None,
         developer_mode: None,
         logins: vec![],
+        devices: Vec::new(),
     }
 }
 
@@ -637,6 +641,51 @@ fn a_value_chosen_sets_the_permission(cx: &mut TestAppContext) {
     );
 }
 
+fn device(name: &str, removable: bool) -> Device {
+    Device {
+        name: name.to_owned().into(),
+        kind: "Serial port".into(),
+        glyph: DeviceKind::Serial,
+        removable,
+    }
+}
+
+/// A device the site was given follows its permissions, and its menu's Remove takes it away; a
+/// menu closed without a choice keeps it.
+#[gpui::test]
+fn a_devices_remove_takes_it_away(cx: &mut TestAppContext) {
+    let mut site = site();
+    site.devices = vec![device("Arduino Uno", true)];
+    let mut panel = Panel::new(cx, site);
+    panel.calls();
+    panel.host.answer.set(None);
+    panel.click(row(3));
+    assert_eq!(panel.calls(), ["menu Remove"]);
+    panel.host.answer.set(Some(0));
+    panel.click(row(3));
+    assert_eq!(
+        panel.calls(),
+        ["menu Remove", &format!("remove device {TAB} 0")]
+    );
+}
+
+/// One a policy gave isn't the user's to take away, so it has no menu, and no stop for the keys.
+#[gpui::test]
+fn a_policys_device_stays(cx: &mut TestAppContext) {
+    let mut site = site();
+    site.devices = vec![device("Arduino Uno", false), device("Pico", true)];
+    let mut panel = Panel::new(cx, site);
+    panel.calls();
+    panel.host.answer.set(Some(0));
+    panel.click(row(3));
+    assert_eq!(panel.calls(), Vec::<String>::new());
+    panel.click(row(4));
+    assert_eq!(
+        panel.calls(),
+        ["menu Remove", &format!("remove device {TAB} 1")]
+    );
+}
+
 /// A site kept for Safari's engine lists it first, and its menu's Off turns it off; On, which it
 /// is, does nothing.
 #[gpui::test]
@@ -772,6 +821,7 @@ fn the_passwords_row_removes_a_login_or_takes_back_never(cx: &mut TestAppContext
     panel.show(under_button(), window());
     panel.changed(Site {
         logins: vec![login("me", false)],
+        devices: Vec::new(),
         ..site()
     });
     panel.calls();
@@ -799,6 +849,7 @@ fn the_passwords_row_shows_only_for_a_site_with_logins(cx: &mut TestAppContext) 
         cx,
         Site {
             logins: vec![login("me", false)],
+            devices: Vec::new(),
             ..site()
         },
     );

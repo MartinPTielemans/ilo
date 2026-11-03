@@ -236,6 +236,23 @@ pub(super) fn card_listener(
     .size_full()
 }
 
+/// As card_listener, for a part of a card a check clicks, such as a chooser's row.
+pub(super) fn part_listener(
+    what: String,
+    drawn: &Rc<Cell<Option<Bounds<Pixels>>>>,
+    tab: u64,
+) -> impl IntoElement + use<> {
+    let drawn = drawn.clone();
+    canvas(
+        move |bounds, _, _| logged_at(&what, &drawn, tab, bounds),
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+}
+
 /// Logs where a card is in its window when that changes.
 fn logged_at(
     what: &str,

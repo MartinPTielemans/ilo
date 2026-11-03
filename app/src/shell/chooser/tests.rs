@@ -197,10 +197,10 @@ fn bluetooth_looks_then_offers_scan_again(cx: &mut TestAppContext) {
         assert_eq!((asked.scan, asked.rows.len()), (Scan::Scanning, 0));
     });
     shell.update(cx, |shell, cx| {
-        shell.set_chooser(10, Some(bluetooth(Vec::new(), Scan::Off)), cx)
+        shell.set_chooser(10, Some(bluetooth(Vec::new(), Scan::Denied)), cx)
     });
     cx.run_until_parked();
-    // The button is the card's last line.
+    // The button is the card's last line, as Off's is where the system has one place for it.
     let settings = shell.read_with(cx, |shell, _| {
         let card = shell.chooser_drawn.get().unwrap();
         point(

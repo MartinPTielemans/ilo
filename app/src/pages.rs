@@ -118,6 +118,23 @@ pub(crate) unsafe extern "C" fn tab_site_controls(
             _ => None,
         },
         logins: logins(controls.logins, controls.login_count),
+        devices: (match controls.device_count {
+            0 => &[][..],
+            count => unsafe { std::slice::from_raw_parts(controls.devices, count) },
+        })
+        .iter()
+        .map(|device| site_controls::Device {
+            name: string(device.name),
+            kind: string(device.kind),
+            glyph: match device.type_ as u32 {
+                bc::BC_DEVICE_SERIAL => shell::DeviceKind::Serial,
+                bc::BC_DEVICE_HID => shell::DeviceKind::Hid,
+                bc::BC_DEVICE_BLUETOOTH => shell::DeviceKind::Bluetooth,
+                _ => shell::DeviceKind::Usb,
+            },
+            removable: device.removable,
+        })
+        .collect(),
     };
     update_app(|cx| site_controls::changed(tab, site, cx));
 }
@@ -337,6 +354,75 @@ pub(crate) unsafe extern "C" fn tab_cast(
         None => log!("browser: cast {tab} closed"),
     }
     update_shells(|shell, cx| shell.set_cast(tab, cast.clone(), cx));
+}
+
+/// What a tab's page asks a device for, as the core finds them, or that the request ended (a null
+/// site), for the window showing the tab.
+pub(crate) unsafe extern "C" fn tab_chooser(
+    _: *mut c_void,
+    tab: bc::bc_id,
+    site: *const c_char,
+    kind: i32,
+    devices: *const bc::bc_chooser_device,
+    count: usize,
+    scan: i32,
+) {
+    let string = |text: *const c_char| -> SharedString {
+        unsafe { CStr::from_ptr(text) }
+            .to_string_lossy()
+            .into_owned()
+            .into()
+    };
+    let chooser = (!site.is_null()).then(|| {
+        let devices = match count {
+            0 => &[][..],
+            _ => unsafe { std::slice::from_raw_parts(devices, count) },
+        };
+        shell::Chooser {
+            site: string(site),
+            kind: match kind as u32 {
+                bc::BC_DEVICE_SERIAL => shell::DeviceKind::Serial,
+                bc::BC_DEVICE_HID => shell::DeviceKind::Hid,
+                bc::BC_DEVICE_BLUETOOTH => shell::DeviceKind::Bluetooth,
+                _ => shell::DeviceKind::Usb,
+            },
+            devices: (devices.iter())
+                .map(|device| shell::ChooserDevice {
+                    id: string(device.id),
+                    name: string(device.name),
+                    detail: string(device.detail),
+                })
+                .collect(),
+            scan: match scan as u32 {
+                bc::BC_SCAN_SCANNING => shell::Scan::Scanning,
+                bc::BC_SCAN_STOPPED => shell::Scan::Stopped,
+                bc::BC_SCAN_OFF => shell::Scan::Off,
+                bc::BC_SCAN_DENIED => shell::Scan::Denied,
+                _ => shell::Scan::Live,
+            },
+        }
+    });
+    // check.sh waits for these lines.
+    match &chooser {
+        Some(chooser) => {
+            log!(
+                "browser: chooser {tab} {} {:?} {:?} devices {}",
+                chooser.site,
+                chooser.kind,
+                chooser.scan,
+                chooser.devices.len()
+            );
+            for device in &chooser.devices {
+                log!(
+                    "browser: chooser {tab} device {} ({})",
+                    device.name,
+                    device.detail
+                );
+            }
+        }
+        None => log!("browser: chooser {tab} ended"),
+    }
+    update_shells(|shell, cx| shell.set_chooser(tab, chooser.clone(), cx));
 }
 
 /// The user right-clicked a page: its menu, as the core has Chrome build it, in ilo's menu over the

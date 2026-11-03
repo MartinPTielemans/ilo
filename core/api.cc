@@ -24,6 +24,7 @@
 #include "browser_core/autofill_data.h"
 #include "browser_core/capture.h"
 #include "browser_core/cast_dialog.h"
+#include "browser_core/device_chooser.h"
 #include "browser_core/clear_site.h"
 #include "browser_core/crash_reports.h"
 #include "browser_core/developer_mode.h"
@@ -1768,6 +1769,26 @@ void bc_cast_close(void) {
 
 void bc_tab_cast_to(bc_id id, const char* device) {
   browser_core::CastDialog::To(id, device);
+}
+
+void bc_tab_choose_device(bc_id id, const char* device) {
+  browser_core::DeviceChooser::Choose(id, device);
+}
+
+void bc_tab_cancel_chooser(bc_id id) {
+  browser_core::DeviceChooser::Cancel(id);
+}
+
+void bc_tab_scan_devices(bc_id id) {
+  browser_core::DeviceChooser::Scan(id);
+}
+
+void bc_tab_device_settings(bc_id id) {
+  browser_core::DeviceChooser::Settings(id);
+}
+
+void bc_tab_remove_site_device(bc_id id, size_t index) {
+  browser_core::SiteControls::RemoveDevice(id, index);
 }
 
 void bc_tab_set_site_permission(bc_id id, int type, int value) {
