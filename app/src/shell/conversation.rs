@@ -208,7 +208,7 @@ impl Shell {
 
     /// The card's click: its conversation in the page area, or, shown already, the Space's tab
     /// again.
-    pub(super) fn show_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+    pub fn show_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
         let Some(card) = self.task_cards.iter().find(|card| card.agent == agent) else {
             return;
         };
