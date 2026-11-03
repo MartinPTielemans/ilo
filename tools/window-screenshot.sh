@@ -3,11 +3,12 @@
 # over it, as on screen, but nothing from other apps. A screen capture would include whatever
 # else is open on the owner's Mac. With "all", it takes every window of the process on that display,
 # such as two browser windows, in one picture.
-# On Windows, under Git Bash, it draws each of the process's windows itself with PrintWindow, in
-# their order on screen, so nothing of another app's can get into the picture. PrintWindow can't
-# read what DirectComposition leaves see-through, as an overlay's round corners, or the invisible
-# borders a window is resized by, and draws both black, so on a CI runner, whose desktop holds
-# nothing but the app, it copies the screen where the windows show instead, as Windows composes it.
+# On Windows, under Git Bash, it copies the screen where the windows show, as Windows composes it,
+# cut to their shapes, while no other app's window is in front of them there. Otherwise it draws
+# each of the process's windows itself with PrintWindow, in their order on screen, so nothing of
+# another app's can get into the picture. PrintWindow draws what DirectComposition leaves
+# see-through, as an overlay's margin, black (#1257), and the caption Windows would give the
+# browser window under the UI (#1262), so it's the way out, not the way in, and says so.
 # On Linux it captures the private session tools/headless.sh --run starts, or check.sh's Xvfb,
 # which hold nothing but the app, and refuses outside one rather than capture the owner's screen.
 # Usage: tools/window-screenshot.sh <pid> <output.png> [all]
@@ -18,12 +19,12 @@ case "$(uname)" in
   MINGW* | MSYS*)
     [ -e "/proc/$1/winpid" ] || { echo "process $1 isn't running" >&2; exit 1; }
     exec env PID="$(cat "/proc/$1/winpid")" OUT="$(cygpath -w "$2")" ALL="${3:-}" \
-      SCREEN="${GITHUB_ACTIONS:-}" \
       powershell.exe -NoProfile -NonInteractive -Command '
-Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @"
+Add-Type -ReferencedAssemblies System.Drawing, System.Windows.Forms -TypeDefinition @"
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 
@@ -39,49 +40,9 @@ public static class Capture {
   [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
   [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr hwnd, IntPtr dc, uint flags);
   [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out RECT rect, int size);
-  [StructLayout(LayoutKind.Sequential)] struct POINT { public int X, Y; }
-  [StructLayout(LayoutKind.Sequential)] struct BITMAPINFOHEADER {
-    public int biSize, biWidth, biHeight; public short biPlanes, biBitCount;
-    public int biCompression, biSizeImage, biXPelsPerMeter, biYPelsPerMeter, biClrUsed, biClrImportant;
-  }
-  [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr dc);
-  [DllImport("gdi32.dll")] static extern IntPtr CreateDIBSection(IntPtr dc, ref BITMAPINFOHEADER info, uint usage, out IntPtr bits, IntPtr section, uint offset);
-  [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
-  [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr obj);
-  [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr dc);
-  [DllImport("gdi32.dll")] static extern bool GdiFlush();
-  [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr hwnd, out RECT rect);
-  [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr hwnd, ref POINT p);
-  [DllImport("user32.dll")] static extern int GetClassName(IntPtr hwnd, System.Text.StringBuilder name, int size);
-
-  // DIAG: PrintWindow into a 32-bit DIB section, which keeps the alpha it writes.
-  static Bitmap Print(IntPtr hwnd, int width, int height, uint flags, System.Text.StringBuilder log) {
-    var info = new BITMAPINFOHEADER();
-    info.biSize = 40; info.biWidth = width; info.biHeight = -height; info.biPlanes = 1; info.biBitCount = 32;
-    IntPtr bits;
-    var dc = CreateCompatibleDC(IntPtr.Zero);
-    var dib = CreateDIBSection(dc, ref info, 0, out bits, IntPtr.Zero, 0);
-    var old = SelectObject(dc, dib);
-    var ok = PrintWindow(hwnd, dc, flags);
-    GdiFlush();
-    var raw = new byte[width * height * 4];
-    Marshal.Copy(bits, raw, 0, raw.Length);
-    SelectObject(dc, old); DeleteObject(dib); DeleteDC(dc);
-    long clear = 0, opaque = 0, part = 0, clearBlack = 0;
-    for (int i = 3; i < raw.Length; i += 4) {
-      if (raw[i] == 0) { clear++; if (raw[i-1] == 0 && raw[i-2] == 0 && raw[i-3] == 0) clearBlack++; }
-      else if (raw[i] == 255) opaque++; else part++;
-    }
-    var name = new System.Text.StringBuilder(256);
-    GetClassName(hwnd, name, 256);
-    log.AppendLine("flags " + flags + " " + name + " " + width + "x" + height + " ok " + ok + " alpha0 " + clear + " (black " + clearBlack + ") alpha255 " + opaque + " partial " + part);
-    var image = new Bitmap(width, height, PixelFormat.Format32bppPArgb);
-    var data = image.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
-    for (int y = 0; y < height; y++)
-      Marshal.Copy(raw, y * width * 4, new IntPtr(data.Scan0.ToInt64() + (long)y * data.Stride), width * 4);
-    image.UnlockBits(data);
-    return image;
-  }
+  [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
+  [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr hwnd);
+  [DllImport("user32.dll")] static extern bool IsZoomed(IntPtr hwnd);
 
   static Rectangle Bounds(IntPtr hwnd) {
     RECT r;
@@ -97,7 +58,52 @@ public static class Capture {
     return Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
   }
 
-  public static string Run(uint pid, string path, bool all, bool screen) {
+  // Whether a window of another app shows in front of one of |shown| where it would be in a copy
+  // of the screen. A cloaked window (DWMWA_CLOAKED), as a Store app kept out of sight has, never
+  // shows.
+  static bool Covered(uint pid, List<IntPtr> shown) {
+    var behind = new List<IntPtr>(shown);
+    var covered = false;
+    EnumWindows((hwnd, data) => {
+      if (behind.Remove(hwnd)) return behind.Count > 0;
+      uint owner;
+      int cloaked;
+      GetWindowThreadProcessId(hwnd, out owner);
+      if (owner != pid && IsWindowVisible(hwnd) && !IsIconic(hwnd) &&
+          !(DwmGetWindowAttribute(hwnd, 14, out cloaked, sizeof(int)) == 0 && cloaked != 0) &&
+          behind.Exists(w => Shown(w).IntersectsWith(Shown(hwnd))))
+        covered = true;
+      return !covered;
+    }, IntPtr.Zero);
+    return covered;
+  }
+
+  // Windows 11 rounds the corners of a window, 8 points across, unless it fills its screen.
+  static readonly bool Rounds = int.Parse((string)Microsoft.Win32.Registry.GetValue(
+      "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
+      "CurrentBuildNumber", "0")) >= 22000;
+
+  // The shape of the window on screen, from |origin|: what a copy of the screen holds of it.
+  static GraphicsPath Shape(IntPtr hwnd, Point origin) {
+    var r = Shown(hwnd);
+    r.Offset(-origin.X, -origin.Y);
+    var path = new GraphicsPath();
+    var fills = IsZoomed(hwnd) ||
+        System.Windows.Forms.Screen.FromHandle(hwnd).Bounds == Shown(hwnd);
+    if (!Rounds || fills) {
+      path.AddRectangle(r);
+      return path;
+    }
+    var d = 2 * 8 * (int)GetDpiForWindow(hwnd) / 96;
+    path.AddArc(r.Left, r.Top, d, d, 180, 90);
+    path.AddArc(r.Right - d, r.Top, d, d, 270, 90);
+    path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+    path.AddArc(r.Left, r.Bottom - d, d, d, 90, 90);
+    path.CloseFigure();
+    return path;
+  }
+
+  public static string Run(uint pid, string path, bool all) {
     // Rects in pixels, as PrintWindow draws.
     SetProcessDPIAware();
     // Top-level windows come front to back. Each window owned by another, a menu or the command
@@ -119,55 +125,53 @@ public static class Capture {
     // The window as it shows, without the clear borders it resizes by, in both ways of capturing.
     var area = Shown(mains[0]);
     if (all) mains.ForEach(w => area = Rectangle.Union(area, Shown(w)));
-    // DIAG (#1257, #1262): the screen as Windows composes it, and PrintWindow three ways beside it.
-    using (var image = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb)) {
-      using (var graphics = Graphics.FromImage(image))
-        graphics.CopyFromScreen(area.Location, Point.Empty, area.Size);
+    var shown = all ? mains : mains.GetRange(0, 1);
+    if (!Covered(pid, shown)) {
+      using (var screen = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb))
+      using (var image = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb)) {
+        using (var graphics = Graphics.FromImage(screen))
+          graphics.CopyFromScreen(area.Location, Point.Empty, area.Size);
+        // Clear outside the windows, where what is behind them shows: past their round corners,
+        // and between the windows "all" takes.
+        using (var graphics = Graphics.FromImage(image))
+        using (var shape = new Region()) {
+          shape.MakeEmpty();
+          foreach (var w in shown)
+            using (var outline = Shape(w, area.Location)) shape.Union(outline);
+          graphics.Clip = shape;
+          graphics.DrawImageUnscaled(screen, 0, 0);
+        }
+        image.Save(path, ImageFormat.Png);
+      }
+      return null;
+    }
+    Console.Error.WriteLine("A window of another app is in front of the app, so the capture " +
+        "draws its windows with PrintWindow, which draws the clear margins of overlays black " +
+        "and a caption under the UI.");
+    using (var image = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb))
+    using (var graphics = Graphics.FromImage(image)) {
+      for (int i = windows.Count - 1; i >= 0; i--) {
+        var top = windows[i];
+        while (GetWindow(top, GW_OWNER) != IntPtr.Zero) top = GetWindow(top, GW_OWNER);
+        if (!(all ? mains.Contains(top) : top == mains[0])) continue;
+        var bounds = Bounds(windows[i]);
+        using (var window = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb)) {
+          using (var g = Graphics.FromImage(window)) {
+            var dc = g.GetHdc();
+            // PW_RENDERFULLCONTENT, without which a window Chromium composites draws black.
+            PrintWindow(windows[i], dc, 2);
+            g.ReleaseHdc(dc);
+          }
+          graphics.DrawImageUnscaled(window, bounds.X - area.X, bounds.Y - area.Y);
+        }
+      }
       image.Save(path, ImageFormat.Png);
     }
-    var stem = path.Substring(0, path.Length - 4);
-    var log = new System.Text.StringBuilder();
-    log.AppendLine("area " + area + " main " + Bounds(mains[0]) + " shown " + Shown(mains[0]));
-    foreach (var mode in new uint[] { 0, 2, 3 }) {
-      using (var image = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb))
-      using (var graphics = Graphics.FromImage(image)) {
-        for (int i = windows.Count - 1; i >= 0; i--) {
-          var top = windows[i];
-          while (GetWindow(top, GW_OWNER) != IntPtr.Zero) top = GetWindow(top, GW_OWNER);
-          if (!(all ? mains.Contains(top) : top == mains[0])) continue;
-          var bounds = Bounds(windows[i]);
-          if (mode == 0) {
-            using (var window = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb)) {
-              using (var g = Graphics.FromImage(window)) {
-                var dc = g.GetHdc();
-                PrintWindow(windows[i], dc, 2);
-                g.ReleaseHdc(dc);
-              }
-              graphics.DrawImageUnscaled(window, bounds.X - area.X, bounds.Y - area.Y);
-            }
-            continue;
-          }
-          if (mode == 3) {
-            RECT client;
-            GetClientRect(windows[i], out client);
-            var origin = new POINT();
-            ClientToScreen(windows[i], ref origin);
-            log.AppendLine("client " + origin.X + "," + origin.Y + " " + client.Right + "x" + client.Bottom + " window " + bounds);
-            bounds = new Rectangle(origin.X, origin.Y, client.Right, client.Bottom);
-          }
-          if (bounds.Width <= 0 || bounds.Height <= 0) continue;
-          using (var window = Print(windows[i], bounds.Width, bounds.Height, mode, log))
-            graphics.DrawImageUnscaled(window, bounds.X - area.X, bounds.Y - area.Y);
-        }
-        image.Save(stem + (mode == 0 ? ".pw.png" : mode == 2 ? ".dib.png" : ".dib3.png"), ImageFormat.Png);
-      }
-    }
-    System.IO.File.WriteAllText(stem + ".txt", log.ToString());
     return null;
   }
 }
 "@
-$failed = [Capture]::Run([uint32]$env:PID, $env:OUT, $env:ALL -eq "all", $env:SCREEN -eq "true")
+$failed = [Capture]::Run([uint32]$env:PID, $env:OUT, $env:ALL -eq "all")
 if ($failed) { [Console]::Error.WriteLine($failed); exit 1 }'
     ;;
 esac
