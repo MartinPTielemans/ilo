@@ -25,8 +25,8 @@ use super::{
     SPACE_NAME, SPACE_NAME_SHUT, SPEAKER_DRAWN, SPEAKER_GAP, SPEAKER_SIZE, STATUS_AGENT,
     STATUS_DOT, STATUS_LOADING, STATUS_RING, STATUS_RING_COLOR, Shell, Slot, Swapped,
     TITLE_END_INSET, URL_BUTTON_GLYPH, clear_label, cubic_bezier, developer_outline, divider_box,
-    favicon, folder_icon, icon_placeholder, icon_slot, name_box, new_tab_label, plate, row_box,
-    row_spring,
+    favicon, folder_icon, host, icon_placeholder, icon_slot, name_box, new_tab_label, plate,
+    row_box, row_spring,
     scaled::scaled_from_middle,
     selected_plate, space_icon, split_plate,
     swap::{ARROW_DOWN, NONE, folder_glyph},
@@ -40,7 +40,8 @@ use crate::{
     icon_picker::{self, Subject},
     palette::Palette,
     space_icon::has_icon,
-    tokens::shell::DROP_SLOT_INSET,
+    tokens::shell::{DROP_SLOT_INSET, HOST_LINE, HOST_TITLE_LINE},
+    tokens::text,
     tooltip::{Anchor, Tip},
 };
 
@@ -1114,6 +1115,16 @@ impl Shell {
         }
     }
 
+    /// The host a tab's row names under its title, as Arc's does: a pinned tab's whose page left
+    /// its pinned URL's host, and a tab's in Developer Mode, whose site is what's worked on. A
+    /// renamed pinned tab at its pinned host has none (*interim*: Arc's rule for those isn't
+    /// known, and one of its two seen has none).
+    pub(super) fn host_line(&self, tab: u64) -> Option<SharedString> {
+        let kept = self.tabs.get(&tab)?;
+        let named = kept.left_pinned_host || kept.page.developer_mode;
+        named.then(|| SharedString::from(host(&kept.page.url).to_owned()))
+    }
+
     fn single_row(
         &self,
         tab: u64,
@@ -1133,6 +1144,10 @@ impl Shell {
         };
         let bright = Row::Tab(tab) == self.selected_row() || page.developer_mode;
         let title = title(&self.palette, label, bright);
+        let title = match self.host_line(tab) {
+            Some(host) => with_host(&self.palette, title, host),
+            None => title,
+        };
         // The row's button shows under the pointer, and the title truncates before it.
         let button = hovered
             .then(|| self.row_button(vec![tab], closable, cx))
@@ -1742,6 +1757,24 @@ pub(super) fn capture_glyph(page: &Page) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// A row's title with its host under it, the two centred in the row together.
+fn with_host(palette: &Palette, title: gpui::Div, host: SharedString) -> gpui::Div {
+    let host = div()
+        .truncate()
+        .text_size(px(text::SMALL))
+        .line_height(px(HOST_LINE))
+        .text_color(palette.text(SECONDARY))
+        .child(host);
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .justify_center()
+        .child(title.flex_none().line_height(px(HOST_TITLE_LINE)))
+        .child(host)
 }
 
 #[cfg(test)]
@@ -3300,6 +3333,48 @@ mod tests {
             [3],
             "the pointer moved on the row it rests on"
         );
+    }
+
+    /// Under its title, a pinned tab's row names the host its page went to from its pinned URL's,
+    /// but not another page on the same host, and a tab's row in Developer Mode names its host,
+    /// without "www." or the port, as the URL field does.
+    #[gpui::test]
+    fn a_row_names_its_host_off_its_pinned_host_and_in_developer_mode(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx, vec![2, 3], vec![4, 5], 4);
+        host.pinned_urls
+            .borrow_mut()
+            .insert(2, "https://p.example/".into());
+        host.pinned_urls
+            .borrow_mut()
+            .insert(3, "https://p.example/".into());
+        let report = |cx: &mut VisualTestContext, tab, url: &str, away, developer_mode| {
+            shell.update(cx, |shell, cx| {
+                let page = Page {
+                    url: gpui::SharedString::from(url.to_owned()),
+                    away_from_pinned_url: away,
+                    developer_mode,
+                    ..shell.page(tab)
+                };
+                shell.set_page(tab, page, cx);
+            });
+        };
+        report(cx, 2, "https://www.other.example/a", true, false);
+        report(cx, 3, "https://p.example/signin", true, false);
+        report(cx, 4, "http://localhost:3000/", false, true);
+        report(cx, 5, "https://q.example/", false, false);
+        let lines = shell.read_with(cx, |shell, _| [2, 3, 4, 5].map(|tab| shell.host_line(tab)));
+        assert_eq!(
+            lines,
+            [
+                Some("other.example".into()),
+                None,
+                Some("localhost".into()),
+                None
+            ]
+        );
+        // Back at its pinned URL's host, the line goes.
+        report(cx, 2, "https://p.example/", false, false);
+        assert_eq!(shell.read_with(cx, |shell, _| shell.host_line(2)), None);
     }
 
     /// A middle press on a tab's row closes it, as its ✕ does: a Today tab goes, a pinned one lets
