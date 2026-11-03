@@ -56,19 +56,16 @@ document.onvisibilitychange = () => {
 </script>'
 log="$out/spaces.log"
 step=0
-# X11 sends a touchpad's scrolling with no start or end, so two fingers never page there (#554),
-# and Windows' touchpad comes through DirectManipulation, which the driver can't stand in for: its
-# wheel messages reach GPUI as a mouse wheel's lines. Their steps go to the Spaces and the Library
-# by key, click and wheel instead. X11's clicks land on whole pixels, at scale 1 here.
+# X11 sends a touchpad's scrolling with no start or end, so two fingers never page there (#554):
+# its steps go to the Spaces and the Library by key, click and wheel instead. Its clicks land on
+# whole pixels, at scale 1 here. Windows' driver hands GPUI two fingers as Direct Manipulation
+# does a precision touchpad's (#1212).
 x11=
 fingers=1
 if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
   x11=1
   fingers=
   echo "skip: two fingers across the sidebar, on X11, which sends no touch phases (#554)."
-elif windows; then
-  fingers=
-  echo "skip: two fingers across the sidebar: the Windows driver can't send a touchpad's."
 fi
 rm -f "$saved" "$launch_frame"
 BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" < "$out/drive" > "$log" 2>&1 &
