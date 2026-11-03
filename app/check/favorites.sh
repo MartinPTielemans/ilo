@@ -225,6 +225,8 @@ size=$(grep '^browser: layout content' "$log" | tail -1 |
 send resize 1000 340
 # The list scrolls as far as the last frame drawn has it.
 expect '^browser: drawn at 1000x340$' "the window didn't draw at its new size"
+# Rows hidden under the list's foot bring a line across the sidebar 1 under it (Arc).
+expect '^browser: scroll foot edge shown$' "the rows under the list's foot didn't show its edge"
 send scroll 100 200 10 5
 expect '^browser: scroll edge shown$' "the list scrolled past its top didn't show its edge"
 ../tools/window-screenshot.sh "$pid" "$out/scroll-edge.png" || fail "no window to capture"
@@ -235,12 +237,16 @@ brighter "$edge" "$gap" || brighter "$gap" "$edge" ||
   fail "the edge is $edge over the sidebar's $gap"
 send scroll 100 200 -10 5
 expect '^browser: scroll edge hidden$' "the list back at its top didn't hide its edge"
-# There, showing the last tab scrolls the list the least that shows its row whole, and showing a
-# tab whose row is in view leaves the list where it is.
+# There, showing the last tab glides the list the least that shows its row whole, recorded for
+# its motion, and showing a tab whose row is in view leaves the list where it is.
+record list-glide 2
 switch "9 cmd" "$b"
 expect "^browser: list scrolled to [1-9][0-9.]* for $b\$" \
   "showing a tab under the list's bottom didn't scroll to its row"
 expect '^browser: scroll edge shown$' "the list scrolled to a row didn't show its edge"
+# The last row in view takes the foot's line away, the room after it still under the foot.
+expect '^browser: scroll foot edge hidden$' "the list scrolled to its last row kept its foot's edge"
+recorded
 ../tools/window-screenshot.sh "$pid" "$out/list-scrolled.png" || fail "no window to capture"
 switch "2 cmd" "$c"
 none_since '^browser: list scrolled' || fail "showing a tab in view scrolled the list"
