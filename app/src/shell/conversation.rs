@@ -1918,9 +1918,16 @@ impl Render for TalkView {
         self.follow_on(now);
         // What changes once it has shown moves.
         self.motion.live = true;
-        // What moves does on frames only while it shows.
-        if self.moving(still) || busy {
+        // What moves does only while it shows: what opens, folds or lands on the display's frames,
+        // and the shimmer, which moves all the while a step waits on the user, on the loading dots'
+        // clock, as each frame draws the whole window again (#1700).
+        if !self.folding.is_empty() || busy {
             window.request_animation_frame();
+        } else if self.moving(still)
+            && let Some(shell) = self.shell.upgrade()
+        {
+            shell.read(cx).breath.keep();
+            cx.defer(move |cx| shell.update(cx, |shell, cx| shell.breath.arm(cx)));
         }
         let palette = look.palette;
         let lines = div()

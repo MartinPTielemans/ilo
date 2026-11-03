@@ -238,9 +238,12 @@ fn a_sessions_conversation_has_no_reply_field(cx: &mut TestAppContext) {
         ..conversation(0)
     };
     shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
-    shell.update(cx, |_, cx| cx.notify());
-    cx.run_until_parked();
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    // Its trace opens as it first draws, and shimmers from the next frame.
+    for _ in 0..2 {
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    }
     let (reply, window) = cx.update(|window, cx| {
         let reply = view.read(cx).reply.focus_handle(cx).is_focused(window);
         (reply, shell.read(cx).focus_handle.is_focused(window))
@@ -623,4 +626,35 @@ fn the_lines_follow_only_while_the_user_reads_at_their_end() {
         "motion reduced"
     );
     assert_eq!(follows(true, false, true, true), Follows::Eased);
+}
+
+/// A step under way that shimmers while nothing else moves draws on the loading dots' clock, not
+/// at every display frame, as each frame draws the whole window again (#1700).
+#[gpui::test]
+fn the_shimmer_draws_on_the_loading_dots_clock(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    let mut talk = conversation(1);
+    if let Line::Trace(trace) = &mut talk.lines[0] {
+        (trace.running, trace.took, trace.items) = (
+            true,
+            None,
+            vec![TraceItem::Step(step(0, "Waiting on you", true))],
+        );
+    }
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    // Its trace opens as it first draws, and shimmers from the next frame.
+    for _ in 0..2 {
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    }
+    assert!(
+        view.read_with(cx, |view, _| view.moving(false)),
+        "the step under way doesn't shimmer"
+    );
+    assert!(
+        shell.read_with(cx, |shell, _| shell.breath.pending()),
+        "the shimmer isn't on the loading dots' clock"
+    );
 }
