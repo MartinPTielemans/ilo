@@ -5,8 +5,9 @@ with no link, from the Start menu or a shortcut, brings the core's window in fro
 The hook comes just before Chrome would open its own windows for the launch, and the launch is then
 silent: the core's windows are the only ones. The core starts Chrome with --no-startup-window, which
 made every launch silent until chrome.exe on Windows handed a second launch's command line over
-without it, and the link opened twice (#1413). The Mac's come by AppController
-(chromium-core-open-links.patch).
+without it, and the link opened twice (#1413). On Windows a click on a toast comes as a launch too,
+which goes to Chrome's handler first, as the hook's silence kept it from (#1426). The Mac's come by
+AppController (chromium-core-open-links.patch).
 
 --- a/chrome/browser/ui/startup/startup_browser_creator.cc
 +++ b/chrome/browser/ui/startup/startup_browser_creator.cc
@@ -24,10 +25,22 @@ without it, and the link opened twice (#1413). The Mac's come by AppController
  namespace {
  
  // Dumps the current set of the browser process's histograms to |output_file|.
-@@ -1169,6 +1176,18 @@
+@@ -1169,6 +1176,30 @@
    }
  #endif  //  !BUILDFLAG(IS_CHROMEOS)
  
++#if BUILDFLAG(IS_WIN)
++  // browser_core: a click on a toast, which notification_helper.exe hands over as a launch with
++  // the toast's id, goes to Chrome's handler, which gives the page its click, as Chrome's own
++  // handling of it below would have, but the hook makes the launch silent first (#1426). An id
++  // Chrome can't read, as the empty one a click on the app's name in the notification center
++  // gives, goes on to the hook, which brings the window forward.
++  if (command_line.HasSwitch(switches::kNotificationLaunchId) &&
++      NotificationPlatformBridgeWin::HandleActivation(command_line)) {
++    return true;
++  }
++#endif
++
 +  // browser_core: the core's windows open the links, this launch's or another's the process
 +  // singleton handed over, and one comes forward for a later launch with none, and Chrome opens
 +  // none. The core gives each launch it starts the switch below, but on Windows chrome.exe hands a
