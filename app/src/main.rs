@@ -6234,8 +6234,11 @@ extern "C" fn reduce_motion_changed() {
     update_app_later(follow_reduce_motion);
 }
 
-/// What GPUI's animations and the UI's own motion follow (`App::reduce_motion`).
+/// What GPUI's animations and the UI's own motion follow (`App::reduce_motion`). A check that
+/// records motion on a runner whose system reduces it, as GitHub's hosted Mac and Windows do,
+/// launches with BROWSER_MOTION=full.
 fn set_reduce_motion(reduce: bool, cx: &mut App) {
+    let reduce = reduce && std::env::var_os("BROWSER_MOTION").is_none_or(|motion| motion != "full");
     if reduce != cx.reduce_motion() {
         // check.sh reads this line.
         log!("browser: reduce motion {}", if reduce { "on" } else { "off" });
