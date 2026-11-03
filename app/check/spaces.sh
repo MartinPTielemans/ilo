@@ -397,9 +397,9 @@ expect "^browser: library field $second at rest drawn\$" "the pointer leaving th
 # A right-click on the second card, 404 in and half its 240 wide, shows that Space's menu, with
 # the colour it was given, and leaves the Library open on the Space shown.
 post rightclick 524 $((${content#*x} / 2))
-expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
-  "a right-click on the second Space's card didn't show its menu"
+card_menu="^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
+New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$"
+expect "$card_menu" "a right-click on the second Space's card didn't show its menu"
 none_since '^browser: library space ' || fail "a right-click on a card showed its Space"
 send dismiss
 # The ••• at the second card's foot, its middle 22 in from the card's right and 21.5 above its foot,
@@ -409,9 +409,7 @@ more_point="$((404 + 240 - 22)) $((${content#*x} - 48 - 22))"
 send move $more_point
 ../tools/window-screenshot.sh "$pid" "$out/library-card-more.png" || fail "no window to capture"
 post click $more_point
-expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $themed, $profile, \
-Export as Markdown…, Delete Space")\$" \
-  "a click on the second card's ••• didn't show its menu"
+expect "$card_menu" "a click on the second card's ••• didn't show its menu"
 none_since '^browser: library space ' || fail "a click on a card's ••• showed its Space"
 send dismiss
 # The card's field is 8 in from its sides and 36 tall around the middle of its name's row, 25
