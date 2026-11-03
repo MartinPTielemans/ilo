@@ -166,6 +166,7 @@ impl Walk<'_> {
         }
         let (mut next, mut next_name) = (depth, parent_name.to_string());
         let shown = INTERACTIVE.contains(&role) || !name.is_empty() || LANDMARKS.contains(&role);
+        let (lines, size) = (self.lines.len(), self.size);
         if !ignored && !FLATTEN.contains(&role) && shown {
             let mut line = format!("- {role}");
             if !name.is_empty() {
@@ -212,6 +213,13 @@ impl Walk<'_> {
             if let Some(child) = child.as_str().and_then(|id| self.by_id.get(id).copied()) {
                 self.node(child, next, &next_name, levels + 1);
             }
+        }
+        // A frame with nothing outlined in it, as a page's helper frames have, is a line an agent
+        // can do nothing with. One the outline was cut in stays, where the cut is.
+        let empty = self.lines.len() == lines + 1 && self.size <= MAX_OUTLINE;
+        if role.starts_with("Iframe") && next > depth && empty {
+            self.lines.truncate(lines);
+            self.size = size;
         }
     }
 }
@@ -356,6 +364,28 @@ mod tests {
         nodes.swap(4, 5);
         let again = super::outline(&tab(), &nodes, &mut refs);
         assert!(again.contains("- textbox \"Coupon\" [e2]"));
+    }
+
+    /// A frame's content is outlined under it, and a frame with nothing in it, as a page's helper
+    /// frames have, is left out, named or not.
+    #[test]
+    fn a_frame_shows_only_with_something_in_it() {
+        let nodes = vec![
+            node("1", "RootWebArea", "Site", &["2", "3", "4", "6"]),
+            node("2", "Iframe", "Not intended for user action", &[]),
+            node("3", "Iframe", "Ad", &["7"]),
+            node("4", "Iframe", "Document", &["5"]),
+            node("5", "RootWebArea", "Report.docx", &["8"]),
+            node("6", "Iframe", "", &[]),
+            node("7", "RootWebArea", "", &[]),
+            node("8", "StaticText", "Quarterly numbers", &[]),
+        ];
+        let outline = outline(&tab(), &nodes, &mut Refs::default());
+        assert_eq!(
+            outline,
+            "Tab 20: Site\nURL: https://shop.example/\n\n\
+             - Iframe \"Document\"\n  - text: Quarterly numbers"
+        );
     }
 
     /// A page bigger than an agent should take in is cut, and says so.
