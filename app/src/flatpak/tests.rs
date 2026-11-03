@@ -309,6 +309,29 @@ fn a_build_installed_asks_nothing_and_restarts_when_told(cx: &mut gpui::TestAppC
     assert_eq!(restarts.get(), 1);
 }
 
+// Restart only asks for the restart. The newest build starts once the restart goes ahead, so a
+// quit a page stops leaves nothing to start at the next quit, which isn't a restart (#1459).
+#[gpui::test]
+fn the_newest_build_starts_only_as_the_restart_goes_ahead(cx: &mut gpui::TestAppContext) {
+    let restarts = updating(cx);
+    let starts = std::rc::Rc::new(std::cell::Cell::new(0));
+    let counted = starts.clone();
+    let start = move || {
+        counted.set(counted.get() + 1);
+        true
+    };
+    cx.update(|cx| on_relaunch(start, cx));
+    cx.update(|cx| changed(State::Installing, cx));
+    assert!(!cx.update(relaunch), "a restart went ahead into a build that isn't in");
+    cx.update(|cx| changed(State::Ready, cx));
+    cx.update(restart);
+    // A page asked to stay, and the user tried again.
+    cx.update(restart);
+    assert_eq!((restarts.get(), starts.get()), (2, 0), "the new build started before the quit");
+    assert!(cx.update(relaunch), "the restart that went ahead didn't start the new build");
+    assert_eq!(starts.get(), 1);
+}
+
 // Check for Updates… called once a build is in, as the app calls Restart to Update in its place,
 // still offers the restart.
 #[gpui::test]

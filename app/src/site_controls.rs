@@ -1676,6 +1676,8 @@ impl Render for SiteControls {
                     cx.notify();
                 }
             }))
+            // A tooltip shows once the pointer rests (tooltip.rs).
+            .on_mouse_move(|_, _, cx| crate::tooltip::moved(cx))
             .size_full()
             .font_family(crate::face::UI);
         let Some(open) = self.open.as_mut() else {

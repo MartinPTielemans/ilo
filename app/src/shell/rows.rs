@@ -2481,8 +2481,9 @@ mod tests {
     /// A pinned tab without its page has nothing to close, so under the pointer its row shows the
     /// remove button in the −'s place (#1349), selected or not. A click on it takes the tab out of
     /// the pinned tabs without showing or loading it: the core unpins it, which puts it at the top
-    /// of Today, and closes it there, into the archive, so Today doesn't gain it. ⌘Z pins it again
-    /// at its place, with its pinned URL.
+    /// of Today, and closes it there, into the archive, so Today doesn't gain it. The toast offers
+    /// its Undo, as a pinned tab is kept as a favorite is, and ⌘Z pins it again at its place, with
+    /// its pinned URL.
     #[gpui::test]
     fn an_unloaded_pinned_rows_button_removes_it_and_undo_pins_it_again(
         cx: &mut TestAppContext,
@@ -2503,7 +2504,7 @@ mod tests {
         assert_eq!(host.take_edits(), ["pinned 3 false", "close 3"]);
         assert!(!host.take().iter().any(|call| call.starts_with("select")));
         assert_eq!(shell.read_with(cx, |shell, _| shell.history.titles().0), Some("Remove Tab"));
-        assert!(host.undo_toasts.borrow().is_empty(), "the row going is plain to see");
+        assert_eq!(host.undo_toasts.borrow().as_slice(), ["Tab Removed"]);
         report_lists(&shell, cx, vec![2], vec![4, 5]);
         assert_eq!(shell.read_with(cx, |shell, _| shell.today().to_vec()), [4, 5]);
 
