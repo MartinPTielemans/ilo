@@ -807,6 +807,47 @@ fn clearing_and_deleting_a_space_are_undone_and_done_again(cx: &mut TestAppConte
     assert_eq!(host.take_edits(), ["delete space 2"]);
 }
 
+/// Deleting a Space with tabs asks first, in words that say its tabs go with it and name the ⌘Z
+/// that brings them back, as it does, since "close" would make the delete sound final.
+#[gpui::test]
+fn the_delete_space_dialog_names_the_undo(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![10], vec![11, 12], Folders::default(), Vec::new());
+    shell.update(cx, |shell, cx| shell.delete_space(1, cx));
+    let (message, detail, confirmed) = host.confirming.take().expect("it didn't ask");
+    let key = crate::shell::keystroke_label("cmd-z");
+    assert_eq!(message, "Delete “One”?");
+    assert_eq!(detail, format!("Its 3 tabs go with it. {key} brings them back."));
+    cx.update(confirmed);
+    assert_eq!(host.take_edits(), ["delete space 1"]);
+    undo(&shell, cx);
+    assert_eq!(host.take_edits(), ["undo delete space 1"]);
+
+    let (shell, host) = plain(cx, vec![11]);
+    shell.update(cx, |shell, cx| shell.delete_space(1, cx));
+    let (_, detail, _) = host.confirming.take().expect("it didn't ask");
+    assert_eq!(detail, format!("Its tab goes with it. {key} brings it back."));
+}
+
+/// "Space deleted! Use ⌘Z to undo." goes with the ⌘Z it names, so it can't prompt a second one,
+/// which would undo the edit before, and with the next edit, which ⌘Z would undo instead.
+#[gpui::test]
+fn the_space_deleted_toast_goes_with_its_undo(cx: &mut TestAppContext) {
+    let (shell, host) = plain(cx, vec![10, 11]);
+    shell.update(cx, |shell, cx| shell.delete_space_now(2, cx));
+    assert_eq!(host.toasts.borrow().as_slice(), ["Space deleted! Use"]);
+    assert_eq!(host.undo_toasts_hidden.get(), 0);
+    undo(&shell, cx);
+    assert_eq!(host.take_edits(), ["delete space 2", "undo delete space 2"]);
+    assert_eq!(host.undo_toasts_hidden.get(), 1);
+    // Nothing offers it now, so a second ⌘Z leaves the toasts alone.
+    undo(&shell, cx);
+    assert_eq!(host.undo_toasts_hidden.get(), 1);
+
+    shell.update(cx, |shell, cx| shell.delete_space_now(2, cx));
+    shell.update(cx, |shell, cx| shell.close_tab(11, false, cx));
+    assert_eq!(host.undo_toasts_hidden.get(), 2);
+}
+
 #[gpui::test]
 fn the_archives_delete_and_clear_are_undone_and_done_again(cx: &mut TestAppContext) {
     let (shell, host) = plain(cx, vec![10]);

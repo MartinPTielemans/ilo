@@ -1521,6 +1521,8 @@ impl Render for SiteControls {
             .key_context("SiteControls")
             .track_focus(&self.focus)
             .on_action(cx.listener(|panel, _: &Close, _, cx| panel.close("escape", cx)))
+            // A tooltip shows once the pointer rests (tooltip.rs).
+            .on_mouse_move(|_, _, cx| crate::tooltip::moved(cx))
             .size_full()
             .font_family(crate::face::UI);
         let Some(open) = self.open.as_mut() else {

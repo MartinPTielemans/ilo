@@ -201,7 +201,7 @@ else
       expect '^browser: find bar drew "VoiceOver" 1/1$' "⌘F and typing didn't find VoiceOver on the page"
       read_tree '"Find Next"' > "$found"
       grep -q ' "Matches"' "$found" || fail "the find bar's count isn't called Matches: $found"
-      for name in "Find Previous" "Find Next" "Close Find Bar"; do
+      for name in Previous Next Close; do
         grep -q " $button \"$name\"" "$found" || fail "the find bar's $name isn't a button: $found"
       done
       send key escape
