@@ -1138,6 +1138,9 @@ pub struct Shell {
     sidebar_keys: FocusHandle,
     focus_keys: bool,
     keyed_drawn: Rc<Cell<Option<(u64, Bounds<Pixels>)>>>,
+    /// The tab Close and Keep Pinned showed, whose row has the ring for a moment, and the timer
+    /// that takes it off.
+    attention: Option<(u64, Task<()>)>,
     /// Whether Clear and the URL field's button were fading in or shown at the last frame, the
     /// fade since it last changed, from how far in they were then, and whether they were drawn
     /// when the last line was logged.
@@ -1587,6 +1590,7 @@ impl Shell {
             sidebar_keys: cx.focus_handle(),
             focus_keys: false,
             keyed_drawn: Rc::default(),
+            attention: None,
             tools_on: false,
             tools_fade: None,
             drawn_tools: false,

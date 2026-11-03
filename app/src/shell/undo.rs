@@ -775,6 +775,9 @@ impl Shell {
             (Some(_), false) => vec![tab],
         };
         let show = self.shown_among(&tabs);
+        if tabs.is_empty() {
+            self.show_the_tab_before(tab, split, cx);
+        }
         self.browser.close(tab, split, cx);
         let what = if tabs.len() > 1 {
             What::CLOSE_TABS
@@ -782,6 +785,28 @@ impl Shell {
             What::CLOSE_TAB
         };
         self.keep(what, (!tabs.is_empty()).then_some(Edit::Reopen { tabs, show }), cx);
+    }
+
+    /// Close and Keep Pinned on the tab shown, a pinned tab or a favorite, shows the tab shown
+    /// before it that's still open in this Space, and rings its row, as Arc 1.170 does: a Today
+    /// tab, or a pinned tab or favorite with its page, so it loads no other. Shown first, so the
+    /// core has no tab of its own to pick, and its pick, the top Today tab, stands when there's
+    /// none. The list glides to the row, as it does to any tab shown.
+    fn show_the_tab_before(&mut self, tab: u64, split: bool, cx: &mut Context<Self>) {
+        let going = if split { self.panes(tab) } else { vec![tab] };
+        let Some(space) = self.shown_space().filter(|_| self.shown_among(&going).is_some()) else {
+            return;
+        };
+        let open = |other: &u64| {
+            space.today.contains(other)
+                || ((space.pinned.contains(other) || self.favorites.contains(other))
+                    && !self.page(*other).unloaded)
+        };
+        let before = self.recent.iter().find(|other| !going.contains(other) && open(other));
+        if let Some(&before) = before {
+            self.select(before, cx);
+            self.ring_for_attention(before, cx);
+        }
     }
 
     /// Removes the pinned row whose first tab is `tab` from the pinned tabs, with its split, as

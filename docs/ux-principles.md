@@ -30,8 +30,8 @@ Each principle has what was **seen**, with the spec section it comes from, our *
 
 ## A change shows that it happened
 
-- **Seen.** A click on Copy URL turns its link into a check that draws itself from its left end, down, then up (Sidebar › URL field, the owner's look at Arc). Reload becomes stop in 80 ms. One shape per action: ✕ closes, − unloads, trash removes (owner, 2026-11-02, #1349). Clear shows no toast: the rows leaving say what it did.
-- **Reading.** A glyph that swaps in one frame is easy to miss, and a click that seems to do nothing gets clicked again. Motion on the thing clicked says it worked, where the eye already is, with nothing to read.
+- **Seen.** A click on Copy URL turns its link into a check that draws itself from its left end, down, then up (Sidebar › URL field, the owner's look at Arc). Reload becomes stop in 80 ms. One shape per action: ✕ closes, − unloads, trash removes (owner, 2026-11-02, #1349). Clear shows no toast: the rows leaving say what it did. Close and Keep Pinned on the tab shown shows the tab used before it, scrolls the sidebar to it and rings its row for a moment (Pinned tabs, Arc 1.170 rec).
+- **Reading.** A glyph that swaps in one frame is easy to miss, and a click that seems to do nothing gets clicked again. Motion on the thing clicked says it worked, where the eye already is, with nothing to read. When the browser, not the user, picks what shows next, the eye doesn't know where to look, so the pick is marked where it is.
 - **Applies.** A glyph that changes on the same thing moves into the new one (Motion › Glyph change). One that differs because something else is shown, such as another tab, shows at once: nothing changed, and a switch stays instant.
 
 ## Wait for intent before acting

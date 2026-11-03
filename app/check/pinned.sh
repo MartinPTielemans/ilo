@@ -1,8 +1,7 @@
 # ⌘D pins the tab shown, from the page and from the UI, at the bottom of the pinned tabs, and unpins
 # it to the top of Today. ⌘1–⌘9 count the pinned tabs first. ⌘W, the − under the pointer, on the
 # tab shown or not, or a middle-click on its row, unloads a pinned tab and keeps its row, and shows
-# the top Today tab, else the nearest pinned tab still loaded, else no page, as closing the last
-# Today tab does. The unloaded row has a remove button in the −'s place, which takes the tab out of
+# the tab shown before it that's still open, whose row it rings for a moment, else no page. The unloaded row has a remove button in the −'s place, which takes the tab out of
 # the pinned tabs and not into Today, and ⌘Z pins it again at its place. Shown again, the tab loads. A link in its page takes it away from
 # its pinned URL, and ⌘↩ from the page and the UI, and a click on its favicon, go back there. An
 # address typed into it opens in a Today tab of its own, as in Arc, and closing that shows the
@@ -121,14 +120,17 @@ none_since '^browser: dragged' || fail "a drag escape put back dropped its row"
 none_since '^browser: selected' || fail "letting go of a drag escape put back showed its tab"
 [ "$(pinned)" = "$c $a" ] || fail "a drag escape put back moved a tab: the pinned tabs are \"$(pinned)\""
 
-# ⌘W on a pinned tab unloads it and shows the top Today tab, and showing it again loads it.
+# ⌘W on a pinned tab unloads it and shows the tab shown before it, a pinned one still loaded ahead
+# of the top Today tab, and rings its row for a moment. Showing it again loads it.
 switch "2 cmd" "$a"
 send key w cmd
-expect "^browser: selected $b\$" "⌘W on a pinned tab didn't show the top Today tab"
+expect "^browser: selected $c in " "⌘W on a pinned tab didn't show the tab shown before it"
+expect "^browser: sidebar ring $c at " "⌘W on a pinned tab didn't ring the row of the tab it showed"
 expect "^browser: page $a unloaded 1\$" "⌘W on a pinned tab didn't unload it"
 none_since "^browser: tab $a closed\$" || fail "⌘W closed a pinned tab"
 [ "$(pinned)" = "$c $a" ] || fail "⌘W on a pinned tab took its row: the pinned tabs are \"$(pinned)\""
 ../tools/window-screenshot.sh "$pid" "$out/pinned.png" || fail "no window to capture"
+expect '^browser: sidebar ring hidden$' "the ring stayed on the tab ⌘W showed"
 send click $(pinned_row 1)
 expect "^browser: selected $a in " "a click on the unloaded pinned tab didn't show it"
 expect "^browser: loaded $a $site\$" "the unloaded pinned tab didn't load once shown"
@@ -154,12 +156,12 @@ expect "^browser: selected $c in " "a click where an unloaded pinned tab's − w
 none_since '^browser: command close-tab' || fail "an unloaded pinned tab showed its −"
 none_since '^browser: command remove-tab' || fail "a second click on the − removed the pinned tab"
 expect "^browser: loaded $c https://example.org/\$" "the pinned tab didn't load once shown"
-# Shown, its − unloads it too and shows the top Today tab.
+# Shown, its − unloads it too and shows the tab shown before it.
 expect "^browser: hover tab $c close − favicon none\$" "the pinned tab shown didn't draw −"
 send click $(pinned_close 0)
 expect '^browser: command close-tab via sidebar$' "a click on a pinned tab's − didn't run Close Tab"
 expect "^browser: page $c unloaded 1\$" "the − didn't unload the pinned tab"
-expect "^browser: selected $b\$" "the − on a pinned tab didn't show the top Today tab"
+expect "^browser: selected $a in " "the − on a pinned tab didn't show the tab shown before it"
 [ "$(pinned)" = "$c $a" ] || fail "the − took the pinned tab's row: pinned tabs are \"$(pinned)\""
 send click $(pinned_row 0)
 expect "^browser: selected $c in " "a click on the unloaded pinned tab didn't show it"
@@ -173,14 +175,15 @@ send click $(pinned_row 1)
 expect "^browser: selected $a in " "a click on the pinned tab a middle-click unloaded didn't show it"
 expect "^browser: loaded $a $site\$" "the pinned tab a middle-click unloaded didn't load once shown"
 
-# Without Today tabs, closing shows the nearest pinned tab still loaded, else no page.
+# Without Today tabs, closing the last shows the nearest pinned tab still loaded, and closing a pinned
+# tab shows the one shown before it still loaded, else no page.
 switch "3 cmd" "$b"
 send key w cmd
 expect "^browser: tab $b closed\$" "⌘W didn't close the last Today tab"
 expect_lists "$c $a" " *" "after closing the last Today tab"
 expect "^browser: selected $a\$" "closing the last Today tab didn't show the lowest pinned tab still loaded"
 send key w cmd
-expect "^browser: selected $c\$" "⌘W on a pinned tab without Today tabs didn't show the other one loaded"
+expect "^browser: selected $c in " "⌘W on a pinned tab without Today tabs didn't show the other one loaded"
 expect "^browser: page $a unloaded 1\$" "⌘W didn't unload the pinned tab"
 send key w cmd
 expect '^browser: selected 0$' "⌘W on the last pinned tab loaded didn't leave the window without a page"

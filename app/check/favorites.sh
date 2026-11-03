@@ -182,10 +182,12 @@ expect "^browser: today $b\$" "⌘Z didn't close the copy and put the tab back: 
 # The copy closing may have shown the favorite already.
 send click $tile
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "the favorite isn't shown again" "$undone"
-# ⌘W unloads a favorite and keeps its tile, showing the top Today tab, and ⌘1 loads it again.
+# ⌘W unloads a favorite and keeps its tile, showing the tab shown before it and ringing its row,
+# and ⌘1 loads it again.
 send click $page_point
 send key w cmd
-expect "^browser: selected $b\$" "⌘W on a favorite didn't show the top Today tab"
+expect "^browser: selected $b in " "⌘W on a favorite didn't show the tab shown before it"
+expect "^browser: sidebar ring $b at " "⌘W on a favorite didn't ring the row of the tab it showed"
 expect "^browser: page $a unloaded 1\$" "⌘W on a favorite didn't unload it"
 none_since "^browser: tab $a closed\$" || fail "⌘W closed a favorite"
 [ "$(favorites)" = "$a" ] ||
