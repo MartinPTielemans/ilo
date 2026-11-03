@@ -8002,6 +8002,28 @@ pub extern "C" fn browser_drive_marked(
     true
 }
 
+/// The Windows driver's two fingers (platform/windows/drive.cc), in GPUI's window `hwnd`: at `x`,
+/// `y` in its client area's pixels, moving the content `dx` points right and `dy` down, as a
+/// precision touchpad's come through Direct Manipulation: touching for `phase` 0, moving for 1 and
+/// lifting for 2. Returns whether the window was GPUI's.
+#[cfg(target_os = "windows")]
+#[unsafe(no_mangle)]
+pub extern "C" fn browser_drive_fingers(
+    hwnd: *mut c_void,
+    x: f32,
+    y: f32,
+    dx: f32,
+    dy: f32,
+    phase: c_int,
+) -> bool {
+    let phase = match phase {
+        0 => gpui::TouchPhase::Started,
+        1 => gpui::TouchPhase::Moved,
+        _ => gpui::TouchPhase::Ended,
+    };
+    gpui_windows::drive_fingers(hwnd, x, y, gpui::point(gpui::px(dx), gpui::px(dy)), phase)
+}
+
 /// On Windows and Linux the browser is this library, which the core in Chromium's own executable
 /// loads as Chromium starts, in place of a main that calls bc_main (core/public/browser_core.h).
 /// What it returns lasts as long as the process.
