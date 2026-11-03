@@ -14,12 +14,48 @@ use gpui::{
 use crate::{
     passwords::Key,
     shell::{
-        BACK_X, Command, FOOTER_HEIGHT, FORWARD_X, Folders, NAV_PRESS_SCALE, NAV_SIZE, NAV_TOP,
-        PRESS_TIME, Page, RELOAD_X, SIDEBAR_BUTTON_X, Shell, beside::AtRest, history::HOLD,
+        Command, FOOTER_HEIGHT, Folders, NAV_PRESS_SCALE, NAV_SIZE, NAV_TOP, PRESS_TIME, Page,
+        SIDEBAR_BUTTON_X, Shell, beside::AtRest, header::nav_places, history::HOLD,
         library::LIBRARY_BACK_INSET, recorder::Recorder,
     },
     site_controls::Place,
 };
+
+/// Back, forward and reload in the 228 pt sidebar a window starts with (Arc 1.170).
+const BACK_X: f32 = 122.;
+const FORWARD_X: f32 = 156.;
+const RELOAD_X: f32 = 190.;
+
+/// Arc's back, forward and reload keep to the sidebar's right edge, 6 in, 2 apart: at 228 where
+/// ours always were, at 347 where Arc 1.170 has them, and the sidebar button where it was.
+#[test]
+fn back_forward_and_reload_keep_to_the_sidebars_right_edge() {
+    let at = |width| nav_places(width, false);
+    assert_eq!(at(228.), [Some(77.), Some(BACK_X), Some(FORWARD_X), Some(RELOAD_X)]);
+    assert_eq!(at(347.), [Some(77.), Some(241.), Some(275.), Some(309.)]);
+    let [_, _, forward, reload] = at(500.);
+    assert_eq!((forward.unwrap() + 34., reload.unwrap() + 32.), (reload.unwrap(), 494.));
+}
+
+/// Narrower than 228 reload goes, then forward under 194, the rest still at the right edge, and
+/// back never comes nearer the sidebar button than its 13 at 228.
+#[test]
+fn a_narrow_sidebar_loses_reload_then_forward() {
+    let at = |width| nav_places(width, false);
+    assert_eq!(at(227.), [Some(77.), Some(155.), Some(189.), None]);
+    assert_eq!(at(194.), [Some(77.), Some(122.), Some(156.), None]);
+    assert_eq!(at(193.), [Some(77.), Some(155.), None, None]);
+    assert_eq!(at(164.), [Some(77.), Some(126.), None, None]);
+}
+
+/// In full screen, with no traffic lights, the sidebar button's glyph is centred 29.25 in (Arc
+/// 1.171), and the others keep their places, with room for all three down to the narrowest.
+#[test]
+fn in_full_screen_the_sidebar_button_moves_left() {
+    let [sidebar, back, ..] = nav_places(228., true);
+    assert_eq!((sidebar.unwrap() + NAV_SIZE / 2., back), (29.25, Some(BACK_X)));
+    assert_eq!(nav_places(165., true).iter().flatten().count(), 4);
+}
 
 /// A shell showing one Space with `pinned` and `today` tabs and `folders`.
 fn shell_with(
