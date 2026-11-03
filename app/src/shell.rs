@@ -126,6 +126,7 @@ pub use commands::{
     find_commands, key_name, keystroke_keys, keystroke_label, menu_item, pane_added, run_from_bar,
     shown_tab, task_page_shown, with_named_rows,
 };
+pub use display_face::display_text;
 pub use drag::dropped_urls;
 pub use drm_note::PlayReady;
 pub use extensions::{
