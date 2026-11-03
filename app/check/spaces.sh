@@ -273,7 +273,18 @@ expect "^browser: space $first in " "the first Space's dot didn't show it"
 expect_tabs "$c $a" "$a" "after ⌘Z put the dragged tab back"
 # Sent while the Space's page still slides in, the click acts on the row that rests under it.
 send click "$(row 0)"
+press=$step
 expect "^browser: selected $c\( in .*\)\{0,1\}\$" "a click on the top row didn't show tab $c"
+# Where frames draw slower than the slide's 0.3 s (#732), the page settles before the app has the
+# click, which then tests only the row at rest; the run says so, as for the right-click below.
+if ! sed -n "/^browser: drive $((press - 1)): /,\$p" "$log" |
+  awk -v sent="^browser: drive $press: " '/^browser: settled space/ { late = 1 }
+    $0 ~ sent { clicked = 1 } clicked && /^browser: selected / { exit late }'; then
+  { [ "$(uname)" = Linux ] || windows || [ -n "${GITHUB_ACTIONS:-}" ]; } ||
+    fail "the page had settled before the click on the top row, so it didn't click mid-slide"
+  echo "skip: a click on a row mid-slide: the page had settled before the app had the click" \
+    "(#732, #1437)."
+fi
 send key w cmd
 expect_tabs "$a" "$a" "after closing the last-used check's tab"
 
