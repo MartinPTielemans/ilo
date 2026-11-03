@@ -132,9 +132,12 @@ impl Browser for Made {
         self.disconnected.borrow_mut().push(agent.into());
     }
 
-    /// The new tab is 30.
+    /// The new tab is 30. As the core, none opens for an agent without a Space.
     fn open_tab(&self, agent: &str, url: &str, _: &mut App) -> u64 {
         let space = self.agent_space(agent);
+        if space == 0 {
+            return 0;
+        }
         let url: &'static str = Box::leak(url.to_string().into_boxed_str());
         self.tabs.borrow_mut().push((30, space, "Opened", url));
         30
@@ -595,6 +598,44 @@ fn list_tabs_lists_only_the_agents_own_tabs(cx: &mut TestAppContext) {
     );
 }
 
+/// An agent whose first call is open_tab gets its Space then, and the tab opens there (#1468).
+#[gpui::test]
+fn open_tab_as_the_first_call_makes_the_agents_space(cx: &mut TestAppContext) {
+    let (browser, configs) = (Rc::new(Made::default()), Arc::new(Configs::default()));
+    let agents = agents(&browser, &configs, None, cx);
+    agents.update(cx, |agents, cx| agents.connect(Client::ClaudeCode, cx));
+    cx.run_until_parked();
+
+    let answer = call(
+        &agents,
+        "claude-code",
+        "open_tab",
+        json!({ "url": "example.com" }),
+        cx,
+    );
+    assert_eq!(
+        *browser.made.borrow(),
+        [("claude-code".to_string(), "Claude Code".to_string())]
+    );
+    let (tab, ..) = browser.pages.borrow()[0].clone();
+    assert_eq!(tab, 30);
+    let opened = page_done(&agents, &browser, answer, shop_tree(), cx);
+    assert!(opened.text.starts_with("Opened tab 30."), "{}", opened.text);
+    let listed = call(&agents, "claude-code", "list_tabs", json!({}), cx)
+        .recv()
+        .unwrap();
+    assert!(
+        listed.text.contains("30  Opened  https://example.com/"),
+        "{}",
+        listed.text
+    );
+    assert_eq!(
+        browser.made.borrow().len(),
+        1,
+        "the agent got a second Space"
+    );
+}
+
 /// Two agents each list their own Space's tabs, as the core lists the calling agent's, and neither
 /// the other's nor the user's.
 #[gpui::test]
@@ -988,6 +1029,165 @@ fn an_agent_opens_a_page_and_acts_by_ref(cx: &mut TestAppContext) {
         agents.page_done(request, "It's gone.".into(), true, cx)
     });
     assert_eq!(answer.recv().unwrap(), ToolResult::error("It's gone."));
+}
+
+/// Tab 20's page with a size picker, open or not, in the document `document`: a menu, a heading,
+/// its text, the picker and a button.
+fn size_picker(open: bool, document: i64) -> String {
+    let picker = json!({ "nodeId": "5", "role": { "value": "combobox" }, "name": { "value": "Size" },
+        "backendDOMNodeId": 50, "childIds": if open { vec!["7"] } else { vec![] },
+        "properties": [{ "name": "expanded", "value": { "value": open } }] });
+    let mut nodes = vec![
+        json!({ "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shirt" },
+          "backendDOMNodeId": document, "childIds": ["2", "3", "4", "5", "6"] }),
+        json!({ "nodeId": "2", "role": { "value": "navigation" }, "name": { "value": "Menu" },
+          "childIds": ["21", "22", "23"] }),
+        json!({ "nodeId": "3", "role": { "value": "heading" }, "name": { "value": "Linen shirt" } }),
+        json!({ "nodeId": "4", "role": { "value": "StaticText" },
+          "name": { "value": "Light linen, cut loose, for long summer days." } }),
+        picker,
+        json!({ "nodeId": "6", "role": { "value": "button" }, "name": { "value": "Add to basket" },
+          "backendDOMNodeId": 60 }),
+        json!({ "nodeId": "7", "role": { "value": "listbox" }, "name": { "value": "Size" },
+          "backendDOMNodeId": 70, "childIds": ["71", "72"] }),
+        json!({ "nodeId": "71", "role": { "value": "option" }, "name": { "value": "S" },
+          "backendDOMNodeId": 71 }),
+        json!({ "nodeId": "72", "role": { "value": "option" }, "name": { "value": "M" },
+          "backendDOMNodeId": 72 }),
+    ];
+    for (id, name) in [("21", "Home"), ("22", "Shirts"), ("23", "Basket")] {
+        nodes.push(
+            json!({ "nodeId": id, "role": { "value": "link" }, "name": { "value": name },
+          "backendDOMNodeId": id.parse::<i64>().unwrap() * 10 }),
+        );
+    }
+    Value::Array(nodes).to_string()
+}
+
+/// An action answers with what changed in the page's outline since the last outline the agent
+/// had of the tab: a click that opens a dropdown, with its options. A navigation, or a click that
+/// opens a new page, answers with the page whole, as does outline full; with outline none, an
+/// action answers with what it did, and the next with what changed since the outline it had.
+#[gpui::test]
+fn an_action_answers_with_what_changed_in_the_page(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let act = |arguments: Value, tree: String, cx: &mut TestAppContext| {
+        let tool = arguments["tool"].as_str().unwrap().to_string();
+        let answer = call(&agents, "claude-code", &tool, arguments, cx);
+        page_done(&agents, &browser, answer, tree, cx).text
+    };
+    let snapshot = json!({ "tool": "snapshot", "tab": 20 });
+    let whole = act(snapshot.clone(), size_picker(false, 1), cx);
+    assert!(whole.contains("- link \"Shirts\" [e2]\n"), "{whole}");
+    let picker = json!({ "tool": "click", "tab": 20, "ref": "e4" });
+    let head = "Tab 20: Shirt\nURL: https://www.example.com/\n\n";
+    let since = "What changed since the last outline you had of this tab:\n\n";
+    assert_eq!(
+        act(picker.clone(), size_picker(true, 1), cx),
+        format!(
+            "Clicked combobox “Size”.\n\n{head}{since}New:\n\
+             - listbox \"Size\" [e6]\n  - option \"S\" [e7]\n  - option \"M\" [e8]\n\n\
+             Changed:\n- combobox \"Size\" [e4] (expanded)"
+        )
+    );
+
+    // With none, what it did and where; the next answer's changes are since the outline it had.
+    let option = json!({ "tool": "click", "tab": 20, "ref": "e7", "outline": "none" });
+    let chose = act(option, size_picker(false, 1), cx);
+    assert_eq!(
+        chose,
+        "Clicked option “S”.\n\nTab 20: Shirt\nURL: https://www.example.com/"
+    );
+    let scrolled = act(
+        json!({ "tool": "scroll", "tab": 20 }),
+        size_picker(false, 1),
+        cx,
+    );
+    assert!(
+        scrolled.contains("Changed:\n- combobox \"Size\" [e4]\n\nGone:\n- listbox"),
+        "{scrolled}"
+    );
+    let again = act(
+        json!({ "tool": "scroll", "tab": 20 }),
+        size_picker(false, 1),
+        cx,
+    );
+    assert_eq!(
+        again,
+        format!("Scrolled down.\n\n{head}Nothing in the outline changed.")
+    );
+
+    // A new page, and outline full, answer whole.
+    let link = json!({ "tool": "click", "tab": 20, "ref": "e2" });
+    assert_eq!(
+        act(link, size_picker(false, 2), cx),
+        format!("Clicked link “Shirts”.\n\n{whole}")
+    );
+    let back = json!({ "tool": "navigate", "tab": 20, "url": "back" });
+    assert_eq!(
+        act(back, size_picker(false, 2), cx),
+        format!("Went back.\n\n{whole}")
+    );
+    let full = json!({ "tool": "press_key", "tab": 20, "key": "Tab", "outline": "full" });
+    assert_eq!(
+        act(full, size_picker(false, 2), cx),
+        format!("Pressed Tab.\n\n{whole}")
+    );
+    let wrong = json!({ "tab": 20, "ref": "e4", "outline": "diff" });
+    let refused = call(&agents, "claude-code", "click", wrong, cx)
+        .recv()
+        .unwrap();
+    assert_eq!(
+        refused,
+        ToolResult::error("outline is changes, full or none.")
+    );
+
+    // A snapshot of a ref outlines its element alone, and the core outlines the page as ever.
+    let part = act(
+        json!({ "tool": "snapshot", "tab": 20, "ref": "e4" }),
+        size_picker(true, 2),
+        cx,
+    );
+    assert_eq!(
+        part,
+        format!(
+            "{head}- combobox \"Size\" [e4] (expanded)\n  - listbox \"Size\" [e6]\n    \
+             - option \"S\" [e7]\n    - option \"M\" [e8]"
+        )
+    );
+    let (_, _, action, element, _) = browser.pages.borrow().last().cloned().unwrap();
+    assert_eq!((action, element), (PageAction::Snapshot, 0));
+    // It isn't the outline the agent has, which the next changes are since.
+    let closed = act(
+        json!({ "tool": "scroll", "tab": 20 }),
+        size_picker(false, 2),
+        cx,
+    );
+    assert!(
+        closed.ends_with("Nothing in the outline changed."),
+        "{closed}"
+    );
+
+    // A run answers with what each step did, then its last step's changes.
+    let steps = json!({ "tool": "run_steps", "tab": 20, "steps": [
+        { "action": "scroll" },
+        { "action": "click", "ref": "e4" },
+    ] });
+    let answer = call(&agents, "claude-code", "run_steps", steps, cx);
+    let request = browser.pages.borrow().last().unwrap().1;
+    agents.update(cx, |agents, cx| {
+        agents.page_done(request, size_picker(false, 2), false, cx)
+    });
+    let ran = page_done(&agents, &browser, answer, size_picker(true, 2), cx);
+    assert!(
+        ran.text
+            .starts_with("Ran 2 steps.\n1. Scrolled down.\n2. Clicked combobox “Size”.\n\n")
+    );
+    assert!(
+        ran.text.contains(&format!("{head}{since}New:\n- listbox")),
+        "{}",
+        ran.text
+    );
 }
 
 /// An agent can't act on the user's tabs, type into a password field or open a page that isn't
@@ -1581,7 +1781,7 @@ fn a_pages_passkey_hands_its_tab_to_the_user(cx: &mut TestAppContext) {
     assert_eq!(log(&agents, "claude-code", cx)[0].0, "handed back");
 }
 
-/// close_tab closes the agent's own tab, which goes to the archive, with its entry in the log.
+/// close_tab closes the agent's own tab, with its entry in the log.
 /// The user's tab, and one the user holds, are refused.
 #[gpui::test]
 fn an_agent_closes_only_its_own_tabs(cx: &mut TestAppContext) {
@@ -1617,10 +1817,7 @@ fn an_agent_closes_only_its_own_tabs(cx: &mut TestAppContext) {
     );
     let closed = closed.recv().unwrap();
     assert!(!closed.error);
-    assert_eq!(
-        closed.text,
-        "Closed tab 20. The user can still find it in the archive."
-    );
+    assert_eq!(closed.text, "Closed tab 20.");
     assert!(browser.tabs.borrow().iter().all(|tab| tab.0 != 20));
     let entry = log(&agents, "claude-code", cx).remove(0);
     assert_eq!(entry, ("close_tab".into(), "example.com".into(), "".into()));
@@ -2053,12 +2250,25 @@ mod tasks {
             ("Find a flight to Lisbon", "Thinking", Dot::Working)
         );
         // Dropped, its CLI ends and its Space goes.
-        agents.update(cx, |agents, cx| agents.end_tasks(cx));
+        agents.update(cx, |agents, cx| agents.end_tasks(true, cx));
         assert_eq!(*browser.deleted.borrow(), vec![100]);
         assert!(
             agents.read_with(cx, |agents, _| agents.tokens.lock().unwrap().is_empty()
                 || !agents.tokens.lock().unwrap().contains_key(&token))
         );
+    }
+
+    /// At a quit with no window left, its CLI ends and its token with it, and its Space stays for
+    /// the next launch to delete, as the core can't then (#1676).
+    #[cfg(unix)]
+    #[gpui::test]
+    fn a_task_ended_with_no_window_left_keeps_its_space(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(Some(fake_cli("first")), cx);
+        start(&agents, "Find a flight to Lisbon", cx);
+        agents.update(cx, |agents, cx| agents.end_tasks(false, cx));
+        assert!(browser.deleted.borrow().is_empty());
+        assert!(agents.read_with(cx, |agents, _| agents.task("task-1").is_none()));
+        assert!(agents.read_with(cx, |agents, _| agents.tokens.lock().unwrap().is_empty()));
     }
 
     #[gpui::test]

@@ -58,10 +58,13 @@ log="$out/spaces.log"
 step=0
 # X11 sends a touchpad's scrolling with no start or end, so two fingers never page there (#554):
 # its steps go to the Spaces and the Library by key, click and wheel instead. Its clicks land on
-# whole pixels, at scale 1 here.
+# whole pixels, at scale 1 here. Windows' driver hands GPUI two fingers as Direct Manipulation
+# does a precision touchpad's (#1212).
 x11=
+fingers=1
 if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
   x11=1
+  fingers=
   echo "skip: two fingers across the sidebar, on X11, which sends no touch phases (#554)."
 fi
 rm -f "$saved" "$launch_frame"
@@ -280,7 +283,7 @@ expect_tabs "$a" "$a" "after closing the last-used check's tab"
 # along the list scroll it, and a wheel's tick across pages once. Held partway, the next Space's
 # page shows beside the first's.
 swipe_point="110 500"
-if [ -z "$x11" ]; then
+if [ -n "$fingers" ]; then
 post swipe $swipe_point -10 0 10 1500
 await '^browser: swipe across$' || fail "two fingers across the sidebar didn't page"
 ../tools/window-screenshot.sh "$pid" "$out/swipe.png" || fail "no window to capture"
@@ -321,7 +324,7 @@ library_to() {
   expect "^browser: command view-library via $2\$" "a $1 didn't reach the Library"
   expect "^browser: library $3\$" "a $1 didn't leave the Library $3"
 }
-if [ -z "$x11" ]; then
+if [ -n "$fingers" ]; then
 post swipe $swipe_point 30 0 10 1500
 expect '^browser: library section ' "two fingers past the first Space didn't bring the Library out"
 ../tools/window-screenshot.sh "$pid" "$out/library-swipe.png" || fail "no window to capture"
@@ -331,14 +334,25 @@ none_since '^browser: command view-library' ||
   fail "a swipe let go short of halfway opened the Library"
 library_to "swipe $swipe_point 12 0 10" swipe shown
 # Fingers going on past where it opens take the Library on a little with the card, its column's
-# fill still reaching the window's left edge, lighter than the window right of it.
+# fill still reaching the window's left edge: the edge is the column's colour 40 across, and not
+# the section's beside it. The column is the ink over the window, darker in a light window and
+# lighter in a dark one, so the step compares colours, not which is brighter.
 post swipe $swipe_point 60 0 10 1500
 expect '^browser: library past its end$' "fingers past the Library's end didn't reach it"
 ../tools/window-screenshot.sh "$pid" "$out/library-end.png" || fail "no window to capture"
-column=$(pixel "$out/library-end.png" $(echo "6 / ${content%x*}" | bc -l) 0.85)
-beside=$(pixel "$out/library-end.png" $(echo "200 / ${content%x*}" | bc -l) 0.85)
-brighter "$column" "$beside" ||
-  fail "past its end the Library's column left the window's edge: $column at it, $beside beside"
+# awk, as Git Bash on Windows has no bc.
+end_at() { pixel "$out/library-end.png" "$(awk "BEGIN { print $1 / ${content%x*} }")" 0.85; }
+alike() {
+  set -- $1 $2
+  for d in $(($1 - $4)) $(($2 - $5)) $(($3 - $6)); do
+    [ "${d#-}" -le 4 ] || return 1
+  done
+}
+column=$(end_at 6)
+inside=$(end_at 40)
+beside=$(end_at 200)
+{ alike "$column" "$inside" && ! alike "$column" "$beside"; } || fail "past its end the \
+Library's column left the window's edge: $column at it, $inside in it, $beside beside"
 await "^browser: drive $step done" || fail "the driver didn't finish the swipe"
 none_since '^browser: command view-library' || fail "fingers past the Library's end closed it"
 expect '^browser: library shown$' "the Library didn't settle back where it opens"
@@ -357,19 +371,19 @@ expect "^browser: library spaces 2 wide $spaces_wide\$" \
 expect "^browser: library resized $spaces_wide\$" "the Library didn't settle at its Spaces' width"
 ../tools/window-screenshot.sh "$pid" "$out/library-spaces.png" || fail "no window to capture"
 # At rest a card's field is its icon and name alone; its plate, the slot's dashes and the brush
-# come with the pointer on the field, here the second card's, 33 down its 48 from the top, and go
+# come with the pointer on the field, here the second card's, 25 down its 48 from the top, and go
 # with the pointer on the card below the field. The capture above is at rest, the pointer on the
 # Spaces button.
 grep -q "^browser: library field $second at rest drawn\$" "$log" ||
   fail "the second card's field wasn't drawn at rest"
-send move $((404 + 120)) $((48 + 33))
+send move $((404 + 120)) $((48 + 25))
 expect "^browser: library field $second shown drawn\$" "the pointer on the second card's field didn't show its plate"
 ../tools/window-screenshot.sh "$pid" "$out/library-field-hover.png" || fail "no window to capture"
 send move 524 $((${content#*x} / 2))
 expect "^browser: library field $second at rest drawn\$" "the pointer leaving the second card's field left its plate"
 # The brush, 4 in from the field's end and 28 wide, and the icon's slot, 6 in and 24 wide, are on
 # the field, and light it too (#1074).
-card_y=$((48 + 33))
+card_y=$((48 + 25))
 brush_x=$((404 + 240 - 8 - 4 - 14))
 slot_x=$((404 + 8 + 6 + 12))
 send move $brush_x $card_y
@@ -383,12 +397,22 @@ expect "^browser: library field $second at rest drawn\$" "the pointer leaving th
 # A right-click on the second card, 404 in and half its 240 wide, shows that Space's menu, with
 # the colour it was given, and leaves the Library open on the Space shown.
 post rightclick 524 $((${content#*x} / 2))
-expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
-  "a right-click on the second Space's card didn't show its menu"
+card_menu="^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
+New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$"
+expect "$card_menu" "a right-click on the second Space's card didn't show its menu"
 none_since '^browser: library space ' || fail "a right-click on a card showed its Space"
 send dismiss
-# The card's field is 8 in from its sides and 36 tall around the middle of its name's row, 33
+# The ••• at the second card's foot, its middle 22 in from the card's right and 21.5 above its foot,
+# shows with the pointer on the card, here on the ••• itself, which the capture shows before the
+# menu covers it. It shows the same menu and leaves the Library open on the Space shown (#1401).
+more_point="$((404 + 240 - 22)) $((${content#*x} - 48 - 22))"
+send move $more_point
+../tools/window-screenshot.sh "$pid" "$out/library-card-more.png" || fail "no window to capture"
+post click $more_point
+expect "$card_menu" "a click on the second card's ••• didn't show its menu"
+none_since '^browser: library space ' || fail "a click on a card's ••• showed its Space"
+send dismiss
+# The card's field is 8 in from its sides and 36 tall around the middle of its name's row, 25
 # down. Its brush opens the theme picker for the Space beside itself, over the Library, which
 # stays open (#1074), where the second gets its light and its dark appearance in turn, and then
 # automatic again. The capture comes while it's dark, the card taking the theme as it's made and
@@ -444,7 +468,7 @@ none_since '^browser: library hidden$' || fail "escape in the card's icon picker
 # In a window 700 wide the two cards, 744 across, don't fit: the section leaves the page 56, 644,
 # and its cards scroll across under two fingers, give past their last and spring back to it once
 # let go, 100 along, the Library staying open (Arc 1.171, #1401).
-if [ -z "$x11" ]; then
+if [ -n "$fingers" ]; then
   send resize 700 ${content#*x}
   expect "^browser: drawn at 700x${content#*x}\$" "the window didn't draw 700 wide"
   record library-cards 3
@@ -567,12 +591,15 @@ expect_soon "^browser: space $second in " "⌃2 didn't show the second Space"
 post rightclick 12 $(row 0 | cut -d' ' -f2)
 expect "^browser: menu shown $(cased 'Copy Link, ')" "a right-click while the second Space's rows slid in showed no menu"
 # Settled before the menu showed, and the press came too late to be a test of the slide. The
-# slide's 0.3 s is the clock's, and a GPU-less Linux runner may draw frames slower than that, which
-# the press waits behind (#732).
+# slide's 0.3 s is the clock's, and a GPU-less runner, Linux's, Windows' or GitHub's hosted Mac,
+# may draw frames slower than that, which the press waits behind (#732). A Mac of our own still
+# fails here, as it keeps the mid-slide press of #1513 tested.
 if ! sed -n "/^browser: drive $slide: /,\$p" "$log" |
   awk '/^browser: settled space/ { late = 1 } /^browser: menu shown/ { exit late }'; then
-  [ "$(uname)" = Linux ] || fail "the rows had settled before the right-click, so it didn't press mid-slide"
-  echo "skip: a right-click mid-slide: the rows had settled before the app had the press (#732)."
+  { [ "$(uname)" = Linux ] || windows || [ -n "${GITHUB_ACTIONS:-}" ]; } ||
+    fail "the rows had settled before the right-click, so it didn't press mid-slide"
+  echo "skip: a right-click mid-slide: the rows had settled before the app had the press" \
+    "(#732, #1513)."
 fi
 send choose Rename…
 expect "^browser: rename tab $b\$" "the menu a mid-slide right-click showed was another row's"
@@ -584,7 +611,7 @@ step=$slide
 expect "^browser: settled space $second\$" "the second Space's page didn't settle"
 step=$now
 
-if [ -z "$x11" ]; then
+if [ -n "$fingers" ]; then
 send swipe $swipe_point -10 0 10
 expect '^browser: swipe across$' "two fingers across the sidebar didn't page"
 none_since '^browser: new space ready$' || fail "a short pull past the last Space readied a Space"
@@ -636,7 +663,7 @@ expect '^browser: command new-space via ui$' "New Space in the menu didn't run n
 expect "^browser: spaces $first [0-9]* $second\$" "New Space didn't make a Space after the first"
 third=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f4)
 expect "^browser: settled space $third\$" "the form's page didn't settle"
-if [ -z "$x11" ]; then
+if [ -n "$fingers" ]; then
 send swipe $swipe_point -40 0 10
 expect '^browser: swipe across$' "two fingers across the form didn't page"
 expect "^browser: settled space $third\$" "the form's page didn't settle back"
@@ -715,6 +742,7 @@ send key s cmd
 expect '^browser: sidebar hidden$' "⌘S didn't hide the sidebar for the … out over the page"
 send move $page_point
 send move 3 300
+send move 3 306
 expect '^browser: reveal shown$' "the pointer at the window's edge didn't bring the sidebar out"
 expect '^browser: reveal window shown$' "the sidebar out didn't come on screen"
 reveal_edit="207 117"
@@ -1113,7 +1141,8 @@ last_title=$(grep "^browser: title $a " "$log" | tail -1 | cut -d' ' -f4-)
 [ "${last_title%% *}" = visible ] ||
   expect "^browser: title $a visible " "a click on the page's row didn't show it"
 ran_hidden "the page shown by its row had run frames while hidden, other than its picture's"
-# Linux has no hiding an app, and the run's sway session keeps its focused window from minimizing.
+# Linux and Windows have no hiding an app, and the run's sway session keeps its focused window from
+# minimizing.
 if [ "$(uname)" = Linux ]; then
   echo "skip: a minimized window and a hidden app, which sway and Linux have no way to make."
 else
@@ -1122,11 +1151,15 @@ else
   send minimize
   expect "^browser: title $a visible 0\$" \
     "the page isn't visible after the window came back, or ran frames while minimized"
-  send hide
-  expect "^browser: title $a hidden\$" "the page isn't hidden while the app is"
-  send hide
-  expect "^browser: title $a visible 0\$" \
-    "the page isn't visible after the app came back, or ran frames while hidden"
+  if windows; then
+    echo "skip: a hidden app, which Windows has no way to make."
+  else
+    send hide
+    expect "^browser: title $a hidden\$" "the page isn't hidden while the app is"
+    send hide
+    expect "^browser: title $a visible 0\$" \
+      "the page isn't visible after the app came back, or ran frames while hidden"
+  fi
 fi
 exec 3>&-
 quit

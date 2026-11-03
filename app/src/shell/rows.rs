@@ -9,8 +9,8 @@ use std::{
 
 use gpui::{
     AnyElement, App, Bounds, ClickEvent, Context, Div, FontWeight, MouseButton, MouseDownEvent,
-    Pixels, Point, Radians, Role, SharedString, Transformation, Window, canvas, div, prelude::*,
-    px, rgb, svg,
+    MouseMoveEvent, Pixels, Point, Radians, Role, SharedString, Transformation, Window, canvas,
+    div, prelude::*, px, rgb, svg,
 };
 
 use super::{
@@ -25,8 +25,8 @@ use super::{
     SPACE_NAME, SPACE_NAME_SHUT, SPEAKER_DRAWN, SPEAKER_GAP, SPEAKER_SIZE, STATUS_AGENT,
     STATUS_DOT, STATUS_LOADING, STATUS_RING, STATUS_RING_COLOR, Shell, Slot, Swapped,
     TITLE_END_INSET, URL_BUTTON_GLYPH, clear_label, cubic_bezier, developer_outline, divider_box,
-    favicon, folder_icon, icon_placeholder, icon_slot, name_box, new_tab_label, plate, row_box,
-    row_spring,
+    favicon, folder_icon, host, icon_placeholder, icon_slot, name_box, new_tab_label, plate,
+    row_box, row_spring,
     scaled::scaled_from_middle,
     selected_plate, space_icon, split_plate,
     swap::{ARROW_DOWN, NONE, folder_glyph},
@@ -40,6 +40,8 @@ use crate::{
     icon_picker::{self, Subject},
     palette::Palette,
     space_icon::has_icon,
+    tokens::shell::{DROP_SLOT_INSET, HOST_LINE, HOST_TITLE_LINE},
+    tokens::text,
     tooltip::{Anchor, Tip},
 };
 
@@ -49,6 +51,8 @@ pub(super) const CLEAR_TIP: &str = "Clear unpinned tabs in this space";
 pub(super) const REMOVE_TIP: &str = "Remove Tab";
 /// The remove button's glyph, in the icon picker's trash's style.
 const REMOVE: &str = "icons/trash.svg";
+/// What a split row's ✕ or − shows while ⌥ is held over it: a click separates its tabs.
+const SEPARATE: &str = "icons/ungroup.svg";
 /// The close button's glyphs, its two bars crossed or level, drawn rather than a file.
 pub(super) const CLOSE: &str = "close";
 pub(super) const UNLOAD: &str = "unload";
@@ -225,10 +229,13 @@ impl Shell {
             Row::Tab(tab) => (("tab", tab), Slot::Tab(tab)),
         };
         let folder = matches!(row, Row::Tab(tab) if self.is_folder_anywhere(tab));
-        // Full for a dragged row's ghost, which the pointer holds, and none for the others then.
+        // Full for a dragged row's ghost, which the pointer holds, and for the row it has rested
+        // on, and none for the others then.
         let dragging = self.dragging();
+        let onto = self.drag.as_ref().and_then(|drag| drag.onto);
+        let onto = onto.is_some_and(|(tab, _)| row == Row::Tab(tab));
         let hover = match dragging {
-            Some(_) => ghost.then_some(1.),
+            Some(_) => (ghost || onto).then_some(1.),
             None => self.hover_fill(row),
         };
         // A new tab's plate fades in, and rows that come together fade in whole.
@@ -385,7 +392,7 @@ impl Shell {
         let onto = self.drag.as_ref().and_then(|drag| drag.onto);
         if self.pointer_row() == Some(row)
             || self.menu_row.is_some_and(|tab| row == Row::Tab(tab))
-            || onto.is_some_and(|tab| row == Row::Tab(tab))
+            || onto.is_some_and(|(tab, _)| row == Row::Tab(tab))
         {
             return Some(1.);
         }
@@ -409,7 +416,7 @@ impl Shell {
             .absolute()
             .top(px(room + row.top))
             .left_0()
-            .w(px(self.width()))
+            .w(px(self.rows_width()))
             .h(px(ROW_HEIGHT))
             .px(px(PLATE_INSET))
             .pl(px(PLATE_INSET + row.indent))
@@ -467,8 +474,14 @@ impl Shell {
             return self.folder_row(tab, ghost, cx).into_any_element();
         }
         let panes = self.panes(tab);
-        match panes.len() > 1 {
-            true => self.split_row(panes, ghost, cx).into_any_element(),
+        // Rested on, a row shows the split view it would make, the dragged tab on its side.
+        let drop = self.drag.as_ref().filter(|_| !ghost).and_then(|drag| {
+            drag.onto
+                .filter(|&(row, _)| row == tab)
+                .map(|(_, left)| (drag.tab, left))
+        });
+        match panes.len() > 1 || drop.is_some() {
+            true => self.split_row(panes, drop, ghost, cx).into_any_element(),
             false => self.single_row(tab, ghost, cx).into_any_element(),
         }
     }
@@ -501,6 +514,7 @@ impl Shell {
                     folder_glyph(open),
                     FAVICON_DRAWN,
                     self.palette.text(SECONDARY).into(),
+                    cx,
                 )
                 .into_any_element(),
         };
@@ -536,15 +550,22 @@ impl Shell {
     }
 
     /// The button that closes `tabs`, which shows under the pointer at a row's end: − on a pinned
-    /// row, which unloads them and keeps the row, else ✕.
+    /// row, which unloads them and keeps the row, else ✕. On a split's, ⌥ held turns it to
+    /// separate, which takes the tabs out of the split and closes none, as Arc's ⌥-click does.
     fn close_button(&self, tabs: Vec<u64>, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
-        let angle = if self.close_glyph(tabs[0]) == UNLOAD {
+        let row = tabs[0];
+        let angle = if self.close_glyph(row) == UNLOAD {
             0.
         } else {
             45.
         };
+        let split = tabs.len() > 1;
+        let glyph = match self.on_split_close == Some((row, true)) {
+            true => SEPARATE.into(),
+            false => super::assets::bars_path(angle),
+        };
         div()
-            .id(("close", tabs[0]))
+            .id(("close", row))
             .flex_none()
             .ml(px(4.))
             .mr(px(CLOSE_RIGHT))
@@ -557,19 +578,49 @@ impl Shell {
             // The bars as one glyph, so they don't darken where they cross (assets::bars).
             .child(
                 svg()
-                    .path(super::assets::bars_path(angle))
+                    .path(glyph)
                     .flex_none()
                     .size(px(CLOSE_GLYPH))
                     .text_color(self.palette.text(SECONDARY)),
             )
+            .when(split, |button| {
+                button
+                    .on_mouse_move(cx.listener(|shell, event: &MouseMoveEvent, _, cx| {
+                        shell.alt_on_close(event.modifiers.alt, cx)
+                    }))
+                    .on_hover(cx.listener(move |shell, hovered: &bool, window, cx| {
+                        // Off it, only its own: the pointer may be on another's already.
+                        if *hovered || shell.on_split_close.is_some_and(|(on, _)| on == row) {
+                            shell.on_split_close = hovered.then(|| (row, window.modifiers().alt));
+                            cx.notify();
+                        }
+                    }))
+            })
             // Not the row's press, which would show the tab before closing it.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             // A pinned tab closed unloads, which the core does for the same call.
-            .on_click(cx.listener(move |shell, _, _, cx| {
+            .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
                 cx.stop_propagation();
+                if split && event.modifiers().alt {
+                    log!("browser: command separate-split via sidebar");
+                    shell.on_split_close = None;
+                    return shell.separate_all(row, cx);
+                }
                 log!("browser: command close-tab via sidebar");
-                shell.close_row(tabs[0], cx);
+                shell.close_row(row, cx);
             }))
+    }
+
+    /// ⌥ is held, or not: a split row's ✕ or − under the pointer shows separate while it is.
+    pub(super) fn alt_on_close(&mut self, alt: bool, cx: &mut Context<Self>) {
+        if let Some((_, held)) = self
+            .on_split_close
+            .as_mut()
+            .filter(|(_, held)| *held != alt)
+        {
+            *held = alt;
+            cx.notify();
+        }
     }
 
     /// Closes the row whose first tab is `row`, as its ✕ or − does. A pinned row keeps its place
@@ -676,6 +727,7 @@ impl Shell {
                     icon,
                     SPEAKER_DRAWN,
                     self.palette.text(SECONDARY).into(),
+                    cx,
                 ))
                 // Not the row's press, which would show the tab, nor a double-click's rename.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -758,6 +810,14 @@ impl Shell {
         if !(0. ..width).contains(&at.x) || !rows.contains(&at.y) {
             return false;
         }
+        // The name row stays put over the rows scrolled under it, which take no press there.
+        if self.on_fixed_head(at.y) && self.settle.is_none() {
+            if event.button == MouseButton::Right {
+                self.space_menu(self.space, event.position, cx);
+                return true;
+            }
+            return false;
+        }
         let y = self.list_y(at.y);
         let row_at = |tops: &[(u64, f32)]| {
             tops.iter()
@@ -820,7 +880,7 @@ impl Shell {
 
     /// How wide each segment of a split view's row is, `count` of them `depth` folders in.
     pub(super) fn segment_width(&self, depth: usize, count: usize) -> f32 {
-        let plate = self.width() - 2. * PLATE_INSET - depth as f32 * FOLDER_INDENT;
+        let plate = self.rows_width() - 2. * PLATE_INSET - depth as f32 * FOLDER_INDENT;
         (plate - (FAVICON_X - PLATE_INSET - SEGMENT_FAVICON_X)) / count as f32
     }
 
@@ -933,16 +993,18 @@ impl Shell {
     }
 
     /// A split view's row, for its first tab: a segment per tab, left to right. A press on one
-    /// shows the split with its page focused, and the close button closes them all.
+    /// shows the split with its page focused, and the close button closes them all. With a tab
+    /// `drop`ped on it, the row of one tab or more shows that tab's slot on its left or right.
     fn split_row(
         &self,
         panes: Vec<u64>,
+        drop: Option<(u64, bool)>,
         ghost: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let first = panes[0];
         let row_selected = self.selected_row() == Row::Tab(first);
-        let hovered = self.pointer_row() == Some(Row::Tab(first));
+        let hovered = self.pointer_row() == Some(Row::Tab(first)) && drop.is_none();
         // A pinned tab closed already has nothing to close.
         let pinned = self.pinned().contains(&first);
         let closable = panes
@@ -965,15 +1027,22 @@ impl Shell {
                 let close = hovered
                     .then(|| self.row_button(panes.clone(), closable, cx))
                     .flatten();
-                let width = self.segment_width(self.depth(first), panes.len());
-                let segments: Vec<_> = panes
+                let count = panes.len() + usize::from(drop.is_some());
+                let width = self.segment_width(self.depth(first), count);
+                let slot = drop.map(|(_, left)| if left { 0 } else { panes.len() });
+                let mut segments: Vec<_> = panes
                     .iter()
                     .enumerate()
                     .map(|(index, &tab)| {
                         let focused = row_selected && tab == self.selected;
-                        self.split_segment(tab, width, index == 0, focused, cx)
+                        let leads = index == 0 && slot != Some(0);
+                        self.split_segment(tab, width, leads, focused, cx)
+                            .into_any_element()
                     })
                     .collect();
+                if let Some(((tab, _), slot)) = drop.zip(slot) {
+                    segments.insert(slot, self.drop_slot(tab, width, slot == 0));
+                }
                 split_plate(segments).children(close)
             }
         };
@@ -991,6 +1060,31 @@ impl Shell {
                     cx.listener(move |shell, _, _, cx| shell.middle_press(first, closable, cx)),
                 )
             })
+    }
+
+    /// The slot `tab`, dragged onto a row, would take in the split view it would make: its segment,
+    /// faint, on a plate inset in its place, so the row reads as the split before it's let go.
+    fn drop_slot(&self, tab: u64, width: f32, first: bool) -> AnyElement {
+        // The first segment starts inside the split plate's padding, and the slot from its edge.
+        let padding = FAVICON_X - PLATE_INSET - SEGMENT_FAVICON_X;
+        let left = if first {
+            DROP_SLOT_INSET - padding
+        } else {
+            DROP_SLOT_INSET
+        };
+        let fill = div()
+            .absolute()
+            .top(px(DROP_SLOT_INSET))
+            .bottom(px(DROP_SLOT_INSET))
+            .left(px(left))
+            .right(px(DROP_SLOT_INSET))
+            .rounded(px(PLATE_RADIUS - DROP_SLOT_INSET))
+            .bg(self.palette.plate(HOVERED));
+        let segment = self
+            .segment(&self.palette, tab, width, first, false)
+            .opacity(SECONDARY);
+        let slot = div().relative().flex_1().min_w_0().h_full().flex();
+        slot.child(fill).child(segment).into_any_element()
     }
 
     /// A middle press on the row whose first tab is `row` closes it as its ✕ or − does, on the
@@ -1029,6 +1123,16 @@ impl Shell {
         }
     }
 
+    /// The host a tab's row names under its title, as Arc's does: a pinned tab's whose page left
+    /// its pinned URL's host, and a tab's in Developer Mode, whose site is what's worked on. A
+    /// renamed pinned tab at its pinned host has none (*interim*: Arc's rule for those isn't
+    /// known, and one of its two seen has none).
+    pub(super) fn host_line(&self, tab: u64) -> Option<SharedString> {
+        let kept = self.tabs.get(&tab)?;
+        let named = kept.left_pinned_host || kept.page.developer_mode;
+        named.then(|| SharedString::from(host(&kept.page.url).to_owned()))
+    }
+
     fn single_row(
         &self,
         tab: u64,
@@ -1048,6 +1152,10 @@ impl Shell {
         };
         let bright = Row::Tab(tab) == self.selected_row() || page.developer_mode;
         let title = title(&self.palette, label, bright);
+        let title = match self.host_line(tab) {
+            Some(host) => with_host(&self.palette, title, host),
+            None => title,
+        };
         // The row's button shows under the pointer, and the title truncates before it.
         let button = hovered
             .then(|| self.row_button(vec![tab], closable, cx))
@@ -1405,7 +1513,7 @@ impl Shell {
             };
             let glyph = self
                 .swaps
-                .glyph(what, arrow, CLEAR_ARROW, self.palette.text(color));
+                .glyph(what, arrow, CLEAR_ARROW, self.palette.text(color), cx);
             let clear = clear_label(&self.palette, glyph, room, color)
                 .id("clear")
                 .opacity(self.tools_opacity());
@@ -1657,6 +1765,24 @@ pub(super) fn capture_glyph(page: &Page) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// A row's title with its host under it, the two centred in the row together.
+fn with_host(palette: &Palette, title: gpui::Div, host: SharedString) -> gpui::Div {
+    let host = div()
+        .truncate()
+        .text_size(px(text::SMALL))
+        .line_height(px(HOST_LINE))
+        .text_color(palette.text(SECONDARY))
+        .child(host);
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .justify_center()
+        .child(title.flex_none().line_height(px(HOST_TITLE_LINE)))
+        .child(host)
 }
 
 #[cfg(test)]
@@ -2289,6 +2415,41 @@ mod tests {
         assert_eq!(arrow(&shell, cx), (Some(true), true));
     }
 
+    /// Under Reduce Motion the rows are in their places at once, and the frame after a move still
+    /// sees it end, which check.sh waits for, when the core's next answer with the same lists
+    /// comes before that frame, as a ⌘Z's for each tab it brings back do (#1380).
+    #[gpui::test]
+    fn under_reduce_motion_rows_moved_before_a_frame_still_settle(cx: &mut TestAppContext) {
+        let (shell, cx, _) = window(cx, vec![10, 11], vec![20, 21], 20);
+        shell.update(cx, |shell, cx| {
+            cx.set_reduce_motion(true);
+            for _ in 0..2 {
+                shell.set_tabs(
+                    1,
+                    vec![10],
+                    vec![11, 20, 21],
+                    Vec::new(),
+                    Folders::default(),
+                    cx,
+                );
+            }
+            assert_eq!(
+                shell.slide(Slot::Tab(11)),
+                0.,
+                "the row slid under Reduce Motion"
+            );
+            assert!(
+                !shell.slides.is_empty(),
+                "the second answer took the move from its frame"
+            );
+            cx.notify();
+        });
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, _| {
+            assert!(shell.slides.is_empty(), "the rows didn't settle")
+        });
+    }
+
     /// A window showing one Space with `pinned` and `today` tabs and `shown`.
     fn window(
         cx: &mut TestAppContext,
@@ -2593,12 +2754,18 @@ mod tests {
         });
         cx.run_until_parked();
         drag_and_rest(cx, 500);
-        assert_eq!(onto(&shell, cx), Some((Some(2), None)));
+        // The pointer is on the row's left half, where the tab would join it on the left.
+        assert_eq!(onto(&shell, cx), Some((Some((2, true)), None)));
         assert_eq!(
             shell.read_with(cx, |shell, _| shell.hover_fill(Row::Tab(2))),
             Some(1.)
         );
-        cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+        // Across the plate's middle, it would join on the right, with no second wait.
+        let right = point(px(x - 40.), to.y);
+        cx.simulate_mouse_move(right, MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(onto(&shell, cx), Some((Some((2, false)), None)));
+        cx.simulate_mouse_up(right, MouseButton::Left, Modifiers::none());
         cx.run_until_parked();
         assert_eq!(host.moves.get(), 1, "a rest doesn't reorder");
         assert_eq!(host.take_edits(), ["split 4 2 false"]);
@@ -2656,6 +2823,66 @@ mod tests {
             ["separate 3"],
             "the press on the second segment takes its tab out"
         );
+    }
+
+    /// ⌥ held over a split row's ✕ turns it to separate, as Arc's does: the glyph follows the key
+    /// as the pointer moves or GPUI hears it, a click with ⌥ takes every tab out of the split from
+    /// the right and closes none, and without ⌥ the ✕ closes them. A tab's own ✕ never turns.
+    #[gpui::test]
+    fn option_on_a_split_rows_close_separates_it(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx, Vec::new(), vec![2, 3, 4, 5], 5);
+        shell.update(cx, |shell, cx| {
+            let split = crate::shell::Split {
+                tabs: vec![2, 3, 4],
+                ..Default::default()
+            };
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![2, 3, 4, 5],
+                vec![split],
+                Folders::default(),
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        let option = Modifiers {
+            alt: true,
+            ..Default::default()
+        };
+        let (x, y) = close_button(&shell, cx, 2);
+        let at = point(px(x), px(y));
+        let shown =
+            |cx: &mut VisualTestContext| shell.read_with(cx, |shell, _| shell.on_split_close);
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(shown(cx), Some((2, false)));
+        cx.simulate_mouse_move(at + point(px(1.), px(0.)), None, option);
+        cx.run_until_parked();
+        assert_eq!(shown(cx), Some((2, true)), "⌥ held as the pointer moves");
+        // GPUI hears the keys while it has the keyboard, as in a field of the sidebar's.
+        cx.update(|window, cx| window.focus(&shell.read(cx).focus_handle.clone(), cx));
+        cx.simulate_modifiers_change(Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(shown(cx), Some((2, false)), "⌥ let go, heard by GPUI");
+        cx.simulate_modifiers_change(option);
+        cx.run_until_parked();
+        assert_eq!(shown(cx), Some((2, true)));
+
+        host.take();
+        host.take_edits();
+        cx.simulate_mouse_down(at, MouseButton::Left, option);
+        cx.simulate_mouse_up(at, MouseButton::Left, option);
+        cx.run_until_parked();
+        assert_eq!(host.take_edits(), ["separate 4", "separate 3"]);
+        assert!(!host.take().iter().any(|call| call.starts_with("close")));
+
+        let own = close_button(&shell, cx, 5);
+        move_to(cx, own);
+        assert_eq!(shown(cx), None, "a tab's own ✕ never turns");
+        cx.simulate_mouse_move(point(px(x), px(y + 300.)), None, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(shown(cx), None);
     }
 
     /// A row dragged onto a page shown alone finds a target at each of the card's edges, and let go
@@ -3114,6 +3341,48 @@ mod tests {
             [3],
             "the pointer moved on the row it rests on"
         );
+    }
+
+    /// Under its title, a pinned tab's row names the host its page went to from its pinned URL's,
+    /// but not another page on the same host, and a tab's row in Developer Mode names its host,
+    /// without "www." or the port, as the URL field does.
+    #[gpui::test]
+    fn a_row_names_its_host_off_its_pinned_host_and_in_developer_mode(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx, vec![2, 3], vec![4, 5], 4);
+        host.pinned_urls
+            .borrow_mut()
+            .insert(2, "https://p.example/".into());
+        host.pinned_urls
+            .borrow_mut()
+            .insert(3, "https://p.example/".into());
+        let report = |cx: &mut VisualTestContext, tab, url: &str, away, developer_mode| {
+            shell.update(cx, |shell, cx| {
+                let page = Page {
+                    url: gpui::SharedString::from(url.to_owned()),
+                    away_from_pinned_url: away,
+                    developer_mode,
+                    ..shell.page(tab)
+                };
+                shell.set_page(tab, page, cx);
+            });
+        };
+        report(cx, 2, "https://www.other.example/a", true, false);
+        report(cx, 3, "https://p.example/signin", true, false);
+        report(cx, 4, "http://localhost:3000/", false, true);
+        report(cx, 5, "https://q.example/", false, false);
+        let lines = shell.read_with(cx, |shell, _| [2, 3, 4, 5].map(|tab| shell.host_line(tab)));
+        assert_eq!(
+            lines,
+            [
+                Some("other.example".into()),
+                None,
+                Some("localhost".into()),
+                None
+            ]
+        );
+        // Back at its pinned URL's host, the line goes.
+        report(cx, 2, "https://p.example/", false, false);
+        assert_eq!(shell.read_with(cx, |shell, _| shell.host_line(2)), None);
     }
 
     /// A middle press on a tab's row closes it, as its ✕ does: a Today tab goes, a pinned one lets

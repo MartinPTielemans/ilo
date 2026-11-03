@@ -9,7 +9,7 @@ use std::{cell::Cell, rc::Rc};
 
 use gpui::{
     Bounds, Context, Div, FontWeight, Pixels, SharedString, Stateful, canvas, div, prelude::*, px,
-    rgba, svg,
+    svg,
 };
 
 use super::{
@@ -129,12 +129,11 @@ impl Shell {
                         // Kept together, so "to" doesn't wrap alone under a long site.
                         .child(format!("{} wants\u{a0}to", question.site)),
                 )
-                .children(
-                    question
-                        .permissions
-                        .iter()
-                        .map(|permission| div().text_color(rgba(DETAIL)).child(permission.clone())),
-                )
+                .children(question.permissions.iter().map(|permission| {
+                    div()
+                        .text_color(self.palette.on_overlay(DETAIL))
+                        .child(permission.clone())
+                }))
                 .child(
                     div()
                         .mt(px(BUTTONS_TOP))

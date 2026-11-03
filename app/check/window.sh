@@ -614,12 +614,16 @@ check_reveal() {
 send key s cmd
 toggle ui hidden "⌘S before the reveal"
 send move 400 300
-# The pointer has to stay at the edge a moment: one passing it doesn't bring the sidebar out.
+# The pointer has to move a few points up or down at the edge and stay a moment: one jumping
+# there, or passing it, doesn't bring the sidebar out.
+send move 3 300
+none_while '^browser: reveal waits$' || fail "the pointer jumping to the window's edge brought the sidebar out"
 step=$((step + 1))
 passed=$step
-echo "move 3 300" >&3
+echo "move 3 306" >&3
 send move 400 300
 send move 3 300
+send move 3 306
 expect '^browser: reveal shown$' "the pointer at the window's edge didn't bring the sidebar out"
 [ "$(sed -n "/^browser: drive $passed: /,\$p" "$log" | grep -c '^browser: reveal shown$')" = 1 ] ||
   fail "the pointer passing the window's edge brought the sidebar out"
@@ -629,11 +633,18 @@ check_buttons "with the sidebar out" hidden
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-reveal.png" || fail "no window to capture"
 send move 200 300
 send move 250 300
-check_reveal "with the pointer over the sidebar out" shown
-send move 400 300
-expect '^browser: reveal hidden$' "the pointer past the sidebar out didn't send it away"
+if [ "$(uname)" = Linux ]; then
+  # On Linux the pointer over the page is Chromium's, which the shell doesn't hear, so the panel
+  # has no hold zone there and goes as the pointer leaves it (platform/linux/reveal_window.rs).
+  expect '^browser: reveal hidden$' "the pointer leaving the sidebar out didn't send it away"
+else
+  check_reveal "with the pointer in the hold zone past the sidebar out" shown
+  send move 400 300
+  expect '^browser: reveal hidden$' "the pointer past the sidebar out didn't send it away"
+fi
 check_reveal "after the sidebar went away"
 send move 3 300
+send move 3 306
 expect '^browser: reveal shown$' "the pointer at the edge didn't bring the sidebar back out"
 send click 93 24
 toggle sidebar shown "a click on the sidebar button of the sidebar out"
@@ -641,6 +652,7 @@ check_reveal "with the sidebar docked from its sidebar button"
 send key s cmd
 toggle ui hidden "⌘S after docking the sidebar out"
 send move 3 300
+send move 3 306
 expect '^browser: reveal shown$' "the pointer at the edge didn't bring the sidebar out again"
 send key s cmd
 toggle ui shown "⌘S with the sidebar out"

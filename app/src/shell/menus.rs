@@ -193,6 +193,28 @@ pub fn new_profile_name(names: &[SharedString]) -> String {
         .unwrap_or_default()
 }
 
+/// Why Settings › Profiles has no Delete for a profile, for the line under its name, or None when
+/// it has one or nothing needs saying. The core deletes none a Space is in, nor the one it started
+/// with, `first`; its favorites go with it. `profiles` counts them all; `spaces` counts the Spaces
+/// listed in it, and `task` says whether an agent's task, whose Space isn't listed, is working in
+/// it.
+pub fn profile_kept(first: bool, profiles: usize, spaces: usize, task: bool) -> Option<String> {
+    let its = match spaces {
+        0 => None,
+        1 => Some("its Space"),
+        _ => Some("its Spaces"),
+    };
+    let why = match its {
+        // With no other profile there's nothing to delete it for, so nothing to explain.
+        _ if first && profiles < 2 => return None,
+        _ if first => "The first profile can't be deleted.".into(),
+        Some(its) => format!("Delete {its} to delete it."),
+        None if task => "An agent's task is working in it.".into(),
+        None => return None,
+    };
+    Some(why)
+}
+
 impl Shell {
     /// The menu a right-click on a Space's name or dot shows (Arc), with its icon (ours).
     pub(super) fn space_menu(
@@ -1265,10 +1287,7 @@ impl Shell {
         let pinned = self.pinned().contains(&tab);
         // Arc's closed split is a pinned one with none of its pages loaded.
         let closed = pinned && panes.iter().all(|&pane| self.page(pane).unloaded);
-        let orientation = match self.stacked(tab) {
-            true => "Convert to Horizontal Split View",
-            false => "Convert to Vertical Split View",
-        };
+        let orientation = super::commands::orientation_title(self.stacked(tab));
         let mut items: Vec<(MenuEntry, &'static str, MenuAction)> = vec![
             (
                 MenuEntry::new("Separate All Tabs", true),
@@ -1658,7 +1677,7 @@ impl Shell {
 }
 
 /// `space`'s folders, in the sidebar's order, each named by its path, "Docs / Old".
-fn folder_paths(space: &super::Space) -> Vec<(u64, String)> {
+pub(super) fn folder_paths(space: &super::Space) -> Vec<(u64, String)> {
     let name = |folder: u64| {
         space
             .folders
@@ -1776,7 +1795,7 @@ mod empty_space_tests;
 mod tests {
     use gpui::{AppContext, Entity, TestAppContext, point, px};
 
-    use super::{MenuEntry, sentence_case, space_menu_head, space_menu_label};
+    use super::{MenuEntry, profile_kept, sentence_case, space_menu_head, space_menu_label};
     use crate::shell::{
         Command, FavoritesScope, Folders, Page, Shell, drag::detents::shell_with,
         recorder::Recorder,
@@ -1817,6 +1836,29 @@ mod tests {
         // Under Each Space a favorite is its Space's, so no profile holds one.
         shell.update(cx, |shell, cx| shell.set_favorites(vec![(21, 1)], cx));
         assert_eq!(says(FavoritesScope::Space, "Work", cx), kept);
+    }
+
+    /// Settings › Profiles says why a profile has no Delete: what keeps it, and what the user does
+    /// to delete it. A profile nothing keeps, and the only one, say nothing. Its favorites don't
+    /// keep it: they go with it (#1524).
+    #[test]
+    fn a_profile_kept_from_deleting_says_why() {
+        let says = |first, profiles, spaces, task| {
+            profile_kept(first, profiles, spaces, task).unwrap_or_default()
+        };
+        assert_eq!(says(true, 1, 3, false), "", "the only profile");
+        assert_eq!(
+            says(true, 2, 1, false),
+            "The first profile can't be deleted."
+        );
+        assert_eq!(says(false, 2, 1, false), "Delete its Space to delete it.");
+        assert_eq!(says(false, 3, 2, true), "Delete its Spaces to delete it.");
+        assert_eq!(says(false, 2, 0, true), "An agent's task is working in it.");
+        assert_eq!(
+            says(false, 2, 0, false),
+            "",
+            "nothing keeps it, so it has Delete"
+        );
     }
 
     /// Off the Mac, ilo's items are in sentence case, keeping its nouns Space and Library and
