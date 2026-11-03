@@ -742,7 +742,7 @@ restore_newest "Restoring the sidebar replaced" 3
 await_today $((backed_up + 1)) "restoring the sidebar replaced didn't bring back the tab"
 exec 3>&-
 quit
-# With Restore windows from last session turned off in Settings › Advanced, a launch opens one
+# With Restore windows from last session turned off in Settings › General, a launch opens one
 # window showing no page, as ⌘N's does: the Space comes back with its pinned tab, and its Today tab
 # goes in the archive. The second window doesn't come back (#684).
 log="$out/fresh-a.log"
@@ -761,10 +761,12 @@ expect '^browser: window opened [0-9]*$' "⌘N didn't open a second window"
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
 settings_drew
-send clickkey $(drawn "toolbar Advanced")
-expect '^browser: settings tab Advanced$' "a click on Advanced didn't show its tab"
-settings_drew Advanced
-# Where Settings drew the switch, as the Mini Player's row above it moves it.
+# General's first row is the switch.
+if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' General$'; then
+  send clickkey $(drawn "toolbar General")
+  expect '^browser: settings tab General$' "a click on General didn't show its section"
+  settings_drew General
+fi
 at=$(drawn "switch restore windows") || fail "Restore windows from last session has no switch"
 send clickkey $at
 expect '^browser: restore windows off$' \

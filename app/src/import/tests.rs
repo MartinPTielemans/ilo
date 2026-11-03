@@ -1847,42 +1847,36 @@ fn a_machine_with_no_browser_is_empty(cx: &mut TestAppContext) {
     fs::remove_dir_all(home).unwrap();
 }
 
-/// On a host's ground, the rows' lines, controls and grey text are its ink over it by as much as
-/// Settings' are over theirs, so Settings' own fill and text give back Settings' look.
+/// On a host's ground, the rows' lines, controls and grey text are its ink over it, edged so the
+/// groups stand off a ground with no card, light or dark.
 #[test]
 fn rows_on_a_hosts_ground_mix_its_ink() {
-    use crate::tokens::settings::{BOX, TEXT};
-    let settings = Look::settings();
-    let mixed = Look::on(gpui::rgb(BOX), gpui::rgb(TEXT));
-    let near = |a: gpui::Rgba, b: gpui::Rgba| {
-        [(a.r, b.r), (a.g, b.g), (a.b, b.b)]
-            .iter()
-            .all(|(a, b)| (a - b).abs() < 2. / 255.)
-    };
-    for (a, b) in [
-        (mixed.line, settings.line),
-        (mixed.detail, settings.detail),
-        (mixed.control, settings.control),
-        (mixed.hovered, settings.hovered),
-        (mixed.pressed, settings.pressed),
-        (mixed.switch_off, settings.switch_off),
-    ] {
-        assert!(near(a, b), "{a:?} {b:?}");
-    }
-    let light = Look::on(gpui::rgb(0xffffff), gpui::rgb(0x000000));
-    assert!(light.line.r < 1. && light.control.r > light.detail.r);
+    let light = Look::on(
+        gpui::rgb(crate::tokens::palette::DIALOG_LIGHT),
+        gpui::rgb(crate::palette::INK),
+    );
+    assert!(light.line.r < light.surface.r && light.control.r > light.detail.r);
+    assert_eq!(light.edge, Some(light.line));
 }
 
-/// A control under the pointer is a quiet step toward pressed and short of it, on Settings' dark
-/// boxes and on a light ground alike, so it shows it can be clicked and a press still shows more.
+/// A control under the pointer is a quiet step toward pressed and short of it, on Settings' card
+/// and on a host's ground alike, so it shows it can be clicked and a press still shows more.
 #[test]
 fn a_control_under_the_pointer_is_a_step_short_of_pressed() {
     let light = |color: gpui::Rgba| color.r + color.g + color.b;
-    let dark = Look::settings();
+    let dark = Look::settings(true);
     assert!(light(dark.control) < light(dark.hovered) && light(dark.hovered) < light(dark.pressed));
-    let paper = Look::on(gpui::rgb(0xffffff), gpui::rgb(0x000000));
+    let paper = Look::settings(false);
     assert!(
         light(paper.control) > light(paper.hovered) && light(paper.hovered) > light(paper.pressed)
+    );
+    let ground = Look::on(
+        gpui::rgb(crate::tokens::palette::DIALOG_LIGHT),
+        gpui::rgb(crate::palette::INK),
+    );
+    assert!(
+        light(ground.control) > light(ground.hovered)
+            && light(ground.hovered) > light(ground.pressed)
     );
 }
 
