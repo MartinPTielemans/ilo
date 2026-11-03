@@ -25,8 +25,8 @@ use super::{
     SPACE_NAME, SPACE_NAME_SHUT, SPEAKER_DRAWN, SPEAKER_GAP, SPEAKER_SIZE, STATUS_AGENT,
     STATUS_DOT, STATUS_LOADING, STATUS_RING, STATUS_RING_COLOR, Shell, Slot, Swapped,
     TITLE_END_INSET, URL_BUTTON_GLYPH, clear_label, cubic_bezier, developer_outline, divider_box,
-    favicon, folder_icon, icon_placeholder, icon_slot, name_box, new_tab_label, plate, row_box,
-    row_spring,
+    favicon, folder_icon, host, icon_placeholder, icon_slot, name_box, new_tab_label, plate,
+    row_box, row_spring,
     scaled::scaled_from_middle,
     selected_plate, space_icon, split_plate,
     swap::{ARROW_DOWN, NONE, folder_glyph},
@@ -40,7 +40,8 @@ use crate::{
     icon_picker::{self, Subject},
     palette::Palette,
     space_icon::has_icon,
-    tokens::shell::DROP_SLOT_INSET,
+    tokens::shell::{DROP_SLOT_INSET, HOST_LINE, HOST_TITLE_LINE},
+    tokens::text,
     tooltip::{Anchor, Tip},
 };
 
@@ -415,7 +416,7 @@ impl Shell {
             .absolute()
             .top(px(room + row.top))
             .left_0()
-            .w(px(self.width()))
+            .w(px(self.rows_width()))
             .h(px(ROW_HEIGHT))
             .px(px(PLATE_INSET))
             .pl(px(PLATE_INSET + row.indent))
@@ -513,6 +514,7 @@ impl Shell {
                     folder_glyph(open),
                     FAVICON_DRAWN,
                     self.palette.text(SECONDARY).into(),
+                    cx,
                 )
                 .into_any_element(),
         };
@@ -725,6 +727,7 @@ impl Shell {
                     icon,
                     SPEAKER_DRAWN,
                     self.palette.text(SECONDARY).into(),
+                    cx,
                 ))
                 // Not the row's press, which would show the tab, nor a double-click's rename.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -807,6 +810,14 @@ impl Shell {
         if !(0. ..width).contains(&at.x) || !rows.contains(&at.y) {
             return false;
         }
+        // The name row stays put over the rows scrolled under it, which take no press there.
+        if self.on_fixed_head(at.y) && self.settle.is_none() {
+            if event.button == MouseButton::Right {
+                self.space_menu(self.space, event.position, cx);
+                return true;
+            }
+            return false;
+        }
         let y = self.list_y(at.y);
         let row_at = |tops: &[(u64, f32)]| {
             tops.iter()
@@ -869,7 +880,7 @@ impl Shell {
 
     /// How wide each segment of a split view's row is, `count` of them `depth` folders in.
     pub(super) fn segment_width(&self, depth: usize, count: usize) -> f32 {
-        let plate = self.width() - 2. * PLATE_INSET - depth as f32 * FOLDER_INDENT;
+        let plate = self.rows_width() - 2. * PLATE_INSET - depth as f32 * FOLDER_INDENT;
         (plate - (FAVICON_X - PLATE_INSET - SEGMENT_FAVICON_X)) / count as f32
     }
 
@@ -1112,6 +1123,16 @@ impl Shell {
         }
     }
 
+    /// The host a tab's row names under its title, as Arc's does: a pinned tab's whose page left
+    /// its pinned URL's host, and a tab's in Developer Mode, whose site is what's worked on. A
+    /// renamed pinned tab at its pinned host has none (*interim*: Arc's rule for those isn't
+    /// known, and one of its two seen has none).
+    pub(super) fn host_line(&self, tab: u64) -> Option<SharedString> {
+        let kept = self.tabs.get(&tab)?;
+        let named = kept.left_pinned_host || kept.page.developer_mode;
+        named.then(|| SharedString::from(host(&kept.page.url).to_owned()))
+    }
+
     fn single_row(
         &self,
         tab: u64,
@@ -1131,6 +1152,10 @@ impl Shell {
         };
         let bright = Row::Tab(tab) == self.selected_row() || page.developer_mode;
         let title = title(&self.palette, label, bright);
+        let title = match self.host_line(tab) {
+            Some(host) => with_host(&self.palette, title, host),
+            None => title,
+        };
         // The row's button shows under the pointer, and the title truncates before it.
         let button = hovered
             .then(|| self.row_button(vec![tab], closable, cx))
@@ -1488,7 +1513,7 @@ impl Shell {
             };
             let glyph = self
                 .swaps
-                .glyph(what, arrow, CLEAR_ARROW, self.palette.text(color));
+                .glyph(what, arrow, CLEAR_ARROW, self.palette.text(color), cx);
             let clear = clear_label(&self.palette, glyph, room, color)
                 .id("clear")
                 .opacity(self.tools_opacity());
@@ -1740,6 +1765,24 @@ pub(super) fn capture_glyph(page: &Page) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// A row's title with its host under it, the two centred in the row together.
+fn with_host(palette: &Palette, title: gpui::Div, host: SharedString) -> gpui::Div {
+    let host = div()
+        .truncate()
+        .text_size(px(text::SMALL))
+        .line_height(px(HOST_LINE))
+        .text_color(palette.text(SECONDARY))
+        .child(host);
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .justify_center()
+        .child(title.flex_none().line_height(px(HOST_TITLE_LINE)))
+        .child(host)
 }
 
 #[cfg(test)]
@@ -2370,6 +2413,41 @@ mod tests {
         assert_eq!(arrow(&shell, cx), (Some(false), true));
         report(&shell, cx, vec![2], 2);
         assert_eq!(arrow(&shell, cx), (Some(true), true));
+    }
+
+    /// Under Reduce Motion the rows are in their places at once, and the frame after a move still
+    /// sees it end, which check.sh waits for, when the core's next answer with the same lists
+    /// comes before that frame, as a ⌘Z's for each tab it brings back do (#1380).
+    #[gpui::test]
+    fn under_reduce_motion_rows_moved_before_a_frame_still_settle(cx: &mut TestAppContext) {
+        let (shell, cx, _) = window(cx, vec![10, 11], vec![20, 21], 20);
+        shell.update(cx, |shell, cx| {
+            cx.set_reduce_motion(true);
+            for _ in 0..2 {
+                shell.set_tabs(
+                    1,
+                    vec![10],
+                    vec![11, 20, 21],
+                    Vec::new(),
+                    Folders::default(),
+                    cx,
+                );
+            }
+            assert_eq!(
+                shell.slide(Slot::Tab(11)),
+                0.,
+                "the row slid under Reduce Motion"
+            );
+            assert!(
+                !shell.slides.is_empty(),
+                "the second answer took the move from its frame"
+            );
+            cx.notify();
+        });
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, _| {
+            assert!(shell.slides.is_empty(), "the rows didn't settle")
+        });
     }
 
     /// A window showing one Space with `pinned` and `today` tabs and `shown`.
@@ -3263,6 +3341,48 @@ mod tests {
             [3],
             "the pointer moved on the row it rests on"
         );
+    }
+
+    /// Under its title, a pinned tab's row names the host its page went to from its pinned URL's,
+    /// but not another page on the same host, and a tab's row in Developer Mode names its host,
+    /// without "www." or the port, as the URL field does.
+    #[gpui::test]
+    fn a_row_names_its_host_off_its_pinned_host_and_in_developer_mode(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx, vec![2, 3], vec![4, 5], 4);
+        host.pinned_urls
+            .borrow_mut()
+            .insert(2, "https://p.example/".into());
+        host.pinned_urls
+            .borrow_mut()
+            .insert(3, "https://p.example/".into());
+        let report = |cx: &mut VisualTestContext, tab, url: &str, away, developer_mode| {
+            shell.update(cx, |shell, cx| {
+                let page = Page {
+                    url: gpui::SharedString::from(url.to_owned()),
+                    away_from_pinned_url: away,
+                    developer_mode,
+                    ..shell.page(tab)
+                };
+                shell.set_page(tab, page, cx);
+            });
+        };
+        report(cx, 2, "https://www.other.example/a", true, false);
+        report(cx, 3, "https://p.example/signin", true, false);
+        report(cx, 4, "http://localhost:3000/", false, true);
+        report(cx, 5, "https://q.example/", false, false);
+        let lines = shell.read_with(cx, |shell, _| [2, 3, 4, 5].map(|tab| shell.host_line(tab)));
+        assert_eq!(
+            lines,
+            [
+                Some("other.example".into()),
+                None,
+                Some("localhost".into()),
+                None
+            ]
+        );
+        // Back at its pinned URL's host, the line goes.
+        report(cx, 2, "https://p.example/", false, false);
+        assert_eq!(shell.read_with(cx, |shell, _| shell.host_line(2)), None);
     }
 
     /// A middle press on a tab's row closes it, as its ✕ does: a Today tab goes, a pinned one lets
