@@ -58,7 +58,23 @@ pub const LITTLE: u64 = u64::MAX;
 /// Little ilo's name in the pop-ups, the rules' file and check.sh's lines.
 const LITTLE_NAME: &str = "Little ilo";
 
-/// A rule: links whose URL meets its condition open in its Space, or Little ilo, 0 for none chosen.
+/// Where a rule sends a link in place of a Space: the Space the regular window in front shows, as
+/// Arc's Most Recent Space. No Space of the core's has this id.
+pub const FRONT: u64 = u64::MAX - 1;
+
+/// The Space in front's name in the rules' file.
+const FRONT_KEY: &str = "front";
+
+/// The rule a profile starts with, once, as Arc seeds its Google Meet route (#692): a call joins
+/// in the Space in front, not in Little ilo, where everything else goes. The trash takes it for
+/// good, as the file then says it was added.
+const MEET: &str = "meet.google.com";
+
+/// The line that says the Meet rule was added, so it's added once.
+const SEEDED: &str = "seeded\tmeet";
+
+/// A rule: links whose URL meets its condition open in its Space, the Space in front or Little ilo,
+/// 0 for none.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Rule {
     pub condition: Condition,
@@ -114,7 +130,8 @@ fn host_and_path(url: &str) -> String {
 }
 
 /// The rules, top to bottom, and the Space everything else opens in, 0 for the Space in front:
-/// Little ilo unless the user picks another, as Arc's Little Arc (the owner, 2026-10-31).
+/// Little ilo unless the user picks another, as Arc's Little Arc (the owner, 2026-10-31). A
+/// profile starts with the Meet rule.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Rules {
     pub rules: Vec<Rule>,
@@ -124,8 +141,19 @@ pub struct Rules {
 impl Default for Rules {
     fn default() -> Rules {
         Rules {
-            rules: Vec::new(),
+            rules: vec![Rule::meet()],
             otherwise: LITTLE,
+        }
+    }
+}
+
+impl Rule {
+    /// The rule a profile starts with: Google Meet's calls in the Space in front.
+    fn meet() -> Rule {
+        Rule {
+            condition: Condition::Contains,
+            text: MEET.to_string(),
+            space: FRONT,
         }
     }
 }
@@ -139,9 +167,12 @@ impl Rules {
         let rule = self
             .rules
             .iter()
-            .position(|rule| there(rule.space) && rule.matches(url));
+            .position(|rule| (rule.space == FRONT || there(rule.space)) && rule.matches(url));
         match rule {
-            Some(index) => (self.rules[index].space, Some(index)),
+            Some(index) => match self.rules[index].space {
+                FRONT => (0, Some(index)),
+                space => (space, Some(index)),
+            },
             None => (
                 if there(self.otherwise) {
                     self.otherwise
@@ -155,28 +186,41 @@ impl Rules {
 
     /// Where a link that would open in a link preview goes instead, of the user's `spaces`: the
     /// Space of the first rule it meets, with that rule, if it's another than `shown`. A rule to
-    /// the Space shown keeps it in the preview, as does one to Little ilo, a quick look as the
-    /// preview is, and everything else's Space is only for links from other apps.
+    /// the Space shown keeps it in the preview, as does one to the Space in front, which is the
+    /// one shown, or to Little ilo, a quick look as the preview is, and everything else's Space is
+    /// only for links from other apps.
     pub fn preview_route(&self, url: &str, spaces: &[u64], shown: u64) -> Option<(u64, usize)> {
         match self.route(url, spaces) {
-            (space, Some(rule)) if space != shown && space != LITTLE => Some((space, rule)),
+            (space, Some(rule)) if space != shown && space != LITTLE && space != 0 => {
+                Some((space, rule))
+            }
             _ => None,
         }
     }
 
     /// The rules the file `text` holds, its Spaces by their places among the user's `spaces`, as
     /// the core's ids are new each launch and the Spaces come back in their order. A file with no
-    /// line for everything else sends it to Little ilo, the default.
+    /// line for everything else sends it to Little ilo, the default, and one that doesn't say the
+    /// Meet rule was added gets it after its own, as a profile from before it does.
     pub fn parse(text: &str, spaces: &[u64]) -> Rules {
         let space = |place: &str| match place {
             LITTLE_NAME => Some(LITTLE),
+            FRONT_KEY => Some(FRONT),
             place => {
                 let place = place.parse::<usize>().ok()?;
                 spaces.get(place.wrapping_sub(1)).copied()
             }
         };
-        let mut rules = Rules::default();
+        let mut rules = Rules {
+            rules: Vec::new(),
+            ..Rules::default()
+        };
+        let mut seeded = false;
         for line in text.lines() {
+            if line == SEEDED {
+                seeded = true;
+                continue;
+            }
             let mut fields = line.splitn(4, '\t');
             match (fields.next(), fields.next(), fields.next(), fields.next()) {
                 (Some("rule"), Some(key), Some(place), Some(text)) => {
@@ -197,14 +241,19 @@ impl Rules {
                 _ => {}
             }
         }
+        if !seeded {
+            rules.rules.push(Rule::meet());
+        }
         rules
     }
 
     /// The file of the rules, as `parse` reads it. A Space not among `spaces`, such as one
-    /// deleted, is written as none, and so is the Space in front.
+    /// deleted, is written as none, and so is everything else's Space in front. It always says
+    /// the Meet rule was added, so a trashed one stays gone.
     pub fn to_text(&self, spaces: &[u64]) -> String {
         let place = |space: u64| match spaces.iter().position(|&each| each == space) {
             _ if space == LITTLE => LITTLE_NAME.to_string(),
+            _ if space == FRONT => FRONT_KEY.to_string(),
             Some(index) => (index + 1).to_string(),
             None => "-".to_string(),
         };
@@ -217,6 +266,8 @@ impl Rules {
         if self.otherwise != LITTLE {
             text.push_str(&format!("otherwise\t{}\n", place(self.otherwise)));
         }
+        text.push_str(SEEDED);
+        text.push('\n');
         text
     }
 
@@ -248,6 +299,7 @@ impl Rules {
 fn space_name(space: u64, spaces: &[(u64, SharedString)]) -> SharedString {
     match spaces.iter().find(|(id, _)| *id == space) {
         _ if space == LITTLE => LITTLE_NAME.into(),
+        _ if space == FRONT => otherwise_name(0, spaces),
         Some((_, name)) => name.clone(),
         None => "No Space".into(),
     }
@@ -408,14 +460,13 @@ impl LinkRulesView {
         cx.notify();
     }
 
-    /// + : a rule at the end, matching what its URL contains, to the first Space, its field taking
-    /// the keyboard.
+    /// + : a rule at the end, matching what its URL contains, to the Space in front, as Arc's New
+    /// Route goes to Most Recent Space (#692), its field taking the keyboard.
     pub fn add(&mut self, cx: &mut Context<Self>) {
-        let space = self.host.spaces().first().map_or(0, |(space, _)| *space);
         let rule = Rule {
             condition: Condition::Contains,
             text: String::new(),
-            space,
+            space: FRONT,
         };
         self.rules.rules.push(rule);
         self.make_fields(cx);
@@ -483,8 +534,8 @@ impl LinkRulesView {
         self.keep(cx);
     }
 
-    /// Opens `which`'s menu over its button: the conditions, or the user's Spaces then Little ilo,
-    /// Everything else's after the Space in front.
+    /// Opens `which`'s menu over its button: the conditions, or the Space in front, the user's
+    /// Spaces, then Little ilo, as Arc's offers Most Recent Space, the Spaces and Little Arc.
     fn choose(&mut self, which: Popup, window: &Window, cx: &mut Context<Self>) {
         let entry = |title: SharedString, on: bool| MenuEntry {
             checked: on,
@@ -507,8 +558,11 @@ impl LinkRulesView {
             }
             Popup::Space(index) => {
                 let chosen = self.rules.rules.get(index).map_or(0, |rule| rule.space);
-                (targets.iter())
-                    .map(|&space| entry(space_name(space, &spaces), space == chosen))
+                std::iter::once(entry(space_name(FRONT, &spaces), chosen == FRONT))
+                    .chain(
+                        (targets.iter())
+                            .map(|&space| entry(space_name(space, &spaces), space == chosen)),
+                    )
                     .collect()
             }
             Popup::Otherwise => {
@@ -530,9 +584,9 @@ impl LinkRulesView {
                     (Popup::Condition(index), Some(picked)) => {
                         view.set_condition(index, Condition::ALL[picked], cx)
                     }
-                    (Popup::Space(_), Some(picked)) => view.set_space(which, targets[picked], cx),
+                    (Popup::Space(_), Some(0)) => view.set_space(which, FRONT, cx),
                     (Popup::Otherwise, Some(0)) => view.set_space(which, 0, cx),
-                    (Popup::Otherwise, Some(picked)) => {
+                    (Popup::Space(_) | Popup::Otherwise, Some(picked)) => {
                         view.set_space(which, targets[picked - 1], cx)
                     }
                     (_, None) => cx.notify(),
