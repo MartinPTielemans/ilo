@@ -23,11 +23,11 @@ use crate::hover_card::{Anchor, Icon};
 use crate::palette::{Palette, STATE_SELECTED};
 use crate::shell::KEY_CONTEXT;
 use crate::text_input::TextInput;
-pub use crate::tokens::folder_preview::{RADIUS, WIDTH};
 use crate::tokens::folder_preview::{
     AGE_LINE, AGE_SIZE, DIVIDER, DIVIDER_ALPHA, HINT, ICON, ICON_X, PADDING, RIM, ROW, ROW_FILL,
     ROW_RADIUS, SEARCH, SEARCH_GLYPH, TALLEST, TITLE, TITLE_LINE, TITLE_SIZE, TITLE_X,
 };
+pub use crate::tokens::folder_preview::{RADIUS, WIDTH};
 use crate::tokens::shell::PLATE_INSET;
 
 actions!(folder_preview, [Dismiss, Choose, Up, Down]);
@@ -128,10 +128,16 @@ pub fn height(count: usize) -> f32 {
 /// PLATE_INSET past its row's plate, centred on the row, and INSIDE the window, the top and left
 /// first if it can't be both.
 pub fn place(anchor: Anchor, height: f32) -> (f32, f32) {
-    let (width, tall) = (f32::from(anchor.window.width), f32::from(anchor.window.height));
+    let (width, tall) = (
+        f32::from(anchor.window.width),
+        f32::from(anchor.window.height),
+    );
     let left = f32::from(anchor.row.right()) + PLATE_INSET + BESIDE;
     let top = (f32::from(anchor.row.center().y) - height / 2.).round();
-    (left.min(width - WIDTH - INSIDE).max(INSIDE), top.min(tall - height - INSIDE).max(INSIDE))
+    (
+        left.min(width - WIDTH - INSIDE).max(INSIDE),
+        top.min(tall - height - INSIDE).max(INSIDE),
+    )
 }
 
 /// The preview that shows.
@@ -227,7 +233,9 @@ fn update(
     f: impl FnOnce(&mut FolderPreview, &mut Window, &mut Context<FolderPreview>),
 ) {
     if let Some(window) = cx.try_global::<PreviewWindow>().map(|preview| preview.0) {
-        window.update(cx, |preview, window, cx| f(preview, window, cx)).ok();
+        window
+            .update(cx, |preview, window, cx| f(preview, window, cx))
+            .ok();
     }
 }
 
@@ -281,7 +289,10 @@ impl FolderPreview {
             self.wait = None;
             return self.show(rest, window, cx);
         }
-        let waiting = self.resting.as_ref().is_some_and(|resting| resting.folder == rest.folder);
+        let waiting = self
+            .resting
+            .as_ref()
+            .is_some_and(|resting| resting.folder == rest.folder);
         self.resting = Some(rest);
         if waiting {
             return;
@@ -300,11 +311,18 @@ impl FolderPreview {
     }
 
     fn left(&mut self, folder: u64, cx: &mut Context<Self>) {
-        if self.resting.as_ref().is_some_and(|rest| rest.folder == folder) {
+        if self
+            .resting
+            .as_ref()
+            .is_some_and(|rest| rest.folder == folder)
+        {
             self.resting = None;
             self.wait = None;
         }
-        let leaves = self.shown.as_ref().is_some_and(|shown| shown.rest.folder == folder);
+        let leaves = self
+            .shown
+            .as_ref()
+            .is_some_and(|shown| shown.rest.folder == folder);
         if leaves {
             self.on_row = false;
             if !self.on_card {
@@ -394,7 +412,10 @@ impl FolderPreview {
         shown.kept = true;
         shown.selected = (!shown.found.is_empty()).then_some(0);
         // check.sh waits for this line, to see what's typed reaches the search.
-        log!("browser: folder preview found {} for {text}", shown.found.len());
+        log!(
+            "browser: folder preview found {} for {text}",
+            shown.found.len()
+        );
         self.wait = None;
         self.scroll.scroll_to_item(0, ScrollStrategy::Top);
         cx.notify();
@@ -559,7 +580,10 @@ impl Focusable for FolderPreview {
 
 impl Render for FolderPreview {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let root = div().key_context(KEY_CONTEXT).size_full().font_family(crate::face::UI);
+        let root = div()
+            .key_context(KEY_CONTEXT)
+            .size_full()
+            .font_family(crate::face::UI);
         let Some(shown) = &self.shown else {
             return root;
         };
@@ -585,7 +609,10 @@ impl Render for FolderPreview {
                     .text_color(palette.on_overlay_glyph(HINT)),
             )
             .child(div().flex_1().child(self.search.clone()));
-        let divider = div().flex_none().h(px(DIVIDER)).bg(palette.plate(DIVIDER_ALPHA));
+        let divider = div()
+            .flex_none()
+            .h(px(DIVIDER))
+            .bg(palette.plate(DIVIDER_ALPHA));
         let list = match shown.found.is_empty() {
             // Arc's words, without its emoji.
             true => div()
@@ -633,9 +660,9 @@ impl Render for FolderPreview {
                 .on_action(cx.listener(Self::choose_selected))
                 .on_action(cx.listener(Self::up))
                 .on_action(cx.listener(Self::down))
-                .on_hover(cx.listener(|preview, hovered: &bool, _, cx| {
-                    preview.on_card(*hovered, cx)
-                }))
+                .on_hover(
+                    cx.listener(|preview, hovered: &bool, _, cx| preview.on_card(*hovered, cx)),
+                )
                 // A click anywhere but a row keeps the keyboard in the search.
                 .on_mouse_down(
                     MouseButton::Left,

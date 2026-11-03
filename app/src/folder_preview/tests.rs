@@ -12,7 +12,9 @@ struct Recorder(RefCell<Vec<String>>);
 
 impl Host for Recorder {
     fn show(&self, window: u64, left: f32, top: f32, height: f32, from: f32) {
-        self.0.borrow_mut().push(format!("show {left} {top} {height} from {from} over {window}"));
+        self.0.borrow_mut().push(format!(
+            "show {left} {top} {height} from {from} over {window}"
+        ));
     }
 
     fn hide(&self) {
@@ -27,12 +29,21 @@ fn window() -> Size<Pixels> {
 /// The row of folder `folder`, the sidebar's rows being 36 apart from 100 down.
 fn row(folder: u64) -> Anchor {
     let top = 100. + 36. * folder as f32;
-    Anchor { row: Bounds::new(point(px(8.), px(top)), size(px(224.), px(34.))), window: window() }
+    Anchor {
+        row: Bounds::new(point(px(8.), px(top)), size(px(224.), px(34.))),
+        window: window(),
+    }
 }
 
 fn item(tab: u64, title: &str, url: &str) -> Item {
     let (title, url) = (title.to_string().into(), url.into());
-    Item { tab, title, url, icon: Icon::Favicon(None), age: "1 hour ago".into() }
+    Item {
+        tab,
+        title,
+        url,
+        icon: Icon::Favicon(None),
+        age: "1 hour ago".into(),
+    }
 }
 
 /// Folder 1, Reading, with three tabs, and folder 2, Work, with one.
@@ -65,8 +76,14 @@ struct Preview {
 fn open_preview(cx: &mut TestAppContext) -> Preview {
     let host = Rc::new(Recorder::default());
     cx.update(crate::text_input::bind_keys);
-    let window = cx.update(|cx| open(host.clone(), cx)).expect("no preview window");
-    let preview = Preview { host, chose: Rc::default(), window };
+    let window = cx
+        .update(|cx| open(host.clone(), cx))
+        .expect("no preview window");
+    let preview = Preview {
+        host,
+        chose: Rc::default(),
+        window,
+    };
     // The pointer is on the folder's row in the sidebar, not on the preview beside it.
     preview.pointer_at(OFF, cx);
     preview
@@ -81,7 +98,10 @@ impl Preview {
 
     /// The pointer rests on `folder`'s row in the sidebar of browser window `window`.
     fn rest_in(&self, window: u64, folder: u64, cx: &mut TestAppContext) {
-        let rest = Rest { window, ..rest(folder, &self.chose) };
+        let rest = Rest {
+            window,
+            ..rest(folder, &self.chose)
+        };
         cx.update(|cx| ask(Ask::Rest(rest), cx));
         cx.run_until_parked();
     }
@@ -104,7 +124,9 @@ impl Preview {
     }
 
     fn showing(&self, cx: &mut TestAppContext) -> Option<(u64, Vec<u64>, Option<u64>)> {
-        self.window.read_with(cx, |preview, _| preview.showing()).unwrap()
+        self.window
+            .read_with(cx, |preview, _| preview.showing())
+            .unwrap()
     }
 
     fn keys(&self, keys: &str, cx: &mut TestAppContext) {
@@ -138,14 +160,23 @@ fn shown_in(window: u64, folder: u64, count: usize) -> String {
 }
 
 #[gpui::test]
-fn a_closed_folder_s_preview_shows_once_the_pointer_has_rested_on_its_row(
-    cx: &mut TestAppContext,
-) {
+fn a_closed_folder_s_preview_shows_once_the_pointer_has_rested_on_its_row(cx: &mut TestAppContext) {
     let preview = open_preview(cx);
     preview.rest_on(1, cx);
-    assert!(preview.after(DWELL - Duration::from_millis(10), cx).is_empty());
-    assert_eq!(preview.after(Duration::from_millis(10), cx), [shown_at(1, 3)]);
-    assert_eq!(preview.showing(cx), Some((1, vec![11, 12, 13], Some(11))), "the first is selected");
+    assert!(
+        preview
+            .after(DWELL - Duration::from_millis(10), cx)
+            .is_empty()
+    );
+    assert_eq!(
+        preview.after(Duration::from_millis(10), cx),
+        [shown_at(1, 3)]
+    );
+    assert_eq!(
+        preview.showing(cx),
+        Some((1, vec![11, 12, 13], Some(11))),
+        "the first is selected"
+    );
 }
 
 #[gpui::test]
@@ -154,7 +185,10 @@ fn under_reduce_motion_it_fades_in_without_growing(cx: &mut TestAppContext) {
     cx.update(|cx| cx.set_reduce_motion(true));
     preview.rest_on(2, cx);
     let shown = preview.after(DWELL, cx);
-    assert_eq!(shown, [shown_at(2, 1).replace(&format!("from {FROM}"), "from 1")]);
+    assert_eq!(
+        shown,
+        [shown_at(2, 1).replace(&format!("from {FROM}"), "from 1")]
+    );
 }
 
 #[gpui::test]
@@ -171,7 +205,10 @@ fn the_preview_goes_once_the_pointer_has_left_its_row_and_it(cx: &mut TestAppCon
     let preview = open_preview(cx);
     preview.shown(1, cx);
     preview.ask(Ask::Left(1), cx);
-    assert!(preview.after(LEAVE / 2, cx).is_empty(), "the pointer may be crossing onto it");
+    assert!(
+        preview.after(LEAVE / 2, cx).is_empty(),
+        "the pointer may be crossing onto it"
+    );
     assert_eq!(preview.after(LEAVE, cx), ["hide"]);
 }
 
@@ -181,7 +218,10 @@ fn the_pointer_on_the_preview_keeps_it(cx: &mut TestAppContext) {
     preview.shown(1, cx);
     preview.ask(Ask::Left(1), cx);
     preview.pointer_at(point(px(20.), px(20.)), cx);
-    assert!(preview.after(LEAVE * 4, cx).is_empty(), "it stays while the pointer is on it");
+    assert!(
+        preview.after(LEAVE * 4, cx).is_empty(),
+        "it stays while the pointer is on it"
+    );
     preview.pointer_at(OFF, cx);
     assert_eq!(preview.after(LEAVE, cx), ["hide"]);
 }
@@ -194,7 +234,10 @@ fn the_pointer_off_the_preview_but_on_its_row_keeps_it(cx: &mut TestAppContext) 
     preview.shown(1, cx);
     preview.pointer_at(point(px(20.), px(20.)), cx);
     preview.pointer_at(OFF, cx);
-    assert!(preview.after(LEAVE * 4, cx).is_empty(), "it stays while the pointer is on its row");
+    assert!(
+        preview.after(LEAVE * 4, cx).is_empty(),
+        "it stays while the pointer is on its row"
+    );
     preview.ask(Ask::Left(1), cx);
     assert_eq!(preview.after(LEAVE, cx), ["hide"]);
 }
@@ -206,7 +249,10 @@ fn the_next_folder_s_preview_takes_its_place_at_once(cx: &mut TestAppContext) {
     preview.ask(Ask::Left(1), cx);
     preview.rest_on(2, cx);
     assert_eq!(preview.after(Duration::ZERO, cx), [shown_at(2, 1)]);
-    assert!(preview.after(LEAVE * 2, cx).is_empty(), "leaving the first doesn't end the second");
+    assert!(
+        preview.after(LEAVE * 2, cx).is_empty(),
+        "leaving the first doesn't end the second"
+    );
 }
 
 #[gpui::test]
@@ -254,7 +300,11 @@ fn the_arrows_select_without_typing_and_stop_at_the_ends(cx: &mut TestAppContext
     let preview = open_preview(cx);
     preview.shown(1, cx);
     preview.keys("up", cx);
-    assert_eq!(preview.showing(cx).unwrap().2, Some(11), "↑ on the first stays there");
+    assert_eq!(
+        preview.showing(cx).unwrap().2,
+        Some(11),
+        "↑ on the first stays there"
+    );
     preview.keys("down down down", cx);
     assert_eq!(preview.showing(cx).unwrap().2, Some(13));
     preview.keys("up", cx);
@@ -294,7 +344,10 @@ fn a_click_outside_leaves_it_without_showing_a_tab(cx: &mut TestAppContext) {
 #[gpui::test]
 fn an_empty_folder_has_no_preview(cx: &mut TestAppContext) {
     let preview = open_preview(cx);
-    let empty = Rest { items: Vec::new(), ..rest(1, &preview.chose) };
+    let empty = Rest {
+        items: Vec::new(),
+        ..rest(1, &preview.chose)
+    };
     preview.ask(Ask::Rest(empty), cx);
     assert!(preview.after(DWELL * 2, cx).is_empty());
 }
@@ -304,9 +357,17 @@ fn it_is_arcs_height_and_scrolls_past_320() {
     // Arc's 53 + 45 a row, and 3 more under the last row's fill, as far as the sides.
     assert_eq!(height(1), 101.);
     assert_eq!(height(5), 281.);
-    assert_eq!(height(6), 320., "the sixth row is cut, so the list reads as one that scrolls");
+    assert_eq!(
+        height(6),
+        320.,
+        "the sixth row is cut, so the list reads as one that scrolls"
+    );
     assert_eq!(height(30), 320.);
-    assert_eq!(height(0), height(1), "an empty search keeps a row for its words");
+    assert_eq!(
+        height(0),
+        height(1),
+        "an empty search keeps a row for its words"
+    );
 }
 
 #[test]
@@ -327,6 +388,9 @@ fn it_stays_18_inside_the_window_beside_a_row_high_or_low_in_it() {
     assert_eq!(place(at(4.), height(6)).1, 18.);
     assert_eq!(place(at(650.), height(6)).1 + height(6), 700. - 18.);
     // In a window too narrow for it beside the sidebar, it keeps inside the window's right side.
-    let narrow = Anchor { window: size(px(400.), px(700.)), ..row(1) };
+    let narrow = Anchor {
+        window: size(px(400.), px(700.)),
+        ..row(1)
+    };
     assert_eq!(place(narrow, height(3)).0, 400. - WIDTH - 18.);
 }

@@ -22,13 +22,13 @@ use crate::tokens::text;
 /// The mark and the line fade in over this long on the scroll edge's curve, as the hover card's
 /// opacity does, from nothing, so a window that shows a page a frame later never shows them.
 pub(super) const FADE: f32 = 0.1;
-use crate::tokens::shell::empty::WORDS_SIZE;
-use crate::tokens::shell::empty::KEYS_SIZE;
+use crate::tokens::shell::empty::KEYS_FILL;
+use crate::tokens::shell::empty::KEYS_GAP;
 use crate::tokens::shell::empty::KEYS_HEIGHT;
 use crate::tokens::shell::empty::KEYS_INSET;
 use crate::tokens::shell::empty::KEYS_RADIUS;
-use crate::tokens::shell::empty::KEYS_FILL;
-use crate::tokens::shell::empty::KEYS_GAP;
+use crate::tokens::shell::empty::KEYS_SIZE;
+use crate::tokens::shell::empty::WORDS_SIZE;
 /// ilo's mark, the app icon's lowercase i (branding/ilo.icon) drawn from its 1024 pt canvas at a
 /// sixteenth, so 39 tall: a 184.4 dot 81.9 over a 133.1 × 358.4 stem with round ends.
 const MARK_SCALE: f32 = 1. / 16.;
@@ -36,30 +36,30 @@ const MARK_DOT: f32 = 184.4 * MARK_SCALE;
 const MARK_DOT_GAP: f32 = 81.9 * MARK_SCALE;
 const MARK_STEM_WIDTH: f32 = 133.1 * MARK_SCALE;
 const MARK_STEM_HEIGHT: f32 = 358.4 * MARK_SCALE;
-use crate::tokens::shell::empty::MARK_DOT_FILL;
-use crate::tokens::shell::empty::MARK_STEM_FILL;
-use crate::tokens::shell::empty::MARK_GAP;
-use crate::tokens::shell::empty::NAME_SIZE;
-use crate::tokens::shell::empty::NAME_LINE;
-use crate::tokens::shell::empty::NAME_GAP;
-use crate::tokens::shell::empty::NAME;
-use crate::tokens::shell::empty::WELCOME_MARK;
-use crate::tokens::shell::empty::WELCOME_SIZE;
-use crate::tokens::shell::empty::WELCOME_LINE;
-use crate::tokens::shell::empty::TAGLINE_SIZE;
-use crate::tokens::shell::empty::TAGLINE_LINE;
-use crate::tokens::shell::empty::TAGLINE;
+use crate::tokens::shell::empty::BUTTON_FILL;
 use crate::tokens::shell::empty::BUTTON_GAP;
 use crate::tokens::shell::empty::BUTTON_HEIGHT;
 use crate::tokens::shell::empty::BUTTON_INSET;
-use crate::tokens::shell::empty::BUTTON_RADIUS;
-use crate::tokens::shell::empty::BUTTON_FILL;
-use crate::tokens::shell::empty::BUTTON_TEXT;
 use crate::tokens::shell::empty::BUTTON_KEYS;
 use crate::tokens::shell::empty::BUTTON_KEYS_HEIGHT;
 use crate::tokens::shell::empty::BUTTON_KEYS_INSET;
 use crate::tokens::shell::empty::BUTTON_KEYS_RADIUS;
+use crate::tokens::shell::empty::BUTTON_RADIUS;
+use crate::tokens::shell::empty::BUTTON_TEXT;
 use crate::tokens::shell::empty::HINT_BOTTOM;
+use crate::tokens::shell::empty::MARK_DOT_FILL;
+use crate::tokens::shell::empty::MARK_GAP;
+use crate::tokens::shell::empty::MARK_STEM_FILL;
+use crate::tokens::shell::empty::NAME;
+use crate::tokens::shell::empty::NAME_GAP;
+use crate::tokens::shell::empty::NAME_LINE;
+use crate::tokens::shell::empty::NAME_SIZE;
+use crate::tokens::shell::empty::TAGLINE;
+use crate::tokens::shell::empty::TAGLINE_LINE;
+use crate::tokens::shell::empty::TAGLINE_SIZE;
+use crate::tokens::shell::empty::WELCOME_LINE;
+use crate::tokens::shell::empty::WELCOME_MARK;
+use crate::tokens::shell::empty::WELCOME_SIZE;
 
 impl Shell {
     /// Shows the first run's welcome on the empty card until a page shows: the launch had no
@@ -96,7 +96,12 @@ impl Shell {
         let Some(since) = self.empty_since.filter(|_| self.selected == 0) else {
             return 0.;
         };
-        fade_at(0., 1., now.saturating_duration_since(since).as_secs_f32(), FADE)
+        fade_at(
+            0.,
+            1.,
+            now.saturating_duration_since(since).as_secs_f32(),
+            FADE,
+        )
     }
 
     /// Whether `at` is on the card while it shows no page.
@@ -166,7 +171,9 @@ impl Shell {
             .text_size(px(WORDS_SIZE))
             .text_color(self.palette.text(SECONDARY))
             .child("Type a site, a search or a command.")
-            .when_some(keys, |hint, keys| hint.child(keys).child("brings it back from anywhere."))
+            .when_some(keys, |hint, keys| {
+                hint.child(keys).child("brings it back from anywhere.")
+            })
     }
 
     /// The mark, the Space's name in the display face, and the line.
@@ -189,8 +196,16 @@ impl Shell {
             .text_color(self.palette.text(SECONDARY))
             .child(div().text_size(px(WORDS_SIZE)).child("New Tab"))
             .children(keys);
-        let sign = div().flex().flex_col().items_center().child(mark(1., &self.palette));
-        match self.shown_space().map(|space| space.name.clone()).filter(|name| !name.is_empty()) {
+        let sign = div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .child(mark(1., &self.palette));
+        match self
+            .shown_space()
+            .map(|space| space.name.clone())
+            .filter(|name| !name.is_empty())
+        {
             // The name's caps, not its line, start the mark's gap below the mark.
             Some(name) => sign
                 .child(
@@ -212,7 +227,12 @@ fn mark(scale: f32, palette: &Palette) -> gpui::Div {
         .flex_col()
         .items_center()
         .gap(px(MARK_DOT_GAP * scale))
-        .child(div().size(px(MARK_DOT * scale)).rounded_full().bg(rgba(MARK_DOT_FILL)))
+        .child(
+            div()
+                .size(px(MARK_DOT * scale))
+                .rounded_full()
+                .bg(rgba(MARK_DOT_FILL)),
+        )
         .child(
             div()
                 .w(px(MARK_STEM_WIDTH * scale))

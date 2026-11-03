@@ -118,7 +118,6 @@ pub fn run(
     }
 }
 
-
 #[cfg(test)]
 mod launch_tests {
     use super::*;
@@ -131,7 +130,12 @@ mod launch_tests {
         assert_eq!(launch(bridge, None), ["/opt/ilo/mcp-bridge"]);
         assert_eq!(
             launch(Path::new("/app/ilo/mcp-bridge"), Some("app.ilo.browser")),
-            ["flatpak", "run", "--command=/app/ilo/mcp-bridge", "app.ilo.browser"]
+            [
+                "flatpak",
+                "run",
+                "--command=/app/ilo/mcp-bridge",
+                "app.ilo.browser"
+            ]
         );
         let info = "[Application]\nname=app.ilo.browser\nruntime=runtime/org.freedesktop.Platform/x86_64/25.08\n\n[Instance]\nname=other\n";
         assert_eq!(flatpak_name(info).as_deref(), Some("app.ilo.browser"));
