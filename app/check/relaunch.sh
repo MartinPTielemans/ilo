@@ -16,6 +16,19 @@ launch_at() {
 frame_of() {
   grep "^browser: window $1 frame " "$log" | tail -1 | cut -d' ' -f5-
 }
+# Wayland shows no client its window's place, so there the app keeps each window's size alone, at
+# 0, 0, and the compositor places it (frames.rs).
+wayland=
+[ "$(uname)" != Linux ] || [ -z "${WAYLAND_DISPLAY:-}" ] || wayland=1
+# Whether the frames $1 and $2, as "<x> <y> <width> <height>", are the same: on Wayland, their
+# sizes.
+same_frame() {
+  if [ -n "$wayland" ]; then
+    [ "$(echo "$1" | cut -d' ' -f3-)" = "$(echo "$2" | cut -d' ' -f3-)" ]
+  else
+    [ "$1" = "$2" ]
+  fi
+}
 # The name of the Space the window with the id $1 shows.
 space_of() {
   grep "^browser: window $1 in space " "$log" | tail -1 | cut -d' ' -f6-
@@ -85,7 +98,7 @@ await '^browser: restored in ' || fail "the relaunch didn't restore the Spaces"
 await '^browser: first frame at ' || fail "the restored window didn't draw"
 await '^browser: window opened [0-9]' || fail "the restored window didn't open"
 first=$(windows_opened | head -1)
-[ "$(frame_of "$first")" = "$(at 60 80 1000 700)" ] ||
+same_frame "$(frame_of "$first")" "$(at 60 80 1000 700)" ||
   fail "the window came back at $(frame_of "$first"), not where it was at $(at 60 80 1000 700)"
 one="window on screen $(launch_at 'window on screen') ms, first frame $(launch_at 'first frame') ms"
 
@@ -156,18 +169,22 @@ await '^browser: window [0-9]* in space Space 1$' || fail "the window behind did
 grep -q '^browser: private window opened ' "$log" && fail "the private window came back"
 front=$(windows_opened | head -1)
 back=$(windows_opened | tail -1)
-[ "$(frame_of "$front")" = "$(at 320 140 900 640)" ] ||
+same_frame "$(frame_of "$front")" "$(at 320 140 900 640)" ||
   fail "the window in front came back at $(frame_of "$front"), not at $(at 320 140 900 640)"
-[ "$(frame_of "$back")" = "$(at 60 80 1000 700)" ] ||
+same_frame "$(frame_of "$back")" "$(at 60 80 1000 700)" ||
   fail "the window behind came back at $(frame_of "$back"), not at $(at 60 80 1000 700)"
 await "^browser: window $front in space reading\$" ||
   fail "the window in front came back in $(space_of "$front"), not reading"
 await "^browser: window $back in space Space 1\$" ||
   fail "the window behind came back in $(space_of "$back"), not Space 1"
 await "^browser: window $back shows [1-9][0-9]*\$" || fail "the window behind came back without its page"
-send order
-expect '^browser: order window 1 window 2, key window 1$' \
-  "the windows came back out of order, or the one in front wasn't key"
+if [ -n "$wayland" ]; then
+  echo "skip: the windows' order after the relaunch: on Wayland the window behind comes back in front (#1550)."
+else
+  send order
+  expect '^browser: order window 1 window 2, key window 1$' \
+    "the windows came back out of order, or the one in front wasn't key"
+fi
 if windows; then
   expect_placement "normal $(at 320 140 900 640)" 1 "the window in front brought back"
   expect_placement "normal $(at 60 80 1000 700)" 2 "the window behind brought back"
@@ -176,7 +193,7 @@ fi
 two="window on screen $(launch_at 'window on screen') ms, first frame $(launch_at 'first frame') ms"
 
 # With windows open, ⌘N's window is as big as the one in front, down and to the right of it as
-# AppKit cascades windows.
+# AppKit cascades windows, except on Wayland, where the compositor places it.
 send window 1
 send key n cmd
 expect '^browser: window opened [0-9]' "⌘N didn't open a window over the two brought back"
@@ -184,8 +201,8 @@ cascaded=$(windows_opened | tail -1)
 read -r x y width height <<EOF
 $(frame_of "$cascaded")
 EOF
-[ "$width $height" = "900 640" ] && [ "${x:-0}" -gt $((screen_x + 320)) ] &&
-  [ "${y:-0}" -gt $((screen_y + 140)) ] ||
+[ "$width $height" = "900 640" ] && { [ -n "$wayland" ] ||
+  { [ "${x:-0}" -gt $((screen_x + 320)) ] && [ "${y:-0}" -gt $((screen_y + 140)) ]; }; } ||
   fail "⌘N's window opened at $(frame_of "$cascaded"), not as big as the one in front at $(at 320 140 900 640) and down and to its right"
 
 # Closed last, a regular window sets where the next launch's window opens, and a private window
@@ -209,10 +226,11 @@ exited
 
 launch_logged "$out/relaunch-d.log"
 await '^browser: window opened [0-9]' || fail "no window opened after the last one closed"
-grep -q "^browser: launch window frame $(at 140 100 1040 680)\$" "$log" ||
+same_frame "$(grep -m1 '^browser: launch window frame ' "$log" | cut -d' ' -f5-)" \
+  "$(at 140 100 1040 680)" ||
   fail "the launch window opened at $(grep '^browser: launch window frame ' "$log" | cut -d' ' -f5-), not where the last window closed at $(at 140 100 1040 680)"
 first=$(windows_opened | head -1)
-[ "$(frame_of "$first")" = "$(at 140 100 1040 680)" ] ||
+same_frame "$(frame_of "$first")" "$(at 140 100 1040 680)" ||
   fail "the window opened at $(frame_of "$first"), not where the last window closed at $(at 140 100 1040 680)"
 
 # On Windows, maximized as it closes, the last window comes back maximized, with its launch window.

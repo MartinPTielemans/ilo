@@ -467,8 +467,13 @@ fn a_slow_call_on_one_tab_holds_no_other_tab() {
     let (mut writer, answers) = session(&server, &mut handed);
     send_call(&mut writer, 2, "click", json!({ "tab": 1, "ref": "e1" }));
     send_call(&mut writer, 3, "click", json!({ "tab": 2, "ref": "e1" }));
-    let slow = next_call(&mut handed).expect("tab 1's call");
-    let quick = next_call(&mut handed).expect("tab 2's call waited for tab 1's");
+    // The two tabs' calls go at once, so either can reach the UI first.
+    let mut calls = [
+        next_call(&mut handed).expect("a tab's call"),
+        next_call(&mut handed).expect("one tab's call waited for the other's"),
+    ];
+    calls.sort_by_key(|call| call.arguments["tab"].as_u64());
+    let [slow, quick] = calls;
     let tabs = (slow.arguments["tab"].clone(), quick.arguments["tab"].clone());
     assert_eq!(tabs, (json!(1), json!(2)));
     quick.reply.send(ToolResult::text("Clicked.")).unwrap();
@@ -509,10 +514,15 @@ fn asks_come_one_at_a_time() {
     send_call(&mut writer, 2, "hand_off", json!({ "tab": 1, "reason": "Sign in" }));
     send_call(&mut writer, 3, "hand_off", json!({ "tab": 2, "reason": "Sign in" }));
     send_call(&mut writer, 4, "click", json!({ "tab": 3, "ref": "e1" }));
-    let asking = next_call(&mut handed).expect("the first hand_off");
-    assert_eq!(asking.arguments["tab"], 1);
-    let click = next_call(&mut handed).expect("tab 3's call waited for the ask");
-    assert_eq!(click.tool, "click");
+    // The first ask and tab 3's call go at once, so either can reach the UI first.
+    let first = next_call(&mut handed).expect("the first hand_off or tab 3's call");
+    let second = next_call(&mut handed).expect("tab 3's call or the first hand_off waited");
+    let (asking, click) = match first.tool.as_str() {
+        "click" => (second, first),
+        _ => (first, second),
+    };
+    assert_eq!((asking.tool.as_str(), asking.arguments["tab"].clone()), ("hand_off", json!(1)));
+    assert_eq!(click.tool, "click", "two asks at once");
     assert!(no_call(&mut handed), "two asks at once");
     click.reply.send(ToolResult::text("Clicked.")).unwrap();
     assert_eq!(answered(&answers), 4);

@@ -465,7 +465,8 @@ impl Shell {
             }
         }
         let was_onto = self.drag.as_ref().and_then(|drag| drag.onto);
-        let onto = was_onto.filter(|&row| middle == Some(row));
+        let onto = was_onto.filter(|&(row, _)| middle == Some(row));
+        let onto = onto.map(|(row, _)| (row, self.left_half(row, pointer.x)));
         let (place, line) = if onto.is_some() { (to, None) } else { (place, line) };
         if let Some(drag) = &mut self.drag {
             drag.moving = true;
@@ -476,9 +477,11 @@ impl Shell {
             drag.onto = onto;
             drag.shape.turn(over_favorites, crate::motion::start(cx));
         }
-        if onto != was_onto {
-            // check.sh waits for this line.
-            log!("browser: drop onto none");
+        match onto {
+            // check.sh waits for these lines.
+            Some((row, left)) if onto != was_onto => log!("browser: drop onto {row} {}", side(left)),
+            None if was_onto.is_some() => log!("browser: drop onto none"),
+            _ => {}
         }
         // Links dragged in have no place before their first, which they didn't pass a row to get.
         let entered = incoming && to == Place::List(false, usize::MAX);
@@ -578,15 +581,25 @@ impl Shell {
     /// joins it in a split view.
     fn rested_onto(&mut self, row: u64, cx: &mut Context<Self>) {
         let resting = |drag: &&mut Drag| drag.resting.as_ref().is_some_and(|rest| rest.0 == row);
+        let x = self.drag.as_ref().map_or(0., |drag| drag.pointer.x);
+        let left = self.left_half(row, x);
         let Some(drag) = self.drag.as_mut().filter(|drag| !drag.dropped).filter(resting) else {
             return;
         };
-        drag.onto = Some(row);
+        drag.onto = Some((row, left));
         drag.line = None;
         // check.sh waits for this line.
-        log!("browser: drop onto {row}");
+        log!("browser: drop onto {row} {}", side(left));
         self.drag_detent(cx);
         cx.notify();
+    }
+
+    /// Whether `x` across the sidebar is on the left half of `row`'s plate, where a tab rested on
+    /// it would join it on the left, before a split's first page, as Arc's does
+    /// (`SidebarDropTargetRegion`).
+    fn left_half(&self, row: u64, x: f32) -> bool {
+        let left = PLATE_INSET + self.depth(row) as f32 * FOLDER_INDENT;
+        x < (left + self.width() - PLATE_INSET) / 2.
     }
 
     /// The tab whose row's middle half is at `y` down the sidebar, which a dragged `tab` would join
@@ -680,11 +693,11 @@ impl Shell {
             cx.notify();
             return;
         }
-        if let Some(with) = drag.onto {
+        if let Some((with, left)) = drag.onto {
             // check.sh waits for this line.
             log!("browser: dragged {tab} onto {with}");
             self.settle_drag(cx);
-            self.join_split(tab, with, false, false, cx);
+            self.join_split(tab, with, left, false, cx);
             cx.notify();
             return;
         }
@@ -1166,4 +1179,9 @@ mod tests {
         ];
         assert_eq!(dropped_urls(dragged, search), opened);
     }
+}
+
+/// The side of a row a tab rested on would join it, as check.sh reads it.
+fn side(left: bool) -> &'static str {
+    if left { "left" } else { "right" }
 }

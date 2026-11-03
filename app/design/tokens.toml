@@ -415,6 +415,9 @@ row-x = 8.0
 # A line between groups: 1 pt in the middle of this, 8 in from the rows' text.
 line = 9.0
 text = 13.0
+# A heading over the items after it, such as a split's Tab Options, in the secondary ink and
+# semibold, as AppKit's section headers are.
+header-text = 11.0
 # Between the check, the title and what trails it.
 gap = 6.0
 check = 12.0
@@ -745,12 +748,13 @@ url-field-text-x = 21.0
 url-button-size = 30.0
 url-button-inset = 3.0
 url-button-glyph = 14.0
-# The favorites' tiles, over the Space's name (docs/ux-spec.md › Favorites): their height, the gap
-# between them and under the last row, the narrowest a row's tiles get before it takes one fewer,
-# and their corners.
-tile-height = 41.0
-tile-gap = 6.0
-tile-min = 48.0
+# The favorites' tiles, over the Space's name (docs/ux-spec.md › Favorites): Arc 1.170's height
+# and the gap between them and under the last row, the narrowest a tile gets before its row takes
+# one fewer, the most a row takes (Arc 1.171), and their corners (ours).
+tile-height = 47.0
+tile-gap = 8.0
+tile-min = 47.0
+tile-columns = 4
 tile-radius = 12.0
 # A favorite's mark in its tile's top right, while its page uses the camera or microphone, shares
 # or is shared, or plays sound (ours).
@@ -774,11 +778,18 @@ name-x = 41.0
 space-icon-slot = 20.0
 # The sidebar's icon takes clicks on Arc's frame, which lights with the header's plate (ours).
 space-icon-plate = 26.0
-# The chevron after the name that collapses the Space's pinned rows and expands them, on the
-# header's hover plate: down while they show, turned to point right while they're collapsed (ours).
+# The chevron that collapses the Space's pinned rows and expands them, in the icon's slot, or after
+# the name without an icon in a box this wide (ours): down while they show, a quarter turned to
+# point right while they're collapsed (Arc 1.171; its size is ours).
 pinned-caret = 12.0
 pinned-caret-plate = 20.0
 pinned-caret-gap = 2.0
+# Under the pointer the name row is a tab row's plate, with its ••• on a square this big whose end
+# is this far in from the plate's (Arc 1.171). Rename Space… puts Done there (Arc 1.171).
+space-more = 24.0
+space-more-inset = 6.0
+space-done-width = 32.0
+space-done-height = 26.0
 icon-placeholder = 24.0
 icon-placeholder-radius = 6.0
 icon-placeholder-line = 1.0
@@ -800,6 +811,10 @@ drop-line = 2.0
 drop-ring = 8.0
 drop-ring-x = 7.0
 drop-line-end = 2.0
+# A tab rested on a row shows in the split it would make, in a slot this far in from its segment's
+# edges at the plate's radius less as much, filled as a hovered row (ours: Arc's preview isn't
+# measured).
+drop-slot-inset = 3.0
 drop = 0xffff_ffe6
 plate-radius = 12.0
 # Around the row the keyboard acts on while the sidebar has it (Focus Sidebar), inside its plate,
@@ -874,6 +889,13 @@ space-height = 34.0
 space-swatch-shown = 14.0
 space-swatch = 10.0
 space-swatch-hovered = 12.0
+# More Spaces than fit at the pitch share the switcher's span in half points; once a share would be
+# under 22, the Space shown keeps 22 and the others share the rest: 17.5, 13 and 9 with 12, 16
+# and 22 Spaces in a sidebar 300 wide (Arc 1.171 ax). A squeezed item's ink keeps 4 clear of its
+# neighbours, and never goes under 4 (ours).
+space-shown-least = 22.0
+space-clear = 4.0
+space-least = 4.0
 form-title-top = 140.0
 form-title-height = 20.0
 form-inset = 14.0
@@ -1166,9 +1188,9 @@ spaces-inset = 48.0
 card-width = 240.0
 card-radius = 16.0
 card-gap = 24.0
-# Ours (*interim*, as Arc's recording never ran out of room): the section grows until the page
-# beside it would be narrower than this, and its cards scroll across past that.
-spaces-page = 400.0
+# Once its cards don't fit, the section leaves the page this much of the window, however narrow,
+# and its cards scroll across (Arc 1.171 ax: 500 → 444, 1100 → 1044, live as the window resizes).
+spaces-page = 56.0
 # The name's row in the card, 33 down to its middle as in Arc, with the rows 52 down.
 card-name-top = 14.0
 card-name-height = 38.0
