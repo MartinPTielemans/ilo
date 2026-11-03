@@ -30,10 +30,14 @@ pub const GRACE: Duration = Duration::from_millis(400);
 /// links that touch isn't a flicker.
 pub const FADE_IN: Duration = Duration::ZERO;
 pub const FADE_OUT: Duration = Duration::from_millis(120);
+/// Arc's, from its release notes and help centre: the pointer resting on a link this long shows its
+/// whole address. Chrome's status bubble waits 1.6 s.
+pub const WHOLE_AFTER: Duration = Duration::from_millis(1500);
 pub use crate::tokens::link_target::HEIGHT;
 pub use crate::tokens::link_target::MARGIN;
 pub use crate::tokens::link_target::NEAR;
-/// Its window, wide enough for the longest address, which elides past it.
+pub use crate::tokens::link_target::RESTING_WIDTH;
+/// Its window, wide enough for the whole address, which elides past it.
 pub use crate::tokens::link_target::WINDOW_WIDTH;
 pub const WINDOW_HEIGHT: f32 = HEIGHT;
 use crate::elevation::{Level, WINDOW_MARGIN};
@@ -202,6 +206,16 @@ pub fn place(card: Bounds<Pixels>, width: f32, side: Side) -> Bounds<Pixels> {
     )
 }
 
+/// Where the plate's window starts in the browser window, for the plate at `frame` in `side` of
+/// the card: at the plate on the left, and ending at it on the right, so the window, wider than
+/// the plate, reaches into the card rather than past the browser window's edge.
+pub fn window_left(frame: Bounds<Pixels>, side: Side) -> f32 {
+    match side {
+        Side::Left => f32::from(frame.left()),
+        Side::Right => f32::from(frame.right()) - WINDOW_WIDTH,
+    }
+}
+
 /// Whether the pointer at (`x`, `y`) in the window is on `frame` or within `NEAR` of it.
 pub fn near(frame: Bounds<Pixels>, x: f32, y: f32) -> bool {
     let (left, top) = (
@@ -229,6 +243,7 @@ pub trait Host {
 struct Pending {
     window: u64,
     plate: Plate,
+    side: Side,
     left: f32,
     top: f32,
 }
@@ -239,8 +254,9 @@ pub struct LinkTarget {
     look: Box<dyn Fn(&App) -> (Hsla, Palette)>,
     /// The browser window the plate shows over, if it shows.
     shown: Option<u64>,
-    /// What the window draws, which stays as it fades out after the plate went.
-    drawn: Option<Plate>,
+    /// What the window draws, at its left or right end, which stays as it fades out after the plate
+    /// went.
+    drawn: Option<(Plate, Side)>,
     pending: Option<Pending>,
     /// The one-shot timer a plate waits on. Dropping it cancels it.
     wait: Option<Task<()>>,
@@ -306,19 +322,21 @@ pub fn open(
     }
 }
 
-/// The pointer is on a link in a page of browser window `window`, or the plate's place changed:
-/// `plate` shows over that window with its top left at (`left`, `top`) in it. After DELAY, one
-/// timer that `hide` cancels, or at once if a plate shows or went less than GRACE ago. A call while
-/// the timer runs changes what it shows, and where.
-pub fn show(window: u64, plate: Plate, left: f32, top: f32, cx: &mut App) {
+/// The pointer is on a link in a page of browser window `window`, or the plate or its place
+/// changed: `plate` shows over that window at `frame` in it, in `side` of the card. After DELAY,
+/// one timer that `hide` cancels, or at once if a plate shows or went less than GRACE ago. A call
+/// while the timer runs changes what it shows, and where.
+pub fn show(window: u64, plate: Plate, frame: Bounds<Pixels>, side: Side, cx: &mut App) {
     let Some(target) = cx.try_global::<LinkTargetWindow>().map(|target| target.0) else {
         return;
     };
+    let (left, top) = (window_left(frame, side), f32::from(frame.top()));
     target
         .update(cx, |target, _, cx| {
             target.pending = Some(Pending {
                 window,
                 plate,
+                side,
                 left,
                 top,
             });
@@ -364,6 +382,7 @@ impl LinkTarget {
         let Some(Pending {
             window,
             plate,
+            side,
             left,
             top,
         }) = self.pending.take()
@@ -375,7 +394,7 @@ impl LinkTarget {
             log!("browser: link target plate {}", plate.text());
         }
         self.shown = Some(window);
-        self.drawn = Some(plate);
+        self.drawn = Some((plate, side));
         self.host.show(window, left, top);
         cx.notify();
     }
@@ -399,9 +418,14 @@ impl Render for LinkTarget {
         let root = div()
             .size_full()
             .p(px(WINDOW_MARGIN))
-            .font_family(crate::face::UI);
-        let Some(plate) = self.drawn.clone() else {
+            .font_family(crate::face::UI)
+            .flex();
+        let Some((plate, side)) = self.drawn.clone() else {
             return root;
+        };
+        let root = match side {
+            Side::Left => root,
+            Side::Right => root.justify_end(),
         };
         let (fill, palette) = (self.look)(cx);
         let text = div()

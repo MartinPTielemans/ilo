@@ -229,9 +229,12 @@ if [ -n "$arc" ]; then
     fail "the import didn't finish once the Work profile loaded"
   # The rules go to Arc's Spaces by their places among the user's: Personal second, Work third.
   t=$(printf '\t')
-  rules="rule${t}contains${t}3${t}work.example.com
+  # After the Meet rule a profile starts with (#692).
+  rules="rule${t}contains${t}front${t}meet.google.com
+rule${t}contains${t}3${t}work.example.com
 rule${t}is${t}2${t}https://news.ycombinator.com/
-rule${t}is${t}3${t}https://docs.example.com/"
+rule${t}is${t}3${t}https://docs.example.com/
+seeded${t}meet"
   [ "$(cat "$rules_file" 2>/dev/null)" = "$rules" ] ||
     fail "Arc's link rules didn't come in to its Spaces: $(cat "$rules_file" 2>/dev/null)"
   ../tools/window-screenshot.sh "$pid" "$out/import-done.png" || fail "no window to capture"
