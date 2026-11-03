@@ -56,19 +56,16 @@ document.onvisibilitychange = () => {
 </script>'
 log="$out/spaces.log"
 step=0
-# X11 sends a touchpad's scrolling with no start or end, so two fingers never page there (#554),
-# and Windows' touchpad comes through DirectManipulation, which the driver can't stand in for: its
-# wheel messages reach GPUI as a mouse wheel's lines. Their steps go to the Spaces and the Library
-# by key, click and wheel instead. X11's clicks land on whole pixels, at scale 1 here.
+# X11 sends a touchpad's scrolling with no start or end, so two fingers never page there (#554):
+# its steps go to the Spaces and the Library by key, click and wheel instead. Its clicks land on
+# whole pixels, at scale 1 here. Windows' driver hands GPUI two fingers as Direct Manipulation
+# does a precision touchpad's (#1212).
 x11=
 fingers=1
 if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
   x11=1
   fingers=
   echo "skip: two fingers across the sidebar, on X11, which sends no touch phases (#554)."
-elif windows; then
-  fingers=
-  echo "skip: two fingers across the sidebar: the Windows driver can't send a touchpad's."
 fi
 rm -f "$saved" "$launch_frame"
 BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" < "$out/drive" > "$log" 2>&1 &
@@ -337,14 +334,25 @@ none_since '^browser: command view-library' ||
   fail "a swipe let go short of halfway opened the Library"
 library_to "swipe $swipe_point 12 0 10" swipe shown
 # Fingers going on past where it opens take the Library on a little with the card, its column's
-# fill still reaching the window's left edge, lighter than the window right of it.
+# fill still reaching the window's left edge: the edge is the column's colour 40 across, and not
+# the section's beside it. The column is the ink over the window, darker in a light window and
+# lighter in a dark one, so the step compares colours, not which is brighter.
 post swipe $swipe_point 60 0 10 1500
 expect '^browser: library past its end$' "fingers past the Library's end didn't reach it"
 ../tools/window-screenshot.sh "$pid" "$out/library-end.png" || fail "no window to capture"
-column=$(pixel "$out/library-end.png" $(echo "6 / ${content%x*}" | bc -l) 0.85)
-beside=$(pixel "$out/library-end.png" $(echo "200 / ${content%x*}" | bc -l) 0.85)
-brighter "$column" "$beside" ||
-  fail "past its end the Library's column left the window's edge: $column at it, $beside beside"
+# awk, as Git Bash on Windows has no bc.
+end_at() { pixel "$out/library-end.png" "$(awk "BEGIN { print $1 / ${content%x*} }")" 0.85; }
+alike() {
+  set -- $1 $2
+  for d in $(($1 - $4)) $(($2 - $5)) $(($3 - $6)); do
+    [ "${d#-}" -le 4 ] || return 1
+  done
+}
+column=$(end_at 6)
+inside=$(end_at 40)
+beside=$(end_at 200)
+{ alike "$column" "$inside" && ! alike "$column" "$beside"; } || fail "past its end the \
+Library's column left the window's edge: $column at it, $inside in it, $beside beside"
 await "^browser: drive $step done" || fail "the driver didn't finish the swipe"
 none_since '^browser: command view-library' || fail "fingers past the Library's end closed it"
 expect '^browser: library shown$' "the Library didn't settle back where it opens"
@@ -573,13 +581,15 @@ expect_soon "^browser: space $second in " "⌃2 didn't show the second Space"
 post rightclick 12 $(row 0 | cut -d' ' -f2)
 expect "^browser: menu shown $(cased 'Copy Link, ')" "a right-click while the second Space's rows slid in showed no menu"
 # Settled before the menu showed, and the press came too late to be a test of the slide. The
-# slide's 0.3 s is the clock's, and a GPU-less Linux or Windows runner may draw frames slower than
-# that, which the press waits behind (#732).
+# slide's 0.3 s is the clock's, and a GPU-less runner, Linux's, Windows' or GitHub's hosted Mac,
+# may draw frames slower than that, which the press waits behind (#732). A Mac of our own still
+# fails here, as it keeps the mid-slide press of #1513 tested.
 if ! sed -n "/^browser: drive $slide: /,\$p" "$log" |
   awk '/^browser: settled space/ { late = 1 } /^browser: menu shown/ { exit late }'; then
-  { [ "$(uname)" = Linux ] || windows; } ||
+  { [ "$(uname)" = Linux ] || windows || [ -n "${GITHUB_ACTIONS:-}" ]; } ||
     fail "the rows had settled before the right-click, so it didn't press mid-slide"
-  echo "skip: a right-click mid-slide: the rows had settled before the app had the press (#732)."
+  echo "skip: a right-click mid-slide: the rows had settled before the app had the press" \
+    "(#732, #1513)."
 fi
 send choose Rename…
 expect "^browser: rename tab $b\$" "the menu a mid-slide right-click showed was another row's"

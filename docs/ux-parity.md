@@ -177,7 +177,7 @@ One row per item in [ux-spec.md](ux-spec.md). The spec holds the full rule and w
 | [x] | Past the first Space, the Library | MVP | fingers move its open from the first Space, never in the swipe that reached it, opening past halfway or on a flick; a wheel's tick opens it; back from it the same way | Arc release notes, Arc 1.x video, Arc 1.170 rec |
 | [x] | Past the last Space, a new Space | MVP | the page pulls ≤ 41 (2×); a circle's ring closes at 38 and readies it, with Arc's morph and pop; let go readied makes the Space with its form, the page in from 46 over 170 ms. Arc's 4-point sparkle: ours is the dot growing into the + | Arc 1.x video |
 | [x] | Release | MVP | ≥ 5 pt/s goes on; ±1 Space; 100 ms velocity history | Dia 1.50.1 bin |
-| [x] | Settle | MVP | critically damped 0.19 s, carrying the velocity; detent haptic | Arc 1.170 rec |
+| [x] | Settle | MVP | critically damped 0.19 s, carrying the velocity; a detent with the fingers down as the landing changes (ours, #1075) | Arc 1.170 rec |
 | [x] | Wheel mice | MVP | sum deltas < 0.049 s apart; > 1 pt pages once; ignore 0.25 s | Dia 1.50.1 bin |
 | [x] | ⌃1–⌃9 | MVP | switch Space | Dia (as profiles) |
 | [ ] | Mouse side buttons over the sidebar | MVP | back and forward show the previous and next Space, as Arc's; over the page they go back and forward. Built, with `cargo test --lib`'s `mouse_back_and_forward_over_the_sidebar_switch_spaces` (pressed as X's buttons 8 and 9 under Xvfb). To tick: a driver command for the side buttons and a step in `./check.sh spaces` that presses each over the sidebar and one over a page with history | Arc, #688 |
