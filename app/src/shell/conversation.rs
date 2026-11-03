@@ -163,6 +163,8 @@ pub struct TalkView {
     drawn: Rc<RefCell<Vec<(u64, Bounds<Pixels>)>>>,
     /// Where each picture was drawn when that was logged last.
     drawn_logged: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
+    /// Where Stop was drawn when that was logged last.
+    stop_logged: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Its pages changed while one was watched over it, so they're pictured again once it shows.
     stale: bool,
     /// Its lines, which keep the newest in view as they come while the user is at the end.
@@ -260,6 +262,7 @@ impl Shell {
                     pictures: Vec::new(),
                     drawn: Rc::default(),
                     drawn_logged: Rc::default(),
+                    stop_logged: Rc::default(),
                     stale: false,
                     scroll: ScrollHandle::new(),
                     viewport: Size::default(),
@@ -791,9 +794,31 @@ impl TalkView {
             let chip =
                 page_chip(palette, "conversation-stop", "Stop", Some(stop_keys())).opacity(opacity);
             match stoppable {
-                true => chip.on_click(cx.listener(|view, _, _, cx| {
-                    view.shell.update(cx, |shell, cx| shell.stop_talk(cx)).ok();
-                })),
+                true => {
+                    let logged = self.stop_logged.clone();
+                    let at = canvas(
+                        move |bounds, _, _| {
+                            if logged.replace(Some(bounds)) != Some(bounds) {
+                                // check.sh reads this line, to click it.
+                                log!(
+                                    "browser: task stop at {:.0} {:.0} {:.0} {:.0}",
+                                    f32::from(bounds.origin.x),
+                                    f32::from(bounds.origin.y),
+                                    f32::from(bounds.size.width),
+                                    f32::from(bounds.size.height)
+                                );
+                            }
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_full();
+                    chip.relative()
+                        .child(at)
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.shell.update(cx, |shell, cx| shell.stop_talk(cx)).ok();
+                        }))
+                }
                 false => chip,
             }
         });

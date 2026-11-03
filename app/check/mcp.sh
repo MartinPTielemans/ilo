@@ -790,8 +790,8 @@ if [ "$driven" = 1 ]; then
   await_log "^browser: agent mcp-client done in $at\$" "the tab still shows a gone agent at work"
   await_log "^browser: agent question $pending gone\$" "a gone agent's question stayed open"
 
-  # Reconnected, the client's next call on a tab is a card of its own. Its Stop, ⌘. with its
-  # conversation shown, answers the call under way that the user stopped it, then closes the
+  # Reconnected, the client's next call on a tab is a card of its own. Its conversation's Stop
+  # answers the call under way that the user stopped it, then closes the
   # client's connection, which the bridge ends with, until the user reconnects it (#1080).
   hello='^browser: agent mcp-client hello from check$'
   initialize='{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}'
@@ -812,8 +812,13 @@ $(grep "^browser: task plate task-${session#session-} at " "$log" | tail -1 | cu
 PLATE
   send click $((px + pw / 2)) $((py + ph / 2))
   expect "^browser: task $session shown\$" "a click on the new card didn't show its conversation"
-  send key . cmd
-  expect '^browser: agent mcp-client stopped by the user$' "⌘. didn't stop the client"
+  expect '^browser: task stop at ' "the new card's conversation drew no Stop"
+  read -r sx sy sw sh <<STOP
+$(grep '^browser: task stop at ' "$log" | tail -1 | cut -d' ' -f5-)
+STOP
+  ../tools/window-screenshot.sh "$pid" "$out/agent-session.png" || fail "no window to capture"
+  send click $((sx + sw / 2)) $((sy + sh / 2))
+  expect '^browser: agent mcp-client stopped by the user$' "Stop didn't stop the client"
   stopped=$(next_answer) || fail "the browser didn't answer the hand_off it stopped"
   stopped=$(printf '%s\n' "$stopped" | answered)
   case "$stopped" in
@@ -859,7 +864,7 @@ forget_login
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, is refused a tab the user took over with the strip's ⌘↩ until they hand it back and Keep answers its ask, is stopped by its card's ⌘., which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow, which Settings › Agents lists, and off takes the socket away"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, is refused a tab the user took over with the strip's ⌘↩ until they hand it back and Keep answers its ask, is stopped by its card's Stop, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow, which Settings › Agents lists, and off takes the socket away"
 else
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases). skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi
