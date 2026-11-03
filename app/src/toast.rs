@@ -193,12 +193,17 @@ impl Shown {
         }
     }
 
-    fn moving(&self) -> bool {
+    /// Whether it's still on its way in or out, or bumping. Under Reduce Motion it's in once it
+    /// has faded in, as it's drawn at its size and never bumps.
+    fn moving(&self, cx: &App) -> bool {
         let bumping = self
             .bumped
             .is_some_and(|at| bump(at.elapsed().as_secs_f32()).is_some());
         match (self.shown, self.leaving) {
             (_, Some(_)) | (None, _) => true,
+            (Some(shown), None) if crate::motion::still(cx) => {
+                shown.elapsed().as_secs_f32() < FADE_IN
+            }
             (Some(shown), None) => {
                 bumping || spring(shown.elapsed().as_secs_f32(), RESPONSE, DAMPING).is_some()
             }
@@ -454,7 +459,7 @@ fn present(
             // it doesn't scale.
             let shown = toast.shown.take().filter(|shown| shown.leaving.is_none());
             let in_place = shown.as_ref().is_some_and(|shown| shown.shown.is_some());
-            let bumped = (in_place && !cx.reduce_motion()).then(|| {
+            let bumped = (in_place && !crate::motion::still(cx)).then(|| {
                 // check.sh reads this line.
                 log!("browser: toast bumped");
                 Instant::now()
@@ -588,7 +593,7 @@ impl Render for Toast {
         if shown.shown.is_none() && window.is_visible() {
             shown.shown = Some(Instant::now());
         }
-        let at_rest = !shown.moving();
+        let at_rest = !shown.moving(cx);
         if !at_rest {
             window.request_animation_frame();
         } else if !shown.settled {

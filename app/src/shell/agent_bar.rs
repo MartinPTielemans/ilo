@@ -5,7 +5,7 @@
 //! GPUI draws, as the window's question cards are.
 
 use gpui::{
-    App, Context, Div, FontWeight, MouseButton, SharedString, Stateful, div, prelude::*, px, rgba,
+    App, Context, Div, FontWeight, MouseButton, SharedString, Stateful, div, prelude::*, px,
 };
 
 use super::{
@@ -225,7 +225,12 @@ impl Shell {
                         .font_weight(FontWeight::MEDIUM)
                         .child(title),
                 )
-                .child(div().truncate().text_color(rgba(DETAIL)).child(detail))
+                .child(
+                    div()
+                        .truncate()
+                        .text_color(self.palette.on_overlay(DETAIL))
+                        .child(detail),
+                )
                 .child(
                     div()
                         .mt(px(BUTTONS_TOP))

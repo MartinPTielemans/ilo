@@ -983,6 +983,7 @@ impl Browser for Fake {
     fn command_bar(
         &self,
         editing: Option<(u64, SharedString)>,
+        _: Vec<SharedString>,
         _: Vec<BarTab>,
         _: Option<Bounds<Pixels>>,
         cx: &mut App,
@@ -1572,6 +1573,8 @@ impl command_bar::Host for PreviewBar {
     fn run_task(&self, _: &str, _: &str, _: Option<(SharedString, SharedString)>, _: &mut App) {}
 
     fn set_up_agents(&self, _: &mut App) {}
+
+    fn tooltip(&self, _: Option<(browser::tooltip::Tip, browser::tooltip::Anchor)>, _: &mut App) {}
 }
 
 /// Opens the command bar at `at`, with the suggestions for what `mode` has typed.
@@ -1625,6 +1628,7 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
         title: title.into(),
         url: url.into(),
         favicon: None,
+        renamed: false,
     })
     .collect();
     let (typed, rows) = match mode {
@@ -1732,8 +1736,11 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
     let tone = forced.or(preview_tone()).unwrap_or_default();
     palette::set_current(Palette::of(theme.as_ref(), tone), cx);
     match typed {
-        "" => command_bar::show(None, tabs, None, cx),
-        typed => command_bar::show(Some((0, typed.to_string().into())), Vec::new(), None, cx),
+        "" => command_bar::show(None, Vec::new(), tabs, None, cx),
+        typed => {
+            let editing = Some((0, typed.to_string().into()));
+            command_bar::show(editing, Vec::new(), Vec::new(), None, cx)
+        }
     }
     let icons = [
         Icon::Envelope,
