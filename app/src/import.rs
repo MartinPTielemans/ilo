@@ -460,6 +460,9 @@ pub struct ImportView {
     os: Os,
     /// The bookmark folders of the browser picked, to choose from.
     folders: Folders,
+    /// The favorites offered that the user unticked, by URL, which its end leaves out when it
+    /// adds them.
+    unticked: Vec<String>,
     /// The favorites the last import offers from its history, once it's read.
     suggested: Option<Vec<Tab>>,
     /// How many imports it ran, which numbers each run.
@@ -497,6 +500,7 @@ impl ImportView {
             drawn: None,
             drawn_at: Rc::default(),
             os: roots.os,
+            unticked: Vec::new(),
             folders: Folders::default(),
             suggested: None,
             runs: 0,
@@ -578,6 +582,7 @@ impl ImportView {
         let picked = read::kinds(&self.sources[source]).to_vec();
         self.step = Step::Pick { source, picked };
         self.folders = Folders::default();
+        self.unticked.clear();
         cx.notify();
     }
 
@@ -622,6 +627,57 @@ impl ImportView {
             None => left_out.push(name.into()),
         }
         log!("browser: import leaves out {}", left_out.join(", "));
+        cx.notify();
+    }
+
+    /// Makes those of the favorites offered that the user ticked, `tabs`, favorites of `space`,
+    /// which ends the offer, so the import's end doesn't make it again.
+    pub fn add_offered(&mut self, space: u64, tabs: &[Tab]) {
+        if !tabs.is_empty() {
+            self.add_favorites(space, tabs);
+        }
+        self.suggested = Some(Vec::new());
+        self.unticked.clear();
+    }
+
+    /// The favorites offered that are still ticked.
+    fn ticked(&self) -> Vec<Tab> {
+        let offered = self.suggested.iter().flatten();
+        let ticked = offered.filter(|tab| !self.unticked.contains(&tab.url));
+        ticked.cloned().collect()
+    }
+
+    /// Ticks or unticks the favorite offered at `url`.
+    fn toggle_favorite(&mut self, url: &str, cx: &mut Context<Self>) {
+        match self.unticked.iter().position(|each| each == url) {
+            Some(at) => {
+                self.unticked.remove(at);
+            }
+            None => self.unticked.push(url.into()),
+        }
+        cx.notify();
+    }
+
+    /// Adds the favorites still ticked to the first Space of the profile the browser started
+    /// with, whose history they come from, as the first launch adds them to its first Space, and
+    /// says how many after what came in.
+    fn add_ticked(&mut self, cx: &mut Context<Self>) {
+        let ticked = self.ticked();
+        let existing = self.host.existing(cx);
+        let start = existing.profiles.first().map(|(id, _)| *id);
+        let space = existing.spaces.iter().find(|space| Some(space.profile) == start);
+        let (Some(space), Step::Done(said)) = (space, &self.step) else {
+            return;
+        };
+        if ticked.is_empty() {
+            return;
+        }
+        let added = match ticked.len() {
+            1 => format!("{said} 1 favorite added."),
+            count => format!("{said} {count} favorites added."),
+        };
+        self.add_offered(space.id, &ticked);
+        self.step = Step::Done(added.into());
         cx.notify();
     }
 
@@ -1042,6 +1098,8 @@ impl ImportView {
         if !matches!(self.step, Step::List) {
             return;
         }
+        // An earlier import's favorites aren't offered at this one's end.
+        self.suggested = None;
         let view = cx.entity().downgrade();
         let chosen = file.clone();
         let then = Box::new(move |passwords: Passwords, cx: &mut App| {
@@ -1257,6 +1315,41 @@ impl ImportView {
             .gap(px(BOX_GAP))
             .child(disclosure)
             .children(chosen)
+    }
+
+    /// The favorites an import worked out from its history, with the line saying where they come
+    /// from, the first launch's own, and a row each, ticked in the accent as Choose folders' are,
+    /// which a click unticks.
+    fn favorites_offer(&self, tabs: &[Tab], cx: &mut Context<Self>) -> gpui::Div {
+        let look = &self.look;
+        let here = match self.os {
+            Os::Mac => "this Mac",
+            _ => "this computer",
+        };
+        let rows = tabs.iter().enumerate().map(|(index, tab)| {
+            let on = !self.unticked.contains(&tab.url);
+            let url = tab.url.clone();
+            div()
+                .id(("import-favorite", index))
+                .on_click(cx.listener(move |view, _, _, cx| view.toggle_favorite(&url, cx)))
+                .child(checked_row(
+                    look,
+                    on,
+                    suggested::site_name(&tab.url),
+                    rgb(NO_THEME_ACCENT),
+                    rgb(CHECK_TICK),
+                ))
+        });
+        let said = format!(
+            "The sites you visit most, from the history it brought, worked out on {here}. \
+             Nothing is sent anywhere."
+        );
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(BOX_GAP))
+            .child(line(said).text_color(look.detail))
+            .child(group(look, rows.map(|row| div().child(row))))
     }
 
     /// A row for each browser found, with Import….
@@ -1634,6 +1727,16 @@ impl Render for ImportView {
                     (line(why).text_color(look.detail), delete)
                 });
                 let (why, delete) = file.unzip();
+                let offered = self.suggested.as_deref().filter(|tabs| !tabs.is_empty());
+                let favorites = offered.map(|tabs| self.favorites_offer(tabs, cx));
+                let add = offered.map(|_| {
+                    let any = !self.ticked().is_empty();
+                    button(&look, "import-add-favorites", "Add Favorites")
+                        .when(!any, |button| button.opacity(0.5))
+                        .when(any, |button| {
+                            button.on_click(cx.listener(|view, _, _, cx| view.add_ticked(cx)))
+                        })
+                });
                 let extensions = self.extensions_box(cx);
                 div()
                     .flex()
@@ -1641,6 +1744,7 @@ impl Render for ImportView {
                     .gap(px(BOX_GAP))
                     .child(line(said.clone()))
                     .children(why)
+                    .children(favorites)
                     .children(extensions)
                     .child(
                         div()
@@ -1648,6 +1752,7 @@ impl Render for ImportView {
                             .justify_end()
                             .gap(px(PADDING))
                             .children(delete)
+                            .children(add)
                             .child(div().relative().child(done).child(drawn(
                                 "import-done".into(),
                                 self.drawn_at.clone(),
