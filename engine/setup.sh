@@ -149,6 +149,14 @@ apply_series "$src"
 if [ -n "$update" ]; then
   echo "setup: updating the tree in place" >&2
   rsync -rlp --checksum --delete --exclude=/out/ "$src/" "$live/"
+  # The toolchain's unpacking links some files by their path in the staged tree, which goes next,
+  # so those links point into the live tree instead: 156.0.8078.79's left rustfmt broken.
+  find "$live" -path "$live/out" -prune -o -type l \( -lname "$ucm/build/src/*" -o -lname "$src/*" \) -print |
+    while IFS= read -r link; do
+      target=$(readlink "$link")
+      target=${target#"$ucm/build/src/"}
+      ln -sfn "$live/${target#"$src/"}" "$link"
+    done
   rm -rf "$stamps" "$live_ucm"
   mv "$ucm" "$live_ucm"
   ln -sfn "$live" "$live_ucm/build/src"
