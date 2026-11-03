@@ -21,6 +21,7 @@
 #include <winrt/Windows.Storage.Streams.h>
 
 #include <algorithm>
+#include <cstdarg>
 #include <cmath>
 #include <cstdio>
 #include <ctime>
@@ -47,8 +48,42 @@ extern "C" void browser_fade_none(void*, double, double, double) {}
 #pragma comment(linker, "/alternatename:browser_fade=browser_fade_none")
 // What check.sh calls a window the host floats over a browser window (below).
 extern "C" const char* host_floating_name(void* hwnd);
+// The app's (src/logging.rs), in the browser and the preview: whether BROWSER_LOG turns on |area|.
+extern "C" bool browser_log_on(const char* area);
 
 namespace {
+
+// A line in |area| of BROWSER_LOG (src/logging.rs), "browser: [area] ...", in one write, if it's
+// on. Never what the user browses or types.
+void LogIn(const char* area, const char* format, ...) {
+  if (!browser_log_on(area)) {
+    return;
+  }
+  char line[512];
+  int length = snprintf(line, sizeof(line), "browser: [%s] ", area);
+  va_list args;
+  va_start(args, format);
+  vsnprintf(line + length, sizeof(line) - length - 1, format, args);
+  va_end(args);
+  length = static_cast<int>(strlen(line));
+  line[length] = '\n';
+  fwrite(line, 1, length + 1, stderr);
+}
+
+// The window class of |hwnd|, for the focus area's lines.
+std::string ClassName(HWND hwnd) {
+  char name[64] = "none";
+  if (hwnd) {
+    GetClassNameA(hwnd, name, sizeof(name));
+  }
+  return name;
+}
+
+// What check.sh calls the floating window |hwnd|, for the focus area's lines.
+const char* FloatingName(HWND hwnd) {
+  const char* name = host_floating_name(hwnd);
+  return name ? name : "a floating window";
+}
 
 std::wstring Wide(const char* utf8) {
   if (!utf8) {
@@ -189,6 +224,7 @@ struct Floating {
 
 void LeaveOverlay(int index);
 void DismissOverlay(int index);
+void TooltipOverlayHiding(int index);
 
 // Whether a mouse button is down, the user's on the device or the driver's in the thread's key
 // state: the user pressing on another window takes the keyboard from the one that had it, which
@@ -297,6 +333,9 @@ LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpa
       // from it only then.
       if (LOWORD(wparam) == WA_INACTIVE && !floating->hiding && floating->shown) {
         const HWND to = reinterpret_cast<HWND>(lparam);
+        LogIn("focus", "%s loses the keyboard to %p %s%s, pressed %d", FloatingName(hwnd),
+              static_cast<void*>(to), ClassName(to).c_str(),
+              to && to == GetWindow(hwnd, GW_OWNER) ? " (its browser window)" : "", Pressed());
         // ilo's menu, opened over this overlay, isn't the user leaving it.
         if (g_menu.shown && to == g_menu.hwnd) {
           break;
@@ -305,6 +344,7 @@ LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpa
         // view replaces the one that had focus. That isn't the user leaving, who would have pressed
         // on it, so this one takes the keyboard back as the window has it (#1363).
         if (floating->keyboard && to && to == GetWindow(hwnd, GW_OWNER) && !Pressed()) {
+          LogIn("focus", "%s takes the keyboard back", FloatingName(hwnd));
           break;
         }
         floating->keyboard = false;
@@ -955,6 +995,7 @@ bool CloseOverlay(int index) {
   Floating& floating = g_overlays[index];
   ++floating.shows;
   const bool was_shown = floating.shown;
+  TooltipOverlayHiding(index);
   Hide(floating);
   if (was_shown) {
     // check.sh reads this line.
@@ -994,7 +1035,7 @@ std::map<void*, std::pair<double, double>> g_pane_corners;
 // window starts at (host_set_pane_corner).
 std::map<void*, double> g_page_lefts;
 Floating g_hud;
-double g_hud_right = 0, g_hud_top = 0;
+double g_hud_right = 0, g_hud_top = 0, g_hud_margin = 0;
 Floating g_drop_targets;
 Floating g_dialog;
 Floating g_site_controls;
@@ -1107,6 +1148,10 @@ Floating g_capture;
 Floating g_toast;
 Floating g_tooltip;
 double g_tooltip_margin = 0;
+// The overlay holding what the tooltip names, which it shows over, as a command bar row's button,
+// or -1, and what's told as the tooltip goes with it.
+int g_tooltip_overlay = -1;
+void (*g_tooltip_away)(void) = nullptr;
 Floating g_card;
 double g_card_margin = 0;
 Floating g_link_target;
@@ -1696,6 +1741,11 @@ class FileDropSource : public IDropSource {
     return refs;
   }
   HRESULT STDMETHODCALLTYPE QueryContinueDrag(BOOL escape, DWORD keys) override {
+    // Each change only, as Windows asks on every move.
+    if (keys != keys_ || escape) {
+      keys_ = keys;
+      LogIn("drag", "buttons %lu escape %d", keys, escape);
+    }
     if (escape || (keys & MK_RBUTTON)) {
       return DRAGDROP_S_CANCEL;
     }
@@ -1704,12 +1754,18 @@ class FileDropSource : public IDropSource {
     }
     return S_OK;
   }
-  HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD) override {
+  HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD effect) override {
+    if (effect != effect_) {
+      effect_ = effect;
+      LogIn("drag", "the target takes effect %lu", effect);
+    }
     return DRAGDROP_S_USEDEFAULTCURSORS;
   }
 
  private:
   ULONG refs_ = 1;
+  DWORD keys_ = ~0ul;
+  DWORD effect_ = ~0ul;
 };
 
 // The shell's own data object for the file at |path|, so a drag carries it as Explorer does, with
@@ -2754,6 +2810,7 @@ void host_set_overlay_elevation(int, float, double, float, double, double) {}
 void host_set_overlay_growth(int, double, double) {}
 void host_set_overlay_shrink(int) {}
 void host_set_overlay_motion(int, double, double, double) {}
+void host_set_overlays_still(bool) {}
 
 void host_show_overlay(int overlay,
                        void* ui_view,
@@ -2959,10 +3016,11 @@ void host_set_pane_corner(void* ui_view, double left, double right, double top) 
   }
 }
 
-void host_add_hud(void* hud_view, double right, double top, double) {
+void host_add_hud(void* hud_view, double right, double top, double margin) {
   Adopt(g_hud, hud_view, true, nullptr);
   g_hud_right = right;
   g_hud_top = top;
+  g_hud_margin = margin;
 }
 
 void host_show_hud(void* ui_view) {
@@ -2970,12 +3028,31 @@ void host_show_hud(void* ui_view) {
   ContentSize(Root(ui_view), &content_width, &content_height);
   WindowSize(g_hud.hwnd, &width, &height);
   auto [extra_right, extra_top] = g_pane_corners[ui_view];
-  Show(g_hud, ui_view, content_width - g_hud_right - extra_right - width, g_hud_top + extra_top, -1,
-       -1, false);
+  // 8 points below the find bar while it shows, where the HUD would cover it, as the Mac's and
+  // Linux's hosts put it.
+  double top = g_hud_top;
+  if (auto it = g_find_bars.find(ui_view); it != g_find_bars.end()) {
+    HWND bar = it->second.floating.hwnd;
+    double bar_width, bar_height;
+    if (bar && IsWindowVisible(bar)) {
+      WindowSize(bar, &bar_width, &bar_height);
+      top = it->second.top + bar_height + 8 - g_hud_margin;
+    }
+  }
+  Show(g_hud, ui_view, content_width - g_hud_right - extra_right - width, top + extra_top, -1, -1,
+       false);
+  // check.sh reads this line, as the Mac's and Linux's hosts log it.
+  if (g_hud.hwnd && IsWindowVisible(g_hud.hwnd)) {
+    fprintf(stderr, "browser: zoom hud shown\n");
+  }
 }
 
 void host_hide_hud(void) {
+  const bool shown = g_hud.hwnd && IsWindowVisible(g_hud.hwnd);
   Hide(g_hud);
+  if (shown) {
+    fprintf(stderr, "browser: zoom hud hidden\n");
+  }
 }
 
 void host_add_drop_targets(void* view) {
@@ -3247,6 +3324,18 @@ LRESULT CALLBACK SaveDialogEvent(int code, WPARAM wparam, LPARAM lparam) {
   return CallNextHookEx(nullptr, code, wparam, lparam);
 }
 
+// Overlay |index| is closing: the tooltip over it goes at once, not left over the page as it fades.
+void TooltipOverlayHiding(int index) {
+  if (g_tooltip_overlay == index) {
+    g_tooltip_overlay = -1;
+    const bool shown = g_tooltip.hwnd && IsWindowVisible(g_tooltip.hwnd);
+    FadeOut(g_tooltip, 0, [] {});
+    if (shown && g_tooltip_away) {
+      g_tooltip_away();
+    }
+  }
+}
+
 }  // namespace
 
 extern "C" {
@@ -3375,12 +3464,27 @@ void host_hide_toast(void) {
   Hide(g_toast);
 }
 
-void host_add_tooltip(void* tooltip_view, double margin, void (*)(void)) {
+void host_add_tooltip(void* tooltip_view, double margin, void (*away)(void)) {
   Adopt(g_tooltip, tooltip_view, true, nullptr);
+  g_tooltip_away = away;
   g_tooltip_margin = margin;
 }
 
-void host_show_tooltip(void* ui_view, double left, double top, double fade) {
+void host_show_tooltip(void* ui_view, int overlay, double left, double top, double fade) {
+  // In the overlay, from where it shows in the browser window. Shown, the tooltip goes over the
+  // windows its browser window owns, the overlay among them.
+  if (overlay >= 0) {
+    if (overlay >= int(std::size(g_overlays))) {
+      return;
+    }
+    const Floating& owner = g_overlays[overlay];
+    if (!owner.shown || !owner.place || GetWindow(owner.hwnd, GW_OWNER) != Root(ui_view)) {
+      return;
+    }
+    left += owner.place->first;
+    top += owner.place->second;
+  }
+  g_tooltip_overlay = overlay;
   FadeIn(g_tooltip, ui_view, left - g_tooltip_margin, top - g_tooltip_margin, fade, "tooltip");
 }
 
@@ -3883,7 +3987,13 @@ bool host_drag_file(const char* path, void (*ended)(bool)) {
     source.Attach(new FileDropSource());
     // On the UI thread GPUI has made an OLE apartment, as Explorer's drag is.
     DWORD effect = DROPEFFECT_NONE;
+    POINT at{};
+    GetCursorPos(&at);
+    const HWND over = WindowFromPoint(at);
+    LogIn("drag", "starts at %ld %ld over %p %s", at.x, at.y, static_cast<void*>(over),
+          ClassName(over).c_str());
     const HRESULT dropped = DoDragDrop(data.Get(), source.Get(), DROPEFFECT_COPY, &effect);
+    LogIn("drag", "ends: %lx, effect %lu", static_cast<unsigned long>(dropped), effect);
     if (ended) {
       ended(dropped == DRAGDROP_S_DROP && effect != DROPEFFECT_NONE);
     }

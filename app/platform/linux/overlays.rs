@@ -10,7 +10,7 @@
 //! shortcut: no blur under them.
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     ffi::{c_int, c_void},
     time::Instant,
 };
@@ -76,6 +76,18 @@ thread_local! {
         const { RefCell::new([None, None, None, None]) };
     /// The app's overlays that have each browser window's keyboard, by their views.
     static LENT: RefCell<Vec<(bc::bc_id, usize)>> = const { RefCell::new(Vec::new()) };
+    /// Reduce Motion, under which they grow and shrink no more, and only fade.
+    static STILL: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The size an overlay grows from and shrinks to, `from` unless Reduce Motion keeps it its own.
+fn shrunk(from: f32) -> f32 {
+    if STILL.get() { 1. } else { from }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn host_set_overlays_still(still: bool) {
+    STILL.set(still);
 }
 
 /// The overlay of `view` takes the keyboard of `window`, or gives it back. The core lends it while
@@ -262,7 +274,7 @@ pub extern "C" fn host_show_overlay(
         ..
     } = growth;
     let scale = Track {
-        from,
+        from: shrunk(from),
         to: 1.,
         seconds,
         curve: GROW_CURVE,
@@ -395,9 +407,33 @@ pub(crate) fn placed(view: *mut c_void) -> Option<(*mut c_void, Bounds<Pixels>)>
     crate::panels::placed(view).or_else(|| crate::popovers::placed(view))
 }
 
+/// Overlay `overlay`'s view and where it shows in its browser window's content, if it shows, for a
+/// tooltip over it (floats.rs).
+pub(crate) fn shown_at(overlay: c_int) -> Option<(*mut c_void, Bounds<Pixels>)> {
+    with_overlay(overlay, |o| {
+        o.shown.as_ref().map(|shown| (o.view, shown.bounds))
+    })
+    .flatten()
+}
+
+/// Puts overlay `overlay` where it shows again, if it does, which stacks it and what shows under it
+/// again: its shadow under it, and it under a tooltip that has come over it (floats.rs).
+pub(crate) fn restack(overlay: c_int) {
+    let shown = with_overlay(overlay, |o| {
+        o.shown
+            .as_ref()
+            .map(|shown| (o.view, shown.bounds, px(o.radius as f32)))
+    });
+    if let Some(Some((view, bounds, radius))) = shown {
+        gpui_linux::move_overlay(view, bounds, radius);
+    }
+}
+
 /// Hides `overlay` if it shows, and says whether it did. The window has its keyboard back once
 /// the overlay's gone, as the input focus on X11 says who had it.
 fn hide(overlay: c_int) -> bool {
+    // A tooltip over it goes with it, at once, not left over the page as it fades.
+    crate::floats::overlay_hiding(overlay);
     let Some(Some((view, window, shrinks, growth))) = with_overlay(overlay, |o| {
         let shown = o.shown.take()?;
         let goes = o.shrinks || o.motion.out.is_some();
@@ -424,7 +460,10 @@ fn hide(overlay: c_int) -> bool {
     lend_keyboard(window, view, false);
     // It fades where it is, unless it shrinks back.
     let (shrinks, Growth { from, out, .. }) = growth;
-    let (to, seconds) = (if shrinks { from } else { 1. }, out.unwrap_or(SHRINK));
+    let (to, seconds) = (
+        if shrinks { shrunk(from) } else { 1. },
+        out.unwrap_or(SHRINK),
+    );
     let scale = Track {
         from: 1.,
         to,
