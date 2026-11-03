@@ -75,6 +75,36 @@ pub(crate) extern "C" fn launch_picture_on_resigning() {
     update_app_later(save_launch_picture);
 }
 
+// The left |width| points of the frame |window| last drew, its sidebar, top-down BGRA, with how many
+// pixels across. Windows' picture of the window has it repaint its frame, where the theme paints
+// the caption under the UI, on screen too (#1262), so the picture comes from GPUI's own frame.
+#[cfg(target_os = "windows")]
+fn sidebar_pixels(window: AnyWindowHandle, width: f64, cx: &mut App) -> Option<(Vec<u8>, usize)> {
+    let started = std::time::Instant::now();
+    let (image, scale) = cx
+        .update_window(window, |_, window, _| {
+            (window.render_to_image(), window.scale_factor())
+        })
+        .ok()?;
+    let image = image.ok()?;
+    let (across, rows) = (image.width() as usize, image.height() as usize);
+    let columns = ((width * f64::from(scale)).round() as usize).min(across);
+    if columns == 0 || rows == 0 {
+        return None;
+    }
+    let mut pixels = Vec::with_capacity(columns * rows * 4);
+    for row in image.as_raw().chunks_exact(across * 4) {
+        for pixel in row[..columns * 4].chunks_exact(4) {
+            pixels.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+        }
+    }
+    log!(
+        "browser: launch picture drawn in {:.1} ms",
+        started.elapsed().as_secs_f64() * 1000.
+    );
+    Some((pixels, columns))
+}
+
 pub(crate) fn save_launch_picture(cx: &mut App) {
     // The regular window in front, which the next launch opens first.
     let Some(window) = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.regular()).cloned())
@@ -99,8 +129,22 @@ pub(crate) fn save_launch_picture(cx: &mut App) {
         return;
     };
     let profile = profile.as_ptr();
+    #[cfg(not(target_os = "windows"))]
     let taken =
         unsafe { platform::host_save_launch_picture(window.ui_view, profile, width.into()) };
+    #[cfg(target_os = "windows")]
+    let taken = sidebar_pixels(window.handle, width.into(), cx).is_some_and(|(pixels, columns)| {
+        let rows = pixels.len() / 4 / columns;
+        unsafe {
+            platform::host_save_launch_pixels(
+                window.ui_view,
+                profile,
+                pixels.as_ptr(),
+                columns,
+                rows,
+            )
+        }
+    });
     // check.sh reads this line.
     log!(
         "browser: launch picture {}",

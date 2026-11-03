@@ -1944,10 +1944,6 @@ void ShowShareSheet(HWND root, std::function<void(const wdt::DataPackage&)> fill
 
 namespace {
 
-#ifndef PW_RENDERFULLCONTENT
-#define PW_RENDERFULLCONTENT 0x00000002
-#endif
-
 // What the first window looks like until its UI has drawn, put on screen before the browser
 // starts: the window's frame, the sidebar's picture and the sidebar's colour past it.
 struct LaunchWindow {
@@ -2054,49 +2050,6 @@ LRESULT CALLBACK LaunchProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
     }
   }
   return DefWindowProcW(hwnd, message, wparam, lparam);
-}
-
-// The left |width| pixels of |window|'s content, top-down BGRX, filling |high|.
-bool Sidebar(HWND window, LONG width, std::vector<uint8_t>* pixels, LONG* high) {
-  RECT client{};
-  GetClientRect(window, &client);
-  width = width < client.right ? width : client.right;
-  *high = client.bottom;
-  if (width < 1 || *high < 1) {
-    return false;
-  }
-  BITMAPINFO info{};
-  info.bmiHeader.biSize = sizeof info.bmiHeader;
-  info.bmiHeader.biWidth = client.right;
-  info.bmiHeader.biHeight = -*high;
-  info.bmiHeader.biPlanes = 1;
-  info.bmiHeader.biBitCount = 32;
-  info.bmiHeader.biCompression = BI_RGB;
-  uint8_t* bits = nullptr;
-  HDC screen = GetDC(nullptr);
-  HDC dc = CreateCompatibleDC(screen);
-  ReleaseDC(nullptr, screen);
-  HBITMAP bitmap =
-      CreateDIBSection(dc, &info, DIB_RGB_COLORS, reinterpret_cast<void**>(&bits), nullptr, 0);
-  bool ok = false;
-  if (bitmap) {
-    HGDIOBJ old = SelectObject(dc, bitmap);
-    // The full content, as GPUI draws through DirectComposition, which a plain copy of the
-    // window's DC misses.
-    ok = PrintWindow(window, dc, PW_CLIENTONLY | PW_RENDERFULLCONTENT);
-    GdiFlush();
-    if (ok) {
-      pixels->resize(static_cast<size_t>(width) * *high * 4);
-      for (LONG y = 0; y < *high; ++y) {
-        memcpy(pixels->data() + static_cast<size_t>(y) * width * 4,
-               bits + static_cast<size_t>(y) * client.right * 4, static_cast<size_t>(width) * 4);
-      }
-    }
-    SelectObject(dc, old);
-    DeleteObject(bitmap);
-  }
-  DeleteDC(dc);
-  return ok;
 }
 
 // Writes |pixels|, |width| by |height| top-down BGRX, to |path| as a PNG. The caller has
@@ -2448,7 +2401,8 @@ void host_close_launch_window(void) {
   g_launch = {};
 }
 
-bool host_save_launch_picture(void* ui_view, const char* profile_dir, double width) {
+bool host_save_launch_pixels(void* ui_view, const char* profile_dir, const uint8_t* pixels,
+                             size_t columns, size_t rows) {
   HWND root = Root(ui_view);
   double x = 0, y = 0, frame_width = 0, frame_height = 0;
   // In the frame's terms, which the next launch's window opens at, and named for its size.
@@ -2464,26 +2418,15 @@ bool host_save_launch_picture(void* ui_view, const char* profile_dir, double wid
   }
   // Chromium's full screen takes the window's caption away.
   const bool full_screen = root && !(GetWindowLongPtrW(root, GWL_STYLE) & WS_CAPTION);
-  if (!framed || !IsWindowVisible(root) || full_screen || width < 1) {
+  if (!framed || !IsWindowVisible(root) || full_screen || !pixels || columns < 1 || rows < 1) {
     return false;
   }
-  // Only the sidebar: the page could be anything, and shouldn't be kept on disk. Of GPUI's window,
-  // which draws it: a PrintWindow of the browser window has it repaint its frame, where Windows'
-  // theme paints the caption the window's style has, under the UI, in the window's own surface,
-  // which shows on screen and in the picture (#1262).
-  HWND ui = GetWindow(Hwnd(ui_view), GW_CHILD);
-  std::vector<uint8_t> pixels;
-  LONG high = 0;
-  const LONG wide = static_cast<LONG>(std::lround(width * Scale(root)));
-  if (!ui || !Sidebar(ui, wide, &pixels, &high)) {
-    return false;
-  }
-  const UINT columns = static_cast<UINT>(pixels.size() / 4 / high);
   // Encoded off the main thread, which the user is about to use elsewhere or quit.
   std::thread([path = LaunchPicturePath(profile_dir, frame_width, frame_height),
-               pixels = std::move(pixels), columns, high] {
+               pixels = std::vector<uint8_t>(pixels, pixels + columns * rows * 4),
+               columns = static_cast<UINT>(columns), rows = static_cast<UINT>(rows)] {
     const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    WritePng(path, pixels, columns, static_cast<UINT>(high));
+    WritePng(path, pixels, columns, rows);
     if (SUCCEEDED(com)) {
       CoUninitialize();
     }
