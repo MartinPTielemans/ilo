@@ -237,6 +237,18 @@ expect "^browser: space $first in " "the first Space's dot didn't show it"
 expect "^browser: settled space $first\$" "the first Space's page didn't settle"
 expect_tabs "$c $a" "$a" "back in the first Space, its last-used tab"
 ../tools/window-screenshot.sh "$pid" "$out/space-last-used.png" || fail "no window to capture"
+# A row carried across the sidebar's right edge out over the page is no longer at the edge, and
+# held there past the edge's 0.5 s wait, the hand's hold the sleep is, it pages nowhere (#1466).
+send press $(row 0)
+send dragto 110 $(row 0 | cut -d' ' -f2)
+send dragto 220 $(row 0 | cut -d' ' -f2)
+send dragto $page_point
+expect "^browser: drop targets for $a\$" "a row dragged over the page didn't bring the targets"
+sleep 1
+none_since '^browser: drag paged to space' || fail "a row held over the page paged to the next Space"
+send dragto $(row 0)
+expect '^browser: drop targets gone$' "the targets stayed with the row back over the sidebar"
+send release $(row 0)
 # A row held at the sidebar's right edge pages to the next Space, and let go there it moves to it.
 # Held on another row's middle half, it doesn't join that row in a split on the way, whose rest is
 # shorter than the edge's wait (#1089). ⌘Z puts it back in its Space, where the window doesn't go

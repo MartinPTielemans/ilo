@@ -146,3 +146,48 @@ fn a_folder_held_at_the_edge_goes_under_the_next_spaces_pinned_tabs(cx: &mut Tes
     shell.update(cx, |shell, cx| shell.drop_row(cx));
     assert_eq!(host.take_edits(), ["space folder 7 2"]);
 }
+
+/// Carried out over the page across the right edge, a row is no longer held at the edge and pages
+/// nowhere however long it stays there, with the page's drop targets under it or none; back at
+/// the edge it pages again (#1466).
+#[gpui::test]
+fn a_row_dragged_over_the_page_pages_nowhere(cx: &mut TestAppContext) {
+    let (shell, host) = shell(cx);
+    let width = shell.read_with(cx, |shell, _| shell.width());
+    let over_page = |cx: &mut TestAppContext| {
+        shell.read_with(cx, |shell, _| shell.drag.as_ref().map(|drag| drag.over_page.is_some()))
+    };
+    // With no tab shown there's no page to join, so no targets.
+    let y = press(&shell, cx, 4);
+    drag_to(&shell, cx, X, y + 10.);
+    drag_to(&shell, cx, width - 10., y + 10.);
+    drag_to(&shell, cx, width + 300., y + 10.);
+    assert_eq!(over_page(cx), Some(false));
+    wait(cx);
+    wait(cx);
+    assert!(host.shown.take().is_empty(), "paged from over the page");
+    drag_to(&shell, cx, width - 10., y + 10.);
+    wait(cx);
+    assert_eq!(host.shown.take(), [2]);
+    shell.update(cx, |shell, cx| {
+        shell.cancel_drag(cx);
+        shell.set_space(1, cx);
+        // 3 shown, so 4 over the page has 3's targets, which take the drag.
+        shell.set_selected(3, cx);
+        shell.viewport = gpui::size(gpui::px(1200.), gpui::px(800.));
+    });
+    cx.run_until_parked();
+    host.take();
+    let y = press(&shell, cx, 4);
+    drag_to(&shell, cx, X, y + 10.);
+    drag_to(&shell, cx, width - 10., y + 10.);
+    drag_to(&shell, cx, width + 300., y + 10.);
+    assert_eq!(over_page(cx), Some(true));
+    wait(cx);
+    wait(cx);
+    assert!(host.shown.take().is_empty(), "paged from the targets");
+    drag_to(&shell, cx, width - 10., y + 10.);
+    assert_eq!(over_page(cx), Some(false));
+    wait(cx);
+    assert_eq!(host.shown.take(), [2]);
+}
