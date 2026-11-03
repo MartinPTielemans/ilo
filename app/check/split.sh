@@ -18,9 +18,10 @@
 # beside the page, and ⌘W closes the focused pane, leaving the page beside it alone, which ⇧⌘T puts
 # back. The ✕ on a split's row closes all its panes, and the window shows the tab above them. ⇧⌘T
 # brings them back together. A row dragged onto the page brings a target to each of the card's
-# sides, which go when it's back over the sidebar, and let go on the left one, the tab joins the
-# page shown on its left. The command bar's Flip Split View, Move Pane Right and Separate All Pages
-# reorder and end a split. A tab rested 0.4 s on another's row joins it, which ⌘Z takes back to its
+# sides, over the page it would join, which go when it's back over the sidebar, its tab shown
+# again, and let go on the left one, the tab joins the page shown on its left. The command bar's
+# Flip Split View, Move Pane Right and Separate All Pages reorder and end a split. A tab rested
+# 0.4 s on another's row joins it, which ⌘Z takes back to its
 # row and ⇧⌘Z joins again, ⌥-click on a split's row takes its tab out and on another tab's joins it
 # to the page shown, and a split's menu has Mute under each tab and a Duplicate that copies the
 # whole split. A row let go with ⌥ held leaves a copy of its tab there, which ⌘Z closes, and
@@ -547,22 +548,26 @@ send click 202 $(row 2 | cut -d' ' -f2)
 expect '^browser: command close-tab via sidebar$' "a click on the split's ✕ didn't run Close Tab"
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "closing the split again didn't show $a"
 # A row dragged onto the page becomes a picture of a window, and a target slides in at each of the
-# card's sides. Back over the sidebar it's a row again, and let go over the left target it joins
-# the page shown on its left, focused.
+# card's sides, over the page it would join, which shows again in place of the one the press showed
+# (#1467). Back over the sidebar it's a row again, its tab shown again, and let go over the left
+# target it joins the page shown on its left, focused.
 target="$((x + 140)) $((y + h / 2))"
 send press $(row 0)
 send dragto 110 $(row 0 | cut -d' ' -f2)
 send dragto $target
 none_since '^browser: detent$' || fail "a row dragged onto the page clicked the trackpad"
 expect "^browser: drop targets for $a\$" "a row dragged onto the page didn't bring the targets"
+expect "^browser: panes $a\$" "the page under the targets isn't $a's, which the tab would join"
 expect '^browser: drop targets shown$' "the targets' window didn't show"
 expect '^browser: drop target left$' "the left target isn't under the tab"
 ../tools/window-screenshot.sh "$pid" "$out/split-targets.png" || fail "no window to capture"
 send dragto 100 300
 expect '^browser: drop targets gone$' "the targets stayed with the tab back over the sidebar"
 expect '^browser: drop targets hidden$' "the targets' window stayed"
+expect "^browser: panes $c\$" "the tab pressed didn't show again with the targets gone"
 send dragto $target
 expect '^browser: drop target left$' "the left target isn't under the tab again"
+expect "^browser: panes $a\$" "the page under the targets isn't $a's again"
 send release $target
 expect "^browser: splits $c+$a\$" "the tab let go on the left target didn't join the page: \"$(splits)\""
 expect "^browser: selected $c\( in .*\)\{0,1\}\$" "the tab let go on a target isn't focused"
