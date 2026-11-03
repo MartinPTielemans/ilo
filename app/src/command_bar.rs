@@ -100,7 +100,7 @@ pub struct Suggestion {
     pub tab: u64,
     /// What completes the text typed to this row, for the first row only.
     pub completion: String,
-    /// Whether ⇧⌦, ⌥⌘⌫ or its ✕ can take it out of the profile's history: a page visited or a
+    /// Whether ⇧⌦, ⌥⌘⌫ or its trash can take it out of the profile's history: a page visited or a
     /// search typed before, never one of the well-known sites or the search for what's typed.
     pub removable: bool,
     /// The browser command the row runs instead, and its shortcut.
@@ -446,7 +446,7 @@ pub struct CommandBar {
     selected: usize,
     /// The row under the pointer, which keeps its plate as the keys move the selection (Arc).
     hovered: Option<usize>,
-    /// The row whose ✕ was last drawn, and its page, for check.sh's line as it draws.
+    /// The row whose trash was last drawn, and its page, for check.sh's line as it draws.
     remove_drawn: Option<(usize, String)>,
     /// Whether an assistive app reads the bar's window, so its rows say what they are.
     a11y: bool,
@@ -1751,8 +1751,9 @@ impl CommandBar {
         self.host.remove_suggestion(&row.url);
     }
 
-    /// The ✕ a row from history shows under the pointer, as Arc's does, which takes it out. It's
-    /// the arrow's tile, so the two read as one kind.
+    /// The trash a row from history shows under the pointer, where Arc's has a ✕, which takes it
+    /// out: ✕ closes and trash removes (ux-principles, the owner, #1394). It's the arrow's tile, so
+    /// the two read as one kind.
     fn remove_button(&self, index: usize, selected: bool, cx: &mut Context<Self>) -> AnyElement {
         let palette = palette::current(cx);
         let (tile, color) = match selected {
@@ -1771,8 +1772,8 @@ impl CommandBar {
             .justify_center()
             .rounded(px(CHIP_RADIUS))
             .bg(tile)
-            .child(svg().path("icons/x.svg").size(px(14.)).text_color(color))
-            // The click is the ✕'s, not the row's under it.
+            .child(svg().path("icons/trash.svg").size(px(14.)).text_color(color))
+            // The click is the trash's, not the row's under it.
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |bar, _, _, cx| {
                 cx.stop_propagation();
