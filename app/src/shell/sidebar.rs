@@ -206,7 +206,7 @@ impl Shell {
     }
 
     /// Tabs opened in the Space shown while the sidebar is hidden, whose rows aren't seen: a toast
-    /// says so, and a click on it reveals the top one's row (Arc's release notes).
+    /// says so, and its Show reveals the top one's row (Arc's release notes), as the Spaces' does.
     pub(super) fn toast_opened(&mut self, tabs: &[u64], cx: &mut Context<Self>) {
         let Some(&tab) = tabs.first().filter(|_| self.unseen_sidebar()) else {
             return;
@@ -219,7 +219,7 @@ impl Shell {
         let show = Rc::new(move |cx: &mut App| {
             shell.update(cx, |shell, cx| shell.reveal_row(tab, cx)).ok();
         });
-        self.browser.toast_button(&text, (None, "show"), show, OPENED_TIME, cx);
+        self.browser.toast_button(&text, ("Show", "show"), show, OPENED_TIME, cx);
     }
 
     /// Whether what's added to the sidebar goes unseen: it's hidden, its reveal isn't out, and the
@@ -256,7 +256,7 @@ impl Shell {
         let show = Rc::new(move |cx: &mut App| {
             shell.update(cx, |shell, cx| shell.show_made_space(first, cx)).ok();
         });
-        self.browser.toast_button(&text, (Some("Show"), "show"), show, OPENED_TIME, cx);
+        self.browser.toast_button(&text, ("Show", "show"), show, OPENED_TIME, cx);
     }
 
     /// The Space toast's Show: the Space, if it's still there, with the sidebar back.
@@ -684,14 +684,15 @@ mod tests {
         assert_eq!(*host.toasts.borrow(), ["Added the Space “Space 4”"]);
         shell.update(cx, spaces(&[1, 2, 3, 4, 5]));
         assert_eq!(host.toasts.borrow().last().unwrap(), "Added 2 Spaces");
-        let show = host.toast_run.borrow_mut().take().expect("no Show");
+        let (label, show) = host.toast_run.borrow_mut().take().expect("no Show");
+        assert_eq!(label, "Show");
         cx.update(|cx| show(cx));
         assert!(!shell.read_with(cx, |shell, _| shell.sidebar_hidden), "Show left it hidden");
         assert_eq!(host.shown.borrow().last(), Some(&4), "Show didn't show the first Space");
     }
 
-    /// A tab opening while the sidebar is hidden gets a toast whose click brings the sidebar back at
-    /// its row; tabs moving, or opening with the sidebar shown, get none.
+    /// A tab opening while the sidebar is hidden gets a toast whose Show, as the Spaces' toast has,
+    /// brings the sidebar back at its row; tabs moving, or opening with the sidebar shown, get none.
     #[gpui::test]
     fn a_tab_opened_with_the_sidebar_hidden_is_toasted(cx: &mut TestAppContext) {
         let (shell, host) = shell_with(cx, &[], &[1], Folders::default());
@@ -709,9 +710,10 @@ mod tests {
         assert_eq!(*host.toasts.borrow(), ["2 New Tabs Created"]);
         shell.update(cx, tabs(vec![5, 3, 4, 1, 2]));
         assert_eq!(host.toasts.borrow().last().unwrap(), super::OPENED);
-        let click = host.toast_run.borrow_mut().take().expect("the toast can't be clicked");
-        cx.update(|cx| click(cx));
-        assert!(!shell.read_with(cx, |shell, _| shell.sidebar_hidden), "the click left it hidden");
+        let (label, show) = host.toast_run.borrow_mut().take().expect("the toast has no Show");
+        assert_eq!(label, "Show");
+        cx.update(|cx| show(cx));
+        assert!(!shell.read_with(cx, |shell, _| shell.sidebar_hidden), "Show left it hidden");
     }
 
     /// ⌥ tapped alone brings the hidden sidebar out wherever the pointer is, which keeps it out
