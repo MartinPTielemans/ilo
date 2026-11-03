@@ -3229,8 +3229,10 @@ void host_capture_name(char* name, size_t capacity) {
 
 namespace {
 
-// The dialog host_save_png shows, once it's on screen, for the driver's savepanel.
+// The dialog host_save_png shows, once it's on screen, and the path the driver's savepanel picked
+// in it.
 HWND g_save_dialog = nullptr;
+std::wstring g_save_answer;
 
 LRESULT CALLBACK SaveDialogEvent(int code, WPARAM wparam, LPARAM lparam) {
   wchar_t name[8] = L"";
@@ -3248,8 +3250,16 @@ LRESULT CALLBACK SaveDialogEvent(int code, WPARAM wparam, LPARAM lparam) {
 
 extern "C" {
 
-void* host_save_dialog(void) {
-  return g_save_dialog;
+// For the driver: picks |path| in the save dialog that shows, as drive.mm's savepanel answers the
+// Mac's through its completion handler: the dialog's own box doesn't take a path set from outside.
+// Returns whether one showed.
+bool host_save_dialog_answer(const char* path) {
+  if (!g_save_dialog) {
+    return false;
+  }
+  g_save_answer = Wide(path);
+  PostMessageW(g_save_dialog, WM_CLOSE, 0, 0);
+  return true;
 }
 
 void host_save_png(void* ui_view, const uint8_t* png, size_t size) {
@@ -3271,11 +3281,15 @@ void host_save_png(void* ui_view, const uint8_t* png, size_t size) {
     save.lpstrDefExt = L"png";
     save.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
     HHOOK hook = SetWindowsHookExW(WH_CBT, SaveDialogEvent, nullptr, GetCurrentThreadId());
-    const bool chosen = GetSaveFileNameW(&save);
+    bool chosen = GetSaveFileNameW(&save);
     if (hook) {
       UnhookWindowsHookEx(hook);
     }
     g_save_dialog = nullptr;
+    if (!g_save_answer.empty()) {
+      chosen = wcscpy_s(path, g_save_answer.c_str()) == 0;
+      g_save_answer.clear();
+    }
     if (!chosen) {
       return;
     }

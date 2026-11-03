@@ -21,9 +21,9 @@
 // pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl with Alt, but Ctrl for
 // ⌃Tab, and alt with both. A trackpad's scrolls and swipes are wheel messages with the pixels in
 // their deltas, as a precision touchpad sends them. choose and dismiss work on ilo's menu and the
-// alerts host_ask shows. savepanel <path> types <path> into the dialog host_save_png shows, where
-// the file name has the keyboard, and saves there, logging "browser: save panel answered", or
-// "browser: no save panel" if none shows. dragover, dragdrop and dragleave hand a drag from another app, a shell
+// alerts host_ask shows. savepanel <path> picks <path> in the dialog host_save_png shows, as
+// drive.mm's does in the Mac's save panel, logging "browser: save panel answered", or "browser: no
+// save panel" if none shows. dragover, dragdrop and dragleave hand a drag from another app, a shell
 // data object carrying what Explorer or a browser would, straight to the drop target Windows would
 // pick, the UI's; one over a page or an overlay, whose targets are Chromium's and GPUI's, logs as
 // unsupported. ime on types as drive.mm's scripted input method does, in the UI's fields alone, as
@@ -71,7 +71,7 @@ bool host_drive_pointer(unsigned message, long x, long y);
 bool host_drive_key(unsigned vk, long lparam);
 uint64_t host_browser_window_id(size_t index);
 const char* host_floating_name(void* hwnd);
-void* host_save_dialog(void);
+bool host_save_dialog_answer(const char* path);
 // The app's (src/main.rs), on GPUI's window |hwnd|, for the scripted input method.
 bool browser_drive_compose(void* hwnd, const char* text, size_t start, size_t end, bool selected);
 bool browser_drive_commit(void* hwnd, const char* text);
@@ -1406,16 +1406,8 @@ bool Run(const std::string& line) {
     return host_menu_window_dismiss();
   }
   if (action == "savepanel") {
-    // The dialog runs on this thread, so its focus is the file name's box, as it opens with.
-    HWND dialog = static_cast<HWND>(host_save_dialog());
-    HWND name = dialog ? GetFocus() : nullptr;
-    if (!name || GetAncestor(name, GA_ROOT) != dialog) {
-      fprintf(stderr, "browser: no save panel\n");
-      return true;
-    }
-    SetWindowTextW(name, Wide(rest).c_str());
-    fprintf(stderr, "browser: save panel answered\n");
-    PostMessageW(dialog, WM_COMMAND, IDOK, 0);
+    fprintf(stderr, host_save_dialog_answer(rest.c_str()) ? "browser: save panel answered\n"
+                                                          : "browser: no save panel\n");
     return true;
   }
   if (action == "agentspace") {

@@ -112,11 +112,13 @@ if windows; then
   ../tools/window-screenshot.sh "$pid" "$out/capture-save-dialog.png" || fail "no window to capture"
   picture="$out/capture-saved.png"
   rm -f "$picture"
-  send savepanel "$(cygpath -w "$picture")"
+  send savepanel "$(cygpath -aw "$picture")"
   expect '^browser: save panel answered$' "no save dialog showed for the toast's Save"
   expect '^browser: capture saved ' "the save dialog didn't save the picture"
+  [ -f "$picture" ] || fail "the save dialog saved the picture elsewhere: $(grep -m1 \
+    '^browser: capture saved ' "$log")"
   [ "$(wc -c < "$picture" | tr -d ' ')" = "$bytes" ] ||
-    fail "the save dialog saved $(wc -c < "$picture" 2>/dev/null) bytes, not the $bytes copied"
+    fail "the save dialog saved $(wc -c < "$picture") bytes, not the $bytes copied"
   send state
   in_browser RenderWidgetHostViewCocoa "after the save dialog"
   saved_to=" The toast's Save saved it to $picture, from $out/capture-save-dialog.png."
