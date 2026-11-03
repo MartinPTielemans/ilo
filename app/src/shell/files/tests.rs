@@ -33,8 +33,14 @@ fn url(path: &Path) -> String {
 #[test]
 fn a_file_url_names_its_path() {
     let path = |url: &str| file_path(url).map(|path| path.to_string_lossy().into_owned());
-    assert_eq!(path("file:///tmp/my%20photo.jpg").as_deref(), Some("/tmp/my photo.jpg"));
-    assert_eq!(path("file://localhost/etc/hosts").as_deref(), Some("/etc/hosts"));
+    assert_eq!(
+        path("file:///tmp/my%20photo.jpg").as_deref(),
+        Some("/tmp/my photo.jpg")
+    );
+    assert_eq!(
+        path("file://localhost/etc/hosts").as_deref(),
+        Some("/etc/hosts")
+    );
     assert_eq!(path("file:///%E6%97%A5%E6%9C%AC").as_deref(), Some("/日本"));
     assert_eq!(path("file:///100%").as_deref(), Some("/100%"));
     assert_eq!(path("https://example.com/a"), None);
@@ -56,7 +62,11 @@ fn a_folder_lists_its_files_and_folders_by_name() {
     let dir = scratch("list");
     let notes = notes(&dir);
     let c = url(&notes.join("sub").join("c.txt"));
-    let sub = Listing { name: "sub".into(), files: vec![c], ..Default::default() };
+    let sub = Listing {
+        name: "sub".into(),
+        files: vec![c],
+        ..Default::default()
+    };
     let whole = Listing {
         name: "Notes".into(),
         folders: vec![sub],
@@ -69,7 +79,10 @@ fn a_folder_lists_its_files_and_folders_by_name() {
     let mut rows = 3;
     let three = list(&notes, &mut rows, 0);
     assert_eq!((three.files.len(), three.folders.len()), (2, 1));
-    assert!(three.folders[0].files.is_empty(), "the folder inside took a row it didn't have");
+    assert!(
+        three.folders[0].files.is_empty(),
+        "the folder inside took a row it didn't have"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -81,28 +94,52 @@ fn a_folder_from_the_desktop_becomes_a_folder_of_its_files(cx: &mut TestAppConte
     let notes = notes(&dir);
     let (shell, host) = shell_with(cx, &[1], &[10], Folders::default());
     host.take();
-    shell.update(cx, |shell, cx| shell.add_folders(vec![notes.clone()], 0, usize::MAX, cx));
+    shell.update(cx, |shell, cx| {
+        shell.add_folders(vec![notes.clone()], 0, usize::MAX, cx)
+    });
     cx.run_until_parked();
     let edits = host.take_edits();
     let made = |edit: &String| edit.split(' ').nth(1).unwrap().parse::<u64>().unwrap();
     assert_eq!(edits.len(), 2, "{edits:?}");
     let (outer, inner) = (made(&edits[0]), made(&edits[1]));
-    assert_eq!(edits, [
-        format!("folder {outer} 1 Notes 0 {}", usize::MAX),
-        format!("folder {inner} 1 sub {outer} 0"),
-    ]);
+    assert_eq!(
+        edits,
+        [
+            format!("folder {outer} 1 Notes 0 {}", usize::MAX),
+            format!("folder {inner} 1 sub {outer} 0"),
+        ]
+    );
     let calls = host.take();
     let opened = |folder, files: &[&str], index| {
         let urls: Vec<String> = (files.iter())
-            .map(|file| url(&file.split('/').fold(notes.clone(), |path, name| path.join(name))))
+            .map(|file| {
+                url(&file
+                    .split('/')
+                    .fold(notes.clone(), |path, name| path.join(name)))
+            })
             .collect();
         format!("open behind {} true {folder} {index}", urls.join(" "))
     };
-    assert!(calls.contains(&opened(inner, &["sub/c.txt"], 0)), "{calls:?}");
-    assert!(calls.contains(&opened(outer, &["A.txt", "b.txt"], 1)), "{calls:?}");
-    assert!(calls.contains(&format!("folder open {inner} false")), "{calls:?}");
-    assert!(!calls.contains(&format!("folder open {outer} false")), "{calls:?}");
-    assert!(!calls.iter().any(|call| call.starts_with("select")), "a file showed: {calls:?}");
+    assert!(
+        calls.contains(&opened(inner, &["sub/c.txt"], 0)),
+        "{calls:?}"
+    );
+    assert!(
+        calls.contains(&opened(outer, &["A.txt", "b.txt"], 1)),
+        "{calls:?}"
+    );
+    assert!(
+        calls.contains(&format!("folder open {inner} false")),
+        "{calls:?}"
+    );
+    assert!(
+        !calls.contains(&format!("folder open {outer} false")),
+        "{calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call.starts_with("select")),
+        "a file showed: {calls:?}"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -118,9 +155,16 @@ fn picked_files_open_and_picked_folders_come_in(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| shell.add_paths(picked, cx));
     cx.run_until_parked();
     let calls = host.take();
-    assert!(calls.contains(&format!("open {} false 0 0", url(&notes.join("A.txt")))), "{calls:?}");
+    assert!(
+        calls.contains(&format!("open {} false 0 0", url(&notes.join("A.txt")))),
+        "{calls:?}"
+    );
     let edits = host.take_edits();
-    assert!(edits.iter().any(|edit| edit.ends_with(&format!(" 1 Notes 0 {}", usize::MAX))));
+    assert!(
+        edits
+            .iter()
+            .any(|edit| edit.ends_with(&format!(" 1 Notes 0 {}", usize::MAX)))
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -139,12 +183,19 @@ fn a_file_tab_is_a_file_row(cx: &mut TestAppContext) {
         (13, url(&notes.join("gone.txt"))),
     ];
     for (tab, url) in pages {
-        let page = Page { url: url.into(), ..Page::default() };
+        let page = Page {
+            url: url.into(),
+            ..Page::default()
+        };
         shell.update(cx, |shell, cx| shell.set_page(tab, page, cx));
     }
-    let rows: Vec<Option<String>> =
-        shell.read_with(cx, |shell, _| [10, 11, 12, 13].map(|tab| shell.file_of_row(tab)).to_vec());
-    assert_eq!(rows, [Some(file.to_string_lossy().into_owned()), None, None, None]);
+    let rows: Vec<Option<String>> = shell.read_with(cx, |shell, _| {
+        [10, 11, 12, 13].map(|tab| shell.file_of_row(tab)).to_vec()
+    });
+    assert_eq!(
+        rows,
+        [Some(file.to_string_lossy().into_owned()), None, None, None]
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -153,9 +204,17 @@ fn a_file_tab_is_a_file_row(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_plus_menu_adds_files_and_folders(cx: &mut TestAppContext) {
     let (shell, host) = shell_with(cx, &[1], &[10], Folders::default());
-    shell.update(cx, |shell, cx| shell.plus_menu(point(px(200.), px(700.)), cx));
-    let menu: Vec<String> =
-        host.menus.borrow().last().unwrap().iter().map(|(title, _)| title.to_string()).collect();
+    shell.update(cx, |shell, cx| {
+        shell.plus_menu(point(px(200.), px(700.)), cx)
+    });
+    let menu: Vec<String> = host
+        .menus
+        .borrow()
+        .last()
+        .unwrap()
+        .iter()
+        .map(|(title, _)| title.to_string())
+        .collect();
     let disk: &[&str] = match PANEL_PICKS_BOTH {
         true => &["", "Add File or Folder…"],
         false => &["", "Add Files…", "Add Folder…"],
@@ -170,6 +229,9 @@ fn the_plus_menu_adds_files_and_folders(cx: &mut TestAppContext) {
     unsafe { std::env::remove_var("BROWSER_ADD_PATHS") };
     cx.run_until_parked();
     let calls = host.take();
-    assert!(calls.contains(&format!("open {} false 0 0", url(&notes.join("b.txt")))), "{calls:?}");
+    assert!(
+        calls.contains(&format!("open {} false 0 0", url(&notes.join("b.txt")))),
+        "{calls:?}"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }

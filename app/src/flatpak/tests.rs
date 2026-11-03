@@ -43,8 +43,14 @@ impl FakePortal {
         _options: HashMap<String, OwnedValue>,
         #[zbus(object_server)] server: &zbus::ObjectServer,
     ) -> zbus::fdo::Result<OwnedObjectPath> {
-        self.calls.lock().unwrap().push("CreateUpdateMonitor".into());
-        let monitor = FakeMonitor { calls: self.calls.clone(), answers: self.answers.clone() };
+        self.calls
+            .lock()
+            .unwrap()
+            .push("CreateUpdateMonitor".into());
+        let monitor = FakeMonitor {
+            calls: self.calls.clone(),
+            answers: self.answers.clone(),
+        };
         server.at(MONITOR_PATH, monitor).await?;
         Ok(OwnedObjectPath::try_from(MONITOR_PATH).unwrap())
     }
@@ -63,7 +69,12 @@ impl FakePortal {
             String::from_utf8_lossy(&bytes[..bytes.len() - 1]).into_owned()
         };
         let argv: Vec<String> = argv.iter().map(|arg| text(arg)).collect();
-        let call = format!("Spawn cwd={:?} flags={flags} fds={} envs={} {argv:?}", text(&cwd), fds.len(), envs.len());
+        let call = format!(
+            "Spawn cwd={:?} flags={flags} fds={} envs={} {argv:?}",
+            text(&cwd),
+            fds.len(),
+            envs.len()
+        );
         self.calls.lock().unwrap().push(call);
         4242
     }
@@ -83,8 +94,16 @@ impl FakeMonitor {
         _options: HashMap<String, OwnedValue>,
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
     ) -> zbus::fdo::Result<()> {
-        self.calls.lock().unwrap().push(format!("Update {parent_window:?}"));
-        let answer = self.answers.lock().unwrap().pop_front().unwrap_or(Answer::Installs);
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("Update {parent_window:?}"));
+        let answer = self
+            .answers
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or(Answer::Installs);
         if let Answer::Late = answer {
             async_io::Timer::after(LATE).await;
         }
@@ -107,7 +126,10 @@ impl FakeMonitor {
     ) -> zbus::Result<()>;
 
     #[zbus(signal)]
-    async fn progress(emitter: &SignalEmitter<'_>, info: HashMap<&str, Value<'_>>) -> zbus::Result<()>;
+    async fn progress(
+        emitter: &SignalEmitter<'_>,
+        info: HashMap<&str, Value<'_>>,
+    ) -> zbus::Result<()>;
 }
 
 /// The app's connection, and the fake's, on either end of a socket.
@@ -129,13 +151,19 @@ async fn connect(answers: &[Answer], calls: Calls) -> (zbus::Connection, zbus::C
 
 /// Says the fake's monitor found `local` installed and `remote` on Flathub, against `running`.
 async fn announce(fake: &zbus::Connection, running: &str, local: &str, remote: &str) {
-    let monitor = fake.object_server().interface::<_, FakeMonitor>(MONITOR_PATH).await.unwrap();
+    let monitor = fake
+        .object_server()
+        .interface::<_, FakeMonitor>(MONITOR_PATH)
+        .await
+        .unwrap();
     let info = HashMap::from([
         ("running-commit", Value::from(running)),
         ("local-commit", Value::from(local)),
         ("remote-commit", Value::from(remote)),
     ]);
-    FakeMonitor::update_available(monitor.signal_emitter(), info).await.unwrap();
+    FakeMonitor::update_available(monitor.signal_emitter(), info)
+        .await
+        .unwrap();
 }
 
 /// The states the updater went through after `announced`, with each Update answered as `answers`
@@ -202,7 +230,13 @@ fn a_build_the_software_centre_installed_needs_only_a_restart() {
 #[test]
 fn a_failed_install_says_why() {
     let (states, _) = states_after(&[Answer::Fails], ["a1", "a1", "b2"], false, 2);
-    assert_eq!(states, [State::Installing, State::Failed("Couldn't reach Flathub".into())]);
+    assert_eq!(
+        states,
+        [
+            State::Installing,
+            State::Failed("Couldn't reach Flathub".into())
+        ]
+    );
 }
 
 // A desktop with nothing to ask whether ilo may update itself never answers: the wait runs out
@@ -211,7 +245,15 @@ fn a_failed_install_says_why() {
 fn an_unanswered_install_says_so_and_a_late_yes_still_installs() {
     let (states, calls) = states_after(&[Answer::Late], ["a1", "a1", "b2"], false, 4);
     let unanswered = State::Failed(UNANSWERED.into());
-    assert_eq!(states, [State::Installing, unanswered, State::Installing, State::Ready]);
+    assert_eq!(
+        states,
+        [
+            State::Installing,
+            unanswered,
+            State::Installing,
+            State::Ready
+        ]
+    );
     assert_eq!(calls, ["CreateUpdateMonitor", r#"Update """#]);
 }
 
@@ -219,8 +261,14 @@ fn an_unanswered_install_says_so_and_a_late_yes_still_installs() {
 fn try_again_installs_anew_after_a_failure() {
     let (states, calls) = states_after(&[Answer::Fails], ["a1", "a1", "b2"], true, 4);
     let failed = State::Failed("Couldn't reach Flathub".into());
-    assert_eq!(states, [State::Installing, failed, State::Installing, State::Ready]);
-    assert_eq!(calls, ["CreateUpdateMonitor", r#"Update """#, r#"Update """#]);
+    assert_eq!(
+        states,
+        [State::Installing, failed, State::Installing, State::Ready]
+    );
+    assert_eq!(
+        calls,
+        ["CreateUpdateMonitor", r#"Update """#, r#"Update """#]
+    );
 }
 
 #[test]
@@ -229,14 +277,26 @@ fn a_restart_spawns_the_flatpaks_command_in_the_newest_build_once_the_profile_is
     block_on(async {
         let (ours, _fake) = connect(&[], calls.clone()).await;
         let (portal, _) = Portal::open(ours).await.unwrap();
-        portal.restart(Path::new("/home/u/.var/app/ilo/SingletonLock")).await.unwrap();
+        portal
+            .restart(Path::new("/home/u/.var/app/ilo/SingletonLock"))
+            .await
+            .unwrap();
     });
     let calls = calls.lock().unwrap();
-    let spawn = calls.iter().find(|call| call.starts_with("Spawn")).expect("no Spawn");
-    assert!(spawn.starts_with(r#"Spawn cwd="" flags=2 fds=0 envs=0 ["/bin/sh", "-c", "#), "{spawn}");
+    let spawn = calls
+        .iter()
+        .find(|call| call.starts_with("Spawn"))
+        .expect("no Spawn");
+    assert!(
+        spawn.starts_with(r#"Spawn cwd="" flags=2 fds=0 envs=0 ["/bin/sh", "-c", "#),
+        "{spawn}"
+    );
     // "ilo", through cobalt and zypak, never /app/ilo/chrome, which would start without the
     // sandbox zypak gives it.
-    assert!(spawn.ends_with(r#""sh", "/home/u/.var/app/ilo/SingletonLock", "ilo"]"#), "{spawn}");
+    assert!(
+        spawn.ends_with(r#""sh", "/home/u/.var/app/ilo/SingletonLock", "ilo"]"#),
+        "{spawn}"
+    );
 }
 
 #[test]
@@ -256,12 +316,23 @@ fn the_wait_for_the_profile_runs_the_build_with_its_arguments() {
     };
     let started = std::time::Instant::now();
     let out = std::process::Command::new("/bin/sh")
-        .args(["-c", RESTART, "sh", lock.to_str().unwrap(), "echo", "started", "a b"])
+        .args([
+            "-c",
+            RESTART,
+            "sh",
+            lock.to_str().unwrap(),
+            "echo",
+            "started",
+            "a b",
+        ])
         .output()
         .unwrap();
     remover.join().unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout), "started a b\n");
-    assert!(started.elapsed() >= std::time::Duration::from_millis(300), "it waited for the lock");
+    assert!(
+        started.elapsed() >= std::time::Duration::from_millis(300),
+        "it waited for the lock"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -275,7 +346,8 @@ impl crate::dialog::Host for DialogWindow {
 
 /// The dialog's window, and how many times Restart restarted.
 fn updating(cx: &mut gpui::TestAppContext) -> std::rc::Rc<std::cell::Cell<usize>> {
-    cx.update(|cx| crate::dialog::open(std::rc::Rc::new(DialogWindow), cx)).expect("no dialog");
+    cx.update(|cx| crate::dialog::open(std::rc::Rc::new(DialogWindow), cx))
+        .expect("no dialog");
     let restarts = std::rc::Rc::new(std::cell::Cell::new(0));
     let counted = restarts.clone();
     cx.update(|cx| on_restart(move |_| counted.set(counted.get() + 1), cx));
@@ -285,7 +357,8 @@ fn updating(cx: &mut gpui::TestAppContext) -> std::rc::Rc<std::cell::Cell<usize>
 /// Chooses the dialog's button `label`, and lets the dialog go, after which its action runs.
 fn choose(label: &str, cx: &mut gpui::TestAppContext) -> bool {
     let chosen = cx.update(|cx| crate::dialog::choose(label, cx));
-    cx.executor().advance_clock(std::time::Duration::from_secs(1));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
     cx.run_until_parked();
     chosen
 }
@@ -304,7 +377,10 @@ fn a_build_installed_asks_nothing_and_restarts_when_told(cx: &mut gpui::TestAppC
     assert!(!asking(cx), "nothing to restart into yet");
     cx.update(|cx| changed(State::Ready, cx));
     assert!(!asking(cx), "a dialog for a build that's in");
-    assert!(cx.update(|cx| crate::updates::ready(cx)), "nothing says it's ready");
+    assert!(
+        cx.update(|cx| crate::updates::ready(cx)),
+        "nothing says it's ready"
+    );
     cx.update(restart);
     assert_eq!(restarts.get(), 1);
 }
@@ -322,13 +398,23 @@ fn the_newest_build_starts_only_as_the_restart_goes_ahead(cx: &mut gpui::TestApp
     };
     cx.update(|cx| on_relaunch(start, cx));
     cx.update(|cx| changed(State::Installing, cx));
-    assert!(!cx.update(relaunch), "a restart went ahead into a build that isn't in");
+    assert!(
+        !cx.update(relaunch),
+        "a restart went ahead into a build that isn't in"
+    );
     cx.update(|cx| changed(State::Ready, cx));
     cx.update(restart);
     // A page asked to stay, and the user tried again.
     cx.update(restart);
-    assert_eq!((restarts.get(), starts.get()), (2, 0), "the new build started before the quit");
-    assert!(cx.update(relaunch), "the restart that went ahead didn't start the new build");
+    assert_eq!(
+        (restarts.get(), starts.get()),
+        (2, 0),
+        "the new build started before the quit"
+    );
+    assert!(
+        cx.update(relaunch),
+        "the restart that went ahead didn't start the new build"
+    );
     assert_eq!(starts.get(), 1);
 }
 
@@ -351,7 +437,11 @@ fn check_for_updates_offers_the_restart_once_a_build_is_in(cx: &mut gpui::TestAp
 #[gpui::test]
 fn check_for_updates_tells_where_the_update_stands(cx: &mut gpui::TestAppContext) {
     let restarts = updating(cx);
-    for state in [State::Current, State::Installing, State::Failed("No network".into())] {
+    for state in [
+        State::Current,
+        State::Installing,
+        State::Failed("No network".into()),
+    ] {
         cx.update(|cx| changed(state.clone(), cx));
         assert!(!asking(cx), "{state:?} asked unprompted");
         cx.update(check);
@@ -383,7 +473,12 @@ fn check_for_updates_tries_again_after_a_failure(cx: &mut gpui::TestAppContext) 
 fn what_check_for_updates_says() {
     let said = |state: Option<&State>| {
         let question = question(state, false);
-        let words = [question.message, question.detail, question.action, question.cancel];
+        let words = [
+            question.message,
+            question.detail,
+            question.action,
+            question.cancel,
+        ];
         words.map(|word| word.to_string())
     };
     let name = env!("APP_NAME");
@@ -392,17 +487,31 @@ fn what_check_for_updates_says() {
     assert_eq!(said(Some(&State::Current)), said(None));
     let installing = "Restart to Update shows in the sidebar once the new version is in.";
     let updating = format!("{name} is updating");
-    assert_eq!(said(Some(&State::Installing)), [&updating, installing, "", "OK"]);
+    assert_eq!(
+        said(Some(&State::Installing)),
+        [&updating, installing, "", "OK"]
+    );
     // A portal that never answered says so, rather than that it's looking.
     let failed = State::Failed("Flatpak’s portal didn’t answer: no bus".into());
     assert_eq!(
         said(Some(&failed)),
-        [&format!("{name} couldn’t update"), "Flatpak’s portal didn’t answer: no bus", "", "OK"]
+        [
+            &format!("{name} couldn’t update"),
+            "Flatpak’s portal didn’t answer: no bus",
+            "",
+            "OK"
+        ]
     );
     // With the portal to ask, a failure offers another try.
     let retrying = question(Some(&failed), true);
-    assert_eq!([&*retrying.action, &*retrying.cancel], ["Try Again", "Later"]);
+    assert_eq!(
+        [&*retrying.action, &*retrying.cancel],
+        ["Try Again", "Later"]
+    );
     let ready = format!("A new version of {name} is ready");
     let restart = format!("Restart {name} to use it.");
-    assert_eq!(said(Some(&State::Ready)), [&ready, &restart, "Restart", "Later"]);
+    assert_eq!(
+        said(Some(&State::Ready)),
+        [&ready, &restart, "Restart", "Later"]
+    );
 }

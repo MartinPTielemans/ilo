@@ -8,8 +8,7 @@ use std::sync::OnceLock;
 /// The areas `BROWSER_LOG` can name.
 pub const AREAS: &[&str] = &[
     // The shortcut a key in a page is and where it went: ilo, an extension, the page.
-    "keys",
-    // Which window takes the keyboard from an overlay, on Windows.
+    "keys", // Which window takes the keyboard from an overlay, on Windows.
     "focus",
     // The system's file drag from the UI, on Windows: where it starts, the buttons, how it ends.
     "drag",
@@ -38,7 +37,11 @@ pub fn on(area: &str) -> bool {
 fn parse(value: &str) -> (Vec<&'static str>, Vec<String>) {
     let mut on = Vec::new();
     let mut unknown = Vec::new();
-    for name in value.split(',').map(str::trim).filter(|name| !name.is_empty()) {
+    for name in value
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
         match AREAS.iter().find(|area| area.eq_ignore_ascii_case(name)) {
             Some(area) => on.push(*area),
             None => unknown.push(name.to_string()),
@@ -75,8 +78,8 @@ pub fn chord(key: &str, modifiers: u32) -> String {
             chord.push_str(name);
         }
     }
-    let shortcut = has(bc::BC_MODIFIER_META)
-        || (has(bc::BC_MODIFIER_CONTROL) && !has(bc::BC_MODIFIER_ALT));
+    let shortcut =
+        has(bc::BC_MODIFIER_META) || (has(bc::BC_MODIFIER_CONTROL) && !has(bc::BC_MODIFIER_ALT));
     if key.chars().count() == 1 && !shortcut {
         return "a character".to_string();
     }
