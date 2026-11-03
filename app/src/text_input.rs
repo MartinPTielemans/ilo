@@ -17,7 +17,8 @@ use gpui::{
     GlobalElementId, Hsla, KeyBinding, LayoutId, MouseButton, Role, accesskit, linear_color_stop,
     linear_gradient,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine,
-    SharedString, Style, Subscription, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div,
+    SharedString, Style, Subscription, TextRun, UTF16Selection, UnderlineStyle, WeakEntity, Window,
+    actions, div,
     fill, hsla,
     point, prelude::*, px, relative, rgb, size,
 };
@@ -118,13 +119,32 @@ pub fn on_lose_keyboard<T: 'static>(
     vec![
         on_leave(&focus, window, cx, move |view, window, cx| left(view, window, cx)),
         cx.subscribe_in(field, window, move |view, _, _: &Away, window, cx| away(view, window, cx)),
-        cx.observe_window_activation(window, move |view, window, cx| {
-            let menu = input.upgrade().is_some_and(|input| input.read(cx).menu_shown);
-            if !window.is_window_active() && !menu {
-                deactivated(view, window, cx)
+        cx.observe_window_activation(window, move |_, window, cx| {
+            if !left_window(&input, window, cx) {
+                return;
             }
+            // GPUI hears of each key window change in a task of its own, with the state the window
+            // had then, so this one can be over already, with the change that says so waiting
+            // behind it: a menu took the keyboard, and gave it back as its choice opened the field
+            // (#1589). The field ends only if the window is still inactive once that has arrived.
+            let (input, deactivated) = (input.clone(), deactivated.clone());
+            cx.spawn_in(window, async move |view, cx| {
+                view.update_in(cx, |view, window, cx| {
+                    if left_window(&input, window, cx) {
+                        deactivated(view, window, cx)
+                    }
+                })
+                .ok();
+            })
+            .detach();
         }),
     ]
+}
+
+/// Whether the field's window is inactive, with no menu of the field's up.
+fn left_window(input: &WeakEntity<TextInput>, window: &Window, cx: &App) -> bool {
+    let menu = input.upgrade().is_some_and(|input| input.read(cx).menu_shown);
+    !window.is_window_active() && !menu
 }
 
 /// `text` without the `javascript:` schemes it starts with, past any whitespace and control
