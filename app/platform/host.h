@@ -435,7 +435,8 @@ void host_hide_capture(void);
 void host_copy_png(const uint8_t* png, size_t size);
 
 // Asks where to save the PNG |png|, |size| bytes long, in a save panel on |ui_view|'s window, named
-// for when it was taken, and saves it there.
+// for when it was taken, and saves it there. It returns at once, before the panel shows, since the
+// UI calls it from an event its panel can't wait in.
 void host_save_png(void* ui_view, const uint8_t* png, size_t size);
 
 // Shares the PNG |png|, |size| bytes long, as a file named for when it was taken: in the system's
@@ -728,6 +729,19 @@ bool host_updates_available(void);
 // Whether the Microsoft Store updates this copy: on Windows, an MSIX from it.
 bool host_updated_by_store(void);
 
+// Whether this build is a nightly, each night's build of main (APP_TRACK=nightly at build time),
+// rather than a release.
+bool host_nightly_build(void);
+
+// Whether this build's updater can take nightly builds instead of its own: it updates itself and
+// carries a nightly feed beside its feed (branding/update-feed-nightly).
+bool host_nightly_feed(void);
+
+// Has the updater read the nightly feed, or with false its own, from its next check on: before
+// host_start_updater, from its first. Either way it installs only a build numbered above the one
+// running, so a nightly that goes back to its own feed keeps its build until a release passes it.
+void host_follow_nightly(bool nightly);
+
 // Where host_start_updater's |changed| says the update stands, for Settings › About's row and
 // Restart to Update at the sidebar's foot.
 enum {
@@ -750,10 +764,16 @@ enum {
 // with no window of its own, checks its EdDSA signature against the build's key, and installs it
 // when the app quits. On the Mac that's Sparkle; on Windows, ilo's own, which runs the installer
 // silently once the app has gone (host_finish_update). Calls |changed| on the main thread with a
-// HOST_UPDATE_* each time the update moves on, with the version it's of, else "", and |quit| on
-// the main thread for host_install_update's restart on Windows. Does nothing where
-// host_updates_available is false.
-void host_start_updater(void (*quit)(void), void (*changed)(int stage, const char* version));
+// HOST_UPDATE_* each time the update moves on, with the version it's of, else "", and |restart| on
+// the main thread once Restart to Update, or on the Mac Sparkle's own Install and Relaunch, wants
+// the browser to restart (bc_restart). Does nothing where host_updates_available is false.
+void host_start_updater(void (*restart)(void), void (*changed)(int stage, const char* version));
+
+// On Windows, before host_start_updater: if a quit since the last launch started installing an
+// update, calls |installed| with the update's build number and this copy's own, once. Where it
+// answers that the update didn't go in, the updater's first check waits its 8 hours, so the app
+// can say so and offer Try Again until the user asks.
+void host_take_install(bool (*installed)(uint64_t build, uint64_t own));
 
 // The app menu's Check for Updates…, which checks now: on the Mac, Sparkle's check, which shows
 // what it finds in Sparkle's window; on Windows, the same quiet check as Settings › About's,
@@ -765,18 +785,27 @@ void host_check_for_updates(void);
 // Sparkle shows one, Check for Updates…; on Windows, the updater's check, at once.
 void host_check_for_updates_quietly(void);
 
-// Restart to Update: installs the update that's HOST_UPDATE_READY now and relaunches into it. On
-// the Mac, once macOS has checked the new version as it would at its first launch, or after 15 s;
-// on Windows, by quitting through |quit|, as the installer runs once the app has gone. Nothing if
-// none is ready.
+// Restart to Update: restarts through host_start_updater's |restart|, to relaunch into the update
+// that's HOST_UPDATE_READY. On the Mac, once macOS has checked the new version as it would at its
+// first launch, or after 15 s. Nothing installs or relaunches before the restart goes ahead
+// (host_relaunch_into_update), so a quit a page stops leaves nothing armed. Nothing if none is
+// ready.
 void host_install_update(void);
 
+// The restart goes ahead (bc_host's quit_going_ahead): the ready update installs as the app quits
+// and relaunches ilo, and this returns true. On the Mac, Sparkle's install, once Restart to Update
+// or Sparkle's Install and Relaunch asked for it; on Windows, the installer's relaunch
+// (host_finish_update). False with none to relaunch into, for the core to start the browser again.
+bool host_relaunch_into_update(void);
+
 // Chromium is quitting. On Windows, a ready update's installer starts, silently, and waits for
-// this process to end before it installs, then relaunches ilo if host_install_update asked. On the
-// Mac, nothing: Sparkle installs on quit by itself.
+// this process to end before it installs, then relaunches ilo if host_relaunch_into_update asked.
+// On the Mac, nothing: Sparkle installs on quit by itself.
 void host_finish_update(void);
 
-// On the Mac: calls |notes| with the release notes' URL of the update this launch is the first of, once.
+// On the Mac and Windows: calls |notes| with the release notes' URL of the update this launch is
+// the first of, once, as the updater kept them when it installed it. Windows' are kept with the
+// build host_take_install reads, so they're taken before it.
 void host_take_update_notes(void (*notes)(const char* url));
 
 // For the test driver: presses the button titled |title| in the alert shown. False if none shows.

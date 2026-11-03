@@ -20,7 +20,8 @@
 # the desktop's defaults name no dev build. A link that launches the browser opens over the Spaces
 # it brings back, before the UI comes out from under the launch picture, or with no rules, in Little
 # ilo, over them; on the Mac the notes of an update that launch is the first of open beside it as a
-# tab in the window, never in Little ilo. On the Mac ⌘Q keeps the
+# tab in the window, never in Little ilo. On Windows a click on a site's notification, which comes
+# as a launch too, reaches the page (#1426). On the Mac ⌘Q keeps the
 # sidebar's picture, which both the launch without a link and the one with it show; Linux has no
 # launch picture (host_show_launch_window). Reports the launch times from the process's start,
 # without a link and with one.
@@ -436,9 +437,18 @@ else
   printf 'otherwise\t1\n' > "$rules_file"
 fi
 # The sidebar's picture, which the launches below show until their UI has drawn.
-quit_by_key
 mac=
 [ "$(uname)" = Darwin ] && mac=1
+if [ -n "$mac" ]; then
+  # A window the screen has less room for at the next launch opens smaller, with no picture of
+  # that size. One filling the hosted Mac's 1024 by 768 screen opened 2 or 3 points shorter
+  # whenever the Dock had grown since (#1528), so the window quits well inside the screen.
+  send screen
+  corner=$(grep '^browser: screen at ' "$log" | tail -1 | cut -d' ' -f4,5)
+  send place $((${corner% *} + 40)) $((${corner#* } + 60)) 900 560
+  expect '^browser: drawn at 900x560$' "the window didn't draw at 900 by 560"
+fi
+quit_by_key
 [ -z "$mac" ] || grep -q '^browser: launch picture taken$' "$log" ||
   fail "⌘Q didn't keep the sidebar's picture for the next launch"
 exited
@@ -488,14 +498,21 @@ quit_launched() {
 at() {
   grep -m1 "^browser: $1 at " "$log" | sed 's/.* at \([0-9.]*\) ms$/\1/'
 }
+# On the Mac, fails with $1 unless the launch showed the sidebar's picture, which it leaves out
+# when it opens at another size than the picture's, so the failure names both.
+pictured() {
+  [ -z "$mac" ] || grep -q '^browser: launch picture shown$' "$log" || {
+    kept=$(ls "$(dirname "$saved")" | grep '^launch-picture-' | tr '\n' ' ')
+    fail "$1: it opened at $(grep -m1 '^browser: launch window frame ' "$log" | cut -d' ' -f5-), the pictures kept being ${kept:-none}"
+  }
+}
 
 launch "$out/links-plain.log"
 await '^browser: restored in ' || fail "the Spaces didn't come back"
 if [ "$driven" = 1 ]; then
   await '^browser: link rules read 1$' || fail "the link rule didn't come back with the launch"
 fi
-[ -z "$mac" ] || grep -q '^browser: launch picture shown$' "$log" ||
-  fail "the launch without a link didn't show the sidebar's picture"
+pictured "the launch without a link didn't show the sidebar's picture"
 plain="launch window $(at 'launch window') ms, started $(at 'started') ms, first frame $(at 'first frame') ms, UI shown $(at 'UI shown') ms"
 quit_launched
 
@@ -504,8 +521,7 @@ quit_launched
 # frame can come before the link, under the picture.
 launch "$out/links-cold.log" "${site}?cold"
 await '^browser: restored in ' || fail "the Spaces didn't come back under the link"
-[ -z "$mac" ] || grep -q '^browser: launch picture shown$' "$log" ||
-  fail "the launch by a link didn't show the sidebar's picture"
+pictured "the launch by a link didn't show the sidebar's picture"
 await "$(link_line "?cold" "[0-9]*" "[0-9]*")" || fail "the link that launched the browser didn't open"
 tab=$(grep "$(link_line "?cold" "[0-9]*" "[0-9]*")" "$log" | sed 's/.*: tab \([0-9]*\) .*/\1/')
 await "^browser: loaded $tab ${site}?cold\$" || fail "the link that launched the browser didn't load"
@@ -552,6 +568,67 @@ grep -q '^browser: link from another app .* of window ' "$log" &&
   fail "the link that launched the browser opened as a tab too"
 ../tools/window-screenshot.sh "$pid" "$out/links-little-launch.png" all || fail "no window to capture"
 quit_launched
+
+# On Windows a click on a toast comes as a launch: notification_helper.exe, which Windows starts for
+# it, runs chrome.exe with the toast's id, which hands it to the browser running, and Chrome gives
+# the page its click, as the user allowed the site to notify (#1426). The id is the one Chrome
+# gives the toast of a page's notification (NotificationLaunchId): a click, on a page's
+# notification, its profile's, the app's name, not private, the site, and the notification, which
+# Chrome names by the site and its tag. Chrome gives Windows a toast only for a copy whose Start
+# menu shortcut the installer made, which the run's has none of, so the run sends the toast's click.
+toasted=
+if windows; then
+  printf '%s' '<title>loading</title><script>
+const toast = new Notification("ilo check", {tag: "check"});
+toast.onshow = () => document.title = "toast shown";
+toast.onerror = () => document.title = "toast refused " + Notification.permission;
+// As a site does, it shows its tab.
+toast.onclick = () => {
+  focus();
+  document.title = "toast clicked";
+};
+</script>' > "$out/site/toast.html"
+  # Allows or takes back ($1) the site's notifications in the profile, while the app isn't running,
+  # as it writes its preferences as it quits.
+  site_notifies() {
+    MSYS2_ARG_CONV_EXCL='*' python3 -I - "$(cygpath -w "$profile_dir/Default/Preferences")" \
+      "${site%/},*" "$1" << 'PY' || fail "the profile's notifications for the site couldn't be set"
+import json, os, sys
+path, pattern, allow = sys.argv[1], sys.argv[2], sys.argv[3] == "allow"
+prefs = {}
+if os.path.exists(path):
+    with open(path) as f:
+        prefs = json.load(f)
+sites = prefs.setdefault("profile", {}).setdefault("content_settings", {})
+sites = sites.setdefault("exceptions", {}).setdefault("notifications", {})
+if allow:
+    sites[pattern] = {"setting": 1}
+else:
+    sites.pop(pattern, None)
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, "w") as f:
+    json.dump(prefs, f)
+PY
+  }
+  site_notifies allow
+  launch "$out/links-toast.log" "${site}toast.html"
+  await "$(little_line "toast.html" "[0-9]*")" ||
+    fail "the notifying page didn't open in Little ilo: $(grep '^browser: link' "$log" | tail -1)"
+  tab=$(grep "$(little_line "toast.html" "[0-9]*")" "$log" | sed 's/.*: tab \([0-9]*\) .*/\1/')
+  await "^browser: title $tab toast shown\$" ||
+    fail "the page's notification didn't show: $(grep "^browser: title $tab " "$log" | tail -1)"
+  click_toast() {
+    set -- "--notification-launch-id=0|1|Default|$(cat branding/name)|0|$site|n#${site%/}#check"
+    [ -n "$fast" ] || set -- "--user-data-dir=$(cygpath -w "$profile_dir")" "$@"
+    # Its | and # are the id's own, which Git Bash would take a path list of.
+    MSYS2_ARG_CONV_EXCL='*' "$app/chrome.exe" "$@" < /dev/null >> "$out/links-sent.log" 2>&1 || true
+  }
+  click_toast
+  await "^browser: title $tab toast clicked\$" || fail "the notification's click didn't reach the page"
+  quit_launched
+  site_notifies take-back
+  toasted=1
+fi
 # The engine's profile folder goes back to how the run found it, with the check's profile.
 if [ -n "$fast" ]; then
   rm -rf "$made"
@@ -572,5 +649,7 @@ fi
 [ -z "$msix" ] || echo "ok: a link sent to the Store's MSIX, which Windows activates for it, opens" \
   "once, in Little ilo, and loads there, the package's chrome.exe handing it over and ending."
 echo "ok: a link that launches the browser opens once, over the Spaces it brings back, before the UI comes out from under the launch picture, and loads, and both launches show the sidebar's picture; with no rules, it opens in Little ilo. Windows: $out/links-cold.png $out/links-little-launch.png"
+[ -z "$toasted" ] || echo "ok: a click on a site's notification, which notification_helper.exe hands" \
+  "chrome.exe as a launch with the toast's id, reaches the page, in the browser running."
 [ -z "$mac" ] || echo "ok: an update's notes open as a tab in the window at its first launch, with links from other apps going to Little ilo, and only then."
 echo "  Launch without a link: $plain; with one: $cold"
