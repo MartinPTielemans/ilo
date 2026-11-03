@@ -85,6 +85,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // The window that shows |tab|'s page, focused or beside the tab it shows in a split view, else
   // null. A window whose page another window took doesn't show it.
   static Window* Showing(bc_id tab);
+  // A video's Mini Player took the keyboard, so the window that let it go wasn't left for another
+  // app or window. On Linux it can take it after that window asked (OnWidgetActivationChanged).
+  static void MiniPlayerTookKeyboard();
   // The window |tab|'s page goes back to once no window shows it: of those that show a picture of
   // it in its place, as another window took it, the one the user was in last. Else null.
   static Window* Picturing(bc_id tab);
@@ -484,6 +487,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   std::unique_ptr<Suggestions> suggestions_;
   bool closing_ = false;
   base::Time inactive_since_ = base::Time::Now();
+  // Whether the user left the window for another app or window since it was last key, rather than
+  // for an overlay of the app's or the Mini Player, so coming back takes the Mini Player back.
+  bool left_ = false;
   // While closing, for a page's Stay or the downloads question, which keeps the window open.
   base::CallbackListSubscription close_stopped_;
   bool off_the_record_ = false;

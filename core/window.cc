@@ -29,6 +29,7 @@
 #include "browser_core/host.h"
 #include "browser_core/idle_unload.h"
 #include "browser_core/install_question.h"
+#include "browser_core/mini_player.h"
 #include "browser_core/password_offer.h"
 #include "browser_core/platform/window_views.h"
 #include "browser_core/profiles.h"
@@ -416,6 +417,13 @@ Window* Window::Showing(bc_id tab) {
     }
   }
   return nullptr;
+}
+
+// static
+void Window::MiniPlayerTookKeyboard() {
+  for (auto& [id, window] : Windows()) {
+    window->left_ = false;
+  }
 }
 
 // static
@@ -2507,6 +2515,9 @@ void Window::OnWidgetActivationChanged(views::Widget* widget, bool active) {
   // core shows pages outside views. Without this, a page that commits while the window isn't key
   // leaves the keyboard with nothing: Chromium gives none to its new view, and the old one is gone.
   if (active) {
+    if (std::exchange(left_, false)) {
+      CameBackTo(*this);
+    }
     FocusPageSoon();
     // The session keeps the Space of the window active last.
     if (ToFront(id_)) {
@@ -2523,6 +2534,17 @@ void Window::OnWidgetActivationChanged(views::Widget* widget, bool active) {
     if (little()) {
       ScheduleAutoArchive();
     }
+    // Posted: on the Mac, an overlay's window is key only once the window has let go.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(
+                       [](base::WeakPtr<Window> window) {
+                         if (window && !window->active() &&
+                             !platform::OverlayHasKeyboard(window->widget_.get()) &&
+                             !MiniPlayerHasKeyboard()) {
+                           window->left_ = true;
+                         }
+                       },
+                       weak_factory_.GetWeakPtr()));
   }
   ReportActiveBrowser();
 }

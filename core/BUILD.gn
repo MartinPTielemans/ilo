@@ -113,6 +113,17 @@ source_set("space_default") {
   ]
 }
 
+# Where a video's Mini Player first shows, apart so browser_core_unittests tests the rule alone.
+source_set("mini_player_place") {
+  sources = [
+    "mini_player_place.cc",
+    "mini_player_place.h",
+  ]
+
+  # Its header's geometry is its callers' too.
+  public_deps = [ "//ui/gfx/geometry" ]
+}
+
 # Which sidebar backups Arc's schedule keeps, apart so browser_core_unittests tests the rule
 # alone.
 source_set("sidebar_backups") {
@@ -251,6 +262,7 @@ source_set("browser_core") {
 
   deps = [
     ":drm_request",
+    ":mini_player_place",
     ":search_default",
     ":sidebar_backups",
     ":space_default",
@@ -511,6 +523,7 @@ source_set("browser_core") {
 # engine's run runs them.
 test("browser_core_unittests") {
   sources = [
+    "mini_player_place_unittest.cc",
     "search_default_unittest.cc",
     "sidebar_backups_unittest.cc",
 
@@ -522,6 +535,7 @@ test("browser_core_unittests") {
     "sync_pairing_unittest.cc",
   ]
   deps = [
+    ":mini_player_place",
     ":search_default",
     ":sidebar_backups",
     ":space_default",
