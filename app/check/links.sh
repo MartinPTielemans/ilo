@@ -14,8 +14,9 @@
 # with a private window in front, in the regular window, which comes to the front. Settings › Links
 # makes rules: a link whose URL holds a rule's text, or is it exactly, opens in the rule's Space, or
 # Little ilo, the first rule that matches winning, a drag reorders them, everything else goes to
-# the Space picked, and − takes a rule away; the rules are kept for the launches after. Settings › General
-# says the browser isn't the default, as a dev build never is: on the Mac it declares no links
+# the Space picked, and the trash takes a rule away, which ⌘Z brings back until Settings closes;
+# the rules are kept for the launches after. Settings › General says the browser isn't the
+# default, as a dev build never is: on the Mac it declares no links
 # (build.sh), and making it the default asks in a system dialog the driver can't answer; on Linux
 # the desktop's defaults name no dev build. A link that launches the browser opens over the Spaces
 # it brings back, before the UI comes out from under the launch picture, or with no rules, in Little
@@ -402,12 +403,18 @@ if [ "$driven" = 1 ]; then
   send choose work
   expect "$(rules_drawn "$exact, URL contains \"work\" → work" work)" "everything else's pop-up didn't set its Space"
   open_link "?else" "$second" "$window"
-  # − takes the first rule away.
+  # The trash takes the first rule away, ⌘Z brings it back to its place, and the trash again.
   send menu Settings…
   expect '^browser: settings shown Links$' "Settings… didn't show Settings on its Links tab"
   settings_drew Links
   send clickkey 597 129
-  expect "$(rules_drawn 'URL contains "work" → work' work)" "− didn't take the rule away"
+  expect "$(rules_drawn 'URL contains "work" → work' work)" "the trash didn't take the rule away"
+  send key z cmd
+  expect "$(rules_drawn "$exact, URL contains \"work\" → work" work)" \
+    "⌘Z didn't bring the rule the trash took back to its place"
+  ../tools/window-screenshot.sh "$pid" "$out/links-rule-back.png" || fail "no window to capture"
+  send clickkey 597 129
+  expect "$(rules_drawn 'URL contains "work" → work' work)" "the trash didn't take the rule away again"
   # A rule to Little ilo opens its links in one, for the Space in front: the second, the last link
   # to the window having shown it.
   post clickkey 500 129
@@ -420,10 +427,13 @@ if [ "$driven" = 1 ]; then
   open_little_link "?work-little" "$second"
   expect "^browser: link rule 0 sends ${site}?work-little to little ilo\$" \
     "the rule didn't send its link to Little ilo"
-  # Back to the second Space, for the launch after.
+  # Back to the second Space, for the launch after. Settings closed since the trash, so ⌘Z has
+  # nothing of it to bring back.
   send menu Settings…
   expect '^browser: settings shown Links$' "Settings… didn't show Settings on its Links tab"
   settings_drew Links
+  send key z cmd
+  none_since '^browser: link rules drawn' || fail "⌘Z brought back a rule after Settings closed"
   post clickkey 500 129
   expect '^browser: menu shown [^,]*, work, Little ilo (checked)$' \
     "the rule's Space pop-up didn't check Little ilo"
@@ -437,9 +447,18 @@ else
   printf 'otherwise\t1\n' > "$rules_file"
 fi
 # The sidebar's picture, which the launches below show until their UI has drawn.
-quit_by_key
 mac=
 [ "$(uname)" = Darwin ] && mac=1
+if [ -n "$mac" ]; then
+  # A window the screen has less room for at the next launch opens smaller, with no picture of
+  # that size. One filling the hosted Mac's 1024 by 768 screen opened 2 or 3 points shorter
+  # whenever the Dock had grown since (#1528), so the window quits well inside the screen.
+  send screen
+  corner=$(grep '^browser: screen at ' "$log" | tail -1 | cut -d' ' -f4,5)
+  send place $((${corner% *} + 40)) $((${corner#* } + 60)) 900 560
+  expect '^browser: drawn at 900x560$' "the window didn't draw at 900 by 560"
+fi
+quit_by_key
 [ -z "$mac" ] || grep -q '^browser: launch picture taken$' "$log" ||
   fail "⌘Q didn't keep the sidebar's picture for the next launch"
 exited
@@ -489,14 +508,21 @@ quit_launched() {
 at() {
   grep -m1 "^browser: $1 at " "$log" | sed 's/.* at \([0-9.]*\) ms$/\1/'
 }
+# On the Mac, fails with $1 unless the launch showed the sidebar's picture, which it leaves out
+# when it opens at another size than the picture's, so the failure names both.
+pictured() {
+  [ -z "$mac" ] || grep -q '^browser: launch picture shown$' "$log" || {
+    kept=$(ls "$(dirname "$saved")" | grep '^launch-picture-' | tr '\n' ' ')
+    fail "$1: it opened at $(grep -m1 '^browser: launch window frame ' "$log" | cut -d' ' -f5-), the pictures kept being ${kept:-none}"
+  }
+}
 
 launch "$out/links-plain.log"
 await '^browser: restored in ' || fail "the Spaces didn't come back"
 if [ "$driven" = 1 ]; then
   await '^browser: link rules read 1$' || fail "the link rule didn't come back with the launch"
 fi
-[ -z "$mac" ] || grep -q '^browser: launch picture shown$' "$log" ||
-  fail "the launch without a link didn't show the sidebar's picture"
+pictured "the launch without a link didn't show the sidebar's picture"
 plain="launch window $(at 'launch window') ms, started $(at 'started') ms, first frame $(at 'first frame') ms, UI shown $(at 'UI shown') ms"
 quit_launched
 
@@ -505,8 +531,7 @@ quit_launched
 # frame can come before the link, under the picture.
 launch "$out/links-cold.log" "${site}?cold"
 await '^browser: restored in ' || fail "the Spaces didn't come back under the link"
-[ -z "$mac" ] || grep -q '^browser: launch picture shown$' "$log" ||
-  fail "the launch by a link didn't show the sidebar's picture"
+pictured "the launch by a link didn't show the sidebar's picture"
 await "$(link_line "?cold" "[0-9]*" "[0-9]*")" || fail "the link that launched the browser didn't open"
 tab=$(grep "$(link_line "?cold" "[0-9]*" "[0-9]*")" "$log" | sed 's/.*: tab \([0-9]*\) .*/\1/')
 await "^browser: loaded $tab ${site}?cold\$" || fail "the link that launched the browser didn't load"
@@ -626,7 +651,7 @@ fi
 if [ "$driven" = 1 ]; then
   [ -z "$again" ] ||
     echo "ok: a launch with no link while the window is minimized brings it back and to the front."
-  echo "ok: links from another app open once, in Little ilo by default, the same link again bringing its window back, and sent to the Space in front as new tabs in the front window's Space and load there, in the user's Space when an agent's is shown, and in the regular window, brought to the front, over a private one; Settings says the browser isn't the default. Settings › Links' rules send a link whose URL holds a rule's text, or is it exactly, to the rule's Space or Little ilo, the first that matches winning, a drag reorders them, everything else goes to the Space picked, − takes a rule away, and the rules come back with the launch. Windows: $out/links-little.png, $out/links-settings.png, $out/links-rules-empty.png, $out/links-rules.png"
+  echo "ok: links from another app open once, in Little ilo by default, the same link again bringing its window back, and sent to the Space in front as new tabs in the front window's Space and load there, in the user's Space when an agent's is shown, and in the regular window, brought to the front, over a private one; Settings says the browser isn't the default. Settings › Links' rules send a link whose URL holds a rule's text, or is it exactly, to the rule's Space or Little ilo, the first that matches winning, a drag reorders them, everything else goes to the Space picked, the trash takes a rule away and ⌘Z brings it back until Settings closes, and the rules come back with the launch. Windows: $out/links-little.png, $out/links-settings.png, $out/links-rules-empty.png, $out/links-rules.png, $out/links-rule-back.png"
 else
   echo "ok: a link from another app opens once, in Little ilo by default, and loads there."
   echo "skip: the launch with no link while the window is minimized, the agent's Space, the private window, Settings and the link rules. Browser wasn't the active app, so the page ignored the click."

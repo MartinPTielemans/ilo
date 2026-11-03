@@ -783,6 +783,8 @@ impl Render for LinkPreview {
             .on_action(cx.listener(|preview, _: &Keep, _, cx| {
                 preview.keep("cmd-enter", cx);
             }))
+            // A tooltip shows once the pointer rests (tooltip.rs).
+            .on_mouse_move(|_, _, cx| crate::tooltip::moved(cx))
             .size_full()
             .font_family(".SystemUIFont");
         let Some(shown) = self.preview.as_mut() else {

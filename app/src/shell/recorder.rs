@@ -175,6 +175,8 @@ pub(super) struct Recorder {
     /// button does.
     pub(super) undo_toasts: RefCell<Vec<String>>,
     pub(super) undo_toast: RefCell<Option<Rc<dyn Fn(&mut App)>>>,
+    /// How many times a toast offering the undo was taken down.
+    pub(super) undo_toasts_hidden: Cell<usize>,
     /// What the last toast with a button other than Undo runs, its words in `toasts`.
     pub(super) toast_run: RefCell<Option<Rc<dyn Fn(&mut App)>>>,
     /// Another browser window is in front of this one.
@@ -1070,6 +1072,7 @@ impl Browser for Recorder {
 
     fn hide_undo_toast(&self, _: &mut App) {
         self.undo_toast.borrow_mut().take();
+        self.undo_toasts_hidden.set(self.undo_toasts_hidden.get() + 1);
     }
 
     fn in_front(&self) -> bool {

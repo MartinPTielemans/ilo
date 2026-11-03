@@ -473,6 +473,10 @@ buttons-top = 12.0
 button-height = 28.0
 button-x = 12.0
 button-gap = 8.0
+# Save's ↩ and Not Now's esc after their words, fainter, as the toast's Undo names ⌘Z: the
+# dialog's chips leave no room for Never in a 320-wide card (#1386).
+key-gap = 5.0
+key = 0.6
 plate-radius = 6.0
 title = 1.0
 detail = 0.78
@@ -660,6 +664,9 @@ title = 0xa4a6a6
 tab-text = 0x9e9f9f
 text = 0xc2c2c2
 control = 0x313333
+# Under the pointer, a quiet step toward pressed, short of it, so a button shows it can be
+# clicked before it's pressed (ours, #1387).
+control-hovered = 0x3a3c3c
 control-pressed = 0x404242
 switch-off = 0x383939
 knob = 0xe1e2e2
@@ -693,6 +700,7 @@ tile-glyph-color = 0xffffff
 # over its boxes.
 on-line = 0.11
 on-control = 0.09
+on-hovered = 0.14
 on-pressed = 0.18
 on-switch-off = 0.13
 on-detail = 0.77
@@ -820,9 +828,11 @@ status-ring = 1.5
 status-ring-color = 0xf3f0e8
 title-gap = 8.0
 # The speaker before a title, while its tab plays sound or is muted, and its pressable square.
+# Arc's title is 8 after its speaker's glyph; ours draws 0.6 inside its 16 pt box, which is 1
+# inside the square, so the title is 6.5 after the square.
 speaker-drawn = 16.0
 speaker-size = 18.0
-speaker-gap = 4.0
+speaker-gap = 6.5
 # Arc's close button, 5 inside the plate's right edge, and the box its glyph is drawn in.
 close-size = 26.0
 close-right = 5.0
@@ -1899,9 +1909,13 @@ note-height = 41.0
 note-top = 4.0
 
 [tooltip]
-# How far below the tile or row it names the tooltip's top is, or above it if it doesn't fit
-# below. The gap between two tiles, so it reads as the tile's own and the tile's edge shows.
+# How far below a folder's row the tooltip's top is, or above it if it doesn't fit below. The gap
+# between two tiles, so it reads as the row's own and the row's edge shows.
 gap = 6.0
+# A button's or tile's tooltip hangs off the bottom right of a 16 pt box around its glyph: its top
+# left is this far right of the glyph's centre and this far below it (Arc 1.170).
+button-x = 8.0
+button-y = 7.0
 # How far in from the window's left and right edges a tooltip that would cross one stays (ours).
 edge-inset = 8.0
 # How far right of a footer button's plate the tooltip beside it starts (Arc).

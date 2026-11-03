@@ -58,7 +58,6 @@ send click $page_point
 if [ "$active" != 1 ]; then
   exec 3>&-
   quit
-  kill "$server"
   echo "skip: restoring Spaces. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
@@ -310,7 +309,6 @@ send click $page_point
 if [ "$active" != 1 ]; then
   exec 3>&-
   quit
-  kill "$server"
   echo "skip: restored history. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
