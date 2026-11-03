@@ -88,6 +88,9 @@ pub trait Browser {
     /// Shows the window over the page that draws `Shell::over_page`, drawing it again, or hides
     /// it.
     fn show_drop_targets(&self, shown: bool, cx: &mut App);
+    /// Where the pointer is, in the window's content, wherever it is on screen: over the page, as
+    /// the UI hears no move there, or outside the window. None where the host doesn't say.
+    fn pointer(&self, cx: &mut App) -> Option<Point<Pixels>>;
     /// Loads a pinned tab's pinned URL, unless it's there already.
     fn back_to_pinned_url(&self, tab: u64, cx: &mut App);
     /// Mutes `tab`, or unmutes it.

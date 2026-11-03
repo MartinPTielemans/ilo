@@ -106,13 +106,15 @@ impl Shell {
     }
 
     /// What the window over the page draws: Add Split View's targets while a tab or a link is
-    /// dragged over it, and the agent's pointer.
+    /// dragged over it, the agent's pointer, and a new download's icon on its way to the Library
+    /// button.
     pub fn over_page(&self, window: &mut Window, cx: &App) -> AnyElement {
         div()
             .size_full()
             .relative()
             .child(self.drop_targets(window))
             .children(self.agent_pointer_drawn(window, cx))
+            .children(self.download_flight_drawn(window, cx))
             .into_any_element()
     }
 

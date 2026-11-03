@@ -64,6 +64,8 @@ pub(super) struct Recorder {
     pub(super) default_browser: Cell<bool>,
     /// The system it says it runs on, the Mac unless a test says.
     pub(super) os: Cell<Option<crate::default_browser::Os>>,
+    /// Where the pointer is in the window, as `pointer` answers.
+    pub(super) pointer: Cell<Option<Point<Pixels>>>,
     /// The build updates itself, as `updates` answers, and how often Check for Updates ran.
     pub(super) updates: Cell<bool>,
     pub(super) checked_for_updates: Cell<usize>,
@@ -407,6 +409,10 @@ impl Browser for Recorder {
     }
 
     fn show_drop_targets(&self, _: bool, _: &mut App) {}
+
+    fn pointer(&self, _: &mut App) -> Option<Point<Pixels>> {
+        self.pointer.get()
+    }
 
     fn back_to_pinned_url(&self, tab: u64, _: &mut App) {
         self.record(format!("back to pinned url {tab}"))

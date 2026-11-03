@@ -9,8 +9,9 @@
 # icon, picked in its icon picker, comes back too. A tab closed before the quit stays closed,
 # in the archive, from which the Library reopens it at its page. A page's downloads go in the
 # check's folder, on the Mac with macOS's quarantine flag, a new one's icon flies
-# into the Library button, none of those a relaunch reads does, and ⇧⌘J opens the Library on
-# Downloads, which lists them. While one runs, the button keeps
+# from the pointer into a bin on the Library button, recorded with the recent downloads coming and
+# going, none of those a relaunch reads does, and ⇧⌘J opens the Library on Downloads, which lists
+# them. While one runs, the button keeps
 # its name and resting on it shows the running one with the finished one. With one running, ⌘Q
 # asks first: Continue Downloading shows the Library's Downloads, and Quit quits, cancelling it.
 # After the relaunch, Remove from List and Clear List take them off the list and keep their files.
@@ -81,16 +82,20 @@ if [ "$(uname)" = Darwin ]; then
     fail "the download has no quarantine flag: $flag"
   [ -n "$(echo "$flag" | cut -d';' -f3)" ] || fail "the download's quarantine flag names no app: $flag"
 fi
+record download-flight 3
 send type s
 expect '^browser: download [0-9]* running slow.bin$' "the page's slow download didn't start"
-# Its icon flies into the Library button.
+# Its icon flies from the pointer, over the page, into a bin on the Library button.
 d=$(grep -m1 '^browser: download [0-9]* running slow.bin$' "$log" | cut -d' ' -f3)
 expect "^browser: download flying $d\$" "the new download's icon didn't fly"
 ../tools/window-screenshot.sh "$pid" "$out/download-flying.png" || fail "no window to capture"
 expect "^browser: download landed $d\$" "the new download's icon didn't land"
+../tools/window-screenshot.sh "$pid" "$out/download-bin.png" || fail "no window to capture"
+recorded
 # While it runs, the Library button keeps its name and keys, and resting on it shows the running
-# download over the finished one.
+# download over the finished one, and sends the bin away.
 check_layout "with a download running"
+record recent-downloads 3
 send move 24 $((height - 25))
 library_keys=⇧⌘L
 [ "$(uname)" = Darwin ] || library_keys=Ctrl+Shift+L
@@ -102,6 +107,7 @@ expect '^browser: recent downloads shown 2$' \
   fail "no window to capture"
 send move $page_point
 expect '^browser: recent downloads hidden$' "the recent downloads stayed after the pointer left"
+recorded
 send key j cmd shift
 expect '^browser: command view-downloads via page$' "⇧⌘J with the page focused didn't reach the UI"
 expect '^browser: library section downloads$' "⇧⌘J didn't open the Library on Downloads"
