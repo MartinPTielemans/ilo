@@ -1415,8 +1415,13 @@ static bool g_pressed_key = false;
 // corners and material too, so the window is clear and without its shadow while it grows, or the
 // rest of its frame would show from the start.
 static void GrowLittleWindow(NSWindow* window) {
-  CALayer* layer = window.contentView.superview.layer;
+  // AppKit makes the frame view's layer only once the window is first on screen, a frame too late.
+  NSView* frame_view = window.contentView.superview;
+  frame_view.wantsLayer = YES;
+  CALayer* layer = frame_view.layer;
   if (!layer) {
+    // check.sh reads this line.
+    fprintf(stderr, "browser: little window can't grow, as its frame has no layer\n");
     return;
   }
   const NSRect frame = window.frame;
