@@ -1545,6 +1545,11 @@ mod tasks {
 
     /// Agents on, with Claude signed in at `program`, and the user's Space 1.
     fn ready(program: Option<PathBuf>, cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>) {
+        // A real CLI's thread says when it ends, whenever that is, which wakes the test's tasks from
+        // a thread GPUI doesn't run: unless told the test has real I/O, GPUI fails the test for it.
+        if program.is_some() {
+            cx.executor().allow_parking();
+        }
         let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
         let agents = agents(&browser, &configs, None, cx);
         agents.update(cx, |agents, cx| {
@@ -1859,8 +1864,6 @@ mod tasks {
         cx.executor().advance_clock(NO_ANSWER * 2);
         cx.run_until_parked();
         assert_eq!(card_of(&agents, cx).dot, Dot::Done, "a timer ended a task that had answered");
-        // Its CLI ends with the test's app, not before: ended here, the thread that reads it would
-        // wake the test's scheduler, which takes that for a test that isn't deterministic.
     }
 
     /// A CLI that never answers, or goes before it does, never leaves Thinking going: the line

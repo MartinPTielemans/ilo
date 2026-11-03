@@ -35,8 +35,8 @@ themed=$(cased "$colors, Remove Theme Color")
 swatch_y=380
 swatch_x() { echo "$1" | awk '{ print 13 + 60.5 + 29.5 * $1 }'; }
 # Its profiles, in the one the check starts with, for a Space with tabs and an empty one.
-profile=$(cased "Profile › Default (checked), Profile › New Profile (disabled)")
-empty_profile=$(cased "Profile › Default (checked), Profile › New Profile")
+profile=$(cased "Set Profile › Default (checked), Set Profile › New Profile (disabled)")
+empty_profile=$(cased "Set Profile › Default (checked), Set Profile › New Profile")
 # The product's name, which the app's menus and alerts use, and the dev build's id.
 app_name=$(cat branding/name)
 app_id=dev.browser.app

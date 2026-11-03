@@ -778,11 +778,18 @@ name-x = 41.0
 space-icon-slot = 20.0
 # The sidebar's icon takes clicks on Arc's frame, which lights with the header's plate (ours).
 space-icon-plate = 26.0
-# The chevron after the name that collapses the Space's pinned rows and expands them, on the
-# header's hover plate: down while they show, turned to point right while they're collapsed (ours).
+# The chevron that collapses the Space's pinned rows and expands them, in the icon's slot, or after
+# the name without an icon in a box this wide (ours): down while they show, a quarter turned to
+# point right while they're collapsed (Arc 1.171; its size is ours).
 pinned-caret = 12.0
 pinned-caret-plate = 20.0
 pinned-caret-gap = 2.0
+# Under the pointer the name row is a tab row's plate, with its ••• on a square this big whose end
+# is this far in from the plate's (Arc 1.171). Rename Space… puts Done there (Arc 1.171).
+space-more = 24.0
+space-more-inset = 6.0
+space-done-width = 32.0
+space-done-height = 26.0
 icon-placeholder = 24.0
 icon-placeholder-radius = 6.0
 icon-placeholder-line = 1.0
@@ -804,6 +811,10 @@ drop-line = 2.0
 drop-ring = 8.0
 drop-ring-x = 7.0
 drop-line-end = 2.0
+# A tab rested on a row shows in the split it would make, in a slot this far in from its segment's
+# edges at the plate's radius less as much, filled as a hovered row (ours: Arc's preview isn't
+# measured).
+drop-slot-inset = 3.0
 drop = 0xffff_ffe6
 plate-radius = 12.0
 # Around the row the keyboard acts on while the sidebar has it (Focus Sidebar), inside its plate,

@@ -12,10 +12,10 @@ use std::{
 
 use gpui::{
     AnyElement, App, Bounds, BoxShadow, Context, DispatchPhase, Entity, FocusHandle, Focusable,
-    FontWeight, HitboxBehavior, Hsla, Image, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent,
-    MouseUpEvent, PathBuilder, Pixels, Point, Rgba, Role, ScrollHandle, SharedString, Size,
-    Subscription, Task, Window, WindowTextSystem, canvas, div, img, point, prelude::*, px, rgb,
-    rgba, size, svg,
+    FontWeight, HitboxBehavior, Hsla, Image, ModifiersChangedEvent, MouseButton, MouseDownEvent,
+    MouseExitEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, Rgba, Role,
+    ScrollHandle, SharedString, Size, Subscription, Task, Window, WindowTextSystem, canvas, div,
+    img, point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{
@@ -240,6 +240,9 @@ const LIST_GLIDE_POWER: i32 = 18;
 // Clear and the URL field's button fade in as the pointer comes onto the sidebar and out as it
 // leaves, on the scroll edge's curve. Arc's fade isn't recorded (docs/ux-spec.md › Clear divider).
 const TOOLS_FADE: f32 = 0.15;
+// The Space's chevron turns a quarter as its pinned rows collapse or expand, ease-in-out (Arc
+// 1.171's 0.12 s; the curve is ours).
+const PINNED_TURN: f32 = 0.12;
 // Two fingers across the sidebar page between Spaces (docs/ux-spec.md › Spaces › Switching). The
 // pages follow at half the fingers' way and rubber-band past the ends. Let go, they settle
 // critically damped on the next Space if the last 100 ms moved them faster than a flick, else on
@@ -301,6 +304,7 @@ use crate::tokens::shell::SPACE_ICON_PLATE;
 use crate::tokens::shell::PINNED_CARET;
 use crate::tokens::shell::PINNED_CARET_PLATE;
 use crate::tokens::shell::PINNED_CARET_GAP;
+use crate::tokens::shell::{SPACE_DONE_HEIGHT, SPACE_DONE_WIDTH, SPACE_MORE, SPACE_MORE_INSET};
 // While the icon picker shows for a Space with no icon, a dashed square holds the icon's place,
 // centred in its frame (Arc 1.170 cap at 1×): 24 across, its corners rounded by about 6, a 1 pt
 // line of 4 pt dashes and 2 pt gaps, in black at 0.30, seen over a red Space (*interim* over the
@@ -847,9 +851,10 @@ struct Drag {
     /// go to, unless that's where it was. The rows stay where they are until it's let go.
     line: Option<f32>,
     /// The tab whose row's middle the pointer is on, and the wait for it to rest there, after which
-    /// it's the tab the dragged one would join in a split view, as Arc's, in place of a gap.
+    /// it's the tab the dragged one would join in a split view, as Arc's, in place of a gap, on its
+    /// left if the pointer is on the row's left half.
     resting: Option<(u64, Task<()>)>,
-    onto: Option<u64>,
+    onto: Option<(u64, bool)>,
     /// Let go, until the browser reports the lists it made.
     dropped: bool,
     /// Over the page, where it can join the page shown in a split view.
@@ -1028,6 +1033,10 @@ pub struct Shell {
     /// button waits until the pointer has left the row or pressed it, so a second click meant for
     /// the − never removes the tab.
     remove_held: Option<u64>,
+    /// The split row whose ✕ or − the pointer is on, and whether ⌥ is held, when a click separates
+    /// its tabs instead of closing them (Arc). The pointer's moves say the keys held, as GPUI hears
+    /// no ⌥ of its own while the page has the keyboard.
+    on_split_close: Option<(u64, bool)>,
     /// A shortcut the page handed back ran since the pointer last moved. The sidebar draws no row
     /// or favicon under the pointer until it moves, as GPUI hides its hover after a key of its own,
     /// so a row the pointer rests on doesn't read as selected beside the tab a key showed.
@@ -1114,6 +1123,14 @@ pub struct Shell {
     marker_drawn: Cell<Option<(bool, Bounds<Pixels>)>>,
     /// Whether the pinned rows' chevron was last drawn for collapsed ones, and where.
     caret_drawn: Rc<Cell<Option<(bool, Bounds<Pixels>)>>>,
+    /// Whether the pointer is over the Space's name row, which then shows its fill, chevron and
+    /// •••, and whether the menu up is the one it opened, which keeps them while it's up.
+    name_hovered: bool,
+    name_menu: bool,
+    /// The Space and whether its pinned rows were collapsed when last drawn, and when they last
+    /// changed there, for the chevron's turn.
+    pinned_seen: Option<(u64, bool)>,
+    pinned_turn: Option<Instant>,
     /// The row whose ring the keys move while the sidebar has the keyboard (sidebar_keys.rs), the
     /// focus it takes them with, whether it takes them at the next draw, and where the ring was
     /// last drawn.
@@ -1525,6 +1542,7 @@ impl Shell {
             selected: 0,
             hovered: None,
             remove_held: None,
+            on_split_close: None,
             page_keyed: false,
             retip: false,
             menu_row: None,
@@ -1561,6 +1579,10 @@ impl Shell {
             list_glide: Cell::new(None),
             marker_drawn: Cell::new(None),
             caret_drawn: Rc::default(),
+            name_hovered: false,
+            name_menu: false,
+            pinned_seen: None,
+            pinned_turn: None,
             keyed: None,
             sidebar_keys: cx.focus_handle(),
             focus_keys: false,
@@ -3075,6 +3097,10 @@ impl Shell {
         if self.remove_held.is_some_and(|held| self.hovered != Some(Row::Tab(held))) {
             self.remove_held = None;
         }
+        // Its button goes with the row's hover, which may tell it nothing.
+        if self.on_split_close.is_some_and(|(on, _)| self.hovered != Some(Row::Tab(on))) {
+            self.on_split_close = None;
+        }
         cx.notify();
     }
 
@@ -3396,6 +3422,7 @@ impl Render for Shell {
         self.step_form_going(cx);
         self.step_scroll_edge(window);
         self.step_tools(window);
+        self.step_pinned_turn(window);
         self.step_empty(window);
         self.step_crash_cards(window);
         let drop_targets = self.drag.as_ref().is_some_and(|drag| drag.over_page.is_some())
@@ -3508,6 +3535,9 @@ impl Render for Shell {
             }))
             .on_action(cx.listener(|shell, _: &crate::text_input::Redo, _, cx| {
                 shell.redo(cx);
+            }))
+            .on_modifiers_changed(cx.listener(|shell, event: &ModifiersChangedEvent, _, cx| {
+                shell.alt_on_close(event.modifiers.alt, cx)
             }))
             .size_full()
             .relative()
@@ -3854,8 +3884,10 @@ impl Shell {
         });
         let line = over_list.and_then(|drag| Some(self.drop_line(drag.line?, drag.depth, room)));
         let dragged = over_list.filter(|drag| !drag.incoming);
-        // Mid-turn into or out of a tile, it's drawn over the sidebar instead.
-        let dragged = dragged.filter(|drag| drag.shape.start.is_none()).map(|drag| {
+        // Mid-turn into or out of a tile, it's drawn over the sidebar instead, and rested on a
+        // row, it's in that row's slot for it.
+        let dragged = dragged.filter(|drag| drag.shape.start.is_none() && drag.onto.is_none());
+        let dragged = dragged.map(|drag| {
             let row = self.tab_row(drag.tab, true, cx);
             let top = room + self.drag_at(drag);
             let ghost = div().id("ghost").absolute().top(px(top)).left_0();
@@ -3954,6 +3986,7 @@ impl Shell {
         self.step_form_going(cx);
         self.step_scroll_edge(window);
         self.step_tools(window);
+        self.step_pinned_turn(window);
         self.step_foot(window, cx);
         let left = REVEAL_INSET - (REVEAL_INSET + self.width()) * (1. - self.reveal_out());
         // Unless a field in the panel has it.

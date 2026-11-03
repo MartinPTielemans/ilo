@@ -6,7 +6,8 @@
 # says what it does. A click on the tile shows it, and ⌘1–⌘9 count favorites first. Past its top, the list shows an
 # edge under the tile, and showing a tab under its bottom scrolls to the tab's row. Scrolled out of
 # the list, the shown tab's row has a marker at the edge it's past, which scrolls back to it. Away
-# from its URL, a double-click on the tile goes back there. ⌘W unloads it and keeps the tile,
+# from its URL, a double-click on the tile goes back there. ⌥-click on a Today row with it shown
+# joins that tab to a copy of it in Today, which ⌘Z closes. ⌘W unloads it and keeps the tile,
 # showing the top Today tab. The tile's menu hangs the icon picker under the tile, whose pick is the
 # tile's icon until Remove Icon, and duplicates it to the top of Today. Launched again, the app
 # brings the favorite back, shown, with the icon it was given before the quit, and Remove from
@@ -166,6 +167,21 @@ expect '^browser: command back-to-pinned-url via favorite$' \
   "a double-click on the tile didn't run Back to Favorite URL"
 expect "^browser: loaded $a $site\$" "a double-click on the tile didn't load the favorite's URL"
 expect "^browser: page $a away 0\$" "the favorite still read as away at its URL"
+# ⌥-click on a Today row with the favorite shown joins that tab to a copy of the favorite at the
+# top of Today, as no Space holds a favorite (Arc), and ⌘Z closes the copy and puts the tab back.
+send click $(tiled_row 0) alt
+expect '^browser: command split via sidebar$' "⌥-click on the Today row didn't reach the sidebar"
+expect "^browser: splits [0-9][0-9]*+$b\$" \
+  "the Today tab didn't join a copy of the favorite: $(grep '^browser: splits' "$log" | tail -1)"
+[ "$(favorites)" = "$a" ] || fail "joining the favorite took its tile: \"$(favorites)\""
+../tools/window-screenshot.sh "$pid" "$out/favorite-split.png" || fail "no window to capture"
+send key z cmd
+undone=$step
+expect '^browser: splits $' "⌘Z didn't undo the split with the favorite's copy"
+expect "^browser: today $b\$" "⌘Z didn't close the copy and put the tab back: \"$(today)\""
+# The copy closing may have shown the favorite already.
+send click $tile
+expect "^browser: selected $a\( in .*\)\{0,1\}\$" "the favorite isn't shown again" "$undone"
 # ⌘W unloads a favorite and keeps its tile, showing the top Today tab, and ⌘1 loads it again.
 send click $page_point
 send key w cmd
