@@ -329,6 +329,7 @@ send choose "$(cased 'Change Icon…')"
 expect "^browser: icon picker for tab $e on emoji\$" \
   "Change Icon… didn't open the icon picker for the middle tab"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker under the middle tab"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 send insert glowing star
 send key return
 expect "^browser: page $e icon 🌟\$" "the picker's pick didn't become the middle tab's icon"

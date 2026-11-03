@@ -138,6 +138,8 @@ struct Picking {
     tones: bool,
     /// While the content slides from one tab's to the other's: the tab it slides from, and when.
     slide: Option<(Tab, Instant)>,
+    /// Whether it has drawn on screen since it was shown, before which a click finds nothing.
+    drawn: bool,
     _edit: Option<Subscription>,
 }
 
@@ -282,6 +284,7 @@ pub fn show(
                 selected: None,
                 tones: false,
                 slide: None,
+                drawn: false,
                 _edit: None,
             });
             picker.show_tab(tab, window, cx);
@@ -916,6 +919,17 @@ impl Render for IconPicker {
             window.request_animation_frame();
             Some((from, progress))
         });
+        // AppKit puts the window on screen some frames after it's asked to, and only then does
+        // GPUI draw it, as the theme picker's.
+        if let Some(picking) = self.picking.as_mut().filter(|picking| !picking.drawn) {
+            if window.is_visible() {
+                picking.drawn = true;
+                // check.sh waits for this line.
+                log!("browser: icon picker drawn");
+            } else {
+                window.request_animation_frame();
+            }
+        }
         let Some(picking) = &self.picking else {
             return root;
         };
