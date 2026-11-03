@@ -767,8 +767,16 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
     Some(match action {
         "window" => (|| {
             let number: usize = words.next()?.parse().ok()?;
-            let (_, node) = browser(number.checked_sub(1)?)?;
-            DRIVEN.set(number - 1);
+            let index = number.checked_sub(1)?;
+            // The core says a window opened before sway has mapped it, and windows pair as sway
+            // lists them, so one not paired yet is waited for (#1579).
+            let Some((_, node)) = browser(index) else {
+                if PAIRED.with_borrow(|paired| paired.len() <= index) {
+                    drive::again();
+                }
+                return None;
+            };
+            DRIVEN.set(index);
             log!("browser: drive window {number}");
             // To the front with the keyboard, as a click on it does.
             sway_command(&format!("[con_id={}] focus", node.id))
