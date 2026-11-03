@@ -1948,6 +1948,48 @@ namespace {
 #define PW_RENDERFULLCONTENT 0x00000002
 #endif
 
+// diag(#1262): what the browser window's own surface, under the UI, holds where Windows' caption
+// would be: a copy of its window DC reads that surface, not DirectComposition's.
+void DiagCaption(HWND root, const char* when) {
+  RECT window{};
+  if (!root || !GetWindowRect(root, &window)) {
+    return;
+  }
+  const int width = std::min<int>(400, window.right - window.left), height = 40;
+  BITMAPINFO info{};
+  info.bmiHeader.biSize = sizeof info.bmiHeader;
+  info.bmiHeader.biWidth = width;
+  info.bmiHeader.biHeight = -height;
+  info.bmiHeader.biPlanes = 1;
+  info.bmiHeader.biBitCount = 32;
+  info.bmiHeader.biCompression = BI_RGB;
+  uint8_t* bits = nullptr;
+  HDC source = GetWindowDC(root);
+  HDC dc = CreateCompatibleDC(source);
+  HBITMAP bitmap =
+      CreateDIBSection(dc, &info, DIB_RGB_COLORS, reinterpret_cast<void**>(&bits), nullptr, 0);
+  if (bitmap) {
+    HGDIOBJ old = SelectObject(dc, bitmap);
+    BitBlt(dc, 0, 0, width, height, source, 0, 0, SRCCOPY);
+    GdiFlush();
+    long sum = 0, light = 0, dark = 0;
+    int high = 0;
+    for (int i = 0; i < width * height; ++i) {
+      const int v = (bits[i * 4] + bits[i * 4 + 1] + bits[i * 4 + 2]) / 3;
+      sum += v;
+      high = std::max(high, v);
+      light += v >= 230;
+      dark += v < 120;
+    }
+    fprintf(stderr, "browser: caption diag %s: mean %ld max %d light %ld dark %ld\n", when,
+            sum / (width * height), high, light, dark);
+    SelectObject(dc, old);
+    DeleteObject(bitmap);
+  }
+  DeleteDC(dc);
+  ReleaseDC(root, source);
+}
+
 // What the first window looks like until its UI has drawn, put on screen before the browser
 // starts: the window's frame, the sidebar's picture and the sidebar's colour past it.
 struct LaunchWindow {
@@ -2083,7 +2125,9 @@ bool Sidebar(HWND window, LONG width, std::vector<uint8_t>* pixels, LONG* high) 
     HGDIOBJ old = SelectObject(dc, bitmap);
     // The full content, as GPUI draws through DirectComposition, which a plain copy of the
     // window's DC misses.
+    DiagCaption(window, "before launch picture");
     ok = PrintWindow(window, dc, PW_CLIENTONLY | PW_RENDERFULLCONTENT);
+    DiagCaption(window, "after launch picture");
     GdiFlush();
     if (ok) {
       pixels->resize(static_cast<size_t>(width) * *high * 4);
@@ -2220,6 +2264,8 @@ LRESULT CALLBACK FrameChildProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM l
   return DefSubclassProc(hwnd, message, wparam, lparam);
 }
 
+LRESULT FrameMessage(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
+
 LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR,
                            DWORD_PTR) {
   // diag(#1262): which messages the browser window gets as Windows' caption shows.
@@ -2230,6 +2276,21 @@ LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
     fprintf(stderr, "browser: frame diag 0x%04x %llx %llx\n", message,
             static_cast<unsigned long long>(wparam), static_cast<unsigned long long>(lparam));
   }
+  if (message == WM_NCPAINT || message == WM_NCACTIVATE || message == WM_PAINT ||
+      message == WM_SETTEXT || message == kDrawCaption || message == kDrawFrame ||
+      message == WM_PRINT || message == WM_PRINTCLIENT) {
+    char before[32];
+    snprintf(before, sizeof before, "before 0x%04x", message);
+    DiagCaption(hwnd, before);
+    const LRESULT result = FrameMessage(hwnd, message, wparam, lparam);
+    snprintf(before, sizeof before, "after 0x%04x", message);
+    DiagCaption(hwnd, before);
+    return result;
+  }
+  return FrameMessage(hwnd, message, wparam, lparam);
+}
+
+LRESULT FrameMessage(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
   switch (message) {
     case WM_NCCALCSIZE: {
       if (!wparam || !(GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CAPTION)) {
@@ -3125,8 +3186,21 @@ void host_show_dialog(void* ui_view, double x, double y, double width, double he
   HWND root = Root(ui_view);
   if (root && root != g_dialog_asking && g_dialog.hwnd && IsWindowVisible(g_dialog.hwnd) &&
       !AppInFront()) {
+    DiagCaption(root, "before flash");
     FLASHWINFO flash{sizeof flash, root, FLASHW_TRAY | FLASHW_TIMERNOFG, 0, 0};
     FlashWindowEx(&flash);
+    DiagCaption(root, "after flash");
+    static HWND probed;
+    probed = root;
+    SetTimer(nullptr, 0, 250, [](HWND, UINT, UINT_PTR timer, DWORD) {
+      static int ticks;
+      char when[32];
+      snprintf(when, sizeof when, "flash +%dms", ++ticks * 250);
+      DiagCaption(probed, when);
+      if (ticks % 12 == 0) {
+        KillTimer(nullptr, timer);
+      }
+    });
     g_dialog_asking = root;
     // check.sh reads this line.
     fprintf(stderr, "browser: dialog shown in the background, its window asking for attention\n");
