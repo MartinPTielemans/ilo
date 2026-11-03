@@ -114,7 +114,11 @@ impl Asked {
         self.kind = chooser.kind;
         self.scan = chooser.scan;
         for row in &mut self.rows {
-            match chooser.devices.iter().find(|device| device.id == row.device.id) {
+            match chooser
+                .devices
+                .iter()
+                .find(|device| device.id == row.device.id)
+            {
                 Some(device) => {
                     row.device = device.clone();
                     if !row.here {
@@ -127,14 +131,20 @@ impl Asked {
         }
         for device in chooser.devices {
             if !self.rows.iter().any(|row| row.device.id == device.id) {
-                self.rows.push(Row { device, here: true, from: now + SETTLING });
+                self.rows.push(Row {
+                    device,
+                    here: true,
+                    from: now + SETTLING,
+                });
             }
         }
     }
 
     /// Whether a click on `id` now grants it.
     fn takes(&self, id: &str, now: Instant) -> bool {
-        self.rows.iter().any(|row| row.device.id == id && row.here && now >= row.from)
+        self.rows
+            .iter()
+            .any(|row| row.device.id == id && row.here && now >= row.from)
     }
 
     /// The note under what the page asks, if the list can't offer anything yet.
@@ -177,7 +187,9 @@ impl Shell {
 
     /// The request of the tab shown, unless its page's question has the card.
     pub(super) fn chooser(&self) -> Option<&Asked> {
-        self.choosers.get(&self.selected).filter(|_| self.question().is_none())
+        self.choosers
+            .get(&self.selected)
+            .filter(|_| self.question().is_none())
     }
 
     /// Whether the tab shown's page asks the user something, a permission or a device, whose card
@@ -190,7 +202,12 @@ impl Shell {
         let settled = (self.chooser_settling.borrow().as_ref())
             .is_some_and(|(shown, settling)| *shown == tab && settling.settled(cx));
         let now = cx.background_executor().now();
-        if !settled || !self.choosers.get(&tab).is_some_and(|asked| asked.takes(&id, now)) {
+        if !settled
+            || !self
+                .choosers
+                .get(&tab)
+                .is_some_and(|asked| asked.takes(&id, now))
+        {
             return;
         }
         self.choosers.remove(&tab);
@@ -304,7 +321,11 @@ impl Shell {
                         // Kept together, so "to" doesn't wrap alone under a long site.
                         .child(format!("{} wants\u{a0}to", asked.site)),
                 )
-                .child(div().text_color(self.palette.on_overlay(DETAIL)).child(asked.kind.asks()))
+                .child(
+                    div()
+                        .text_color(self.palette.on_overlay(DETAIL))
+                        .child(asked.kind.asks()),
+                )
                 .children(note)
                 .children(list)
                 .children(settings)

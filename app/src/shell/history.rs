@@ -34,8 +34,17 @@ fn offset_of(command: Command) -> Option<i32> {
 
 impl Shell {
     /// Asks for the pages back from the tab shown, or forward of it, for a menu at `position`.
-    pub(super) fn ask_history(&mut self, forward: bool, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let command = if forward { Command::Forward } else { Command::Back };
+    pub(super) fn ask_history(
+        &mut self,
+        forward: bool,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let command = if forward {
+            Command::Forward
+        } else {
+            Command::Back
+        };
         if self.selected == 0 || !self.offers(command) {
             return;
         }
@@ -65,7 +74,11 @@ impl Shell {
         let items = (pages.into_iter())
             .map(|page| {
                 // As Chrome's menu names a page without a title.
-                let title = if page.title.is_empty() { page.url } else { page.title };
+                let title = if page.title.is_empty() {
+                    page.url
+                } else {
+                    page.title
+                };
                 let offset = page.offset;
                 let go: MenuAction = Box::new(move |shell, cx| {
                     log!("browser: command history {offset} via sidebar");
@@ -87,13 +100,21 @@ impl Shell {
             return;
         }
         // check.sh waits for this line.
-        log!("browser: command {} in the background via sidebar", command.name());
+        log!(
+            "browser: command {} in the background via sidebar",
+            command.name()
+        );
         self.browser.open_history(self.selected, offset, cx);
     }
 
     /// The left button went down on `command`'s button: back or forward held for HOLD lists the
     /// history that way at `position`.
-    pub(super) fn press_nav(&mut self, command: Command, position: Point<Pixels>, cx: &mut Context<Self>) {
+    pub(super) fn press_nav(
+        &mut self,
+        command: Command,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
         self.nav_held = false;
         let forward = match command {
             Command::Back => false,
@@ -120,7 +141,12 @@ impl Shell {
     }
 
     /// A click on `command`'s button, unless it was held for its menu.
-    pub(super) fn click_nav(&mut self, command: Command, modifiers: Modifiers, cx: &mut Context<Self>) {
+    pub(super) fn click_nav(
+        &mut self,
+        command: Command,
+        modifiers: Modifiers,
+        cx: &mut Context<Self>,
+    ) {
         self.nav_hold = None;
         if std::mem::take(&mut self.nav_held) {
             return;

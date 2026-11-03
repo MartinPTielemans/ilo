@@ -17,7 +17,9 @@ use super::{
     permission::{BESIDE_CLOSE, card_close, card_listener},
 };
 use crate::palette::{Palette, STATE_HOVERED, STATE_PRESSED};
-use crate::tokens::shell::cast::{GLYPH, GLYPH_GAP, LIST_TOP, NAME, ROW, ROW_GAP, ROW_INSET, STATUS};
+use crate::tokens::shell::cast::{
+    GLYPH, GLYPH_GAP, LIST_TOP, NAME, ROW, ROW_GAP, ROW_INSET, STATUS,
+};
 
 /// One turn of the ring while a card looks for devices (ours: a turn a second reads as busy
 /// without hurrying).
@@ -86,7 +88,11 @@ impl Shell {
 
     /// Another tab shown closes the card, as the dialog is the tab's.
     pub(super) fn cast_for_shown(&mut self, cx: &mut Context<Self>) {
-        if self.cast.as_ref().is_some_and(|(tab, _)| *tab != self.selected) {
+        if self
+            .cast
+            .as_ref()
+            .is_some_and(|(tab, _)| *tab != self.selected)
+        {
             self.cast = None;
             self.browser.cast_close(cx);
         }
@@ -102,12 +108,13 @@ impl Shell {
             return None;
         }
         let tab = *tab;
-        let close = card_close(&self.palette, "cast-close").on_click(cx.listener(|shell, _, _, cx| {
-            log!("browser: command cast-close via card");
-            shell.cast = None;
-            shell.browser.cast_close(cx);
-            cx.notify();
-        }));
+        let close =
+            card_close(&self.palette, "cast-close").on_click(cx.listener(|shell, _, _, cx| {
+                log!("browser: command cast-close via card");
+                shell.cast = None;
+                shell.browser.cast_close(cx);
+                cx.notify();
+            }));
         // Chrome's words while it looks, as no device answered yet.
         let looking = cast.devices.is_empty().then(|| self.looking_row());
         let devices: Vec<_> = (cast.devices.iter().enumerate())
@@ -143,7 +150,10 @@ impl Shell {
             device.status.clone(),
         );
         // One Chrome can't cast to now, or that's on its way, takes no click, as on Chrome's.
-        let busy = matches!(device.state, CastState::Connecting | CastState::Disconnecting);
+        let busy = matches!(
+            device.state,
+            CastState::Connecting | CastState::Disconnecting
+        );
         if device.state == CastState::Unavailable || busy {
             return row.opacity(0.5).into_any_element();
         }
@@ -166,14 +176,24 @@ impl Shell {
             .size(px(GLYPH))
             .text_color(self.palette.glyph(NAV))
             .with_transformation(Transformation::rotate(Radians(TAU * turned)));
-        foot_row(&self.palette, "devices-looking", ring, "Looking for devices…")
-            .text_color(self.palette.on_overlay(SECONDARY))
+        foot_row(
+            &self.palette,
+            "devices-looking",
+            ring,
+            "Looking for devices…",
+        )
+        .text_color(self.palette.on_overlay(SECONDARY))
     }
 }
 
 /// A card's list of devices, under its words, its rows' plates hanging outside the text column.
 pub(super) fn device_list() -> Div {
-    div().mt(px(LIST_TOP)).mx(px(-ROW_INSET)).flex().flex_col().gap(px(ROW_GAP))
+    div()
+        .mt(px(LIST_TOP))
+        .mx(px(-ROW_INSET))
+        .flex()
+        .flex_col()
+        .gap(px(ROW_GAP))
 }
 
 /// A device's row in a card, the Cast dialog's or a page's chooser: its glyph on the card's text
@@ -193,13 +213,23 @@ pub(super) fn device_row(
             .text_color(palette.on_overlay(SECONDARY))
             .child(detail)
     });
-    let glyph = svg().path(glyph).flex_none().size(px(GLYPH)).text_color(palette.glyph(NAV));
+    let glyph = svg()
+        .path(glyph)
+        .flex_none()
+        .size(px(GLYPH))
+        .text_color(palette.glyph(NAV));
     let text = div()
         .flex_1()
         .min_w_0()
         .flex()
         .flex_col()
-        .child(div().truncate().text_size(px(NAME)).text_color(palette.text(TITLE)).child(name))
+        .child(
+            div()
+                .truncate()
+                .text_size(px(NAME))
+                .text_color(palette.text(TITLE))
+                .child(name),
+        )
         .children(detail);
     row(id).child(glyph).child(text)
 }
@@ -211,9 +241,10 @@ pub(super) fn foot_row(
     glyph: impl IntoElement,
     label: &'static str,
 ) -> Stateful<Div> {
-    row(id).child(glyph).child(div().truncate().text_size(px(NAME)).child(label)).text_color(
-        palette.text(TITLE),
-    )
+    row(id)
+        .child(glyph)
+        .child(div().truncate().text_size(px(NAME)).child(label))
+        .text_color(palette.text(TITLE))
 }
 
 fn row(id: impl Into<ElementId>) -> Stateful<Div> {
@@ -250,7 +281,14 @@ mod tests {
             let space = (1, "Home".into(), None, 1, "".into(), "".into(), "".into());
             shell.set_spaces(vec![space], cx);
             shell.set_space(1, cx);
-            shell.set_tabs(1, Vec::new(), vec![1, 2], Vec::new(), Folders::default(), cx);
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![1, 2],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
             shell.set_selected(1, cx);
         });
         host.take();
@@ -264,7 +302,10 @@ mod tests {
             state: CastState::Available,
             status: "".into(),
         };
-        Cast { header: "Cast tab".into(), devices: vec![device] }
+        Cast {
+            header: "Cast tab".into(),
+            devices: vec![device],
+        }
     }
 
     /// View › Cast… asks the core for the tab shown's dialog, and again closes it; the core's
