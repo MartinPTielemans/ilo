@@ -790,15 +790,16 @@ impl Shell {
         self.browser.focus_page(cx)
     }
 
-    /// A press on the list where the row drawn isn't the one that rests there. On the page that
-    /// slides in after a Space switch, where the page isn't yet, the pointer is over the outgoing
-    /// page, which takes no input, or over nothing. Among rows that moved, as ⌘D or a close
-    /// moves them, the frame last drawn may have another row under the pointer, one on its way
-    /// out. Either way it acts on the row that will be there, as the press that it is
-    /// (docs/ux-principles.md: act on the press), so a click under a pointer that hasn't moved
+    /// A press on the list where the row drawn isn't the one that rests there. While the page of
+    /// a Space switched to slides in, the frame last drawn has it somewhere on its way, which a
+    /// busy main thread leaves behind the slide, so the pointer may be over the outgoing page,
+    /// which takes no input, over nothing, or over another part of the row, such as its ✕. Among
+    /// rows that moved, as ⌘D or a close moves them, it may have another row under the pointer,
+    /// one on its way out. Either way it acts on the row that will be there, as the press that it
+    /// is (docs/ux-principles.md: act on the press), so a click under a pointer that hasn't moved
     /// acts on the row it rests on, and a right-click where no row rests shows the menu of the
     /// Space's name or of its empty space. Returns whether it took the press; a press on a row
-    /// drawn where it rests, or on the sliding page's drawn part, is the rows' own.
+    /// drawn where it rests is the rows' own.
     pub(super) fn press_at_rest(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) -> bool {
         let busy = self.swipe.is_some() || self.form().is_some() || self.renaming.is_some();
         if busy || self.dragging().is_some() || (self.settle.is_some() && self.drag.is_some()) {
@@ -830,15 +831,7 @@ impl Shell {
             })
             .collect();
         let tab = row_at(&layout);
-        if self.settle.is_some() {
-            let Some(&(_, page)) = self.pages().iter().find(|&&(space, _)| space == self.space)
-            else {
-                return false;
-            };
-            if (page..page + width).contains(&at.x) {
-                return false;
-            }
-        } else if row_at(&self.drawn_rows.borrow()) == tab {
+        if self.settle.is_none() && row_at(&self.drawn_rows.borrow()) == tab {
             return false;
         }
         let new_tab = (self.layout().into_iter())
@@ -3156,6 +3149,126 @@ mod tests {
             host.menus.borrow().len(),
             1,
             "a right-click on the drawn row"
+        );
+    }
+
+    /// A click on a row while its Space's page slides back in from the left shows that row's tab,
+    /// as it rests under the pointer, whatever the frame last drawn has there (#1437): the page
+    /// further back than it is by now, as a busy main thread draws it, or the row's ✕ under a
+    /// pointer that rested on the sidebar as the page slid under it.
+    #[gpui::test]
+    fn a_click_while_a_space_slides_back_in_shows_the_row_at_rest(cx: &mut TestAppContext) {
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        shell.update(cx, |shell, cx| {
+            let space = |id: u64| {
+                (
+                    id,
+                    format!("Space {id}").into(),
+                    None,
+                    1,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                )
+            };
+            shell.set_spaces(vec![space(1), space(2)], cx);
+            shell.set_space(1, cx);
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![10, 4],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
+            shell.set_tabs(2, Vec::new(), vec![7], Vec::new(), Folders::default(), cx);
+            shell.set_selected(4, cx);
+        });
+        cx.run_until_parked();
+        let (close, y) = close_button(&shell, cx, 10);
+        let at = point(px(100.), px(y));
+        let width = shell.read_with(cx, |shell, _| shell.width());
+        let back = |cx: &mut VisualTestContext| {
+            shell.update(cx, |shell, cx| {
+                shell.set_space(2, cx);
+                shell.set_selected(7, cx);
+                shell.settle = None;
+                cx.notify();
+            });
+            cx.run_until_parked();
+        };
+        let slide_in = |cx: &mut VisualTestContext, ago: u64| {
+            shell.update(cx, |shell, cx| {
+                shell.set_space(1, cx);
+                shell.set_selected(4, cx);
+                if let Some(settle) = shell.settle.as_mut() {
+                    settle.start -= Duration::from_millis(ago);
+                }
+                cx.notify();
+            });
+            cx.run_until_parked();
+            shell.read_with(cx, |shell, _| shell.pages()[0])
+        };
+        let click = |cx: &mut VisualTestContext, at: gpui::Point<gpui::Pixels>| {
+            host.take();
+            cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+            cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
+            cx.run_until_parked();
+            host.take()
+        };
+
+        // Drawn with the pointer still over the outgoing page, then on, undrawn, past the pointer.
+        back(cx);
+        cx.simulate_mouse_move(point(px(97.), px(y + 400.)), None, Modifiers::none());
+        let (space, drawn) = slide_in(cx, 0);
+        assert!(
+            space == 1 && drawn < 100. - width,
+            "the page was drawn at {drawn}"
+        );
+        shell.update(cx, |shell, _| {
+            if let Some(settle) = shell.settle.as_mut() {
+                settle.start -= Duration::from_millis(100);
+            }
+        });
+        let now = shell.read_with(cx, |shell, _| shell.pages()[0].1);
+        assert!(now > 100. - width && now < 0., "the page is at {now}");
+        let calls = click(cx, at);
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.starts_with("select"))
+                .count(),
+            1,
+            "{calls:?}"
+        );
+        assert!(
+            calls.contains(&"select 10".to_string()),
+            "behind the slide: {calls:?}"
+        );
+
+        // The pointer rests where row 10's ✕ is drawn as the page slides under it, a point that
+        // at rest is on the row, left of its ✕. Taken from the frame drawn, not a time into the
+        // slide, so the ✕'s place in the row doesn't move it off the pointer.
+        back(cx);
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        let (_, drawn) = slide_in(cx, 60);
+        let over_close = point(px(close + drawn), px(y));
+        assert!(
+            close + drawn > 0. && close + drawn < close - CLOSE_SIZE,
+            "the ✕ is drawn at {}, where it rests at {close}",
+            close + drawn
+        );
+        cx.simulate_mouse_move(over_close, None, Modifiers::none());
+        let calls = click(cx, over_close);
+        assert!(
+            calls.contains(&"select 10".to_string()),
+            "over the ✕: {calls:?}"
+        );
+        assert!(
+            !calls.iter().any(|call| call.starts_with("close")),
+            "over the ✕: {calls:?}"
         );
     }
 
