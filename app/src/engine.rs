@@ -1484,7 +1484,10 @@ impl Browser for Engine {
     fn show_autofill(&self, tab: u64, logins: bool) -> bool {
         let shown = unsafe { bc::bc_tab_show_autofill(tab, logins) };
         // check.sh waits for this line.
-        log!("browser: autofill {tab} {}", if shown { "dropdown" } else { "no field" });
+        log!(
+            "browser: autofill {tab} {}",
+            if shown { "dropdown" } else { "no field" }
+        );
         shown
     }
 
