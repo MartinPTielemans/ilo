@@ -904,6 +904,8 @@ impl Browser for Fake {
     ) {
     }
 
+    fn spaces_menu(&self, _: Vec<shell::BarSpace>, _: Bounds<Pixels>, _: &mut App) {}
+
     fn search_tabs(&self, _: Vec<BarTab>, _: &mut App) {}
 
     // The made-up pages have nothing to find.

@@ -1,20 +1,20 @@
 //! Little ilo, Arc's Little Arc (docs/ux-spec.md › Little Arc): one page in a small window with no
 //! sidebar, under a bar in its Space's colour with the page's favicon, host and title, a click on
-//! which opens the command bar on its URL, and Copy Link and Open in Main Window at its end, after
-//! the profile picker while there's more than one profile.
+//! which opens the command bar on its URL, and Copy Link and Open in <Space> ⌘O | ⌄ at its end,
+//! after the profile picker while there's more than one profile.
 //!
 //! The window is the main window with its sidebar hidden: the same material and colours, the card
 //! at the same inset and radius. The bar's row is the main window's header row, its buttons the
 //! header's, and the favicon stands where the header's first button does.
 
 use gpui::{
-    Bounds, Context, Entity, MouseButton, Pixels, Point, SharedString, div, point, prelude::*, px,
-    relative, size, svg,
+    App, Bounds, Context, Entity, FontWeight, MouseButton, Pixels, Point, SharedString, div, point,
+    prelude::*, px, relative, size, svg,
 };
 
 use super::{
-    Command, MenuEntry, NAV, NAV_HOVERED, NAV_RADIUS, Shell, Space, SpaceEntry, Swapped, TITLE,
-    WINDOW_BUTTONS,
+    BarSpace, Command, MenuEntry, NAV, NAV_HOVERED, NAV_RADIUS, Shell, Space, SpaceEntry, Swapped,
+    TITLE, WINDOW_BUTTONS,
     access::Accessible,
     browser::Browser,
     favicon,
@@ -23,11 +23,15 @@ use super::{
     swap::{CHECK, LINK},
 };
 use crate::theme::Theme;
-use crate::tokens::command_bar::{LITTLE_DOWN, LITTLE_WIDTH};
+use crate::tokens::command_bar::{LITTLE_DOWN, LITTLE_WIDTH, ROW_HEIGHT};
 use crate::tokens::shell::{
-    FAVICON_DRAWN, LITTLE_BAR, LITTLE_GLYPH, NAV_SIZE, NAV_TOP, SIDEBAR_BUTTON_X,
+    FAVICON_DRAWN, LITTLE_BAR, LITTLE_CHEVRON, LITTLE_CHEVRON_GLYPH, LITTLE_COPY_GAP, LITTLE_GLYPH,
+    LITTLE_OPEN, LITTLE_OPEN_GAP, LITTLE_OPEN_KEY, LITTLE_OPEN_MAX, LITTLE_OPEN_PAD,
+    LITTLE_SPACES_BELOW, LITTLE_SPACES_WIDTH, LITTLE_SPLIT, LITTLE_SPLIT_LINE, NAV_SIZE, NAV_TOP,
+    SIDEBAR_BUTTON_X,
 };
 use crate::tokens::text;
+use crate::tooltip::text_width;
 
 /// The gap between the bar's title and its buttons, and between the title's parts (ours).
 const GAP: f32 = 6.;
@@ -35,18 +39,31 @@ const GAP: f32 = 6.;
 /// The bar's buttons are the header's pitch apart, back to forward.
 const PITCH: f32 = super::NAV_PITCH;
 
-/// The middle of the bar's button `index` from its right end, in a window `width` wide. The last
-/// one's glyph is as far in from the window's right edge as the close button's is from its left,
-/// so the row's ends mirror each other and its glyphs end where the window buttons start.
-pub(super) fn little_button_middle(width: Pixels, index: usize) -> Point<Pixels> {
-    let x = width - px(WINDOW_BUTTONS[0].0 + index as f32 * PITCH);
-    point(x, px(NAV_TOP + NAV_SIZE / 2.))
-}
-
 /// A Little ilo window's own: the user's Space it's for, whose look it takes and which ⌘O moves
-/// its page to.
+/// its page to, and the user's Spaces, in the sidebar's order, which its Spaces menu offers.
 pub(super) struct Little {
     pub(super) home: u64,
+    spaces: Vec<Elsewhere>,
+}
+
+/// One of the user's Spaces, as a Little ilo window knows it: enough to name and mark it in its
+/// Spaces menu and to know whether its page would go to another profile there.
+struct Elsewhere {
+    id: u64,
+    name: SharedString,
+    profile: u64,
+    color: Option<u32>,
+    theme: Option<Theme>,
+}
+
+/// Where the bar's end lies, from the window's right edge: Open in <Space>'s chevron half, the line
+/// between its halves, its words' half, and the middles of Copy Link and the profile picker.
+pub(super) struct BarEnd {
+    pub(super) chevron: Bounds<Pixels>,
+    pub(super) line: Pixels,
+    pub(super) words: Bounds<Pixels>,
+    pub(super) copy: Point<Pixels>,
+    pub(super) profile: Point<Pixels>,
 }
 
 impl Shell {
@@ -62,15 +79,26 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut shell = Self::new(browser, cx);
-        shell.little = Some(Little { home });
         shell.space = space;
         shell.sidebar_hidden = true;
         // The profiles too, for the bar's picker, which the core reports again only as they change.
+        let mut spaces = Vec::new();
         let look = from.and_then(|from| {
             let from = from.read(cx);
             shell.profiles = from.profiles.clone();
+            spaces = (from.spaces.iter())
+                .filter(|each| each.agent.is_empty())
+                .map(|each| Elsewhere {
+                    id: each.id,
+                    name: each.name.clone(),
+                    profile: each.profile,
+                    color: each.color,
+                    theme: each.theme,
+                })
+                .collect();
             from.spaces.iter().find(|each| each.id == home).cloned()
         });
+        shell.little = Some(Little { home, spaces });
         shell.spaces = vec![Space {
             id: space,
             name: SharedString::default(),
@@ -118,6 +146,18 @@ impl Shell {
         let Some(home) = self.little() else {
             return;
         };
+        let users = (spaces.iter()).filter(|(.., agent, _)| agent.is_empty()).map(
+            |(id, name, color, profile, _, _, theme)| Elsewhere {
+                id: *id,
+                name: name.clone(),
+                profile: *profile,
+                color: *color,
+                theme: Theme::parse(theme),
+            },
+        );
+        if let Some(little) = self.little.as_mut() {
+            little.spaces = users.collect();
+        }
         let Some((_, name, color, _, icon, _, theme)) =
             spaces.into_iter().find(|&(id, ..)| id == home)
         else {
@@ -173,11 +213,99 @@ impl Shell {
 
     /// ⌘O: its page goes, live, to its Space in the main window, and the Little ilo window closes.
     pub(super) fn open_in_main_window(&mut self, cx: &mut Context<Self>) {
-        if let Some(home) = self.little()
-            && self.selected != 0
-        {
-            self.browser.open_in_main_window(self.selected, home, cx);
+        if let Some(home) = self.little() {
+            self.open_in_space(home, cx);
         }
+    }
+
+    /// Its page goes to the user's Space `space` in the main window, and the Little ilo window
+    /// closes: live in its own profile, and in another, warned the first time as Move to Space
+    /// warns, as a page loaded again there.
+    pub(super) fn open_in_space(&mut self, space: u64, cx: &mut Context<Self>) {
+        let (Some(little), tab) = (self.little.as_ref(), self.selected) else {
+            return;
+        };
+        let Some(to) = little.spaces.iter().find(|each| each.id == space) else {
+            return;
+        };
+        let own = self.spaces.first().map(|own| own.profile);
+        if tab == 0 || own == Some(to.profile) || !self.browser.warn_moving_profiles(cx) {
+            if tab != 0 {
+                self.browser.open_in_main_window(tab, space, cx);
+            }
+            return;
+        }
+        let name = (self.profiles.iter())
+            .find(|(profile, _)| *profile == to.profile)
+            .map(|(_, name)| name.clone())
+            .unwrap_or_default();
+        let shell = cx.weak_entity();
+        self.browser.confirm(
+            format!("Move this tab to the “{name}” profile?"),
+            "Its page loads again there, without this profile's cookies and logins, so a site may \
+             ask you to sign in."
+                .into(),
+            "Move",
+            Box::new(move |cx| {
+                shell
+                    .update(cx, |shell, cx| {
+                        shell.browser.set_warn_moving_profiles(false, cx);
+                        shell.browser.open_in_main_window(tab, space, cx);
+                    })
+                    .ok();
+            }),
+            cx,
+        );
+    }
+
+    /// The chevron's Spaces menu: the compact command bar hanging under Open in <Space>, its
+    /// right edge the button's, listing the user's Spaces to send the page to (Arc).
+    fn little_spaces_menu(&mut self, cx: &mut Context<Self>) {
+        let Some(little) = self.little.as_ref() else {
+            return;
+        };
+        let spaces = (little.spaces.iter())
+            .map(|each| BarSpace {
+                space: each.id,
+                name: each.name.clone(),
+                swatch: self.swatch_of(each.theme, each.color),
+            })
+            .collect();
+        let end = self.little_end(cx);
+        let width = px(LITTLE_SPACES_WIDTH).min(end.chevron.right());
+        let top = end.chevron.bottom() + px(LITTLE_SPACES_BELOW);
+        let at = Bounds::new(point(end.chevron.right() - width, top), size(width, px(ROW_HEIGHT)));
+        self.browser.spaces_menu(spaces, at, cx);
+    }
+
+    /// Open in <Space>'s words: Open in and its home Space's name, and the key ⌘O is now.
+    pub(super) fn little_open_words(&self, cx: &App) -> (SharedString, Option<SharedString>) {
+        let name = self.spaces.first().map(|own| own.name.clone()).unwrap_or_default();
+        let key = super::user_keys(cx).label(Command::OpenInMainWindow).map(Into::into);
+        (format!("Open in {name}").into(), key)
+    }
+
+    /// Where the bar's end lies in the window: the chevron's half, its plate ending where a header
+    /// button's would whose glyph is as far in from the window's right edge as the close button's
+    /// is from its left, so the row's ends mirror each other; the line; then the words' half as
+    /// wide as its words, at most LITTLE_OPEN_MAX; and Copy Link's plate and the profile picker's,
+    /// a pitch apart, before it.
+    pub(super) fn little_end(&self, cx: &App) -> BarEnd {
+        let right = self.viewport.width - px(WINDOW_BUTTONS[0].0 - NAV_SIZE / 2.);
+        let top = px(NAV_TOP);
+        let plate = |left: Pixels, width: f32| Bounds::new(point(left, top), size(px(width), px(NAV_SIZE)));
+        let chevron = plate(right - px(LITTLE_CHEVRON), LITTLE_CHEVRON);
+        let line = chevron.left() - px(1.);
+        let (words, key) = self.little_open_words(cx);
+        let system = gpui::WindowTextSystem::new(cx.text_system().clone());
+        let measured = text_width(&words, text::BODY, FontWeight::MEDIUM, &system)
+            + key.map_or(0., |key| LITTLE_OPEN_GAP + text_width(&key, text::BODY, FontWeight::NORMAL, &system));
+        let width = (2. * LITTLE_OPEN_PAD + measured).min(LITTLE_OPEN_MAX);
+        let words = plate(line - px(width), width);
+        let middle = px(NAV_TOP + NAV_SIZE / 2.);
+        let copy = point(words.left() - px(LITTLE_COPY_GAP + NAV_SIZE / 2.), middle);
+        let profile = point(copy.x - px(PITCH), middle);
+        BarEnd { chevron, line, words, copy, profile }
     }
 
     /// The profiles the bar's picker offers, each with whether the window's page is in it, or
@@ -188,11 +316,6 @@ impl Shell {
         Some(profiles.collect()).filter(|profiles: &Vec<_>| profiles.len() > 1)
     }
 
-    /// The bar's buttons, from its right end: Open in Main Window, Copy Link and, while there's
-    /// more than one profile, the profile picker.
-    fn little_buttons(&self) -> usize {
-        if self.little_profiles().is_some() { 3 } else { 2 }
-    }
 
     /// The profile picker's menu, hanging from its button: the profiles, the page's checked. One
     /// picked opens the page in it and is kept for its site (Arc's Little Arc).
@@ -204,7 +327,7 @@ impl Shell {
             .map(|(_, name, own)| MenuEntry::named(name.clone(), true).checked(*own))
             .collect();
         // From its plate's left edge, 4 under it.
-        let plate = little_button_middle(self.viewport.width, 2);
+        let plate = self.little_end(cx).profile;
         let at = point(plate.x - px(NAV_SIZE / 2.), plate.y + px(NAV_SIZE / 2. + 4.));
         let shell = cx.weak_entity();
         self.browser.context_menu(
@@ -241,8 +364,9 @@ impl Shell {
     /// Where the bar's title goes, which a click opens the command bar over, as the URL field's
     /// does in the sidebar: from where the header's first button is, the sidebar's, to the bar's
     /// buttons, a plate's height on the header's line.
-    fn little_title_bounds(&self) -> Bounds<Pixels> {
-        let first = little_button_middle(self.viewport.width, self.little_buttons() - 1);
+    fn little_title_bounds(&self, cx: &App) -> Bounds<Pixels> {
+        let end = self.little_end(cx);
+        let first = if self.little_profiles().is_some() { end.profile } else { end.copy };
         let right = first.x - px(NAV_SIZE / 2. + GAP);
         Bounds::new(
             point(px(SIDEBAR_BUTTON_X), px(NAV_TOP)),
@@ -252,8 +376,8 @@ impl Shell {
 
     /// Where a click on its bar's title opens the compact command bar in a Little ilo window: over
     /// the title, as a click on the URL field opens it over the field.
-    pub(super) fn little_field_bounds(&self) -> Option<Bounds<Pixels>> {
-        self.little.as_ref().map(|_| self.little_title_bounds())
+    pub(super) fn little_field_bounds(&self, cx: &App) -> Option<Bounds<Pixels>> {
+        self.little.as_ref().map(|_| self.little_title_bounds(cx))
     }
 
     /// Where ⌘L and ⌘T open the command bar in a Little ilo window: inside it, centred across it,
@@ -266,14 +390,15 @@ impl Shell {
     }
 
     /// The bar, over the window's tint: the page's favicon, host and title, then the profile
-    /// picker, Copy Link and Open in Main Window. None while the page is full screen.
+    /// picker, Copy Link and Open in <Space> ⌘O | ⌄. None while the page is full screen.
     pub(super) fn little_bar(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         if self.little.is_none() || self.page_fullscreen {
             return None;
         }
         let tab = self.selected;
         let url = self.url(tab);
-        let bounds = self.little_title_bounds();
+        let bounds = self.little_title_bounds(cx);
+        let end = self.little_end(cx);
         // The page's host, or with no page the URL field's placeholder, which says what a click on
         // the bar does, in the URL field's colours.
         let (site, site_color) = self.url_words(tab, &url, 1.);
@@ -333,11 +458,10 @@ impl Shell {
         let glyph = self.palette.glyph(NAV);
         // The header's buttons: its plates, hover and tooltips, with the key they share.
         let button = |id: &'static str,
-                      index: usize,
+                      middle: Point<Pixels>,
                       command: Option<Command>,
                       name: &'static str,
                       cx: &mut Context<Self>| {
-            let middle = little_button_middle(self.viewport.width, index);
             let button = div()
                 .id(id)
                 .when(self.a11y, |button| button.button_named(name))
@@ -356,7 +480,7 @@ impl Shell {
                 None => button,
             }
         };
-        let copy = button("little-copy", 1, Some(Command::CopyUrl), "Copy URL", cx)
+        let copy = button("little-copy", end.copy, Some(Command::CopyUrl), "Copy URL", cx)
             .on_click(cx.listener(|shell, _, _, cx| shell.copy_url_from_button(cx)))
             .child(self.swaps.glyph(
                 Swapped::CopyUrl,
@@ -364,20 +488,69 @@ impl Shell {
                 LITTLE_GLYPH,
                 glyph,
             ));
-        let main = button("little-main", 0, Some(Command::OpenInMainWindow), "Open in Main Window", cx)
+        // Open in <Space> ⌘O | ⌄: one plate of the header's, split by a line, each half its own
+        // hover. Its words name the Space and the key, so it needs no tooltip.
+        let half = |id: &'static str, bounds: Bounds<Pixels>| {
+            div()
+                .id(id)
+                .absolute()
+                .left(bounds.left())
+                .top(bounds.top())
+                .w(bounds.size.width)
+                .h(bounds.size.height)
+                .flex()
+                .items_center()
+                .justify_center()
+                .block_mouse_except_scroll()
+                .hover(|style| style.bg(self.palette.plate(NAV_HOVERED)))
+        };
+        let (words, key) = self.little_open_words(cx);
+        let open = half("little-open", end.words)
+            .when(self.a11y, |button| button.button_named(words.clone()))
+            .px(px(LITTLE_OPEN_PAD))
+            .gap(px(LITTLE_OPEN_GAP))
+            .rounded_l(px(NAV_RADIUS))
+            .text_size(px(text::BODY))
             .on_click(cx.listener(|shell, _, _, cx| {
                 shell.run(Command::OpenInMainWindow, "little bar", cx)
             }))
-            .child(svg().path("icons/external-link.svg").size(px(LITTLE_GLYPH)).text_color(glyph));
+            .child(
+                div()
+                    .min_w(px(0.))
+                    .truncate()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(self.palette.text(LITTLE_OPEN))
+                    .child(words),
+            )
+            .children(key.map(|key| {
+                div().flex_none().text_color(self.palette.text(LITTLE_OPEN_KEY)).child(key)
+            }));
+        let line = div()
+            .absolute()
+            .left(end.line)
+            .top(px(NAV_TOP + (NAV_SIZE - LITTLE_SPLIT) / 2.))
+            .w(px(1.))
+            .h(px(LITTLE_SPLIT))
+            .bg(self.palette.plate(LITTLE_SPLIT_LINE));
+        let spaces = half("little-spaces", end.chevron)
+            .when(self.a11y, |button| button.button_named("Open in Another Space"))
+            .rounded_r(px(NAV_RADIUS))
+            .on_click(cx.listener(|shell, _, _, cx| shell.little_spaces_menu(cx)))
+            .child(
+                svg()
+                    .path("icons/chevron-down.svg")
+                    .size(px(LITTLE_CHEVRON_GLYPH))
+                    .text_color(glyph),
+            );
         // Profiles' glyph, as Settings' Profiles tab has it, and nothing with only one profile. It
         // runs no command, so it has no tooltip: its menu names the profiles.
         let profile = self.little_profiles().map(|_| {
-            button("little-profile", 2, None, "Profile", cx)
+            button("little-profile", end.profile, None, "Profile", cx)
                 .on_click(cx.listener(|shell, _, _, cx| shell.little_profile_menu(cx)))
                 .child(svg().path("icons/user.svg").size(px(LITTLE_GLYPH)).text_color(glyph))
         });
         let bar = div().absolute().top_0().left_0().right_0().h(px(LITTLE_BAR));
-        Some(bar.child(title).children(profile).child(copy).child(main))
+        Some(bar.child(title).children(profile).child(copy).child(open).child(line).child(spaces))
     }
 }
 

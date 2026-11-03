@@ -119,7 +119,7 @@ pub use browser::{
     WindowButtonGeometry,
 };
 pub use commands::{
-    BAR_ROWS, BAR_TABS_SHOWN, BarCommand, BarTab, CancelName, Command, CreateSpace, KEY_CONTEXT,
+    BAR_ROWS, BAR_TABS_SHOWN, BarCommand, BarSpace, BarTab, CancelName, Command, CreateSpace, KEY_CONTEXT,
     KeepName, Match, bar_commands, bind_keys, copy_from_bar, copy_url_of_preview, find_commands,
     key_name, keystroke_keys, keystroke_label, Run, menu_item, pane_added, run_from_bar, shown_tab,
     task_page_shown, with_named_rows,

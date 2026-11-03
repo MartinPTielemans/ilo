@@ -60,10 +60,16 @@ impl Shell {
     /// Whether `space`'s window is dark or light: as its theme's appearance forces it, else as
     /// the system's is, as Arc's follows it. A private window is dark, as Arc's is.
     pub(super) fn tone_of(&self, space: u64) -> Tone {
+        self.tone_with(self.theme_of(space).as_ref())
+    }
+
+    /// The tone a Space with `theme` draws in: the theme's, else the system's; dark in a private
+    /// window.
+    pub(super) fn tone_with(&self, theme: Option<&Theme>) -> Tone {
         if self.private {
             return Tone::Dark;
         }
-        match self.theme_of(space).map(|theme| theme.appearance) {
+        match theme.map(|theme| theme.appearance) {
             Some(Appearance::Light) => Tone::Light,
             Some(Appearance::Dark) => Tone::Dark,
             Some(Appearance::Automatic) | None => self.system_tone,

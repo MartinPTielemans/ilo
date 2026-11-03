@@ -93,6 +93,22 @@ pub struct Swatch {
     pub to: u32,
 }
 
+impl Swatch {
+    /// The mark as a menu draws it on `panel`, ringed where its edge would fade into the panel.
+    pub fn dot(self, panel: Rgba) -> gpui::Div {
+        let (from, to) = (rgb(self.from), rgb(self.to));
+        let gradient = linear_gradient(135., linear_color_stop(from, 0.), linear_color_stop(to, 1.))
+            .color_space(gpui::ColorSpace::Oklab);
+        let ring = crate::palette::Palette::swatch_ring_of(from, to, &[panel]);
+        div()
+            .size(px(SWATCH))
+            .flex_none()
+            .rounded_full()
+            .bg(gradient)
+            .when_some(ring, |dot, ring| dot.border_1().border_color(ring))
+    }
+}
+
 /// The menu's look: the panel's material, Ink in a dark window and Paper in a light one, and the
 /// highlight in its Space's accent.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1259,22 +1275,7 @@ impl ContextMenu {
                 slot.child(svg().path("icons/check.svg").size(px(CHECK)).text_color(label))
             })
         });
-        let swatch = entry.swatch.map(|swatch| {
-            let gradient = linear_gradient(
-                135.,
-                linear_color_stop(rgb(swatch.from), 0.),
-                linear_color_stop(rgb(swatch.to), 1.),
-            )
-            .color_space(gpui::ColorSpace::Oklab);
-            let panel = rgb(palette.fill >> 8);
-            let ring = crate::palette::Palette::swatch_ring_of(rgb(swatch.from), rgb(swatch.to), &[panel]);
-            div()
-                .size(px(SWATCH))
-                .flex_none()
-                .rounded_full()
-                .bg(gradient)
-                .when_some(ring, |dot, ring| dot.border_1().border_color(ring))
-        });
+        let swatch = entry.swatch.map(|swatch| swatch.dot(rgb(palette.fill >> 8)));
         let favicon = entry.page.then(|| match entry.favicon.clone() {
             Some(favicon) => img(favicon).size(px(FAVICON)).flex_none().into_any_element(),
             None => svg()

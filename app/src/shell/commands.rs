@@ -520,6 +520,15 @@ pub struct BarTab {
     pub favicon: Option<Arc<Image>>,
 }
 
+/// One of the user's Spaces, which a Little ilo window's Spaces menu lists for its page to go to,
+/// with the mark Move to Space's menu shows it by.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BarSpace {
+    pub space: u64,
+    pub name: SharedString,
+    pub swatch: crate::menu::Swatch,
+}
+
 /// The commands that do something now that match `typed`, best first.
 pub fn bar_commands(typed: &str, cx: &App) -> Vec<BarCommand> {
     let shell = cx.try_global::<ShellHandle>().and_then(|handle| handle.0.upgrade());
@@ -985,6 +994,10 @@ impl Shell {
             Command::NewTab if self.little.is_some() => Command::EditUrl,
             command => command,
         };
+        // Its Spaces menu sends its page to the Space picked, in the main window (Arc).
+        if let (Command::MoveToSpace(space), Some(_)) = (command, &self.little) {
+            return self.open_in_space(space, cx);
+        }
         if self.little.is_some() && !little_runs(command) {
             return;
         }
@@ -1030,7 +1043,7 @@ impl Shell {
                 // A click on the URL field opens the bar over the field, and ⌘L centred (Arc). In a
                 // Little ilo window a click on its bar's title opens it compact over the title, and
                 // the keys inside the window.
-                let field = match self.little_field_bounds() {
+                let field = match self.little_field_bounds(cx) {
                     Some(title) if from == "little bar" => Some(title),
                     Some(_) => {
                         let bar = self.little_bar_bounds();

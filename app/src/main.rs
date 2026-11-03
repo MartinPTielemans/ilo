@@ -3530,6 +3530,10 @@ impl Browser for Engine {
         with_overlays(move |cx| command_bar::show_in(editing, tabs, bar, cx), cx);
     }
 
+    fn spaces_menu(&self, spaces: Vec<shell::BarSpace>, bar: Bounds<Pixels>, cx: &mut App) {
+        with_overlays(move |cx| command_bar::show_spaces(spaces, bar, cx), cx);
+    }
+
     fn search_tabs(&self, tabs: Vec<BarTab>, cx: &mut App) {
         with_overlays(move |cx| command_bar::show_tabs(tabs, cx), cx);
     }
@@ -3770,25 +3774,42 @@ impl Browser for Engine {
         });
     }
 
-    fn open_in_main_window(&self, tab: u64, home: u64, cx: &mut App) {
+    fn open_in_main_window(&self, tab: u64, space: u64, cx: &mut App) {
         let id = self.window;
         cx.defer(move |_| {
-            let Some(main) = main_window_for(home) else {
+            let Some(main) = main_window_for(space) else {
                 // check.sh reads this line.
                 log!("browser: little window {id} has no main window for {tab}");
                 return;
             };
-            let home = little_home(home, main);
+            let space = little_home(space, main);
             unsafe {
-                if bc::bc_window_space(main) != home {
-                    bc::bc_window_show_space(main, home);
+                if bc::bc_window_space(main) != space {
+                    bc::bc_window_show_space(main, space);
                 }
-                bc::bc_tab_move_to_space(tab, home);
-                bc::bc_window_select(main, tab);
+                bc::bc_tab_move_to_space(tab, space);
+            }
+            // In another profile the page opens again as a new tab, at the top of the Space's Today.
+            let today = unsafe {
+                let count = bc::bc_space_today(space, std::ptr::null_mut(), 0);
+                let mut today = vec![0; count];
+                let count = bc::bc_space_today(space, today.as_mut_ptr(), today.len());
+                today.truncate(count);
+                today
+            };
+            let moved = if today.contains(&tab) { tab } else { today.first().copied().unwrap_or(0) };
+            if moved == 0 {
+                // check.sh reads this line.
+                log!("browser: little window {id} couldn't put {tab} in space {space}");
+                return;
+            }
+            unsafe {
+                bc::bc_window_select(main, moved);
                 bc::bc_window_activate(main);
             }
             // check.sh reads this line.
-            log!("browser: little window {id} put {tab} in window {main} space {home}");
+            let copied = if moved == tab { String::new() } else { format!(" as {moved}") };
+            log!("browser: little window {id} put {tab} in window {main} space {space}{copied}");
             unsafe { bc::bc_window_close(id) };
         });
     }
