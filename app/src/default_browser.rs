@@ -50,7 +50,11 @@ pub struct DefaultBrowser {
 impl DefaultBrowser {
     pub fn new(system: Rc<dyn System>, os: Os) -> Self {
         let default = system.is_default();
-        Self { system, os, default }
+        Self {
+            system,
+            os,
+            default,
+        }
     }
 
     /// Reads the system's setting again.
@@ -186,7 +190,10 @@ mod tests {
     /// and Settings, which watches it, draws it so.
     #[gpui::test]
     fn the_row_follows_a_change_made_in_system_settings(cx: &mut TestAppContext) {
-        let setting = Rc::new(Setting { default: Cell::new(true), ..Setting::default() });
+        let setting = Rc::new(Setting {
+            default: Cell::new(true),
+            ..Setting::default()
+        });
         let row = row(&setting, cx);
         let redrawn = Rc::new(Cell::new(0));
         let _watch = cx.update(|cx| {
@@ -218,7 +225,14 @@ mod tests {
         });
         // The Flatpak's row asked nothing.
         assert_eq!(setting.asked.get(), 3);
-        let detail = |os| details.iter().find(|(each, _)| *each == os).unwrap().1.clone();
+        let detail = |os| {
+            details
+                .iter()
+                .find(|(each, _)| *each == os)
+                .unwrap()
+                .1
+                .clone()
+        };
         assert!(detail(Os::Mac).starts_with("macOS asks you first."));
         assert!(detail(Os::Windows).starts_with("Windows opens Settings › Default apps, where"));
         assert!(detail(Os::Linux).contains("changes at once"));
@@ -226,7 +240,10 @@ mod tests {
         assert!(detail(Os::Flatpak).contains("KDE System Settings › Default Applications"));
         for (os, text) in &details {
             let others = details.iter().filter(|(other, _)| other != os);
-            assert!(others.into_iter().all(|(_, other)| other != text), "{os:?} shares its text");
+            assert!(
+                others.into_iter().all(|(_, other)| other != text),
+                "{os:?} shares its text"
+            );
         }
     }
 }
