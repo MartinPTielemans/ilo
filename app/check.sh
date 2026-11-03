@@ -9,7 +9,8 @@
 # The store run installs from Google's Web Store, adblock-live blocks Google's ad servers with
 # uBlock Origin's own lists and widevine, Linux's alone, downloads Google's Widevine module, so they
 # need the network and run only when named: ./check.sh store.
-# Updates runs only when named too, until it passes on the Mac. So does keychain, which uses the
+# Updates runs only when named too, until it passes on the Mac, and so does nightly, which builds a
+# check copy of its own (build.sh updates), on the Mac and Windows. So does keychain, which uses the
 # real Keychain, on the prod build and only in a check VM. Shots takes the Store's pictures from
 # pages on the internet, so it runs only when named too.
 # Every run but load and crash needs Browser to be the active app, and window, find and updates
@@ -69,12 +70,21 @@ runs="load keys tabs window popup history spaces agents profiles restore relaunc
 runs="$runs split favorites cards extensions adblock adblock-lists windows private little capture media"
 runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp"
 runs="$runs appearance about sync sync-account sync-devices"
-named="store adblock-live widevine updates keychain shots"
+named="store adblock-live widevine updates nightly keychain shots"
 for run in "$@"; do
   case " $runs $named " in
     *" $run "*) ;;
     *) echo "FAIL: there's no run $run. The runs: $runs $named" >&2; exit 1 ;;
   esac
+done
+# A file sourced with a syntax error ends the check where it stands, with the status of the EXIT
+# trap's last command, 0 under the Mac's sh, and the runs after it never start (#1267). So each
+# file the check sources is parsed before any run starts.
+for file in lib site ilo-server ${*:-$runs}; do
+  why=$(sh -n "check/$file.sh" 2>&1) || {
+    echo "FAIL: check/$file.sh doesn't parse: $why" >&2
+    exit 1
+  }
 done
 out=build/check
 windows() {

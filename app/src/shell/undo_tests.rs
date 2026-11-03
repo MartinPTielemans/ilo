@@ -164,8 +164,9 @@ fn closing_the_tabs_below_brings_back_the_top_one_first(cx: &mut TestAppContext)
     undo(&shell, cx);
     assert_eq!(host.take_edits(), ["reopen 3 as 1001", "reopen 4 as 1002"]);
     report(&shell, cx, Vec::new(), vec![1, 2, 1001, 1002]);
+    // Redone, they close bottom up again, so each keeps its place for the next ⌘Z.
     redo(&shell, cx);
-    assert_eq!(host.take_edits(), ["close 1001", "close 1002"]);
+    assert_eq!(host.take_edits(), ["close 1002", "close 1001"]);
 }
 
 #[gpui::test]
@@ -191,13 +192,24 @@ fn closing_a_split_brings_all_its_tabs_back(cx: &mut TestAppContext) {
         vec![split],
     );
     shell.update(cx, |shell, cx| shell.close_tab(10, true, cx));
-    // Both panes closed: the core keeps each with its partner, so each comes back.
+    // The core closes 10 and then 11, and keeps only 10 beside 11, which was still open: 11 has to
+    // be back for 10 to rejoin it (#1361).
     assert_eq!(host.take_edits(), ["close 10"]);
     report(&shell, cx, Vec::new(), vec![12]);
     undo(&shell, cx);
     assert_eq!(
         host.take_edits(),
-        ["reopen 10 as 1001", "reopen 11 as 1002"]
+        ["reopen 11 as 1001", "reopen 10 as 1002"]
+    );
+    // Redone, 1001 closes beside 1002, which closes last and so reopens first.
+    report(&shell, cx, Vec::new(), vec![1002, 1001, 12]);
+    redo(&shell, cx);
+    assert_eq!(host.take_edits(), ["close 1002", "close 1001"]);
+    report(&shell, cx, Vec::new(), vec![12]);
+    undo(&shell, cx);
+    assert_eq!(
+        host.take_edits(),
+        ["reopen 1001 as 1003", "reopen 1002 as 1004"]
     );
 }
 
@@ -814,6 +826,26 @@ fn the_delete_space_dialog_names_the_undo(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| shell.delete_space(1, cx));
     let (_, detail, _) = host.confirming.take().expect("it didn't ask");
     assert_eq!(detail, format!("Its tab goes with it. {key} brings it back."));
+}
+
+/// "Space deleted! Use ⌘Z to undo." goes with the ⌘Z it names, so it can't prompt a second one,
+/// which would undo the edit before, and with the next edit, which ⌘Z would undo instead.
+#[gpui::test]
+fn the_space_deleted_toast_goes_with_its_undo(cx: &mut TestAppContext) {
+    let (shell, host) = plain(cx, vec![10, 11]);
+    shell.update(cx, |shell, cx| shell.delete_space_now(2, cx));
+    assert_eq!(host.toasts.borrow().as_slice(), ["Space deleted! Use"]);
+    assert_eq!(host.undo_toasts_hidden.get(), 0);
+    undo(&shell, cx);
+    assert_eq!(host.take_edits(), ["delete space 2", "undo delete space 2"]);
+    assert_eq!(host.undo_toasts_hidden.get(), 1);
+    // Nothing offers it now, so a second ⌘Z leaves the toasts alone.
+    undo(&shell, cx);
+    assert_eq!(host.undo_toasts_hidden.get(), 1);
+
+    shell.update(cx, |shell, cx| shell.delete_space_now(2, cx));
+    shell.update(cx, |shell, cx| shell.close_tab(11, false, cx));
+    assert_eq!(host.undo_toasts_hidden.get(), 2);
 }
 
 #[gpui::test]

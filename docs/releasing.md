@@ -1,26 +1,79 @@
 # Releasing
 
-`.github/workflows/release.yml` builds a release for every OS from one annotated tag. This page says how to cut one and what the run needs.
+ilo has two tracks, and both are built by `.github/workflows/release.yml` on GitHub's hosted runners.
+
+- **Releases** are built from an annotated tag, `v<version>`, and read by every copy from the feed `app/branding/update-feed`: release `updates`' `appcast.xml`.
+- **The nightly** is main's build each night, read from release `nightly`'s `appcast.xml` by a copy with Get nightly builds on (Settings › About).
+
+Both count builds the same way, by `git rev-list --count` of the commit, and an updater installs only a higher build. Main's builds are ahead of a release branch's, so a nightly with the switch turned off keeps its build until a release passes it, which is the next minor's, cut from main. Nothing ever goes back a build.
+
+This page says how to cut a release, how fixes reach one, how the nightly runs, and what the runs need.
+
+## Where a release comes from
+
+Until the nightly track is on, releases come from main, as 0.1.3 does. From then on, each minor has a branch, `release/0.<minor>`, and main carries the next minor:
+
+- **A fix** merges to main first, as any change does. Then it's cherry-picked to the branch with `git cherry-pick -x`, so the branch's commit names main's.
+- **The branch's version** moves to the fix release's in a commit of its own on the branch, as `chore(app): version 0.1.4` does on main: `app/Cargo.toml`, `app/Cargo.lock`, and the release's line in `app/platform/linux/flatpak/app.ilo.browser.metainfo.xml`.
+- **A Chromium security point release** on the branch's major reaches the branch the same way: its pin's commit is cherry-picked.
+- **The next minor's first release**, such as 0.2.0, is cut from main. Its branch, `release/0.2`, is cut from that tag when its first fix needs one.
+
+## Turning the nightly track on
+
+This is one step, done once, right before the first nightly publishes. Do it in this order:
+
+1. **Cut the last release from main**, as before. That's 0.1.3.
+2. **Cut `release/0.1` from that tag:** `git push origin v0.1.3^{commit}:refs/heads/release/0.1`.
+3. **Move main to 0.2.0** in one commit, `chore(app): version 0.2.0`, which changes `app/Cargo.toml` and `app/Cargo.lock`. The Flatpak metainfo gains a release only when 0.2.0 is cut. This way a nightly never reads as a 0.1.x.
+4. **Name the nightly feed** in a second commit: `app/branding/update-feed-nightly` holds `https://github.com/MartinPTielemans/ilo/releases/download/nightly/appcast.xml`, a default service URL that a fork changes. A build that carries it shows Get nightly builds where its updater can follow it. The nightly mode publishes only once the night's commit carries it.
+5. **Publish the first nightly:** `gh workflow run release.yml --ref main -f tag=nightly`, or wait for the next night at 06:00 UTC. The run makes release `nightly`.
+6. **Let 0.1.x copies opt in** by cherry-picking step 4's commit to `release/0.1`. From the next 0.1.x on, a release copy offers the switch.
+
+Turn the track off by removing `app/branding/update-feed-nightly` from main. The night then builds nothing and says why. Copies already on a nightly keep their build until a release passes it.
 
 ## Cutting a release
 
-1. Set the version in `app/Cargo.toml` and merge it to main.
-2. Make sure the Windows engine exists for that commit. It builds nightly, so run Engine on Windows (cross-compiled) on it, `gh workflow run engine-windows-cross.yml --ref main` with main at that commit, and wait for its release `engine-windows-<commit>`. The Mac and Linux engines must exist for the commit too; each OS's job stops without one.
-3. Write the release's entry in [ilo-site](https://github.com/MartinPTielemans/ilo-site)'s `src/changelog.ts` from the notes, and merge it before tagging: each update's notes and its first launch open `/changelog#<version>` on the site (`tools/appcast.sh`).
-4. Tag the commit with the release notes as the tag's message, and push the tag:
+1. **Move the version** on the release's branch, or on main until the nightly track is on. That's `app/Cargo.toml`, `app/Cargo.lock` and the metainfo's release line, merged as any change is.
+2. **Make sure each OS has an engine for that commit.** Each OS's job stops without one, or packs an older core.
+   - **On main:** Linux and Windows build nightly, so dispatch both on it: `gh workflow run engine-linux.yml --ref main` and `gh workflow run engine-windows-cross.yml --ref main`, with main at that commit. Then wait for their releases `engine-linux-<commit>` and `engine-windows-<commit>`. The Mac engine must exist for the commit too.
+   - **On a release branch:** dispatch the same two with `--ref release/0.<minor>`. The Mac's is built on the owner's MacBook from the branch's commit, with `engine/build.sh`, then `tools/mac-engine-publish.sh`. `tools/mac-nightly.sh` builds main only.
+3. **Write the release's changelog entry** in [ilo-site](https://github.com/MartinPTielemans/ilo-site)'s `src/changelog.ts` from the notes, and merge it before tagging. Each update's notes and its first launch open `/changelog#<version>` on the site (`tools/appcast.sh`).
+4. **Tag the commit and push the tag.** The release's notes are the tag's message:
 
    ```bash
-   git tag -a v0.1.0      # the editor's text is the release's notes
-   git push origin v0.1.0
+   git tag -a v0.1.4 <commit>    # the editor's text is the release's notes
+   git push origin v0.1.4
    ```
 
-   A lightweight tag fails the run, since the notes come from the message. Running the workflow by hand before the tag exists tries the release: it builds everything, and its notes say it isn't for publishing.
-5. Check the draft release's files, then publish it.
-6. Open a pull request to [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) with the manifests in the run's `winget` artifact.
+   A lightweight tag fails the run, since the notes come from the message. Running the workflow by hand before the tag exists tries the release: it builds everything, its notes say it isn't for publishing, and it makes no release.
+5. **Check the draft release's files, then publish it.**
+6. **Open a pull request** to [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) with the manifests in the run's `winget` artifact.
 
 Publish each draft before building the next: a Linux build doesn't follow a draft that isn't live yet.
 
-## What the run makes
+## The nightly
+
+`release.yml` runs at 06:00 UTC, after the night's engines and checks. Run it by hand with `gh workflow run release.yml --ref main -f tag=nightly`, for example after a security point release merges, so the fix ships that day.
+
+- **The night's commit** is the newest on main whose core and engine are those of the Mac engine that `engine/fetch.sh` takes there (`tools/nightly-commit.sh`).
+  - Windows joins when its engine fits that commit too. Otherwise the feed keeps Windows's previous build.
+  - The appcast is signed beside the Mac's build, so while the Mac engine is behind main's core (the MacBook slept), the night builds nothing new.
+  - A night whose commit the feed has already builds nothing.
+- **What it builds** is the release's own jobs, so each night rehearses a release:
+  - the Mac DMG, signed and notarized;
+  - the Windows installer, with no MSIX and no winget;
+  - the Flatpak bundle, as a check only, since a Flatpak follows the branch it's installed from.
+
+  A nightly is marked as one (`APP_TRACK=nightly`), so About says "Nightly 0.2.0 (1688)".
+- **What it publishes**, to release `nightly`, a prerelease made with `--latest=false`, so the site's buttons never offer it:
+  - `ilo-mac-arm64-<build>.dmg` and `ilo-windows-x64-setup-<build>.exe`, uploaded before `appcast.xml`, which names each entry "0.2.0 (<build>)";
+  - each OS's newest three builds stay, and packages the appcast no longer names go.
+- **A failure** opens or comments on one issue, "Release fails on main", and the next night that publishes closes it (`.github/scripts/main-check.sh`).
+- **To try it** from a branch, `gh workflow run release.yml --ref <branch> -f tag=nightly-<name>` publishes the same to a release `nightly-<name>`. It needs no feed file. Delete the release and its tag when done. `-f tag=nightly` runs only from main.
+
+The nightly needs no secret of its own: it signs with the Mac's.
+
+## What a release's run makes
 
 A draft release whose files keep their names, so `releases/latest/download/<name>` always links the newest:
 
@@ -38,7 +91,7 @@ Once the draft is published:
 - [ilo-site](https://github.com/MartinPTielemans/ilo-site)'s release workflow puts the demo on [ilobrowser.com](https://ilobrowser.com), links its source to the tag and deploys the site, whose download buttons link the newest release. It checks every half hour, or at once with `SITE_DISPATCH_TOKEN`.
 - Martin's Grok bot announces it: it records clips and a film of the new features on the published build, adds the clips to the site's changelog through its own ilo-site pull request, and drafts the post. With `RELEASE_WEBHOOK_URL` and `RELEASE_WEBHOOK_KEY` set, the `announce` job tells it at once; without them, it finds the release at one of its three daily check-ins, at 10:00, 16:00 and 21:00 Copenhagen time. The release never waits for it.
 
-Every other release in this repository, such as `updates`, is made with `--latest=false`, or the site's buttons would link it. The prebuilt engines live in [ilo-engine](https://github.com/MartinPTielemans/ilo-engine), the repository `engine/prebuilt.ini` names, as `engine-mac-`, `engine-linux-` and `engine-windows-<commit>`, also with `--latest=false`.
+Every other release in this repository, such as `updates` and `nightly`, is made with `--latest=false`, or the site's buttons would link it. The prebuilt engines live in [ilo-engine](https://github.com/MartinPTielemans/ilo-engine), the repository `engine/prebuilt.ini` names, as `engine-mac-`, `engine-linux-` and `engine-windows-<commit>`, also with `--latest=false`.
 
 ## Secrets and variables
 
