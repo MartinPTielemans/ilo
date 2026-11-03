@@ -39,7 +39,7 @@ use wayland_protocols_wlr::virtual_pointer::v1::client::{
 };
 use xkbcommon::xkb;
 
-use crate::{CX, WINDOWS, bc, drive, overlays, panels, settings_window};
+use crate::{CX, WINDOWS, bc, drive, floats, overlays, panels, settings_window};
 
 /// The modifiers, as drive.rs's X states hold them, which are the xkb masks of the keymap the
 /// driver's keyboard has.
@@ -387,7 +387,9 @@ fn focused_settings(nodes: &[Node]) -> Option<Node> {
 
 /// Where in the content of its browser window the overlay of `view` shows.
 fn overlay_frame(view: *mut c_void) -> Option<(bc::bc_id, gpui::Bounds<gpui::Pixels>)> {
-    let (ui_view, bounds) = overlays::placed(view).or_else(|| panels::placed(view))?;
+    let (ui_view, bounds) = (overlays::placed(view))
+        .or_else(|| panels::placed(view))
+        .or_else(|| floats::placed(view))?;
     let id = WINDOWS.with_borrow(|windows| {
         windows.iter().find(|w| w.ui_view == ui_view).map(|w| w.id)
     })?;
@@ -408,7 +410,8 @@ fn await_settings_focus() {
 }
 
 /// The origin, in sway's layout, of the window with the keyboard, for clickkey: Settings with
-/// sway's focus, the overlay with the keys in its browser window, or the driven browser window.
+/// sway's focus, the overlay with the keys in its browser window, or the browser window with sway's
+/// focus, else the driven one.
 fn key_origin() -> Option<(f64, f64)> {
     let nodes = ours();
     if let Some(settings) = focused_settings(&nodes) {
@@ -417,10 +420,18 @@ fn key_origin() -> Option<(f64, f64)> {
     if let Some((id, bounds)) = gpui_linux::shown_keyboard_overlay().and_then(overlay_frame)
         && let Some((_, node)) = browsers(&nodes).into_iter().find(|&(each, _)| each == id)
     {
-        let origin = bounds.origin.map(f64::from);
+        // At whole points, as a subsurface's place is, which GPUI truncates the overlay's to: a
+        // click in the theme picker, at a half point, landed half a point off.
+        let origin = bounds.origin.map(|each| f64::from(each).trunc());
         return Some((node.x + origin.x, node.y + origin.y));
     }
-    let (_, node) = driven()?;
+    // As drive.rs's is the X focus's: a Little ilo window the driven one opened has the keys, and
+    // its profile picker's click went to the driven window under it.
+    let focused = nodes.iter().find(|node| node.focused).map(|node| node.id);
+    let node = match browsers(&nodes).into_iter().find(|(_, node)| Some(node.id) == focused) {
+        Some((_, node)) => node,
+        None => driven()?.1,
+    };
     Some((node.x, node.y))
 }
 
