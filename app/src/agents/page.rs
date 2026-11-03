@@ -14,6 +14,12 @@ const INTERACTIVE: &[&str] = &[
     "spinbutton", "listbox", "option", "menuitem", "menuitemcheckbox", "menuitemradio", "tab",
     "treeitem",
 ];
+/// Roles given a ref too, to scroll in: a frame, and the parts of a page a site often scrolls on
+/// their own.
+const SCROLLS: &[&str] = &[
+    "Iframe", "IframePresentational", "main", "region", "document", "article", "feed", "log",
+    "list", "grid", "tree", "tabpanel", "dialog", "alertdialog", "complementary", "navigation",
+];
 /// Wrappers that only add nesting, whose children are outlined a level up.
 const FLATTEN: &[&str] = &[
     "none", "generic", "presentation", "LayoutTable", "LayoutTableRow", "LayoutTableCell",
@@ -172,7 +178,8 @@ impl Walk<'_> {
                 line.push_str(&format!(" \"{}\"", clip(&name, 160)));
             }
             let backend = node.get("backendDOMNodeId").and_then(Value::as_i64);
-            if let (true, Some(backend)) = (INTERACTIVE.contains(&role), backend) {
+            let refers = INTERACTIVE.contains(&role) || SCROLLS.contains(&role);
+            if let (true, Some(backend)) = (refers, backend) {
                 let password = node.get("password").and_then(Value::as_bool).unwrap_or(false);
                 let element = Element {
                     node: backend,
@@ -356,6 +363,34 @@ mod tests {
         nodes.swap(4, 5);
         let again = super::outline(&tab(), &nodes, &mut refs);
         assert!(again.contains("- textbox \"Coupon\" [e2]"));
+    }
+
+    /// A frame and a part of the page a site scrolls on its own have refs, for scroll to name, and
+    /// a heading has none (#1445).
+    #[test]
+    fn what_scrolls_has_a_ref() {
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Mail", &["2", "3", "4"]),
+            node("2", "heading", "Inbox", &[]),
+            node("3", "region", "Messages", &["5"]),
+            node("4", "Iframe", "Message", &["6"]),
+            node("5", "StaticText", "From Ana", &[]),
+            node("6", "StaticText", "Hello", &[]),
+        ];
+        nodes[1]["backendDOMNodeId"] = json!(20);
+        nodes[2]["backendDOMNodeId"] = json!(30);
+        nodes[3]["backendDOMNodeId"] = json!(40);
+        let mut refs = Refs::default();
+        let outline = outline(&tab(), &nodes, &mut refs);
+        assert!(
+            outline.ends_with(
+                "- heading \"Inbox\"\n\
+                 - region \"Messages\" [e1]\n  - text: From Ana\n\
+                 - Iframe \"Message\" [e2]\n  - text: Hello"
+            ),
+            "{outline}"
+        );
+        assert_eq!(refs.get("e2").map(|element| element.node), Some(40));
     }
 
     /// A page bigger than an agent should take in is cut, and says so.

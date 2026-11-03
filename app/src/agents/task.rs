@@ -1294,6 +1294,9 @@ impl Agents {
                 did.target = match &element {
                     Some(element) => named(element),
                     None => string("direction"),
+                };
+                if element.is_some() {
+                    did.text = string("direction");
                 }
             }
             "wait" => {

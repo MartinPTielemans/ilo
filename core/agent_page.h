@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -76,6 +77,7 @@ class AgentPage : public content::WebContentsObserver,
     std::string frame;
     std::string session;
   };
+  class WheelWatch;
 
   explicit AgentPage(content::WebContents* contents);
 
@@ -96,6 +98,11 @@ class AgentPage : public content::WebContentsObserver,
   void Focus(int64_t element, bool submit);
   void PressKey(const std::string& key, base::OnceClosure then);
   void Scroll(bool down);
+  // Turns the wheel at the middle of |area|, in the viewport's CSS pixels, by most of its height,
+  // then answers with the tree, or that nothing scrolled.
+  void Wheel(const gfx::RectF& area, bool down);
+  void Scrolled(bool down);
+  void ScrollTo();
   void History(bool forward);
   void Screenshot();
 
@@ -163,6 +170,8 @@ class AgentPage : public content::WebContentsObserver,
   std::vector<Target> targets_;
   // The frames the snapshot running reads.
   std::vector<Frame> frames_;
+  // Whether the wheel the scroll running turned moved anything.
+  std::unique_ptr<WheelWatch> wheel_;
   // Keeps the page drawing while it's hidden, for the agent's input and screenshots.
   base::ScopedClosureRunner drawing_;
   base::WeakPtrFactory<AgentPage> weak_factory_{this};

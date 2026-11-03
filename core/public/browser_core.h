@@ -1299,7 +1299,9 @@ BC_EXPORT size_t bc_agent_list_tabs(const char* agent, bc_id* tabs, size_t capac
 // Presses the key |text| names: Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp, ArrowDown,
 // ArrowLeft, ArrowRight, PageUp, PageDown, Home or End.
 #define BC_AGENT_PAGE_KEY 4
-// Scrolls the element into view, or with no element the page by most of a screen.
+// Turns the wheel, as a user does, at the middle of the element's part of the view, or with no
+// element of the page's, by most of its height: whatever scrolls there scrolls, a panel or a frame
+// of another site too. Answers with an error when nothing did, as at its end.
 #define BC_AGENT_PAGE_SCROLL_DOWN 5
 #define BC_AGENT_PAGE_SCROLL_UP 6
 // Goes back, or forward, in the tab's history.
@@ -1307,6 +1309,8 @@ BC_EXPORT size_t bc_agent_list_tabs(const char* agent, bc_id* tabs, size_t capac
 #define BC_AGENT_PAGE_FORWARD 8
 // A JPEG of what the page's view shows.
 #define BC_AGENT_PAGE_SCREENSHOT 9
+// Scrolls the element into view.
+#define BC_AGENT_PAGE_SCROLL_TO 10
 
 // Does |action|, a BC_AGENT_PAGE_ value, in |tab| for the agent with the id |agent|, to |element|,
 // a backendDOMNodeId from the tree, or 0, with |text| as the action says, else null. Then

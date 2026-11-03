@@ -12,6 +12,7 @@
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/scoped_multi_source_observation.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/task/single_thread_task_runner.h"
@@ -27,8 +28,13 @@
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_widget_host.h"
+#include "content/public/browser/render_widget_host_observer.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
+#include "third_party/blink/public/mojom/input/input_event_result.mojom-shared.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/size.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -216,6 +222,53 @@ base::ListValue AgentTree(base::ListValue nodes, const std::set<int64_t>& passwo
   return kept;
 }
 
+// Whether a wheel moved anything, as the widgets of the page's frames answer it: a scroll it
+// started that scrolled, in the frame under it or one it went on to, or a page that took the wheel
+// itself, as an editor or a map may.
+class AgentPage::WheelWatch : public content::RenderWidgetHost::InputEventObserver,
+                              public content::RenderWidgetHostObserver {
+ public:
+  explicit WheelWatch(content::WebContents& contents) {
+    contents.GetPrimaryMainFrame()->ForEachRenderFrameHost(
+        [this](content::RenderFrameHost* frame) {
+          content::RenderWidgetHost* widget = frame->GetRenderWidgetHost();
+          if (widget && !acks_.IsObservingSource(widget)) {
+            acks_.AddObservation(widget);
+            gone_.AddObservation(widget);
+          }
+        });
+  }
+
+  bool moved() const { return moved_; }
+
+ private:
+  // content::RenderWidgetHost::InputEventObserver:
+  void OnInputEventAck(const content::RenderWidgetHost&,
+                       blink::mojom::InputEventResultSource,
+                       blink::mojom::InputEventResultState state,
+                       const blink::WebInputEvent& event) override {
+    const blink::WebInputEvent::Type type = event.GetType();
+    if (state == blink::mojom::InputEventResultState::kConsumed &&
+        (type == blink::WebInputEvent::Type::kGestureScrollUpdate ||
+         type == blink::WebInputEvent::Type::kMouseWheel)) {
+      moved_ = true;
+    }
+  }
+
+  // content::RenderWidgetHostObserver:
+  void RenderWidgetHostDestroyed(content::RenderWidgetHost* widget) override {
+    acks_.RemoveObservation(widget);
+    gone_.RemoveObservation(widget);
+  }
+
+  bool moved_ = false;
+  base::ScopedMultiSourceObservation<content::RenderWidgetHost,
+                                     content::RenderWidgetHost::InputEventObserver>
+      acks_{this};
+  base::ScopedMultiSourceObservation<content::RenderWidgetHost, content::RenderWidgetHostObserver>
+      gone_{this};
+};
+
 AgentPage::AgentPage(content::WebContents* contents)
     : content::WebContentsObserver(contents),
       content::WebContentsUserData<AgentPage>(*contents),
@@ -290,6 +343,9 @@ void AgentPage::Run() {
     case BC_AGENT_PAGE_SCROLL_DOWN:
     case BC_AGENT_PAGE_SCROLL_UP:
       Scroll(action == BC_AGENT_PAGE_SCROLL_DOWN);
+      return;
+    case BC_AGENT_PAGE_SCROLL_TO:
+      ScrollTo();
       return;
     case BC_AGENT_PAGE_BACK:
     case BC_AGENT_PAGE_FORWARD:
@@ -496,22 +552,6 @@ void AgentPage::PressKey(const std::string& name, base::OnceClosure then) {
 }
 
 void AgentPage::Scroll(bool down) {
-  if (job_->element) {
-    Center(base::BindOnce(
-        [](base::WeakPtr<AgentPage> page, std::optional<gfx::RectF> box) {
-          if (!page) {
-            return;
-          }
-          if (!box) {
-            page->Fail(
-                "The element isn't on the page any more, or is hidden. Take a new snapshot.");
-            return;
-          }
-          page->Settle();
-        },
-        weak_factory_.GetWeakPtr()));
-    return;
-  }
   Send("Page.getLayoutMetrics", base::DictValue(),
        base::BindOnce(
            [](base::WeakPtr<AgentPage> page, bool down, const base::DictValue* metrics) {
@@ -522,26 +562,81 @@ void AgentPage::Scroll(bool down) {
                  metrics ? metrics->FindDict("cssLayoutViewport") : nullptr;
              const double width = viewport ? viewport->FindDouble("clientWidth").value_or(0) : 0;
              const double height = viewport ? viewport->FindDouble("clientHeight").value_or(0) : 0;
-             if (width <= 0 || height <= 0) {
+             const gfx::RectF view(static_cast<float>(width), static_cast<float>(height));
+             if (view.IsEmpty()) {
                page->Fail("The page has no view to scroll.");
                return;
              }
-             page->Send("Input.dispatchMouseEvent",
-                        base::DictValue()
-                            .Set("type", "mouseWheel")
-                            .Set("x", width / 2)
-                            .Set("y", height / 2)
-                            .Set("deltaX", 0)
-                            .Set("deltaY", (down ? 0.8 : -0.8) * height),
-                        base::BindOnce(
-                            [](base::WeakPtr<AgentPage> page, const base::DictValue*) {
-                              if (page) {
-                                page->Settle();
-                              }
-                            },
-                            page));
+             if (!page->job_->element) {
+               page->Wheel(view, down);
+               return;
+             }
+             page->Center(base::BindOnce(
+                 [](base::WeakPtr<AgentPage> page, bool down, gfx::RectF view,
+                    std::optional<gfx::RectF> box) {
+                   if (!page) {
+                     return;
+                   }
+                   // Its part of the view, where a user's pointer would be.
+                   const gfx::RectF shown = box ? gfx::IntersectRects(*box, view) : gfx::RectF();
+                   if (shown.IsEmpty()) {
+                     page->Fail(
+                         "The element isn't on the page any more, or is hidden. Take a new "
+                         "snapshot.");
+                     return;
+                   }
+                   page->Wheel(shown, down);
+                 },
+                 page, down, view));
            },
            weak_factory_.GetWeakPtr(), down));
+}
+
+void AgentPage::Wheel(const gfx::RectF& area, bool down) {
+  wheel_ = std::make_unique<WheelWatch>(GetWebContents());
+  const gfx::PointF at = area.CenterPoint();
+  Send("Input.dispatchMouseEvent",
+       base::DictValue()
+           .Set("type", "mouseWheel")
+           .Set("x", at.x())
+           .Set("y", at.y())
+           .Set("deltaX", 0)
+           .Set("deltaY", (down ? 0.8 : -0.8) * area.height()),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, bool down, const base::DictValue*) {
+             if (page) {
+               // By then the scroll the wheel started has scrolled, or found nothing to.
+               page->wait_.Start(FROM_HERE, kSettle,
+                                 base::BindOnce(&AgentPage::Scrolled, page, down));
+             }
+           },
+           weak_factory_.GetWeakPtr(), down));
+}
+
+void AgentPage::Scrolled(bool down) {
+  const bool moved = wheel_ && wheel_->moved();
+  wheel_.reset();
+  if (!moved) {
+    Fail(down ? "Nothing scrolled: it's as far down as it goes, or nothing there scrolls."
+              : "Nothing scrolled: it's as far up as it goes, or nothing there scrolls.");
+    return;
+  }
+  AfterLoad(base::BindOnce(&AgentPage::Snapshot, weak_factory_.GetWeakPtr()));
+}
+
+void AgentPage::ScrollTo() {
+  Center(base::BindOnce(
+      [](base::WeakPtr<AgentPage> page, std::optional<gfx::RectF> box) {
+        if (!page) {
+          return;
+        }
+        if (!box) {
+          page->Fail("The element isn't on the page any more, or is hidden. Take a new snapshot.");
+          return;
+        }
+        page->Settle();
+      },
+      weak_factory_.GetWeakPtr()));
 }
 
 void AgentPage::History(bool forward) {
@@ -919,6 +1014,7 @@ void AgentPage::Answer(std::string text, bool error) {
   const uint64_t request = job_->request;
   job_.reset();
   frames_.clear();
+  wheel_.reset();
   wait_.Stop();
   loaded_.Reset();
   // Posted, so the app never hears inside its own bc_agent_page.
@@ -950,6 +1046,7 @@ void AgentPage::LetGo() {
                                   std::string("The agent's session with the tab ended."), true));
   }
   weak_factory_.InvalidateWeakPtrs();
+  wheel_.reset();
   wait_.Stop();
   rest_.Stop();
   loaded_.Reset();

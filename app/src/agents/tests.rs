@@ -890,6 +890,34 @@ fn an_agent_opens_a_page_and_acts_by_ref(cx: &mut TestAppContext) {
     assert_eq!(answer.recv().unwrap(), ToolResult::error("It's gone."));
 }
 
+/// scroll with a direction turns the wheel at the middle of the page, or with a ref as well in
+/// that element, such as a panel or a frame, and with a ref alone brings the element into view
+/// (#1445).
+#[gpui::test]
+fn an_agent_scrolls_the_page_in_an_element_or_to_it(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    page_done(&agents, &browser, answer, shop_tree(), cx);
+    let scrolls = [
+        (json!({ "direction": "up" }), PageAction::ScrollUp, 0, "Scrolled up."),
+        (
+            json!({ "ref": "e3", "direction": "down" }),
+            PageAction::ScrollDown,
+            51,
+            "Scrolled down in “Place order”.",
+        ),
+        (json!({ "ref": "e3" }), PageAction::ScrollTo, 51, "Scrolled to “Place order”."),
+    ];
+    for (mut arguments, action, element, note) in scrolls {
+        arguments["tab"] = json!(20);
+        let answer = call(&agents, "claude-code", "scroll", arguments, cx);
+        let (_, _, sent, to, _) = browser.pages.borrow().last().cloned().unwrap();
+        assert_eq!((sent, to), (action, element));
+        let scrolled = page_done(&agents, &browser, answer, shop_tree(), cx);
+        assert!(scrolled.text.starts_with(note), "{}", scrolled.text);
+    }
+}
+
 /// An agent can't act on the user's tabs, type into a password field or open a page that isn't
 /// on the web; each refusal is logged.
 #[gpui::test]
@@ -2142,6 +2170,7 @@ mod tasks {
             (did("press_key", "", "Enter", ""), Tense::Done, "Pressed Enter"),
             (did("scroll", "maat.pt", "down", ""), Tense::Done, "Scrolled down on maat.pt"),
             (did("scroll", "maat.pt", "“Opening hours”", ""), Tense::Now, "Scrolling to “Opening hours”"),
+            (did("scroll", "maat.pt", "“Document”", "down"), Tense::Done, "Scrolled down in “Document”"),
             (did("wait", "", "2s", ""), Tense::Done, "Waited 2s"),
             (did("wait", "", "“Tickets”", ""), Tense::Failed, "Didn't see “Tickets”"),
             (did("list_tabs", "", "", ""), Tense::Done, "Looked over its tabs"),
