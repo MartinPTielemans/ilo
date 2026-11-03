@@ -29,7 +29,10 @@ impl Field {
         let input = cx.read(|cx| shows.read(cx).0.clone());
         cx.simulate_input(text);
         cx.run_until_parked();
-        Self { input, cx: cx.clone() }
+        Self {
+            input,
+            cx: cx.clone(),
+        }
     }
 
     fn mac(text: &str, cx: &mut TestAppContext) -> Self {
@@ -55,13 +58,17 @@ impl Field {
     }
 
     fn text(&self) -> String {
-        self.input.read_with(&self.cx, |input, _| input.text().to_string())
+        self.input
+            .read_with(&self.cx, |input, _| input.text().to_string())
     }
 
     /// Where `fraction` of the way across the character at `index` is in the window.
     fn over(&mut self, index: usize, fraction: f32) -> Point<Pixels> {
         self.input.update_in(&mut self.cx, |input, _, _| {
-            let (bounds, line) = (input.last_bounds.unwrap(), input.last_layout.clone().unwrap());
+            let (bounds, line) = (
+                input.last_bounds.unwrap(),
+                input.last_layout.clone().unwrap(),
+            );
             let (left, right) = (line.x_for_index(index), line.x_for_index(index + 1));
             let x = bounds.left() + left + (right - left) * fraction - input.scroll;
             point(x, bounds.center().y)
@@ -79,21 +86,36 @@ impl Field {
     fn press_at(&mut self, position: Point<Pixels>, clicks: usize, modifiers: Modifiers) {
         let button = MouseButton::Left;
         let (click_count, first_mouse) = (clicks, false);
-        let down = MouseDownEvent { button, position, modifiers, click_count, first_mouse };
+        let down = MouseDownEvent {
+            button,
+            position,
+            modifiers,
+            click_count,
+            first_mouse,
+        };
         self.cx.simulate_event(down);
         self.cx.run_until_parked();
     }
 
     fn release(&mut self, position: Point<Pixels>, click_count: usize) {
         let (button, modifiers) = (MouseButton::Left, Modifiers::default());
-        self.cx.simulate_event(MouseUpEvent { button, position, modifiers, click_count });
+        self.cx.simulate_event(MouseUpEvent {
+            button,
+            position,
+            modifiers,
+            click_count,
+        });
         self.cx.run_until_parked();
     }
 
     fn drag_to(&mut self, position: Point<Pixels>) -> (usize, usize) {
         let pressed_button = Some(MouseButton::Left);
         let modifiers = Modifiers::default();
-        self.cx.simulate_event(MouseMoveEvent { position, pressed_button, modifiers });
+        self.cx.simulate_event(MouseMoveEvent {
+            position,
+            pressed_button,
+            modifiers,
+        });
         self.cx.run_until_parked();
         self.selected()
     }
@@ -108,7 +130,9 @@ impl Field {
     }
 
     fn commit(&mut self) {
-        self.input.update_in(&mut self.cx, |input, window, cx| input.unmark_text(window, cx));
+        self.input.update_in(&mut self.cx, |input, window, cx| {
+            input.unmark_text(window, cx)
+        });
         self.cx.run_until_parked();
     }
 }
@@ -126,11 +150,18 @@ fn option_arrows_move_by_words_and_with_shift_select_them(cx: &mut TestAppContex
     assert_eq!(field.press("alt-right"), (16, 16));
     assert_eq!(field.press("shift-alt-right"), (16, 21));
     assert_eq!(field.press("shift-alt-left"), (16, 17));
-    assert_eq!(field.press("shift-alt-left"), (16, 12), "past where it began, it turns");
+    assert_eq!(
+        field.press("shift-alt-left"),
+        (16, 12),
+        "past where it began, it turns"
+    );
     assert_eq!(field.press("shift-alt-left"), (16, 0));
     // A move without ⇧ goes a word from the selection's end the way it goes.
     assert_eq!(field.press("alt-right"), (21, 21));
-    assert_eq!(field.press("shift-alt-left shift-alt-left alt-left"), (0, 0));
+    assert_eq!(
+        field.press("shift-alt-left shift-alt-left alt-left"),
+        (0, 0)
+    );
     assert_eq!(field.text(), "example.com/some/path");
 }
 
@@ -143,7 +174,11 @@ fn cmd_shift_arrows_and_emacs_keys_go_to_the_ends(cx: &mut TestAppContext) {
     assert_eq!(field.press("ctrl-e"), (11, 11));
     assert_eq!(field.press("alt-left"), (6, 6));
     assert_eq!(field.press("shift-cmd-left"), (6, 0));
-    assert_eq!(field.press("shift-cmd-right"), (6, 11), "from where the selection began");
+    assert_eq!(
+        field.press("shift-cmd-right"),
+        (6, 11),
+        "from where the selection began"
+    );
     assert_eq!(field.press("ctrl-shift-a"), (6, 0));
     assert_eq!(field.press("ctrl-shift-e"), (6, 11));
     assert_eq!(field.press("shift-home"), (6, 0));
@@ -159,7 +194,11 @@ fn option_forward_delete_deletes_the_word_after_the_caret(cx: &mut TestAppContex
     field.press("alt-delete");
     assert_eq!(field.text(), "/path");
     field.press("alt-right alt-delete");
-    assert_eq!(field.text(), "/path", "at the end there's nothing after the caret");
+    assert_eq!(
+        field.text(),
+        "/path",
+        "at the end there's nothing after the caret"
+    );
     field.press("cmd-a alt-delete");
     assert_eq!(field.text(), "");
 }
@@ -173,8 +212,16 @@ fn a_whole_selection_grows_the_way_the_key_goes(cx: &mut TestAppContext) {
     assert_eq!(field.press("shift-alt-left"), (7, 0));
     assert_eq!(field.click(5, 2), 4..7);
     assert_eq!(field.press("shift-alt-right"), (4, 13));
-    assert_eq!(field.press("cmd-a shift-left"), (13, 0), "it can't grow past the start");
-    assert_eq!(field.press("shift-right"), (13, 1), "now it's the caret's end that moves");
+    assert_eq!(
+        field.press("cmd-a shift-left"),
+        (13, 0),
+        "it can't grow past the start"
+    );
+    assert_eq!(
+        field.press("shift-right"),
+        (13, 1),
+        "now it's the caret's end that moves"
+    );
 }
 
 /// A double-click selects the word under it, or the run of spaces or the mark, and a
@@ -185,7 +232,10 @@ fn a_double_click_selects_a_word_and_a_triple_click_the_line(cx: &mut TestAppCon
     assert_eq!(field.click(7, 2), 6..11);
     assert_eq!(field.click(11, 2), 11..13);
     assert_eq!(field.click(14, 3), 0..16);
-    assert!(field.click(2, 1).is_empty(), "one click puts the caret down");
+    assert!(
+        field.click(2, 1).is_empty(),
+        "one click puts the caret down"
+    );
     // Over the right half of hello's "o" it's still hello's, not the space after it.
     let position = field.over(4, 0.9);
     field.press_at(position, 2, Modifiers::default());
@@ -229,16 +279,25 @@ fn an_input_methods_composition_keeps_its_text_from_word_keys(cx: &mut TestAppCo
     let mut field = Field::mac("abc ", cx);
     field.compose("てきすと");
     let composing = |field: &Field| {
-        field.input.read_with(&field.cx, |input, _| (input.selection(), input.marked_range.clone()))
+        field.input.read_with(&field.cx, |input, _| {
+            (input.selection(), input.marked_range.clone())
+        })
     };
     let before = composing(&field);
     let keys = "alt-left alt-right shift-alt-left shift-alt-right shift-cmd-left shift-cmd-right \
         ctrl-a ctrl-e ctrl-shift-a shift-home cmd-left left right shift-left alt-delete";
     for key in keys.split_whitespace() {
         field.press(key);
-        assert_eq!((field.text(), composing(&field)), ("abc てきすと".into(), before.clone()), "{key}");
+        assert_eq!(
+            (field.text(), composing(&field)),
+            ("abc てきすと".into(), before.clone()),
+            "{key}"
+        );
     }
-    assert!(field.click(1, 2).is_empty(), "a double-click is one click while it composes");
+    assert!(
+        field.click(1, 2).is_empty(),
+        "a double-click is one click while it composes"
+    );
     field.compose("テキスト");
     field.commit();
     assert_eq!(field.text(), "abc テキスト");

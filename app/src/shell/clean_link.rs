@@ -19,7 +19,11 @@ pub fn clean_link(url: &str) -> String {
     let kept: Vec<&str> = query
         .split('&')
         .filter(|param| {
-            let name = param.split('=').next().unwrap_or_default().to_ascii_lowercase();
+            let name = param
+                .split('=')
+                .next()
+                .unwrap_or_default()
+                .to_ascii_lowercase();
             !name.starts_with("utm_") && !TRACKERS.contains(&name.as_str())
         })
         .collect();
@@ -42,10 +46,19 @@ mod tests {
     #[test]
     fn leaves_out_trackers_and_keeps_the_rest() {
         let cases = [
-            ("https://a.test/p?utm_source=x&id=3&utm_Medium=y#top", "https://a.test/p?id=3#top"),
+            (
+                "https://a.test/p?utm_source=x&id=3&utm_Medium=y#top",
+                "https://a.test/p?id=3#top",
+            ),
             ("https://a.test/?fbclid=1&gclid=2", "https://a.test/"),
-            ("https://a.test/?q=utm_source&page=2", "https://a.test/?q=utm_source&page=2"),
-            ("https://a.test/#utm_source=x", "https://a.test/#utm_source=x"),
+            (
+                "https://a.test/?q=utm_source&page=2",
+                "https://a.test/?q=utm_source&page=2",
+            ),
+            (
+                "https://a.test/#utm_source=x",
+                "https://a.test/#utm_source=x",
+            ),
             ("https://a.test/path", "https://a.test/path"),
             ("https://a.test/?", "https://a.test/?"),
         ];

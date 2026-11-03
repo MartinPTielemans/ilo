@@ -37,8 +37,8 @@ use windows_sys::Win32::System::Pipes::{
     WaitNamedPipeW,
 };
 use windows_sys::Win32::System::Threading::{
-    CreateEventW, GetCurrentProcess, OpenProcessToken, SetEvent, WaitForMultipleObjects,
-    WaitForSingleObject, INFINITE,
+    CreateEventW, GetCurrentProcess, INFINITE, OpenProcessToken, SetEvent, WaitForMultipleObjects,
+    WaitForSingleObject,
 };
 
 /// What each end buffers.
@@ -106,8 +106,15 @@ pub struct Pipe {
 
 impl Pipe {
     fn new(pipe: Handle, server: bool) -> io::Result<Pipe> {
-        let connection = Connection { pipe, closed: event()?, server };
-        Ok(Pipe { connection: Arc::new(connection), event: event()? })
+        let connection = Connection {
+            pipe,
+            closed: event()?,
+            server,
+        };
+        Ok(Pipe {
+            connection: Arc::new(connection),
+            event: event()?,
+        })
     }
 
     /// Connects to the server's pipe at `path`, if it's the user's.
@@ -118,7 +125,15 @@ impl Pipe {
             let flags = FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION;
             let access = GENERIC_READ | GENERIC_WRITE;
             let opened = unsafe {
-                CreateFileW(name.as_ptr(), access, 0, null(), OPEN_EXISTING, flags, null_mut())
+                CreateFileW(
+                    name.as_ptr(),
+                    access,
+                    0,
+                    null(),
+                    OPEN_EXISTING,
+                    flags,
+                    null_mut(),
+                )
             };
             if opened != INVALID_HANDLE_VALUE {
                 let pipe = Handle(opened);
@@ -142,7 +157,10 @@ impl Pipe {
     }
 
     pub fn try_clone(&self) -> io::Result<Pipe> {
-        Ok(Pipe { connection: self.connection.clone(), event: event()? })
+        Ok(Pipe {
+            connection: self.connection.clone(),
+            event: event()?,
+        })
     }
 
     /// Ends the connection: what waits on it here returns, and the server's end disconnects the
@@ -191,8 +209,15 @@ impl Pipe {
 
 /// Whether the error is the connection's end: the other side closed it, or this one did.
 fn ended(error: &io::Error) -> bool {
-    let ends = [ERROR_BROKEN_PIPE, ERROR_PIPE_NOT_CONNECTED, ERROR_NO_DATA, ERROR_OPERATION_ABORTED];
-    error.raw_os_error().is_some_and(|code| ends.contains(&(code as u32)))
+    let ends = [
+        ERROR_BROKEN_PIPE,
+        ERROR_PIPE_NOT_CONNECTED,
+        ERROR_NO_DATA,
+        ERROR_OPERATION_ABORTED,
+    ];
+    error
+        .raw_os_error()
+        .is_some_and(|code| ends.contains(&(code as u32)))
 }
 
 impl Read for Pipe {
@@ -203,8 +228,15 @@ impl Read for Pipe {
         let mut overlapped = self.overlapped();
         let length = buffer.len().min(u32::MAX as usize) as u32;
         let pipe = self.connection.pipe.0;
-        let started =
-            unsafe { ReadFile(pipe, buffer.as_mut_ptr(), length, null_mut(), &mut overlapped) };
+        let started = unsafe {
+            ReadFile(
+                pipe,
+                buffer.as_mut_ptr(),
+                length,
+                null_mut(),
+                &mut overlapped,
+            )
+        };
         match self.finish(&mut overlapped, started) {
             Err(error) if ended(&error) => Ok(0),
             read => read,
@@ -246,7 +278,11 @@ impl Listener {
         let name = wide(path);
         let security = Descriptor::users_alone()?;
         let next = instance(&name, &security, true)?;
-        Ok(Listener { name, security, next })
+        Ok(Listener {
+            name,
+            security,
+            next,
+        })
     }
 
     /// The next client's connection, once one connects. An error means no more can.
@@ -265,7 +301,9 @@ impl Listener {
                 return Ok(taken);
             }
         }
-        Err(io::Error::other("clients kept going before they were taken"))
+        Err(io::Error::other(
+            "clients kept going before they were taken",
+        ))
     }
 }
 
@@ -283,7 +321,16 @@ fn instance(name: &[u16], security: &Descriptor, first: bool) -> io::Result<Pipe
     let mode = PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS;
     let made = unsafe {
         let most = PIPE_UNLIMITED_INSTANCES;
-        CreateNamedPipeW(name.as_ptr(), open, mode, most, BUFFER, BUFFER, 0, &attributes)
+        CreateNamedPipeW(
+            name.as_ptr(),
+            open,
+            mode,
+            most,
+            BUFFER,
+            BUFFER,
+            0,
+            &attributes,
+        )
     };
     match made == INVALID_HANDLE_VALUE {
         true => Err(io::Error::last_os_error()),
@@ -308,7 +355,10 @@ impl Descriptor {
     /// service and no administrator but by taking ownership.
     fn users_alone() -> io::Result<Descriptor> {
         let user = User::current()?.text()?;
-        let text: Vec<u16> = format!("O:{user}D:P(A;;GA;;;{user})").encode_utf16().chain([0]).collect();
+        let text: Vec<u16> = format!("O:{user}D:P(A;;GA;;;{user})")
+            .encode_utf16()
+            .chain([0])
+            .collect();
         let mut made = null_mut();
         let converted = unsafe {
             ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -339,7 +389,13 @@ impl User {
         unsafe { GetTokenInformation(token.0, TokenUser, null_mut(), 0, &mut length) };
         let mut buffer = vec![0u64; (length as usize).div_ceil(8)];
         let read = unsafe {
-            GetTokenInformation(token.0, TokenUser, buffer.as_mut_ptr().cast(), length, &mut length)
+            GetTokenInformation(
+                token.0,
+                TokenUser,
+                buffer.as_mut_ptr().cast(),
+                length,
+                &mut length,
+            )
         };
         match read == 0 {
             true => Err(io::Error::last_os_error()),
@@ -357,7 +413,9 @@ impl User {
         if unsafe { ConvertSidToStringSidW(self.sid(), &mut text) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        let length = (0..).take_while(|&at| unsafe { *text.add(at) } != 0).count();
+        let length = (0..)
+            .take_while(|&at| unsafe { *text.add(at) } != 0)
+            .count();
         let read = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, length) });
         unsafe { LocalFree(text.cast()) };
         Ok(read)
