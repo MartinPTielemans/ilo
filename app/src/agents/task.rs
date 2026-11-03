@@ -1352,10 +1352,10 @@ impl Agents {
         log!("browser: task {agent} dropped");
     }
 
-    /// At quit: every task goes, and with `spaces` its Space. With no window left, as when the
-    /// last one closed on Windows or Linux, the core can't delete a Space (#1676), and the next
-    /// launch deletes them, as after a crash.
-    pub fn end_tasks(&mut self, spaces: bool, cx: &mut Context<Self>) {
+    /// At quit: every task goes, and its Space stays for the next launch to delete, as after a
+    /// crash. The quit has already saved the Spaces, so one deleted now would come back anyway
+    /// (#1687).
+    pub fn end_tasks(&mut self, cx: &mut Context<Self>) {
         let agents: Vec<String> = self
             .tasks
             .tasks
@@ -1363,7 +1363,7 @@ impl Agents {
             .map(|task| task.agent.clone())
             .collect();
         for agent in agents {
-            self.end_task(&agent, spaces, cx);
+            self.end_task(&agent, false, cx);
         }
     }
 

@@ -47,13 +47,11 @@ pub(crate) unsafe extern "C" fn stopping(_: *mut c_void) {
     };
     // The recovery words a Copy put on the clipboard don't outlast the app (settings.rs).
     unsafe { platform::host_forget_secret() };
-    // Tasks live for the run: their CLIs stop and their Spaces go while the core still answers,
-    // on every way out, the Dock's Quit and logging out included. A crash leaves them for the
-    // next launch.
-    let spaces = WINDOWS.with_borrow(|windows| !windows.is_empty());
+    // Tasks live for the run: their CLIs stop while the core still answers, on every way out, the
+    // Dock's Quit and logging out included.
     update_app(|cx| {
         if let Some(agents) = browser::agents::global(cx) {
-            agents.update(cx, |agents, cx| agents.end_tasks(spaces, cx));
+            agents.update(cx, |agents, cx| agents.end_tasks(cx));
         }
     });
 }

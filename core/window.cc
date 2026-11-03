@@ -1119,7 +1119,9 @@ bool Window::DeleteSpace(bc_id space) {
   deleted.id = space;
   const std::vector<Space*> all = Space::All();
   deleted.at = static_cast<size_t>(std::ranges::find(all, space, &Space::id) - all.begin());
-  deleted.shown = Order().empty() ? 0 : FromId(Order().front())->SelectedIn(space);
+  // With no window left, as at quit once the last has closed, it shows nothing (#1687).
+  const std::vector<Window*> windows = All();
+  deleted.shown = windows.empty() ? 0 : windows.front()->SelectedIn(space);
   deleted.saved = SaveSpace(**it, deleted.shown, &deleted.today);
   if (DeletedSpaces().size() > kMaxClosedTabs) {
     // |deleted| is the last, which stays.
@@ -2412,6 +2414,9 @@ void Window::Destroy() {
   auto it = Windows().find(id_);
   std::unique_ptr<Window> self = std::move(it->second);
   Windows().erase(it);
+  // Its widget can report itself active as it closes, as on Windows when an owned window goes
+  // first, which would put the closed window back in Order (#1687).
+  widget_observation_.Reset();
   // What it built on its profiles, before the Space goes and ends a private session: not left to
   // the order of its members.
   suggestions_.reset();
