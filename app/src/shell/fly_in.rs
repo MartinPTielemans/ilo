@@ -42,7 +42,8 @@ impl Shell {
     pub(super) fn fly_new_download(&mut self, downloads: &[Download], cx: &mut Context<Self>) {
         let first = !std::mem::replace(&mut self.downloads_read, true);
         let new = new_download(&self.downloads_seen, first, downloads);
-        self.downloads_seen.extend(downloads.iter().map(|each| each.id));
+        self.downloads_seen
+            .extend(downloads.iter().map(|each| each.id));
         let Some(id) = new.filter(|_| self.flight_shown()) else {
             return;
         };
@@ -89,7 +90,9 @@ impl Shell {
     /// The flying icon, over the sidebar's rows, which keep the pointer.
     pub(super) fn flying_icon(&self) -> Option<impl IntoElement + use<>> {
         let flight = self.flight.as_ref()?;
-        let t = flight.start.map_or(0., |start| start.elapsed().as_secs_f32());
+        let t = flight
+            .start
+            .map_or(0., |start| start.elapsed().as_secs_f32());
         let place = flight_place(t, self.width(), f32::from(self.viewport.height))?;
         // The generic file glyph, as the Library's rows show, until the core sends the icon.
         let icon = match self.download_icons.get(&flight.id).cloned().flatten() {
@@ -131,7 +134,10 @@ fn flight_place(t: f32, width: f32, height: f32) -> Option<Place> {
     let (x1, y1, x2, y2) = FLIGHT_CURVE;
     let p = cubic_bezier(x1, y1, x2, y2, t / FLIGHT);
     let (from_x, from_y) = (width / 2., LIST_TOP + FLIGHT_FROM / 2.);
-    let (to_x, to_y) = (LIBRARY_BACK_INSET + NAV_SIZE / 2., height - FOOTER_HEIGHT / 2.);
+    let (to_x, to_y) = (
+        LIBRARY_BACK_INSET + NAV_SIZE / 2.,
+        height - FOOTER_HEIGHT / 2.,
+    );
     // A quadratic curve whose middle point is straight under the start, so the icon drops first
     // and swings left into the button.
     let (mid_x, mid_y) = (from_x, (from_y + to_y) / 2.);
@@ -179,9 +185,16 @@ mod tests {
         let seen = HashSet::from([1, 2]);
         let report = [download(2, Running), download(1, Done)];
         assert_eq!(new_download(&seen, false, &report), None);
-        assert_eq!(new_download(&seen, false, &[download(3, Done), download(2, Paused)]), None);
+        assert_eq!(
+            new_download(&seen, false, &[download(3, Done), download(2, Paused)]),
+            None
+        );
         // Several new at once fly once, as the newest, which comes first.
-        let report = [download(5, Running), download(4, Running), download(2, Running)];
+        let report = [
+            download(5, Running),
+            download(4, Running),
+            download(2, Running),
+        ];
         assert_eq!(new_download(&seen, false, &report), Some(5));
     }
 
@@ -192,7 +205,10 @@ mod tests {
     fn the_icon_speeds_up_into_the_library_button() {
         let (width, height) = (240., 800.);
         let start = flight_place(0., width, height).unwrap();
-        assert_eq!((start.x, start.y, start.size, start.opacity), (120., 106., 32., 1.));
+        assert_eq!(
+            (start.x, start.y, start.size, start.opacity),
+            (120., 106., 32., 1.)
+        );
         let half = flight_place(FLIGHT / 2., width, height).unwrap();
         assert!(half.y < (106. + 775.) / 2. && half.y > 106.);
         assert!(half.size > 24. && half.opacity == 1.);

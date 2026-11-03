@@ -10,21 +10,50 @@ use super::TabInfo;
 
 /// Roles an agent can act on, each given a ref.
 const INTERACTIVE: &[&str] = &[
-    "button", "link", "textbox", "searchbox", "combobox", "checkbox", "radio", "switch", "slider",
-    "spinbutton", "listbox", "option", "menuitem", "menuitemcheckbox", "menuitemradio", "tab",
+    "button",
+    "link",
+    "textbox",
+    "searchbox",
+    "combobox",
+    "checkbox",
+    "radio",
+    "switch",
+    "slider",
+    "spinbutton",
+    "listbox",
+    "option",
+    "menuitem",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "tab",
     "treeitem",
 ];
 /// Wrappers that only add nesting, whose children are outlined a level up.
 const FLATTEN: &[&str] = &[
-    "none", "generic", "presentation", "LayoutTable", "LayoutTableRow", "LayoutTableCell",
-    "InlineTextBox", "RootWebArea",
+    "none",
+    "generic",
+    "presentation",
+    "LayoutTable",
+    "LayoutTableRow",
+    "LayoutTableCell",
+    "InlineTextBox",
+    "RootWebArea",
 ];
 /// Landmarks worth a line without a name.
 const LANDMARKS: &[&str] = &[
-    "form", "dialog", "alertdialog", "alert", "navigation", "main", "banner", "search",
+    "form",
+    "dialog",
+    "alertdialog",
+    "alert",
+    "navigation",
+    "main",
+    "banner",
+    "search",
     "contentinfo",
 ];
-const STATES: &[&str] = &["checked", "selected", "expanded", "disabled", "required", "level"];
+const STATES: &[&str] = &[
+    "checked", "selected", "expanded", "disabled", "required", "level",
+];
 /// A frame's element, under which the core puts its document.
 const FRAMES: &[&str] = &["Iframe", "IframePresentational"];
 /// The outline's bytes at most, as a long page would fill the agent's context.
@@ -32,8 +61,20 @@ pub const MAX_OUTLINE: usize = 30_000;
 
 /// The keys press_key presses, as the core knows them.
 pub const KEYS: &[&str] = &[
-    "Enter", "Tab", "Escape", "Backspace", "Delete", "Space", "ArrowUp", "ArrowDown", "ArrowLeft",
-    "ArrowRight", "PageUp", "PageDown", "Home", "End",
+    "Enter",
+    "Tab",
+    "Escape",
+    "Backspace",
+    "Delete",
+    "Space",
+    "ArrowUp",
+    "ArrowDown",
+    "ArrowLeft",
+    "ArrowRight",
+    "PageUp",
+    "PageDown",
+    "Home",
+    "End",
 ];
 
 /// An element of a page an agent may act on, by its ref.
@@ -151,7 +192,10 @@ impl Walk<'_> {
         if levels > 200 || self.size > MAX_OUTLINE {
             return;
         }
-        let ignored = node.get("ignored").and_then(Value::as_bool).unwrap_or(false);
+        let ignored = node
+            .get("ignored")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let role = role(node);
         let name = name(node);
         let lower = name.to_lowercase();
@@ -177,7 +221,10 @@ impl Walk<'_> {
             }
             let backend = node.get("backendDOMNodeId").and_then(Value::as_i64);
             if let (true, Some(backend)) = (INTERACTIVE.contains(&role), backend) {
-                let password = node.get("password").and_then(Value::as_bool).unwrap_or(false);
+                let password = node
+                    .get("password")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 let element = Element {
                     node: backend,
                     role: role.into(),
@@ -190,7 +237,12 @@ impl Walk<'_> {
                     line.push_str(" (password: off limits)");
                 }
             }
-            for property in node.get("properties").and_then(Value::as_array).into_iter().flatten() {
+            for property in node
+                .get("properties")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
                 let Some(state) = property.get("name").and_then(Value::as_str) else {
                     continue;
                 };
@@ -233,12 +285,17 @@ impl Walk<'_> {
 }
 
 fn role(node: &Value) -> &str {
-    node.pointer("/role/value").and_then(Value::as_str).unwrap_or_default()
+    node.pointer("/role/value")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
 }
 
 /// The node's name, its runs of white space one space.
 fn name(node: &Value) -> String {
-    let name = node.pointer("/name/value").and_then(Value::as_str).unwrap_or_default();
+    let name = node
+        .pointer("/name/value")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     name.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -252,19 +309,54 @@ pub fn clip(text: &str, chars: usize) -> String {
 
 /// Words that pay or order, as a button's name has them.
 const PAYMENT: &[&str] = &[
-    "pay", "buy", "purchase", "checkout", "check out", "place order", "place your order",
-    "submit order", "order now", "subscribe", "donate", "transfer",
+    "pay",
+    "buy",
+    "purchase",
+    "checkout",
+    "check out",
+    "place order",
+    "place your order",
+    "submit order",
+    "order now",
+    "subscribe",
+    "donate",
+    "transfer",
 ];
 /// Words that send, as a button's name has them.
-const SEND: &[&str] = &["send", "submit", "post", "publish", "reply", "tweet", "comment"];
+const SEND: &[&str] = &[
+    "send", "submit", "post", "publish", "reply", "tweet", "comment",
+];
 const MESSAGING: &[&str] = &[
-    "mail.google.com", "outlook.live.com", "outlook.office.com", "slack.com", "discord.com",
-    "x.com", "twitter.com", "linkedin.com", "facebook.com", "messenger.com", "instagram.com",
-    "whatsapp.com", "web.telegram.org", "reddit.com",
+    "mail.google.com",
+    "outlook.live.com",
+    "outlook.office.com",
+    "slack.com",
+    "discord.com",
+    "x.com",
+    "twitter.com",
+    "linkedin.com",
+    "facebook.com",
+    "messenger.com",
+    "instagram.com",
+    "whatsapp.com",
+    "web.telegram.org",
+    "reddit.com",
 ];
 const BANKS: &[&str] = &[
-    "chase", "wellsfargo", "bankofamerica", "citi", "capitalone", "schwab", "fidelity", "vanguard",
-    "paypal", "venmo", "revolut", "wise", "monzo", "coinbase",
+    "chase",
+    "wellsfargo",
+    "bankofamerica",
+    "citi",
+    "capitalone",
+    "schwab",
+    "fidelity",
+    "vanguard",
+    "paypal",
+    "venmo",
+    "revolut",
+    "wise",
+    "monzo",
+    "coinbase",
 ];
 
 /// Why acting on the element named `label` on `host` asks the user first, if it does: it looks
@@ -406,7 +498,10 @@ mod tests {
         let ids: Vec<String> = (2..5000).map(|id| id.to_string()).collect();
         let children: Vec<&str> = ids.iter().map(String::as_str).collect();
         let mut nodes = vec![node("1", "RootWebArea", "Long", &children)];
-        nodes.extend(ids.iter().map(|id| node(id, "paragraph", &format!("Paragraph {id}"), &[])));
+        nodes.extend(
+            ids.iter()
+                .map(|id| node(id, "paragraph", &format!("Paragraph {id}"), &[])),
+        );
         let outline = outline(&tab(), &nodes, &mut Refs::default());
         assert!(outline.len() < MAX_OUTLINE + 1000);
         assert!(outline.ends_with("read_page has all of the page's text."));

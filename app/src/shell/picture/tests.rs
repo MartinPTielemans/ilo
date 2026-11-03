@@ -21,9 +21,19 @@ fn window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc
     let browser = host.clone();
     let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
     shell.update(cx, |shell, cx| {
-        shell.set_spaces(vec![(1, "Space".into(), None, 1, "".into(), "".into(), "".into())], cx);
+        shell.set_spaces(
+            vec![(1, "Space".into(), None, 1, "".into(), "".into(), "".into())],
+            cx,
+        );
         shell.set_space(1, cx);
-        shell.set_tabs(1, Vec::new(), vec![10, 20], Vec::new(), Folders::default(), cx);
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            vec![10, 20],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
         shell.set_selected(10, cx);
     });
     cx.run_until_parked();
@@ -39,7 +49,9 @@ fn page() -> PagePicture {
 /// Answers the request the shell has out with a picture.
 fn answer(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
     let request = shell.read_with(cx, |shell, _| shell.picture.as_ref().unwrap().request);
-    shell.update(cx, |shell, cx| shell.page_pictured(request, Some(page()), cx));
+    shell.update(cx, |shell, cx| {
+        shell.page_pictured(request, Some(page()), cx)
+    });
     cx.run_until_parked();
 }
 
@@ -68,12 +80,17 @@ fn picture_at(
 
 /// What the shell asked of the core about pictures since the last time.
 fn asked(host: &Recorder) -> Vec<String> {
-    host.take().into_iter().filter(|call| call.starts_with("picture")).collect()
+    host.take()
+        .into_iter()
+        .filter(|call| call.starts_with("picture"))
+        .collect()
 }
 
 /// The picture the window shows, if it has one.
 fn image(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<Arc<RenderImage>> {
-    shell.read_with(cx, |shell, _| Some(shell.picture.as_ref()?.image.as_ref()?.image.clone()))
+    shell.read_with(cx, |shell, _| {
+        Some(shell.picture.as_ref()?.image.as_ref()?.image.clone())
+    })
 }
 
 fn pictured(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> bool {
@@ -133,7 +150,10 @@ fn the_picture_rests_at_four_fifths_of_the_card(cx: &mut TestAppContext) {
         (width - REST * card_width).abs() < 0.01 || (height - REST * card_height).abs() < 0.01,
         "{width}x{height} touches neither 0.8 side of {card_width}x{card_height}"
     );
-    assert!((width / height - 2.).abs() < 0.01, "it keeps the page's shape: {width}x{height}");
+    assert!(
+        (width / height - 2.).abs() < 0.01,
+        "it keeps the page's shape: {width}x{height}"
+    );
     let (centre, card_centre) = (rest.center(), card.center());
     assert!((f32::from(centre.x) - f32::from(card_centre.x)).abs() < 0.01);
     assert!((f32::from(centre.y) - f32::from(card_centre.y)).abs() < 0.01);
@@ -161,7 +181,10 @@ fn a_click_on_the_picture_takes_the_page_back(cx: &mut TestAppContext) {
     cx.simulate_click(corner, Modifiers::none());
     cx.executor().advance_clock(Duration::from_millis(300));
     cx.run_until_parked();
-    assert!(host.take().is_empty(), "a click beside the picture took the page");
+    assert!(
+        host.take().is_empty(),
+        "a click beside the picture took the page"
+    );
 
     shell.update(cx, |shell, cx| shell.select(10, cx));
     assert_eq!(host.take(), ["select 10"]);
@@ -203,7 +226,10 @@ fn the_window_a_page_leaves_shows_the_taker_s_picture_at_once(cx: &mut TestAppCo
     // The fresh one replaces it where it is, without stepping back again.
     answer(&giver, cx);
     assert!(!Arc::ptr_eq(&image(&giver, cx).unwrap(), &shown));
-    assert_eq!(picture_at(&giver, cx, Duration::from_millis(300)), Some(rest));
+    assert_eq!(
+        picture_at(&giver, cx, Duration::from_millis(300)),
+        Some(rest)
+    );
 
     // Once no window shows a picture of the tab, a window it leaves shows none until one comes.
     drop(shown);
@@ -269,7 +295,9 @@ fn the_picture_goes_with_the_page_it_stands_for(cx: &mut TestAppContext) {
     let request = shell.read_with(cx, |shell, _| shell.picture.as_ref().unwrap().request);
     shell.update(cx, |shell, cx| shell.set_selected(20, cx));
     assert_eq!(asked(&host), ["picture 10"]);
-    shell.update(cx, |shell, cx| shell.page_pictured(request, Some(page()), cx));
+    shell.update(cx, |shell, cx| {
+        shell.page_pictured(request, Some(page()), cx)
+    });
     cx.run_until_parked();
     assert!(!pictured(&shell, cx));
 }
