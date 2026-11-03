@@ -35,8 +35,9 @@ fi
 
 # The Little ilo window that opened last, from its log line.
 opened() { grep '^browser: little window opened ' "$log" | tail -1 | cut -d' ' -f5; }
-# grew <what> <from>: on the Mac with motion, the window grew in from a 40 × 28 rectangle at <from>,
-# its content at full size (Arc). Elsewhere, and under Reduce Motion, it didn't.
+# grew <what> <from>: on the Mac with motion, the window grew in from a 40 × 28 rectangle at <from>
+# once its UI drew on screen, its content at full size (Arc). Elsewhere, and under Reduce Motion, it
+# didn't.
 grew() {
   if [ "$(uname)" != Darwin ] || [ "$(last 'reduce motion')" = on ]; then
     none_since '^browser: little window grows from ' || fail "$1 grew in"
@@ -58,7 +59,9 @@ little=$(opened)
 expect "^browser: window opened $little\$" "the Little ilo window didn't open"
 expect "^browser: window $little frame -\{0,1\}[0-9]* -\{0,1\}[0-9]* 900 640\$" \
   "the first Little ilo window didn't open 900 × 640: $(grep "^browser: window $little frame" "$log")"
-grew "the Little ilo window ⌥⌘N opened" "450 320"
+# Its middle, from its frame, which a 1x screen can round a point taller.
+middle=$(grep "^browser: window $little frame " "$log" | tail -1 | awk '{ print $7 / 2, $8 / 2 }')
+grew "the Little ilo window ⌥⌘N opened" "$middle"
 recorded
 send window 2
 send key l cmd

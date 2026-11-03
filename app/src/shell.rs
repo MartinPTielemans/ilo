@@ -3397,6 +3397,7 @@ impl Render for Shell {
         self.step_tools(window);
         self.step_empty(window);
         self.step_crash_cards(window);
+        self.step_little(window, cx);
         let drop_targets = self.drag.as_ref().is_some_and(|drag| drag.over_page.is_some())
             || self.link_over.is_some()
             || self.agent_pointer_shown();

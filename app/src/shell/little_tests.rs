@@ -501,3 +501,27 @@ fn its_keys_open_the_command_bar_inside_it(cx: &mut TestAppContext) {
     assert!(host.bars_in.borrow().is_empty());
     assert!(host.command_bars.borrow().last().copied().flatten().is_some());
 }
+
+#[gpui::test]
+fn it_grows_in_from_its_first_frame_on_screen_once(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| {
+        let main = cx.new(|cx| Shell::new(browser.clone(), cx));
+        Shell::little_window(browser, 9, 1, 1, Some(&main), cx)
+    });
+    cx.run_until_parked();
+    let drawn = |host: &Recorder| host.take().iter().filter(|call| *call == "little drawn").count();
+    assert_eq!(drawn(&host), 1, "its first frame on screen didn't start its opening");
+    // Drawn again, it has grown already.
+    shell.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert_eq!(drawn(&host), 0, "a later frame started its opening again");
+
+    // A regular window has no opening of its own.
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (_, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+    cx.run_until_parked();
+    assert_eq!(drawn(&host), 0, "a regular window asked to grow in");
+}

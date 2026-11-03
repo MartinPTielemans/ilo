@@ -8,8 +8,8 @@
 //! header's, and the favicon stands where the header's first button does.
 
 use gpui::{
-    App, Bounds, Context, Entity, FontWeight, MouseButton, Pixels, Point, SharedString, div, point,
-    prelude::*, px, relative, size, svg,
+    App, Bounds, Context, Entity, FontWeight, MouseButton, Pixels, Point, SharedString, Window, div,
+    point, prelude::*, px, relative, size, svg,
 };
 
 use super::{
@@ -40,10 +40,12 @@ const GAP: f32 = 6.;
 const PITCH: f32 = super::NAV_PITCH;
 
 /// A Little ilo window's own: the user's Space it's for, whose look it takes and which ⌘O moves
-/// its page to, and the user's Spaces, in the sidebar's order, which its Spaces menu offers.
+/// its page to, the user's Spaces, in the sidebar's order, which its Spaces menu offers, and
+/// whether it has drawn on screen yet.
 pub(super) struct Little {
     pub(super) home: u64,
     spaces: Vec<Elsewhere>,
+    drawn: bool,
 }
 
 /// One of the user's Spaces, as a Little ilo window knows it: enough to name and mark it in its
@@ -98,7 +100,7 @@ impl Shell {
                 .collect();
             from.spaces.iter().find(|each| each.id == home).cloned()
         });
-        shell.little = Some(Little { home, spaces });
+        shell.little = Some(Little { home, spaces, drawn: false });
         shell.spaces = vec![Space {
             id: space,
             name: SharedString::default(),
@@ -260,6 +262,18 @@ impl Shell {
 
     /// The chevron's Spaces menu: the compact command bar hanging under Open in <Space>, its
     /// right edge the button's, listing the user's Spaces to send the page to (Arc).
+    /// Its opening grows from its first frame on screen, which AppKit gives some frames after it's
+    /// asked to, so the motion's start is seen (Arc's Little Arc).
+    pub(super) fn step_little(&mut self, window: &Window, cx: &mut App) {
+        let Some(little) = self.little.as_mut().filter(|little| !little.drawn) else {
+            return;
+        };
+        if window.is_visible() {
+            little.drawn = true;
+            self.browser.little_drawn(cx);
+        }
+    }
+
     fn little_spaces_menu(&mut self, cx: &mut Context<Self>) {
         let Some(little) = self.little.as_ref() else {
             return;

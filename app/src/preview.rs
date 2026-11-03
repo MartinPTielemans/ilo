@@ -1173,6 +1173,8 @@ impl Browser for Fake {
 
     fn show_window_buttons(&self, _: bool, _: &mut App) {}
 
+    fn little_drawn(&self, _: &mut App) {}
+
     fn press_window_button(&self, _: WindowButton, _: &mut App) {}
 
     // The preview's window is GPUI's own, which GPUI moves.
