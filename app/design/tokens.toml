@@ -745,12 +745,13 @@ url-field-text-x = 21.0
 url-button-size = 30.0
 url-button-inset = 3.0
 url-button-glyph = 14.0
-# The favorites' tiles, over the Space's name (docs/ux-spec.md › Favorites): their height, the gap
-# between them and under the last row, the narrowest a row's tiles get before it takes one fewer,
-# and their corners.
-tile-height = 41.0
-tile-gap = 6.0
-tile-min = 48.0
+# The favorites' tiles, over the Space's name (docs/ux-spec.md › Favorites): Arc 1.170's height
+# and the gap between them and under the last row, the narrowest a tile gets before its row takes
+# one fewer, the most a row takes (Arc 1.171), and their corners (ours).
+tile-height = 47.0
+tile-gap = 8.0
+tile-min = 47.0
+tile-columns = 4
 tile-radius = 12.0
 # A favorite's mark in its tile's top right, while its page uses the camera or microphone, shares
 # or is shared, or plays sound (ours).
