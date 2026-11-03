@@ -17,6 +17,8 @@ pid=$!
 exec 3> "$out/drive"
 await_load
 await '^browser: title [0-9]* ready$' || fail "the test page didn't draw"
+# The app can say which window opened after its page has loaded.
+await '^browser: window opened [0-9]' || fail "the app didn't say which window opened"
 main=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
 home=$(space)
 a=$(today)
@@ -184,14 +186,19 @@ if [ "$(uname)" = Darwin ]; then
   send window 1
 fi
 
-# The menu bar's button, the Mac's alone: none until Settings › General turns it on, a click on it
+# The menu bar's button, the Mac's alone: none until Settings › Features turns it on, a click on it
 # opens a Little ilo window for the Space shown, and turned off it's gone.
 if [ "$(uname)" = Darwin ]; then
   send statusitem
   expect '^browser: status item none$' "the menu bar has Little ilo's button before it was turned on"
   send menu Settings…
-  expect '^browser: settings shown General$' "Settings… didn't show General"
-  settings_drew General
+  expect '^browser: settings shown ' "Settings… didn't show Settings"
+  settings_drew
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Features$'; then
+    send clickkey $(drawn "toolbar Features")
+    expect '^browser: settings tab Features$' "a click on Features didn't show its section"
+    settings_drew Features
+  fi
   menu_bar_switch=$(drawn "switch little in the menu bar") ||
     fail "Settings didn't draw Show Little ilo in the menu bar's switch"
   send clickkey $menu_bar_switch
@@ -207,8 +214,8 @@ if [ "$(uname)" = Darwin ]; then
   send key w cmd
   expect "^browser: window closed $little\$" "the menu bar's Little ilo window didn't come to the front: ⌘W didn't close it"
   send menu Settings…
-  expect '^browser: settings shown General$' "Settings… didn't show General again"
-  settings_drew General
+  expect '^browser: settings shown Features$' "Settings… didn't show Features again"
+  settings_drew Features
   send clickkey $menu_bar_switch
   expect '^browser: little in the menu bar off$' "a click on the menu bar switch didn't turn it off"
   send statusitem

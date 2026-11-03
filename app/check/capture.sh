@@ -59,12 +59,17 @@ capture_mode() {
 in_page() {
   awk -v x="$1" -v y="$2" -v left="$left" -v top="$top" 'BEGIN { print x + left, y + top }'
 }
+# Moves the pointer onto the box, 200 by 100 at 300, 200 in the page, and waits for it to light,
+# else fails with $1. The pointer leaves the box first. wlroots sends no motion to where the pointer
+# is already, and the last click on the box left it there (#1578).
+light_box() {
+  send move $(in_page 100 100)
+  send move $(in_page 400 250)
+  expect '^browser: capture element at [0-9.]* [0-9.]*: 300 200 200 100$' "$1"
+}
 
 capture_mode page
-# The box is 200 by 100 at 300, 200 in the page.
-send move $(in_page 400 250)
-expect '^browser: capture element at [0-9.]* [0-9.]*: 300 200 200 100$' \
-  "the pointer over the box didn't light it: $(grep '^browser: capture element' "$log" | tail -1)"
+light_box "the pointer over the box didn't light it"
 ../tools/window-screenshot.sh "$pid" "$out/capture-element.png" || fail "no window to capture"
 send click $(in_page 400 250)
 expect '^browser: capture chose 300 200 200 100$' "a click on the box didn't take it"
@@ -126,9 +131,7 @@ fi
 
 # Save to Library, 37 to 61 down, saves the box's picture without a question and says so.
 capture_mode page
-send move $(in_page 400 250)
-expect '^browser: capture element at [0-9.]* [0-9.]*: 300 200 200 100$' \
-  "the pointer over the box didn't light it the second time"
+light_box "the pointer over the box didn't light it the second time"
 send click $(in_page 400 250)
 expect '^browser: capture chose 300 200 200 100$' "a second click on the box didn't take it"
 send click $(in_page 442 245)
@@ -278,9 +281,7 @@ tone() {
 capture_look() {
   capture_mode page
   expect "^browser: capture pill drawn $1\$" "capture mode's pill didn't draw in the $1 look"
-  send move $(in_page 400 250)
-  expect '^browser: capture element at [0-9.]* [0-9.]*: 300 200 200 100$' \
-    "the pointer over the box didn't light it in the $1 look"
+  light_box "the pointer over the box didn't light it in the $1 look"
   ../tools/window-screenshot.sh "$pid" "$out/capture-pill-$1.png" || fail "no window to capture"
   send click $(in_page 400 250)
   expect '^browser: capture chose 300 200 200 100$' \

@@ -5,7 +5,7 @@
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, Bounds, Hsla, PathBuilder, Transformation, Window, canvas, div, fill, point,
+    AnyElement, App, Bounds, Hsla, PathBuilder, Transformation, Window, canvas, div, fill, point,
     prelude::*, px, size, svg,
 };
 
@@ -172,6 +172,7 @@ impl Swaps {
         path: &'static str,
         side: f32,
         color: Hsla,
+        cx: &App,
     ) -> AnyElement {
         let Some(swap) = self
             .0
@@ -188,10 +189,12 @@ impl Swaps {
             };
         };
         let elapsed = swap.elapsed(Instant::now());
+        // Under Reduce Motion the glyphs cross-fade at their size.
         let glyph = |path: &'static str, opacity: f32, scale: f32| {
             if path == NONE {
                 return div().into_any_element();
             }
+            let scale = crate::motion::scale(scale, cx);
             svg()
                 .absolute()
                 .size_full()

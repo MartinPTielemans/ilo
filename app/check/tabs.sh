@@ -7,9 +7,10 @@
 # URL field over the field. ⇧⌘A opens it for Search Tabs, listing the open tabs alone, which typing
 # filters, and ↩ switches to the one left. ⌘T or ⌘L closes the open bar again, ⌘L's field holds the
 # whole address, and ↩ on it as it opened reloads the page. Tab in the empty field, or "/ ", lists
-# only the commands, which typing filters, until Esc or ⌫ at the start leaves. ⌘1–⌘9, ⌥⌘↓, ⌥⌘↑ and
-# clicks on rows show tabs. ⌃Tab, with the page or the UI focused, shows the tab shown before, and
-# with ⌃ held goes on back through the tabs in the order they were shown, and ⌃⇧Tab the other way,
+# only the commands, which typing filters, until Esc or ⌫ at the start leaves, and "2. tab" goes to
+# the second sidebar item. ⌘1–⌘9, ⌥⌘↓, ⌥⌘↑ and clicks on rows show tabs. ⌃Tab, with the page or
+# the UI focused, shows the tab shown before, and with ⌃ held goes on back through the tabs in the
+# order they were shown, and ⌃⇧Tab the other way,
 # until ⌃ goes up or a click. A tab a page opens goes under it and closing it goes back there, and
 # ⌘W otherwise shows the tab below, or above at the bottom. Tabs opened behind close to their
 # sibling, then their opener; after a switch to an unrelated tab, a tab opened in front closes to
@@ -17,7 +18,7 @@
 # Closing the last tab leaves the Space empty, with no pane, its window resizing, and on Windows
 # maximizing and restoring, with no page, and ⌘T still works there. Mute/Unmute Tab mutes a tab,
 # its row shows a speaker while it plays, crossed out while it's muted, and a click on it unmutes
-# the tab. There ⇧⌦ takes a page out of history, as a click on the ✕ the pointer draws on its row
+# the tab. There ⇧⌦ takes a page out of history, as a click on the trash the pointer draws on its row
 # does, and ⌥⌘⌫ a search typed before, ⇧⌘↩ searches for what was typed, ⌘↩ opens it in a tab behind
 # that loads once it's first shown, Tab on the row that hints a search engine, or a space after its
 # keyword, searches with that engine alone until ⌫ leaves, ↩ on a sum's row copies its result, and a
@@ -444,6 +445,17 @@ expect '^browser: command new-tab via sidebar$' "a click on \"+ New Tab\" didn't
 expect '^browser: command bar shown$' "a click on \"+ New Tab\" didn't open the command bar"
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
+# "2. tab", Arc's words for its numbered rows, finds Go to Sidebar Item 2 first, and ↩ shows the
+# second item, b, as ⌘2 does (#1396). After the walk, so the order the tabs were shown in is its.
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send type 2. tab
+expect '^browser: command bar commands "2. tab": Go to Sidebar Item 2' \
+  "the command bar didn't find Go to Sidebar Item 2 first for \"2. tab\": $(grep '^browser: command bar commands ' "$log" | tail -1)"
+../tools/window-screenshot.sh "$pid" "$out/numbered.png" || fail "no window to capture"
+send key return
+expect '^browser: command select-tab via command bar$' "↩ on Go to Sidebar Item 2 didn't run it"
+expect "^browser: selected $b\( in .*\)\{0,1\}\$" "Go to Sidebar Item 2 didn't show the second item, $b"
 
 switch "3 cmd" "$a"
 send click 290 34
@@ -525,6 +537,9 @@ expect "^$c_page\$" "c's tab came back without its history: $(grep "^browser: pa
 send menu Settings…
 expect '^browser: settings shown General$' "Settings… didn't show General"
 settings_drew General
+send clickkey $(drawn "toolbar Tabs & Sidebar")
+expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
+settings_drew 'Tabs & Sidebar'
 # Where Settings drew the switch, which differs by OS: it logs that once a place.
 await '^browser: settings switch unload idle tabs at ' || fail "Settings didn't draw Unload tabs' switch"
 unload_switch=$(sed -n 's/^browser: settings switch unload idle tabs at //p' "$log" | tail -1)
@@ -539,8 +554,9 @@ expect "^browser: selected $n\$" "a click in the right pane didn't focus it"
 expect 'browser: idle tabs checked$' "showing a tab didn't check for tabs unseen 2 hours"
 since $aged | grep -q "browser: tab $c without its page\$" && fail "a tab let go of its page with the switch off"
 send menu Settings…
-expect '^browser: settings shown General$' "Settings… didn't bring Settings back to the front"
-settings_drew General
+# Settings comes back on the section it showed last.
+expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't bring Settings back to the front"
+settings_drew 'Tabs & Sidebar'
 send clickkey $unload_switch
 expect '^browser: unload idle tabs on$' "a click on Unload tabs' switch didn't turn it on"
 expect "browser: tab $c without its page\$" "turning the switch on didn't unload the tab unseen 2 hours"
@@ -559,8 +575,9 @@ send state
 # the taskbar's Close window does, which Settings takes as hiding.
 if windows; then
   send menu Settings…
-  expect '^browser: settings shown General$' "Settings… didn't show General after its close button"
-  settings_drew General
+  expect '^browser: settings shown Tabs & Sidebar$' \
+    "Settings… didn't show Tabs & Sidebar again after its close button"
+  settings_drew 'Tabs & Sidebar'
   post key f4 ctrl
   expect '^browser: settings hidden$' "Alt+F4 didn't hide Settings"
   await "^browser: drive $step done" || fail "the driver didn't finish Alt+F4 in Settings"
@@ -637,12 +654,12 @@ expect '^browser: command bar removes https://example.org/$' "⇧⌦ didn't take
 expect '^browser: command bar suggestions "example" in ' \
   "the command bar didn't list its rows again after ⇧⌦"
 suggestions | grep -q '^https://example.org/' && fail "example.org's row stayed after ⇧⌦"
-# The pointer on a row from history draws a ✕ at the row's end, as Arc's does, and a click on it
-# takes the row's page out rather than going there. Rows are 50 tall under the input's 68, and the
-# ✕'s middle is 29 in from the bar's right edge; the pointer goes down them to example.com's.
+# The pointer on a row from history draws a trash at the row's end, where Arc's has a ✕, and a
+# click on it takes the row's page out rather than going there. Rows are 50 tall under the input's
+# 68, and the trash's middle is 29 in from the bar's right edge; the pointer goes down them to example.com's.
 # The bar's frame in the window, which can be in half points.
 bar_at=$(grep '^browser: command bar at' "$log" | tail -1 | cut -d' ' -f5-)
-# The ✕ of row $1, in the bar's window, or in the browser window's with "window".
+# The trash of row $1, in the bar's window, or in the browser window's with "window".
 cross() {
   echo "$bar_at" | awk -v row="$1" -v where="${2:-}" '{
     x = $3 - 29; y = 93 + 50 * row
@@ -658,15 +675,29 @@ for row in 0 1 2 3 4; do
     sleep 0.1
   done
 done
-expect "$drew" "the pointer on example.com's row didn't draw its ✕: $(suggestions | tr '\n' ' ')"
+expect "$drew" "the pointer on example.com's row didn't draw its trash: $(suggestions | tr '\n' ' ')"
 row=$(grep "$drew" "$log" | tail -1 | cut -d' ' -f8)
 ../tools/window-screenshot.sh "$pid" "$out/remove-suggestion.png" || fail "no window to capture"
+# Resting on it, its tooltip names it and its key. It hangs from it in the bar's window and goes
+# over the bar, a window of its own over the page, which a tooltip otherwise goes under (#1394).
+remove_keys=⌥⌘⌫
+[ "$(uname)" = Darwin ] || remove_keys=Shift+Del
+expect "^browser: tooltip shown Remove from History $remove_keys\$" \
+  "resting on the trash didn't show Remove from History and $remove_keys"
+expect '^browser: tooltip window shown$' "the trash's tooltip didn't show"
+# Where the UI asked, in the bar, and where the host put it, which the Mac's and Linux's say.
+asked=$(grep '^browser: tooltip at ' "$log" | tail -1 | cut -d' ' -f4,5)
+placed=$(grep '^browser: tooltip window at ' "$log" | tail -1 | cut -d' ' -f5,6)
+[ -z "$placed" ] || echo "$asked $placed" | awk '{ exit !(($1 - $3)^2 < 1 && ($2 - $4)^2 < 1) }' ||
+  fail "the trash's tooltip is at $placed in the bar, not at $asked where the UI asked"
+../tools/window-screenshot.sh "$pid" "$out/remove-tooltip.png" || fail "no window to capture"
 send clickkey $(cross "$row")
-expect '^browser: command bar removes https://example.com/$' "a click on the ✕ didn't take example.com's row out"
+expect '^browser: command bar removes https://example.com/$' "a click on the trash didn't take example.com's row out"
+expect '^browser: tooltip hidden$' "a click on the trash didn't end its tooltip"
 expect '^browser: command bar suggestions "example" in ' \
-  "the command bar didn't list its rows again after the ✕"
-none_since '^browser: command bar \(go\|switch to tab\|behind\)' || fail "a click on the ✕ took its row too"
-suggestions | grep -q '^https://example.com/' && fail "example.com's row stayed after its ✕"
+  "the command bar didn't list its rows again after the trash"
+none_since '^browser: command bar \(go\|switch to tab\|behind\)' || fail "a click on the trash took its row too"
+suggestions | grep -q '^https://example.com/' && fail "example.com's row stayed after its trash"
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 # ⇧⌘↩ searches for what was typed even when it names a page, as Chrome's does.
@@ -1309,10 +1340,10 @@ chrome_ms=$(echo "$spans" | grep -v incomplete | summary)
 [ -n "$chrome_ms" ] || fail "the trace has no finished tab switches"
 # grep -c finds none in a run where no switch was cut off, and exits 1 then.
 chrome_ms="$chrome_ms, $(echo "$spans" | grep -c incomplete || true) incomplete, not counted"
-echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's ✕ take a page out of history and ⌥⌘⌫ a search typed before, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row and a space after an engine's keyword search with it alone until ⌫ leaves, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it, by close and ↩ in the command bar, goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, ⌘W shows the tab below or above, an empty Space shows no pane, its window resizes, and on Windows maximizes and restores, and it still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one. ⌘-click and ⇧-click choose three rows, whose menu and ⇧⌘C copy their links in order, and ⌘D pins them, New Folder folders them and ⌘W closes them, each undone by ⌘Z. On Windows the bar, a tooltip and a menu are on screen only while the UI shows them: after Esc, ⌘T again or a click on the page, as the pointer leaves, after Windows shows them again and after their window was minimized."
+echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's trash take a page out of history and ⌥⌘⌫ a search typed before, and the button's tooltip names it and its key over the bar, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row and a space after an engine's keyword search with it alone until ⌫ leaves, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it, by close and ↩ in the command bar, goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, ⌘W shows the tab below or above, an empty Space shows no pane, its window resizes, and on Windows maximizes and restores, and it still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one. ⌘-click and ⇧-click choose three rows, whose menu and ⇧⌘C copy their links in order, and ⌘D pins them, New Folder folders them and ⌘W closes them, each undone by ⌘Z. On Windows the bar, a tooltip and a menu are on screen only while the UI shows them: after Esc, ⌘T again or a click on the page, as the pointer leaves, after Windows shows them again and after their window was minimized."
 [ -z "${committed:-}" ] || echo "  On Windows Alt+F4 in the bar closes its window and the bar opens" \
   "over the next one, the bar" \
   "moves with its window and the window's menu closes, and the bar stays open over a page that" \
   "commits in another site's renderer and $committed: $out/command-bar-moved.png"
 echo "  Switch to a loaded tab, tab strip to frame shown (Chrome's measure; gate 16 ms): $chrome_ms."
-echo "  Switch, key to the core's report: $app_ms. Windows: $out/muted.png, $out/tabs.png, $out/bar-close.png, $out/suggestions.png, $out/completion.png, $out/search-tabs.png, $out/url-field-bar.png, $out/commands-only.png, $out/listed.png, $out/popular.png, $out/site-hint.png, $out/site-search.png, $out/field-menu.png, $out/empty.png, $out/remove-suggestion.png, $out/site-search-settings.png, $out/idle-unloaded.png, $out/back-held.png, $out/back-menu.png, $out/back-behind.png, $out/chosen.png, $out/chosen-menu.png"
+echo "  Switch, key to the core's report: $app_ms. Windows: $out/muted.png, $out/tabs.png, $out/bar-close.png, $out/suggestions.png, $out/completion.png, $out/search-tabs.png, $out/url-field-bar.png, $out/commands-only.png, $out/numbered.png, $out/listed.png, $out/popular.png, $out/site-hint.png, $out/site-search.png, $out/field-menu.png, $out/empty.png, $out/remove-suggestion.png, $out/remove-tooltip.png, $out/site-search-settings.png, $out/idle-unloaded.png, $out/back-held.png, $out/back-menu.png, $out/back-behind.png, $out/chosen.png, $out/chosen-menu.png"

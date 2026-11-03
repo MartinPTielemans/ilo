@@ -14,7 +14,8 @@
 # source in a tab under it. Help › Troubleshooting's Open Task Manager opens Chrome's, with the
 # keyboard, and ⌘W there closes it, not the tab. Its Record a Trace records until the toast's Stop,
 # which shows while it records, and the command bar offers to stop it meanwhile; Stop saves
-# Chromium's trace where the save panel picks.
+# Chromium's trace where the save panel picks. On Windows that's a Save As of the browser window's,
+# which closing the window cancels as it quits.
 # Undocked, after a relaunch, ⌥⌘J opens DevTools in a window of Chrome's, where ⌘C copies
 # the console's text to the run's own pasteboard and ⌘V pastes it, and ⌥⌘I from the page brings
 # them to the front.
@@ -208,7 +209,7 @@ expect '^browser: find bar shown$' "⌘F after the close button didn't open the 
 # left selected. ⌘↑ is the page's own, to its top, and off the Mac that's Home. It ends there, where
 # zooming doesn't scroll it.
 top="key up cmd"
-[ "$(uname)" = Linux ] && top="key home"
+[ "$(uname)" = Darwin ] || top="key home"
 for _ in 1 2 3; do send key backspace; done
 send type far
 expect_find "$first" "open 1 of 1 far" "the find didn't find the text below the fold"
@@ -282,12 +283,13 @@ expect '^browser: loaded [0-9]* https://example.org/$' "the first tab didn't loa
 # of it, from the frame's left, through a resize. Each tab has its own. Sets $views to the frames
 # of the views shown, DevTools' first, once there are $1 of them. DevTools fill the frame at once,
 # and the page moves aside once they've loaded, as in Arc, so with two it waits for that too.
-# Linux's driver lists the pages the UI lays out, and DevTools are an aura window in Chromium's,
-# which the X server doesn't see (drive.rs), so there neither checks the views.
+# Off the Mac the drivers list the pages the UI lays out, and DevTools are an aura window in the
+# same Chromium window as the page, which neither the X server (drive.rs) nor Windows sees, so
+# there neither checks the views; devtools.png shows them.
 sees_devtools=1
-if [ "$(uname)" = Linux ]; then
+if [ "$(uname)" != Darwin ]; then
   sees_devtools=
-  echo "skip: where DevTools dock beside the page: Linux's driver can't see aura windows."
+  echo "skip: where DevTools dock beside the page: off the Mac the driver can't see aura windows."
 fi
 await_views() {
   [ -n "$sees_devtools" ] || return 0
@@ -343,17 +345,15 @@ await_views 2 "after JavaScript Console"
 # off already, ↩ runs those words as a script that fails, and the paste reads the same. $1 says
 # where DevTools are, docked or undocked.
 console_keys() {
-  local word=$1-copy
+  local word=$1-copy copied= pasted=
   for _ in $(seq 50); do
     send key a cmd
     send type "$word"
     send key a cmd
     send key c cmd
-    send pasteboard
-    sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q "^browser: pasteboard text $word\$" &&
-      break
+    holds "$word" && copied=1 && break
   done
-  expect "^browser: pasteboard text $word\$" "⌘C in $1 DevTools didn't copy the console's text"
+  [ -n "$copied" ] || fail "⌘C in $1 DevTools didn't copy the console's text"
   send key v cmd
   send key a cmd
   send type "allow pasting"
@@ -366,13 +366,23 @@ console_keys() {
   for _ in $(seq 50); do
     send key a cmd
     send key c cmd
-    send pasteboard
-    logged "^browser: pasteboard text pasted-$word\$" && break
+    holds "pasted-$word" && pasted=1 && break
   done
-  logged "^browser: pasteboard text pasted-$word\$" || {
+  [ -n "$pasted" ] || {
     ../tools/window-screenshot.sh "$pid" "$out/devtools-$1-paste.png" all || true
     fail "⌘V in $1 DevTools didn't paste in the console, see $out/devtools-$1-paste.png"
   }
+}
+# The run's pasteboard holds $1, as the driver reads GPUI's. On Wayland a client hears of the
+# selection only while it has the keyboard, which DevTools' page has here. So there GPUI's reads
+# nothing, and the session's clipboard is read instead (#1575).
+holds() {
+  if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    clipboard_holds "$1"
+  else
+    send pasteboard
+    logged "^browser: pasteboard text $1\$"
+  fi
 }
 keys=$((step + 1))
 console_keys docked
@@ -426,7 +436,7 @@ fi
 if [ -n "$shown" ]; then
   expect "$managed" "Open Task Manager didn't show Chrome's"
   send key w cmd
-  if [ "$(uname)" = Linux ]; then
+  if [ "$(uname)" != Darwin ]; then
     # Off the Mac the Task Manager is Chromium's own window, which takes Ctrl+W itself, as
     # Chrome's, and the window manager gives the keyboard back once it's gone.
     for _ in $(seq 100); do
@@ -484,13 +494,32 @@ with open(sys.argv[1]) as f:
     trace = json.load(f)
 assert trace["traceEvents"], "no events"
 ' "$out/trace.json" || fail "the saved trace isn't Chromium's"
+elif windows; then
+  # Windows' Save As is the browser window's, which it disables while the dialog shows, as Chrome's
+  # is. Without an owner it left the window usable and kept ilo from quitting (#1647).
+  for _ in $(seq 50); do
+    python3 -I check/app-windows.py list "$(cat "/proc/$pid/winpid")" > "$out/trace-dialog.txt"
+    grep -q '#32770 "Save As" visible' "$out/trace-dialog.txt" && break
+    sleep 0.1
+  done
+  grep -q '#32770 "Save As" visible owned' "$out/trace-dialog.txt" ||
+    fail "the trace's Save As isn't owned by a window: $(grep -v hidden "$out/trace-dialog.txt" | tr '\n' ';')"
+  grep -q ' browser visible disabled' "$out/trace-dialog.txt" ||
+    fail "the browser window takes input under the trace's Save As: $(grep -v hidden "$out/trace-dialog.txt" | tr '\n' ';')"
+  echo "skip: saving the trace: the driver answers only the host's own Save As, not GPUI's."
 else
   echo "skip: saving the trace: the headless session has no file chooser portal for the driver to answer."
 fi
 none_since '^browser: toast shown Recording a trace' || fail "the trace's toast came back after Stop"
-quit_by_key
-await '^browser: command quit via ' || fail "⌘Q didn't quit"
-exited
+if windows; then
+  # The keyboard is the dialog's, so the browser window closes, as the taskbar's Close window
+  # closes it, and the dialog goes with it as Cancel would.
+  quit
+else
+  quit_by_key
+  await '^browser: command quit via ' || fail "⌘Q didn't quit"
+  exited
+fi
 
 # Undocked, as DevTools' Dock side menu leaves them for the next time, DevTools are a window of
 # Chrome's, where ⌘C and ⌘V are the console's, and ⌥⌘I from the page raises them, as Chrome's and
