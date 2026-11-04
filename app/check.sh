@@ -6,7 +6,7 @@
 #   split favorites cards extensions adblock adblock-lists windows private little capture media
 #   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp
 #   appearance about sync sync-account sync-devices switch-frames devices filled scripting
-#   notifications calls battery policies
+#   notifications calls battery policies hosts
 # The store run installs from Google's Web Store, adblock-live blocks Google's ad servers with
 # uBlock Origin's own lists and widevine, Linux's alone, downloads Google's Widevine module, so they
 # need the network and run only when named: ./check.sh store.
@@ -71,7 +71,7 @@ fi
 runs="load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear"
 runs="$runs split favorites cards extensions adblock adblock-lists windows private little capture media"
 runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp"
-runs="$runs appearance about sync sync-account sync-devices switch-frames devices filled scripting notifications calls battery policies"
+runs="$runs appearance about sync sync-account sync-devices switch-frames devices filled scripting notifications calls battery policies hosts"
 named="store adblock-live widevine updates nightly keychain shots"
 for run in "$@"; do
   case " $runs $named " in
@@ -247,6 +247,7 @@ for run in ${*:-$runs}; do
   # The windows and clear runs keep 127.0.0.1 for Safari's engine, whose pages would then open there
   # in a later run if one failed, and clear the note it closed and the listed host it turned off.
   forget_engine_sites
+  forget_appearance
   # Every run is sourced into this one shell, so a helper a run defines under a lib.sh name would
   # replace lib.sh's for the runs after it.
   . "check/$run.sh"

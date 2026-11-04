@@ -111,7 +111,7 @@ mod sidebar_keys;
 mod space_form;
 mod space_order;
 mod split_targets;
-mod swap;
+pub(crate) mod swap;
 mod swipe;
 mod task_area;
 mod themes;
