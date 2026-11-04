@@ -90,7 +90,8 @@ pub enum Command {
     MuteAll(bool),
     /// Puts the window full screen, or takes it out, as View's Enter Full Screen does.
     ToggleFullScreen,
-    /// Arc's Exit (⎋): leaves the command bar, which closes before any command runs.
+    /// Arc's View › Exit (⎋): takes the window out of full screen, and a page full screen with
+    /// it, as Exit Full Screen does.
     Exit,
     /// Closes the Today tabs of the Space shown, but the one shown.
     Clear,
@@ -463,9 +464,9 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         Command::MuteAll(false),
         &["sound", "audio"],
     ),
+    ("Exit", Command::Exit, &["escape"]),
     ("Enter Full Screen", Command::ToggleFullScreen, &["toggle"]),
     ("Exit Full Screen", Command::ToggleFullScreen, &["toggle"]),
-    ("Exit", Command::Exit, &["escape"]),
     (
         "New Profile",
         Command::ChangeProfile(None),
@@ -889,7 +890,7 @@ fn ranked(
         .map(|(matched, name, command)| BarCommand {
             name,
             command,
-            // Exit is ⎋'s, which leaves the bar as it does, bound to no command.
+            // Exit is View › Exit's ⎋, which leaves full screen as it does, bound to no command.
             shortcut: (keys.label(command))
                 .or_else(|| (command == Command::Exit).then(|| keystroke_label("escape")))
                 .map(Into::into),
@@ -1470,8 +1471,7 @@ impl Shell {
             Command::ToggleMute => return self.toggle_mute(self.selected, cx),
             Command::MuteAll(muted) => return self.mute_all(muted, cx),
             Command::ToggleFullScreen => return self.browser.toggle_full_screen(cx),
-            // The bar has closed already, which is all Exit does.
-            Command::Exit => return,
+            Command::Exit => return self.browser.toggle_full_screen(cx),
             Command::Clear => return self.clear(cx),
             Command::Undo => {
                 self.undo(cx);
@@ -2040,7 +2040,9 @@ impl Shell {
             Command::ChangeProfile(None) => {
                 self.profile_choices(self.space).is_some_and(|(_, new)| new)
             }
-            Command::ToggleFullScreen | Command::Exit => true,
+            Command::ToggleFullScreen => true,
+            // Only full screen, the page's too, has something to leave.
+            Command::Exit => self.full_screen,
             Command::CheckForUpdates => self.browser.updates(),
             Command::RestoreEarlierSidebar => !self.shown_backups().is_empty(),
             Command::PreviousSpace => space.is_some_and(|index| index > 0),

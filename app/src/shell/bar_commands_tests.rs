@@ -1,5 +1,6 @@
 //! Arc's bar commands that call what the menus do: Mute All Tabs and Unmute All Tabs, Enter and
-//! Exit Full Screen, Exit and New Profile, each listed only while it would do something.
+//! Exit Full Screen, Exit (View › Exit) and New Profile, each listed only while it would do
+//! something.
 
 use std::rc::Rc;
 
@@ -100,10 +101,16 @@ fn enter_full_screen_reads_exit_in_full_screen(cx: &mut TestAppContext) {
     assert_eq!(listed(cx, "full screen", &full), ["Exit Full Screen"]);
 }
 
-/// Exit has ⎋'s key, as Arc's row, and does nothing but leave the bar.
+/// Exit is View › Exit's: listed only in full screen, with ⎋'s key, and it takes the window out,
+/// a page full screen with it, as Exit Full Screen does.
 #[gpui::test]
-fn exit_shows_escape_and_only_leaves_the_bar(cx: &mut TestAppContext) {
+fn exit_leaves_full_screen_and_shows_escape(cx: &mut TestAppContext) {
     let (shell, host) = window(cx, &[1]);
+    assert!(
+        listed(cx, "exit", &[Command::Exit]).is_empty(),
+        "Exit listed out of full screen"
+    );
+    shell.update(cx, |shell, _| shell.full_screen = true);
     let escape = crate::shell::keystroke_label("escape");
     assert_eq!(
         listed(cx, "exit", &[Command::Exit]),
@@ -111,7 +118,7 @@ fn exit_shows_escape_and_only_leaves_the_bar(cx: &mut TestAppContext) {
     );
     host.take();
     shell.update(cx, |shell, cx| shell.run(Command::Exit, "command bar", cx));
-    assert!(host.take().is_empty());
+    assert!(host.take().contains(&"toggle full screen".to_owned()));
 }
 
 /// New Profile is listed while the Space shown is empty, as the menus' is, and asks for the new

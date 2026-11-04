@@ -1303,7 +1303,8 @@ fi
 
 # Arc's bar commands that call what the menus do: Mute All Tabs mutes every tab, and Unmute All
 # Tabs, listed while one is muted, unmutes them; Enter Full Screen puts the window full screen and
-# reads Exit Full Screen there, which takes it out; Exit, ⎋'s, only leaves the bar.
+# reads Exit Full Screen there, which takes it out; and there Exit, View › Exit's, with ⎋'s key,
+# takes it out too.
 send click $page_point
 send key l cmd
 expect '^browser: command bar shown$' "⌘L didn't open the command bar for Mute All Tabs"
@@ -1319,8 +1320,10 @@ bar_command toggle-full-screen "Enter Full Screen" "enter full"
 expect '^browser: window entered full screen$' "Enter Full Screen didn't put the window full screen"
 bar_command toggle-full-screen "Exit Full Screen" "exit full"
 expect '^browser: window left full screen$' "Exit Full Screen didn't take the window out"
-bar_command exit Exit exit
-expect '^browser: command bar hidden$' "Exit didn't leave the command bar"
+bar_command toggle-full-screen "Enter Full Screen" "enter full"
+expect '^browser: window entered full screen$' "Enter Full Screen didn't put the window full screen again"
+bar_command exit Exit escape
+expect '^browser: window left full screen$' "Exit didn't take the window out of full screen"
 
 exec 3>&-
 # Chrome writes the trace before it quits, once every process has started tracing or 10 s have
