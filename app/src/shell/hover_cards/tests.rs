@@ -2,7 +2,6 @@
 //! tabs' pictures are taken, on a host that records what the shell asks.
 
 use std::rc::Rc;
-use std::time::Duration;
 
 use gpui::{
     Modifiers, MouseButton, Pixels, Point, ScrollDelta, ScrollEvent, TestAppContext,
@@ -399,16 +398,11 @@ fn hidden_tabs_are_pictured_once_the_switches_are_quiet(cx: &mut TestAppContext)
     cx.executor().advance_clock(PICTURE_HIDDEN / 2);
     cx.run_until_parked();
     assert!(pictured(&host).is_empty(), "another switch puts it off");
-    // Not while the core may still keep the page the switch left on screen, up to a second.
-    cx.executor()
-        .advance_clock(Duration::from_secs(1) - PICTURE_HIDDEN / 2);
-    cx.run_until_parked();
-    assert!(
-        pictured(&host).is_empty(),
-        "pictured while the switch may still show it"
-    );
+    // Asked once the last switch has been quiet for the Dock dot's 400 ms, while the core may
+    // still keep the page it left on screen, which it holds for the picture (#1658).
     cx.executor().advance_clock(PICTURE_HIDDEN / 2);
     cx.run_until_parked();
+    assert_eq!(PICTURE_HIDDEN, std::time::Duration::from_millis(400));
     assert_eq!(pictured(&host), ["card picture 2", "card picture 4"]);
 }
 
