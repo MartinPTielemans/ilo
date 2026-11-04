@@ -106,8 +106,46 @@ pub(crate) unsafe extern "C" fn favorites_changed(_: *mut c_void) {
         .into_iter()
         .map(|tab| (tab, holder(tab)))
         .collect();
-    update_shells(|shell, cx| shell.set_favorites(tabs.clone(), cx));
+    // Those that are split views, each one favorite, and the tab each shows focused.
+    let mut splits = Vec::new();
+    let mut focus = HashMap::new();
+    for &(tab, _) in &tabs {
+        let split = split_of(tab);
+        if split.tabs.len() > 1 && split.tabs[0] == tab {
+            focus.insert(tab, unsafe { bc::bc_tab_split_focused(tab) });
+            splits.push(split);
+        }
+    }
+    update_shells(|shell, cx| {
+        shell.set_split_favorites(tabs.clone(), splits.clone(), focus.clone(), cx)
+    });
     update_app(settings::refresh);
+}
+
+/// `tab`'s split view as the core has it, else `tab` alone.
+fn split_of(tab: bc::bc_id) -> Split {
+    // The core's splits have up to three tabs.
+    let mut split = [0; 3];
+    let count = unsafe { bc::bc_tab_split(tab, split.as_mut_ptr(), split.len()) };
+    let tabs = split[..count.min(split.len())].to_vec();
+    if tabs.len() < 2 {
+        return Split {
+            tabs: vec![tab],
+            ..Default::default()
+        };
+    }
+    let shares: Vec<f64> = tabs
+        .iter()
+        .map(|&tab| unsafe { bc::bc_tab_split_share(tab) })
+        .collect();
+    // Even shares are the core's integer split, which the shell draws the same way.
+    let even = shares.iter().all(|&share| share == shares[0]);
+    Split {
+        stacked: unsafe { bc::bc_tab_split_stacked(tab) },
+        shares: if even { Vec::new() } else { shares },
+        expanded: unsafe { bc::bc_tab_split_expanded(tab) },
+        tabs,
+    }
 }
 
 pub(crate) unsafe extern "C" fn space_changed(_: *mut c_void, space: bc::bc_id) {
@@ -121,23 +159,9 @@ pub(crate) unsafe extern "C" fn space_changed(_: *mut c_void, space: bc::bc_id) 
     let (pinned, today) = (list(bc::bc_space_pinned), list(bc::bc_space_today));
     let mut splits = Vec::new();
     for &tab in pinned.iter().chain(&today) {
-        // The core's splits have up to three tabs.
-        let mut split = [0; 3];
-        let count = unsafe { bc::bc_tab_split(tab, split.as_mut_ptr(), split.len()) };
-        if count > 1 && split[0] == tab {
-            let tabs = split[..count.min(split.len())].to_vec();
-            let shares: Vec<f64> = tabs
-                .iter()
-                .map(|&tab| unsafe { bc::bc_tab_split_share(tab) })
-                .collect();
-            // Even shares are the core's integer split, which the shell draws the same way.
-            let even = shares.iter().all(|&share| share == shares[0]);
-            splits.push(Split {
-                tabs,
-                stacked: unsafe { bc::bc_tab_split_stacked(tab) },
-                shares: if even { Vec::new() } else { shares },
-                expanded: unsafe { bc::bc_tab_split_expanded(tab) },
-            });
+        let split = split_of(tab);
+        if split.tabs.len() > 1 && split.tabs[0] == tab {
+            splits.push(split);
         }
     }
     let pinned_shut = unsafe { !bc::bc_space_pinned_open(space) };

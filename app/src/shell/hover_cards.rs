@@ -180,28 +180,46 @@ impl Shell {
         }
     }
 
-    /// What `tab`'s card shows, if it has one.
+    /// What `tab`'s card shows, if it has one. A favorite split's tile has one too, its pages
+    /// side by side, the title the page focused last's and the hosts every page's in their order;
+    /// a split's row has none.
     pub(super) fn card(&self, tab: u64) -> Option<Card> {
+        let split = self
+            .favorite_split(tab)
+            .filter(|split| split.tabs[0] == tab);
         if tab == 0
             || self.is_folder(tab)
-            || self.panes(tab).len() > 1
+            || (self.panes(tab).len() > 1 && split.is_none())
             || !self.tabs.contains_key(&tab)
         {
             return None;
         }
-        let each = &self.tabs[&tab];
-        let icon = match has_icon(&each.page.icon) {
-            true => Icon::Emoji(each.page.icon.clone()),
-            false => Icon::Favicon(each.favicon.clone()),
+        let icon_of = |tab: u64| match self.tabs.get(&tab) {
+            Some(each) if has_icon(&each.page.icon) => Icon::Emoji(each.page.icon.clone()),
+            each => Icon::Favicon(each.and_then(|each| each.favicon.clone())),
+        };
+        let host_of = |tab: u64| host(&self.page(tab).url).to_string();
+        let (panes, focused) = match split {
+            Some(split) => (split.tabs.clone(), self.favorite_focused(tab)),
+            None => (Vec::new(), tab),
+        };
+        let host = match panes.is_empty() {
+            true => host_of(tab),
+            false => (panes.iter().map(|&pane| host_of(pane)))
+                .collect::<Vec<_>>()
+                .join(" · "),
         };
         Some(Card {
             tab,
-            title: self.title(tab),
-            host: host(&each.page.url).to_string().into(),
-            icon,
+            title: self.title(focused),
+            host: host.into(),
+            icon: icon_of(focused),
             // The page shown is on screen beside it.
-            pictured: !self.on_screen(tab),
+            pictured: !self.on_screen(tab) && !panes.iter().any(|&pane| self.on_screen(pane)),
             actions: self.card_actions(tab),
+            panes: panes.iter().map(|&pane| (pane, icon_of(pane))).collect(),
+            focused,
+            ring: self.palette.accent.into(),
         })
     }
 
@@ -242,11 +260,16 @@ impl Shell {
 
     fn card_event(&mut self, tab: u64, event: Event, cx: &mut Context<Self>) {
         match event {
-            // A loaded tab's picture is taken again, as the page is now.
+            // A loaded tab's picture is taken again, as the page is now, and each of a favorite
+            // split's.
             Event::Shown => {
-                if self.tabs.contains_key(&tab) && !self.on_screen(tab) && !self.page(tab).unloaded
-                {
-                    self.browser.card_picture(tab, cx);
+                for tab in self.panes(tab) {
+                    if self.tabs.contains_key(&tab)
+                        && !self.on_screen(tab)
+                        && !self.page(tab).unloaded
+                    {
+                        self.browser.card_picture(tab, cx);
+                    }
                 }
             }
             // Off the card, the pointer may be past a hidden sidebar's panel too, which the reveal

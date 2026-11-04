@@ -485,6 +485,11 @@ impl Browser for Fake {
         });
     }
 
+    /// The preview's favorites are each one tab: a split's dragged tab goes alone.
+    fn move_split_to_favorites(&self, tab: u64, index: usize, cx: &mut App) {
+        self.move_to_favorites(tab, index, cx)
+    }
+
     fn move_tab(&self, tab: u64, pinned: bool, folder: u64, index: usize, cx: &mut App) {
         self.later(cx, move |shell, cx| {
             if pinned {

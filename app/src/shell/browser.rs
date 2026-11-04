@@ -37,6 +37,9 @@ pub trait Browser {
     /// Makes `tab` the favorite at `index` of the favorites without it, else the last, out of its
     /// Space, or moves it there among them.
     fn move_to_favorites(&self, tab: u64, index: usize, cx: &mut App);
+    /// The same for `tab` with the rest of its split view, which become one favorite, a split,
+    /// focused where it's focused now.
+    fn move_split_to_favorites(&self, tab: u64, index: usize, cx: &mut App);
     /// Moves `tab` to `index` in its Space's Today tabs, or in its pinned tabs, inside `folder` if
     /// it isn't 0, pinning or unpinning it, with the rest of its split view. `index` counts tabs,
     /// not rows, without the split's, and folders directly in the pinned tabs or `folder` count
