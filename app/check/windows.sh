@@ -530,6 +530,24 @@ send key w cmd shift
 expect "^browser: window closed $fourth\$" "⇧⌘W didn't close the window the pages moved to"
 send window 1
 
+# ⌘N from a window full screen of its own opens one that goes full screen too, then opens its command
+# bar (#669), on Windows as elsewhere. Wayland's sessions don't run this run.
+send window 1
+send fullscreen
+expect '^browser: window entered full screen$' "the first window didn't go full screen for ⌘N"
+send key n cmd
+expect '^browser: window opened [0-9]' "⌘N in full screen didn't open a window"
+full_new=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+expect_late '^browser: new window went full screen$' \
+  "⌘N's window from full screen didn't go full screen: $(grep "^browser: window $full_new asked for full screen" "$log" | tail -1)"
+new_window_bar "$out/new-window-full-screen.png"
+send window "$(grep -c '^browser: window opened ' "$log")"
+send key w cmd shift
+expect "^browser: window closed $full_new\$" "⇧⌘W didn't close ⌘N's full-screen window"
+send window 1
+send fullscreen
+expect '^browser: window left full screen$' "the first window didn't leave full screen after ⌘N's"
+
 # A tab's row dragged out of its window (#1798), the Mac's alone so far. Over the other window's list
 # it moves there where the line marks, its page live with what was typed in it, and let go where
 # nothing takes it, it opens in a window of its own under the pointer, which ⌘Z there closes,
