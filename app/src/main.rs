@@ -239,6 +239,15 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     });
     let repeat = unsafe { platform::host_key_repeated() };
     let now = Instant::now();
+    // Esc in full screen, pressed twice or held, leaves even when the page keeps it (Arc's).
+    if keystroke == "escape"
+        && update_tab_window(tab, |shell, cx| {
+            shell.escape_in_full_screen(repeat, now, cx)
+        })
+        .unwrap_or(false)
+    {
+        return (true, "escape in full screen");
+    }
     let shortcut = shortcut.flatten().is_some();
     if SECOND_PRESS.with_borrow_mut(|second| second.press(tab, &keystroke, shortcut, repeat, now)) {
         // check.sh reads this line.
