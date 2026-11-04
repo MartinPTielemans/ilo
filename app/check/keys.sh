@@ -591,12 +591,13 @@ expect '^browser: command bar shown$' "⌘L didn't open the command bar"
 send $ime
 send type nihongo
 [ "$marked" = "$preedit_marked" ] || fail "the command bar didn't take the composition: marked $marked"
+[ -z "$japanese" ] || ../tools/window-screenshot.sh "$pid" "$out/ime-composing.png" ||
+  fail "no window to capture"
 send key escape
+# Microsoft's IME shows its predictions as it composes, and its first escape closes them, the
+# second the composition.
+[ "$marked" = none ] || [ -z "$japanese" ] || send key escape
 none_since '^browser: command bar hidden$' || fail "escape while composing closed the command bar"
-# Microsoft's IME cancels a moment after it takes the key.
-for _ in 1 2 3 4 5; do
-  [ "$marked" = none ] || [ -z "$japanese" ] || { sleep 0.2; send state; }
-done
 [ "$marked" = none ] || fail "escape didn't cancel the composition: marked $marked"
 send type nihongo
 send key space
