@@ -114,11 +114,14 @@ pub fn on_lose_keyboard<T: 'static>(
     let (left, away, deactivated) = (listener.clone(), listener.clone(), listener);
     let input = field.downgrade();
     let focus = field.focus_handle(cx);
+    // Each says which way it went, for a check that finds a field ended it didn't end (#1664).
     vec![
         on_leave(&focus, window, cx, move |view, window, cx| {
+            crate::log!("browser: field lost the keyboard to another element");
             left(view, window, cx)
         }),
         cx.subscribe_in(field, window, move |view, _, _: &Away, window, cx| {
+            crate::log!("browser: field lost the keyboard to a press away");
             away(view, window, cx)
         }),
         cx.observe_window_activation(window, move |_, window, cx| {
@@ -133,6 +136,7 @@ pub fn on_lose_keyboard<T: 'static>(
             cx.spawn_in(window, async move |view, cx| {
                 view.update_in(cx, |view, window, cx| {
                     if left_window(&input, window, cx) {
+                        crate::log!("browser: field lost the keyboard with its window");
                         deactivated(view, window, cx)
                     }
                 })
