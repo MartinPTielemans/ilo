@@ -3428,6 +3428,76 @@ fn a_bookmarks_file_comes_in_once(cx: &mut TestAppContext) {
     fs::remove_dir_all(file.parent().unwrap()).unwrap();
 }
 
+/// Favorite tiles that fit on one row are centred under the view's centred heading and button, two
+/// as much as one; with more rows the grid keeps its left edge, the last row's tiles under the
+/// first's.
+#[gpui::test]
+fn one_row_of_tiles_is_centred_and_more_keep_their_left_edge(cx: &mut TestAppContext) {
+    let made = chrome("chrome-tiles-row", &[("Default", "Me")], SystemTime::now());
+    let browser = Rc::new(Browser::new(Some(Roots::under(&made, Os::Linux))));
+    let host: Rc<dyn Host> = browser.clone();
+    let (view, cx) = cx.add_window_view(|_, _| ImportView::new(host, false).headed());
+    view.update(cx, |view, cx| {
+        view.pick(0, cx);
+        view.import(cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| browser.added(cx));
+    // Offers `sites`, and says where the grid's middle and each tile's were drawn, across.
+    let offer = |sites: &[&str], cx: &mut gpui::VisualTestContext| {
+        let tabs = (sites.iter())
+            .map(|site| Tab {
+                url: format!("https://{site}/"),
+                name: String::new(),
+            })
+            .collect();
+        view.update(cx, |view, cx| {
+            view.offer(tabs);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let lines = view.read_with(cx, |view, _| view.drawn_at.borrow().clone());
+        let x = |what: &str| {
+            let at = format!("browser: settings {what} at ");
+            (lines.iter())
+                .find_map(|line| line.strip_prefix(&at))
+                .and_then(|rest| rest.split(' ').next()?.parse::<f32>().ok())
+                .unwrap_or_else(|| panic!("{what} wasn't drawn: {lines:?}"))
+        };
+        let tiles: Vec<f32> = (sites.iter())
+            .map(|site| x(&format!("import-favorite {site}")))
+            .collect();
+        (x("import-favorites"), tiles)
+    };
+    let (middle, two) = offer(&["one.example.org", "two.example.org"], cx);
+    assert!(
+        ((two[0] + two[1]) / 2. - middle).abs() <= 1.,
+        "two tiles aren't centred on {middle}: {two:?}"
+    );
+    let (middle, one) = offer(&["lone.example.org"], cx);
+    assert!(
+        (one[0] - middle).abs() <= 1.,
+        "one tile isn't centred on {middle}: {one:?}"
+    );
+    let five = [
+        "a.example.org",
+        "b.example.org",
+        "c.example.org",
+        "d.example.org",
+        "e.example.org",
+    ];
+    let (middle, five) = offer(&five, cx);
+    assert!(
+        (five[4] - five[0]).abs() <= 1.,
+        "the second row's tile isn't under the first's: {five:?}"
+    );
+    assert!(
+        five[0] < middle && five[3] > middle,
+        "a full row isn't across the grid: {five:?}"
+    );
+    fs::remove_dir_all(made).unwrap();
+}
+
 /// The favorites offered are tiles, all ticked at first: a click on one unticks it and the button
 /// counts those left, "Add 2 Favorites", then "Add 1 Favorite", and with none, "Add Favorites",
 /// dimmed; Add adds the ticked ones alone.

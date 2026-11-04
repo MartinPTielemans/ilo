@@ -5,7 +5,7 @@
 
 use std::time::Instant;
 
-use gpui::{AnyElement, Div, FontWeight, div, prelude::*, px, rgb, svg};
+use gpui::{AnyElement, Div, FontWeight, div, prelude::*, px, relative, rgb, svg};
 
 use super::arrival::pose;
 use crate::settings_rows::Look;
@@ -157,21 +157,30 @@ fn badge(tile: &Tile, look: &Look, still: bool, now: Instant) -> Div {
         .child(mark(tile.on, 0.8 + 0.2 * grown, come))
 }
 
-/// The tiles in rows of `tiles-per-row`, each as wide as the others, the last row's spaces left.
+/// The tiles in rows of `tiles-per-row`, each a row's share wide less the gap. A single row is
+/// centred, under the view's centred heading and button; more rows keep their left edge, the
+/// last one's places left empty.
 pub fn grid(tiles: Vec<AnyElement>, look: &Look, settings: bool) -> Div {
     let per = TILES_PER_ROW as usize;
+    let one_row = tiles.len() <= per;
     let mut rows = Vec::new();
     let mut tiles = tiles.into_iter().peekable();
     while tiles.peek().is_some() {
-        let row: Vec<AnyElement> = tiles.by_ref().take(per).collect();
-        let room = per - row.len();
-        let spaces = (0..room).map(|_| div().flex_1().min_w_0().into_any_element());
+        // Each tile in a place of its own, half the gap in from each side, so a row's places are
+        // its share wide whether it's full or not.
+        let places = tiles.by_ref().take(per).map(|tile| {
+            div()
+                .flex()
+                .w(relative(1. / per as f32))
+                .px(px(CARD_GAP / 2.))
+                .child(tile)
+        });
         rows.push(
             div()
                 .flex()
-                .gap(px(CARD_GAP))
-                .children(row)
-                .children(spaces),
+                .mx(px(-CARD_GAP / 2.))
+                .when(one_row, |row| row.justify_center())
+                .children(places),
         );
     }
     let grid = div().flex().flex_col().gap(px(CARD_GAP)).children(rows);

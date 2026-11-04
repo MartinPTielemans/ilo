@@ -1295,7 +1295,7 @@ impl ImportView {
             self.toggled.clear();
         }
         let settings = !self.guided;
-        let drawn = (tiles.iter().zip(&tabs)).map(|(tile, tab)| {
+        let placed = (tiles.iter().zip(&tabs)).map(|(tile, tab)| {
             let url = tab.url.clone();
             div()
                 .id(("import-favorite", tile.index))
@@ -1311,8 +1311,14 @@ impl ImportView {
                 ))
                 .into_any_element()
         });
-        let drawn: Vec<gpui::AnyElement> = drawn.collect();
-        Some(tiles::grid(drawn, &self.look, settings))
+        let placed: Vec<gpui::AnyElement> = placed.collect();
+        let grid = tiles::grid(placed, &self.look, settings);
+        Some(
+            div()
+                .relative()
+                .child(grid)
+                .child(drawn("import-favorites".into(), self.drawn_at.clone())),
+        )
     }
 
     /// What the button that adds the favorites ticked says: how many.
