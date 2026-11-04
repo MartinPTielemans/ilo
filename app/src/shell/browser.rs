@@ -424,6 +424,13 @@ pub trait Browser {
     fn toggle_full_screen(&self, _cx: &mut App) {}
     /// Does what a click on the window's close, minimize or zoom button does.
     fn press_window_button(&self, button: WindowButton, cx: &mut App);
+    /// Keeps the window over other apps' windows, its overlays still over it, or lets it go back
+    /// among them.
+    fn set_on_top(&self, on: bool, cx: &mut App);
+    /// Whether the window can stay on top: not under Wayland, which gives no client a way.
+    fn can_stay_on_top(&self) -> bool {
+        true
+    }
     /// The window's own buttons as the system draws them, for the copies the UI draws in their
     /// place, once it can say: the Mac's. Elsewhere the UI draws the only ones, at
     /// `WindowButtonGeometry::default`.

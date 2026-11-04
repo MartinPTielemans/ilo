@@ -168,6 +168,7 @@ unsafe extern "C" {
     pub fn host_focus(view: *mut c_void);
     pub fn host_show_window_buttons(ui_view: *mut c_void, shown: bool);
     pub fn host_press_window_button(ui_view: *mut c_void, button: i32);
+    pub fn host_set_window_on_top(ui_view: *mut c_void, on: bool);
     #[cfg(target_os = "macos")]
     pub fn host_window_buttons(
         ui_view: *mut c_void,
@@ -199,6 +200,12 @@ unsafe extern "C" {
     pub fn host_detent();
     pub fn host_dock_dot_launch(profile_dir: *const c_char);
     pub fn host_dock_dot(colored: bool, color: u32);
+    pub fn host_app_active() -> bool;
+    pub fn host_needs_you_badge(count: c_int);
+    #[cfg(not(target_os = "linux"))]
+    pub fn host_needs_you_notify(id: u64, title: *const c_char, body: *const c_char);
+    #[cfg(not(target_os = "linux"))]
+    pub fn host_watch_needs_you(clicked: extern "C" fn(id: u64));
     pub fn host_watch_control(released: extern "C" fn());
     pub fn host_take_drops(
         dragged: extern "C" fn(

@@ -113,6 +113,15 @@ await() {
   done
   return 1
 }
+# Puts View › Appearance back to Automatic, the profile's first, by taking away the choice the app
+# keeps for its next launch (settings.rs), which a run that picks Light or Dark and fails before
+# Automatic leaves for the runs after (#1791). The app reads it only as it launches and writes it
+# only when the user picks, so this goes before a launch. On every OS, and it fails if it stays.
+forget_appearance() {
+  rm -f "$profile_dir/Appearance"
+  [ ! -e "$profile_dir/Appearance" ] ||
+    fail "the profile kept its saved appearance, $(cat "$profile_dir/Appearance")"
+}
 # The app logs "browser: loaded" when the main frame has loaded.
 await_load() {
   await '^browser: load' || fail "the page didn't finish loading"
@@ -193,6 +202,8 @@ exited() {
   pgrep -f "$app/.*chrome_crashpad_handler" > /dev/null &&
     fail "Crashpad's handler outlived the app"
   pgrep -f "$procs" > /dev/null && fail "Chromium helper processes were left running"
+  # What the app left for Safari's engine as it quit, which the next forget takes away.
+  [ "$(uname)" != Darwin ] || echo "engine sites after the quit: $(engine_sites)"
   return 0
 }
 # A quit Apple Event goes through -[NSApplication terminate:], the way macOS quits apps when the
@@ -581,15 +592,39 @@ pinned_favicon() {
   echo "26 $((90 + 44 + 41 * $1 + 20))"
 }
 
-# Forgets the sites the profile keeps for Safari's engine, the notes it closed and the listed hosts
-# it turned off, which a run that turns them on leaves for the runs after. Only while the app isn't
-# running, as it writes its preferences as it quits.
-forget_engine_sites() {
+# What the profile keeps for Safari's engine, as JSON: its sites, the notes it closed and the listed
+# hosts turned off, or {} for none. The Mac's alone, as Safari's engine is.
+engine_sites() {
   prefs="$profile_dir/Default/Preferences"
+  [ -e "$prefs" ] || { echo "{}"; return 0; }
+  python3 -I -c '
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    engine = json.load(f).get("browser_core", {}).get("system_engine", {})
+print(json.dumps({kind: engine[kind] for kind in ("sites", "closed_notes", "listed_off") if kind in engine}))
+' "$prefs"
+}
+# Forgets the sites the profile keeps for Safari's engine, the notes it closed and the listed hosts
+# it turned off, which a run that turns them on leaves for the runs after (#1782). The app writes
+# its preferences as it quits, so a forget while any process of it is left loses to that write: it
+# waits up to 20 s for the last to go, and fails if one stays. It says what it found, which a run
+# before it left, and the profile then has none of it before the launch that follows. On the Mac
+# only, as only its Safari's engine keeps them.
+forget_engine_sites() {
+  [ "$(uname)" = Darwin ] || return 0
+  local _ left
+  for _ in $(seq 200); do
+    pgrep -f "$procs" > /dev/null || break
+    sleep 0.1
+  done
+  left=$(pgrep -f "$procs" | tr '\n' ' ')
+  [ -z "$left" ] ||
+    fail "the app is still running ($left), and its last write of its preferences would undo the forget of Safari's engine's sites"
+  prefs="$profile_dir/Default/Preferences"
+  echo "engine sites before the forget: $(engine_sites)"
   [ -e "$prefs" ] || return 0
   python3 -I -c '
 import json, sys
-# Chrome writes it as UTF-8, which Windows' Python doesn't read by default.
 with open(sys.argv[1], encoding="utf-8") as f:
     prefs = json.load(f)
 engine = prefs.get("browser_core", {}).get("system_engine", {})
@@ -598,6 +633,8 @@ for kind in ("sites", "closed_notes", "listed_off"):
 with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(prefs, f)
 ' "$prefs" || fail "the profile's sites for Safari's engine couldn't be reset"
+  [ "$(engine_sites)" = "{}" ] ||
+    fail "the profile kept Safari's engine's sites through the forget: $(engine_sites)"
 }
 
 # Starts the app on the page $1 with the profile $2 and the arguments after $3, and check/cdp.py
