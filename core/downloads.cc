@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <functional>
-#include <ios>
 #include <memory>
 #include <optional>
 #include <string>
@@ -10,7 +9,6 @@
 
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
-#include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/supports_user_data.h"
@@ -22,7 +20,6 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/download/download_crx_util.h"
 #include "chrome/browser/download/download_item_model.h"
-#include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/icon_loader.h"
 #include "chrome/browser/icon_manager.h"
 #include "chrome/browser/profiles/profile.h"
@@ -32,7 +29,6 @@
 #include "components/download/public/common/download_item.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/pref_registry/pref_registry_syncable.h"
-#include "components/prefs/pref_service.h"
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/download_manager.h"
 #include "ui/gfx/codec/png_codec.h"
@@ -140,14 +136,6 @@ class Downloads : public download::AllDownloadItemNotifier::Observer {
   void OnManagerGoingDown(content::DownloadManager* manager) override { Changed(); }
   void OnDownloadCreated(content::DownloadManager* manager,
                          download::DownloadItem* item) override {
-    // What Chrome decides a private session's download by, as a Save File dialog can come of it.
-    if (Profile* profile = ProfileOf(item); profile && profile->IsOffTheRecord()) {
-      DownloadPrefs* prefs = DownloadPrefs::FromDownloadManager(manager);
-      LOG(ERROR) << "browser: private download created, folder "
-                 << (prefs ? prefs->DownloadPath().AsUTF8Unsafe() : std::string("none"))
-                 << ", asks " << std::boolalpha << (prefs && prefs->PromptForDownload())
-                 << ", disposition " << static_cast<int>(item->GetTargetDisposition());
-    }
     Changed();
   }
   void OnDownloadUpdated(content::DownloadManager* manager,
@@ -258,21 +246,6 @@ void RegisterDownloadPrefs() {
 }
 
 void ObserveDownloads(Profile* profile) {
-  // A private session saw none of its profile's download settings, so it asked where to save,
-  // ungoogled-chromium's default, and offered the system's Downloads folder, where a regular
-  // window saves to the profile's folder at once. It takes them from its profile as it starts.
-  // Neither is a pref an off-the-record session writes through, so they stay in its memory and
-  // go with it, and a profile whose user turned asking on still asks.
-  if (profile->IsOffTheRecord()) {
-    PrefService* original = profile->GetOriginalProfile()->GetPrefs();
-    PrefService* session = profile->GetPrefs();
-    session->SetBoolean(prefs::kPromptForDownload, original->GetBoolean(prefs::kPromptForDownload));
-    session->SetFilePath(prefs::kDownloadDefaultDirectory,
-                         original->GetFilePath(prefs::kDownloadDefaultDirectory));
-    // check.sh waits for this line.
-    LOG(ERROR) << "browser: private downloads observed, asking " << std::boolalpha
-               << session->GetBoolean(prefs::kPromptForDownload);
-  }
   TheDownloads().Observe(profile);
 }
 
