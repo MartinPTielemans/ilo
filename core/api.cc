@@ -1313,39 +1313,6 @@ void bc_set_little_archive_after(double seconds) {
   browser_core::SessionChanged();
 }
 
-bool bc_ask_where_to_save(void) {
-  return browser_core::UserSettings().ask_where_to_save;
-}
-
-void bc_set_ask_where_to_save(bool ask) {
-  browser_core::UserSettings().ask_where_to_save = ask;
-  browser_core::ApplyEveryday(browser_core::Everyday::kAskWhereToSave);
-  browser_core::SessionChanged();
-}
-
-double bc_page_zoom(void) {
-  return browser_core::UserSettings().page_zoom;
-}
-
-void bc_set_page_zoom(double factor) {
-  if (!(factor > 0)) {
-    return;
-  }
-  browser_core::UserSettings().page_zoom = factor;
-  browser_core::ApplyEveryday(browser_core::Everyday::kPageZoom);
-  browser_core::SessionChanged();
-}
-
-bool bc_notification_prompts(void) {
-  return browser_core::UserSettings().notification_prompts;
-}
-
-void bc_set_notification_prompts(bool on) {
-  browser_core::UserSettings().notification_prompts = on;
-  browser_core::ApplyEveryday(browser_core::Everyday::kNotificationPrompts);
-  browser_core::SessionChanged();
-}
-
 bool bc_haptics(void) {
   return browser_core::UserSettings().haptics;
 }
@@ -1438,6 +1405,39 @@ void bc_set_unload_idle_tabs(bool unload) {
 
 void bc_age_tabs_for_testing(double seconds) {
   browser_core::AgeTabsForTesting(base::Seconds(seconds));
+}
+
+bool bc_ask_where_to_save(void) {
+  return browser_core::UserSettings().ask_where_to_save;
+}
+
+void bc_set_ask_where_to_save(bool ask) {
+  browser_core::UserSettings().ask_where_to_save = ask;
+  browser_core::ApplyEveryday(browser_core::Everyday::kAskWhereToSave);
+  browser_core::SessionChanged();
+}
+
+double bc_page_zoom(void) {
+  return browser_core::UserSettings().page_zoom;
+}
+
+void bc_set_page_zoom(double factor) {
+  if (!(factor > 0)) {
+    return;
+  }
+  browser_core::UserSettings().page_zoom = factor;
+  browser_core::ApplyEveryday(browser_core::Everyday::kPageZoom);
+  browser_core::SessionChanged();
+}
+
+bool bc_notification_prompts(void) {
+  return browser_core::UserSettings().notification_prompts;
+}
+
+void bc_set_notification_prompts(bool on) {
+  browser_core::UserSettings().notification_prompts = on;
+  browser_core::ApplyEveryday(browser_core::Everyday::kNotificationPrompts);
+  browser_core::SessionChanged();
 }
 
 bool bc_ad_blocking(void) {
