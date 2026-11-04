@@ -612,6 +612,9 @@ impl Shell {
     pub fn keyboard_left(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let renaming = self.renaming.as_ref();
         if !renaming.is_some_and(|renaming| renaming.name.read(cx).menu_shown()) {
+            if renaming.is_some() {
+                log!("browser: field lost the keyboard to the page");
+            }
             self.name_left(window, cx)
         }
     }

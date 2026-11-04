@@ -53,10 +53,19 @@ unsafe extern "C" {
     ) -> bool;
     pub fn host_close_launch_window();
     pub fn host_watch_finished_launching(finished: extern "C" fn());
+    #[cfg(not(target_os = "windows"))]
     pub fn host_save_launch_picture(
         ui_view: *mut c_void,
         profile_dir: *const c_char,
         width: f64,
+    ) -> bool;
+    #[cfg(target_os = "windows")]
+    pub fn host_save_launch_pixels(
+        ui_view: *mut c_void,
+        profile_dir: *const c_char,
+        pixels: *const u8,
+        columns: usize,
+        rows: usize,
     ) -> bool;
     pub fn host_cascaded(
         ui_view: *mut c_void,

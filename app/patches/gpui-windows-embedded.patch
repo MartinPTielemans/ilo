@@ -66,6 +66,18 @@ index 4ad4cc77b3..44d7b2ce80 100644
          if current == DIRECTMANIPULATION_READY {
              self.end_gesture();
  
+diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
+index 98a13f304c..367e44dfd4 100644
+--- a/crates/gpui_windows/src/directx_renderer.rs
++++ b/crates/gpui_windows/src/directx_renderer.rs
+@@ -409,7 +409,6 @@ impl DirectXRenderer {
+     /// goes through MetalRenderer; this is the Windows analogue). Draws into
+     /// the existing render target, copies it into a `D3D11_USAGE_STAGING`
+     /// texture, maps it, and converts BGRA to RGBA.
+-    #[cfg(any(test, feature = "test-support"))]
+     pub(crate) fn render_to_image(
+         &mut self,
+         scene: &Scene,
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
 index 08f91bd626..e3544609fe 100644
 --- a/crates/gpui_windows/src/events.rs
@@ -578,7 +590,7 @@ index 095e009e23..b1cd3624a5 100644
 +    EMBEDDED.store(true, std::sync::atomic::Ordering::Relaxed);
 +}
 diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
-index c467101fc8..60d02730d5 100644
+index c467101fc8..d5afb55ac8 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
 @@ -32,6 +32,18 @@ use crate::direct_manipulation::DirectManipulationHandler;
@@ -727,3 +739,11 @@ index c467101fc8..60d02730d5 100644
              }
              WindowBackgroundAppearance::Blurred => {
                  set_window_composition_attribute(hwnd, Some((0, 0, 0, 0)), 4);
+@@ -1041,7 +1098,6 @@ impl PlatformWindow for WindowsWindow {
+             .log_err();
+     }
+ 
+-    #[cfg(any(test, feature = "test-support"))]
+     fn render_to_image(&self, scene: &Scene) -> anyhow::Result<image::RgbaImage> {
+         self.state
+             .renderer
