@@ -173,6 +173,44 @@ resized_once() {
 check_layout "at launch"
 check_buttons "at launch"
 
+# On Windows, moved to a display of another scale, as Windows tells it (WM_DPICHANGED) with its
+# size in pixels kept, the page fills the content area at that scale: its insets, in DIPs, scaled
+# by the new display's, not the old one's (#1823). 100% to 150% and back, then to 125% and back.
+if windows; then
+  # The content's size and the page's rect, in pixels, in $rect.
+  page_rect() {
+    send layout
+    rect=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' | sed -n \
+      's/^browser: layout content \([0-9]*\)x\([0-9]*\),.*WebContentsViewCocoa \([0-9]*\),\([0-9]*\) \([0-9]*\)x\([0-9]*\).*/\1 \2 \3 \4 \5 \6/p')
+  }
+  page_rect
+  at_100=$rect
+  [ -n "$at_100" ] || fail "the layout named no page at launch"
+  for percent in 150 100 125 100; do
+    send dpi "$percent"
+    page_rect
+    python3 -I - "$percent" $at_100 $rect << 'PY' ||
+import math, sys
+s = int(sys.argv[1]) / 100
+cw, ch, x, y, w, h = map(int, sys.argv[2:8])
+cw2, ch2, x2, y2, w2, h2 = map(int, sys.argv[8:14])
+# The insets at 100%, in DIPs: the layout's y counts from the content's bottom.
+left, bottom, right, top = x, y, cw - x - w, ch - y - h
+# The core's layout: the content in DIPs at the scale, floored, inset, and scaled to pixels.
+fw = math.floor(cw2 / s) - left - right
+fh = math.floor(ch2 / s) - top - bottom
+px_left, px_top = math.floor(left * s), math.floor(top * s)
+px_right, px_bottom = math.ceil((left + fw) * s), math.ceil((top + fh) * s)
+want = (px_left, ch2 - px_bottom, px_right - px_left, px_bottom - px_top)
+got = (x2, y2, w2, h2)
+if any(abs(a - b) > 1 for a, b in zip(want, got)):
+    sys.exit(f"at {sys.argv[1]}% the page is {got[0]},{got[1]} {got[2]}x{got[3]} in {cw2}x{ch2}, "
+             f"not {want[0]},{want[1]} {want[2]}x{want[3]}")
+PY
+      fail "the page didn't fill the content area at the new display's scale"
+  done
+fi
+
 # A page shows black until its first frame while websites are told the appearance is dark, and
 # white while it's light, as Arc's does, with View › Appearance on each in turn; its tab is loading
 # from the start. The page's w opens one whose server never answers, so it never commits, and its
