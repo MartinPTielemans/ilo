@@ -32,7 +32,11 @@ actions!(
         /// ⌘F, Ctrl+F off the Mac: the keyboard goes to the field.
         Search,
         /// Esc: the field empties and the section shows again.
-        EndSearch
+        EndSearch,
+        /// ⇥: the keyboard goes to the next control, in reading order.
+        NextControl,
+        /// ⇧⇥: the keyboard goes to the control before.
+        PreviousControl
     ]
 );
 
@@ -42,6 +46,8 @@ pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         shell::view_binding("cmd-f", Box::new(Search), "Settings", cx),
         gpui::KeyBinding::new("escape", EndSearch, Some("Settings")),
+        gpui::KeyBinding::new("tab", NextControl, Some("Settings")),
+        gpui::KeyBinding::new("shift-tab", PreviousControl, Some("Settings")),
     ]);
 }
 
