@@ -76,11 +76,14 @@ impl Browser for Core {
     }
 
     fn tab(&self, tab: u64, cx: &App) -> TabInfo {
+        // A pinned tab has the URL it goes back to; agents' Spaces have no favorites, which do too.
+        let pinned = unsafe { bc::bc_tab_pinned_url(tab, std::ptr::null_mut(), 0) } > 0;
         // Every window's shell has every Space's tabs.
         let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
         let Some(shell) = shell.and_then(|shell| shell.upgrade()) else {
             return TabInfo {
                 id: tab,
+                pinned,
                 ..TabInfo::default()
             };
         };
@@ -89,6 +92,7 @@ impl Browser for Core {
             id: tab,
             title: shell.title(tab),
             url: shell.page(tab).url,
+            pinned,
         }
     }
 
@@ -224,6 +228,19 @@ impl Browser for Core {
 
     fn answer_download(&self, download: u64, keep: bool) {
         unsafe { bc::bc_agent_download_answer(download, keep) };
+    }
+
+    fn set_pinned(&self, tab: u64, pinned: bool, _: &mut App) {
+        unsafe { bc::bc_tab_set_pinned(tab, pinned) };
+    }
+
+    // The core has no call that removes a pinned tab, so it's the two the row's remove button
+    // takes: unpinning, then closing it with its split.
+    fn remove_pinned(&self, tab: u64, _: &mut App) {
+        unsafe {
+            bc::bc_tab_set_pinned(tab, false);
+            bc::bc_tab_close(tab, true);
+        }
     }
 
     fn make_task_space(&self, agent: &str, agent_name: &str, like: u64, cx: &mut App) -> u64 {

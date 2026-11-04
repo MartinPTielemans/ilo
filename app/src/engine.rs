@@ -67,14 +67,17 @@ impl Browser for Engine {
 
     fn set_pinned(&self, tab: u64, pinned: bool, _: &mut App) {
         unsafe { bc::bc_tab_set_pinned(tab, pinned) };
+        agents_core::update(move |agents, _| agents.users_pin(tab));
     }
 
     fn move_to_favorites(&self, tab: u64, index: usize, _: &mut App) {
         unsafe { bc::bc_tab_move_to_favorites(tab, index) };
+        agents_core::update(move |agents, _| agents.users_pin(tab));
     }
 
     fn move_tab(&self, tab: u64, pinned: bool, folder: u64, index: usize, _: &mut App) {
         unsafe { bc::bc_tab_move(tab, pinned, folder, index) };
+        agents_core::update(move |agents, _| agents.users_pin(tab));
     }
 
     // The ones after the first load once shown, as links opened behind do.

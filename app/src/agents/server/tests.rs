@@ -257,7 +257,10 @@ fn the_server_answers_what_needs_no_browser() {
             "request",
             "run_steps",
             "hand_off",
-            "ask_for_tab"
+            "ask_for_tab",
+            "pin_tab",
+            "unpin_tab",
+            "remove_tab"
         ]
     );
     assert_eq!(list["id"], "a");

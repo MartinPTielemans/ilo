@@ -87,6 +87,7 @@ impl Browser for Made {
                 id,
                 title: title.into(),
                 url: url.into(),
+                pinned: self.pinned.borrow().contains(&id),
             })
             .collect()
     }
@@ -110,6 +111,7 @@ impl Browser for Made {
                 id,
                 title: title.into(),
                 url: url.into(),
+                pinned: self.pinned.borrow().contains(&id),
             },
         )
     }
@@ -200,6 +202,18 @@ impl Browser for Made {
 
     fn answer_download(&self, download: u64, keep: bool) {
         self.downloads.borrow_mut().push((download, keep));
+    }
+
+    fn set_pinned(&self, tab: u64, pinned: bool, _: &mut App) {
+        match pinned {
+            true => self.pinned.borrow_mut().insert(tab),
+            false => self.pinned.borrow_mut().remove(&tab),
+        };
+    }
+
+    fn remove_pinned(&self, tab: u64, cx: &mut App) {
+        self.set_pinned(tab, false, cx);
+        self.close_user_tab(tab, cx);
     }
 
     fn close_tab(&self, agent: &str, tab: u64, discard: bool, _: &mut App) -> Closed {
@@ -766,6 +780,7 @@ fn a_long_page_is_cut() {
         id: 1,
         title: "Long".into(),
         url: "https://long.example/".into(),
+        ..TabInfo::default()
     };
     let text = "é".repeat(tools::MAX_TEXT);
     let answer = tools::page_text(&tab, &text);
@@ -2434,6 +2449,117 @@ fn a_pinned_tab_stays_open(cx: &mut TestAppContext) {
     );
 }
 
+/// An agent pins its own tab, unpins it and removes it, each in the log (#1360). A pinned tab it
+/// didn't pin is the user's, in its Space or theirs, and stays, as does one whose pin the user
+/// changed: list_tabs says whose each pin is. A task has no pins.
+#[gpui::test]
+fn agents_pin_their_own_tabs_and_leave_the_users_pins(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = |tool: &str, tab: u64, cx: &mut TestAppContext| {
+        call(&agents, "claude-code", tool, json!({ "tab": tab }), cx)
+            .recv()
+            .unwrap()
+    };
+    let listed = |cx: &mut TestAppContext| {
+        call(&agents, "claude-code", "list_tabs", json!({}), cx)
+            .recv()
+            .unwrap()
+            .text
+    };
+    let pinned = answer("pin_tab", 20, cx);
+    assert!(
+        pinned
+            .text
+            .starts_with("Pinned tab 20 at the page it's at."),
+        "{}",
+        pinned.text
+    );
+    assert!(browser.pinned.borrow().contains(&20));
+    assert_eq!(
+        listed(cx),
+        "* 20  Example Domain  https://www.example.com/  pinned by you"
+    );
+    assert_eq!(
+        answer("unpin_tab", 20, cx),
+        ToolResult::text("Unpinned tab 20. It's at the top of your Today tabs.")
+    );
+    assert!(browser.pinned.borrow().is_empty());
+    assert_eq!(
+        answer("unpin_tab", 20, cx),
+        ToolResult::error("Tab 20 isn't pinned.")
+    );
+    answer("pin_tab", 20, cx);
+    assert_eq!(
+        answer("remove_tab", 20, cx),
+        ToolResult::text("Removed tab 20. The user can still find it in the archive.")
+    );
+    assert!(browser.tabs.borrow().iter().all(|tab| tab.0 != 20));
+    assert!(browser.pinned.borrow().is_empty());
+    let did: Vec<_> = (log(&agents, "claude-code", cx).into_iter())
+        .filter(|(action, _, _)| action != "list_tabs")
+        .map(|(action, site, refused)| (action, site, refused.is_empty()))
+        .collect();
+    let did: Vec<_> = did.into_iter().take(5).rev().collect();
+    let expected = [
+        ("pin_tab", true),
+        ("unpin_tab", true),
+        ("unpin_tab", false),
+        ("pin_tab", true),
+        ("remove_tab", true),
+    ];
+    assert_eq!(
+        did,
+        expected.map(|(action, done)| (action.into(), "example.com".into(), done))
+    );
+    assert_eq!(tools::describe("remove_tab"), "Removed a pinned tab");
+
+    browser
+        .tabs
+        .borrow_mut()
+        .push((21, 2, "Docs", "https://docs.example.com/"));
+    browser.pinned.borrow_mut().extend([21, 10]);
+    assert!(listed(cx).ends_with("21  Docs  https://docs.example.com/  pinned by the user"));
+    let theirs = "The user pinned tab 21, so only they unpin it.";
+    assert_eq!(answer("unpin_tab", 21, cx), ToolResult::error(theirs));
+    let refused = ("unpin_tab".into(), "docs.example.com".into(), theirs.into());
+    assert_eq!(log(&agents, "claude-code", cx)[0], refused);
+    let theirs = "The user pinned tab 21, so only they remove it.";
+    assert_eq!(answer("remove_tab", 21, cx), ToolResult::error(theirs));
+    assert_eq!(
+        answer("pin_tab", 21, cx),
+        ToolResult::text("Tab 21 is pinned already.")
+    );
+    let theirs = "The user pinned tab 21, so only they unpin it.";
+    let answered = answer("unpin_tab", 21, cx);
+    assert_eq!(
+        answered,
+        ToolResult::error(theirs),
+        "pin_tab made it the agent's"
+    );
+    for tool in ["pin_tab", "unpin_tab", "remove_tab"] {
+        let refused = ToolResult::error("The tab isn't in the agent's own Space.");
+        assert_eq!(answer(tool, 10, cx), refused, "{tool}");
+    }
+    assert_eq!(*browser.pinned.borrow(), HashSet::from([21, 10]));
+
+    browser
+        .tabs
+        .borrow_mut()
+        .push((22, 2, "Status", "https://status.example.com/"));
+    answer("pin_tab", 22, cx);
+    agents.update(cx, |agents, _| agents.users_pin(22));
+    let theirs = "The user pinned tab 22, so only they remove it.";
+    assert_eq!(answer("remove_tab", 22, cx), ToolResult::error(theirs));
+    assert!(browser.pinned.borrow().contains(&22));
+
+    let names = tools::names("task-1");
+    let pins = ["pin_tab", "unpin_tab", "remove_tab"];
+    assert!(
+        names.iter().all(|name| !pins.contains(&name.as_str())),
+        "{names:?}"
+    );
+}
+
 /// Take Back All Tabs, in the agent's Space's menu, takes over each tab there the user doesn't
 /// hold, which the agent is refused until the user hands it back.
 #[gpui::test]
@@ -2632,21 +2758,24 @@ fn a_wait_step_waits_for_its_text_in_the_page(cx: &mut TestAppContext) {
 
 /// The actions the core lets an agent take in its tabs, agent_session.cc's RefusedAction: each a
 /// thing the user does in a page, or handing the tab to them.
-const CORE_ALLOWS: [&str; 14] = [
+const CORE_ALLOWS: [&str; 17] = [
     "back",
     "click",
     "close_tab",
     "forward",
     "hand_off",
     "navigate",
+    "pin_tab",
     "press_key",
     "read_page",
+    "remove_tab",
     "request",
     "screenshot",
     "scroll",
     "select_option",
     "snapshot",
     "type",
+    "unpin_tab",
 ];
 
 /// Agents never read or fill a saved password, address, card or passkey (principle 3). The server
@@ -2677,6 +2806,9 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "run_steps",
             "hand_off",
             "ask_for_tab",
+            "pin_tab",
+            "unpin_tab",
+            "remove_tab",
         ]
     );
 
@@ -2713,6 +2845,10 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         ),
         ("hand_off", tab(json!({ "reason": "Sign in" }))),
         ("ask_for_tab", tab(json!({ "reason": "To go on" }))),
+        ("pin_tab", tab(json!({}))),
+        ("unpin_tab", tab(json!({}))),
+        ("pin_tab", tab(json!({}))),
+        ("remove_tab", tab(json!({}))),
         ("close_tab", json!({ "tab": 30 })),
     ];
     for (tool, arguments) in calls {
@@ -2746,11 +2882,16 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         "press_key",
         "scroll",
     ];
-    for action in
-        page_actions
-            .into_iter()
-            .chain(["screenshot", "request", "back", "hand_off", "close_tab"])
-    {
+    for action in page_actions.into_iter().chain([
+        "screenshot",
+        "request",
+        "back",
+        "hand_off",
+        "close_tab",
+        "pin_tab",
+        "unpin_tab",
+        "remove_tab",
+    ]) {
         assert!(
             checked.contains(action),
             "{action} didn't ask the core: {checked:?}"

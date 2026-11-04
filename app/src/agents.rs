@@ -67,6 +67,8 @@ pub struct TabInfo {
     pub id: u64,
     pub title: SharedString,
     pub url: SharedString,
+    /// Whether it's pinned in its Space.
+    pub pinned: bool,
 }
 
 /// What the core does in an agent's tab (bc_agent_page).
@@ -221,6 +223,12 @@ pub trait Browser {
     /// Answers for the user about a download an agent's page started, which the core holds
     /// (bc_agent_download_answer): `keep` lets it go on, else it's cancelled and its file gone.
     fn answer_download(&self, download: u64, keep: bool);
+    /// Pins `tab` in its Space at the page it's at, or unpins it to the top of its Today tabs, as
+    /// the user does (bc_tab_set_pinned).
+    fn set_pinned(&self, tab: u64, pinned: bool, cx: &mut App);
+    /// Removes the pinned `tab` from its Space, as its row's remove button does: unpinned, then
+    /// closed with its split, to the archive.
+    fn remove_pinned(&self, tab: u64, cx: &mut App);
     /// Makes the hidden Space of the task agent `agent`, named `name`, in the profile of the
     /// user's Space `like` (bc_space_create_for_agent, bc_space_set_profile).
     fn make_task_space(&self, agent: &str, name: &str, like: u64, cx: &mut App) -> u64;
@@ -543,6 +551,9 @@ pub struct Agents {
     stepping: Option<String>,
     /// The tasks the user asked from ⌘T, and their CLIs' settings.
     tasks: task::Tasks,
+    /// The tabs agents pinned, by tab, with the agent that pinned each, which alone may unpin or
+    /// remove it. Every other pinned tab is the user's, as is one whose pin the user changes.
+    pins: HashMap<u64, String>,
 }
 
 /// A run of steps (run_steps): one at a time, each as its tool would run alone.
@@ -674,6 +685,7 @@ impl Agents {
             downloading: HashMap::new(),
             grants: HashMap::new(),
             doing: HashMap::new(),
+            pins: HashMap::new(),
             held: HashMap::new(),
             runs: Vec::new(),
             stepping: None,
@@ -1084,10 +1096,12 @@ impl Agents {
                 let tabs = self.browser.agent_tabs(&agent, cx);
                 self.note(&agent, "list_tabs", "", "");
                 cx.notify();
-                _ = reply.send(ToolResult::text(tools::tab_list(
-                    &tabs,
-                    self.current.get(&agent).copied(),
-                )));
+                let mine: Vec<u64> = (self.pins.iter())
+                    .filter(|(_, by)| **by == agent)
+                    .map(|(&tab, _)| tab)
+                    .collect();
+                let current = self.current.get(&agent).copied();
+                _ = reply.send(ToolResult::text(tools::tab_list(&tabs, current, &mine)));
             }
             "read_page" => {
                 let tab = match tools::tab_argument(&arguments) {
@@ -1095,7 +1109,7 @@ impl Agents {
                     Ok(None) => match self.default_tab(&agent, cx) {
                         Some(tab) => tab,
                         None => {
-                            _ = reply.send(ToolResult::text(tools::tab_list(&[], None)));
+                            _ = reply.send(ToolResult::text(tools::tab_list(&[], None, &[])));
                             return;
                         }
                     },
@@ -1247,6 +1261,12 @@ impl Agents {
                 };
                 self.held.insert(tab, held);
                 self.asked(cx);
+            }
+            "pin_tab" | "unpin_tab" | "remove_tab" if !is_task(&agent) => {
+                let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {
+                    return;
+                };
+                self.pin(&agent, &tool, tab, reply, cx);
             }
             "close_tab" => {
                 let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {
@@ -2607,6 +2627,81 @@ impl Agents {
             true => page,
             false => format!("{note}\n\n{page}"),
         }
+    }
+
+    /// Pins the agent's tab, or unpins or removes one it pinned (#1360). The core keeps every one
+    /// to the agent's own Space; a pinned tab the agent didn't pin is the user's, and stays.
+    fn pin(
+        &mut self,
+        agent: &str,
+        action: &str,
+        tab: u64,
+        reply: mpsc::Sender<ToolResult>,
+        cx: &mut Context<Self>,
+    ) {
+        let pinned = self.browser.tab(tab, cx).pinned;
+        let theirs = pinned && self.pins.get(&tab).is_none_or(|by| by != agent);
+        let checked = self.browser.may_act(agent, tab, action, cx).and_then(|()| {
+            match (action, pinned, theirs) {
+                ("pin_tab", _, _) => Ok(()),
+                (_, false, _) => Err(format!("Tab {tab} isn't pinned.")),
+                (_, true, true) => Err(format!(
+                    "The user pinned tab {tab}, so only they {} it.",
+                    action.trim_end_matches("_tab")
+                )),
+                (_, true, false) => Ok(()),
+            }
+        });
+        let site = site(&self.browser.tab(tab, cx).url);
+        self.note(
+            agent,
+            action,
+            &site,
+            checked.as_ref().err().map_or("", String::as_str),
+        );
+        cx.notify();
+        if let Err(why) = checked {
+            _ = reply.send(ToolResult::error(why));
+            return;
+        }
+        self.current.insert(agent.into(), tab);
+        let answer = match (action, pinned) {
+            ("pin_tab", true) => format!("Tab {tab} is pinned already."),
+            ("pin_tab", false) => {
+                self.browser.set_pinned(tab, true, cx);
+                self.pins.insert(tab, agent.into());
+                format!(
+                    "Pinned tab {tab} at the page it's at. It stays in your Space's pinned tabs, \
+                     even closed, until you unpin or remove it."
+                )
+            }
+            ("unpin_tab", _) => {
+                self.browser.set_pinned(tab, false, cx);
+                self.pins.remove(&tab);
+                format!("Unpinned tab {tab}. It's at the top of your Today tabs.")
+            }
+            _ => {
+                self.browser.remove_pinned(tab, cx);
+                self.pins.remove(&tab);
+                let space = self.browser.agent_space(agent);
+                let open = (self.browser.space_tabs(space, cx).iter()).any(|each| each.id == tab);
+                match open {
+                    true => format!(
+                        "Tab {tab} is unpinned but stays open: its page asks the user before it's \
+                         left."
+                    ),
+                    false => {
+                        format!("Removed tab {tab}. The user can still find it in the archive.")
+                    }
+                }
+            }
+        };
+        _ = reply.send(ToolResult::text(answer));
+    }
+
+    /// The user pinned, unpinned or moved `tab`, which makes its pin theirs.
+    pub fn users_pin(&mut self, tab: u64) {
+        self.pins.remove(&tab);
     }
 
     /// Asks the core whether the agent may do `action` to `tab`, and logs the answer. A refusal
