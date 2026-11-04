@@ -49,18 +49,20 @@ pub extern "C" fn host_needs_you_badge(count: c_int) {
         } else {
             words[0] & !URGENCY
         };
-        if flags == words[0] {
-            continue;
-        }
-        words[0] = flags;
-        let changed = connection.change_property32(
-            PropMode::REPLACE,
-            window,
-            AtomEnum::WM_HINTS,
-            AtomEnum::WM_HINTS,
-            &words,
-        );
-        if changed.is_ok() && connection.flush().is_ok() {
+        // Taken off already, as the window manager or Chromium may as the window takes the
+        // keyboard, it's as asked.
+        let ok = flags == words[0] || {
+            words[0] = flags;
+            let changed = connection.change_property32(
+                PropMode::REPLACE,
+                window,
+                AtomEnum::WM_HINTS,
+                AtomEnum::WM_HINTS,
+                &words,
+            );
+            changed.is_ok() && connection.flush().is_ok()
+        };
+        if ok {
             // check.sh reads this line.
             browser::log!(
                 "browser: window {id} urgent {}",
