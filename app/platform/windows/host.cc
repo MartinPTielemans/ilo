@@ -3272,8 +3272,9 @@ void host_hide_capture(void) {
   fprintf(stderr, "browser: capture hidden\n");
 }
 
-// The window Capture shows over resized, which leaves it, as on the Mac and Linux: what it showed
-// of the page is no longer where thpboard(nullptr)) {
+void host_copy_png(const uint8_t* png, size_t size) {
+  static const UINT png_format = RegisterClipboardFormatW(L"PNG");
+  if (!OpenClipboard(nullptr)) {
     return;
   }
   EmptyClipboard();
