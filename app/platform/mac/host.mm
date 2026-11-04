@@ -1743,6 +1743,40 @@ size_t host_screens(double* frames, size_t count) {
 NSPoint g_driven_pointer;
 bool g_driven_pointer_known = false;
 
+bool host_app_icon(const char* bundle_id, size_t size, uint8_t* rgba) {
+  @autoreleasepool {
+    NSWorkspace* workspace = NSWorkspace.sharedWorkspace;
+    NSURL* app = [workspace URLForApplicationWithBundleIdentifier:@(bundle_id)];
+    if (!app) {
+      return false;
+    }
+    NSImage* icon = [workspace iconForFile:app.path];
+    NSBitmapImageRep* bitmap =
+        [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
+                                                pixelsWide:(NSInteger)size
+                                                pixelsHigh:(NSInteger)size
+                                             bitsPerSample:8
+                                           samplesPerPixel:4
+                                                  hasAlpha:YES
+                                                  isPlanar:NO
+                                            colorSpaceName:NSDeviceRGBColorSpace
+                                               bytesPerRow:(NSInteger)size * 4
+                                              bitsPerPixel:32];
+    if (!icon || !bitmap) {
+      return false;
+    }
+    [NSGraphicsContext saveGraphicsState];
+    NSGraphicsContext.currentContext = [NSGraphicsContext graphicsContextWithBitmapImageRep:bitmap];
+    [icon drawInRect:NSMakeRect(0, 0, size, size)
+            fromRect:NSZeroRect
+           operation:NSCompositingOperationCopy
+            fraction:1];
+    [NSGraphicsContext restoreGraphicsState];
+    memcpy(rgba, bitmap.bitmapData, size * size * 4);
+    return true;
+  }
+}
+
 bool host_pointer(double* x, double* y) {
   const NSPoint point = g_driven_pointer_known ? g_driven_pointer : NSEvent.mouseLocation;
   *x = point.x;
