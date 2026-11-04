@@ -151,7 +151,7 @@ impl Render for Searched {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let look = Look::settings(true);
         let rows = rows();
-        let typed = self.input.read(cx).text().to_string();
+        let typed = typed(&self.input, cx);
         let clicked = self.clicked.clone();
         let show: Show = Rc::new(move |section, row, _, _| {
             clicked.borrow_mut().push((section, row.to_string()))
@@ -252,7 +252,7 @@ fn drew(view: &Entity<Searched>, what: &str, cx: &mut VisualTestContext) -> bool
     })
 }
 
-fn typed(view: &Entity<Searched>, cx: &mut VisualTestContext) -> String {
+fn field_text(view: &Entity<Searched>, cx: &mut VisualTestContext) -> String {
     view.read_with(cx, |view, cx| view.input.read(cx).text().to_string())
 }
 
@@ -262,11 +262,11 @@ fn typed(view: &Entity<Searched>, cx: &mut VisualTestContext) -> String {
 fn esc_empties_the_field_and_shows_the_section_again(cx: &mut TestAppContext) {
     let (view, cx) = searched(cx);
     search("pip", cx);
-    assert_eq!(typed(&view, cx), "pip");
+    assert_eq!(field_text(&view, cx), "pip");
     assert!(!drew(&view, "page", cx), "the page showed over the results");
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
-    assert_eq!(typed(&view, cx), "");
+    assert_eq!(field_text(&view, cx), "");
     assert!(drew(&view, "page", cx), "the section didn't show again");
 }
 
@@ -308,4 +308,47 @@ fn a_click_on_a_section_name_shows_the_section_at_the_row(cx: &mut TestAppContex
             "Archive windows left unused after".to_string()
         )]
     );
+}
+
+/// What an input method composes shows in the field and finds nothing until it commits, then the
+/// word committed finds its rows; Esc while it composes is the composition's, so the search stays.
+#[gpui::test]
+fn a_composition_finds_nothing_until_it_commits(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let (view, cx) = searched(cx);
+    search("", cx);
+    let input = view.read_with(cx, |view, _| view.input.clone());
+    let compose = |text: &str, cx: &mut VisualTestContext| {
+        cx.update(|window, cx| {
+            input.update(cx, |input, cx| {
+                input.replace_and_mark_text_in_range(None, text, None, window, cx)
+            })
+        });
+        cx.run_until_parked();
+    };
+    compose("ぴっぷ", cx);
+    assert_eq!(field_text(&view, cx), "ぴっぷ");
+    assert!(drew(&view, "page", cx), "the composition searched");
+    cx.update(|window, cx| {
+        input.update(cx, |input, cx| {
+            input.replace_text_in_range(None, "pip", window, cx)
+        })
+    });
+    cx.run_until_parked();
+    assert!(!drew(&view, "page", cx), "the committed word didn't search");
+    let names = view.read_with(cx, |view, _| view.names.borrow().clone());
+    assert!(
+        names
+            .iter()
+            .any(|(what, _)| what == "found Features Mini Player")
+    );
+    compose("あ", cx);
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(
+        field_text(&view, cx),
+        "pipあ",
+        "Esc ended the search while composing"
+    );
+    assert!(!drew(&view, "page", cx));
 }
