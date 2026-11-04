@@ -164,6 +164,11 @@ jobs:
             esac
             pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
           done
+          # PROBE: the app by its bundle and its path too.
+          for service in kTCCServiceCamera kTCCServiceMicrophone; do
+            sudo sqlite3 "$user" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified) VALUES ('$service', 'dev.browser.app', 0, 2, 4, 1, 'UNUSED', 0, $now)"
+            grant "$user" "$service" "$PWD/build/Browser.app/Contents/MacOS/Browser"
+          done
           echo "$paths" | sed 's/^ *//' | while read -r path; do
             [ -n "$path" ] || continue
             defaults write "$approvals" "$path" -date "3000-01-01 00:00:00 +0000"
@@ -172,6 +177,8 @@ jobs:
           # Each reads them again as it starts.
           sudo killall tccd || true
           killall replayd || true
+          launchctl kickstart -k "gui/$(id -u)/com.apple.tccd" || true
+          sleep 2; pgrep -lf tccd || true
 
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       - name: Runs
@@ -223,8 +230,13 @@ jobs:
       - name: PROBE TCC log
         if: ${{ always() && steps.engine.outputs.found == 'true' }}
         run: |
-          log show --last 40m --style compact --predicate 'process == "tccd"' 2>/dev/null | grep -E 'service=|kTCCService|prompt' | grep -vE 'milod|efilogin|AddressBook' | cut -c1-500 | tail -60 || true
-          log show --last 40m --style compact --predicate 'process == "replayd"' 2>/dev/null | grep -iE 'approv|alert|prompt|deny|allow' | cut -c1-400 | tail -30 || true
+          pgrep -lf tccd || true
+          sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "SELECT service, client, client_type, auth_value, auth_reason, last_modified FROM access WHERE service IN ('kTCCServiceMicrophone','kTCCServiceCamera')" || true
+          log show --last 40m --style compact --predicate 'process == "tccd"' 2>/dev/null > "$RUNNER_TEMP/tccd.log" || true
+          for id in $(grep -E 'service=kTCCService(Microphone|Camera), preflight=no' "$RUNNER_TEMP/tccd.log" | grep -oE 'msgID=[0-9.]+' | sort -u); do
+            echo "== $id"; grep -F "$id," "$RUNNER_TEMP/tccd.log" | cut -c1-900
+          done
+          grep -E 'Publishing|Create|Update|Delete' "$RUNNER_TEMP/tccd.log" | grep -E 'Microphone|Camera' | cut -c1-400 | tail -10
 
       - if: ${{ always() && steps.engine.outputs.found == 'true' }}
         uses: actions/upload-artifact@v4
