@@ -315,7 +315,16 @@ else
   expect "^browser: window $full_new shows [1-9][0-9]*\$" "the URL typed in ⌘N's command bar didn't show in its window"
   # Its own full screen ends as the first's does, by the green button, and it closes.
   send key w cmd shift
+  closed=$step
   expect "^browser: window closed $full_new\$" "⇧⌘W didn't close ⌘N's full-screen window"
+  # Its Space goes with it, and macOS slides back to the first window's. AppKit says the window
+  # left full screen before that slide ends, and the first window's full screen ended in it ends
+  # at once, then slides there and back, in which macOS turns down the page's full screen below
+  # and puts the window back (#889). The check VM's slides end later than the hosted Mac's.
+  if [ "$(uname)" = Darwin ]; then
+    expect '^browser: desktop space changed$' \
+      "the first window's full-screen Space didn't come back after ⌘N's window closed" "$closed"
+  fi
   send window 1
 fi
 send fullscreen
