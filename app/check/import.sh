@@ -259,7 +259,9 @@ if [ -n "$arc" ]; then
   record import-arrival 2
   click_drawn import-go
   expect '^browser: import cards Personal, Work$' "Arc's Spaces didn't come as cards, Personal then Work"
-  expect '^browser: import drawn running$' "Arc's cards didn't draw"
+  # Captured waiting, or at the end where Work's profile came before the window's next frame, as
+  # on Windows' runner.
+  expect '^browser: import \(drawn running\|done: \)' "Arc's cards didn't draw"
   ../tools/window-screenshot.sh "$pid" "$out/import-arriving.png" || fail "no window to capture"
   expect '^browser: import from Arc: 2 Spaces, 6 pinned tabs, 0 open tabs, 3 favorites, 0 pages, 0 addresses$' \
     "Import didn't plan Arc's 2 Spaces, 6 pinned tabs and 3 favorites"
