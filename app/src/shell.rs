@@ -2789,13 +2789,21 @@ impl Shell {
         }
     }
 
-    /// The row with the selected plate: the tab shown's, or its split's.
-    fn selected_row(&self) -> Row {
-        if self.new_tab {
-            Row::NewTab
-        } else {
-            Row::Tab(self.row_of(self.selected))
+    /// The row with the selected plate: the tab shown's, or its split's, or New Tab's while ⌘T's
+    /// bar is open. None while a task has the page area, as its card has the plate then.
+    fn selected_row(&self) -> Option<Row> {
+        match self.new_tab {
+            true => Some(Row::NewTab),
+            false => self
+                .shown_has_plate()
+                .then(|| Row::Tab(self.row_of(self.selected))),
         }
+    }
+
+    /// Whether the tab shown has the selected plate, on its row or its tile: not while ⌘T's bar
+    /// gives it to New Tab, or while a task's conversation or page is in the page area.
+    fn shown_has_plate(&self) -> bool {
+        !self.new_tab && self.task_area.is_none()
     }
 
     fn shown(&mut self, tab: u64, cx: &mut App) {
@@ -3342,7 +3350,7 @@ impl Shell {
 
     /// Eases the selected row back from its hover fill once the pointer or its menu has left it.
     fn unhover(&mut self, row: Row) {
-        if row == self.selected_row() {
+        if Some(row) == self.selected_row() {
             self.unhovered.push((row, Instant::now()));
         }
     }

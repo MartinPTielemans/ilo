@@ -1630,11 +1630,17 @@ foot-share = 0.5
 # The glyph: a box at the favicon's column, a ring in Signal round a dot that circles it while
 # the task works, at this alpha, and goes to the middle, grown, while it asks; done, the ring
 # shrinks away for a tick; stopped, the dot goes and the ring shrinks, in the ink at `stopped`.
+# The rings are drawn at these values, under the floor text keeps (palette), as they're marks
+# beside a status that says the same in words. On the selected plate's fill, which Signal stands
+# out from less, the ring is as much brighter as `ring-working-selected` is than `ring-working`:
+# a dark window's selected fill takes 0.5 for the ring to stand out from it as 0.28 does from a
+# card's own fill, over a black backdrop and a white one.
 glyph = 18.0
 glyph-top = 11.0
 ring = 5.25
 ring-stroke = 1.5
 ring-working = 0.28
+ring-working-selected = 0.5
 ring-done = 0.6
 ring-stopped = 0.65
 stopped = 0.45
@@ -1642,12 +1648,13 @@ dot = 1.9
 dot-asks = 1.58
 dot-done = 0.3
 tick-stroke = 1.6
-# The status while it works: a highlight sweeping along it, from `shimmer-low` to the
-# `shimmer-high` alpha over `shimmer-reach` of the line's width either side of its middle, which
+# The status while it works: a highlight sweeping along it, from the status's own colour to the
+# ink at `shimmer-high`, over `shimmer-reach` of the line's width either side of its middle, which
 # goes from `shimmer-from` to `shimmer-to` of the width from the line's start, so it rests past
-# the end for a while before the next sweep.
-shimmer-low = 0.5
-shimmer-high = 0.95
+# the end for a while before the next sweep. It's text, so it never dims under the floor text
+# keeps (palette), and the highlight goes from wherever that floor puts the status, to the full
+# ink, so it shows however far the window raises it: a dark window raises the status to 0.88.
+shimmer-high = 1.0
 shimmer-reach = 0.312
 shimmer-from = -0.3
 shimmer-to = 2.26
@@ -1779,8 +1786,9 @@ page-chip-fill = 0.08
 # it, each a line of its glyph, its title in secondary and, fainter, what it took from 1 s or why
 # it failed. A line that opens has its own chevron and, under the pointer, a plate hanging outside
 # its text, which then goes to the title's colour. A rule runs down the open trace, in from the
-# column's edge. The step under way shimmers: a band of near-white sweeps across its title, a pass
-# each period. A failed step's glyph is the find bar's red.
+# column's edge. The step under way shimmers: a band of the full ink sweeps across its title, a
+# pass each period, from wherever the floor text keeps puts the title, as the card's status does.
+# A failed step's line is the find bar's red: its glyph, its title and why.
 trace-line = 26.0
 trace-glyph = 14.0
 trace-glyph-alpha = 0.38
@@ -1801,7 +1809,7 @@ open-below = 6.0
 trace-picture-width = 150.0
 trace-picture-height = 94.0
 trace-picture-radius = 6.0
-shimmer = 0.95
+shimmer = 1.0
 shimmer-period = 1.6
 # Half the band, in the title's widths.
 shimmer-band = 0.3

@@ -32,9 +32,7 @@ use crate::tokens::shell::import::{
 };
 use crate::tokens::shell::task::motion::SHIMMER;
 use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, CHIPS_STAGGER, EASE, ROLL, ROLL_RISE};
-use crate::tokens::shell::task::{
-    SHIMMER_FROM, SHIMMER_HIGH, SHIMMER_LOW, SHIMMER_REACH, SHIMMER_TO,
-};
+use crate::tokens::shell::task::{SHIMMER_FROM, SHIMMER_HIGH, SHIMMER_REACH, SHIMMER_TO};
 use crate::tokens::text;
 
 /// A Space the import makes, or fills, as its card shows it.
@@ -457,26 +455,31 @@ pub fn stage_row(
         .child(end([value.into_any_element()]))
 }
 
-/// `said` with a highlight sweeping along it, a character at a time, as a task's status while it
-/// works; still, under Reduce Motion.
-fn shimmering(said: &SharedString, look: &Look, phase: f32, still: bool) -> StyledText {
+/// `said` with a highlight sweeping along it, a character at a time, from the row's grey to the
+/// ink at `shimmer-high`, as a task's status while it works; still, under Reduce Motion. GPUI keeps
+/// the text's own alpha under a highlight's colour, so the words are drawn at the peak and each
+/// part fades down from it, as the card's status does (Palette::lit_highlight).
+fn shimmering(said: &SharedString, look: &Look, phase: f32, still: bool) -> gpui::AnyElement {
     if still {
-        return StyledText::new(said.clone());
+        return StyledText::new(said.clone()).into_any_element();
     }
+    let peak = look.ink.opacity(SHIMMER_HIGH);
+    let rest = look.detail.a.min(peak.a);
     let width = said.chars().count().max(1) as f32;
     let middle = width * (SHIMMER_FROM + (SHIMMER_TO - SHIMMER_FROM) * phase);
     let highlights = said.char_indices().enumerate().map(|(at, (byte, c))| {
         let near = (1. - (at as f32 - middle).abs() / (SHIMMER_REACH * width)).max(0.);
-        let alpha = SHIMMER_LOW + (SHIMMER_HIGH - SHIMMER_LOW) * near;
+        let alpha = rest + (peak.a - rest) * near;
         (
             byte..byte + c.len_utf8(),
             HighlightStyle {
-                color: Some(look.ink.opacity(alpha).into()),
+                fade_out: Some(1. - alpha / peak.a.max(f32::EPSILON)),
                 ..Default::default()
             },
         )
     });
-    StyledText::new(said.clone()).with_highlights(highlights.collect::<Vec<_>>())
+    let words = StyledText::new(said.clone()).with_highlights(highlights.collect::<Vec<_>>());
+    div().text_color(peak).child(words).into_any_element()
 }
 
 /// The rows after the cards: favorites, history and addresses, each that the import brings.

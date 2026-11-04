@@ -2187,7 +2187,14 @@ impl ImportView {
             listed.extensions.iter().partition(|each| each.blocks_ads());
         let rows = extensions.iter().enumerate().map(|(index, extension)| {
             let id = extension.id.clone();
+            // check.sh clicks it where it's logged.
+            let at = drawn(
+                format!("import-add-extension {}", extension.id),
+                self.drawn_at.clone(),
+            );
             let add = button(look, ("import-add-extension", index), "Add…")
+                .relative()
+                .child(at)
                 .on_click(cx.listener(move |view, _, _, cx| view.add_extension(&id, cx)))
                 .into_any_element();
             match extension.pinned {
@@ -2251,6 +2258,8 @@ impl ImportView {
         };
         let disclosure = div()
             .id("import-choose-folders")
+            .relative()
+            .child(drawn("import-choose-folders".into(), self.drawn_at.clone()))
             .px(px(ROW_X))
             .flex()
             .items_center()
@@ -2275,6 +2284,11 @@ impl ImportView {
                     let toggled = name.clone();
                     div()
                         .id(("import-folder", index))
+                        .relative()
+                        .child(drawn(
+                            format!("import-folder {name}"),
+                            self.drawn_at.clone(),
+                        ))
                         .on_click(
                             cx.listener(move |view, _, _, cx| view.toggle_folder(&toggled, cx)),
                         )
