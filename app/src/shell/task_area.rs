@@ -689,8 +689,13 @@ impl Shell {
             {
                 return false;
             }
-            // ⌘T opens the bar over the conversation, from a page watched too.
-            Command::NewTab | Command::SearchTabs => {
+            // Rows chosen in the sidebar are copied as anywhere.
+            Command::CopyUrl if !self.chosen.is_empty() => return false,
+            // The conversation is no page, as the URL field shows: nothing to copy or control.
+            Command::CopyUrl | Command::CopyMarkdownLink | Command::SiteControls => {}
+            // ⌘T opens the bar over the conversation, from a page watched too, and so does Edit
+            // URL with no page in place, the field showing the bar's placeholder.
+            Command::NewTab | Command::SearchTabs | Command::EditUrl => {
                 if self
                     .task_area
                     .as_ref()
