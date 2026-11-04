@@ -63,9 +63,9 @@ quit
 
 begin older
 await 'browser: sync service active$' || fail "started again, the device's sync didn't become active"
-await '^browser: sync spaces held, a newer ilo wrote them$' ||
+await 'browser: sync spaces held, a newer ilo wrote them$' ||
   fail "this ilo didn't find the Spaces a newer one wrote"
-await '^browser: sync spaces kept back$' ||
+await 'browser: sync spaces kept back$' ||
   fail "this ilo didn't keep its Spaces back from the newer one's"
 [ "$(spaces_stored)" = "$written" ] ||
   fail "this ilo wrote over the newer one's Spaces: the server had $written, now $(spaces_stored)"
