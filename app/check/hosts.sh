@@ -100,7 +100,8 @@ with open(f"{out}/hosts-addresses.txt", "w") as seen:
         seen.write(f"{address} {count}\n")
 
 unlisted = [h for h in sorted(hosts) if not any(fnmatch.fnmatch(h, p) for p in patterns)]
-sync = [m for m in re.findall(r'127\.0\.0\.1:(\d+)', text) if m == sync_port]
+# A request to it, not the switch naming it, which the net log's own command line holds.
+sync = re.findall(r'"(?:url|original_url)":"[a-z]+://(?:127\.0\.0\.1|localhost):' + sync_port + r'[/"]', text)
 if unlisted:
     print("hosts check/hosts.txt doesn't name: " + " ".join(unlisted))
     sys.exit(1)
