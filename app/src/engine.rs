@@ -1076,6 +1076,15 @@ impl Browser for Engine {
         })
     }
 
+    fn toggle_full_screen(&self, _: &mut App) {
+        // The Mac's green button is View › Enter Full Screen's toggleFullScreen:; off the Mac the
+        // core puts the window full screen, as the window manager's key does.
+        match cfg!(target_os = "macos") {
+            true => unsafe { platform::host_press_window_button(self.ui_view, 2) },
+            false => unsafe { bc::bc_window_toggle_full_screen(self.window) },
+        }
+    }
+
     fn press_window_button(&self, button: WindowButton, _: &mut App) {
         // Windows' own zoom button maximizes, and its window has no full screen of its own, so the
         // zoom Escape presses in full screen takes the window out through the core.

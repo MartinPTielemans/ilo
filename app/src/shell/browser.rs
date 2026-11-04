@@ -428,6 +428,8 @@ pub trait Browser {
     fn set_pane_corner(&self, left: f32, right: f32, top: f32, cx: &mut App);
     /// Shows the window's close, minimize and zoom buttons, or hides them.
     fn show_window_buttons(&self, shown: bool, cx: &mut App);
+    /// Puts the window full screen, or takes it out, as View's Enter Full Screen does.
+    fn toggle_full_screen(&self, _cx: &mut App) {}
     /// Does what a click on the window's close, minimize or zoom button does.
     fn press_window_button(&self, button: WindowButton, cx: &mut App);
     /// Keeps the window over other apps' windows, its overlays still over it, or lets it go back
