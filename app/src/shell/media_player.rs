@@ -127,7 +127,7 @@ impl Shell {
             }));
         // Over Restart to Update, while an update waits.
         let bottom =
-            FOOTER_HEIGHT + self.update_sign_room() + index as f32 * (MEDIA_HEIGHT + MEDIA_GAP);
+            FOOTER_HEIGHT + self.update_banner_room() + index as f32 * (MEDIA_HEIGHT + MEDIA_GAP);
         // check.sh finds the bottom one's buttons from where it's drawn.
         let listener = (index == 0).then(|| card_listener("media player", &self.media_drawn, tab));
         div()

@@ -287,7 +287,14 @@ if [ "$asks" = dialog ]; then
   send key escape
   expect '^browser: dialog hidden$' "escape didn't cancel Settings' dialog"
 else
+  # The alert runs a loop of its own, where the UI's tasks and timers go on: held open a while, none
+  # may find the UI in an update, which GPUI would drop or panic on (#1358).
+  asked=$(wc -l < "$log")
+  sleep 2
   send choose Cancel
+  ! tail -n "+$((asked + 1))" "$log" | grep -q 'gpui dropped\|panicked\|already borrowed' ||
+    fail "the UI's work in the alert's loop found it in an update: $(tail -n "+$((asked + 1))" "$log" |
+      grep 'gpui dropped\|panicked\|already borrowed' | head -3 | tr '\n' ';')"
 fi
 none_since '^browser: remove login' || fail "Cancel removed the login"
 send clickkey $(drawn "switch save and fill addresses")
