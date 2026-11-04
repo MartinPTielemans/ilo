@@ -247,7 +247,15 @@ for line in sys.stdin:
 PY
 rm -f "$out/network"
 mkfifo "$out/network"
-python3 -I "$out/network.py" "$ports" "http://127.0.0.1:$free/" < "$out/network" > "$out/network.log" 2>&1 &
+# Windows' Python can't open Git Bash's FIFO, so on Windows it reads a pipe that cat fills from it,
+# as windows_bridge does (git-bash.sh).
+if windows; then
+  python3 -I "$out/network.py" "$ports" "http://127.0.0.1:$free/" < <(cat "$out/network") \
+    > "$out/network.log" 2>&1 &
+else
+  python3 -I "$out/network.py" "$ports" "http://127.0.0.1:$free/" < "$out/network" \
+    > "$out/network.log" 2>&1 &
+fi
 network=$!
 exec 4> "$out/network"
 # Takes the tab $1, offline or online.

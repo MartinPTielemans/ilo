@@ -684,3 +684,53 @@ fn devtools_rests_in_the_url_field_in_developer_mode(cx: &mut TestAppContext) {
     assert_eq!(at(true, cx), AtRest::DevTools);
     assert_eq!(at(false, cx), AtRest::Field);
 }
+
+/// The header's glyphs take the disabled alpha, 0.26, as it is while the host says the window isn't
+/// the one the user is in, as Arc's do, under the glyph floor that would leave the dim unseen, and
+/// 0.60 again once it is. In the user's window a disabled glyph, as back's with no history, keeps
+/// the floor. GPUI's window losing the keyboard, as it does to the window's own page on X11 and to
+/// its command bar or menu on the Mac, leaves them lit, and so does the command bar open over it.
+#[gpui::test]
+fn the_header_glyphs_dim_while_the_window_is_not_the_users(cx: &mut TestAppContext) {
+    let (shell, cx, host) = drawn_shell(cx);
+    let round = |alpha: f32| (alpha * 100.).round() / 100.;
+    let alphas = |cx: &mut VisualTestContext| {
+        shell.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, _| {
+            let [lit, disabled] = [true, false].map(|enabled| round(shell.nav_glyph(enabled).a));
+            (shell.nav_dimmed_drawn.get(), lit, disabled)
+        })
+    };
+    let set_main = |main: bool, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.set_window_main(main, cx));
+    };
+    let floor = round(shell.read_with(cx, |shell, _| shell.palette.glyph_floor));
+    assert!(
+        floor > 0.26,
+        "the test's Space needs a floor over 0.26, not {floor}"
+    );
+    let lit = (Some(false), 0.6, floor);
+    cx.update(|window, _| window.activate_window());
+    assert_eq!(alphas(cx), lit, "not lit in the user's window");
+    // The page or an overlay has the keyboard: GPUI's window isn't active, the host's still main.
+    cx.deactivate_window();
+    assert_eq!(
+        alphas(cx),
+        lit,
+        "dimmed as the page or an overlay took the keys"
+    );
+    host.bar_open.set(true);
+    assert_eq!(alphas(cx), lit, "dimmed under the window's command bar");
+    host.bar_open.set(false);
+    // Another window came to the front: 0.26 for every glyph, under the floor.
+    set_main(false, cx);
+    assert_eq!(
+        alphas(cx),
+        (Some(true), 0.26, 0.26),
+        "not 0.26 behind another window"
+    );
+    // Back, by a click in its page, which doesn't give GPUI's window the keys.
+    set_main(true, cx);
+    assert_eq!(alphas(cx), lit, "not lit once it's the user's again");
+}

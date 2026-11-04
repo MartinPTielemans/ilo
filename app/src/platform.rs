@@ -84,6 +84,7 @@ unsafe extern "C" {
     pub fn host_set_little_status_item(clicked: Option<extern "C" fn()>);
     pub fn host_watch_key_window(changed: extern "C" fn(*mut c_void));
     pub fn host_watch_full_screen(changed: extern "C" fn(*mut c_void, bool));
+    pub fn host_watch_window_main(changed: extern "C" fn(*mut c_void, bool));
     pub fn host_watch_swipes(swiped: extern "C" fn(*mut c_void, f64, f64, bool) -> bool);
     pub fn host_watch_option_taps(tapped: extern "C" fn(*mut c_void));
     #[cfg(not(target_os = "linux"))]
@@ -169,6 +170,10 @@ unsafe extern "C" {
     pub fn host_show_window_buttons(ui_view: *mut c_void, shown: bool);
     pub fn host_press_window_button(ui_view: *mut c_void, button: i32);
     pub fn host_set_window_on_top(ui_view: *mut c_void, on: bool);
+    #[cfg(target_os = "macos")]
+    pub fn host_enter_full_screen(ui_view: *mut c_void) -> bool;
+    #[cfg(target_os = "macos")]
+    pub fn host_window_on_active_space(ui_view: *mut c_void) -> bool;
     #[cfg(target_os = "macos")]
     pub fn host_window_buttons(
         ui_view: *mut c_void,
