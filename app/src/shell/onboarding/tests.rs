@@ -872,9 +872,10 @@ fn importing_from(
     (shell, cx, view.expect("the import view"))
 }
 
-/// Safari's files kept from the app need Full Disk Access: the import step stays, showing the
-/// view's way to System Settings, and Skip still goes on. Once it's given and the user is back,
-/// the import reads and the flow goes on by itself (#1378).
+/// Safari's files kept from the app need Full Disk Access as Safari is picked: the import step
+/// stays, showing the view's way to System Settings, and Skip still goes on. Once it's given and
+/// the user is back, the view reads Safari and shows its choices, and Import there goes on
+/// (#1378, #1673).
 #[cfg(unix)]
 #[gpui::test]
 fn an_import_that_needs_full_disk_access_keeps_its_step(cx: &mut TestAppContext) {
@@ -885,10 +886,7 @@ fn an_import_that_needs_full_disk_access_keeps_its_step(cx: &mut TestAppContext)
     };
     let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Mac))));
     let (shell, cx, view) = importing_from(browser.clone(), cx);
-    view.update(cx, |view, cx| {
-        view.pick(0, cx);
-        view.import(cx);
-    });
+    view.update(cx, |view, cx| view.pick(0, cx));
     cx.run_until_parked();
     assert_eq!(
         step(&shell, cx),
@@ -900,11 +898,15 @@ fn an_import_that_needs_full_disk_access_keeps_its_step(cx: &mut TestAppContext)
         Some("no access")
     );
 
-    // With access given, coming back reads, and the flow goes on.
+    // With access given, coming back reads Safari and shows its choices; Import goes on.
     let_read(&home);
     cx.update(|_, cx| browser.activate(cx));
     cx.run_until_parked();
-    assert_ne!(step(&shell, cx), Some(Step::Import), "read, it went on");
+    assert_eq!(view.read_with(cx, |view, _| view.drawn()), Some("pick"));
+    assert_eq!(step(&shell, cx), Some(Step::Import), "it waits for Import");
+    view.update(cx, |view, cx| view.import(cx));
+    cx.run_until_parked();
+    assert_ne!(step(&shell, cx), Some(Step::Import), "imported, it went on");
     std::fs::remove_dir_all(&home).unwrap();
 }
 

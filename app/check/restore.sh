@@ -83,12 +83,16 @@ logged '^browser: download [0-9]* done notes.txt$' ||
 $(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -i 'download' | tr '\n' ';'). \
 The folder: $(ls -A "$out/downloads" | tr '\n' ' ')"
 [ -f "$out/downloads/notes.txt" ] || fail "the download isn't in the check's folder"
-# On the Mac it carries macOS's quarantine flag, naming the app that downloaded it, so Gatekeeper
-# checks it the first time it opens (#685). Chromium's quarantine service sets it.
+# On the Mac it carries macOS's quarantine flag, naming ilo as the app that downloaded it, so
+# Gatekeeper checks it the first time it opens (#685). Chromium's quarantine service sets it, and
+# macOS takes the agent from the app's bundle: "flags;time;agent;id".
 if [ "$(uname)" = Darwin ]; then
   flag=$(xattr -p com.apple.quarantine "$out/downloads/notes.txt" 2>&1) ||
     fail "the download has no quarantine flag: $flag"
-  [ -n "$(echo "$flag" | cut -d';' -f3)" ] || fail "the download's quarantine flag names no app: $flag"
+  [ "$(echo "$flag" | cut -d';' -f3)" = "$app_name" ] ||
+    fail "the download's quarantine flag names another app than $app_name: $flag"
+else
+  echo "skip: the download's quarantine flag, which is macOS's alone."
 fi
 # Its icon flies from the pointer, over the page, into a bin on the Library button. The window is
 # captured only between recordings: on the hosted Mac a capture ends the recording's stream.

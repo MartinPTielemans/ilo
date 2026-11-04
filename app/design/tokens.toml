@@ -707,6 +707,11 @@ check-glyph = 12.0
 check-tick = 0xffffff
 disclosure-gap = 4.0
 disclosure-glyph = 12.0
+# Ours (#1673): the import's numbered steps, such as Full Disk Access's, each number on a circle
+# of the control's fill, and the dot before a line that waits, or before an Arc Space's name in the
+# colour of its theme.
+step = 20.0
+dot = 7.0
 # The views Settings shows from the library, Sync and Import, put a heading 8 over a group and 20
 # under the one before, and their groups 10 apart.
 header-gap = 7.0
@@ -889,15 +894,13 @@ loading-size = 12.0
 # A row narrower than this, such as a split's segment in a narrow sidebar, leaves the dot out
 # (Dia), as it would leave the title no room.
 loading-row-min = 48.0
-# The status dot (ours, #321): the row's text at 0.6 while its page loads, Signal green while an
-# agent works in the tab. Breathing, from 0.35 of its strength to all of it, says it's loading.
+# The status dot (ours, #321): the row's text at 0.6 while its page loads. Breathing, from 0.35
+# of its strength to all of it, says it's loading. Signal green is an agent at work, as a task's
+# card shows it.
 status-dot = 6.0
 status-loading = 0.6
 status-agent = 0x0e9f55
 breath-low = 0.35
-# A coloured dot's ring, in the neutral opposite the rows' text, so it reads on any theme.
-status-ring = 1.5
-status-ring-color = 0xf3f0e8
 title-gap = 8.0
 # The speaker before a title, while its tab plays sound or is muted, and its pressable square.
 # Arc's title is 8 after its speaker's glyph; ours draws 0.6 inside its 16 pt box, which is 1

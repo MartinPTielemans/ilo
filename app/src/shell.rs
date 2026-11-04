@@ -31,8 +31,6 @@ mod access;
 mod agent_bar;
 mod agent_pointer;
 mod agent_question;
-#[cfg(test)]
-mod agent_spaces;
 mod assets;
 mod battery;
 mod beside;
@@ -118,8 +116,7 @@ mod update_sign;
 pub use assets::Assets;
 pub use battery::PAUSED;
 pub use browser::{
-    AgentGrants, Browser, Folders, MediaAction, Page, Split, Trouble, WindowButton,
-    WindowButtonGeometry,
+    Browser, Folders, MediaAction, Page, Split, Trouble, WindowButton, WindowButtonGeometry,
 };
 pub use cast::{Cast, CastDevice, CastState};
 use clean_link::clean_link;
@@ -351,8 +348,6 @@ use crate::tokens::shell::LOADING_SIZE;
 use crate::tokens::shell::STATUS_AGENT;
 use crate::tokens::shell::STATUS_DOT;
 use crate::tokens::shell::STATUS_LOADING;
-use crate::tokens::shell::STATUS_RING;
-use crate::tokens::shell::STATUS_RING_COLOR;
 // A loading dot's breath, out and back, eased in and out (ours, #321).
 const BREATH: Duration = Duration::from_millis(1600);
 use crate::tokens::shell::TITLE_GAP;
@@ -1477,10 +1472,9 @@ pub struct Shell {
     /// once drawn (Agent task).
     talk: Option<conversation::Talk>,
     focus_talk: bool,
-    /// What the agents do and what the user holds from them, for the bar in an agent's Space
+    /// What the agents do and what the user holds from them, for a task's page's strip
     /// (agent_bar.rs).
     agent_status: Vec<crate::agents::Status>,
-    agent_bar_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The Spaces of the tasks the user asked from ⌘T, which the window never lists, and what the
     /// page area shows of one (task_area.rs).
     task_spaces: Vec<Space>,
@@ -1499,9 +1493,6 @@ pub struct Shell {
     update_waiting: bool,
     update_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     _update_watch: Subscription,
-    /// Whether a tooltip the agent bar asked for may be up, and whether its bar showed the agent
-    /// at work, so it ends once that bar is gone (agent_bar.rs).
-    agent_tip: Cell<Option<bool>>,
     /// The protected-media key system each tab's page asked for that ilo can't play, until the tab
     /// goes to another site.
     drm_notes: HashMap<u64, SharedString>,
@@ -1792,7 +1783,6 @@ impl Shell {
             talk: None,
             focus_talk: false,
             agent_status: Vec::new(),
-            agent_bar_drawn: Rc::default(),
             task_spaces: Vec::new(),
             task_area: None,
             task_core: 0,
@@ -1804,7 +1794,6 @@ impl Shell {
             update_waiting: crate::updates::ready(cx),
             update_drawn: Rc::default(),
             _update_watch: crate::updates::observe_view(cx, Self::update_changed),
-            agent_tip: Cell::default(),
             drm_notes: HashMap::new(),
             keys: HashMap::new(),
             battery_saver: None,
@@ -2147,18 +2136,15 @@ impl Shell {
     }
 
     /// Whether a link from `tab`'s page to another site opens in a link preview: `tab` is a
-    /// favorite or pinned in the Space shown, as such a tab keeps its own site, and the Space is
-    /// the user's, as a preview is theirs alone.
+    /// favorite or pinned in the Space shown, as such a tab keeps its own site.
     pub fn previews_links_of(&self, tab: u64) -> bool {
-        let kept = self.favorites.contains(&tab) || self.pinned().contains(&tab);
-        kept && !self.agents_space_shown()
+        self.favorites.contains(&tab) || self.pinned().contains(&tab)
     }
 
     /// Whether a link the user asks for in a link preview, by ⇧-click or Open Link in Peek, opens
-    /// in one: they have previews on, the window shows `tab`'s page, whatever tab it is, and the
-    /// Space is theirs, as a preview is theirs alone.
+    /// in one: they have previews on and the window shows `tab`'s page, whatever tab it is.
     pub fn peeks_links_of(&self, tab: u64) -> bool {
-        self.browser.link_previews() && self.shows(tab) && !self.agents_space_shown()
+        self.browser.link_previews() && self.shows(tab)
     }
 
     /// The user asked for `url`, a link at `at` in `tab`'s page, in a link preview: it opens over
@@ -3173,13 +3159,6 @@ impl Shell {
         }
     }
 
-    /// Whether the Space shown is an agent's, which no tab moves into, as the browser keeps the
-    /// user's tabs out of its reach.
-    fn agents_space_shown(&self) -> bool {
-        self.shown_space()
-            .is_some_and(|space| !space.agent.is_empty())
-    }
-
     /// The core let the agent with the id `agent` act in `tab`, for the activity log: it's at work
     /// there now, and no longer in the tab it acted in before.
     pub fn agent_acted(&mut self, agent: SharedString, tab: u64, cx: &mut Context<Self>) {
@@ -3203,12 +3182,6 @@ impl Shell {
             log!("browser: agent {agent} done in {tab}");
             self.tab_changed(tab, true, cx);
         }
-    }
-
-    /// Whether an agent is at work in `tab`. Only an agent's own Space's tabs are its to act in,
-    /// so one the user moved out of it, into a Space of theirs, no longer shows one.
-    pub(super) fn agent_at_work(&self, tab: u64) -> bool {
-        self.agents_space_shown() && self.agents_at.values().any(|&at| at == tab)
     }
 
     fn show_space_at(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
@@ -3969,7 +3942,6 @@ impl Shell {
                     .children(self.media_player_cards(cx))
                     .children(self.task_foot(cx))
                     .children(self.task_ghosts())
-                    .children(self.agent_bar_card(cx))
                     .children(self.drm_note_card(cx))
             }
         };

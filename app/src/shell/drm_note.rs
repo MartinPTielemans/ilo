@@ -219,9 +219,9 @@ impl Shell {
     }
 
     /// Whether the note's button shows the page in Safari's engine, in the tab: where the Mac has
-    /// one, and not in an agent's Space, whose tabs never switch.
+    /// one.
     fn can_switch(&self) -> bool {
-        self.browser.can_use_system_engine() && !self.agents_space_shown()
+        self.browser.can_use_system_engine()
     }
 
     /// Shows the page of the tab shown in Safari's engine. The core takes the note away.
@@ -233,10 +233,10 @@ impl Shell {
     }
 
     /// Where Google's Widevine module is, if the note of the tab shown offers it: for a Widevine
-    /// page, where the core offers the module, and not in an agent's Space.
+    /// page, where the core offers the module.
     fn widevine_offer(&self) -> Option<Widevine> {
         let state = self.browser.widevine();
-        let offered = state != Widevine::None && !self.agents_space_shown();
+        let offered = state != Widevine::None;
         let widevine = |key_system: &&SharedString| offered && key_system.as_ref() == WIDEVINE;
         self.drm_note().filter(widevine).map(|_| state)
     }
@@ -739,32 +739,6 @@ mod tests {
             shell.restart_for_widevine(cx);
         });
         assert_eq!(host.take(), ["restart"]);
-    }
-
-    /// The yes is the user's: in an agent's Space the note offers no module, and the browser
-    /// downloads none.
-    #[gpui::test]
-    fn an_agents_space_gets_no_widevine_offer(cx: &mut TestAppContext) {
-        let (shell, host) = window_with_tabs(cx);
-        host.widevine.set(Widevine::Absent);
-        shell.update(cx, |shell, cx| {
-            let agent = (
-                1,
-                "Agent".into(),
-                None,
-                0,
-                "".into(),
-                "claude-code".into(),
-                "".into(),
-            );
-            shell.set_spaces(vec![agent], cx);
-            shell.set_media_unsupported(10, "com.widevine.alpha", cx);
-            assert!(shell.drm_note().is_some());
-            assert_eq!(shell.widevine_offer(), None);
-            host.take();
-            shell.download_widevine(cx);
-        });
-        assert!(host.take().is_empty());
     }
 
     /// The module plays Widevine alone, and where the core offers none, nothing changes.
