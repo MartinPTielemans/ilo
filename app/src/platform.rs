@@ -169,6 +169,8 @@ unsafe extern "C" {
     pub fn host_show_window_buttons(ui_view: *mut c_void, shown: bool);
     pub fn host_press_window_button(ui_view: *mut c_void, button: i32);
     #[cfg(target_os = "macos")]
+    pub fn host_enter_full_screen(ui_view: *mut c_void) -> bool;
+    #[cfg(target_os = "macos")]
     pub fn host_window_buttons(
         ui_view: *mut c_void,
         centres: *mut f64,

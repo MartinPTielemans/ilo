@@ -527,8 +527,9 @@ pub trait Browser {
     /// Shows the note on how to leave full screen in the toast, or takes it away if it shows.
     fn full_screen_note(&self, shown: bool, cx: &mut App);
     /// Puts the window full screen of its own, as the green button or the window manager's key
-    /// does, unless it is already.
-    fn enter_full_screen(&self, cx: &mut App);
+    /// does, unless it is already, which it returns: AppKit takes a window opened from a
+    /// full-screen one there itself.
+    fn enter_full_screen(&self, cx: &mut App) -> bool;
     /// Shows the note that `tab`'s page stopped answering in the toast, with Wait and Reload, until
     /// one is pressed or it's taken away (`shown` false).
     fn hang_note(&self, tab: u64, shown: bool, cx: &mut App);

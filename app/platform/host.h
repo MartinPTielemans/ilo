@@ -557,6 +557,11 @@ bool host_window_buttons(void* ui_view, double centres[3], double* y, double* di
 // Does what a click on the close (0), minimize (1) or zoom (2) button of |ui_view|'s window does.
 void host_press_window_button(void* ui_view, int button);
 
+// The Mac's: puts the browser window of |ui_view| full screen as its green button does, unless
+// it's full screen already or on its way, as AppKit takes a window opened from a full-screen one
+// there itself. Returns whether it was.
+bool host_enter_full_screen(void* ui_view);
+
 #ifdef _WIN32
 // Windows' alone, whose browser window has no title bar for these: moves |ui_view|'s window with
 // the pointer until the button that's down comes up, as a drag on a title bar does, and whether

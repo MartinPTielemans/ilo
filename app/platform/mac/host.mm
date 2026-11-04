@@ -4594,6 +4594,24 @@ void host_day_starts(double starts[4]) {
   }
 }
 
+bool host_enter_full_screen(void* ui_view) {
+  Browser* browser = BrowserWithView(ui_view);
+  if (!browser || !browser->window) {
+    return false;
+  }
+  NSWindow* window = browser->window;
+  // AppKit sets the mask as the transition starts.
+  if (window.styleMask & NSWindowStyleMaskFullScreen) {
+    return true;
+  }
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!(window.styleMask & NSWindowStyleMaskFullScreen)) {
+      [window toggleFullScreen:nil];
+    }
+  });
+  return false;
+}
+
 void host_press_window_button(void* ui_view, int button) {
   Browser* browser = BrowserWithView(ui_view);
   if (!browser) {

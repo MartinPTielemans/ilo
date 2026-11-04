@@ -54,12 +54,13 @@ impl Shell {
             log!("browser: new window first frame at {ms:.1} ms");
         }
         // The bar waits for the window's full screen, as macOS moves the window to a desktop of
-        // its own on the way, and the bar would be left on the one it came from.
+        // its own on the way, and the bar would be left on the one it came from. AppKit can have
+        // taken it there itself, as it does a window opened from a full-screen one.
         if opening.full_screen && !self.full_screen {
-            if !std::mem::replace(&mut opening.entering, true) {
-                self.browser.enter_full_screen(cx);
+            let asked = std::mem::replace(&mut opening.entering, true);
+            if asked || !self.browser.enter_full_screen(cx) {
+                return;
             }
-            return;
         }
         if opening.entering {
             // check.sh reads this line.
@@ -171,6 +172,31 @@ mod tests {
             bars(&host),
             1,
             "the bar didn't open once it was full screen"
+        );
+    }
+
+    /// A window AppKit took full screen itself, as it does one opened from a full-screen window,
+    /// isn't asked again, which would take it out, and opens its bar at once.
+    #[gpui::test]
+    fn a_new_window_already_full_screen_opens_its_bar_at_once(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx);
+        host.full_screen.set(true);
+        shell.update(cx, |shell, _| {
+            shell.open_bar_when_shown(Instant::now(), true)
+        });
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        assert_eq!(
+            bars(&host),
+            1,
+            "the bar waited for a full screen the window had"
+        );
+        assert_eq!(
+            (host.take().iter())
+                .filter(|call| *call == "enter full screen")
+                .count(),
+            1,
+            "it didn't ask once whether the window was full screen"
         );
     }
 }

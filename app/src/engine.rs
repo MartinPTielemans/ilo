@@ -1312,16 +1312,18 @@ impl Browser for Engine {
         );
     }
 
-    fn enter_full_screen(&self, _: &mut App) {
-        // The Mac's through the green button's toggle, which moves it to a desktop of its own;
-        // elsewhere the core's, as the window manager's key does.
+    fn enter_full_screen(&self, _: &mut App) -> bool {
+        // The Mac's as its green button does, which moves it to a desktop of its own; elsewhere
+        // the core's, as the window manager's key does.
         #[cfg(target_os = "macos")]
-        unsafe {
-            platform::host_press_window_button(self.ui_view, 2)
-        };
+        return unsafe { platform::host_enter_full_screen(self.ui_view) };
         #[cfg(not(target_os = "macos"))]
-        if !self.window_full_screen() {
-            unsafe { bc::bc_window_toggle_full_screen(self.window) };
+        {
+            let already = self.window_full_screen();
+            if !already {
+                unsafe { bc::bc_window_toggle_full_screen(self.window) };
+            }
+            already
         }
     }
 
