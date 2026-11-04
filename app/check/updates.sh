@@ -34,7 +34,8 @@ banner_looks() {
   read -r bx by bw bh <<EOF
 $(grep '^browser: update banner 0 at ' "$log" | tail -1 | cut -d' ' -f6-)
 EOF
-  local tone light opened
+  local tone light opened open_height
+  open_height=$(sed -n 's/^update-banner-open = \([0-9]*\).*/\1/p' design/tokens.toml)
   for tone in light dark; do
     if [ $tone = light ]; then light=true; else light=false; fi
     if ! grep '^browser: window light ' "$log" | tail -1 | grep -q " $light\$"; then
@@ -51,11 +52,14 @@ EOF
     done
     [ "$(grep -c '^browser: update banner open$' "$log" || true)" -gt "$opened" ] ||
       fail "the update banner didn't open under the pointer: $(grep '^browser: update banner' "$log" | tail -1)"
-    # Once it has opened all the way, in the dialog's 0.275 s: the round trip that drew it there.
+    # Once it's drawn open all the way, at tokens.toml's height, in the dialog's 0.275 s.
     for _ in $(seq 50); do
-      [ "$(grep '^browser: update banner 0 at ' "$log" | tail -1 | cut -d' ' -f9)" -gt "$bh" ] && break
+      [ "$(grep '^browser: update banner 0 at ' "$log" | tail -1 | cut -d' ' -f9)" = "$open_height" ] &&
+        break
       sleep 0.1
     done
+    [ "$(grep '^browser: update banner 0 at ' "$log" | tail -1 | cut -d' ' -f9)" = "$open_height" ] ||
+      fail "the update banner didn't open to $open_height: $(grep '^browser: update banner 0 at ' "$log" | tail -1)"
     ../tools/window-screenshot.sh "$pid" "$out/updates-banner-open-$tone.png" ||
       fail "no window to capture"
     send move $sidebar_point
