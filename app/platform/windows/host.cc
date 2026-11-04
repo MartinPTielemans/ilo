@@ -4114,6 +4114,12 @@ bool host_trash(const char* path) {
          GetFileAttributesW(Wide(path).c_str()) == INVALID_FILE_ATTRIBUTES;
 }
 
+// shortcut: a tab's drag out of its window is the Mac's alone so far, and its row stays (#1798).
+bool host_drag_tab(void*, uint64_t, double, double, double, double, double, double,
+                   void (*)(uint64_t, int, bool, double, double)) {
+  return false;
+}
+
 bool host_drag_file(const char* path, void (*ended)(bool)) {
   std::wstring wide = Wide(path);
   if (GetFileAttributesW(wide.c_str()) == INVALID_FILE_ATTRIBUTES) {

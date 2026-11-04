@@ -224,6 +224,18 @@ unsafe extern "C" {
     );
     pub fn host_trash(path: *const c_char) -> bool;
     pub fn host_drag_file(path: *const c_char, ended: extern "C" fn(taken: bool)) -> bool;
+    #[allow(clippy::too_many_arguments)]
+    pub fn host_drag_tab(
+        ui_view: *mut c_void,
+        tab: u64,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        grab_x: f64,
+        grab_y: f64,
+        ended: extern "C" fn(tab: u64, how: c_int, placed: bool, x: f64, y: f64),
+    ) -> bool;
     pub fn host_file_preview(
         path: *const c_char,
         id: u64,
@@ -401,6 +413,10 @@ pub const UPDATE_READY: c_int = 5;
 pub const UPDATE_FAILED: c_int = 6;
 pub const UPDATE_AVAILABLE: c_int = 7;
 
+/// How the system's drag of a tab ended (host_drag_tab).
+pub const TAB_TAKEN: c_int = 0;
+pub const TAB_LET_GO: c_int = 1;
+
 /// What host_take_drops hears of a drag.
 pub const DRAG_OVER: c_int = 0;
 pub const DRAG_DROP: c_int = 2;
@@ -409,4 +425,6 @@ pub const DRAG_DROP: c_int = 2;
 pub struct host_dragged {
     pub url: *const c_char,
     pub file: bool,
+    /// A tab of the app's that host_drag_tab drags, else 0.
+    pub tab: u64,
 }
