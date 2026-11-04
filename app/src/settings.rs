@@ -1017,13 +1017,18 @@ fn open(cx: &mut App) {
                 settings.focus.clone()
             })
             .detach();
-            // Settings opens in its search field, which a press away gives the keyboard back from.
+            // A press away from the search field, which Settings opens in, takes the keyboard from
+            // it to Settings, unless the press gives it to a control: ⌘Z there would be the field's,
+            // which undoes nothing, and Esc and ⌘W go on to what Settings shows.
             let search = settings.search.clone();
-            browser::settings_rows::give_back_on_press_away(
+            cx.subscribe_in(
                 &search,
                 window,
-                cx,
-                |settings: &Settings| settings.focus.clone(),
+                |settings, search, _: &browser::text_input::Away, window, cx| {
+                    if search.focus_handle(cx).is_focused(window) {
+                        window.focus(&settings.focus, cx)
+                    }
+                },
             )
             .detach();
             // Closing it hides it, so it opens again where the user left it.
