@@ -239,6 +239,11 @@ void host_set_overlay_growth(int overlay, double x, double y);
 // Makes the overlay, once it grows in, shrink back to where it grew from as it hides, fading.
 void host_set_overlay_shrink(int overlay);
 
+// Makes the overlay that grows in (host_set_overlay_growth) grow from |from| of its size, rather
+// than near nothing, over |seconds|, fading in alongside, and fade out over |out| seconds as it
+// hides, shrinking back to |from| only if host_set_overlay_shrink asked: a folder's preview. Each
+// show takes the motion last set.
+void host_set_overlay_motion(int overlay, double from, double seconds, double out);
 // Under Reduce Motion the overlays that grow in and shrink back only fade, at their size. The UI
 // says so as its own Reduce Motion changes (main.rs, set_reduce_motion).
 void host_set_overlays_still(bool still);

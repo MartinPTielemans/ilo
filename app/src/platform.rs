@@ -117,6 +117,7 @@ unsafe extern "C" {
     pub fn host_set_overlay_radius(overlay: c_int, radius: f64);
     pub fn host_set_overlay_growth(overlay: c_int, x: f64, y: f64);
     pub fn host_set_overlay_shrink(overlay: c_int);
+    pub fn host_set_overlay_motion(overlay: c_int, from: f64, seconds: f64, out: f64);
     pub fn host_set_overlays_still(still: bool);
     pub fn host_show_overlay(
         overlay: c_int,

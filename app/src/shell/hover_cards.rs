@@ -12,6 +12,7 @@ use crate::hover_card::{Action, Anchor, Card, Event, Hover, Icon, Rest};
 use crate::space_icon::has_icon;
 use crate::{icon_picker, theme_picker};
 
+use super::recent_downloads::{age, now};
 use super::{PLATE_INSET, Row, Shell, host};
 
 impl Shell {
@@ -140,25 +141,38 @@ impl Shell {
     }
 
     /// What a closed `folder`'s preview lists: the tabs in it and in the folders in it, as their
-    /// rows say them, or nothing for an open one, whose rows show.
+    /// rows say them, the one a window showed last first, each with how long ago that was, as
+    /// Arc's does, or nothing for an open folder, whose rows show.
     pub(super) fn previewed(&self, folder: u64) -> Vec<Item> {
         if self.shown_space().is_none_or(|space| space.is_open(folder)) {
             return Vec::new();
         }
-        let item = |tab: u64| {
+        let (now, today) = (now(), self.browser.day_starts()[0]);
+        let mut tabs: Vec<(u64, f64)> = (self.folder_tabs(folder).into_iter())
+            .map(|tab| (tab, self.browser.last_seen(tab)))
+            .collect();
+        // Those seen at the same time, or never, keep the sidebar's order.
+        tabs.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let item = |(tab, seen): (u64, f64)| {
             let each = self.tabs.get(&tab);
             let icon = match each.filter(|each| has_icon(&each.page.icon)) {
                 Some(each) => Icon::Emoji(each.page.icon.clone()),
                 None => Icon::Favicon(each.and_then(|each| each.favicon.clone())),
+            };
+            let age = if seen > 0. {
+                age(seen, now, today).into()
+            } else {
+                Default::default()
             };
             Item {
                 tab,
                 title: self.title(tab),
                 url: self.url(tab),
                 icon,
+                age,
             }
         };
-        self.folder_tabs(folder).into_iter().map(item).collect()
+        tabs.into_iter().map(item).collect()
     }
 
     /// Shows the tab chosen in a folder's preview, which peeks under its closed folder, with the

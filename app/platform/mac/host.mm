@@ -303,6 +303,8 @@ Browser* FrontBrowser() {
 // (Arc 1.170 rec at 2×, the Space's icon picker: 0.57 of its size at 55 ms, 0.83 at 105 ms).
 constexpr double kOverlayGrow = 0.2;
 constexpr double kOverlayGrowFade = 0.1;
+// The size it grows from, about its growth point.
+constexpr double kOverlayShrunk = 0.05;
 // Arc's theme picker shrinks to its arrow and fades as it closes, gone in 0.11 s.
 constexpr double kOverlayShrink = 0.11;
 
@@ -348,6 +350,12 @@ struct Overlay {
   double reach() const { return 3 * shadow_radius + shadow_drop; }
   // From host_set_overlay_shrink: whether it shrinks back there as it hides.
   bool shrinks = false;
+  // From host_set_overlay_motion: the size it grows from, over how long, how long its fade in
+  // takes, and how long it fades out as it hides, or 0 for a popover's shrink.
+  double grow_from = kOverlayShrunk;
+  double grow_time = kOverlayGrow;
+  double grow_fade = kOverlayGrowFade;
+  double fade_out = 0;
 };
 
 Overlay g_overlays[] = {Overlay("command bar"), Overlay("icon picker"), Overlay("theme picker"),
@@ -2281,8 +2289,8 @@ void host_set_overlays_still(bool still) {
   g_overlays_still = still;
 }
 
-// |overlay| at near nothing about its growth point, as a sublayer transform of the layer holding
-// its blur and drawing; at its size under Reduce Motion.
+// |overlay| at the size it grows from, about its growth point, as a sublayer transform of the
+// layer holding its blur and drawing; at its size under Reduce Motion.
 static CATransform3D ShrunkOverlay(const Overlay& overlay) {
   NSView* container = overlay.view.superview;
   CALayer* layer = container.layer;
@@ -2293,13 +2301,13 @@ static CATransform3D ShrunkOverlay(const Overlay& overlay) {
   const double y = (container.isFlipped ? overlay.grow_y : size.height - overlay.grow_y) -
                    layer.anchorPoint.y * size.height;
   CATransform3D shrunk = CATransform3DMakeTranslation(x, y, 0);
-  const double scale = g_overlays_still ? 1 : 0.05;
+  const double scale = g_overlays_still ? 1 : overlay.grow_from;
   shrunk = CATransform3DScale(shrunk, scale, scale, 1);
   return CATransform3DTranslate(shrunk, -x, -y, 0);
 }
 
-// Grows |overlay| in from near nothing about its growth point, its blur and drawing together, as
-// NSPopover does, with its shadow fading in alongside.
+// Grows |overlay| in about its growth point, its blur and drawing together, as NSPopover does,
+// with its shadow fading in alongside.
 static void GrowOverlay(Overlay& overlay) {
   NSView* container = overlay.view.superview;
   container.wantsLayer = YES;
@@ -2310,24 +2318,25 @@ static void GrowOverlay(Overlay& overlay) {
   CABasicAnimation* grow = [CABasicAnimation animationWithKeyPath:@"sublayerTransform"];
   grow.fromValue = [NSValue valueWithCATransform3D:ShrunkOverlay(overlay)];
   grow.toValue = [NSValue valueWithCATransform3D:CATransform3DIdentity];
-  grow.duration = kOverlayGrow;
+  grow.duration = overlay.grow_time;
   grow.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.15:0.75:0.35:1];
   [layer addAnimation:grow forKey:@"grow"];
   CABasicAnimation* fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
   fade.fromValue = @0;
   fade.toValue = @1;
-  fade.duration = kOverlayGrowFade;
+  fade.duration = overlay.grow_fade;
   [layer addAnimation:fade forKey:@"fade"];
   overlay.shadow.alphaValue = 0;
   [NSAnimationContext
       runAnimationGroup:^(NSAnimationContext* context) {
-        context.duration = kOverlayGrow;
+        context.duration = overlay.grow_time;
         overlay.shadow.animator.alphaValue = 1;
       }
       completionHandler:nil];
 }
 
-// Shrinks |overlay| back to its growth point and fades it, then takes it off |parent|.
+// Fades |overlay| out, shrinking it back to its growth point if it shrinks, then takes it off
+// |parent|.
 static void ShrinkOverlay(Overlay& overlay, NSWindow* parent) {
   CALayer* layer = overlay.view.superview.layer;
   NSWindow* window = overlay.window;
@@ -2347,23 +2356,26 @@ static void ShrinkOverlay(Overlay& overlay, NSWindow* parent) {
   }];
   CAMediaTimingFunction* timing =
       [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseIn];
+  const double seconds = overlay.fade_out > 0 ? overlay.fade_out : kOverlayShrink;
   CABasicAnimation* shrink = [CABasicAnimation animationWithKeyPath:@"sublayerTransform"];
   shrink.toValue = [NSValue valueWithCATransform3D:ShrunkOverlay(overlay)];
   CABasicAnimation* fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
   fade.toValue = @0;
   for (CABasicAnimation* animation in @[ shrink, fade ]) {
-    animation.duration = kOverlayShrink;
+    animation.duration = seconds;
     animation.timingFunction = timing;
     // Held at its end until the window goes, so it doesn't come back for a frame.
     animation.fillMode = kCAFillModeForwards;
     animation.removedOnCompletion = NO;
   }
-  [layer addAnimation:shrink forKey:@"shrink"];
+  if (overlay.shrinks) {
+    [layer addAnimation:shrink forKey:@"shrink"];
+  }
   [layer addAnimation:fade forKey:@"shrink fade"];
   [CATransaction commit];
   [NSAnimationContext
       runAnimationGroup:^(NSAnimationContext* context) {
-        context.duration = kOverlayShrink;
+        context.duration = seconds;
         overlay.shadow.animator.alphaValue = 0;
       }
       completionHandler:nil];
@@ -2372,6 +2384,15 @@ static void ShrinkOverlay(Overlay& overlay, NSWindow* parent) {
 void host_set_overlay_shrink(int index) {
   if (Overlay* overlay = OverlayAt(index)) {
     overlay->shrinks = true;
+  }
+}
+
+void host_set_overlay_motion(int index, double from, double seconds, double out) {
+  if (Overlay* overlay = OverlayAt(index)) {
+    overlay->grow_from = from;
+    overlay->grow_time = seconds;
+    overlay->grow_fade = seconds;
+    overlay->fade_out = out;
   }
 }
 
@@ -2514,7 +2535,7 @@ void host_hide_overlay(int index) {
     }
   }
   Browser* browser = overlay->over;
-  if (overlay->shrinks && overlay->grows && overlay->window.visible) {
+  if (overlay->grows && (overlay->shrinks || overlay->fade_out > 0) && overlay->window.visible) {
     ShrinkOverlay(*overlay, browser->window);
   } else {
     [browser->window removeChildWindow:overlay->window];

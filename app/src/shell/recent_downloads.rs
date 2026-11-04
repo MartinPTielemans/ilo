@@ -221,7 +221,7 @@ fn civil(days: i64) -> (i64, u32, u32) {
     (yoe + era * 400 + i64::from(month <= 2), month, day)
 }
 
-fn now() -> f64 {
+pub(super) fn now() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0., |since| since.as_secs_f64() * 1e3)

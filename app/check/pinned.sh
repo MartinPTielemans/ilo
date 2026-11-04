@@ -633,6 +633,15 @@ bar_command expand-folders "Expand All Folders" "expand all"
 expect "^browser: outline $f+\\[$c\\]\$" "Expand All Folders didn't open the folder: $(outline)"
 bar_command collapse-folders "Collapse All Folders" "collapse all"
 expect "^browser: outline $f-\\[$c\\]\$" "Collapse All Folders didn't close the folder again: $(outline)"
+# The preview coming and going, recorded for its motion: 0.45 s after the pointer comes onto the
+# folder's row it fades in over 90 ms as it grows from 0.85 about the middle of its left edge, and
+# 40 ms after the pointer leaves both it fades out over 80 ms (docs/ux-spec.md › Folders › Preview).
+record folder-preview-motion 3
+send move $(pinned_row 0)
+expect "^browser: folder preview shown $f at " "resting on the closed folder didn't preview it to record"
+send move $page_point
+expect '^browser: folder preview hidden$' "the pointer leaving the folder's row didn't hide its preview"
+recorded
 # The pointer resting on the closed folder previews its tab with the keyboard in its search, where
 # typing its title selects it and ↩ shows it, keeping the folder closed.
 send move $(pinned_row 0)
