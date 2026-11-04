@@ -29,6 +29,7 @@
 #include "components/download/public/common/download_item.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/download_manager.h"
 #include "ui/gfx/codec/png_codec.h"
@@ -241,6 +242,18 @@ void RegisterDownloadPrefs() {
 }
 
 void ObserveDownloads(Profile* profile) {
+  // A private session saw none of its profile's download settings, so it asked where to save,
+  // ungoogled-chromium's default, and offered the system's Downloads folder, where a regular
+  // window saves to the profile's folder at once. It takes them from its profile as it starts.
+  // Neither is a pref an off-the-record session writes through, so they stay in its memory and
+  // go with it, and a profile whose user turned asking on still asks.
+  if (profile->IsOffTheRecord()) {
+    PrefService* original = profile->GetOriginalProfile()->GetPrefs();
+    PrefService* session = profile->GetPrefs();
+    session->SetBoolean(prefs::kPromptForDownload, original->GetBoolean(prefs::kPromptForDownload));
+    session->SetFilePath(prefs::kDownloadDefaultDirectory,
+                         original->GetFilePath(prefs::kDownloadDefaultDirectory));
+  }
   TheDownloads().Observe(profile);
 }
 
