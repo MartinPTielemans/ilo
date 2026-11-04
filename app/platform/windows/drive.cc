@@ -960,9 +960,10 @@ HWND g_drag_view = nullptr;
 IDropTarget* g_drag_target = nullptr;
 
 // A drag's data as another app's would carry |kind| |value|: a file at the path as Explorer drags
-// one, a link as browsers do, with its text, or text. Null for another kind.
+// one, a link as browsers do, with its text, or text; or a tab, as host_drag_tab carries one from
+// another of the app's windows. Null for another kind.
 IDataObject* DragData(const std::string& kind, const std::string& value) {
-  if (kind != "file" && kind != "url" && kind != "text") {
+  if (kind != "file" && kind != "url" && kind != "text" && kind != "tab") {
     return nullptr;
   }
   IDataObject* data = nullptr;
@@ -983,6 +984,12 @@ IDataObject* DragData(const std::string& kind, const std::string& value) {
   };
   const std::wstring wide = Wide(value);
   const size_t size = (wide.size() + 1) * sizeof(wchar_t);
+  if (kind == "tab") {
+    const std::wstring tab = std::to_wstring(GetCurrentProcessId()) + L" " + wide;
+    put(RegisterClipboardFormatW(L"dev.ilo.browser.tab"), tab.c_str(),
+        (tab.size() + 1) * sizeof(wchar_t));
+    return data;
+  }
   if (kind == "file") {
     // DROPFILES, then the paths, each ending in a null, and one more null.
     std::vector<BYTE> files(sizeof(DROPFILES) + size + sizeof(wchar_t), 0);

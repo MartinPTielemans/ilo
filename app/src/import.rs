@@ -64,9 +64,13 @@ use sources::{Family, Os, Roots, Source};
 pub trait Host {
     /// Where the other browsers' folders are: the user's, or a made-up home a check run gives.
     fn roots(&self) -> Roots;
-    /// The browser's app icon as the system draws it, if its app is installed, for its row's
-    /// plate; ilo ships none of theirs (#1673).
-    fn app_icon(&self, _source: &Source) -> Option<std::sync::Arc<gpui::RenderImage>> {
+    /// The browser's app icon as the system draws it, `pixels` square, if its app is installed,
+    /// for its row's plate; ilo ships none of theirs (#1673).
+    fn app_icon(
+        &self,
+        _source: &Source,
+        _pixels: u32,
+    ) -> Option<std::sync::Arc<gpui::RenderImage>> {
         None
     }
     fn existing(&self, cx: &App) -> Existing;
@@ -557,8 +561,10 @@ pub struct ImportView {
     skip: bool,
     look: Look,
     sources: Vec<Source>,
-    /// Each browser's app icon, as the system gave it when the view was made, or none.
+    /// Each browser's app icon, or none, as the system gave it at the window's scale it was asked
+    /// for at, which it's asked for again at once the window's scale changes.
     icons: Vec<Option<std::sync::Arc<gpui::RenderImage>>>,
+    icons_scale: Option<f32>,
     step: Step,
     /// Which switch last changed, and when, for its knob's slide.
     switched: Option<(Kind, Instant)>,
@@ -631,19 +637,13 @@ impl ImportView {
         let names: Vec<String> = sources.iter().map(Source::name).collect();
         // check.sh waits for this line.
         log!("browser: import found {}", names.join(", "));
-        let icons: Vec<_> = sources.iter().map(|source| host.app_icon(source)).collect();
-        let iconed: Vec<&str> = (names.iter().zip(&icons))
-            .filter(|(_, icon)| icon.is_some())
-            .map(|(name, _)| name.as_str())
-            .collect();
-        // check.sh reads this line.
-        log!("browser: import icons {}", iconed.join(", "));
         ImportView {
             host,
             skip,
             look: Look::settings(true),
             sources,
-            icons,
+            icons: Vec::new(),
+            icons_scale: None,
             step: Step::List,
             switched: None,
             passwords_file: None,
@@ -2470,6 +2470,25 @@ impl ImportView {
         group(look, rows)
     }
 
+    /// Asks the system for each browser's app icon, a plate's 28 points at the window's `scale`,
+    /// unless it has them at that scale.
+    fn ask_icons(&mut self, scale: f32) {
+        if self.icons_scale == Some(scale) {
+            return;
+        }
+        let pixels = (GLYPH_PLATE * scale).round() as u32;
+        self.icons = (self.sources.iter())
+            .map(|source| self.host.app_icon(source, pixels))
+            .collect();
+        self.icons_scale = Some(scale);
+        let iconed: Vec<String> = (self.sources.iter().zip(&self.icons))
+            .filter(|(_, icon)| icon.is_some())
+            .map(|(source, _)| source.name())
+            .collect();
+        // check.sh reads this line.
+        log!("browser: import icons {pixels} px: {}", iconed.join(", "));
+    }
+
     /// The browser's app icon at a glyph plate's size and place, as the system draws it, or with
     /// none, a quiet globe on the plate, so the names line up either way.
     fn app_plate(&self, index: usize) -> gpui::AnyElement {
@@ -3260,6 +3279,7 @@ impl Render for ImportView {
             log!("browser: import drawn {step}");
         }
         let look = self.look;
+        self.ask_icons(window.scale_factor());
         let arrival = self.arrival(window, cx);
         let stopped_cards = self.stopped_cards(cx);
         let mut favorites = match self.step {

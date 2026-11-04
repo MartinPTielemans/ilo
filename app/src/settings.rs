@@ -43,13 +43,14 @@ use browser::settings_rows::{
     Look as RowLook, SLIDE, button, detailed_row, end, frame, glyph_plate, group, group_lined,
     popup, row, switch, text,
 };
+use browser::settings_search::{self, EndSearch, Entry, Search};
 use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN};
 use browser::tokens::radius;
 use browser::tokens::settings::{
     BUTTON_GLYPH, BUTTONS_TOP, CHIP, CHIP_FIXED, CHIP_FIXED_TEXT, CHIP_GAP, CHIP_HEIGHT,
-    CHIP_NONE_TEXT, CHIP_PADDING, CHIP_RADIUS, CHIP_TEXT, CHIP_WIDTH, CONTROL_GAP, CONTROL_HEIGHT,
-    CONTROL_PADDING, CONTROL_RADIUS, DETAIL_LINE, DETAIL_TOP, END_GAP, FAVORITES_POPUP_WIDTH,
-    FIRST_GROUP, GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT,
+    CHIP_NONE_TEXT, CHIP_PADDING, CHIP_RADIUS, CHIP_TEXT, CHIP_WIDTH, CONTROL_GAP, CONTROL_PADDING,
+    DETAIL_LINE, DETAIL_TOP, END_GAP, FAVORITES_POPUP_WIDTH, FIRST_GROUP, FOUND_FLASH,
+    FOUND_FLASH_TIME, GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT,
     LEDE, LEDE_LINE, LEDE_TOP, MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH,
     RESTORE_RADIUS, ROW_X, SECTION_TEXT, SHORT_PADDING, SHORT_ROW, TEXT_X, TITLE, WIDTH,
 };
@@ -96,10 +97,43 @@ enum Block {
     /// A heading with what's inside it after a ›, quieter, as Import › Arc.
     Crumb(SharedString, SharedString),
     Group(gpui::Div),
+    /// A group of rows the search can find.
+    Rows(Vec<Row>),
     /// Buttons under the group before, such as New Profile.
     Under(gpui::Div),
     /// A view that spaces its own groups, such as the import's.
     View(AnyElement),
+}
+
+/// A setting's row, with what Settings' search reads of it.
+struct Row {
+    name: SharedString,
+    line: Option<SharedString>,
+    /// The keys its chip shows, a shortcut's.
+    keys: Option<String>,
+    /// A feature's own setting, under it in its group with its text where the feature's name is.
+    nested: bool,
+    div: gpui::Div,
+}
+
+/// A section's page as its section builds it: the sentence under its name, what sits beside
+/// them, and its blocks, which the card draws, or the search reads the rows of.
+struct Page {
+    section: Section,
+    lede: SharedString,
+    action: Option<AnyElement>,
+    blocks: Vec<Block>,
+}
+
+impl Page {
+    fn new(section: Section, lede: impl Into<SharedString>, blocks: Vec<Block>) -> Page {
+        Page {
+            section,
+            lede: lede.into(),
+            action: None,
+            blocks,
+        }
+    }
 }
 
 /// The keys a row of the Shortcuts tab shows: a command's shortcut, or keys the app binds itself.
@@ -378,8 +412,13 @@ pub struct Settings {
     recording: Option<Command>,
     /// Why the key pressed for this command wasn't given to it.
     refused: Option<(Command, SharedString)>,
-    /// Shortcuts' search, which narrows its rows to what it finds.
+    /// The search at the column's top, whose rows found replace the section's page while it
+    /// holds any words.
     search: Entity<TextInput>,
+    /// What the search last logged it found, for check.sh.
+    searched: String,
+    /// The row a click on a found section's name showed, which flashes once, and when.
+    flash: Option<(SharedString, Instant)>,
     default_browser: Entity<DefaultBrowser>,
     account: Entity<Account>,
     /// The sites with ad blocking off, as Privacy last logged them for check.sh.
@@ -939,6 +978,7 @@ fn open(cx: &mut App) {
         cx.bind_keys([release]);
     }
     account::bind_keys(cx);
+    settings_search::bind_keys(cx);
     let synced = account::synced(cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
@@ -1042,16 +1082,7 @@ fn open(cx: &mut App) {
                     .placeholder_color(look.detail)
                     .caret_color(look.ink)
             });
-            let mut searched = String::new();
-            cx.observe(&search, move |_, search, cx| {
-                let typed = search.read(cx).text();
-                if typed != searched {
-                    searched = typed.to_string();
-                    log_found(&searched, cx);
-                }
-                cx.notify();
-            })
-            .detach();
+            cx.observe(&search, |_, _, cx| cx.notify()).detach();
             Settings {
                 account,
                 #[cfg(target_os = "linux")]
@@ -1074,6 +1105,8 @@ fn open(cx: &mut App) {
                 recording: None,
                 refused: None,
                 search,
+                searched: String::new(),
+                flash: None,
                 off_sites_logged: None,
                 drawn_logged: Rc::default(),
                 popup_texts: Rc::default(),
@@ -1319,15 +1352,20 @@ impl Settings {
     }
 
     /// A section's page: its name in the display face, or for About the app's, the sentence that
-    /// says what it's for, `action` beside them, and its blocks, each spaced by what's before it.
-    fn page(
-        &self,
-        title: &'static str,
-        lede: impl Into<SharedString>,
-        action: Option<AnyElement>,
-        blocks: Vec<Block>,
-        cx: &mut App,
-    ) -> gpui::Div {
+    /// says what it's for, its action beside them, and its blocks, each spaced by what's before it.
+    fn page(&self, page: Page, cx: &mut App) -> gpui::Div {
+        let Page {
+            section,
+            lede,
+            action,
+            blocks,
+        } = page;
+        // The one page whose heading is the app's name, with the line the first launch shows
+        // under the wordmark.
+        let title = match section {
+            Section::About => env!("APP_NAME"),
+            section => section.name(),
+        };
         let base = self.base();
         let title =
             shell::display_text(title, TITLE_SIZE, TITLE_LINE, cx).text_color(base.opacity(TITLE));
@@ -1335,7 +1373,7 @@ impl Settings {
             .mt(px(LEDE_TOP))
             .line_height(px(LEDE_LINE))
             .text_color(base.opacity(LEDE))
-            .child(lede.into());
+            .child(lede);
         let head = div()
             .px(px(TEXT_X))
             .flex()
@@ -1365,6 +1403,7 @@ impl Settings {
                         .into_any_element()
                 }
                 Block::Group(group) | Block::Under(group) => group.into_any_element(),
+                Block::Rows(rows) => self.rows(rows).into_any_element(),
                 Block::View(view) => view,
             };
             div().mt(px(top)).child(block)
@@ -1390,6 +1429,20 @@ impl Settings {
             .child(heading)
     }
 
+    /// A group of `rows`, a feature's own settings under it with the hairline from their text, and
+    /// the row a click on a found section's name went to flashing once.
+    fn rows(&self, rows: Vec<Row>) -> gpui::Div {
+        let x = ROW_X + GLYPH_PLATE + GLYPH_PLATE_GAP;
+        let rows = rows.into_iter().map(|row| {
+            let div = self.flashed(&row.name, row.div);
+            match row.nested {
+                true => (div.pl(px(x)), x),
+                false => (div, ROW_X),
+            }
+        });
+        group_lined(&self.look, rows)
+    }
+
     /// `name`'s row once a profile, by what `control` gives each: a plain row with one profile,
     /// else one a profile, its name in grey before its control, the line under the first alone.
     fn per_profile(
@@ -1398,7 +1451,7 @@ impl Settings {
         name: &'static str,
         line: Option<SharedString>,
         mut control: impl FnMut(&Profile) -> Option<AnyElement>,
-    ) -> Vec<gpui::Div> {
+    ) -> Vec<Row> {
         let several = profiles.len() > 1;
         let mut rows = Vec::new();
         for profile in profiles {
@@ -1413,7 +1466,7 @@ impl Settings {
                 name.text_color(self.look.detail).into_any_element()
             });
             let line = line.clone().filter(|_| rows.is_empty());
-            rows.push(line_row(
+            rows.push(setting(
                 &self.look,
                 name,
                 line,
@@ -1425,7 +1478,7 @@ impl Settings {
 
     /// General: how ilo opens and quits, and each profile's search engine and downloads. Make
     /// Default sits by the heading only while ilo isn't the default.
-    fn general(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> gpui::Div {
+    fn general(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         let default = self.default_browser.read(cx);
         let lede: SharedString = match (default.is_default(), default.offers()) {
             (true, _) => concat!("How ", env!("APP_NAME"), " opens, quits and looks.").into(),
@@ -1461,33 +1514,29 @@ impl Settings {
             cx,
         );
         let quit = shell::keystroke_label("cmd-q");
-        let opening = group(
-            look,
-            [
-                line_row(
-                    look,
-                    "Reopen your windows and tabs",
-                    Some(
-                        concat!(
-                            "Off: ",
-                            env!("APP_NAME"),
-                            " opens one empty window, and Today tabs go to the archive."
-                        )
-                        .into(),
-                    ),
-                    vec![restore],
+        let opening = vec![
+            setting(
+                look,
+                "Reopen your windows and tabs",
+                Some(
+                    concat!(
+                        "Off: ",
+                        env!("APP_NAME"),
+                        " opens one empty window, and Today tabs go to the archive."
+                    )
+                    .into(),
                 ),
-                line_row(
-                    look,
-                    "Ask before quitting",
-                    Some(
-                        format!("{quit} asks first, so a stray press can't close every window.")
-                            .into(),
-                    ),
-                    vec![warn],
+                vec![restore],
+            ),
+            setting(
+                look,
+                "Ask before quitting",
+                Some(
+                    format!("{quit} asks first, so a stray press can't close every window.").into(),
                 ),
-            ],
-        );
+                vec![warn],
+            ),
+        ];
         // Each only once the core has loaded the profile.
         let search = self.per_profile(profiles, "Search engine", None, |profile| {
             let id = profile.id;
@@ -1527,26 +1576,24 @@ impl Settings {
                     .into_any_element(),
             )
         });
-        let found: Vec<gpui::Div> = search.into_iter().chain(folders).collect();
+        let found: Vec<Row> = search.into_iter().chain(folders).collect();
         let mut blocks = vec![
             Block::Heading("Opening and quitting".into()),
-            Block::Group(opening),
+            Block::Rows(opening),
         ];
         if !found.is_empty() {
             blocks.push(Block::Heading("Search and downloads".into()));
-            blocks.push(Block::Group(group(look, found)));
+            blocks.push(Block::Rows(found));
         }
-        self.page(Section::General.name(), lede, make, blocks, cx)
+        Page {
+            action: make,
+            ..Page::new(Section::General, lede, blocks)
+        }
     }
 
     /// Tabs & Sidebar: when Today tabs are archived and unloaded, who shares the favorites, and
     /// how the hidden sidebar comes.
-    fn tabs_and_sidebar(
-        &self,
-        profiles: &[Profile],
-        accent: Rgba,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    fn tabs_and_sidebar(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
         let reopen = shell::keystroke_label("shift-cmd-t");
         let archive = self.per_profile(
@@ -1578,7 +1625,7 @@ impl Settings {
         );
         let unload = unsafe { bc::bc_unload_idle_tabs() };
         let unload = self.toggle("unload idle tabs", unload, set_unload_idle_tabs, accent, cx);
-        let unload = line_row(
+        let unload = setting(
             look,
             "Unload tabs you haven't looked at",
             Some(
@@ -1598,7 +1645,7 @@ impl Settings {
             }),
         );
         let favorites = favorites.child(self.drawn("favorites".into()));
-        let favorites = line_row(
+        let favorites = setting(
             look,
             "Share favorites",
             Some("Which Spaces show the same favorites.".into()),
@@ -1606,8 +1653,8 @@ impl Settings {
         );
         let mut blocks = vec![
             Block::Heading("Today tabs".into()),
-            Block::Group(group(look, archive.into_iter().chain([unload]))),
-            Block::Group(group(look, [favorites])),
+            Block::Rows(archive.into_iter().chain([unload]).collect()),
+            Block::Rows(vec![favorites]),
         ];
         // Where the host watches for it (host_watch_option_taps).
         if cfg!(any(target_os = "macos", target_os = "linux")) {
@@ -1629,14 +1676,14 @@ impl Settings {
                     "Press and let go of Alt with no other key.",
                 ),
             };
-            let row = line_row(look, name, Some(line.into()), vec![option]);
-            blocks.push(Block::Group(group(look, [row])));
+            let row = setting(look, name, Some(line.into()), vec![option]);
+            blocks.push(Block::Rows(vec![row]));
         }
         // The trackpad's, which the Mac alone has a host for.
         if cfg!(target_os = "macos") {
             let haptics = unsafe { bc::bc_haptics() };
             let haptics = self.toggle("haptics", haptics, set_haptics, accent, cx);
-            let row = line_row(
+            let row = setting(
                 look,
                 "Haptic feedback",
                 Some(
@@ -1645,27 +1692,25 @@ impl Settings {
                 ),
                 vec![haptics],
             );
-            blocks.push(Block::Group(group(look, [row])));
+            blocks.push(Block::Rows(vec![row]));
         }
-        self.page(
-            Section::TabsAndSidebar.name(),
+        Page::new(
+            Section::TabsAndSidebar,
             "When Today tabs leave, and how the sidebar comes and goes.",
-            None,
             blocks,
-            cx,
         )
     }
 
     /// Features: ilo's own tools, each its glyph, its name, its ways in and its switch, and its
     /// own settings under it.
-    fn features(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> gpui::Div {
+    fn features(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
         let mac = cfg!(target_os = "macos");
         let (little_keys, little_click, peek_click) = match mac {
             true => ("⌥⌘N", "⌥⌘-click", "⇧-click"),
             false => ("Ctrl+Alt+N", "Ctrl+Alt-click", "Shift-click"),
         };
-        let little = feature_row(
+        let little = feature(
             look,
             "icons/app-window.svg",
             concat!("Little ", env!("APP_NAME")),
@@ -1688,7 +1733,7 @@ impl Settings {
                 accent,
                 cx,
             );
-            nested(line_row(
+            nested(setting(
                 look,
                 "Show in the menu bar",
                 Some("A button there opens a new one.".into()),
@@ -1706,22 +1751,20 @@ impl Settings {
                 settings.choose_little_archive_after(chosen, window, cx)
             }),
         );
-        let little_archive = nested(line_row(
+        let little_archive = nested(setting(
             look,
             "Archive windows left unused after",
             Some("Counted from when you leave the window.".into()),
             vec![little_archive.into_any_element()],
         ));
-        let little = group_lined(
-            look,
-            [(little, ROW_X)]
-                .into_iter()
-                .chain(menu_bar)
-                .chain([little_archive]),
-        );
+        let little: Vec<Row> = [little]
+            .into_iter()
+            .chain(menu_bar)
+            .chain([little_archive])
+            .collect();
         let previews = unsafe { bc::bc_link_previews() };
         let previews = self.toggle("link previews", previews, set_link_previews, accent, cx);
-        let peek = feature_row(
+        let peek = feature(
             look,
             "icons/eye.svg",
             "Peek",
@@ -1736,7 +1779,7 @@ impl Settings {
         );
         let mini_player = unsafe { bc::bc_auto_picture_in_picture() };
         let mini_player = self.toggle("mini player", mini_player, set_mini_player, accent, cx);
-        let mini_player = feature_row(
+        let mini_player = feature(
             look,
             "icons/picture-in-picture-2.svg",
             "Mini Player",
@@ -1750,54 +1793,48 @@ impl Settings {
         };
         // One profile's service on the feature's row, else each profile's under it.
         let note = match profiles {
-            [profile] => group(
+            [profile] => vec![feature(
                 look,
-                [feature_row(
-                    look,
-                    "icons/pencil.svg",
-                    "New Note",
-                    Some(note_line),
-                    vec![self.notes_popup(profile.id, cx)],
-                )],
-            ),
+                "icons/pencil.svg",
+                "New Note",
+                Some(note_line),
+                vec![self.notes_popup(profile.id, cx)],
+            )],
             _ => {
                 let services = profiles.iter().map(|profile| {
-                    nested(line_row(
+                    nested(setting(
                         look,
                         profile.name.clone(),
                         None,
                         vec![self.notes_popup(profile.id, cx)],
                     ))
                 });
-                let services: Vec<(gpui::Div, f32)> = services.collect();
-                let head = feature_row(
+                let head = feature(
                     look,
                     "icons/pencil.svg",
                     "New Note",
                     Some(note_line),
                     Vec::new(),
                 );
-                group_lined(look, [(head, ROW_X)].into_iter().chain(services))
+                [head].into_iter().chain(services).collect()
             }
         };
         let mut blocks = vec![
-            Block::Group(little),
-            Block::Group(group(look, [peek])),
-            Block::Group(group(look, [mini_player])),
-            Block::Group(note),
+            Block::Rows(little),
+            Block::Rows(vec![peek]),
+            Block::Rows(vec![mini_player]),
+            Block::Rows(note),
         ];
         if self.widevine.read(cx).shown() {
-            blocks.push(Block::Group(group(look, [self.widevine_row(cx)])));
+            blocks.push(Block::Rows(vec![self.widevine_row(cx)]));
         }
-        self.page(
-            Section::Features.name(),
+        Page::new(
+            Section::Features,
             concat!(
                 env!("APP_NAME"),
                 "'s own tools. Off takes every way into one away, and its switch brings it back."
             ),
-            None,
             blocks,
-            cx,
         )
     }
 
@@ -1826,17 +1863,17 @@ impl Settings {
         off_sites: &[OffSite],
         accent: Rgba,
         cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    ) -> Page {
         let look = &self.look;
         let ad_blocking = unsafe { bc::bc_ad_blocking() };
         let ad_blocking = self.toggle("ad blocking", ad_blocking, set_ad_blocking, accent, cx);
-        let ad_blocking = line_row(
+        let ad_blocking = setting(
             look,
             "Block ads and trackers",
             Some("uBlock Origin, built in. A site's Site Controls turn it off there.".into()),
             vec![ad_blocking],
         );
-        let mut blocks = vec![Block::Group(group(look, [ad_blocking]))];
+        let mut blocks = vec![Block::Rows(vec![ad_blocking])];
         if !off_sites.is_empty() {
             blocks.push(Block::Heading("Ads are shown on".into()));
             blocks.push(Block::Group(self.off_sites(off_sites, cx)));
@@ -1870,11 +1907,11 @@ impl Settings {
                 .into_iter()
                 .chain([button.into_any_element()])
                 .collect();
-            line_row(look, "Browsing data", line, controls)
+            setting(look, "Browsing data", line, controls)
         });
-        let clear: Vec<gpui::Div> = clear.collect();
+        let clear: Vec<Row> = clear.collect();
         if !clear.is_empty() {
-            blocks.push(Block::Group(group(look, clear)));
+            blocks.push(Block::Rows(clear));
         }
         let collector = crash_reports_collector();
         if !collector.is_empty() {
@@ -1890,15 +1927,13 @@ impl Settings {
                 "Only while this is on, to {}. Turning it off deletes those not yet sent.",
                 collector_name(&collector)
             );
-            let row = line_row(look, "Send crash reports", Some(line.into()), vec![send]);
-            blocks.push(Block::Group(group(look, [row])));
+            let row = setting(look, "Send crash reports", Some(line.into()), vec![send]);
+            blocks.push(Block::Rows(vec![row]));
         }
-        self.page(
-            Section::Privacy.name(),
+        Page::new(
+            Section::Privacy,
             concat!("What sites may do, and what ", env!("APP_NAME"), " sends."),
-            None,
             blocks,
-            cx,
         )
     }
 
@@ -2179,7 +2214,7 @@ impl Settings {
     /// Profiles: a row for each profile, with how many Spaces are in it, Rename, and Delete for one
     /// nothing is in, else why it has none, and New Profile under them. A double-click on a
     /// profile's name renames it too, as on a Space's.
-    fn profiles(&self, profiles: &[Profile], cx: &mut Context<Self>) -> gpui::Div {
+    fn profiles(&self, profiles: &[Profile], cx: &mut Context<Self>) -> Page {
         let look = &self.look;
         let rows = profiles.iter().map(|profile| {
             let (id, name) = (profile.id, profile.name.clone());
@@ -2264,13 +2299,11 @@ impl Settings {
             Block::Group(group(look, rows)),
             Block::Under(div().flex().child(new)),
         ];
-        self.page(
-            Section::Profiles.name(),
+        Page::new(
+            Section::Profiles,
             "A profile keeps its own logins, cookies, history and extensions. Several Spaces can \
              share one.",
-            None,
             blocks,
-            cx,
         )
     }
 
@@ -2410,19 +2443,14 @@ impl Settings {
     /// over its switches for what it offers to save; then its saved logins, each with its username
     /// under its site, the sites set to Never, each removable, and Manage Passwords…, which opens
     /// Chrome's page; then its addresses and cards, while it has any.
-    fn passwords(
-        &mut self,
-        profiles: &[Profile],
-        accent: Rgba,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    fn passwords(&mut self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         const LEDE: &str = concat!(
             "What each profile saves and fills in. ",
             env!("APP_NAME"),
             " shows a login's site and username, never its password."
         );
         let Some(profile) = self.passwords_profile(profiles) else {
-            return self.page(Section::Passwords.name(), LEDE, None, Vec::new(), cx);
+            return Page::new(Section::Passwords, LEDE, Vec::new());
         };
         // None until the core has loaded the profile, which has no logins to read before then.
         let offers = |what| {
@@ -2585,7 +2613,7 @@ impl Settings {
             blocks.push(Block::Heading("Payment methods".into()));
             blocks.push(Block::Group(group(&look, cards)));
         }
-        self.page(Section::Passwords.name(), LEDE, None, blocks, cx)
+        Page::new(Section::Passwords, LEDE, blocks)
     }
 
     /// Opens the profiles' pop-up menu over its button, as the archive's, and lists the profile
@@ -2704,7 +2732,7 @@ impl Settings {
 
     /// Agents: the switch that lets agents in, the tasks ⇥ asks in ⌘T, the apps that connect,
     /// and each agent's permissions and what it did in this run, newest first.
-    fn agents(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> gpui::Div {
+    fn agents(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
         let on = agents.read(cx).is_on();
         let switch = {
@@ -2720,7 +2748,7 @@ impl Settings {
             }
             None => "Each asks before it sends or pays for anything.".into(),
         };
-        let master = feature_row(
+        let master = feature(
             look,
             Section::Agents.glyph(),
             "Let agents use the browser",
@@ -2733,7 +2761,7 @@ impl Settings {
             .map(|client| self.client(agents, *client, &listed, cx))
             .collect();
         let mut blocks = vec![
-            Block::Group(group(look, [master])),
+            Block::Rows(vec![master]),
             Block::Heading("Tasks".into()),
             Block::Group(self.tasks(agents, cx)),
             Block::Heading("Apps that connect".into()),
@@ -2804,13 +2832,11 @@ impl Settings {
                 )],
             )));
         }
-        self.page(
-            Section::Agents.name(),
+        Page::new(
+            Section::Agents,
             "Agents work in a Space of their own that you can watch. They never see your \
              passwords, cookies or autofill.",
-            None,
             blocks,
-            cx,
         )
     }
 
@@ -3136,7 +3162,7 @@ impl Settings {
 
     /// Google's Widevine module, where the core offers it: where it is, and the ways to get it,
     /// load it or remove it. The user's, as the note's yes is.
-    fn widevine_row(&self, cx: &mut Context<Self>) -> gpui::Div {
+    fn widevine_row(&self, cx: &mut Context<Self>) -> Row {
         let look = &self.look;
         let row = self.widevine.read(cx);
         let (title, detail, actions) = (row.title(), row.detail(), row.actions());
@@ -3153,7 +3179,7 @@ impl Settings {
                 .into_any_element()
         });
         let buttons: Vec<AnyElement> = buttons.collect();
-        feature_row(look, "icons/video.svg", title, Some(detail.into()), buttons)
+        feature(look, "icons/video.svg", title, Some(detail.into()), buttons)
     }
 
     /// Gives the renaming field the keyboard once its profile is listed, which a new one is once
@@ -3184,35 +3210,11 @@ impl Settings {
     /// keys in a chip. A click on a command's chip records its next keys; escape leaves them and
     /// ⌫ takes them away. ↺ gives a command its default back, and Restore Defaults every
     /// command, with the favorites numbered and ⌘9 the last tab.
-    fn shortcuts(&self, accent: Rgba, cx: &mut Context<Self>) -> gpui::Div {
-        let look = &self.look;
-        let typed = self.search.read(cx).text().to_string();
-        let found = found(&typed, cx);
+    fn shortcuts(&self, accent: Rgba, cx: &mut Context<Self>) -> Page {
         let mut blocks = Vec::new();
-        let search = div()
-            .h(px(CONTROL_HEIGHT))
-            .px(px(CONTROL_PADDING))
-            .flex()
-            .items_center()
-            .rounded(px(CONTROL_RADIUS))
-            .bg(look.control)
-            // Keys typed here are the search's, not a command's being recorded.
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|settings, _, _, cx| {
-                    settings.recording = None;
-                    settings.refused = None;
-                    cx.notify();
-                }),
-            )
-            .relative()
-            .child(self.search.clone())
-            .child(self.drawn("shortcuts search".into()));
-        blocks.push(Block::View(search.into_any_element()));
         for (section, rows) in SHORTCUTS {
-            let rows: Vec<gpui::Div> = rows
+            let rows: Vec<Row> = rows
                 .iter()
-                .filter(|(name, _)| found.contains(name))
                 .map(|(name, keys)| {
                     let control = match (keys, keys.fixed()) {
                         (Keys::Of(command), _) => self.shortcut(*command, accent, cx),
@@ -3234,23 +3236,20 @@ impl Settings {
                             .chip(keys.unwrap_or_default().into(), Chip::Fixed)
                             .into_any_element(),
                     };
-                    short_row(shown(name), control)
+                    let name: SharedString = shown(name).into();
+                    Row {
+                        div: short_row(name.clone(), control),
+                        name,
+                        line: None,
+                        keys: keys_label(keys, cx),
+                        nested: false,
+                    }
                 })
                 .collect();
-            if !rows.is_empty() {
-                blocks.push(Block::Heading((*section).into()));
-                blocks.push(Block::Group(group(look, rows)));
-            }
+            blocks.push(Block::Heading((*section).into()));
+            blocks.push(Block::Rows(rows));
         }
-        // Ours: Arc's look for a search that finds nothing isn't recorded.
-        if found.is_empty() {
-            let none = div()
-                .px(px(TEXT_X))
-                .text_color(look.detail)
-                .child("No Results");
-            blocks.push(Block::View(none.into_any_element()));
-        }
-        let restore = button(look, "restore-shortcuts", "Restore Defaults");
+        let restore = button(&self.look, "restore-shortcuts", "Restore Defaults");
         let restore = restore
             .relative()
             .child(self.drawn("restore shortcuts".into()));
@@ -3264,12 +3263,10 @@ impl Settings {
             cx.notify();
         }));
         blocks.push(Block::Under(div().flex().child(restore)));
-        self.page(
-            Section::Shortcuts.name(),
+        Page::new(
+            Section::Shortcuts,
             "Click a command's keys, then press new ones. ↺ gives a command its own back.",
-            None,
             blocks,
-            cx,
         )
     }
 
@@ -3372,13 +3369,13 @@ impl Settings {
     }
 
     /// Import & Export: the import's view, as it is, and Export Spaces as Markdown.
-    fn import_export(&self, cx: &mut Context<Self>) -> gpui::Div {
+    fn import_export(&self, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
         let export = button(look, "export-spaces", "Export…")
             .relative()
             .child(self.drawn("export spaces".into()))
             .on_click(|_, _, cx| crate::export_spaces(cx));
-        let export = line_row(
+        let export = setting(
             look,
             "Spaces as Markdown",
             Some("Each Space's favorites and pinned tabs, as a list of links.".into()),
@@ -3399,15 +3396,13 @@ impl Settings {
         );
         if !under_way {
             blocks.push(Block::Heading("Export".into()));
-            blocks.push(Block::Group(group(look, [export])));
+            blocks.push(Block::Rows(vec![export]));
         }
-        self.page(
-            Section::ImportExport.name(),
+        Page::new(
+            Section::ImportExport,
             "Bring tabs, bookmarks, history and passwords from another browser, or take your \
              Spaces with you.",
-            None,
             blocks,
-            cx,
         )
     }
 
@@ -3415,7 +3410,7 @@ impl Settings {
     /// update stands and, where the build carries a nightly feed, whether it takes nightly builds,
     /// then the licence it's under and the notices of what it's built from, each of which opens in
     /// a tab.
-    fn about(&self, cx: &mut Context<Self>) -> gpui::Div {
+    fn about(&self, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
         // check.sh reads the engine's version here.
         let line = format!("browser: settings about {}", version(cx));
@@ -3485,9 +3480,7 @@ impl Settings {
             Block::Group(group(look, version.into_iter().flatten())),
             Block::Group(group(look, notices)),
         ];
-        // The one page whose heading is the app's name, with the line the first launch shows
-        // under the wordmark.
-        self.page(env!("APP_NAME"), "a good tool.", None, blocks, cx)
+        Page::new(Section::About, "a good tool.", blocks)
     }
 
     /// A right-click on `command`'s chip: who gets its keys first when a page uses them too,
@@ -3792,11 +3785,48 @@ fn feature_row(
         .when(!controls.is_empty(), |row| row.child(end(controls)))
 }
 
+/// A setting's row: its name, its line and its controls, as the search reads it.
+fn setting(
+    look: &RowLook,
+    name: impl Into<SharedString>,
+    line: Option<SharedString>,
+    controls: Vec<AnyElement>,
+) -> Row {
+    let name = name.into();
+    Row {
+        div: line_row(look, name.clone(), line.clone(), controls),
+        name,
+        line,
+        keys: None,
+        nested: false,
+    }
+}
+
+/// A feature's row, its glyph on its quiet plate before its name, as the search reads it.
+fn feature(
+    look: &RowLook,
+    glyph: &'static str,
+    name: impl Into<SharedString>,
+    line: Option<SharedString>,
+    controls: Vec<AnyElement>,
+) -> Row {
+    let name = name.into();
+    Row {
+        div: feature_row(look, glyph, name.clone(), line.clone(), controls),
+        name,
+        line,
+        keys: None,
+        nested: false,
+    }
+}
+
 /// A feature's own setting, under it in its group, its text and the hairline over it starting
 /// where the feature's name does.
-fn nested(row: gpui::Div) -> (gpui::Div, f32) {
-    let x = ROW_X + GLYPH_PLATE + GLYPH_PLATE_GAP;
-    (row.pl(px(x)), x)
+fn nested(row: Row) -> Row {
+    Row {
+        nested: true,
+        ..row
+    }
 }
 
 /// A row whose control fills it, such as a shortcut's chip: shorter than one with a line.
@@ -3850,22 +3880,13 @@ fn command_name(command: Command) -> &'static str {
         .unwrap_or("another command")
 }
 
-/// Where the user's keys are kept: in the profile directory, beside Chromium's profiles, as the
-/// core keeps no settings of the app's own.
-/// The names of the Shortcuts tab's rows that a search for `typed` finds, by their names or the
-/// keys their chips show.
-fn found(typed: &str, cx: &App) -> Vec<&'static str> {
-    let user = shell::user_keys(cx);
-    let rows = SHORTCUTS.iter().flat_map(|(_, rows)| rows.iter());
-    let found = rows.filter(|(name, keys)| {
-        let label = match keys {
-            Keys::Of(command) => user.label(*command),
-            Keys::FavoritesNumbered | Keys::LastTabNinth => None,
-            _ => keys.fixed(),
-        };
-        shell::shortcut_found(typed, &shown(name), label.as_deref())
-    });
-    found.map(|(name, _)| *name).collect()
+/// The keys a Shortcuts row's chip shows, which the search finds it by.
+fn keys_label(keys: &Keys, cx: &App) -> Option<String> {
+    match keys {
+        Keys::Of(command) => shell::user_keys(cx).label(*command),
+        Keys::FavoritesNumbered | Keys::LastTabNinth => None,
+        _ => keys.fixed(),
+    }
 }
 
 /// A row's name as the tab shows it, with ⌘1–⌘8 in this OS's keys, Ctrl+1–Ctrl+8 off the Mac.
@@ -3878,20 +3899,8 @@ fn shown(name: &str) -> String {
     name.replace("⌘1–⌘8", &tabs)
 }
 
-fn log_found(typed: &str, cx: &App) {
-    // check.sh waits for this line.
-    match typed {
-        "" => log!("browser: shortcuts search cleared"),
-        _ => {
-            let found: Vec<String> = found(typed, cx).into_iter().map(shown).collect();
-            log!(
-                "browser: shortcuts search {typed:?} finds {}",
-                found.join(", ")
-            )
-        }
-    }
-}
-
+/// Where the user's keys are kept: in the profile directory, beside Chromium's profiles, as the
+/// core keeps no settings of the app's own.
 fn shortcuts_path() -> String {
     format!("{}/Shortcuts", crate::profile_dir())
 }
@@ -3974,64 +3983,59 @@ impl Render for Settings {
             // check.sh waits for this line after it resizes the window.
             log!("browser: settings drawn at {}x{}", size.0, size.1);
         }
-        let page = match self.section {
-            Section::General => self.general(&profiles(), accent, cx),
-            Section::TabsAndSidebar => self.tabs_and_sidebar(&profiles(), accent, cx),
-            Section::Features => self.features(&profiles(), accent, cx),
-            Section::Agents => match agents::global(cx) {
-                Some(agents) => self.agents(&agents, accent, cx),
-                None => self.page(Section::Agents.name(), "", None, Vec::new(), cx),
-            },
-            Section::Links => {
-                let links = self
-                    .links
-                    .clone()
-                    .map(|links| Block::View(links.into_any_element()));
-                self.page(
-                    Section::Links.name(),
-                    "Where a link from another app opens. Rules run from the top, and the first \
-                     match wins.",
-                    None,
-                    links.into_iter().collect(),
-                    cx,
-                )
+        if self
+            .flash
+            .as_ref()
+            .is_some_and(|(_, at)| at.elapsed().as_secs_f32() < FOUND_FLASH_TIME)
+        {
+            window.request_animation_frame();
+        }
+        let typed = settings_search::typed(&self.search, cx);
+        let (page, found) = match typed.trim().is_empty() {
+            true => {
+                self.log_search(&[], cx);
+                let page = self.section_page(self.section, accent, window, cx);
+                (self.page(page, cx), None)
             }
-            Section::Shortcuts => self.shortcuts(accent, cx),
-            Section::Profiles => {
-                let profiles = profiles();
-                self.focus_field(&profiles, window, cx);
-                self.profiles(&profiles, cx)
+            false => {
+                let (results, found) = self.results(&typed, accent, cx);
+                (results, Some(found))
             }
-            Section::Passwords => self.passwords(&profiles(), accent, cx),
-            Section::Privacy => {
-                let off_sites = off_sites();
-                self.log_off_sites(&off_sites);
-                self.privacy(&profiles(), &off_sites, accent, cx)
-            }
-            Section::Sync => self.page(
-                Section::Sync.name(),
-                "Sync Spaces, bookmarks, passwords and open tabs across your devices, encrypted \
-                 with a key only they hold.",
-                None,
-                vec![Block::View(self.account.clone().into_any_element())],
-                cx,
-            ),
-            Section::ImportExport => self.import_export(cx),
-            Section::About => self.about(cx),
         };
         let base = self.base();
         let view = cx.entity().downgrade();
         let pick: settings_column::Pick = Rc::new(move |section, window, cx| {
             let show = |settings: &mut Settings, cx: &mut Context<Settings>| {
+                settings.end_search(window, cx);
                 settings.show_section(section, window, cx)
             };
             view.update(cx, show).ok();
         });
         let foot: settings_column::Foot = Rc::new(|_, cx| more_settings(cx));
+        let search = self.search.clone();
+        let field = settings_search::field(
+            &self.search,
+            base,
+            self.drawn("search".into()),
+            move |window, cx| {
+                settings_search::end(&search, window, cx);
+            },
+            cx,
+        );
+        // Keys typed there are the search's, not a command's being recorded.
+        let field = div()
+            .capture_any_mouse_down(cx.listener(|settings, _, _, cx| {
+                settings.recording = None;
+                settings.refused = None;
+                cx.notify();
+            }))
+            .child(field);
         let column = settings_column::column(
             self.section,
             self.dark,
             self.drawn_logged.clone(),
+            field.into_any_element(),
+            found.as_deref(),
             pick,
             foot,
         );
@@ -4059,6 +4063,17 @@ impl Render for Settings {
                 settings.record(&event.keystroke, cx)
             }))
             .on_action(|_: &CloseSettings, _, cx| hide(cx))
+            .on_action(cx.listener(|settings, _: &Search, window, cx| {
+                settings.recording = None;
+                let focus = settings.search.read(cx).focus_handle(cx);
+                window.focus(&focus, cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|settings, _: &EndSearch, window, cx| {
+                if !settings.end_search(window, cx) {
+                    cx.propagate();
+                }
+            }))
             .on_action(|_: &ReleaseHeldProfile, _, _| crate::import_host::release_held())
             .on_action(
                 cx.listener(|settings, _: &browser::text_input::Undo, _, cx| settings.undo(cx)),
@@ -4078,6 +4093,198 @@ impl Render for Settings {
 }
 
 impl Settings {
+    /// `section`'s page, as it shows on the card.
+    fn section_page(
+        &mut self,
+        section: Section,
+        accent: Rgba,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Page {
+        match section {
+            Section::General => self.general(&profiles(), accent, cx),
+            Section::TabsAndSidebar => self.tabs_and_sidebar(&profiles(), accent, cx),
+            Section::Features => self.features(&profiles(), accent, cx),
+            Section::Agents => match agents::global(cx) {
+                Some(agents) => self.agents(&agents, accent, cx),
+                None => Page::new(Section::Agents, "", Vec::new()),
+            },
+            Section::Links => {
+                let links = self
+                    .links
+                    .clone()
+                    .map(|links| Block::View(links.into_any_element()));
+                Page::new(
+                    Section::Links,
+                    "Where a link from another app opens. Rules run from the top, and the first \
+                     match wins.",
+                    links.into_iter().collect(),
+                )
+            }
+            Section::Shortcuts => self.shortcuts(accent, cx),
+            Section::Profiles => {
+                let profiles = profiles();
+                self.focus_field(&profiles, window, cx);
+                self.profiles(&profiles, cx)
+            }
+            Section::Passwords => self.passwords(&profiles(), accent, cx),
+            Section::Privacy => {
+                let off_sites = off_sites();
+                self.log_off_sites(&off_sites);
+                self.privacy(&profiles(), &off_sites, accent, cx)
+            }
+            Section::Sync => Page::new(
+                Section::Sync,
+                "Sync Spaces, bookmarks, passwords and open tabs across your devices, encrypted \
+                 with a key only they hold.",
+                vec![Block::View(self.account.clone().into_any_element())],
+            ),
+            Section::ImportExport => self.import_export(cx),
+            Section::About => self.about(cx),
+        }
+    }
+
+    /// What `typed` finds, in place of the section's page, and the sections it's in. It reads the
+    /// sections of settings; the user's own things, their profiles, logins, rules and account,
+    /// are found where they're listed.
+    fn results(
+        &mut self,
+        typed: &str,
+        accent: Rgba,
+        cx: &mut Context<Self>,
+    ) -> (gpui::Div, Vec<Section>) {
+        let profiles = profiles();
+        let mut pages = vec![
+            self.general(&profiles, accent, cx),
+            self.tabs_and_sidebar(&profiles, accent, cx),
+            self.features(&profiles, accent, cx),
+        ];
+        if let Some(agents) = agents::global(cx) {
+            pages.push(self.agents(&agents, accent, cx));
+        }
+        pages.push(self.shortcuts(accent, cx));
+        pages.push(self.privacy(&profiles, &off_sites(), accent, cx));
+        pages.push(self.import_export(cx));
+        // In the column's order, as the results run.
+        pages.sort_by_key(|page| Section::all().position(|each| each == page.section));
+        let (mut entries, mut divs, mut under) = (Vec::new(), Vec::new(), Vec::new());
+        for page in pages {
+            for block in page.blocks {
+                let rows = match block {
+                    Block::Rows(rows) => rows,
+                    Block::Under(buttons) => {
+                        under.push((page.section, buttons));
+                        continue;
+                    }
+                    _ => continue,
+                };
+                let head = rows
+                    .iter()
+                    .find(|row| !row.nested)
+                    .map(|row| row.name.clone());
+                for row in rows {
+                    entries.push(Entry {
+                        section: page.section,
+                        under: row.nested.then(|| head.clone()).flatten(),
+                        name: row.name,
+                        line: row.line,
+                        keys: row.keys,
+                    });
+                    divs.push(Some(row.div));
+                }
+            }
+        }
+        let found = settings_search::find(typed, &entries);
+        let found: Vec<(Entry, gpui::Div)> = found
+            .into_iter()
+            .filter_map(|index| Some((entries[index].clone(), divs[index].take()?)))
+            .collect();
+        let names: Vec<&str> = found.iter().map(|(entry, _)| entry.name.as_ref()).collect();
+        self.log_search(&names, cx);
+        let sections =
+            settings_search::sections(&found.iter().map(|(entry, _)| entry).collect::<Vec<_>>());
+        let view = cx.entity().downgrade();
+        let show: settings_search::Show = Rc::new(move |section, row, window, cx| {
+            let show = |settings: &mut Settings, cx: &mut Context<Settings>| {
+                settings.show_found(section, row, window, cx)
+            };
+            view.update(cx, show).ok();
+        });
+        let logged = self.drawn_logged.clone();
+        let drawn = move |what| browser::settings_rows::drawn(what, logged.clone());
+        let results = settings_search::results(&self.look, found, under, show, drawn);
+        (results, sections)
+    }
+
+    /// Logs what the search found once it changes, for check.sh.
+    /// Logs what the search found once it changes, and what an input method composes in its
+    /// field, which finds nothing until it commits, for check.sh and check/ime.sh.
+    fn log_search(&mut self, found: &[&str], cx: &App) {
+        let input = self.search.read(cx);
+        let (shown, composing) = (input.text().to_string(), input.composing());
+        let typed = settings_search::typed(&self.search, cx);
+        let typed = typed.trim();
+        let now = match composing {
+            true => format!("composing {shown:?}"),
+            false => typed.to_string(),
+        };
+        if now == self.searched {
+            return;
+        }
+        self.searched = now;
+        // check.sh and check/ime.sh wait for these lines.
+        match (composing, typed) {
+            (true, _) => log!("browser: settings search composing {shown:?}"),
+            (false, "") => log!("browser: settings search cleared"),
+            (false, _) => log!(
+                "browser: settings search {typed:?} finds {}",
+                found.join(", ")
+            ),
+        }
+    }
+
+    /// Esc: the field empties and the section shows again. False when there was nothing to end.
+    fn end_search(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !settings_search::end(&self.search, window, cx) {
+            return false;
+        }
+        window.focus(&self.focus, cx);
+        cx.notify();
+        true
+    }
+
+    /// A click on a found group's section name: the section shows, scrolled to `row`, which
+    /// flashes once.
+    fn show_found(
+        &mut self,
+        section: Section,
+        row: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.end_search(window, cx);
+        self.show_section(section, window, cx);
+        // check.sh waits for this line.
+        log!("browser: settings found {} › {row}", section.name());
+        self.card.reveal_next();
+        self.flash = Some((row, Instant::now()));
+        cx.notify();
+    }
+
+    /// `div`, the row named `name`, with the plate that flashes once under it, up and back, after
+    /// a click on its section's name, and the card scrolled to it.
+    fn flashed(&self, name: &SharedString, div: gpui::Div) -> gpui::Div {
+        let Some((_, at)) = self.flash.as_ref().filter(|(flashed, _)| flashed == name) else {
+            return div;
+        };
+        let t = (at.elapsed().as_secs_f32() / FOUND_FLASH_TIME).min(1.);
+        let up = 1. - (2. * t - 1.).abs();
+        div.relative()
+            .rounded(px(radius::ROW))
+            .bg(self.base().opacity(FOUND_FLASH * up))
+            .child(self.card.reveal())
+    }
+
     #[cfg(target_os = "linux")]
     fn cover(&self, cx: &App) -> Option<AnyElement> {
         dialog::cover(&self.dialog, cx)

@@ -548,15 +548,17 @@ send window 1
 send fullscreen
 expect '^browser: window left full screen$' "the first window didn't leave full screen after ⌘N's"
 
-# A tab's row dragged out of its window (#1798), on the Mac and Linux's X11. Over the other window's list
+# A tab's row dragged out of its window (#1798), on the Mac, Windows and Linux's X11. Over the other window's list
 # it moves there where the line marks, its page live with what was typed in it, and let go where
 # nothing takes it, it opens in a window of its own under the pointer, which ⌘Z there closes,
 # sending the tab back. AppKit's drag of the tab only moves within the window it started in, with no
 # real button holding it, so the driver hands the other window's list the tab's drag itself, as it
 # hands another app's, and the drag let go over its own window's page, which takes no tab, is the
-# one let go where nothing takes it. ⌘Z after the drop on the list puts it back too. The windows sit
-# side by side, their lists in the open: Xvfb's screen is 1280 wide, the Macs' 1920.
-if [ "$(uname)" = Darwin ] || [ "$(uname)" = Linux ]; then
+# one let go where nothing takes it. ⌘Z after the drop on the list puts it back too. On Windows the
+# app stops in DoDragDrop under the driver (#1583), so the drag let go where nothing takes it is the
+# Mac's and Linux's alone. The windows sit side by side, their lists in the open: Xvfb's screen is
+# 1280 wide, the Macs' 1920.
+if [ "$(uname)" = Darwin ] || windows || [ "$(uname)" = Linux ]; then
   case $(uname) in
   Linux) left=10 right=640 wide=620 ;;
   *) left=20 right=960 wide=900 ;;
@@ -612,44 +614,48 @@ if [ "$(uname)" = Darwin ] || [ "$(uname)" = Linux ]; then
   expect "^browser: window $first shows $c\$" "⌘Z didn't send the tab dropped on the list back to the first window"
   send key z cmd shift
   expect "^browser: window $sixth shows $c\$" "⇧⌘Z didn't bring the tab back to the second window's list"
-  # Dragged past the second window's bottom edge, its row leaves as the system's drag, and let go
-  # over the page, which takes no tab, it opens in a window of its own there, under the pointer.
-  set -- $(row_of $c)
-  send press $1 $2
-  send dragto $1 $(($2 + 10))
-  send dragto $1 705
-  expect "^browser: tab $c window drag\$" "the row dragged past the window's edge didn't leave it"
-  # AppKit's drag tracks the mouse in a loop of its own until it's let go, which holds the
-  # driver's done till then: the move over the page is posted, and the release ends it there.
-  over=$((wide - 100))
-  post dragto $over 400
-  send release $over 400
-  expect "^browser: tab $c window drag to a new window\$" "let go where nothing took it, the tab's drag opened no window"
-  expect "^browser: window [0-9]* took $c from window $sixth\$" "no window took the tab let go where nothing took it"
-  seventh=$(grep "^browser: window [0-9]* took $c from window $sixth\$" "$log" | tail -1 | cut -d' ' -f3)
-  expect "^browser: window $seventh shows $c\$" "the window opened for the tab didn't show it"
-  driven_seventh=$(grep -c '^browser: window opened ' "$log")
-  # Under the pointer, at its point on the screen, as near as the screen lets it.
-  send order
-  frame=$(grep "^browser: frame window $driven_seventh " "$log" | tail -1 | cut -d' ' -f5-)
-  echo "$frame" | awk -v x=$((right + over)) '{ exit !($1 <= x && x <= $1 + $3 && $2 <= 440 && 440 <= $2 + $4) }' ||
-    fail "the window opened for the tab isn't under the pointer: $frame"
-  ../tools/window-screenshot.sh "$pid" "$out/windows-dragged-out.png" all || fail "no window to capture"
-  send window $driven_seventh
-  kept "let go where nothing took it"
-  # ⌘Z in a page's text field is the page's, so the UI takes the keyboard first, at the sidebar's
-  # empty foot.
-  send click 100 600
-  send key z cmd
-  expect "^browser: window closed $seventh\$" "⌘Z didn't close the window the tab's drag opened"
-  expect "^browser: window $sixth shows $c\$" "⌘Z didn't send the tab back to the window it came from"
+  if windows; then
+    echo "skip: a tab's row let go where nothing takes it: the app stops in DoDragDrop under Windows' driver (#1583)."
+  else
+    # Dragged past the second window's bottom edge, its row leaves as the system's drag, and let go
+    # over the page, which takes no tab, it opens in a window of its own there, under the pointer.
+    set -- $(row_of $c)
+    send press $1 $2
+    send dragto $1 $(($2 + 10))
+    send dragto $1 705
+    expect "^browser: tab $c window drag\$" "the row dragged past the window's edge didn't leave it"
+    # AppKit's drag tracks the mouse in a loop of its own until it's let go, which holds the
+    # driver's done till then: the move over the page is posted, and the release ends it there.
+    over=$((wide - 100))
+    post dragto $over 400
+    send release $over 400
+    expect "^browser: tab $c window drag to a new window\$" "let go where nothing took it, the tab's drag opened no window"
+    expect "^browser: window [0-9]* took $c from window $sixth\$" "no window took the tab let go where nothing took it"
+    seventh=$(grep "^browser: window [0-9]* took $c from window $sixth\$" "$log" | tail -1 | cut -d' ' -f3)
+    expect "^browser: window $seventh shows $c\$" "the window opened for the tab didn't show it"
+    driven_seventh=$(grep -c '^browser: window opened ' "$log")
+    # Under the pointer, at its point on the screen, as near as the screen lets it.
+    send order
+    frame=$(grep "^browser: frame window $driven_seventh " "$log" | tail -1 | cut -d' ' -f5-)
+    echo "$frame" | awk -v x=$((right + over)) '{ exit !($1 <= x && x <= $1 + $3 && $2 <= 440 && 440 <= $2 + $4) }' ||
+      fail "the window opened for the tab isn't under the pointer: $frame"
+    ../tools/window-screenshot.sh "$pid" "$out/windows-dragged-out.png" all || fail "no window to capture"
+    send window $driven_seventh
+    kept "let go where nothing took it"
+    # ⌘Z in a page's text field is the page's, so the UI takes the keyboard first, at the sidebar's
+    # empty foot.
+    send click 100 600
+    send key z cmd
+    expect "^browser: window closed $seventh\$" "⌘Z didn't close the window the tab's drag opened"
+    expect "^browser: window $sixth shows $c\$" "⌘Z didn't send the tab back to the window it came from"
+  fi
   send window $driven_sixth
   send key w cmd shift
   expect "^browser: window closed $sixth\$" "⇧⌘W didn't close the window the tab was dragged to"
   send window 1
   dragged_out=", a tab's row dragged out of its window moves its page live to the other window's list, or let go where nothing takes it to a window of its own under the pointer, which ⌘Z closes, sending it back"
 else
-  echo "skip: a tab's row dragged out of its window: Windows' system drag of a tab isn't built yet (#1798)."
+  echo "skip: a tab's row dragged out of its window: this system has no drag of a tab (#1798)."
 fi
 
 # ⇧⌘W in the last window quits. It's the driver's last command: the app doesn't report it done.
