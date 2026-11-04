@@ -41,7 +41,7 @@ use browser::settings_card::{self, Card};
 use browser::settings_column::{self, Section};
 use browser::settings_rows::{
     Look as RowLook, SLIDE, button, detailed_row, end, frame, glyph_plate, group, group_lined,
-    popup, ring, row, switch, text,
+    popup, ring, ring_round, row, switch, text,
 };
 use browser::settings_search::{self, EndSearch, Entry, NextControl, PreviousControl, Search};
 use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN};
@@ -2153,7 +2153,7 @@ impl Settings {
             // ⇥ reaches it, and Space or Return flips it as a click does.
             .tab_index(0)
             .rounded_full()
-            .focus_visible(ring(self.look.ink))
+            .focus_visible(ring_round(self.look.ink))
             .on_click(cx.listener(move |settings, _, _, cx| {
                 // check.sh waits for this line.
                 log!("browser: {name} {}", if on { "off" } else { "on" });
