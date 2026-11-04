@@ -603,6 +603,7 @@ pub(crate) fn finish_opening(
     ) && let Ok(view) = toast.update(cx, |_, window, _| ns_view(window))
     {
         toast_host.view.set(view);
+        TOAST_VIEW.set(view);
         unsafe { platform::host_add_toast(view) };
         // Auto-archive at launch can come before there's a toast to show its note in.
         show_archive_note(cx);
