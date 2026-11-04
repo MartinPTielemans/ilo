@@ -548,6 +548,17 @@ post rightclick $(row 0)
 expect "^browser: menu shown .*, $(cased 'Move to') › reading 日本語 › Today, \
 $(cased 'Move to') › reading 日本語 › shelf, $(cased 'Move to › New Space…'), " \
   "Move to › didn't list the second Space's Today and its folder: $(grep '^browser: menu shown' "$log" | tail -1)"
+# The capture has the second Space's submenu open on its Today and folder, picked by its keys.
+expect '^browser: menu window at ' "the tab's menu didn't take the keyboard"
+send key m
+send key o
+expect "^browser: menu highlights $(cased 'Move to') at " "typing mo didn't select Move to"
+send key right
+expect "^browser: menu submenu $(cased 'Move to') shown at " "→ didn't open the Move to submenu"
+send key r
+expect '^browser: menu highlights .*reading 日本語 at ' "typing r didn't select the second Space"
+send key right
+expect '^browser: menu submenu reading 日本語 shown at ' "→ didn't open the second Space's submenu"
 ../tools/window-screenshot.sh "$pid" "$out/move-to-folder.png" || fail "no window to capture"
 send choose shelf
 expect '^browser: command move-to-folder via tab menu$' "Move to › reading 日本語 › shelf didn't run"
