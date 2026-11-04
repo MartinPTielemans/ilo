@@ -717,6 +717,7 @@ impl Shell {
             | Command::NewLittleWindow
             | Command::ToggleSidebar
             | Command::RecordTrace
+            | Command::StayOnTop
             | Command::TaskManager
             | Command::Settings
             | Command::KeyboardShortcuts

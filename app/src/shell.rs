@@ -124,7 +124,7 @@ use clean_link::clean_link;
 use commands::ShellHandle;
 pub use commands::{
     BAR_ROWS, BAR_TABS_SHOWN, BarCommand, BarTab, CancelName, Command, CreateSpace, KEY_CONTEXT,
-    KeepName, Match, Run, bar_commands, bind_keys, copy_from_bar, copy_url_of_preview,
+    KeepName, Match, Run, STAY_ON_TOP, bar_commands, bind_keys, copy_from_bar, copy_url_of_preview,
     find_commands, key_name, keystroke_keys, keystroke_label, menu_item, pane_added, run_from_bar,
     shown_tab, task_page_shown, with_named_rows,
 };
@@ -1268,6 +1268,8 @@ pub struct Shell {
     text_system: Option<WindowTextSystem>,
     /// Whether the window is full screen, as macOS last told once its transition was over.
     full_screen: bool,
+    /// Whether Window › Stay On Top keeps it over other apps' windows.
+    on_top: bool,
     /// On Linux, whether the window is maximized, which its third button shows.
     maximized: bool,
     /// Whether the window went full screen for the page, so it comes back with it.
@@ -1683,6 +1685,7 @@ impl Shell {
             link: None,
             text_system: None,
             full_screen: false,
+            on_top: false,
             maximized: false,
             window_for_page: false,
             page_held: None,
