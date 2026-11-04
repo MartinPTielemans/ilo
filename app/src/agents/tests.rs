@@ -1292,18 +1292,36 @@ fn a_tab_the_agents_click_opens_is_named(cx: &mut TestAppContext) {
     let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
     page_done(&agents, &browser, answer, shop_tree(), cx);
 
-    let answer = call(&agents, "claude-code", "click", json!({ "tab": 20, "ref": "e1" }), cx);
+    let answer = call(
+        &agents,
+        "claude-code",
+        "click",
+        json!({ "tab": 20, "ref": "e1" }),
+        cx,
+    );
     agents.update(cx, |agents, _| {
         agents.tab_opened(26, 20);
         agents.tab_opened(27, 10);
     });
     let clicked = page_done(&agents, &browser, answer, shop_tree(), cx);
     let said = clicked.text.split("\n\n").next().unwrap();
-    assert_eq!(said, "Clicked textbox “Coupon”. It opened tab 26 in your Space.");
+    assert_eq!(
+        said,
+        "Clicked textbox “Coupon”. It opened tab 26 in your Space."
+    );
 
-    let answer = call(&agents, "claude-code", "click", json!({ "tab": 20, "ref": "e1" }), cx);
+    let answer = call(
+        &agents,
+        "claude-code",
+        "click",
+        json!({ "tab": 20, "ref": "e1" }),
+        cx,
+    );
     let clicked = page_done(&agents, &browser, answer, shop_tree(), cx);
-    assert_eq!(clicked.text.split("\n\n").next().unwrap(), "Clicked textbox “Coupon”.");
+    assert_eq!(
+        clicked.text.split("\n\n").next().unwrap(),
+        "Clicked textbox “Coupon”."
+    );
 }
 
 /// An order asks the user first, in the card: Allow Once lets it go this time and asks again
