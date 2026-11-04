@@ -1167,6 +1167,9 @@ fn view(cx: &mut App) -> Entity<Settings> {
 /// What Settings' search reads of its rows, for the command bar to find settings by the same
 /// names, other names and keys. The bar asks once a time it opens, as it's typed in.
 pub fn index(cx: &mut App) -> Vec<Entry> {
+    if let Some(index) = INDEX.with_borrow(Clone::clone) {
+        return index;
+    }
     let started = Instant::now();
     let accent = rgb(NO_THEME_ACCENT);
     let entries = view(cx).update(cx, |settings, cx| settings.searched_rows(accent, cx).0);
@@ -1176,7 +1179,20 @@ pub fn index(cx: &mut App) -> Vec<Entry> {
         entries.len(),
         started.elapsed().as_secs_f64() * 1000.
     );
+    INDEX.set(Some(entries.clone()));
     entries
+}
+
+thread_local! {
+    /// The index as last read, until Settings or the core changes what it holds: building every
+    /// section's rows takes milliseconds, which the command bar's frames can't spare each time.
+    static INDEX: RefCell<Option<Vec<Entry>>> = const { RefCell::new(None) };
+}
+
+/// The rows may have changed, as Settings hid after the user changed something, or the core
+/// changed a profile: the bar reads them again.
+fn forget_index() {
+    INDEX.set(None);
 }
 
 /// Shows Settings on `section` at the row named `row`, scrolled to it and flashed once, as a click
@@ -1197,6 +1213,7 @@ pub fn show_row(section: Section, row: SharedString, cx: &mut App) {
 
 /// Shows what changed in the core, such as a profile made, renamed or deleted, if it's open.
 pub fn refresh(cx: &mut App) {
+    forget_index();
     if let Some(window) = cx.try_global::<SettingsWindow>().map(|settings| settings.0) {
         window.update(cx, |_, _, cx| cx.notify()).ok();
     }
@@ -1284,6 +1301,7 @@ fn windows_close_button(base: Rgba, at: gpui::Canvas<()>) -> AnyElement {
 fn hide(cx: &mut App) {
     // check.sh waits for this line.
     log!("browser: settings hidden");
+    forget_index();
     unsafe { platform::host_hide_settings() };
     // Later, as it can come from inside the window's own update. What Links' ⌘Z would bring back
     // goes with the window, as the issue's "until Settings closes" (#1377).
