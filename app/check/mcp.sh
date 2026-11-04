@@ -837,6 +837,10 @@ exec 5<&-
 if [ "$driven" = 1 ]; then
   await_log "^browser: agent session ended mcp-client $agent_tab disconnected\$" \
     "ending the client's session didn't end its session with the tab"
+  # Its card ends on its receipt, the pages it worked in (#1080). The bank's site it was allowed
+  # to open is no order or message.
+  await_log '^browser: task card session-[0-9]* Done Done · [0-9]* pages\{0,1\}$' \
+    "the client's card ended without its receipt: $(grep '^browser: task card session-[0-9]* Done ' "$log" | tail -1)"
   # The agent is at work in the tab it last acted in, the bank's it opened.
   at=$(grep '^browser: agent mcp-client at work in ' "$log" | tail -1 | awk '{print $NF}')
   await_log "^browser: agent mcp-client done in $at\$" "the tab still shows a gone agent at work"
