@@ -113,6 +113,15 @@ await() {
   done
   return 1
 }
+# Puts View › Appearance back to Automatic, the profile's first, by taking away the choice the app
+# keeps for its next launch (settings.rs), which a run that picks Light or Dark and fails before
+# Automatic leaves for the runs after (#1791). The app reads it only as it launches and writes it
+# only when the user picks, so this goes before a launch. On every OS, and it fails if it stays.
+forget_appearance() {
+  rm -f "$profile_dir/Appearance"
+  [ ! -e "$profile_dir/Appearance" ] ||
+    fail "the profile kept its saved appearance, $(cat "$profile_dir/Appearance")"
+}
 # The app logs "browser: loaded" when the main frame has loaded.
 await_load() {
   await '^browser: load' || fail "the page didn't finish loading"
