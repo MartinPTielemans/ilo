@@ -316,7 +316,7 @@ fn serve(stream: Stream, number: u64, shared: &Shared) {
     let Some(agent) = shared.agent(&token) else {
         let refused =
             "The token isn't one the browser gave. Connect the client again in Settings › Agents.";
-        _ = writeln!(writer, "{}", json!({ "error": refused }));
+        _ = writeln!(writer, "{}", json!({ "error": refused })).and_then(|()| writer.flush());
         return;
     };
     if let Some(connection) = shared.connections.lock().unwrap().get_mut(&number) {
