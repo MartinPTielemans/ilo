@@ -999,6 +999,13 @@ close-hovered = 0.12
 url-field = 0.1
 new-tab = 0.62
 new-tab-plus = 0.45
+# The update banner over the footer (#678), as Arc's: a pill this tall at rest, this far over the
+# footer and under the list, its glyph this size in the rows' icon column and its words on their
+# title column; under the pointer it opens upward to this height, in the dialog's timing.
+update-banner = 24.0
+update-banner-gap = 6.0
+update-banner-glyph = 14.0
+update-banner-open = 86.0
 # The Clear divider's line, 0.15 (Arc).
 divider = 0.15
 # The edges under the favorites while the list is scrolled and at its foot while rows are hidden

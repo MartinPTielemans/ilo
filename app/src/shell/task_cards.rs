@@ -835,7 +835,7 @@ impl Shell {
     /// Where the media players end, over Restart to Update, the foot's plates over them.
     pub(super) fn media_top(&self) -> f32 {
         let players = self.media_players().len() as f32 * (MEDIA_HEIGHT + MEDIA_GAP);
-        FOOTER_HEIGHT + self.update_sign_room() + players
+        FOOTER_HEIGHT + self.update_banner_room() + players
     }
 
     /// The most room the opened foot takes before it scrolls: the closed foot never does.

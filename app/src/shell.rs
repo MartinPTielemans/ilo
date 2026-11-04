@@ -112,7 +112,7 @@ mod tile_theme;
 mod trace;
 mod trouble;
 mod undo;
-mod update_sign;
+mod update_banner;
 
 pub use assets::Assets;
 pub use browser::{
@@ -1492,9 +1492,15 @@ pub struct Shell {
     /// The players last drawn, as the log has them, and where the bottom one is.
     media_logged: RefCell<Vec<u64>>,
     media_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// Whether an update waits for a restart, which Restart to Update at the sidebar's foot says,
-    /// where that's drawn, and the watch on the updater.
-    update_waiting: bool,
+    /// What the update banner at the foot offers, whether it's open under the pointer or says a
+    /// restart is under way, its opening or closing from a height, and what the log said last
+    /// (update_banner.rs).
+    update_banner: Option<update_banner::Waiting>,
+    update_open: bool,
+    update_restarting: bool,
+    update_motion: Option<(f32, Instant)>,
+    update_said: Option<&'static str>,
+    /// Where the banner is drawn, and the watch on the updater.
     update_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     _update_watch: Subscription,
     /// Whether a tooltip the agent bar asked for may be up, and whether its bar showed the agent
@@ -1793,7 +1799,11 @@ impl Shell {
             media_dismissed: HashSet::new(),
             media_logged: RefCell::default(),
             media_drawn: Rc::default(),
-            update_waiting: crate::updates::ready(cx),
+            update_banner: update_banner::Waiting::of(crate::updates::stage(cx)),
+            update_open: false,
+            update_restarting: false,
+            update_motion: None,
+            update_said: None,
             update_drawn: Rc::default(),
             _update_watch: crate::updates::observe_view(cx, Self::update_changed),
             agent_tip: Cell::default(),
@@ -3647,6 +3657,7 @@ impl Render for Shell {
         self.step_foot(window, cx);
         self.step_picture(window);
         self.step_recent_downloads(window, cx);
+        self.step_update_banner(window);
         if let Some((_, left)) = &self.leaving_form {
             if left.elapsed().as_secs_f32() < FORM_LEAVE_TITLE + FORM_LEAVE {
                 window.request_animation_frame();
@@ -3954,9 +3965,10 @@ impl Shell {
                     .children(self.question_card(cx))
                     .children(self.cast_card(cx))
                     .children(self.agent_question_card(cx))
-                    .children(self.update_sign())
                     .children(self.media_player_cards(cx))
                     .children(self.task_foot(cx))
+                    // Over the players and the task's foot, which it opens over.
+                    .children(self.update_banner(cx))
                     .children(self.task_ghosts())
                     .children(self.agent_bar_card(cx))
                     .children(self.drm_note_card(cx))
