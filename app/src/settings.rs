@@ -64,11 +64,31 @@ use browser::tokens::text;
 actions!(settings, [CloseSettings, ReleaseHeldProfile]);
 
 /// What Arc offers for how long a Today tab waits unseen before it's archived, in seconds.
-const ARCHIVE_AFTER: [(&str, f64); 4] = [
+const ARCHIVE_AFTER: [(&str, f64); 5] = [
     ("12 hours (default)", 12. * 3600.),
     ("24 hours", 24. * 3600.),
     ("7 days", 7. * 24. * 3600.),
     ("30 days", 30. * 24. * 3600.),
+    // Ours (#1636), Arc had none: Clear and ⌘W still archive (BC_ARCHIVE_NEVER).
+    ("Never", ARCHIVE_NEVER),
+];
+
+/// The core's BC_ARCHIVE_NEVER.
+const ARCHIVE_NEVER: f64 = -1.;
+
+/// Chrome's page zoom choices, as its settings page's.
+const PAGE_ZOOM: [(&str, f64); 11] = [
+    ("50%", 0.5),
+    ("67%", 2. / 3.),
+    ("75%", 0.75),
+    ("80%", 0.8),
+    ("90%", 0.9),
+    ("100% (default)", 1.),
+    ("110%", 1.1),
+    ("125%", 1.25),
+    ("150%", 1.5),
+    ("175%", 1.75),
+    ("200%", 2.),
 ];
 
 /// What's offered for how long a Little ilo window that isn't in use stays open before it closes
@@ -389,6 +409,8 @@ enum Popup {
     TaskModel(Cli),
     /// General's Appearance.
     Appearance,
+    /// General's Page zoom.
+    PageZoom,
 }
 
 pub struct Settings {
@@ -1705,7 +1727,20 @@ impl Settings {
                     .into_any_element(),
             )
         });
-        let found: Vec<Row> = search.into_iter().chain(folders).collect();
+        let ask = self.toggle(
+            "ask where to save",
+            unsafe { bc::bc_ask_where_to_save() },
+            set_ask_where_to_save,
+            accent,
+            cx,
+        );
+        let ask = setting(
+            look,
+            "Ask where to save each file",
+            Some("Each download asks where it goes, rather than saving to its folder.".into()),
+            vec![ask],
+        );
+        let found: Vec<Row> = search.into_iter().chain(folders).chain([ask]).collect();
         let appearance = shell::app_appearance(cx);
         let appearance_popup = self.popup(
             Popup::Appearance,
@@ -1719,16 +1754,44 @@ impl Settings {
             true => "Light, dark, or as macOS is. View › Appearance has it too.",
             false => "Light, dark, or as the system is.",
         };
-        let mut looks = vec![setting(
-            look,
-            "Appearance",
-            Some(appearance_line.into()),
-            vec![
-                appearance_popup
-                    .child(self.drawn("appearance".into()))
-                    .into_any_element(),
-            ],
-        )];
+        let zoom = unsafe { bc::bc_page_zoom() };
+        let zoom_chosen = PAGE_ZOOM
+            .iter()
+            .position(|&(_, each)| (each - zoom).abs() < 0.001);
+        let zoom_label: SharedString = match zoom_chosen {
+            Some(index) => PAGE_ZOOM[index].0.into(),
+            None => format!("{:.0}%", zoom * 100.).into(),
+        };
+        let zoom_popup = self.popup(
+            Popup::PageZoom,
+            zoom_label,
+            POPUP_WIDTH,
+            cx.listener(move |settings, _, window, cx| {
+                settings.choose_page_zoom(zoom_chosen, window, cx)
+            }),
+        );
+        let mut looks = vec![
+            setting(
+                look,
+                "Appearance",
+                Some(appearance_line.into()),
+                vec![
+                    appearance_popup
+                        .child(self.drawn("appearance".into()))
+                        .into_any_element(),
+                ],
+            ),
+            setting(
+                look,
+                "Page zoom",
+                Some("Every page's size, until you zoom a site, which keeps its own.".into()),
+                vec![
+                    zoom_popup
+                        .child(self.drawn("page zoom".into()))
+                        .into_any_element(),
+                ],
+            ),
+        ];
         // The Dock's, which the Mac alone has.
         if cfg!(target_os = "macos") {
             let colored = !off(DOCK_ICON_PLAIN);
@@ -2089,7 +2152,25 @@ impl Settings {
             Some("uBlock Origin, built in. A site's Site Controls turn it off there.".into()),
             vec![ad_blocking],
         );
-        let mut blocks = vec![Block::Rows(vec![ad_blocking])];
+        let prompts = unsafe { bc::bc_notification_prompts() };
+        let prompts_switch = self.toggle(
+            "notification prompts",
+            prompts,
+            set_notification_prompts,
+            accent,
+            cx,
+        );
+        let prompts_line = match prompts {
+            true => "Calls and chat need it. A site you allowed or blocked keeps its choice.",
+            false => "Off: no site can ask. A site you allowed or blocked keeps its choice.",
+        };
+        let prompts = setting(
+            look,
+            "Let sites ask to send notifications",
+            Some(prompts_line.into()),
+            vec![prompts_switch],
+        );
+        let mut blocks = vec![Block::Rows(vec![ad_blocking]), Block::Rows(vec![prompts])];
         if !off_sites.is_empty() {
             blocks.push(Block::Heading("Ads are shown on".into()));
             blocks.push(Block::Group(self.off_sites(off_sites, cx)));
@@ -2404,6 +2485,30 @@ impl Settings {
             settings.update(cx, |settings, cx| settings.chose(cx)).ok();
         });
         self.pop_up(Popup::Favorites, items, picked, window, cx);
+    }
+
+    /// General's Page zoom: Chrome's choices, which every profile's pages take.
+    fn choose_page_zoom(&mut self, chosen: Option<usize>, window: &Window, cx: &mut Context<Self>) {
+        let items: Vec<MenuEntry> = (PAGE_ZOOM.iter().enumerate())
+            .map(|(index, &(title, _))| {
+                let on = Some(index) == chosen;
+                MenuEntry {
+                    checked: on,
+                    over: on,
+                    ..MenuEntry::new(title, true)
+                }
+            })
+            .collect();
+        let settings = cx.weak_entity();
+        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
+            if let Some((title, factor)) = picked.map(|index| PAGE_ZOOM[index]) {
+                // check.sh waits for this line.
+                log!("browser: page zoom {title}");
+                unsafe { bc::bc_set_page_zoom(factor) };
+            }
+            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
+        });
+        self.pop_up(Popup::PageZoom, items, picked, window, cx);
     }
 
     /// General's Appearance: Automatic, Light or Dark, View › Appearance's choice, which every
@@ -4000,6 +4105,14 @@ fn set_dock_icon_color(colored: bool, cx: &mut App) {
 
 fn set_whats_new(shown: bool, _: &mut App) {
     set_off(updates::NO_WHATS_NEW, !shown);
+}
+
+fn set_ask_where_to_save(ask: bool, _: &mut App) {
+    unsafe { bc::bc_set_ask_where_to_save(ask) };
+}
+
+fn set_notification_prompts(on: bool, _: &mut App) {
+    unsafe { bc::bc_set_notification_prompts(on) };
 }
 
 fn set_warn_moving_profiles(warn: bool, _: &mut App) {
