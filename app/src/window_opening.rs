@@ -511,6 +511,8 @@ pub(crate) fn finish_opening(
     });
     // check.sh reads these lines.
     log!("browser: window opened {id}");
+    #[cfg(target_os = "linux")]
+    crate::active_window::window_opened();
     match own {
         Some(Own::Private(profile)) => {
             log!("browser: private window opened {id} profile {profile}")
@@ -536,6 +538,7 @@ pub(crate) fn finish_opening(
         platform::host_take_drops(dragged);
         platform::host_watch_key_window(key_window_changed);
         platform::host_watch_full_screen(full_screen_changed);
+        platform::host_watch_window_main(window_main_changed);
         platform::host_watch_swipes(swiped);
         platform::host_watch_option_taps(option_tapped);
         #[cfg(not(target_os = "linux"))]
@@ -611,6 +614,7 @@ pub(crate) fn finish_opening(
     ) && let Ok(view) = toast.update(cx, |_, window, _| ns_view(window))
     {
         toast_host.view.set(view);
+        TOAST_VIEW.set(view);
         unsafe { platform::host_add_toast(view) };
         // Auto-archive at launch can come before there's a toast to show its note in.
         show_archive_note(cx);

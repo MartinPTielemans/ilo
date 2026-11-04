@@ -222,7 +222,7 @@ impl Shell {
         ghost: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        let selected = row == self.selected_row();
+        let selected = Some(row) == self.selected_row();
         let (id, slot) = match row {
             Row::NewTab => (("new-tab", 0), Slot::NewTab),
             Row::Tab(tab) => (("tab", tab), Slot::Tab(tab)),
@@ -395,7 +395,7 @@ impl Shell {
         {
             return Some(1.);
         }
-        let selected = row == self.selected_row();
+        let selected = Some(row) == self.selected_row();
         let left = self
             .unhovered
             .iter()
@@ -767,6 +767,18 @@ impl Shell {
         }
     }
 
+    /// Mutes every tab of the window, or unmutes them, those silent now too, so none starts playing
+    /// aloud (Arc's Mute All Tabs; ours, which tabs: the window's, as Arc's isn't recorded).
+    pub(super) fn mute_all(&mut self, muted: bool, cx: &mut Context<Self>) {
+        let tabs: Vec<u64> = (self.tabs.iter())
+            .filter(|(_, tab)| tab.page.muted != muted)
+            .map(|(&tab, _)| tab)
+            .collect();
+        for tab in tabs {
+            self.browser.set_muted(tab, muted, cx);
+        }
+    }
+
     /// What stands for `tab`: the emoji the user gave it, else its page's favicon.
     pub(super) fn tab_icon(&self, tab: u64) -> AnyElement {
         self.tab_icon_in(&self.palette, tab)
@@ -995,7 +1007,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let first = panes[0];
-        let row_selected = self.selected_row() == Row::Tab(first);
+        let row_selected = self.selected_row() == Some(Row::Tab(first));
         let hovered = self.pointer_row() == Some(Row::Tab(first)) && drop.is_none();
         // A pinned tab closed already has nothing to close.
         let pinned = self.pinned().contains(&first);
@@ -1142,7 +1154,7 @@ impl Shell {
         } else {
             self.title(tab)
         };
-        let bright = Row::Tab(tab) == self.selected_row() || page.developer_mode;
+        let bright = Some(Row::Tab(tab)) == self.selected_row() || page.developer_mode;
         let title = title(&self.palette, label, bright);
         let title = match self.host_line(tab) {
             Some(host) => with_host(&self.palette, title, host),

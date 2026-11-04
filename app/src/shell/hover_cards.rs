@@ -6,6 +6,8 @@ use std::rc::Rc;
 
 use gpui::{App, Bounds, Context, Pixels, Point, px, size};
 
+use std::time::Duration;
+
 use crate::dock_dot::QUIET;
 use crate::folder_preview::{self, Ask, Item};
 use crate::hover_card::{Action, Anchor, Card, Event, Hover, Icon, Rest};
@@ -14,6 +16,14 @@ use crate::{icon_picker, theme_picker};
 
 use super::{PLATE_INSET, Row, Shell, host};
 
+/// How long the switches are quiet before a page they hid is pictured: past the Dock dot's
+/// `QUIET`, and past the longest the core keeps the pages a switch left on screen over one that
+/// hasn't drawn yet (core/platform/mac/window_views.mm's kLeavingAtMost, 1 s), with a frame to
+/// spare. Asked while it's still there, a page isn't drawn unseen for its picture, and as it
+/// leaves during the copy, the copy comes back empty (#1658).
+pub(super) const PICTURE_HIDDEN: Duration = Duration::from_millis(1100);
+
+const _: () = assert!(PICTURE_HIDDEN.as_millis() > QUIET.as_millis());
 impl Shell {
     /// The pointer came onto `row` or left it: a tab's row or tile rests for its card, and leaving
     /// it lets the card go. Folders, split views' rows and New Tab have none, and none shows while
@@ -301,8 +311,8 @@ impl Shell {
     }
 
     /// The tab shown was `before`'s pages and is now another's: those it hid are pictured once
-    /// the switches have been quiet for QUIET, as the Dock's dot waits, so nothing lands on the
-    /// switch, and a run of switches pictures only what it left hidden.
+    /// the switches have been quiet for `PICTURE_HIDDEN`, so nothing lands on the switch, and a
+    /// run of switches pictures only what it left hidden.
     pub(super) fn hid_for_cards(&mut self, before: Vec<u64>, cx: &mut Context<Self>) {
         let shown = self.panes(self.selected);
         self.card_hidden.extend(
@@ -314,7 +324,7 @@ impl Shell {
             return;
         }
         self.card_wait = Some(cx.spawn(async move |shell, cx| {
-            cx.background_executor().timer(QUIET).await;
+            cx.background_executor().timer(PICTURE_HIDDEN).await;
             shell.update(cx, |shell, cx| shell.picture_hidden(cx)).ok();
         }));
     }

@@ -2,6 +2,7 @@
 //! answers.
 
 use super::*;
+use std::time::Instant;
 
 /// A window's shell's requests, as calls to the core. The core reports back once each call has
 /// returned.
@@ -1068,6 +1069,15 @@ impl Browser for Engine {
         })
     }
 
+    fn toggle_full_screen(&self, _: &mut App) {
+        // The Mac's green button is View › Enter Full Screen's toggleFullScreen:; off the Mac the
+        // core puts the window full screen, as the window manager's key does.
+        match cfg!(target_os = "macos") {
+            true => unsafe { platform::host_press_window_button(self.ui_view, 2) },
+            false => unsafe { bc::bc_window_toggle_full_screen(self.window) },
+        }
+    }
+
     fn press_window_button(&self, button: WindowButton, _: &mut App) {
         // Windows' own zoom button maximizes, and its window has no full screen of its own, so the
         // zoom Escape presses in full screen takes the window out through the core.
@@ -1262,6 +1272,35 @@ impl Browser for Engine {
         with_overlays(show, cx);
     }
 
+    fn toast_share(
+        &self,
+        text: &str,
+        share: Rc<dyn Fn(Point<Pixels>, &mut App)>,
+        time: Duration,
+        cx: &mut App,
+    ) {
+        let text = text.to_string();
+        let show = move |cx: &mut App| {
+            // The capture toast's Share button, as it is (capture.rs).
+            let button = toast::Button {
+                label: toast::Label::Glyph("icons/share.svg"),
+                name: "share",
+                run: share,
+            };
+            toast::show_with_buttons(&text, vec![button], time, cx)
+        };
+        with_overlays(show, cx);
+    }
+
+    fn share_from_toast(&self, url: &str, title: &str, at: Point<Pixels>, _: &mut App) {
+        let (Ok(url), Ok(title)) = (CString::new(url), CString::new(title)) else {
+            return;
+        };
+        let (x, y) = (f64::from(at.x), f64::from(at.y));
+        let view = TOAST_VIEW.get();
+        unsafe { platform::host_share(view, x, y, 1., 1., url.as_ptr(), title.as_ptr()) };
+    }
+
     fn toast_undo(&self, text: &str, undo: Rc<dyn Fn(&mut App)>, time: Duration, cx: &mut App) {
         let text = text.to_string();
         with_overlays(move |cx| toast::show_undo(&text, undo, time, cx), cx);
@@ -1293,6 +1332,31 @@ impl Browser for Engine {
             move |cx| toast::show_with_buttons(&text, vec![button], time, cx),
             cx,
         );
+    }
+
+    fn enter_full_screen(&self, cx: &mut App) -> bool {
+        // The Mac's as its green button does, which moves it to a desktop of its own; elsewhere
+        // the core's, as the window manager's key does.
+        #[cfg(target_os = "macos")]
+        {
+            let _ = cx;
+            unsafe { platform::host_enter_full_screen(self.ui_view) }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let already = self.window_full_screen();
+            // After the frame that asks, as the core resizes the window it's drawing.
+            let window = self.window;
+            if !already {
+                cx.defer(move |_| unsafe { bc::bc_window_toggle_full_screen(window) });
+            }
+            already
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn on_active_space(&self) -> bool {
+        unsafe { platform::host_window_on_active_space(self.ui_view) }
     }
 
     fn full_screen_note(&self, shown: bool, cx: &mut App) {
@@ -1510,6 +1574,7 @@ impl Browser for Engine {
 
     fn new_window(&self, cx: &mut App) {
         let id = self.window;
+        let asked = Instant::now();
         // Outside the shell's update, as the new window's shell reads this one's.
         cx.defer(move |cx| {
             // From a private window, the Spaces are the regular window's in front.
@@ -1518,8 +1583,10 @@ impl Browser for Engine {
                 this.or_else(|| windows.iter().find(|w| w.regular()))
                     .cloned()
             });
-            if from.is_some() {
-                open_window(from, None, cx);
+            if from.is_some()
+                && let Some(opened) = open_window(from, None, cx)
+            {
+                open_bar_when_shown(id, opened, asked, cx);
             }
         });
     }
@@ -1557,12 +1624,16 @@ impl Browser for Engine {
 
     fn new_private_window(&self, cx: &mut App) {
         let id = self.window;
+        let asked = Instant::now();
         cx.defer(move |cx| {
             let from = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == id).cloned());
             // The profile of the Space this window shows, a private one's too.
             let profile = unsafe { bc::bc_space_profile(bc::bc_window_space(id)) };
-            if from.is_some() && profile != 0 {
-                open_window(from, Some(Own::Private(profile)), cx);
+            if from.is_some()
+                && profile != 0
+                && let Some(opened) = open_window(from, Some(Own::Private(profile)), cx)
+            {
+                open_bar_when_shown(id, opened, asked, cx);
             }
         });
     }
@@ -1763,5 +1834,24 @@ pub(crate) fn core_text(text: *const c_char) -> SharedString {
             .to_string_lossy()
             .into_owned()
             .into(),
+    }
+}
+
+/// ⌘N's or ⇧⌘N's window `opened`, from `from`, opens ⌘T's command bar once it's on screen, and
+/// goes full screen first if `from` is full screen of its own (docs/ux-spec.md › Window).
+fn open_bar_when_shown(from: bc::bc_id, opened: bc::bc_id, asked: Instant, cx: &mut App) {
+    let shell_of = |id: bc::bc_id| {
+        WINDOWS.with_borrow(|windows| {
+            (windows.iter().find(|w| w.id == id)).and_then(|w| w.shell.upgrade())
+        })
+    };
+    // Not on Windows yet, where the core's full screen doesn't take a window just opened.
+    let full_screen = cfg!(not(target_os = "windows"))
+        && shell_of(from).is_some_and(|shell| shell.read(cx).in_window_full_screen());
+    if let Some(shell) = shell_of(opened) {
+        shell.update(cx, |shell, cx| {
+            shell.open_bar_when_shown(asked, full_screen);
+            cx.notify();
+        });
     }
 }
