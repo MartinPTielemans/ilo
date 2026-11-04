@@ -63,3 +63,4 @@ ours/chromium-core-passkey-sign-in-wording.patch
 ours/chromium-core-frame-shown.patch
 ours/chromium-core-page-bubbles.patch
 ours/chromium-freezing-measure-on-battery-saver.patch
+ours/chromium-no-page-resource-monitor.patch
