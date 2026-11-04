@@ -1086,6 +1086,17 @@ impl Browser for Engine {
         unsafe { platform::host_press_window_button(self.ui_view, button) };
     }
 
+    fn set_on_top(&self, on: bool, _: &mut App) {
+        unsafe { platform::host_set_window_on_top(self.ui_view, on) };
+    }
+
+    fn can_stay_on_top(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        return frames::stays_on_top();
+        #[cfg(not(target_os = "linux"))]
+        return true;
+    }
+
     fn start_window_move(&self, _: &mut App) {
         // The core moves a window on Linux alone; on Windows the host does, from the app.
         #[cfg(target_os = "windows")]
