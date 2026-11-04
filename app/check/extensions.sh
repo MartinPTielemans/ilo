@@ -695,7 +695,8 @@ crash_once() {
   go_from_bar "chrome-extension://$crashing_id/page.html"
   expect '^browser: title [0-9]* crash page$' "Check Crash's page didn't load"
   go_from_bar "chrome://crash/"
-  expect "browser: extension $crashing_id crashed, $1 times\$" \
+  # The renderer's exit comes once the crash handler has written its report, which takes seconds.
+  expect_late "browser: extension $crashing_id crashed, $1 times\$" \
     "chrome://crash in Check Crash's page didn't count its crash $1"
 }
 crash_launch extension-crash
