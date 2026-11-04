@@ -83,6 +83,7 @@ pub enum PageAction {
     Screenshot,
     /// The tree once the page has settled, as after an action, without one.
     Quiet,
+    Select,
 }
 
 /// What closing an agent's tab did (bc_agent_close_tab).
@@ -328,6 +329,8 @@ struct Act {
     note: String,
     /// What of the outline the answer gives.
     show: Show,
+    /// The field it chooses in, as its answer names it: "combobox “Status”".
+    field: String,
     /// What it would do, as a question has it.
     what: String,
     /// The download it lets go on, for "download", else 0.
@@ -413,6 +416,7 @@ struct Acting {
     /// Whether the action opened the tab, which stays open if its page then fails, so the answer
     /// keeps the note that names it.
     opened: bool,
+    field: String,
     reply: mpsc::Sender<ToolResult>,
     /// The tabs its page opened meanwhile, in the agent's Space, which its answer names.
     opened_tabs: Vec<u64>,
@@ -1093,6 +1097,7 @@ impl Agents {
                     note: String::new(),
                     show: Show::Full,
                     download: 0,
+                    field: String::new(),
                     reply,
                 };
                 if !is_web(&act.url) {
@@ -1101,7 +1106,8 @@ impl Agents {
                 let risk = page::opening_risk(&host);
                 self.check(act, host, risk, cx);
             }
-            "navigate" | "snapshot" | "click" | "type" | "press_key" | "scroll" | "screenshot" => {
+            "navigate" | "snapshot" | "click" | "type" | "select" | "press_key" | "scroll"
+            | "screenshot" => {
                 let tab = match tools::tab_argument(&arguments) {
                     Ok(Some(tab)) => tab,
                     Ok(None) => match self.default_tab(&agent, cx) {
@@ -1501,6 +1507,7 @@ impl Agents {
             note,
             show,
             opened: false,
+            field: String::new(),
             reply,
             opened_tabs: vec![],
         };
@@ -1766,6 +1773,7 @@ impl Agents {
             text: String::new(),
             note: String::new(),
             show,
+            field: String::new(),
             what: String::new(),
             download: 0,
             reply,
@@ -1850,6 +1858,27 @@ impl Agents {
                 act.what = format!("send “{}” on {host}", page::clip(&text, 60));
                 act.text = text;
                 risk = submit.then(|| page::risk(&host, "send")).flatten();
+            }
+            "select" => {
+                let option = string("option").unwrap_or_default().trim().to_string();
+                let Some(element) = element.as_ref().filter(|_| !option.is_empty()) else {
+                    _ = act
+                        .reply
+                        .send(ToolResult::error("select needs a ref and an option."));
+                    return;
+                };
+                act.action = "select_option";
+                act.page = PageAction::Select;
+                act.field = match element.name.is_empty() {
+                    true => element.role.clone(),
+                    false => format!("{} {}", element.role, label(element)),
+                };
+                let chose = format!("“{}”", page::clip(&option, 60));
+                act.note = format!("Chose {chose} in the {}.", act.field);
+                act.what = format!("choose {chose} in {} on {host}", label(element));
+                // As a click on the field or the option would.
+                risk = page::risk(&host, &element.name).or_else(|| page::risk(&host, &option));
+                act.text = option;
             }
             "press_key" => {
                 let key = string("key").unwrap_or_default();
@@ -2132,6 +2161,7 @@ impl Agents {
             text,
             mut note,
             show,
+            field,
             reply,
             ..
         } = act;
@@ -2180,6 +2210,7 @@ impl Agents {
             note,
             show,
             opened,
+            field,
             reply,
             opened_tabs: vec![],
         };
@@ -2231,6 +2262,7 @@ impl Agents {
             text: name,
             note: String::new(),
             show: Show::Nothing,
+            field: String::new(),
             download: id,
             reply,
         };
@@ -2310,6 +2342,7 @@ impl Agents {
             mut note,
             show,
             opened,
+            field,
             reply,
             opened_tabs,
             ..
@@ -2350,6 +2383,14 @@ impl Agents {
             note = match note.is_empty() {
                 true => BUSY.into(),
                 false => format!("{note} {BUSY}"),
+            };
+        }
+        // A choice answers with what the field holds once it shows the option, as the core
+        // names it, and else says the page may have undone it.
+        if !field.is_empty() {
+            note = match tree["chosen"].as_str() {
+                Some(option) => format!("The {field} now holds “{}”.", page::clip(option, 60)),
+                None => format!("{note} {UNSHOWN}"),
             };
         }
         let info = self.browser.tab(tab, cx);
@@ -2700,6 +2741,7 @@ fn act_of(agent: &str, call: u64, tab: u64, reply: mpsc::Sender<ToolResult>) -> 
         note: String::new(),
         show: Show::Nothing,
         what: String::new(),
+        field: String::new(),
         download: 0,
         reply,
     }
@@ -2722,6 +2764,8 @@ const WEB_ONLY: &str = "Agents may open only http and https pages.";
 /// Why an agent can't type into a password field.
 const PASSWORDS: &str = "Password fields are off limits to agents: signing in is the user's to do. \
     Hand them the tab with hand_off.";
+/// What a choice adds when its field doesn't show the option after.
+const UNSHOWN: &str = "It doesn't show it as chosen, so the page may have changed it back.";
 /// What the user reads in the bar of a tab whose page asked for their passkey.
 const PASSKEY: &str = "The page asks for your passkey. Sign in, then hand the tab back.";
 
