@@ -426,6 +426,49 @@ settings_drew Features
 ../tools/window-screenshot.sh "$pid" "$out/settings-found.png" || fail "no window to capture"
 send clickkey $(drawn "toolbar Shortcuts")
 settings_drew Shortcuts
+# Settings › Agents' Tasks from the command bar (#1636), under Let agents use the browser while
+# agents are on: on, ⇥ in ⌘T makes what's typed a task; off, it doesn't, and agents stay on.
+# Agents go off again after.
+send clickkey $(drawn "toolbar Agents")
+settings_drew Agents
+send clickkey $(drawn "switch agents")
+expect '^browser: agents on$' "a click on Let agents use the browser didn't turn agents on"
+tasks_switch=$(drawn "switch agent tasks") || fail "Tasks from the command bar didn't show with agents on"
+../tools/window-screenshot.sh "$pid" "$out/settings-agent-tasks-on.png" || fail "no window to capture"
+send clickkey $tasks_switch
+expect '^browser: agent tasks off$' "a click on Tasks from the command bar didn't turn tasks off"
+../tools/window-screenshot.sh "$pid" "$out/settings-agent-tasks-off.png" || fail "no window to capture"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send type summarise this
+send key tab
+none_while '^browser: command bar asks an agent$' || fail "⇥ made a task with tasks off"
+send key escape
+expect '^browser: command bar hidden$' "escape didn't close the command bar"
+send menu Settings…
+expect '^browser: settings shown Agents$' "Settings… didn't show Agents again"
+settings_drew Agents
+send clickkey $(drawn "switch agent tasks")
+expect '^browser: agent tasks on$' "a click on Tasks from the command bar didn't turn tasks on"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send type summarise this
+send key tab
+expect '^browser: command bar asks an agent$' "⇥ didn't make a task with tasks on"
+send key escape
+send key escape
+expect '^browser: command bar hidden$' "escape didn't close the command bar from the ask"
+send menu Settings…
+expect '^browser: settings shown Agents$' "Settings… didn't show Agents again"
+settings_drew Agents
+send clickkey $(drawn "switch agents")
+expect '^browser: agents off$' "a click on Let agents use the browser didn't turn agents off"
+send clickkey $(drawn "toolbar Shortcuts")
+settings_drew Shortcuts
 send clickkey $(drawn "shortcut new-tab")
 expect '^browser: shortcut recording new-tab$' "a click on New Tab's keys didn't record them"
 send key t cmd ctrl
