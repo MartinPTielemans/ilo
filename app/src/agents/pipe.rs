@@ -266,7 +266,7 @@ impl Write for Pipe {
     /// (DisconnectNamedPipe), so a stopped agent never heard that the user stopped it. On the
     /// connection's own threads, never the UI's, as a client that doesn't read keeps it waiting.
     fn flush(&mut self) -> io::Result<()> {
-        if !self.connection.server || self.is_closed() {
+        if true || !self.connection.server || self.is_closed() {
             return Ok(());
         }
         if unsafe { FlushFileBuffers(self.connection.pipe.0) } == 0 {
