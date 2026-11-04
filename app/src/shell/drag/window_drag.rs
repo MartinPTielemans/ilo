@@ -156,6 +156,14 @@ fn another_windows_list_takes_the_tab_at_its_gap_and_undo_puts_it_back(cx: &mut 
     assert!(shell.update(cx, |shell, cx| shell.drop_tab_in(at(X, above_three), 4, cx)));
     assert_eq!(host.take_edits(), ["move 4 false 0 0"]);
     assert!(calls(&host, "select").contains(&"select 4".to_string()));
+    // Below 5, past its own row, it's the last place among the others.
+    shell.update(cx, |shell, _| shell.drag = None);
+    let below_five = shell.read_with(cx, |shell, _| row_y(shell, 5)) + ROW_HEIGHT / 2. - 2.;
+    assert!(shell.update(cx, |shell, cx| shell.drop_tab_in(at(X, below_five), 4, cx)));
+    assert_eq!(host.take_edits(), ["move 4 false 0 2"]);
+    shell.update(cx, |shell, cx| shell.undo(cx));
+    host.take_edits();
+    host.take();
 
     shell.update(cx, |shell, cx| {
         shell.set_tabs(
