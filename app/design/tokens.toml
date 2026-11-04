@@ -1417,6 +1417,8 @@ import-surface = 0.05
 # it goes on by itself (#1673); the history and addresses the core adds then go on under the steps
 # after it, in the line at the bottom left.
 import-hold = 0.6
+# The line saying where the favorites go is this far under their tiles.
+tiles-line-gap = 12.0
 # The opt-ins step's switches, Settings' own, in one box under its line, a row each of the switch's
 # name over its one sentence, at body, and the switch at the box's right edge; Settings' padding
 # and lines between rows.
@@ -1456,6 +1458,18 @@ badge-inset = 8.0
 profile-name = 11.0
 profile-name-line = 14.0
 profile-name-gap = 6.0
+# The favorites an import offers are tiles, `tiles-per-row` to a row across the view, `card-gap`
+# apart, at the row radius: the site's letter on a `tile-plate` plate at the control radius, 11 semibold, over its name,
+# 11/14, `tile-name-gap` under it, and the badge at the cards' place. A tile unticked loses its
+# fill for the line, and its letter and name are at `tile-unticked` of themselves.
+tile-height = 76.0
+tiles-per-row = 4
+tile-plate = 22.0
+tile-letter = 11.0
+tile-name = 11.0
+tile-name-line = 14.0
+tile-name-gap = 8.0
+tile-unticked = 0.4
 profile-gap = 24.0
 
 [shell.import.motion]
