@@ -249,4 +249,9 @@ for run in ${*:-$runs}; do
   # Every run is sourced into this one shell, so a helper a run defines under a lib.sh name would
   # replace lib.sh's for the runs after it.
   . "check/$run.sh"
+  # On Windows GPUI lost a window's move, size or modifiers that came during an update (#1358).
+  if windows && grep -q '^browser: gpui dropped ' "$log"; then
+    fail "GPUI dropped updates that came during another: $(grep '^browser: gpui dropped ' "$log" |
+      sort | uniq -c | tr -s ' ' | tr '\n' ',')"
+  fi
 done
