@@ -93,7 +93,11 @@ for event in log["events"]:
     kind = types.get(event["type"], "")
     params = event.get("params", {})
     if kind.startswith("HOST_RESOLVER"):
-        named.update(re.findall(r"\d+\.\d+\.\d+\.\d+|[0-9a-f]*:[0-9a-f:]+:[0-9a-f]+", json.dumps(params)))
+        for found in re.findall(r"[0-9a-fA-F:.]*[:.][0-9a-fA-F:.]+", json.dumps(params)):
+            try:
+                named.add(str(ipaddress.ip_address(found.strip(":") if "::" not in found else found)))
+            except ValueError:
+                pass
     if kind == "DNS_CONFIG_CHANGED":
         nameservers.update(params.get("nameservers", []))
     if kind in ("TCP_CONNECT_ATTEMPT", "TCP_CONNECT", "UDP_CONNECT") and params.get("address"):
@@ -103,7 +107,7 @@ for address, count in addresses.items():
     ip = address.rsplit(":", 1)[0].strip("[]")
     if local(ip) or address in nameservers or address.endswith(":53"):
         continue
-    if ip not in named:
+    if str(ipaddress.ip_address(ip)) not in named:
         unnamed.append(address)
 
 with open(f"{out}/hosts-seen.txt", "w") as seen:
@@ -112,6 +116,7 @@ with open(f"{out}/hosts-seen.txt", "w") as seen:
 with open(f"{out}/hosts-addresses.txt", "w") as seen:
     for address, count in sorted(addresses.items()):
         ip = address.rsplit(":", 1)[0].strip("[]")
+        ip = str(ipaddress.ip_address(ip)) if not local(ip) else ip
         seen.write(f"{address} {count} {'named' if ip in named else 'local' if local(ip) else 'resolver' if address.endswith(':53') else 'no name'}\n")
 
 unlisted = [h for h in sorted(hosts) if not any(fnmatch.fnmatch(h, p) for p in patterns)]
