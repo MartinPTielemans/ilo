@@ -50,7 +50,7 @@ onkeydown = async e => {
       const music = new Audio(URL.createObjectURL(new Blob([wav], {type: "audio/wav"})));
       music.loop = true;
       music.onplaying = () => document.title = "playing";
-      music.onpause = () => document.title = "paused";
+      music.onpause = () => { document.title = "paused"; setTimeout(() => self.gc && gc(), 0); setTimeout(() => self.gc && gc(), 500); };
       navigator.mediaSession.metadata = new MediaMetadata({title: "Quiet", artist: "Check"});
       navigator.mediaSession.setActionHandler("nexttrack", () => document.title = "next track");
       navigator.mediaSession.setActionHandler("enterpictureinpicture", async () => {
@@ -99,7 +99,7 @@ secure="https://127.0.0.1:$tls_port/"
 log="$out/media.log"
 step=0
 rm -f "$saved" "$launch_frame"
-BROWSER_DRIVE=1 BROWSER_URL="${site}call.html" "$browser" --use-fake-device-for-media-stream \
+BROWSER_DRIVE=1 BROWSER_URL="${site}call.html" "$browser" --use-fake-device-for-media-stream --js-flags=--expose-gc \
   --auto-select-tab-capture-source-by-title=Shared --ignore-certificate-errors-spki-list="$spki" \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
