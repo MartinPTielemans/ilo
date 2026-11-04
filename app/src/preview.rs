@@ -1085,6 +1085,10 @@ impl Browser for Fake {
 
     fn passwords(&self, _: u64, _: &mut App) {}
 
+    fn show_autofill(&self, _: u64, _: bool) -> bool {
+        false
+    }
+
     fn take_over(&self, _: SharedString, _: u64, _: &mut App) {}
 
     fn hand_back(&self, _: u64, _: &mut App) {}

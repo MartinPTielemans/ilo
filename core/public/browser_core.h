@@ -2483,6 +2483,14 @@ BC_EXPORT void bc_tab_answer_offer(bc_id tab, int answer, const char* username);
 // BC_PASSWORDS_OFFER. The user's: agents get none, as the offer names the user's login.
 BC_EXPORT void bc_tab_show_offer(bc_id tab);
 
+// Opens Chrome's autofill dropdown at the field of the tab's page that has the keyboard, as
+// Edit › AutoFill does: the one a click in the field opens, with what the profile has saved for
+// it, or with |logins|, every login the profile has, as Chrome's Select Password does. Whether it
+// asked the field for it: false while the page doesn't have the keyboard or its focus isn't in a
+// form's field, and in an agent's tab, where Chrome fills nothing. The user's: agents get none, as
+// the dropdown shows the user's addresses, cards and logins.
+BC_EXPORT bool bc_tab_show_autofill(bc_id tab, bool logins);
+
 // Closes the page menu tab_page_menu showed for |tab|, after running its row with |command|, as
 // Chrome's menu runs the row the user chose, or none with 0. Does nothing if the tab's menu isn't
 // open. The user's: agents get none, as they have no page menu.

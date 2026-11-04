@@ -16,6 +16,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "browser_core/autofill_menu.h"
 #include "browser_core/favorites.h"
 #include "browser_core/held_keys.h"
 #include "browser_core/host.h"
@@ -355,6 +356,8 @@ void Tab::Attach(content::WebContents* contents) {
   ScriptDialogs::Attach(contents);
   // A press with a modifier held may be the app's, such as ⇧⌘-drag's capture.
   PagePresses::CreateForWebContents(contents, id_);
+  // Edit › AutoFill opens Chrome's dropdown at the field its page's focus is in.
+  AutofillMenu::Watch(contents);
   // A tab is often made with its first page already on its way, before anything observes it, so
   // the app hears it's loading now rather than once the page commits.
   ReportStateSoon();

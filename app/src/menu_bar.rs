@@ -150,6 +150,16 @@ pub(crate) fn menus(
                         item("Jump to Selection", Command::JumpToSelection),
                     ],
                 )),
+                // Where AppKit puts the system's, which ilo's replaces (platform/mac/host.mm).
+                MenuItem::separator(),
+                MenuItem::submenu(menu(
+                    "AutoFill",
+                    vec![
+                        item("Contact…", Command::AutoFill),
+                        item("Passwords…", Command::AutoFillPasswords),
+                        item("Credit Card…", Command::AutoFill),
+                    ],
+                )),
             ],
         ),
         menu(

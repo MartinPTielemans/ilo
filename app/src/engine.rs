@@ -1500,6 +1500,16 @@ impl Browser for Engine {
         settings::show_passwords(Some(profile).filter(|&profile| profile != 0), cx);
     }
 
+    fn show_autofill(&self, tab: u64, logins: bool) -> bool {
+        let shown = unsafe { bc::bc_tab_show_autofill(tab, logins) };
+        // check.sh waits for this line.
+        log!(
+            "browser: autofill {tab} {}",
+            if shown { "dropdown" } else { "no field" }
+        );
+        shown
+    }
+
     fn crash_reports(&self, _: &App) -> Option<bool> {
         let offered = !settings::crash_reports_collector().is_empty();
         offered.then(|| unsafe { bc::bc_send_crash_reports() })

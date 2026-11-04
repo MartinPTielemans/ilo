@@ -655,6 +655,9 @@ pub trait Browser {
     fn import(&self, cx: &mut App);
     /// Opens the Settings window on its Passwords tab, with the logins of `space`'s profile.
     fn passwords(&self, space: u64, cx: &mut App);
+    /// Opens Chrome's autofill dropdown at the field of `tab`'s page that has the keyboard, with
+    /// every login the profile has if `logins`. False while no field of its page has it.
+    fn show_autofill(&self, tab: u64, logins: bool) -> bool;
     /// The user takes over `tab`, where the agent with the id `agent` is at work: it may not act
     /// there until they hand it back.
     fn take_over(&self, agent: SharedString, tab: u64, cx: &mut App);

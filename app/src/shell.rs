@@ -32,6 +32,8 @@ mod agent_bar;
 mod agent_pointer;
 mod agent_question;
 mod assets;
+#[cfg(test)]
+mod autofill_tests;
 mod beside;
 mod browser;
 mod card_strip;
