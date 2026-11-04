@@ -248,9 +248,9 @@ PY
 rm -f "$out/network"
 mkfifo "$out/network"
 # Windows' Python can't open Git Bash's FIFO, so on Windows it reads a pipe that cat fills from it,
-# as windows_bridge does (git-bash.sh).
+# as windows_bridge does (git-bash.sh); a plain pipe, as the Mac's bash 3.2 parses this file --posix.
 if windows; then
-  python3 -I "$out/network.py" "$ports" "http://127.0.0.1:$free/" < <(cat "$out/network") \
+  cat "$out/network" | python3 -I "$out/network.py" "$ports" "http://127.0.0.1:$free/" \
     > "$out/network.log" 2>&1 &
 else
   python3 -I "$out/network.py" "$ports" "http://127.0.0.1:$free/" < "$out/network" \

@@ -733,10 +733,14 @@ impl Shell {
     /// from the conversation back to the Space's tab. Never Stop, as an agent stopped by a stray
     /// escape would lose its work.
     pub(super) fn task_step_back(&mut self, cx: &mut Context<Self>) {
-        match self.watched_task_page() {
-            Some(_) => self.task_page_back(cx),
-            None => self.close_task(cx),
+        if self.watched_task_page().is_some() {
+            return self.task_page_back(cx);
         }
+        // From Pages, back to Talk first.
+        if self.talk_back_to_talk(cx) {
+            return;
+        }
+        self.close_task(cx);
     }
 
     /// Steps the area's motion for a frame: the page's zoom.
