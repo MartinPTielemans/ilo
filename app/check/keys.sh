@@ -36,13 +36,12 @@ page='data:text/html,<title>loading</title>
 <script>
 requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
 text.oninput = () => document.title = "value " + text.value;
-// Like Google Docs, the page keeps ⌘F, and ⌘L once its field ends with "keep", as a web terminal
-// does. It answers ⌘L late, as a busy page can, past the 0.4 s the keys typed after it were once
-// held for. No number sign: it would end this data URL.
+// Like Google Docs, the page keeps ⌘F. It answers ⌘L late, as a busy page can, past the 0.4 s
+// the keys typed after it were once held for. No number sign: it would end this data URL.
 addEventListener("keydown", e => {
   if (!e.'"$cmd_key"') return;
   document.title = "page saw cmd-" + e.key;
-  if (e.key == "f" || (e.key == "l" && text.value.endsWith("keep"))) e.preventDefault();
+  if (e.key == "f") e.preventDefault();
   for (const until = performance.now() + (e.key == "l" ? 700 : 0); performance.now() < until;);
 }, true);
 addEventListener("keydown", e => {
@@ -267,9 +266,12 @@ if [ "$(uname)" = Linux ]; then
   echo "skip: composing right after ⌘L: the Linux driver types plain keys in a page."
 elif windows && [ -z "$japanese" ]; then
   echo "skip: composing right after ⌘L: the runner has no Japanese IME, and the Windows driver's own composes in the UI's fields alone, not in a page."
+elif windows; then
+  # The host holds the keys typed until the bar has the keyboard (host.cc's HoldKeys), but
+  # Microsoft's IME composes them in the page before the hold sees them, and a repost of a key
+  # passes the IME by (#454).
+  echo "skip: composing right after Ctrl+L: Microsoft's Japanese IME composes in the page the keys the host holds for the bar."
 else
-  # On Windows the host holds the keys with the page's input method taken away, and hands them to
-  # the bar's through TSF's keystroke manager, so Microsoft's IME composes them there (#1784).
   send $ime
   typed_after l nihongo
   expect "^browser: command bar drew \"$preedit\"\$" \
@@ -277,31 +279,10 @@ else
   send state
   [ "$marked" = "$preedit_marked" ] || fail "the command bar didn't take all of the composition: marked $marked"
   send key escape
-  # Microsoft's IME's first escape closes its predictions.
-  [ "$marked" = none ] || [ -z "$japanese" ] || send key escape
   send key escape
   expect '^browser: command bar hidden$' "escape didn't close the command bar"
   send ime off
   in_browser RenderWidgetHostViewCocoa "after the command bar closed"
-  # A page that keeps Ctrl+L, as a web terminal does, which this one does once its field ends with
-  # "keep": no bar opens, and the keys held for one compose in the page, in order (#1784).
-  if [ -n "$japanese" ]; then
-    send type keep
-    expect '^browser: title [0-9]* value .*keep$' "the page didn't get \"keep\""
-    kept=$(grep '^browser: title [0-9]* value ' "$log" | tail -1 | sed 's/.* value //')
-    send $ime
-    before_l=$(wc -l < "$log")
-    typed_after l nihongo
-    expect "^browser: title [0-9]* value $kept$preedit\$" \
-      "the page that keeps Ctrl+L didn't compose the keys typed after it: $(grep '^browser: title' "$log" | tail -1)"
-    ! tail -n "+$((before_l + 1))" "$log" | grep -q '^browser: command bar shown$' ||
-      fail "a page that keeps Ctrl+L opened the command bar"
-    send key return
-    send ime off
-    send key a cmd
-    send type y
-    expect '^browser: title [0-9]* value y$' "Ctrl+A in the page didn't select all"
-  fi
 fi
 send click $sidebar_point
 in_browser AccessKitSubclassOfGPUIView "after a click on the sidebar"
