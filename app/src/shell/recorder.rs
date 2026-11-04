@@ -1212,6 +1212,11 @@ impl Browser for Recorder {
         *self.toast_run.borrow_mut() = Some((label, run));
     }
 
+    fn enter_full_screen(&self, _: &mut App) -> bool {
+        self.record("enter full screen".into());
+        self.full_screen.get()
+    }
+
     fn full_screen_note(&self, shown: bool, _: &mut App) {
         self.record(format!(
             "full screen note {}",

@@ -363,6 +363,16 @@ drawn() {
   done
   return 1
 }
+# ⌘N's and ⇧⌘N's window opens with ⌘T's command bar once it's on screen, as Arc's (window.sh
+# checks it). Escape closes it, leaving the window with no page that the steps after expect. With
+# a path, the windows are captured there while it's open.
+new_window_bar() {
+  expect '^browser: command new-tab via new window$' "the new window didn't open the command bar"
+  expect '^browser: command bar shown$' "the new window's command bar didn't show"
+  [ -z "${1:-}" ] || ../tools/window-screenshot.sh "$pid" "$1" all || fail "no window to capture"
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close the new window's command bar"
+}
 # Nothing logged since the last command was sent matches $1.
 none_since() {
   ! sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q "$1"

@@ -127,10 +127,11 @@ sed -n "/^browser: drive $held: /,\$p" "$log" | grep -q '^browser: title [0-9]* 
   fail "a held escape's repeats went on to the page after it closed the command bar"
 send key f cmd
 expect '^browser: title [0-9]* page saw cmd-f$' "⌘F with the page focused didn't reach the page"
-# ⌘N from the page opens a window with no page, so its UI has the keyboard, and ⇧⌘W there closes
-# it.
+# ⌘N from the page opens a window with no page and its command bar, which escape closes, leaving
+# its UI the keyboard, and ⇧⌘W there closes it.
 page_shortcut n new-window
 expect '^browser: window opened [0-9]' "⌘N with the page focused didn't open a window"
+new_window_bar
 send state
 in_browser AccessKitSubclassOfGPUIView "in the window ⌘N opened"
 send key w cmd shift
@@ -142,6 +143,7 @@ send click $page_point
 in_browser RenderWidgetHostViewCocoa "before ⌘N opened a window for ⌘W"
 page_shortcut n new-window
 expect '^browser: window opened [0-9]' "⌘N with the page focused didn't open a window"
+new_window_bar
 send key w cmd
 expect '^browser: command close-tab via ui$' "⌘W with the UI focused didn't reach the UI"
 expect '^browser: window closed [0-9]' "⌘W in a window with no page didn't close it"
@@ -172,6 +174,7 @@ expect '^browser: command new-window via ui$' "⌘N with the UI focused didn't r
 expect '^browser: window opened [0-9]' "⌘N with the UI focused didn't open a window"
 first=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
 second=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+new_window_bar
 # The driver counts windows in the order they opened, closed ones too.
 send window "$(grep -c '^browser: window opened ' "$log")"
 send click $(row 0)

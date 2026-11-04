@@ -1368,6 +1368,7 @@ impl Shell {
         let target = match command {
             Command::NewTab => {
                 self.set_new_tab(true, cx);
+                self.set_bar_over_card(true, cx);
                 let shown = self.shown_urls();
                 return self
                     .browser
@@ -1375,12 +1376,14 @@ impl Shell {
             }
             Command::SearchTabs => {
                 self.set_new_tab(false, cx);
+                self.set_bar_over_card(true, cx);
                 return self.browser.search_tabs(self.open_tabs(cx), cx);
             }
             Command::EditUrl => {
                 self.set_new_tab(false, cx);
                 let tab = self.field_tab();
                 let editing = (tab != 0).then(|| (tab, self.url(tab)));
+                self.set_bar_over_card(editing.is_none(), cx);
                 // A click on the URL field opens the bar over the field, and ⌘L centred (Arc). A
                 // Little ilo window's opens compact over its bar's title either way.
                 let field = match self.little_field_bounds() {
