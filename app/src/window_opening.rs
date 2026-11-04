@@ -274,6 +274,9 @@ pub(crate) fn open_window_as(
             }
         });
         window.focus(&shell.focus_handle(cx), cx);
+        // As Settings › Features has it, which the core read with the Spaces.
+        let little = unsafe { crate::bc::bc_little_windows() };
+        shell.update(cx, |shell, cx| shell.set_little_windows(little, cx));
         CX.set(Some(cx.to_async()));
         if let Some(state) = SYNC_STATE.with_borrow_mut(Option::take) {
             settings::sync_changed(state, cx);

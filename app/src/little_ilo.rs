@@ -155,6 +155,9 @@ pub(crate) fn open_links_in_little(front: bc::bc_id, urls: Vec<String>, cx: &mut
 /// The Little ilo windows open, as the Dock's menu opens: 0 with none, 1 with one on screen, 2
 /// with all of them hidden.
 pub(crate) extern "C" fn dock_little() -> c_int {
+    if !unsafe { crate::bc::bc_little_windows() } {
+        return -1;
+    }
     WINDOWS.with_borrow(|windows| {
         let mut little = windows.iter().filter(|w| w.little.is_some()).peekable();
         if little.peek().is_none() {
@@ -254,8 +257,19 @@ pub(crate) fn set_little_in_menu_bar(on: bool) {
     } else {
         std::fs::remove_file(path)
     };
-    let clicked = on.then_some(status_item_clicked as extern "C" fn());
+    let clicked = (on && unsafe { crate::bc::bc_little_windows() })
+        .then_some(status_item_clicked as extern "C" fn());
     unsafe { platform::host_set_little_status_item(clicked) };
+}
+
+/// Settings › Features' Little ilo switch: the core opens none while it's off, and every window's
+/// menus, the command bar's rows and ⌥⌘-click on a row follow. The menu bar's button goes, its own
+/// choice kept for when Little ilo is on again. The windows open stay.
+pub(crate) fn set_little_windows(on: bool, cx: &mut gpui::App) {
+    unsafe { crate::bc::bc_set_little_windows(on) };
+    let clicked = (on && little_in_menu_bar()).then_some(status_item_clicked as extern "C" fn());
+    unsafe { platform::host_set_little_status_item(clicked) };
+    crate::browser_windows::update_shells_in(cx, |shell, cx| shell.set_little_windows(on, cx));
 }
 
 /// ⌥⌘-click on a link in a page of `window`: `url` opens in a new Little ilo window, for the

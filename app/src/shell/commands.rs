@@ -1424,6 +1424,8 @@ impl Shell {
             }
             Command::NewWindow => return self.browser.new_window(cx),
             Command::NewPrivateWindow => return self.browser.new_private_window(cx),
+            // Off in Settings › Features, ⌥⌘N does nothing.
+            Command::NewLittleWindow if !self.little_windows => return,
             Command::NewLittleWindow => {
                 let home = self.little().unwrap_or(self.space);
                 return self.browser.new_little_window(home, cx);
@@ -2073,13 +2075,13 @@ impl Shell {
             Command::PreviousSpace => space.is_some_and(|index| index > 0),
             Command::NextTab | Command::PreviousTab => self.sidebar_rows().len() > 1,
             Command::OpenInMainWindow => self.little.is_some() && self.selected != 0,
+            Command::NewLittleWindow => self.little_windows,
             Command::NewFolder
             | Command::PasteUrlAsTab
             | Command::SearchTabs
             | Command::ReopenClosedTab
             | Command::NewWindow
             | Command::NewPrivateWindow
-            | Command::NewLittleWindow
             | Command::CloseWindow
             | Command::ToggleSidebar
             | Command::NewSpace
@@ -2137,7 +2139,12 @@ impl Shell {
 
     /// What the command bar calls `command`, listed as `name`, if it offers it now: a toggle's row
     /// says what it would do.
-    fn bar_name(&self, name: &'static str, command: Command, cx: &App) -> Option<&'static str> {
+    pub(super) fn bar_name(
+        &self,
+        name: &'static str,
+        command: Command,
+        cx: &App,
+    ) -> Option<&'static str> {
         if !self.offers(command) {
             return None;
         }
