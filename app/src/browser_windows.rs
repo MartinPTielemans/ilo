@@ -369,9 +369,9 @@ pub(crate) unsafe extern "C" fn window_activated(_: *mut c_void, window: bc::bc_
     }
 }
 
-/// ⌥ was pressed alone with the page in `window` focused, which GPUI doesn't hear under X11, as
-/// option_tapped is for the UI's. After, as window_activated.
-#[cfg(target_os = "linux")]
+/// ⌥ was pressed alone in `window`: with its page focused, which GPUI doesn't hear under X11, as
+/// option_tapped is for the UI's, or on Windows with either focused. After, as window_activated.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) unsafe extern "C" fn window_option_tapped(_: *mut c_void, window: bc::bc_id) {
     if let Some(cx) = CX.with_borrow(Clone::clone) {
         let later = async move { update_window(window, |shell, cx| shell.option_tapped(cx)) };

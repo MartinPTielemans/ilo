@@ -21,7 +21,8 @@
 // hidden again, as Windows does. window <n> behind drives a window without bringing it forward, as
 // drive.mm's does.
 // The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl
-// with Alt, but Ctrl for ⌃Tab, and alt with both. A click's or a drag's are held as a Windows user
+// with Alt, but Ctrl for ⌃Tab, and alt with both; flags' winalt holds Windows' own Alt, its key
+// down and up, for Alt pressed alone. A click's or a drag's are held as a Windows user
 // holds them, cmd with Ctrl and alt with Alt. A trackpad's scrolls, and its swipes over a page, are
 // wheel messages with the pixels in their deltas, going the way drive.mm's go, which Chromium
 // scrolls by. Its swipes over GPUI's view are handed to GPUI as Direct Manipulation hands it a
@@ -106,6 +107,9 @@ LPARAM const kDriverLeave = 0x44524956;
 int const kCtrl = 1;
 int const kShift = 2;
 int const kAlt = 4;
+// Windows' own Alt, held with its key's messages, as a keyboard sends Alt pressed alone (flags
+// winalt). The Mac has no key the app reads as it: its ⌥ is Ctrl+Alt here.
+int const kAltKey = 8;
 
 // A step of a command: what it posts, then how long to wait before the next.
 struct Step {
@@ -572,16 +576,16 @@ void PostKey(UINT vk, int modifiers, bool down, bool repeat = false) {
   if (host_drive_key(vk, static_cast<long>(lparam))) {
     return;
   }
-  const bool system = ((held & kAlt) && !(held & kCtrl)) || vk == VK_F10;
+  const bool system = ((held & kAlt || vk == VK_MENU) && !(held & kCtrl)) || vk == VK_F10;
   const UINT message =
       down ? (system ? WM_SYSKEYDOWN : WM_KEYDOWN) : (system ? WM_SYSKEYUP : WM_KEYUP);
   PostMessageW(KeyTarget(), message, vk, lparam);
 }
 
-// Ctrl's and Shift's keys going down or up, from |from| held to |to|, as the keyboard sends them.
-// Alt's are left out: Alt let go alone opens the window's menu, which a key with it in between
-// stops on a real keyboard, and a key's Alt is read from the state held, as Chromium and GPUI read
-// every modifier.
+// Ctrl's and Shift's keys going down or up, from |from| held to |to|, as the keyboard sends them,
+// then winalt's Alt. A key's Alt is otherwise left out: Alt let go alone is a tap of its own, which
+// a key with it in between stops on a real keyboard, and a key's Alt is read from the state held,
+// as Chromium and GPUI read every modifier.
 void PostModifiers(int from, int to) {
   static const std::pair<int, UINT> keys[] = {{kCtrl, VK_CONTROL}, {kShift, VK_SHIFT}};
   for (const auto& [modifier, vk] : keys) {
@@ -589,6 +593,10 @@ void PostModifiers(int from, int to) {
       from = (to & modifier) ? from | modifier : from & ~modifier;
       PostKey(vk, from, (to & modifier) != 0);
     }
+  }
+  if ((from & kAltKey) != (to & kAltKey)) {
+    const bool down = (to & kAltKey) != 0;
+    PostKey(VK_MENU, down ? from | kAlt | kAltKey : from & ~(kAlt | kAltKey), down);
   }
 }
 
@@ -1688,7 +1696,8 @@ bool Run(const std::string& line) {
     return true;
   }
   // The modifiers held from now, as their keys going down or up. ⌃ is held only for ⌃Tab, which
-  // is Ctrl+Tab here, so it holds Ctrl, which the app watches for its release.
+  // is Ctrl+Tab here, so it holds Ctrl, which the app watches for its release. winalt is Windows'
+  // Alt, its key going down and up as a keyboard sends it, so it alone is a tap.
   if (action == "flags") {
     int modifiers = 0;
     std::string word;
@@ -1696,6 +1705,7 @@ bool Run(const std::string& line) {
       modifiers |= word == "cmd" || word == "ctrl" ? kCtrl
                    : word == "shift"               ? kShift
                    : word == "alt"                 ? kCtrl | kAlt
+                   : word == "winalt"              ? kAlt | kAltKey
                                                    : 0;
     }
     g_steps.push_back({[=] {

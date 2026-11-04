@@ -23,7 +23,10 @@
 #include "base/scoped_multi_source_observation.h"
 #include "base/scoped_observation.h"
 #include "base/task/single_thread_task_runner.h"
+#include "browser_core/host.h"
 #include "browser_core/platform/focus_ring_aura.h"
+#include "browser_core/session.h"
+#include "browser_core/window.h"
 #include "chrome/installer/util/install_util.h"
 #include "chrome/installer/util/shell_util.h"
 #include "ui/aura/client/focus_change_observer.h"
@@ -263,6 +266,121 @@ class PaneKeyboard : public aura::client::FocusChangeObserver,
   base::WeakPtrFactory<PaneKeyboard> weak_factory_{this};
 };
 
+// Alt pressed and let go alone tells the app (window_option_tapped), which shows the hidden sidebar
+// as ⌥ does on the Mac: ilo has no menu bar on Windows, and its menus are the sidebar's, where
+// Chrome's lone Alt goes to its menu button (#1847). As in Chrome, another key, a click or a scroll
+// while it's down, as with Alt+Tab, Alt+F4 or Alt+D, or Ctrl or Shift held, as AltGr holds Ctrl,
+// makes it no tap. The keys go to the UI's child HWND or a page's, so the window hears none: a hook
+// on the UI thread's queue sees each as it's taken out, and runs only for a message.
+namespace alt_taps {
+
+// The browser window Alt went down in alone, until something else does.
+HWND g_pressed_in = nullptr;
+// The window whose Alt was let go alone in the message being handled, whose SC_KEYMENU, sent while
+// that release is handled, goes no further (Tapped).
+HWND g_tapped_in = nullptr;
+
+bool Held(int key) {
+  return (GetKeyState(key) & 0x8000) != 0;
+}
+
+// The pointer's presses and scrolls, in a window's client area or its frame.
+bool PointerPressed(UINT message) {
+  switch (message) {
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONDOWN:
+    case WM_RBUTTONDBLCLK:
+    case WM_MBUTTONDOWN:
+    case WM_MBUTTONDBLCLK:
+    case WM_XBUTTONDOWN:
+    case WM_XBUTTONDBLCLK:
+    case WM_NCLBUTTONDOWN:
+    case WM_NCRBUTTONDOWN:
+    case WM_NCMBUTTONDOWN:
+    case WM_NCXBUTTONDOWN:
+    case WM_MOUSEWHEEL:
+    case WM_MOUSEHWHEEL:
+    case WM_POINTERDOWN:
+      return true;
+  }
+  return false;
+}
+
+// Tells the app once the release has been handled, as Linux's core tells it from the event.
+void Tap(HWND root) {
+  if (!Host().window_option_tapped) {
+    return;
+  }
+  for (Window* window : Window::All()) {
+    if (window->widget() && views::HWNDForWidget(window->widget()) == root) {
+      if (UserSettings().option_reveals_sidebar) {
+        g_tapped_in = root;
+      }
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce([](bc_id id) { Host().window_option_tapped(Host().context, id); },
+                         window->id()));
+    }
+  }
+}
+
+void Take(const MSG& msg) {
+  g_tapped_in = nullptr;
+  const HWND root = msg.hwnd ? GetAncestor(msg.hwnd, GA_ROOT) : nullptr;
+  switch (msg.message) {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
+      // Its repeats while held change nothing.
+      if (msg.wParam != VK_MENU) {
+        g_pressed_in = nullptr;
+      } else if (!(msg.lParam & (1 << 30))) {
+        const bool chord = Held(VK_CONTROL) || Held(VK_SHIFT) || Held(VK_LWIN) || Held(VK_RWIN);
+        g_pressed_in = chord ? nullptr : root;
+      }
+      break;
+    case WM_KEYUP:
+    case WM_SYSKEYUP:
+      if (msg.wParam == VK_MENU && root && std::exchange(g_pressed_in, nullptr) == root) {
+        Tap(root);
+      }
+      break;
+    default:
+      if (PointerPressed(msg.message)) {
+        g_pressed_in = nullptr;
+      }
+  }
+}
+
+LRESULT CALLBACK Heard(int code, WPARAM removed, LPARAM msg) {
+  if (code == HC_ACTION && removed == PM_REMOVE) {
+    Take(*reinterpret_cast<const MSG*>(msg));
+  }
+  return CallNextHookEx(nullptr, code, removed, msg);
+}
+
+// Once, on the UI thread, for every browser window.
+void Watch() {
+  static HHOOK hook = SetWindowsHookExW(WH_GETMESSAGE, Heard, nullptr, GetCurrentThreadId());
+  (void)hook;
+}
+
+// |root| went to the back: Alt let go after another window took the keyboard, as Alt+Tab's is
+// when the user comes back, isn't a tap.
+void Deactivated(HWND root) {
+  if (g_pressed_in == root) {
+    g_pressed_in = nullptr;
+  }
+}
+
+// Whether |root|'s SC_KEYMENU is the tap's, which the app took, so Windows doesn't also give the
+// keyboard to the window's menu, nor Chromium hand it on as an accelerator.
+bool Tapped(HWND root) {
+  return root && root == g_tapped_in;
+}
+
+}  // namespace alt_taps
+
 // A child widget, one HWND, holding one pane's page and its docked DevTools, or the side panel.
 struct Slot {
   std::unique_ptr<views::Widget> widget;
@@ -295,6 +413,7 @@ class WindowViews : public views::WidgetObserver,
   WindowViews(views::Widget* widget, HWND ui) : widget_(widget), ui_(ui) {
     observation_.Observe(widget);
     ui::HWNDSubclass::AddFilterToTarget(window(), this);
+    alt_taps::Watch();
   }
 
   ~WindowViews() override { ui::HWNDSubclass::RemoveFilterFromAllTargets(this); }
@@ -554,9 +673,19 @@ class WindowViews : public views::WidgetObserver,
   // ui::HWNDMessageFilter: Windows gives a window coming back to the front the keyboard itself, not
   // the child that had it, a page's or the UI's, so it goes back to that child, as AppKit gives it
   // back to the view that had it. Only from another window: the core gives the window the keyboard
-  // to take it from both (ReleaseKeyboard).
-  bool FilterMessage(HWND hwnd, UINT message, WPARAM w_param, LPARAM, LRESULT*) override {
+  // to take it from both (ReleaseKeyboard). And Alt let go alone goes no further once it's a tap.
+  bool FilterMessage(HWND hwnd,
+                     UINT message,
+                     WPARAM w_param,
+                     LPARAM l_param,
+                     LRESULT* result) override {
+    if (message == WM_SYSCOMMAND && (w_param & 0xFFF0) == SC_KEYMENU && l_param == 0 &&
+        alt_taps::Tapped(hwnd)) {
+      *result = 0;
+      return true;
+    }
     if (message == WM_ACTIVATE && LOWORD(w_param) == WA_INACTIVE) {
+      alt_taps::Deactivated(hwnd);
       HWND focus = GetFocus();
       had_keyboard_ = focus && IsChild(hwnd, focus) ? focus : nullptr;
     } else if (message == WM_SETFOCUS) {

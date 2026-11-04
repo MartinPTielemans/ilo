@@ -934,7 +934,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         archive_note_changed: Some(archive_note_changed),
         #[cfg(target_os = "linux")]
         window_activated: Some(window_activated),
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         window_option_tapped: Some(window_option_tapped),
         addresses_added: Some(addresses_added),
         battery_saver_changed: Some(battery_saver_changed),
