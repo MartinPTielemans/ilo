@@ -3753,9 +3753,34 @@ impl Settings {
             Some("Its notes open in a tab. What's New opens them any time.".into()),
             vec![whats_new],
         );
+        // The Mac's and Windows' own updater's: a Flatpak's updates are the system's, and the
+        // Store's are the Store's.
+        let checks = (cfg!(not(target_os = "linux")) && updates::own_updater(cx)).then(|| {
+            let on = automatic_update_checks();
+            let switch = self.toggle(
+                "automatic update checks",
+                on,
+                set_automatic_update_checks,
+                accent,
+                cx,
+            );
+            let line = match on {
+                true => "Every 8 hours, and it downloads them in the background.".to_string(),
+                false => format!(
+                    "{} won't look for new versions until you choose Check for Updates….",
+                    env!("APP_NAME")
+                ),
+            };
+            setting(
+                look,
+                "Check for updates automatically",
+                Some(line.into()),
+                vec![switch],
+            )
+        });
         let blocks = vec![
             Block::Group(group(look, version.into_iter().flatten())),
-            Block::Rows(vec![whats_new]),
+            Block::Rows(checks.into_iter().chain([whats_new]).collect()),
             Block::Group(group(look, notices)),
         ];
         Page::new(Section::About, "a good tool.", blocks)
@@ -3973,6 +3998,21 @@ fn set_edge_reveals(reveals: bool, cx: &mut App) {
 fn set_dock_icon_color(colored: bool, cx: &mut App) {
     set_off(DOCK_ICON_PLAIN, !colored);
     browser::dock_dot::set_plain(!colored, cx);
+}
+
+/// About's "Check for updates automatically", which only the Mac and Windows show.
+fn automatic_update_checks() -> bool {
+    #[cfg(not(target_os = "linux"))]
+    return crate::updates_host::automatic_checks();
+    #[cfg(target_os = "linux")]
+    true
+}
+
+fn set_automatic_update_checks(on: bool, _: &mut App) {
+    #[cfg(not(target_os = "linux"))]
+    crate::updates_host::set_automatic_checks(on);
+    #[cfg(target_os = "linux")]
+    let _ = on;
 }
 
 fn set_whats_new(shown: bool, _: &mut App) {
