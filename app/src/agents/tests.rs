@@ -2273,6 +2273,54 @@ mod tasks {
         assert_eq!(card.dot, Dot::Ended);
     }
 
+    /// Settings › Agents' Tasks from the command bar off: ⌘T's ask lists no agent, no task starts,
+    /// and a task at its limit offers no Retry and takes no reply or retry; agents stay on for
+    /// apps that connect, and on again it's as it was.
+    #[gpui::test]
+    fn with_tasks_off_no_task_starts_and_a_card_asks_nothing_more(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Find a flight", cx);
+        agents.update(cx, |agents, _| {
+            let task = agents.task_mut(&agent).unwrap();
+            task.state = State::Limit { resets: None };
+        });
+        assert!(card_of(&agents, cx).retry);
+        agents.update(cx, |agents, cx| agents.set_tasks_on(false, cx));
+        agents.read_with(cx, |agents, _| {
+            assert!(agents.is_on(), "tasks off turned agents off");
+            assert!(!agents.tasks_on());
+            assert!(
+                agents.ask_agents().is_empty(),
+                "⌘T's ask still lists agents"
+            );
+        });
+        let started = agents.update(cx, |agents, cx| {
+            agents.start_task(Cli::Claude, "Another", page(), 1, cx)
+        });
+        assert_eq!(started, None, "a task started with tasks off");
+        assert!(!card_of(&agents, cx).retry, "the card still offers Retry");
+        let messages = |cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().messages.len())
+        };
+        let before = messages(cx);
+        agents.update(cx, |agents, cx| {
+            agents.task_action(&agent, TaskAction::Reply("And a hotel".into()), cx);
+            agents.task_action(&agent, TaskAction::Retry, cx);
+        });
+        assert_eq!(
+            messages(cx),
+            before,
+            "a reply reached the task with tasks off"
+        );
+        assert!(matches!(
+            agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().state.clone()),
+            State::Limit { .. }
+        ));
+        agents.update(cx, |agents, cx| agents.set_tasks_on(true, cx));
+        assert!(agents.read_with(cx, |agents, _| !agents.ask_agents().is_empty()));
+        assert!(card_of(&agents, cx).retry);
+    }
+
     #[gpui::test]
     fn the_task_tools_are_a_tasks_alone(cx: &mut TestAppContext) {
         let names = tools::names("task-1");
