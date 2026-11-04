@@ -981,7 +981,6 @@ fn open(cx: &mut App) {
     }
     account::bind_keys(cx);
     settings_search::bind_keys(cx);
-    let synced = account::synced(cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
             point(px(0.), px(0.)),
@@ -1006,7 +1005,8 @@ fn open(cx: &mut App) {
     };
     SHOWN_SECTION.set(Section::General.name());
     let window = cx.open_window(options, |window, cx| {
-        cx.new(|cx| {
+        let settings = view(cx);
+        settings.update(cx, |settings, cx| {
             // Closing it hides it, so it opens again where the user left it.
             window.on_window_should_close(cx, |_, cx| {
                 hide(cx);
@@ -1014,13 +1014,15 @@ fn open(cx: &mut App) {
             });
             // The window follows View › Appearance, else the system, and the views it shows with
             // it.
-            let dark = dark(window, cx);
-            let look = RowLook::settings(dark);
-            // check.sh reads this line, and the one each change logs.
-            log!(
-                "browser: settings look {}",
-                if dark { "dark" } else { "light" }
-            );
+            let dark = settings.dark;
+            settings.follow_appearance(window, cx);
+            // check.sh reads this line, and the one each change logs, which a change here did.
+            if settings.dark == dark {
+                log!(
+                    "browser: settings look {}",
+                    if dark { "dark" } else { "light" }
+                );
+            }
             cx.observe_window_appearance(window, |settings: &mut Settings, window, cx| {
                 settings.follow_appearance(window, cx)
             })
@@ -1029,17 +1031,13 @@ fn open(cx: &mut App) {
                 settings.follow_appearance(window, cx)
             })
             .detach();
-            let default_browser = cx.new(|_| DefaultBrowser::new(Rc::new(System), Os::current()));
-            cx.observe(&default_browser, |_, _, cx| cx.notify())
-                .detach();
+            // Settings takes the keyboard back from the dialog once it has gone, as the dialog's
+            // focus still counts as focused then, though nothing draws it.
             #[cfg(target_os = "linux")]
-            let dialog = {
-                let dialog = dialog::in_window(Rc::new(InWindow), cx);
-                // Settings takes the keyboard back from the dialog once it has gone, as the
-                // dialog's focus still counts as focused then, though nothing draws it.
+            {
                 let mut asked = false;
                 cx.observe_in(
-                    &dialog,
+                    &settings.dialog.clone(),
                     window,
                     move |settings: &mut Settings, dialog, window, cx| {
                         let asks = dialog::asks(&dialog, cx);
@@ -1050,78 +1048,9 @@ fn open(cx: &mut App) {
                     },
                 )
                 .detach();
-                dialog
-            };
-            let host = CoreAccount {
-                #[cfg(target_os = "linux")]
-                dialog: Some(dialog.clone()),
-            };
-            let account = cx.new(|cx| {
-                let mut account = Account::new(Rc::new(host), cx);
-                account.set_state(synced, cx);
-                account.set_look(look, cx);
-                account
-            });
-            cx.observe(&account, |_, _, cx| cx.notify()).detach();
-            let widevine = cx.new(|_| WidevineRow::new(Rc::new(Module)));
-            cx.observe(&widevine, |_, _, cx| cx.notify()).detach();
-            let version = cx.new(|cx| {
-                let mut row = VersionRow::new(version(cx), cx);
-                row.set_look(look, cx);
-                row
-            });
-            let nightly = cx.new(|cx| {
-                let mut row = NightlyRow::new(cx);
-                row.set_look(look, cx);
-                row
-            });
-            // The row shows only where the updater can follow its choice, which it says at launch.
-            updates::observe_view(cx, |_, cx| cx.notify()).detach();
-            let agents = agents::global(cx);
-            let agents = agents.map(|agents| cx.observe(&agents, |_, _, cx| cx.notify()));
-            let search = cx.new(|cx| {
-                TextInput::new("Search", cx)
-                    .placeholder_color(look.detail)
-                    .caret_color(look.ink)
-            });
-            cx.observe(&search, |_, _, cx| cx.notify()).detach();
-            Settings {
-                account,
-                #[cfg(target_os = "linux")]
-                dialog,
-                default_browser,
-                widevine,
-                version,
-                nightly,
-                _agents: agents,
-                section: Section::General,
-                focus: cx.focus_handle(),
-                dark,
-                look,
-                card: Card::default(),
-                shown: false,
-                switched: None,
-                choosing: None,
-                renaming: None,
-                focus_renaming: false,
-                recording: None,
-                refused: None,
-                search,
-                searched: String::new(),
-                flash: None,
-                off_sites_logged: None,
-                drawn_logged: Rc::default(),
-                popup_texts: Rc::default(),
-                passwords_profile: None,
-                logins: HashMap::new(),
-                autofill: HashMap::new(),
-                asked: HashSet::new(),
-                import: None,
-                _import: None,
-                drawn_size: None,
-                links: None,
             }
-        })
+        });
+        settings
     });
     match window {
         Ok(window) => {
@@ -1140,8 +1069,187 @@ fn open(cx: &mut App) {
     }
 }
 
+/// Settings itself, made the first time it's needed: by its window as it opens, or by the
+/// command bar, which finds its rows by what its own search reads (`index`), before any window.
+struct SettingsView(Entity<Settings>);
+
+impl Global for SettingsView {}
+
+fn view(cx: &mut App) -> Entity<Settings> {
+    if let Some(view) = cx.try_global::<SettingsView>() {
+        return view.0.clone();
+    }
+    let synced = account::synced(cx);
+    let view = cx.new(|cx| {
+        // As the system is until its window opens and follows View › Appearance, else the
+        // system's, with the views it shows.
+        let dark = dark_in(cx.window_appearance(), cx);
+        let look = RowLook::settings(dark);
+        let default_browser = cx.new(|_| DefaultBrowser::new(Rc::new(System), Os::current()));
+        cx.observe(&default_browser, |_, _, cx| cx.notify())
+            .detach();
+        #[cfg(target_os = "linux")]
+        let dialog = dialog::in_window(Rc::new(InWindow), cx);
+        let host = CoreAccount {
+            #[cfg(target_os = "linux")]
+            dialog: Some(dialog.clone()),
+        };
+        let account = cx.new(|cx| {
+            let mut account = Account::new(Rc::new(host), cx);
+            account.set_state(synced, cx);
+            account.set_look(look, cx);
+            account
+        });
+        cx.observe(&account, |_, _, cx| cx.notify()).detach();
+        let widevine = cx.new(|_| WidevineRow::new(Rc::new(Module)));
+        cx.observe(&widevine, |_, _, cx| cx.notify()).detach();
+        let version = cx.new(|cx| {
+            let mut row = VersionRow::new(version(cx), cx);
+            row.set_look(look, cx);
+            row
+        });
+        let nightly = cx.new(|cx| {
+            let mut row = NightlyRow::new(cx);
+            row.set_look(look, cx);
+            row
+        });
+        // The row shows only where the updater can follow its choice, which it says at launch.
+        updates::observe_view(cx, |_, cx| cx.notify()).detach();
+        let agents = agents::global(cx);
+        let agents = agents.map(|agents| cx.observe(&agents, |_, _, cx| cx.notify()));
+        let search = cx.new(|cx| {
+            TextInput::new("Search", cx)
+                .placeholder_color(look.detail)
+                .caret_color(look.ink)
+        });
+        cx.observe(&search, |_, _, cx| cx.notify()).detach();
+        Settings {
+            account,
+            #[cfg(target_os = "linux")]
+            dialog,
+            default_browser,
+            widevine,
+            version,
+            nightly,
+            _agents: agents,
+            section: Section::General,
+            focus: cx.focus_handle(),
+            dark,
+            look,
+            card: Card::default(),
+            shown: false,
+            switched: None,
+            choosing: None,
+            renaming: None,
+            focus_renaming: false,
+            recording: None,
+            refused: None,
+            search,
+            searched: String::new(),
+            flash: None,
+            off_sites_logged: None,
+            drawn_logged: Rc::default(),
+            popup_texts: Rc::default(),
+            passwords_profile: None,
+            logins: HashMap::new(),
+            autofill: HashMap::new(),
+            asked: HashSet::new(),
+            import: None,
+            _import: None,
+            drawn_size: None,
+            links: None,
+        }
+    });
+    cx.set_global(SettingsView(view.clone()));
+    view
+}
+
+/// What Settings' search reads of its rows, for the command bar to find settings by the same
+/// names, other names and keys. The bar asks once a time it opens, as it's typed in.
+pub fn index() -> Option<Rc<Vec<Entry>>> {
+    INDEX.with_borrow(Clone::clone)
+}
+
+/// Builds the index again in a task of its own, never on a frame of the command bar's: once after
+/// launch, and once Settings hides or the core changes what it holds. The bar goes on reading the
+/// one before until it's done.
+pub fn index_later(cx: &mut App) {
+    // Not before launch's own, after the UI shows, as a change the core reports while the
+    // window opens would put the build on launch's way.
+    if !INDEX_AFTER_LAUNCH.get() || INDEXING.replace(true) {
+        return;
+    }
+    cx.spawn(async move |cx| {
+        cx.update(|cx| {
+            INDEXING.set(false);
+            // Never while the bar shows, opening or typed in: it builds once the bar has gone.
+            if browser::command_bar::is_open(cx) {
+                INDEX_WANTED.set(true);
+                return;
+            }
+            build_index(cx);
+        })
+    })
+    .detach();
+}
+
+/// The command bar has gone: a build that waited for it starts.
+pub fn bar_hidden() {
+    if INDEX_WANTED.take() {
+        crate::browser_windows::update_app_later(index_later);
+    }
+}
+
+fn build_index(cx: &mut App) {
+    let started = Instant::now();
+    let accent = rgb(NO_THEME_ACCENT);
+    let entries = view(cx).update(cx, |settings, cx| settings.searched_rows(accent, cx).0);
+    // check.sh reads this line.
+    log!(
+        "browser: settings index {} rows in {:.1} ms",
+        entries.len(),
+        started.elapsed().as_secs_f64() * 1000.
+    );
+    INDEX.set(Some(Rc::new(entries)));
+}
+
+thread_local! {
+    /// The index as last built: building every section's rows takes milliseconds, and the first
+    /// time makes Settings, which the command bar's frames can't spare.
+    static INDEX: RefCell<Option<Rc<Vec<Entry>>>> = const { RefCell::new(None) };
+    /// A build is on its way.
+    static INDEXING: Cell<bool> = const { Cell::new(false) };
+    /// A build waits for the command bar to go.
+    static INDEX_WANTED: Cell<bool> = const { Cell::new(false) };
+    /// Launch has shown the UI and made the overlays, so builds may start.
+    static INDEX_AFTER_LAUNCH: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Launch's build, once the UI shows and the overlays are made: the first, which makes Settings.
+pub fn index_after_launch(cx: &mut App) {
+    INDEX_AFTER_LAUNCH.set(true);
+    index_later(cx);
+}
+
+/// Shows Settings on `section` at the row named `row`, scrolled to it and flashed once, as a click
+/// on a found section's name does: the command bar's settings rows.
+pub fn show_row(section: Section, row: SharedString, cx: &mut App) {
+    cx.defer(move |cx| {
+        show_now(cx);
+        let Some(window) = cx.try_global::<SettingsWindow>().map(|settings| settings.0) else {
+            return;
+        };
+        window
+            .update(cx, |settings, window, cx| {
+                settings.show_found(section, row, window, cx)
+            })
+            .ok();
+    });
+}
+
 /// Shows what changed in the core, such as a profile made, renamed or deleted, if it's open.
 pub fn refresh(cx: &mut App) {
+    index_later(cx);
     if let Some(window) = cx.try_global::<SettingsWindow>().map(|settings| settings.0) {
         window.update(cx, |_, _, cx| cx.notify()).ok();
     }
@@ -1149,11 +1257,16 @@ pub fn refresh(cx: &mut App) {
 
 /// Whether Settings is dark: as View › Appearance chose, else as the system is.
 fn dark(window: &Window, cx: &App) -> bool {
+    dark_in(window.appearance(), cx)
+}
+
+/// Whether Settings is dark in a window or a system of `appearance`.
+fn dark_in(appearance: gpui::WindowAppearance, cx: &App) -> bool {
     match shell::app_appearance(cx) {
         Appearance::Light => false,
         Appearance::Dark => true,
         Appearance::Automatic => matches!(
-            window.appearance(),
+            appearance,
             gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
         ),
     }
@@ -1224,6 +1337,7 @@ fn windows_close_button(base: Rgba, at: gpui::Canvas<()>) -> AnyElement {
 fn hide(cx: &mut App) {
     // check.sh waits for this line.
     log!("browser: settings hidden");
+    index_later(cx);
     unsafe { platform::host_hide_settings() };
     // Later, as it can come from inside the window's own update. What Links' ⌘Z would bring back
     // goes with the window, as the issue's "until Settings closes" (#1377).
@@ -4377,6 +4491,27 @@ impl Settings {
         accent: Rgba,
         cx: &mut Context<Self>,
     ) -> (gpui::Div, Vec<Section>) {
+        let (entries, mut divs, under) = self.searched_rows(accent, cx);
+        let found = settings_search::find(typed, &entries);
+        let found: Vec<(Entry, gpui::Div)> = found
+            .into_iter()
+            .filter_map(|index| Some((entries[index].clone(), divs[index].take()?)))
+            .collect();
+        self.show_results(found, under, cx)
+    }
+
+    /// What the search reads of the sections of settings, in the column's order: each row's entry
+    /// and the row, and the buttons under each section's groups.
+    #[allow(clippy::type_complexity)]
+    fn searched_rows(
+        &mut self,
+        accent: Rgba,
+        cx: &mut Context<Self>,
+    ) -> (
+        Vec<Entry>,
+        Vec<Option<gpui::Div>>,
+        Vec<(Section, gpui::Div)>,
+    ) {
         let profiles = profiles();
         let mut pages = vec![
             self.general(&profiles, accent, cx),
@@ -4419,11 +4554,16 @@ impl Settings {
                 }
             }
         }
-        let found = settings_search::find(typed, &entries);
-        let found: Vec<(Entry, gpui::Div)> = found
-            .into_iter()
-            .filter_map(|index| Some((entries[index].clone(), divs[index].take()?)))
-            .collect();
+        (entries, divs, under)
+    }
+
+    /// The rows the search found, in place of the section's page, and the sections they're in.
+    fn show_results(
+        &mut self,
+        found: Vec<(Entry, gpui::Div)>,
+        under: Vec<(Section, gpui::Div)>,
+        cx: &mut Context<Self>,
+    ) -> (gpui::Div, Vec<Section>) {
         let names: Vec<&str> = found.iter().map(|(entry, _)| entry.name.as_ref()).collect();
         self.log_search(&names, cx);
         let sections =

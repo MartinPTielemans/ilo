@@ -405,6 +405,29 @@ done
 send key a cmd
 send key backspace
 expect '^browser: settings search cleared$' "⌫ didn't clear the search"
+# The command bar finds settings too (#1636), by what Settings' search reads: "peek" in ⌘T lists
+# Peek — Settings, and ↩ on it opens Settings › Features at the row, which flashes once.
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send type peek
+expect '^browser: command bar settings "peek": Peek — Settings$' "⌘T didn't list Peek — Settings"
+for _ in 1 2 3 4 5; do
+  send key down
+  logged '^browser: command bar selected Peek — Settings$' && break
+done
+logged '^browser: command bar selected Peek — Settings$' || fail "↓ didn't reach Peek — Settings"
+../tools/window-screenshot.sh "$pid" "$out/command-bar-setting.png" || fail "no window to capture"
+send key return
+expect '^browser: command bar shows setting Features › Peek$' "↩ on Peek — Settings didn't open it"
+expect '^browser: settings found Features › Peek$' "Settings didn't show Features at Peek"
+settings_drew Features
+../tools/window-screenshot.sh "$pid" "$out/settings-from-bar.png" || fail "no window to capture"
+grep -q '^browser: settings index [0-9]* rows in ' "$log" || fail "the bar didn't read Settings' index"
+send clickkey $(drawn "toolbar Shortcuts")
+settings_drew Shortcuts
+send clickkey $(drawn "search")
 # It reads every section's rows: "archive" finds five in three sections, live under their names,
 # and the column dims the rest. Esc empties the field, ⌘F takes the keyboard back to it, and a
 # click on Features' name shows Features at its row.
