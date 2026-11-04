@@ -15,6 +15,7 @@
 //! second run adds nothing the first did (plan.rs).
 
 pub mod arc;
+mod arrival;
 pub mod chromium;
 pub mod extensions;
 pub mod firefox;
@@ -526,6 +527,10 @@ struct Run {
     picked: Vec<Kind>,
     /// The profiles that hadn't opened when the wait ended, by name, and the Spaces waiting.
     unopened: (Vec<String>, usize),
+    /// A card for each Space it makes or fills, as the core makes them (arrival.rs).
+    cards: Vec<arrival::Card>,
+    /// When the Spaces were in, for what the core adds after them.
+    placed_at: Option<Instant>,
 }
 
 impl Run {
@@ -1460,6 +1465,11 @@ impl ImportView {
             return self.import_run_passwords(cx);
         }
         run.counts = counts;
+        // A card a Space, from as the core makes each.
+        run.cards = arrival::cards(&plan, &existing, Instant::now());
+        let names: Vec<&str> = run.cards.iter().map(|card| card.name.as_str()).collect();
+        // check.sh reads this line.
+        log!("browser: import cards {}", names.join(", "));
         run.job = Some(Job::start(plan, &*self.host));
         self.advance(cx);
     }
@@ -1503,6 +1513,12 @@ impl ImportView {
         (run.stall, run.stalled, run.placed) = (None, None, true);
         cx.emit(ImportEvent::Placed);
         let later = job.finish(&*self.host, cx);
+        // Every tab is in once the core has placed them, so each card ticks.
+        let now = Instant::now();
+        run.placed_at = Some(now);
+        for card in &mut run.cards {
+            (card.placed, card.done) = (card.total, Some(now));
+        }
         // What the core says it added, into the run's count of it and of what it has left.
         type Count = fn(&mut Run) -> (&mut usize, &mut usize);
         let then = |count: Count, cx: &mut Context<Self>| {
@@ -1961,6 +1977,101 @@ impl ImportView {
                 view.child(buttons([back.into_any_element(), open.into_any_element()]))
             })
             .into_any_element()
+    }
+
+    /// The cards of the import under way: each Space's name, its profile and whether the import
+    /// makes it, its tabs in and of how many, and whether it has ticked.
+    #[cfg(test)]
+    pub(crate) fn cards(&self) -> Vec<(String, (String, bool), usize, usize, bool)> {
+        let Step::Running { run, .. } = &self.step else {
+            return Vec::new();
+        };
+        (run.cards.iter())
+            .map(|card| {
+                let done = card.done.is_some();
+                (
+                    card.name.clone(),
+                    card.profile.clone(),
+                    card.placed,
+                    card.total,
+                    done,
+                )
+            })
+            .collect()
+    }
+
+    /// The import under way's cards and the rows after them, asking for frames while they move.
+    fn arrival(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let (look, settings, still) = (self.look, !self.guided, crate::motion::still(cx));
+        let Step::Running { run, .. } = &mut self.step else {
+            return None;
+        };
+        if run.cards.is_empty() {
+            return None;
+        }
+        let now = Instant::now();
+        let adding = run.history_left + run.addresses_left > 0;
+        if run.cards.iter().any(|card| card.moving(now)) || (adding && !still) {
+            window.request_animation_frame();
+        }
+        let cards = arrival::draw(&mut run.cards, &look, settings, still, now);
+        let counts = run.counts;
+        let since = run.placed_at.unwrap_or(now);
+        let stage = |left: usize, adding: String, came: usize| match (run.placed, left) {
+            (false, _) => arrival::Stage::Waiting,
+            (true, 0) => arrival::Stage::In(grouped(came).into()),
+            (true, _) => arrival::Stage::Adding(adding.into()),
+        };
+        let mut rows = Vec::new();
+        if counts.favorites > 0 {
+            let stage = stage(0, String::new(), counts.favorites);
+            rows.push(arrival::stage_row(
+                &look,
+                glyph(Kind::Favorites),
+                "Favorites",
+                "At the top of each profile's Spaces",
+                &stage,
+                still,
+                now,
+                since,
+            ));
+        }
+        if counts.pages > 0 {
+            let adding = format!("Adding {} pages…", grouped(counts.pages));
+            let stage = stage(run.history_left, adding, run.pages);
+            rows.push(arrival::stage_row(
+                &look,
+                glyph(Kind::History),
+                "History",
+                "It goes on while you carry on, and can't be stopped once it starts",
+                &stage,
+                still,
+                now,
+                since,
+            ));
+        }
+        if counts.addresses > 0 {
+            let stage = stage(run.addresses_left, "Adding…".into(), run.addresses);
+            rows.push(arrival::stage_row(
+                &look,
+                glyph(Kind::Addresses),
+                "Addresses",
+                "Into each profile",
+                &stage,
+                still,
+                now,
+                since,
+            ));
+        }
+        let rows = arrival::stages(&look, rows);
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(BOX_GAP))
+                .child(cards)
+                .children(rows),
+        )
     }
 
     /// What the wait for Full Disk Access says, while it shows.
@@ -2946,6 +3057,7 @@ impl Render for ImportView {
         let step = match &self.step {
             Step::List => "list",
             Step::Pick { .. } => "pick",
+            Step::Running { run, .. } if run.placed => "placed",
             Step::Running { .. } | Step::Passwords => "running",
             Step::NoAccess { .. } => "no access",
             Step::Cancelled { .. } => "cancelled",
@@ -2959,6 +3071,7 @@ impl Render for ImportView {
             log!("browser: import drawn {step}");
         }
         let look = self.look;
+        let arrival = self.arrival(window, cx);
         let content = match &self.step {
             Step::List => self.list(cx),
             Step::Pick { source, .. } => self.picking(*source, cx),
@@ -2975,11 +3088,10 @@ impl Render for ImportView {
                         .on_click(cx.listener(|view, _, _, cx| view.try_again(cx)))
                         .into_any_element()
                 });
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(BOX_GAP))
-                    .child(match run.stalled.is_some() {
+                // The cards and the rows after them, but for a stalled import's line, which
+                // says why it waits, and a run with nothing to show yet.
+                let said = (arrival.is_none() || run.stalled.is_some()).then(|| {
+                    match run.stalled.is_some() {
                         // Which profile hasn't opened, marked, as its Spaces wait for it.
                         true => {
                             let mark = svg()
@@ -2992,7 +3104,14 @@ impl Render for ImportView {
                             group(&look, [frame().child(mark).child(said)])
                         }
                         false => group(&look, [said_row(progress(name, run))]),
-                    })
+                    }
+                });
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(BOX_GAP))
+                    .children(said)
+                    .children(arrival)
                     .when(cancel.is_some(), |column| {
                         column.child(buttons(cancel.into_iter().chain(again)))
                     })
