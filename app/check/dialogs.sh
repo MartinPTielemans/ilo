@@ -19,6 +19,18 @@
 serve
 log="$out/dialogs.log"
 step=0
+# EXPLORATION for #1458: the engine's own profile folder, prod's, so links from another app go
+# chrome.exe's fast way, as Teams' do on the owner's PC.
+if windows; then
+  engines="$(cygpath -u "$LOCALAPPDATA")/ilo"
+  rm -rf "$engines/User Data"
+  profile_dir="$engines/User Data"
+  BROWSER_PROFILE_DIR="$(cygpath -w "$profile_dir")"
+  export BROWSER_PROFILE_DIR
+  saved="$profile_dir/Spaces.json"
+  launch_frame="$profile_dir/launch-frame"
+  mkdir -p "$profile_dir"
+fi
 rm -f "$saved"
 BROWSER_DRIVE=1 BROWSER_URL="${site}dialogs.html" "$browser" \
   < "$out/drive" > "$log" 2>&1 &
@@ -112,6 +124,104 @@ expect '^browser: dialog settled$' "Open Maps? didn't settle"
 send key return
 expect "^browser: page $page dialog answered cancel\$" "↩ didn't cancel opening Maps"
 expect '^browser: dialog hidden$' "Open Maps? didn't leave once answered"
+
+# EXPLORATION for #1458, on its proof branches only: what's on screen after each way the command
+# bar closes, with the bar opened each time, then links each way after it opened and closed.
+if windows; then
+  winpid=$(cat "/proc/$pid/winpid")
+  look_n=0
+  look() {
+    look_n=$((look_n + 1))
+    sleep 2
+    {
+      echo "== $look_n $1"
+      python3 -I check/app-windows.py shown "$winpid"
+      echo "-- bar: $(grep '^browser: command bar \(shown\|hidden\)$' "$log" | tail -1)"
+    } >> "$out/stray.txt" 2>&1
+    ../tools/window-screenshot.sh "$pid" "$out/stray-$look_n.png" all || true
+  }
+  bar_up() {
+    local bars
+    bars=$(grep -c '^browser: command bar shown$' "$log")
+    send key t cmd
+    for _ in $(seq 50); do
+      [ "$(grep -c '^browser: command bar shown$' "$log")" -gt "$bars" ] && return
+      sleep 0.1
+    done
+    echo "the command bar didn't show for $1" >> "$out/stray.txt"
+  }
+  bar_closed() { bar_up "$1"; send key escape; }
+  from_app() {
+    "$app/chrome.exe" --single-argument "$1" < /dev/null >> "$out/stray-sent.log" 2>&1 ||
+      echo "second launch with $1 failed: $?" >> "$out/stray.txt"
+    sleep 2
+  }
+  go() { send key l cmd; send type "${site#http://}$1"; send key return; sleep 2; }
+  printf '%s' '<title>links</title>
+<a href="notes.txt" style="position:fixed;left:0;top:0;width:50%;height:100%">plain</a>
+<a target=_blank href="notes.txt?blank" style="position:fixed;right:0;top:0;width:50%;height:100%">blank</a>
+<script>requestAnimationFrame(() => setTimeout(() => document.title = "ready"));</script>' > "$out/site/links.html"
+  look "start"
+  # Links first, the owner's hint: each after the bar has opened and closed.
+  go links.html
+  bar_closed "link from another app"
+  from_app "${site}?app1"
+  look "bar opened and closed, then a link from another app, window up"
+  go links.html
+  bar_closed "plain link"
+  send click 400 400
+  look "bar opened and closed, then a plain link in the page"
+  go links.html
+  bar_closed "target=_blank link"
+  send click 850 400
+  look "bar opened and closed, then a target=_blank link"
+  # The bar up as a link comes from another app.
+  bar_up "link while up"
+  from_app "${site}?app2"
+  look "bar up, then a link from another app"
+  send key escape
+  # The ways the bar closes.
+  go links.html
+  bar_up "click into the page"
+  send click 600 300
+  look "bar up, then a click into the page"
+  bar_up "escape"
+  send key escape
+  look "bar up, then escape"
+  bar_up "tab closing"
+  send key w cmd
+  look "bar up, then Ctrl+W"
+  bar_up "another app"
+  ( notepad.exe & )
+  sleep 3
+  look "bar up, then notepad takes activation"
+  taskkill //IM notepad.exe //F > /dev/null 2>&1 || true
+  send window 1
+  look "back from notepad"
+  bar_up "display change"
+  powershell.exe -NoProfile -Command 'Set-DisplayResolution -Width 1600 -Height 900 -Force' > /dev/null 2>&1
+  sleep 2
+  powershell.exe -NoProfile -Command 'Set-DisplayResolution -Width 1920 -Height 1080 -Force' > /dev/null 2>&1
+  look "bar up, then a display change"
+  send key escape
+  # The bar opening while a page loads: a page held by the site until it's let go.
+  rm -f "$out/site/held.go"
+  send key l cmd
+  send type "${site#http://}held"
+  send key return
+  bar_up "while loading"
+  look "bar up while a page loads"
+  touch "$out/site/held.go"
+  sleep 2
+  send key escape
+  look "after the page loaded and escape"
+  from_app "${site}?app3"
+  look "end, a link from another app"
+  cat "$out/stray.txt"
+  echo "ok: exploration only"
+  quit
+  exit 0
+fi
 
 send click $page_point
 send key u

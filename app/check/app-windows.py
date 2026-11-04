@@ -251,7 +251,40 @@ def cover(pid, foreground, front_file):
             user32.DispatchMessageW(ctypes.byref(message))
 
 
+def shown(pid):
+    """Each of process |pid|'s top-level windows Windows has on screen, front to back: visible, not
+    cloaked, with an area, which a hidden window and DWM's cloaked ones aren't, whatever the UI
+    thinks of them. Its class, title, rectangle in pixels, and whether it's a browser window and
+    which window owns it."""
+    dwmapi = ctypes.windll.dwmapi
+    for hwnd in windows(pid):
+        if not user32.IsWindowVisible(hwnd):
+            continue
+        cloaked = w.DWORD()
+        # DWMWA_CLOAKED
+        dwmapi.DwmGetWindowAttribute(hwnd, 14, ctypes.byref(cloaked), ctypes.sizeof(cloaked))
+        rect = w.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        width, height = rect.right - rect.left, rect.bottom - rect.top
+        if cloaked.value or width <= 0 or height <= 0:
+            continue
+        owner = user32.GetWindow(hwnd, GW_OWNER)
+        states = [
+            "browser" if holds_ui(hwnd) else "",
+            "owned by %#x" % owner if owner else "",
+            "minimized" if user32.IsIconic(hwnd) else "",
+        ]
+        print('%#x %s "%s" %dx%d at %d,%d %s' % (
+            hwnd or 0, text(user32.GetClassNameW, hwnd), text(user32.GetWindowTextW, hwnd),
+            width, height, rect.left, rect.top, " ".join(state for state in states if state)))
+
+
+
 def main():
+    # EXPLORATION for #1458, on its proof branches only.
+    if sys.argv[1:2] == ["shown"]:
+        shown(int(sys.argv[2]))
+        return
     command = sys.argv[1] if len(sys.argv) > 1 else ""
     front = command == "close" and sys.argv[3:] == ["front"]
     known = ("close", "list", "icon", "cover")
