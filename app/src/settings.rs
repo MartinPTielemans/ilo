@@ -1182,10 +1182,22 @@ pub fn index_later(cx: &mut App) {
     cx.spawn(async move |cx| {
         cx.update(|cx| {
             INDEXING.set(false);
+            // Never while the bar shows, opening or typed in: it builds once the bar has gone.
+            if browser::command_bar::is_open(cx) {
+                INDEX_WANTED.set(true);
+                return;
+            }
             build_index(cx);
         })
     })
     .detach();
+}
+
+/// The command bar has gone: a build that waited for it starts.
+pub fn bar_hidden() {
+    if INDEX_WANTED.take() {
+        crate::browser_windows::update_app_later(index_later);
+    }
 }
 
 fn build_index(cx: &mut App) {
@@ -1207,6 +1219,8 @@ thread_local! {
     static INDEX: RefCell<Option<Rc<Vec<Entry>>>> = const { RefCell::new(None) };
     /// A build is on its way.
     static INDEXING: Cell<bool> = const { Cell::new(false) };
+    /// A build waits for the command bar to go.
+    static INDEX_WANTED: Cell<bool> = const { Cell::new(false) };
     /// Launch has shown the UI and made the overlays, so builds may start.
     static INDEX_AFTER_LAUNCH: Cell<bool> = const { Cell::new(false) };
 }

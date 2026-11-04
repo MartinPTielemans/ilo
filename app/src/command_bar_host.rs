@@ -126,6 +126,7 @@ impl command_bar::Host for Bar {
 
     fn hide(&self) {
         unsafe { platform::host_hide_overlay(COMMAND_BAR) };
+        crate::settings::bar_hidden();
     }
 
     fn dismiss(&self) {
