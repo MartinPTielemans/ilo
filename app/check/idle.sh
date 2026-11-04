@@ -1,15 +1,15 @@
-# An idle window off Battery Saver is never woken to measure its pages (#686, #1773). Chrome measures
-# them on timers in resource_attribution's queries.cc, which Chromium's startup trace records as
-# tasks with their delay: its freezing policy each minute, which now measures only on Battery Saver
-# (engine/patches/ours/chromium-freezing-measure-on-battery-saver.patch), and its page resource
-# monitor every 2 minutes for UKM nothing reads, which the engine leaves out
+# An idle window off Battery Saver is never woken to measure its pages (#686, #1773). Chrome
+# measures them on timers in resource_attribution's queries.cc, which Chromium's startup trace
+# records as tasks with their delay: its freezing policy each minute, which now measures only on
+# Battery Saver (engine/patches/ours/chromium-freezing-measure-on-battery-saver.patch), and its page
+# resource monitor every 2 minutes for UKM nothing reads, which the engine leaves out
 # (chromium-no-page-resource-monitor.patch). The window sits on about:blank for 130 s, past each
-# one's first wake, and its trace must have no queries.cc timer but one: Chrome's process
-# metrics, every 2 minutes too, stay for now, as its urgent discarding on the Mac and Windows reads
-# them (#1773). The trace can't tell the two 2-minute timers apart, so a second fails. With Battery
-# Saver on, through the Local State pref Chrome keeps it in (3 is On), a 75 s trace must have the
-# freezing policy's, so the trace would have shown one. A profile of the run's own keeps the pref
-# from the runs after it.
+# one's first wake, and its trace must have no queries.cc timer but one: Chrome's process metrics,
+# every 2 minutes too, stay for now, as its urgent discarding on the Mac and Windows reads them
+# (#1773). The trace can't tell the two 2-minute timers apart, so a second fails. With Battery Saver
+# on, through the Local State pref Chrome keeps it in (3 is On), a 75 s trace must have the freezing
+# policy's, so the trace would have shown one. A profile of the run's own keeps the pref from the
+# runs after it.
 
 profile_dir="$PWD/$out/idle/profile"
 # The tasks of queries.cc's timers a trace has: those posted 60 s ahead, those but the process
