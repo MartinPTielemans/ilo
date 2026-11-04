@@ -1314,11 +1314,17 @@ struct Detached {
 };
 Detached g_detached;
 
-// Takes |window|'s input method away, so the keys come raw to the hold: its TSF document, which a
-// page's is, as Chromium's windows take IMM's context away for TSF, and its IMM context, which
-// GPUI's is. Each goes back as it was (ReattachInputMethod).
+// Takes |window|'s input method away while its IME is on, so the keys come raw to the hold.
 void DetachInputMethod(HWND window) {
   if (!window || g_detached.window) {
+    return;
+  }
+  HIMC context = ImmGetContext(window);
+  const bool open = context && ImmGetOpenStatus(context);
+  if (context) {
+    ImmReleaseContext(window, context);
+  }
+  if (!open) {
     return;
   }
   g_detached.window = window;
