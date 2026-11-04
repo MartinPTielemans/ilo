@@ -60,10 +60,15 @@ from collections import Counter
 
 netlog, listed, out, sync_port = sys.argv[1:]
 text = open(netlog, encoding="utf-8", errors="replace").read()
-patterns = []
+# The hosts it may ask, and those the page names only for what the user does (a ! before them),
+# which it mustn't.
+patterns, never = [], {}
 for line in open(listed, encoding="utf-8"):
     line = line.split("#", 1)[0].strip()
-    if line:
+    if line.startswith("!"):
+        name, _, why = line[1:].partition(" ")
+        never[name] = why.strip()
+    elif line:
         patterns.append(line.split()[0])
 
 hosts = Counter()
@@ -119,9 +124,13 @@ with open(f"{out}/hosts-addresses.txt", "w") as seen:
         ip = str(ipaddress.ip_address(ip)) if not local(ip) else ip
         seen.write(f"{address} {count} {'named' if ip in named else 'local' if local(ip) else 'resolver' if address.endswith(':53') else 'no name'}\n")
 
-unlisted = [h for h in sorted(hosts) if not any(fnmatch.fnmatch(h, p) for p in patterns)]
+asked = [f"{h} ({why})" for h in sorted(hosts) for p, why in never.items() if fnmatch.fnmatch(h, p)]
+unlisted = [h for h in sorted(hosts) if not any(fnmatch.fnmatch(h, p) for p in patterns + list(never))]
 # A request to it, not the switch naming it, which the net log's own command line holds.
 sync = re.findall(r'"(?:url|original_url)":"[a-z]+://(?:127\.0\.0\.1|localhost):' + sync_port + r'[/"]', text)
+if asked:
+    print("hosts asked that the page names only for what the user does: " + ", ".join(asked))
+    sys.exit(1)
 if unlisted:
     print("hosts check/hosts.txt doesn't name: " + " ".join(unlisted))
     sys.exit(1)

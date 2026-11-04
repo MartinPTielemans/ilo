@@ -2,7 +2,9 @@
 # Chromium's net log of a launch, an idle past the security components' first check, a page and
 # a search typed in the command bar. One pattern a line, * for any part of a name, then why, in
 # the words of ilobrowser.com/privacy (#684). A host not here fails the run, and one added here
-# goes on that page in the same change.
+# goes on that page in the same change. A line starting ! is a host the page names only for what
+# the user does or turns on, or that only the prod build asks, so the run fails if it asks it: the
+# page and this file name the same hosts.
 
 # The run's own server.
 127.0.0.1         the run's own pages
@@ -13,6 +15,7 @@ localhost         the run's own pages
 update.googleapis.com   security components' update check
 dl.google.com           security components' downloads
 *.gvt1.com              security components' downloads
+www.google.com          security components' downloads, from www.google.com/dl/
 
 # uBlock Origin's lists, weekly and at a launch past their expiry, from the hosts its assets.json
 # names (core/ad_block.cc, app/ublock.ini).
@@ -26,10 +29,21 @@ malware-filter.pages.dev   ad and tracker blocking lists
 curbengh.github.io         ad and tracker blocking lists
 publicsuffix.org           ad and tracker blocking lists
 
-# The search engine's suggestions as the user types in the command bar: DuckDuckGo, the default
-# (core/search_default.cc).
-duckduckgo.com             search suggestions as you type
+# Searches go to the search engine on return, DuckDuckGo by default (core/search_default.cc), and
+# nothing typed goes before: the run types without searching, so a request to it would be a
+# suggestion the page says ilo never asks for.
+!duckduckgo.com            a search, only on return
 
 # The system's proxy settings: where they say to find a proxy automatically, as Windows' do by
 # default, the name the local network may answer for a proxy configuration (WPAD).
 wpad                       automatic proxy discovery, on the local network
+
+# Named by the page for what the user does or turns on, or that only the prod build asks.
+!sync.ilobrowser.com                     sync, only signed in (the run points sync elsewhere too)
+!*.ingest.de.sentry.io                   crash reports, only those sent, prod build only
+!chromewebstore.google.com               the Chrome Web Store, on a visit
+!clients2.google.com                     store extensions' downloads and update checks
+!clients2.googleusercontent.com          store extensions' downloads
+!github.com                              ilo's update feed, prod build only, and links the user opens
+!release-assets.githubusercontent.com    ilo's update feed's downloads, prod build only
+!dl.flathub.org                          the Flatpak's runtime, by the system's Flatpak
