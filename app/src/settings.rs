@@ -494,6 +494,36 @@ impl account::Host for CoreAccount {
         unsafe { bc::bc_sync_remove_device(id.as_ptr()) };
     }
 
+    fn activity(&self) -> account::Activity {
+        let mut activity = bc::bc_sync_activity::default();
+        unsafe { bc::bc_sync_read_activity(&mut activity) };
+        let mut day_starts = [0.; 4];
+        unsafe { platform::host_day_starts(day_starts.as_mut_ptr()) };
+        let trouble = match activity.trouble as u32 {
+            bc::BC_SYNC_TROUBLE_UNREACHABLE => Some(account::Trouble::Unreachable),
+            bc::BC_SYNC_TROUBLE_THROTTLED => Some(account::Trouble::Throttled),
+            bc::BC_SYNC_TROUBLE_STOPPED => Some(account::Trouble::Stopped),
+            _ => None,
+        };
+        // check.sh waits for this line.
+        log!(
+            "browser: sync activity {} {trouble:?}",
+            if activity.last_synced > 0. {
+                "synced"
+            } else {
+                "never"
+            }
+        );
+        account::Activity {
+            synced: account::synced_when(activity.last_synced, day_starts).into(),
+            trouble,
+        }
+    }
+
+    fn delete_account(&self) {
+        unsafe { bc::bc_sync_delete_account() };
+    }
+
     fn copy_secret(&self, text: &str, kept: Duration, cx: &mut App) {
         let secret = CString::new(text).unwrap_or_default();
         let seconds = u32::try_from(kept.as_secs()).unwrap_or(u32::MAX);
@@ -854,6 +884,11 @@ fn show_now(cx: &mut App) {
             settings.shown = true;
             if settings.section == Section::Agents {
                 look_for_clients(cx);
+            }
+            if settings.section == Section::Sync {
+                settings
+                    .account
+                    .update(cx, |account, cx| account.read_activity(cx));
             }
             cx.notify();
         })
@@ -1236,6 +1271,10 @@ impl Settings {
         }
         if section == Section::Agents {
             look_for_clients(cx);
+        }
+        if section == Section::Sync {
+            self.account
+                .update(cx, |account, cx| account.read_activity(cx));
         }
         let look = self.look;
         self.links = (section == Section::Links).then(|| {
@@ -4005,8 +4044,8 @@ impl Render for Settings {
             }
             Section::Sync => self.page(
                 Section::Sync.name(),
-                "Sync Spaces, bookmarks, passwords and open tabs across your devices, encrypted \
-                 with a key only they hold.",
+                "Sync Spaces, bookmarks and passwords across your devices, encrypted with a key \
+                 only they hold.",
                 None,
                 vec![Block::View(self.account.clone().into_any_element())],
                 cx,

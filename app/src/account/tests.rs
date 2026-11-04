@@ -24,6 +24,8 @@ struct Recorder {
     asked: RefCell<Option<(String, Box<dyn FnOnce(&mut App)>)>>,
     /// Where it asks instead, as Settings does on Linux, for a test that answers with keys.
     dialog: RefCell<Option<Entity<dialog::Dialog>>>,
+    /// What activity answers.
+    activity: RefCell<Activity>,
 }
 
 impl Recorder {
@@ -74,6 +76,15 @@ impl Host for Recorder {
 
     fn read_devices(&self) {
         self.record("read devices");
+    }
+
+    fn activity(&self) -> Activity {
+        self.record("activity");
+        self.activity.borrow().clone()
+    }
+
+    fn delete_account(&self) {
+        self.record("delete account");
     }
 
     fn remove_device(&self, id: &str) {
@@ -328,7 +339,7 @@ fn the_first_device_shows_its_words_once(cx: &mut TestAppContext) {
     tab.set(state(Status::On));
     assert!(tab.showing_words());
     tab.click("copy");
-    assert_eq!(tab.host.take(), ["copy secret 24 90"]);
+    assert_eq!(tab.host.take(), ["activity", "copy secret 24 90"]);
     tab.click("done");
     assert!(!tab.showing_words());
     assert_eq!(tab.host.take(), ["read devices"]);
@@ -463,7 +474,7 @@ fn the_recovery_words_instead(cx: &mut TestAppContext) {
         tab.account
             .read_with(tab.cx, |account, _| account.entering.is_none())
     );
-    assert_eq!(tab.host.take(), ["read devices"]);
+    assert_eq!(tab.host.take(), ["activity", "read devices"]);
 }
 
 /// Someone with neither another device nor the words starts over from where the words are typed,
@@ -551,7 +562,7 @@ fn back_from_the_words(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_devices_and_remove(cx: &mut TestAppContext) {
     let mut tab = shown(state(Status::On), cx);
-    assert_eq!(tab.host.take(), ["read devices"]);
+    assert_eq!(tab.host.take(), ["activity", "read devices"]);
     tab.set_devices(vec![device("this", true), device("phone", false)]);
     assert!(!tab.drawn("remove this"));
     tab.click("remove phone");
@@ -701,4 +712,166 @@ fn the_server_is_named_by_its_host() {
     assert_eq!(host_of("https://sync.example.org/"), "sync.example.org");
     assert_eq!(host_of("http://127.0.0.1:8080/x?y"), "127.0.0.1:8080");
     assert_eq!(host_of("sync.example.org"), "sync.example.org");
+}
+
+impl Shown<'_> {
+    fn status(&mut self) -> (Option<String>, String) {
+        self.account
+            .read_with(self.cx, |account, _| account.status_words())
+    }
+
+    /// The core's answer to how sync is keeping up, as the view reads it when Settings shows.
+    fn shows_with(&mut self, synced: &str, trouble: Option<Trouble>) {
+        *self.host.activity.borrow_mut() = Activity {
+            synced: synced.to_string().into(),
+            trouble,
+        };
+        self.account
+            .update(self.cx, |account, cx| account.read_activity(cx));
+        self.cx.run_until_parked();
+    }
+}
+
+/// Signed in, the line under the email says when it last synced, through which server, and once
+/// something stops it, what and what happens next, read from the core only as Settings shows.
+#[gpui::test]
+fn the_status_line_says_when_it_synced_and_what_stops_it(cx: &mut TestAppContext) {
+    let mut tab = shown(state(Status::On), cx);
+    let app = env!("APP_NAME");
+    assert_eq!(tab.status(), (None, format!("Syncing through {app}")));
+    assert!(tab.host.take().contains(&"activity".to_string()));
+
+    tab.shows_with("at 15:04", None);
+    assert_eq!(
+        tab.status(),
+        (None, format!("Synced at 15:04, through {app}"))
+    );
+    tab.shows_with("at 15:04", Some(Trouble::Unreachable));
+    assert_eq!(
+        tab.status(),
+        (
+            Some(format!("Can't reach {app}'s server.")),
+            format!("Last synced at 15:04; {app} keeps trying.")
+        )
+    );
+    tab.shows_with("", Some(Trouble::Throttled));
+    assert_eq!(
+        tab.status(),
+        (
+            Some("The server asked to wait.".into()),
+            format!("{app} syncs again soon.")
+        )
+    );
+    tab.shows_with("at 15:04", Some(Trouble::Stopped));
+    assert_eq!(
+        tab.status().0.as_deref(),
+        Some("Sync stopped after an error.")
+    );
+
+    // A server of the user's own is named by its host.
+    tab.set(State {
+        default_server: false,
+        ..state(Status::On)
+    });
+    tab.shows_with("yesterday at 09:30", Some(Trouble::Unreachable));
+    assert_eq!(
+        tab.status().0.as_deref(),
+        Some("Can't reach sync.example.org.")
+    );
+
+    // Nothing reads it again until Settings shows again, however long it stays open.
+    tab.host.take();
+    tab.cx.run_until_parked();
+    assert!(tab.host.take().is_empty());
+
+    // Signed out, the core isn't asked.
+    tab.set(state(Status::SignedOut));
+    assert!(!tab.host.take().contains(&"activity".to_string()));
+}
+
+/// Delete Account asks first, saying what goes and what stays, only a click deletes, and the core
+/// signs the browser out after.
+#[gpui::test]
+fn delete_account_asks_first(cx: &mut TestAppContext) {
+    let mut tab = shown(state(Status::On), cx);
+    tab.set_devices(vec![device("this", true), device("phone", false)]);
+    tab.host.take();
+    tab.click("delete-account");
+    assert_eq!(
+        tab.host.take(),
+        ["ask Delete the account ada@example.org? Delete Account"]
+    );
+    tab.confirm();
+    assert_eq!(tab.host.take(), ["delete account"]);
+
+    // A device without the secret deletes it too, for someone who lost the words and devices.
+    tab.set(state(Status::NeedsSecret));
+    tab.host.take();
+    tab.click("delete-account");
+    tab.confirm();
+    assert_eq!(
+        tab.host.take(),
+        [
+            "ask Delete the account ada@example.org? Delete Account",
+            "delete account"
+        ]
+    );
+}
+
+/// ↩ in Delete Account's question doesn't delete, as nothing brings the account back: only a click
+/// does.
+#[gpui::test]
+fn return_never_deletes_the_account(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        crate::text_input::bind_keys(cx);
+        bind_keys(cx);
+    });
+    let host = Rc::new(Recorder::default());
+    let core = host.clone();
+    let (page, cx) = cx.add_window_view(|_, cx| {
+        let dialog = dialog::in_window(Rc::new(InWindow), cx);
+        *core.dialog.borrow_mut() = Some(dialog.clone());
+        Page {
+            account: cx.new(|cx| Account::new(core, cx)),
+            dialog,
+        }
+    });
+    cx.simulate_resize(size(px(684.), px(650.)));
+    let account = page.read_with(cx, |page, _| page.account.clone());
+    let mut tab = Shown { account, cx, host };
+    tab.set(state(Status::On));
+    tab.host.take();
+    tab.click("delete-account");
+    let asked = "ask Delete the account ada@example.org? Delete Account";
+    assert_eq!(tab.host.take(), [asked]);
+    tab.keys("enter");
+    tab.cx.executor().advance_clock(Duration::from_secs(1));
+    tab.cx.run_until_parked();
+    assert!(tab.host.take().is_empty(), "↩ never deletes the account");
+    let asking = tab
+        .cx
+        .update(|_, cx| dialog::cover(&page.read(cx).dialog, cx).is_some());
+    assert!(asking, "the question stays for a click");
+}
+
+/// The last sync reads as a clock time today and yesterday, then in days, and not at all before
+/// the first.
+#[test]
+fn the_last_sync_reads_off_the_users_days() {
+    let hour = 3_600_000.;
+    let today = 1_000. * 24. * hour;
+    let days = [
+        today,
+        today - 24. * hour,
+        today - 48. * hour,
+        today - 72. * hour,
+    ];
+    assert_eq!(
+        synced_when(today + 15. * hour + 4. * 60_000., days),
+        "at 15:04"
+    );
+    assert_eq!(synced_when(today - 14.5 * hour, days), "yesterday at 09:30");
+    assert_eq!(synced_when(today - 30. * hour, days), "2 days ago");
+    assert_eq!(synced_when(today - 80. * hour, days), "4 days ago");
+    assert_eq!(synced_when(0., days), "");
 }
