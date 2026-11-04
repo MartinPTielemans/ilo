@@ -143,6 +143,9 @@ pub enum Command {
     TaskManager,
     /// Starts recording a trace of the whole browser, or stops it and asks where to save it.
     RecordTrace,
+    /// Keeps the window over other apps' windows, or lets it go back among them (Arc's Window ›
+    /// Stay On Top).
+    StayOnTop,
     /// Turns Developer Mode on or off for the page's site.
     ToggleDeveloperMode,
     /// Opens Chrome's extensions page in a new tab.
@@ -362,6 +365,10 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
 /// sidebar to hide.
 const HIDE_SIDEBAR: &str = "Hide Sidebar";
 
+/// Window › Stay On Top, and the command bar's row that ends it while it's on.
+pub const STAY_ON_TOP: &str = "Stay On Top";
+const DONT_STAY_ON_TOP: &str = "Don't Stay On Top";
+
 /// The page's Developer Mode's rows in the command bar, of which it lists the one that would change
 /// it (Arc's, in sentence case).
 const DEVELOPER_MODE_ON: &str = "Turn on Developer Mode for this site";
@@ -560,6 +567,16 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         &["dev mode", "localhost"],
     ),
     ("Open Task Manager", Command::TaskManager, &[]),
+    (
+        STAY_ON_TOP,
+        Command::StayOnTop,
+        &["float", "always on top", "pin window"],
+    ),
+    (
+        DONT_STAY_ON_TOP,
+        Command::StayOnTop,
+        &["float", "always on top", "pin window"],
+    ),
     (
         trace::RECORD,
         Command::RecordTrace,
@@ -1088,6 +1105,7 @@ impl Command {
             Command::JavaScriptConsole => "javascript-console",
             Command::TaskManager => "task-manager",
             Command::RecordTrace => "record-trace",
+            Command::StayOnTop => "stay-on-top",
             Command::ToggleDeveloperMode => "toggle-developer-mode",
             Command::ManageExtensions => "manage-extensions",
             Command::AddExtension => "add-extension",
@@ -1469,6 +1487,7 @@ impl Shell {
                 trace::toggle(self.browser.clone(), cx);
                 return self.update_menus(cx);
             }
+            Command::StayOnTop => return self.toggle_on_top(cx),
             Command::ToggleDeveloperMode => {
                 let on = !self.page(self.selected).developer_mode;
                 return self.browser.set_developer_mode(self.selected, on, cx);
@@ -2017,6 +2036,7 @@ impl Shell {
             | Command::Welcome
             | Command::Appearance(_)
             | Command::RecordTrace
+            | Command::StayOnTop
             | Command::ReportProblem
             | Command::CopyBuildInfo
             | Command::HelpCenter
@@ -2068,6 +2088,15 @@ impl Shell {
                 (name == orientation_title(self.stacked(self.selected))).then_some(name)
             }
             Command::RecordTrace => (name == trace::title(trace::recording(cx))).then_some(name),
+            // The row that changes it, where the window can stay on top at all.
+            Command::StayOnTop => (self.browser.can_stay_on_top()
+                && name
+                    == if self.on_top {
+                        DONT_STAY_ON_TOP
+                    } else {
+                        STAY_ON_TOP
+                    })
+            .then_some(name),
             Command::CheckForUpdates => (name == crate::updates::command_title(cx)).then_some(name),
             _ => Some(name),
         }

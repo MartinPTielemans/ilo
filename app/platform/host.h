@@ -557,6 +557,12 @@ bool host_window_buttons(void* ui_view, double centres[3], double* y, double* di
 // Does what a click on the close (0), minimize (1) or zoom (2) button of |ui_view|'s window does.
 void host_press_window_button(void* ui_view, int button);
 
+// Keeps the browser window of |ui_view| over other apps' windows, its overlays over it as before,
+// or with |on| false lets it go back among them (Window › Stay On Top). The Mac sets it aside
+// while the window is full screen, and takes it up again after. Under Wayland, which gives a client
+// no way, nothing.
+void host_set_window_on_top(void* ui_view, bool on);
+
 #ifdef _WIN32
 // Windows' alone, whose browser window has no title bar for these: moves |ui_view|'s window with
 // the pointer until the button that's down comes up, as a drag on a title bar does, and whether
