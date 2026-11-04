@@ -787,54 +787,61 @@ check_reveal "with the sidebar docked by ⌘S"
 # ⌥ pressed and let go alone brings the hidden sidebar out with the pointer over the page, which
 # keeps it out, and again sends it away. ⌥ held with ⌘, as for a shortcut, or let go after a key,
 # as for a typed character, doesn't, and with the sidebar docked it does nothing.
-send flags alt
-send flags
-none_since '^browser: reveal by option$' || fail "⌥ with the sidebar docked brought it out"
-send key s cmd
-toggle ui hidden "⌘S before ⌥"
-send move 600 300
-send flags alt
-send flags
-expect '^browser: reveal by option$' "⌥ pressed alone didn't bring the hidden sidebar out"
-expect '^browser: reveal shown$' "⌥ didn't bring the sidebar's panel out"
-check_reveal "with the sidebar out for ⌥" shown
-../tools/window-screenshot.sh "$pid" "$out/sidebar-option.png" || fail "no window to capture"
-# Only the panel ⌥ brought out, still out, goes away for it: one the pointer took away would come
-# out again.
-send move 650 320
-send flags alt
-send flags
-expect '^browser: reveal away by option$' \
-  "the pointer over the page, or a second ⌥, sent the sidebar away"
-expect '^browser: reveal hidden$' "a second ⌥ didn't take the sidebar's panel away"
-send flags alt
-send flags alt cmd
-send flags
-none_since '^browser: reveal by option$' || fail "⌥ held with ⌘ brought the sidebar out"
-send flags alt
-send key left alt
-send flags
-none_since '^browser: reveal by option$' || fail "⌥ let go after a key brought the sidebar out"
-# The same with the page focused, whose keys on X11 GPUI doesn't hear, so the core tells of its ⌥,
-# and on the Mac come through the app again when the page doesn't use them.
-send click $page_point
-in_browser RenderWidgetHostViewCocoa "after a click on the page with the sidebar hidden"
-send flags alt
-send flags
-expect '^browser: reveal by option$' \
-  "⌥ pressed alone with the page focused didn't bring the hidden sidebar out"
-expect '^browser: reveal shown$' "⌥ with the page focused didn't bring the sidebar's panel out"
-send flags alt
-send flags
-expect '^browser: reveal away by option$' "a second ⌥ with the page focused didn't send it away"
-expect '^browser: reveal hidden$' "a second ⌥ with the page focused didn't take the panel away"
-send flags alt
-send key left alt
-send flags
-none_since '^browser: reveal by option$' ||
-  fail "⌥ let go after a key with the page focused brought the sidebar out"
-send key s cmd
-toggle page shown "⌘S from the page after ⌥"
+if windows; then
+  # Windows' core doesn't tell the app of an Alt let go alone (bc_option_reveals_sidebar's tap,
+  # which the Mac's and Linux's cores detect), and Windows takes Alt alone for its menus.
+  echo "skip: ⌥ alone bringing the hidden sidebar out: Windows' core doesn't detect Alt let go alone."
+  send click $page_point
+else
+  send flags alt
+  send flags
+  none_since '^browser: reveal by option$' || fail "⌥ with the sidebar docked brought it out"
+  send key s cmd
+  toggle ui hidden "⌘S before ⌥"
+  send move 600 300
+  send flags alt
+  send flags
+  expect '^browser: reveal by option$' "⌥ pressed alone didn't bring the hidden sidebar out"
+  expect '^browser: reveal shown$' "⌥ didn't bring the sidebar's panel out"
+  check_reveal "with the sidebar out for ⌥" shown
+  ../tools/window-screenshot.sh "$pid" "$out/sidebar-option.png" || fail "no window to capture"
+  # Only the panel ⌥ brought out, still out, goes away for it: one the pointer took away would come
+  # out again.
+  send move 650 320
+  send flags alt
+  send flags
+  expect '^browser: reveal away by option$' \
+    "the pointer over the page, or a second ⌥, sent the sidebar away"
+  expect '^browser: reveal hidden$' "a second ⌥ didn't take the sidebar's panel away"
+  send flags alt
+  send flags alt cmd
+  send flags
+  none_since '^browser: reveal by option$' || fail "⌥ held with ⌘ brought the sidebar out"
+  send flags alt
+  send key left alt
+  send flags
+  none_since '^browser: reveal by option$' || fail "⌥ let go after a key brought the sidebar out"
+  # The same with the page focused, whose keys on X11 GPUI doesn't hear, so the core tells of its ⌥,
+  # and on the Mac come through the app again when the page doesn't use them.
+  send click $page_point
+  in_browser RenderWidgetHostViewCocoa "after a click on the page with the sidebar hidden"
+  send flags alt
+  send flags
+  expect '^browser: reveal by option$' \
+    "⌥ pressed alone with the page focused didn't bring the hidden sidebar out"
+  expect '^browser: reveal shown$' "⌥ with the page focused didn't bring the sidebar's panel out"
+  send flags alt
+  send flags
+  expect '^browser: reveal away by option$' "a second ⌥ with the page focused didn't send it away"
+  expect '^browser: reveal hidden$' "a second ⌥ with the page focused didn't take the panel away"
+  send flags alt
+  send key left alt
+  send flags
+  none_since '^browser: reveal by option$' ||
+    fail "⌥ let go after a key with the page focused brought the sidebar out"
+  send key s cmd
+  toggle page shown "⌘S from the page after ⌥"
+fi
 # With the sidebar hidden, a tab opening says so in a toast, as its row isn't seen. A second asked
 # for while it's in place, as Arc's second ⌘↩ is, keeps it there and bumps it, unless motion is
 # reduced; recorded on the Mac, and the window captured after, as a capture ends a recording on
