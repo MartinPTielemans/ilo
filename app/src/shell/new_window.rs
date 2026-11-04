@@ -56,17 +56,20 @@ impl Shell {
         // The bar waits for the window's full screen, as macOS moves the window to a desktop of
         // its own on the way, and the bar would be left on the one it came from. AppKit can have
         // taken it there itself, as it does a window opened from a full-screen one.
+        let entering = opening.entering;
         if opening.full_screen && !self.full_screen {
-            let asked = std::mem::replace(&mut opening.entering, true);
-            if asked || !self.browser.enter_full_screen(cx) {
+            opening.entering = true;
+            if entering || !self.browser.enter_full_screen(cx) {
                 return;
             }
+            // AppKit tells of the full screen it gave the window as it opened before the window
+            // can hear it, so the shell takes it from here: its layout and the note follow.
+            self.set_full_screen(true, cx);
         }
-        if opening.entering {
+        if self.opening.take().is_some_and(|opening| opening.entering) {
             // check.sh reads this line.
             log!("browser: new window went full screen");
         }
-        self.opening = None;
         // After this frame, as running it updates the shell.
         cx.defer_in(window, |shell, _, cx| {
             shell.run(Command::NewTab, "new window", cx)
@@ -190,6 +193,10 @@ mod tests {
             bars(&host),
             1,
             "the bar waited for a full screen the window had"
+        );
+        assert!(
+            shell.read_with(cx, |shell, _| shell.full_screen),
+            "the shell didn't take the full screen the window had"
         );
         assert_eq!(
             (host.take().iter())
