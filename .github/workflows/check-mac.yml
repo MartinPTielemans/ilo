@@ -208,6 +208,11 @@ jobs:
           done
           exit "$failed"
 
+      - name: PROBE TCC log
+        if: ${{ always() && steps.engine.outputs.found == 'true' }}
+        run: |
+          log show --last 40m --style compact --predicate 'process == "tccd"' 2>/dev/null | grep -E 'service=|kTCCService|prompt' | grep -vE 'milod|efilogin' | cut -c1-500 | tail -60 || true
+
       - if: ${{ always() && steps.engine.outputs.found == 'true' }}
         uses: actions/upload-artifact@v4
         with:

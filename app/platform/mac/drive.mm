@@ -1960,6 +1960,28 @@ void drive_start(void) {
               usingBlock:^(NSNotification*) {
                 fprintf(stderr, "browser: desktop space changed\n");
               }];
+  // PROBE (scratch only): which app takes activation, and the other apps' windows on screen then.
+  [NSWorkspace.sharedWorkspace.notificationCenter
+      addObserverForName:NSWorkspaceDidActivateApplicationNotification
+                  object:nil
+                   queue:nil
+              usingBlock:^(NSNotification* note) {
+                NSRunningApplication* app = note.userInfo[NSWorkspaceApplicationKey];
+                fprintf(stderr, "browser: probe activated %s %s pid %d\n",
+                        app.bundleIdentifier.UTF8String ?: "?", app.localizedName.UTF8String ?: "?",
+                        app.processIdentifier);
+                CFArrayRef list = CGWindowListCopyWindowInfo(
+                    kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+                    kCGNullWindowID);
+                for (NSDictionary* info in (__bridge NSArray*)list) {
+                  if ([info[(id)kCGWindowOwnerPID] intValue] == getpid()) continue;
+                  fprintf(stderr, "browser: probe window %s layer %d %s\n",
+                          [info[(id)kCGWindowOwnerName] UTF8String] ?: "?",
+                          [info[(id)kCGWindowLayer] intValue],
+                          [[info[(id)kCGWindowBounds] description] UTF8String] ?: "");
+                }
+                if (list) CFRelease(list);
+              }];
   // Full-screen transitions animate, and end well after the command's done.
   for (NSNotificationName name :
        {NSWindowDidEnterFullScreenNotification, NSWindowDidExitFullScreenNotification}) {
