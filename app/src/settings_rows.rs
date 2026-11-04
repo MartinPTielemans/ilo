@@ -59,6 +59,21 @@ pub fn ring(ink: Rgba) -> impl FnOnce(gpui::StyleRefinement) -> gpui::StyleRefin
     }
 }
 
+/// The same ring round a control whose own plate fills it, as a switch's pill does, which would
+/// cover a ring inside: just outside its edge, as Site Controls ring a round control.
+pub fn ring_round(ink: Rgba) -> impl FnOnce(gpui::StyleRefinement) -> gpui::StyleRefinement {
+    let color = Rgba { a: KEYED, ..ink };
+    move |style| {
+        style.shadow(vec![BoxShadow {
+            color: color.into(),
+            offset: point(px(0.), px(0.)),
+            blur_radius: px(0.),
+            spread_radius: px(KEYED_RING),
+            inset: false,
+        }])
+    }
+}
+
 /// A switch's knob slides across over 150 ms (ours).
 pub const SLIDE: f32 = 0.15;
 
