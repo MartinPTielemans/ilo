@@ -703,6 +703,7 @@ impl Shell {
             }
             Command::NewWindow
             | Command::NewPrivateWindow
+            | Command::NewBlankWindow
             | Command::NewLittleWindow
             | Command::ToggleSidebar
             | Command::RecordTrace

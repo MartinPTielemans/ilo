@@ -598,7 +598,7 @@ impl Shell {
         let movable = !drag.incoming
             && !self.favorites.contains(&tab)
             && self.panes(tab).len() == 1
-            && !self.private;
+            && !self.one_space();
         let side = side.filter(|_| movable && self.edge_space(side == Some(true)).is_some());
         if drag.edge.map(|(right, _)| right) == side {
             return;

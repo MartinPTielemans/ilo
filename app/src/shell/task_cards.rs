@@ -649,7 +649,7 @@ impl Shell {
     /// The Agents' cards, newest first, none of which a private window shows, as it offers no
     /// tasks. A new one takes the ask's slot once ⌘T ran it, so nothing at the foot moves.
     pub fn set_task_cards(&mut self, mut cards: Vec<Card>, cx: &mut Context<Self>) {
-        if self.private {
+        if self.one_space() {
             cards.clear();
         }
         if cards == self.task_cards {
@@ -1148,7 +1148,8 @@ impl Shell {
             return;
         }
         let now = Instant::now();
-        let flies = self.foot.primed && !cx.reduce_motion() && !self.private && self.foot_drawn();
+        let flies =
+            self.foot.primed && !cx.reduce_motion() && !self.one_space() && self.foot_drawn();
         let from = self
             .foot
             .plates_drawn

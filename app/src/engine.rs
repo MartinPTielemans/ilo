@@ -1567,6 +1567,36 @@ impl Browser for Engine {
         });
     }
 
+    fn new_blank_window(&self, cx: &mut App) {
+        let id = self.window;
+        cx.defer(move |cx| {
+            let from = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == id).cloned());
+            // The profile of the Space this window shows, a private one's base too.
+            let profile = unsafe { bc::bc_space_profile(bc::bc_window_space(id)) };
+            if from.is_some() && profile != 0 {
+                open_window(from, Some(Own::Blank(profile)), cx);
+            }
+        });
+    }
+
+    fn move_out_of_blank(&self, tab: u64, space: u64, cx: &mut App) {
+        let id = self.window;
+        cx.defer(move |_| {
+            let Some(main) = main_window_for(space) else {
+                return;
+            };
+            unsafe {
+                if bc::bc_window_space(main) != space {
+                    bc::bc_window_show_space(main, space);
+                }
+                bc::bc_tab_move_to_space(tab, space);
+                bc::bc_window_select(main, tab);
+            }
+            // check.sh reads this line.
+            log!("browser: blank window {id} moved {tab} to window {main} space {space}");
+        });
+    }
+
     fn new_little_window(&self, home: u64, cx: &mut App) {
         let id = self.window;
         cx.defer(move |cx| {

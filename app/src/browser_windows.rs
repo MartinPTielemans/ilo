@@ -17,6 +17,8 @@ pub(crate) struct BrowserWindow {
     /// A Little ilo window's: it shows a Space of its own, for the user's Space here, which ⌘O
     /// moves its page to.
     pub(crate) little: Option<bc::bc_id>,
+    /// A Blank Window's: it shows a Space of its own, unsaved, in the user's profile.
+    pub(crate) blank: bool,
     /// The user's Space it showed last, not an agent's, or 0, for a link from another app.
     pub(crate) users_space: bc::bc_id,
     /// The link from another app a Little ilo window opened for, which brings it back when another
@@ -25,9 +27,9 @@ pub(crate) struct BrowserWindow {
 }
 
 impl BrowserWindow {
-    /// Whether it shows the user's Spaces, as neither a private nor a Little ilo window does.
+    /// Whether it shows the user's Spaces, as no private, Little ilo or Blank Window does.
     pub(crate) fn regular(&self) -> bool {
-        !self.private && self.little.is_none()
+        !self.private && self.little.is_none() && !self.blank
     }
 }
 
@@ -38,6 +40,8 @@ pub(crate) enum Own {
     Private(bc::bc_id),
     /// Little ilo's, in `profile`, for the user's Space `home`, which ⌘O moves its page to.
     Little { profile: bc::bc_id, home: bc::bc_id },
+    /// ⌃⌘N's Blank Window, in `profile`: its tabs aren't kept or shown in other windows.
+    Blank(bc::bc_id),
 }
 
 /// The core's id and the UI's view of the window that the overlays every window shares show over,

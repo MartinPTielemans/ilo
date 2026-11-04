@@ -36,6 +36,8 @@ mod bar_usage;
 #[cfg(test)]
 mod bar_usage_tests;
 mod beside;
+#[cfg(test)]
+mod blank_tests;
 mod browser;
 mod card_strip;
 mod cast;
@@ -1569,6 +1571,10 @@ pub struct Shell {
     card_move: Option<Subscription>,
     /// A private window's: its one Space is its own, unsaved, in an off-the-record session.
     private: bool,
+    /// A Blank Window's: its one Space is its own, unsaved, in the user's profile.
+    blank: bool,
+    /// The user's Spaces a Blank Window's tab can move to, by id, name and profile.
+    blank_targets: Vec<(u64, SharedString, u64)>,
     /// A Little ilo window's (Arc's Little Arc): its one Space is its own, holding its page.
     little: Option<little::Little>,
 }
@@ -1837,6 +1843,8 @@ impl Shell {
             window_light: None,
             capture_look: None,
             private: false,
+            blank: false,
+            blank_targets: Vec::new(),
             little: None,
         }
     }
@@ -1874,6 +1882,42 @@ impl Shell {
     /// Whether this is a private window's shell.
     pub fn private(&self) -> bool {
         self.private
+    }
+
+    /// A Blank Window's shell (⌃⌘N, Arc's): one Space of its own, `space` in `profile`, unsaved
+    /// and in no other window, named for what it is, with the square glyph before its name; its
+    /// tabs are Today's alone, and it has no favorites, Space switcher or Library, as a private
+    /// window has none, but the look and the extensions of any window of its profile.
+    pub fn blank_window(
+        browser: Rc<dyn Browser>,
+        space: u64,
+        profile: u64,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut shell = Self::new(browser, cx);
+        shell.blank = true;
+        shell.space = space;
+        shell.spaces = vec![Space {
+            id: space,
+            name: BLANK_WINDOW.into(),
+            color: None,
+            theme: None,
+            icon: BLANK_ICON.into(),
+            agent: SharedString::default(),
+            profile,
+            pinned: Vec::new(),
+            today: Vec::new(),
+            splits: Vec::new(),
+            folders: Folders::default(),
+            shown: 0,
+        }];
+        shell
+    }
+
+    /// Whether the window shows one Space of its own and no others: a private window or a Blank
+    /// Window. Its tabs are Today's alone and stay in it.
+    pub fn one_space(&self) -> bool {
+        self.private || self.blank
     }
 
     /// A shell for another window, which starts out knowing what `from` heard from the core about
@@ -2204,7 +2248,16 @@ impl Shell {
     /// The Spaces, by id, name, colour, profile, icon and the name of the agent each belongs to,
     /// empty for the user's own, in the switcher's order.
     pub fn set_spaces(&mut self, spaces: Vec<SpaceEntry>, cx: &mut Context<Self>) {
-        if self.private {
+        // A Blank Window keeps the user's Spaces for its tabs' Move to, its way out, and shows its
+        // own alone.
+        if self.blank {
+            self.blank_targets = (spaces.into_iter())
+                .filter(|(.., agent)| agent.is_empty())
+                .map(|(id, name, _, profile, ..)| (id, name, profile))
+                .collect();
+            return;
+        }
+        if self.one_space() {
             return;
         }
         if self.little.is_some() {
@@ -2534,7 +2587,7 @@ impl Shell {
     /// Every favorite, left to right, each with its holder: the Space it belongs to under Each
     /// Space (the core's `bc_favorite_space`), else its profile.
     pub fn set_favorites(&mut self, favorites: Vec<(u64, u64)>, cx: &mut Context<Self>) {
-        if self.private || self.little.is_some() {
+        if self.one_space() || self.little.is_some() {
             return;
         }
         let tiles = self.drawn();
@@ -3960,10 +4013,10 @@ impl Shell {
         sidebar
             .children(self.new_space_circle(cx))
             .children(self.recent_download_rows(cx))
-            .children((!self.private).then(|| self.library_button(cx)))
+            .children((!self.one_space()).then(|| self.library_button(cx)))
             .children(self.download_bin(cx))
             .children(self.archive_flights())
-            .children((!self.private).then(|| self.plus_button(cx)))
+            .children((!self.one_space()).then(|| self.plus_button(cx)))
             .children(self.switcher(cx))
             .child(self.press_listener())
             .children(self.paging_frame(started))
@@ -5202,3 +5255,7 @@ mod tests {
         assert!(1. - along(Curve::Room, 280.) < 0.01);
     }
 }
+
+/// A Blank Window's Space's name, and its icon: the square glyph, in the name's ink, before it.
+pub(super) const BLANK_WINDOW: &str = "Blank Window";
+pub(super) const BLANK_ICON: &str = "glyph:square";

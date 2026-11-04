@@ -1497,6 +1497,10 @@ impl Browser for Fake {
 
     fn new_private_window(&self, _: &mut App) {}
 
+    fn new_blank_window(&self, _: &mut App) {}
+
+    fn move_out_of_blank(&self, _: u64, _: u64, _: &mut App) {}
+
     fn new_little_window(&self, _: u64, _: &mut App) {}
 
     fn open_tab_in_little(&self, _: u64, _: &mut App) {}

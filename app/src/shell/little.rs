@@ -163,7 +163,7 @@ impl Shell {
             .is_some_and(|space| space.agent.is_empty());
         // ⌘ is Control off the Mac, where the platform key is Super.
         let takes = event.modifiers.alt && event.modifiers.secondary(cx) && !event.modifiers.shift;
-        if !takes || !users || self.private || self.little.is_some() || self.is_folder(tab) {
+        if !takes || !users || self.one_space() || self.little.is_some() || self.is_folder(tab) {
             return false;
         }
         if !self.today().contains(&tab) || self.panes(tab).len() > 1 {

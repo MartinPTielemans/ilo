@@ -48,6 +48,9 @@ pub(crate) fn open_browser_window(
         (Some(Own::Little { profile, .. }), _) => unsafe {
             bc::bc_window_open_little(bounds, ui_view, profile)
         },
+        (Some(Own::Blank(profile)), _) => unsafe {
+            bc::bc_window_open_blank(bounds, ui_view, profile)
+        },
         (None, Some(index)) => unsafe { bc::bc_window_open_saved(index, bounds, ui_view) },
         (None, None) => unsafe { bc::bc_window_open(bounds, ui_view) },
     };
@@ -247,6 +250,9 @@ pub(crate) fn open_window_as(
                 (_, Some((space, Own::Private(profile)))) => {
                     Shell::private_window(engine, space, private_name(profile), profile, cx)
                 }
+                (_, Some((space, Own::Blank(profile)))) => {
+                    Shell::blank_window(engine, space, profile, cx)
+                }
                 (from, Some((space, Own::Little { profile, home }))) => {
                     Shell::little_window(engine, space, home, profile, from.as_ref(), cx)
                 }
@@ -273,6 +279,7 @@ pub(crate) fn open_window_as(
                     handle: Window::window_handle(window),
                     children: Vec::new(),
                     private: matches!(own, Some(Own::Private(_))),
+                    blank: matches!(own, Some(Own::Blank(_))),
                     little: match own {
                         Some(Own::Little { home, .. }) => Some(home),
                         _ => None,
@@ -511,6 +518,7 @@ pub(crate) fn finish_opening(
         Some(Own::Little { profile, home }) => {
             log!("browser: little window opened {id} profile {profile} home {home}")
         }
+        Some(Own::Blank(profile)) => log!("browser: blank window opened {id} profile {profile}"),
         None => {}
     }
     if own.is_some() {

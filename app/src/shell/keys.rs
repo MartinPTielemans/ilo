@@ -153,11 +153,15 @@ pub fn reserved(command: Command) -> bool {
 
 /// Chrome's keys on Linux and Windows that the Mac's Chrome and Arc have no key for.
 const OFF_THE_MAC_ONLY: &[&str] = &["shift-escape"];
+/// Arc's keys off the Mac would press as another of ours: ⌃⌘N's Blank Window is Ctrl+Alt+N there,
+/// which is ⌥⌘N's Little ilo Window (#669).
+const MAC_ONLY: &[&str] = &["ctrl-cmd-n"];
 
 fn defaults(command: Command) -> Vec<String> {
     (SHORTCUTS.iter())
         .filter(|&&(_, each, _)| each == command)
         .filter(|&&(key, ..)| OFF_THE_MAC || !OFF_THE_MAC_ONLY.contains(&key))
+        .filter(|&&(key, ..)| !OFF_THE_MAC || !MAC_ONLY.contains(&key))
         .map(|&(key, ..)| key.to_string())
         .collect()
 }
@@ -337,7 +341,7 @@ fn written_off_the_mac(keystroke: &str) -> String {
     // Alt alone is ⌃, since ⌥ alone is no shortcut. With Ctrl it's ⌥, unless ⌃⌘ makes a key ours.
     let as_control = written([alt, false, shift, ctrl], rest);
     let known = |key: &str| {
-        let keys = SHORTCUTS.iter().map(|&(key, ..)| key);
+        let keys = (SHORTCUTS.iter().map(|&(key, ..)| key)).filter(|key| !MAC_ONLY.contains(key));
         keys.chain(SYSTEM_KEYS.iter().map(|&(key, _)| key))
             .any(|each| each == key)
     };
@@ -1125,6 +1129,10 @@ mod tests {
     fn the_shortcuts_keep_their_keys_off_the_mac() {
         let mut taken: Vec<(String, Command)> = Vec::new();
         for &(key, command, _) in SHORTCUTS {
+            // The Mac's alone, as off the Mac they'd press as another of ours.
+            if MAC_ONLY.contains(&key) {
+                continue;
+            }
             let pressed = pressed_off_the_mac(key);
             let alt = key.replacen("ctrl-", "alt-", 1);
             if !key.contains("cmd-") && CHROME_ALT_KEYS.iter().any(|&(chrome, _)| chrome == alt) {

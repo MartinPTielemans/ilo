@@ -28,7 +28,7 @@ impl Shell {
     /// Shows the Space with its name in a field, all selected, to type a new one over.
     pub(super) fn rename_space(&mut self, space: u64, cx: &mut Context<Self>) {
         // A private window's Space is named for what it is.
-        if self.private {
+        if self.one_space() {
             return;
         }
         let Some(name) = self

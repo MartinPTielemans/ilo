@@ -65,6 +65,8 @@ class Space {
     kPrivate,
     // A Little ilo window's (Arc's Little Arc): its tabs in the profile itself.
     kLittle,
+    // A Blank Window's (Arc's): its tabs in the profile itself, and in no other window.
+    kBlank,
   };
   // A window's own Space, its tabs in the profile in the directory |profile|, or for a private
   // window in its off-the-record profile. It holds Today tabs alone, and isn't among All(), so
@@ -110,6 +112,8 @@ class Space {
   bool off_the_record() const { return own_ == Own::kPrivate; }
   // Whether it's a Little ilo window's.
   bool little() const { return own_ == Own::kLittle; }
+  // Whether it's a Blank Window's.
+  bool blank() const { return own_ == Own::kBlank; }
   // The Space's node. A window's own has none.
   const Node& node() const { return node_; }
   // The pinned tab's or folder's |id|'s node, or null if it isn't one of the Space's.

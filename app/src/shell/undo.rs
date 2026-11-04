@@ -619,7 +619,7 @@ impl Shell {
     /// which keeps nothing. What was undone before is gone, as in every app. If `what` takes
     /// something out of sight without a trace, the toast offers the Undo.
     pub(super) fn keep(&mut self, what: What, edit: Option<Edit>, cx: &mut Context<Self>) {
-        let Some(edit) = edit.filter(|_| !self.private) else {
+        let Some(edit) = edit.filter(|_| !self.one_space()) else {
             return;
         };
         // ⇧⌘T reopens what closed last: a tab closed since comes before the preview.
@@ -655,7 +655,7 @@ impl Shell {
     }
 
     fn step(&mut self, undoing: bool, cx: &mut Context<Self>) -> bool {
-        if self.private {
+        if self.one_space() {
             return false;
         }
         // The Undo the toast offers is done, or is no longer the one.
@@ -717,7 +717,7 @@ impl Shell {
     /// The user closed the link preview over `closed.over`, which ⌘Z and ⇧⌘T open again, unless
     /// Redo closed it (`undone`), as the history has it already.
     pub fn preview_closed(&mut self, closed: Closed, undone: bool, cx: &mut Context<Self>) {
-        if self.private {
+        if self.one_space() {
             return;
         }
         self.closed_preview = Some(closed.clone());
@@ -811,7 +811,7 @@ impl Shell {
         {
             self.browser.close(tab, false, cx);
             self.closed_preview = None;
-            self.closed_pinned = (!self.private).then(|| join.clone());
+            self.closed_pinned = (!self.one_space()).then(|| join.clone());
             return self.keep(What::CLOSE_TAB, Some(join), cx);
         }
         // The core closes a split's panes in their order, so they reopen last first.
@@ -874,7 +874,7 @@ impl Shell {
         };
         self.unpin_and_close(tab, cx);
         self.keep(What::REMOVE_TAB, Some(back.clone()), cx);
-        self.closed_pinned = (!self.private).then_some(back);
+        self.closed_pinned = (!self.one_space()).then_some(back);
     }
 
     /// The core has no call that removes a pinned tab, so it's the two the other way takes: Unpin,

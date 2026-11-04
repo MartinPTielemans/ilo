@@ -208,6 +208,12 @@ void KeepClosed(bc_id id) {
   if (saved.history.empty()) {
     return;
   }
+  // A Blank Window's goes in the archive, so nothing closed is lost, but not in the closed tabs
+  // ⇧⌘T reopens, whose Space went with its window.
+  if (space->blank()) {
+    Archive(id, saved.history[saved.current].virtual_url(), tab->Title(), /*little=*/false);
+    return;
+  }
   Archive(id, saved.history[saved.current].virtual_url(), tab->Title(), space->little());
   const size_t index = std::ranges::find(space->today(), id) - space->today().begin();
   const std::vector<bc_id> panes = space->Panes(id);
@@ -2399,8 +2405,8 @@ void Window::Destroy() {
       const bool its = own_space_ ? space && space->id() == space_
                                   : !(space && space->own()) && !OffTheRecord(tab);
       if (!tab->web_contents() && its) {
-        // A Little ilo window's goes in the archive, as one with its page does.
-        if (space && space->little()) {
+        // A Little ilo window's and a Blank Window's go in the archive, as one with its page does.
+        if (space && (space->little() || space->blank())) {
           KeepClosed(tab->id());
         }
         tab->Close();
@@ -2473,10 +2479,11 @@ void Window::OnTabStripModelChanged(TabStripModel* tab_strip_model,
                                     const TabStripSelectionChange& selection) {
   if (change.type() == TabStripModelChange::kRemoved) {
     // Tabs closing with the window, or as the browser quits, come back at the next launch instead.
-    // A Little ilo window's, which never comes back with a launch, goes in the archive as it
-    // closes with its window (KeepClosed).
+    // A Little ilo window's and a Blank Window's, which never come back with a launch, go in the
+    // archive as they close with their window (KeepClosed).
     const Space* own = own_space_ ? Space::FromId(space_) : nullptr;
-    if ((closing_ && !(own && own->little())) || browser_shutdown::IsTryingToQuit()) {
+    if ((closing_ && !(own && (own->little() || own->blank()))) ||
+        browser_shutdown::IsTryingToQuit()) {
       return;
     }
     for (const TabStripModelChange::RemovedTab& removed : change.GetRemove()->contents) {

@@ -485,7 +485,7 @@ impl Shell {
     /// The tasks in the Archive changed, all of them, the last to leave the foot first. A private
     /// window, which offers no tasks, lists none.
     pub fn set_archived_tasks(&mut self, mut tasks: Vec<ArchivedTask>, cx: &mut Context<Self>) {
-        if self.private {
+        if self.one_space() {
             tasks.clear();
         }
         if tasks == self.archived_tasks {
@@ -718,7 +718,7 @@ impl Shell {
     /// Opens the Library, or closes it, from wherever the card is, the sidebar fading.
     pub(super) fn set_library(&mut self, open: bool, cx: &mut Context<Self>) {
         // A private window has no Library: what it shows is the regular windows'.
-        if open == self.library_open || (open && (self.page_fullscreen || self.private)) {
+        if open == self.library_open || (open && (self.page_fullscreen || self.one_space())) {
             return;
         }
         if open {
