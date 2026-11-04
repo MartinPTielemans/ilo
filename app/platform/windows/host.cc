@@ -1840,6 +1840,8 @@ bool host_app_icon(const char* app, size_t size, uint8_t* rgba) {
   if (path.find_first_of(L"/\\") == std::wstring::npos) {
     path = AppPath(path);
   }
+  // The shell parses Windows' separators alone, and the import joins its paths with /.
+  std::replace(path.begin(), path.end(), L'/', L'\\');
   if (path.empty() || GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES || !size) {
     return false;
   }
@@ -1852,10 +1854,18 @@ bool host_app_icon(const char* app, size_t size, uint8_t* rgba) {
     ComPtr<IWICBitmapScaler> scaler;
     HBITMAP bitmap = nullptr;
     const UINT pixels = static_cast<UINT>(size);
-    if (SUCCEEDED(SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(&factory))) &&
-        SUCCEEDED(factory->GetImage({static_cast<LONG>(pixels), static_cast<LONG>(pixels)},
-                                    SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK, &bitmap)) &&
-        bitmap &&
+    const HRESULT item =
+        SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(&factory));
+    const HRESULT image =
+        SUCCEEDED(item) ? factory->GetImage({static_cast<LONG>(pixels), static_cast<LONG>(pixels)},
+                                            SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK, &bitmap)
+                        : item;
+    if (FAILED(image) || !bitmap) {
+      // check.sh shows this line when a row it gave an icon has none.
+      fprintf(stderr, "browser: import icon for %s failed: 0x%08lx\n", app,
+              static_cast<unsigned long>(image));
+    }
+    if (SUCCEEDED(image) && bitmap &&
         SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
                                    IID_PPV_ARGS(&wic))) &&
         SUCCEEDED(wic->CreateBitmapFromHBITMAP(bitmap, nullptr, WICBitmapUsePremultipliedAlpha,
