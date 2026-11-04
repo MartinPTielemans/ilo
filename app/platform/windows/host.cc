@@ -1303,6 +1303,19 @@ ITfThreadMgr* ThreadManager() {
   return manager;
 }
 
+// A TSF document with nothing in it, which has TSF's focus while a hold lasts, so the IME composes
+// nothing in the page meanwhile.
+ITfDocumentMgr* EmptyDocument() {
+  static ITfDocumentMgr* empty = [] {
+    ITfDocumentMgr* made = nullptr;
+    if (ITfThreadMgr* manager = ThreadManager()) {
+      manager->CreateDocumentMgr(&made);
+    }
+    return made;
+  }();
+  return empty;
+}
+
 // The window with the keyboard as a hold began, whose input method composes nothing until it ends:
 // an IME takes a key before the hold sees it, so what's typed for a bar would compose in the page
 // (#1784). Its IMM context and TSF document, taken away from it meanwhile.
@@ -1328,11 +1341,7 @@ void DetachInputMethod(HWND window) {
   g_detached.context = ImmAssociateContext(window, nullptr);
   if (ITfThreadMgr* manager = ThreadManager()) {
     g_detached.tsf = SUCCEEDED(manager->AssociateFocus(window, nullptr, &g_detached.document));
-    static ITfDocumentMgr* empty = [manager] {
-      ITfDocumentMgr* made = nullptr;
-      manager->CreateDocumentMgr(&made);
-      return made;
-    }();
+    ITfDocumentMgr* empty = EmptyDocument();
     if (empty && SUCCEEDED(manager->GetFocus(&g_detached.focused)) && g_detached.focused) {
       manager->SetFocus(empty);
     }
@@ -1400,12 +1409,41 @@ bool GiveHeldKey(const MSG& held, HWND to) {
   return eaten != FALSE;
 }
 
-// Gives the keys held to the window that now has the keyboard, unless they wait for another bar.
-void ReleaseKeys(HWND from) {
-  if ((from && g_keys_for && from != g_keys_for) || !g_holding_keys) {
+// The window the keys held go to once TSF's focus is on its document (GiveHeldKeysOnceFocused),
+// the hold lasting until then, or null.
+HWND g_giving_to = nullptr;
+
+// Gives the keys held to |g_giving_to| once TSF's focus has left the hold's empty document for
+// that window's, which TSF moves to it a moment after the focus change, checked each 10 ms |tries|
+// times. The hold lasts until then, so keys typed meanwhile go after those held before.
+void GiveHeldKeysOnceFocused(int tries) {
+  ITfDocumentMgr* focused = nullptr;
+  if (ITfThreadMgr* manager = ThreadManager()) {
+    manager->GetFocus(&focused);
+  }
+  const bool empty = focused && focused == EmptyDocument();
+  if (focused) {
+    focused->Release();
+  }
+  if (empty && tries > 0) {
+    After(0.01, [tries] { GiveHeldKeysOnceFocused(tries - 1); });
     return;
   }
   g_holding_keys = false;
+  HWND to = std::exchange(g_giving_to, nullptr);
+  size_t taken = 0;
+  for (const MSG& key : std::exchange(g_held_keys, {})) {
+    taken += GiveHeldKey(key, to);
+  }
+  // check.sh reads this line.
+  fprintf(stderr, "browser: the input method took %zu of the held key events\n", taken);
+}
+
+// Gives the keys held to the window that now has the keyboard, unless they wait for another bar.
+void ReleaseKeys(HWND from) {
+  if ((from && g_keys_for && from != g_keys_for) || !g_holding_keys || g_giving_to) {
+    return;
+  }
   if (g_hold_timer) {
     KillTimer(nullptr, g_hold_timer);
     g_hold_timer = 0;
@@ -1420,18 +1458,12 @@ void ReleaseKeys(HWND from) {
             to_bar ? "GPUIPanel" : "BrowserCoreNSWindow");
   }
   ReattachInputMethod();
-  // After the window that has the keyboard has its input method's focus, which TSF moves to it
-  // once the focus change it heard is handled. A posted task goes before the keys typed since.
-  Later([to, held = std::exchange(g_held_keys, {})] {
-    size_t taken = 0;
-    for (const MSG& key : held) {
-      taken += GiveHeldKey(key, to);
-    }
-    // check.sh reads this line.
-    if (!held.empty()) {
-      fprintf(stderr, "browser: the input method took %zu of the held key events\n", taken);
-    }
-  });
+  if (g_held_keys.empty()) {
+    g_holding_keys = false;
+    return;
+  }
+  g_giving_to = to;
+  GiveHeldKeysOnceFocused(50);
 }
 
 void CALLBACK HoldTimedOut(HWND, UINT, UINT_PTR id, DWORD) {
