@@ -5,7 +5,7 @@
 #   load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear
 #   split favorites cards extensions adblock adblock-lists windows private little capture media
 #   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp
-#   appearance about sync sync-account sync-devices switch-frames devices filled battery
+#   appearance about sync sync-account sync-devices switch-frames devices filled scripting battery
 # The store run installs from Google's Web Store, adblock-live blocks Google's ad servers with
 # uBlock Origin's own lists and widevine, Linux's alone, downloads Google's Widevine module, so they
 # need the network and run only when named: ./check.sh store.
@@ -14,7 +14,7 @@
 # real Keychain, on the prod build and only in a check VM. Shots takes the Store's pictures from
 # pages on the internet, so it runs only when named too.
 # Every run but load and crash needs Browser to be the active app, and window, find and updates
-# take it full screen for a moment. Passkeys is the Mac's alone so far. Updates makes
+# take it full screen for a moment. Passkeys and scripting are the Mac's alone. Updates makes
 # build/Updates.app on the Mac, a copy with Sparkle and a feed of its own (build.sh updates), and
 # ilo's Flatpak on Linux, which a repository of the run's own updates (check/updates.sh).
 # In a check VM the check turns the Mac's appearance dark for the runs, which read the window's
@@ -70,7 +70,7 @@ fi
 runs="load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear"
 runs="$runs split favorites cards extensions adblock adblock-lists windows private little capture media"
 runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp"
-runs="$runs appearance about sync sync-account sync-devices switch-frames devices filled battery"
+runs="$runs appearance about sync sync-account sync-devices switch-frames devices filled scripting battery"
 named="store adblock-live widevine updates nightly keychain shots"
 for run in "$@"; do
   case " $runs $named " in
@@ -112,6 +112,23 @@ if windows; then
   browser=windows_browser
   procs="$(cygpath -m "$app/chrome.exe")"
   profile_dir="$(cygpath -u "$LOCALAPPDATA")/browser-app"
+elif [ -n "${BROWSER_FLATPAK:-}" ]; then
+  # The Flatpak flatpak.yml installed, app.ilo.browser: the prod build in its sandbox, given the
+  # run's BROWSER_ settings, this folder and the profile's. Only sync-account runs in it so far.
+  app=/app/ilo
+  flatpak_browser() {
+    set -- app.ilo.browser "$@"
+    for name in $(env | sed -n 's/^\(BROWSER_[A-Z0-9_]*\)=.*/\1/p'); do
+      eval "set -- \"--env=$name=\${$name}\" \"\$@\""
+    done
+    # A run's own profile, as sync-devices gives each device, or the check's.
+    dir=${BROWSER_PROFILE_DIR:-$profile_dir}
+    exec flatpak run --cwd="$PWD" --filesystem="$PWD" --filesystem="$dir:create" \
+      --env=BROWSER_PROFILE_DIR="$dir" "$@"
+  }
+  browser=flatpak_browser
+  procs="$app/chrome"
+  profile_dir="$HOME/.cache/browser-app"
 elif [ "$(uname)" = Linux ]; then
   app="$PWD/build/Browser"
   browser="$app/chrome"
@@ -150,13 +167,15 @@ rm -f "$(dirname "$saved")/Agents" "$(dirname "$saved")/Shortcuts"
 # have left localhost out of Developer Mode. A failed media run may have left the Mini Player off,
 # which the core keeps as Block for every site's Automatic picture-in-picture and doesn't undo at
 # launch, so no later run's call floated (#1165).
+# Each file is Chrome's or the core's, in UTF-8, which Windows' Python doesn't read by default, as a
+# Space's emoji in Spaces.json needs (#1673).
 prefs="$profile_dir/Default/Preferences"
 mkdir -p "$(dirname "$prefs")" "$out/downloads"
 python3 -I -c '
 import json, os, sys
 prefs = {}
 if os.path.exists(sys.argv[1]):
-    with open(sys.argv[1]) as f:
+    with open(sys.argv[1], encoding="utf-8") as f:
         prefs = json.load(f)
 prefs.setdefault("devtools", {}).setdefault("preferences", {})["currentDockState"] = "\"right\""
 prefs.setdefault("download", {})["default_directory"] = sys.argv[2]
@@ -167,18 +186,18 @@ for kind in ("window_placement", "permission_autoblocking_data", "auto_picture_i
 defaults = prefs.get("profile", {}).get("default_content_setting_values", {})
 defaults.pop("auto_picture_in_picture", None)
 prefs.get("browser_core", {}).pop("developer_mode", None)
-with open(sys.argv[1], "w") as f:
+with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(prefs, f)
 ' "$prefs" "$(native_path "$PWD/$out/downloads")"
 python3 -I -c '
 import json, os, sys
 if not os.path.exists(sys.argv[1]):
     sys.exit()
-with open(sys.argv[1]) as f:
+with open(sys.argv[1], encoding="utf-8") as f:
     saved = json.load(f)
 if saved.get("settings", {}).get("auto_picture_in_picture") is False:
     saved["settings"]["auto_picture_in_picture"] = True
-    with open(sys.argv[1], "w") as f:
+    with open(sys.argv[1], "w", encoding="utf-8") as f:
         json.dump(saved, f)
 ' "$saved"
 # Each run starts in the one profile, Default: Chrome deletes the others, which a run before made,
@@ -188,7 +207,7 @@ only_default() {
 import json, os, sys
 if not os.path.exists(sys.argv[1]):
     sys.exit()
-with open(sys.argv[1]) as f:
+with open(sys.argv[1], encoding="utf-8") as f:
     local = json.load(f)
 profile = local.setdefault("profile", {})
 left = [name for name in profile.get("info_cache", {}) if name != "Default"]
@@ -198,7 +217,7 @@ profile["last_used"] = "Default"
 profile["last_active_profiles"] = profile["profiles_order"] = ["Default"]
 deleted = local.setdefault("profiles", {}).setdefault("profile_basenames_deleted", [])
 deleted.extend(name for name in left if name not in deleted)
-with open(sys.argv[1], "w") as f:
+with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(local, f)
 ' "$(dirname "$saved")/Local State"
 }
