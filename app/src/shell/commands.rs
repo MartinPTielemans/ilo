@@ -86,6 +86,12 @@ pub enum Command {
     ResetSpaceTabs,
     /// Mutes the selected tab, or unmutes it.
     ToggleMute,
+    /// Mutes every tab of the window (`true`), or unmutes them all: Arc's Mute All Tabs.
+    MuteAll(bool),
+    /// Puts the window full screen, or takes it out, as View's Enter Full Screen does.
+    ToggleFullScreen,
+    /// Arc's Exit (⎋): leaves the command bar, which closes before any command runs.
+    Exit,
     /// Closes the Today tabs of the Space shown, but the one shown.
     Clear,
     /// Undoes the last thing the user did that lost or moved something (`Shell::undo`).
@@ -440,6 +446,24 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         &["reset tab"],
     ),
     ("Mute/Unmute Tab", Command::ToggleMute, &["sound", "audio"]),
+    (
+        "Mute All Tabs",
+        Command::MuteAll(true),
+        &["sound", "audio", "silence"],
+    ),
+    (
+        "Unmute All Tabs",
+        Command::MuteAll(false),
+        &["sound", "audio"],
+    ),
+    ("Enter Full Screen", Command::ToggleFullScreen, &["toggle"]),
+    ("Exit Full Screen", Command::ToggleFullScreen, &["toggle"]),
+    ("Exit", Command::Exit, &["escape"]),
+    (
+        "New Profile",
+        Command::ChangeProfile(None),
+        &["add profile"],
+    ),
     ("Copy URL", Command::CopyUrl, &["link"]),
     ("Copy URL as Markdown", Command::CopyMarkdownLink, &["link"]),
     (
@@ -848,7 +872,10 @@ fn ranked(
         .map(|(matched, name, command)| BarCommand {
             name,
             command,
-            shortcut: keys.label(command).map(Into::into),
+            // Exit is ⎋'s, which leaves the bar as it does, bound to no command.
+            shortcut: (keys.label(command))
+                .or_else(|| (command == Command::Exit).then(|| keystroke_label("escape")))
+                .map(Into::into),
             matched,
         })
         .collect()
@@ -1045,6 +1072,10 @@ impl Command {
             Command::BackToPinnedUrl => "back-to-pinned-url",
             Command::ResetSpaceTabs => "reset-space-tabs",
             Command::ToggleMute => "toggle-mute",
+            Command::MuteAll(true) => "mute-all-tabs",
+            Command::MuteAll(false) => "unmute-all-tabs",
+            Command::ToggleFullScreen => "toggle-full-screen",
+            Command::Exit => "exit",
             Command::Clear => "clear",
             Command::Undo => "undo",
             Command::Redo => "redo",
@@ -1409,6 +1440,10 @@ impl Shell {
                 return;
             }
             Command::ToggleMute => return self.toggle_mute(self.selected, cx),
+            Command::MuteAll(muted) => return self.mute_all(muted, cx),
+            Command::ToggleFullScreen => return self.browser.toggle_full_screen(cx),
+            // The bar has closed already, which is all Exit does.
+            Command::Exit => return,
             Command::Clear => return self.clear(cx),
             Command::Undo => {
                 self.undo(cx);
@@ -1971,6 +2006,12 @@ impl Shell {
                 self.selected != 0 && !favorite && !self.sidebar_hidden
             }
             Command::NextSpace => space.is_some_and(|index| index + 1 < self.spaces.len()),
+            Command::MuteAll(muted) => self.tabs.values().any(|tab| tab.page.muted != muted),
+            // As the menus' New Profile: only an empty Space changes profile.
+            Command::ChangeProfile(None) => {
+                self.profile_choices(self.space).is_some_and(|(_, new)| new)
+            }
+            Command::ToggleFullScreen | Command::Exit => true,
             Command::CheckForUpdates => self.browser.updates(),
             Command::RestoreEarlierSidebar => !self.shown_backups().is_empty(),
             Command::PreviousSpace => space.is_some_and(|index| index > 0),
@@ -2058,6 +2099,13 @@ impl Shell {
                 (name == orientation_title(self.stacked(self.selected))).then_some(name)
             }
             Command::RecordTrace => (name == trace::title(trace::recording(cx))).then_some(name),
+            Command::ToggleFullScreen => {
+                let title = match self.full_screen {
+                    true => "Exit Full Screen",
+                    false => "Enter Full Screen",
+                };
+                (name == title).then_some(name)
+            }
             Command::CheckForUpdates => (name == crate::updates::command_title(cx)).then_some(name),
             _ => Some(name),
         }
