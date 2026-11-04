@@ -177,17 +177,7 @@ pub(crate) extern "C" fn dock_chosen(item: c_int) {
             return new_little_window("dock", cx);
         }
         if item == 3 || item == 4 {
-            let command = match item {
-                3 => shell::Command::NewWindow,
-                _ => shell::Command::NewPrivateWindow,
-            };
-            let front = WINDOWS.with_borrow(|windows| {
-                (windows.iter().find(|w| w.regular())).and_then(|w| w.shell.upgrade())
-            });
-            if let Some(shell) = front {
-                shell.update(cx, |shell, cx| shell.run(command, "dock", cx));
-            }
-            return;
+            return new_window_in_front(item == 4, "dock", cx);
         }
         let shown = item == 1;
         let little: Vec<(bc::bc_id, *mut c_void)> = WINDOWS.with_borrow(|windows| {

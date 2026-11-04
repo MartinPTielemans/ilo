@@ -12,3 +12,12 @@ StartupWMClass=app.ilo.browser
 Categories=Network;WebBrowser;
 Keywords=web;browser;internet;
 MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+Actions=new-window;new-private-window;
+
+[Desktop Action new-window]
+Name=New window
+Exec=ilo --new-window
+
+[Desktop Action new-private-window]
+Name=New incognito window
+Exec=ilo --incognito

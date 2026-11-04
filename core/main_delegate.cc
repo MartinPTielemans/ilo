@@ -148,8 +148,13 @@ void OpenCommandLine(const base::CommandLine& command_line,
       urls.push_back(tab.url);
     }
   }
+  // A desktop file's or jump list's New Window or New Incognito Window, Chrome's switches.
+  const bool private_window = command_line.HasSwitch("incognito");
+  const bool new_window = private_window || command_line.HasSwitch("new-window");
   if (std::ranges::any_of(urls, &Opens)) {
     OpenLinks(urls);
+  } else if (!process_startup && new_window && g_host.app_new_window) {
+    g_host.app_new_window(g_host.context, private_window);
   } else if (!process_startup && g_host.launched_again) {
     g_host.launched_again(g_host.context);
   }

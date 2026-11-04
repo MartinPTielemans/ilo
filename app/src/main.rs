@@ -488,6 +488,11 @@ unsafe extern "C" fn started(_: *mut c_void) {
         dock_dot::open(Rc::new(DockDot), cx);
         needs_you_host::start(cx);
         open_window(None, None, cx);
+        // Launched by New Incognito Window while ilo wasn't running, the private window opens
+        // over the first.
+        if launch_asks_private_window() {
+            cx.defer(|cx| new_window_in_front(true, "launch", cx));
+        }
     });
     // On Chromium's Wayland display, GPUI's windows and their surfaces are on a display Chromium
     // has closed by the time the thread-locals go at exit, and dropping them there crashes (#474).
@@ -797,6 +802,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         passwords_imported: Some(passwords_imported),
         open_links: Some(open_links),
         launched_again: Some(launched_again),
+        app_new_window: Some(app_new_window),
         quit_going_ahead: Some(quit_going_ahead),
         agent_activity: Some(agent_activity),
         #[cfg(target_os = "linux")]

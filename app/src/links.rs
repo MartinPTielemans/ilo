@@ -67,6 +67,39 @@ pub(crate) unsafe extern "C" fn launched_again(_: *mut c_void) {
     unsafe { platform::host_activate(window.ui_view) };
 }
 
+/// Another launch asked for a new window, private or not (the desktop file's New Window and New
+/// Incognito Window, Windows' jump list): File's New Window or New Incognito Window runs in the
+/// regular window in front, as ⌘N or ⇧⌘N there would, and as the Mac's Dock items do.
+pub(crate) unsafe extern "C" fn app_new_window(_: *mut c_void, private_window: bool) {
+    // check.sh reads this line.
+    log!(
+        "browser: launched again for a new window, private {}",
+        private_window as u8
+    );
+    update_app_later(move |cx| new_window_in_front(private_window, "launch", cx));
+}
+
+/// Runs File's New Window, or with `private_window` New Incognito Window, in the regular window in
+/// front, from `from`.
+pub(crate) fn new_window_in_front(private_window: bool, from: &str, cx: &mut App) {
+    let command = match private_window {
+        true => shell::Command::NewPrivateWindow,
+        false => shell::Command::NewWindow,
+    };
+    let front = WINDOWS.with_borrow(|windows| {
+        (windows.iter().find(|w| w.regular())).and_then(|w| w.shell.upgrade())
+    });
+    if let Some(shell) = front {
+        shell.update(cx, |shell, cx| shell.run(command, from, cx));
+    }
+}
+
+/// Whether this launch's own command line asks for a private window, as the desktop file's or the
+/// jump list's New Incognito Window does when ilo wasn't running: it opens over the first window.
+pub(crate) fn launch_asks_private_window() -> bool {
+    std::env::args().any(|arg| arg == "--incognito")
+}
+
 /// Opens a tab loading `url` in the front window and shows it: in the Space the window shows if
 /// it's one of the user's in `profile`, else in the first of theirs that is, which the window then
 /// shows, as a profile's own page, such as Chrome's password manager, shows that profile's data.

@@ -2578,11 +2578,22 @@ void host_maximize_window(void* ui_view) {
   }
 }
 
+namespace {
+// Whether the app asked for the jump list (host_add_dock_items), which waits for a window with the
+// AppUserModelID it goes under, and whether it's set.
+bool g_jump_list_wanted = false;
+bool g_jump_list_set = false;
+void SetJumpList();
+}  // namespace
+
 void host_show_window(void* ui_view) {
   HWND root = Root(ui_view);
   TakeTitleBar(ui_view);
   ShowWindow(root, SW_SHOW);
   SetForegroundWindow(root);
+  if (g_jump_list_wanted && !std::exchange(g_jump_list_set, true)) {
+    SetJumpList();
+  }
   // The launch window stays over it until the UI has drawn (host_close_launch_window).
   if (g_launch.hwnd) {
     SetWindowPos(g_launch.hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -2639,13 +2650,82 @@ void host_activate(void* ui_view) {
 // Windows opens a window on the virtual desktop shown, and has no full-screen desktops.
 void host_set_window_little(void* ui_view) {}
 
-// Little ilo's Dock items alone hide windows, and Windows has no Dock menu: its taskbar's jump list
-// isn't ours yet.
+// Little ilo's Dock items alone hide windows, and Windows has no Dock menu.
 void host_set_window_shown(void* ui_view, bool shown) {}
 bool host_window_shown(void* ui_view) {
   return true;
 }
-void host_add_dock_items(int (*little)(void), void (*chosen)(int item)) {}
+
+namespace {
+std::wstring BrowserModelId();
+
+// The taskbar's jump list, Windows' stand-in for the Mac's Dock menu: New window and New incognito
+// window, each launching ilo again with Chrome's switch for it, which the running browser hears as
+// a second launch (bc_host's app_new_window). Under the AppUserModelID the windows have, so the
+// list is the one their taskbar button shows. Set once, after the first window, which has the ID.
+void SetJumpList() {
+  ComPtr<ICustomDestinationList> list;
+  if (FAILED(CoCreateInstance(CLSID_DestinationList, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(&list)))) {
+    return;
+  }
+  const std::wstring id = BrowserModelId();
+  if (!id.empty()) {
+    list->SetAppID(id.c_str());
+  }
+  UINT slots = 0;
+  ComPtr<IObjectArray> removed;
+  ComPtr<IObjectCollection> tasks;
+  if (FAILED(list->BeginList(&slots, IID_PPV_ARGS(&removed))) ||
+      FAILED(CoCreateInstance(CLSID_EnumerableObjectCollection, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(&tasks)))) {
+    return;
+  }
+  wchar_t exe[MAX_PATH] = {};
+  GetModuleFileNameW(nullptr, exe, MAX_PATH);
+  // PKEY_Title, named here rather than linked from propsys.
+  constexpr PROPERTYKEY kTitle = {
+      {0xF29F85E0, 0x4FF9, 0x1068, {0xAB, 0x91, 0x08, 0x00, 0x2B, 0x27, 0xB3, 0xD9}}, 2};
+  for (auto [title, switch_name] : {std::pair{L"New window", L"--new-window"},
+                                    std::pair{L"New incognito window", L"--incognito"}}) {
+    ComPtr<IShellLinkW> link;
+    ComPtr<IPropertyStore> store;
+    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&link))) ||
+        FAILED(link.As(&store))) {
+      continue;
+    }
+    link->SetPath(exe);
+    link->SetArguments(switch_name);
+    link->SetIconLocation(exe, 0);
+    PROPVARIANT value;
+    PropVariantInit(&value);
+    value.vt = VT_LPWSTR;
+    if (FAILED(SHStrDupW(title, &value.pwszVal))) {
+      continue;
+    }
+    store->SetValue(kTitle, value);
+    store->Commit();
+    PropVariantClear(&value);
+    tasks->AddObject(link.Get());
+  }
+  ComPtr<IObjectArray> array;
+  if (SUCCEEDED(tasks.As(&array)) && SUCCEEDED(list->AddUserTasks(array.Get()))) {
+    list->CommitList();
+    // check.sh reads this line.
+    fprintf(stderr, "browser: jump list set\n");
+  }
+}
+}  // namespace
+
+// Windows has no Dock menu; its jump list holds New window and New incognito window instead, once
+// the app has finished launching.
+void host_add_dock_items(int (*little)(void), void (*chosen)(int item)) {
+  g_jump_list_wanted = true;
+  if (!UiViews().empty() && !std::exchange(g_jump_list_set, true)) {
+    SetJumpList();
+  }
+}
 
 void host_set_little_status_item(void (*clicked)(void)) {}
 
