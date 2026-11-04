@@ -65,6 +65,8 @@ constexpr base::TimeDelta kBusy = base::Seconds(5);
 constexpr base::TimeDelta kQuiet = base::Milliseconds(500);
 // A frame, at the rate pages draw, between the looks that tell whether something holds still.
 constexpr base::TimeDelta kFrame = base::Hertz(60);
+// What the wheel starts, a scroll or nothing to scroll, has started by then (#1627).
+constexpr base::TimeDelta kSettle = base::Milliseconds(400);
 // How long a hidden page keeps drawing after an agent's last action, for its next one.
 constexpr base::TimeDelta kRest = base::Seconds(30);
 // Ours: how long a navigation that became a download keeps its action's answer for the download.
