@@ -44,6 +44,7 @@ use gpui::{
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 mod agents_core;
+mod bar_picks_host;
 mod browser_windows;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/drive.rs"]

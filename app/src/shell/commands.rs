@@ -13,6 +13,7 @@ use gpui::{
 
 use crate::build_info::{self, BuildInfo};
 use crate::theme::Appearance;
+use crate::usage::{self, Usage};
 
 use super::{
     COPIED_TIME, Edit, Section, Shell, Space, Swapped, UserKeys, What, agent_bar,
@@ -718,6 +719,8 @@ pub struct BarTab {
     /// Whether its title is the name the user gave it, which counts more when what's typed starts
     /// it, as Arc's custom title does.
     pub renamed: bool,
+    /// How much the user's switches to it count, which ranks the tabs matching what's typed.
+    pub switched: f32,
 }
 
 /// The commands that do something now that match `typed`, best first.
@@ -730,12 +733,13 @@ pub fn bar_commands(typed: &str, cx: &App) -> Vec<BarCommand> {
     };
     let shell = shell.read(cx);
     let keys = user_keys(cx);
-    let found = find_commands(typed, keys, |name, command| {
+    let picks = shell.bar_picks(cx);
+    let found = find_ranked(typed, keys, picks, |name, command| {
         shell.bar_name(name, command, cx)
     });
     let mut named = shell.named_bar_rows();
     named.extend(shell.numbered_bar_row(typed, cx));
-    with_named_rows(found, typed, &named, keys)
+    with_named_ranked(found, typed, &named, keys, picks)
 }
 
 /// The commands of BAR_COMMANDS that match `typed`, best first and then in the table's order, at
@@ -745,6 +749,16 @@ pub fn bar_commands(typed: &str, cx: &App) -> Vec<BarCommand> {
 pub fn find_commands(
     typed: &str,
     keys: &UserKeys,
+    named: impl FnMut(&'static str, Command) -> Option<&'static str>,
+) -> Vec<BarCommand> {
+    find_ranked(typed, keys, None, named)
+}
+
+/// As `find_commands`, with equal matches ranked by the user's `picks` of them.
+fn find_ranked(
+    typed: &str,
+    keys: &UserKeys,
+    picks: Option<&Usage<String>>,
     mut named: impl FnMut(&'static str, Command) -> Option<&'static str>,
 ) -> Vec<BarCommand> {
     let typed = typed.trim().to_lowercase();
@@ -766,7 +780,7 @@ pub fn find_commands(
             Some((matched, SharedString::from(named(name, command)?), command))
         })
         .collect();
-    ranked(found, &typed, keys)
+    ranked(found, &typed, keys, picks)
 }
 
 /// A command bar row the browser names now: its name, the words that find it as hidden words do,
@@ -781,6 +795,16 @@ pub fn with_named_rows(
     rows: &[NamedRow],
     keys: &UserKeys,
 ) -> Vec<BarCommand> {
+    with_named_ranked(found, typed, rows, keys, None)
+}
+
+fn with_named_ranked(
+    found: Vec<BarCommand>,
+    typed: &str,
+    rows: &[NamedRow],
+    keys: &UserKeys,
+    picks: Option<&Usage<String>>,
+) -> Vec<BarCommand> {
     let typed = typed.trim().to_lowercase();
     if typed.is_empty() {
         return found;
@@ -794,17 +818,31 @@ pub fn with_named_rows(
         let matched = match_of(&name.to_lowercase(), &words, &typed)?;
         Some((matched, name.clone(), *command))
     });
-    ranked(found.chain(named).collect(), &typed, keys)
+    ranked(found.chain(named).collect(), &typed, keys, picks)
 }
 
-/// `found` best first, equals in their order, at most BAR_ROWS unless nothing is `typed`.
+/// `found` best first, equals by how much the user picked them, then in their order, at most
+/// BAR_ROWS unless nothing is `typed`, when it's the table's order alone, which the user learns by
+/// place.
 fn ranked(
     mut found: Vec<(Match, SharedString, Command)>,
     typed: &str,
     keys: &UserKeys,
+    picks: Option<&Usage<String>>,
 ) -> Vec<BarCommand> {
-    // Stable, so equals keep the table's order.
-    found.sort_by_key(|&(matched, ..)| std::cmp::Reverse(matched));
+    use std::cmp::Reverse;
+    match picks.filter(|picks| !typed.is_empty() && !picks.is_empty()) {
+        // A score is never negative, so its bits order as it does. Stable, so equals keep the
+        // table's order.
+        Some(picks) => {
+            let now = usage::now();
+            let picked = |name: &str| picks.score(name, now).to_bits();
+            found.sort_by_cached_key(|(matched, name, _)| {
+                (Reverse(*matched), Reverse(picked(name)))
+            });
+        }
+        None => found.sort_by_key(|&(matched, ..)| Reverse(matched)),
+    }
     if !typed.is_empty() {
         found.truncate(BAR_ROWS);
     }
@@ -1247,6 +1285,7 @@ impl Shell {
             Command::NewTab | Command::SearchTabs | Command::EditUrl | Command::AddSplit
         ) {
             self.set_revealed(false, cx);
+            self.read_bar_picks(cx);
         }
         let target = match command {
             Command::NewTab => {
@@ -1254,11 +1293,11 @@ impl Shell {
                 let shown = self.shown_urls();
                 return self
                     .browser
-                    .command_bar(None, shown, self.bar_tabs(), None, cx);
+                    .command_bar(None, shown, self.bar_tabs(cx), None, cx);
             }
             Command::SearchTabs => {
                 self.set_new_tab(false, cx);
-                return self.browser.search_tabs(self.open_tabs(), cx);
+                return self.browser.search_tabs(self.open_tabs(cx), cx);
             }
             Command::EditUrl => {
                 self.set_new_tab(false, cx);
@@ -1274,7 +1313,7 @@ impl Shell {
                 let shown = self.shown_urls();
                 return self
                     .browser
-                    .command_bar(editing, shown, self.bar_tabs(), field, cx);
+                    .command_bar(editing, shown, self.bar_tabs(cx), field, cx);
             }
             // A Little ilo window's page closes with it (Arc).
             Command::CloseTab if self.little.is_some() => {
@@ -1410,7 +1449,10 @@ impl Shell {
             Command::AddExtension => return self.browser.add_extension(cx),
             Command::Settings => return self.browser.settings(cx),
             Command::SiteSearchSettings => return self.browser.site_search_settings(cx),
-            Command::ClearBrowsingData => return self.browser.clear_browsing_data(cx),
+            Command::ClearBrowsingData => {
+                self.forget_bar_usage(cx);
+                return self.browser.clear_browsing_data(cx);
+            }
             Command::KeyboardShortcuts => return self.browser.shortcuts(cx),
             Command::About => return self.browser.about(cx),
             Command::CheckForUpdates => return self.browser.check_for_updates(cx),
@@ -1754,21 +1796,21 @@ impl Shell {
     /// sidebar's order. It leaves out the tab shown and what shows with it, as its suggestions do.
     /// All of them: the bar lists the first BAR_TABS_SHOWN, and looks through the rest for a name
     /// that what's typed starts.
-    pub(super) fn bar_tabs(&self) -> Vec<BarTab> {
+    pub(super) fn bar_tabs(&self, cx: &App) -> Vec<BarTab> {
         let mut tabs = self.favorites.clone();
         if let Some(space) = self.shown_space() {
             tabs.extend(space_tabs(space));
         }
-        self.as_bar_tabs(self.recent_first(tabs))
+        self.as_bar_tabs(self.recent_first(tabs), cx)
     }
 
     /// The tabs Search Tabs lists: the command bar's, then the other Spaces' pinned and Today tabs,
     /// those shown most recently first, then the rest in the Spaces' order.
-    pub(super) fn open_tabs(&self) -> Vec<BarTab> {
+    pub(super) fn open_tabs(&self, cx: &App) -> Vec<BarTab> {
         let others = self.spaces.iter().filter(|space| space.id != self.space);
         let others = self.recent_first(others.flat_map(space_tabs).collect());
-        let mut tabs = self.bar_tabs();
-        tabs.extend(self.as_bar_tabs(others));
+        let mut tabs = self.bar_tabs(cx);
+        tabs.extend(self.as_bar_tabs(others, cx));
         tabs
     }
 
@@ -1786,7 +1828,7 @@ impl Shell {
 
     /// `tabs` as the command bar lists them, without the tab shown and what shows with it, and
     /// without those that have no page yet.
-    fn as_bar_tabs(&self, tabs: Vec<u64>) -> Vec<BarTab> {
+    fn as_bar_tabs(&self, tabs: Vec<u64>, cx: &App) -> Vec<BarTab> {
         let shown = self.panes(self.selected);
         tabs.into_iter()
             .filter(|tab| !shown.contains(tab) && !self.url(*tab).is_empty())
@@ -1796,6 +1838,7 @@ impl Shell {
                 url: self.url(tab),
                 favicon: self.tabs.get(&tab).and_then(|tab| tab.favicon.clone()),
                 renamed: !self.browser.tab_name(tab).is_empty(),
+                switched: self.switch_score(tab, cx),
             })
             .collect()
     }

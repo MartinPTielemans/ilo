@@ -618,7 +618,7 @@ import json, os, sys
 path, pattern, allow = sys.argv[1], sys.argv[2], sys.argv[3] == "allow"
 prefs = {}
 if os.path.exists(path):
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         prefs = json.load(f)
 sites = prefs.setdefault("profile", {}).setdefault("content_settings", {})
 sites = sites.setdefault("exceptions", {}).setdefault("notifications", {})
@@ -627,7 +627,7 @@ if allow:
 else:
     sites.pop(pattern, None)
 os.makedirs(os.path.dirname(path), exist_ok=True)
-with open(path, "w") as f:
+with open(path, "w", encoding="utf-8") as f:
     json.dump(prefs, f)
 PY
   }
