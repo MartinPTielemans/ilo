@@ -528,6 +528,10 @@ pub(crate) struct Browser {
 
 #[derive(Default)]
 struct State {
+    /// The browsers, by their rows' names, whose app the system has an icon for, and the sizes
+    /// the view asked for, in pixels.
+    icons: Vec<String>,
+    icon_pixels: Vec<u32>,
     /// Each browser's last import, as the record keeps it.
     imports: Vec<(String, SystemTime)>,
     next: u64,
@@ -696,6 +700,19 @@ impl Browser {
 }
 
 impl Host for Browser {
+    fn app_icon(
+        &self,
+        source: &sources::Source,
+        pixels: u32,
+    ) -> Option<std::sync::Arc<gpui::RenderImage>> {
+        let mut state = self.state.borrow_mut();
+        state.icon_pixels.push(pixels);
+        state.icons.contains(&source.name()).then(|| {
+            let icon = image::RgbaImage::new(pixels, pixels);
+            std::sync::Arc::new(gpui::RenderImage::new(vec![image::Frame::new(icon)]))
+        })
+    }
+
     fn roots(&self) -> Roots {
         self.roots
             .clone()
@@ -1557,6 +1574,42 @@ fn a_profile_that_doesnt_open_offers_try_again(cx: &mut TestAppContext) {
     cx.executor().advance_clock(STALL);
     cx.run_until_parked();
     assert_eq!(says(&view, cx), said);
+}
+
+/// Once the wait for Work's profile has ended, Work's card is held, dimmed with ⚠ and still, while
+/// Personal's, whose profile is open, waits on as it was; Cancel then leaves both Spaces it made as
+/// cards, outlined and empty. Before the wait ends, and once Work opens, none is held.
+#[gpui::test]
+fn a_stalled_profiles_card_is_held_and_cancel_leaves_the_made_ones_empty(cx: &mut TestAppContext) {
+    let browser = Rc::new(Browser::new(None));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    import_first(&view, cx);
+    let none = (Vec::<String>::new(), Vec::<String>::new());
+    assert_eq!(view.read_with(cx, |view, _| view.held_and_stopped()), none);
+    cx.executor().advance_clock(STALL);
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |view, _| view.held_and_stopped()),
+        (vec!["Work".to_string()], Vec::new()),
+        "Work's card, and it alone, isn't held once Work hasn't opened"
+    );
+    view.update(cx, |view, cx| view.cancel(cx));
+    assert_eq!(
+        view.read_with(cx, |view, _| view.held_and_stopped()),
+        (Vec::new(), vec!["Personal".to_string(), "Work".to_string()]),
+        "Cancel didn't leave the Spaces it made as cards"
+    );
+
+    let browser = Rc::new(Browser::new(None));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    import_first(&view, cx);
+    cx.executor().advance_clock(STALL);
+    cx.run_until_parked();
+    cx.update(|cx| browser.load(cx));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.held_and_stopped()), none);
 }
 
 /// While the core adds the history and addresses, the view says what came in so far, and what
@@ -3426,6 +3479,250 @@ fn a_bookmarks_file_comes_in_once(cx: &mut TestAppContext) {
         "Couldn't import notes.html: it isn't a bookmarks file a browser exported."
     );
     fs::remove_dir_all(file.parent().unwrap()).unwrap();
+}
+
+/// On Windows a Chromium installed for the user has its exe beside its profiles, then its name for
+/// the registry's App Paths; Chromium's own, whose name is Chrome's, is looked for beside its
+/// profiles alone, and a browser with no exe the host can find, as the Store's Arc, has none.
+#[test]
+fn windows_knows_a_browsers_app_by_its_exe() {
+    let source = |name: &str, dir: &str| sources::Source {
+        browser: (sources::BROWSERS.iter())
+            .find(|browser| browser.name == name)
+            .unwrap(),
+        dir: PathBuf::from(dir),
+        install: None,
+        profiles: Vec::new(),
+        used: None,
+    };
+    let local = "C:/Users/me/AppData/Local";
+    let ids = |name: &str, dir: &str| source(name, &format!("{local}/{dir}")).app_ids(Os::Windows);
+    let beside = |dir: &str, exe: &str| {
+        Path::new(&format!("{local}/{dir}"))
+            .join("Application")
+            .join(exe)
+            .to_string_lossy()
+            .into_owned()
+    };
+    assert_eq!(
+        ids("Chrome", "Google/Chrome/User Data"),
+        [beside("Google/Chrome", "chrome.exe"), "chrome.exe".into()]
+    );
+    assert_eq!(
+        ids("Chromium", "Chromium/User Data"),
+        [beside("Chromium", "chrome.exe")]
+    );
+    assert_eq!(
+        ids("Firefox", "../Roaming/Mozilla/Firefox"),
+        ["firefox.exe"]
+    );
+    assert!(
+        ids(
+            "Arc",
+            "Packages/TheBrowserCompany.Arc_x/LocalCache/Local/Arc/User Data"
+        )
+        .is_empty()
+    );
+}
+
+/// Each browser's row has its app's icon where the system has one, and the globe plate where it
+/// hasn't, the names lining up either way; on Linux the app is known by its desktop entry, a
+/// Flatpak's by its app id from where its profiles are.
+#[gpui::test]
+fn a_browser_with_no_app_icon_has_the_globe_plate_and_the_names_line_up(cx: &mut TestAppContext) {
+    let home = chrome("chrome-icons", &[("Default", "Me")], SystemTime::now());
+    let flatpak = chrome(
+        "chrome-icons-flatpak",
+        &[("Default", "Me")],
+        SystemTime::now(),
+    );
+    let app = home.join(".var/app/com.google.Chrome/config");
+    fs::create_dir_all(&app).unwrap();
+    fs::rename(
+        flatpak.join(".config/google-chrome"),
+        app.join("google-chrome"),
+    )
+    .unwrap();
+    let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Linux))));
+    browser.state.borrow_mut().icons = vec!["Chrome".into()];
+    let host: Rc<dyn Host> = browser.clone();
+    let (view, cx) = cx.add_window_view(|_, _| ImportView::new(host, false).headed());
+    cx.run_until_parked();
+    let (names, icons, ids) = view.read_with(cx, |view, _| {
+        let names: Vec<String> = view.sources.iter().map(|source| source.name()).collect();
+        let icons: Vec<bool> = view.icons.iter().map(Option::is_some).collect();
+        let ids: Vec<Vec<String>> = (view.sources.iter())
+            .map(|source| source.app_ids(Os::Linux))
+            .collect();
+        (names, icons, ids)
+    });
+    let mut rows: Vec<(String, bool, Vec<String>)> = (names.into_iter().zip(icons).zip(ids))
+        .map(|((name, icon), ids)| (name, icon, ids))
+        .collect();
+    rows.sort();
+    let row = |name: &str, icon: bool, id: &str| (name.to_string(), icon, vec![id.to_string()]);
+    assert_eq!(
+        rows,
+        [
+            row("Chrome", true, "google-chrome"),
+            row("Chrome (Flatpak)", false, "com.google.Chrome")
+        ]
+    );
+    let lines = view.read_with(cx, |view, _| view.drawn_at.borrow().clone());
+    let x = |name: &str| {
+        let at = format!("browser: settings import-name {name} at ");
+        (lines.iter())
+            .find_map(|line| line.strip_prefix(&at))
+            .and_then(|rest| rest.split(' ').next()?.parse::<f32>().ok())
+            .unwrap_or_else(|| panic!("{name}'s name wasn't drawn: {lines:?}"))
+    };
+    assert_eq!(
+        x("Chrome"),
+        x("Chrome (Flatpak)"),
+        "the names don't line up"
+    );
+    // Asked once each, at a plate's 28 points in the window's pixels.
+    let scale = cx.update(|window, _| window.scale_factor());
+    let pixels = (28. * scale).round() as u32;
+    assert_eq!(browser.state.borrow().icon_pixels, [pixels, pixels]);
+    fs::remove_dir_all(home).unwrap();
+    fs::remove_dir_all(flatpak).unwrap();
+}
+
+/// Favorite tiles that fit on one row are centred under the view's centred heading and button, two
+/// as much as one; with more rows the grid keeps its left edge, the last row's tiles under the
+/// first's.
+#[gpui::test]
+fn one_row_of_tiles_is_centred_and_more_keep_their_left_edge(cx: &mut TestAppContext) {
+    let made = chrome("chrome-tiles-row", &[("Default", "Me")], SystemTime::now());
+    let browser = Rc::new(Browser::new(Some(Roots::under(&made, Os::Linux))));
+    let host: Rc<dyn Host> = browser.clone();
+    let (view, cx) = cx.add_window_view(|_, _| ImportView::new(host, false).headed());
+    view.update(cx, |view, cx| {
+        view.pick(0, cx);
+        view.import(cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| browser.added(cx));
+    // Offers `sites`, and says where the grid's middle and each tile's were drawn, across.
+    let offer = |sites: &[&str], cx: &mut gpui::VisualTestContext| {
+        let tabs = (sites.iter())
+            .map(|site| Tab {
+                url: format!("https://{site}/"),
+                name: String::new(),
+            })
+            .collect();
+        view.update(cx, |view, cx| {
+            view.offer(tabs);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let lines = view.read_with(cx, |view, _| view.drawn_at.borrow().clone());
+        let x = |what: &str| {
+            let at = format!("browser: settings {what} at ");
+            (lines.iter())
+                .find_map(|line| line.strip_prefix(&at))
+                .and_then(|rest| rest.split(' ').next()?.parse::<f32>().ok())
+                .unwrap_or_else(|| panic!("{what} wasn't drawn: {lines:?}"))
+        };
+        let tiles: Vec<f32> = (sites.iter())
+            .map(|site| x(&format!("import-favorite {site}")))
+            .collect();
+        (x("import-favorites"), tiles)
+    };
+    let (middle, two) = offer(&["one.example.org", "two.example.org"], cx);
+    assert!(
+        ((two[0] + two[1]) / 2. - middle).abs() <= 1.,
+        "two tiles aren't centred on {middle}: {two:?}"
+    );
+    let (middle, one) = offer(&["lone.example.org"], cx);
+    assert!(
+        (one[0] - middle).abs() <= 1.,
+        "one tile isn't centred on {middle}: {one:?}"
+    );
+    let five = [
+        "a.example.org",
+        "b.example.org",
+        "c.example.org",
+        "d.example.org",
+        "e.example.org",
+    ];
+    let (middle, five) = offer(&five, cx);
+    assert!(
+        (five[4] - five[0]).abs() <= 1.,
+        "the second row's tile isn't under the first's: {five:?}"
+    );
+    assert!(
+        five[0] < middle && five[3] > middle,
+        "a full row isn't across the grid: {five:?}"
+    );
+    fs::remove_dir_all(made).unwrap();
+}
+
+/// The favorites offered are tiles, all ticked at first: a click on one unticks it and the button
+/// counts those left, "Add 2 Favorites", then "Add 1 Favorite", and with none, "Add Favorites",
+/// dimmed; Add adds the ticked ones alone.
+#[gpui::test]
+fn favorite_tiles_tick_and_untick_at_a_click_and_the_button_counts_them(cx: &mut TestAppContext) {
+    let made = chrome("chrome-tiles", &[("Default", "Me")], SystemTime::now());
+    let browser = Rc::new(Browser::new(Some(Roots::under(&made, Os::Linux))));
+    let host: Rc<dyn Host> = browser.clone();
+    let (view, cx) = cx.add_window_view(|_, _| ImportView::new(host, false).headed());
+    view.update(cx, |view, cx| {
+        view.pick(0, cx);
+        view.import(cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| browser.added(cx));
+    let tab = |url: &str| Tab {
+        url: url.into(),
+        name: String::new(),
+    };
+    let offered = [
+        "https://news.example.org/",
+        "https://mail.example.org/",
+        "https://docs.example.com/",
+    ];
+    view.update(cx, |view, cx| {
+        view.offer(offered.iter().map(|url| tab(url)).collect());
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let title = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| view.add_favorites_title().to_string())
+    };
+    assert_eq!(title(cx), "Add 3 Favorites");
+    // Where each tile was drawn, as check.sh reads it from the log.
+    let at = |name: &str, cx: &mut gpui::VisualTestContext| {
+        let lines = view.read_with(cx, |view, _| view.drawn_at.borrow().clone());
+        let prefix = format!("browser: settings import-favorite {name} at ");
+        let line = (lines.iter())
+            .find_map(|line| line.strip_prefix(&prefix).map(str::to_string))
+            .unwrap_or_else(|| panic!("no tile for {name} drawn: {lines:?}"));
+        let (x, y) = line.split_once(' ').unwrap();
+        gpui::point(gpui::px(x.parse().unwrap()), gpui::px(y.parse().unwrap()))
+    };
+    let click = |name: &str, cx: &mut gpui::VisualTestContext| {
+        let point = at(name, cx);
+        cx.simulate_click(point, gpui::Modifiers::none());
+        cx.run_until_parked();
+    };
+    click("mail.example.org", cx);
+    assert_eq!(title(cx), "Add 2 Favorites");
+    click("news.example.org", cx);
+    assert_eq!(title(cx), "Add 1 Favorite");
+    click("docs.example.com", cx);
+    assert_eq!(title(cx), "Add Favorites");
+    click("mail.example.org", cx);
+    let ticked = view.read_with(cx, |view, _| view.ticked());
+    let urls: Vec<&str> = ticked.iter().map(|tab| tab.url.as_str()).collect();
+    assert_eq!(urls, ["https://mail.example.org/"]);
+    view.update(cx, |view, cx| view.add_ticked(cx));
+    let favorites: Vec<String> = (browser.state.borrow().favorites.iter())
+        .map(|(_, tab)| tab.url.clone())
+        .collect();
+    assert_eq!(favorites, ["https://mail.example.org/"]);
+    fs::remove_dir_all(made).unwrap();
 }
 
 /// The end of an import from Settings offers the favorites it worked out from the history, each

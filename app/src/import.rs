@@ -14,6 +14,7 @@
 //! the other browser's files, and it adds through the core's calls a user's actions make, so a
 //! second run adds nothing the first did (plan.rs).
 
+pub mod app_icons;
 pub mod arc;
 mod arrival;
 pub mod chromium;
@@ -29,6 +30,7 @@ pub mod sources;
 pub mod suggested;
 #[cfg(test)]
 pub(crate) mod tests;
+mod tiles;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -49,7 +51,8 @@ use crate::theme::Theme;
 use crate::tokens::radius;
 use crate::tokens::settings::{
     BOX_GAP, BUTTONS_TOP, CHECK_TICK, CHIP_GAP, CHIP_HEIGHT, CHIP_PADDING, CHIP_RADIUS,
-    CONTROL_GAP, DETAIL_LINE, DETAIL_TOP, DISCLOSURE_GAP, DISCLOSURE_GLYPH, DOT, ROW_X, STEP,
+    CONTROL_GAP, DETAIL_LINE, DETAIL_TOP, DISCLOSURE_GAP, DISCLOSURE_GLYPH, DOT, GLYPH_PLATE,
+    GLYPH_PLATE_GAP, ROW_X, STEP,
 };
 use crate::tokens::text;
 use found::{Address, Found, FromProfile, Page, Tab};
@@ -61,6 +64,15 @@ use sources::{Family, Os, Roots, Source};
 pub trait Host {
     /// Where the other browsers' folders are: the user's, or a made-up home a check run gives.
     fn roots(&self) -> Roots;
+    /// The browser's app icon as the system draws it, `pixels` square, if its app is installed,
+    /// for its row's plate; ilo ships none of theirs (#1673).
+    fn app_icon(
+        &self,
+        _source: &Source,
+        _pixels: u32,
+    ) -> Option<std::sync::Arc<gpui::RenderImage>> {
+        None
+    }
     fn existing(&self, cx: &App) -> Existing;
     /// Makes a profile, which loads afterwards, and returns it.
     fn create_profile(&self, name: &str) -> u64;
@@ -445,6 +457,8 @@ enum Step {
         source: usize,
         picked: Vec<Kind>,
         made: usize,
+        /// The cards of the Spaces it made, empty.
+        cards: Vec<arrival::Card>,
     },
     /// What came in, or why nothing did.
     Done(SharedString),
@@ -547,6 +561,10 @@ pub struct ImportView {
     skip: bool,
     look: Look,
     sources: Vec<Source>,
+    /// Each browser's app icon, or none, as the system gave it at the window's scale it was asked
+    /// for at, which it's asked for again at once the window's scale changes.
+    icons: Vec<Option<std::sync::Arc<gpui::RenderImage>>>,
+    icons_scale: Option<f32>,
     step: Step,
     /// Which switch last changed, and when, for its knob's slide.
     switched: Option<(Kind, Instant)>,
@@ -566,6 +584,10 @@ pub struct ImportView {
     /// The favorites offered that the user unticked, by URL, which its end leaves out when it
     /// adds them.
     unticked: Vec<String>,
+    /// The favorites whose tiles are shown, by URL, and when they first showed, which they land
+    /// from; and when each favorite was last ticked or unticked, while its badge changes.
+    tiles_shown: Option<(Vec<String>, Instant)>,
+    toggled: Vec<(String, Instant)>,
     /// The favorites the last import offers from its history, once it's read.
     suggested: Option<Vec<Tab>>,
     /// How many imports it ran, which numbers each run.
@@ -620,6 +642,8 @@ impl ImportView {
             skip,
             look: Look::settings(true),
             sources,
+            icons: Vec::new(),
+            icons_scale: None,
             step: Step::List,
             switched: None,
             passwords_file: None,
@@ -627,6 +651,8 @@ impl ImportView {
             drawn_at: Rc::default(),
             os: roots.os,
             unticked: Vec::new(),
+            tiles_shown: None,
+            toggled: Vec::new(),
             folders: Folders::default(),
             suggested: None,
             runs: 0,
@@ -1233,21 +1259,94 @@ impl ImportView {
     }
 
     /// The favorites offered that are still ticked.
-    fn ticked(&self) -> Vec<Tab> {
+    pub fn ticked(&self) -> Vec<Tab> {
         let offered = self.suggested.iter().flatten();
         let ticked = offered.filter(|tab| !self.unticked.contains(&tab.url));
         ticked.cloned().collect()
     }
 
-    /// Ticks or unticks the favorite offered at `url`.
-    fn toggle_favorite(&mut self, url: &str, cx: &mut Context<Self>) {
+    /// Ticks or unticks the favorite offered at `url`, its badge changing from now.
+    pub fn toggle_favorite(&mut self, url: &str, cx: &mut Context<Self>) {
         match self.unticked.iter().position(|each| each == url) {
             Some(at) => {
                 self.unticked.remove(at);
             }
             None => self.unticked.push(url.into()),
         }
+        self.toggled.retain(|(each, _)| each != url);
+        self.toggled.push((url.into(), Instant::now()));
+        // check.sh reads this line.
+        log!("browser: import unticked {}", self.unticked.join(" "));
         cx.notify();
+    }
+
+    /// The favorites offered, as tiles a click ticks or unticks, asking for frames while they
+    /// land or a badge changes: the first launch's Favorites step's, and Settings' end's.
+    pub fn favorite_tiles(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Div> {
+        let tabs = self.offered()?.to_vec();
+        let (now, still) = (Instant::now(), crate::motion::still(cx));
+        let urls: Vec<String> = tabs.iter().map(|tab| tab.url.clone()).collect();
+        let shown = match &self.tiles_shown {
+            Some((shown, at)) if *shown == urls => *at,
+            _ => {
+                self.tiles_shown = Some((urls, now));
+                now
+            }
+        };
+        let tiles: Vec<tiles::Tile> = (tabs.iter().enumerate())
+            .map(|(index, tab)| tiles::Tile {
+                name: suggested::site_name(&tab.url),
+                on: !self.unticked.contains(&tab.url),
+                index,
+                shown,
+                toggled: (self.toggled.iter())
+                    .find(|(url, _)| *url == tab.url)
+                    .map(|(_, at)| *at),
+            })
+            .collect();
+        if tiles.iter().any(|tile| tile.moving(now)) {
+            window.request_animation_frame();
+        } else {
+            self.toggled.clear();
+        }
+        let settings = !self.guided;
+        let placed = (tiles.iter().zip(&tabs)).map(|(tile, tab)| {
+            let url = tab.url.clone();
+            div()
+                .id(("import-favorite", tile.index))
+                .relative()
+                .flex_1()
+                .min_w_0()
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |view, _, _, cx| view.toggle_favorite(&url, cx)))
+                .child(tiles::tile(tile, &self.look, settings, still, now))
+                .child(drawn(
+                    format!("import-favorite {}", tile.name),
+                    self.drawn_at.clone(),
+                ))
+                .into_any_element()
+        });
+        let placed: Vec<gpui::AnyElement> = placed.collect();
+        let grid = tiles::grid(placed, &self.look, settings);
+        Some(
+            div()
+                .relative()
+                .child(grid)
+                .child(drawn("import-favorites".into(), self.drawn_at.clone())),
+        )
+    }
+
+    /// What the button that adds the favorites ticked says: how many.
+    pub fn add_favorites_title(&self) -> SharedString {
+        match self.ticked().len() {
+            0 => "Add Favorites".into(),
+            1 => "Add 1 Favorite".into(),
+            count => format!("Add {count} Favorites").into(),
+        }
     }
 
     /// Adds the favorites still ticked to the first Space of the profile the browser started
@@ -1683,12 +1782,14 @@ impl ImportView {
             return self.finish(said, cx);
         };
         let (source, picked) = (*source, run.picked.clone());
+        let cards = run.cards.iter().filter(|card| card.made).cloned().collect();
         // Done's line is the bottom left's, on the first launch.
         cx.emit(ImportEvent::Finished(said.clone()));
         self.step = Step::Cancelled {
             source,
             picked,
             made,
+            cards,
         };
         cx.notify();
     }
@@ -2000,6 +2101,28 @@ impl ImportView {
             .collect()
     }
 
+    /// The cards drawn held, dimmed with ⚠ and holding still once they've come, as their profile
+    /// hasn't opened, and the cards a stopped import left, as outlines, empty: by their Spaces.
+    #[cfg(test)]
+    pub(crate) fn held_and_stopped(&self) -> (Vec<String>, Vec<String>) {
+        let names = |cards: &mut dyn Iterator<Item = &arrival::Card>| {
+            cards.map(|card| card.name.clone()).collect()
+        };
+        match &self.step {
+            Step::Running { run, .. } => {
+                let stalled = stalled(run);
+                let came = Instant::now() + Duration::from_secs(5);
+                let held = |card: &&arrival::Card| {
+                    let held = card.held(&stalled);
+                    held && !card.moving(came, held)
+                };
+                (names(&mut run.cards.iter().filter(held)), Vec::new())
+            }
+            Step::Cancelled { cards, .. } => (Vec::new(), names(&mut cards.iter())),
+            _ => (Vec::new(), Vec::new()),
+        }
+    }
+
     /// The import under way's cards and the rows after them, asking for frames while they move.
     fn arrival(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) -> Option<gpui::Div> {
         let (look, settings, still) = (self.look, !self.guided, crate::motion::still(cx));
@@ -2011,20 +2134,30 @@ impl ImportView {
         }
         let now = Instant::now();
         let adding = run.history_left + run.addresses_left > 0;
-        if run.cards.iter().any(|card| card.moving(now)) || (adding && !still) {
+        let stalled = stalled(run);
+        let moving = |card: &arrival::Card| card.moving(now, card.held(&stalled));
+        if run.cards.iter().any(moving) || (adding && !still) {
             window.request_animation_frame();
         }
-        let cards = arrival::draw(&mut run.cards, &look, settings, still, now);
+        let showing = arrival::Showing::Running { stalled: &stalled };
+        let cards = arrival::draw(&mut run.cards, &look, settings, still, now, showing);
         let counts = run.counts;
         let since = run.placed_at.unwrap_or(now);
-        let stage = |left: usize, adding: String, came: usize| match (run.placed, left) {
-            (false, _) => arrival::Stage::Waiting,
-            (true, 0) => arrival::Stage::In(grouped(came).into()),
-            (true, _) => arrival::Stage::Adding(adding.into()),
+        let once = (!stalled.is_empty()).then(|| format!("once {} opens", listed(&stalled)));
+        // What comes after the Spaces, from what was read, and once a profile that hasn't opened
+        // has, as the line under them says.
+        let stage = |left: usize, adding: String, came: usize, read: String| match (
+            run.placed, left, &once,
+        ) {
+            (false, _, Some(once)) => arrival::Stage::Held(format!("{read}, {once}").into()),
+            (false, _, None) => arrival::Stage::Waiting,
+            (true, 0, _) => arrival::Stage::In(grouped(came).into()),
+            (true, _, _) => arrival::Stage::Adding(adding.into()),
         };
         let mut rows = Vec::new();
         if counts.favorites > 0 {
-            let stage = stage(0, String::new(), counts.favorites);
+            let read = grouped(counts.favorites);
+            let stage = stage(0, String::new(), counts.favorites, read);
             rows.push(arrival::stage_row(
                 &look,
                 glyph(Kind::Favorites),
@@ -2038,7 +2171,8 @@ impl ImportView {
         }
         if counts.pages > 0 {
             let adding = format!("Adding {} pages…", grouped(counts.pages));
-            let stage = stage(run.history_left, adding, run.pages);
+            let read = counted(counts.pages, "page", "pages");
+            let stage = stage(run.history_left, adding, run.pages, read);
             rows.push(arrival::stage_row(
                 &look,
                 glyph(Kind::History),
@@ -2051,7 +2185,8 @@ impl ImportView {
             ));
         }
         if counts.addresses > 0 {
-            let stage = stage(run.addresses_left, "Adding…".into(), run.addresses);
+            let read = grouped(counts.addresses);
+            let stage = stage(run.addresses_left, "Adding…".into(), run.addresses, read);
             rows.push(arrival::stage_row(
                 &look,
                 glyph(Kind::Addresses),
@@ -2072,6 +2207,17 @@ impl ImportView {
                 .child(cards)
                 .children(rows),
         )
+    }
+
+    /// The cards of the Spaces a stopped import made, as outlines, empty.
+    fn stopped_cards(&mut self, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let (look, settings, still) = (self.look, !self.guided, crate::motion::still(cx));
+        let Step::Cancelled { cards, .. } = &mut self.step else {
+            return None;
+        };
+        let showing = arrival::Showing::Stopped;
+        (!cards.is_empty())
+            .then(|| arrival::draw(cards, &look, settings, still, Instant::now(), showing))
     }
 
     /// What the wait for Full Disk Access says, while it shows.
@@ -2113,7 +2259,14 @@ impl ImportView {
             listed.extensions.iter().partition(|each| each.blocks_ads());
         let rows = extensions.iter().enumerate().map(|(index, extension)| {
             let id = extension.id.clone();
+            // check.sh clicks it where it's logged.
+            let at = drawn(
+                format!("import-add-extension {}", extension.id),
+                self.drawn_at.clone(),
+            );
             let add = button(look, ("import-add-extension", index), "Add…")
+                .relative()
+                .child(at)
                 .on_click(cx.listener(move |view, _, _, cx| view.add_extension(&id, cx)))
                 .into_any_element();
             match extension.pinned {
@@ -2177,6 +2330,8 @@ impl ImportView {
         };
         let disclosure = div()
             .id("import-choose-folders")
+            .relative()
+            .child(drawn("import-choose-folders".into(), self.drawn_at.clone()))
             .px(px(ROW_X))
             .flex()
             .items_center()
@@ -2201,6 +2356,11 @@ impl ImportView {
                     let toggled = name.clone();
                     div()
                         .id(("import-folder", index))
+                        .relative()
+                        .child(drawn(
+                            format!("import-folder {name}"),
+                            self.drawn_at.clone(),
+                        ))
                         .on_click(
                             cx.listener(move |view, _, _, cx| view.toggle_folder(&toggled, cx)),
                         )
@@ -2224,38 +2384,29 @@ impl ImportView {
     }
 
     /// The favorites an import worked out from its history, with the line saying where they come
-    /// from, the first launch's own, and a row each, ticked in the accent as Choose folders' are,
-    /// which a click unticks.
-    fn favorites_offer(&self, tabs: &[Tab], cx: &mut Context<Self>) -> gpui::Div {
-        let look = &self.look;
+    /// from, the first launch's own, over their tiles.
+    fn favorites_offer(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Div> {
         let here = match self.os {
             Os::Mac => "this Mac",
             _ => "this computer",
         };
-        let rows = tabs.iter().enumerate().map(|(index, tab)| {
-            let on = !self.unticked.contains(&tab.url);
-            let url = tab.url.clone();
-            div()
-                .id(("import-favorite", index))
-                .on_click(cx.listener(move |view, _, _, cx| view.toggle_favorite(&url, cx)))
-                .child(checked_row(
-                    look,
-                    on,
-                    suggested::site_name(&tab.url),
-                    look.accent,
-                    rgb(CHECK_TICK),
-                ))
-        });
+        let tiles = self.favorite_tiles(window, cx)?;
         let said = format!(
             "The sites you visit most, from the history it brought, worked out on {here}. \
              Nothing is sent anywhere."
         );
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(BOX_GAP))
-            .child(line(said).text_color(look.detail))
-            .child(group(look, rows.map(|row| div().child(row))))
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(BOX_GAP))
+                .child(line(said).text_color(self.look.detail))
+                .child(tiles),
+        )
     }
 
     /// A row for each browser found, with Import….
@@ -2310,12 +2461,59 @@ impl ImportView {
                 .child(at)
                 .on_click(cx.listener(move |view, _, _, cx| view.pick(index, cx)))
                 .into_any_element();
-            match line.is_empty() {
-                true => row(source.name(), choose),
-                false => detailed_row(look, source.name(), line, Some(choose)),
-            }
+            let line = (!line.is_empty()).then(|| line.into());
+            frame()
+                .child(self.app_plate(index))
+                .child(self.row_words(source, line))
+                .child(end([choose]))
         });
         group(look, rows)
+    }
+
+    /// Asks the system for each browser's app icon, a plate's 28 points at the window's `scale`,
+    /// unless it has them at that scale.
+    fn ask_icons(&mut self, scale: f32) {
+        if self.icons_scale == Some(scale) {
+            return;
+        }
+        let pixels = (GLYPH_PLATE * scale).round() as u32;
+        self.icons = (self.sources.iter())
+            .map(|source| self.host.app_icon(source, pixels))
+            .collect();
+        self.icons_scale = Some(scale);
+        let iconed: Vec<String> = (self.sources.iter().zip(&self.icons))
+            .filter(|(_, icon)| icon.is_some())
+            .map(|(source, _)| source.name())
+            .collect();
+        // check.sh reads this line.
+        log!("browser: import icons {pixels} px: {}", iconed.join(", "));
+    }
+
+    /// The browser's app icon at a glyph plate's size and place, as the system draws it, or with
+    /// none, a quiet globe on the plate, so the names line up either way.
+    fn app_plate(&self, index: usize) -> gpui::AnyElement {
+        match self.icons.get(index).cloned().flatten() {
+            Some(icon) => gpui::img(icon)
+                .flex_none()
+                .size(px(GLYPH_PLATE))
+                .mr(px(GLYPH_PLATE_GAP))
+                .into_any_element(),
+            None => glyph_plate(&self.look, "icons/globe.svg", false).into_any_element(),
+        }
+    }
+
+    /// A browser's name over its line, logged where it's drawn, as check.sh and the tests read
+    /// that the names line up.
+    fn row_words(&self, source: &Source, line: Option<SharedString>) -> gpui::Div {
+        div()
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .child(words(&self.look, source.name(), line))
+            .child(drawn(
+                format!("import-name {}", source.name()),
+                self.drawn_at.clone(),
+            ))
     }
 
     /// A browser's row in the guided list, which a click picks: the one picked on a plate, with
@@ -2339,7 +2537,8 @@ impl ImportView {
         });
         let line = (!line.is_empty()).then(|| line.into());
         let row = frame()
-            .child(words(look, source.name(), line))
+            .child(self.app_plate(index))
+            .child(self.row_words(source, line))
             .children(enter.map(|enter| end([enter])));
         let hovered = look.hovered;
         div().child(
@@ -2977,6 +3176,14 @@ fn passwords_summary(file: &Path, passwords: Passwords, into: Option<&str>) -> S
     said.into()
 }
 
+/// The profiles that haven't opened, once the wait for them has ended, whose cards are held.
+fn stalled(run: &Run) -> Vec<String> {
+    match run.stalled {
+        Some(_) => run.unopened.0.clone(),
+        None => Vec::new(),
+    }
+}
+
 /// What an import under way says: that it's reading, then what came in so far while the core adds
 /// the history and addresses, or that a profile it waits for hasn't opened.
 fn progress(name: &str, run: &Run) -> SharedString {
@@ -3058,6 +3265,7 @@ impl Render for ImportView {
             Step::List => "list",
             Step::Pick { .. } => "pick",
             Step::Running { run, .. } if run.placed => "placed",
+            Step::Running { run, .. } if run.stalled.is_some() => "stalled",
             Step::Running { .. } | Step::Passwords => "running",
             Step::NoAccess { .. } => "no access",
             Step::Cancelled { .. } => "cancelled",
@@ -3071,7 +3279,13 @@ impl Render for ImportView {
             log!("browser: import drawn {step}");
         }
         let look = self.look;
+        self.ask_icons(window.scale_factor());
         let arrival = self.arrival(window, cx);
+        let stopped_cards = self.stopped_cards(cx);
+        let mut favorites = match self.step {
+            Step::Done(_) => self.favorites_offer(window, cx),
+            _ => None,
+        };
         let content = match &self.step {
             Step::List => self.list(cx),
             Step::Pick { source, .. } => self.picking(*source, cx),
@@ -3090,28 +3304,36 @@ impl Render for ImportView {
                 });
                 // The cards and the rows after them, but for a stalled import's line, which
                 // says why it waits, and a run with nothing to show yet.
-                let said = (arrival.is_none() || run.stalled.is_some()).then(|| {
-                    match run.stalled.is_some() {
-                        // Which profile hasn't opened, marked, as its Spaces wait for it.
-                        true => {
-                            let mark = svg()
-                                .flex_none()
-                                .mr(px(CONTROL_GAP))
-                                .path("icons/circle-alert.svg")
-                                .size(px(DISCLOSURE_GLYPH))
-                                .text_color(look.detail);
-                            let said = div().flex_1().min_w_0().child(progress(name, run));
-                            group(&look, [frame().child(mark).child(said)])
-                        }
-                        false => group(&look, [said_row(progress(name, run))]),
-                    }
-                });
+                let mark = || {
+                    svg()
+                        .flex_none()
+                        .mr(px(CONTROL_GAP))
+                        .path("icons/circle-alert.svg")
+                        .size(px(DISCLOSURE_GLYPH))
+                        .text_color(look.detail)
+                };
+                let progress = || div().flex_1().min_w_0().child(progress(name, run));
+                // With nothing to show yet, its line; stalled, the profile that hasn't opened,
+                // marked, under the cards and the rows, but where the host's title says it.
+                let said = match (arrival.is_some(), run.stalled.is_some()) {
+                    (false, true) => Some(group(&look, [frame().child(mark()).child(progress())])),
+                    (false, false) => Some(group(&look, [frame().child(progress())])),
+                    (true, true) if !self.guided => Some(
+                        div()
+                            .px(px(ROW_X))
+                            .flex()
+                            .items_center()
+                            .child(mark())
+                            .child(progress()),
+                    ),
+                    (true, _) => None,
+                };
                 div()
                     .flex()
                     .flex_col()
                     .gap(px(BOX_GAP))
-                    .children(said)
                     .children(arrival)
+                    .children(said)
                     .when(cancel.is_some(), |column| {
                         column.child(buttons(cancel.into_iter().chain(again)))
                     })
@@ -3125,6 +3347,7 @@ impl Render for ImportView {
             // What it stopped, with Done and Import Again; the first launch's title and button
             // say it there.
             Step::Cancelled { made, .. } => {
+                let stopped_cards = stopped_cards.unwrap_or_else(div);
                 let done = self
                     .control("import-done", "Done")
                     .on_click(cx.listener(|view, _, _, cx| view.done(cx)));
@@ -3143,6 +3366,7 @@ impl Render for ImportView {
                     .flex()
                     .flex_col()
                     .gap(px(BOX_GAP))
+                    .child(stopped_cards)
                     .when(!self.guided, |view| {
                         view.child(line(stopped(*made)))
                             .child(buttons([done.into_any_element(), again.into_any_element()]))
@@ -3165,11 +3389,10 @@ impl Render for ImportView {
                     let why = div().flex_1().min_w_0().text_color(look.detail).child(why);
                     frame().child(why).child(end([delete.into_any_element()]))
                 });
-                let offered = self.offered();
-                let favorites = offered.map(|tabs| self.favorites_offer(tabs, cx));
-                let add = offered.map(|_| {
+                let favorites = favorites.take();
+                let add = self.offered().map(|_| {
                     let any = !self.ticked().is_empty();
-                    self.control("import-add-favorites", "Add Favorites")
+                    primary(&look, "import-add-favorites", self.add_favorites_title())
                         .when(!any, |button| button.opacity(0.5))
                         .when(any, |button| {
                             button.on_click(cx.listener(|view, _, _, cx| view.add_ticked(cx)))

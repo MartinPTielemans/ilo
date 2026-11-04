@@ -26,7 +26,8 @@
 // precision touchpad's, with their touch and lift. choose and dismiss work on ilo's menu and the
 // alerts host_ask shows. savepanel <path> picks <path> in the dialog host_save_png shows, as
 // drive.mm's does in the Mac's save panel, logging "browser: save panel answered", or "browser: no
-// save panel" if none shows. dragover, dragdrop and dragleave hand a drag from another app, a shell
+// save panel" if none shows. tabpicture writes the picture a tab's drag shows for part of the window
+// to a file and logs its size. dragover, dragdrop and dragleave hand a drag from another app, a shell
 // data object carrying what Explorer or a browser would, straight to the drop target Windows would
 // pick, the UI's; one over a page or an overlay, whose targets are Chromium's and GPUI's, logs as
 // unsupported. ime on types as drive.mm's scripted input method does, in the UI's fields alone, as
@@ -60,6 +61,7 @@
 #include <cstring>
 #include <deque>
 #include <functional>
+#include <map>
 #include <sstream>
 #include <optional>
 #include <string>
@@ -86,6 +88,8 @@ bool browser_drive_marked(void* hwnd, size_t* start, size_t* length);
 // The app's, on GPUI's window |hwnd|, for two fingers as a precision touchpad's.
 bool browser_drive_fingers(void* hwnd, float x, float y, float dx, float dy, int phase);
 void* host_drop_target(void* hwnd);
+bool host_drive_window_part(void* hwnd, double x, double y, double width, double height,
+                            const char* path, long* pixels_wide, long* pixels_high);
 }
 
 namespace {
@@ -959,9 +963,10 @@ HWND g_drag_view = nullptr;
 IDropTarget* g_drag_target = nullptr;
 
 // A drag's data as another app's would carry |kind| |value|: a file at the path as Explorer drags
-// one, a link as browsers do, with its text, or text. Null for another kind.
+// one, a link as browsers do, with its text, or text; or a tab, as host_drag_tab carries one from
+// another of the app's windows. Null for another kind.
 IDataObject* DragData(const std::string& kind, const std::string& value) {
-  if (kind != "file" && kind != "url" && kind != "text") {
+  if (kind != "file" && kind != "url" && kind != "text" && kind != "tab") {
     return nullptr;
   }
   IDataObject* data = nullptr;
@@ -982,6 +987,12 @@ IDataObject* DragData(const std::string& kind, const std::string& value) {
   };
   const std::wstring wide = Wide(value);
   const size_t size = (wide.size() + 1) * sizeof(wchar_t);
+  if (kind == "tab") {
+    const std::wstring tab = std::to_wstring(GetCurrentProcessId()) + L" " + wide;
+    put(RegisterClipboardFormatW(L"dev.ilo.browser.tab"), tab.c_str(),
+        (tab.size() + 1) * sizeof(wchar_t));
+    return data;
+  }
   if (kind == "file") {
     // DROPFILES, then the paths, each ending in a null, and one more null.
     std::vector<BYTE> files(sizeof(DROPFILES) + size + sizeof(wchar_t), 0);
@@ -1119,6 +1130,25 @@ bool Run(const std::string& line) {
       fprintf(stderr, "browser: drag %s\n", dropped ? "dropped" : "refused");
       EndDrag();
     }
+    return true;
+  }
+  // tabpicture <x> <y> <width> <height> <path>: the picture host_drag_tab shows for that part of
+  // the driven window, the row a drag holds, written to <path> as a BMP, logging its size: the
+  // driver can't hold the system's drag itself (#1583).
+  if (action == "tabpicture") {
+    double x, y, width, height;
+    std::string path;
+    if (!(words >> x >> y >> width >> height) || !std::getline(words >> std::ws, path)) {
+      return false;
+    }
+    Target target;
+    long wide = 0, high = 0;
+    // From the UI's window, whose points start where the browser window's content does.
+    if (!TargetAt(x + 1, y + 1, &target) ||
+        !host_drive_window_part(target.hwnd, x, y, width, height, path.c_str(), &wide, &high)) {
+      return false;
+    }
+    fprintf(stderr, "browser: tab picture %ldx%ld\n", wide, high);
     return true;
   }
   if (action == "dragleave") {
@@ -1809,6 +1839,26 @@ LRESULT CALLBACK WatchKeyboard(int code, WPARAM wparam, LPARAM lparam) {
   return CallNextHookEx(nullptr, code, wparam, lparam);
 }
 
+// Logs "browser: window zoomed <0|1>" as a browser window maximizes or comes back from it, as
+// drive.mm logs AppKit's zoom and Linux's driver the window manager's, from the WM_SIZE Windows
+// sends it once it has.
+LRESULT CALLBACK WatchZoom(int code, WPARAM wparam, LPARAM lparam) {
+  static std::map<HWND, bool> zoomed;
+  const auto* sent = reinterpret_cast<CWPRETSTRUCT*>(lparam);
+  if (code == HC_ACTION && sent->message == WM_SIZE &&
+      (sent->wParam == SIZE_MAXIMIZED || sent->wParam == SIZE_RESTORED) &&
+      GetAncestor(sent->hwnd, GA_ROOT) == sent->hwnd &&
+      FindWindowExW(sent->hwnd, nullptr, L"BrowserUI", nullptr)) {
+    const bool now = sent->wParam == SIZE_MAXIMIZED;
+    const auto was = zoomed.find(sent->hwnd);
+    if (was == zoomed.end() ? now : was->second != now) {
+      fprintf(stderr, "browser: window zoomed %d\n", now ? 1 : 0);
+    }
+    zoomed[sent->hwnd] = now;
+  }
+  return CallNextHookEx(nullptr, code, wparam, lparam);
+}
+
 extern "C" {
 
 void drive_watch_menus(bool (*menus)(void* ui_view, const char* title, bool bar)) {
@@ -1825,6 +1875,7 @@ void drive_start(void) {
                              nullptr, window_class.hInstance, nullptr);
   SetWindowsHookExW(WH_GETMESSAGE, DropRealPointer, nullptr, GetCurrentThreadId());
   SetWindowsHookExW(WH_CBT, WatchKeyboard, nullptr, GetCurrentThreadId());
+  SetWindowsHookExW(WH_CALLWNDPROCRET, WatchZoom, nullptr, GetCurrentThreadId());
   HWND driver = g_driver;
   std::thread([driver] {
     HANDLE input = GetStdHandle(STD_INPUT_HANDLE);

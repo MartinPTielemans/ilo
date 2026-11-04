@@ -48,6 +48,7 @@ x11rb::atom_manager! {
         URI_LIST: b"text/uri-list",
         TEXT_UTF8: b"text/plain;charset=utf-8",
         TEXT: b"text/plain",
+        ILO_TAB: b"application/x-ilo-tab",
         ILO_DROPPED,
     }
 }
@@ -80,8 +81,9 @@ struct Drag {
     enter: [u32; 5],
     types: Vec<xproto::Atom>,
     over: Option<Over>,
-    /// What it carries once read, its URLs and whether each is a file's.
+    /// What it carries once read, its URLs and whether each is a file's, or the app's tab.
     items: Option<Vec<(String, bool)>>,
+    tab: u64,
     asked: bool,
     /// Over the UI before the items were read: the answer waits for them, as a source waits for
     /// one before it says more.
@@ -100,8 +102,25 @@ pub extern "C" fn host_take_drops(dragged: Dragged) {
     gpui_linux::take_embedder_drops(&TYPES, dropped);
 }
 
-/// The types the UI reads a drag as: its links and files, else its text.
-const TYPES: [&str; 4] = [
+/// The type of a tab host_drag_tab drags, this process's id and the tab's, which the UI takes only
+/// from this process.
+const TAB_TYPE: &str = "application/x-ilo-tab";
+
+/// The app's tab `data` carries, as host_drag_tab writes it, else 0.
+fn tab_of(data: &[u8]) -> u64 {
+    let text = String::from_utf8_lossy(data);
+    let mut words = text.split_whitespace();
+    let pid = words.next().and_then(|pid| pid.parse::<u32>().ok());
+    let tab = words.next().and_then(|tab| tab.parse::<u64>().ok());
+    match (pid, tab) {
+        (Some(pid), Some(tab)) if pid == std::process::id() => tab,
+        _ => 0,
+    }
+}
+
+/// The types the UI reads a drag as: the app's own tab, its links and files, else its text.
+const TYPES: [&str; 5] = [
+    TAB_TYPE,
     "text/uri-list",
     "UTF8_STRING",
     "text/plain;charset=utf-8",
@@ -116,20 +135,27 @@ fn dropped(
     y: f32,
     carried: Option<(&str, &[u8])>,
 ) -> bool {
-    let items = carried.map_or_else(Vec::new, |(kind, data)| items(kind == TYPES[0], data));
+    let tab = carried
+        .filter(|(kind, _)| *kind == TAB_TYPE)
+        .map_or(0, |(_, data)| tab_of(data));
+    let items = match tab {
+        0 => carried.map_or_else(Vec::new, |(kind, data)| items(kind == TYPES[1], data)),
+        _ => Vec::new(),
+    };
+    let carries = tab != 0 || !items.is_empty();
     let (x, y) = (f64::from(x), f64::from(y));
     match drag {
         gpui_linux::EmbedderDrag::Over => {
-            !items.is_empty() && tell(view, platform::DRAG_OVER, x, y, &items)
+            carries && tell(view, platform::DRAG_OVER, x, y, &items, tab)
         }
         gpui_linux::EmbedderDrag::Left => {
-            tell(view, DRAG_LEFT, x, y, &[]);
+            tell(view, DRAG_LEFT, x, y, &[], 0);
             false
         }
         gpui_linux::EmbedderDrag::Dropped => {
-            let taken = !items.is_empty() && tell(view, platform::DRAG_DROP, x, y, &items);
+            let taken = carries && tell(view, platform::DRAG_DROP, x, y, &items, tab);
             // After a drop too, as the Mac's draggingEnded, which the UI keeps.
-            tell(view, DRAG_LEFT, x, y, &[]);
+            tell(view, DRAG_LEFT, x, y, &[], 0);
             taken
         }
     }
@@ -279,6 +305,7 @@ fn handle(proxy: &Proxy, message: &ClientMessageEvent) {
             types,
             over: None,
             items: None,
+            tab: 0,
             asked: false,
             waiting: false,
         };
@@ -341,9 +368,9 @@ fn handle(proxy: &Proxy, message: &ClientMessageEvent) {
                 let taken = drag
                     .items
                     .as_ref()
-                    .is_some_and(|items| tell_ui(ui, platform::DRAG_DROP, x, y, items));
+                    .is_some_and(|items| tell_ui(ui, platform::DRAG_DROP, x, y, items, drag.tab));
                 // After a drop too, as the Mac's draggingEnded, which the UI keeps.
-                tell_ui(ui, DRAG_LEFT, x, y, &[]);
+                tell_ui(ui, DRAG_LEFT, x, y, &[], 0);
                 let action = if taken { atoms.XdndActionCopy } else { 0 };
                 to_source(
                     proxy,
@@ -374,7 +401,7 @@ fn leave(proxy: &Proxy, drag: &mut Drag, over: Option<Over>) {
         to_page(proxy, left, proxy.atoms.XdndLeave, [0; 5]);
     }
     if let Some(left) = ui(drag.over).filter(|&left| ui(over) != Some(left)) {
-        tell_ui(left, DRAG_LEFT, 0, 0, &[]);
+        tell_ui(left, DRAG_LEFT, 0, 0, &[], 0);
     }
     if let Some(came) = page(over).filter(|&came| page(drag.over) != Some(came)) {
         to_page(proxy, came, proxy.atoms.XdndEnter, drag.enter);
@@ -437,6 +464,7 @@ fn type_list(proxy: &Proxy, source: xproto::Window) -> Vec<xproto::Atom> {
 fn wanted(proxy: &Proxy, drag: &Drag) -> Option<xproto::Atom> {
     let atoms = &proxy.atoms;
     [
+        atoms.ILO_TAB,
         atoms.URI_LIST,
         atoms.UTF8_STRING,
         atoms.TEXT_UTF8,
@@ -469,16 +497,23 @@ fn read_items(proxy: &Proxy, property: xproto::Atom) {
                 .ok()
         })
         .flatten();
-    let items = reply.map_or_else(Vec::new, |reply| {
-        items(reply.type_ == proxy.atoms.URI_LIST, &reply.value)
-    });
-    read_done(proxy, items);
+    let tab = (reply.as_ref())
+        .filter(|reply| reply.type_ == proxy.atoms.ILO_TAB)
+        .map_or(0, |reply| tab_of(&reply.value));
+    let items = match tab {
+        0 => reply.map_or_else(Vec::new, |reply| {
+            items(reply.type_ == proxy.atoms.URI_LIST, &reply.value)
+        }),
+        _ => Vec::new(),
+    };
+    read_done(proxy, items, tab);
 }
 
-fn read_done(proxy: &Proxy, items: Vec<(String, bool)>) {
+fn read_done(proxy: &Proxy, items: Vec<(String, bool)>, tab: u64) {
     DRAG.with_borrow_mut(|drag| {
         let Some(drag) = drag.as_mut() else { return };
         drag.items = Some(items);
+        drag.tab = tab;
         if std::mem::take(&mut drag.waiting) && matches!(drag.over, Some(Over::Ui(..))) {
             answer(proxy, drag);
         }
@@ -519,7 +554,8 @@ fn answer(proxy: &Proxy, drag: &Drag) {
         return;
     };
     let items = drag.items.as_deref().unwrap_or_default();
-    let taken = !items.is_empty() && tell_ui(ui, platform::DRAG_OVER, x, y, items);
+    let taken = (drag.tab != 0 || !items.is_empty())
+        && tell_ui(ui, platform::DRAG_OVER, x, y, items, drag.tab);
     let action = if taken { proxy.atoms.XdndActionCopy } else { 0 };
     // Bit 1 asks for each move, as the UI's drop line follows the pointer.
     to_source(
@@ -531,17 +567,40 @@ fn answer(proxy: &Proxy, drag: &Drag) {
 }
 
 /// Calls the UI's `dragged` for the UI's window `ui`, at (`x`, `y`) in its pixels.
-fn tell_ui(ui: xproto::Window, phase: c_int, x: i16, y: i16, items: &[(String, bool)]) -> bool {
+fn tell_ui(
+    ui: xproto::Window,
+    phase: c_int,
+    x: i16,
+    y: i16,
+    items: &[(String, bool)],
+    tab: u64,
+) -> bool {
     let scale = unsafe { bc::bc_display_scale() };
     let (x, y) = (f64::from(x) / scale, f64::from(y) / scale);
-    tell(ui as usize as *mut c_void, phase, x, y, items)
+    tell(ui as usize as *mut c_void, phase, x, y, items, tab)
 }
 
-/// Calls the UI's `dragged` for the UI's view `view`, at (`x`, `y`) in its points.
-fn tell(view: *mut c_void, phase: c_int, x: f64, y: f64, items: &[(String, bool)]) -> bool {
+/// Calls the UI's `dragged` for the UI's view `view`, at (`x`, `y`) in its points, with the links
+/// and files the drag carries, or the app's `tab` if it isn't 0.
+fn tell(
+    view: *mut c_void,
+    phase: c_int,
+    x: f64,
+    y: f64,
+    items: &[(String, bool)],
+    tab: u64,
+) -> bool {
     let Some(dragged) = DRAGGED.get() else {
         return false;
     };
+    if tab != 0 {
+        let item = platform::host_dragged {
+            url: c"".as_ptr(),
+            file: false,
+            tab,
+        };
+        return dragged(view, phase, x, y, &item, 1);
+    }
     let urls: Vec<CString> = (items.iter())
         .filter_map(|(url, _)| CString::new(url.as_str()).ok())
         .collect();
@@ -549,6 +608,7 @@ fn tell(view: *mut c_void, phase: c_int, x: f64, y: f64, items: &[(String, bool)
         .map(|(url, &(_, file))| platform::host_dragged {
             url: url.as_ptr(),
             file,
+            tab: 0,
         })
         .collect();
     dragged(view, phase, x, y, items.as_ptr(), items.len())

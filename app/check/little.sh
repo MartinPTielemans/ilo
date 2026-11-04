@@ -155,14 +155,34 @@ if [ "$(uname)" = Darwin ]; then
   expect '^browser: window left full screen$' "the main window didn't leave full screen"
 fi
 
-# The Dock's menu, the Mac's alone: New Little ilo Window after the engine's New Window opens one
-# for the Space shown, and while one is open Hide All Little ilo Windows hides it, which Show All
-# Little ilo Windows brings back in front.
+# The Dock's menu, the Mac's alone: ilo's New Window and New Incognito Window, File's, in place of
+# the engine's, which opened Chrome's windows, then New Little ilo Window, which opens one for the
+# Space shown, and while one is open Hide All Little ilo Windows hides it, which Show All Little
+# ilo Windows brings back in front.
 if [ "$(uname)" = Darwin ]; then
   dock_menu() { grep '^browser: dock menu ' "$log" | tail -1 | cut -d' ' -f4-; }
+  # A window ⌘N's command opens may open its command bar, which escape closes.
+  dock_window() {
+    send dock "$1"
+    expect "^browser: command $2 via dock\$" "the Dock's $1 didn't run File's"
+    expect "^browser: $3 opened [0-9]" "the Dock's $1 didn't open a window"
+    docked=$(sed -n "s/^browser: $3 opened \([0-9]*\).*/\1/p" "$log" | tail -1)
+    for _ in $(seq 30); do
+      logged '^browser: command bar shown$' && { send key escape; break; }
+      sleep 0.1
+    done
+    send window "$(grep -c '^browser: window opened ' "$log")"
+    send key w cmd shift
+    expect "^browser: window closed $docked\$" "⇧⌘W didn't close the window the Dock's $1 opened"
+    send window 1
+  }
   send dock
-  expect '^browser: dock menu \(.*, \)\{0,1\}New Window, New Little ilo Window\(, .*\)\{0,1\}$' \
-    "the Dock menu has no New Little ilo Window after New Window: \"$(dock_menu)\""
+  expect '^browser: dock menu \(.*, \)\{0,1\}New Window, New Incognito Window, New Little ilo Window\(, .*\)\{0,1\}$' \
+    "the Dock menu doesn't have ilo's New Window, New Incognito Window and New Little ilo Window: \"$(dock_menu)\""
+  [ "$(dock_menu | grep -o 'New Window' | wc -l | tr -d ' ')" = 1 ] ||
+    fail "the Dock menu kept the engine's New Window beside ilo's: \"$(dock_menu)\""
+  dock_window "New Window" new-window "window"
+  dock_window "New Incognito Window" new-private-window "private window"
   case "$(dock_menu)" in *"All Little ilo Windows"*) fail "the Dock menu offers Show or Hide All with none open" ;; esac
   send dock New Little ilo Window
   expect '^browser: dock opened little window [0-9]*$' "the Dock's New Little ilo Window didn't open one"
@@ -180,7 +200,8 @@ if [ "$(uname)" = Darwin ]; then
   send dock Show All Little ilo Windows
   expect "^browser: dock showed little windows $little\$" "Show All Little ilo Windows didn't show it"
   expect "^browser: key window $little\$" "Show All didn't put the Little ilo window in front"
-  send window 6
+  # The driver numbers windows in the order they were made, the closed ones too.
+  send window "$(grep -c '^browser: window opened ' "$log")"
   ../tools/window-screenshot.sh "$pid" "$out/little-dock.png" all || fail "no window to capture"
   send key w cmd
   expect "^browser: window closed $little\$" "⌘W didn't close the Dock's Little ilo window"

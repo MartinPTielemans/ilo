@@ -689,8 +689,13 @@ impl Shell {
             {
                 return false;
             }
-            // ⌘T opens the bar over the conversation, from a page watched too.
-            Command::NewTab | Command::SearchTabs => {
+            // Rows chosen in the sidebar are copied as anywhere.
+            Command::CopyUrl if !self.chosen.is_empty() => return false,
+            // The conversation is no page, as the URL field shows: nothing to copy or control.
+            Command::CopyUrl | Command::CopyMarkdownLink | Command::SiteControls => {}
+            // ⌘T opens the bar over the conversation, from a page watched too, and so does Edit
+            // URL with no page in place, the field showing the bar's placeholder.
+            Command::NewTab | Command::SearchTabs | Command::EditUrl => {
                 if self
                     .task_area
                     .as_ref()
@@ -727,10 +732,14 @@ impl Shell {
     /// from the conversation back to the Space's tab. Never Stop, as an agent stopped by a stray
     /// escape would lose its work.
     pub(super) fn task_step_back(&mut self, cx: &mut Context<Self>) {
-        match self.watched_task_page() {
-            Some(_) => self.task_page_back(cx),
-            None => self.close_task(cx),
+        if self.watched_task_page().is_some() {
+            return self.task_page_back(cx);
         }
+        // From Pages, back to Talk first.
+        if self.talk_back_to_talk(cx) {
+            return;
+        }
+        self.close_task(cx);
     }
 
     /// Steps the area's motion for a frame: the page's zoom.

@@ -135,6 +135,7 @@ key_at() { grep '^browser: key drawn at ' "$log" | tail -1 | cut -d' ' -f5-6; }
 send click $(key_at)
 expect "^browser: key $tab clicked\$" "a click on the key didn't reach it"
 offered save
+skip_on_sway_xwayland "the offer's keys and the steps after them"
 send click $(offer_field)
 send key escape
 expect "^browser: offer $tab answered NotNow check@example.test\$" \
@@ -472,7 +473,37 @@ offered_to_save card
 send key escape
 expect "^browser: offer $tab answered NotNow \$" "escape didn't decline the card"
 expect "^browser: offer $tab gone\$" "declining the card left Chrome's offer open"
+# Settings' Passwords tab, which ⌘, shows again, lists the saved address under the logins, and its
+# Remove asks first, as a login's does, and removes it, which Settings hears. The card declined
+# isn't listed.
+saved_autofill() { grep '^browser: autofill ' "$log" | tail -1 | sed 's/^browser: autofill [0-9]*: //'; }
+send key , cmd
+expect '^browser: settings shown Passwords$' "⌘, didn't show Settings' Passwords tab again"
+settings_drew Passwords
+for _ in $(seq 100); do
+  [ "$(saved_autofill)" = "1 addresses, 0 cards" ] && break
+  sleep 0.1
+done
+[ "$(saved_autofill)" = "1 addresses, 0 cards" ] ||
+  fail "Settings didn't hear of the saved address alone: $(saved_autofill)"
+remove_at=$(drawn "remove autofill 0") || fail "Settings didn't list the saved address"
+../tools/window-screenshot.sh "$pid" "$out/settings-address.png" || fail "no window to capture"
+post clickkey $remove_at
+expect "^browser: $asks shown Remove the address for “.*”?\$" "Remove on the address didn't ask first"
+if [ "$asks" = dialog ]; then
+  expect '^browser: dialog settled$' "Settings' dialog didn't settle"
+  send key return
+else
+  send choose Remove
+fi
+expect '^browser: remove address [0-9]*$' "Remove in the dialog didn't remove the address"
+for _ in $(seq 100); do
+  [ "$(saved_autofill)" = "0 addresses, 0 cards" ] && break
+  sleep 0.1
+done
+[ "$(saved_autofill)" = "0 addresses, 0 cards" ] ||
+  fail "Settings didn't hear the address was removed: $(saved_autofill)"
 exec 3>&- 5>&-
 quit
 rm -rf "$scratch"
-echo "ok: a submitted login offers to save its password in a card 18 from the page's top right, through a resize; another tab closes it, and the key after the host brings it back; Japanese input composes in its username field and return commits it without saving; return saves the username as left, and the login page fills the saved password in, with a key that opens the Site Controls, and Chrome's dropdown fills it in again; the eye shows in the password field once one is typed, never for the one filled in, and goes with the field's focus; a changed password offers to update it, which escape declines; and Never answers on another site, whose Site Controls take it off Never; the first site's Site Controls name its login, All Passwords… lists it in Settings, where Remove asks and Cancel keeps it and Manage Passwords… opens Chrome's password manager page listing it, and the row's Remove asks in the dialog and removes it, which Settings hears; a sign-up form offers Chrome's strong password, which Choose Your Own leaves to the user and Use Strong Password fills in and saves, with no offer; and Settings' Offer to save passwords switched off keeps the next login from bringing an offer, and Save and fill addresses switches off and on; a form's address offers to save it in the card, return saves it and Chrome's dropdown then offers it, and a card's offer declines with escape. Windows: $out/password-offer.png, $out/password-key.png, $out/password-fill.png, $out/password-reveal.png, $out/password-offer-ime.png, $out/password-update.png, $out/site-controls-never.png, $out/site-controls-passwords.png, $out/settings-passwords.png, $out/password-manager.png, $out/password-remove.png, $out/password-generation.png, $out/settings-passwords-off.png, $out/address-offer.png, $out/address-fill.png, $out/card-offer.png"
+echo "ok: a submitted login offers to save its password in a card 18 from the page's top right, through a resize; another tab closes it, and the key after the host brings it back; Japanese input composes in its username field and return commits it without saving; return saves the username as left, and the login page fills the saved password in, with a key that opens the Site Controls, and Chrome's dropdown fills it in again; the eye shows in the password field once one is typed, never for the one filled in, and goes with the field's focus; a changed password offers to update it, which escape declines; and Never answers on another site, whose Site Controls take it off Never; the first site's Site Controls name its login, All Passwords… lists it in Settings, where Remove asks and Cancel keeps it and Manage Passwords… opens Chrome's password manager page listing it, and the row's Remove asks in the dialog and removes it, which Settings hears; a sign-up form offers Chrome's strong password, which Choose Your Own leaves to the user and Use Strong Password fills in and saves, with no offer; and Settings' Offer to save passwords switched off keeps the next login from bringing an offer, and Save and fill addresses switches off and on; a form's address offers to save it in the card, return saves it and Chrome's dropdown then offers it, and a card's offer declines with escape; Settings lists the address, whose Remove asks first and removes it. Windows: $out/password-offer.png, $out/password-key.png, $out/password-fill.png, $out/password-reveal.png, $out/password-offer-ime.png, $out/password-update.png, $out/site-controls-never.png, $out/site-controls-passwords.png, $out/settings-passwords.png, $out/password-manager.png, $out/password-remove.png, $out/password-generation.png, $out/settings-passwords-off.png, $out/address-offer.png, $out/address-fill.png, $out/card-offer.png, $out/settings-address.png"

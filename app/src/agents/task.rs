@@ -293,6 +293,10 @@ pub struct Session {
     pub agent: String,
     /// Its pages: the tabs it opened or acted in, in that order.
     pub tabs: Vec<u64>,
+    /// The orders it placed and the messages it sent, each once the user allowed it and it was
+    /// done, for its receipt. For this run only, as the session is.
+    pub(super) orders: usize,
+    pub(super) messages: usize,
     /// Its calls under way, which it waits on.
     pub(super) calls: Vec<u64>,
     /// What ends it once it has waited IDLE for its next call.
@@ -528,6 +532,10 @@ impl Agents {
         {
             return (None, None);
         }
+        // With tasks off nothing more is asked of a task; an answer still lets one finish.
+        if !self.tasks_on() && matches!(action, TaskAction::Reply(_) | TaskAction::Retry) {
+            return (None, None);
+        }
         match action {
             TaskAction::Dismiss => self.dismiss_task(agent, cx),
             TaskAction::Restore => {
@@ -738,16 +746,14 @@ impl Agents {
             (State::Working, None) => (working(task), Dot::Working),
             (State::Asking { question, .. }, None) if asks => (question.clone(), Dot::Waiting),
             (State::Asking { .. }, None) => ("Waiting for you".into(), Dot::Waiting),
-            // A session says when it ended, as it has no result to say.
-            (State::Done { .. }, _) if task.session.is_some() => {
+            // A session has no result to say, so its receipt says what it did, or with nothing to
+            // count, when it ended.
+            (State::Done { .. }, _) if let Some(session) = &task.session => {
                 let at = task
                     .ended
                     .map(|at| super::local_time(seconds(at)))
                     .unwrap_or_default();
-                (
-                    format!("Done {at}").trim_end().to_string().into(),
-                    Dot::Done,
-                )
+                (receipt(session, &at).into(), Dot::Done)
             }
             // The tick says it's done, so a finish with no line says the result's first words.
             (
@@ -791,7 +797,7 @@ impl Agents {
             },
             question,
             open,
-            retry: matches!(task.state, State::Limit { .. }),
+            retry: matches!(task.state, State::Limit { .. }) && self.tasks_on(),
             command: match task.state {
                 State::Failed { command, .. } => command,
                 _ => None,
@@ -801,7 +807,7 @@ impl Agents {
 
     /// The CLIs ⌘T's ask lists: those signed in, as last learned, the default first.
     pub fn ask_agents(&self) -> Vec<AskAgent> {
-        if !self.on {
+        if !self.tasks_on() {
             return Vec::new();
         }
         let mut clis: Vec<Cli> = (Cli::ALL.into_iter())
@@ -947,7 +953,7 @@ impl Agents {
         cx: &mut Context<Self>,
     ) -> Option<String> {
         let asked = asked.trim();
-        if asked.is_empty() || !self.on {
+        if asked.is_empty() || !self.tasks_on() {
             return None;
         }
         self.tasks.next += 1;
@@ -1734,6 +1740,8 @@ impl Agents {
         let session = Session {
             agent: call.agent.clone(),
             tabs: Vec::new(),
+            orders: 0,
+            messages: 0,
             calls: vec![call.id],
             idle: None,
         };
@@ -1775,6 +1783,20 @@ impl Agents {
         };
         if !session.tabs.contains(&tab) {
             session.tabs.push(tab);
+        }
+    }
+
+    /// `agent`'s call `call` did what asked first, allowed: its session counts it for its receipt.
+    pub(super) fn counted(&mut self, agent: &str, call: u64, did: super::Did) {
+        let Some(key) = self.session_of(agent, call).map(|task| task.agent.clone()) else {
+            return;
+        };
+        let Some(session) = self.task_mut(&key).and_then(|task| task.session.as_mut()) else {
+            return;
+        };
+        match did {
+            super::Did::Order => session.orders += 1,
+            super::Did::Message => session.messages += 1,
         }
     }
 
@@ -2585,4 +2607,26 @@ fn picture(base64: &str) -> Option<Arc<gpui::Image>> {
         gpui::ImageFormat::Jpeg,
         bytes,
     )))
+}
+
+/// A session's receipt as it ends: what it did that had consequences, the orders and messages the
+/// user allowed it, once done, "Done · 1 order placed · 2 messages sent". Its pages are Open's
+/// button's to count. With none of them, "Done 13:28", when it ended.
+fn receipt(session: &Session, ended: &str) -> String {
+    let count = |n: usize, one: &str, many: &str| match n {
+        0 => None,
+        1 => Some(format!("1 {one}")),
+        n => Some(format!("{n} {many}")),
+    };
+    let did: Vec<String> = [
+        count(session.orders, "order placed", "orders placed"),
+        count(session.messages, "message sent", "messages sent"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    match did.is_empty() {
+        true => format!("Done {ended}").trim_end().to_string(),
+        false => format!("Done · {}", did.join(" · ")),
+    }
 }

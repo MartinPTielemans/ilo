@@ -34,16 +34,21 @@ index 54b72a63ec..cf7cd404f3 100644
      pub fn simulate_resize(&self, size: Size<Pixels>) {
          self.simulate_window_resize(self.window, size)
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index a875ee0f37..3643f9c59c 100644
+index a875ee0f37..129db9afc3 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
-@@ -1415,8 +1415,8 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+@@ -1415,8 +1415,13 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
      /// Renders the given scene to a texture and returns the pixel data as an RGBA image.
      /// This does not present the frame to screen - useful for visual testing where we want
      /// to capture what would be rendered without displaying it or requiring the window to be visible.
 -    #[cfg(any(test, feature = "test-support"))]
 -    fn render_to_image(&self, _scene: &Scene) -> Result<RgbaImage> {
-+    #[cfg(any(test, feature = "test-support", target_os = "windows"))]
++    #[cfg(any(
++        test,
++        feature = "test-support",
++        target_os = "windows",
++        target_os = "linux"
++    ))]
 +    fn render_to_image(&self, _scene: &Scene) -> Result<image::RgbaImage> {
          anyhow::bail!("render_to_image not implemented for this platform")
      }
@@ -259,7 +264,7 @@ index 6cb33874b2..0066ba74a2 100644
  
  #[cfg_attr(
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index c559412e56..4a59b5b481 100644
+index c559412e56..f9733eb4c8 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -360,6 +360,50 @@ thread_local! {
@@ -445,17 +450,23 @@ index c559412e56..4a59b5b481 100644
              requested_autoscroll: None,
              last_text_input_configuration: None,
              focused_text_input: None,
-@@ -2884,7 +2969,8 @@ impl Window {
+@@ -2884,7 +2969,14 @@ impl Window {
      /// Renders the current frame's scene to a texture and returns the pixel data as an RGBA image.
      /// This does not present the frame to screen - useful for visual testing where we want
      /// to capture what would be rendered without displaying it or requiring the window to be visible.
 -    #[cfg(any(test, feature = "test-support"))]
-+    // ilo takes the launch picture on Windows from the frame GPUI drew.
-+    #[cfg(any(test, feature = "test-support", target_os = "windows"))]
++    // ilo takes the launch picture on Windows, and a dragged tab's on Linux, from the frame GPUI
++    // drew.
++    #[cfg(any(
++        test,
++        feature = "test-support",
++        target_os = "windows",
++        target_os = "linux"
++    ))]
      pub fn render_to_image(&self) -> anyhow::Result<image::RgbaImage> {
          self.platform_window
              .render_to_image(&self.rendered_frame.scene)
-@@ -3761,7 +3847,23 @@ impl Window {
+@@ -3761,7 +3853,23 @@ impl Window {
          #[cfg(feature = "profiler")]
          let paint_start = Instant::now();
          self.invalidator.set_phase(DrawPhase::Paint);
@@ -480,7 +491,7 @@ index c559412e56..4a59b5b481 100644
  
          #[cfg(any(feature = "inspector", debug_assertions))]
          self.paint_inspector(inspector_element, cx);
-@@ -4227,6 +4329,40 @@ impl Window {
+@@ -4227,6 +4335,40 @@ impl Window {
          result
      }
  
@@ -521,7 +532,7 @@ index c559412e56..4a59b5b481 100644
      pub(crate) fn with_element_opacity<R>(
          &mut self,
          opacity: Option<f32>,
-@@ -5578,9 +5714,8 @@ impl Window {
+@@ -5578,9 +5720,8 @@ impl Window {
      fn reset_cursor_style(&self, cx: &mut App) {
          // Set the cursor only if we're the active window.
          if self.is_window_hovered() {
@@ -533,7 +544,7 @@ index c559412e56..4a59b5b481 100644
                  .unwrap_or(CursorStyle::Arrow);
              cx.platform.set_cursor_style(style);
          }
-@@ -7097,18 +7232,24 @@ impl Window {
+@@ -7097,18 +7238,24 @@ impl Window {
  
          // Fall back to built-in action handling.
          match request.action {

@@ -2,7 +2,7 @@
 //! a tab comes in by opening behind in the front window, unloaded, and moving to its Space and
 //! its place there, so it loads only once it's first shown.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
@@ -13,6 +13,7 @@ use browser::import::plan::{Existing, ExistingSpace, Row};
 use browser::import::sources::{Os, Roots};
 use browser::import::{Exported, Passwords};
 use browser::link_rules::{Host as _, Rule};
+use browser::log;
 use browser::theme::Theme;
 use gpui::{App, PathPromptOptions};
 
@@ -33,6 +34,38 @@ thread_local! {
     /// What waits for passwords_imported, with the profile the passwords went to.
     static PASSWORDS: RefCell<Vec<(u64, Box<dyn FnOnce(Passwords, &mut App)>)>> =
         const { RefCell::new(Vec::new()) };
+    /// The profile a check run holds back, with the Spaces that wait to go in it.
+    static HELD: RefCell<Option<(u64, Vec<u64>)>> = const { RefCell::new(None) };
+    /// Whether the check run's profile was held, which it is once.
+    static HOLDS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The new profile a check run holds back from its Spaces until it releases them, so its capture
+/// shows them arriving and stalled however fast the profile loads. A prod build holds none.
+fn held_name() -> Option<String> {
+    if cfg!(feature = "prod") {
+        return None;
+    }
+    std::env::var("BROWSER_IMPORT_HOLD").ok()
+}
+
+/// Whether this run holds a profile back, so it has a key to release it.
+pub fn holding() -> bool {
+    held_name().is_some()
+}
+
+/// Puts the held profile's Spaces in it, as the import asked before it was held.
+pub fn release_held() {
+    let Some((profile, spaces)) = HELD.take() else {
+        return;
+    };
+    log!(
+        "browser: import releases {} Spaces to profile {profile}",
+        spaces.len()
+    );
+    for space in spaces {
+        unsafe { bc::bc_space_set_profile(space, profile) };
+    }
 }
 
 /// Runs what waited for the app to become the active one.
@@ -147,7 +180,81 @@ fn keep(id: u64, tab: &Tab) {
     }
 }
 
+/// The icon the host draws for `app`, `pixels` square: on the Mac a bundle id, on Windows an exe,
+/// by its path or, for one the user installed, its name in the registry's App Paths. The host
+/// draws it premultiplied, and the image is straight RGBA.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn host_icon(app: &str, pixels: u32) -> Option<image::RgbaImage> {
+    let app = CString::new(app).ok()?;
+    let size = pixels as usize;
+    let mut rgba = vec![0u8; size * size * 4];
+    if !unsafe { platform::host_app_icon(app.as_ptr(), size, rgba.as_mut_ptr()) } {
+        return None;
+    }
+    for pixel in rgba.chunks_exact_mut(4) {
+        let alpha = u16::from(pixel[3]);
+        if alpha > 0 {
+            for channel in &mut pixel[..3] {
+                *channel = ((u16::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8;
+            }
+        }
+    }
+    image::RgbaImage::from_raw(pixels, pixels, rgba)
+}
+
+/// The browser's app icon on the Mac, from its bundle.
+#[cfg(target_os = "macos")]
+fn app_icon_pixels(
+    source: &browser::import::sources::Source,
+    pixels: u32,
+) -> Option<image::RgbaImage> {
+    let id = source.app_ids(Os::Mac).into_iter().next()?;
+    host_icon(&id, pixels)
+}
+
+/// The browser's app icon on Linux, from its desktop entry, under the check's made-up home alone
+/// when it gives one, so a run shows the icon it put there.
+#[cfg(target_os = "linux")]
+fn app_icon_pixels(
+    source: &browser::import::sources::Source,
+    pixels: u32,
+) -> Option<image::RgbaImage> {
+    use browser::import::app_icons;
+    let made_up = std::env::var_os("BROWSER_IMPORT_HOME");
+    let home = made_up.clone().or_else(|| std::env::var_os("HOME"))?;
+    let dirs = app_icons::data_dirs(Path::new(&home), made_up.is_some());
+    app_icons::find(&dirs, &source.app_ids(Os::Linux), pixels)
+}
+
+/// The browser's app icon on Windows, the shell's for its exe: the one beside its profiles where
+/// it's installed for the user, else the one the registry names. A check run's made-up home has
+/// its own exe and no registry, so the run shows the icon it put there.
+#[cfg(target_os = "windows")]
+fn app_icon_pixels(
+    source: &browser::import::sources::Source,
+    pixels: u32,
+) -> Option<image::RgbaImage> {
+    let made_up = std::env::var_os("BROWSER_IMPORT_HOME").is_some();
+    (source.app_ids(Os::Windows).iter())
+        .filter(|app| !made_up || app.contains(['/', '\\']))
+        .find_map(|app| host_icon(app, pixels))
+}
+
 impl browser::import::Host for CoreImport {
+    fn app_icon(
+        &self,
+        source: &browser::import::sources::Source,
+        pixels: u32,
+    ) -> Option<std::sync::Arc<gpui::RenderImage>> {
+        let mut icon = app_icon_pixels(source, pixels)?;
+        // GPUI draws BGRA.
+        for pixel in icon.pixels_mut() {
+            pixel.0.swap(0, 2);
+        }
+        let frame = image::Frame::new(icon);
+        Some(std::sync::Arc::new(gpui::RenderImage::new(vec![frame])))
+    }
+
     fn roots(&self) -> Roots {
         // A check run gives a made-up home folder, so it never reads the user's browsers.
         match std::env::var_os("BROWSER_IMPORT_HOME") {
@@ -207,8 +314,14 @@ impl browser::import::Host for CoreImport {
     }
 
     fn create_profile(&self, name: &str) -> u64 {
+        let held = !HOLDS.get() && held_name().as_deref() == Some(name);
         let name = CString::new(name).unwrap_or_default();
-        unsafe { bc::bc_profile_create(name.as_ptr()) }
+        let profile = unsafe { bc::bc_profile_create(name.as_ptr()) };
+        if held {
+            HOLDS.set(true);
+            HELD.set(Some((profile, Vec::new())));
+        }
+        profile
     }
 
     fn create_space(&self, name: &str, icon: &str, theme: Option<&Theme>) -> u64 {
@@ -226,6 +339,17 @@ impl browser::import::Host for CoreImport {
     }
 
     fn set_space_profile(&self, space: u64, profile: u64) {
+        let held = HELD.with_borrow_mut(|held| match held {
+            Some((each, spaces)) if *each == profile => {
+                spaces.push(space);
+                true
+            }
+            _ => false,
+        });
+        if held {
+            log!("browser: import holds space {space} from profile {profile}");
+            return;
+        }
         unsafe { bc::bc_space_set_profile(space, profile) };
     }
 

@@ -907,6 +907,31 @@ mod tests {
         assert_eq!(listed, ["allowed"]);
     }
 
+    /// A private window opened after the core reported the extensions lists those allowed in
+    /// Incognito from the window it opened from, as it hears them only once they change.
+    #[gpui::test]
+    fn a_private_window_lists_the_allowed_extensions_its_opener_heard(cx: &mut TestAppContext) {
+        let allowed = Extension {
+            incognito: true,
+            ..extension("allowed", true, &[])
+        };
+        let extensions = vec![extension("other", true, &[]), allowed];
+        let host = Rc::new(Recorder::default());
+        let from = cx.new(|cx| Shell::new(host.clone(), cx));
+        from.update(cx, |shell, cx| shell.set_extensions(7, extensions, cx));
+        let private = cx.new(|cx| {
+            let mut shell = Shell::private_window(host.clone(), 1, "Private".into(), 7, cx);
+            shell.hear_extensions_from(&from, cx);
+            shell
+        });
+        let listed = private.update(cx, |shell, cx| {
+            (shell.menu_bar(cx).extensions.iter())
+                .map(|extension| extension.id.to_string())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(listed, ["allowed"]);
+    }
+
     fn action(id: &str, pinned: bool) -> ExtensionAction {
         ExtensionAction {
             id: id.to_string().into(),

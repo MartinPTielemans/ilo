@@ -32,6 +32,8 @@ mod agent_bar;
 mod agent_pointer;
 mod agent_question;
 mod assets;
+#[cfg(test)]
+mod bar_commands_tests;
 mod bar_usage;
 #[cfg(test)]
 mod bar_usage_tests;
@@ -82,6 +84,7 @@ mod menu_bar;
 mod menus;
 mod naming;
 mod new_space;
+mod new_window;
 mod onboarding;
 mod page_dialog;
 mod page_menu;
@@ -131,7 +134,7 @@ pub use commands::{
     shown_tab, task_page_shown, window_became_key, with_named_rows,
 };
 pub use display_face::display_text;
-pub use drag::dropped_urls;
+pub use drag::{WindowDragEnd, dropped_urls};
 pub use drm_note::PlayReady;
 pub use extensions::{
     Extension, ExtensionAction, ExtensionCommand, menu_item as extension_menu_item,
@@ -161,6 +164,7 @@ pub use recent_downloads::{FilePreview, HOVER_ALL};
 use rows::{Breath, UNLOAD};
 use scaled::scaled;
 pub use side_panel::SidePanel;
+pub use sidebar::{SidebarEdge, edge_reveals};
 use swap::{ARROW_DOWN, Swapped, Swaps};
 pub use themes::{AppAppearance, app_appearance};
 use tile_theme::TileTheme;
@@ -464,6 +468,7 @@ use crate::tokens::shell::FORM_TEXT;
 use crate::tokens::shell::NAV;
 use crate::tokens::shell::NAV_DISABLED;
 use crate::tokens::shell::NAV_HOVERED;
+use crate::tokens::shell::NAV_INACTIVE;
 use crate::tokens::shell::SPACE_HOVERED;
 use crate::tokens::shell::SPACE_NAME;
 use crate::tokens::shell::SPACE_NAME_SHUT;
@@ -902,6 +907,9 @@ struct Drag {
     /// and since when, for paging to the Space on that side.
     space: u64,
     edge: Option<(bool, Instant)>,
+    /// The Space it last paged to, which the core says it shows only once that Space's page is
+    /// handed over, by when the pointer can be off the edge (#1840).
+    paged: Option<u64>,
     /// Pressed with ⌥, whose click splits once it's let go without having moved, so that a drag
     /// with ⌥ held can drop a copy instead (#690).
     alt_click: bool,
@@ -1205,6 +1213,11 @@ pub struct Shell {
     new_tab: bool,
     /// When the card started to show no page, for the line on it to fade in from.
     empty_since: Option<Instant>,
+    /// Whether the command bar this window opened is up, over the card while it shows no page,
+    /// which then draws nothing: its one offer, New Tab, is the bar.
+    bar_over_card: bool,
+    /// When the bar last left the card, for its content to fade in again from.
+    card_back: Option<Instant>,
     /// The fade has ended and said so.
     empty_settled: bool,
     /// The first run's welcome takes the empty card until a page shows (set_welcome).
@@ -1224,6 +1237,8 @@ pub struct Shell {
     /// once it has.
     bar_follows: bool,
     drag: Option<Drag>,
+    /// A tab's row dragged out of the window, as the system drags it, until it's let go.
+    window_drag: Option<drag::WindowDrag>,
     /// A drag just ended, so the release isn't a click on the row.
     dragged: bool,
     /// Escape put a dragged tab back, and the frame that shows it all put back isn't drawn yet.
@@ -1268,6 +1283,8 @@ pub struct Shell {
     text_system: Option<WindowTextSystem>,
     /// Whether the window is full screen, as macOS last told once its transition was over.
     full_screen: bool,
+    /// ⌘N's or ⇧⌘N's window, until its command bar opens once it's on screen.
+    opening: Option<new_window::Opening>,
     /// Whether Window › Stay On Top keeps it over other apps' windows.
     on_top: bool,
     /// The Esc presses its page has had first in full screen, which leave held or twice.
@@ -1541,6 +1558,12 @@ pub struct Shell {
     forced_tone: Option<Tone>,
     window_active: bool,
     window_watches: Vec<Subscription>,
+    /// Whether the window is the one the user is in, as the host says (host_watch_window_main):
+    /// its header's glyphs dim while it isn't. Its own overlays and page having the keyboard
+    /// leave it so, unlike GPUI's activation.
+    window_main: bool,
+    /// Whether the header's glyphs were last drawn dimmed, which the log says when it changes.
+    nav_dimmed_drawn: Cell<Option<bool>>,
     /// Whether the host was last asked to draw the material light.
     window_light: Option<bool>,
     /// The menus' look capture mode was last given, which it takes again when it changes (#861).
@@ -1660,6 +1683,8 @@ impl Shell {
             clearing: Vec::new(),
             new_tab: false,
             empty_since: None,
+            bar_over_card: false,
+            card_back: None,
             empty_settled: false,
             welcome: false,
             onboarding: None,
@@ -1668,6 +1693,7 @@ impl Shell {
             press_closed_bar: false,
             bar_follows: false,
             drag: None,
+            window_drag: None,
             dragged: false,
             putting_back: false,
             swipe: None,
@@ -1689,6 +1715,7 @@ impl Shell {
             link: None,
             text_system: None,
             full_screen: false,
+            opening: None,
             on_top: false,
             escapes: Default::default(),
             maximized: false,
@@ -1833,6 +1860,8 @@ impl Shell {
             app_appearance: Appearance::Automatic,
             forced_tone: None,
             window_active: true,
+            window_main: true,
+            nav_dimmed_drawn: Cell::new(None),
             window_watches: Vec::new(),
             window_light: None,
             capture_look: None,
@@ -1869,6 +1898,12 @@ impl Shell {
             shown: 0,
         }];
         shell
+    }
+
+    /// The extensions the window it opened from heard, for a private window: the core reports
+    /// them only as they change, so a window that opens after hears none of its own.
+    pub fn hear_extensions_from(&mut self, from: &Entity<Shell>, cx: &App) {
+        self.extensions = from.read(cx).extensions.clone();
     }
 
     /// Whether this is a private window's shell.
@@ -2406,17 +2441,23 @@ impl Shell {
         self.opened = None;
         self.closing.clear();
         self.clearing.clear();
-        // A tab dragged to the sidebar's edge pages with it, to drop there; any other drag ends.
-        match self
-            .drag
-            .as_mut()
-            .filter(|drag| drag.edge.is_some() && !drag.dropped)
-        {
+        // A tab dragged to the sidebar's edge pages with it, to drop there; any other drag goes
+        // back, as its release would put it back.
+        match self.drag.as_mut().filter(|drag| {
+            let paged = drag.edge.is_some() || drag.paged == Some(space);
+            paged && !drag.dropped
+        }) {
             Some(drag) => {
                 drag.to = Place::List(false, usize::MAX);
                 drag.line = None;
             }
-            None => self.drag = None,
+            None => {
+                if let Some(drag) = self.drag.take().filter(|drag| !drag.dropped) {
+                    self.dragged |= drag.moving;
+                    self.putting_back |= drag.moving;
+                    self.retip = true;
+                }
+            }
         }
         if self.show_favorites() {
             self.log_favorites();
@@ -2705,6 +2746,7 @@ impl Shell {
                 .browser
                 .command_bar_follows(self.bar_tabs(cx), self.open_tabs(cx), cx);
         self.set_new_tab(new_tab, cx);
+        self.set_bar_over_card(new_tab, cx);
         self.adding_pane = None;
         self.link_tab_changed(cx);
         self.note_hang(cx);
@@ -2733,6 +2775,7 @@ impl Shell {
 
     /// The command bar closed with no tab chosen in it: the user left it, or its ask ran a task.
     pub fn command_bar_dismissed(&mut self, cx: &mut Context<Self>) {
+        self.set_bar_over_card(false, cx);
         self.set_new_tab(false, cx);
         if self.adding_pane.take().is_some() {
             self.lay_out_page(cx);
@@ -2793,13 +2836,21 @@ impl Shell {
         }
     }
 
-    /// The row with the selected plate: the tab shown's, or its split's.
-    fn selected_row(&self) -> Row {
-        if self.new_tab {
-            Row::NewTab
-        } else {
-            Row::Tab(self.row_of(self.selected))
+    /// The row with the selected plate: the tab shown's, or its split's, or New Tab's while ⌘T's
+    /// bar is open. None while a task has the page area, as its card has the plate then.
+    fn selected_row(&self) -> Option<Row> {
+        match self.new_tab {
+            true => Some(Row::NewTab),
+            false => self
+                .shown_has_plate()
+                .then(|| Row::Tab(self.row_of(self.selected))),
         }
+    }
+
+    /// Whether the tab shown has the selected plate, on its row or its tile: not while ⌘T's bar
+    /// gives it to New Tab, or while a task's conversation or page is in the page area.
+    fn shown_has_plate(&self) -> bool {
+        !self.new_tab && self.task_area.is_none()
     }
 
     fn shown(&mut self, tab: u64, cx: &mut App) {
@@ -3051,6 +3102,10 @@ impl Shell {
     /// unless a page took it there, and leaving takes that away.
     pub fn set_full_screen(&mut self, entered: bool, cx: &mut Context<Self>) {
         self.full_screen = entered;
+        // A new window waiting for its full screen opens its bar at the next frame.
+        if self.opening.is_some() {
+            cx.notify();
+        }
         // There for the page, or back, with no resize to end the hold, as a window already its
         // screen's size goes: held on, the page stayed put for good, under the Library (#1633).
         if entered == self.page_fullscreen && self.page_held.take().is_some() {
@@ -3346,7 +3401,7 @@ impl Shell {
 
     /// Eases the selected row back from its hover fill once the pointer or its menu has left it.
     fn unhover(&mut self, row: Row) {
-        if row == self.selected_row() {
+        if Some(row) == self.selected_row() {
             self.unhovered.push((row, Instant::now()));
         }
     }
@@ -3387,6 +3442,22 @@ impl Shell {
                             .ok();
                     }
                 });
+            },
+        )
+        .absolute()
+        .size_full()
+    }
+
+    /// The pointer leaving the window's own view, for the page's or another window, which ends a
+    /// wait at the edge and the sidebar's hover. The window's, not the sidebar's: with the sidebar
+    /// hidden no listener of its heard the leave on Linux and Windows, whose pages are windows the
+    /// shell doesn't hear the pointer in, and a pointer passing the edge brought the sidebar out.
+    fn leave_listener(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let shell = cx.weak_entity();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let shell = shell.clone();
                 window.on_mouse_event(move |_: &MouseExitEvent, phase, _, cx| {
                     if phase == DispatchPhase::Capture {
                         shell
@@ -3511,6 +3582,7 @@ impl Render for Shell {
         self.a11y = window.is_a11y_active();
         self.watch_appearance(window, cx);
         self.full_screen_step("drawn", window.viewport_size());
+        self.step_opening(window, cx);
         self.stop_videos(window, cx);
         // check.sh reads this line. It comes as the rows are drawn, so a click it sends next goes
         // to what's drawn.
@@ -3831,6 +3903,7 @@ impl Render for Shell {
                 }),
             )
             .child(self.window_background())
+            .child(self.leave_listener(cx))
             // The page views go over the cards, as native views. A task the page area shows takes
             // the card's place, the Space's page pushed out of the window (task_area.rs).
             .when(normal, |shell| {

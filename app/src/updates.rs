@@ -274,6 +274,21 @@ pub fn first_launch_notes(file: &std::path::Path, own: &str) -> Option<String> {
     newer(own, last?).then(|| format!("{}#{own}", crate::build_info::WHATS_NEW))
 }
 
+/// Settings › About's "Show what's new after an update" is off while this file is in the profile
+/// directory: on by default, and on the nightly track a tab every morning is noise.
+pub const NO_WHATS_NEW: &str = "no-whats-new";
+
+/// The notes an update's first launch opens, `notes`, unless the user turned them off in the
+/// profile directory `dir`. Help › What's New still opens them.
+pub fn notes_to_open(notes: Option<String>, dir: &std::path::Path) -> Option<String> {
+    let off = dir.join(NO_WHATS_NEW).exists();
+    if off && let Some(url) = &notes {
+        // check.sh reads this line.
+        crate::log!("browser: update notes off: {url}");
+    }
+    notes.filter(|_| !off)
+}
+
 /// Whether version `own` comes after `last`, number by number: 0.1.10 after 0.1.9.
 fn newer(own: &str, last: &str) -> bool {
     let numbers = |version: &str| -> Option<Vec<u64>> {
