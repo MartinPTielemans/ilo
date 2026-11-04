@@ -420,6 +420,8 @@ pub trait Browser {
     fn set_pane_corner(&self, left: f32, right: f32, top: f32, cx: &mut App);
     /// Shows the window's close, minimize and zoom buttons, or hides them.
     fn show_window_buttons(&self, shown: bool, cx: &mut App);
+    /// Puts the window full screen, or takes it out, as View's Enter Full Screen does.
+    fn toggle_full_screen(&self, _cx: &mut App) {}
     /// Does what a click on the window's close, minimize or zoom button does.
     fn press_window_button(&self, button: WindowButton, cx: &mut App);
     /// Keeps the window over other apps' windows, its overlays still over it, or lets it go back
@@ -512,6 +514,21 @@ pub trait Browser {
         _cx: &mut App,
     ) {
     }
+    /// Shows `text` in the toast with the capture toast's Share button after it, which runs `share`
+    /// with where in the toast it was pressed, for `time` and for as long as the pointer is over it.
+    /// Where there's no share sheet it's the plain toast.
+    fn toast_share(
+        &self,
+        text: &str,
+        _share: Rc<dyn Fn(Point<Pixels>, &mut App)>,
+        time: Duration,
+        cx: &mut App,
+    ) {
+        self.toast(text, None, time, cx);
+    }
+    /// Opens the system's share sheet for the page at `url`, titled `title`, hanging from `at` in
+    /// the toast, where its Share button was pressed.
+    fn share_from_toast(&self, _url: &str, _title: &str, _at: Point<Pixels>, _cx: &mut App) {}
     /// The user closed the tab's protected-media note: the profile keeps it from showing again at
     /// the site of its page, and Site Controls offer Safari's engine there instead.
     fn close_media_note(&self, _tab: u64, _cx: &mut App) {}

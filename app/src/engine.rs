@@ -1068,6 +1068,15 @@ impl Browser for Engine {
         })
     }
 
+    fn toggle_full_screen(&self, _: &mut App) {
+        // The Mac's green button is View › Enter Full Screen's toggleFullScreen:; off the Mac the
+        // core puts the window full screen, as the window manager's key does.
+        match cfg!(target_os = "macos") {
+            true => unsafe { platform::host_press_window_button(self.ui_view, 2) },
+            false => unsafe { bc::bc_window_toggle_full_screen(self.window) },
+        }
+    }
+
     fn press_window_button(&self, button: WindowButton, _: &mut App) {
         // Windows' own zoom button maximizes, and its window has no full screen of its own, so the
         // zoom Escape presses in full screen takes the window out through the core.
@@ -1260,6 +1269,35 @@ impl Browser for Engine {
             toast::show(&text, key, time, cx)
         };
         with_overlays(show, cx);
+    }
+
+    fn toast_share(
+        &self,
+        text: &str,
+        share: Rc<dyn Fn(Point<Pixels>, &mut App)>,
+        time: Duration,
+        cx: &mut App,
+    ) {
+        let text = text.to_string();
+        let show = move |cx: &mut App| {
+            // The capture toast's Share button, as it is (capture.rs).
+            let button = toast::Button {
+                label: toast::Label::Glyph("icons/share.svg"),
+                name: "share",
+                run: share,
+            };
+            toast::show_with_buttons(&text, vec![button], time, cx)
+        };
+        with_overlays(show, cx);
+    }
+
+    fn share_from_toast(&self, url: &str, title: &str, at: Point<Pixels>, _: &mut App) {
+        let (Ok(url), Ok(title)) = (CString::new(url), CString::new(title)) else {
+            return;
+        };
+        let (x, y) = (f64::from(at.x), f64::from(at.y));
+        let view = TOAST_VIEW.get();
+        unsafe { platform::host_share(view, x, y, 1., 1., url.as_ptr(), title.as_ptr()) };
     }
 
     fn toast_undo(&self, text: &str, undo: Rc<dyn Fn(&mut App)>, time: Duration, cx: &mut App) {
