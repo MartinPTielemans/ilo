@@ -332,6 +332,10 @@ $(grep "^browser: task plate task-${session#session-} at " "$log" | tail -1 | cu
 PLATE
   send click $((px + pw / 2)) $((py + ph / 2))
   expect "^browser: task $session shown\$" "a click on the client's card didn't show its conversation"
+  # Its pages, more than one, open on Pages, their grid, each a picture to watch it from (#1080).
+  await_log "^browser: task $session opens on pages\$" "the client's card with its pages didn't open on Pages"
+  picture "$agent_tab" > /dev/null
+  ../tools/window-screenshot.sh "$pid" "$out/agent-pages.png" || fail "no window to capture"
   watch "$agent_tab"
   ../tools/window-screenshot.sh "$pid" "$out/agent-watched.png" || fail "no window to capture"
   # The core lists the agent's Space alone: its tab, and not the user's Wikipedia tab in theirs.
