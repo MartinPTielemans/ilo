@@ -67,3 +67,5 @@ ours/chromium-core-notification-click.patch
 ours/chromium-battery-saver-sampled-power.patch
 ours/chromium-policy-windows-key.patch
 ours/chromium-core-clear-history-element.patch
+ours/chromium-freezing-measure-on-battery-saver.patch
+ours/chromium-no-page-resource-monitor.patch
