@@ -521,7 +521,7 @@ send key 2 cmd
 expect "^browser: selected \($x\|$y\) in " "⌘2 didn't show the split put back in Today"
 bar_command separate-split "Separate All Tabs" "separate all"
 expect '^browser: splits $' "Separate All Tabs didn't end the split"
-expect '^browser: rows settled$' "the rows didn't settle after the split ended"
+expect "^browser: today $x $y\$" "Separate All Tabs didn't leave the rows as they were: \"$(today)\""
 # Three tiles in the sidebar at its narrowest take two rows, 110 points, more than 40 % of a window
 # 220 tall, so they scroll with the list, under the URL field (Ardia).
 send drag $(tiled_row 0) 200 112
