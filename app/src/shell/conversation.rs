@@ -518,7 +518,14 @@ impl TalkView {
             }
             // It opens on Pages when the task has two pages or more, on Talk with fewer.
             if self.pages.is_none() {
-                self.pages = Some(conversation.tabs.len() >= 2);
+                let pages = conversation.tabs.len() >= 2;
+                // check.sh reads this line.
+                log!(
+                    "browser: task {} opens on {}",
+                    self.agent,
+                    if pages { "pages" } else { "talk" }
+                );
+                self.pages = Some(pages);
             }
             self.shown = Some(conversation);
             cx.notify();
