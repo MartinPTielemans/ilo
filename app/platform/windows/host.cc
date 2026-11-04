@@ -862,7 +862,6 @@ std::map<HWND, ClosedFrame>& ClosedFrames() {
 
 // The holder keeps GPUI's window, its only child, filling it.
 int FrameHit(HWND root, POINT at);  // Below, with the frame it answers for.
-void CaptureWindowSized(HWND holder, int width, int height);  // Below, with Capture.
 
 LRESULT CALLBACK HolderProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
   switch (message) {
@@ -876,7 +875,6 @@ LRESULT CALLBACK HolderProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         SetWindowPos(ui, nullptr, 0, 0, LOWORD(lparam), HIWORD(lparam),
                      SWP_NOZORDER | SWP_NOACTIVATE);
       }
-      CaptureWindowSized(hwnd, LOWORD(lparam), HIWORD(lparam));
       return 0;
     case WM_PARENTNOTIFY:
       // A click in the UI takes the keyboard from the page, as one in a top-level window would.
@@ -1172,15 +1170,18 @@ LRESULT CALLBACK LinkPreviewOwnerProc(HWND hwnd, UINT message, WPARAM wparam, LP
 }
 
 Floating g_capture;
-// The holder of the browser window Capture shows over, and its size then.
-HWND g_capture_holder = nullptr;
+// The browser window Capture shows over, and the size of its client area then.
+HWND g_capture_over = nullptr;
 SIZE g_capture_size = {};
 
 // The window Capture shows over resized, which leaves it, as on the Mac and Linux: what it showed
 // of the page is no longer where the page is.
-void CaptureWindowSized(HWND holder, int width, int height) {
-  if (holder != g_capture_holder || !g_capture.hwnd || !IsWindowVisible(g_capture.hwnd) ||
-      (width == g_capture_size.cx && height == g_capture_size.cy)) {
+void CaptureWindowSized(HWND root) {
+  RECT client = {};
+  if (root != g_capture_over || !g_capture.hwnd || !IsWindowVisible(g_capture.hwnd) ||
+      !GetClientRect(root, &client) ||
+      (client.right - client.left == g_capture_size.cx &&
+       client.bottom - client.top == g_capture_size.cy)) {
     return;
   }
   host_hide_capture();
@@ -1612,6 +1613,9 @@ LRESULT CALLBACK OwnerProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
     Minimized(hwnd);
   } else if (message == WM_WINDOWPOSCHANGED && (~flags & (SWP_NOMOVE | SWP_NOSIZE))) {
     Moved(hwnd);
+    if (~flags & SWP_NOSIZE) {
+      CaptureWindowSized(hwnd);
+    }
   } else if (message == WM_ACTIVATE && LOWORD(wparam) != WA_INACTIVE) {
     KeepKeyboard(hwnd);
   } else if (message == WM_NCDESTROY) {
@@ -3290,10 +3294,10 @@ void host_add_capture(void* view, void (*dismissed)(void)) {
 
 void host_show_capture(void* ui_view, double left, double top, double width, double height) {
   Show(g_capture, ui_view, left, top, width, height, true);
-  g_capture_holder = ui_view ? GetParent(Hwnd(ui_view)) : nullptr;
-  RECT holder = {};
-  GetClientRect(g_capture_holder, &holder);
-  g_capture_size = {holder.right - holder.left, holder.bottom - holder.top};
+  g_capture_over = Root(ui_view);
+  RECT client = {};
+  GetClientRect(g_capture_over, &client);
+  g_capture_size = {client.right - client.left, client.bottom - client.top};
   if (g_capture.hwnd && IsWindowVisible(g_capture.hwnd)) {
     // check.sh reads this line, as the Mac's and Linux's hosts log it.
     fprintf(stderr, "browser: capture shown at %g %g %g %g\n", left, top, width, height);
