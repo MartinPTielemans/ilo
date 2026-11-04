@@ -314,16 +314,19 @@ jobs:
 
       # Windows' own Microsoft sign-in, which Chromium logs on or off as it starts (#1345). The core
       # turns it on by default only on a device joined or registered to a work or school directory,
-      # which a runner isn't, so here it's off until the CloudAPAuthEnabled policy turns it on.
+      # which a runner isn't, so here it's off until the CloudAPAuthEnabled policy turns it on, under
+      # ilo's key (docs/policies.md): Chromium's, which every other Chromium on the machine reads,
+      # leaves it off (engine/patches/ours/chromium-policy-windows-key.patch).
       - name: Microsoft sign-in
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           out=$RUNNER_TEMP/check
           mkdir -p "$out"
-          key='HKCU\SOFTWARE\Policies\Chromium'
+          key='HKCU\SOFTWARE\Policies\ilo'
+          chromium='HKCU\SOFTWARE\Policies\Chromium'
           # Git Bash would take reg's and taskkill's switches for paths.
           export MSYS2_ARG_CONV_EXCL='*'
-          trap 'reg delete "$key" /v CloudAPAuthEnabled /f > /dev/null 2>&1 || true' EXIT
+          trap 'for k in "$key" "$chromium"; do reg delete "$k" /v CloudAPAuthEnabled /f > /dev/null 2>&1 || true; done' EXIT
           # Starts the app with a profile of its own, named $1, and checks that it logs $2: 0 for
           # off, 1 for on.
           sign_in() {
@@ -347,7 +350,11 @@ jobs:
             }
           }
           reg delete "$key" /v CloudAPAuthEnabled /f > /dev/null 2>&1 || true
+          reg delete "$chromium" /v CloudAPAuthEnabled /f > /dev/null 2>&1 || true
           sign_in no-policy 0
+          reg add "$chromium" /v CloudAPAuthEnabled /t REG_DWORD /d 1 /f > /dev/null
+          sign_in chromium-key 0
+          reg delete "$chromium" /v CloudAPAuthEnabled /f > /dev/null 2>&1 || true
           reg add "$key" /v CloudAPAuthEnabled /t REG_DWORD /d 1 /f > /dev/null
           sign_in policy-on 1
 

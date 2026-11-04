@@ -62,3 +62,4 @@ ours/chromium-core-address-offer.patch
 ours/chromium-core-passkey-sign-in-wording.patch
 ours/chromium-core-frame-shown.patch
 ours/chromium-core-page-bubbles.patch
+ours/chromium-policy-windows-key.patch
