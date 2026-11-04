@@ -771,7 +771,7 @@ send menu Developer › Turn on Developer Mode for this site
 expect "^browser: page $r developer mode 1\$" "View › Developer didn't turn Developer Mode on"
 # Off the Mac ⌃D is pressed as Alt+D, Chrome's for the address bar, so Developer Mode has no key
 # there (commands.rs), and fields don't delete forward on it.
-if [ "$(uname)" = Linux ]; then
+if [ "$(uname)" != Darwin ]; then
   echo "skip: ⌃D for Developer Mode and forward delete: off the Mac it's Alt+D, the address bar's."
 else
   # So does ⌃D, which the page gets first: in its text field it deletes forward, as in any Mac
@@ -961,12 +961,15 @@ EOF
 # click, whose page can say it loaded WebKit before the next line runs.
 early=$(grep '^browser: system engine loaded for ' "$log" | grep -v ' for clearing a site' || true)
 # On Linux the note's button downloads Google's Widevine module from Google, which the widevine run
-# checks, so it isn't pressed here.
-[ "$(uname)" = Linux ] || send click $((nx + nw / 2)) $((ny + nh - 26))
+# checks, so it isn't pressed here, and on Windows the note has none (drm_note.rs).
+[ "$(uname)" != Darwin ] || send click $((nx + nw / 2)) $((ny + nh - 26))
 # Safari's engine keeps a store for each profile from macOS 14; before it, the note offers Safari.
 if [ "$(uname)" = Linux ]; then
   drm_done="nothing, as on Linux it offers Google's Widevine module, the widevine run's"
   echo "skip: the note's button: on Linux it downloads Google's Widevine module (the widevine run)."
+elif windows; then
+  drm_done="nothing, as on Windows the note offers none"
+  echo "skip: the note's button: on Windows the note says why the PC can't play the video, and offers nothing."
 elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   drm_done="Safari's engine"
   [ -z "$early" ] || fail "WebKit loaded before its first page: $early"
