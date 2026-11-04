@@ -135,6 +135,40 @@ jobs:
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: ./setup.sh prebuilt && ./build.sh
 
+      # macOS asks Screen Recording, the camera and the microphone of the process responsible for
+      # the app, here the runner's agent that started the job, not of the app: once media's call and
+      # tab share reached Chromium's capture, UserNotificationCenter's question took the app's
+      # activation, and the run's clicks and keys went nowhere (#1554). The check VMs answered
+      # it once; a hosted runner is new each time, with SIP off, so the job grants them to the
+      # processes it runs under. Each grant is read back, and a missing one fails the job.
+      - if: ${{ steps.engine.outputs.found == 'true' }}
+        run: |
+          now=$(date +%s)
+          grant() { # <database> <service> <client path>
+            sudo sqlite3 "$1" "INSERT OR REPLACE INTO access (service, client, client_type,
+              auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified)
+              VALUES ('$2', '$3', 1, 2, 4, 1, 'UNUSED', 0, $now)"
+            [ "$(sudo sqlite3 "$1" "SELECT auth_value FROM access WHERE service = '$2' AND client = '$3'")" = 2 ] ||
+              { echo "::error::$2 wasn't granted to $3"; exit 1; }
+          }
+          system="/Library/Application Support/com.apple.TCC/TCC.db"
+          user="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+          pid=$$
+          while [ "$pid" -gt 1 ]; do
+            path=$(ps -o comm= -p "$pid")
+            case $path in
+            /*)
+              grant "$system" kTCCServiceScreenCapture "$path"
+              grant "$user" kTCCServiceCamera "$path"
+              grant "$user" kTCCServiceMicrophone "$path"
+              echo "granted to $path"
+              ;;
+            esac
+            pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
+          done
+          # tccd reads them again as it starts.
+          sudo killall tccd || true
+
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       - name: Runs
         if: ${{ steps.engine.outputs.found == 'true' }}
