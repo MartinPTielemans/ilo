@@ -97,6 +97,12 @@ impl Shell {
             return;
         };
         let plate = self.link_plate(&target, true, cx);
+        // check.sh reads this line.
+        log!(
+            "browser: link target whole {} {:.0}",
+            plate.text(),
+            plate.width
+        );
         if let Some(link) = &mut self.link {
             link.plate = plate;
             link.whole = true;

@@ -14,6 +14,7 @@
 //! the other browser's files, and it adds through the core's calls a user's actions make, so a
 //! second run adds nothing the first did (plan.rs).
 
+pub mod app_icons;
 pub mod arc;
 mod arrival;
 pub mod chromium;
@@ -50,7 +51,8 @@ use crate::theme::Theme;
 use crate::tokens::radius;
 use crate::tokens::settings::{
     BOX_GAP, BUTTONS_TOP, CHECK_TICK, CHIP_GAP, CHIP_HEIGHT, CHIP_PADDING, CHIP_RADIUS,
-    CONTROL_GAP, DETAIL_LINE, DETAIL_TOP, DISCLOSURE_GAP, DISCLOSURE_GLYPH, DOT, ROW_X, STEP,
+    CONTROL_GAP, DETAIL_LINE, DETAIL_TOP, DISCLOSURE_GAP, DISCLOSURE_GLYPH, DOT, GLYPH_PLATE,
+    GLYPH_PLATE_GAP, ROW_X, STEP,
 };
 use crate::tokens::text;
 use found::{Address, Found, FromProfile, Page, Tab};
@@ -62,6 +64,11 @@ use sources::{Family, Os, Roots, Source};
 pub trait Host {
     /// Where the other browsers' folders are: the user's, or a made-up home a check run gives.
     fn roots(&self) -> Roots;
+    /// The browser's app icon as the system draws it, if its app is installed, for its row's
+    /// plate; ilo ships none of theirs (#1673).
+    fn app_icon(&self, _source: &Source) -> Option<std::sync::Arc<gpui::RenderImage>> {
+        None
+    }
     fn existing(&self, cx: &App) -> Existing;
     /// Makes a profile, which loads afterwards, and returns it.
     fn create_profile(&self, name: &str) -> u64;
@@ -550,6 +557,8 @@ pub struct ImportView {
     skip: bool,
     look: Look,
     sources: Vec<Source>,
+    /// Each browser's app icon, as the system gave it when the view was made, or none.
+    icons: Vec<Option<std::sync::Arc<gpui::RenderImage>>>,
     step: Step,
     /// Which switch last changed, and when, for its knob's slide.
     switched: Option<(Kind, Instant)>,
@@ -622,11 +631,19 @@ impl ImportView {
         let names: Vec<String> = sources.iter().map(Source::name).collect();
         // check.sh waits for this line.
         log!("browser: import found {}", names.join(", "));
+        let icons: Vec<_> = sources.iter().map(|source| host.app_icon(source)).collect();
+        let iconed: Vec<&str> = (names.iter().zip(&icons))
+            .filter(|(_, icon)| icon.is_some())
+            .map(|(name, _)| name.as_str())
+            .collect();
+        // check.sh reads this line.
+        log!("browser: import icons {}", iconed.join(", "));
         ImportView {
             host,
             skip,
             look: Look::settings(true),
             sources,
+            icons,
             step: Step::List,
             switched: None,
             passwords_file: None,
@@ -2444,12 +2461,40 @@ impl ImportView {
                 .child(at)
                 .on_click(cx.listener(move |view, _, _, cx| view.pick(index, cx)))
                 .into_any_element();
-            match line.is_empty() {
-                true => row(source.name(), choose),
-                false => detailed_row(look, source.name(), line, Some(choose)),
-            }
+            let line = (!line.is_empty()).then(|| line.into());
+            frame()
+                .child(self.app_plate(index))
+                .child(self.row_words(source, line))
+                .child(end([choose]))
         });
         group(look, rows)
+    }
+
+    /// The browser's app icon at a glyph plate's size and place, as the system draws it, or with
+    /// none, a quiet globe on the plate, so the names line up either way.
+    fn app_plate(&self, index: usize) -> gpui::AnyElement {
+        match self.icons.get(index).cloned().flatten() {
+            Some(icon) => gpui::img(icon)
+                .flex_none()
+                .size(px(GLYPH_PLATE))
+                .mr(px(GLYPH_PLATE_GAP))
+                .into_any_element(),
+            None => glyph_plate(&self.look, "icons/globe.svg", false).into_any_element(),
+        }
+    }
+
+    /// A browser's name over its line, logged where it's drawn, as check.sh and the tests read
+    /// that the names line up.
+    fn row_words(&self, source: &Source, line: Option<SharedString>) -> gpui::Div {
+        div()
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .child(words(&self.look, source.name(), line))
+            .child(drawn(
+                format!("import-name {}", source.name()),
+                self.drawn_at.clone(),
+            ))
     }
 
     /// A browser's row in the guided list, which a click picks: the one picked on a plate, with
@@ -2473,7 +2518,8 @@ impl ImportView {
         });
         let line = (!line.is_empty()).then(|| line.into());
         let row = frame()
-            .child(words(look, source.name(), line))
+            .child(self.app_plate(index))
+            .child(self.row_words(source, line))
             .children(enter.map(|enter| end([enter])));
         let hovered = look.hovered;
         div().child(

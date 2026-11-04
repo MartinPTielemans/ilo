@@ -327,6 +327,62 @@ impl Source {
         }
     }
 
+    /// The ids the system knows the browser's app by, for its icon: on the Mac its bundle id; on
+    /// Linux its desktop entry's, a Flatpak's app id and a Snap's `<name>_<name>` read from where
+    /// its profiles are, else the names its packages install. Windows' come with its host's call.
+    pub fn app_ids(&self, os: Os) -> Vec<String> {
+        let mac = |id: &str| vec![id.to_string()];
+        match os {
+            Os::Mac => match self.browser.name {
+                "Arc" => mac("company.thebrowser.Browser"),
+                "Chrome" => mac("com.google.Chrome"),
+                "Dia" => mac("company.thebrowser.dia"),
+                "Edge" => mac("com.microsoft.edgemac"),
+                "Brave" => mac("com.brave.Browser"),
+                "Vivaldi" => mac("com.vivaldi.Vivaldi"),
+                "Opera" => mac("com.operasoftware.Opera"),
+                "Chromium" => mac("org.chromium.Chromium"),
+                "Helium" => mac("net.imput.helium"),
+                "Firefox" => mac("org.mozilla.firefox"),
+                "Zen" => mac("app.zen-browser.zen"),
+                "LibreWolf" => mac("org.mozilla.librewolf"),
+                "Safari" => mac("com.apple.Safari"),
+                _ => Vec::new(),
+            },
+            Os::Linux => {
+                let parts: Vec<String> = (self.dir.components())
+                    .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                    .collect();
+                let after = |a: &str, b: &str| {
+                    (parts.windows(3)).find_map(|w| (w[0] == a && w[1] == b).then(|| w[2].clone()))
+                };
+                if let Some(id) = after(".var", "app") {
+                    return vec![id];
+                }
+                if let Some(name) =
+                    (parts.windows(2)).find_map(|w| (w[0] == "snap").then(|| w[1].clone()))
+                {
+                    return vec![format!("{name}_{name}")];
+                }
+                let names: &[&str] = match self.browser.name {
+                    "Chrome" => &["google-chrome"],
+                    "Edge" => &["microsoft-edge"],
+                    "Brave" => &["brave-browser"],
+                    "Vivaldi" => &["vivaldi-stable"],
+                    "Opera" => &["opera"],
+                    "Chromium" => &["chromium", "chromium-browser"],
+                    "Helium" => &["helium"],
+                    "Firefox" => &["firefox", "firefox-esr"],
+                    "Zen" => &["zen"],
+                    "LibreWolf" => &["librewolf"],
+                    _ => &[],
+                };
+                names.iter().map(|name| name.to_string()).collect()
+            }
+            Os::Windows => Vec::new(),
+        }
+    }
+
     /// Arc's sidebar, beside its user data folder, where its Spaces, pinned tabs and favorites are.
     pub fn arc_sidebar(&self) -> Option<PathBuf> {
         let path = self.dir.parent()?.join("StorableSidebar.json");
