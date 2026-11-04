@@ -4,14 +4,16 @@
 # (engine/patches/ours/chromium-freezing-measure-on-battery-saver.patch), and its page resource
 # monitor every 2 minutes for UKM nothing reads, which the engine leaves out
 # (chromium-no-page-resource-monitor.patch). The window sits on about:blank for 130 s, past each
-# one's first wake, and its trace must have no queries.cc timer at all. With Battery Saver on,
-# through the Local State pref Chrome keeps it in (3 is On), a 75 s trace must have the freezing
-# policy's, so the trace would have shown one. A profile of the run's own keeps the pref from the
-# runs after it.
+# one's first wake, and its trace must have no queries.cc timer but one: Chrome's process
+# metrics, every 2 minutes too, stay for now, as its urgent discarding on the Mac and Windows reads
+# them (#1773). The trace can't tell the two 2-minute timers apart, so a second fails. With Battery
+# Saver on, through the Local State pref Chrome keeps it in (3 is On), a 75 s trace must have the
+# freezing policy's, so the trace would have shown one. A profile of the run's own keeps the pref
+# from the runs after it.
 
 profile_dir="$PWD/$out/idle/profile"
-# The tasks of queries.cc's timers a trace has, those posted 60 s ahead, then all of them by their
-# delay, for the line.
+# The tasks of queries.cc's timers a trace has: those posted 60 s ahead, those but the process
+# metrics' one 2-minute timer, then all of them by their delay, for the line.
 minute_wakes() {
   python3 -I - "$1" << 'PY'
 import collections, json, sys
@@ -26,11 +28,13 @@ for event in events:
     if not str(args.get("src_file", "")).endswith("resource_attribution/queries.cc"):
         continue
     delays[(args.get("chrome_task_annotator") or {}).get("task_delay_us", 0) // 1000000] += 1
-print(delays[60], sum(delays.values()), " ".join(f"{n}x{s}s" for s, n in sorted(delays.items())) or "none")
+# The process metrics' timer, which stays (#1773), isn't counted among them.
+others = sum(delays.values()) - min(delays[120], 1)
+print(delays[60], others, " ".join(f"{n}x{s}s" for s, n in sorted(delays.items())) or "none")
 PY
 }
 # Runs the app idle for $2 seconds with the startup trace, and sets $wakes (the minute timer's),
-# $all and $timers from its trace. $1 names it.
+# $all (all but the process metrics') and $timers from its trace. $1 names it.
 idle_trace() {
   trace="$PWD/$out/idle/$1.json"
   log="$out/idle-$1.log"
@@ -75,6 +79,7 @@ on=$wakes on_timers=$timers
 [ "$on" -ge 1 ] ||
   fail "with Battery Saver on, the trace had no minute measurement ($on_timers), so it can't show one's absence"
 rm -rf "$profile_dir"
-echo "ok: idle for 130 s off Battery Saver the window was woken 0 times to measure its pages" \
+echo "ok: idle for 130 s off Battery Saver the window was woken 0 times to measure its pages, but" \
+  "for Chrome's process metrics" \
   "(queries.cc's timers: $off_timers); with Battery Saver on, $on times ($on_timers)." \
   "Traces: $out/idle/off.json, $out/idle/on.json"
