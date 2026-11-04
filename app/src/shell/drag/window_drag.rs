@@ -249,3 +249,48 @@ fn a_cancelled_drag_changes_nothing(cx: &mut TestAppContext) {
     );
     assert!(shell.read_with(cx, |shell, _| shell.window_drag.is_none()));
 }
+
+/// Into another profile's Space, where the core makes it a new tab whose page loads again, the
+/// drop asks first, with Move to's one-time warning, and once it's answered moves the tab as Move
+/// to does. Not asked, it moves at once; the same profile's Space never asks.
+#[gpui::test]
+fn a_drop_into_another_profiles_space_warns_as_move_to_does(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+    shell.update(cx, |shell, cx| {
+        let space = |id, name: &str, profile| {
+            (
+                id,
+                name.into(),
+                None,
+                profile,
+                "".into(),
+                "".into(),
+                "".into(),
+            )
+        };
+        shell.set_spaces(vec![space(1, "One", 7), space(2, "Two", 8)], cx);
+        shell.set_space(1, cx);
+        shell.set_tabs(1, Vec::new(), vec![3], Vec::new(), Folders::default(), cx);
+        shell.set_tabs(2, Vec::new(), vec![9], Vec::new(), Folders::default(), cx);
+    });
+    cx.run_until_parked();
+    host.tab_windows.borrow_mut().insert(9, 2);
+    host.warn_profiles.set(true);
+    let below = shell.read_with(cx, |shell, _| row_y(shell, 3)) + ROW_HEIGHT / 2. - 2.;
+    host.take_edits();
+    assert!(shell.update(cx, |shell, cx| shell.drop_tab_in(at(X, below), 9, cx)));
+    assert!(host.take_edits().is_empty(), "moved before it asked");
+    let (message, _, moved) = host.confirming.take().expect("it didn't ask");
+    assert!(message.starts_with("Move this tab to the"), "{message}");
+    cx.update(|_, cx| moved(cx));
+    assert_eq!(host.take_edits(), ["space 9 1"]);
+    // Answered once, as the core keeps it, it moves at once.
+    host.warn_profiles.set(false);
+    cx.run_until_parked();
+    shell.update(cx, |shell, _| shell.drag = None);
+    assert!(shell.update(cx, |shell, cx| shell.drop_tab_in(at(X, below), 9, cx)));
+    assert!(host.confirming.take().is_none(), "it asked again");
+    assert_eq!(host.take_edits(), ["space 9 1"]);
+}
