@@ -6,6 +6,26 @@
 # the same through a red theme and a blue one of the other look than the system's.
 
 serve
+# scratch (#1791): what the run starts from: the saved appearance and the Spaces it brings back.
+echo "saved appearance: $(cat "$profile_dir/Appearance" 2>/dev/null || echo none)"
+python3 -I - "$saved" << 'PY' || true
+import json, sys
+try:
+    spaces = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception as error:
+    sys.exit(print(f"saved spaces: none ({error})"))
+def urls(node):
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in ("url", "URL") and isinstance(value, str):
+                yield value
+            else:
+                yield from urls(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from urls(value)
+print("saved spaces:", " ".join(sorted(set(urls(spaces))))[:600])
+PY
 log="$out/appearance.log"
 step=0
 BROWSER_DRIVE=1 BROWSER_URL="${site}scheme.html" "$browser" < "$out/drive" > "$log" 2>&1 &
