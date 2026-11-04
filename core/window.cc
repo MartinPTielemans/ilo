@@ -678,9 +678,14 @@ void Window::AdjustNavigate(NavigateParams& params) {
   // press it came from tells them apart. A private window's opens beside its page, as its links
   // stay private, and the link menu's Open Link in Split View splits.
   Profile* clicked_in = params.browser->GetProfile();
-  if (source && params.disposition == WindowOpenDisposition::NEW_SPLIT_VIEW &&
-      source->last_press_held_command() && !params.started_from_context_menu &&
-      !clicked_in->IsOffTheRecord() && Host().window_open_little) {
+  const bool little_click = source &&
+                            params.disposition == WindowOpenDisposition::NEW_SPLIT_VIEW &&
+                            source->last_press_held_command() &&
+                            !params.started_from_context_menu && !clicked_in->IsOffTheRecord();
+  // With Little ilo off (bc_little_windows) it opens as ⌘-click does, in a tab behind.
+  if (little_click && !UserSettings().little_windows) {
+    params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
+  } else if (little_click && Host().window_open_little) {
     params.disposition = WindowOpenDisposition::IGNORE_ACTION;
     // Posted, as for Open Link in New Window above.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -1886,8 +1891,9 @@ bc_id Window::ReopenClosedTab() {
   }
   const ClosedTab& last = ClosedTabs().back();
   // A Little ilo window's comes back in a new one, which the app opens, as Arc's ⇧⌘T reopens it in
-  // Little Arc. Posted, so the app hears of it once its own call has returned.
-  if (last.little) {
+  // Little Arc. Posted, so the app hears of it once its own call has returned. With Little ilo off
+  // it comes back as a Today tab, as a regular window's does.
+  if (last.little && UserSettings().little_windows) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(
                        [](base::WeakPtr<Window> window, bc_id closed, bc_id profile) {

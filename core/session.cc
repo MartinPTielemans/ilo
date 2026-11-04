@@ -491,6 +491,7 @@ std::optional<std::string> ToJson(const Saved& saved) {
                            .Set("archive_after", saved.settings.archive_after.InSecondsF())
                            .Set("little_archive_after",
                                 saved.settings.little_archive_after.InSecondsF())
+                           .Set("little_windows", saved.settings.little_windows)
                            .Set("haptics", saved.settings.haptics)
                            .Set("warn_before_quitting", saved.settings.warn_before_quitting)
                            .Set("archive_noted", saved.settings.archive_noted)
@@ -739,6 +740,7 @@ std::optional<Saved> Read(const base::FilePath& path) {
     if (little_archive_after > 0) {
       saved.settings.little_archive_after = base::Seconds(little_archive_after);
     }
+    saved.settings.little_windows = settings->FindBool("little_windows").value_or(true);
     saved.settings.haptics = settings->FindBool("haptics").value_or(true);
     saved.settings.warn_before_quitting =
         settings->FindBool("warn_before_quitting").value_or(true);
