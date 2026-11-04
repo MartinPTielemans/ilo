@@ -2,9 +2,9 @@
 # declares and Chromium's code answered outside ilo's rules: every window's tabs with their URLs and
 # titles, and commands up to execute, which runs JavaScript in a page (#704). The app declares no
 # scripting and has no scripting.sdef, and a script asking it for its windows or a tab's URL gets an
-# error, while the quit Apple Event, which isn't scripting, still quits it. The run also writes what
-# the Mac lets osascript do, for ilo's own dictionary's check: System Integrity Protection's status
-# and the Automation grants TCC holds, in scripting-tcc.txt.
+# error, while the quit Apple Event, which isn't scripting, still quits it. In a check VM with System
+# Integrity Protection off it lets osascript control the app first, so a script is answered or
+# refused by the app, not held at macOS's Automation prompt; scripting-tcc.txt says what TCC held.
 
 if [ "$(uname)" != Darwin ]; then
   echo "skip: scripting: AppleScript is the Mac's alone."
@@ -21,6 +21,33 @@ else
         where service = 'kTCCServiceAppleEvents'" 2>&1 || true
     done
   } > "$out/scripting-tcc.txt"
+  # No one answers macOS's Automation prompt in a check VM, so where System Integrity Protection is
+  # off, as on the hosted Mac, the processes the VM lets control System Events may control the
+  # app too, as the user's yes would. Never on a Mac with it on, such as the owner's.
+  if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ] && csrutil status | grep -q disabled; then
+    cat > "$out/scripting-grant.py" << 'EOF'
+import sqlite3, sys
+db, target = sys.argv[1:]
+tcc = sqlite3.connect(db)
+names = [column[1] for column in tcc.execute("pragma table_info(access)")]
+rows = tcc.execute("select * from access where service = 'kTCCServiceAppleEvents'"
+                   " and indirect_object_identifier = 'com.apple.systemevents'").fetchall()
+for row in rows:
+    row = dict(zip(names, row))
+    row["indirect_object_identifier"] = target
+    row["indirect_object_code_identity"] = None
+    tcc.execute(f"insert or replace into access ({', '.join(names)})"
+                f" values ({', '.join('?' * len(names))})", [row[name] for name in names])
+tcc.commit()
+print(len(rows))
+EOF
+    granted=$(python3 -I "$out/scripting-grant.py" \
+      "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "$app_id") ||
+      fail "the VM's TCC database couldn't let osascript control the app"
+    echo "granted: $granted clients" >> "$out/scripting-tcc.txt"
+    # TCC's daemon reads the database again as it starts, on the next request.
+    killall tccd 2> /dev/null || true
+  fi
   BROWSER_URL="$site" "$browser" < /dev/null > "$log" 2>&1 &
   pid=$!
   await_load
