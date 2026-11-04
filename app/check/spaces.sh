@@ -1157,10 +1157,10 @@ send window 1
 # empty, moves its tab there as Move to does, and the Library stays open; dragged back from there,
 # it goes home (Arc's help centre, #688). Each card's tabs are under its name, 48 + 6 + 38 down, and
 # with no pinned tabs under the divider's 15, so its first row's middle is 127 down.
+# The Library opens on the section it showed last, its Spaces.
 send key l cmd shift
+expect '^browser: library section spaces$' "⇧⌘L didn't open the Library on its Spaces, as it was left"
 expect '^browser: library shown$' "⇧⌘L didn't open the Library over the cards"
-send click 56 $((${content#*x} / 2 + 45))
-expect '^browser: library section spaces$' "a click on Spaces didn't show the Library's Spaces"
 card_drag() {
   send press $1 127
   send dragto $(($1 + 10)) 127
