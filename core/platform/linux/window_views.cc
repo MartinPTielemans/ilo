@@ -570,7 +570,24 @@ class WindowViews : public views::WidgetObserver,
     // observers (DesktopWindowTreeHostLinux::UpdateFrameHints).
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&WindowViews::ShowThrough, weak_factory_.GetWeakPtr()));
-    // No compositor sizes a subsurface, so the app sizes its UI to the window's content.
+    TellSize();
+  }
+
+  // Maximized or full screen, the window has no band to resize by, and back from either has it
+  // again, which the window manager may say after the bounds have changed.
+  void OnWidgetShowStateChanged(views::Widget*) override {
+    ShowThrough();
+    // The app asks whether the window is full screen or maximized as it hears the window's size,
+    // and a window already its screen's size goes either way at that size (#1220). Posted, after
+    // the size Wayland's configure brings with the state, so the app lays the page out once.
+    if (OnWayland()) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(&WindowViews::TellSize, weak_factory_.GetWeakPtr()));
+    }
+  }
+
+  // Under Wayland, where no compositor sizes a subsurface, the app sizes its UI to the content.
+  void TellSize() {
     if (!Host().window_resized) {
       return;
     }
@@ -581,10 +598,6 @@ class WindowViews : public views::WidgetObserver,
       }
     }
   }
-
-  // Maximized or full screen, the window has no band to resize by, and back from either has it
-  // again, which the window manager may say after the bounds have changed.
-  void OnWidgetShowStateChanged(views::Widget*) override { ShowThrough(); }
 
   void OnWidgetDestroying(views::Widget*) override {
     ui_text_input_.SetKeyboard(false);

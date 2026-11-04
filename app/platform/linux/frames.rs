@@ -74,6 +74,16 @@ pub(crate) fn sized(ui_view: *mut c_void, size: [f64; 2]) {
     );
 }
 
+/// The size kept for the window of `ui_view` (`sized`).
+pub(crate) fn size_of(ui_view: *mut c_void) -> Option<[f64; 2]> {
+    SIZES.with_borrow(|sizes| {
+        sizes
+            .iter()
+            .find(|(each, _)| *each == ui_view)
+            .map(|(_, size)| *size)
+    })
+}
+
 /// Forgets the window of `ui_view`, closed (host_forget_window).
 pub(crate) fn forget_window(ui_view: *mut c_void) {
     SIZES.with_borrow_mut(|sizes| sizes.retain(|(each, _)| *each != ui_view));
