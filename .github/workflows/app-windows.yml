@@ -11,6 +11,8 @@ on:
     paths: [app/**, core/public/**, tools/parity.sh, tools/window-capture.ps1, .github/workflows/app-windows.yml, '!**/*.md']
   pull_request:
     paths: [app/**, core/public/**, tools/parity.sh, tools/window-capture.ps1, .github/workflows/app-windows.yml, '!**/*.md']
+  # A branch's head whose last push skipped this, as a push runs it only when its own diff matched (#1834).
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -23,8 +25,8 @@ concurrency:
 
 jobs:
   test:
-    # A pull request from a branch here already ran on its push.
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    # A pull request from a branch here already ran on its push, or on a dispatch on its head.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: windows-2022
     timeout-minutes: 90
     defaults:
