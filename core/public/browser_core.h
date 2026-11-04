@@ -616,6 +616,19 @@ typedef struct bc_sync_pairing {
 } bc_sync_pairing;
 
 // One of the account's devices, as Settings lists them.
+// A tab open on one of the account's other computers, as sync last brought it (#1234).
+typedef struct bc_other_tab {
+  // Its page's address, http or https, and its title, UTF-8.
+  const char* url;
+  const char* title;
+  // The computer it's open on, as Settings › Sync lists it, such as "ilo on Mac (MacBookPro18,3)",
+  // and its operating system, as bc_sync_device's: "macOS", "Windows" or "Linux".
+  const char* computer;
+  const char* os;
+  // When the computer last changed its tabs, in milliseconds since 1970.
+  double seen;
+} bc_other_tab;
+
 typedef struct bc_sync_device {
   // For bc_sync_remove_device.
   const char* id;
@@ -1030,6 +1043,13 @@ typedef struct bc_host {
   // takes its restart with it, so a later quit isn't one. Return true to start the browser again
   // yourself, as an update that installs first does, and the core doesn't.
   bool (*quit_going_ahead)(void* context, bool restarting);
+  // The tabs open on the account's other computers, most recently seen first, once sync has them
+  // after launch or a sign-in, each time another computer's change arrives, and none once the
+  // profile signs out of the account (#1234). |profile| is the one that syncs, the first. A
+  // computer's tabs go once Chromium drops its session, 28 days after the computer last changed
+  // its tabs. Never this computer's own, and never an agent's Space's, which stays on its device.
+  // The user's: agents get none. The strings last only for the call.
+  void (*other_tabs_changed)(void* context, bc_id profile, const bc_other_tab* tabs, size_t count);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
