@@ -1371,7 +1371,7 @@ void ReattachInputMethod() {
 // Hands |held| to the input method of the window with the keyboard, through TSF's keystroke
 // manager, which gives a key to the text service on this thread directly, as the input queue
 // would, so the IME composes it there; or posts it to |to| as typed, where it takes none.
-bool GiveHeldKey(const MSG& held, HWND to) {
+void GiveHeldKey(const MSG& held, HWND to) {
   static ITfKeystrokeMgr* keystrokes = [] {
     ITfKeystrokeMgr* manager = nullptr;
     if (ITfThreadMgr* threads = ThreadManager()) {
@@ -1397,7 +1397,6 @@ bool GiveHeldKey(const MSG& held, HWND to) {
   if (!eaten) {
     PostMessageW(to, held.message, held.wParam, held.lParam);
   }
-  return eaten != FALSE;
 }
 
 // Gives the keys held to the window that now has the keyboard, unless they wait for another bar.
@@ -1420,18 +1419,14 @@ void ReleaseKeys(HWND from) {
             to_bar ? "GPUIPanel" : "BrowserCoreNSWindow");
   }
   ReattachInputMethod();
-  // After the window that has the keyboard has its input method's focus, which TSF moves to it
-  // once the focus change it heard is handled. A posted task goes before the keys typed since.
-  Later([to, held = std::exchange(g_held_keys, {})] {
-    size_t taken = 0;
-    for (const MSG& key : held) {
-      taken += GiveHeldKey(key, to);
-    }
-    // check.sh reads this line.
-    if (!held.empty()) {
-      fprintf(stderr, "browser: the input method took %zu of the held key events\n", taken);
-    }
-  });
+  if (!g_held_keys.empty()) {
+    fprintf(stderr, "browser: held keys go through %s\n",
+            ThreadManager() ? "TSF's keystroke manager" : "the window's queue");
+  }
+  for (const MSG& held : g_held_keys) {
+    GiveHeldKey(held, to);
+  }
+  g_held_keys.clear();
 }
 
 void CALLBACK HoldTimedOut(HWND, UINT, UINT_PTR id, DWORD) {
