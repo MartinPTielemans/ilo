@@ -5,11 +5,7 @@
 
 use gpui::{App, Context, SharedString};
 
-use super::{
-    Shell,
-    commands::{ShellHandle, keystroke_label},
-    extensions::keystroke_text,
-};
+use super::{Shell, commands::keystroke_label, extensions::keystroke_text};
 use crate::agents::Status;
 
 /// What the bar shows.
@@ -51,10 +47,7 @@ pub(super) fn bind(cx: &mut App) {
         if crate::dialog::asking(cx) {
             return;
         }
-        let Some(shell) = cx
-            .try_global::<ShellHandle>()
-            .map(|handle| handle.0.clone())
-        else {
+        let Some(shell) = super::commands::key_shell(cx) else {
             return;
         };
         let keystroke = keystroke_text(&event.keystroke);

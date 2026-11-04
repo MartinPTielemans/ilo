@@ -466,12 +466,13 @@ none_since "^browser: loaded $c ${site}notes.txt" || fail "the unloaded tab load
 outline() {
   grep '^browser: outline' "$log" | tail -1 | sed 's/^browser: outline *//'
 }
-# Waits for the rows moving since the last outline to come to rest, so a press lands on the row
-# drawn there.
+# Waits for the rows moving since the outline last changed to come to rest, so a press lands on the
+# row drawn there. An outline the same as the one before moves no row, and so brings no "rows
+# settled" after it: the pages of a folder dropped from the desktop log theirs again as they load.
 settled() {
   for _ in $(seq 300); do
-    awk '/^browser: outline/ { s = 0 } /^browser: rows settled/ { s = 1 } END { exit !s }' \
-      "$log" && return 0
+    awk '/^browser: outline/ { if ($0 != last) s = 0; last = $0 } /^browser: rows settled/ { s = 1 }
+      END { exit !s }' "$log" && return 0
     sleep 0.1
   done
   fail "the rows didn't come to rest"

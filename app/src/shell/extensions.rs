@@ -14,7 +14,7 @@ use gpui::{
 use crate::site_controls;
 
 use super::{
-    MenuAction, MenuEntry, NAV, NAV_HOVERED, NAV_RADIUS, PLATE_INSET, PRESSED, Shell, ShellHandle,
+    MenuAction, MenuEntry, NAV, NAV_HOVERED, NAV_RADIUS, PLATE_INSET, PRESSED, Shell,
     URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD_TEXT_X, URL_FIELD_TOP, UserKeys,
     user_keys, written_as,
 };
@@ -108,10 +108,7 @@ pub(super) fn bind(cx: &mut App) {
         if crate::dialog::asking(cx) {
             return;
         }
-        let Some(shell) = cx
-            .try_global::<ShellHandle>()
-            .map(|handle| handle.0.clone())
-        else {
+        let Some(shell) = super::commands::key_shell(cx) else {
             return;
         };
         let keystroke = keystroke_text(&event.keystroke);
@@ -127,10 +124,7 @@ pub(super) fn bind(cx: &mut App) {
         if crate::dialog::asking(cx) {
             return;
         }
-        if let Some(shell) = cx
-            .try_global::<ShellHandle>()
-            .map(|handle| handle.0.clone())
-        {
+        if let Some(shell) = super::commands::key_shell(cx) {
             shell
                 .update(cx, |shell, cx| shell.run_extension(&run.0, cx))
                 .ok();
@@ -140,10 +134,7 @@ pub(super) fn bind(cx: &mut App) {
         if crate::dialog::asking(cx) {
             return;
         }
-        if let Some(shell) = cx
-            .try_global::<ShellHandle>()
-            .map(|handle| handle.0.clone())
-        {
+        if let Some(shell) = super::commands::key_shell(cx) {
             shell
                 .update(cx, |shell, cx| shell.toggle_pinned(&pin.0, cx))
                 .ok();

@@ -11,9 +11,7 @@ use gpui::{
 };
 
 use super::Command;
-use super::commands::{
-    BAR_COMMANDS, KEY_CONTEXT, Run, SHORTCUTS, ShellHandle, keystroke_keys, keystroke_label,
-};
+use super::commands::{BAR_COMMANDS, KEY_CONTEXT, Run, SHORTCUTS, keystroke_keys, keystroke_label};
 
 /// Keys that run something other than a command: AppKit's Hide, Hide Others and Minimize, which
 /// main.rs binds, the Edit menu's, which reach the focused page or field, and the View menu's
@@ -674,10 +672,7 @@ pub fn change_keys<R>(cx: &mut App, change: impl FnOnce(&mut UserKeys) -> R) -> 
         }
     }
     cx.set_global(after);
-    if let Some(shell) = cx
-        .try_global::<ShellHandle>()
-        .map(|handle| handle.0.clone())
-    {
+    if let Some(shell) = super::commands::key_shell(cx) {
         shell.update(cx, |shell, cx| shell.refresh_menus(cx)).ok();
     }
     result
@@ -791,7 +786,7 @@ mod tests {
         Context, FocusHandle, Modifiers, TestAppContext, VisualTestContext, Window, div, prelude::*,
     };
 
-    use super::*;
+    use super::{super::commands::ShellHandle, *};
 
     /// Whether the Shortcuts tab's search for `typed` finds each of `rows`, a name and the
     /// command's keystroke as a binding writes it, or none.
