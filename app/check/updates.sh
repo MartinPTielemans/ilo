@@ -3,24 +3,70 @@
 # Neither is ever the product's: the run never reads branding/update-feed or the owner's key.
 # The app menu has Check for Updates… under About. Sparkle checks every 8 hours, from the last check.
 # Check for Updates… finds the feed's update and shows it with its Markdown notes. A scheduled
-# check that finds one while a window is full screen holds it, and shows it with the keyboard once
-# the window leaves full screen.
+# check shows no alert of Sparkle's own, full screen or not (#678): one it won't download by itself,
+# as an informational update, is the sidebar's banner, Update available, whose click opens
+# Sparkle's window on it with the keyboard.
 # Settings › About's row checks without a window of Sparkle's own and says where the update
 # stands: with the feed gone the check fails, Try Again checks again once it's back, and Sparkle
 # downloads the update, here the check build one build on, in the background. Once it's ready,
-# Restart to Update shows at the sidebar's foot, in light and dark, and its click installs the
-# update and relaunches into it.
+# the banner at the sidebar's foot says so, collapsed, and opens under the pointer, in light and
+# dark, and its click says Restarting…, installs the update and relaunches into it.
 # Not here: the release notes the first launch of an update opens, which Sparkle keeps for https
 # notes only, so the links run opens notes of its own.
 # On Linux, ilo's Flatpak, built as a release's (tools/flatpak.sh), installed from a repository of
 # the run's own, where a newer build then comes, as a release puts one in ilo's. Flatpak's own
 # portal, on a session bus of the run's own and looking every 10 s rather than every half hour,
-# announces it, ilo installs it beside the build running and shows Restart to Update at the
-# sidebar's foot, which starts the new build once this one has quit. Flatpak asks the user once
+# announces it, ilo installs it beside the build running and shows the banner at the sidebar's foot,
+# collapsed and open under the pointer, in light and dark, whose click starts the new build once
+# this one has quit. Flatpak asks the user once
 # whether an app may update itself; the run says yes for them, in a home of its own, which has the
 # profile too.
 # It needs flatpak, flatpak-builder and ostree, and skips where ilo's Flatpak is installed from
 # another repository, which it would replace.
+
+# The update banner at the sidebar's foot, once it shows, in each look, which the window says as it
+# changes: collapsed, then open with the pointer on it, then collapsed again with the pointer back
+# on the rows. Captures $out/updates-banner-<look>.png and $out/updates-banner-open-<look>.png, and
+# leaves the pointer off it. Sets bx, by, bw and bh to where it's drawn collapsed.
+banner_looks() {
+  await '^browser: update banner 0 at ' || fail "the update banner didn't show at the sidebar's foot"
+  await '^browser: update banner collapsed$' || fail "the update banner didn't show collapsed"
+  read -r bx by bw bh <<EOF
+$(grep '^browser: update banner 0 at ' "$log" | tail -1 | cut -d' ' -f6-)
+EOF
+  local tone light opened open_height
+  open_height=$(sed -n 's/^update-banner-open = \([0-9]*\).*/\1/p' design/tokens.toml)
+  for tone in light dark; do
+    if [ $tone = light ]; then light=true; else light=false; fi
+    if ! grep '^browser: window light ' "$log" | tail -1 | grep -q " $light\$"; then
+      send menu "Appearance › $([ $tone = light ] && echo Light || echo Dark)"
+      expect "^browser: window light $light\$" "View › Appearance didn't make the window $tone"
+    fi
+    ../tools/window-screenshot.sh "$pid" "$out/updates-banner-$tone.png" ||
+      fail "no window to capture"
+    opened=$(grep -c '^browser: update banner open$' "$log" || true)
+    send move $((bx + bw / 2)) $((by + bh / 2))
+    for _ in $(seq 50); do
+      [ "$(grep -c '^browser: update banner open$' "$log" || true)" -gt "$opened" ] && break
+      sleep 0.1
+    done
+    [ "$(grep -c '^browser: update banner open$' "$log" || true)" -gt "$opened" ] ||
+      fail "the update banner didn't open under the pointer: $(grep '^browser: update banner' "$log" | tail -1)"
+    # Once it's drawn open all the way, at tokens.toml's height, in the dialog's 0.275 s.
+    for _ in $(seq 50); do
+      [ "$(grep '^browser: update banner 0 at ' "$log" | tail -1 | cut -d' ' -f9)" = "$open_height" ] &&
+        break
+      sleep 0.1
+    done
+    [ "$(grep '^browser: update banner 0 at ' "$log" | tail -1 | cut -d' ' -f9)" = "$open_height" ] ||
+      fail "the update banner didn't open to $open_height: $(grep '^browser: update banner 0 at ' "$log" | tail -1)"
+    ../tools/window-screenshot.sh "$pid" "$out/updates-banner-open-$tone.png" ||
+      fail "no window to capture"
+    send move $sidebar_point
+    expect '^browser: update banner collapsed$' "the update banner didn't close as the pointer left"
+  done
+  send menu "Appearance › Automatic"
+}
 
 updates_check() {
   if [ "$(uname)" = Linux ]; then
@@ -129,9 +175,10 @@ $out/updates-sample.txt, the window: $out/updates-stalled.png"
 
     # Last checked 7 hours 59 minutes 35 seconds ago, Sparkle checks 25 s after the launch, with
     # up to 15 s more of its timer's leeway, by when the window is full screen. The update is
-    # informational, which an automatic check shows rather than downloads.
+    # informational, which an automatic check never downloads: the banner says it's available,
+    # and Sparkle shows nothing of its own, in full screen or after.
     feed --informational
-    log="$out/updates-full-screen.log"
+    log="$out/updates-scheduled.log"
     launch -28775S
     [ "$delay" -le 25 ] || fail "checked 8 hours ago less 25 s, the next check is in $delay s"
     send fullscreen
@@ -140,35 +187,51 @@ $out/updates-sample.txt, the window: $out/updates-stalled.png"
       fail "Sparkle checked before the window went full screen, $delay s after the launch"
     # The check comes when Sparkle's timer fires, up to 40 s after the launch.
     for _ in $(seq 600); do
-      grep -q "^browser: update $next \(held in full screen\|shown\)\$" "$log" && break
+      grep -q "^browser: update $next \(in the banner\|shown\)\$" "$log" && break
       kill -0 "$pid" 2>/dev/null || fail "the app exited"
       sleep 0.1
     done
-    grep -q "^browser: update $next held in full screen\$" "$log" ||
-      fail "the check in full screen didn't hold its update: $(grep "^browser: update" "$log")"
-    grep -q '^browser: update .* alert has the keyboard$' "$log" &&
-      fail "the update held in full screen took the keyboard"
-    ../tools/window-screenshot.sh "$pid" "$out/updates-held.png" all || fail "no window to capture"
+    grep -q "^browser: update $next in the banner\$" "$log" ||
+      fail "the scheduled check didn't leave its update to the banner: $(grep "^browser: update" "$log")"
+    await '^browser: update stage available' || fail "the banner wasn't told the update is available"
+    ../tools/window-screenshot.sh "$pid" "$out/updates-scheduled-full-screen.png" all ||
+      fail "no window to capture"
     send fullscreen
     expect '^browser: window left full screen$' "the window didn't leave full screen"
-    expect '^browser: update shown after full screen$' \
-      "the held update wasn't shown after full screen"
+    await '^browser: update banner collapsed$' || fail "the update banner didn't show collapsed"
+    # A round trip after the window left full screen, by when Sparkle would have shown its alert.
+    send state
+    grep -q '^browser: update alert shows$\|^browser: update .* alert has the keyboard$' "$log" &&
+      fail "the scheduled check showed Sparkle's alert: $(grep '^browser: update' "$log" | tr '\n' ';')"
+    ../tools/window-screenshot.sh "$pid" "$out/updates-available.png" all || fail "no window to capture"
+    read -r bx by bw bh <<EOF
+$(grep '^browser: update banner 0 at ' "$log" | tail -1 | cut -d' ' -f6-)
+EOF
+    send move $((bx + bw / 2)) $((by + bh / 2))
+    expect '^browser: update banner open$' "the update banner didn't open under the pointer"
+    send click $((bx + bw / 2)) $((by + bh / 2))
+    expect '^browser: command show-update via sidebar$' "Update available didn't take the click"
+    expect '^browser: update show asked$' "Update available didn't ask for Sparkle's window"
+    # Sparkle resumes the update it held rather than showing it anew, so its window says only that
+    # it has the keyboard.
     expect "^browser: update $next alert has the keyboard\$" \
-      "the update shown after full screen didn't get the keyboard"
-    ../tools/window-screenshot.sh "$pid" "$out/updates-after-full-screen.png" all ||
+      "the banner's click didn't show Sparkle's window with the keyboard"
+    ../tools/window-screenshot.sh "$pid" "$out/updates-shown-from-banner.png" all ||
       fail "no window to capture"
     exec 3>&-
     quit
     about_updates
     echo "ok: the check build's app menu has Check for Updates… under About, and Sparkle checks 8" \
       "hours after the last check, in $interval s here. Check for Updates… found the run's" \
-      "signed update and showed it with its Markdown notes. A check in full screen held its" \
-      "update, which came with the keyboard once the window left full screen. About's check" \
-      "failed with no feed, Try Again downloaded build $next, Restart to Update showed at the" \
-      "sidebar's foot, and its click relaunched into build $next." \
+      "signed update and showed it with its Markdown notes. A scheduled check in full screen" \
+      "showed no alert, then or after, and left its update to the banner, Update available," \
+      "whose click showed Sparkle's window with the keyboard. About's check failed with no feed," \
+      "Try Again downloaded build $next, the banner showed collapsed and opened under the" \
+      "pointer, and its click said Restarting… and relaunched into build $next." \
       "Interval: $out/updates-interval.txt." \
-      "Windows: $out/updates-menu.png, $out/updates-found.png, $out/updates-held.png," \
-      "$out/updates-after-full-screen.png, $out/updates-about-*.png, $out/updates-sign-*.png," \
+      "Windows: $out/updates-menu.png, $out/updates-found.png," \
+      "$out/updates-scheduled-full-screen.png, $out/updates-available.png," \
+      "$out/updates-shown-from-banner.png, $out/updates-about-*.png, $out/updates-banner-*.png," \
       "$out/updates-relaunched.png"
   fi
   defaults delete "$app_id" > /dev/null 2>&1 || true
@@ -240,24 +303,13 @@ about_updates() {
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
   # Drawn as the update became ready, behind Settings.
-  await '^browser: update sign 0 at ' || fail "Restart to Update didn't show at the sidebar's foot"
-  # In each look, which the window says as it changes.
-  local sx sy sw sh tone light
-  for tone in light dark; do
-    if [ $tone = light ]; then light=true; else light=false; fi
-    if ! grep '^browser: window light ' "$log" | tail -1 | grep -q " $light\$"; then
-      send menu "Appearance › $([ $tone = light ] && echo Light || echo Dark)"
-      expect "^browser: window light $light\$" "View › Appearance didn't make the window $tone"
-    fi
-    ../tools/window-screenshot.sh "$pid" "$out/updates-sign-$tone.png" || fail "no window to capture"
-  done
-  send menu "Appearance › Automatic"
-  read -r sx sy sw sh <<EOF
-$(grep '^browser: update sign 0 at ' "$log" | tail -1 | cut -d' ' -f6-)
-EOF
+  banner_looks
+  send move $((bx + bw / 2)) $((by + bh / 2))
+  expect '^browser: update banner open$' "the update banner didn't open under the pointer"
   # Posted: the app quits before the driver could say it's done.
-  post click $((sx + sw / 2)) $((sy + sh / 2))
+  post click $((bx + bw / 2)) $((by + bh / 2))
   expect '^browser: command restart-to-update via sidebar$' "Restart to Update didn't take the click"
+  expect '^browser: update banner restarting$' "the update banner didn't say Restarting…"
   expect '^browser: update installs now$' "Restart to Update didn't install the update"
   exec 3>&-
   # Sparkle quits the app, installs the update over it and opens it again, as a new process.
@@ -368,15 +420,15 @@ flatpak_updates_check() {
     fail "Flatpak didn't install build $next beside $installed"
   # Before any command of the driver's, which expect looks after.
   await '^browser: update stage ready$' || fail "the build installed didn't make the update ready"
-  await '^browser: update sign 0 at ' || fail "Restart to Update didn't show at the sidebar's foot"
-  local sx sy sw sh
-  read -r sx sy sw sh <<EOF
-$(grep '^browser: update sign 0 at ' "$log" | tail -1 | cut -d' ' -f6-)
-EOF
   ../tools/window-screenshot.sh "$pid" "$out/updates-ready.png" || fail "no window to capture"
+  local bx by bw bh
+  banner_looks
+  send move $((bx + bw / 2)) $((by + bh / 2))
+  expect '^browser: update banner open$' "the update banner didn't open under the pointer"
   # Posted: the app quits before the driver could say it's done.
-  post click $((sx + sw / 2)) $((sy + sh / 2))
+  post click $((bx + bw / 2)) $((by + bh / 2))
   expect '^browser: command restart-to-update via sidebar$' "Restart to Update didn't take the click"
+  expect '^browser: update banner restarting$' "the update banner didn't say Restarting…"
   for _ in $(seq 300); do
     kill -0 "$pid" 2> /dev/null || break
     sleep 0.1
@@ -414,8 +466,9 @@ EOF
   scratch=
   procs=$saved_procs
   echo "ok: ilo's Flatpak, installed at $(echo "$installed" | cut -c1-12), installed the newer" \
-    "build $(echo "$next" | cut -c1-12) Flatpak's portal announced, showed Restart to Update at" \
-    "the sidebar's foot, and its click started it once the build running had quit." \
-    "Windows: $out/updates-ready.png, $out/updates-restarted.png"
+    "build $(echo "$next" | cut -c1-12) Flatpak's portal announced, showed the banner at the" \
+    "sidebar's foot, collapsed and open under the pointer, in light and dark, and its click said" \
+    "Restarting… and started it once the build running had quit." \
+    "Windows: $out/updates-ready.png, $out/updates-banner-*.png, $out/updates-restarted.png"
 }
 updates_check

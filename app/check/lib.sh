@@ -345,6 +345,19 @@ none_while() {
 # Kills the app's pages' renderers, as macOS kills one under memory pressure. Not an extension's,
 # which is a renderer too and whose death shows Chromium's balloon saying the extension crashed.
 kill_pages() {
+  # On Windows, Git Bash's ps lists its own processes alone: the build's renderers, from Windows',
+  # ended as TerminateProcess ends one.
+  if windows; then
+    renderers=$(powershell.exe -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process \
+      -Filter \"Name = 'chrome.exe'\" | Where-Object { \$_.CommandLine -match '--type=renderer' -and \
+      \$_.CommandLine -notmatch '--extension-process' -and \$_.ExecutablePath -like '*\\build\\Browser\\*' } |
+      ForEach-Object { \$_.ProcessId }" | tr -d '\r')
+    [ -n "$renderers" ] || return 1
+    for renderer in $renderers; do
+      taskkill //F //PID "$renderer" > /dev/null 2>&1
+    done
+    return 0
+  fi
   renderers=$(ps -Ao pid=,args= | grep -e "$procs.*--type=rendere[r]" |
     grep -v -e '--extension-process' | awk '{ print $1 }')
   [ -n "$renderers" ] && kill -KILL $renderers
