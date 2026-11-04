@@ -76,8 +76,9 @@ pub(crate) extern "C" fn launch_picture_on_resigning() {
 }
 
 // The left |width| points of the frame |window| last drew, its sidebar, top-down BGRA, with how many
-// pixels across. Windows' picture of the window has it repaint its frame, where the theme paints
-// the caption under the UI, on screen too (#1262), so the picture comes from GPUI's own frame.
+// pixels across: only the sidebar, as the page could be anything and shouldn't be kept on disk.
+// From GPUI's own frame, as Windows' picture of the window has it repaint its frame, where the
+// theme paints the caption under the UI, on screen too (#1262).
 #[cfg(target_os = "windows")]
 fn sidebar_pixels(window: AnyWindowHandle, width: f64, cx: &mut App) -> Option<(Vec<u8>, usize)> {
     let (image, scale) = cx
