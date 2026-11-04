@@ -748,12 +748,12 @@ bc_id Space::NearestOpenedBy(bc_id opener, size_t index) const {
   return 0;
 }
 
-std::vector<Space::SplitView>::iterator Space::SplitOf(bc_id tab) {
+std::vector<SplitView>::iterator Space::SplitOf(bc_id tab) {
   return std::ranges::find_if(
       splits_, [tab](const SplitView& split) { return std::ranges::contains(split.tabs, tab); });
 }
 
-std::vector<Space::SplitView>::const_iterator Space::SplitOf(bc_id tab) const {
+std::vector<SplitView>::const_iterator Space::SplitOf(bc_id tab) const {
   return std::ranges::find_if(
       splits_, [tab](const SplitView& split) { return std::ranges::contains(split.tabs, tab); });
 }

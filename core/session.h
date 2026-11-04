@@ -45,6 +45,9 @@ struct SavedTab {
   // Whether its page took its split view's card, the other pages keeping 220 pt, which the shares
   // aren't kept for.
   bool expanded = false;
+  // Whether it's the tab of its favorite split view focused last. A favorite's split view is with
+  // the favorite of its profile, or its Space under Each Space, saved before it.
+  bool focused = false;
   // A pinned tab's folder, among its Space's saved folders, else -1.
   int folder = -1;
   // A pinned tab's node, or none if it was saved before pinned tabs had them.

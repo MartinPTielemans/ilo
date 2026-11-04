@@ -163,6 +163,34 @@ std::vector<double> ExpandedShares(size_t count, size_t focused, int length) {
   return shares;
 }
 
+// What shows with |tab|, in its order: its split's tabs, a Space's or a favorite's, else |tab|.
+std::vector<bc_id> PanesWith(bc_id tab) {
+  if (const Space* space = Space::Holding(tab)) {
+    return space->Panes(tab);
+  }
+  if (std::vector<bc_id> panes = Favorites::Panes(tab); !panes.empty()) {
+    return panes;
+  }
+  return {tab};
+}
+
+// How |tab|'s split shows its pages: stacked, each page's share, and the page that took its card.
+struct SplitLook {
+  bool stacked = false;
+  std::vector<double> shares;
+  bc_id expanded = 0;
+};
+
+SplitLook LookOf(bc_id tab) {
+  if (const Space* space = Space::Holding(tab)) {
+    return {space->Stacked(tab), space->Shares(tab), space->Expanded(tab)};
+  }
+  if (const SplitView* split = Favorites::SplitOf(tab)) {
+    return {split->stacked, split->shares, split->expanded};
+  }
+  return {};
+}
+
 // The Spaces going once their last tab closes.
 std::set<bc_id>& DeletingSpaces() {
   static base::NoDestructor<std::set<bc_id>> deleting;
@@ -438,9 +466,7 @@ Window* Window::Picturing(bc_id tab) {
       continue;
     }
     // A split view's pages move together, so the picture of one stands for them all.
-    Space* space = Space::Holding(window->selected_);
-    if (space ? std::ranges::contains(space->Panes(window->selected_), tab)
-              : window->selected_ == tab) {
+    if (std::ranges::contains(PanesWith(window->selected_), tab)) {
       return window;
     }
   }
@@ -513,14 +539,14 @@ void Window::PanesChanged() {
       continue;
     }
     const bc_id selected = window->selected_;
-    // A favorite is in no split.
-    Space* space = Space::Holding(selected);
-    if (selected && (space ? space->Panes(selected) : std::vector<bc_id>{selected}) !=
-                        window->panes_) {
+    if (!selected) {
+      continue;
+    }
+    const SplitLook look = LookOf(selected);
+    if (PanesWith(selected) != window->panes_) {
       window->Select(selected);
-    } else if (space && (space->Stacked(selected) != window->stacked_ ||
-                         space->Expanded(selected) != window->expanded_ ||
-                         (!window->expanded_ && space->Shares(selected) != window->shares_))) {
+    } else if (look.stacked != window->stacked_ || look.expanded != window->expanded_ ||
+               (!window->expanded_ && look.shares != window->shares_)) {
       window->LayOutPage();
     }
   }
@@ -530,8 +556,7 @@ void Window::PanesChanged() {
 bool Window::SplitTogether(content::WebContents* contents, content::WebContents* other) {
   const Tab* tab = Tab::FromWebContents(contents);
   const Tab* with = Tab::FromWebContents(other);
-  const Space* space = tab && with ? Space::Holding(tab->id()) : nullptr;
-  return space && tab != with && std::ranges::contains(space->Panes(tab->id()), with->id());
+  return tab && with && tab != with && std::ranges::contains(PanesWith(tab->id()), with->id());
 }
 
 // static
@@ -763,6 +788,15 @@ void Window::OnTabClosing(bc_id tab) {
     KeepSession();
   }
   const bc_id next = space ? space->NextAfterLeaving(tab, &Tab::Loaded) : 0;
+  // A favorite split's page closing leaves the rest of it to show, the one on its right first.
+  bc_id beside = 0;
+  if (!space) {
+    const std::vector<bc_id> panes = Favorites::Panes(tab);
+    const auto at = std::ranges::find(panes, tab);
+    auto right = std::find_if(at == panes.end() ? at : at + 1, panes.end(), &Tab::Loaded);
+    auto left = std::find_if(std::make_reverse_iterator(at), panes.rend(), &Tab::Loaded);
+    beside = right != panes.end() ? *right : left != panes.rend() ? *left : 0;
+  }
   if (space) {
     space->Remove(tab);
   } else {
@@ -772,8 +806,10 @@ void Window::OnTabClosing(bc_id tab) {
   for (Window* window : All()) {
     if (window->selected_ == tab) {
       window->selected_ = 0;
-      Space* shown = space ? nullptr : Space::FromId(window->space_);
-      window->next_after_closing_ = shown ? shown->NextAfterLeaving(tab, &Tab::Loaded) : next;
+      Space* shown = space || beside ? nullptr : Space::FromId(window->space_);
+      window->next_after_closing_ = beside ? beside
+                                    : shown ? shown->NextAfterLeaving(tab, &Tab::Loaded)
+                                            : next;
 #if BUILDFLAG(IS_LINUX)
       // Until the next page shows, keys in nothing reach no shortcut, as ⌘T straight after ⌘W
       // would, where the Mac's menu bar takes them: the UI holds them for it, as with no page
@@ -807,7 +843,7 @@ void Window::Unload(bc_id tab, bool split) {
   if ((space ? !space->IsPinned(tab) : !Favorites::Has(tab)) || !Tab::Get(tab)) {
     return;
   }
-  const std::vector<bc_id> going = space && split ? space->Panes(tab) : std::vector<bc_id>{tab};
+  const std::vector<bc_id> going = split ? PanesWith(tab) : std::vector<bc_id>{tab};
   const auto staying = [&going](bc_id other) {
     return !std::ranges::contains(going, other) && Tab::Loaded(other);
   };
@@ -815,6 +851,8 @@ void Window::Unload(bc_id tab, bool split) {
   // Out of its split, so showing the rest of it doesn't load it again.
   if (space && !split) {
     space->Separate(tab);
+  } else if (!split) {
+    Favorites::Separate(tab);
   }
   // Another tab first, so the pages unload out of sight.
   for (Window* window : All()) {
@@ -867,25 +905,90 @@ void Window::MoveToFavorites(bc_id tab, size_t index) {
 }
 
 // static
+void Window::MoveSplitToFavorites(bc_id tab, size_t index) {
+  if (Favorites::Has(tab)) {
+    Favorites::Move(tab, index);
+    return;
+  }
+  Space* space = Space::Holding(tab);
+  const std::vector<bc_id> panes = space ? space->Panes(tab) : std::vector<bc_id>();
+  if (panes.size() < 2) {
+    MoveToFavorites(tab, index);
+    return;
+  }
+  // As MoveToFavorites: never a private window's, nor an agent's under Each Space.
+  if (space->own() || (space->agent() && Favorites::scope() == BC_FAVORITES_SPACE) ||
+      std::ranges::any_of(panes, [](bc_id pane) { return !Tab::Get(pane); })) {
+    return;
+  }
+  SplitView split{.tabs = panes,
+                  .stacked = space->Stacked(tab),
+                  .shares = space->Shares(tab),
+                  .expanded = space->Expanded(tab),
+                  .focused = tab};
+  // Focused where a window shows it focused.
+  for (Window* window : All()) {
+    if (std::ranges::contains(panes, window->selected_)) {
+      split.focused = window->selected_;
+      break;
+    }
+  }
+  std::vector<GURL> urls;
+  for (bc_id pane : panes) {
+    urls.push_back(space->IsPinned(pane) ? space->PinnedUrl(pane) : Tab::Get(pane)->Url());
+  }
+  // In the favorites before they leave their Space, as MoveToFavorites.
+  Favorites::AddSplit(std::move(split), urls, index, space->id());
+  for (bc_id pane : panes) {
+    space->Remove(pane);
+  }
+  PanesChanged();
+  for (bc_id pane : panes) {
+    Tab::Get(pane)->StateChanged();
+  }
+}
+
+// static
 void Window::Unfavorite(bc_id tab, bool pinned, bc_id folder, size_t index) {
-  Tab* moving = Tab::Get(tab);
   Window* window = Holding(tab);
   Space* shown = window ? Space::FromId(window->space_) : nullptr;
   // A favorite is the user's, so it doesn't move into an agent's Space.
   if (!shown || shown->agent() || shown->own() || !Favorites::ShownIn(tab, *shown)) {
     return;
   }
+  // A split goes whole, a split there too, as it looked.
+  const std::vector<bc_id> panes = Favorites::Panes(tab);
+  const SplitView* split = Favorites::SplitOf(tab);
+  const SplitView look = split ? *split : SplitView();
   // In the Space before it leaves the favorites, as above.
-  if (pinned) {
-    shown->AddPinned(tab, folder, index, Favorites::Url(tab));
-  } else {
-    shown->AddAt(tab, index);
+  for (size_t i = 0; i < panes.size(); ++i) {
+    const bc_id pane = panes[i];
+    if (pinned) {
+      shown->AddPinned(pane, folder, index, Favorites::Url(pane));
+    } else {
+      shown->AddAt(pane, index);
+    }
+    if (i > 0) {
+      shown->Split(pane, panes[i - 1], Favorites::Url(pane), /*left=*/false);
+    }
   }
-  // Under Every Space, the site's tabs in the other profiles close.
-  Favorites::Unfavorite(tab);
-  // So it isn't archived at once.
-  moving->set_last_seen(base::Time::Now());
-  moving->StateChanged();
+  if (panes.size() > 1) {
+    shown->SetStacked(tab, look.stacked);
+    shown->SetShares(tab, look.shares);
+    if (look.expanded) {
+      shown->SetExpanded(look.expanded, true);
+    }
+  }
+  for (bc_id pane : panes) {
+    // Under Every Space, the site's tabs in the other profiles close.
+    Favorites::Unfavorite(pane);
+    if (Tab* moving = Tab::Get(pane)) {
+      // So it isn't archived at once.
+      moving->set_last_seen(base::Time::Now());
+      moving->StateChanged();
+    }
+  }
+  PanesChanged();
 }
 
 // static
@@ -1326,8 +1429,7 @@ void Window::Show(content::WebContents* contents, const gfx::Rect& frame) {
   // A full-screen page's tab leaving takes the window out with it, within ActivateTabAt.
   tabs->ActivateTabAt(tabs->GetIndexOfWebContents(contents));
   const bc_id tab = Tab::IdOf(contents);
-  Space* space = Space::Holding(tab);
-  std::vector<bc_id> panes = space ? space->Panes(tab) : std::vector<bc_id>{tab};
+  std::vector<bc_id> panes = PanesWith(tab);
   for (bc_id pane : panes_) {
     if (!std::ranges::contains(panes, pane)) {
       Seen(pane);
@@ -1379,9 +1481,9 @@ void Window::LayOutPage() {
   if (shown_ && shown_->IsFullscreen()) {
     shown = {shown_.get()};
   }
-  Space* space = panes_.empty() ? nullptr : Space::Holding(panes_.front());
-  stacked_ = space && space->Stacked(panes_.front());
-  shares_ = space ? space->Shares(panes_.front()) : std::vector<double>();
+  const SplitLook look = panes_.empty() ? SplitLook() : LookOf(panes_.front());
+  stacked_ = look.stacked;
+  shares_ = look.shares;
   std::vector<platform::Pane> panes;
   size_t focused = 0;
   std::optional<gfx::Rect> focused_frame;
@@ -1391,7 +1493,7 @@ void Window::LayOutPage() {
   const int start = stacked_ ? page_frame_.y() : page_frame_.x();
   const int span = (stacked_ ? page_frame_.height() : page_frame_.width()) + kSplitGap;
   // An expanded split keeps the others at 220 pt whatever the frame, so its shares come from it.
-  expanded_ = space ? space->Expanded(panes_.front()) : 0;
+  expanded_ = look.expanded;
   if (const auto at = std::ranges::find(panes_, expanded_);
       expanded_ && at != panes_.end() && shown.size() == panes_.size()) {
     shares_ = ExpandedShares(shown.size(), at - panes_.begin(), span - kSplitGap);
@@ -1517,9 +1619,12 @@ bc_id Window::TabToShowIn(bc_id space) const {
   // Never a page another window shows, which would leave that window.
   const auto free = [this](bc_id tab) { return !ShownElsewhere(tab); };
   auto last = selected_in_space_.find(space);
-  if (last != selected_in_space_.end() && free(last->second) &&
-      (in->Has(last->second) || Favorites::ShownIn(last->second, *in))) {
-    return last->second;
+  // A favorite split it showed shows focused where it was focused last, here or in another Space.
+  const bc_id was = last == selected_in_space_.end() ? 0
+                    : Favorites::Has(last->second)   ? Favorites::Focused(last->second)
+                                                     : last->second;
+  if (was && free(was) && (in->Has(was) || Favorites::ShownIn(was, *in))) {
+    return was;
   }
   if (auto today = std::ranges::find_if(in->today(), free); today != in->today().end()) {
     return *today;
@@ -1610,7 +1715,7 @@ void Window::Select(bc_id tab) {
     return;
   }
   // A tab without its page, and each of its split's, gets it back here, as it's shown.
-  for (bc_id pane : holding ? holding->Panes(tab) : std::vector<bc_id>{tab}) {
+  for (bc_id pane : PanesWith(tab)) {
     if (Tab* waking = Tab::Get(pane); waking && !waking->web_contents()) {
       waking->Wake(*this);
     }
@@ -1637,6 +1742,8 @@ void Window::Select(bc_id tab) {
   }
   // Here before ShowSpace looks for a tab no other window shows.
   Adopt(tab);
+  // A favorite split shows focused on the tab focused last, in whichever Space it shows next.
+  Favorites::SetFocused(tab);
   if (other_space) {
     // As the tab its Space shows, so the one it showed before doesn't load on the way.
     SetSelectedIn(other_space, tab);
@@ -1650,8 +1757,7 @@ void Window::Select(bc_id tab) {
 }
 
 void Window::Adopt(bc_id tab) {
-  Space* space = Space::Holding(tab);
-  for (bc_id pane : space ? space->Panes(tab) : std::vector<bc_id>{tab}) {
+  for (bc_id pane : PanesWith(tab)) {
     content::WebContents* contents = Tab::FromId(pane);
     tabs::TabInterface* in =
         contents ? tabs::TabInterface::MaybeGetFromContents(contents) : nullptr;

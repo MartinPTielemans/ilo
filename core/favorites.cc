@@ -6,17 +6,20 @@
 #include <limits>
 #include <map>
 #include <string>
+#include <tuple>
 #include <utility>
 
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/no_destructor.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/host.h"
 #include "browser_core/profiles.h"
 #include "browser_core/session.h"
 #include "browser_core/space.h"
+#include "browser_core/split_view.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "components/sessions/core/serialized_navigation_entry.h"
@@ -38,6 +41,8 @@ struct Fav {
   bc_id space = 0;
   // Names its site, which the tabs of one site in each profile share.
   int site = 0;
+  // Names the split it's in, which its copies in the other lists share, else 0.
+  int group = 0;
   // Its tab is closing, so it's in no list.
   bool doomed = false;
 };
@@ -47,6 +52,9 @@ struct State {
   std::vector<bc_id> tabs;
   std::map<bc_id, Fav> favs;
   int next_site = 1;
+  // The favorites that are splits, each in one list, its tabs together in it, in its order.
+  std::vector<SplitView> splits;
+  int next_group = 1;
 };
 
 State& Get() {
@@ -91,19 +99,135 @@ std::vector<bc_id> ListOf(const State& state, const Fav& like, bc_id except = 0)
   return list;
 }
 
-size_t IndexIn(const State& state, bc_id tab) {
-  const std::vector<bc_id> list = ListOf(state, state.favs.at(tab));
-  return std::ranges::find(list, tab) - list.begin();
+// The favorites of |list|, a list's tabs in its order: each split's tabs together, and each tab in
+// none alone.
+std::vector<std::vector<bc_id>> UnitsOf(const State& state, const std::vector<bc_id>& list) {
+  std::vector<std::vector<bc_id>> units;
+  std::map<const SplitView*, size_t> at;
+  for (bc_id tab : list) {
+    const SplitView* split = SplitHolding(state.splits, tab);
+    if (!split) {
+      units.push_back({tab});
+      continue;
+    }
+    auto [it, fresh] = at.try_emplace(split, units.size());
+    if (fresh) {
+      units.emplace_back();
+    }
+    units[it->second].push_back(tab);
+  }
+  return units;
 }
 
 // Puts |tab|, which has its entry in |state.favs| and isn't in |state.tabs|, at |index| of its list,
-// else after the last of it.
+// counting a split as one, else after the last of it.
 void Insert(State& state, bc_id tab, size_t index) {
   const std::vector<bc_id> mine = ListOf(state, state.favs.at(tab), tab);
-  auto at = index < mine.size() ? std::ranges::find(state.tabs, mine[index])
-            : mine.empty()      ? state.tabs.end()
-                                : std::ranges::find(state.tabs, mine.back()) + 1;
+  const std::vector<std::vector<bc_id>> units = UnitsOf(state, mine);
+  auto at = index < units.size() ? std::ranges::find(state.tabs, units[index].front())
+            : mine.empty()        ? state.tabs.end()
+                                  : std::ranges::find(state.tabs, mine.back()) + 1;
   state.tabs.insert(at, tab);
+}
+
+// Puts |tab|, as Insert takes it, right after |after|.
+void InsertAfter(State& state, bc_id tab, bc_id after) {
+  state.tabs.insert(std::ranges::find(state.tabs, after) + 1, tab);
+}
+
+// What names |fav|'s list: its Space under Each Space, else its profile.
+std::string ListKey(const Fav& fav) {
+  return CurrentScope() == BC_FAVORITES_SPACE ? "space " + base::NumberToString(fav.space)
+                                              : "profile " + fav.profile;
+}
+
+// |tab|, and under Every Space its site's tabs in the other profiles, which are one favorite.
+std::vector<bc_id> Copies(const State& state, bc_id tab) {
+  std::vector<bc_id> copies = {tab};
+  const Fav& of = state.favs.at(tab);
+  if (CurrentScope() == BC_FAVORITES_EVERY) {
+    for (const auto& [other, fav] : state.favs) {
+      if (other != tab && !fav.doomed && fav.site == of.site) {
+        copies.push_back(other);
+      }
+    }
+  }
+  return copies;
+}
+
+// The tab of |tabs| standing for |was|: |was| if it's one of them, else the one of its site, as a
+// copy of it is, else 0.
+bc_id CopyOf(const State& state, const std::vector<bc_id>& tabs, bc_id was) {
+  if (!was || std::ranges::contains(tabs, was)) {
+    return was;
+  }
+  auto fav = state.favs.find(was);
+  if (fav == state.favs.end()) {
+    return 0;
+  }
+  auto it = std::ranges::find_if(tabs, [&](bc_id tab) {
+    auto each = state.favs.find(tab);
+    return each != state.favs.end() && each->second.site == fav->second.site;
+  });
+  return it == tabs.end() ? 0 : *it;
+}
+
+// Makes the splits the favorites' groups say, after their lists were copied, merged or filled in.
+// In each list a group's tabs are one split, together at the first's place. A split that was keeps
+// its look, and a copy takes the look of the one it's a copy of, focused on the copy of the tab
+// focused there. A tab whose group has no other tab in its list is in none.
+void Regroup(State& state) {
+  std::map<std::pair<std::string, int>, int64_t> keys;
+  std::map<bc_id, int64_t> key;
+  for (bc_id tab : state.tabs) {
+    const Fav& fav = state.favs.at(tab);
+    if (!fav.doomed && fav.group) {
+      auto [it, fresh] =
+          keys.try_emplace({ListKey(fav), fav.group}, static_cast<int64_t>(keys.size()) + 1);
+      key[tab] = it->second;
+    }
+  }
+  std::vector<SplitView> splits;
+  for (std::vector<bc_id>& tabs : SplitsIn(state.tabs, key)) {
+    // A split shows no more than a Space's does: the rest are favorites alone.
+    for (size_t i = Space::kMaxPanes; i < tabs.size(); ++i) {
+      key.erase(tabs[i]);
+    }
+    tabs.resize(std::min(tabs.size(), Space::kMaxPanes));
+    const int group = state.favs.at(tabs.front()).group;
+    const SplitView* same = nullptr;
+    const SplitView* like = nullptr;
+    for (const SplitView& old : state.splits) {
+      if (old.tabs == tabs) {
+        same = &old;
+        break;
+      }
+      if (!like && std::ranges::any_of(old.tabs, [&](bc_id tab) {
+            auto fav = state.favs.find(tab);
+            return fav != state.favs.end() && fav->second.group == group;
+          })) {
+        like = &old;
+      }
+    }
+    SplitView made{.tabs = tabs};
+    if (const SplitView* from = same ? same : like) {
+      made.stacked = from->stacked;
+      if (from->shares.size() == tabs.size()) {
+        made.shares = from->shares;
+      }
+      made.expanded = CopyOf(state, tabs, from->expanded);
+      made.focused = CopyOf(state, tabs, from->focused);
+    }
+    splits.push_back(std::move(made));
+  }
+  for (auto& [tab, fav] : state.favs) {
+    if (!SplitHolding(splits, tab)) {
+      fav.group = 0;
+      key.erase(tab);
+    }
+  }
+  state.tabs = Gathered(state.tabs, key);
+  state.splits = std::move(splits);
 }
 
 // The window active last without a Space of its own, which makes the tabs.
@@ -216,14 +340,17 @@ Template TemplateOf(const State& state, bc_id tab) {
 }
 
 // Opens a tab from |made| in the profile in the directory |profile|, unloaded until it's shown, and
-// makes it a favorite there, of |space| under Each Space, at |index| of its list. Returns it, or 0
-// if there's no window or the profile isn't loaded.
+// makes it a favorite there, of |space| under Each Space and in the split |group| names, right
+// after |after| if it isn't 0, else at |index| of its list. Returns it, or 0 if there's no window
+// or the profile isn't loaded.
 bc_id Make(State& state,
            const Template& made,
            const std::string& profile,
            bc_id space,
            int site,
-           size_t index) {
+           int group,
+           size_t index,
+           bc_id after = 0) {
   Window* window = AnyWindow();
   Profile* in = window ? ProfileFor(profile) : nullptr;
   if (!in || DirOf(in) != profile) {
@@ -240,8 +367,13 @@ bc_id Make(State& state,
   if (!tab) {
     return 0;
   }
-  state.favs[tab] = {.url = made.url, .profile = profile, .space = space, .site = site};
-  Insert(state, tab, index);
+  state.favs[tab] = {
+      .url = made.url, .profile = profile, .space = space, .site = site, .group = group};
+  if (after) {
+    InsertAfter(state, tab, after);
+  } else {
+    Insert(state, tab, index);
+  }
   return tab;
 }
 
@@ -260,13 +392,15 @@ void FillIn(State& state) {
   const std::vector<std::string> profiles = ShowingProfiles();
   const std::vector<int> sites = MergedSites(state, profiles);
   for (const std::string& profile : profiles) {
-    size_t index = 0;
+    // Each after the site before it, the first at the front.
+    bc_id after = 0;
     for (int site : sites) {
       if (const bc_id have = InstanceOf(state, profile, site)) {
-        index = IndexIn(state, have) + 1;
+        after = have;
       } else if (const bc_id from = AnyInstanceOf(state, site)) {
-        if (Make(state, TemplateOf(state, from), profile, 0, site, index)) {
-          ++index;
+        if (const bc_id made = Make(state, TemplateOf(state, from), profile, 0, site,
+                                    state.favs.at(from).group, 0, after)) {
+          after = made;
         }
       }
     }
@@ -307,7 +441,8 @@ void CopyToSpaces(State& state) {
         continue;
       }
       for (bc_id tab : list) {
-        Make(state, TemplateOf(state, tab), profile, holder->id(), state.favs.at(tab).site, kEnd);
+        const Fav& fav = state.favs.at(tab);
+        Make(state, TemplateOf(state, tab), profile, holder->id(), fav.site, fav.group, kEnd);
       }
     }
   }
@@ -318,10 +453,23 @@ int Rank(bc_id tab) {
   return Window::Showing(tab) ? 2 : Tab::Loaded(tab) ? 1 : 0;
 }
 
+// |list|'s favorites as the merges match them.
+std::vector<FavoriteUnit> MatchedUnits(const State& state, const std::vector<bc_id>& list) {
+  std::vector<FavoriteUnit> units;
+  for (const std::vector<bc_id>& tabs : UnitsOf(state, list)) {
+    FavoriteUnit& unit = units.emplace_back(FavoriteUnit{.tabs = tabs});
+    for (bc_id tab : tabs) {
+      unit.urls.push_back(state.favs.at(tab).url.spec());
+      unit.rank = std::max(unit.rank, Rank(tab));
+    }
+  }
+  return units;
+}
+
 // Out of Each Space: each profile's Spaces' lists are merged into the profile's. The list of the
 // Space the window shows comes first, then each other Space's extras in the Spaces' order, then
-// those no Space has. A favorite at the same URL as an earlier one is its duplicate, and the extra
-// tab closes.
+// those no Space has. A favorite at the same URL as an earlier one is its duplicate, and a split
+// at the same URLs in their order, and the extra tabs close.
 void MergeSpaces(State& state) {
   const std::vector<Space*> spaces = Space::All();
   const Space* shown = ShownSpace();
@@ -337,36 +485,28 @@ void MergeSpaces(State& state) {
         owners.push_back(space->id());
       }
     }
-    std::vector<bc_id> merged;
-    // Where each favorite is, by URL and by how many of that URL come before it in its list.
-    std::map<std::pair<std::string, int>, size_t> at;
     // Those no Space has come last, as owner 0.
     owners.push_back(0);
+    std::vector<std::vector<FavoriteUnit>> lists;
     for (bc_id owner : owners) {
-      std::map<std::string, int> counts;
+      std::vector<bc_id> list;
       for (bc_id tab : state.tabs) {
         const Fav& fav = state.favs.at(tab);
-        if (fav.doomed || fav.profile != profile) {
-          continue;
-        }
         const bc_id of = std::ranges::contains(owners, fav.space) ? fav.space : 0;
-        if (of != owner) {
-          continue;
-        }
-        const std::string url = fav.url.spec();
-        const std::pair<std::string, int> key(url, counts[url]++);
-        auto [it, fresh] = at.try_emplace(key, merged.size());
-        if (fresh) {
-          merged.push_back(tab);
-        } else if (const bc_id kept = merged[it->second]; Rank(tab) > Rank(kept)) {
-          merged[it->second] = tab;
-          losers.push_back(kept);
-        } else {
-          losers.push_back(tab);
+        if (!fav.doomed && fav.profile == profile && of == owner) {
+          list.push_back(tab);
         }
       }
+      lists.push_back(MatchedUnits(state, list));
     }
-    rebuilt.insert(rebuilt.end(), merged.begin(), merged.end());
+    for (const FavoriteUnit& unit : MergeUnits(lists, losers)) {
+      // Each split kept is a split of its own in the profile's list.
+      const int group = unit.tabs.size() > 1 ? state.next_group++ : 0;
+      for (bc_id tab : unit.tabs) {
+        state.favs.at(tab).group = group;
+      }
+      rebuilt.insert(rebuilt.end(), unit.tabs.begin(), unit.tabs.end());
+    }
   }
   for (bc_id tab : rebuilt) {
     state.favs.at(tab).space = 0;
@@ -382,14 +522,16 @@ void MergeSpaces(State& state) {
   }
   state.tabs = std::move(rebuilt);
   SetScopeValue(BC_FAVORITES_PROFILE);
+  Regroup(state);
   for (bc_id tab : losers) {
     Retire(tab);
   }
 }
 
-// Into Every Space: favorites at the same URL in different profiles become one site, each profile's
-// list takes the merged order, the shown profile's first and then each other's extras, and each
-// profile that shows favorites gets tabs for the sites it lacks.
+// Into Every Space: favorites at the same URL in different profiles become one site, and splits at
+// the same URLs in their order one split, each pane a site. Each profile's list takes the merged
+// order, the shown profile's first and then each other's extras, and each profile that shows
+// favorites gets tabs for the sites it lacks.
 void LinkProfiles(State& state) {
   std::vector<std::string> profiles = ShowingProfiles();
   for (const std::string& profile : ProfilesWithFavorites(state)) {
@@ -397,22 +539,38 @@ void LinkProfiles(State& state) {
       profiles.push_back(profile);
     }
   }
-  // By URL and by how many of that URL come before it in its list.
-  std::map<std::pair<std::string, int>, int> sites;
+  // By the URLs of the favorite or split, how many like it come before it in its list, and the
+  // tab's place in it.
+  std::map<std::tuple<std::vector<std::string>, int, size_t>, int> sites;
+  std::map<std::pair<std::vector<std::string>, int>, int> groups;
   for (const std::string& profile : profiles) {
-    std::map<std::string, int> counts;
+    std::vector<bc_id> list;
     for (bc_id tab : state.tabs) {
-      Fav& fav = state.favs.at(tab);
-      if (fav.doomed || fav.profile != profile) {
-        continue;
+      const Fav& fav = state.favs.at(tab);
+      if (!fav.doomed && fav.profile == profile) {
+        list.push_back(tab);
       }
-      const std::string url = fav.url.spec();
-      const std::pair<std::string, int> key(url, counts[url]++);
-      auto [it, fresh] = sites.try_emplace(key, state.next_site);
-      if (fresh) {
-        ++state.next_site;
+    }
+    std::map<std::vector<std::string>, int> counts;
+    for (const FavoriteUnit& unit : MatchedUnits(state, list)) {
+      const int count = counts[unit.urls]++;
+      int group = 0;
+      if (unit.tabs.size() > 1) {
+        auto [it, fresh] = groups.try_emplace({unit.urls, count}, state.next_group);
+        if (fresh) {
+          ++state.next_group;
+        }
+        group = it->second;
       }
-      fav.site = it->second;
+      for (size_t i = 0; i < unit.tabs.size(); ++i) {
+        auto [it, fresh] = sites.try_emplace({unit.urls, count, i}, state.next_site);
+        if (fresh) {
+          ++state.next_site;
+        }
+        Fav& fav = state.favs.at(unit.tabs[i]);
+        fav.site = it->second;
+        fav.group = group;
+      }
     }
   }
   SetScopeValue(BC_FAVORITES_EVERY);
@@ -470,6 +628,7 @@ void Favorites::SetScope(int scope) {
     } else {
       LinkProfiles(state);
     }
+    Regroup(state);
   }
   ReportChanged();
 }
@@ -571,7 +730,7 @@ void Favorites::Add(bc_id tab, GURL url, size_t index, bc_id space) {
     const Fav fav = state.favs.at(tab);
     for (const std::string& profile : ShowingProfiles()) {
       if (profile != fav.profile) {
-        Make(state, made, profile, 0, fav.site, index);
+        Make(state, made, profile, 0, fav.site, 0, index);
       }
     }
   }
@@ -621,17 +780,17 @@ void Favorites::Move(bc_id tab, size_t index) {
   if (it == state.favs.end() || it->second.doomed) {
     return;
   }
-  std::vector<bc_id> moving = {tab};
-  if (CurrentScope() == BC_FAVORITES_EVERY) {
-    for (const auto& [other, fav] : state.favs) {
-      if (other != tab && !fav.doomed && fav.site == it->second.site) {
-        moving.push_back(other);
-      }
+  // Each with its split, in each profile under Every Space.
+  for (bc_id each : Copies(state, tab)) {
+    const SplitView* split = SplitHolding(state.splits, each);
+    const std::vector<bc_id> unit = split ? split->tabs : std::vector<bc_id>{each};
+    for (bc_id pane : unit) {
+      std::erase(state.tabs, pane);
     }
-  }
-  for (bc_id each : moving) {
-    std::erase(state.tabs, each);
-    Insert(state, each, index);
+    Insert(state, unit.front(), index);
+    for (size_t i = 1; i < unit.size(); ++i) {
+      InsertAfter(state, unit[i], unit[i - 1]);
+    }
   }
   ReportChanged();
 }
@@ -639,10 +798,28 @@ void Favorites::Move(bc_id tab, size_t index) {
 // static
 void Favorites::Remove(bc_id tab) {
   State& state = Get();
-  if (state.favs.erase(tab)) {
-    std::erase(state.tabs, tab);
-    ReportChanged();
+  if (!state.favs.erase(tab)) {
+    return;
   }
+  std::erase(state.tabs, tab);
+  // Its split goes on without it, and goes once one is left.
+  if (SplitView* split = SplitHolding(state.splits, tab)) {
+    std::erase(split->tabs, tab);
+    split->shares.clear();
+    if (split->expanded == tab) {
+      split->expanded = 0;
+    }
+    if (split->focused == tab) {
+      split->focused = 0;
+    }
+    if (split->tabs.size() < 2) {
+      for (bc_id left : split->tabs) {
+        state.favs.at(left).group = 0;
+      }
+      std::erase_if(state.splits, [&](const SplitView& each) { return &each == split; });
+    }
+  }
+  ReportChanged();
 }
 
 // static
@@ -688,13 +865,15 @@ void Favorites::SpaceMoved(bc_id space) {
     if (state.favs.at(tab).profile == in->profile()) {
       continue;
     }
-    if (Make(state, TemplateOf(state, tab), in->profile(), space, state.favs.at(tab).site, kEnd)) {
+    const Fav& fav = state.favs.at(tab);
+    if (Make(state, TemplateOf(state, tab), in->profile(), space, fav.site, fav.group, kEnd)) {
       left.push_back(tab);
     }
   }
   for (bc_id tab : left) {
     state.favs.at(tab).doomed = true;
   }
+  Regroup(state);
   ReportChanged();
   for (bc_id tab : left) {
     Retire(tab);
@@ -723,8 +902,233 @@ void Favorites::SpaceDeleting(bc_id space) {
 void Favorites::Complete() {
   if (CurrentScope() == BC_FAVORITES_EVERY) {
     FillIn(Get());
+    Regroup(Get());
     ReportChanged();
   }
+}
+
+// static
+std::vector<bc_id> Favorites::Panes(bc_id tab) {
+  const State& state = Get();
+  if (!state.favs.contains(tab)) {
+    return {};
+  }
+  const SplitView* split = SplitHolding(state.splits, tab);
+  return split ? split->tabs : std::vector<bc_id>{tab};
+}
+
+// static
+const SplitView* Favorites::SplitOf(bc_id tab) {
+  return SplitHolding(Get().splits, tab);
+}
+
+// static
+bc_id Favorites::Focused(bc_id tab) {
+  const State& state = Get();
+  if (!state.favs.contains(tab)) {
+    return 0;
+  }
+  const SplitView* split = SplitHolding(state.splits, tab);
+  if (!split) {
+    return tab;
+  }
+  return std::ranges::contains(split->tabs, split->focused) ? split->focused : split->tabs.front();
+}
+
+// static
+void Favorites::SetFocused(bc_id tab) {
+  SplitView* split = SplitHolding(Get().splits, tab);
+  if (split && split->focused != tab) {
+    split->focused = tab;
+    SessionChanged();
+  }
+}
+
+// static
+void Favorites::Separate(bc_id tab) {
+  State& state = Get();
+  if (!state.favs.contains(tab) || !SplitHolding(state.splits, tab)) {
+    return;
+  }
+  for (bc_id each : Copies(state, tab)) {
+    SplitView* split = SplitHolding(state.splits, each);
+    if (!split) {
+      continue;
+    }
+    std::erase(split->tabs, each);
+    split->shares.clear();
+    split->expanded = 0;
+    if (split->focused == each) {
+      split->focused = 0;
+    }
+    const bc_id last = split->tabs.back();
+    state.favs.at(each).group = 0;
+    if (split->tabs.size() < 2) {
+      for (bc_id left : split->tabs) {
+        state.favs.at(left).group = 0;
+      }
+      std::erase_if(state.splits, [&](const SplitView& view) { return &view == split; });
+    }
+    // Just after the tabs left in it.
+    std::erase(state.tabs, each);
+    InsertAfter(state, each, last);
+  }
+  ReportChanged();
+}
+
+// static
+bool Favorites::MoveInSplit(bc_id tab, size_t index) {
+  State& state = Get();
+  const SplitView* in = SplitHolding(state.splits, tab);
+  if (!state.favs.contains(tab) || !in || index >= in->tabs.size()) {
+    return false;
+  }
+  for (bc_id each : Copies(state, tab)) {
+    SplitView* split = SplitHolding(state.splits, each);
+    if (!split || index >= split->tabs.size()) {
+      continue;
+    }
+    // A split's tabs sit together, in its order.
+    const auto first = std::ranges::find(state.tabs, split->tabs.front());
+    std::erase(split->tabs, each);
+    split->tabs.insert(split->tabs.begin() + index, each);
+    std::ranges::copy(split->tabs, first);
+  }
+  ReportChanged();
+  return true;
+}
+
+// static
+bool Favorites::SetStacked(bc_id tab, bool stacked) {
+  SplitView* split = SplitHolding(Get().splits, tab);
+  if (!split) {
+    return false;
+  }
+  split->stacked = stacked;
+  ReportChanged();
+  return true;
+}
+
+// static
+bool Favorites::SetShares(bc_id tab, std::vector<double> shares) {
+  SplitView* split = SplitHolding(Get().splits, tab);
+  std::optional<std::vector<double>> scaled =
+      split ? ScaledShares(std::move(shares), split->tabs.size()) : std::nullopt;
+  if (!scaled) {
+    return false;
+  }
+  split->shares = std::move(*scaled);
+  split->expanded = 0;
+  ReportChanged();
+  return true;
+}
+
+// static
+bool Favorites::SetExpanded(bc_id tab, bool expanded) {
+  SplitView* split = SplitHolding(Get().splits, tab);
+  if (!split) {
+    return false;
+  }
+  split->shares.clear();
+  split->expanded = expanded ? tab : 0;
+  ReportChanged();
+  return true;
+}
+
+// static
+void Favorites::AddSplit(SplitView split,
+                         const std::vector<GURL>& urls,
+                         size_t index,
+                         bc_id space) {
+  State& state = Get();
+  if (split.tabs.size() < 2 || split.tabs.size() > Space::kMaxPanes ||
+      urls.size() != split.tabs.size() ||
+      std::ranges::any_of(split.tabs, [&](bc_id tab) { return state.favs.contains(tab); })) {
+    return;
+  }
+  const bool each_space = CurrentScope() == BC_FAVORITES_SPACE;
+  const int group = state.next_group++;
+  for (size_t i = 0; i < split.tabs.size(); ++i) {
+    const bc_id tab = split.tabs[i];
+    state.favs[tab] = {.url = urls[i],
+                       .profile = ProfileDirOf(tab),
+                       .space = each_space ? space : 0,
+                       .site = state.next_site++,
+                       .group = group};
+    if (i == 0) {
+      Insert(state, tab, index);
+    } else {
+      InsertAfter(state, tab, split.tabs[i - 1]);
+    }
+  }
+  if (!std::ranges::contains(split.tabs, split.focused)) {
+    split.focused = split.tabs.front();
+  }
+  if (!std::ranges::contains(split.tabs, split.expanded)) {
+    split.expanded = 0;
+  }
+  if (split.shares.size() != split.tabs.size()) {
+    split.shares.clear();
+  }
+  const std::vector<bc_id> tabs = split.tabs;
+  state.splits.push_back(std::move(split));
+  // Under Every Space every other profile that shows favorites gets the split in tabs of its own.
+  if (CurrentScope() == BC_FAVORITES_EVERY) {
+    const std::string profile = state.favs.at(tabs.front()).profile;
+    for (const std::string& other : ShowingProfiles()) {
+      if (other == profile) {
+        continue;
+      }
+      bc_id after = 0;
+      for (bc_id tab : tabs) {
+        const Fav fav = state.favs.at(tab);
+        if (const bc_id made = Make(state, TemplateOf(state, tab), other, 0, fav.site, group,
+                                    index, after)) {
+          after = made;
+        }
+      }
+    }
+    Regroup(state);
+  }
+  ReportChanged();
+}
+
+// static
+void Favorites::RestoreSplit(SplitView split) {
+  State& state = Get();
+  if (split.tabs.size() < 2 || split.tabs.size() > Space::kMaxPanes) {
+    return;
+  }
+  for (bc_id tab : split.tabs) {
+    auto fav = state.favs.find(tab);
+    if (fav == state.favs.end() || fav->second.doomed || SplitHolding(state.splits, tab) ||
+        ListKey(fav->second) != ListKey(state.favs.at(split.tabs.front()))) {
+      return;
+    }
+  }
+  const int group = state.next_group++;
+  std::map<bc_id, int64_t> key;
+  for (bc_id tab : split.tabs) {
+    state.favs.at(tab).group = group;
+    key[tab] = 1;
+  }
+  // Together, in the split's order, at the place of its first.
+  std::vector<bc_id> list = Gathered(state.tabs, key);
+  const auto first =
+      std::ranges::find_if(list, [&](bc_id tab) { return std::ranges::contains(split.tabs, tab); });
+  std::ranges::copy(split.tabs, first);
+  state.tabs = std::move(list);
+  if (!std::ranges::contains(split.tabs, split.focused)) {
+    split.focused = split.tabs.front();
+  }
+  if (!std::ranges::contains(split.tabs, split.expanded)) {
+    split.expanded = 0;
+  }
+  if (!ScaledShares(split.shares, split.tabs.size())) {
+    split.shares.clear();
+  }
+  state.splits.push_back(std::move(split));
+  ReportChanged();
 }
 
 }  // namespace browser_core

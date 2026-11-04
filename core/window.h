@@ -139,6 +139,8 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Makes |tab| the favorite at |index|, out of its Space, or moves it there among the favorites.
   // See bc_tab_move_to_favorites.
   static void MoveToFavorites(bc_id tab, size_t index);
+  // See bc_tab_move_split_to_favorites.
+  static void MoveSplitToFavorites(bc_id tab, size_t index);
   // Takes the favorite |tab| to |index| in the pinned tabs or |folder| or the Today tabs of the
   // Space its window shows. See bc_tab_move.
   static void Unfavorite(bc_id tab, bool pinned, bc_id folder, size_t index);

@@ -121,8 +121,9 @@ Space::Node ReadNode(const base::DictValue& dict) {
   return node;
 }
 
-// The favorite |id| as the session keeps it, else empty history if it has no page to keep.
-SavedTab SaveFavorite(bc_id id) {
+// The favorite |id| as the session keeps it, else empty history if it has no page to keep, in a
+// split view with |above|, the favorite of its list saved before it, if they're in one.
+SavedTab SaveFavorite(bc_id id, bc_id above) {
   const Tab* saving = Tab::Get(id);
   SavedTab tab = saving ? saving->Save() : SavedTab();
   if (tab.history.empty()) {
@@ -131,7 +132,50 @@ SavedTab SaveFavorite(bc_id id) {
   tab.pinned_url = Favorites::Url(id);
   tab.profile = Favorites::ProfileOf(id);
   tab.site = Favorites::SiteOf(id);
+  if (const SplitView* split = Favorites::SplitOf(id)) {
+    tab.split = above && std::ranges::contains(split->tabs, above);
+    tab.stacked = split->stacked;
+    if (!split->shares.empty()) {
+      tab.share = split->shares[std::ranges::find(split->tabs, id) - split->tabs.begin()];
+    }
+    tab.expanded = split->expanded == id;
+    tab.focused = Favorites::Focused(id) == id;
+  }
   return tab;
+}
+
+// Joins the favorites restored from |saved|, which |tabs| has in its order, 0 for one that didn't
+// come back, in the split views they were saved in.
+void RestoreFavoriteSplits(const std::vector<SavedTab>& saved, const std::vector<bc_id>& tabs) {
+  // Each profile's favorites are in their order among the others'.
+  std::map<std::string, SplitView> runs;
+  const auto finish = [](SplitView& run) {
+    if (run.tabs.size() > 1) {
+      Favorites::RestoreSplit(run);
+    }
+    run = SplitView();
+  };
+  for (size_t i = 0; i < saved.size() && i < tabs.size(); ++i) {
+    SplitView& run = runs[saved[i].profile];
+    if (!saved[i].split) {
+      finish(run);
+    }
+    if (!tabs[i]) {
+      continue;
+    }
+    run.tabs.push_back(tabs[i]);
+    run.stacked = run.stacked || saved[i].stacked;
+    run.shares.push_back(saved[i].share);
+    if (saved[i].expanded) {
+      run.expanded = tabs[i];
+    }
+    if (saved[i].focused) {
+      run.focused = tabs[i];
+    }
+  }
+  for (auto& [profile, run] : runs) {
+    finish(run);
+  }
 }
 
 std::string ScopeName(int scope) {
@@ -281,11 +325,13 @@ SavedSpace SaveSpace(const Space& space, bc_id shown, std::vector<bc_id>* today)
     }
   }
   // Under Each Space, the favorites that are its own.
+  bc_id above_favorite = 0;
   for (bc_id id : Favorites::OwnedBy(space.id())) {
-    SavedTab tab = SaveFavorite(id);
+    SavedTab tab = SaveFavorite(id, above_favorite);
     if (tab.history.empty()) {
       continue;
     }
+    above_favorite = id;
     if (id == shown) {
       to.shown_own_favorite = to.favorites.size();
     }
@@ -306,11 +352,15 @@ Saved Collect() {
   std::map<bc_id, int> spaces;
   // Each favorite saved, by its place among them. Those of a Space are saved with it.
   std::map<bc_id, int> favorites;
+  // The favorite saved last of each profile.
+  std::map<std::string, bc_id> above;
   for (bc_id id : Favorites::All()) {
-    SavedTab tab = Favorites::SpaceOf(id) ? SavedTab() : SaveFavorite(id);
+    SavedTab tab =
+        Favorites::SpaceOf(id) ? SavedTab() : SaveFavorite(id, above[Favorites::ProfileOf(id)]);
     if (tab.history.empty()) {
       continue;
     }
+    above[Favorites::ProfileOf(id)] = id;
     favorites[id] = saved.favorites.size();
     saved.favorites.push_back(std::move(tab));
   }
@@ -389,6 +439,9 @@ std::optional<std::string> ToJson(const Saved& saved) {
       }
       if (tab.expanded) {
         dict.Set("expanded", true);
+      }
+      if (tab.focused) {
+        dict.Set("focused", true);
       }
       if (folders) {
         write_folder(*folders, tab.folder, dict);
@@ -550,6 +603,7 @@ std::optional<SavedTab> ReadTab(const base::Value& value) {
   tab.stacked = tab.split && dict->FindBool("stacked").value_or(false);
   tab.share = dict->FindDouble("share").value_or(0);
   tab.expanded = dict->FindBool("expanded").value_or(false);
+  tab.focused = dict->FindBool("focused").value_or(false);
   if (const std::string* profile = dict->FindString("profile")) {
     tab.profile = *profile;
   }
@@ -913,6 +967,7 @@ void PutBackSidebar(Window& window, const std::string& dir, const Saved& saved) 
                            /*space=*/0, saved_tab.site);
       }
     }
+    RestoreFavoriteSplits(saved.favorites, favorites);
   }
   bc_id show = 0;
   for (const SavedSpace& saved_space : saved.spaces) {
@@ -1271,9 +1326,11 @@ Space* RestoreSpace(Window& window,
   restore_folders(saved_space.pinned.size());
   space->RestoreNodes(saved_space.node, nodes);
   // Under Each Space, its favorites, in its profile.
+  std::vector<bc_id> own_favorites;
   for (size_t j = 0; j < saved_space.favorites.size(); ++j) {
     const SavedTab& saved_tab = saved_space.favorites[j];
-    if (bc_id tab = Tab::Restore(profile, saved_tab)) {
+    const bc_id tab = own_favorites.emplace_back(Tab::Restore(profile, saved_tab));
+    if (tab) {
       Favorites::Restore(tab,
                          saved_tab.pinned_url.is_valid()
                              ? saved_tab.pinned_url
@@ -1284,6 +1341,7 @@ Space* RestoreSpace(Window& window,
       }
     }
   }
+  RestoreFavoriteSplits(saved_space.favorites, own_favorites);
   // Bottom up, as each goes at the top, of the Space or of the archive.
   for (size_t j = saved_space.today.size(); j-- > 0;) {
     if (!whole) {
@@ -1351,6 +1409,7 @@ bool RestoreSession(Window& window) {
                          /*space=*/0, saved_tab.site);
     }
   }
+  RestoreFavoriteSplits(saved->favorites, favorites);
   RestoredSpaces().clear();
   for (const SavedSpace& saved_space : saved->spaces) {
     Space* space = RestoreSpace(window, ProfileFor(saved_space.profile), saved_space);
