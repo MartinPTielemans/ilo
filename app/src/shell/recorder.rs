@@ -60,6 +60,10 @@ pub(super) struct Recorder {
     pub(super) detents: Cell<usize>,
     /// How many tabs and folders it was asked to move.
     pub(super) moves: Cell<usize>,
+    /// Whether a tab's row dragged out of the window starts the system's drag, as the Mac's does.
+    pub(super) drags_tabs: Cell<bool>,
+    /// The window that shows each tab's page, as `tab_window` answers.
+    pub(super) tab_windows: RefCell<HashMap<u64, u64>>,
     /// Whether the system opens links with it, as `is_default_browser` answers.
     pub(super) default_browser: Cell<bool>,
     /// The system it says it runs on, the Mac unless a test says.
@@ -1524,6 +1528,37 @@ impl Browser for Recorder {
 
     fn close_window(&self, _: &mut App) {
         self.record("close window".into())
+    }
+
+    fn drag_tab(&self, tab: u64, row: Bounds<Pixels>, grab: Point<f32>, _: &mut App) -> bool {
+        if !self.drags_tabs.get() {
+            return false;
+        }
+        let (x, y) = (f32::from(row.origin.x), f32::from(row.origin.y));
+        let (width, height) = (f32::from(row.size.width), f32::from(row.size.height));
+        self.record(format!(
+            "drag tab {tab} {x} {y} {width}x{height} at {} {}",
+            grab.x, grab.y
+        ));
+        true
+    }
+
+    fn show_in_window(&self, window: u64, tab: u64, _: &mut App) {
+        self.record(format!("show {tab} in window {window}"))
+    }
+
+    fn tab_to_new_window(&self, tab: u64, at: Option<Point<f32>>, grab: Point<f32>, _: &mut App) {
+        let at = at.map_or("where the system puts it".into(), |at| {
+            format!("at {} {}", at.x, at.y)
+        });
+        self.record(format!(
+            "new window for {tab} {at}, held at {} {}",
+            grab.x, grab.y
+        ))
+    }
+
+    fn tab_window(&self, tab: u64) -> u64 {
+        self.tab_windows.borrow().get(&tab).copied().unwrap_or(0)
     }
 
     fn new_private_window(&self, _: &mut App) {}

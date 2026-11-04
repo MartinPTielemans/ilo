@@ -48,8 +48,11 @@
 //   pageswipe <x> <y> back|forward        a swipe between pages at (x, y), as three fingers or
 //                                         a mouse's swipe send one, handed to the host's monitor
 //   wheel <x> <y> <dx>                    a mouse wheel's tick across at (x, y), <dx> lines right
-//   dragover <x> <y> [url|file|text <s>]  a drag from another app at (x, y), carrying the URL,
-//                                         the file at the path or the text <s>, handed to the view
+//   dragover <x> <y> [url|file|text|tab <s>]
+//                                         a drag from another app at (x, y), carrying the URL,
+//                                         the file at the path or the text <s>, or tab <s>, as a
+//                                         tab's row dragged from another of the app's windows
+//                                         carries it (host_drag_tab), handed to the view
 //                                         AppKit would hand it to, which it logs with whether it
 //                                         takes it, as "browser: drag over <view class> taken"
 //   dragdrop <x> <y> [url|file|text <s>]  lets go of that drag there, as dragover, then logs
@@ -676,6 +679,10 @@ bool DragOver(NSWindow* window, double x, double y, std::istringstream& words) {
       [pasteboard writeObjects:@[ url ]];
     } else if (kind == "text") {
       [pasteboard setString:value forType:NSPasteboardTypeString];
+    } else if (kind == "tab") {
+      // As host_drag_tab carries one from another of the app's windows.
+      [pasteboard setString:[NSString stringWithFormat:@"%d %@", getpid(), value]
+                    forType:@"dev.ilo.browser.tab"];
     } else {
       [pasteboard releaseGlobally];
       return false;

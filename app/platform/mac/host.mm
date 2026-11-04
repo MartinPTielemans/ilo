@@ -52,8 +52,44 @@ bool (*g_dragged)(void*, int, double, double, const host_dragged*, size_t);
 }
 @end
 
+// The type of a tab host_drag_tab drags: this process's id and the tab's, which only the app's views
+// take, so another app, or another ilo, leaves it be.
+static NSPasteboardType const kTabDragType = @"dev.ilo.browser.tab";
+
+// The source of a tab host_drag_tab drags, which moves it to another of the app's windows and
+// nowhere else.
+@interface HostTabDragSource : NSObject <NSDraggingSource>
+@property(nonatomic) void (*ended)(uint64_t, int, bool, double, double);
+@property(nonatomic) uint64_t tab;
+@end
+
+@implementation HostTabDragSource
+@synthesize ended = _ended;
+@synthesize tab = _tab;
+
+- (NSDragOperation)draggingSession:(NSDraggingSession*)session
+    sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
+  return context == NSDraggingContextWithinApplication ? NSDragOperationMove : NSDragOperationNone;
+}
+
+- (void)draggingSession:(NSDraggingSession*)session
+           endedAtPoint:(NSPoint)point
+              operation:(NSDragOperation)operation {
+  // In host_window_frame's terms: from the top-left of the first screen, y down.
+  const double y = NSHeight(NSScreen.screens.firstObject.frame) - point.y;
+  // Escape ends a drag no view took as a release where none takes it does: the event that ended
+  // it tells them apart.
+  NSEvent* event = NSApp.currentEvent;
+  const bool escape = event.type == NSEventTypeKeyDown && event.keyCode == 53;
+  const int how = operation != NSDragOperationNone ? HOST_TAB_TAKEN
+                  : escape                         ? HOST_TAB_CANCELLED
+                                                   : HOST_TAB_LET_GO;
+  self.ended(self.tab, how, true, point.x, y);
+}
+@end
+
 // The view the UI draws in. It takes the links and files dragged onto it, from the page or another
-// app, for the UI.
+// app, for the UI, and the tabs host_drag_tab drags from the app's windows.
 @interface HostUIView : NSView
 @end
 
@@ -61,12 +97,14 @@ bool (*g_dragged)(void*, int, double, double, const host_dragged*, size_t);
   // What the drag over the view carries, read as it comes.
   std::vector<std::string> _urls;
   std::vector<bool> _files;
+  // The app's tab it carries instead, else 0.
+  uint64_t _tab;
 }
 
 - (instancetype)initWithFrame:(NSRect)frame {
   if ((self = [super initWithFrame:frame])) {
     [self registerForDraggedTypes:@[
-      NSPasteboardTypeFileURL, NSPasteboardTypeURL, NSPasteboardTypeString
+      kTabDragType, NSPasteboardTypeFileURL, NSPasteboardTypeURL, NSPasteboardTypeString
     ]];
   }
   return self;
@@ -79,8 +117,11 @@ bool (*g_dragged)(void*, int, double, double, const host_dragged*, size_t);
   }
   NSPoint point = [self convertPoint:info.draggingLocation fromView:nil];
   std::vector<host_dragged> items;
+  if (_tab) {
+    items.push_back({"", false, _tab});
+  }
   for (size_t i = 0; i < _urls.size(); i++) {
-    items.push_back({_urls[i].c_str(), _files[i]});
+    items.push_back({_urls[i].c_str(), _files[i], 0});
   }
   return g_dragged((__bridge void*)self, phase, point.x, NSHeight(self.bounds) - point.y,
                    items.data(), items.size());
@@ -89,7 +130,15 @@ bool (*g_dragged)(void*, int, double, double, const host_dragged*, size_t);
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)info {
   _urls.clear();
   _files.clear();
+  _tab = 0;
   NSPasteboard* pasteboard = info.draggingPasteboard;
+  // "<pid> <tab>", this process's alone.
+  NSArray<NSString*>* tab =
+      [[pasteboard stringForType:kTabDragType] componentsSeparatedByString:@" "];
+  if (tab.count == 2 && tab[0].longLongValue == getpid()) {
+    _tab = strtoull(tab[1].UTF8String, nullptr, 10);
+    return [self draggingUpdated:info];
+  }
   NSArray<NSURL*>* files =
       [pasteboard readObjectsForClasses:@[ NSURL.class ]
                                 options:@{NSPasteboardURLReadingFileURLsOnlyKey : @YES}];
@@ -114,7 +163,10 @@ bool (*g_dragged)(void*, int, double, double, const host_dragged*, size_t);
 }
 
 - (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)info {
-  return [self tell:HOST_DRAG_OVER info:info] ? NSDragOperationCopy : NSDragOperationNone;
+  if (![self tell:HOST_DRAG_OVER info:info]) {
+    return NSDragOperationNone;
+  }
+  return _tab ? NSDragOperationMove : NSDragOperationCopy;
 }
 
 - (void)draggingExited:(id<NSDraggingInfo>)info {
@@ -126,6 +178,7 @@ bool (*g_dragged)(void*, int, double, double, const host_dragged*, size_t);
   [self tell:HOST_DRAG_LEFT info:info];
   _urls.clear();
   _files.clear();
+  _tab = 0;
 }
 
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)info {
@@ -4301,6 +4354,58 @@ bool host_drag_file(const char* path, void (*ended)(bool taken)) {
   source = [[HostFileDragSource alloc] init];
   source.ended = ended;
   return [view beginDraggingSessionWithItems:@[ item ] event:event source:source] != nil;
+}
+
+bool host_drag_tab(void* ui_view, uint64_t tab, double x, double y, double width, double height,
+                   double grab_x, double grab_y,
+                   void (*ended)(uint64_t tab, int how, bool placed, double x, double y)) {
+  // Kept until the next drag, as the session doesn't keep its source.
+  static HostTabDragSource* source;
+  Browser* browser = BrowserWithView(ui_view);
+  NSEvent* event = NSApp.currentEvent;
+  NSWindow* window = browser ? browser->window : nil;
+  if (!window || event.type != NSEventTypeLeftMouseDragged || width < 1 || height < 1) {
+    return false;
+  }
+  NSView* view = browser->ui_view;
+  // The row as it's drawn, from the window's own picture, which needs no Screen Recording
+  // permission, as the launch picture's (host_save_launch_picture).
+  using CreateImage = CGImageRef (*)(CGRect, CGWindowListOption, CGWindowID, CGWindowImageOption);
+  static const auto create_image =
+      reinterpret_cast<CreateImage>(dlsym(RTLD_DEFAULT, "CGWindowListCreateImage"));
+  CGImageRef whole =
+      create_image ? create_image(CGRectNull, kCGWindowListOptionIncludingWindow,
+                                  (CGWindowID)window.windowNumber, kCGWindowImageBoundsIgnoreFraming)
+                   : nullptr;
+  NSImage* picture = nil;
+  if (whole) {
+    const CGFloat scale = (CGFloat)CGImageGetWidth(whole) / NSWidth(view.bounds);
+    CGImageRef row = CGImageCreateWithImageInRect(
+        whole, CGRectMake(round(x * scale), round(y * scale), round(width * scale),
+                          round(height * scale)));
+    CGImageRelease(whole);
+    if (row) {
+      picture = [[NSImage alloc] initWithCGImage:row size:NSMakeSize(width, height)];
+      CGImageRelease(row);
+    }
+  }
+  NSPasteboardItem* carried = [[NSPasteboardItem alloc] init];
+  [carried setString:[NSString stringWithFormat:@"%d %llu", getpid(), (unsigned long long)tab]
+             forType:kTabDragType];
+  NSDraggingItem* item = [[NSDraggingItem alloc] initWithPasteboardWriter:carried];
+  // Held where the pointer is in it, in the view's terms, whose y is up.
+  const NSPoint at = [view convertPoint:event.locationInWindow fromView:nil];
+  [item setDraggingFrame:NSMakeRect(at.x - grab_x, at.y - (height - grab_y), width, height)
+                contents:picture];
+  source = [[HostTabDragSource alloc] init];
+  source.ended = ended;
+  source.tab = tab;
+  NSDraggingSession* session = [view beginDraggingSessionWithItems:@[ item ]
+                                                             event:event
+                                                            source:source];
+  // Let go, it comes back to nowhere: the tab has gone where it was dropped, or to a new window.
+  session.animatesToStartingPositionsOnCancelOrFail = NO;
+  return session != nil;
 }
 
 // |image| as a PNG, or nil.

@@ -1389,7 +1389,15 @@ impl Browser for Engine {
             // After the frame that asks, as the core resizes the window it's drawing.
             let window = self.window;
             if !already {
-                cx.defer(move |_| unsafe { bc::bc_window_toggle_full_screen(window) });
+                cx.defer(move |_| {
+                    unsafe { bc::bc_window_toggle_full_screen(window) };
+                    // check.sh reads this line.
+                    let now = unsafe { bc::bc_window_is_full_screen(window) };
+                    log!(
+                        "browser: window {window} asked for full screen, now {}",
+                        now as u8
+                    );
+                });
             }
             already
         }
@@ -1641,6 +1649,81 @@ impl Browser for Engine {
                 open_bar_when_shown(id, opened, asked, cx);
             }
         });
+    }
+
+    fn drag_tab(&self, tab: u64, row: Bounds<Pixels>, grab: Point<f32>, _: &mut App) -> bool {
+        let Some(ui_view) = ui_view_of(self.window) else {
+            return false;
+        };
+        let [x, y, width, height] = [row.origin.x, row.origin.y, row.size.width, row.size.height]
+            .map(|n| f64::from(f32::from(n)));
+        unsafe {
+            platform::host_drag_tab(
+                ui_view,
+                tab,
+                x,
+                y,
+                width,
+                height,
+                grab.x.into(),
+                grab.y.into(),
+                tab_drag_ended,
+            )
+        }
+    }
+
+    fn show_in_window(&self, window: u64, tab: u64, cx: &mut App) {
+        // Outside the shell's update, as the window it shows in hears of it.
+        cx.defer(move |_| {
+            if WINDOWS.with_borrow(|windows| windows.iter().any(|w| w.id == window)) {
+                unsafe { bc::bc_window_select(window, tab) };
+            }
+        });
+    }
+
+    fn tab_to_new_window(&self, tab: u64, at: Option<Point<f32>>, grab: Point<f32>, cx: &mut App) {
+        let id = self.window;
+        // Outside the shell's update, as the new window's shell reads this one's.
+        cx.defer(move |cx| {
+            let from = WINDOWS.with_borrow(|windows| {
+                (windows.iter())
+                    .find(|w| w.id == id && w.regular())
+                    .cloned()
+            });
+            let Some(from) = from else {
+                return;
+            };
+            // As big as this window, with the row under the pointer where it held it here.
+            let bounds = at.and_then(|at| {
+                let (mut x, mut y, mut width, mut height) = (0., 0., 0., 0.);
+                unsafe {
+                    platform::host_window_frame(
+                        from.ui_view,
+                        &mut x,
+                        &mut y,
+                        &mut width,
+                        &mut height,
+                    )
+                }
+                .then(|| bc::bc_rect {
+                    x: f64::from(at.x - grab.x),
+                    y: f64::from(at.y - grab.y),
+                    width,
+                    height,
+                })
+            });
+            let Some(new) = open_window_at(Some(from), bounds, cx) else {
+                return;
+            };
+            unsafe { bc::bc_window_select(new, tab) };
+            // check.sh reads this line.
+            log!("browser: window {new} took {tab} from window {id}");
+            update_window_in(new, cx, |shell, cx| shell.came_by_window_drag(tab, id, cx));
+        });
+    }
+
+    fn tab_window(&self, tab: u64) -> u64 {
+        unsafe { bc::bc_tab_window(tab) }
     }
 
     fn is_default_browser(&self) -> bool {
@@ -1897,9 +1980,7 @@ fn open_bar_when_shown(from: bc::bc_id, opened: bc::bc_id, asked: Instant, cx: &
             (windows.iter().find(|w| w.id == id)).and_then(|w| w.shell.upgrade())
         })
     };
-    // Not on Windows yet, where the core's full screen doesn't take a window just opened.
-    let full_screen = cfg!(not(target_os = "windows"))
-        && shell_of(from).is_some_and(|shell| shell.read(cx).in_window_full_screen());
+    let full_screen = shell_of(from).is_some_and(|shell| shell.read(cx).in_window_full_screen());
     if let Some(shell) = shell_of(opened) {
         shell.update(cx, |shell, cx| {
             shell.open_bar_when_shown(asked, full_screen);

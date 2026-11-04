@@ -1052,9 +1052,7 @@ fi
 # closing a tab shows it, and its full-screen Space goes as it closes, with a slide that macOS takes
 # its time over in a check VM, and a full-screen change asked for in it ends at once and is then
 # turned down (#889).
-if windows; then
-  echo "skip: ⌘N in full screen: on Windows the core's full screen doesn't take a window just opened yet, so it opens windowed."
-else
+{
   send click $page_point
   send fullscreen
   expect '^browser: window entered full screen$' "the window didn't go full screen for ⌘N"
@@ -1075,7 +1073,7 @@ else
   send key w cmd shift
   expect "^browser: window closed $full_new\$" "⇧⌘W didn't close ⌘N's full-screen window"
   send window 1
-fi
+}
 exec 3>&-
 quit
 echo "edge: $edge"

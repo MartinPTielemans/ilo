@@ -121,6 +121,19 @@ pub(crate) extern "C" fn file_drag_ended(taken: bool) {
     update_window(front().0, |shell, cx| shell.file_drag_ended(taken, cx));
 }
 
+/// The system's drag of `tab` out of a window ended, `how` host_drag_tab says, let go at (`x`, `y`)
+/// on the screen where `placed`.
+pub(crate) extern "C" fn tab_drag_ended(tab: u64, how: c_int, placed: bool, x: f64, y: f64) {
+    let ended = match how {
+        platform::TAB_TAKEN => shell::WindowDragEnd::Taken,
+        platform::TAB_LET_GO => {
+            shell::WindowDragEnd::LetGo(placed.then(|| point(x as f32, y as f32)))
+        }
+        _ => shell::WindowDragEnd::Cancelled,
+    };
+    update_shells(|shell, cx| shell.window_drag_ended(tab, ended, cx));
+}
+
 pub(crate) extern "C" fn dragged(
     ui_view: *mut c_void,
     phase: c_int,
@@ -133,6 +146,20 @@ pub(crate) extern "C" fn dragged(
         true => &[][..],
         false => unsafe { std::slice::from_raw_parts(items, count) },
     };
+    let position = point(px(x as f32), px(y as f32));
+    // A tab dragged out of one of the app's windows (host_drag_tab).
+    if let Some(tab) = items.iter().map(|item| item.tab).find(|&tab| tab != 0) {
+        let window = window_with_view(ui_view);
+        let answer = update_window(window, |shell, cx| match phase {
+            platform::DRAG_OVER => shell.drag_tab_in(position, tab, cx),
+            platform::DRAG_DROP => shell.drop_tab_in(position, tab, cx),
+            _ => {
+                shell.drag_away(cx);
+                false
+            }
+        });
+        return answer.unwrap_or(false);
+    }
     let items: Vec<_> = items
         .iter()
         .map(|item| {
@@ -150,7 +177,6 @@ pub(crate) extern "C" fn dragged(
         })
     };
     let urls = shell::dropped_urls(items, search);
-    let position = point(px(x as f32), px(y as f32));
     let answer = update_window(window, |shell, cx| match phase {
         platform::DRAG_OVER => !urls.is_empty() && shell.drag_in(position, cx),
         platform::DRAG_DROP => shell.drop_in(position, &urls, cx),
