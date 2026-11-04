@@ -194,18 +194,28 @@ grep -q '^browser: title [0-9]* page saw cmd-l$' "$log" || fail "⌘L with the p
 grep -q '^browser: command find via page$' "$log" && fail "the page kept ⌘F, but the UI ran it too"
 grep -q '^browser: command \(back\|forward\) via page$' "$log" && fail "⌘← or ⌘→ in the page's text field went back or forward"
 
-# The driver's scripted input method stands in for Japanese input, which is system-wide.
+# The driver's scripted input method stands in for Japanese input, which is system-wide. On Windows
+# it's Microsoft's Japanese IME itself, where the runner has it (check-windows.yml installs it for
+# this run): the driver's ime ja sends the keys through Windows' input queue, and "nihongo"
+# composes にほんご, as a user's typing does.
 composed=日本語
+ime="ime on" preedit=nihongo preedit_marked=0,7
+japanese=
+if windows; then
+  powershell.exe -NoProfile -NonInteractive -Command "(Get-WinUserLanguageList).InputMethodTips" \
+    2> /dev/null | grep -qi 03B5835F-F03C-411B-9CE2-AA23E1171E36 && japanese=1
+  [ -z "$japanese" ] || { ime="ime ja"; preedit=にほんご; preedit_marked=0,4; }
+fi
 if [ "$(uname)" = Linux ]; then
   echo "skip: composing in a page: the Linux driver types plain keys there; check/ime.sh covers it with a real input method."
   composed=
-elif windows; then
-  echo "skip: composing in a page: the Windows driver's input method composes in the UI's fields alone, and nothing covers a page's yet."
+elif windows && [ -z "$japanese" ]; then
+  echo "skip: composing in a page: the runner has no Japanese IME, and the Windows driver's own input method composes in the UI's fields alone."
   composed=
 else
-  send ime on
+  send $ime
   send type nihongo
-  expect '^browser: title [0-9]* value abcdnihongo$' "the page didn't show the composition"
+  expect "^browser: title [0-9]* value abcd$preedit\$" "the page didn't show the composition"
   send key space
   expect '^browser: title [0-9]* value abcd日本語$' "the page didn't show the conversion"
   send key return
@@ -254,15 +264,20 @@ for shortcut in t l; do
 done
 if [ "$(uname)" = Linux ]; then
   echo "skip: composing right after ⌘L: the Linux driver types plain keys in a page."
+elif windows && [ -z "$japanese" ]; then
+  echo "skip: composing right after ⌘L: the runner has no Japanese IME, and the Windows driver's own composes in the UI's fields alone, not in a page."
 elif windows; then
-  echo "skip: composing right after ⌘L: the Windows driver composes in the UI's fields alone, not in a page."
+  # The host holds the keys typed until the bar has the keyboard (host.cc's HoldKeys), but
+  # Microsoft's IME composes them in the page before the hold sees them, and a repost of a key
+  # passes the IME by (#454).
+  echo "skip: composing right after Ctrl+L: Microsoft's Japanese IME composes in the page the keys the host holds for the bar."
 else
-  send ime on
+  send $ime
   typed_after l nihongo
-  expect '^browser: command bar drew "nihongo"$' \
+  expect "^browser: command bar drew \"$preedit\"\$" \
     "a composition typed right after ⌘L didn't go to the command bar: $(drew 'command bar')"
   send state
-  [ "$marked" = 0,7 ] || fail "the command bar didn't take all of the composition: marked $marked"
+  [ "$marked" = "$preedit_marked" ] || fail "the command bar didn't take all of the composition: marked $marked"
   send key escape
   send key escape
   expect '^browser: command bar hidden$' "escape didn't close the command bar"
@@ -573,10 +588,15 @@ expect '^browser: title [0-9]* page saw cmd-f$' "the page didn't get ⌘F first 
 
 send key l cmd
 expect '^browser: command bar shown$' "⌘L didn't open the command bar"
-send ime on
+send $ime
 send type nihongo
-[ "$marked" = 0,7 ] || fail "the command bar didn't take the composition: marked $marked"
+[ "$marked" = "$preedit_marked" ] || fail "the command bar didn't take the composition: marked $marked"
+[ -z "$japanese" ] || ../tools/window-screenshot.sh "$pid" "$out/ime-composing.png" ||
+  fail "no window to capture"
 send key escape
+# Microsoft's IME shows its predictions as it composes, and its first escape closes them, the
+# second the composition.
+[ "$marked" = none ] || [ -z "$japanese" ] || send key escape
 none_since '^browser: command bar hidden$' || fail "escape while composing closed the command bar"
 [ "$marked" = none ] || fail "escape didn't cancel the composition: marked $marked"
 send type nihongo
