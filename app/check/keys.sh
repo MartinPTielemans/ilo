@@ -405,6 +405,59 @@ done
 send key a cmd
 send key backspace
 expect '^browser: settings search cleared$' "⌫ didn't clear the search"
+# Settings from the keyboard alone (#1526). ⌘, with the page focused opens it with the keyboard in
+# its search field; ⇥ goes from there to the switch found, and Space flips it and back. ⌘, with
+# the UI focused, then ⇥ to a pop-up found: Return opens its menu, ⎋ closes the menu and nothing
+# else, and Return, ↓ and Return choose from it, then the way back.
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+send click $page_point
+in_browser RenderWidgetHostViewCocoa "before ⌘, from the page"
+send key , cmd
+expect '^browser: settings shown ' "⌘, with the page focused didn't show Settings"
+settings_drew
+send type peek
+expect '^browser: settings search "peek" finds Peek$' "typing once ⌘, opened Settings didn't search"
+send key tab
+../tools/window-screenshot.sh "$pid" "$out/settings-focus-ring.png" || fail "no window to capture"
+send key space
+expect '^browser: link previews off$' "Space on Peek's switch, reached by ⇥, didn't turn it off"
+send key space
+expect '^browser: link previews on$' "Space on Peek's switch didn't turn it on again"
+send key escape
+expect '^browser: settings search cleared$' "⎋ didn't empty the search"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+send click $sidebar_point
+in_browser AccessKitSubclassOfGPUIView "before ⌘, from the UI"
+send key , cmd
+expect '^browser: settings shown ' "⌘, with the UI focused didn't show Settings"
+settings_drew
+send type share favorites
+expect '^browser: settings search "share favorites" finds Share favorites$' \
+  "typing once ⌘, opened Settings didn't find Share favorites"
+send key tab
+send key return
+expect '^browser: menu shown ' "Return on the favorites pop-up, reached by ⇥, didn't open its menu"
+../tools/window-screenshot.sh "$pid" "$out/settings-focus-popup.png" || fail "no window to capture"
+send key escape
+expect '^browser: menu closed$' "⎋ didn't close the pop-up's menu"
+none_since '^browser: settings \(hidden\|search cleared\)$' || fail "⎋ in the pop-up's menu went on to Settings"
+send key return
+expect '^browser: menu shown ' "Return didn't open the pop-up's menu again"
+send key down
+send key return
+expect "^browser: favorites scope In Each Space\$" "↓ and Return in the pop-up's menu didn't choose In Each Space"
+send key return
+expect '^browser: menu shown ' "Return didn't open the pop-up's menu a third time"
+send key up
+send key return
+expect "^browser: favorites scope In Each Profile's Spaces\$" "↑ and Return didn't choose the default back"
+send key escape
+expect '^browser: settings search cleared$' "⎋ didn't empty the search"
+send clickkey $(drawn "toolbar Shortcuts")
+settings_drew Shortcuts
+send clickkey $(drawn "search")
 # It reads every section's rows: "archive" finds five in three sections, live under their names,
 # and the column dims the rest. Esc empties the field, ⌘F takes the keyboard back to it, and a
 # click on Features' name shows Features at its row.

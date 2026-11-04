@@ -3,7 +3,9 @@
 
 use std::cell::{Cell, RefCell};
 
-use gpui::{Context, InputEvent as _, Modifiers, TestAppContext, VisualTestContext, point, size};
+use gpui::{
+    Context, Focusable, InputEvent as _, Modifiers, TestAppContext, VisualTestContext, point, size,
+};
 
 use super::*;
 use crate::tokens::shell::library::SEARCH_HEIGHT;
@@ -165,4 +167,136 @@ fn at_the_least_height_the_sections_scroll_above_the_foot(cx: &mut TestAppContex
         view.read_with(cx, |view, _| view.picked.borrow().is_empty()),
         "the click picked a section"
     );
+}
+
+/// Settings in small for the keyboard: the column with the search field, and the card with a
+/// button, under Settings' key context, as the window has them.
+struct Keyed {
+    focus: gpui::FocusHandle,
+    input: gpui::Entity<crate::text_input::TextInput>,
+    card: crate::settings_card::Card,
+    shown: Section,
+    pressed: Rc<Cell<usize>>,
+}
+
+impl Render for Keyed {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use crate::settings_search::{NextControl, PreviousControl, field};
+        let view = cx.weak_entity();
+        let pick: Pick = Rc::new(move |section, _, cx| {
+            view.update(cx, |view, cx| {
+                view.shown = section;
+                cx.notify();
+            })
+            .ok();
+        });
+        let field = field(
+            &self.input,
+            rgb(PAPER),
+            gpui::canvas(|_, _, _| {}, |_, _, _, _| {}),
+            |_, _| {},
+            cx,
+        );
+        let pressed = self.pressed.clone();
+        let look = crate::settings_rows::Look::settings(true);
+        let button = crate::settings_rows::button(&look, "restore", "Restore…")
+            .on_click(move |_, _, _| pressed.set(pressed.get() + 1));
+        let colors = crate::settings_card::Colors {
+            line: look.line,
+            name: look.ink,
+            heading: look.heading,
+        };
+        let card = self.card.draw("General", div().child(button), true, colors);
+        div()
+            .key_context("Settings")
+            .track_focus(&self.focus)
+            .on_action(|_: &NextControl, window, cx| window.focus_next(cx))
+            .on_action(|_: &PreviousControl, window, cx| window.focus_prev(cx))
+            .size_full()
+            .flex()
+            .child(column(
+                self.shown,
+                true,
+                Rc::default(),
+                field.into_any_element(),
+                None,
+                pick,
+                Rc::new(|_, _| {}),
+            ))
+            .child(card)
+    }
+}
+
+/// A key pressed and let go, as a keyboard sends it: Space and Return click on the release.
+fn press(key: &'static str, cx: &mut VisualTestContext) {
+    cx.simulate_keystrokes(key);
+    let keystroke = gpui::Keystroke::parse(key).unwrap();
+    cx.update(|window, cx| {
+        window.dispatch_event(gpui::KeyUpEvent { keystroke }.to_platform_input(), cx);
+    });
+    cx.run_until_parked();
+}
+
+/// From the search field, where Settings opens, ⇥ goes to the card's button and Space or Return
+/// clicks it; ⇧⇥ goes back through the field to the sections, the last first; ↑ and ↓ move in the
+/// list without leaving it at its ends; Return shows the section that has the keyboard.
+#[gpui::test]
+fn the_keyboard_goes_through_settings_in_reading_order(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        crate::text_input::bind_keys(cx);
+        crate::settings_search::bind_keys(cx);
+    });
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let input = cx.new(|cx| crate::text_input::TextInput::new("Search", cx));
+        let _ = input.read(cx).focus_handle(cx).tab_stop(true);
+        Keyed {
+            focus: cx.focus_handle(),
+            input,
+            card: Default::default(),
+            shown: Section::General,
+            pressed: Rc::default(),
+        }
+    });
+    cx.simulate_resize(size(px(820.), px(660.)));
+    cx.update(|window, cx| {
+        window.activate_window();
+        let field = view.read(cx).input.read(cx).focus_handle(cx);
+        window.focus(&field, cx);
+    });
+    cx.run_until_parked();
+    let pressed = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.pressed.get());
+    let shown = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.shown);
+
+    cx.simulate_keystrokes("tab");
+    press("enter", cx);
+    assert_eq!(
+        pressed(cx),
+        1,
+        "⇥ from the field didn't reach the card's button"
+    );
+    press("space", cx);
+    assert_eq!(pressed(cx), 2, "Space didn't click the button");
+
+    // Back through the field to the list's last section, About.
+    cx.simulate_keystrokes("shift-tab shift-tab");
+    press("enter", cx);
+    assert_eq!(shown(cx), Section::About);
+    // ↓ at the list's end stays there; ↑ goes to the section above.
+    cx.simulate_keystrokes("down");
+    press("enter", cx);
+    assert_eq!(shown(cx), Section::About, "↓ left the list at its end");
+    cx.simulate_keystrokes("up up");
+    press("enter", cx);
+    assert_eq!(shown(cx), Section::Sync);
+    // ⇥ from the list goes on to the field, where typing searches.
+    for _ in 0..3 {
+        cx.simulate_keystrokes("down");
+    }
+    cx.simulate_keystrokes("tab");
+    cx.simulate_input("pip");
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.input.read(cx).text().to_string()),
+        "pip"
+    );
+    assert_eq!(pressed(cx), 2);
 }
