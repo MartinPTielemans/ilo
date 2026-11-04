@@ -229,21 +229,21 @@ public static class Capture {
       }
       return null;
     }
-    var printed = false;
+    var printed = new List<string>();
     using (var image = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb))
     using (var graphics = Graphics.FromImage(image)) {
       for (int i = windows.Count - 1; i >= 0; i--) {
         var top = windows[i];
         while (GetWindow(top, GW_OWNER) != IntPtr.Zero) top = GetWindow(top, GW_OWNER);
         if (!(all ? mains.Contains(top) : top == mains[0])) continue;
-        printed |= !Draw(windows[i], graphics, area.Location, grab);
+        if (!Draw(windows[i], graphics, area.Location, grab)) printed.Add(ClassOf(windows[i]));
       }
       image.Save(path, ImageFormat.Png);
     }
-    if (printed)
+    if (printed.Count > 0)
       Console.Error.WriteLine("A window of another app is in front of the app, and " +
-          "Windows.Graphics.Capture took none, so the capture drew them with PrintWindow, which " +
-          "draws the clear margins of overlays black and has Windows paint a caption under the UI.");
+          "Windows.Graphics.Capture could not take " + string.Join(", ", printed) + ", so the " +
+          "capture drew them with PrintWindow, which draws the clear margins of overlays black.");
     return null;
   }
 }
@@ -284,8 +284,10 @@ $grab = [Func[IntPtr, System.Drawing.Bitmap]] {
     $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
       $_.Name -eq "AsTask" -and $_.GetParameters().Count -eq 1 -and
         $_.GetParameters()[0].ParameterType.Name -eq "IAsyncOperation``1" } | Select-Object -First 1
-    $copy = [Windows.Graphics.Imaging.SoftwareBitmap]::CreateCopyFromSurfaceAsync($frame.Surface,
-      [Windows.Graphics.Imaging.BitmapAlphaMode]::Premultiplied)
+    $surface = [Windows.Graphics.DirectX.Direct3D11.IDirect3DSurface, Windows.Graphics, ContentType = WindowsRuntime]
+    $alpha = [Windows.Graphics.Imaging.BitmapAlphaMode]
+    $copy = [Windows.Graphics.Imaging.SoftwareBitmap].GetMethod("CreateCopyFromSurfaceAsync",
+      [Type[]] @($surface, $alpha)).Invoke($null, @($frame.Surface, $alpha::Premultiplied))
     $task = $asTask.MakeGenericMethod([Windows.Graphics.Imaging.SoftwareBitmap]).Invoke($null, @($copy))
     $bitmap = $task.Result
     $buffer = New-Object Windows.Storage.Streams.Buffer ([uint32]($bitmap.PixelWidth * $bitmap.PixelHeight * 4))
