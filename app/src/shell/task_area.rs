@@ -561,17 +561,19 @@ impl Shell {
 
     /// The page watched goes at once, back to the conversation.
     fn leave_task_page_now(&mut self, cx: &mut Context<Self>) {
-        let Some(area) = &mut self.task_area else {
+        let Some(page) = self.task_area.as_mut().and_then(|area| area.page.take()) else {
             return;
         };
-        if let Some(Watched {
+        if let Watched {
             picture: Some(picture),
             asked: true,
             ..
-        }) = area.page.take()
+        } = page
         {
             self.stale_pictures.push(picture.image());
         }
+        // check.sh waits for this line, as at the end of the zoom back with motion.
+        log!("browser: task page in its thumbnail");
         self.show_users_page(cx);
         self.retake_talk_pictures(cx);
         cx.notify();
