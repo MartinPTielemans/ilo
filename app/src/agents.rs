@@ -352,6 +352,9 @@ struct Acting {
     element: i64,
     note: String,
     show: Show,
+    /// Whether the action opened the tab, which stays open if its page then fails, so the answer
+    /// keeps the note that names it.
+    opened: bool,
     reply: mpsc::Sender<ToolResult>,
 }
 
@@ -1379,6 +1382,7 @@ impl Agents {
             element: 0,
             note,
             show,
+            opened: false,
             reply,
         };
         self.acting.insert(request, acting);
@@ -2017,12 +2021,14 @@ impl Agents {
         }
         let request = self.next_request;
         self.next_request += 1;
+        let opened = action == "open_tab";
         let acting = Acting {
             agent: agent.clone(),
             tab,
             element,
             note,
             show,
+            opened,
             reply,
         };
         self.acting.insert(request, acting);
@@ -2044,6 +2050,7 @@ impl Agents {
             tab,
             note,
             show,
+            opened,
             reply,
             ..
         }) = self.acting.remove(&request)
@@ -2051,6 +2058,11 @@ impl Agents {
             return;
         };
         if error {
+            // As a page still loading: the agent can look at the tab it opened later (#1461).
+            let text = match opened {
+                true => format!("{note} {text}"),
+                false => text,
+            };
             _ = reply.send(ToolResult::error(text));
             return self.advance(cx);
         }

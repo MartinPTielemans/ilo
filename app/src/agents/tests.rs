@@ -1021,6 +1021,37 @@ fn an_agent_opens_a_page_and_acts_by_ref(cx: &mut TestAppContext) {
     assert_eq!(answer.recv().unwrap(), ToolResult::error("It's gone."));
 }
 
+/// A tab open_tab opened stays open though its page then fails, as one still loading does, so the
+/// answer names it for the agent to look at later; another action's failure is the core's alone
+/// (#1461).
+#[gpui::test]
+fn a_tab_opened_still_loading_is_named_in_the_error(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let loading = "example.com is still loading after 15 s. Wait, or try again.";
+    let answer = call(
+        &agents,
+        "claude-code",
+        "open_tab",
+        json!({ "url": "example.com" }),
+        cx,
+    );
+    let request = browser.pages.borrow().last().unwrap().1;
+    agents.update(cx, |agents, cx| {
+        agents.page_done(request, loading.into(), true, cx)
+    });
+    assert_eq!(
+        answer.recv().unwrap(),
+        ToolResult::error(format!("Opened tab 30. {loading}"))
+    );
+
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 30 }), cx);
+    let request = browser.pages.borrow().last().unwrap().1;
+    agents.update(cx, |agents, cx| {
+        agents.page_done(request, loading.into(), true, cx)
+    });
+    assert_eq!(answer.recv().unwrap(), ToolResult::error(loading));
+}
+
 /// Tab 20's page with a size picker, open or not, in the document `document`: a menu, a heading,
 /// its text, the picker and a button.
 fn size_picker(open: bool, document: i64) -> String {

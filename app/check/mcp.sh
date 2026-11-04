@@ -7,7 +7,8 @@
 # link to an app (ms-word:) opens nothing and asks nothing, the tab staying on its page, and the
 # click's answer names the scheme. Ten
 # cases, each the same form in a tab of its own the user isn't looking at, move to Closed a step a
-# turn, a turn's ten calls answered at once, which logs the turns and how long they took. A
+# turn, a turn's ten calls answered at once, which logs the turns and how long they took. A page
+# that hasn't come once an action has waited for it is still loading, as the answer says. A
 # page with fields gives its prose and none of their values: typed, filled in or a password, in its
 # text and in its outline, and the agent can't type into the password field. It types into another.
 # A frame nested two sites deep and one the page adds after its load are in the page's outline
@@ -271,6 +272,18 @@ for n in $(seq 10); do
   grep -q "^browser: title [0-9]* case $n saved Closed\$" "$log" || fail "case $n wasn't saved Closed"
 done
 cases=$(sed -n 's/^cases: \(10 cases in .*\)/\1/p' "$out/cases.log")
+
+# A page whose first load hasn't committed once an action has waited 15 s for it (kLoadTimeout in
+# agent_page.cc) is still loading, which the answer says, naming the tab it opened, and not a page
+# agents may not use (#1461). /wait never comes.
+waited=$(call open_tab "{\"url\":\"localhost:$port/wait\"}")
+case "$waited" in
+  "error: Opened tab "*". localhost is still loading after 15 s. Wait, or try again.") ;;
+  *) fail "open_tab of a page still loading answered: $waited" ;;
+esac
+waiting_tab=$(printf '%s\n' "$waited" | sed -n '1s/^error: Opened tab \([0-9]*\)\..*/\1/p')
+closed=$(call close_tab "{\"tab\":$waiting_tab}")
+case "$closed" in "Closed tab $waiting_tab."*) ;; *) fail "closing the tab still loading answered: $closed" ;; esac
 
 # The client's work is one card at the sidebar's foot, from its first call that acted on a tab, and
 # the cases' calls on their connection of their own were steps of the same card (#1080). Its name
