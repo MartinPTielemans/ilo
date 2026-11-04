@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <ios>
 #include <memory>
 #include <optional>
 #include <string>
@@ -9,6 +10,7 @@
 
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/supports_user_data.h"
@@ -80,11 +82,16 @@ int StateOf(const download::DownloadItem& item) {
 
 class Downloads : public download::AllDownloadItemNotifier::Observer {
  public:
-  // Adds |profile|'s downloads to the list, or its private session's.
+  // Adds |profile|'s downloads to the list, or its private session's, once.
   void Observe(Profile* profile) {
+    content::DownloadManager* manager = profile->GetDownloadManager();
+    if (std::ranges::any_of(notifiers_,
+                            [manager](const auto& each) { return each->GetManager() == manager; })) {
+      return;
+    }
     // Made here, as it tells of a manager that has read the history at once.
     notifiers_.push_back(
-        std::make_unique<download::AllDownloadItemNotifier>(profile->GetDownloadManager(), this));
+        std::make_unique<download::AllDownloadItemNotifier>(manager, this));
     Changed();
   }
 
@@ -253,6 +260,9 @@ void ObserveDownloads(Profile* profile) {
     session->SetBoolean(prefs::kPromptForDownload, original->GetBoolean(prefs::kPromptForDownload));
     session->SetFilePath(prefs::kDownloadDefaultDirectory,
                          original->GetFilePath(prefs::kDownloadDefaultDirectory));
+    // check.sh waits for this line.
+    LOG(ERROR) << "browser: private downloads observed, asking " << std::boolalpha
+               << session->GetBoolean(prefs::kPromptForDownload);
   }
   TheDownloads().Observe(profile);
 }

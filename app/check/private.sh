@@ -121,6 +121,7 @@ for _ in $(seq 100); do
 done
 grep -q '^browser: download [0-9]* done private-notes.bin$' "$log" ||
   fail "the private window's download didn't finish: $(grep -c 'private-notes' "$out/site.log") requests"
+send window 4
 send key j cmd shift
 expect '^browser: library section downloads$' "⇧⌘J didn't open the private window's Library"
 expect '^browser: library lists downloads: private-notes.bin$' \
