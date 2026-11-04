@@ -1179,6 +1179,14 @@ bool PageDialogsInOwnWindow() {
   return false;
 }
 
+bool FocusSettledOnActivation() {
+  // Aura's desktop widget tells its observers last, once it has activated its window and given
+  // views their focus back (DesktopNativeWidgetAura::HandleActivationChanged), as X11 reads the
+  // window's FocusIn and Wayland its activated state. A key read with that, in the same batch of
+  // events, comes before any task posted then (#1711).
+  return true;
+}
+
 bool KeyboardForPage(views::Widget* widget) {
   WindowViews* views = ViewsOf(widget);
   // The UI's, unless it only holds it while no page shows.

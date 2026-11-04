@@ -19,7 +19,10 @@
 //! cmd with Ctrl, ctrl and alt with Alt, and ⌃Tab as Ctrl+Tab; a click's as Chrome reads
 //! them, cmd with Ctrl and alt with Alt. flags presses and lets
 //! go of those keys, the last key's among them, and the keys after it go with what it holds. insert
-//! commits its text to a field of the UI's, not a page's. scroll turns the wheel a notch for each event,
+//! commits its text to a field of the UI's, not a page's. Linux's own keyonreturn sends a key as key does,
+//! the moment the X input focus is back in a browser window from one of the app's own, such as a
+//! dialog that closes, as a key typed as it goes reaches the window, before Chromium has run what
+//! it posts on reading the focus come back (#1711). scroll turns the wheel a notch for each event,
 //! where the Mac's moves the content by points. choose works on ilo's menu and on ilo's dialog,
 //! whose buttons it presses by their labels as drive.mm does an alert's, and dismiss on the menu;
 //! Linux shows no alerts yet. fullscreen toggles the window's full screen through the core. ime on types as
@@ -1026,6 +1029,24 @@ fn hold_modifiers() -> Option<()> {
     connection.flush().ok()?;
     LOCKED.set(held);
     Some(())
+}
+
+/// Runs `key`, a key command, once the X input focus is in a browser window, looking each
+/// millisecond until `until`: GLib's timeouts come before Chromium's posted tasks, so the key comes
+/// with the focus, before what Chromium posts on reading it.
+fn key_on_return(key: String, until: std::time::Instant, done: Box<dyn FnOnce()>) {
+    let back = matches!(keyboard_window(), Some(Keyboard::Browser(..)));
+    if !back && std::time::Instant::now() < until {
+        after(1, Box::new(move || key_on_return(key, until, done)));
+        return;
+    }
+    match back {
+        true => {
+            run(&key);
+        }
+        false => log!("browser: drive: the keyboard didn't come back to a browser window"),
+    }
+    done();
 }
 
 /// Sends the key `code`'s events of `kinds`, with the modifiers `state`, as `key_events` does.
@@ -2150,6 +2171,12 @@ fn run_command(line: &str) -> Option<()> {
                 state = state & !alt | ctrl | option;
             }
             key(name, state)
+        }
+        "keyonreturn" => {
+            let key = format!("key {rest}");
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            go_on(Box::new(move |done| key_on_return(key, until, done)));
+            Some(())
         }
         // Each modifier going down or up as its key does, the left one, in the state held before
         // it, as the X server reports a key.

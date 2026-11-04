@@ -855,6 +855,12 @@ std::optional<gfx::Rect> DialogFrame(views::Widget* widget) {
   return frame;
 }
 
+bool FocusSettledOnActivation() {
+  // Windows activates a window inside SetForegroundWindow, which the core can call part way
+  // through a change, and it hasn't been measured there: as before, from a posted task.
+  return false;
+}
+
 bool PageDialogsInOwnWindow() {
   // Aura would draw it in the window's HWND, under the UI's and the pages' child HWNDs.
   return true;
