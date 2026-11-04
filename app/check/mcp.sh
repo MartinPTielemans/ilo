@@ -332,8 +332,15 @@ $(grep "^browser: task plate task-${session#session-} at " "$log" | tail -1 | cu
 PLATE
   send click $((px + pw / 2)) $((py + ph / 2))
   expect "^browser: task $session shown\$" "a click on the client's card didn't show its conversation"
-  # Its pages, more than one, open on Pages, their grid, each a picture to watch it from (#1080).
-  await_log "^browser: task $session opens on pages\$" "the client's card with its pages didn't open on Pages"
+  # Its one page so far opens on Talk, and the header's Pages shows its grid, each page a picture
+  # to watch it from (#1080).
+  await_log "^browser: task $session opens on talk\$" "the client's card with one page didn't open on Talk"
+  await_log '^browser: task pages at ' "the conversation's header drew no Pages"
+  read -r gx gy gw gh <<CHIP
+$(grep '^browser: task pages at ' "$log" | tail -1 | cut -d' ' -f5-)
+CHIP
+  send click $((gx + gw / 2)) $((gy + gh / 2))
+  expect "^browser: task $session shows pages\$" "a click on Pages didn't show the grid"
   picture "$agent_tab" > /dev/null
   ../tools/window-screenshot.sh "$pid" "$out/agent-pages.png" || fail "no window to capture"
   watch "$agent_tab"

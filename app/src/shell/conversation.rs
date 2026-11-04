@@ -163,6 +163,8 @@ pub struct TalkView {
     drawn_logged: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
     /// Where Stop was drawn when that was logged last.
     stop_logged: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Where Pages N was drawn when that was logged last.
+    pages_logged: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Its pages changed while one was watched over it, so they're pictured again once it shows.
     stale: bool,
     /// Whether its step under way shimmered as it last drew, which check.sh hears of.
@@ -284,6 +286,7 @@ impl Shell {
                     drawn: Rc::default(),
                     drawn_logged: Rc::default(),
                     stop_logged: Rc::default(),
+                    pages_logged: Rc::default(),
                     stale: false,
                     shimmering: false,
                     scroll: ScrollHandle::new(),
@@ -894,12 +897,30 @@ impl TalkView {
                 .flex()
                 .gap(px(VIEWS_GAP))
                 .child(chip("conversation-talk", "Talk".into(), !pages, false))
-                .child(chip(
-                    "conversation-pages-chip",
-                    format!("Pages {count}").into(),
-                    pages,
-                    true,
-                ))
+                .child({
+                    let logged = self.pages_logged.clone();
+                    let at = canvas(
+                        move |bounds, _, _| {
+                            if logged.replace(Some(bounds)) != Some(bounds) {
+                                // check.sh reads this line, to click it.
+                                log!(
+                                    "browser: task pages at {:.0} {:.0} {:.0} {:.0}",
+                                    f32::from(bounds.origin.x),
+                                    f32::from(bounds.origin.y),
+                                    f32::from(bounds.size.width),
+                                    f32::from(bounds.size.height)
+                                );
+                            }
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_full();
+                    let words = format!("Pages {count}").into();
+                    chip("conversation-pages-chip", words, pages, true)
+                        .relative()
+                        .child(at)
+                })
         });
         div()
             .flex_none()
