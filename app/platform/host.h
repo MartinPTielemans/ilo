@@ -53,6 +53,11 @@ void host_watch_finished_launching(void (*finished)(void));
 // launch's window, unless the window is hidden or full screen, and says whether it took it. The
 // file is written in the background.
 bool host_save_launch_picture(void* ui_view, const char* profile_dir, double width);
+// Windows: the same, from the sidebar's pixels in the frame the UI last drew, |columns| by |rows|
+// top-down BGRA. A picture of the window would have Windows repaint its frame, where its theme
+// paints the caption under the UI, on screen too (#1262).
+bool host_save_launch_pixels(void* ui_view, const char* profile_dir, const uint8_t* pixels,
+                             size_t columns, size_t rows);
 
 // Makes the view the UI draws in, for bc_window_open, which sizes it to fill the window. The
 // functions below that take a |ui_view| act on the browser window it's in.

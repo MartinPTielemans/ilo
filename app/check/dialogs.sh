@@ -190,6 +190,16 @@ kill -0 "$pid" 2>/dev/null || gone
 # window away from both. They went to the front of every app's window, which Windows allows unless
 # the window in front has the foreground. Once it's gone the plate is over ilo's window again.
 covered=
+# Fails unless the top row of the picture $1, $2 across, behind the window buttons, is the sidebar's
+# colour further down: not Windows' caption, which the frame painted under the UI as a PrintWindow
+# of it repainted it, the launch picture's as the app went to the background or a capture's (#1262).
+no_caption() {
+  local top below
+  top=$(pixel "$1" "$2" 0.008)
+  below=$(pixel "$1" "$2" 0.8)
+  ! brighter "$top" "$below" ||
+    fail "Windows' caption showed behind the window buttons $3, $top over the sidebar's $below: $1"
+}
 # The window and plate on top of the stack the driver last listed match $1, or fail with $2.
 stacked() {
   send stack
@@ -279,6 +289,10 @@ if windows; then
   expect "^browser: page $page dialog Alert .* says\$" "the page didn't alert once /held came"
   expect '^browser: dialog settled$' "the page's alert didn't settle with another app in front"
   ../tools/window-screenshot.sh "$pid" "$out/dialog-background.png" || fail "no window to capture"
+  # The launch picture the app took as it went to the background, of the sidebar alone.
+  launch_picture=$(ls -t "$profile_dir"/launch-picture-*.png 2>/dev/null | head -1)
+  [ -n "$launch_picture" ] || fail "going to the background, the app kept no launch picture"
+  cp "$launch_picture" "$out/dialog-launch-picture.png"
   [ "$foreground" != away ] ||
     expect '^browser: dialog shown in the background, its window asking for attention$' \
       "the alert shown in the background didn't have its window ask for attention"
@@ -314,6 +328,14 @@ if windows; then
   expect '^browser: dialog hidden$' "the page's dialog didn't leave on Alt+F4"
   expect "^browser: title $page confirm false\$" "the page didn't hear Cancel from Alt+F4"
   ask c Confirm after-close
+  # A copy of the screen, with nothing in front: a caption painted under the UI at the background
+  # step would still show, as no activation change since paints over it.
+  no_caption "$out/dialog-after-close.png" 0.15 "once the dialog came back"
+  # And in the pictures of the background step, PrintWindow's, the capture's and the launch picture.
+  [ -z "$background_dialog" ] || {
+    no_caption "$out/dialog-background.png" 0.15 "with the alert in the background"
+    no_caption "$out/dialog-launch-picture.png" 0.4 "in the launch picture"
+  }
   answer return accept "confirm true"
   closed_dialog=1
 fi
@@ -408,9 +430,11 @@ echo "  and hides 20 times, between the command bar and a tab's menu, with no pa
   "$out/link-target-uncovered.png"
 [ -z "$background_dialog" ] || echo "  An alert that came with another app in front of ilo's" \
   "window ($background_dialog) went under that app's window and over ilo's, and took the keyboard" \
-  "as ilo's window came to the front: $out/dialog-background.png"
+  "as ilo's window came to the front, with no caption of Windows' behind the window buttons there" \
+  "or in the launch picture: $out/dialog-background.png $out/dialog-launch-picture.png"
 [ -z "$closed_dialog" ] || echo "  Alt+F4 in a page's dialog cancels it as Esc does, and the" \
-  "dialog asks again: $out/dialog-after-close.png"
+  "dialog asks again, with no caption of Windows' behind the window buttons:" \
+  "$out/dialog-after-close.png"
 [ -z "$two_windows" ] || echo "  With two windows side by side, a row of the one behind shows its" \
   "card over that window, and a row of the one in front over the one in front:" \
   "$out/hover-card-window-behind.png"
