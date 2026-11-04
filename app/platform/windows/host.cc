@@ -695,6 +695,24 @@ std::vector<std::string> DraggedFiles(IDataObject* data) {
   return urls;
 }
 
+// The format of a tab host_drag_tab drags: this process's id and the tab's, as text, which only the
+// app's own targets take, so another app, or another ilo, leaves it be.
+CLIPFORMAT TabFormat() {
+  static const auto format = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"dev.ilo.browser.tab"));
+  return format;
+}
+
+// The app's tab |data| carries, else 0.
+uint64_t DraggedTab(IDataObject* data) {
+  const std::wstring text = DraggedText(data, TabFormat());
+  unsigned long pid = 0;
+  unsigned long long tab = 0;
+  if (swscanf(text.c_str(), L"%lu %llu", &pid, &tab) != 2 || pid != GetCurrentProcessId()) {
+    return 0;
+  }
+  return tab;
+}
+
 // The target the UI's holder registers for drags over it, from a page or another app, which hands
 // them to the UI with what they carry, as the Mac's HostUIView does: files, else a link, else text.
 // It has the shell draw the drag's image over the window, as Explorer's own windows do.
@@ -724,9 +742,10 @@ class DropTarget final : public IDropTarget {
   }
 
   HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* data, DWORD, POINTL at, DWORD* effect) override {
-    urls_ = DraggedFiles(data);
+    tab_ = DraggedTab(data);
+    urls_ = tab_ ? std::vector<std::string>() : DraggedFiles(data);
     files_ = !urls_.empty();
-    if (urls_.empty()) {
+    if (urls_.empty() && !tab_) {
       std::wstring url =
           DraggedText(data, static_cast<CLIPFORMAT>(RegisterClipboardFormatW(CFSTR_INETURLW)));
       // Text, which the UI opens only if it's a web link.
@@ -764,6 +783,7 @@ class DropTarget final : public IDropTarget {
     }
     Tell(HOST_DRAG_LEFT, at_, nullptr);
     urls_.clear();
+    tab_ = 0;
     return S_OK;
   }
 
@@ -776,6 +796,7 @@ class DropTarget final : public IDropTarget {
     // After a drop too, as the Mac's draggingEnded, which the UI keeps.
     Tell(HOST_DRAG_LEFT, at, nullptr);
     urls_.clear();
+    tab_ = 0;
     return S_OK;
   }
 
@@ -787,20 +808,24 @@ class DropTarget final : public IDropTarget {
   }
 
   // Tells the UI, with where the pointer is in points from the holder's top-left corner, and
-  // answers the drag's source with a copy if the UI takes it.
+  // answers the drag's source with a copy if the UI takes it, or a move for a tab.
   void Tell(int phase, POINTL at, DWORD* effect) {
     at_ = at;
     POINT point{at.x, at.y};
     ScreenToClient(holder_, &point);
     const double scale = Scale(holder_);
     std::vector<host_dragged> items;
+    if (tab_) {
+      items.push_back({"", false, tab_});
+    }
     for (const std::string& url : urls_) {
-      items.push_back({url.c_str(), files_});
+      items.push_back({url.c_str(), files_, 0});
     }
     const bool taken = g_dragged && g_dragged(holder_, phase, point.x / scale, point.y / scale,
                                               items.data(), items.size());
     if (effect) {
       *effect = !taken                      ? DROPEFFECT_NONE
+                : tab_                      ? *effect & DROPEFFECT_MOVE
                 : *effect & DROPEFFECT_COPY ? DROPEFFECT_COPY
                 : *effect & DROPEFFECT_LINK ? DROPEFFECT_LINK
                                             : DROPEFFECT_NONE;
@@ -812,6 +837,8 @@ class DropTarget final : public IDropTarget {
   IDropTargetHelper* helper_ = nullptr;
   std::vector<std::string> urls_;
   bool files_ = false;
+  // The app's tab it carries instead, else 0.
+  uint64_t tab_ = 0;
   POINTL at_{};
 };
 
@@ -1794,6 +1821,7 @@ class FileDropSource : public IDropSource {
       LogIn("drag", "buttons %lu escape %d", keys, escape);
     }
     if (escape || (keys & MK_RBUTTON)) {
+      cancelled_ = true;
       return DRAGDROP_S_CANCEL;
     }
     if (!(keys & MK_LBUTTON)) {
@@ -1801,6 +1829,8 @@ class FileDropSource : public IDropSource {
     }
     return S_OK;
   }
+  // Whether Escape or the right button ended it, rather than the left button let go.
+  bool cancelled() const { return cancelled_; }
   HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD effect) override {
     if (effect != effect_) {
       effect_ = effect;
@@ -1813,6 +1843,7 @@ class FileDropSource : public IDropSource {
   ULONG refs_ = 1;
   DWORD keys_ = ~0ul;
   DWORD effect_ = ~0ul;
+  bool cancelled_ = false;
 };
 
 // The shell's own data object for the file at |path|, so a drag carries it as Explorer does, with
@@ -4223,10 +4254,50 @@ bool host_trash(const char* path) {
          GetFileAttributesW(Wide(path).c_str()) == INVALID_FILE_ATTRIBUTES;
 }
 
-// shortcut: a tab's drag out of its window is the Mac's alone so far, and its row stays (#1798).
-bool host_drag_tab(void*, uint64_t, double, double, double, double, double, double,
-                   void (*)(uint64_t, int, bool, double, double)) {
-  return false;
+bool host_drag_tab(void* ui_view, uint64_t tab, double, double, double, double, double, double,
+                   void (*ended)(uint64_t, int, bool, double, double)) {
+  if (!Root(ui_view)) {
+    return false;
+  }
+  ComPtr<IDataObject> data;
+  if (FAILED(SHCreateDataObject(nullptr, 0, nullptr, nullptr, IID_PPV_ARGS(&data)))) {
+    return false;
+  }
+  const std::wstring text =
+      std::to_wstring(GetCurrentProcessId()) + L" " + std::to_wstring(tab);
+  const size_t size = (text.size() + 1) * sizeof(wchar_t);
+  HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, size);
+  memcpy(GlobalLock(memory), text.c_str(), size);
+  GlobalUnlock(memory);
+  FORMATETC format{TabFormat(), nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+  STGMEDIUM medium{};
+  medium.tymed = TYMED_HGLOBAL;
+  medium.hGlobal = memory;
+  if (FAILED(data->SetData(&format, &medium, TRUE))) {
+    GlobalFree(memory);
+    return false;
+  }
+  // From a task of its own once the UI's event has returned, as host_drag_file's: DoDragDrop is
+  // modal until it's let go. shortcut: it shows no picture of the row yet, only the pointer's.
+  Later([data, tab, ended] {
+    auto* source = new FileDropSource();
+    ComPtr<IDropSource> holding;
+    holding.Attach(source);
+    DWORD effect = DROPEFFECT_NONE;
+    const HRESULT dropped = DoDragDrop(data.Get(), holding.Get(), DROPEFFECT_MOVE, &effect);
+    POINT at{};
+    GetCursorPos(&at);
+    RECT point{at.x, at.y, at.x, at.y};
+    double x = 0, y = 0, width = 0, height = 0;
+    Logical(point, &x, &y, &width, &height);
+    const int how = dropped == DRAGDROP_S_DROP && effect != DROPEFFECT_NONE ? HOST_TAB_TAKEN
+                    : source->cancelled()                                   ? HOST_TAB_CANCELLED
+                                                                            : HOST_TAB_LET_GO;
+    LogIn("drag", "tab %llu ends: %lx, effect %lu", static_cast<unsigned long long>(tab),
+          static_cast<unsigned long>(dropped), effect);
+    ended(tab, how, true, x, y);
+  });
+  return true;
 }
 
 bool host_drag_file(const char* path, void (*ended)(bool)) {

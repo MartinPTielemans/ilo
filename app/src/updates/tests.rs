@@ -443,3 +443,20 @@ fn only_a_copy_with_a_nightly_feed_offers_it(_: &mut TestAppContext) {
         assert!(about.asked().is_empty());
     }
 }
+
+/// With Settings › About's Show what's new off, an update's first launch opens no notes, and on
+/// again it opens them.
+#[test]
+fn with_whats_new_off_an_update_opens_no_notes() {
+    let dir = std::env::temp_dir().join(format!("ilo-whats-new-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let notes = || Some(format!("{}#0.1.10", crate::build_info::WHATS_NEW));
+    assert_eq!(notes_to_open(notes(), &dir), notes(), "on, the default");
+    std::fs::write(dir.join(NO_WHATS_NEW), "").unwrap();
+    assert_eq!(notes_to_open(notes(), &dir), None, "off");
+    assert_eq!(notes_to_open(None, &dir), None);
+    std::fs::remove_file(dir.join(NO_WHATS_NEW)).unwrap();
+    assert_eq!(notes_to_open(notes(), &dir), notes(), "on again");
+    let _ = std::fs::remove_dir_all(&dir);
+}

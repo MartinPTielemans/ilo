@@ -1008,8 +1008,28 @@ impl Shell {
             ),
             Place::Favorite(_) => return false,
         };
-        // From this window itself, it only moves in the list.
         let from = self.browser.tab_window(tab);
+        // Into another profile's Space the core makes it a new tab whose page loads again there,
+        // so it goes as Move to sends it, after Move to's one-time warning, to Move to's place.
+        let profile_of = |space: u64| {
+            (self.spaces.iter())
+                .find(|each| each.id == space)
+                .map(|each| each.profile)
+        };
+        let its_space = (self.spaces.iter())
+            .find(|each| each.pinned.contains(&tab) || each.today.contains(&tab))
+            .map(|each| each.id);
+        if !here && its_space.is_some_and(|its| profile_of(its) != profile_of(self.space)) {
+            // check.sh waits for this line.
+            log!("browser: tab {tab} dropped from window {from} into another profile's space");
+            self.window_drag.take_if(|drag| drag.tab == tab);
+            self.settle_drag(cx);
+            let space = self.space;
+            self.move_to_space(tab, space, in_pinned, cx);
+            cx.notify();
+            return true;
+        }
+        // From this window itself, it only moves in the list.
         let from_here = self.window_drag.take_if(|drag| drag.tab == tab).is_some();
         let back = self.put_back(tab);
         let returned = (!from_here && from != 0).then_some(Edit::Return {
