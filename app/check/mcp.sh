@@ -66,7 +66,9 @@ frame.src = chrome.runtime.getURL("frame.html");
 document.body.append(frame);' > "$extension/content.js"
 printf '%s' '<p>Extension text</p><script src=frame.js></script>' > "$extension/frame.html"
 printf '%s' 'parent.postMessage("extension frame", "*");' > "$extension/frame.js"
-BROWSER_DRIVE=1 BROWSER_URL='https://en.wikipedia.org/wiki/Arc_(web_browser)' \
+# With motion, as the run clicks Stop while a step's shimmer draws, which a system that reduces
+# motion has none of, as GitHub's hosted Windows runner does (main.rs, set_reduce_motion).
+BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL='https://en.wikipedia.org/wiki/Arc_(web_browser)' \
   "$browser" --load-extension="$(app_path "$extension")" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
