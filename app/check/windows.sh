@@ -538,7 +538,10 @@ if [ "$(uname)" = Darwin ]; then
   # the first window: the driver stands in for that, as it does for another app's.
   send window $driven_sixth
   set -- $(row 0)
-  send dragover $1 $(($2 - 20)) tab $c
+  post dragover $1 $(($2 - 20)) tab $c
+  # PROBE (scratch): where the main thread is if the step never finishes.
+  for _ in $(seq 100); do grep -q "^browser: drive $step done" "$log" && break; sleep 0.1; done
+  grep -q "^browser: drive $step done" "$log" || { sample "$pid" 3 -file "$out/stuck-sample.txt" > /dev/null 2>&1; fail "PROBE: dragover tab never finished"; }
   send dragdrop $1 $(($2 - 20))
   expect '^browser: drag dropped$' "the second window's list didn't take the tab dragged from the first"
   expect "^browser: tab $c dropped from window $first in today 0\$" \
