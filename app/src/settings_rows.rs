@@ -442,6 +442,24 @@ pub fn checked_row(
         .child(div().flex_1().min_w_0().truncate().child(name.into()))
 }
 
+/// Keeps the keyboard in `window` when the control that has it goes from the frame, as a press on
+/// a link rule's trash takes its row, a switch can take a site's, or Import… turns the list into a
+/// browser's choices: it goes to the nearest of the control's holders still drawn, else to
+/// `fallback`'s, so the keys those take, ⌘W, ⌘Z and Esc, reach them as before a press gave controls
+/// the keyboard. A control with the keyboard from ⇥ that goes leaves it there too.
+pub fn keep_keyboard<T: 'static>(
+    window: &mut gpui::Window,
+    cx: &mut gpui::Context<T>,
+    fallback: impl Fn(&T) -> gpui::FocusHandle + 'static,
+) -> gpui::Subscription {
+    cx.on_focus_lost(window, move |view, window, cx| {
+        let back = window
+            .focus_lost_restore_target(cx)
+            .unwrap_or_else(|| fallback(view));
+        window.focus(&back, cx);
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -484,5 +502,67 @@ mod tests {
         assert!(!dark.light() && light.light());
         let on = Look::on(dark.surface, dark.ink, dark.accent);
         assert!(dark.edge.is_none() && on.edge.is_some());
+    }
+
+    /// A view holding the keyboard round a control a press gives it, as Settings' rows and the
+    /// import hold theirs, which logs the keys that reach it.
+    struct Holder {
+        focus: gpui::FocusHandle,
+        control: bool,
+        keys: Vec<String>,
+    }
+
+    impl gpui::Render for Holder {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            div()
+                .track_focus(&self.focus)
+                .on_key_down(cx.listener(|holder, event: &gpui::KeyDownEvent, _, _| {
+                    let key = &event.keystroke;
+                    let cmd = if key.modifiers.platform { "cmd-" } else { "" };
+                    holder.keys.push(format!("{cmd}{}", key.key))
+                }))
+                .size_full()
+                .when(self.control, |holder| {
+                    holder.child(div().id("trash").tab_index(0).w(px(40.)).h(px(20.)))
+                })
+        }
+    }
+
+    /// A press on a control gives it the keyboard; once the control goes, as a rule's trash does
+    /// with its row, the keys go to what held it, as they did before controls took the keyboard
+    /// (#1876): Esc to the import's choices, ⌘W and ⌘Z to Settings.
+    #[gpui::test]
+    fn the_keys_reach_the_holder_once_the_pressed_control_goes(cx: &mut gpui::TestAppContext) {
+        let (holder, cx) = cx.add_window_view(|window, cx| {
+            let focus = cx.focus_handle();
+            keep_keyboard(window, cx, |holder: &Holder| holder.focus.clone()).detach();
+            Holder {
+                focus,
+                control: true,
+                keys: Vec::new(),
+            }
+        });
+        holder.update_in(cx, |holder, window, cx| window.focus(&holder.focus, cx));
+        cx.run_until_parked();
+        cx.simulate_click(gpui::point(px(10.), px(10.)), gpui::Modifiers::none());
+        let pressed = holder.read_with(cx, |holder, _| holder.focus.clone());
+        cx.update(|window, _| {
+            assert!(
+                !pressed.is_focused(window),
+                "the press gave the control nothing"
+            )
+        });
+        holder.update(cx, |holder, cx| {
+            holder.control = false;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("escape cmd-w");
+        let keys = holder.read_with(cx, |holder, _| holder.keys.clone());
+        assert_eq!(keys, ["escape", "cmd-w"]);
     }
 }
