@@ -60,6 +60,7 @@
 #include <cstring>
 #include <deque>
 #include <functional>
+#include <map>
 #include <sstream>
 #include <optional>
 #include <string>
@@ -1816,6 +1817,26 @@ LRESULT CALLBACK WatchKeyboard(int code, WPARAM wparam, LPARAM lparam) {
   return CallNextHookEx(nullptr, code, wparam, lparam);
 }
 
+// Logs "browser: window zoomed <0|1>" as a browser window maximizes or comes back from it, as
+// drive.mm logs AppKit's zoom and Linux's driver the window manager's, from the WM_SIZE Windows
+// sends it once it has.
+LRESULT CALLBACK WatchZoom(int code, WPARAM wparam, LPARAM lparam) {
+  static std::map<HWND, bool> zoomed;
+  const auto* sent = reinterpret_cast<CWPRETSTRUCT*>(lparam);
+  if (code == HC_ACTION && sent->message == WM_SIZE &&
+      (sent->wParam == SIZE_MAXIMIZED || sent->wParam == SIZE_RESTORED) &&
+      GetAncestor(sent->hwnd, GA_ROOT) == sent->hwnd &&
+      FindWindowExW(sent->hwnd, nullptr, L"BrowserUI", nullptr)) {
+    const bool now = sent->wParam == SIZE_MAXIMIZED;
+    const auto was = zoomed.find(sent->hwnd);
+    if (was == zoomed.end() ? now : was->second != now) {
+      fprintf(stderr, "browser: window zoomed %d\n", now ? 1 : 0);
+    }
+    zoomed[sent->hwnd] = now;
+  }
+  return CallNextHookEx(nullptr, code, wparam, lparam);
+}
+
 extern "C" {
 
 void drive_watch_menus(bool (*menus)(void* ui_view, const char* title, bool bar)) {
@@ -1832,6 +1853,7 @@ void drive_start(void) {
                              nullptr, window_class.hInstance, nullptr);
   SetWindowsHookExW(WH_GETMESSAGE, DropRealPointer, nullptr, GetCurrentThreadId());
   SetWindowsHookExW(WH_CBT, WatchKeyboard, nullptr, GetCurrentThreadId());
+  SetWindowsHookExW(WH_CALLWNDPROCRET, WatchZoom, nullptr, GetCurrentThreadId());
   HWND driver = g_driver;
   std::thread([driver] {
     HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
