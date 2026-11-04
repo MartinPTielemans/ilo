@@ -943,6 +943,28 @@ expect "^browser: icon picker for $first on emoji\$" \
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker"
 expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 ../tools/window-screenshot.sh "$pid" "$out/space-emoji-grid.png" all || fail "no window to capture"
+# The hand at the search's right end, 13 + 44 + 12 down, puts out the six tones along the search,
+# and the fifth, medium-dark, shows each emoji that has tones in it: "thumbs" then finds 👍🏾 first,
+# which ↩ makes the Space's icon. The default tone, the first, puts them back. Each is 20 wide,
+# ending 2 in from the search's end at 12.25 + 8 × 31.
+tone_y=69
+send clickkey 248.25 $tone_y
+send state
+send clickkey 228.25 $tone_y
+send insert thumbs
+../tools/window-screenshot.sh "$pid" "$out/emoji-tone.png" all || fail "no window to capture"
+send key return
+expect "^browser: iconed space $first 👍🏾\$" \
+  "the medium-dark tone didn't make thumbs' first match 👍🏾: $(grep '^browser: iconed space' "$log" | tail -1)"
+expect '^browser: icon picker hidden$' "the emoji picked in its tone didn't close the icon picker"
+post rightclick $name_point
+expect "^browser: menu shown $(cased "Change Space Icon…, Remove Icon, ")" "a right-click on the Space's name didn't offer Remove Icon"
+send choose "$(cased 'Change Space Icon…')"
+expect "^browser: icon picker for $first on emoji\$" "Change Icon… didn't open the picker on the Emoji tab again"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
+send clickkey 248.25 $tone_y
+send state
+send clickkey 148.25 $tone_y
 send clickkey 197 39.5
 expect "^browser: iconed space $first none\$" "the icon picker's trash didn't take the icon away"
 expect '^browser: icon picker hidden$' "the icon picker's trash didn't close it"
@@ -1160,6 +1182,18 @@ send choose Rename Space…
 send key escape
 expect '^browser: rename cancelled$' \
   "escape in the name's field didn't cancel: $(lost_keyboard)"
+# Edit Theme… in ⌘T's bar, which "theme" finds first, opens the theme picker for the Space shown.
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar for Edit Theme…"
+send type theme
+send key return
+expect '^browser: command edit-theme via ' "Edit Theme… in the command bar didn't run"
+expect "^browser: theme picker for $first\$" "Edit Theme… didn't open the theme picker for the Space shown"
+expect '^browser: theme picker shown$' "Edit Theme… didn't show the theme picker"
+expect '^browser: theme picker drawn$' "the theme picker from the bar didn't draw itself on screen"
+../tools/window-screenshot.sh "$pid" "$out/theme-from-bar.png" || fail "no window to capture"
+send key escape
+expect '^browser: theme picker hidden$' "escape didn't hide the theme picker from the bar"
 # The page shown is hidden while its window is minimized, and while the app is hidden, as Chrome's
 # is, and visible once they're back. Last, as the app may not be active after it's been hidden.
 # Today is the tab ⇧⌘T reopened over the page's.
