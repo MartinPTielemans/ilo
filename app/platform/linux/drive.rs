@@ -2468,6 +2468,13 @@ fn hold_mini_player(window: xproto::Window, step: &str, x: f64, y: f64) -> Optio
             at: (left, top),
         };
         PIP_HELD.set(Some(held));
+        log!(
+            "browser: PROBE pip press at root {} {}, pointer back {} {}, window {left:.0} {top:.0}",
+            at.root_x,
+            at.root_y,
+            back.0,
+            back.1
+        );
         return fake(xproto::BUTTON_PRESS_EVENT, 1, (at.root_x, at.root_y));
     }
     let held = PIP_HELD.get()?;
@@ -2477,9 +2484,17 @@ fn hold_mini_player(window: xproto::Window, step: &str, x: f64, y: f64) -> Optio
         held.root.1 + ((y - held.y) * scale).round() as i16,
     );
     fake(xproto::MOTION_NOTIFY_EVENT, 0, to)?;
+    if let Some([left, top, ..]) = frame(window) {
+        log!(
+            "browser: PROBE pip {step} to root {} {}, window {left:.0} {top:.0}",
+            to.0,
+            to.1
+        );
+    }
     if step == "dragto" {
         return Some(());
     }
+    let waited = std::time::Instant::now();
     // The window manager takes the pointer only once it has the core's request to move the
     // window, which can be after the drag's last motion, and it then moves the window with the
     // pointer until a click, so the release would leave the window following the pointer home.
@@ -2495,9 +2510,25 @@ fn hold_mini_player(window: xproto::Window, step: &str, x: f64, y: f64) -> Optio
             fake(xproto::MOTION_NOTIFY_EVENT, 0, to)?;
         }
     }
+    if let Some([left, top, ..]) = frame(window) {
+        log!(
+            "browser: PROBE pip released after {} ms, window {left:.0} {top:.0}, {}",
+            waited.elapsed().as_millis(),
+            if (left, top) == held.at {
+                "not moved"
+            } else {
+                "moved"
+            }
+        );
+    }
     PIP_HELD.set(None);
     fake(xproto::BUTTON_RELEASE_EVENT, 1, to)?;
-    fake(xproto::MOTION_NOTIFY_EVENT, 0, held.back)
+    fake(xproto::MOTION_NOTIFY_EVENT, 0, held.back)?;
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    if let Some([left, top, ..]) = frame(window) {
+        log!("browser: PROBE pip after the pointer went back, window {left:.0} {top:.0}");
+    }
+    Some(())
 }
 
 /// A press on the Mini Player through XTest: where it was in the window and on the screen, where

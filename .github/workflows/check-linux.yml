@@ -256,6 +256,7 @@ jobs:
                 [ "$run" != updates ] || limit=45m
                 timeout "$limit" ./check.sh "$run" > "$dir/$run.log" 2>&1 || status=$?
                 [ ! -d build/check ] || mv build/check "$dir/$run"
+                [ ! -f build/openbox.log ] || mv build/openbox.log "$dir/$run-openbox.log"
                 pkill -9 -f "$PWD/build/Browser/" || true
                 # A run that passes may have skipped steps, or all of itself, such as when the app
                 # wasn't the active one.

@@ -50,7 +50,7 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
     # shellcheck disable=SC2016 # expanded by the session's shell
     exec xvfb-run -a -s "-screen 0 1280x800x24" sh -c '
       ready=$(mktemp -u)
-      openbox --startup "touch $ready" &
+      openbox --debug --startup "touch $ready" > "$PWD/build/openbox.log" 2>&1 &
       while [ ! -e "$ready" ]; do
         kill -0 $! 2> /dev/null || { echo "openbox exited" >&2; exit 1; }
         sleep 0.1
