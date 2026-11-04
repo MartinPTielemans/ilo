@@ -549,6 +549,7 @@ fn tell(view: *mut c_void, phase: c_int, x: f64, y: f64, items: &[(String, bool)
         .map(|(url, &(_, file))| platform::host_dragged {
             url: url.as_ptr(),
             file,
+            tab: 0,
         })
         .collect();
     dragged(view, phase, x, y, items.as_ptr(), items.len())

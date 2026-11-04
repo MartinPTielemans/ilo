@@ -268,7 +268,7 @@ fn open_saved_windows(cx: &mut App) {
         let Some(above) = WINDOWS.with_borrow(|windows| windows.last().cloned()) else {
             return;
         };
-        open_window_as(Some(above), None, Some(index), cx);
+        open_window_as(Some(above), None, Some(index), None, cx);
     }
 }
 

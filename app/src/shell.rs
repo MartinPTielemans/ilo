@@ -130,7 +130,7 @@ pub use commands::{
     shown_tab, task_page_shown, window_became_key, with_named_rows,
 };
 pub use display_face::display_text;
-pub use drag::dropped_urls;
+pub use drag::{WindowDragEnd, dropped_urls};
 pub use drm_note::PlayReady;
 pub use extensions::{
     Extension, ExtensionAction, ExtensionCommand, menu_item as extension_menu_item,
@@ -1223,6 +1223,8 @@ pub struct Shell {
     /// once it has.
     bar_follows: bool,
     drag: Option<Drag>,
+    /// A tab's row dragged out of the window, as the system drags it, until it's let go.
+    window_drag: Option<drag::WindowDrag>,
     /// A drag just ended, so the release isn't a click on the row.
     dragged: bool,
     /// Escape put a dragged tab back, and the frame that shows it all put back isn't drawn yet.
@@ -1663,6 +1665,7 @@ impl Shell {
             press_closed_bar: false,
             bar_follows: false,
             drag: None,
+            window_drag: None,
             dragged: false,
             putting_back: false,
             swipe: None,
