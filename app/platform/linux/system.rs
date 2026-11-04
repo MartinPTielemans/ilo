@@ -74,6 +74,9 @@ pub fn watch_activation<T: 'static>(
         if active {
             crate::link_preview_window::took_keyboard(ui_view);
         }
+        if whole_window {
+            crate::active_window::wayland_active(ui_view, active);
+        }
         unsafe { platform::host_window_active(ui_view, active, whole_window) }
     })
     .detach();

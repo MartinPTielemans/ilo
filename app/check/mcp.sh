@@ -332,6 +332,17 @@ $(grep "^browser: task plate task-${session#session-} at " "$log" | tail -1 | cu
 PLATE
   send click $((px + pw / 2)) $((py + ph / 2))
   expect "^browser: task $session shown\$" "a click on the client's card didn't show its conversation"
+  # Its one page so far opens on Talk, and the header's Pages shows its grid, each page a picture
+  # to watch it from (#1080).
+  await_log "^browser: task $session opens on talk\$" "the client's card with one page didn't open on Talk"
+  await_log '^browser: task pages at ' "the conversation's header drew no Pages"
+  read -r gx gy gw gh <<CHIP
+$(grep '^browser: task pages at ' "$log" | tail -1 | cut -d' ' -f5-)
+CHIP
+  send click $((gx + gw / 2)) $((gy + gh / 2))
+  expect "^browser: task $session shows pages\$" "a click on Pages didn't show the grid"
+  picture "$agent_tab" > /dev/null
+  ../tools/window-screenshot.sh "$pid" "$out/agent-pages.png" || fail "no window to capture"
   watch "$agent_tab"
   ../tools/window-screenshot.sh "$pid" "$out/agent-watched.png" || fail "no window to capture"
   # The core lists the agent's Space alone: its tab, and not the user's Wikipedia tab in theirs.
@@ -837,10 +848,19 @@ exec 5<&-
 if [ "$driven" = 1 ]; then
   await_log "^browser: agent session ended mcp-client $agent_tab disconnected\$" \
     "ending the client's session didn't end its session with the tab"
+  # Its card ends on its receipt, which names only what had consequences (#1080): the bank's site
+  # it was allowed to open is no order or message, and its pages are Open's to count, so it says
+  # when it ended.
+  await_log '^browser: task card session-[0-9]* Done Done [0-9]' \
+    "the client's card didn't say when it ended: $(grep '^browser: task card session-[0-9]* Done ' "$log" | tail -1)"
+  grep '^browser: task card session-[0-9]* Done ' "$log" | grep -q '[0-9] pages\{0,1\}' &&
+    fail "the client's receipt counted its pages, which Open counts: $(grep '^browser: task card session-[0-9]* Done ' "$log" | tail -1)"
   # The agent is at work in the tab it last acted in, the bank's it opened.
   at=$(grep '^browser: agent mcp-client at work in ' "$log" | tail -1 | awk '{print $NF}')
   await_log "^browser: agent mcp-client done in $at\$" "the tab still shows a gone agent at work"
   await_log "^browser: agent question $pending gone\$" "a gone agent's question stayed open"
+  # The card on its receipt, its status rolled in by now.
+  ../tools/window-screenshot.sh "$pid" "$out/agent-receipt.png" || fail "no window to capture"
 
   # Reconnected, the client's next call on a tab is a card of its own. Its conversation's Stop
   # answers the call under way that the user stopped it, then closes the client's connection,

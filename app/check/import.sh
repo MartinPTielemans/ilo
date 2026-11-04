@@ -267,6 +267,9 @@ if [ -n "$arc" ]; then
   expect '^browser: import cards Personal, Work$' "Arc's Spaces didn't come as cards, Personal then Work"
   expect '^browser: import holds space [0-9]* from profile [0-9]*$' "the run didn't hold Work's Space back"
   expect '^browser: import drawn running$' "Arc's cards didn't draw"
+  # The still waits for the recording, as one taken while the window records ends it (ReplayKit's
+  # -5814); the cards wait on, as Work is held.
+  recorded
   ../tools/window-screenshot.sh "$pid" "$out/import-arriving.png" || fail "no window to capture"
   expect '^browser: import from Arc: 2 Spaces, 6 pinned tabs, 0 open tabs, 3 favorites, 0 pages, 0 addresses$' \
     "Import didn't plan Arc's 2 Spaces, 6 pinned tabs and 3 favorites"
@@ -284,7 +287,6 @@ if [ -n "$arc" ]; then
   arc_done='2 Spaces, 6 pinned tabs, 3 favorites and 3 link rules came in from Arc'
   await "^browser: import done: $arc_done\\.\$" ||
     fail "the import didn't finish once the Work profile loaded"
-  recorded
   # The rules go to Arc's Spaces by their places among the user's: Personal second, Work third.
   t=$(printf '\t')
   # After the Meet rule a profile starts with (#692).
