@@ -664,3 +664,59 @@ quit_by_key
 await '^browser: command quit via ' || fail "⌘Q didn't quit"
 exited
 echo "ok: a .crx from a page asks to be added with the browser's dialog, in Chrome's words, listing its warnings. Escape cancels it, return adds it, and Add Extension… opens a tab. Window: $out/extension-install.png"
+
+# An extension whose own process crashes twice, across launches, is turned off: the browser's
+# dialog says so once, with Turn On Again, Keep Off and Remove…, and Turn On Again turns it on. Its
+# page in a tab runs in its process, which chrome://crash in that tab crashes. It's loaded in a
+# profile of the block's own, which counts the crashes.
+crashing="$PWD/$out/crashing"
+rm -rf "$crashing"
+mkdir -p "$crashing/extension" "$crashing/profile"
+cat > "$crashing/extension/manifest.json" << 'JSON'
+{"manifest_version": 3, "name": "Check Crash", "version": "1", "action": {}}
+JSON
+echo '<title>crash page</title>' > "$crashing/extension/page.html"
+# Launches the app on the block's profile with the extension, logging to $1, and sets $crashing_id.
+crash_launch() {
+  log="$out/$1.log"
+  step=0
+  BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$crashing/profile" \
+    "$browser" --load-extension="$(app_path "$crashing/extension")" \
+    < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await_load
+  await "^browser: extensions menu [a-p]* $ublock\$" ||
+    fail "the Extensions menu didn't list Check Crash: $(grep '^browser: extensions menu' "$log")"
+  crashing_id=$(grep -m1 "^browser: extensions menu [a-p]* $ublock\$" "$log" | cut -d' ' -f4)
+}
+# The extension's page in the tab shown, and chrome://crash in it, the extension's crash $1.
+crash_once() {
+  go_from_bar "chrome-extension://$crashing_id/page.html"
+  expect '^browser: title [0-9]* crash page$' "Check Crash's page didn't load"
+  go_from_bar "chrome://crash/"
+  expect "browser: extension $crashing_id crashed, $1 times\$" \
+    "chrome://crash in Check Crash's page didn't count its crash $1"
+}
+crash_launch extension-crash
+crash_once 1
+none_since "browser: extension $crashing_id turned off" || fail "one crash turned Check Crash off"
+exec 3>&-
+quit
+crash_launch extension-crash-again
+crash_once 2
+expect "browser: extension $crashing_id turned off for crashing\$" \
+  "a second crash, after a relaunch, didn't turn Check Crash off"
+expect '^browser: dialog shown “Check Crash” was turned off$' \
+  "the browser didn't say it turned Check Crash off"
+expect "^browser: told extension $crashing_id crashed\$" "the browser didn't hear it told the user"
+expect '^browser: dialog settled$' "the dialog saying Check Crash was turned off didn't settle"
+../tools/window-screenshot.sh "$pid" "$out/extension-crashed-off.png" || fail "no window to capture"
+grep "^browser: extensions menu" "$log" | tail -1 | grep -q " $crashing_id " &&
+  fail "Check Crash stayed in the Extensions menu, turned off"
+send key return
+expect "^browser: turn on extension $crashing_id on\$" "Turn On Again didn't turn Check Crash on"
+expect "^browser: extensions menu $crashing_id $ublock\$" "Check Crash didn't come back in the Extensions menu"
+exec 3>&-
+quit
+echo "ok: an extension whose own process crashes twice, across a relaunch, is turned off, and the browser's dialog says so, with Turn On Again, which turns it on. Window: $out/extension-crashed-off.png"
