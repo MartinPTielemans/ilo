@@ -12,7 +12,12 @@ impl browser::needs_you::Host for NeedsYou {
     }
 
     fn active(&self) -> bool {
-        unsafe { platform::host_app_active() }
+        #[cfg(target_os = "linux")]
+        return needs_you::app_active();
+        #[cfg(not(target_os = "linux"))]
+        unsafe {
+            platform::host_app_active()
+        }
     }
 
     fn notify(&self, id: u64, title: &str, body: &str) {

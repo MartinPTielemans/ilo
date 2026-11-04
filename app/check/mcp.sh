@@ -868,10 +868,11 @@ if [ "$driven" = 1 ]; then
     exec 7> "$out/other-in"
     for _ in $(seq 50); do grep -q '^[0-9]' "$out/other-window.log" && break; sleep 0.1; done
     other_window=$(head -1 "$out/other-window.log")
-    actives=$(grep -c '^browser: app active 0$' "$log" || true)
     xdotool windowactivate --sync "$other_window" 2> /dev/null ||
       fail "another app's window didn't open and take the keyboard: $(cat "$out/other-window.log")"
-    await_more '^browser: app active 0$' "$actives" || fail "another app's window left ilo active"
+    # The driver reads the keyboard's window from the X server, as the app does.
+    send state
+    [ "$active" = 0 ] || fail "another app's window left ilo active"
     background=linux
   elif windows; then
     rm -f "$out/cover-front"

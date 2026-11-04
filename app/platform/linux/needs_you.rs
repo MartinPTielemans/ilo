@@ -69,3 +69,38 @@ pub extern "C" fn host_needs_you_badge(count: c_int) {
         }
     }
 }
+
+/// Whether ilo has the keyboard. On X11, whether the input focus is in a window of this process's,
+/// as the X server says: GPUI hears no activation of its windows inside Chromium's there, so the
+/// host's own tracking never moves. Under Wayland, the host's.
+pub(crate) fn app_active() -> bool {
+    if crate::frames::on_x11() != Some(true) {
+        return unsafe { crate::platform::host_app_active() };
+    }
+    focus_is_ours().unwrap_or(false)
+}
+
+fn focus_is_ours() -> Option<bool> {
+    let (connection, screen) = x11rb::connect(None).ok()?;
+    let root = connection.setup().roots[screen].root;
+    let pid = (connection
+        .intern_atom(true, b"_NET_WM_PID")
+        .ok()?
+        .reply()
+        .ok()?)
+    .atom;
+    let mut window = connection.get_input_focus().ok()?.reply().ok()?.focus;
+    // 0 and 1 are None and PointerRoot: no window has it.
+    while window > 1 && window != root {
+        let owner = (connection
+            .get_property(false, window, pid, AtomEnum::CARDINAL, 0, 1)
+            .ok())
+        .and_then(|asked| asked.reply().ok())
+        .and_then(|owner| owner.value32().and_then(|mut values| values.next()));
+        if let Some(owner) = owner {
+            return Some(owner == std::process::id());
+        }
+        window = connection.query_tree(window).ok()?.reply().ok()?.parent;
+    }
+    Some(false)
+}
