@@ -61,6 +61,7 @@ mod fly_in;
 mod footer;
 #[cfg(test)]
 mod full_screen;
+mod full_screen_escape;
 mod header;
 #[cfg(test)]
 mod help_tests;
@@ -105,7 +106,7 @@ mod sidebar_backups;
 mod sidebar_keys;
 mod space_form;
 mod split_targets;
-mod swap;
+pub(crate) mod swap;
 mod swipe;
 mod task_area;
 mod themes;
@@ -1267,6 +1268,8 @@ pub struct Shell {
     text_system: Option<WindowTextSystem>,
     /// Whether the window is full screen, as macOS last told once its transition was over.
     full_screen: bool,
+    /// The Esc presses its page has had first in full screen, which leave held or twice.
+    escapes: full_screen_escape::EscapeToLeave,
     /// On Linux, whether the window is maximized, which its third button shows.
     maximized: bool,
     /// Whether the window went full screen for the page, so it comes back with it.
@@ -1684,6 +1687,7 @@ impl Shell {
             link: None,
             text_system: None,
             full_screen: false,
+            escapes: Default::default(),
             maximized: false,
             window_for_page: false,
             page_held: None,

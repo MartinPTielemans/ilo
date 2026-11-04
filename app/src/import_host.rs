@@ -6,6 +6,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use browser::import::found::{Address, Page, Tab};
 use browser::import::plan::{Existing, ExistingSpace, Row};
@@ -401,4 +402,26 @@ impl browser::import::Host for CoreImport {
     fn open_store_page(&self, url: &str) {
         open_tab_behind(front().0, url, false);
     }
+
+    fn last_import(&self, browser: &str) -> Option<SystemTime> {
+        IMPORTS.with_borrow(|imports| {
+            (imports.iter())
+                .find(|(each, _)| each == browser)
+                .map(|(_, at)| *at)
+        })
+    }
+
+    fn imported(&self, browser: &str, at: SystemTime) {
+        IMPORTS.with_borrow_mut(|imports| {
+            imports.retain(|(each, _)| each != browser);
+            imports.push((browser.into(), at));
+        });
+    }
+}
+
+thread_local! {
+    /// Each browser's last import this run, by its name: in memory alone, as the Archive's tasks
+    /// are, as nothing that records the user's use is stored without the owner's yes. After a
+    /// relaunch a browser's row is Import… again, and a rerun still adds nothing twice.
+    static IMPORTS: RefCell<Vec<(String, SystemTime)>> = const { RefCell::new(Vec::new()) };
 }
