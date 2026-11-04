@@ -72,6 +72,15 @@ send dragto 114 112
 expect '^browser: drag shape tile$' "the row dragged onto the Space's name didn't turn into a tile"
 send release 114 112
 expect "^browser: favorites $a\$" "the row dragged onto the Space's name didn't make a favorite"
+# In the empty Space, the command bar's New Profile asks for the new profile's name in the dialog,
+# as the Space menu's does, and Cancel makes none.
+bar_command change-profile "New Profile" "new profile"
+expect '^browser: dialog shown New Profile$' "the command bar's New Profile didn't ask for its name"
+../tools/window-screenshot.sh "$pid" "$out/bar-new-profile.png" || fail "no window to capture"
+send key escape
+expect '^browser: dialog cancelled$' "escape didn't cancel the new profile's dialog"
+expect '^browser: dialog hidden$' "the new profile's dialog didn't go"
+none_since 'browser: create profile' || fail "cancelling the dialog made a profile"
 
 # A new Space is in the profile of the Space it's made from. Its form's Profile row puts it in a
 # new profile, whose name Chrome's numbering gives, and its favorites aren't the first profile's.
