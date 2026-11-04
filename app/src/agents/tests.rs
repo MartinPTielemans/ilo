@@ -2156,7 +2156,33 @@ mod tasks {
         std::fs::write(&program, "#!/bin/sh\nexec cat > \"$0.in\"\n").unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        run_once_free(&program);
         program
+    }
+
+    /// Runs the fake CLI just written, with nothing to read, until it starts. Another test's thread
+    /// that forked while the script was open for writing hands its child that handle until the
+    /// child runs its own program, and the script won't run meanwhile: "Text file busy" (ETXTBSY).
+    /// Once it has run, no such handle is left and none can come, as ours is closed, so the task's
+    /// own start can't meet it. A retry, as cargo's and Go's spawns do; writing every fake before
+    /// any thread forks isn't possible from inside the test binary.
+    #[cfg(unix)]
+    fn run_once_free(program: &std::path::Path) {
+        for _ in 0..100 {
+            match crate::child::command(program)
+                .stdin(std::process::Stdio::null())
+                .status()
+            {
+                Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(Duration::from_millis(10))
+                }
+                ran => {
+                    ran.expect("the fake CLI didn't run");
+                    return;
+                }
+            }
+        }
+        panic!("the fake CLI stayed busy for a second");
     }
 
     /// Agents on, with Claude signed in at `program`, and the user's Space 1.

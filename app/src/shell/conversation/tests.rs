@@ -566,3 +566,34 @@ fn the_lines_follow_only_while_the_user_reads_at_their_end() {
     );
     assert_eq!(follows(true, false, true, true), Follows::Eased);
 }
+
+/// The reply field's "Reply to …" follows a switch between light and dark while the conversation
+/// stays open, as its lines do, in the placeholder colour of the palette it's drawn in (#1659).
+#[gpui::test]
+fn the_reply_placeholder_follows_the_appearance(cx: &mut TestAppContext) {
+    use crate::shell::Appearance;
+    use crate::tokens::shell::FORM_PLACEHOLDER;
+    let (shell, _, cx) = shown(cx);
+    let mut colours = Vec::new();
+    for appearance in [Appearance::Light, Appearance::Dark, Appearance::Light] {
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::Appearance(appearance), "ui", cx)
+        });
+        cx.run_until_parked();
+        let (drawn, meant) = shell.read_with(cx, |shell, cx| {
+            let talk = shell.talk.as_ref().expect("the conversation");
+            let reply = talk.view.read(cx).reply.read(cx).placeholder_hsla();
+            (
+                reply,
+                gpui::Hsla::from(shell.palette.text(FORM_PLACEHOLDER)),
+            )
+        });
+        assert_eq!(drawn, meant, "{appearance:?}'s placeholder");
+        colours.push(drawn);
+    }
+    assert_ne!(
+        colours[0], colours[1],
+        "light and dark drew the same placeholder"
+    );
+    assert_eq!(colours[0], colours[2]);
+}

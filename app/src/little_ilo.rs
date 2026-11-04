@@ -66,7 +66,7 @@ pub(crate) fn little_frame() -> bc::bc_rect {
     let size = (width, height);
     let on_pointers = pointer.then(|| window_frames::on_screen_of((x, y), size, &screens));
     let frame = on_pointers.flatten().unwrap_or_else(|| {
-        unsafe { platform::host_centered(width, height, &mut x, &mut y) };
+        (x, y) = platform::centered(width, height);
         window_frames::raised(
             Frame {
                 x,

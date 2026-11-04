@@ -3709,10 +3709,12 @@ impl Render for Shell {
             self.focus_color = Some(focus_color);
             self.browser.set_focus_color(focus_color, cx);
         }
-        // A page shows the card until its first frame, never white (Ardia). Not while the sidebar
-        // pages between Spaces, whose colours cross-fade at every step.
-        let page_color = packed(self.window_fill().blend(self.palette.page.into()));
-        if self.pages().len() == 1 && self.page_color != Some(page_color) {
+        // A page shows the colour of the appearance websites are told until its first frame, as
+        // Arc's does: View › Appearance's, else the system's, whatever the Space's theme.
+        let page_color = packed(self.system_tone.unpainted().into());
+        if self.page_color != Some(page_color) {
+            // check.sh reads this line.
+            log!("browser: page color {page_color:06x}");
             self.page_color = Some(page_color);
             self.browser.set_page_color(page_color, cx);
         }
