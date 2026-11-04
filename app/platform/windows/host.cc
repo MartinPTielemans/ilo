@@ -862,6 +862,7 @@ std::map<HWND, ClosedFrame>& ClosedFrames() {
 
 // The holder keeps GPUI's window, its only child, filling it.
 int FrameHit(HWND root, POINT at);  // Below, with the frame it answers for.
+void CaptureWindowSized(HWND holder, int width, int height);  // Below, with Capture.
 
 LRESULT CALLBACK HolderProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
   switch (message) {
@@ -875,6 +876,7 @@ LRESULT CALLBACK HolderProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         SetWindowPos(ui, nullptr, 0, 0, LOWORD(lparam), HIWORD(lparam),
                      SWP_NOZORDER | SWP_NOACTIVATE);
       }
+      CaptureWindowSized(hwnd, LOWORD(lparam), HIWORD(lparam));
       return 0;
     case WM_PARENTNOTIFY:
       // A click in the UI takes the keyboard from the page, as one in a top-level window would.
@@ -3269,8 +3271,16 @@ void host_add_capture(void* view, void (*dismissed)(void)) {
   Adopt(g_capture, view, false, dismissed);
 }
 
+// The holder of the browser window Capture shows over, and its size then.
+HWND g_capture_holder = nullptr;
+SIZE g_capture_size = {};
+
 void host_show_capture(void* ui_view, double left, double top, double width, double height) {
   Show(g_capture, ui_view, left, top, width, height, true);
+  g_capture_holder = ui_view ? GetParent(Hwnd(ui_view)) : nullptr;
+  RECT holder = {};
+  GetClientRect(g_capture_holder, &holder);
+  g_capture_size = {holder.right - holder.left, holder.bottom - holder.top};
   if (g_capture.hwnd && IsWindowVisible(g_capture.hwnd)) {
     // check.sh reads this line, as the Mac's and Linux's hosts log it.
     fprintf(stderr, "browser: capture shown at %g %g %g %g\n", left, top, width, height);
@@ -3288,6 +3298,19 @@ void host_hide_capture(void) {
   Hide(g_capture);
   // check.sh reads this line.
   fprintf(stderr, "browser: capture hidden\n");
+}
+
+// The window Capture shows over resized, which leaves it, as on the Mac and Linux: what it showed
+// of the page is no longer where the page is.
+void CaptureWindowSized(HWND holder, int width, int height) {
+  if (holder != g_capture_holder || !g_capture.hwnd || !IsWindowVisible(g_capture.hwnd) ||
+      (width == g_capture_size.cx && height == g_capture_size.cy)) {
+    return;
+  }
+  host_hide_capture();
+  if (void (*dismissed)(void) = g_capture.dismissed) {
+    Later([dismissed] { dismissed(); });
+  }
 }
 
 void host_copy_png(const uint8_t* png, size_t size) {
