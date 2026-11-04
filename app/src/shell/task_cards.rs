@@ -55,10 +55,11 @@ use crate::tooltip::text_width;
 use glyph::{Glyph, State};
 use motion::{Curve, Ease};
 
-/// A task's number, from its agent's id, `task-<n>`.
+/// A task's number, from its agent's id: `task-<n>`, or `session-<n>` for an outside agent's
+/// session, which are numbered with the tasks.
 pub(super) fn number(agent: &str) -> u64 {
-    agent
-        .strip_prefix("task-")
+    (agent.strip_prefix("task-"))
+        .or_else(|| agent.strip_prefix("session-"))
         .and_then(|n| n.parse().ok())
         .unwrap_or(0)
 }
@@ -835,7 +836,7 @@ impl Shell {
     /// Where the media players end, over Restart to Update, the foot's plates over them.
     pub(super) fn media_top(&self) -> f32 {
         let players = self.media_players().len() as f32 * (MEDIA_HEIGHT + MEDIA_GAP);
-        FOOTER_HEIGHT + self.update_sign_room() + players
+        FOOTER_HEIGHT + self.update_banner_room() + players
     }
 
     /// The most room the opened foot takes before it scrolls: the closed foot never does.

@@ -1,5 +1,14 @@
 use std::ffi::{c_char, c_int, c_void};
 
+/// Where a window `width` by `height` goes centred on the screen the windows open on, in the core's
+/// terms, at whole points: the host's centre is half a point off whenever the screen's visible
+/// height is odd, and the core would open the window a point taller (#1568).
+pub fn centered(width: f64, height: f64) -> (f64, f64) {
+    let (mut x, mut y) = (0., 0.);
+    unsafe { host_centered(width, height, &mut x, &mut y) };
+    browser::window_frames::whole_point((x, y))
+}
+
 unsafe extern "C" {
     #[cfg(not(target_os = "linux"))]
     pub fn drive_start();
@@ -9,7 +18,8 @@ unsafe extern "C" {
     );
     #[cfg(target_os = "linux")]
     pub fn host_choose(title: *const c_char) -> bool;
-    pub fn host_centered(width: f64, height: f64, x: *mut f64, y: *mut f64);
+    // Through `centered` alone, which takes its point to whole points.
+    fn host_centered(width: f64, height: f64, x: *mut f64, y: *mut f64);
     #[cfg(not(target_os = "linux"))]
     pub fn host_ui_view() -> *mut c_void;
     #[cfg(target_os = "linux")]
@@ -43,10 +53,19 @@ unsafe extern "C" {
     ) -> bool;
     pub fn host_close_launch_window();
     pub fn host_watch_finished_launching(finished: extern "C" fn());
+    #[cfg(not(target_os = "windows"))]
     pub fn host_save_launch_picture(
         ui_view: *mut c_void,
         profile_dir: *const c_char,
         width: f64,
+    ) -> bool;
+    #[cfg(target_os = "windows")]
+    pub fn host_save_launch_pixels(
+        ui_view: *mut c_void,
+        profile_dir: *const c_char,
+        pixels: *const u8,
+        columns: usize,
+        rows: usize,
     ) -> bool;
     pub fn host_cascaded(
         ui_view: *mut c_void,
@@ -149,6 +168,7 @@ unsafe extern "C" {
     pub fn host_focus(view: *mut c_void);
     pub fn host_show_window_buttons(ui_view: *mut c_void, shown: bool);
     pub fn host_press_window_button(ui_view: *mut c_void, button: i32);
+    pub fn host_set_window_on_top(ui_view: *mut c_void, on: bool);
     #[cfg(target_os = "macos")]
     pub fn host_window_buttons(
         ui_view: *mut c_void,
@@ -180,6 +200,12 @@ unsafe extern "C" {
     pub fn host_detent();
     pub fn host_dock_dot_launch(profile_dir: *const c_char);
     pub fn host_dock_dot(colored: bool, color: u32);
+    pub fn host_app_active() -> bool;
+    pub fn host_needs_you_badge(count: c_int);
+    #[cfg(not(target_os = "linux"))]
+    pub fn host_needs_you_notify(id: u64, title: *const c_char, body: *const c_char);
+    #[cfg(not(target_os = "linux"))]
+    pub fn host_watch_needs_you(clicked: extern "C" fn(id: u64));
     pub fn host_watch_control(released: extern "C" fn());
     pub fn host_take_drops(
         dragged: extern "C" fn(
@@ -368,6 +394,7 @@ pub const UPDATE_FOUND: c_int = 3;
 pub const UPDATE_DOWNLOADING: c_int = 4;
 pub const UPDATE_READY: c_int = 5;
 pub const UPDATE_FAILED: c_int = 6;
+pub const UPDATE_AVAILABLE: c_int = 7;
 
 /// What host_take_drops hears of a drag.
 pub const DRAG_OVER: c_int = 0;

@@ -42,6 +42,7 @@ pub use crate::tokens::palette::{
 };
 use crate::tokens::shell::library::{COLUMN, LIBRARY_PLATE};
 use crate::tokens::shell::{CARD as PAGE_CARD, LIGHT_CARD as LIGHT_PAGE_CARD};
+use crate::tokens::shell::{LIGHT_UNPAINTED, UNPAINTED};
 /// The ends of the scale each family's text runs toward, which the accent's search needs, and the
 /// ground a swatch's colours are judged on.
 const BLACK: Rgba = Rgba {
@@ -160,11 +161,19 @@ impl Tone {
         }
     }
 
-    /// The card the pages lie in, what shows before a page first paints.
+    /// The card the pages lie in.
     fn page(self) -> Rgba {
         rgba(match self {
             Tone::Dark => PAGE_CARD,
             Tone::Light => LIGHT_PAGE_CARD,
+        })
+    }
+
+    /// What a page shows until its first frame, while websites are told this is the appearance.
+    pub fn unpainted(self) -> Rgba {
+        rgba(match self {
+            Tone::Dark => UNPAINTED,
+            Tone::Light => LIGHT_UNPAINTED,
         })
     }
 

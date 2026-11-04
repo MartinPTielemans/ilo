@@ -121,6 +121,12 @@ fn remove_keys() -> Vec<SharedString> {
         .collect()
 }
 
+/// The key on a hint's chip at the input's end: ↩ and ⇥ on the Mac, and off it Enter and Tab, the
+/// words the menus use, as the UI's font there has no keyboard symbols (#772).
+fn hint_key(key: &str, off_the_mac: bool) -> String {
+    shell::key_name(key, off_the_mac)
+}
+
 /// One of the core's suggestions for what's typed.
 #[derive(Default)]
 pub struct Suggestion {
@@ -306,6 +312,7 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::Forward => "icons/arrow-right.svg",
         Command::Reload | Command::ForceReload => "icons/rotate-cw.svg",
         Command::Stop => "icons/x.svg",
+        Command::StayOnTop => "icons/pin.svg",
         Command::ZoomIn => "icons/zoom-in.svg",
         Command::ZoomOut => "icons/zoom-out.svg",
         Command::FlipSplit => "icons/arrow-left-right.svg",
@@ -1798,8 +1805,13 @@ impl CommandBar {
         }
         let named = |tab: &&shell::BarTab| !self.is_shown(tab.tab) && names_tab(tab, &typed);
         let mut named: Vec<&shell::BarTab> = self.tabs.iter().filter(named).collect();
-        // Stable, so the most recently shown stays first among equals.
-        named.sort_by_key(|tab| !(tab.renamed && tab.title.to_lowercase().starts_with(&typed)));
+        // A renamed tab whose name what's typed starts, then the tabs switched to more, as Arc's
+        // rank (#1396). Stable, so the most recently shown stays first among equals. A score is
+        // never negative, so its bits order as it does.
+        named.sort_by_cached_key(|tab| {
+            let prefix = tab.renamed && tab.title.to_lowercase().starts_with(&typed);
+            (!prefix, std::cmp::Reverse(tab.switched.to_bits()))
+        });
         named.truncate(TABS_RISEN);
         // Each in place of the core's row for it, where the core listed one.
         let mut risen =
@@ -2198,6 +2210,7 @@ impl CommandBar {
         // check.sh reads these lines.
         if let Some(command) = row.command {
             log!("browser: command bar runs {}", row.text);
+            shell::picked_in_bar(&row.text, command, cx);
             use shell::Command::{AddSplit, EditUrl, NewTab, SearchTabs};
             if !matches!(command, NewTab | SearchTabs | EditUrl | AddSplit) {
                 self.close();
@@ -2437,9 +2450,11 @@ impl CommandBar {
             .chosen()
             .filter(|row| self.site.is_none() && !row.keyword.is_empty());
         let (said, key) = match site {
-            Some(row) => (format!("Search {}", row.site), "Tab"),
-            None if self.ask.is_some() => ("Run".to_string(), "↩"),
-            None if self.offers_ask(cx) => ("Ask".to_string(), "⇥"),
+            Some(row) => (format!("Search {}", row.site), "Tab".to_string()),
+            None if self.ask.is_some() => {
+                ("Run".to_string(), hint_key("enter", shell::OFF_THE_MAC))
+            }
+            None if self.offers_ask(cx) => ("Ask".to_string(), hint_key("tab", shell::OFF_THE_MAC)),
             None => return None,
         };
         let palette = palette::current(cx);

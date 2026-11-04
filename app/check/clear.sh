@@ -330,6 +330,7 @@ send choose "$(cased 'Change Icon…')"
 expect "^browser: icon picker for tab $e on emoji\$" \
   "Change Icon… didn't open the icon picker for the middle tab"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker under the middle tab"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 send insert glowing star
 send key return
 expect "^browser: page $e icon 🌟\$" "the picker's pick didn't become the middle tab's icon"
@@ -1385,7 +1386,7 @@ if [ "$drm_done" = "Safari's engine" ]; then
   # On took back the off, and never kept the listed host as the user's own.
   python3 -I -c '
 import json, sys
-engine = json.load(open(sys.argv[1])).get("browser_core", {}).get("system_engine", {})
+engine = json.load(open(sys.argv[1], encoding="utf-8")).get("browser_core", {}).get("system_engine", {})
 for kind in ("sites", "listed_off"):
     if "127.0.0.1" in engine.get(kind, []):
         sys.exit(f"the profile has the listed host in its {kind}")

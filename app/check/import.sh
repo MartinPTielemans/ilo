@@ -1,5 +1,5 @@
 # Settings › Import finds the made-up Arc in src/import/fixture and a made-up Chrome and Firefox
-# beside it, never the Mac's own browsers. From Arc it brings its two Spaces, one in a new profile
+# beside it, never the machine's own browsers. From Arc it brings its two Spaces, one in a new profile
 # named Work as Arc's Local State names it, their pinned tabs and folders, its favorites, and the
 # three of its link rules that can be ours, each to the Space its Arc Space became; from
 # Chrome and from Firefox their bookmarks as a Space named after each and their history, which the
@@ -10,11 +10,15 @@
 # password importer: the view says how many came in, deletes the file when asked, and a second file
 # with a login's password changed says it conflicted and kept the saved one. Settings' Passwords
 # tab lists what came in, and the app menu's Import from Other Browsers… shows Import again. With
-# the sidebar hidden, Arc's Spaces say so in a toast. Each step is captured, and the list and the
-# first browser's choices, under Import › its name with Import in the accent, at Settings' first
-# size and its least, dark and light; Esc goes back from the choices to the list. Arc has no Linux
-# build, so off the Mac the fixture's Arc isn't found, its steps are left out, and Chrome and Firefox
-# are where Linux keeps them.
+# the sidebar hidden, Arc's Spaces say so in a toast. While an import runs, each Space it makes is
+# a card under its profile, captured waiting (Arc's, as Work's profile loads, recorded on the Mac)
+# and ticked (Chrome's, as its history goes in). Once a browser has come in, its row says when,
+# that again brings only what's new, and Import Again…. Each step is captured, and the list and the
+# first browser's choices, read as it's picked and each kind counted, under Import › its name with
+# Import in the accent, at Settings' first size and its least, dark and light; Esc goes back from
+# the choices to the list. The fixture's Arc is put where the Mac keeps it, or Windows' Store, and
+# Chrome and Firefox where each system keeps them. Arc has no Linux build, so on Linux it isn't
+# found and its steps are left out.
 
 serve
 printf '%s' '<title>import ready</title>' > "$out/site/import.html"
@@ -27,10 +31,20 @@ rm -f "$saved" "$rules_file"
 home="$out/import-home"
 rm -rf "$home"
 cp -R src/import/fixture "$home"
+arc_dir="$home/Library/Application Support/Arc"
 if [ "$(uname)" = Darwin ]; then
   arc=1
   chrome="$home/Library/Application Support/Google/Chrome"
   firefox="$home/Library/Application Support/Firefox"
+elif windows; then
+  # Arc on Windows is the Store's, in its package's folder (sources.rs).
+  arc=1
+  store="$home/AppData/Local/Packages/TheBrowserCompany.Arc_ttt1ap7aakyb4/LocalCache/Local"
+  mkdir -p "$store"
+  mv "$arc_dir" "$store/Arc"
+  arc_dir="$store/Arc"
+  chrome="$home/AppData/Local/Google/Chrome/User Data"
+  firefox="$home/AppData/Roaming/Mozilla/Firefox"
 else
   arc=
   chrome="$home/.config/google-chrome"
@@ -62,10 +76,21 @@ print "SNSS", pack("l<", 3), cmd(9, pack("l<2", 1, 0)),
   cmd(0, pack("l<2", 1, 2)), cmd(2, pack("l<2", 2, 0)), cmd(6, nav(2, 0, "https://open.example.org/")),
   cmd(0, pack("l<2", 1, 3)), cmd(2, pack("l<2", 3, 1)), cmd(6, nav(3, 0, "https://mail.example.org/")),
   cmd(255, "")' > "$chrome/Default/Sessions/Session_13400000000000000"
-command -v sqlite3 > /dev/null || fail "no sqlite3 to write Chrome's History with"
+# Runs the SQL $2 on the database $1: with the sqlite3 command where there is one, else with
+# Python's own sqlite3 module, as Windows' Git Bash has Python but no sqlite3 (#1724).
+sql() {
+  if command -v sqlite3 > /dev/null; then
+    sqlite3 "$1" "$2"
+  else
+    python3 -c 'import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.executescript(sys.argv[2])
+db.commit()' "$1" "$2"
+  fi
+}
 # Chromium counts microseconds from 1601: an hour and two hours ago.
 now=$(( ($(date +%s) + 11644473600) * 1000000 ))
-sqlite3 "$chrome/Default/History" "
+sql "$chrome/Default/History" "
   CREATE TABLE urls(id INTEGER PRIMARY KEY AUTOINCREMENT, url LONGVARCHAR, title LONGVARCHAR,
     visit_count INTEGER DEFAULT 0 NOT NULL, typed_count INTEGER DEFAULT 0 NOT NULL,
     last_visit_time INTEGER NOT NULL, hidden INTEGER DEFAULT 0 NOT NULL);
@@ -74,7 +99,7 @@ sqlite3 "$chrome/Default/History" "
     ('https://history-two.example.org/', 'Two', 1, 0, $now - 7200000000);"
 # Chrome's saved address, field by field as Chromium's FieldType numbers (full name, city, country)
 # with each typed by the user, and a made-up card beside it, which the import never reads.
-sqlite3 "$chrome/Default/Web Data" "
+sql "$chrome/Default/Web Data" "
   CREATE TABLE address_type_tokens(guid VARCHAR, type INTEGER, value VARCHAR,
     verification_status INTEGER DEFAULT 0, observations BLOB);
   INSERT INTO address_type_tokens(guid, type, value, verification_status) VALUES
@@ -87,7 +112,7 @@ printf '[Profile0]\nName=default-release\nIsRelative=1\nPath=Profiles/x.default-
 # Firefox counts microseconds from 1970: its two bookmarks never visited, two pages visited an hour
 # and two hours ago.
 now=$(( $(date +%s) * 1000000 ))
-sqlite3 "$firefox/Profiles/x.default-release/places.sqlite" "
+sql "$firefox/Profiles/x.default-release/places.sqlite" "
   CREATE TABLE moz_places(id INTEGER PRIMARY KEY, url LONGVARCHAR, title LONGVARCHAR,
     visit_count INTEGER DEFAULT 0, hidden INTEGER DEFAULT 0 NOT NULL,
     typed INTEGER DEFAULT 0 NOT NULL, last_visit_date INTEGER, guid TEXT);
@@ -105,7 +130,7 @@ sqlite3 "$firefox/Profiles/x.default-release/places.sqlite" "
 # Arc used last, so it's listed first, then Chrome, then Firefox.
 touch -t 200001010000 "$chrome/Default/History" "$chrome/Default/Preferences"
 touch -t 199901010000 "$firefox/Profiles/x.default-release/places.sqlite"
-touch "$home/Library/Application Support/Arc/StorableSidebar.json"
+touch "$arc_dir/StorableSidebar.json"
 # The file the open panel would give, which a run can't drive: made-up logins, never real ones.
 passwords="$out/passwords.csv"
 printf '%s\n' 'name,url,username,password,note' \
@@ -121,10 +146,12 @@ printf '%s\n' '<!DOCTYPE NETSCAPE-Bookmark-file-1>' '<TITLE>Bookmarks</TITLE>' \
 # The check's profile keeps the address an earlier run brought in, and the import adds an address
 # only once, so the run starts with none; the app isn't running, so Web Data is free.
 web_data="$profile_dir/Default/Web Data"
-[ ! -e "$web_data" ] || sqlite3 "$web_data" "DELETE FROM addresses; DELETE FROM address_type_tokens;" ||
+[ ! -e "$web_data" ] || sql "$web_data" "DELETE FROM addresses; DELETE FROM address_type_tokens;" ||
   fail "the check's profile kept its addresses"
-BROWSER_IMPORT_HOME="$home" BROWSER_IMPORT_PASSWORDS="$passwords" \
-  BROWSER_IMPORT_BOOKMARKS="$bookmarks" BROWSER_DRIVE=1 BROWSER_URL="${site}import.html" \
+# The app on Windows takes Windows' paths, and starts in a folder of its own.
+BROWSER_IMPORT_HOME="$(native_path "$PWD/$home")" \
+  BROWSER_IMPORT_PASSWORDS="$(native_path "$PWD/$passwords")" \
+  BROWSER_IMPORT_BOOKMARKS="$(native_path "$PWD/$bookmarks")" BROWSER_DRIVE=1 BROWSER_URL="${site}import.html" \
   "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
@@ -204,12 +231,21 @@ settings_shots() {
   settings_at 820 660
 }
 settings_shots list
-# The first browser's choices, under the heading Import › its name, with Import in the accent;
-# Esc goes back to the list.
-if [ -n "$arc" ]; then first_found=Arc; else first_found=Chrome; fi
+# The first browser's choices, under the heading Import › its name, with Import in the accent,
+# read as it's picked: each kind with how much of it comes, Arc's Spaces by name, the passwords'
+# row and the profiles it goes into. Esc goes back to the list.
+if [ -n "$arc" ]; then
+  first_found=Arc
+  counts='spaces: 2, pinned: 6, folders: 2, link_rules: 3, favorites: 3, bookmarks: 0, bookmark_folders: 0, open_tabs: 0, reading_list: 0, pages: 0, addresses: 0, extensions: 0'
+else
+  first_found=Chrome
+  counts='spaces: 0, pinned: 0, folders: 0, link_rules: 0, favorites: 0, bookmarks: 3, bookmark_folders: 1, open_tabs: 2, reading_list: 0, pages: 2, addresses: 1, extensions: 0'
+fi
 send clickkey $(drawn "import-from $first_found")
 expect "^browser: import pick $first_found\$" "Import… on $first_found's row didn't show its choices"
 expect '^browser: import drawn pick$' "$first_found's choices didn't draw"
+expect "^browser: import read $first_found: Tally { $counts }\$" \
+  "picking $first_found didn't read it: $(grep '^browser: import read' "$log" | tail -1)"
 settings_shots choose
 send key escape
 expect '^browser: import escape$' "Esc in $first_found's choices didn't reach the import"
@@ -219,7 +255,15 @@ if [ -n "$arc" ]; then
   expect '^browser: import pick Arc$' "Import… on Arc's row didn't show what comes from it"
   expect '^browser: import drawn pick$' "Arc's choices didn't draw"
   ../tools/window-screenshot.sh "$pid" "$out/import-pick.png" || fail "no window to capture"
+  # The arrival, recorded on the Mac: a card a Space as the core makes it, under its profile, each
+  # waiting while Work's profile loads, then ticking as its tabs go in.
+  record import-arrival 2
   click_drawn import-go
+  expect '^browser: import cards Personal, Work$' "Arc's Spaces didn't come as cards, Personal then Work"
+  # Captured waiting, or at the end where Work's profile came before the window's next frame, as
+  # on Windows' runner.
+  expect '^browser: import \(drawn running\|done: \)' "Arc's cards didn't draw"
+  ../tools/window-screenshot.sh "$pid" "$out/import-arriving.png" || fail "no window to capture"
   expect '^browser: import from Arc: 2 Spaces, 6 pinned tabs, 0 open tabs, 3 favorites, 0 pages, 0 addresses$' \
     "Import didn't plan Arc's 2 Spaces, 6 pinned tabs and 3 favorites"
   expect '^browser: import from Arc: 3 link rules$' "Import didn't plan Arc's 3 link rules"
@@ -227,11 +271,15 @@ if [ -n "$arc" ]; then
   arc_done='2 Spaces, 6 pinned tabs, 3 favorites and 3 link rules came in from Arc'
   await "^browser: import done: $arc_done\\.\$" ||
     fail "the import didn't finish once the Work profile loaded"
+  recorded
   # The rules go to Arc's Spaces by their places among the user's: Personal second, Work third.
   t=$(printf '\t')
-  rules="rule${t}contains${t}3${t}work.example.com
+  # After the Meet rule a profile starts with (#692).
+  rules="rule${t}contains${t}front${t}meet.google.com
+rule${t}contains${t}3${t}work.example.com
 rule${t}is${t}2${t}https://news.ycombinator.com/
-rule${t}is${t}3${t}https://docs.example.com/"
+rule${t}is${t}3${t}https://docs.example.com/
+seeded${t}meet"
   [ "$(cat "$rules_file" 2>/dev/null)" = "$rules" ] ||
     fail "Arc's link rules didn't come in to its Spaces: $(cat "$rules_file" 2>/dev/null)"
   ../tools/window-screenshot.sh "$pid" "$out/import-done.png" || fail "no window to capture"
@@ -270,14 +318,22 @@ expect '^browser: import drawn pick$' "Chrome's choices didn't draw"
 click_drawn import-go
 expect '^browser: import from Chrome: 1 Spaces, 3 pinned tabs, 1 open tabs, 0 favorites, 2 pages, 1 addresses$' \
   "Import didn't plan Chrome's bookmarks, open tab, history and address"
+# Its card ticks once its tabs are in, as the core adds the history after: captured then, or at
+# the end if the core was quicker than the frame.
+expect '^browser: import cards Chrome$' "Chrome's Space didn't come as a card"
+expect '^browser: import \(drawn placed\|done: \)' "Chrome's tabs didn't go in"
+../tools/window-screenshot.sh "$pid" "$out/import-placed.png" || fail "no window to capture"
 await '^browser: history added 2 to profile [0-9]*$' || fail "the core didn't add Chrome's 2 pages"
 await '^browser: addresses added 1 to profile [0-9]*$' || fail "the core didn't add Chrome's address"
 expect '^browser: import done: 1 Space, 3 pinned tabs, 1 open tab, 2 pages of history and 1 address came in from Chrome\.$' \
   "the import didn't say what came from Chrome"
 ../tools/window-screenshot.sh "$pid" "$out/import-chrome.png" || fail "no window to capture"
+expect '^browser: import kept Chrome$' "Chrome's import wasn't kept as its last"
 expect '^browser: import drawn done$' "the import's end didn't draw"
 click_drawn import-done
 expect '^browser: import drawn list$' "Done didn't go back to the list"
+# Chrome's row says when it came in, that again brings only what's new, and Import Again….
+../tools/window-screenshot.sh "$pid" "$out/import-again-list.png" || fail "no window to capture"
 send clickkey $(drawn "import-from Chrome")
 expect '^browser: import pick Chrome$' "Import… didn't show Chrome's choices again"
 expect '^browser: import drawn pick$' "Chrome's choices didn't draw"
@@ -392,7 +448,8 @@ echo "  With the sidebar hidden, Arc's two Spaces say so in a toast."
 echo "  Settings' list and $first_found's choices, under Import › $first_found, at 820 by 660 and"
 echo "  720 by 480, dark and light, and Esc goes back from the choices to the list."
 echo "  Windows: $out/import-settings-{list,choose}-{820,720}-{dark,light}.png,"
-echo "  $out/import-list.png, $out/import-pick.png, $out/import-done.png,"
+echo "  $out/import-arriving.png (with Arc), $out/import-placed.png,"
+echo "  $out/import-again-list.png, $out/import-list.png, $out/import-pick.png, $out/import-done.png,"
 echo "  $out/import-again.png, $out/import-chrome.png, $out/import-firefox.png,"
 echo "  $out/import-bookmarks.png, $out/import-passwords.png,"
 echo "  $out/import-passwords-conflict.png, $out/import-personal.png"

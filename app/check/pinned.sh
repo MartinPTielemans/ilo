@@ -466,12 +466,13 @@ none_since "^browser: loaded $c ${site}notes.txt" || fail "the unloaded tab load
 outline() {
   grep '^browser: outline' "$log" | tail -1 | sed 's/^browser: outline *//'
 }
-# Waits for the rows moving since the last outline to come to rest, so a press lands on the row
-# drawn there.
+# Waits for the rows moving since the outline last changed to come to rest, so a press lands on the
+# row drawn there. An outline the same as the one before moves no row, and so brings no "rows
+# settled" after it: the pages of a folder dropped from the desktop log theirs again as they load.
 settled() {
   for _ in $(seq 300); do
-    awk '/^browser: outline/ { s = 0 } /^browser: rows settled/ { s = 1 } END { exit !s }' \
-      "$log" && return 0
+    awk '/^browser: outline/ { if ($0 != last) s = 0; last = $0 } /^browser: rows settled/ { s = 1 }
+      END { exit !s }' "$log" && return 0
     sleep 0.1
   done
   fail "the rows didn't come to rest"
@@ -706,6 +707,7 @@ expect "^browser: menu shown $(cased 'Rename Folder, Change Icon…, Duplicate')
 send choose "$(cased 'Change Icon…')"
 expect "^browser: icon picker for folder $f on emoji\$" "Change Icon… didn't open the icon picker for the folder"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker under the folder"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 send insert glowing star
 send key return
 expect "^browser: iconed folder $f 🌟\$" "the picker's pick didn't become the folder's icon"

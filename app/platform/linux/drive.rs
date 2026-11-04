@@ -33,7 +33,8 @@
 //! or resizes, then "browser: pip gone", or "browser: pip none" without one. pip doubleclick, pip
 //! wheel, and pip press, dragto and release work in it, at points from its top-left corner as the
 //! command finds it, or as it was at the press. pip press, dragto and release alone move the
-//! display's pointer, through XTest, onto the window only, and the release puts it back.
+//! display's pointer, through XTest, onto the window only, and the release puts it back once the
+//! window manager has let go, logging where the drag left the window.
 //!
 //! It logs as drive.mm does: "browser: drive <n>: <command>" as command n arrives, "browser: drive
 //! <n>: can't do that" for one it can't, and "browser: drive <n> done, key <window>, focus <view>,
@@ -52,7 +53,7 @@ use std::{
     io::BufRead,
     rc::Rc,
     sync::{
-        Arc, OnceLock,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -80,13 +81,25 @@ use crate::{
 
 unsafe extern "C" {
     // GLib's, from chrome, whose main loop is GLib's.
-    fn g_idle_add(function: extern "C" fn(*mut c_void) -> c_int, data: *mut c_void) -> c_uint;
+    fn g_idle_add_full(
+        priority: c_int,
+        function: extern "C" fn(*mut c_void) -> c_int,
+        data: *mut c_void,
+        notify: *mut c_void,
+    ) -> c_uint;
     fn g_timeout_add(
         interval: c_uint,
         function: extern "C" fn(*mut c_void) -> c_int,
         data: *mut c_void,
     ) -> c_uint;
 }
+
+/// GLib's G_PRIORITY_LOW, below its idle priority.
+const G_PRIORITY_LOW: c_int = 300;
+/// How long, in milliseconds, a command waits for the loop to be free before it runs anyway: past
+/// the longest wait seen while windows animate on a loaded machine, about 110, so it only runs
+/// early while frames draw without a break.
+const IDLE_WAIT: c_uint = 250;
 
 /// Starts reading commands from stdin.
 pub fn start() {
@@ -128,16 +141,31 @@ pub fn start() {
     });
 }
 
-/// Runs `task` on the main thread once nothing more urgent is ready, such as the X events Chromium
-/// and GPUI have to read: GLib's idle priority is below their sources'.
+/// Runs `task` on the main thread once nothing more urgent is ready: the X events Chromium and GPUI
+/// have to read, and the tasks Chromium has posted. Those run at GLib's idle priority, a few a turn,
+/// so a command there could come between them, as a key between the browser window becoming active
+/// and the page taking the keyboard back, which reached no page (#1621). Frames drawn without a
+/// break, as a shimmer's under software rendering, keep the loop from ever being free, as their
+/// sources are above the idle priority, so after IDLE_WAIT the task runs anyway (#1700).
 fn idle(task: Box<dyn FnOnce() + Send>) {
+    type Slot = Mutex<Option<Box<dyn FnOnce() + Send>>>;
     extern "C" fn run(data: *mut c_void) -> c_int {
-        // SAFETY: the box `idle` leaked, which runs once.
-        let task = unsafe { Box::from_raw(data as *mut Box<dyn FnOnce() + Send>) };
-        task();
+        // SAFETY: one of the two references `idle` leaked, each taken back once. The first to run
+        // takes the task.
+        let slot = unsafe { Arc::from_raw(data as *const Slot) };
+        let task = slot.lock().ok().and_then(|mut task| task.take());
+        if let Some(task) = task {
+            task();
+        }
         0
     }
-    unsafe { g_idle_add(run, Box::into_raw(Box::new(task)) as *mut c_void) };
+    let slot: Arc<Slot> = Arc::new(Mutex::new(Some(task)));
+    let free = Arc::into_raw(slot.clone()) as *mut c_void;
+    let late = Arc::into_raw(slot) as *mut c_void;
+    unsafe {
+        g_idle_add_full(G_PRIORITY_LOW, run, free, std::ptr::null_mut());
+        g_timeout_add(IDLE_WAIT, run, late);
+    }
 }
 
 /// Has the command running go on after it returns, with `rest`, which gets what reports the
@@ -2432,13 +2460,12 @@ fn hold_mini_player(window: xproto::Window, step: &str, x: f64, y: f64) -> Optio
             return fake(xproto::MOTION_NOTIFY_EVENT, 0, back);
         }
         first_press(at, 1, false);
-        let [left, top, ..] = frame(window)?;
         let held = HeldPip {
             x,
             y,
             root: (at.root_x, at.root_y),
             back,
-            at: (left, top),
+            frame: frame(window)?,
         };
         PIP_HELD.set(Some(held));
         return fake(xproto::BUTTON_PRESS_EVENT, 1, (at.root_x, at.root_y));
@@ -2456,11 +2483,11 @@ fn hold_mini_player(window: xproto::Window, step: &str, x: f64, y: f64) -> Optio
     // The window manager takes the pointer only once it has the core's request to move the
     // window, which can be after the drag's last motion, and it then moves the window with the
     // pointer until a click, so the release would leave the window following the pointer home.
-    // A hand that drags keeps moving: a pixel back and forth till the window has moved, or 2 s.
+    // A hand that drags keeps moving: a pixel back and forth till the window has moved or sized,
+    // or 2 s.
     if to != held.root {
         for _ in 0..20 {
-            let [left, top, ..] = frame(window)?;
-            if (left, top) != held.at {
+            if frame(window)? != held.frame {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -2470,18 +2497,54 @@ fn hold_mini_player(window: xproto::Window, step: &str, x: f64, y: f64) -> Optio
     }
     PIP_HELD.set(None);
     fake(xproto::BUTTON_RELEASE_EVENT, 1, to)?;
+    // A hand rests after it lets go. The window manager takes a move's queued motions as one, the
+    // last first, so the pointer sent home before it has read the release took the window with it,
+    // its grabbed point under the corner (#1780). The pointer waits till no one holds it, or 2 s.
+    for _ in 0..20 {
+        if !pointer_held_elsewhere()? {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    // Where the drag left it, as the last frame the window manager gave it may have come before.
+    let [left, top, width, height] = frame(window)?;
+    log!("browser: pip at {left:.0} {top:.0} {width:.0} {height:.0}");
     fake(xproto::MOTION_NOTIFY_EVENT, 0, held.back)
 }
 
+/// Whether another client holds the display's pointer, as the window manager does through a move
+/// or resize it took over, and the window a press was on until its release: a grab of ours fails
+/// then. Ours, when it succeeds, goes at once.
+fn pointer_held_elsewhere() -> Option<bool> {
+    let server = server()?;
+    let (connection, root) = &*server;
+    let grab = connection.grab_pointer(
+        false,
+        *root,
+        EventMask::NO_EVENT,
+        xproto::GrabMode::ASYNC,
+        xproto::GrabMode::ASYNC,
+        x11rb::NONE,
+        x11rb::NONE,
+        x11rb::CURRENT_TIME,
+    );
+    let status = grab.ok()?.reply().ok()?.status;
+    if status == xproto::GrabStatus::SUCCESS {
+        connection.ungrab_pointer(x11rb::CURRENT_TIME).ok()?;
+        connection.flush().ok()?;
+    }
+    Some(status == xproto::GrabStatus::ALREADY_GRABBED)
+}
+
 /// A press on the Mini Player through XTest: where it was in the window and on the screen, where
-/// the display's pointer was before it, where the release puts it back, and where the window was.
+/// the display's pointer was before it, where the release puts it back, and the window's frame.
 #[derive(Clone, Copy)]
 struct HeldPip {
     x: f64,
     y: f64,
     root: (i16, i16),
     back: (i16, i16),
-    at: (f64, f64),
+    frame: [f64; 4],
 }
 
 /// Logs the Mini Player's frame each time `window`, it, moves or resizes, from a thread of its own

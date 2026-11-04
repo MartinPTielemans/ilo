@@ -77,6 +77,8 @@ pub(super) struct Recorder {
     pub(super) import: RefCell<Option<std::rc::Rc<dyn crate::import::Host>>>,
     /// The window is full screen, as Linux's window manager says, for `window_full_screen`.
     pub(super) full_screen: Cell<bool>,
+    /// Whether the window can't stay on top, as under Wayland.
+    pub(super) no_stay_on_top: Cell<bool>,
     /// The opt-ins' switches, as `crash_reports` and `agents` answer, None for one not offered.
     pub(super) crash_reports: Cell<Option<bool>>,
     pub(super) agents: Cell<Option<bool>>,
@@ -142,6 +144,8 @@ pub(super) struct Recorder {
     /// How many times Site Search Settings opened.
     pub(super) site_search_settings: Cell<usize>,
     pub(super) clear_browsing_data: Cell<usize>,
+    /// Each profile's command bar picks, as the file keeps them.
+    pub(super) bar_picks: RefCell<HashMap<u64, String>>,
     /// The pages `open_page` opened, in order.
     pub(super) opened_pages: RefCell<Vec<String>>,
     /// The text `copy` put on the clipboard, in order.
@@ -199,7 +203,6 @@ pub(super) struct Recorder {
     /// The answers to page dialogs it was given, with what was typed.
     pub(super) replies: RefCell<Vec<PageReply>>,
     /// What it says every agent's Space's menu lists.
-    pub(super) agent_permissions: RefCell<super::AgentGrants>,
     /// What the Library button's hover leaves out, none at first, as the core's default.
     hover_kinds_off: Cell<u32>,
     /// The account's core, as the first launch's account step asks it, in a build that names a
@@ -869,6 +872,20 @@ impl Browser for Recorder {
             .set(self.clear_browsing_data.get() + 1);
     }
 
+    fn bar_picks(&self, profile: u64) -> String {
+        self.bar_picks
+            .borrow()
+            .get(&profile)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn set_bar_picks(&self, profile: u64, text: &str) {
+        self.bar_picks
+            .borrow_mut()
+            .insert(profile, text.to_string());
+    }
+
     fn close_other_window(&self, _: &mut App) -> bool {
         Default::default()
     }
@@ -1066,6 +1083,14 @@ impl Browser for Recorder {
 
     fn window_button_geometry(&self, _: &mut App) -> Option<super::WindowButtonGeometry> {
         self.window_buttons.get()
+    }
+
+    fn set_on_top(&self, on: bool, _: &mut App) {
+        self.record(format!("on top {on}"))
+    }
+
+    fn can_stay_on_top(&self) -> bool {
+        !self.no_stay_on_top.get()
     }
 
     fn press_window_button(&self, button: WindowButton, _: &mut App) {
@@ -1340,37 +1365,12 @@ impl Browser for Recorder {
         self.record(format!("passwords {space}"));
     }
 
-    fn agent_activity(&self, _: &mut App) {
-        self.record("agent activity".into());
-    }
-
-    fn agent_permissions(&self, _: u64, _: &App) -> super::AgentGrants {
-        self.agent_permissions.borrow().clone()
-    }
-
-    fn revoke_agent(&self, space: u64, site: Option<SharedString>, _: &mut App) {
-        let site = site.map_or("all".into(), |site| site.to_string());
-        self.record(format!("revoke agent {space} {site}"));
-    }
-
-    fn disconnect_agent(&self, space: u64, _: &mut App) {
-        self.record(format!("disconnect agent {space}"));
-    }
-
-    fn take_back_agent_tabs(&self, space: u64, _: &mut App) {
-        self.record(format!("take back agent {space}"));
-    }
-
     fn take_over(&self, agent: SharedString, tab: u64, _: &mut App) {
         self.record(format!("take over {agent} {tab}"));
     }
 
     fn hand_back(&self, tab: u64, _: &mut App) {
         self.record(format!("hand back {tab}"));
-    }
-
-    fn give_to_agent(&self, tab: u64, space: u64, _: &mut App) {
-        self.record(format!("give {tab} to {space}"));
     }
 
     fn stop_agent(&self, agent: SharedString, _: &mut App) {
