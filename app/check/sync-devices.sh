@@ -233,6 +233,9 @@ others=
 device a
 exec 5>&- 3>&-
 quit
+# What A's sync carries, as the core names its data types once sync is active.
+types=$(grep -h 'browser: sync types ' "$a_log" | tail -1 | sed 's/.*browser: sync types //')
+[ -n "$types" ] || fail "A's sync never said what it carries"
 # The runs after start signed out.
 rm -f "$profile_dir/Account"
 kill "$ilo_server" 2>/dev/null || true
@@ -240,4 +243,5 @@ ilo_server=
 echo "ok: A added B, C recovered with the copied words, which the clipboard let go of after 90 s," \
   "A's own open tab reached B and its agent's never did," \
   "a login A saved reached B, whose removal reached A," \
-  "and B and C signed out, on a local ilo-server as $email. Logs: $out/sync-devices-*.log"
+  "and B and C signed out, on a local ilo-server as $email. A synced: $types." \
+  "Logs: $out/sync-devices-*.log"

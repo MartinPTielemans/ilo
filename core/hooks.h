@@ -248,6 +248,11 @@ extern bool (*g_browser_core_sync_hold_commit)(syncer::DataType type,
 extern void (*g_browser_core_sync_commit)(syncer::DataType type,
                                           syncer::CommitRequestDataList& commit);
 
+// chrome/browser/ui/sync/tab_contents_synced_tab_delegate.cc: whether the account's other devices
+// may get |contents| as one of this device's open tabs, as session sync would give them every tab:
+// never a tab of an agent's Space, which stays on its device (#1796). On the UI thread.
+extern bool (*g_browser_core_sync_tab)(content::WebContents* contents);
+
 // components/password_manager/core/browser/sync/password_proto_utils.cc: a password's client tag,
 // from Chromium's, on the password store's sequence.
 extern std::string (*g_browser_core_sync_password_tag)(const std::string& tag);
