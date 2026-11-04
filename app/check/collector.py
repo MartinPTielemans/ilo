@@ -100,6 +100,6 @@ class Collector(http.server.BaseHTTPRequestHandler):
 
 
 server = http.server.HTTPServer(("127.0.0.1", 0), Collector)
-with open(sys.argv[1], "w") as port:
+with open(sys.argv[1], "w", encoding="utf-8") as port:
     port.write(str(server.server_port))
 server.serve_forever()

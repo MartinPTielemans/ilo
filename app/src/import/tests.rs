@@ -350,7 +350,7 @@ fn chromium_dir(dir: PathBuf, ago: u64) {
 }
 
 /// A Firefox folder with one profile, used `ago` seconds ago.
-fn firefox_dir(dir: PathBuf, ago: u64) {
+pub(crate) fn firefox_dir(dir: PathBuf, ago: u64) {
     write(
         dir.join("profiles.ini"),
         "[Profile0]\nName=default\nPath=p.default\n",
@@ -1568,7 +1568,7 @@ fn history_is_the_last_90_days_of_pages() {
 
 /// Chrome on Linux, as the tests make it: `profiles` by folder and name, each with a short bar, two
 /// tabs open, one of them a bookmark's, two pages of history and an address.
-fn chrome(name: &str, profiles: &[(&str, &str)], now: SystemTime) -> PathBuf {
+pub(crate) fn chrome(name: &str, profiles: &[(&str, &str)], now: SystemTime) -> PathBuf {
     let home = home(name);
     let chrome = home.join(".config/google-chrome");
     let cache: Vec<String> = (profiles.iter())

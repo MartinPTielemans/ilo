@@ -1,6 +1,7 @@
 # An MCP client reaches the browser through the bridge beside it once Settings › Agents is on and
 # it's connected, as the saved settings say here. The socket is the user's alone, and the bridge
-# gets nowhere without the agent's token. Its first call makes its Space, and it may list and read
+# gets nowhere without the agent's token. Its first call makes its Space, which no window lists, and
+# its first call that acts on a tab starts its card, one for all its connections. It may list and read
 # only the tabs there: its list leaves out the user's tab, a read of the user's tab is refused, with
 # an activity-log entry, and a read of example.com, opened in its Space, gives the page's text. A
 # link to an app (ms-word:) opens nothing and asks nothing, the tab staying on its page, and the
@@ -15,13 +16,15 @@
 # types, each answered with what changed in the outline alone, and not into a frame's password
 # field. Its text leaves out a frame an extension puts in
 # the page, which isn't the page's. Its keys, typed or pressed, go to the page alone, and Escape
-# the page doesn't keep runs no Stop of ilo's. Where it acts in the page shown, its pointer and a
+# the page doesn't keep runs no Stop of ilo's. Where it acts in the page watched, its pointer and a
 # ring with the element's ref show it. It opens a page, clicks its link, goes back, where the tab
 # takes the page's title again, scrolls, takes a screenshot and closes a tab, and a bank's site asks first, in a card whose Allow Once opens it. Always Allow
-# opens it from then on, until Revoke Permission in the Space's menu takes that back. A login the
+# opens it from then on, as Settings › Agents lists with its Revoke. A login the
 # user saved fills in neither as the agent's tab loads it nor from a dropdown, and fills once the
-# user takes the tab over, without a reload. Closing the client's end ends its session with the tab,
-# and turning Settings › Agents off takes the socket away and drops a client connected.
+# user takes the tab over, without a reload. Closing the client's end ends its session with the tab.
+# Reconnected, its next call is a card of its own, whose ✕ answers the call under way and closes
+# the client's connection. Turning Settings › Agents off takes the socket away and drops a client
+# connected.
 
 log="$out/mcp.log"
 step=0
@@ -189,7 +192,10 @@ mcp '{"jsonrpc":"2.0","id":100,"method":"tools/list"}' | grep -q '"name":"read_p
 listed=$(call list_tabs '{}')
 await_log '^browser: made space [1-9][0-9]* for agent mcp-client$' "list_tabs didn't make the agent's Space"
 agent=$(grep '^browser: made space' "$log" | tail -1 | cut -d' ' -f4)
-await_log "^browser: added space $agent MCP client\$" "the agent's Space didn't reach the switcher"
+# Its Space is the agent's alone, which no window lists (#1080), and list_tabs alone starts no card.
+await_log "^browser: task space $agent MCP client\$" "the window didn't keep the agent's Space apart"
+grep -q "^browser: added space $agent " "$log" && fail "the agent's Space reached the switcher"
+grep -q '^browser: session ' "$log" && fail "list_tabs alone started the client's card"
 case "$listed" in
   "Your Space has no tabs yet."*) ;;
   *) fail "list_tabs in a new Space said: $listed" ;;
@@ -266,13 +272,41 @@ for n in $(seq 10); do
 done
 cases=$(sed -n 's/^cases: \(10 cases in .*\)/\1/p' "$out/cases.log")
 
+# The client's work is one card at the sidebar's foot, from its first call that acted on a tab, and
+# the cases' calls on their connection of their own were steps of the same card (#1080). Its name
+# is the one the client gave.
+sessions=$(grep -c '^browser: session session-[0-9]* of agent mcp-client as check$' "$log" || true)
+[ "$sessions" = 1 ] || fail "the client's two connections had $sessions cards, not one"
+session=$(sed -n 's/^browser: session \(session-[0-9]*\) of agent mcp-client as check$/\1/p' "$log")
+await_log "^browser: task plate task-${session#session-} at " "the client's card wasn't drawn"
+opened=$(call open_tab '{"url":"example.com"}')
+agent_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+[ -n "$agent_tab" ] || fail "open_tab example.com answered: $opened"
+# Its page's picture in the card's conversation, once it shows: "x y width height".
+picture() {
+  await_log "^browser: task picture $1 at " "the conversation didn't picture tab $1"
+  grep "^browser: task picture $1 at " "$log" | tail -1 | cut -d' ' -f6-
+}
+# Watches the agent's tab $1 from its picture, from the conversation.
+watch() {
+  read -r wx wy ww wh <<PICTURE
+$(picture "$1")
+PICTURE
+  send click $((wx + ww / 2)) $((wy + wh / 2))
+  await_log "^browser: task $session page $1\$" "a click on tab $1's picture didn't watch it"
+  await_log "^browser: task page $1 in place\$" "tab $1's page didn't come to rest in place"
+}
 send click $page_point
 driven=$active
 if [ "$driven" = 1 ]; then
-  send key 2 ctrl
-  expect "^browser: space $agent\( in .*\)\{0,1\}\$" "⌃2 didn't show the agent's Space"
-  open_from_bar example.com
-  agent_tab=$tab
+  # A click on the card opens its conversation, its steps in its agent's place.
+  read -r px py pw ph <<PLATE
+$(grep "^browser: task plate task-${session#session-} at " "$log" | tail -1 | cut -d' ' -f6-)
+PLATE
+  send click $((px + pw / 2)) $((py + ph / 2))
+  expect "^browser: task $session shown\$" "a click on the client's card didn't show its conversation"
+  watch "$agent_tab"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-watched.png" || fail "no window to capture"
   # The core lists the agent's Space alone: its tab, and not the user's Wikipedia tab in theirs.
   listed=$(call list_tabs '{}')
   case "$listed" in
@@ -311,7 +345,7 @@ typed.oninput = () => document.title = "typed";
 note.oninput = () => document.title = "noted";
 painted(() => document.title = "fields");
 </script>' > "$out/site/fields.html"
-  go_from_bar "localhost:$port/fields.html"
+  call navigate "{\"tab\":$agent_tab,\"url\":\"localhost:$port/fields.html\"}" > /dev/null
   await_log "^browser: title $agent_tab fields\$" "the fields page didn't load in the agent's tab"
   # A click while the page still loads can land before its field is drawn, and focus no field.
   await_log "^browser: page $agent_tab back 1 forward 0 loading 0 http://localhost:$port/fields\\.html\$" \
@@ -358,7 +392,7 @@ painted(() => document.title = "fields");
   esac
   case "$typed" in *by-the-agent*) fail "the outline gave what the agent typed" ;; esac
   await_log "^browser: title $agent_tab noted\$" "the agent's typing didn't reach the field"
-  # The page shown in the agent's Space has its pointer: at the note it typed into, ringed and
+  # The page watched from its card has its pointer: at the note it typed into, ringed and
   # tagged with the note's ref, over the page in the window the mouse goes through. It goes a
   # moment after.
   await_log "^browser: agent element $agent_tab [0-9]* at [0-9.]* [0-9.]* [1-9][0-9.]* [1-9][0-9.]*\$" \
@@ -591,25 +625,16 @@ CARD
     *) fail "hand_off answered: $handed" ;;
   esac
 
-  # The bar in the agent's Space takes the tab it's at work in over, and the agent's next action
-  # there is refused until the user hands it back from the bar.
-  # The bar logs its place as it changes, which a new tab doesn't.
-  await_log '^browser: agent bar [0-9]* at ' "the agent's Space showed no bar"
-  read -r bx by bw bh <<BAR
-$(grep '^browser: agent bar [0-9]* at ' "$log" | tail -1 | cut -d' ' -f6-)
-BAR
-  ../tools/window-screenshot.sh "$pid" "$out/agent-bar.png" || fail "no window to capture"
-  # Stop's tooltip shows its key, as Take Over's does Back to Pinned URL's.
-  hidden=$(grep -c '^browser: tooltip hidden$' "$log" || true)
-  faded=$(grep -c '^browser: tooltip window shown$' "$log" || true)
-  send move $((bx + bw / 4)) $((by + bh - 26))
-  await_log '^browser: tooltip shown Stop \(⌘\.\|Ctrl+\.\)$' "resting on Stop didn't show its key"
-  await_more '^browser: tooltip window shown$' "$faded" || fail "Stop's tooltip didn't fade in"
-  ../tools/window-screenshot.sh "$pid" "$out/agent-bar-tooltip.png" || fail "no window to capture"
-  send move $((bx + bw / 2)) $((by - 40))
-  await_more '^browser: tooltip hidden$' "$hidden" || fail "leaving Stop didn't hide its tooltip"
-  send click $((bx + bw - 16)) $((by + bh - 26))
-  await_log "^browser: agent mcp-client taken over in $opened_tab\$" "Take Over didn't take the tab"
+  # From the conversation, the strip under the page watched takes the tab the agent is at work
+  # in over with ⌘↩, and the agent's next action there is refused until the user hands it back.
+  send key escape
+  await_log "^browser: task page $agent_tab back\$" "Escape didn't step back to the conversation"
+  await_log '^browser: task page in its thumbnail$' "the page watched didn't go back into its picture"
+  watch "$opened_tab"
+  await_log "^browser: task strip $opened_tab at " "the page watched showed no strip"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-strip.png" || fail "no window to capture"
+  send key return cmd
+  await_log "^browser: agent mcp-client taken over in $opened_tab\$" "⌘↩ didn't take the tab"
   refused=$(call scroll "{\"tab\":$opened_tab}")
   case "$refused" in
     "error: "*"hand it back"*) ;;
@@ -636,28 +661,21 @@ CARD
     "error: The user keeps tab $opened_tab."*) ;;
     *) fail "ask_for_tab answered: $kept" ;;
   esac
-  # Hand Back, the held tab's bar's one button, at its left.
-  send click $((bx + 30)) $((by + bh - 26))
-  await_log "^browser: agent mcp-client handed back $opened_tab\$" "the bar's Hand Back didn't"
+  # ⌘↩ again hands it back.
+  send key return cmd
+  await_log "^browser: agent mcp-client handed back $opened_tab\$" "⌘↩ didn't hand the tab back"
   scrolled=$(call scroll "{\"tab\":$opened_tab}")
   case "$scrolled" in "Scrolled down."*) ;; *) fail "after Hand Back, scroll answered: $scrolled" ;; esac
 
   # Nothing of the user's autofills in the agent's tab. A throwaway login, saved through the offer
   # while the user holds the tab, on this run's own port, fills in neither as the page loads nor
   # from a dropdown once the agent has the tab back. Take Over fills it at once, without a reload,
-  # and the dropdown offers it. The bar logs its place as it changes.
-  bar() {
-    read -r bx by bw bh <<BAR
-$(grep '^browser: agent bar [0-9]* at ' "$log" | tail -1 | cut -d' ' -f6-)
-BAR
-  }
-  # Take Over, at the right end of the bar's buttons.
+  # and the dropdown offers it. ⌘↩ on the page watched takes it over and hands it back.
   take_over() {
     taken="^browser: agent mcp-client taken over in $opened_tab\$"
     before=$(grep -c "$taken" "$log" || true)
-    bar
-    send click $((bx + bw - 16)) $((by + bh - 26))
-    await_more "$taken" "$before" || fail "$1: Take Over didn't take the tab"
+    send key return cmd
+    await_more "$taken" "$before" || fail "$1: ⌘↩ didn't take the tab"
   }
   # How many child windows the browser window has, Chrome's autofill dropdown among them.
   children() {
@@ -666,17 +684,6 @@ BAR
   }
   logins() {
     grep -c "^browser: title $opened_tab login\$" "$log" || true
-  }
-  # Waits until no tooltip is up, its window faded out too, so it isn't counted as a child window.
-  no_tooltip() {
-    for _ in $(seq 50); do
-      case "$(grep '^browser: tooltip \(shown\|hidden\)' "$log" | tail -1)" in
-        "browser: tooltip shown "*) sleep 0.1 ;;
-        # Its window fades out in 270 ms (tooltip.rs FADE_OUT).
-        *) sleep 0.4; return 0 ;;
-      esac
-    done
-    return 1
   }
   call navigate "{\"tab\":$opened_tab,\"url\":\"localhost:$port/welcome.html\"}" > /dev/null
   await_log "^browser: title $opened_tab welcome\$" "the welcome page didn't load in the agent's tab"
@@ -706,20 +713,13 @@ BAR
   expect "^browser: offer $opened_tab answered Accept check@example.test\$" "return didn't save the login"
   handed="^browser: agent mcp-client handed back $opened_tab\$"
   before=$(grep -c "$handed" "$log" || true)
-  # Hand Back, the held tab's bar's one button, at its left.
-  bar
-  send click $((bx + 30)) $((by + bh - 26))
-  await_more "$handed" "$before" || fail "the bar's Hand Back didn't hand the login's tab back"
-  # Off the bar, which comes back with Stop under where Hand Back was, and Stop's tooltip would
-  # count below as a dropdown's child window.
-  send move $((bx + bw / 2)) $((by - 40))
-  tips=$(grep -c '^browser: tooltip shown ' "$log" || true)
+  send key return cmd
+  await_more "$handed" "$before" || fail "⌘↩ didn't hand the login's tab back"
 
   before=$(logins)
   call navigate "{\"tab\":$opened_tab,\"url\":\"localhost:$port/login.html\"}" > /dev/null
   await_more "^browser: title $opened_tab login\$" "$before" ||
     fail "the login page didn't load in the agent's tab"
-  no_tooltip || fail "a tooltip stayed up with the pointer off the agent bar"
   shown=$(children)
   # A click in the username field, where Chrome's dropdown would offer the login.
   send click 600 60
@@ -728,8 +728,6 @@ BAR
   sleep 1
   ../tools/window-screenshot.sh "$pid" "$out/agent-login-empty.png" || fail "no window to capture"
   [ "$(children)" = "$shown" ] || fail "the agent's tab offered the saved login in a dropdown"
-  [ "$(grep -c '^browser: tooltip shown ' "$log" || true)" = "$tips" ] ||
-    fail "a tooltip showed with the pointer off the agent bar: $(grep '^browser: tooltip shown ' "$log" | tail -1)"
   grep -q "^browser: title $opened_tab filled\$" "$log" &&
     fail "Chrome filled the saved password in the agent's tab"
   outline=$(call snapshot "{\"tab\":$opened_tab}")
@@ -744,9 +742,8 @@ BAR
   ../tools/window-screenshot.sh "$pid" "$out/agent-login-filled.png" || fail "no window to capture"
   send key escape
   before=$(grep -c "$handed" "$log" || true)
-  bar
-  send click $((bx + 30)) $((by + bh - 26))
-  await_more "$handed" "$before" || fail "the bar's Hand Back didn't hand the filled tab back"
+  send key return cmd
+  await_more "$handed" "$before" || fail "⌘↩ didn't hand the filled tab back"
 
   # A bank's site asks first, in a card in the window, and Allow Once opens it.
   bank="{\"url\":\"bank.localhost:$port/fields.html\"}"
@@ -780,14 +777,23 @@ CARD
   case "$allowed" in "Opened tab "*) ;; *) fail "after Always Allow, open_tab answered: $allowed" ;; esac
   [ "$(grep -c "$asks" "$log")" = "$before" ] || fail "Always Allow asked again"
 
-  # The Space's menu lists the permission, and revoking it asks again.
-  post rightclick $(row 9)
-  expect "^browser: menu shown .*$(cased 'Revoke Permission › Always Allow') on bank\\.localhost" \
-    "the agent's Space's menu didn't list its permission on the bank's site"
-  send choose "$(cased 'Revoke Permission › Always Allow') on bank.localhost"
-  await_log '^browser: agent mcp-client revoked bank\.localhost$' "Revoke didn't revoke the permission"
-  request open_tab "$bank" >&4
-  await_more "$asks" "$before" || fail "a revoked permission didn't ask again"
+  # Settings › Agents lists the permission with its Revoke, which the space menu of the agent's
+  # Space did before #1080. Under Xvfb's 800-point screen the button is drawn below its bottom, so
+  # the click isn't driven; the Agents' tests revoke.
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings"
+  settings_drew
+  send clickkey $(drawn "toolbar Agents")
+  expect '^browser: settings tab Agents$' "a click on Agents didn't show its section"
+  settings_drew Agents
+  drawn "revoke bank.localhost" > /dev/null || fail "Settings › Agents didn't list the bank's permission to revoke"
+  ../tools/window-screenshot.sh "$pid" "$out/settings-agents-revoke.png" || fail "no window to capture"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+  # Another bank's site asks, as the answer was for bank.localhost alone.
+  asks='^browser: agent mcp-client asks [0-9]*: open otherbank\.localhost$'
+  request open_tab "{\"url\":\"otherbank.localhost:$port/fields.html\"}" >&4
+  await_more "$asks" 0 || fail "another bank's site didn't ask"
   # Left unanswered, for the client to go with.
   pending=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
   await_log "^browser: agent question $pending at " "the agent's question wasn't drawn"
@@ -809,18 +815,62 @@ if [ "$driven" = 1 ]; then
   await_log "^browser: agent mcp-client done in $at\$" "the tab still shows a gone agent at work"
   await_log "^browser: agent question $pending gone\$" "a gone agent's question stayed open"
 
+  # Reconnected, the client's next call on a tab is a card of its own. Its ✕, which stops it as
+  # Stop does, answers the call under way that the user stopped it, then closes the client's
+  # connection, which the bridge ends with, until the user reconnects it (#1080). It's used from
+  # the foot, not the conversation, whose step under way shimmers while it waits on the user: on
+  # CI's software rendering those frames starve the driver's idle callbacks.
+  hello='^browser: agent mcp-client hello from check$'
+  initialize='{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}'
+  # children sends its layout from a subshell, whose steps the count here didn't keep.
+  step=$(sed -n 's/^browser: drive \([0-9]*\)[: ].*/\1/p' "$log" | sort -n | tail -1)
+  bridge_on
+  hellos=$(grep -c "$hello" "$log" || true)
+  mcp "$initialize" > /dev/null
+  await_more "$hello" "$hellos" || fail "the app didn't hear the reconnected client's hello"
+  sessions=$(grep -c '^browser: session session-[0-9]* of agent mcp-client as check$' "$log" || true)
+  request hand_off "{\"tab\":$opened_tab,\"reason\":\"Sign in once more\"}" >&4
+  await_more '^browser: session session-[0-9]* of agent mcp-client as check$' "$sessions" ||
+    fail "the reconnected client's call started no card of its own"
+  session=$(sed -n 's/^browser: session \(session-[0-9]*\) of agent mcp-client as check$/\1/p' "$log" | tail -1)
+  await_log "^browser: agent mcp-client hands off $opened_tab: Sign in once more\$" \
+    "the reconnected client's hand_off didn't hand the tab over"
+  await_log "^browser: task card $session Waiting " "the reconnected client's card didn't wait for the user"
+  await_log "^browser: task plate task-${session#session-} at " "the reconnected client's card wasn't drawn"
+  read -r px py pw ph <<PLATE
+$(grep "^browser: task plate task-${session#session-} at " "$log" | tail -1 | cut -d' ' -f6-)
+PLATE
+  # ✕ shows on the hovered plate, at its right end.
+  send move $((px + pw / 2)) $((py + ph / 2))
+  ../tools/window-screenshot.sh "$pid" "$out/agent-session.png" || fail "no window to capture"
+  send click $((px + pw - 20)) $((py + ph / 2))
+  expect '^browser: command dismiss-task via sidebar$' "a click on the card's ✕ didn't close it"
+  expect '^browser: agent mcp-client stopped by the user$' "closing the card didn't stop the client"
+  stopped=$(next_answer) || fail "the browser didn't answer the hand_off it stopped"
+  stopped=$(printf '%s\n' "$stopped" | answered)
+  case "$stopped" in
+    "error: The user stopped you."*) ;;
+    *) fail "the hand_off stopped answered: $stopped" ;;
+  esac
+  await_log '^browser: agent mcp-client connection [0-9]* closed, as the user stopped it$' \
+    "Stop didn't close the client's connection"
+  for _ in $(seq 100); do kill -0 "$bridge_pid" 2>/dev/null || break; sleep 0.1; done
+  kill -0 "$bridge_pid" 2>/dev/null && fail "the bridge stayed connected once the user stopped its client"
+  exec 4>&- 5<&-
+
   # Off in Settings › Agents takes the socket away and drops a client connected.
   bridge_on
-  hello='^browser: agent mcp-client hello from check$'
   hellos=$(grep -c "$hello" "$log" || true)
-  mcp '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}' \
-    > /dev/null
+  mcp "$initialize" > /dev/null
   await_more "$hello" "$hellos" || fail "the app didn't hear the second client's hello"
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings"
   settings_drew
-  send clickkey $(drawn "toolbar Agents")
-  expect '^browser: settings tab Agents$' "a click on Agents didn't show its section"
+  # Agents, unless Settings came back on it.
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Agents$'; then
+    send clickkey $(drawn "toolbar Agents")
+    expect '^browser: settings tab Agents$' "a click on Agents didn't show its section"
+  fi
   settings_drew Agents
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents.png" || fail "no window to capture"
   send clickkey $(drawn "switch agents")
@@ -841,7 +891,7 @@ forget_login
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, is refused a tab the user took over until they hand it back and Keep answers its ask, its bar's Stop naming ⌘. in its tooltip, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow and again once that's revoked, and off takes the socket away"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, is refused a tab the user took over with the strip's ⌘↩ until they hand it back and Keep answers its ask, is stopped by its card's ✕, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow, which Settings › Agents lists, and off takes the socket away"
 else
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases). skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi
