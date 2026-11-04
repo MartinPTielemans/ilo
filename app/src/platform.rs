@@ -84,6 +84,7 @@ unsafe extern "C" {
     pub fn host_set_little_status_item(clicked: Option<extern "C" fn()>);
     pub fn host_watch_key_window(changed: extern "C" fn(*mut c_void));
     pub fn host_watch_full_screen(changed: extern "C" fn(*mut c_void, bool));
+    pub fn host_watch_window_main(changed: extern "C" fn(*mut c_void, bool));
     pub fn host_watch_swipes(swiped: extern "C" fn(*mut c_void, f64, f64, bool) -> bool);
     pub fn host_watch_option_taps(tapped: extern "C" fn(*mut c_void));
     #[cfg(not(target_os = "linux"))]

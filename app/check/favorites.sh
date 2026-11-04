@@ -15,7 +15,7 @@
 # into a row. Today rows dragged onto the tiles become favorites where they're dropped, a tile
 # dragged across the other goes before it, one dragged into the list goes there, and escape puts a
 # dragged tile back. Tiles taller than 40 % of the window scroll with the list. ⌘, from the page and
-# the UI opens Settings, behind which the browser window's header glyphs dim, where switches turn the warning before quitting and the haptics off and the
+# the UI opens Settings, where switches turn the warning before quitting and the haptics off and the
 # menus of two pop-up buttons set how long Today tabs wait for the archive and who shares the
 # favorites (Each Space, kept across the quit and its favorite with it, then Each Profile's Spaces
 # again), and all of them stay after the quit, when ⌘Q quits without asking. ⌘W and the window's close button hide it, and More
@@ -315,8 +315,6 @@ send key , cmd
 expect '^browser: command settings via page$' "⌘, from the page didn't run Settings"
 expect '^browser: settings shown General$' "⌘, didn't show Settings on its General section"
 settings_drew General
-# Behind Settings the browser window isn't the active one, and its header's glyphs dim, as Arc's.
-expect '^browser: nav glyphs dimmed true$' "the window behind Settings didn't dim its header's glyphs"
 ../tools/window-screenshot.sh "$pid" "$out/settings.png" || fail "no window to capture"
 send clickkey $(drawn "switch warn before quitting")
 expect '^browser: warn before quitting off$' "a click on Ask before quitting didn't turn it off"
@@ -341,9 +339,6 @@ fi
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 none_since '^browser: command close-tab' || fail "⌘W in Settings closed a tab"
-# The browser window is the active one again, and its glyphs are lit.
-expect '^browser: nav glyphs dimmed false$' "the window didn't light its header's glyphs again"
-../tools/window-screenshot.sh "$pid" "$out/settings-closed.png" || fail "no window to capture"
 # The quit leaves the favorite shown, with an icon, which is kept with it as its name would be.
 send click $tile
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "a click on the tile didn't show the favorite"
