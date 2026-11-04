@@ -1536,6 +1536,10 @@ pub struct Shell {
     forced_tone: Option<Tone>,
     window_active: bool,
     window_watches: Vec<Subscription>,
+    /// Whether the window is the one the user is in, as the host says (host_watch_window_main):
+    /// its header's glyphs dim while it isn't. Its own overlays and page having the keyboard
+    /// leave it so, unlike GPUI's activation.
+    window_main: bool,
     /// Whether the header's glyphs were last drawn dimmed, which the log says when it changes.
     nav_dimmed_drawn: Cell<Option<bool>>,
     /// Whether the host was last asked to draw the material light.
@@ -1828,6 +1832,7 @@ impl Shell {
             app_appearance: Appearance::Automatic,
             forced_tone: None,
             window_active: true,
+            window_main: true,
             nav_dimmed_drawn: Cell::new(None),
             window_watches: Vec::new(),
             window_light: None,

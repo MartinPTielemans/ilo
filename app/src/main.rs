@@ -43,6 +43,9 @@ use gpui::{
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
+#[cfg(target_os = "linux")]
+#[path = "../platform/linux/active_window.rs"]
+mod active_window;
 mod agents_core;
 mod bar_picks_host;
 mod browser_windows;

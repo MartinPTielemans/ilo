@@ -142,6 +142,15 @@ void host_set_little_status_item(void (*clicked)(void));
 // Calls |changed| with the view of each browser window that becomes the key window.
 void host_watch_key_window(void (*changed)(void* ui_view));
 
+// Calls |changed| with the view of a browser window as it becomes the window the user is in, or
+// stops being, and with each one's state as the watch starts and as it shows. That's the active
+// app's main window on the Mac, so its own overlays, menus and sheets over it don't count; the
+// foreground window on Windows, or one it owns, as an overlay; on X11 the window manager's active
+// window (_NET_ACTIVE_WINDOW), or one transient for it, read as it changes; under Wayland the
+// browser window's having the keyboard, which the compositor gives the activated toplevel, the
+// page's or the UI's alike. Linux's is active_window.rs's.
+void host_watch_window_main(void (*changed)(void* ui_view, bool main));
+
 // Calls |changed| with the view of each browser window that has gone full screen, or left it, once
 // macOS's transition is over.
 void host_watch_full_screen(void (*changed)(void* ui_view, bool entered));

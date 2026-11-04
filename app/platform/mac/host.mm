@@ -616,7 +616,23 @@ void WatchMenus() {
                   }];
 }
 
-// From the first browser window, the levels follow the main window and the active app.
+// Told whether a browser window is the one the user is in (host_watch_window_main).
+void (*g_window_main_changed)(void* ui_view, bool main);
+
+// Tells the app whether |window|, if a browser window, is the one the user is in: the active app's
+// main window, which the levels below follow too. An overlay, a menu or a sheet over it is never
+// main, so it stays.
+void TellMain(NSWindow* window, bool main) {
+  if (!g_window_main_changed) {
+    return;
+  }
+  if (Browser* browser = BrowserOf(window)) {
+    g_window_main_changed((__bridge void*)browser->ui_view, main);
+  }
+}
+
+// From the first browser window, the levels follow the main window and the active app, and so does
+// whether each browser window is the one the user is in.
 void WatchMainWindow() {
   static bool watching = false;
   if (watching) {
@@ -629,18 +645,21 @@ void WatchMainWindow() {
                        queue:nil
                   usingBlock:^(NSNotification* notification) {
                     LevelOver(notification.object, NSApp.active);
+                    TellMain(notification.object, NSApp.active);
                   }];
   [center addObserverForName:NSWindowDidResignMainNotification
                       object:nil
                        queue:nil
                   usingBlock:^(NSNotification* notification) {
                     LevelOver(notification.object, false);
+                    TellMain(notification.object, false);
                   }];
   [center addObserverForName:NSApplicationDidBecomeActiveNotification
                       object:nil
                        queue:nil
                   usingBlock:^(NSNotification*) {
                     LevelOver(NSApp.mainWindow, true);
+                    TellMain(NSApp.mainWindow, true);
                   }];
   // Before the tooltip and Site Controls start fading out as the app goes.
   [center addObserverForName:NSApplicationWillResignActiveNotification
@@ -649,6 +668,7 @@ void WatchMainWindow() {
                   usingBlock:^(NSNotification*) {
                     for (NSWindow* window in NSApp.windows) {
                       LevelOver(window, false);
+                      TellMain(window, false);
                     }
                   }];
 }
@@ -1518,6 +1538,12 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   WatchMenus();
   WatchMainWindow();
   WatchDisplayGone();
+  // Shown, the app hears whether it's the one the user is in: one shown behind another never
+  // becomes main, so it hears nothing else.
+  __weak NSWindow* shown = window;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    TellMain(shown, NSApp.active && shown.isMainWindow);
+  });
   WatchHeldEscape();
   if (above && above->window) {
     [window orderWindow:NSWindowBelow relativeTo:above->window.windowNumber];
@@ -1901,6 +1927,15 @@ void host_watch_key_window(void (*changed)(void* ui_view)) {
                                                   changed((__bridge void*)browser->ui_view);
                                                 }
                                               }];
+}
+
+void host_watch_window_main(void (*changed)(void* ui_view, bool main)) {
+  g_window_main_changed = changed;
+  for (auto& browser : g_browsers) {
+    if (browser->window) {
+      TellMain(browser->window, NSApp.active && browser->window.isMainWindow);
+    }
+  }
 }
 
 void host_watch_full_screen(void (*changed)(void* ui_view, bool entered)) {
