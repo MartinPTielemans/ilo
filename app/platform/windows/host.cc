@@ -1311,9 +1311,6 @@ struct Detached {
   HIMC context = nullptr;
   ITfDocumentMgr* document = nullptr;
   bool tsf = false;
-  // The document TSF's focus was on, the page's, which an association changes only as a window
-  // gets the keyboard, so the hold gives TSF's focus to an empty one of its own meanwhile.
-  ITfDocumentMgr* focused = nullptr;
 };
 Detached g_detached;
 
@@ -1328,14 +1325,6 @@ void DetachInputMethod(HWND window) {
   g_detached.context = ImmAssociateContext(window, nullptr);
   if (ITfThreadMgr* manager = ThreadManager()) {
     g_detached.tsf = SUCCEEDED(manager->AssociateFocus(window, nullptr, &g_detached.document));
-    static ITfDocumentMgr* empty = [manager] {
-      ITfDocumentMgr* made = nullptr;
-      manager->CreateDocumentMgr(&made);
-      return made;
-    }();
-    if (empty && SUCCEEDED(manager->GetFocus(&g_detached.focused)) && g_detached.focused) {
-      manager->SetFocus(empty);
-    }
   }
 }
 
@@ -1354,17 +1343,9 @@ void ReattachInputMethod() {
       }
     }
     ImmAssociateContext(detached.window, detached.context);
-    // Still the window with the keyboard, as a page that kept the shortcut is: its document gets
-    // TSF's focus back. A bar that took the keyboard has TSF's focus on its own already.
-    if (detached.focused && GetFocus() == detached.window) {
-      ThreadManager()->SetFocus(detached.focused);
-    }
   }
   if (detached.document) {
     detached.document->Release();
-  }
-  if (detached.focused) {
-    detached.focused->Release();
   }
 }
 
