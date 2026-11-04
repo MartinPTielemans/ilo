@@ -244,10 +244,26 @@ index 6cb33874b2..0066ba74a2 100644
  
  #[cfg_attr(
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index c559412e56..3fb5df7566 100644
+index c559412e56..42305532de 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
-@@ -737,6 +737,19 @@ impl<M: Focusable + EventEmitter<DismissEvent> + Render> ManagedView for M {}
+@@ -360,6 +360,15 @@ thread_local! {
+ /// arrive re-entrantly while a draw is already on the stack (e.g. via nested
+ /// message pumping in the Windows window procedure), instead of running a
+ /// nested draw or panicking on the already-borrowed App.
++/// Says, for ilo's checks (check.sh), that a window's `kind` update came while the App was in an
++/// update, which on Windows sends a window's move and size, and its activation's modifiers, from
++/// inside the update that moves or activates it, and was lost.
++fn dropped(kind: &str, cx: &crate::AsyncApp) {
++    if (cx.app.upgrade()).is_some_and(|app| app.try_borrow_mut().is_err()) {
++        eprintln!("browser: gpui dropped {kind}");
++    }
++}
++
+ fn draw_in_progress() -> bool {
+     CURRENT_ELEMENT_ARENA.with(|current| current.get().is_some())
+ }
+@@ -737,6 +746,19 @@ impl<M: Focusable + EventEmitter<DismissEvent> + Render> ManagedView for M {}
  /// Emitted by implementers of [`ManagedView`] to indicate the view should be dismissed, such as when a view is presented as a modal.
  pub struct DismissEvent;
  
@@ -267,7 +283,7 @@ index c559412e56..3fb5df7566 100644
  type FrameCallback = Box<dyn FnOnce(&mut Window, &mut App)>;
  
  pub(crate) type AnyMouseListener =
-@@ -1247,6 +1260,10 @@ pub struct Window {
+@@ -1247,6 +1269,10 @@ pub struct Window {
      pub(crate) rendered_entity_stack: Vec<EntityId>,
      pub(crate) element_offset_stack: Vec<Point<Pixels>>,
      pub(crate) element_opacity: f32,
@@ -278,7 +294,7 @@ index c559412e56..3fb5df7566 100644
      pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
      pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
      /// The [`TextInputConfiguration`] most recently forwarded to the platform
-@@ -1664,6 +1681,7 @@ impl Window {
+@@ -1664,6 +1690,7 @@ impl Window {
          let next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>> = Default::default();
          let input_rate_tracker = Rc::new(RefCell::new(InputRateTracker::default()));
          let last_frame_time = Rc::new(Cell::new(None));
@@ -286,7 +302,7 @@ index c559412e56..3fb5df7566 100644
  
          platform_window
              .request_decorations(window_decorations.unwrap_or(WindowDecorations::Server));
-@@ -1773,6 +1791,7 @@ impl Window {
+@@ -1773,6 +1800,7 @@ impl Window {
              let mut cx = cx.to_async();
              let invalidator = invalidator.clone();
              let active = active.clone();
@@ -294,7 +310,7 @@ index c559412e56..3fb5df7566 100644
              let needs_present = needs_present.clone();
              let next_frame_callbacks = next_frame_callbacks.clone();
              let input_rate_tracker = input_rate_tracker.clone();
-@@ -1830,7 +1849,10 @@ impl Window {
+@@ -1830,7 +1858,10 @@ impl Window {
                          && next_frame_callbacks.borrow().is_empty())
                  {
                      None
@@ -306,7 +322,56 @@ index c559412e56..3fb5df7566 100644
                      inactive_frame_interval.map(|interval| (interval, FrameRateLimit::Inactive))
                  } else if let Some(ThermalState::Critical | ThermalState::Serious) = thermal_state {
                      Some((Duration::from_micros(16667), FrameRateLimit::Thermal))
-@@ -2156,6 +2178,9 @@ impl Window {
+@@ -1967,17 +1998,23 @@ impl Window {
+         platform_window.on_resize(Box::new({
+             let mut cx = cx.to_async();
+             move |_, _| {
+-                handle
++                if handle
+                     .update(&mut cx, |_, window, cx| window.bounds_changed(cx))
+-                    .log_err();
++                    .is_err()
++                {
++                    dropped("resize", &cx);
++                }
+             }
+         }));
+         platform_window.on_moved(Box::new({
+             let mut cx = cx.to_async();
+             move || {
+-                handle
++                if handle
+                     .update(&mut cx, |_, window, cx| window.bounds_changed(cx))
+-                    .log_err();
++                    .is_err()
++                {
++                    dropped("move", &cx);
++                }
+             }
+         }));
+         platform_window.on_display_changed(Box::new({
+@@ -2053,10 +2090,16 @@ impl Window {
+         platform_window.on_input({
+             let mut cx = cx.to_async();
+             Box::new(move |event| {
+-                handle
+-                    .update(&mut cx, |_, window, cx| window.dispatch_event(event, cx))
+-                    .log_err()
+-                    .unwrap_or(DispatchEventResult::default())
++                let modifiers = matches!(event, PlatformInput::ModifiersChanged(_));
++                match handle.update(&mut cx, |_, window, cx| window.dispatch_event(event, cx)) {
++                    Ok(result) => result,
++                    Err(_) => {
++                        if modifiers {
++                            dropped("modifiers", &cx);
++                        }
++                        DispatchEventResult::default()
++                    }
++                }
+             })
+         });
+         platform_window.on_hit_test_window_control({
+@@ -2156,6 +2199,9 @@ impl Window {
              element_offset_stack: Vec::new(),
              content_mask_stack: Vec::new(),
              element_opacity: 1.0,
@@ -316,7 +381,7 @@ index c559412e56..3fb5df7566 100644
              requested_autoscroll: None,
              last_text_input_configuration: None,
              focused_text_input: None,
-@@ -3761,7 +3786,23 @@ impl Window {
+@@ -3761,7 +3807,23 @@ impl Window {
          #[cfg(feature = "profiler")]
          let paint_start = Instant::now();
          self.invalidator.set_phase(DrawPhase::Paint);
@@ -341,7 +406,7 @@ index c559412e56..3fb5df7566 100644
  
          #[cfg(any(feature = "inspector", debug_assertions))]
          self.paint_inspector(inspector_element, cx);
-@@ -4227,6 +4268,40 @@ impl Window {
+@@ -4227,6 +4289,40 @@ impl Window {
          result
      }
  
@@ -382,7 +447,7 @@ index c559412e56..3fb5df7566 100644
      pub(crate) fn with_element_opacity<R>(
          &mut self,
          opacity: Option<f32>,
-@@ -5578,9 +5653,8 @@ impl Window {
+@@ -5578,9 +5674,8 @@ impl Window {
      fn reset_cursor_style(&self, cx: &mut App) {
          // Set the cursor only if we're the active window.
          if self.is_window_hovered() {
@@ -394,7 +459,7 @@ index c559412e56..3fb5df7566 100644
                  .unwrap_or(CursorStyle::Arrow);
              cx.platform.set_cursor_style(style);
          }
-@@ -7097,18 +7171,24 @@ impl Window {
+@@ -7097,18 +7192,24 @@ impl Window {
  
          // Fall back to built-in action handling.
          match request.action {
