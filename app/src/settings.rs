@@ -3990,10 +3990,10 @@ impl Render for Settings {
         {
             window.request_animation_frame();
         }
-        let typed = self.search.read(cx).text().to_string();
+        let typed = settings_search::typed(&self.search, cx);
         let (page, found) = match typed.trim().is_empty() {
             true => {
-                self.log_search(&typed, &[]);
+                self.log_search(&[], cx);
                 let page = self.section_page(self.section, accent, window, cx);
                 (self.page(page, cx), None)
             }
@@ -4200,7 +4200,7 @@ impl Settings {
             .filter_map(|index| Some((entries[index].clone(), divs[index].take()?)))
             .collect();
         let names: Vec<&str> = found.iter().map(|(entry, _)| entry.name.as_ref()).collect();
-        self.log_search(typed, &names);
+        self.log_search(&names, cx);
         let sections =
             settings_search::sections(&found.iter().map(|(entry, _)| entry).collect::<Vec<_>>());
         let view = cx.entity().downgrade();
@@ -4217,16 +4217,26 @@ impl Settings {
     }
 
     /// Logs what the search found once it changes, for check.sh.
-    fn log_search(&mut self, typed: &str, found: &[&str]) {
+    /// Logs what the search found once it changes, and what an input method composes in its
+    /// field, which finds nothing until it commits, for check.sh and check/ime.sh.
+    fn log_search(&mut self, found: &[&str], cx: &App) {
+        let input = self.search.read(cx);
+        let (shown, composing) = (input.text().to_string(), input.composing());
+        let typed = settings_search::typed(&self.search, cx);
         let typed = typed.trim();
-        if typed == self.searched {
+        let now = match composing {
+            true => format!("composing {shown:?}"),
+            false => typed.to_string(),
+        };
+        if now == self.searched {
             return;
         }
-        self.searched = typed.to_string();
-        // check.sh waits for these lines.
-        match typed {
-            "" => log!("browser: settings search cleared"),
-            _ => log!(
+        self.searched = now;
+        // check.sh and check/ime.sh wait for these lines.
+        match (composing, typed) {
+            (true, _) => log!("browser: settings search composing {shown:?}"),
+            (false, "") => log!("browser: settings search cleared"),
+            (false, _) => log!(
                 "browser: settings search {typed:?} finds {}",
                 found.join(", ")
             ),

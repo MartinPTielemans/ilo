@@ -254,10 +254,18 @@ pub fn field(
         .child(drawn)
 }
 
+/// What the search finds by: the field's text once an input method has committed it, so a word
+/// being composed finds nothing until it's chosen.
+pub fn typed(input: &Entity<TextInput>, cx: &App) -> String {
+    input.read(cx).committed()
+}
+
 /// Esc's part: empties the field, so the section shows again. False when it was empty, for Esc to
-/// go on to whatever else takes it.
+/// go on to whatever else takes it, and while an input method composes there, whose Esc cancels
+/// the composition.
 pub fn end(input: &Entity<TextInput>, window: &mut Window, cx: &mut App) -> bool {
-    if input.read(cx).text().is_empty() {
+    let input_read = input.read(cx);
+    if input_read.text().is_empty() || input_read.composing() {
         return false;
     }
     input.update(cx, |input, cx| input.reset("".into(), window, cx));
