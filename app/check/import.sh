@@ -152,7 +152,8 @@ web_data="$profile_dir/Default/Web Data"
 BROWSER_IMPORT_HOME="$(native_path "$PWD/$home")" \
   BROWSER_IMPORT_PASSWORDS="$(native_path "$PWD/$passwords")" \
   BROWSER_IMPORT_BOOKMARKS="$(native_path "$PWD/$bookmarks")" BROWSER_DRIVE=1 BROWSER_URL="${site}import.html" \
-  "$browser" < "$out/drive" > "$log" 2>&1 &
+  "$browser" --extension-mime-request-handling=always-prompt-for-install < "$out/drive" \
+  > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -434,6 +435,132 @@ if [ -n "$arc" ]; then
     "Personal's pinned tabs and folders aren't the 7 rows Arc's are: $(pinned)"
   ../tools/window-screenshot.sh "$pid" "$out/import-personal.png" || fail "no window to capture"
 fi
+# The rows the parity checklist ticks on this run (docs/ux-parity/import.md). A made-up Brave comes
+# in after the others, which Settings finds as it shows again: its bookmarks in a bar, a folder of
+# the bar's and the other bookmarks, a Web Store extension it pinned and uBlock Origin. Choose
+# folders shows a box of the folders, each ticked; one unticked, the bar's Reading, stays out. Its end
+# lists the extension to add, with uBlock Origin left off in a line of its own, with Add Anyway.
+# Added from the list, and then from the run's own .crx, offline, the extension is pinned as it
+# was in Brave.
+if [ "$(uname)" = Darwin ]; then
+  brave="$home/Library/Application Support/BraveSoftware/Brave-Browser"
+elif windows; then
+  brave="$home/AppData/Local/BraveSoftware/Brave-Browser/User Data"
+else
+  brave="$home/.config/BraveSoftware/Brave-Browser"
+fi
+mkdir -p "$brave/Default"
+printf '%s' '{"profile":{"info_cache":{"Default":{"name":"Brave Me"}}}}' > "$brave/Local State"
+cat > "$brave/Default/Bookmarks" << 'JSON'
+{"roots": {
+  "bookmark_bar": {"type": "folder", "name": "Bookmarks bar", "children": [
+    {"type": "url", "name": "Mail", "url": "https://brave-mail.example.org/"},
+    {"type": "folder", "name": "Reading", "children": [
+      {"type": "url", "name": "Read", "url": "https://brave-read.example.org/"}]}]},
+  "other": {"type": "folder", "name": "Other bookmarks", "children": [
+    {"type": "url", "name": "Docs", "url": "https://brave-docs.example.org/"}]},
+  "synced": {"type": "folder", "name": "Mobile bookmarks", "children": []}}, "version": 1}
+JSON
+# The extension's .crx, signed with a key of the run's own, which its id comes from, as
+# extensions.sh makes its own; the made-up Brave has it from the Web Store, pinned.
+pinned_src="$out/pinned-extension"
+rm -rf "$pinned_src"
+mkdir -p "$pinned_src/source"
+printf '%s' '{"manifest_version": 3, "name": "Check Pinned", "version": "1",
+ "action": {"default_title": "Check Pinned"}}' > "$pinned_src/source/manifest.json"
+pinned_id=$(python3 -I -c '
+import hashlib, io, os, struct, subprocess, sys, zipfile
+
+source, crx = sys.argv[1], sys.argv[2]
+key = os.path.join(os.path.dirname(source), "key.pem")
+subprocess.run(["openssl", "genrsa", "-out", key, "2048"], check=True, capture_output=True)
+public = subprocess.run(["openssl", "rsa", "-in", key, "-pubout", "-outform", "DER"],
+                        check=True, capture_output=True).stdout
+archive = io.BytesIO()
+with zipfile.ZipFile(archive, "w") as z:
+    for name in sorted(os.listdir(source)):
+        z.write(os.path.join(source, name), name)
+archive = archive.getvalue()
+
+# A length-delimited protobuf field.
+def field(number, data):
+    out = b""
+    for value in (number << 3 | 2, len(data)):
+        while value > 0x7f:
+            out += bytes([value & 0x7f | 0x80])
+            value >>= 7
+        out += bytes([value])
+    return out + data
+
+# CRX3 (components/crx_file/crx3.proto): the key, and its signature of the id and the zip.
+crx_id = hashlib.sha256(public).digest()[:16]
+signed = field(1, crx_id)
+signature = subprocess.run(
+    ["openssl", "dgst", "-sha256", "-sign", key], check=True, capture_output=True,
+    input=b"CRX3 SignedData\x00" + struct.pack("<I", len(signed)) + signed + archive).stdout
+header = field(2, field(1, public) + field(2, signature)) + field(10000, signed)
+with open(crx, "wb") as f:
+    f.write(b"Cr24" + struct.pack("<II", 3, len(header)) + header + archive)
+print("".join(chr(ord("a") + int(c, 16)) for c in crx_id.hex()))
+' "$pinned_src/source" "$out/site/pinned.crx") || fail "couldn't make the pinned extension's .crx"
+printf '{"extensions": {"pinned_extensions": ["%s"]}}' "$pinned_id" > "$brave/Default/Preferences"
+store_manifest() {
+  mkdir -p "$brave/Default/Extensions/$1/1_0"
+  printf '{"manifest_version": 3, "name": "%s", "version": "1", "update_url": "%s"}' "$2" \
+    "https://clients2.google.com/service/update2/crx" > "$brave/Default/Extensions/$1/1_0/manifest.json"
+}
+store_manifest "$pinned_id" "Check Pinned"
+store_manifest cjpalhdlnbpafiamejdnhcphjbkeiagm "uBlock Origin"
+send menu Import from Other Browsers…
+expect '^browser: settings shown ' "Import from Other Browsers… didn't show Settings again"
+settings_drew 'Import & Export'
+# Import & Export finds the browsers again as it's switched to.
+send clickkey $(drawn "toolbar Passwords")
+expect '^browser: settings tab Passwords$' "a click on Passwords didn't show its section"
+settings_drew Passwords
+send clickkey $(drawn "toolbar Import & Export")
+expect '^browser: settings tab Import & Export$' "a click on Import & Export didn't show its section"
+settings_drew 'Import & Export'
+expect '^browser: import found .*Brave' "Settings didn't find the made-up Brave once it showed again"
+send clickkey $(drawn "import-from Brave")
+expect '^browser: import pick Brave$' "Import… on Brave's row didn't show its choices"
+expect '^browser: import read Brave: ' "picking Brave didn't read it"
+# Choose folders, a box of a checkbox a folder, each ticked.
+send clickkey $(drawn import-choose-folders)
+expect '^browser: import folders .*Other bookmarks' "Choose folders didn't list Brave's folders"
+send state
+../tools/window-screenshot.sh "$pid" "$out/import-folders.png" || fail "no window to capture"
+# The bar's folder Reading unticked: its bookmark stays out, so 2 of the 3 come.
+send clickkey $(drawn "import-folder Reading")
+expect '^browser: import leaves out Reading$' "a click didn't untick Reading"
+# Closed again, which keeps what's unticked, Import is back in the card's sight.
+send clickkey $(drawn import-choose-folders)
+click_drawn import-go
+expect '^browser: import from Brave: 1 Spaces, 2 pinned tabs, 0 open tabs, 0 favorites, 0 pages, 0 addresses$' \
+  "the import didn't leave the unticked folder out: $(grep '^browser: import from Brave' "$log" | tail -1)"
+expect "^browser: import lists extensions .*$pinned_id" "Brave's import didn't list its extension"
+await '^browser: import done: .* from Brave' || fail "Brave's import didn't end"
+expect '^browser: import drawn done$' "Brave's import's end didn't draw"
+# Its end lists the extension, pinned in Brave, with Add…, and leaves uBlock Origin off the list in
+# a line of its own, with Add Anyway.
+send state
+../tools/window-screenshot.sh "$pid" "$out/import-extensions.png" || fail "no window to capture"
+if windows; then
+  echo "skip: adding the listed extension from a .crx: Windows' driver doesn't answer its install dialog yet."
+else
+  send clickkey $(drawn "import-add-extension $pinned_id")
+  expect "^browser: import add extension $pinned_id\$" "Add… didn't take the extension off the list"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+  go_from_bar "${site}pinned.crx"
+  expect '^browser: dialog shown Add "Check Pinned"?$' "the .crx didn't ask to add Check Pinned"
+  expect '^browser: dialog takes input$' "the install dialog never took input"
+  send key return
+  expect '^browser: dialog confirmed$' "return didn't add Check Pinned"
+  await "^browser: extension $pinned_id pinned as it was in the browser imported from\$" ||
+    fail "the extension Brave pinned wasn't pinned once it came in"
+  ../tools/window-screenshot.sh "$pid" "$out/import-pinned-extension.png" || fail "no window to capture"
+fi
 quit
 [ -n "$arc" ] || echo "skip: import's Arc steps. Arc has no Linux build, so it's never found there."
 echo "ok: Settings › Import finds the fixture's Arc, Chrome and Firefox. From Arc come its Spaces,"
@@ -449,6 +576,7 @@ echo "  Settings' list and $first_found's choices, under Import › $first_found
 echo "  720 by 480, dark and light, and Esc goes back from the choices to the list."
 echo "  Windows: $out/import-settings-{list,choose}-{820,720}-{dark,light}.png,"
 echo "  $out/import-arriving.png (with Arc), $out/import-placed.png,"
+echo "  $out/import-folders.png, $out/import-extensions.png, $out/import-pinned-extension.png (not on Windows),"
 echo "  $out/import-again-list.png, $out/import-list.png, $out/import-pick.png, $out/import-done.png,"
 echo "  $out/import-again.png, $out/import-chrome.png, $out/import-firefox.png,"
 echo "  $out/import-bookmarks.png, $out/import-passwords.png,"

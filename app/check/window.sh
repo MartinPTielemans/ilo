@@ -2,7 +2,9 @@
 # and the window's buttons stay in the header row. A page that goes full screen takes the window
 # with it, and escape or the page leaving brings both back, the page resized once each way, straight
 # to its new size, and its leaving reported once, timed from the page's request to the window's and
-# the UI's steps, going in and out. The window leaving full screen by its green button takes the page
+# the UI's steps, going in and out. After the window leaves full screen its page draws again at its
+# new size, and on the Mac a display plugged in while it's full screen keeps it at its size with its
+# page drawn. The window leaving full screen by its green button takes the page
 # out with it and brings back the sidebar and the card, and the page's full screen takes the window
 # again after. A full-screen window's display going away keeps the window and the page together,
 # both full screen or both out, and escape and the page's full screen work after; going away while
@@ -490,6 +492,72 @@ else
   windowed_again "as the window entered full screen" display-gone-entering
   send place $frame
 fi
+
+# Full screen holds up (Arc's release notes): once the window leaves full screen its page draws
+# again at its new size, not a frame from before or nothing, and on the Mac a display plugged in
+# while it's full screen, and taken out again, leaves it full screen at its size with its page
+# drawn. The page is blue in a card narrower than 900 and orange in a wider one, so a capture says
+# which size it last drew at.
+printf '%s' '<title>sized</title><style>body{margin:0;background:#3366cc}
+@media (min-width:900px){body{background:#cc6633}}</style>' > "$out/site/sized.html"
+# Whether capture $1, at the page's middle, is "r g b" $2 within 16 a channel, as a display's colour
+# profile moves it.
+drawn_as() {
+  seen=$(pixel "$1" 0.6 0.5)
+  set -- $seen $2
+  [ $(($1 > $4 ? $1 - $4 : $4 - $1)) -le 16 ] && [ $(($2 > $5 ? $2 - $5 : $5 - $2)) -le 16 ] &&
+    [ $(($3 > $6 ? $3 - $6 : $6 - $3)) -le 16 ]
+}
+# Captures the window as $1 until the page shows "r g b" $2, for up to 2 s, else fails saying $3.
+await_drawn() {
+  for _ in $(seq 20); do
+    ../tools/window-screenshot.sh "$pid" "$out/$1.png" || fail "no window to capture"
+    drawn_as "$out/$1.png" "$2" && return 0
+    sleep 0.1
+  done
+  fail "$3: the page shows $seen, not $2"
+}
+blue="51 102 204" orange="204 102 51"
+shown_before=$(grep '^browser: selected [0-9]' "$log" | tail -1 | cut -d' ' -f3)
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar for the sized page"
+send insert "${site}sized.html"
+send key return
+expect "^browser: loaded [0-9]* ${site}sized.html\$" "the sized page didn't load"
+send click $page_point
+await_drawn sized-windowed "$blue" "the sized page in the window"
+send fullscreen
+expect '^browser: window entered full screen$' "the window didn't go full screen with the sized page"
+check_layout "full screen with the sized page"
+full=$content
+await_drawn sized-full-screen "$orange" "the sized page in full screen"
+if [ "$(uname)" = Darwin ]; then
+  send display add 1280 800
+  added=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: display ')
+  case "$added" in "browser: display added at "*) ;; *) fail "no display to plug in: $added" ;; esac
+  check_layout "full screen as a display was plugged in"
+  [ "$content" = "$full" ] || fail "a display plugged in took the full-screen window from $full to $content"
+  await_drawn display-plugged "$orange" "full screen as a display was plugged in"
+  send display remove
+  expect '^browser: display removed$' "the plugged-in display didn't go away"
+  check_layout "full screen as the plugged-in display went away"
+  [ "$content" = "$full" ] || fail "the plugged-in display going took the full-screen window from $full to $content"
+  await_drawn display-unplugged "$orange" "full screen as the plugged-in display went away"
+else
+  driver=Linux
+  ! windows || driver=Windows
+  echo "skip: a display plugged in while full screen: the $driver driver can't add one yet."
+fi
+send fullscreen
+expect '^browser: window left full screen$' "the window didn't leave full screen with the sized page"
+check_layout "after full screen with the sized page"
+await_drawn sized-left "$blue" "after leaving full screen"
+# The runs after this one drive the page from before, which closing the sized page shows again.
+send key w cmd
+expect "^browser: selected $shown_before\( in .*\)\{0,1\}\$" "closing the sized page didn't show the page before it"
+# Where it was before, as the display's coming and going can leave it elsewhere.
+[ -z "${frame:-}" ] || send place $frame
+send click $page_point
 
 # A page's full screen timed three times each way, entered by a key as a video's button is and left
 # by the page, as its button leaves, and then by escape. The steps run from the core's line to the
