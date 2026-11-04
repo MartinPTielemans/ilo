@@ -118,21 +118,40 @@ pub extern "C" fn host_drag_file(path: *const c_char, ended: extern "C" fn(taken
     })
 }
 
-/// A tab's drag out of its window, which is the Mac's alone so far: the row stays (#1798).
+/// Starts the system's drag of `tab`, as host.h says: XDND on X11, the data device's drag under
+/// Wayland, of the app's own type, this process's id and the tab's (drops.rs reads it). The system
+/// shows no picture of the row, only the pointer. Under Wayland no app picks its window's place,
+/// so it says no point where it's let go.
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn host_drag_tab(
     _ui_view: *mut c_void,
-    _tab: u64,
+    tab: u64,
     _x: f64,
     _y: f64,
     _width: f64,
     _height: f64,
     _grab_x: f64,
     _grab_y: f64,
-    _ended: extern "C" fn(tab: u64, how: std::ffi::c_int, placed: bool, x: f64, y: f64),
+    ended: extern "C" fn(tab: u64, how: std::ffi::c_int, placed: bool, x: f64, y: f64),
 ) -> bool {
-    false
+    let data = format!("{} {tab}", std::process::id()).into_bytes();
+    gpui_linux::start_drag("application/x-ilo-tab", data, move |end| {
+        let (how, at) = match end {
+            gpui_linux::DragEnd::Taken => (0, None),
+            gpui_linux::DragEnd::LetGo(at) => (1, at),
+            gpui_linux::DragEnd::Cancelled => (2, None),
+        };
+        // After the event that let it go, out of the display's handling.
+        if let Some(cx) = crate::CX.with_borrow(Clone::clone) {
+            cx.foreground_executor()
+                .spawn(async move {
+                    let (x, y) = at.unwrap_or_default();
+                    ended(tab, how, at.is_some(), x.into(), y.into())
+                })
+                .detach();
+        }
+    })
 }
 
 /// Calls `released` once Control is no longer held, after the event that shows it, as a ⌃Tab walk
