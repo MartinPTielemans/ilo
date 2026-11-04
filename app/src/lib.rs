@@ -132,6 +132,7 @@ pub mod toast;
 pub mod tokens;
 pub mod tooltip;
 pub mod updates;
+pub mod usage;
 pub mod widevine;
 pub mod window_frames;
 pub mod zoom_hud;
