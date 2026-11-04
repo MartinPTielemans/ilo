@@ -139,7 +139,10 @@ mod tests {
         cx.update(|cx| set_plain(true, cx));
         assert_eq!(host.0.take(), [None]);
         cx.update(|cx| follow(Some(0xE0475B), cx));
-        assert!(after(cx, &host, QUIET * 2).is_empty(), "a switch swapped the plain icon");
+        assert!(
+            after(cx, &host, QUIET * 2).is_empty(),
+            "a switch swapped the plain icon"
+        );
         cx.update(|cx| set_plain(false, cx));
         assert_eq!(host.0.take(), [Some(0xE0475B)]);
     }

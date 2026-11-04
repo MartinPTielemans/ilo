@@ -770,6 +770,38 @@ reveal_at_edge "the pointer at the edge didn't bring the sidebar out again"
 send key s cmd
 toggle ui shown "⌘S with the sidebar out"
 check_reveal "with the sidebar docked by ⌘S"
+# Settings › Tabs & Sidebar's edge switch off (#1636): the pointer moving along the edge of the
+# window with its sidebar hidden brings nothing out, and ⌘S still shows it. On again after.
+send menu Settings…
+expect '^browser: settings shown ' "Settings… didn't show Settings"
+settings_drew
+send clickkey $(drawn "toolbar Tabs & Sidebar")
+settings_drew "Tabs & Sidebar"
+../tools/window-screenshot.sh "$pid" "$out/settings-tabs.png" || fail "no window to capture"
+send clickkey $(drawn "switch edge reveals sidebar")
+expect '^browser: edge reveals sidebar off$' "a click on the edge's switch didn't turn it off"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+send key s cmd
+toggle ui hidden "⌘S with the edge off"
+send move 400 300
+from=$((step + 1))
+send move 3 300
+send move 3 306
+send move 3 312
+# Past the wait the edge would have before the sidebar came out.
+sleep 1
+! sed -n "/^browser: drive $from: /,\$p" "$log" | grep -q '^browser: reveal \(waits\|shown\)$' ||
+  fail "the pointer at the edge brought the sidebar out with the edge off"
+send key s cmd
+toggle ui shown "⌘S with the edge off"
+send menu Settings…
+expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't show Tabs & Sidebar again"
+settings_drew "Tabs & Sidebar"
+send clickkey $(drawn "switch edge reveals sidebar")
+expect '^browser: edge reveals sidebar on$' "a click on the edge's switch didn't turn it on again"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 # ⌥ pressed and let go alone brings the hidden sidebar out with the pointer over the page, which
 # keeps it out, and again sends it away. ⌥ held with ⌘, as for a shortcut, or let go after a key,
 # as for a typed character, doesn't, and with the sidebar docked it does nothing.

@@ -1381,11 +1381,19 @@ mod tests {
         cx.executor().advance_clock(super::REVEAL_WAIT * 2);
         cx.run_until_parked();
         shell.read_with(cx, |shell, _| {
-            assert!(!shell.revealed, "the edge brought the sidebar out while off");
+            assert!(
+                !shell.revealed,
+                "the edge brought the sidebar out while off"
+            );
             assert!(shell.reveal_wait.is_none());
         });
-        shell.update(cx, |shell, cx| shell.run(crate::shell::Command::ToggleSidebar, "key", cx));
-        assert!(shell.read_with(cx, |shell, _| !shell.sidebar_hidden), "⌘S didn't show it");
+        shell.update(cx, |shell, cx| {
+            shell.run(crate::shell::Command::ToggleSidebar, "key", cx)
+        });
+        assert!(
+            shell.read_with(cx, |shell, _| !shell.sidebar_hidden),
+            "⌘S didn't show it"
+        );
     }
 
     /// A pointer that jumps into the strip at the window's edge and stays leaves the sidebar

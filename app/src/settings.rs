@@ -387,6 +387,8 @@ enum Popup {
     TaskAgent,
     /// The model a CLI runs tasks with.
     TaskModel(Cli),
+    /// General's Appearance.
+    Appearance,
 }
 
 pub struct Settings {
@@ -1577,9 +1579,52 @@ impl Settings {
             )
         });
         let found: Vec<Row> = search.into_iter().chain(folders).collect();
+        let appearance = shell::app_appearance(cx);
+        let appearance_popup = self.popup(
+            Popup::Appearance,
+            appearance_label(appearance).into(),
+            POPUP_WIDTH,
+            cx.listener(move |settings, _, window, cx| {
+                settings.choose_appearance(appearance, window, cx)
+            }),
+        );
+        let appearance_line = match cfg!(target_os = "macos") {
+            true => "Light, dark, or as macOS is. View › Appearance has it too.",
+            false => "Light, dark, or as the system is.",
+        };
+        let mut looks = vec![setting(
+            look,
+            "Appearance",
+            Some(appearance_line.into()),
+            vec![
+                appearance_popup
+                    .child(self.drawn("appearance".into()))
+                    .into_any_element(),
+            ],
+        )];
+        // The Dock's, which the Mac alone has.
+        if cfg!(target_os = "macos") {
+            let colored = !off(DOCK_ICON_PLAIN);
+            let colored = self.toggle("dock icon color", colored, set_dock_icon_color, accent, cx);
+            looks.push(setting(
+                look,
+                "Dock icon takes the Space's color",
+                Some(
+                    concat!(
+                        "Its dot shows the Space in front. Off, the icon stays ",
+                        env!("APP_NAME"),
+                        " green."
+                    )
+                    .into(),
+                ),
+                vec![colored],
+            ));
+        }
         let mut blocks = vec![
             Block::Heading("Opening and quitting".into()),
             Block::Rows(opening),
+            Block::Heading("Look".into()),
+            Block::Rows(looks),
         ];
         if !found.is_empty() {
             blocks.push(Block::Heading("Search and downloads".into()));
@@ -1651,11 +1696,41 @@ impl Settings {
             Some("Which Spaces show the same favorites.".into()),
             vec![favorites.into_any_element()],
         );
+        let moving = self.toggle(
+            "warn moving profiles",
+            unsafe { bc::bc_warn_moving_profiles() },
+            set_warn_moving_profiles,
+            accent,
+            cx,
+        );
+        let moving = setting(
+            look,
+            "Ask before moving a tab to another profile",
+            Some("Its page loads again there, without this profile's logins and cookies.".into()),
+            vec![moving],
+        );
         let mut blocks = vec![
             Block::Heading("Today tabs".into()),
-            Block::Rows(archive.into_iter().chain([unload]).collect()),
+            Block::Rows(archive.into_iter().chain([unload, moving]).collect()),
             Block::Rows(vec![favorites]),
         ];
+        let edge = self.toggle(
+            "edge reveals sidebar",
+            !off(NO_EDGE_REVEAL),
+            set_edge_reveals,
+            accent,
+            cx,
+        );
+        let toggle_keys = shell::keystroke_label("cmd-s");
+        let mut hidden = vec![setting(
+            look,
+            "Show the hidden sidebar at the window's edge",
+            Some(
+                format!("Move the pointer along the left edge. {toggle_keys} shows it either way.")
+                    .into(),
+            ),
+            vec![edge],
+        )];
         // Where the host watches for it (host_watch_option_taps).
         if cfg!(any(target_os = "macos", target_os = "linux")) {
             let option = unsafe { bc::bc_option_reveals_sidebar() };
@@ -1676,9 +1751,10 @@ impl Settings {
                     "Press and let go of Alt with no other key.",
                 ),
             };
-            let row = setting(look, name, Some(line.into()), vec![option]);
-            blocks.push(Block::Rows(vec![row]));
+            hidden.push(setting(look, name, Some(line.into()), vec![option]));
         }
+        blocks.push(Block::Heading("The hidden sidebar".into()));
+        blocks.push(Block::Rows(hidden));
         // The trackpad's, which the Mac alone has a host for.
         if cfg!(target_os = "macos") {
             let haptics = unsafe { bc::bc_haptics() };
@@ -1693,6 +1769,19 @@ impl Settings {
                 vec![haptics],
             );
             blocks.push(Block::Rows(vec![row]));
+        }
+        // Once the core has backed the sidebar up, which it does as it saves the Spaces.
+        if front_shell().is_some_and(|shell| shell.read(cx).has_sidebar_backups()) {
+            let restore = button(look, "restore-sidebar", "Restore…")
+                .relative()
+                .child(self.drawn("restore sidebar".into()))
+                .on_click(|_, _, cx| restore_earlier_sidebar(cx));
+            blocks.push(Block::Rows(vec![setting(
+                look,
+                "Restore an earlier sidebar",
+                Some("Brings back the Spaces and tabs from a backup, newest first.".into()),
+                vec![restore.into_any_element()],
+            )]));
         }
         Page::new(
             Section::TabsAndSidebar,
@@ -2171,6 +2260,32 @@ impl Settings {
             settings.update(cx, |settings, cx| settings.chose(cx)).ok();
         });
         self.pop_up(Popup::Favorites, items, picked, window, cx);
+    }
+
+    /// General's Appearance: Automatic, Light or Dark, View › Appearance's choice, which every
+    /// window takes.
+    fn choose_appearance(&mut self, chosen: Appearance, window: &Window, cx: &mut Context<Self>) {
+        const ALL: [Appearance; 3] = [Appearance::Automatic, Appearance::Light, Appearance::Dark];
+        let items: Vec<MenuEntry> = (ALL.iter())
+            .map(|&each| {
+                let on = each == chosen;
+                MenuEntry {
+                    checked: on,
+                    over: on,
+                    ..MenuEntry::new(appearance_label(each), true)
+                }
+            })
+            .collect();
+        let settings = cx.weak_entity();
+        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
+            if let Some(appearance) = picked.map(|index| ALL[index]) {
+                crate::browser_windows::update_shells_in(cx, |shell, cx| {
+                    shell.run(Command::Appearance(appearance), "settings", cx)
+                });
+            }
+            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
+        });
+        self.pop_up(Popup::Appearance, items, picked, window, cx);
     }
 
     /// Shows `which` pop-up's menu of `items` in ilo's menu over Settings' window, light or dark as
@@ -3410,7 +3525,7 @@ impl Settings {
     /// update stands and, where the build carries a nightly feed, whether it takes nightly builds,
     /// then the licence it's under and the notices of what it's built from, each of which opens in
     /// a tab.
-    fn about(&self, cx: &mut Context<Self>) -> Page {
+    fn about(&self, accent: Rgba, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
         // check.sh reads the engine's version here.
         let line = format!("browser: settings about {}", version(cx));
@@ -3476,8 +3591,22 @@ impl Settings {
             Some(div().child(self.version.clone())),
             offered.then(|| div().child(self.nightly.clone())),
         ];
+        let whats_new = self.toggle(
+            "whats new",
+            !off(updates::NO_WHATS_NEW),
+            set_whats_new,
+            accent,
+            cx,
+        );
+        let whats_new = setting(
+            look,
+            "Show what's new after an update",
+            Some("Its notes open in a tab. What's New opens them any time.".into()),
+            vec![whats_new],
+        );
         let blocks = vec![
             Block::Group(group(look, version.into_iter().flatten())),
+            Block::Rows(vec![whats_new]),
             Block::Group(group(look, notices)),
         ];
         Page::new(Section::About, "a good tool.", blocks)
@@ -3662,6 +3791,77 @@ fn set_link_previews(previews: bool, _: &mut App) {
 /// In every profile; a site the user allows in its Site Controls still floats.
 fn set_mini_player(on: bool, _: &mut App) {
     unsafe { bc::bc_set_auto_picture_in_picture(on) };
+}
+
+/// The app's own switches that are on unless the user turned them off, each a file in the
+/// profile directory while it's off, as the core keeps no settings of the app's own.
+const NO_EDGE_REVEAL: &str = "no-edge-reveal";
+const DOCK_ICON_PLAIN: &str = "plain-dock-icon";
+
+fn off(name: &str) -> bool {
+    std::path::Path::new(&format!("{}/{name}", crate::profile_dir())).exists()
+}
+
+fn set_off(name: &str, is_off: bool) {
+    let path = format!("{}/{name}", crate::profile_dir());
+    _ = match is_off {
+        true => std::fs::write(path, ""),
+        false => std::fs::remove_file(path),
+    };
+}
+
+/// Hands the app's switches to what they change, at launch.
+pub fn read_switches(cx: &mut App) {
+    cx.set_global(shell::SidebarEdge(!off(NO_EDGE_REVEAL)));
+    browser::dock_dot::set_plain(off(DOCK_ICON_PLAIN), cx);
+}
+
+fn set_edge_reveals(reveals: bool, cx: &mut App) {
+    set_off(NO_EDGE_REVEAL, !reveals);
+    cx.set_global(shell::SidebarEdge(reveals));
+}
+
+fn set_dock_icon_color(colored: bool, cx: &mut App) {
+    set_off(DOCK_ICON_PLAIN, !colored);
+    browser::dock_dot::set_plain(!colored, cx);
+}
+
+fn set_whats_new(shown: bool, _: &mut App) {
+    set_off(updates::NO_WHATS_NEW, !shown);
+}
+
+fn set_warn_moving_profiles(warn: bool, _: &mut App) {
+    unsafe { bc::bc_set_warn_moving_profiles(warn) };
+}
+
+/// Appearance's choices as View › Appearance names them.
+fn appearance_label(appearance: Appearance) -> &'static str {
+    match appearance {
+        Appearance::Automatic => "Automatic",
+        Appearance::Light => "Light",
+        Appearance::Dark => "Dark",
+    }
+}
+
+/// The browser window in front's shell, if there's one.
+fn front_shell() -> Option<Entity<shell::Shell>> {
+    let (_, view) = crate::browser_windows::front();
+    crate::browser_windows::shell_with_view(view).upgrade()
+}
+
+/// Tabs & Sidebar's Restore…: Settings goes, and the window in front lists the backups where its
+/// command bar was, newest first, each asking first, as the command bar's Restore Earlier
+/// Sidebar… does.
+fn restore_earlier_sidebar(cx: &mut App) {
+    let Some(shell) = front_shell() else {
+        return;
+    };
+    // check.sh waits for this line.
+    log!("browser: settings restore sidebar");
+    hide(cx);
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::RestoreEarlierSidebar, "settings", cx)
+    });
 }
 
 fn set_option_reveals(reveals: bool, _: &mut App) {
@@ -4140,7 +4340,7 @@ impl Settings {
                 vec![Block::View(self.account.clone().into_any_element())],
             ),
             Section::ImportExport => self.import_export(cx),
-            Section::About => self.about(cx),
+            Section::About => self.about(accent, cx),
         }
     }
 
@@ -4165,6 +4365,7 @@ impl Settings {
         pages.push(self.shortcuts(accent, cx));
         pages.push(self.privacy(&profiles, &off_sites(), accent, cx));
         pages.push(self.import_export(cx));
+        pages.push(self.about(accent, cx));
         // In the column's order, as the results run.
         pages.sort_by_key(|page| Section::all().position(|each| each == page.section));
         let (mut entries, mut divs, mut under) = (Vec::new(), Vec::new(), Vec::new());
