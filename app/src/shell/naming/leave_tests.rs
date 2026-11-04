@@ -246,6 +246,64 @@ fn a_name_field_opened_from_a_menu_outlasts_the_menu_giving_back_the_keyboard(
     }
 }
 
+/// The pointer over the Space's name, where the menu's window leaves it as it closes, lights the
+/// row but doesn't take the keyboard from the name's field open in it: Esc still cancels (#1664).
+/// The hover comes as the browser window gets the keyboard back, before GPUI has heard of it, and
+/// after.
+#[gpui::test]
+fn a_hover_over_the_space_name_leaves_its_field_the_keyboard(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    let menu = cx.update(|_, cx| {
+        cx.open_window(WindowOptions::default(), |_, cx| cx.new(|_| Empty))
+            .unwrap()
+    });
+    let row = shell
+        .read_with(cx, |shell, _| shell.name_row_drawn.get())
+        .expect("a name row");
+    let name = point(row.left() + px(60.), row.center().y);
+    let away = point(px(60.), px(400.));
+    for hover_first in [false, true] {
+        cx.update(|window, _| window.activate_window());
+        cx.simulate_mouse_move(away, None, Modifiers::none());
+        cx.run_until_parked();
+        press(cx, name, MouseButton::Right, 1);
+        menu.update(cx, |_, window, _| window.activate_window())
+            .unwrap();
+        cx.run_until_parked();
+        cx.update(|_, cx| host.choose("Rename Space…", cx));
+        cx.run_until_parked();
+        assert!(
+            naming(&shell, cx) == Some(Naming::Space(1)),
+            "Rename Space opened no field"
+        );
+        cx.update(|window, _| window.activate_window());
+        // AppKit's moves as the menu's window goes, a point on from the press.
+        if hover_first {
+            cx.simulate_mouse_move(name + point(px(5.), px(0.)), None, Modifiers::none());
+        }
+        cx.run_until_parked();
+        cx.simulate_mouse_move(name + point(px(10.), px(0.)), None, Modifiers::none());
+        cx.run_until_parked();
+        assert!(
+            shell.read_with(cx, |shell, _| shell.name_hovered),
+            "the pointer didn't reach the Space's name ({hover_first})"
+        );
+        assert!(
+            naming(&shell, cx) == Some(Naming::Space(1)),
+            "a hover over the Space's name ended its field (before the window was heard back: \
+             {hover_first})"
+        );
+        cx.simulate_input("gone");
+        cx.simulate_keystrokes("escape");
+        assert!(naming(&shell, cx).is_none(), "Esc didn't close the field");
+        assert_eq!(
+            host.take_edits(),
+            Vec::<String>::new(),
+            "Esc renamed the Space"
+        );
+    }
+}
+
 /// A pinned tab's Edit… field takes a URL only on purpose: losing the keyboard undoes it.
 #[gpui::test]
 fn a_pinned_url_typed_is_undone_however_the_field_loses_the_keyboard(cx: &mut TestAppContext) {
