@@ -593,6 +593,10 @@ send type nihongo
 [ "$marked" = "$preedit_marked" ] || fail "the command bar didn't take the composition: marked $marked"
 send key escape
 none_since '^browser: command bar hidden$' || fail "escape while composing closed the command bar"
+# Microsoft's IME cancels a moment after it takes the key.
+for _ in 1 2 3 4 5; do
+  [ "$marked" = none ] || [ -z "$japanese" ] || { sleep 0.2; send state; }
+done
 [ "$marked" = none ] || fail "escape didn't cancel the composition: marked $marked"
 send type nihongo
 send key space

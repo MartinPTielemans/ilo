@@ -900,6 +900,8 @@ bool AddSentKey(UINT vk) {
     SendVirtualKey(vk);
   }, 30});
   g_steps.push_back({[] { WaitForKeys(100); }, 16});
+  // What the IME does with the key, as a composition it cancels, can come a moment after.
+  g_steps.push_back({[] {}, 150});
   return true;
 }
 
