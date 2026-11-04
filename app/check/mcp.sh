@@ -898,7 +898,7 @@ if [ "$driven" = 1 ]; then
     "the reconnected client's hand_off didn't hand the tab over"
   await_log "^browser: task card $session Waiting " "the reconnected client's card didn't wait for the user"
   await_log "^browser: task plate task-${session#session-} at " "the reconnected client's card wasn't drawn"
-  needing="task-${session#session-}"
+  needing=$session
   await_more '^browser: needs you 1$' "$ones" || fail "the waiting card didn't count as a need"
   case $background in
     linux)
