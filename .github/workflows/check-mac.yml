@@ -195,6 +195,8 @@ jobs:
           all) runs=$all ;;
           *) runs=$RUNS ;;
           esac
+          # PROBE: the whole screen every 5 s.
+          (for i in $(seq 200); do screencapture -x -t jpg "$out/screen-$(printf %03d $i).jpg" 2>/dev/null; sleep 5; done) &
           {
             echo "| Run | Result |"
             echo "|---|---|"
@@ -236,7 +238,10 @@ jobs:
           for id in $(grep -E 'service=kTCCService(Microphone|Camera), preflight=no' "$RUNNER_TEMP/tccd.log" | grep -oE 'msgID=[0-9.]+' | sort -u); do
             echo "== $id"; grep -F "$id," "$RUNNER_TEMP/tccd.log" | cut -c1-900
           done
-          grep -E 'Publishing|Create|Update|Delete' "$RUNNER_TEMP/tccd.log" | grep -E 'Microphone|Camera' | cut -c1-400 | tail -10
+          echo "== results not allowed"
+          for id in $(grep -E 'AUTHREQ_RESULT' "$RUNNER_TEMP/tccd.log" | grep -v 'authValue=2' | grep -oE 'msgID=[0-9.]+' | sort -u | tail -40); do
+            grep -F "$id," "$RUNNER_TEMP/tccd.log" | grep -E 'AUTHREQ_CTX|AUTHREQ_RESULT|AUTHREQ_ATTRIBUTION' | grep -vE 'milod|efilogin|AddressBook|photoanalysisd' | sed 's/binary_path=[^}]*//g' | cut -c1-500
+          done
 
       - if: ${{ always() && steps.engine.outputs.found == 'true' }}
         uses: actions/upload-artifact@v4
