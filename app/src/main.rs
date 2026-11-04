@@ -43,6 +43,9 @@ use gpui::{
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
+#[cfg(target_os = "linux")]
+#[path = "../platform/linux/active_window.rs"]
+mod active_window;
 mod agents_core;
 mod bar_picks_host;
 mod browser_windows;
@@ -281,7 +284,28 @@ fn open_saved_windows(cx: &mut App) {
         let Some(above) = WINDOWS.with_borrow(|windows| windows.last().cloned()) else {
             return;
         };
-        open_window_as(Some(above), None, Some(index), cx);
+        open_window_as(Some(above), None, Some(index), None, cx);
+    }
+}
+
+/// A window brought back in a Space an agent left, which this launch deletes once it has moved its
+/// tabs to the user's (`end_old_tasks`), as a run quit with no window left can't (#1676), shows the
+/// user's Space of its profile instead. The pages the launch opens then go there and stay in front,
+/// where they went to the agent's Space and the window then showed another tab.
+fn leave_agent_space(window: bc::bc_id) {
+    let shown = unsafe { bc::bc_window_space(window) };
+    if shown == 0 || name(bc::bc_space_agent, shown).is_empty() {
+        return;
+    }
+    let profile = unsafe { bc::bc_space_profile(shown) };
+    let home = ids(bc::bc_spaces).into_iter().find(|&space| {
+        name(bc::bc_space_agent, space).is_empty()
+            && unsafe { bc::bc_space_profile(space) } == profile
+    });
+    if let Some(home) = home {
+        // check.sh reads this line.
+        log!("browser: window {window} left space {shown} of an agent for space {home}");
+        unsafe { bc::bc_window_show_space(window, home) };
     }
 }
 
@@ -302,6 +326,7 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
             "browser: restored in {:.1} ms",
             start.elapsed().as_secs_f64() * 1000.
         );
+        leave_agent_space(window);
     } else {
         unsafe { bc::bc_window_show_space(window, create_space("Space 1", 0)) };
     }

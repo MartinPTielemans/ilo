@@ -59,6 +59,10 @@ bool host_save_launch_picture(void* ui_view, const char* profile_dir, double wid
 bool host_save_launch_pixels(void* ui_view, const char* profile_dir, const uint8_t* pixels,
                              size_t columns, size_t rows);
 
+// Mac only: draws the icon of the app with |bundle_id|, if it's installed, |size| pixels square
+// into |rgba|, size * size * 4 bytes of premultiplied RGBA, for the import's rows (#1673).
+bool host_app_icon(const char* bundle_id, size_t size, uint8_t* rgba);
+
 // Makes the view the UI draws in, for bc_window_open, which sizes it to fill the window. The
 // functions below that take a |ui_view| act on the browser window it's in.
 void* host_ui_view(void);
@@ -142,6 +146,15 @@ void host_set_little_status_item(void (*clicked)(void));
 
 // Calls |changed| with the view of each browser window that becomes the key window.
 void host_watch_key_window(void (*changed)(void* ui_view));
+
+// Calls |changed| with the view of a browser window as it becomes the window the user is in, or
+// stops being, and with each one's state as the watch starts and as it shows. That's the active
+// app's main window on the Mac, so its own overlays, menus and sheets over it don't count; the
+// foreground window on Windows, or one it owns, as an overlay; on X11 the window manager's active
+// window (_NET_ACTIVE_WINDOW), or one transient for it, read as it changes; under Wayland the
+// browser window's having the keyboard, which the compositor gives the activated toplevel, the
+// page's or the UI's alike. Linux's is active_window.rs's.
+void host_watch_window_main(void (*changed)(void* ui_view, bool main));
 
 // Calls |changed| with the view of each browser window that has gone full screen, or left it, once
 // macOS's transition is over.
@@ -558,6 +571,15 @@ bool host_window_buttons(void* ui_view, double centres[3], double* y, double* di
 // Does what a click on the close (0), minimize (1) or zoom (2) button of |ui_view|'s window does.
 void host_press_window_button(void* ui_view, int button);
 
+// The Mac's: puts the browser window of |ui_view| full screen as its green button does, unless
+// it's full screen already or on its way, as AppKit takes a window opened from a full-screen one
+// there itself. Returns whether it was.
+bool host_enter_full_screen(void* ui_view);
+
+// Whether the browser window of |ui_view| is on the macOS desktop shown, as a window AppKit takes
+// full screen isn't until macOS has moved to its desktop. Off the Mac, always.
+bool host_window_on_active_space(void* ui_view);
+
 // Keeps the browser window of |ui_view| over other apps' windows, its overlays over it as before,
 // or with |on| false lets it go back among them (Window › Stay On Top). The Mac sets it aside
 // while the window is full screen, and takes it up again after. Under Wayland, which gives a client
@@ -649,6 +671,8 @@ typedef struct {
   const char* url;
   // Whether it's a file's, dragged as a file, rather than a link or text.
   bool file;
+  // A tab of this app's that host_drag_tab drags, with an empty |url|, else 0.
+  uint64_t tab;
 } host_dragged;
 
 // What host_take_drops hears of a drag.
@@ -671,6 +695,20 @@ bool host_trash(const char* path);
 // UI's view as host_take_drops says. Calls |ended| once it's let go, with whether something took
 // it. Returns false, and never calls |ended|, if it didn't start, as when there's no file there.
 bool host_drag_file(const char* path, void (*ended)(bool taken));
+
+// Starts the system's drag of |tab|, a tab's row dragged out of its window, from the pointer, during
+// the event of the left button held and moved. It shows the row: the part of |ui_view|'s window at
+// (|x|, |y|), |width| by |height| points from its content's top-left corner, with the pointer at
+// (|grab_x|, |grab_y|) in it. It carries a type of the app's own, which only the app's UI views
+// take, with the tab in the item host_take_drops hands them. Calls |ended| once it ends: taken by
+// one, let go where none took it, or cancelled, as escape does, with where on the screen it was let
+// go, in host_window_frame's terms, |placed| false where the system doesn't say, as under Wayland.
+// Returns false, and never calls |ended|, if it didn't start, as on Windows and Linux so far
+// (#1798), where the row stays in its window.
+enum { HOST_TAB_TAKEN, HOST_TAB_LET_GO, HOST_TAB_CANCELLED };
+bool host_drag_tab(void* ui_view, uint64_t tab, double x, double y, double width, double height,
+                   double grab_x, double grab_y,
+                   void (*ended)(uint64_t tab, int how, bool placed, double x, double y));
 
 // Looks up a preview of the file at |path|, a full path in UTF-8, off the main thread: for an
 // image, or a video's first frame, a thumbnail at most 96 pixels on its longer side, its aspect

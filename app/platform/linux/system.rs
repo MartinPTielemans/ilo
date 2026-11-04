@@ -74,6 +74,9 @@ pub fn watch_activation<T: 'static>(
         if active {
             crate::link_preview_window::took_keyboard(ui_view);
         }
+        if whole_window {
+            crate::active_window::wayland_active(ui_view, active);
+        }
         unsafe { platform::host_window_active(ui_view, active, whole_window) }
     })
     .detach();
@@ -113,6 +116,23 @@ pub extern "C" fn host_drag_file(path: *const c_char, ended: extern "C" fn(taken
                 .detach();
         }
     })
+}
+
+/// A tab's drag out of its window, which is the Mac's alone so far: the row stays (#1798).
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn host_drag_tab(
+    _ui_view: *mut c_void,
+    _tab: u64,
+    _x: f64,
+    _y: f64,
+    _width: f64,
+    _height: f64,
+    _grab_x: f64,
+    _grab_y: f64,
+    _ended: extern "C" fn(tab: u64, how: std::ffi::c_int, placed: bool, x: f64, y: f64),
+) -> bool {
+    false
 }
 
 /// Calls `released` once Control is no longer held, after the event that shows it, as a ⌃Tab walk

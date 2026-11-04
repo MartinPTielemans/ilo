@@ -1135,6 +1135,7 @@ elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   send key n cmd shift
   expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
   private=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
+  new_window_bar
   send window 2
   private_session_page "?private" "$private"
   expect "^browser: copied 0 cookies and 0 storage items for 127.0.0.1 into the system's engine\$" \
@@ -1156,6 +1157,7 @@ elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   send key n cmd shift
   expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window again"
   private=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
+  new_window_bar
   # The driver numbers windows in the order they were made, the closed one too.
   send window 3
   private_session_page "" "$private"
@@ -1356,6 +1358,7 @@ if [ "$drm_done" = "Safari's engine" ]; then
   send key n cmd shift
   expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
   private=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
+  new_window_bar
   send window 2
   send key t cmd
   expect '^browser: command bar shown$' "⌘T didn't open the command bar in the private window"

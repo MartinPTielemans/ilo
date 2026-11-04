@@ -10,8 +10,10 @@
 # both full screen or both out, and escape and the page's full screen work after; going away while
 # the page takes the window full screen leaves both windowed. The footer's menu
 # flips up at the screen's bottom in full screen.
-# Esc in full screen goes to a page that keeps it, and twice or held leaves anyway. The command
-# bar opens in full screen and keeps the keyboard when a page commits under it, then
+# Esc in full screen goes to a page that keeps it, and twice or held leaves anyway, and ⌘N in full
+# screen, with the page's keyboard, opens a window that goes full screen too and then opens ⌘T's
+# command bar, whose URL loads there. The command bar opens in full screen and keeps the keyboard
+# when a page commits under it, then
 # gives the keyboard to the new page, and scrolling a long page doesn't stutter. Dragging the
 # window's background moves the window, and the buttons, URL field and rows keep their presses. A
 # double-click there zooms it, and one in the
@@ -1044,6 +1046,79 @@ if [ "$(uname)" = Darwin ]; then
 else
   echo "skip: Esc held in full screen, as off the Mac the host can't tell a held key's repeats from presses, which leave as twice."
 fi
+
+# With two windows, only the key window's hidden sidebar comes out at its edge, as Arc 1.171's: a
+# window behind leaves its edge to the pointer on its way to the one in front (#1402). The driver
+# sends the window behind its moves without bringing it forward, as dialogs' hover card behind
+# shows they reach it; once in front, the same moves bring its sidebar out. Linux's driver can't
+# drive a window behind another.
+if [ "$(uname)" = Linux ]; then
+  echo "skip: the edge of a window behind another, which Linux's driver can't drive without bringing it forward."
+else
+  send click 110 400
+  send key s cmd
+  toggle ui hidden "⌘S before the window behind's edge"
+  send key n cmd
+  expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
+  second_window=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+  # The driver counts every window opened, closed ones too.
+  driven_second=$(grep -c '^browser: window opened ' "$log")
+  # A new window opens ⌘T's bar, which keeps its window's keyboard until escape closes it.
+  expect_late '^browser: command bar shown$' "⌘N's window didn't open the command bar"
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close ⌘N's command bar"
+  send window 1 behind
+  behind=$step
+  send move 400 300
+  send move 3 300
+  send move 3 306
+  ../tools/window-screenshot.sh "$pid" "$out/reveal-behind.png" all || fail "no window to capture"
+  # The window's wait starts as the pointer moves in its edge, logged then, so none by the time the
+  # driver brings it forward means it never started.
+  send window 1
+  sed -n "/^browser: drive $behind: /,/^browser: drive $step: /p" "$log" |
+    grep -q '^browser: reveal \(waits\|shown\)$' &&
+    fail "the pointer at the edge of the window behind brought its sidebar out"
+  reveal_at_edge "the pointer at the edge of the first window, in front, didn't bring its sidebar out"
+  check_reveal "with the first window's sidebar out in front of the second" shown
+  send move 400 300
+  expect '^browser: reveal hidden$' "the pointer past the first window's sidebar out didn't send it away"
+  send window "$driven_second"
+  send key w cmd shift
+  expect "^browser: window closed $second_window\$" "⇧⌘W didn't close the second window"
+  send window 1
+  send key s cmd
+  toggle ui shown "⌘S after the window behind's edge"
+fi
+
+# ⌘N with the page's keyboard, in full screen, opens a window that goes full screen too, then opens
+# ⌘T's command bar in it, whose URL loads there (Arc). The window it came from shows what it did.
+# Last, as what it leaves would reach the steps after: its page stays in the Space's Today, where
+# closing a tab shows it, and its full-screen Space goes as it closes, with a slide that macOS takes
+# its time over in a check VM, and a full-screen change asked for in it ends at once and is then
+# turned down (#889).
+{
+  send click $page_point
+  send fullscreen
+  expect '^browser: window entered full screen$' "the window didn't go full screen for ⌘N"
+  send key n cmd
+  expect '^browser: command new-window via ' "⌘N in full screen with the page's keyboard didn't run New Window"
+  expect '^browser: window opened [0-9]' "⌘N in full screen didn't open a window"
+  full_new=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+  expect_late '^browser: new window first frame at [0-9.]* ms$' "⌘N's window in full screen drew no frame"
+  expect_late '^browser: new window went full screen$' "⌘N's window from full screen didn't go full screen"
+  expect_late '^browser: command bar shown$' "⌘N's full-screen window didn't open the command bar"
+  # The bar takes the note on leaving full screen away as it opens, settled or not.
+  expect_late '^browser: toast \(settled\|hidden\)$' "the new full-screen window's note didn't show"
+  ../tools/window-screenshot.sh "$pid" "$out/new-window-full-screen.png" || fail "no window to capture"
+  send insert "${site}notes.txt"
+  send key return
+  expect "^browser: window $full_new shows [1-9][0-9]*\$" "the URL typed in ⌘N's command bar didn't show in its window"
+  # Its own full screen ends as the first's does, by the green button, and it closes.
+  send key w cmd shift
+  expect "^browser: window closed $full_new\$" "⇧⌘W didn't close ⌘N's full-screen window"
+  send window 1
+}
 exec 3>&-
 quit
 echo "edge: $edge"
