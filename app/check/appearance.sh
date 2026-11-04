@@ -74,24 +74,33 @@ sees_the_same() {
     fail "$1: the reloaded page didn't say what it sees"
   [ "$now" = "$seen" ] || fail "$1: the page saw \"$now\", not \"$seen\""
 }
-# Gives the Space shown a theme from the picker: the appearance button at $1 first, if any, then
-# the field's colour at $2.
-theme_space() {
+open_picker() {
   bar_command edit-theme "Edit Theme…" theme
   expect '^browser: theme picker shown$' "Edit Theme… didn't show the theme picker"
   expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
-  [ -z "$1" ] || send clickkey $1
-  send clickkey $2
-  expect '^browser: themed space ' "a click in the theme picker's field didn't theme the Space"
+}
+close_picker() {
   send key escape
   expect '^browser: theme picker hidden$' "escape didn't hide the theme picker"
 }
-theme_space "" "276.5 178.5"
+open_picker
+send clickkey 276.5 178.5
+expect '^browser: themed space ' "a click in the theme picker's field didn't theme the Space"
+close_picker
 sees_the_same "with a red theme"
 look=dark at="231.7 49"
 [ "$system" = light ] || look=light at="191.3 49"
-# Blue: hue 240, clockwise from the right, half way out.
-theme_space "$at" "149 105"
+# The other look, then the blue swatch, the eighth, which the keyboard reaches, as the field takes
+# no click once the Space has a colour: tab to the appearance buttons, to − and +, then to the
+# swatches' first, and → to it.
+open_picker
+send clickkey $at
+expect '^browser: themed space ' "the theme picker's $look button didn't change the Space's theme"
+for key in tab tab tab right right right right right right right space; do
+  send key $key
+done
+expect '^browser: colored space [0-9]* 7eb6d5$' "the blue swatch didn't give the Space its colour"
+close_picker
 grep -q "^browser: theme picker set [0-9]* .*appearance=$look\$" "$log" ||
   fail "the theme picker's $look button didn't give the theme a $look look"
 sees_the_same "with a $look blue theme in a $system system"
