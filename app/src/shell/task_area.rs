@@ -954,8 +954,8 @@ impl Shell {
         let palette = self.palette;
         let card = self.task_card_shown();
         let agent = card.map(|card| card.agent.clone()).unwrap_or_default();
-        let take_over =
-            |cx: &mut Context<Self>| Some(user_keys(cx).chips(Command::BackToPinnedUrl).concat());
+        // ⌘↩, or off the Mac Ctrl+Enter, as a menu spells it.
+        let take_over = |cx: &mut Context<Self>| user_keys(cx).label(Command::BackToPinnedUrl);
         let mut chips = Vec::new();
         match (self.agent_bar(), card.map(|card| card.dot)) {
             (Some(Bar::Held { .. }), _) => chips.push(

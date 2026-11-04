@@ -121,6 +121,12 @@ fn remove_keys() -> Vec<SharedString> {
         .collect()
 }
 
+/// The key on a hint's chip at the input's end: ↩ and ⇥ on the Mac, and off it Enter and Tab, the
+/// words the menus use, as the UI's font there has no keyboard symbols (#772).
+fn hint_key(key: &str, off_the_mac: bool) -> String {
+    shell::key_name(key, off_the_mac)
+}
+
 /// One of the core's suggestions for what's typed.
 #[derive(Default)]
 pub struct Suggestion {
@@ -2443,9 +2449,11 @@ impl CommandBar {
             .chosen()
             .filter(|row| self.site.is_none() && !row.keyword.is_empty());
         let (said, key) = match site {
-            Some(row) => (format!("Search {}", row.site), "Tab"),
-            None if self.ask.is_some() => ("Run".to_string(), "↩"),
-            None if self.offers_ask(cx) => ("Ask".to_string(), "⇥"),
+            Some(row) => (format!("Search {}", row.site), "Tab".to_string()),
+            None if self.ask.is_some() => {
+                ("Run".to_string(), hint_key("enter", shell::OFF_THE_MAC))
+            }
+            None if self.offers_ask(cx) => ("Ask".to_string(), hint_key("tab", shell::OFF_THE_MAC)),
             None => return None,
         };
         let palette = palette::current(cx);

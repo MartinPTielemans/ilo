@@ -10,7 +10,8 @@
 # both full screen or both out, and escape and the page's full screen work after; going away while
 # the page takes the window full screen leaves both windowed. The footer's menu
 # flips up at the screen's bottom in full screen.
-# The command bar opens in full screen and keeps the keyboard when a page commits under it, then
+# Esc in full screen goes to a page that keeps it, and twice or held leaves anyway. The command
+# bar opens in full screen and keeps the keyboard when a page commits under it, then
 # gives the keyboard to the new page, and scrolling a long page doesn't stutter. Dragging the
 # window's background moves the window, and the buttons, URL field and rows keep their presses. A
 # double-click there zooms it, and one in the
@@ -456,6 +457,8 @@ windowed_again() {
 }
 if [ "$(uname)" = Linux ]; then
   echo "skip: second display: the Linux driver can't add one yet."
+elif windows; then
+  echo "skip: second display: the Windows driver can't add one yet."
 else
   send order
   frame=$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)
@@ -1002,6 +1005,44 @@ if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
     [ -z "$off" ] || fail "the sidebar isn't Dia's composite within 3 levels over grey${off%,}: $material"
   fi
   material="over grey ${material%; }"
+fi
+
+# Esc in full screen goes to the page first, so a page that keeps it stays full screen on one
+# press. Two within 500 ms leave anyway, and so does one held 600 ms (Arc's).
+printf '%s' '<title>keeps escape</title><p>Escape is mine</p><script>let n = 0;
+onkeydown = e => { if (e.key == "Escape") { e.preventDefault(); document.title = "kept " + ++n; } };
+</script>' > "$out/site/keeps-escape.html"
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar for the page that keeps Esc"
+send insert "${site}keeps-escape.html"
+send key return
+expect "^browser: loaded [0-9]* ${site}keeps-escape.html\$" "the page that keeps Esc didn't load"
+keeps=$(sed -n "s|^browser: loaded \([0-9]*\) ${site}keeps-escape.html\$|\1|p" "$log" | tail -1)
+send click $page_point
+send fullscreen
+expect '^browser: window entered full screen$' "the window didn't go full screen for the page that keeps Esc"
+send key escape
+expect "^browser: title $keeps kept 1\$" "the page didn't get Esc first in full screen"
+none_since '^browser: window left full screen$' || fail "one Esc the page kept took the window out of full screen"
+send key escape
+expect '^browser: escape twice leaves full screen$' "a second Esc at once didn't leave full screen"
+expect '^browser: window left full screen$' "Esc twice didn't take the window out of full screen"
+none_since "^browser: title $keeps kept 2\$" || fail "the second Esc that left full screen reached the page too"
+# Held: the Mac's driver sends the keyboard's repeat, which says it's held; off the Mac a held key's
+# repeats come as presses, so a held Esc leaves there as one pressed twice.
+if [ "$(uname)" = Darwin ]; then
+  send click $page_point
+  send fullscreen
+  expect '^browser: window entered full screen$' "the window didn't go full screen again"
+  send keydown escape
+  expect "^browser: title $keeps kept [0-9]*\$" "the page didn't get the held Esc's press"
+  sleep 0.7
+  send keydown escape repeat
+  expect '^browser: escape held leaves full screen$' "Esc held 700 ms didn't leave full screen"
+  send keyup escape
+  expect '^browser: window left full screen$' "Esc held didn't take the window out of full screen"
+else
+  echo "skip: Esc held in full screen, as off the Mac the host can't tell a held key's repeats from presses, which leave as twice."
 fi
 exec 3>&-
 quit
