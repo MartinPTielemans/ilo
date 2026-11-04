@@ -106,6 +106,7 @@ jobs:
       WINDOWS_RUNS: >-
         load tabs dialogs crash about onboarding agents access passkeys passwords quit relaunch
         private links capture spaces pinned profiles devices history appearance adblock-live find
+        sync-account
     steps:
       # setup.sh and the patches it applies need the repository's line endings.
       - run: git config --global core.autocrlf false
@@ -220,9 +221,9 @@ jobs:
 
       # The sync-account run signs in to an ilo-server of its own, on SQLite with a throwaway
       # account, never the hosted one: built from the server's repo at the commit check-linux.yml
-      # builds, only when a run asks for it.
+      # builds, when the runs include it.
       - id: server
-        if: ${{ steps.build.outcome == 'success' && (inputs.runs == 'all' || contains(format(' {0} ', inputs.runs), ' sync-account ')) }}
+        if: ${{ steps.build.outcome == 'success' && (inputs.runs == '' || inputs.runs == 'all' || contains(format(' {0} ', inputs.runs), ' sync-account ')) }}
         uses: actions/checkout@v4
         with:
           repository: MartinPTielemans/ilo-server
