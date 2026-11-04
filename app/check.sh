@@ -150,6 +150,8 @@ rm -f "$(dirname "$saved")/Agents" "$(dirname "$saved")/Shortcuts"
 # have left localhost out of Developer Mode. A failed media run may have left the Mini Player off,
 # which the core keeps as Block for every site's Automatic picture-in-picture and doesn't undo at
 # launch, so no later run's call floated (#1165).
+# Each file is Chrome's or the core's, in UTF-8, which Windows' Python doesn't read by default, as a
+# Space's emoji in Spaces.json needs (#1673).
 prefs="$profile_dir/Default/Preferences"
 mkdir -p "$(dirname "$prefs")" "$out/downloads"
 python3 -I -c '

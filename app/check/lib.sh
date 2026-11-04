@@ -560,6 +560,7 @@ forget_engine_sites() {
   [ -e "$prefs" ] || return 0
   python3 -I -c '
 import json, sys
+# Chrome writes it as UTF-8, which Windows' Python doesn't read by default.
 with open(sys.argv[1], encoding="utf-8") as f:
     prefs = json.load(f)
 engine = prefs.get("browser_core", {}).get("system_engine", {})
