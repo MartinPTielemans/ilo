@@ -1030,6 +1030,15 @@ typedef struct bc_host {
   // takes its restart with it, so a later quit isn't one. Return true to start the browser again
   // yourself, as an update that installs first does, and the core doesn't.
   bool (*quit_going_ahead)(void* context, bool restarting);
+  // Chrome's Battery Saver (its Energy Saver) turned on or off. |percent| is the battery's charge
+  // as it last read it, or -1 before it read one. It turns on below 20 % on battery
+  // (bc_battery_saver_enabled), and off once plugged in or turned off for now
+  // (bc_battery_saver_off_for_now). While it's on, pages draw at 30 frames a second and pages
+  // busy out of sight freeze (tab_frozen). The user's alone: agents hear none.
+  void (*battery_saver_changed)(void* context, bool active, int percent);
+  // |tab|'s page froze, as Battery Saver freezes a page that's busy out of sight, or thawed, as it
+  // does once shown or as Battery Saver turns off.
+  void (*tab_frozen)(void* context, bc_id tab, bool frozen);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -1895,6 +1904,17 @@ BC_EXPORT void bc_set_unload_idle_tabs(bool unload);
 // The next tab shown checks which to unload, as it would then, and from now each check logs
 // "browser: idle tabs checked" once it's done.
 BC_EXPORT void bc_age_tabs_for_testing(double seconds);
+// Whether Battery Saver is on now (battery_saver_changed).
+BC_EXPORT bool bc_battery_saver_active(void);
+// Turns Battery Saver off until the computer is plugged in again, as Chrome's "Turn off for now".
+BC_EXPORT void bc_battery_saver_off_for_now(void);
+// Whether Battery Saver turns on below 20 % on battery, Chrome's default, or never. Chrome keeps it
+// in the browser's local state.
+BC_EXPORT bool bc_battery_saver_enabled(void);
+BC_EXPORT void bc_set_battery_saver_enabled(bool enabled);
+// For check.sh, with --battery-for-testing: from now the battery reads |percent| charged and
+// |plugged| in or not, read at once. Does nothing without the switch.
+BC_EXPORT void bc_battery_for_testing(int percent, bool plugged);
 // Whether the browser blocks ads and trackers, in every profile and its private windows, with the
 // uBlock Origin it comes with: on unless the user turned it off. Off turns uBlock Origin off in
 // each profile, as its switch in Chrome's extensions page does. The core keeps it with the Spaces.

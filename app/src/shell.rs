@@ -34,6 +34,7 @@ mod agent_question;
 #[cfg(test)]
 mod agent_spaces;
 mod assets;
+mod battery;
 mod beside;
 mod browser;
 mod card_strip;
@@ -115,6 +116,7 @@ mod undo;
 mod update_sign;
 
 pub use assets::Assets;
+pub use battery::PAUSED;
 pub use browser::{
     AgentGrants, Browser, Folders, MediaAction, Page, Split, Trouble, WindowButton,
     WindowButtonGeometry,
@@ -1505,6 +1507,12 @@ pub struct Shell {
     drm_notes: HashMap<u64, SharedString>,
     /// The tabs' keys, for those whose page the password manager has something for.
     keys: HashMap<u64, Key>,
+    /// Chrome's Battery Saver, on at the battery's percent, or off (battery.rs).
+    battery_saver: Option<i32>,
+    /// Where its leaf was drawn last, which the log says when it changes.
+    battery_leaf_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The tabs whose pages Chrome froze, as Battery Saver does those busy out of sight.
+    frozen: HashSet<u64>,
     /// Where the note's card was drawn last, which the log says when it changes.
     drm_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The card of each tab whose page died while this window showed it, until it loads again.
@@ -1799,6 +1807,9 @@ impl Shell {
             agent_tip: Cell::default(),
             drm_notes: HashMap::new(),
             keys: HashMap::new(),
+            battery_saver: None,
+            battery_leaf_drawn: Rc::default(),
+            frozen: HashSet::new(),
             drm_drawn: Rc::default(),
             crash_cards: HashMap::new(),
             crash_drawn: Rc::default(),

@@ -294,6 +294,7 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::SelectSpace(_) => "icons/layers.svg",
         Command::MoveToSpace(_) | Command::MoveToFolder(_) => "icons/arrow-right.svg",
         Command::ToggleMute => "icons/volume-2.svg",
+        Command::TurnOffBatterySaver => "icons/leaf.svg",
         Command::ReopenClosedTab => "icons/undo-2.svg",
         Command::CopyUrl | Command::CopyMarkdownLink => "icons/link.svg",
         Command::PasteUrlAsTab => "icons/clipboard.svg",

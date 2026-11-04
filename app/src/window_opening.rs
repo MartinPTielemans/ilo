@@ -286,6 +286,9 @@ pub(crate) fn open_window_as(
             // The core read the extensions before there was a shell to take them.
             unsafe { bc::bc_extensions_report() };
         }
+        // As at a launch below 20 %, before there was a window to hear it.
+        let battery = BATTERY_SAVER.get();
+        shell.update(cx, |shell, cx| shell.set_battery_saver(battery, cx));
         shell
     });
     let window = match window {

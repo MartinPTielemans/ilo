@@ -201,6 +201,7 @@ impl Shell {
             icon,
             // The page shown is on screen beside it.
             pictured: !self.on_screen(tab),
+            paused: self.frozen(tab),
             actions: self.card_actions(tab),
         })
     }

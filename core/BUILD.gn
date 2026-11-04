@@ -145,6 +145,8 @@ source_set("browser_core") {
     "autofill_data.h",
     "autofill_offer.cc",
     "autofill_offer.h",
+    "battery_saver.cc",
+    "battery_saver.h",
     "browser_window_stand_in.cc",
     "browser_window_stand_in.h",
     "capture.cc",

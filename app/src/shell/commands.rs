@@ -85,6 +85,8 @@ pub enum Command {
     ResetSpaceTabs,
     /// Mutes the selected tab, or unmutes it.
     ToggleMute,
+    /// Turns Chrome's Battery Saver off until the computer's plugged in, while it's on (#686).
+    TurnOffBatterySaver,
     /// Closes the Today tabs of the Space shown, but the one shown.
     Clear,
     /// Undoes the last thing the user did that lost or moved something (`Shell::undo`).
@@ -439,6 +441,11 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         &["reset tab"],
     ),
     ("Mute/Unmute Tab", Command::ToggleMute, &["sound", "audio"]),
+    (
+        "Turn Off Battery Saver for Now",
+        Command::TurnOffBatterySaver,
+        &["energy saver", "power"],
+    ),
     ("Copy URL", Command::CopyUrl, &["link"]),
     ("Copy URL as Markdown", Command::CopyMarkdownLink, &["link"]),
     (
@@ -1018,6 +1025,7 @@ impl Command {
             Command::BackToPinnedUrl => "back-to-pinned-url",
             Command::ResetSpaceTabs => "reset-space-tabs",
             Command::ToggleMute => "toggle-mute",
+            Command::TurnOffBatterySaver => "turn-off-battery-saver",
             Command::Clear => "clear",
             Command::Undo => "undo",
             Command::Redo => "redo",
@@ -1363,6 +1371,7 @@ impl Shell {
             }
             Command::CopyUrl if !self.chosen.is_empty() => return self.copy_chosen(cx),
             Command::CopyUrl => return self.copy_url(false, cx),
+            Command::TurnOffBatterySaver => return self.turn_off_battery_saver(cx),
             Command::CopyMarkdownLink => return self.copy_url(true, cx),
             Command::PasteUrlAsTab => return self.paste_url_as_tab(cx),
             Command::Share => return self.share_page(cx),
@@ -1910,6 +1919,7 @@ impl Shell {
                 self.selected != 0 && !favorite && !self.sidebar_hidden
             }
             Command::NextSpace => space.is_some_and(|index| index + 1 < self.spaces.len()),
+            Command::TurnOffBatterySaver => self.battery_saver.is_some(),
             Command::CheckForUpdates => self.browser.updates(),
             Command::RestoreEarlierSidebar => !self.shown_backups().is_empty(),
             Command::PreviousSpace => space.is_some_and(|index| index > 0),

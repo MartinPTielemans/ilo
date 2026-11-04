@@ -69,6 +69,8 @@ pub trait Browser {
     fn set_folder_open(&self, folder: u64, open: bool, cx: &mut App);
     /// Collapses `space`'s pinned rows, or expands them.
     fn set_pinned_open(&self, space: u64, open: bool, cx: &mut App);
+    /// Turns Chrome's Battery Saver off until the computer's plugged in again.
+    fn battery_saver_off_for_now(&self, _cx: &mut App) {}
     /// Moves `folder`, with what's in it, to `index` in `to`, else in the pinned tabs, counted as
     /// `move_tab` counts.
     fn move_folder(&self, folder: u64, to: u64, index: usize, cx: &mut App);

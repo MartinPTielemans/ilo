@@ -140,6 +140,10 @@ impl Browser for Engine {
         unsafe { bc::bc_space_set_pinned_open(space, open) };
     }
 
+    fn battery_saver_off_for_now(&self, _: &mut App) {
+        unsafe { bc::bc_battery_saver_off_for_now() };
+    }
+
     fn move_folder(&self, folder: u64, to: u64, index: usize, _: &mut App) {
         unsafe { bc::bc_folder_move(folder, to, index) };
     }

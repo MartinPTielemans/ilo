@@ -402,6 +402,10 @@ impl Browser for Recorder {
         self.record(format!("pinned open {space} {open}"))
     }
 
+    fn battery_saver_off_for_now(&self, _: &mut App) {
+        self.record("battery saver off for now".into())
+    }
+
     fn move_folder(&self, folder: u64, to: u64, index: usize, _: &mut App) {
         self.edit(format!("move folder {folder} {to} {index}"));
         self.moves.set(self.moves.get() + 1);
