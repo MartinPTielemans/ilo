@@ -567,6 +567,20 @@ impl Shell {
     /// row's hover card, it sends it away, and the card with it.
     pub fn pointer_at(&mut self, x: f32, cx: &mut Context<Self>) {
         self.reveal_x = x;
+        // diag(#872): why the edge doesn't bring the sidebar out on Windows.
+        if (0. ..CARD_INSET).contains(&x) {
+            log!(
+                "browser: diag reveal at {x}: hidden {} motion {} library {} fullscreen {} revealed {} wait {} strip {:?} key {}",
+                self.sidebar_hidden,
+                self.sidebar_motion.is_some(),
+                self.library.is_some(),
+                self.page_fullscreen,
+                self.revealed,
+                self.reveal_wait.is_some(),
+                self.reveal_strip,
+                self.is_key_window(cx)
+            );
+        }
         if !self.can_reveal() {
             return;
         }
