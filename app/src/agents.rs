@@ -21,6 +21,7 @@ pub mod page;
 mod pipe;
 pub mod ready;
 pub mod runner;
+pub mod scripts;
 mod server;
 pub mod task;
 pub mod tools;
@@ -371,6 +372,8 @@ pub struct Activity {
     pub refused: SharedString,
     /// A run's steps (run_steps), each an entry of its own.
     pub steps: Vec<Activity>,
+    /// Who sent a script's command, by its app's name (scripts.rs), or empty for an agent's.
+    pub by: SharedString,
 }
 
 /// An agent the user connected.
@@ -434,6 +437,9 @@ pub struct Agents {
     stepping: Option<String>,
     /// The tasks the user asked from ⌘T, and their CLIs' settings.
     tasks: task::Tasks,
+    /// Whether scripts may control the browser (scripts.rs), and the Apple Event logged last.
+    scripts: bool,
+    script_event: u64,
 }
 
 /// A run of steps (run_steps): one at a time, each as its tool would run alone.
@@ -554,6 +560,8 @@ impl Agents {
                 dir,
                 ..Default::default()
             },
+            scripts: false,
+            script_event: 0,
         }
     }
 
@@ -613,6 +621,10 @@ impl Agents {
         }))
         .collect();
         self.on = saved.get("on").and_then(Value::as_bool).unwrap_or(false);
+        self.scripts = saved
+            .get("scripts")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         if self.on {
             self.start(cx);
         }
@@ -2153,6 +2165,7 @@ impl Agents {
             site: SharedString::from(site.to_string()),
             refused: SharedString::from(refused.to_string()),
             steps: Vec::new(),
+            by: SharedString::default(),
         };
         if self.stepping.as_deref() == Some(agent) {
             let run = self
@@ -2253,7 +2266,13 @@ impl Agents {
             "models": models,
             "found": found,
         });
-        let saved = json!({ "on": self.on, "agents": agents, "grants": grants, "tasks": tasks });
+        let saved = json!({
+            "on": self.on,
+            "agents": agents,
+            "grants": grants,
+            "tasks": tasks,
+            "scripts": self.scripts,
+        });
         if let Err(error) = clients::write_private(path, saved.to_string().as_bytes()) {
             log!("couldn't save the agents' settings: {error}");
         }

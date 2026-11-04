@@ -18,6 +18,7 @@ fn main() {
                 .file("platform/mac/emoji.mm")
                 .file("platform/mac/dock.mm")
                 .file("platform/mac/updates.mm")
+                .file("platform/mac/scripting.mm")
                 .flag("-std=c++20")
                 .flag("-fobjc-arc")
                 // Sparkle's headers alone: updates.mm loads the framework at run time, from a

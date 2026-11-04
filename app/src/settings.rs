@@ -2736,6 +2736,10 @@ impl Settings {
             Block::Heading("Apps that connect".into()),
             Block::Group(group(look, clients)),
         ];
+        // AppleScript is the Mac's alone.
+        if cfg!(target_os = "macos") {
+            blocks.extend(self.scripts(agents, accent, cx));
+        }
         // A list for each agent, as each has its own Space (decision 8): what the user let it do
         // or never do on a site, to revoke, then what it did.
         let model = agents.read(cx);
@@ -2809,6 +2813,55 @@ impl Settings {
             blocks,
             cx,
         )
+    }
+
+    /// Scripts (#704): the switch that lets AppleScript in, off at first, and what each script
+    /// did, refused or not, under the app that sent it.
+    fn scripts(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> Vec<Block> {
+        let look = &self.look;
+        let on = agents.read(cx).scripts_on();
+        let switch = {
+            let agents = agents.clone();
+            let set = move |on, cx: &mut App| {
+                agents.update(cx, |agents, cx| agents.set_scripts_on(on, cx))
+            };
+            self.toggle("scripts", on, set, accent, cx)
+        };
+        let row = feature_row(
+            look,
+            "icons/square-terminal.svg",
+            "Let scripts control the browser",
+            Some(
+                "AppleScript lists windows, Spaces and tabs, switches them and opens pages. It \
+                 never reads what's in a page."
+                    .into(),
+            ),
+            vec![switch],
+        );
+        let mut blocks = vec![
+            Block::Heading("Scripts".into()),
+            Block::Group(group(look, [row])),
+        ];
+        let now = std::time::SystemTime::now();
+        let entries: Vec<gpui::Div> = (agents.read(cx).activity(agents::scripts::AGENT))
+            .take(ACTIVITY_SHOWN)
+            .map(|entry| {
+                let ago = div()
+                    .text_color(look.detail)
+                    .child(agents::ago(entry.at, now));
+                line_row(
+                    look,
+                    agents::scripts::title(entry),
+                    Some(agents::scripts::detail(entry).into()),
+                    vec![ago.into_any_element()],
+                )
+            })
+            .collect();
+        if !entries.is_empty() {
+            blocks.push(Block::Heading("What scripts did".into()));
+            blocks.push(Block::Group(group(look, entries)));
+        }
+        blocks
     }
 
     /// The tasks ⇥ asks in ⌘T: the agent they run on, then each CLI, whether it's installed and

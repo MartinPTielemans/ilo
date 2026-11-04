@@ -156,6 +156,7 @@ use capture_host::*;
 mod updates_host;
 use updates_host::*;
 mod quitting;
+mod scripting_host;
 use quitting::*;
 
 use browser::bc;
@@ -496,6 +497,8 @@ unsafe extern "C" fn started(_: *mut c_void) {
 /// AppKit has finished launching the app, and so has handed over the links that launched it.
 extern "C" fn finished_launching() {
     unsafe { platform::host_add_dock_items(dock_little, dock_chosen) };
+    // AppleScript, once the windows it reads can be there.
+    scripting_host::answer_scripts();
     if little_in_menu_bar() {
         unsafe { platform::host_set_little_status_item(Some(status_item_clicked)) };
     }

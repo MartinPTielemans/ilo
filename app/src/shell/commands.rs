@@ -2085,7 +2085,7 @@ impl Shell {
 }
 
 /// `space`'s pinned tabs, without its folders, and its Today tabs, in the sidebar's order.
-fn space_tabs(space: &Space) -> impl Iterator<Item = u64> + '_ {
+pub(super) fn space_tabs(space: &Space) -> impl Iterator<Item = u64> + '_ {
     let pinned = space.pinned.iter().filter(|&&row| !space.is_folder(row));
     pinned.chain(&space.today).copied()
 }
