@@ -208,9 +208,10 @@ EOF
     send click $((bx + bw / 2)) $((by + bh / 2))
     expect '^browser: command show-update via sidebar$' "Update available didn't take the click"
     expect '^browser: update show asked$' "Update available didn't ask for Sparkle's window"
-    expect "^browser: update $next shown\$" "the banner's click didn't show Sparkle's window"
+    # Sparkle resumes the update it held rather than showing it anew, so its window says only that
+    # it has the keyboard.
     expect "^browser: update $next alert has the keyboard\$" \
-      "Sparkle's window from the banner didn't get the keyboard"
+      "the banner's click didn't show Sparkle's window with the keyboard"
     ../tools/window-screenshot.sh "$pid" "$out/updates-shown-from-banner.png" all ||
       fail "no window to capture"
     exec 3>&-
