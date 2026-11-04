@@ -11,10 +11,11 @@
 # with a login's password changed says it conflicted and kept the saved one. Settings' Passwords
 # tab lists what came in, and the app menu's Import from Other Browsers… shows Import again. With
 # the sidebar hidden, Arc's Spaces say so in a toast. Each step is captured, and the list and the
-# first browser's choices, under Import › its name with Import in the accent, at Settings' first
-# size and its least, dark and light; Esc goes back from the choices to the list. The fixture's Arc
-# is where the Mac keeps it, so off the Mac it isn't found and its steps are left out, and Chrome and
-# Firefox are where Linux or Windows keeps them.
+# first browser's choices, read as it's picked and each kind counted, under Import › its name with
+# Import in the accent, at Settings' first size and its least, dark and light; Esc goes back from
+# the choices to the list. The fixture's Arc is put where the Mac keeps it, or Windows' Store, and
+# Chrome and Firefox where each system keeps them. Arc has no Linux build, so on Linux it isn't
+# found and its steps are left out.
 
 serve
 printf '%s' '<title>import ready</title>' > "$out/site/import.html"
@@ -27,12 +28,18 @@ rm -f "$saved" "$rules_file"
 home="$out/import-home"
 rm -rf "$home"
 cp -R src/import/fixture "$home"
+arc_dir="$home/Library/Application Support/Arc"
 if [ "$(uname)" = Darwin ]; then
   arc=1
   chrome="$home/Library/Application Support/Google/Chrome"
   firefox="$home/Library/Application Support/Firefox"
 elif windows; then
-  arc=
+  # Arc on Windows is the Store's, in its package's folder (sources.rs).
+  arc=1
+  store="$home/AppData/Local/Packages/TheBrowserCompany.Arc_ttt1ap7aakyb4/LocalCache/Local"
+  mkdir -p "$store"
+  mv "$arc_dir" "$store/Arc"
+  arc_dir="$store/Arc"
   chrome="$home/AppData/Local/Google/Chrome/User Data"
   firefox="$home/AppData/Roaming/Mozilla/Firefox"
 else
@@ -120,7 +127,7 @@ sql "$firefox/Profiles/x.default-release/places.sqlite" "
 # Arc used last, so it's listed first, then Chrome, then Firefox.
 touch -t 200001010000 "$chrome/Default/History" "$chrome/Default/Preferences"
 touch -t 199901010000 "$firefox/Profiles/x.default-release/places.sqlite"
-touch "$home/Library/Application Support/Arc/StorableSidebar.json"
+touch "$arc_dir/StorableSidebar.json"
 # The file the open panel would give, which a run can't drive: made-up logins, never real ones.
 passwords="$out/passwords.csv"
 printf '%s\n' 'name,url,username,password,note' \
@@ -221,12 +228,21 @@ settings_shots() {
   settings_at 820 660
 }
 settings_shots list
-# The first browser's choices, under the heading Import › its name, with Import in the accent;
-# Esc goes back to the list.
-if [ -n "$arc" ]; then first_found=Arc; else first_found=Chrome; fi
+# The first browser's choices, under the heading Import › its name, with Import in the accent,
+# read as it's picked: each kind with how much of it comes, Arc's Spaces by name, the passwords'
+# row and the profiles it goes into. Esc goes back to the list.
+if [ -n "$arc" ]; then
+  first_found=Arc
+  counts='spaces: 2, pinned: 6, folders: 2, link_rules: 3, favorites: 3, bookmarks: 0, bookmark_folders: 0, open_tabs: 0, reading_list: 0, pages: 0, addresses: 0, extensions: 0'
+else
+  first_found=Chrome
+  counts='spaces: 0, pinned: 0, folders: 0, link_rules: 0, favorites: 0, bookmarks: 3, bookmark_folders: 1, open_tabs: 2, reading_list: 0, pages: 2, addresses: 1, extensions: 0'
+fi
 send clickkey $(drawn "import-from $first_found")
 expect "^browser: import pick $first_found\$" "Import… on $first_found's row didn't show its choices"
 expect '^browser: import drawn pick$' "$first_found's choices didn't draw"
+expect "^browser: import read $first_found: Tally { $counts }\$" \
+  "picking $first_found didn't read it: $(grep '^browser: import read' "$log" | tail -1)"
 settings_shots choose
 send key escape
 expect '^browser: import escape$' "Esc in $first_found's choices didn't reach the import"
@@ -399,7 +415,7 @@ if [ -n "$arc" ]; then
   ../tools/window-screenshot.sh "$pid" "$out/import-personal.png" || fail "no window to capture"
 fi
 quit
-[ -n "$arc" ] || echo "skip: import's Arc steps. The fixture's Arc is laid out as the Mac's, so it's found there alone."
+[ -n "$arc" ] || echo "skip: import's Arc steps. Arc has no Linux build, so it's never found there."
 echo "ok: Settings › Import finds the fixture's Arc, Chrome and Firefox. From Arc come its Spaces,"
 echo "  one in a new profile, their pinned tabs and folders, and its favorites; from Chrome and"
 echo "  Firefox their bookmarks as a Space and their history, with Chrome's open tab and address; and"
