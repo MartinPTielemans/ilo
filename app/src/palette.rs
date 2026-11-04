@@ -13,8 +13,8 @@
 //! component to WCAG's minimums.
 
 use gpui::{
-    BoxShadow, ColorSpace, Div, Global, Hsla, Rgba, div, linear_color_stop, linear_gradient, point,
-    prelude::*, px, rgb, rgba,
+    BoxShadow, ColorSpace, Div, Global, HighlightStyle, Hsla, Rgba, div, linear_color_stop,
+    linear_gradient, point, prelude::*, px, rgb, rgba,
 };
 
 use crate::theme::{self, DEFAULT_INTENSITY, GRAIN_STRENGTH, Theme};
@@ -432,6 +432,28 @@ impl Palette {
     /// Ink or Paper at `alpha`, or as much more as text needs to read on any theme.
     pub fn text(&self, alpha: f32) -> Hsla {
         Hsla::from(self.ink).opacity(alpha.max(self.text_floor))
+    }
+
+    /// Text at `alpha`, `lit` of the way to the ink at `high`, as a shimmer's highlight passes. It
+    /// goes from where the floor puts the text, so the highlight shows however far that raises it.
+    pub fn lit(&self, alpha: f32, high: f32, lit: f32) -> Hsla {
+        let rest = self.text(alpha);
+        Hsla {
+            a: rest.a + (high.max(rest.a) - rest.a) * lit,
+            ..rest
+        }
+    }
+
+    /// The highlight that draws text in `lit(alpha, high, 1.)`, its peak, `lit` of the way there.
+    /// GPUI keeps the text's own alpha under a highlight's colour, so a brighter one of the same ink
+    /// shows nothing: the text is drawn at its peak, and each part fades down from it.
+    pub fn lit_highlight(&self, alpha: f32, high: f32, lit: f32) -> HighlightStyle {
+        let peak = self.lit(alpha, high, 1.).a;
+        let fade = 1. - self.lit(alpha, high, lit).a / peak.max(f32::EPSILON);
+        HighlightStyle {
+            fade_out: Some(fade),
+            ..Default::default()
+        }
     }
 
     /// Ink or Paper at `alpha`, or as much more as a glyph or boundary needs.
