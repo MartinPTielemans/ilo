@@ -335,11 +335,12 @@ expect '^browser: capture left (escape)$' "escape didn't leave the dragged recta
 capture_mode page
 send click 100 400
 expect '^browser: capture left (dismissed)$' "a click on the sidebar didn't leave capture mode"
-# The click leaves the keyboard in the page on the Mac and Linux, and gives it to the UI on Windows.
-case "$(uname)" in
-  MINGW* | MSYS*) capture_mode ui ;;
-  *) capture_mode page ;;
-esac
+# The click gives the keyboard to the UI, but on Linux the core leaves it in the page (#708).
+if [ "$(uname)" = Linux ]; then
+  capture_mode page
+else
+  capture_mode ui
+fi
 send resize 1200 760
 expect '^browser: capture left (dismissed)$' "a resize didn't leave capture mode"
 
