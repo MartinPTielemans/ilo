@@ -1278,12 +1278,13 @@ fi
 # Rested on a link whose address is longer than half the card, the plate shows it cut, then after
 # 1.5 s whole, wider, in the same corner, as it fits in the card.
 long_path="notes.txt?$(printf 'a%.0s' $(seq 110))"
-printf '%s' "<title>long link</title><a href=\"$long_path\" style=\"position:fixed;left:100px;top:100px;width:200px;height:40px\"></a>" \
+printf '%s' "<title>long link</title><a href=\"${site}$long_path\" style=\"position:fixed;left:100px;top:100px;width:200px;height:40px\"></a>" \
   > "$out/site/long-link.html"
-# In a new tab, as the tab shown is on Safari's engine on the Mac now.
+# From the file, in a new tab: on the Mac the run has given the served sites to Safari's engine,
+# which reports no link targets.
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
-send type "${site#http://}long-link.html"
+send type "file://$PWD/$out/site/long-link.html"
 send key return
 expect '^browser: command bar hidden$' "going to the long link's page didn't close the command bar"
 expect '^browser: title [0-9]* long link$' "the page with the long link didn't load"

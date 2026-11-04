@@ -50,7 +50,7 @@ cat > "$clicked_dir/clicked.js" << 'EOF'
 (async () => {
   // The check's own pop-up window, which stays until the next tab opens, saying in the title what
   // it hears from it.
-  if (location.hash === "#keep") {
+  if (location.search === "?keep") {
     let type = "", id = 0;
     chrome.runtime.onMessage.addListener(message => { document.title = `clicked ${message} ${type}`; });
     chrome.windows.onRemoved.addListener(gone => {
@@ -489,10 +489,10 @@ expect "^browser: menu shown $(cased 'Manage Extension, Close Side Panel')\$" \
   "a click on the side panel's ⋯ didn't show its menu"
 send choose "$(cased 'Close Side Panel')"
 expect '^browser: side panel none$' "Close Side Panel didn't close the side panel"
-# Check Clicked's page opened as clicked.html#keep keeps a pop-up window, as MetaMask's are, with
+# Check Clicked's page opened as clicked.html?keep keeps a pop-up window, as MetaMask's are, with
 # the keyboard, which the check captures over the browser window once it has drawn. It's none of
 # the app's tabs, and the next one, Check Clicked's from the Extensions menu, closes it.
-go_from_bar "chrome-extension://$clicked/clicked.html#keep"
+go_from_bar "chrome-extension://$clicked/clicked.html?keep"
 await '^browser: title [0-9]* clicked kept drawn popup$' ||
   fail "Check Clicked's page didn't keep a pop-up window that drew: $(grep 'title [0-9]* clicked kept' "$log")"
 kept=$(sed -n "s|^browser: loaded \([0-9]*\) chrome-extension://$clicked/kept.html\$|\1|p" "$log" | tail -1)
