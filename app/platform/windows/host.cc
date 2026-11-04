@@ -1172,6 +1172,23 @@ LRESULT CALLBACK LinkPreviewOwnerProc(HWND hwnd, UINT message, WPARAM wparam, LP
 }
 
 Floating g_capture;
+// The holder of the browser window Capture shows over, and its size then.
+HWND g_capture_holder = nullptr;
+SIZE g_capture_size = {};
+
+// The window Capture shows over resized, which leaves it, as on the Mac and Linux: what it showed
+// of the page is no longer where the page is.
+void CaptureWindowSized(HWND holder, int width, int height) {
+  if (holder != g_capture_holder || !g_capture.hwnd || !IsWindowVisible(g_capture.hwnd) ||
+      (width == g_capture_size.cx && height == g_capture_size.cy)) {
+    return;
+  }
+  host_hide_capture();
+  if (void (*dismissed)(void) = g_capture.dismissed) {
+    Later([dismissed] { dismissed(); });
+  }
+}
+
 Floating g_toast;
 Floating g_tooltip;
 double g_tooltip_margin = 0;
@@ -3271,10 +3288,6 @@ void host_add_capture(void* view, void (*dismissed)(void)) {
   Adopt(g_capture, view, false, dismissed);
 }
 
-// The holder of the browser window Capture shows over, and its size then.
-HWND g_capture_holder = nullptr;
-SIZE g_capture_size = {};
-
 void host_show_capture(void* ui_view, double left, double top, double width, double height) {
   Show(g_capture, ui_view, left, top, width, height, true);
   g_capture_holder = ui_view ? GetParent(Hwnd(ui_view)) : nullptr;
@@ -3301,21 +3314,7 @@ void host_hide_capture(void) {
 }
 
 // The window Capture shows over resized, which leaves it, as on the Mac and Linux: what it showed
-// of the page is no longer where the page is.
-void CaptureWindowSized(HWND holder, int width, int height) {
-  if (holder != g_capture_holder || !g_capture.hwnd || !IsWindowVisible(g_capture.hwnd) ||
-      (width == g_capture_size.cx && height == g_capture_size.cy)) {
-    return;
-  }
-  host_hide_capture();
-  if (void (*dismissed)(void) = g_capture.dismissed) {
-    Later([dismissed] { dismissed(); });
-  }
-}
-
-void host_copy_png(const uint8_t* png, size_t size) {
-  static const UINT png_format = RegisterClipboardFormatW(L"PNG");
-  if (!OpenClipboard(nullptr)) {
+// of the page is no longer where thpboard(nullptr)) {
     return;
   }
   EmptyClipboard();
