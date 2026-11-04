@@ -10,6 +10,8 @@ on:
     paths: [app/**, core/public/**, tools/headless.sh, tools/parity.sh, .github/workflows/app-linux.yml, '!**/*.md']
   pull_request:
     paths: [app/**, core/public/**, tools/headless.sh, tools/parity.sh, .github/workflows/app-linux.yml, '!**/*.md']
+  # A branch's head whose last push skipped this, as a push runs it only when its own diff matched (#1834).
+  workflow_dispatch:
 
 # A branch's newer push cancels its older run. Main's runs, and pull requests', each get a group of
 # their own, so none is cancelled, or replaced while it waits.
@@ -22,7 +24,7 @@ jobs:
   # read the manifests, and its --all formats them too. The workflow's app/** filter starts it for
   # every Rust file and app/rustfmt.toml.
   fmt:
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -31,8 +33,8 @@ jobs:
       - run: git ls-files -z 'app/*.rs' | xargs -0 rustfmt --check
 
   test:
-    # A pull request from a branch here already ran on its push.
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    # A pull request from a branch here already ran on its push, or on a dispatch on its head.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:

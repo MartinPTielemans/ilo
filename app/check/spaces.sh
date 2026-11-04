@@ -798,6 +798,7 @@ expect '^browser: sidebar shown$' "⌘S didn't bring the sidebar back after its 
 # (#1090).
 send key n cmd
 expect '^browser: window opened [0-9]*$' "⌘N didn't open a second window for the …"
+new_window_bar
 # The driver's fullscreen takes the window it drives, which stays the first till it's told.
 send window 2
 for where in second-window full-screen; do
@@ -1137,6 +1138,7 @@ archived=$(grep '^browser: archive [0-9]* tabs$' "$log" | tail -1 | cut -d' ' -f
 send key n cmd
 expect '^browser: window opened [0-9]' "⌘N didn't open a window"
 other=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+new_window_bar
 send window 1
 post rightclick 131 $dots_y
 # ⌘Z brought the Space back with its theme.

@@ -345,6 +345,62 @@ fn escape_steps_back_and_command_w_dismisses(cx: &mut TestAppContext) {
     shell.read_with(cx, |shell, _| assert_eq!(shell.talk_agent(), None));
 }
 
+/// A task with two pages opens on Pages, its grid, a picture each; a pick zooms its page out of
+/// its picture, Esc puts it back in its picture on Pages, and Esc again goes to Talk, whose lines
+/// show, and a third closes the task.
+#[gpui::test]
+fn two_pages_open_on_pages_and_esc_goes_back_to_talk(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    let mut talk = conversation(1);
+    talk.tabs = vec![
+        (30, "tickets.example".into()),
+        (31, "seatmap.example".into()),
+    ];
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    shell.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(
+        shell.read_with(cx, |shell, cx| shell.talk_on_pages(cx)),
+        "two pages opened on Talk"
+    );
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let tiles: Vec<u64> = view.read_with(cx, |view, _| {
+        view.drawn.borrow().iter().map(|(tab, _)| *tab).collect()
+    });
+    assert_eq!(tiles, [30, 31]);
+    let (_, at) = view.read_with(cx, |view, _| view.drawn.borrow()[0]);
+    host.take();
+    cx.simulate_click(at.center(), Modifiers::none());
+    assert!(host.take().contains(&"select 30".to_string()));
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, Some(30)))
+    );
+
+    cx.simulate_keystrokes("escape");
+    shell.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, None))
+    );
+    assert!(
+        shell.read_with(cx, |shell, cx| shell.talk_on_pages(cx)),
+        "the page went back to Talk"
+    );
+    shell.update(cx, |shell, cx| shell.task_step_back(cx));
+    assert!(
+        !shell.read_with(cx, |shell, cx| shell.talk_on_pages(cx)),
+        "Esc stayed on Pages"
+    );
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, None))
+    );
+    shell.update(cx, |shell, cx| shell.task_step_back(cx));
+    assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);
+}
+
 /// A picture's click zooms its page out of it, at the picture's place and with its image; what
 /// the task does meanwhile isn't pictured under the page, but is once the page is back.
 #[gpui::test]
@@ -356,9 +412,11 @@ fn a_picture_shows_its_page(cx: &mut TestAppContext) {
     let request = crate::shell::picture::next_request() - 1;
     let picture = PagePicture::from_bgra(vec![255; 4 * 4], 2, 2);
     shell.update(cx, |shell, cx| shell.page_pictured(request, picture, cx));
-    shell.update(cx, |_, cx| cx.notify());
-    cx.run_until_parked();
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    // One page opens on Talk, which has no pictures: Pages has them.
+    assert!(!shell.read_with(cx, |shell, cx| shell.talk_on_pages(cx)));
+    view.update(cx, |view, cx| view.show_pages(true, cx));
+    cx.run_until_parked();
     let (tab, at) = view.read_with(cx, |view, _| view.drawn.borrow()[0]);
     assert_eq!(tab, 30);
     host.take();

@@ -10,8 +10,10 @@
 # both full screen or both out, and escape and the page's full screen work after; going away while
 # the page takes the window full screen leaves both windowed. The footer's menu
 # flips up at the screen's bottom in full screen.
-# Esc in full screen goes to a page that keeps it, and twice or held leaves anyway. The command
-# bar opens in full screen and keeps the keyboard when a page commits under it, then
+# Esc in full screen goes to a page that keeps it, and twice or held leaves anyway, and ⌘N in full
+# screen, with the page's keyboard, opens a window that goes full screen too and then opens ⌘T's
+# command bar, whose URL loads there. The command bar opens in full screen and keeps the keyboard
+# when a page commits under it, then
 # gives the keyboard to the new page, and scrolling a long page doesn't stutter. Dragging the
 # window's background moves the window, and the buttons, URL field and rows keep their presses. A
 # double-click there zooms it, and one in the
@@ -1043,6 +1045,36 @@ if [ "$(uname)" = Darwin ]; then
   expect '^browser: window left full screen$' "Esc held didn't take the window out of full screen"
 else
   echo "skip: Esc held in full screen, as off the Mac the host can't tell a held key's repeats from presses, which leave as twice."
+fi
+# ⌘N with the page's keyboard, in full screen, opens a window that goes full screen too, then opens
+# ⌘T's command bar in it, whose URL loads there (Arc). The window it came from shows what it did.
+# Last, as what it leaves would reach the steps after: its page stays in the Space's Today, where
+# closing a tab shows it, and its full-screen Space goes as it closes, with a slide that macOS takes
+# its time over in a check VM, and a full-screen change asked for in it ends at once and is then
+# turned down (#889).
+if windows; then
+  echo "skip: ⌘N in full screen: on Windows the core's full screen doesn't take a window just opened yet, so it opens windowed."
+else
+  send click $page_point
+  send fullscreen
+  expect '^browser: window entered full screen$' "the window didn't go full screen for ⌘N"
+  send key n cmd
+  expect '^browser: command new-window via ' "⌘N in full screen with the page's keyboard didn't run New Window"
+  expect '^browser: window opened [0-9]' "⌘N in full screen didn't open a window"
+  full_new=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+  expect_late '^browser: new window first frame at [0-9.]* ms$' "⌘N's window in full screen drew no frame"
+  expect_late '^browser: new window went full screen$' "⌘N's window from full screen didn't go full screen"
+  expect_late '^browser: command bar shown$' "⌘N's full-screen window didn't open the command bar"
+  # The bar takes the note on leaving full screen away as it opens, settled or not.
+  expect_late '^browser: toast \(settled\|hidden\)$' "the new full-screen window's note didn't show"
+  ../tools/window-screenshot.sh "$pid" "$out/new-window-full-screen.png" || fail "no window to capture"
+  send insert "${site}notes.txt"
+  send key return
+  expect "^browser: window $full_new shows [1-9][0-9]*\$" "the URL typed in ⌘N's command bar didn't show in its window"
+  # Its own full screen ends as the first's does, by the green button, and it closes.
+  send key w cmd shift
+  expect "^browser: window closed $full_new\$" "⇧⌘W didn't close ⌘N's full-screen window"
+  send window 1
 fi
 exec 3>&-
 quit

@@ -1398,6 +1398,10 @@ impl Browser for Fake {
 
     fn full_screen_note(&self, _: bool, _: &mut App) {}
 
+    fn enter_full_screen(&self, _: &mut App) -> bool {
+        false
+    }
+
     // The toast is a window over the page, which the preview has neither of.
     fn hang_note(&self, _: u64, _: bool, _: &mut App) {}
 
@@ -1682,7 +1686,7 @@ fn task_cards(home: u64) -> Vec<TaskCard> {
 }
 
 /// The working task's conversation: a step done, one that failed, what the agent said of it, and
-/// the step under way.
+/// the step under way, on four pages, so it opens on Pages.
 fn task_conversation(agent: SharedString) -> Conversation {
     let (title, _, _) = TASKS[0];
     let step = |key, glyph, title: &str, description: &str, running, failed| TraceStep {
@@ -1733,8 +1737,13 @@ fn task_conversation(agent: SharedString) -> Conversation {
             took: None,
             items,
         })],
-        tabs: Vec::new(),
-        on: None,
+        tabs: vec![
+            (FIRST_TASK + 200, "tickets.example".into()),
+            (FIRST_TASK + 201, "seatmap.example".into()),
+            (FIRST_TASK + 202, "tickets.example".into()),
+            (FIRST_TASK + 203, "maps.example".into()),
+        ],
+        on: Some(FIRST_TASK + 200),
         stoppable: true,
         open: None,
         answers: Vec::new(),

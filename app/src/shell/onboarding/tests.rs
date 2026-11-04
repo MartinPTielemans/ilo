@@ -691,8 +691,8 @@ fn an_import_offers_its_most_visited_sites_as_favorites(cx: &mut TestAppContext)
         ticked(&shell, cx),
         ["https://example.com/", "https://news.example.org/"]
     );
-    shell.update(cx, |shell, cx| {
-        shell.onboarding_tick("https://example.com/", cx)
+    view(&shell, cx).update(cx, |view, cx| {
+        view.toggle_favorite("https://example.com/", cx)
     });
     assert_eq!(ticked(&shell, cx), ["https://news.example.org/"]);
     cx.simulate_keystrokes("enter");

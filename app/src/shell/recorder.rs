@@ -122,6 +122,8 @@ pub(super) struct Recorder {
     /// The questions the dialog was asked through `tell`, each as its message, its buttons and
     /// its other answer's, and what the last one's action does.
     pub(super) told: RefCell<Vec<String>>,
+    /// Each tab the shell muted or unmuted, in order.
+    pub(super) muted: RefCell<Vec<(u64, bool)>>,
     pub(super) told_action: RefCell<Option<Box<dyn FnOnce(Vec<String>, &mut App)>>>,
     /// The dialog asks something else, so `tell` doesn't ask.
     pub(super) dialog_busy: Cell<bool>,
@@ -403,6 +405,10 @@ impl Browser for Recorder {
         self.record(format!("folder open {folder} {open}"))
     }
 
+    fn toggle_full_screen(&self, _: &mut App) {
+        self.record("toggle full screen".into())
+    }
+
     fn set_pinned_open(&self, space: u64, open: bool, _: &mut App) {
         self.record(format!("pinned open {space} {open}"))
     }
@@ -467,7 +473,9 @@ impl Browser for Recorder {
         self.record(format!("back to pinned url {tab}"))
     }
 
-    fn set_muted(&self, _: u64, _: bool, _: &mut App) {}
+    fn set_muted(&self, tab: u64, muted: bool, _: &mut App) {
+        self.muted.borrow_mut().push((tab, muted));
+    }
 
     fn share_instead(&self, tab: u64, _: &mut App) {
         self.record(format!("share instead {tab}"));
@@ -1202,6 +1210,11 @@ impl Browser for Recorder {
     ) {
         self.toasts.borrow_mut().push(text.into());
         *self.toast_run.borrow_mut() = Some((label, run));
+    }
+
+    fn enter_full_screen(&self, _: &mut App) -> bool {
+        self.record("enter full screen".into());
+        self.full_screen.get()
     }
 
     fn full_screen_note(&self, shown: bool, _: &mut App) {
