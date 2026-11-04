@@ -927,6 +927,16 @@ if [ "$driven" = 1 ]; then
       [ "$active" = 1 ] || fail "the window didn't take the keyboard back"
       send key escape
       expect "^browser: task area [0-9]* closed\$" "Escape didn't put the task's card away"
+      # Seen, the finished session's card folds into the Archive as the card goes, and the foot
+      # closes up under it: the plate is read once it has stood still for half a second.
+      plate_at() { grep "^browser: task plate task-${session#session-} at " "$log" | tail -1; }
+      still=0 last=
+      for _ in $(seq 100); do
+        now=$(plate_at)
+        if [ "$now" = "$last" ]; then still=$((still + 1)); else still=0 last=$now; fi
+        [ "$still" -ge 5 ] && break
+        sleep 0.1
+      done
       ;;
     windows)
       await_more '^browser: taskbar badge 1$' "$badges" ||
