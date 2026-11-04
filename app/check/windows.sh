@@ -603,6 +603,9 @@ if [ "$(uname)" = Darwin ]; then
   ../tools/window-screenshot.sh "$pid" "$out/windows-dragged-out.png" all || fail "no window to capture"
   send window $driven_seventh
   kept "let go where nothing took it"
+  # ⌘Z in a page's text field is the page's, so the UI takes the keyboard first, at the sidebar's
+  # empty foot.
+  send click 100 600
   send key z cmd
   expect "^browser: window closed $seventh\$" "⌘Z didn't close the window the tab's drag opened"
   expect "^browser: window $sixth shows $c\$" "⌘Z didn't send the tab back to the window it came from"
