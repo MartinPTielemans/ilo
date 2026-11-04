@@ -22,6 +22,7 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/download/download_crx_util.h"
 #include "chrome/browser/download/download_item_model.h"
+#include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/icon_loader.h"
 #include "chrome/browser/icon_manager.h"
 #include "chrome/browser/profiles/profile.h"
@@ -139,6 +140,14 @@ class Downloads : public download::AllDownloadItemNotifier::Observer {
   void OnManagerGoingDown(content::DownloadManager* manager) override { Changed(); }
   void OnDownloadCreated(content::DownloadManager* manager,
                          download::DownloadItem* item) override {
+    // What Chrome decides a private session's download by, as a Save File dialog can come of it.
+    if (Profile* profile = ProfileOf(item); profile && profile->IsOffTheRecord()) {
+      DownloadPrefs* prefs = DownloadPrefs::FromDownloadManager(manager);
+      LOG(ERROR) << "browser: private download created, folder "
+                 << (prefs ? prefs->DownloadPath().AsUTF8Unsafe() : std::string("none"))
+                 << ", asks " << std::boolalpha << (prefs && prefs->PromptForDownload())
+                 << ", disposition " << static_cast<int>(item->GetTargetDisposition());
+    }
     Changed();
   }
   void OnDownloadUpdated(content::DownloadManager* manager,
