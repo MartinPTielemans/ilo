@@ -13,7 +13,7 @@ use super::{Fold, markdown};
 use crate::agents::task::{Conversation, Line, Opens, Trace, TraceItem, TraceStep};
 use crate::shell::cubic_bezier;
 use crate::tokens::shell::conversation::motion::{
-    CHEVRON, LAND, PICK_FADE, PICTURE, RING_DELAY, RISE, STAGGER, STREAM, SWAP,
+    CHEVRON, LAND, PICK_FADE, PICTURE, RISE, STAGGER, STREAM, SWAP,
 };
 use crate::tokens::shell::task::motion::{
     CHIPS, CHIPS_DELAY, CHIPS_STAGGER, CROSSFADE, EASE, FADE, HEIGHT, ROLL, ROLL_RISE,
@@ -86,15 +86,6 @@ pub(super) struct Answered {
     pub since: Instant,
 }
 
-/// The Signal ring going from a picture to another, by their places in the row, or coming or
-/// going.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Ring {
-    pub from: Option<usize>,
-    pub to: Option<usize>,
-    pub since: Instant,
-}
-
 /// The lines following what came at their end, from where they were, and where they were last set.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Follow {
@@ -117,7 +108,6 @@ pub(super) struct Motion {
     counts: HashMap<usize, (SharedString, Instant)>,
     status: Option<(SharedString, Instant)>,
     stop: Option<Instant>,
-    pub ring: Option<Ring>,
     /// The traces folding as their turn ended, by their keys.
     folded: HashMap<usize, Instant>,
     written: HashMap<usize, Written>,
@@ -291,15 +281,6 @@ impl Motion {
             if !old.tabs.iter().any(|(each, _)| each == tab) {
                 self.came.insert(Key::Picture(*tab), now);
             }
-        }
-        if old.on != new.on {
-            let place =
-                |on: Option<u64>| on.and_then(|on| new.tabs.iter().position(|(tab, _)| *tab == on));
-            self.ring = Some(Ring {
-                from: place(old.on),
-                to: place(new.on),
-                since: now,
-            });
         }
         // The answer comes once the trace above it has folded.
         let mut after = now;
@@ -540,9 +521,6 @@ impl Motion {
         self.counts.retain(|_, (_, since)| !over(*since, ROLL));
         self.status = self.status.take().filter(|(_, since)| !over(*since, ROLL));
         self.stop = self.stop.filter(|since| !over(*since, RISE));
-        self.ring = self
-            .ring
-            .filter(|ring| !over(ring.since, RING_DELAY + PICTURE));
         self.folded
             .retain(|_, since| !over(*since, HEIGHT.max(CHEVRON)));
         for written in self.written.values_mut() {
@@ -571,7 +549,6 @@ impl Motion {
             || !self.counts.is_empty()
             || self.status.is_some()
             || self.stop.is_some()
-            || self.ring.is_some()
             || !self.folded.is_empty()
             || writing
             || self

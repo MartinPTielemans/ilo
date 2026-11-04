@@ -37,20 +37,18 @@ use crate::text_input::TextInput;
 use crate::tokens::find_bar::NOT_FOUND;
 use crate::tokens::shell::FORM_PLACEHOLDER;
 use crate::tokens::shell::agent_pointer::{COLOR as SIGNAL, RING};
-use crate::tokens::shell::conversation::motion::{
-    CHEVRON, LAND, PICK_FADE, PICTURE, RING_DELAY, RISE, STEPS_FADE,
-};
+use crate::tokens::shell::conversation::motion::{CHEVRON, LAND, PICK_FADE, RISE, STEPS_FADE};
 use crate::tokens::shell::conversation::{
     BLOCK_GAP, BUBBLE_BOTTOM, BUBBLE_FILL, BUBBLE_TOP, BUBBLE_WIDTH, BUBBLE_X, CHIPS_BELOW,
     CHIPS_TOP, CODE_FILL, COLUMN, HEADER_BOTTOM, INSET, ITEM_GAP, LINES_BELOW, LINK_LINE,
     LINK_UNDERLINE, LIST_MARKER, META_GAP, META_LINE, OPEN_BELOW, OPEN_TOP, PAGE_CHIP_BELOW,
     PAGE_CHIP_FAVICON, PAGE_CHIP_FILL, PAGE_CHIP_GAP, PAGE_CHIP_HANG, PAGE_CHIP_HEIGHT,
     PAGE_CHIP_X, PARAGRAPH_GAP, PICTURE_GAP, PICTURE_HEIGHT, PICTURE_RADIUS, PICTURE_WIDTH,
-    PICTURES_BOTTOM, RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP, REPLY_HEIGHT, REPLY_INSET,
-    SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD, SITE, SITE_GAP, TEXT_LINE, TITLE_LINE, TOP, TRACE_BELOW,
-    TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH, TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER,
+    PICTURES_COLUMNS, PICTURES_ROW_GAP, RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP, REPLY_HEIGHT,
+    REPLY_INSET, SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD, SITE, SITE_GAP, TEXT_LINE, TITLE_LINE, TOP,
+    TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH, TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER,
     TRACE_INDENT, TRACE_LINE, TRACE_NOTE, TRACE_PICTURE_HEIGHT, TRACE_PICTURE_RADIUS,
-    TRACE_PICTURE_WIDTH, TRACE_RULE, TRACE_RULE_FILL, TRACE_RULE_X, TRACE_TITLE,
+    TRACE_PICTURE_WIDTH, TRACE_RULE, TRACE_RULE_FILL, TRACE_RULE_X, TRACE_TITLE, VIEWS_GAP,
 };
 use crate::tokens::shell::empty::KEYS_FILL;
 use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, HEIGHT};
@@ -173,6 +171,8 @@ pub struct TalkView {
     scroll: ScrollHandle,
     /// The window's size as last drawn: a change keeps the lines at their end if they were.
     viewport: Size<Pixels>,
+    /// Pages rather than Talk: as the user last picked, else as the task first showed.
+    pages: Option<bool>,
     /// What the user opened or folded of its traces and their lines, which wins over what the
     /// trace would do by itself.
     opened: HashMap<Fold, bool>,
@@ -229,6 +229,17 @@ impl Shell {
     /// again.
     /// A click on the notification a task's need posted (needs_you): its card's click, which never
     /// puts the task away if it shows already, as the user came to it.
+    /// Esc on Pages: back to Talk, and whether it was there.
+    pub(super) fn talk_back_to_talk(&mut self, cx: &mut Context<Self>) -> bool {
+        let view = self.talk.as_ref().map(|talk| talk.view.clone());
+        view.is_some_and(|view| view.update(cx, |view, cx| view.back_to_talk(cx)))
+    }
+
+    /// The task's conversation shows Pages, its grid, rather than Talk.
+    pub fn talk_on_pages(&self, cx: &gpui::App) -> bool {
+        (self.talk.as_ref()).is_some_and(|talk| talk.view.read(cx).on_pages())
+    }
+
     pub fn show_needed_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
         if self.talk_agent().as_ref() != Some(&agent) {
             self.show_task(agent, cx);
@@ -277,6 +288,7 @@ impl Shell {
                     shimmering: false,
                     scroll: ScrollHandle::new(),
                     viewport: Size::default(),
+                    pages: None,
                     opened: HashMap::new(),
                     was_open: HashMap::new(),
                     folding: HashMap::new(),
@@ -503,6 +515,10 @@ impl TalkView {
                         set: at,
                     });
                 }
+            }
+            // It opens on Pages when the task has two pages or more, on Talk with fewer.
+            if self.pages.is_none() {
+                self.pages = Some(conversation.tabs.len() >= 2);
             }
             self.shown = Some(conversation);
             cx.notify();
@@ -857,6 +873,27 @@ impl TalkView {
                     .text_color(palette.text(SECONDARY))
                     .child(about),
             );
+        // Talk and Pages N, once it has a page, the one shown filled.
+        let count = shown.map_or(0, |shown| shown.tabs.len());
+        let views = (count > 0).then(|| {
+            let pages = self.on_pages();
+            let chip = |id: &'static str, words: SharedString, on: bool, to: bool| {
+                page_chip(palette, id, words, None)
+                    .when(on, |chip| chip.bg(palette.state(CHIP_FILL, STATE_PRESSED)))
+                    .when(!on, |chip| chip.bg(gpui::transparent_black()))
+                    .on_click(cx.listener(move |view, _, _, cx| view.show_pages(to, cx)))
+            };
+            div()
+                .flex()
+                .gap(px(VIEWS_GAP))
+                .child(chip("conversation-talk", "Talk".into(), !pages, false))
+                .child(chip(
+                    "conversation-pages-chip",
+                    format!("Pages {count}").into(),
+                    pages,
+                    true,
+                ))
+        });
         div()
             .flex_none()
             .mb(px(HEADER_BOTTOM))
@@ -864,139 +901,166 @@ impl TalkView {
             .items_center()
             .gap(px(BUBBLE_X))
             .child(words)
+            .children(views)
             .children(stop)
     }
 
-    /// Its pages' pictures, each over its site, in a row that scrolls sideways rather than wrap;
-    /// the agent's tab has the Signal ring while it works, and a click zooms the page out of it.
-    fn pictures(&self, look: &Look, cx: &mut Context<Self>) -> Option<gpui::Stateful<gpui::Div>> {
-        let shown = self.shown.as_ref().filter(|shown| !shown.tabs.is_empty())?;
+    /// Pages: its pages' pictures in a grid, up to three across as the area holds them, each over
+    /// its site, the agent's page ringed Signal while it works, with its step. A pick zooms the
+    /// page out of its picture. The pictures are taken when the agent acts (`set_conversation`).
+    fn grid(&self, look: &Look, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
         self.drawn.borrow_mut().clear();
-        // A page the task opens grows into the row as it fades in. Where each picture's left edge
-        // is, for the ring.
-        let grown: Vec<(f32, f32)> = (shown.tabs.iter())
-            .map(|(tab, _)| match self.motion.came(Key::Picture(*tab)) {
-                None => (1., 1.),
-                Some(since) if look.still => (1., eased(since, look.now, RISE)),
-                Some(since) => (
-                    eased(since, look.now, PICTURE),
-                    eased(since, look.now, RISE),
-                ),
-            })
-            .collect();
-        let mut lefts = Vec::with_capacity(grown.len());
-        let mut left = 0.;
-        for (index, (grown, _)) in grown.iter().enumerate() {
-            left += if index > 0 { PICTURE_GAP * grown } else { 0. };
-            lefts.push(left);
-            left += PICTURE_WIDTH * grown;
-        }
-        let ring = self.ring(&lefts, look).map(|(left, opacity)| {
-            div()
+        let tabs = self
+            .shown
+            .as_ref()
+            .map(|shown| shown.tabs.clone())
+            .unwrap_or_default();
+        let on = self.shown.as_ref().and_then(|shown| shown.on);
+        let step = self.running_step();
+        // The area's own width as it last drew, the grid taking its inset but a gap each side.
+        let area = (self.drawn_at.get()).map_or(self.viewport.width, |bounds| bounds.size.width);
+        let room = f32::from(area) - 2. * PICTURE_GAP;
+        let columns = (((room + PICTURE_GAP) / (PICTURE_WIDTH + PICTURE_GAP)).floor())
+            .clamp(1., PICTURES_COLUMNS) as usize;
+        let tiles: Vec<_> = (tabs.iter().enumerate())
+            .map(|(index, (tab, site))| {
+                let tab = *tab;
+                let opacity = match self.motion.came(Key::Picture(tab)) {
+                    Some(since) if !look.still => eased(since, look.now, RISE),
+                    _ => 1.,
+                };
+                let image = (self.pictures.iter().find(|(each, ..)| *each == tab))
+                    .and_then(|(_, _, picture)| picture.as_ref().map(PagePicture::image));
+                let (drawn, logged) = (self.drawn.clone(), self.drawn_logged.clone());
+                let paint = canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| {
+                        drawn.borrow_mut().push((tab, bounds));
+                        if logged.borrow_mut().insert(tab, bounds) != Some(bounds) {
+                            // check.sh reads this line, to click the picture.
+                            log!(
+                                "browser: task picture {tab} at {:.0} {:.0} {:.0} {:.0}",
+                                f32::from(bounds.origin.x),
+                                f32::from(bounds.origin.y),
+                                f32::from(bounds.size.width),
+                                f32::from(bounds.size.height)
+                            );
+                        }
+                        if let Some(image) = image {
+                            let corners = Corners::all(px(PICTURE_RADIUS));
+                            window
+                                .paint_image(bounds, bounds, corners, image, 0, false)
+                                .ok();
+                        }
+                    },
+                )
                 .absolute()
-                .top_0()
-                .left(px(left))
-                .w(px(PICTURE_WIDTH))
-                .h(px(PICTURE_HEIGHT))
-                .rounded(px(PICTURE_RADIUS))
-                .border(px(RING))
-                .border_color(rgb(SIGNAL))
-                .opacity(opacity)
-        });
-        let pictures = shown.tabs.iter().enumerate().map(|(index, (tab, site))| {
-            let tab = *tab;
-            let (width, opacity) = grown[index];
-            let image = (self.pictures.iter().find(|(each, ..)| *each == tab))
-                .and_then(|(_, _, picture)| picture.as_ref().map(PagePicture::image));
-            let (drawn, logged) = (self.drawn.clone(), self.drawn_logged.clone());
-            let paint = canvas(
-                |_, _, _| {},
-                move |bounds, _, window, _| {
-                    drawn.borrow_mut().push((tab, bounds));
-                    if logged.borrow_mut().insert(tab, bounds) != Some(bounds) {
-                        // check.sh reads this line, to click the picture.
-                        log!(
-                            "browser: task picture {tab} at {:.0} {:.0} {:.0} {:.0}",
-                            f32::from(bounds.origin.x),
-                            f32::from(bounds.origin.y),
-                            f32::from(bounds.size.width),
-                            f32::from(bounds.size.height)
-                        );
-                    }
-                    if let Some(image) = image {
-                        let corners = Corners::all(px(PICTURE_RADIUS));
-                        window
-                            .paint_image(bounds, bounds, corners, image, 0, false)
-                            .ok();
-                    }
-                },
-            )
-            .absolute()
-            .size_full();
-            let picture = div()
-                .relative()
-                .flex_none()
-                .w(px(PICTURE_WIDTH))
-                .h(px(PICTURE_HEIGHT))
-                .rounded(px(PICTURE_RADIUS))
-                .bg(look.palette.plate(gpui::rgba(KEYS_FILL).a))
-                .overflow_hidden()
-                .child(paint);
-            div()
-                .id(("conversation-page", tab))
-                .flex_none()
-                .w(px(PICTURE_WIDTH * width))
-                .when(index > 0, |picture| picture.ml(px(PICTURE_GAP * width)))
-                .overflow_hidden()
-                .opacity(opacity)
-                .cursor_pointer()
-                .child(picture)
-                .child(
+                .size_full();
+                let working = on == Some(tab);
+                let picture = div()
+                    .relative()
+                    .w(px(PICTURE_WIDTH))
+                    .h(px(PICTURE_HEIGHT))
+                    .rounded(px(PICTURE_RADIUS))
+                    .bg(look.palette.plate(gpui::rgba(KEYS_FILL).a))
+                    .overflow_hidden()
+                    .child(paint)
+                    .when(working, |picture| {
+                        picture.child(
+                            div()
+                                .absolute()
+                                .size_full()
+                                .rounded(px(PICTURE_RADIUS))
+                                .border(px(RING))
+                                .border_color(rgb(SIGNAL)),
+                        )
+                    });
+                let line = |words: SharedString, color: Hsla| {
                     div()
-                        .mt(px(SITE_GAP))
                         .w(px(PICTURE_WIDTH))
                         .h(px(SITE))
                         .truncate()
                         .text_size(px(text::SMALL))
-                        .text_color(look.palette.text(SECONDARY))
-                        .child(site.clone()),
-                )
-                .on_click(cx.listener(move |view, _, _, cx| view.watch(tab, cx)))
-        });
-        Some(
-            div()
-                .id("conversation-pictures")
-                .relative()
-                .flex_none()
-                .mb(px(PICTURES_BOTTOM))
-                .overflow_x_scroll()
-                .flex()
-                .children(pictures)
-                .children(ring),
-        )
+                        .text_color(color)
+                        .child(words)
+                };
+                div()
+                    .id(("conversation-page", tab))
+                    .flex_none()
+                    .w(px(PICTURE_WIDTH))
+                    .when(index % columns > 0, |tile| tile.ml(px(PICTURE_GAP)))
+                    .mb(px(PICTURES_ROW_GAP))
+                    .opacity(opacity)
+                    .cursor_pointer()
+                    .child(picture)
+                    .child(line(site.clone(), look.palette.text(TITLE)).mt(px(SITE_GAP)))
+                    .children(
+                        step.clone()
+                            .filter(|_| working)
+                            .map(|step| line(step, rgb(SIGNAL).into())),
+                    )
+                    .on_click(cx.listener(move |view, _, _, cx| view.watch(tab, cx)))
+            })
+            .collect();
+        let width = columns as f32 * PICTURE_WIDTH + (columns as f32 - 1.) * PICTURE_GAP;
+        div()
+            .id("conversation-pages")
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .overflow_y_scroll()
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .w(px(width))
+                    .flex()
+                    .flex_wrap()
+                    .content_start()
+                    .children(tiles),
+            )
     }
 
-    /// The Signal ring on the picture of the tab the agent is on, by the pictures' left edges: where
-    /// it is and its opacity. It slides to the agent's next tab once that has started to grow in,
-    /// comes as the agent starts on one and goes as it stops.
-    fn ring(&self, lefts: &[f32], look: &Look) -> Option<(f32, f32)> {
+    /// The step under way, as its trace names it, for the agent's page's picture.
+    fn running_step(&self) -> Option<SharedString> {
         let shown = self.shown.as_ref()?;
-        let at = |place: Option<usize>| place.and_then(|place| lefts.get(place).copied());
-        let on = at(shown
-            .on
-            .and_then(|on| shown.tabs.iter().position(|(tab, _)| *tab == on)));
-        let Some(ring) = self.motion.ring else {
-            return on.map(|left| (left, 1.));
-        };
-        let moved = ring.since + std::time::Duration::from_secs_f32(RING_DELAY);
-        match (at(ring.from), at(ring.to)) {
-            (Some(from), Some(to)) if !look.still => {
-                Some((from + (to - from) * eased(moved, look.now, PICTURE), 1.))
-            }
-            (_, Some(to)) => Some((to, eased(moved, look.now, RISE))),
-            (Some(from), None) => Some((from, 1. - eased(ring.since, look.now, RISE))),
-            (None, None) => None,
+        shown.lines.iter().rev().find_map(|line| match line {
+            Line::Trace(trace) => (trace.items.iter().rev()).find_map(|item| match item {
+                TraceItem::Step(step) if step.running => Some(step.title.clone()),
+                _ => None,
+            }),
+            Line::Step(step) if step.running => Some(step.title.clone()),
+            _ => None,
+        })
+    }
+
+    /// Whether Pages shows, rather than Talk: as the user picked, else Pages while the task had
+    /// two pages or more as it opened.
+    fn on_pages(&self) -> bool {
+        self.pages.unwrap_or(false)
+    }
+
+    /// The header's Talk or Pages.
+    fn show_pages(&mut self, pages: bool, cx: &mut Context<Self>) {
+        if self.pages != Some(pages) {
+            // check.sh reads this line.
+            log!(
+                "browser: task {} shows {}",
+                self.agent,
+                if pages { "pages" } else { "talk" }
+            );
+            self.pages = Some(pages);
+            cx.notify();
         }
+    }
+
+    /// Esc on Pages goes back to Talk, and says whether it did.
+    pub(super) fn back_to_talk(&mut self, cx: &mut Context<Self>) -> bool {
+        let on = self.on_pages();
+        if on {
+            self.show_pages(false, cx);
+        }
+        on
     }
 
     /// What the agent said, as its Markdown marks it: its paragraphs and lists, with bold, italic,
@@ -1994,25 +2058,46 @@ impl Render for TalkView {
             .px(px(TRACE_HANG))
             .pb(px(LINES_BELOW))
             .children(self.lines(&look, cx));
+        // The header and the reply field are the column's; Pages' grid takes the area's width.
+        let on_column = |child: gpui::AnyElement| {
+            div()
+                .w_full()
+                .flex()
+                .justify_center()
+                .child(div().w_full().max_w(px(COLUMN)).child(child))
+        };
+        let middle = match self.on_pages() {
+            true => div()
+                .flex_1()
+                .min_h_0()
+                .mx(px(PICTURE_GAP - INSET))
+                .flex()
+                .mb(px(REPLY_GAP))
+                .child(self.grid(&look, cx)),
+            false => div()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .flex()
+                .justify_center()
+                .mb(px(REPLY_GAP))
+                .child(
+                    div()
+                        .size_full()
+                        .max_w(px(COLUMN + 2. * TRACE_HANG))
+                        .child(lines),
+                ),
+        };
         let column = div()
             .size_full()
-            .max_w(px(COLUMN))
             .flex()
             .flex_col()
             .text_size(px(text::BODY))
             .line_height(px(TEXT_LINE))
             .text_color(palette.text(TITLE))
-            .child(self.header(&look, cx))
-            .children(self.pictures(&look, cx))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .mx(px(-TRACE_HANG))
-                    .mb(px(REPLY_GAP))
-                    .child(lines),
-            )
-            .child(self.reply(&look, cx));
+            .child(on_column(self.header(&look, cx).into_any_element()))
+            .child(middle)
+            .child(on_column(self.reply(&look, cx).into_any_element()));
         let drawn = self.drawn_at.clone();
         div()
             .id("conversation")
