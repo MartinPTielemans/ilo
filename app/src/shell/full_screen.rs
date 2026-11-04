@@ -85,6 +85,46 @@ fn escape_leaves_full_screen_when_nothing_loads(cx: &mut TestAppContext) {
     assert!(!host.take().contains(&"window button zoom".to_string()));
 }
 
+/// The page's Esc in full screen, pressed twice or held, leaves even though the page kept the
+/// first, and a single one is the page's; out of full screen, or in a page's own full screen,
+/// neither counts.
+#[gpui::test]
+fn escape_twice_or_held_in_the_page_leaves_full_screen(cx: &mut TestAppContext) {
+    let (shell, host) = two_spaces(cx);
+    let start = std::time::Instant::now();
+    let at = |ms| start + std::time::Duration::from_millis(ms);
+    let press = |shell: &Entity<Shell>, repeat, when, cx: &mut TestAppContext| {
+        shell.update(cx, |shell, cx| {
+            shell.escape_in_full_screen(repeat, when, cx)
+        })
+    };
+    assert!(
+        !press(&shell, false, at(0), cx),
+        "Esc out of full screen was taken"
+    );
+    assert!(
+        !press(&shell, false, at(100), cx),
+        "a second Esc out of full screen was taken"
+    );
+    shell.update(cx, |shell, cx| shell.set_full_screen(true, cx));
+    host.take();
+    assert!(
+        !press(&shell, false, at(1000), cx),
+        "a single Esc in full screen was taken"
+    );
+    assert!(
+        press(&shell, false, at(1300), cx),
+        "a second Esc 300 ms on didn't leave"
+    );
+    assert_eq!(host.take(), ["window button zoom"]);
+    assert!(!press(&shell, false, at(3000), cx));
+    assert!(
+        press(&shell, true, at(3650), cx),
+        "Esc held 650 ms didn't leave"
+    );
+    assert_eq!(host.take(), ["window button zoom"]);
+}
+
 const WINDOWED: Size<Pixels> = size(px(1000.), px(700.));
 const SCREEN: Size<Pixels> = size(px(1440.), px(900.));
 
