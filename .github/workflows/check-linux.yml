@@ -81,7 +81,7 @@ jobs:
         load preview import adblock adblock-lists passkeys onboarding links relaunch split
         extensions capture popup pinned about windows dialogs trouble cards passwords updates
         restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices little
-        devices
+        devices calls
       # The runs that pass on Wayland so far, in the headless sway session.
       WAYLAND_RUNS: tabs private updates
       # The runs that don't apply to Linux, a line each with why, which the summary gives. They're
