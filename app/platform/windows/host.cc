@@ -1810,6 +1810,78 @@ ComPtr<IDataObject> FileDataObject(const std::wstring& path) {
   return data;
 }
 
+// The exe the registry's App Paths names for |name|, such as chrome.exe, the user's before the
+// machine's: the path alone, as the shell's icon is all the import reads of another browser.
+std::wstring AppPath(const std::wstring& name) {
+  const std::wstring key = L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\" + name;
+  for (HKEY root : {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE}) {
+    wchar_t path[MAX_PATH] = {};
+    DWORD bytes = sizeof path;
+    if (RegGetValueW(root, key.c_str(), nullptr, RRF_RT_REG_SZ, nullptr, path, &bytes) ==
+            ERROR_SUCCESS &&
+        path[0]) {
+      std::wstring found(path);
+      // Some installers quote it.
+      if (found.size() > 1 && found.front() == L'"' && found.back() == L'"') {
+        found = found.substr(1, found.size() - 2);
+      }
+      return found;
+    }
+  }
+  return {};
+}
+
+}  // namespace
+
+// The shell's icon for an exe, by its path or its name in App Paths, |size| pixels square, as
+// premultiplied RGBA (host.h). A browser whose exe isn't there has none, and its row the globe.
+bool host_app_icon(const char* app, size_t size, uint8_t* rgba) {
+  std::wstring path = Wide(app);
+  if (path.find_first_of(L"/\\") == std::wstring::npos) {
+    path = AppPath(path);
+  }
+  if (path.empty() || GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES || !size) {
+    return false;
+  }
+  const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  bool ok = false;
+  {
+    ComPtr<IShellItemImageFactory> factory;
+    ComPtr<IWICImagingFactory> wic;
+    ComPtr<IWICBitmap> source;
+    ComPtr<IWICBitmapScaler> scaler;
+    HBITMAP bitmap = nullptr;
+    const UINT pixels = static_cast<UINT>(size);
+    if (SUCCEEDED(SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(&factory))) &&
+        SUCCEEDED(factory->GetImage({static_cast<LONG>(pixels), static_cast<LONG>(pixels)},
+                                    SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK, &bitmap)) &&
+        bitmap &&
+        SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                   IID_PPV_ARGS(&wic))) &&
+        SUCCEEDED(wic->CreateBitmapFromHBITMAP(bitmap, nullptr, WICBitmapUsePremultipliedAlpha,
+                                               &source)) &&
+        SUCCEEDED(wic->CreateBitmapScaler(&scaler)) &&
+        SUCCEEDED(scaler->Initialize(source.Get(), pixels, pixels,
+                                     WICBitmapInterpolationModeHighQualityCubic)) &&
+        SUCCEEDED(scaler->CopyPixels(nullptr, pixels * 4, pixels * pixels * 4, rgba))) {
+      // The shell's is BGRA.
+      for (size_t at = 0; at < size * size * 4; at += 4) {
+        std::swap(rgba[at], rgba[at + 2]);
+      }
+      ok = true;
+    }
+    if (bitmap) {
+      DeleteObject(bitmap);
+    }
+  }
+  if (SUCCEEDED(com)) {
+    CoUninitialize();
+  }
+  return ok;
+}
+
+namespace {
+
 // Encodes the shell's thumbnail or icon for |path| as a PNG, off the main thread. An image (or any
 // file Windows makes a thumbnail for) gets its thumbnail scaled to fit 96 px, its aspect kept; the
 // rest the file's 52 px icon. Fills |png|, |width|, |height| and |image|, returning whether it got
