@@ -459,10 +459,11 @@ pub trait Host {
     /// Whether the bar shows over a private window, which offers no tasks, as agents get no path
     /// into private windows.
     fn over_private(&self) -> bool;
-    /// What Settings' search reads of its rows, which the bar finds settings by, read once a time
-    /// the bar opens, as it's typed in. None but the browser's has any.
-    fn settings_index(&self, _: &mut App) -> Vec<settings_search::Entry> {
-        Vec::new()
+    /// What Settings' search reads of its rows, which the bar finds settings by, as last built,
+    /// which the browser does off the bar's frames: None until it's ready, when the bar lists no
+    /// settings rather than wait. It only reads, as the bar opens and is typed in.
+    fn settings_index(&self, _: &App) -> Option<Rc<Vec<settings_search::Entry>>> {
+        None
     }
     /// Opens Settings at the row named `name` in `section`, scrolled to it and flashed once, as a
     /// click on a found section's name does. Agents have no path to it: it's the bar's alone.
@@ -546,7 +547,7 @@ pub struct CommandBar {
     /// While it lists only commands, as after Tab in an empty field or "/ " typed (Arc), what
     /// leaving puts back before what's typed: nothing after Tab, "/ " after "/ ".
     commands: Option<&'static str>,
-    /// What Settings' search reads of its rows, read once since the bar opened.
+    /// What Settings' search reads of its rows, read once since the bar opened, once it's ready.
     settings_index: Option<Rc<Vec<settings_search::Entry>>>,
     /// When the bar was asked to open, until its first frame on screen logs how long it took.
     opened_at: Option<Instant>,
@@ -1072,8 +1073,7 @@ pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
                 None => {
                     let mut rows = rows;
                     if bar.settings_index.is_none() {
-                        let index = bar.host.settings_index(cx);
-                        bar.settings_index = Some(Rc::new(index));
+                        bar.settings_index = bar.host.settings_index(cx);
                     }
                     let (open, risen) = bar.take_open_tabs(&text, &mut rows);
                     let mut rows = with_calculation(&text, bar.with_commands(&text, rows, cx));

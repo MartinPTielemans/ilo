@@ -36,8 +36,9 @@ struct Recorder {
     /// The tooltips asked for and ended, apart from the rest, and where each hangs from.
     tips: RefCell<Vec<String>>,
     anchors: RefCell<Vec<Anchor>>,
-    /// What Settings' search reads of its rows, and how many times the bar read them.
-    settings: Vec<settings_search::Entry>,
+    /// What Settings' search reads of its rows, once the browser has built it, and how many
+    /// times the bar read it.
+    settings: RefCell<Option<Rc<Vec<settings_search::Entry>>>>,
     settings_read: std::cell::Cell<usize>,
 }
 
@@ -167,9 +168,9 @@ impl Host for Recorder {
         self.private
     }
 
-    fn settings_index(&self, _: &mut App) -> Vec<settings_search::Entry> {
+    fn settings_index(&self, _: &App) -> Option<Rc<Vec<settings_search::Entry>>> {
         self.settings_read.set(self.settings_read.get() + 1);
-        self.settings.clone()
+        self.settings.borrow().clone()
     }
 
     fn show_setting(&self, section: Section, name: SharedString, _: &mut App) {
@@ -3068,7 +3069,7 @@ fn settings_rows() -> Vec<settings_search::Entry> {
 #[gpui::test]
 fn a_setting_named_opens_settings_at_its_row(cx: &mut TestAppContext) {
     let host = Recorder {
-        settings: settings_rows(),
+        settings: RefCell::new(Some(Rc::new(settings_rows()))),
         ..Recorder::default()
     };
     let mut bar = Bar::open(cx, Vec::new(), host);
@@ -3104,7 +3105,7 @@ fn a_setting_named_opens_settings_at_its_row(cx: &mut TestAppContext) {
     assert!(!bar.is_open());
 
     let host = Recorder {
-        settings: settings_rows(),
+        settings: RefCell::new(Some(Rc::new(settings_rows()))),
         ..Recorder::default()
     };
     let mut bar = Bar::open(cx, Vec::new(), host);
@@ -3113,5 +3114,24 @@ fn a_setting_named_opens_settings_at_its_row(cx: &mut TestAppContext) {
     assert_eq!(
         bar.listed(),
         [search("picture in"), "Mini Player — Settings".into()]
+    );
+}
+
+/// Until the browser has built Settings' index the bar lists no settings, without waiting for it,
+/// and asks again as the next suggestions come; once it's ready they show.
+#[gpui::test]
+fn settings_rows_wait_for_nothing(cx: &mut TestAppContext) {
+    let mut bar = Bar::open(cx, Vec::new(), Recorder::default());
+    bar.type_text("peek");
+    bar.suggest("peek", vec![searching("peek")]);
+    assert_eq!(bar.listed(), [search("peek")]);
+    bar.host.settings.replace(Some(Rc::new(settings_rows())));
+    bar.type_text(" ");
+    bar.suggest("peek ", vec![searching("peek ")]);
+    assert_eq!(bar.listed(), [search("peek "), "Peek — Settings".into()]);
+    assert_eq!(
+        bar.host.settings_read.get(),
+        2,
+        "the bar didn't ask again, or asked once it had it"
     );
 }

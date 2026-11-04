@@ -144,8 +144,8 @@ impl command_bar::Host for Bar {
         shell::bar_commands(text, cx)
     }
 
-    fn settings_index(&self, cx: &mut App) -> Vec<browser::settings_search::Entry> {
-        crate::settings::index(cx)
+    fn settings_index(&self, _: &App) -> Option<std::rc::Rc<Vec<browser::settings_search::Entry>>> {
+        crate::settings::index()
     }
 
     fn show_setting(
