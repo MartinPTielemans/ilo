@@ -269,8 +269,9 @@ elif windows && [ -z "$japanese" ]; then
 elif windows; then
   # The host holds the keys typed until the bar has the keyboard (host.cc's HoldKeys), but
   # Microsoft's IME composes them in the page before the hold sees them, and a repost of a key
-  # passes the IME by (#454).
-  echo "skip: composing right after Ctrl+L: Microsoft's Japanese IME composes in the page the keys the host holds for the bar."
+  # passes the IME by. TSF's keystroke manager doesn't hand held keys to it in the bar either
+  # (#1784).
+  echo "skip: composing right after Ctrl+L: Microsoft's Japanese IME composes in the page the keys the host holds for the bar (#1784)."
 else
   send $ime
   typed_after l nihongo
