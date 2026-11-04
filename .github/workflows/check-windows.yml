@@ -242,7 +242,14 @@ jobs:
           ssl="/c/Program Files/OpenSSL"
           [ -d "$ssl/include" ] || choco install openssl -y --no-progress > /dev/null
           [ -d "$ssl/include" ] || ssl="/c/Program Files/OpenSSL-Win64"
-          export OPENSSL_DIR="$(cygpath -w "$ssl")"
+          # OpenSSL 3's installer keeps its import libraries by compiler and runtime.
+          for lib in "$ssl/lib/VC/x64/MD" "$ssl/lib/VC/x64/MT" "$ssl/lib"; do
+            [ -e "$lib/libssl.lib" ] || continue
+            export OPENSSL_LIB_DIR="$(cygpath -w "$lib")"
+            break
+          done
+          [ -n "${OPENSSL_LIB_DIR:-}" ] || { find "$ssl/lib" -name 'libssl*'; exit 1; }
+          export OPENSSL_INCLUDE_DIR="$(cygpath -w "$ssl/include")"
           cargo build --release --locked
           echo "ILO_SERVER=$PWD/target/release/ilo-server.exe" >> "$GITHUB_ENV"
           # Its DLLs, for the server to start.
