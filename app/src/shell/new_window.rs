@@ -220,4 +220,44 @@ mod tests {
             "it didn't ask once whether the window was full screen"
         );
     }
+
+    /// While the command bar is open over the empty card, the card draws nothing, as its one offer
+    /// is the bar; Esc brings it back, fading in as when the card first showed (#669).
+    #[gpui::test]
+    fn the_empty_card_draws_nothing_under_the_bar(cx: &mut TestAppContext) {
+        use crate::shell::{Command, empty::FADE};
+        use std::time::Duration;
+        let (shell, cx, _) = window(cx);
+        let later = || Instant::now() + Duration::from_secs(1);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        let shown = |cx: &mut VisualTestContext| {
+            shell.read_with(cx, |shell, _| shell.card_opacity(later()))
+        };
+        assert!(shown(cx) > 0.99, "the empty card didn't show");
+        for opens in [Command::NewTab, Command::EditUrl] {
+            shell.update(cx, |shell, cx| shell.run(opens, "ui", cx));
+            assert_eq!(
+                shown(cx),
+                0.,
+                "{opens:?}'s bar left the card's content under it"
+            );
+            assert!(
+                shell.read_with(cx, |shell, _| shell.empty_opacity(later())) > 0.99,
+                "the URL field's words went with the card under {opens:?}'s bar"
+            );
+            shell.update(cx, |shell, cx| shell.command_bar_dismissed(cx));
+            let back = shell.read_with(cx, |shell, _| shell.card_opacity(Instant::now()));
+            assert!(
+                back < 0.5,
+                "the card came back at once, not fading in: {back}"
+            );
+            let after = Instant::now() + Duration::from_secs_f32(FADE * 2.);
+            let faded = shell.read_with(cx, |shell, _| shell.card_opacity(after));
+            assert!(
+                faded > 0.99,
+                "the card didn't come back once the bar had gone"
+            );
+        }
+    }
 }

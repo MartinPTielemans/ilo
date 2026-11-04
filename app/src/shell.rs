@@ -1201,6 +1201,11 @@ pub struct Shell {
     new_tab: bool,
     /// When the card started to show no page, for the line on it to fade in from.
     empty_since: Option<Instant>,
+    /// Whether the command bar this window opened is up, over the card while it shows no page,
+    /// which then draws nothing: its one offer, New Tab, is the bar.
+    bar_over_card: bool,
+    /// When the bar last left the card, for its content to fade in again from.
+    card_back: Option<Instant>,
     /// The fade has ended and said so.
     empty_settled: bool,
     /// The first run's welcome takes the empty card until a page shows (set_welcome).
@@ -1648,6 +1653,8 @@ impl Shell {
             clearing: Vec::new(),
             new_tab: false,
             empty_since: None,
+            bar_over_card: false,
+            card_back: None,
             empty_settled: false,
             welcome: false,
             onboarding: None,
@@ -2685,6 +2692,7 @@ impl Shell {
                 .browser
                 .command_bar_follows(self.bar_tabs(), self.open_tabs(), cx);
         self.set_new_tab(new_tab, cx);
+        self.set_bar_over_card(new_tab, cx);
         self.adding_pane = None;
         self.link_tab_changed(cx);
         self.note_hang(cx);
@@ -2712,6 +2720,7 @@ impl Shell {
 
     /// The command bar closed with no tab chosen in it: the user left it, or its ask ran a task.
     pub fn command_bar_dismissed(&mut self, cx: &mut Context<Self>) {
+        self.set_bar_over_card(false, cx);
         self.set_new_tab(false, cx);
         if self.adding_pane.take().is_some() {
             self.lay_out_page(cx);
