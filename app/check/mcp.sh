@@ -965,7 +965,10 @@ PLATE
     send click $((px + pw / 2)) $((py + ph / 2))
     expect "^browser: task $session shown\$" "a click on the new card didn't show its conversation"
   fi
-  await_log "^browser: task $session shimmers\$" "the conversation's step waiting on the user didn't shimmer"
+  # With motion reduced, as on GitHub's Windows runner, the step holds still rather than shimmer.
+  if ! grep -q '^browser: reduce motion on$' "$log"; then
+    await_log "^browser: task $session shimmers\$" "the conversation's step waiting on the user didn't shimmer"
+  fi
   await_log '^browser: task stop at ' "the new card's conversation drew no Stop"
   read -r sx sy sw sh <<STOP
 $(grep '^browser: task stop at ' "$log" | tail -1 | cut -d' ' -f5-)
