@@ -584,6 +584,9 @@ pub struct Agents {
     /// The tabs agents pinned, by tab, with the agent that pinned each, which alone may unpin or
     /// remove it. Every other pinned tab is the user's, as is one whose pin the user changes.
     pins: HashMap<u64, String>,
+    /// Settings › Agents' Tasks from the command bar is off: asking an agent from ⌘T and letting
+    /// an app connect are two trust decisions, so tasks have a switch of their own under agents'.
+    tasks_off: bool,
 }
 
 /// A run of steps (run_steps): one at a time, each as its tool would run alone.
@@ -723,6 +726,7 @@ impl Agents {
                 dir,
                 ..Default::default()
             },
+            tasks_off: false,
         }
     }
 
@@ -781,6 +785,7 @@ impl Agents {
             Some((runner::Cli::from_id(cli)?, ready::Found::from_saved(found)))
         }))
         .collect();
+        self.tasks_off = tasks.get("on").and_then(Value::as_bool) == Some(false);
         self.on = saved.get("on").and_then(Value::as_bool).unwrap_or(false);
         if self.on {
             self.start(cx);
@@ -790,6 +795,25 @@ impl Agents {
 
     pub fn is_on(&self) -> bool {
         self.on
+    }
+
+    /// Whether the user may ask an agent from ⌘T: agents are on, and so is Settings › Agents' Tasks
+    /// from the command bar, which is on unless they turned it off. Outside agents, through the
+    /// server, don't hang on it.
+    pub fn tasks_on(&self) -> bool {
+        self.on && !self.tasks_off
+    }
+
+    /// Settings › Agents' Tasks from the command bar. Off, ⇥ makes no task and shows no hint, no
+    /// task starts, and a task's card offers no Retry or reply; the tasks running finish, and
+    /// their cards stay until seen.
+    pub fn set_tasks_on(&mut self, on: bool, cx: &mut Context<Self>) {
+        if on != self.tasks_off {
+            return;
+        }
+        self.tasks_off = !on;
+        self.save();
+        cx.notify();
     }
 
     /// The switch in Settings › Agents. Off stops the server and ends every agent's session.
@@ -3116,6 +3140,7 @@ impl Agents {
             .map(|(cli, found)| (cli.id().into(), found.saved()))
             .collect();
         let tasks = json!({
+            "on": !self.tasks_off,
             "default": self.tasks.default.map(runner::Cli::id),
             "models": models,
             "found": found,

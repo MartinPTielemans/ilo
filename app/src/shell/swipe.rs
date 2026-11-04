@@ -9,9 +9,9 @@ use gpui::{
 };
 
 use super::{
-    ROW_PITCH, SCROLL_EDGE, SCROLL_EDGE_FADE, SWIPE_FLICK, SWIPE_HISTORY, SWIPE_TRACKING, Settle,
-    Shell, Space, Swipe, WHEEL_BURST, WHEEL_LINE, WHEEL_REST, fade_at, library::library_band,
-    rubber_band,
+    Command, ROW_PITCH, SCROLL_EDGE, SCROLL_EDGE_FADE, SWIPE_FLICK, SWIPE_HISTORY, SWIPE_TRACKING,
+    Settle, Shell, Space, Swipe, WHEEL_BURST, WHEEL_LINE, WHEEL_REST, fade_at,
+    library::library_band, rubber_band,
 };
 
 impl Shell {
@@ -370,29 +370,52 @@ impl Shell {
         if (sum * WHEEL_LINE).abs() > 1. {
             self.wheel = None;
             self.wheel_paged = Some(now);
-            self.leave_popovers(cx);
-            let library = sum > 0. && (self.library_open || self.library_beside(self.space));
-            if library != self.library_open {
-                // check.sh waits for this line.
-                log!("browser: command view-library via wheel");
-                if !library {
-                    self.show_first_space(cx);
-                }
-                self.set_library(library, cx);
-            } else if !self.library_open
-                && let Some(space) = self.nearest(self.space, sum.signum() * self.width())
-                && space != self.space
-            {
-                if self.form().is_some() {
-                    self.cancel_space(window, cx);
-                    return true;
-                }
-                // check.sh waits for this line.
-                log!("browser: command select-space via wheel");
-                self.show_space(space, cx);
-            }
+            self.page_step(sum > 0., "wheel", window, cx);
         }
         true
+    }
+
+    /// One step along the row the pages go by, back (to the left) or forward, as a wheel's burst
+    /// or a mouse's button takes it: back from the first Space opens the Library, forward leaves
+    /// it for the first Space, and back off the form cancels it.
+    fn page_step(&mut self, back: bool, via: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_popovers(cx);
+        let library = back && (self.library_open || self.library_beside(self.space));
+        if library != self.library_open {
+            // check.sh waits for this line.
+            log!("browser: command view-library via {via}");
+            if !library {
+                self.show_first_space(cx);
+            }
+            self.set_library(library, cx);
+        } else if !self.library_open
+            && let Some(space) =
+                self.nearest(self.space, if back { 1. } else { -1. } * self.width())
+            && space != self.space
+        {
+            if self.form().is_some() {
+                self.cancel_space(window, cx);
+                return;
+            }
+            // check.sh waits for this line.
+            log!("browser: command select-space via {via}");
+            self.show_space(space, cx);
+        }
+    }
+
+    /// A mouse's back or forward button over the UI takes the pages a step, and forward from the
+    /// last Space makes a new one, as the pull past it does. A private or little window pages no
+    /// Spaces with it.
+    pub(super) fn navigate(&mut self, back: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.private || self.little.is_some() {
+            return;
+        }
+        if !back && !self.library_open && self.new_space_beside(self.space) {
+            self.leave_popovers(cx);
+            self.run(Command::NewSpace, "mouse", cx);
+            return;
+        }
+        self.page_step(back, "mouse", window, cx);
     }
 
     /// Fingers and wheels over the sidebar or the Library, heard ahead of the list, which would

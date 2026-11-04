@@ -25,6 +25,7 @@ use crate::tokens::icon_picker::{
 pub use crate::tokens::palette::SECOND_AT;
 use crate::tokens::palette::{
     ACCENT_HOVERED, ACCENT_PRESSED, INTENSITY_FLOOR, INTENSITY_SPAN, RING, SELECTION,
+    SWATCH_MAIN_TO,
 };
 use crate::tokens::palette::{
     DIALOG_DARK, DIALOG_LIGHT, GRADIENT_ALPHA, GROUND_OVER_BLACK, GROUND_OVER_WHITE,
@@ -235,15 +236,17 @@ pub struct Palette {
     pub swatch: Swatch,
 }
 
-/// A Space's mark: its theme's colours as a small swatch (#320), drawn in the same gradient the
-/// window is, with a hairline ring of Ink or Paper where its edge would fade into what's behind.
+/// A Space's mark: its theme's colours as a small swatch (#320), lying as the window's gradient
+/// does, with a hairline ring of Ink or Paper where its edge would fade into what's behind.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Swatch {
-    /// The gradient's ends: the main colour and the second along 135°, reaching it SECOND_AT of
-    /// the way, or a colour alone going lighter down.
+    /// The gradient's ends: the main colour at the top left, held to SWATCH_MAIN_TO along 135°,
+    /// and the second at the bottom right, or a colour alone going lighter down. GPUI's 135° runs
+    /// a disc's diagonal from 0 at its top left edge to 1 at its bottom right.
     from: Rgba,
     to: Rgba,
     angle: f32,
+    from_at: f32,
     to_at: f32,
     /// A third colour coming in toward the bottom.
     third: Option<Rgba>,
@@ -560,18 +563,7 @@ impl Palette {
     /// The ring a swatch of two colours alone needs on any of `behind`, by the same rule as a
     /// theme's: a Space's swatch in a menu, `from` at its top left to `to` at its bottom right.
     pub fn swatch_ring_of(from: Rgba, to: Rgba, behind: &[Rgba]) -> Option<Rgba> {
-        let (a, b) = (luminance(from), luminance(to));
-        let (darkest, lightest) = (a.min(b), a.max(b));
-        let swatch = Swatch {
-            from,
-            to,
-            angle: 135.,
-            to_at: 1.,
-            third: None,
-            darkest,
-            lightest,
-        };
-        swatch.ring_on(behind)
+        Swatch::of_two(from, to).ring_on(behind)
     }
 
     /// Where a swatch ring is checked against this palette's window: every point checked, over
@@ -701,6 +693,7 @@ impl Swatch {
                 from: accent,
                 to: accent,
                 angle: 180.,
+                from_at: 0.,
                 to_at: 1.,
                 third: None,
                 darkest: lum,
@@ -708,14 +701,14 @@ impl Swatch {
             };
         };
         let colors: Vec<Rgba> = theme.colors().into_iter().map(rgb).collect();
-        let (from, to, angle, to_at) = match colors[..] {
+        let (from, to, angle, from_at) = match colors[..] {
             [_] => (
                 Layer::of(theme, 0., 0.).color,
                 Layer::of(theme, 0., 1.).color,
                 180.,
-                1.,
+                0.,
             ),
-            _ => (colors[0], colors[1], 135., SECOND_AT),
+            _ => (colors[0], colors[1], 135., SWATCH_MAIN_TO),
         };
         let lums = window.swatch().into_iter().map(luminance);
         let (darkest, lightest) = lums.fold((f32::MAX, f32::MIN), |(d, l), y| (d.min(y), l.max(y)));
@@ -723,10 +716,27 @@ impl Swatch {
             from,
             to,
             angle,
-            to_at,
+            from_at,
+            to_at: 1.,
             third: colors.get(2).copied(),
             darkest,
             lightest,
+        }
+    }
+
+    /// Two colours alone, as a Space's swatch in a menu: `from`, the main one, at the top left,
+    /// as a theme's swatch lies.
+    pub fn of_two(from: Rgba, to: Rgba) -> Swatch {
+        let (a, b) = (luminance(from), luminance(to));
+        Swatch {
+            from,
+            to,
+            angle: 135.,
+            from_at: SWATCH_MAIN_TO,
+            to_at: 1.,
+            third: None,
+            darkest: a.min(b),
+            lightest: a.max(b),
         }
     }
 
@@ -765,7 +775,7 @@ impl Swatch {
     pub fn draw(&self, size: f32, behind: &[Rgba]) -> Div {
         let gradient = linear_gradient(
             self.angle,
-            linear_color_stop(self.from, 0.),
+            linear_color_stop(self.from, self.from_at),
             linear_color_stop(self.to, self.to_at),
         )
         .color_space(ColorSpace::Oklab);

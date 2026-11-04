@@ -528,6 +528,10 @@ pub(crate) struct Browser {
 
 #[derive(Default)]
 struct State {
+    /// The browsers, by their rows' names, whose app the system has an icon for, and the sizes
+    /// the view asked for, in pixels.
+    icons: Vec<String>,
+    icon_pixels: Vec<u32>,
     /// Each browser's last import, as the record keeps it.
     imports: Vec<(String, SystemTime)>,
     next: u64,
@@ -696,6 +700,19 @@ impl Browser {
 }
 
 impl Host for Browser {
+    fn app_icon(
+        &self,
+        source: &sources::Source,
+        pixels: u32,
+    ) -> Option<std::sync::Arc<gpui::RenderImage>> {
+        let mut state = self.state.borrow_mut();
+        state.icon_pixels.push(pixels);
+        state.icons.contains(&source.name()).then(|| {
+            let icon = image::RgbaImage::new(pixels, pixels);
+            std::sync::Arc::new(gpui::RenderImage::new(vec![image::Frame::new(icon)]))
+        })
+    }
+
     fn roots(&self) -> Roots {
         self.roots
             .clone()
@@ -3462,6 +3479,114 @@ fn a_bookmarks_file_comes_in_once(cx: &mut TestAppContext) {
         "Couldn't import notes.html: it isn't a bookmarks file a browser exported."
     );
     fs::remove_dir_all(file.parent().unwrap()).unwrap();
+}
+
+/// On Windows a Chromium installed for the user has its exe beside its profiles, then its name for
+/// the registry's App Paths; Chromium's own, whose name is Chrome's, is looked for beside its
+/// profiles alone, and a browser with no exe the host can find, as the Store's Arc, has none.
+#[test]
+fn windows_knows_a_browsers_app_by_its_exe() {
+    let source = |name: &str, dir: &str| sources::Source {
+        browser: (sources::BROWSERS.iter())
+            .find(|browser| browser.name == name)
+            .unwrap(),
+        dir: PathBuf::from(dir),
+        install: None,
+        profiles: Vec::new(),
+        used: None,
+    };
+    let local = "C:/Users/me/AppData/Local";
+    let ids = |name: &str, dir: &str| source(name, &format!("{local}/{dir}")).app_ids(Os::Windows);
+    let beside = |dir: &str, exe: &str| {
+        Path::new(&format!("{local}/{dir}"))
+            .join("Application")
+            .join(exe)
+            .to_string_lossy()
+            .into_owned()
+    };
+    assert_eq!(
+        ids("Chrome", "Google/Chrome/User Data"),
+        [beside("Google/Chrome", "chrome.exe"), "chrome.exe".into()]
+    );
+    assert_eq!(
+        ids("Chromium", "Chromium/User Data"),
+        [beside("Chromium", "chrome.exe")]
+    );
+    assert_eq!(
+        ids("Firefox", "../Roaming/Mozilla/Firefox"),
+        ["firefox.exe"]
+    );
+    assert!(
+        ids(
+            "Arc",
+            "Packages/TheBrowserCompany.Arc_x/LocalCache/Local/Arc/User Data"
+        )
+        .is_empty()
+    );
+}
+
+/// Each browser's row has its app's icon where the system has one, and the globe plate where it
+/// hasn't, the names lining up either way; on Linux the app is known by its desktop entry, a
+/// Flatpak's by its app id from where its profiles are.
+#[gpui::test]
+fn a_browser_with_no_app_icon_has_the_globe_plate_and_the_names_line_up(cx: &mut TestAppContext) {
+    let home = chrome("chrome-icons", &[("Default", "Me")], SystemTime::now());
+    let flatpak = chrome(
+        "chrome-icons-flatpak",
+        &[("Default", "Me")],
+        SystemTime::now(),
+    );
+    let app = home.join(".var/app/com.google.Chrome/config");
+    fs::create_dir_all(&app).unwrap();
+    fs::rename(
+        flatpak.join(".config/google-chrome"),
+        app.join("google-chrome"),
+    )
+    .unwrap();
+    let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Linux))));
+    browser.state.borrow_mut().icons = vec!["Chrome".into()];
+    let host: Rc<dyn Host> = browser.clone();
+    let (view, cx) = cx.add_window_view(|_, _| ImportView::new(host, false).headed());
+    cx.run_until_parked();
+    let (names, icons, ids) = view.read_with(cx, |view, _| {
+        let names: Vec<String> = view.sources.iter().map(|source| source.name()).collect();
+        let icons: Vec<bool> = view.icons.iter().map(Option::is_some).collect();
+        let ids: Vec<Vec<String>> = (view.sources.iter())
+            .map(|source| source.app_ids(Os::Linux))
+            .collect();
+        (names, icons, ids)
+    });
+    let mut rows: Vec<(String, bool, Vec<String>)> = (names.into_iter().zip(icons).zip(ids))
+        .map(|((name, icon), ids)| (name, icon, ids))
+        .collect();
+    rows.sort();
+    let row = |name: &str, icon: bool, id: &str| (name.to_string(), icon, vec![id.to_string()]);
+    assert_eq!(
+        rows,
+        [
+            row("Chrome", true, "google-chrome"),
+            row("Chrome (Flatpak)", false, "com.google.Chrome")
+        ]
+    );
+    let lines = view.read_with(cx, |view, _| view.drawn_at.borrow().clone());
+    let x = |name: &str| {
+        let at = format!("browser: settings import-name {name} at ");
+        (lines.iter())
+            .find_map(|line| line.strip_prefix(&at))
+            .and_then(|rest| rest.split(' ').next()?.parse::<f32>().ok())
+            .unwrap_or_else(|| panic!("{name}'s name wasn't drawn: {lines:?}"))
+    };
+    assert_eq!(
+        x("Chrome"),
+        x("Chrome (Flatpak)"),
+        "the names don't line up"
+    );
+    // Asked once each, at a plate's 28 points in the window's pixels.
+    let scale = cx.update(|window, _| window.scale_factor());
+    let pixels = (28. * scale).round() as u32;
+    assert_eq!(browser.state.borrow().icon_pixels, [pixels, pixels]);
+    fs::remove_dir_all(home).unwrap();
+    fs::remove_dir_all(flatpak).unwrap();
 }
 
 /// Favorite tiles that fit on one row are centred under the view's centred heading and button, two

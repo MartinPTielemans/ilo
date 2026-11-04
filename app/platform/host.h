@@ -59,6 +59,12 @@ bool host_save_launch_picture(void* ui_view, const char* profile_dir, double wid
 bool host_save_launch_pixels(void* ui_view, const char* profile_dir, const uint8_t* pixels,
                              size_t columns, size_t rows);
 
+// Mac and Windows: draws the icon of |app|, if it's installed, |size| pixels square into |rgba|,
+// size * size * 4 bytes of premultiplied RGBA, for the import's rows (#1673). On the Mac |app| is
+// a bundle id; on Windows the shell's icon for an exe, by its UTF-8 path, or by a bare name such as
+// chrome.exe looked up in the registry's App Paths, which is all it reads of the other browser.
+bool host_app_icon(const char* app, size_t size, uint8_t* rgba);
+
 // Makes the view the UI draws in, for bc_window_open, which sizes it to fill the window. The
 // functions below that take a |ui_view| act on the browser window it's in.
 void* host_ui_view(void);

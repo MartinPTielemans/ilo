@@ -260,8 +260,13 @@ pub(crate) fn open_window_as(
                 videos: RefCell::default(),
             });
             match (&from_shell, own_space) {
-                (_, Some((space, Own::Private(profile)))) => {
-                    Shell::private_window(engine, space, private_name(profile), profile, cx)
+                (from, Some((space, Own::Private(profile)))) => {
+                    let mut shell =
+                        Shell::private_window(engine, space, private_name(profile), profile, cx);
+                    if let Some(from) = from {
+                        shell.hear_extensions_from(from, cx);
+                    }
+                    shell
                 }
                 (from, Some((space, Own::Blank(profile)))) => {
                     Shell::blank_window(engine, space, profile, from.as_ref(), cx)
@@ -396,7 +401,10 @@ pub(crate) fn open_window_as(
                     platform::host_since_launch()
                 });
                 cx.update(overlays_now);
-                cx.update(agents_core::start)
+                cx.update(agents_core::start);
+                // The command bar's settings rows, built in a task of their own once the UI
+                // shows.
+                cx.update(crate::settings::index_after_launch)
             })
             .detach();
         }

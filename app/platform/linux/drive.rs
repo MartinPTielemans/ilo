@@ -1723,6 +1723,11 @@ fn start_drag(kind: &str, value: &str) -> Option<Source> {
         ],
         "file" => vec![(uris?, format!("{}\r\n", file_url(value)).into_bytes())],
         "text" => vec![(utf8?, value.into()), (plain?, value.into())],
+        // As host_drag_tab carries one from another of the app's windows.
+        "tab" => vec![(
+            atom("application/x-ilo-tab")?,
+            format!("{} {value}", std::process::id()).into_bytes(),
+        )],
         _ => return None,
     };
     let window = driver_window()?;

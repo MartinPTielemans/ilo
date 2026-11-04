@@ -2831,10 +2831,17 @@ fn preview_account(state: &str, cx: &mut App) {
                 }
                 account
             });
+            let look = browser::settings_rows::Look::settings(true);
+            let search = cx.new(|cx| {
+                browser::text_input::TextInput::new("Search", cx)
+                    .placeholder_color(look.detail)
+                    .caret_color(look.ink)
+            });
             AccountPage {
                 account,
                 dialog,
                 card: Card::default(),
+                search,
             }
         });
         window.focus(&page.read(cx).account.focus_handle(cx), cx);
@@ -2860,6 +2867,8 @@ struct AccountPage {
     account: gpui::Entity<Account>,
     dialog: gpui::Entity<dialog::Dialog>,
     card: Card,
+    /// Settings' search field, at the column's top.
+    search: gpui::Entity<browser::text_input::TextInput>,
 }
 
 impl gpui::Render for AccountPage {
@@ -2881,10 +2890,19 @@ impl gpui::Render for AccountPage {
         let look = Look::settings(dark);
         self.account
             .update(cx, |account, cx| account.set_look(look, cx));
+        let field = browser::settings_search::field(
+            &self.search,
+            if dark { rgb(PAPER) } else { rgb(INK) },
+            gpui::canvas(|_, _, _| {}, |_, _, _, _| {}),
+            |_, _| {},
+            cx,
+        );
         let column = settings_column::column(
             Section::Sync,
             dark,
             Rc::default(),
+            gpui::IntoElement::into_any_element(field),
+            None,
             Rc::new(|_, _, _| {}),
             Rc::new(|_, _| {}),
         );

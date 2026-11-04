@@ -532,6 +532,10 @@ impl Agents {
         {
             return (None, None);
         }
+        // With tasks off nothing more is asked of a task; an answer still lets one finish.
+        if !self.tasks_on() && matches!(action, TaskAction::Reply(_) | TaskAction::Retry) {
+            return (None, None);
+        }
         match action {
             TaskAction::Dismiss => self.dismiss_task(agent, cx),
             TaskAction::Restore => {
@@ -793,7 +797,7 @@ impl Agents {
             },
             question,
             open,
-            retry: matches!(task.state, State::Limit { .. }),
+            retry: matches!(task.state, State::Limit { .. }) && self.tasks_on(),
             command: match task.state {
                 State::Failed { command, .. } => command,
                 _ => None,
@@ -803,7 +807,7 @@ impl Agents {
 
     /// The CLIs ⌘T's ask lists: those signed in, as last learned, the default first.
     pub fn ask_agents(&self) -> Vec<AskAgent> {
-        if !self.on {
+        if !self.tasks_on() {
             return Vec::new();
         }
         let mut clis: Vec<Cli> = (Cli::ALL.into_iter())
@@ -949,7 +953,7 @@ impl Agents {
         cx: &mut Context<Self>,
     ) -> Option<String> {
         let asked = asked.trim();
-        if asked.is_empty() || !self.on {
+        if asked.is_empty() || !self.tasks_on() {
             return None;
         }
         self.tasks.next += 1;

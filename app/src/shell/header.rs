@@ -371,31 +371,25 @@ impl Shell {
             .collect()
     }
 
-    /// A mouse's back and forward buttons anywhere over the UI show the previous and next Space,
-    /// as Arc's do (the owner's call); over a page, the page takes them itself and goes back and
-    /// forward. The window hears them, as the sidebar keeps its presses from what's under it.
+    /// A mouse's back and forward buttons anywhere over the UI walk the row a swipe pages, the
+    /// Library, the Spaces and a new Space, a step a press (the owner's call, #1852); over a page,
+    /// the page takes them itself and goes back and forward. The window hears them, as the
+    /// sidebar keeps its presses from what's under it.
     pub(super) fn navigate_listener(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let shell = cx.weak_entity();
         canvas(
             |_, _, _| {},
             move |_, _, window, _| {
-                window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
+                window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
                     let MouseButton::Navigate(direction) = event.button else {
                         return;
                     };
                     if phase != DispatchPhase::Bubble {
                         return;
                     }
-                    let command = match direction {
-                        NavigationDirection::Back => Command::PreviousSpace,
-                        NavigationDirection::Forward => Command::NextSpace,
-                    };
+                    let back = direction == NavigationDirection::Back;
                     shell
-                        .update(cx, |shell, cx| {
-                            if shell.offers(command) {
-                                shell.run(command, "mouse", cx);
-                            }
-                        })
+                        .update(cx, |shell, cx| shell.navigate(back, window, cx))
                         .ok();
                 });
             },

@@ -36,6 +36,10 @@ struct Recorder {
     /// The tooltips asked for and ended, apart from the rest, and where each hangs from.
     tips: RefCell<Vec<String>>,
     anchors: RefCell<Vec<Anchor>>,
+    /// What Settings' search reads of its rows, once the browser has built it, and how many
+    /// times the bar read it.
+    settings: RefCell<Option<Rc<Vec<settings_search::Entry>>>>,
+    settings_read: std::cell::Cell<usize>,
 }
 
 impl Recorder {
@@ -167,6 +171,15 @@ impl Host for Recorder {
 
     fn over_private(&self) -> bool {
         self.private
+    }
+
+    fn settings_index(&self, _: &App) -> Option<Rc<Vec<settings_search::Entry>>> {
+        self.settings_read.set(self.settings_read.get() + 1);
+        self.settings.borrow().clone()
+    }
+
+    fn show_setting(&self, section: Section, name: SharedString, _: &mut App) {
+        self.record(format!("show setting {} › {name}", section.name()));
     }
 
     fn asking(&self, shown: bool, _: &mut App) {
@@ -335,6 +348,7 @@ impl Bar {
                     .map(|row| match (&row.command, &row.shortcut) {
                         (Some(_), Some(key)) => format!("{} {key}", row.text),
                         (Some(_), None) => row.text.to_string(),
+                        (None, _) if row.setting.is_some() => row.text.to_string(),
                         (None, _) => row.url.clone(),
                     })
                     .collect()
@@ -3102,4 +3116,94 @@ fn the_ask_lists_the_agents_as_the_browser_learns(cx: &mut TestAppContext) {
     assert_eq!(bar.agent_rows(), ["codex"]);
     bar.keys("enter");
     assert!(bar.calls().contains(&"task codex book a table".to_string()));
+}
+
+/// Settings' rows as its search reads them: Peek and the Mini Player in Features, and Shortcuts'
+/// row for a command, which the bar lists itself.
+fn settings_rows() -> Vec<settings_search::Entry> {
+    let row = |section, name: &str| settings_search::Entry {
+        section,
+        under: None,
+        name: name.to_string().into(),
+        line: Some("Links open in a preview.".into()),
+        keys: None,
+    };
+    vec![
+        row(Section::Features, "Peek"),
+        row(Section::Features, "Mini Player"),
+        row(Section::Shortcuts, "Peek Link"),
+    ]
+}
+
+/// "peek" lists Peek — Settings under the first row, found as Settings' search finds it, and ↩
+/// on it opens Settings at its row without anything of the switch's changing; Shortcuts' row
+/// stays out, and fewer than three letters list none. Its other name finds it too.
+#[gpui::test]
+fn a_setting_named_opens_settings_at_its_row(cx: &mut TestAppContext) {
+    let host = Recorder {
+        settings: RefCell::new(Some(Rc::new(settings_rows()))),
+        ..Recorder::default()
+    };
+    let mut bar = Bar::open(cx, Vec::new(), host);
+    bar.type_text("pe");
+    bar.suggest("pe", vec![searching("pe")]);
+    assert_eq!(bar.listed(), [search("pe")]);
+    bar.type_text("ek");
+    bar.suggest("peek", vec![searching("peek"), page("https://peek.test/")]);
+    assert_eq!(
+        bar.listed(),
+        [
+            search("peek"),
+            "Peek — Settings".into(),
+            "https://peek.test/".into()
+        ]
+    );
+    bar.keys("down enter");
+    let calls = bar.calls();
+    assert_eq!(
+        bar.host.settings_read.get(),
+        1,
+        "the index was read more than once a time the bar opened"
+    );
+    assert!(
+        calls.contains(&"show setting Features › Peek".to_string()),
+        "{calls:?}"
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.starts_with("open") || call.starts_with("navigate"))
+    );
+    assert!(!bar.is_open());
+
+    let host = Recorder {
+        settings: RefCell::new(Some(Rc::new(settings_rows()))),
+        ..Recorder::default()
+    };
+    let mut bar = Bar::open(cx, Vec::new(), host);
+    bar.type_text("picture in");
+    bar.suggest("picture in", vec![searching("picture in")]);
+    assert_eq!(
+        bar.listed(),
+        [search("picture in"), "Mini Player — Settings".into()]
+    );
+}
+
+/// Until the browser has built Settings' index the bar lists no settings, without waiting for it,
+/// and asks again as the next suggestions come; once it's ready they show.
+#[gpui::test]
+fn settings_rows_wait_for_nothing(cx: &mut TestAppContext) {
+    let mut bar = Bar::open(cx, Vec::new(), Recorder::default());
+    bar.type_text("peek");
+    bar.suggest("peek", vec![searching("peek")]);
+    assert_eq!(bar.listed(), [search("peek")]);
+    bar.host.settings.replace(Some(Rc::new(settings_rows())));
+    bar.type_text(" ");
+    bar.suggest("peek ", vec![searching("peek ")]);
+    assert_eq!(bar.listed(), [search("peek "), "Peek — Settings".into()]);
+    assert_eq!(
+        bar.host.settings_read.get(),
+        2,
+        "the bar didn't ask again, or asked once it had it"
+    );
 }

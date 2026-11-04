@@ -174,6 +174,7 @@ pub use recent_downloads::{FilePreview, HOVER_ALL};
 use rows::{Breath, UNLOAD};
 use scaled::scaled;
 pub use side_panel::SidePanel;
+pub use sidebar::{SidebarEdge, edge_reveals};
 use swap::{ARROW_DOWN, Swapped, Swaps};
 pub use themes::{AppAppearance, app_appearance};
 use tile_theme::TileTheme;
@@ -920,6 +921,9 @@ struct Drag {
     /// and since when, for paging to the Space on that side.
     space: u64,
     edge: Option<(bool, Instant)>,
+    /// The Space it last paged to, which the core says it shows only once that Space's page is
+    /// handed over, by when the pointer can be off the edge (#1840).
+    paged: Option<u64>,
     /// Pressed with ⌥, whose click splits once it's let go without having moved, so that a drag
     /// with ⌥ held can drop a copy instead (#690).
     alt_click: bool,
@@ -1940,6 +1944,12 @@ impl Shell {
         shell
     }
 
+    /// The extensions the window it opened from heard, for a private window: the core reports
+    /// them only as they change, so a window that opens after hears none of its own.
+    pub fn hear_extensions_from(&mut self, from: &Entity<Shell>, cx: &App) {
+        self.extensions = from.read(cx).extensions.clone();
+    }
+
     /// Whether this is a private window's shell.
     pub fn private(&self) -> bool {
         self.private
@@ -2574,17 +2584,23 @@ impl Shell {
         self.opened = None;
         self.closing.clear();
         self.clearing.clear();
-        // A tab dragged to the sidebar's edge pages with it, to drop there; any other drag ends.
-        match self
-            .drag
-            .as_mut()
-            .filter(|drag| drag.edge.is_some() && !drag.dropped)
-        {
+        // A tab dragged to the sidebar's edge pages with it, to drop there; any other drag goes
+        // back, as its release would put it back.
+        match self.drag.as_mut().filter(|drag| {
+            let paged = drag.edge.is_some() || drag.paged == Some(space);
+            paged && !drag.dropped
+        }) {
             Some(drag) => {
                 drag.to = Place::List(false, usize::MAX);
                 drag.line = None;
             }
-            None => self.drag = None,
+            None => {
+                if let Some(drag) = self.drag.take().filter(|drag| !drag.dropped) {
+                    self.dragged |= drag.moving;
+                    self.putting_back |= drag.moving;
+                    self.retip = true;
+                }
+            }
         }
         if self.show_favorites() {
             self.log_favorites();
@@ -3617,6 +3633,22 @@ impl Shell {
                             .ok();
                     }
                 });
+            },
+        )
+        .absolute()
+        .size_full()
+    }
+
+    /// The pointer leaving the window's own view, for the page's or another window, which ends a
+    /// wait at the edge and the sidebar's hover. The window's, not the sidebar's: with the sidebar
+    /// hidden no listener of its heard the leave on Linux and Windows, whose pages are windows the
+    /// shell doesn't hear the pointer in, and a pointer passing the edge brought the sidebar out.
+    fn leave_listener(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let shell = cx.weak_entity();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let shell = shell.clone();
                 window.on_mouse_event(move |_: &MouseExitEvent, phase, _, cx| {
                     if phase == DispatchPhase::Capture {
                         shell
@@ -4063,6 +4095,7 @@ impl Render for Shell {
                 }),
             )
             .child(self.window_background())
+            .child(self.leave_listener(cx))
             // The page views go over the cards, as native views. A task the page area shows takes
             // the card's place, the Space's page pushed out of the window (task_area.rs).
             .when(normal, |shell| {

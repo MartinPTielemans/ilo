@@ -92,6 +92,17 @@ clipboard() {
 }
 others=
 
+# A's list ends with none once B removes the login A saves, so A starts with none: the check's
+# profile keeps the logins an earlier run saved, as import's. The app isn't running, so the files
+# are free.
+for logins in "$profile_dir/Default/Login Data" "$profile_dir/Default/Login Data For Account"; do
+  [ ! -e "$logins" ] || python3 -I -c '
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.execute("delete from logins")
+db.commit()
+' "$logins" || fail "the check's profile kept its logins"
+done
 start a "$profile_dir" 5
 open_sign_in
 sign_in first

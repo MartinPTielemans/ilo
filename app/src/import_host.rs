@@ -180,7 +180,81 @@ fn keep(id: u64, tab: &Tab) {
     }
 }
 
+/// The icon the host draws for `app`, `pixels` square: on the Mac a bundle id, on Windows an exe,
+/// by its path or, for one the user installed, its name in the registry's App Paths. The host
+/// draws it premultiplied, and the image is straight RGBA.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn host_icon(app: &str, pixels: u32) -> Option<image::RgbaImage> {
+    let app = CString::new(app).ok()?;
+    let size = pixels as usize;
+    let mut rgba = vec![0u8; size * size * 4];
+    if !unsafe { platform::host_app_icon(app.as_ptr(), size, rgba.as_mut_ptr()) } {
+        return None;
+    }
+    for pixel in rgba.chunks_exact_mut(4) {
+        let alpha = u16::from(pixel[3]);
+        if alpha > 0 {
+            for channel in &mut pixel[..3] {
+                *channel = ((u16::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8;
+            }
+        }
+    }
+    image::RgbaImage::from_raw(pixels, pixels, rgba)
+}
+
+/// The browser's app icon on the Mac, from its bundle.
+#[cfg(target_os = "macos")]
+fn app_icon_pixels(
+    source: &browser::import::sources::Source,
+    pixels: u32,
+) -> Option<image::RgbaImage> {
+    let id = source.app_ids(Os::Mac).into_iter().next()?;
+    host_icon(&id, pixels)
+}
+
+/// The browser's app icon on Linux, from its desktop entry, under the check's made-up home alone
+/// when it gives one, so a run shows the icon it put there.
+#[cfg(target_os = "linux")]
+fn app_icon_pixels(
+    source: &browser::import::sources::Source,
+    pixels: u32,
+) -> Option<image::RgbaImage> {
+    use browser::import::app_icons;
+    let made_up = std::env::var_os("BROWSER_IMPORT_HOME");
+    let home = made_up.clone().or_else(|| std::env::var_os("HOME"))?;
+    let dirs = app_icons::data_dirs(Path::new(&home), made_up.is_some());
+    app_icons::find(&dirs, &source.app_ids(Os::Linux), pixels)
+}
+
+/// The browser's app icon on Windows, the shell's for its exe: the one beside its profiles where
+/// it's installed for the user, else the one the registry names. A check run's made-up home has
+/// its own exe and no registry, so the run shows the icon it put there.
+#[cfg(target_os = "windows")]
+fn app_icon_pixels(
+    source: &browser::import::sources::Source,
+    pixels: u32,
+) -> Option<image::RgbaImage> {
+    let made_up = std::env::var_os("BROWSER_IMPORT_HOME").is_some();
+    (source.app_ids(Os::Windows).iter())
+        .filter(|app| !made_up || app.contains(['/', '\\']))
+        .find_map(|app| host_icon(app, pixels))
+}
+
 impl browser::import::Host for CoreImport {
+    fn app_icon(
+        &self,
+        source: &browser::import::sources::Source,
+        pixels: u32,
+    ) -> Option<std::sync::Arc<gpui::RenderImage>> {
+        let mut icon = app_icon_pixels(source, pixels)?;
+        // GPUI draws BGRA.
+        for pixel in icon.pixels_mut() {
+            pixel.0.swap(0, 2);
+        }
+        let frame = image::Frame::new(icon);
+        Some(std::sync::Arc::new(gpui::RenderImage::new(vec![frame])))
+    }
+
     fn roots(&self) -> Roots {
         // A check run gives a made-up home folder, so it never reads the user's browsers.
         match std::env::var_os("BROWSER_IMPORT_HOME") {

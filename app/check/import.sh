@@ -45,10 +45,56 @@ elif windows; then
   arc_dir="$store/Arc"
   chrome="$home/AppData/Local/Google/Chrome/User Data"
   firefox="$home/AppData/Roaming/Mozilla/Firefox"
+  # Chrome installed for the user keeps chrome.exe beside its profiles, which is where the app
+  # looks in a made-up home. Here it's a copy of Windows' whoami.exe with its resources taken out
+  # and a plain icon of ours put in, a blue square, never Chrome's; it's never run.
+  mkdir -p "$home/AppData/Local/Google/Chrome/Application"
+  python3 -I -c '
+import ctypes, shutil, struct, sys, zlib
+from ctypes import wintypes
+size = 256
+rows = b"".join(b"\0" + bytes([40, 120, 220, 255]) * size for _ in range(size))
+def chunk(kind, data):
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+png += chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+# A group of one 256 px icon, 0 being 256, whose image is the PNG.
+group = struct.pack("<HHHBBBBHHIH", 0, 1, 1, 0, 0, 0, 0, 1, 32, len(png), 1)
+shutil.copyfile(sys.argv[1], sys.argv[2])
+kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+kernel.BeginUpdateResourceW.restype = wintypes.HANDLE
+kernel.BeginUpdateResourceW.argtypes = [wintypes.LPCWSTR, wintypes.BOOL]
+kernel.UpdateResourceW.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p,
+                                   wintypes.WORD, ctypes.c_char_p, wintypes.DWORD]
+kernel.EndUpdateResourceW.argtypes = [wintypes.HANDLE, wintypes.BOOL]
+update = kernel.BeginUpdateResourceW(sys.argv[2], True)
+ok = bool(update)
+ok = ok and kernel.UpdateResourceW(update, 3, 1, 1033, png, len(png))
+ok = ok and kernel.UpdateResourceW(update, 14, 1, 1033, group, len(group))
+ok = ok and kernel.EndUpdateResourceW(update, False)
+sys.exit(0 if ok else "the icon did not go in: %d" % ctypes.get_last_error())
+' "$(cygpath -W)\\System32\\whoami.exe" \
+    "$(cygpath -w "$home/AppData/Local/Google/Chrome/Application/chrome.exe")" ||
+    fail "couldn't make the made-up Chrome's exe"
 else
   arc=
   chrome="$home/.config/google-chrome"
   firefox="$home/.mozilla/firefox"
+  # Chrome's desktop entry and a made-up icon in the made-up home, the one place the run's app
+  # looks for them, so its row has an app icon as a launcher finds it, and Firefox's the globe.
+  mkdir -p "$home/.local/share/applications" "$home/.local/share/icons/hicolor/64x64/apps"
+  printf '[Desktop Entry]\nName=Chrome\nIcon=google-chrome\n' \
+    > "$home/.local/share/applications/google-chrome.desktop"
+  python3 -I -c '
+import struct, sys, zlib
+size = 64
+rows = b"".join(b"\0" + bytes([40, 120, 220, 255]) * size for _ in range(size))
+def chunk(kind, data):
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+png += chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+open(sys.argv[1], "wb").write(png)
+' "$home/.local/share/icons/hicolor/64x64/apps/google-chrome.png" || fail "couldn't write the made-up icon"
 fi
 mkdir -p "$chrome/Default"
 printf '%s' '{"profile":{"info_cache":{"Default":{"name":"Me"}}}}' > "$chrome/Local State"
@@ -196,6 +242,13 @@ settings_drew 'Import & Export'
 expect "^browser: import found $found\$" \
   "the import didn't find the fixture's $found, and only them: $(grep 'import found' "$log")"
 expect '^browser: import drawn list$' "Settings › Import & Export didn't draw its list"
+# Each row's app icon is the system's, a plate's 28 points at the window's scale: on Linux and
+# Windows the made-up one for Chrome alone, from its desktop entry or its exe; on the Mac
+# whichever of the browsers the runner has installed, which the capture shows.
+if [ "$(uname)" = Linux ] || windows; then
+  await '^browser: import icons [0-9]* px: Chrome$' ||
+    fail "Chrome's row didn't get the made-up icon: $(grep 'import icon' "$log")"
+fi
 ../tools/window-screenshot.sh "$pid" "$out/import-list.png" || fail "no window to capture"
 # Settings at its first size and at its least, in its look and then the other, as
 # $out/import-settings-$1-<width>-<dark|light>.png, and back at its first size in its own look.
