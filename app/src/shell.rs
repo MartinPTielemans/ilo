@@ -105,7 +105,7 @@ mod sidebar_backups;
 mod sidebar_keys;
 mod space_form;
 mod split_targets;
-mod swap;
+pub(crate) mod swap;
 mod swipe;
 mod task_area;
 mod themes;

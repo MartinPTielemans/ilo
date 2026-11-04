@@ -295,7 +295,7 @@ fn check_line(way: f32) -> Vec<(f32, f32)> {
 }
 
 /// The check, drawn `way` of the way along its stroke.
-fn drawing_check(way: f32, color: Hsla) -> impl IntoElement {
+pub(crate) fn drawing_check(way: f32, color: Hsla) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {

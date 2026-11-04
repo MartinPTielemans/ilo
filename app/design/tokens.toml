@@ -1419,6 +1419,47 @@ import-surface = 0.05
 opt-in-width = 420.0
 opt-in-line = 18.0
 
+[shell.import]
+# Ours (#1673): while an import runs, each Space it makes is a card in its own colours, under the
+# name of the profile it goes into, its count rolling up as its pinned tabs go in, and ticked once
+# they're in. A card 80 by 96 on the first launch's ground, 72 wide in Settings' group, 8 apart, at
+# the row radius; its glyph, name and count `card-inset` in, the name 12/16 medium and the count
+# 11/14 at 0.6 of the ink. Its colour runs from `card-tint-top` of it at the top to
+# `card-tint-bottom` at the bottom over the ground, and less on a light one.
+card-width = 80.0
+card-width-settings = 72.0
+card-height = 96.0
+card-gap = 8.0
+card-inset = 10.0
+card-glyph = 16.0
+card-name = 12.0
+card-name-line = 16.0
+card-count = 11.0
+card-count-line = 14.0
+card-count-alpha = 0.6
+card-tint-top = 0.42
+card-tint-bottom = 0.14
+card-tint-top-light = 0.38
+card-tint-bottom-light = 0.12
+# The badge, 16 across in the accent, `badge-inset` in from the card's top right, ticks once its
+# Space is in; until then a dot of the ink breathes there.
+badge = 16.0
+badge-inset = 8.0
+# A profile's cards sit under its name, 11/14, 6 above them; the profiles `profile-gap` apart,
+# wrapping at the view's width.
+profile-name = 11.0
+profile-name-line = 14.0
+profile-name-gap = 6.0
+profile-gap = 24.0
+
+[shell.import.motion]
+# Seconds. A card comes as a task's chips do ([shell.task.motion] chips, chips-stagger,
+# chips-rise, on its ease), and its count rolls as a task's status ([shell.task.motion] roll,
+# roll-rise), once a roll at most. Its badge's check draws in `check`, ease-in-out (ux-spec, Check
+# draw), and its waiting dot breathes once in `breath` (ux-spec, Status dot breath).
+check = 0.25
+breath = 1.6
+
 [shell.permission]
 # Ours, as Arc's wasn't recorded: under the URL field, as wide as it, with the dialog's corners
 # and the header's plates. The detail is the dialog's: the palette's ink at its alpha, dark in

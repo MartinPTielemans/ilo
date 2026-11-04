@@ -10,7 +10,9 @@
 # password importer: the view says how many came in, deletes the file when asked, and a second file
 # with a login's password changed says it conflicted and kept the saved one. Settings' Passwords
 # tab lists what came in, and the app menu's Import from Other Browsers… shows Import again. With
-# the sidebar hidden, Arc's Spaces say so in a toast. Each step is captured, and the list and the
+# the sidebar hidden, Arc's Spaces say so in a toast. While an import runs, each Space it makes is
+# a card under its profile, captured waiting (Arc's, as Work's profile loads, recorded on the Mac)
+# and ticked (Chrome's, as its history goes in). Each step is captured, and the list and the
 # first browser's choices, read as it's picked and each kind counted, under Import › its name with
 # Import in the accent, at Settings' first size and its least, dark and light; Esc goes back from
 # the choices to the list. The fixture's Arc is put where the Mac keeps it, or Windows' Store, and
@@ -252,7 +254,13 @@ if [ -n "$arc" ]; then
   expect '^browser: import pick Arc$' "Import… on Arc's row didn't show what comes from it"
   expect '^browser: import drawn pick$' "Arc's choices didn't draw"
   ../tools/window-screenshot.sh "$pid" "$out/import-pick.png" || fail "no window to capture"
+  # The arrival, recorded on the Mac: a card a Space as the core makes it, under its profile, each
+  # waiting while Work's profile loads, then ticking as its tabs go in.
+  record import-arrival 2
   click_drawn import-go
+  expect '^browser: import cards Personal, Work$' "Arc's Spaces didn't come as cards, Personal then Work"
+  expect '^browser: import drawn running$' "Arc's cards didn't draw"
+  ../tools/window-screenshot.sh "$pid" "$out/import-arriving.png" || fail "no window to capture"
   expect '^browser: import from Arc: 2 Spaces, 6 pinned tabs, 0 open tabs, 3 favorites, 0 pages, 0 addresses$' \
     "Import didn't plan Arc's 2 Spaces, 6 pinned tabs and 3 favorites"
   expect '^browser: import from Arc: 3 link rules$' "Import didn't plan Arc's 3 link rules"
@@ -260,6 +268,7 @@ if [ -n "$arc" ]; then
   arc_done='2 Spaces, 6 pinned tabs, 3 favorites and 3 link rules came in from Arc'
   await "^browser: import done: $arc_done\\.\$" ||
     fail "the import didn't finish once the Work profile loaded"
+  recorded
   # The rules go to Arc's Spaces by their places among the user's: Personal second, Work third.
   t=$(printf '\t')
   # After the Meet rule a profile starts with (#692).
@@ -306,6 +315,11 @@ expect '^browser: import drawn pick$' "Chrome's choices didn't draw"
 click_drawn import-go
 expect '^browser: import from Chrome: 1 Spaces, 3 pinned tabs, 1 open tabs, 0 favorites, 2 pages, 1 addresses$' \
   "Import didn't plan Chrome's bookmarks, open tab, history and address"
+# Its card ticks once its tabs are in, as the core adds the history after: captured then, or at
+# the end if the core was quicker than the frame.
+expect '^browser: import cards Chrome$' "Chrome's Space didn't come as a card"
+expect '^browser: import \(drawn placed\|done: \)' "Chrome's tabs didn't go in"
+../tools/window-screenshot.sh "$pid" "$out/import-placed.png" || fail "no window to capture"
 await '^browser: history added 2 to profile [0-9]*$' || fail "the core didn't add Chrome's 2 pages"
 await '^browser: addresses added 1 to profile [0-9]*$' || fail "the core didn't add Chrome's address"
 expect '^browser: import done: 1 Space, 3 pinned tabs, 1 open tab, 2 pages of history and 1 address came in from Chrome\.$' \
@@ -428,6 +442,7 @@ echo "  With the sidebar hidden, Arc's two Spaces say so in a toast."
 echo "  Settings' list and $first_found's choices, under Import › $first_found, at 820 by 660 and"
 echo "  720 by 480, dark and light, and Esc goes back from the choices to the list."
 echo "  Windows: $out/import-settings-{list,choose}-{820,720}-{dark,light}.png,"
+echo "  $out/import-arriving.png (with Arc), $out/import-placed.png,"
 echo "  $out/import-list.png, $out/import-pick.png, $out/import-done.png,"
 echo "  $out/import-again.png, $out/import-chrome.png, $out/import-firefox.png,"
 echo "  $out/import-bookmarks.png, $out/import-passwords.png,"
