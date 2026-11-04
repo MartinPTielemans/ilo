@@ -365,6 +365,7 @@ if windows || [ "$(uname)" = Darwin ]; then
   send key n cmd
   expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
   second=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+  new_window_bar
   # The driver numbers windows in the order they opened.
   driven_second=$(grep -c '^browser: window opened ' "$log")
   # The Windows runner's screen is 1920 by 1080 (check-windows.yml).

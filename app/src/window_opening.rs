@@ -507,6 +507,8 @@ pub(crate) fn finish_opening(
     });
     // check.sh reads these lines.
     log!("browser: window opened {id}");
+    #[cfg(target_os = "linux")]
+    crate::active_window::window_opened();
     match own {
         Some(Own::Private(profile)) => {
             log!("browser: private window opened {id} profile {profile}")
@@ -531,6 +533,7 @@ pub(crate) fn finish_opening(
         platform::host_take_drops(dragged);
         platform::host_watch_key_window(key_window_changed);
         platform::host_watch_full_screen(full_screen_changed);
+        platform::host_watch_window_main(window_main_changed);
         platform::host_watch_swipes(swiped);
         platform::host_watch_option_taps(option_tapped);
         #[cfg(not(target_os = "linux"))]

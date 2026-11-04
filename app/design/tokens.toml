@@ -1091,9 +1091,13 @@ developer-outline-width = 1.0
 developer-selected = 0.26
 developer-tile = 0.16
 # The header's glyphs (docs/ux-spec.md › Header and URL field): 0.60, and 0.26 for back or forward
-# with nowhere to go, over a hover plate of 0.077.
+# with nowhere to go, over a hover plate of 0.077. In a window that isn't the user's they all take
+# the disabled 0.26 as it is, under the glyph floor (palette.rs), which would leave the dim unseen:
+# nobody reads them till they're back, as macOS greys the traffic lights, and WCAG's 1.4.11
+# exempts inactive controls. The active window's, a disabled back's too, keep the floor.
 nav = 0.6
 nav-disabled = 0.26
+nav-inactive = 0.26
 nav-hovered = 0.077
 # The Space's name and the switcher's icons, on #320's ladder: 0.62, then 0.6 for the Space shown
 # and 0.35 for the others, 0.5 under the pointer (ours: Arc's isn't measured). The Space shown's
@@ -1473,6 +1477,8 @@ import-surface = 0.05
 # it goes on by itself (#1673); the history and addresses the core adds then go on under the steps
 # after it, in the line at the bottom left.
 import-hold = 0.6
+# The line saying where the favorites go is this far under their tiles.
+tiles-line-gap = 12.0
 # The opt-ins step's switches, Settings' own, in one box under its line, a row each of the switch's
 # name over its one sentence, at body, and the switch at the box's right edge; Settings' padding
 # and lines between rows.
@@ -1512,6 +1518,18 @@ badge-inset = 8.0
 profile-name = 11.0
 profile-name-line = 14.0
 profile-name-gap = 6.0
+# The favorites an import offers are tiles, `tiles-per-row` to a row across the view, `card-gap`
+# apart, at the row radius: the site's letter on a `tile-plate` plate at the control radius, 11 semibold, over its name,
+# 11/14, `tile-name-gap` under it, and the badge at the cards' place. A tile unticked loses its
+# fill for the line, and its letter and name are at `tile-unticked` of themselves.
+tile-height = 76.0
+tiles-per-row = 4
+tile-plate = 22.0
+tile-letter = 11.0
+tile-name = 11.0
+tile-name-line = 14.0
+tile-name-gap = 8.0
+tile-unticked = 0.4
 profile-gap = 24.0
 
 [shell.import.motion]
@@ -1791,13 +1809,20 @@ title-line = 20.0
 meta-line = 15.0
 meta-gap = 1.0
 header-bottom = 14.0
-picture-width = 112.0
-picture-height = 72.0
+# Pages, the task's own view of its pages (#1080, the orchestrator's call): a grid of its pages'
+# pictures, up to `pictures-columns` across, as many as the area holds, each over its site, and the
+# agent's page's step, `pictures-row-gap` over the next row. The pictures are taken at twice this
+# size, when the agent acts.
+picture-width = 326.0
+picture-height = 204.0
 picture-radius = 6.0
-picture-gap = 10.0
+picture-gap = 16.0
+pictures-row-gap = 24.0
+pictures-columns = 3.0
 site = 16.0
 site-gap = 3.0
-pictures-bottom = 18.0
+# Its header's Talk and Pages, a chip each, the one shown filled, this far apart.
+views-gap = 4.0
 # The agent's text, at body, and the gap under each block.
 text-line = 20.0
 block-gap = 14.0
@@ -1878,8 +1903,8 @@ lines-below = 16.0
 # curve. A line or a step rises the chips' distance over `rise`, as Thinking does, and Stop fades
 # in and out over it; Open comes as a question's chips do. A line's words crossfade, the old going over `swap` and the new coming
 # over the crossfade's rest; a finished step's note fades in over the task's `fade`. A page grows
-# into the pictures over `picture` as it fades in over `rise`, and the Signal ring slides to it
-# `ring-delay` later. As the turn ends its trace folds: its steps fade over `steps-fade` and it
+# into Pages over `picture` as it fades in over `rise`, and the Signal ring rings the page the
+# agent is on. As the turn ends its trace folds: its steps fade over `steps-fade` and it
 # closes over the task's `height`, its chevron turning over `chevron`. The answer comes once it
 # has folded, each block `stagger` after the one before and fading in over `stream`, as each run
 # of the words Claude writes does as it comes. A picked answer lands as a sent reply does; the
@@ -1888,7 +1913,6 @@ land = 0.26
 rise = 0.15
 swap = 0.09
 picture = 0.22
-ring-delay = 0.14
 steps-fade = 0.11
 chevron = 0.2
 stream = 0.16

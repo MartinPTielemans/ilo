@@ -581,14 +581,19 @@ const BANKS: &[&str] = &[
 pub fn risk(host: &str, label: &str) -> Option<&'static str> {
     let label = label.to_lowercase();
     if PAYMENT.iter().any(|words| has_words(&label, words)) {
-        return Some("It looks like a payment or an order.");
+        return Some(ORDER);
     }
     let sends = SEND.iter().any(|words| has_words(&label, words));
     if sends && MESSAGING.iter().any(|site| on(host, site)) {
-        return Some("It sends a message or a post.");
+        return Some(SENDS);
     }
     None
 }
+
+/// Why a payment or an order asks first, which a session's receipt counts as an order placed.
+pub const ORDER: &str = "It looks like a payment or an order.";
+/// Why sending a message or a post asks first, which the receipt counts as a message sent.
+pub const SENDS: &str = "It sends a message or a post.";
 
 /// Why opening a page on `host` asks the user first, if it does: it's a bank's.
 pub fn opening_risk(host: &str) -> Option<&'static str> {

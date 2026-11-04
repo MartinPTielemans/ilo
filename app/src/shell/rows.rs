@@ -767,6 +767,18 @@ impl Shell {
         }
     }
 
+    /// Mutes every tab of the window, or unmutes them, those silent now too, so none starts playing
+    /// aloud (Arc's Mute All Tabs; ours, which tabs: the window's, as Arc's isn't recorded).
+    pub(super) fn mute_all(&mut self, muted: bool, cx: &mut Context<Self>) {
+        let tabs: Vec<u64> = (self.tabs.iter())
+            .filter(|(_, tab)| tab.page.muted != muted)
+            .map(|(&tab, _)| tab)
+            .collect();
+        for tab in tabs {
+            self.browser.set_muted(tab, muted, cx);
+        }
+    }
+
     /// What stands for `tab`: the emoji the user gave it, else its page's favicon.
     pub(super) fn tab_icon(&self, tab: u64) -> AnyElement {
         self.tab_icon_in(&self.palette, tab)

@@ -363,6 +363,8 @@ struct Act {
     download: u64,
     /// The HTTP requests it sends (request).
     requests: Vec<request::Request>,
+    /// What it does that asked first, once allowed, for its session's receipt.
+    did: Option<Did>,
     reply: mpsc::Sender<ToolResult>,
 }
 
@@ -398,6 +400,24 @@ struct Downloading {
     agent: String,
     name: String,
     reply: mpsc::Sender<ToolResult>,
+}
+
+/// What an action that asked first did once it was allowed and done, which its session's receipt
+/// counts: "1 order placed", "2 messages sent".
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Did {
+    Order,
+    Message,
+}
+
+impl Did {
+    fn of(why: &str) -> Option<Did> {
+        match why {
+            page::ORDER => Some(Did::Order),
+            page::SENDS => Some(Did::Message),
+            _ => None,
+        }
+    }
 }
 
 /// What of the page's outline an action answers with, as its `outline` argument says.
@@ -436,6 +456,9 @@ impl Show {
 /// An action that waits on the core's answer.
 struct Acting {
     agent: String,
+    /// The call it's for, and what it does that asked first, which its session counts once done.
+    call: u64,
+    did: Option<Did>,
     tab: u64,
     /// The element it acts on, or 0.
     element: i64,
@@ -1144,6 +1167,7 @@ impl Agents {
                     action: "open_tab",
                     tab: 0,
                     what: format!("open {host}"),
+                    did: None,
                     url,
                     page: PageAction::Quiet,
                     element: 0,
@@ -1450,6 +1474,7 @@ impl Agents {
                     field: String::new(),
                     download: 0,
                     requests,
+                    did: None,
                     reply,
                 };
                 // Reads go; changes ask every time, never a grant's to answer.
@@ -1701,6 +1726,8 @@ impl Agents {
         let (note, show) = (String::new(), Show::Nothing);
         let acting = Acting {
             agent: agent.into(),
+            call: 0,
+            did: None,
             tab,
             element: 0,
             note,
@@ -1976,6 +2003,7 @@ impl Agents {
             what: String::new(),
             download: 0,
             requests: Vec::new(),
+            did: None,
             reply,
         };
         let mut risk = None;
@@ -2138,10 +2166,17 @@ impl Agents {
 
     /// Runs the action, unless what it does on `site` asks the user first (`why`): then it waits
     /// for the user's answer, or the one they gave for good.
-    fn check(&mut self, act: Act, site: String, why: Option<&'static str>, cx: &mut Context<Self>) {
+    fn check(
+        &mut self,
+        mut act: Act,
+        site: String,
+        why: Option<&'static str>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(why) = why else {
             return self.run(act, cx);
         };
+        act.did = Did::of(why);
         match self
             .grants
             .get(&act.agent)
@@ -2384,6 +2419,7 @@ impl Agents {
             show,
             field,
             requests,
+            did,
             reply,
             ..
         } = act;
@@ -2442,6 +2478,8 @@ impl Agents {
         let opened = action == "open_tab";
         let acting = Acting {
             agent: agent.clone(),
+            call,
+            did,
             tab,
             element,
             note,
@@ -2502,6 +2540,7 @@ impl Agents {
             field: String::new(),
             download: id,
             requests: Vec::new(),
+            did: None,
             reply,
         };
         self.check(act, host, Some(DOWNLOADS), cx);
@@ -2630,6 +2669,8 @@ impl Agents {
     pub fn page_done(&mut self, request: u64, text: String, error: bool, cx: &mut Context<Self>) {
         let Some(Acting {
             agent,
+            call,
+            did,
             tab,
             mut note,
             show,
@@ -2661,6 +2702,9 @@ impl Agents {
             };
             _ = reply.send(ToolResult::error(text));
             return self.advance(cx);
+        }
+        if let Some(did) = did {
+            self.counted(&agent, call, did);
         }
         if !text.starts_with('{') {
             _ = reply.send(ToolResult::image(text));
@@ -3117,6 +3161,7 @@ fn act_of(agent: &str, call: u64, tab: u64, reply: mpsc::Sender<ToolResult>) -> 
         field: String::new(),
         download: 0,
         requests: Vec::new(),
+        did: None,
         reply,
     }
 }

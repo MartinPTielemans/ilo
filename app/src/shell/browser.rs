@@ -442,6 +442,8 @@ pub trait Browser {
     fn set_pane_corner(&self, left: f32, right: f32, top: f32, cx: &mut App);
     /// Shows the window's close, minimize and zoom buttons, or hides them.
     fn show_window_buttons(&self, shown: bool, cx: &mut App);
+    /// Puts the window full screen, or takes it out, as View's Enter Full Screen does.
+    fn toggle_full_screen(&self, _cx: &mut App) {}
     /// Does what a click on the window's close, minimize or zoom button does.
     fn press_window_button(&self, button: WindowButton, cx: &mut App);
     /// Keeps the window over other apps' windows, its overlays still over it, or lets it go back
@@ -577,6 +579,15 @@ pub trait Browser {
     fn set_edit_titles(&self, undo: Option<&str>, redo: Option<&str>, cx: &mut App);
     /// Shows the note on how to leave full screen in the toast, or takes it away if it shows.
     fn full_screen_note(&self, shown: bool, cx: &mut App);
+    /// Puts the window full screen of its own, as the green button or the window manager's key
+    /// does, unless it is already, which it returns: AppKit takes a window opened from a
+    /// full-screen one there itself.
+    fn enter_full_screen(&self, cx: &mut App) -> bool;
+    /// Whether the window is on the macOS desktop shown: one AppKit takes full screen isn't until
+    /// macOS has moved there, and an overlay opened before is left on the desktop it came from.
+    fn on_active_space(&self) -> bool {
+        true
+    }
     /// Shows the note that `tab`'s page stopped answering in the toast, with Wait and Reload, until
     /// one is pressed or it's taken away (`shown` false).
     fn hang_note(&self, tab: u64, shown: bool, cx: &mut App);

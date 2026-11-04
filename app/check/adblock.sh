@@ -217,6 +217,7 @@ reload_until "$blocked" "turned on again in Settings, the page didn't block its 
 # A private window blocks too.
 send key n cmd shift
 expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
+new_window_bar
 send window 2
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar in the private window"

@@ -918,7 +918,40 @@ void (*g_became_active)(void) = nullptr;
 void (*g_reduce_motion_changed)(void) = nullptr;
 bool g_active = true;
 
+// Told whether a browser window is the one the user is in (host_watch_window_main).
+void (*g_window_main_changed)(void* ui_view, bool main) = nullptr;
+
+// Tells the app of each browser window that has become the one the user is in, or stopped being,
+// with |front| in front: the window in front, or the browser window that owns it, as an overlay's
+// or the link preview's does. Settings and the other apps' windows own none.
+void TellMain(HWND front) {
+  static auto* told = new std::map<HWND, bool>;
+  if (!g_window_main_changed) {
+    return;
+  }
+  DWORD process = 0;
+  GetWindowThreadProcessId(front, &process);
+  // GA_ROOTOWNER follows an owner only for a WS_POPUP window, which GPUI's overlays aren't.
+  HWND owner = front && process == GetCurrentProcessId() ? GetAncestor(front, GA_ROOT) : nullptr;
+  while (HWND next = owner ? GetWindow(owner, GW_OWNER) : nullptr) {
+    owner = next;
+  }
+  for (HWND view : UiViews()) {
+    if (!IsWindow(view)) {
+      told->erase(view);
+      continue;
+    }
+    const bool main = owner && GetAncestor(view, GA_ROOT) == owner;
+    if (auto it = told->find(view); it != told->end() && it->second == main) {
+      continue;
+    }
+    (*told)[view] = main;
+    g_window_main_changed(view, main);
+  }
+}
+
 void CALLBACK ForegroundChanged(HWINEVENTHOOK, DWORD, HWND hwnd, LONG, LONG, DWORD, DWORD) {
+  TellMain(hwnd);
   DWORD process = 0;
   GetWindowThreadProcessId(hwnd, &process);
   const bool ours = process == GetCurrentProcessId();
@@ -2665,6 +2698,14 @@ static std::map<void*, uint64_t>& WindowIds() {
 
 void host_window_opened(void* ui_view, uint64_t window) {
   WindowIds()[ui_view] = window;
+  // Opened behind another, it hears it isn't the one the user is in, which no foreground event says.
+  TellMain(GetForegroundWindow());
+}
+
+void host_watch_window_main(void (*changed)(void* ui_view, bool main)) {
+  g_window_main_changed = changed;
+  WatchForeground();
+  TellMain(GetForegroundWindow());
 }
 
 // Windows delivers a touchpad's swipes to the page as scrolls, which it takes, so there's nothing

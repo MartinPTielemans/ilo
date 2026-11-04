@@ -29,7 +29,8 @@
 # its way there without taking it, picks what a press-drag-release ends on and closes on a click
 # outside. A tab unseen for 2 hours lets go of its page as another is shown, unless it plays sound,
 # its page asks before it's left or a split shows it, and loads it back with its history once shown,
-# and Settings' Unload switch turns that off and on. Back right-clicked or held lists the pages
+# and Settings' Unload switch turns that off and on. The header's glyphs stay lit with the
+# command bar open and with the page having the keyboard, and dim behind Settings till it goes. Back right-clicked or held lists the pages
 # back, nearest first, with their favicons, a row picked goes there, and ⌘-clicked it opens the page
 # back in a tab behind. Tabs › Reset all tabs in this Space takes the loaded pinned tabs away from
 # their pinned URLs back there, and leaves an unloaded one. ⌘-click and ⇧-click choose rows,
@@ -530,6 +531,24 @@ switch "1 cmd" "$c"
 expect "browser: tab $c has its page\$" "c's tab didn't get its page back once shown"
 expect "^browser: loaded $c ${c_page##* }\$" "c's page didn't load once shown at ${c_page##* }"
 expect "^$c_page\$" "c's tab came back without its history: $(grep "^browser: page $c back" "$log" | tail -1)"
+# The header's glyphs stay lit while the window is the one the user is in, with its command bar
+# open over it or its page having the keyboard, which GPUI's window loses, and dim behind another
+# window, Settings here, as Arc's do (host_watch_window_main).
+window=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
+nav_lit() {
+  [ "$(last 'nav glyphs dimmed')" != true ] && none_since "^browser: window $window main false\$" ||
+    fail "the header's glyphs dimmed $1"
+}
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+nav_lit "under the window's command bar"
+../tools/window-screenshot.sh "$pid" "$out/nav-lit-bar.png" || fail "no window to capture"
+send key escape
+expect '^browser: command bar hidden$' "escape didn't close the command bar"
+send click $page_point
+await "^browser: drive $step done" || fail "the driver didn't finish the click in c's page"
+nav_lit "with the page having the keyboard"
+../tools/window-screenshot.sh "$pid" "$out/nav-lit.png" || fail "no window to capture"
 # With the switch off, a tab 2 hours unseen keeps its page, and turned on, it lets go. Settings
 # stays open behind the browser window between the two clicks and comes back to the front for the
 # second: a click in a Settings window closed and opened again, on the switch it last changed, never
@@ -537,6 +556,10 @@ expect "^$c_page\$" "c's tab came back without its history: $(grep "^browser: pa
 send menu Settings…
 expect '^browser: settings shown General$' "Settings… didn't show General"
 settings_drew General
+expect "^browser: window $window main false\$" "the window behind Settings wasn't told it isn't the user's"
+expect '^browser: nav glyphs dimmed true$' "the window behind Settings didn't dim its header's glyphs"
+expect "^browser: window $window drew main false\$" "the window behind Settings didn't draw its dimmed glyphs"
+../tools/window-screenshot.sh "$pid" "$out/nav-dimmed.png" all || fail "no window to capture"
 send clickkey $(drawn "toolbar Tabs & Sidebar")
 expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
 settings_drew 'Tabs & Sidebar'
@@ -563,6 +586,8 @@ expect "browser: tab $c without its page\$" "turning the switch on didn't unload
 settings_close
 post clickkey $close
 expect '^browser: settings hidden$' "the close button didn't hide Settings"
+expect "^browser: window $window main true\$" "the window wasn't told it's the user's again once Settings went"
+expect '^browser: nav glyphs dimmed false$' "the window didn't light its header's glyphs again once Settings went"
 # A key sent while the keyboard leaves the closing Settings window for the browser's is lost, so
 # ⌘W waits for the click to finish and the browser window to have the keyboard. On the Mac the
 # click's done can go with the window it closed, as in favorites.sh, so there the state says.
@@ -1332,6 +1357,7 @@ FRAME
   send key n cmd
   expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
   second=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+  new_window_bar
   send key t cmd
   expect '^browser: command bar shown$' "⌘T didn't open the command bar in the second window"
   post key f4 ctrl
@@ -1345,6 +1371,30 @@ FRAME
   send key escape
   bar_gone "Esc in the command bar after Alt+F4 closed the window it was over"
 fi
+
+# Arc's bar commands that call what the menus do: Mute All Tabs mutes every tab, and Unmute All
+# Tabs, listed while one is muted, unmutes them; Enter Full Screen puts the window full screen and
+# reads Exit Full Screen there, which takes it out; and there Exit, View › Exit's, with ⎋'s key,
+# takes it out too.
+send click $page_point
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the command bar for Mute All Tabs"
+send type 'all tabs'
+expect '^browser: command bar commands "all tabs": Mute All Tabs' "the command bar didn't find Mute All Tabs first"
+../tools/window-screenshot.sh "$pid" "$out/bar-mute-all.png" || fail "no window to capture"
+send key return
+expect '^browser: command mute-all-tabs via command bar$' "Mute All Tabs didn't run from the command bar"
+expect '^browser: page [0-9]* audible [01] muted 1$' "Mute All Tabs muted no tab"
+bar_command unmute-all-tabs "Unmute All Tabs" unmute
+expect '^browser: page [0-9]* audible [01] muted 0$' "Unmute All Tabs unmuted no tab"
+bar_command toggle-full-screen "Enter Full Screen" "enter full"
+expect '^browser: window entered full screen$' "Enter Full Screen didn't put the window full screen"
+bar_command toggle-full-screen "Exit Full Screen" "exit full"
+expect '^browser: window left full screen$' "Exit Full Screen didn't take the window out"
+bar_command toggle-full-screen "Enter Full Screen" "enter full"
+expect '^browser: window entered full screen$' "Enter Full Screen didn't put the window full screen again"
+bar_command exit Exit escape
+expect '^browser: window left full screen$' "Exit didn't take the window out of full screen"
 
 exec 3>&-
 # Chrome writes the trace before it quits, once every process has started tracing or 10 s have
