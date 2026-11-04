@@ -1896,6 +1896,12 @@ impl Shell {
         shell
     }
 
+    /// The extensions the window it opened from heard, for a private window: the core reports
+    /// them only as they change, so a window that opens after hears none of its own.
+    pub fn hear_extensions_from(&mut self, from: &Entity<Shell>, cx: &App) {
+        self.extensions = from.read(cx).extensions.clone();
+    }
+
     /// Whether this is a private window's shell.
     pub fn private(&self) -> bool {
         self.private
