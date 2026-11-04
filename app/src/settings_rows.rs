@@ -460,6 +460,27 @@ pub fn keep_keyboard<T: 'static>(
     })
 }
 
+/// Gives `window`'s keyboard to `holder`'s handle on a press away from `field` that leaves the field
+/// with it, as Settings opens in its search field: a press on a control that takes no keyboard,
+/// such as a link rule's trash, would leave ⌘Z the field's, which undoes nothing. A press that
+/// gives a control the keyboard leaves it there.
+pub fn give_back_on_press_away<T: 'static>(
+    field: &gpui::Entity<crate::text_input::TextInput>,
+    window: &mut gpui::Window,
+    cx: &mut gpui::Context<T>,
+    holder: impl Fn(&T) -> gpui::FocusHandle + 'static,
+) -> gpui::Subscription {
+    cx.subscribe_in(
+        field,
+        window,
+        move |view, field, _: &crate::text_input::Away, window, cx| {
+            if gpui::Focusable::focus_handle(field.read(cx), cx).is_focused(window) {
+                window.focus(&holder(view), cx)
+            }
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,5 +585,56 @@ mod tests {
         cx.simulate_keystrokes("escape cmd-w");
         let keys = holder.read_with(cx, |holder, _| holder.keys.clone());
         assert_eq!(keys, ["escape", "cmd-w"]);
+    }
+
+    /// A view holding a field the keyboard opens in, as Settings its search field, beside a
+    /// control that takes no keyboard, as a link rule's trash.
+    struct Searching {
+        focus: gpui::FocusHandle,
+        field: gpui::Entity<crate::text_input::TextInput>,
+    }
+
+    impl gpui::Render for Searching {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            div()
+                .track_focus(&self.focus)
+                .size_full()
+                .child(div().w(px(200.)).h(px(20.)).child(self.field.clone()))
+                // As a rule's trash, whose press goes no further than the trash.
+                .child(
+                    div()
+                        .id("trash")
+                        .w(px(40.))
+                        .h(px(20.))
+                        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation()),
+                )
+        }
+    }
+
+    /// A press on the trash, which takes no keyboard, takes it from the field to what holds it, so
+    /// ⌘Z reaches Settings' undo rather than the field's, which undoes nothing (#1876).
+    #[gpui::test]
+    fn a_press_away_from_the_field_gives_the_keyboard_back(cx: &mut gpui::TestAppContext) {
+        let (searching, cx) = cx.add_window_view(|window, cx| {
+            let field = cx.new(|cx| crate::text_input::TextInput::new("Search", cx));
+            give_back_on_press_away(&field, window, cx, |view: &Searching| view.focus.clone())
+                .detach();
+            Searching {
+                focus: cx.focus_handle(),
+                field,
+            }
+        });
+        searching.update_in(cx, |view, window, cx| {
+            window.focus(&gpui::Focusable::focus_handle(view.field.read(cx), cx), cx)
+        });
+        cx.run_until_parked();
+        cx.simulate_click(gpui::point(px(10.), px(30.)), gpui::Modifiers::none());
+        cx.run_until_parked();
+        let focus = searching.read_with(cx, |view, _| view.focus.clone());
+        cx.update(|window, _| assert!(focus.is_focused(window), "the field kept the keyboard"));
     }
 }
