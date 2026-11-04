@@ -328,6 +328,9 @@ LPARAM ClientParam(const Target& target) {
 // The pointer moves into |target|'s window: the one it was in hears it leave, as Windows tells it.
 void Enter(const Target& target) {
   if (g_hovered && g_hovered != target.hwnd && IsWindow(g_hovered)) {
+    // diag(#872): where the leave goes, and who holds the capture.
+    fprintf(stderr, "browser: drive: diag leave to %ls, capture %ls\n", ClassOf(g_hovered).c_str(),
+            GetCapture() ? ClassOf(GetCapture()).c_str() : L"none");
     PostMessageW(g_hovered, WM_MOUSELEAVE, 0, kDriverLeave);
   }
   g_hovered = target.hwnd;
