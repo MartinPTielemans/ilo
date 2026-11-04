@@ -32,6 +32,8 @@ if windows; then
   mkdir -p "$profile_dir"
 fi
 rm -f "$saved"
+# EXPLORATION for #1458: Settings › Links sends a link from another app to the window in front.
+! windows || printf 'otherwise\tfront\n' > "$profile_dir/Link rules"
 BROWSER_DRIVE=1 BROWSER_URL="${site}dialogs.html" "$browser" \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
@@ -179,23 +181,25 @@ if windows; then
   sleep 2
   powershell.exe -NoProfile -Command 'Set-DisplayResolution -Width 1920 -Height 1080 -Force' > /dev/null 2>&1
   look "3b display change, 1920x1080 to 1600x900 and back"
-  # 4. Links, each window in front in turn.
-  from_app "${site}?second1"
-  look "4a link from another app, second window in front"
-  go links.html
-  send click 400 400
-  look "4b plain link in the second window"
+  # 4. Links into the main window's Space, the main window in front.
   send window 1
-  look "4c main window in front"
+  look "4a main window in front"
   from_app "${site}?main1"
-  look "4d link from another app, main window in front"
+  look "4b link from another app, into the main window"
   go links.html
   send click 400 400
-  look "4e plain link in the main window"
+  look "4c plain link in the main window"
+  # 5. The same with the second window at 125%.
   send window 2
-  look "4f second window in front"
-  from_app "${site}?second2"
-  look "4g link from another app, second window in front again"
+  send dpi 125
+  send window 1
+  look "5a second window at 125%, main window in front"
+  from_app "${site}?main2"
+  look "5b link from another app, into the main window"
+  go links.html
+  send click 400 400
+  look "5c plain link in the main window"
+  send window 2
   send dpi 100
   send window 1
   look "end: second window back at 100%, main window in front"
