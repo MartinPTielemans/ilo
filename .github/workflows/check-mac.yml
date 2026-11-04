@@ -127,8 +127,8 @@ jobs:
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: ./setup.sh prebuilt && ./build.sh
 
-      # macOS asks Screen Recording, the camera and the microphone of the process responsible for
-      # the app, here the runner's agent that started the job, not of the app: once media's call and
+      # macOS asks Screen Recording, Input Monitoring, the camera and the microphone of the process
+      # responsible for the app, here the runner's agent that started the job, not of the app: once media's call and
       # tab share reached Chromium's capture, UserNotificationCenter's question took the app's
       # activation, and the run's clicks and keys went nowhere (#1554). The check VMs answered
       # it once; a hosted runner is new each time, with SIP off, so the job grants them to the
@@ -145,21 +145,33 @@ jobs:
           }
           system="/Library/Application Support/com.apple.TCC/TCC.db"
           user="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+          # Screen capture asks replayd too, which keeps its own list of what it lets record, by
+          # executable path: the app's, its helpers', and the processes the job runs under.
+          approvals="$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals"
+          paths=$(find -L "$PWD/build/Browser.app" -path '*/Contents/MacOS/*' -type f -perm -u+x)
           pid=$$
           while [ "$pid" -gt 1 ]; do
             path=$(ps -o comm= -p "$pid")
             case $path in
             /*)
               grant "$system" kTCCServiceScreenCapture "$path"
+              grant "$system" kTCCServiceListenEvent "$path"
               grant "$user" kTCCServiceCamera "$path"
               grant "$user" kTCCServiceMicrophone "$path"
-              echo "granted to $path"
+              paths="$paths
+          $path"
               ;;
             esac
             pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
           done
-          # tccd reads them again as it starts.
+          echo "$paths" | sed 's/^ *//' | while read -r path; do
+            [ -n "$path" ] || continue
+            defaults write "$approvals" "$path" -date "3000-01-01 00:00:00 +0000"
+            echo "approved $path"
+          done
+          # Each reads them again as it starts.
           sudo killall tccd || true
+          killall replayd || true
 
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       - name: Runs
