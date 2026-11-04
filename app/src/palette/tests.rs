@@ -937,3 +937,26 @@ fn a_shimmer_shows_however_far_the_floor_raises_the_text() {
         "half lit is {half}, not half way from {rest}"
     );
 }
+
+/// A shimmer's highlight shows in the colour GPUI draws text in, which keeps the text's own alpha
+/// under a highlight's colour: lit as a colour of the same ink, the card's status never moved.
+#[test]
+fn a_shimmer_draws_as_lit() {
+    let palette = Palette::of(None, Tone::Dark);
+    let peak = gpui::TextStyle {
+        color: palette.lit(0.5, 1., 1.),
+        ..Default::default()
+    };
+    for lit in [0., 0.25, 0.5, 1.] {
+        let drawn = peak
+            .clone()
+            .highlight(palette.lit_highlight(0.5, 1., lit))
+            .color
+            .a;
+        let meant = palette.lit(0.5, 1., lit).a;
+        assert!(
+            (drawn - meant).abs() < 1e-4,
+            "{lit} lit drew {drawn}, not {meant}"
+        );
+    }
+}

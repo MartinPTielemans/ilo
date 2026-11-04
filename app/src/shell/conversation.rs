@@ -1757,7 +1757,9 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
     let words = match (failed, shimmers) {
         (true, _) => red,
         (false, Some(None)) => palette.text(TITLE),
-        (false, _) => palette.text(TRACE_TITLE),
+        // At the shimmer's peak, which each part fades down from.
+        (false, Some(Some(_))) => palette.lit(TRACE_TITLE, SHIMMER, 1.),
+        (false, None) => palette.text(TRACE_TITLE),
     };
     let glyph = glyph.map(|glyph| {
         let color = if failed {
@@ -1827,9 +1829,13 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
                 .truncate()
                 .opacity(alpha)
                 .text_color(words)
-                .when(opens && !failed, |title| {
-                    title.group_hover(hover, move |style| style.text_color(palette.text(TITLE)))
-                })
+                // A shimmering title is lit by its shimmer, under the pointer too.
+                .when(
+                    opens && !failed && !matches!(shimmers, Some(Some(_))),
+                    |title| {
+                        title.group_hover(hover, move |style| style.text_color(palette.text(TITLE)))
+                    },
+                )
                 .child(match shimmers {
                     Some(Some(phase)) => shimmering(&palette, title, phase),
                     _ => StyledText::new(title),
@@ -1855,12 +1861,8 @@ fn shimmering(palette: &super::Palette, title: SharedString, phase: f32) -> Styl
         .map(|(index, (at, char))| {
             let along = (index as f32 + 0.5) / count;
             let near = (1. - (along - middle).abs() / SHIMMER_BAND).max(0.);
-            let color = palette.lit(TRACE_TITLE, SHIMMER, near);
-            let style = HighlightStyle {
-                color: Some(color),
-                ..Default::default()
-            };
-            (at..at + char.len_utf8(), style)
+            let highlight = palette.lit_highlight(TRACE_TITLE, SHIMMER, near);
+            (at..at + char.len_utf8(), highlight)
         })
         .collect();
     StyledText::new(title).with_highlights(highlights)

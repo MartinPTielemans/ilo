@@ -23,9 +23,8 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, Bounds, Context, FontWeight, HighlightStyle, Hsla, MouseButton, Pixels,
-    ScrollHandle, SharedString, StyledText, TextRun, Window, WindowTextSystem, canvas, div, point,
-    prelude::*, px, rgb,
+    AnyElement, Bounds, Context, FontWeight, Hsla, MouseButton, Pixels, ScrollHandle, SharedString,
+    StyledText, TextRun, Window, WindowTextSystem, canvas, div, point, prelude::*, px, rgb,
 };
 
 use super::library::LIBRARY_BACK_INSET;
@@ -1618,20 +1617,15 @@ impl Shell {
                 true => {
                     let width = face.width.min(room).max(1.);
                     let highlights = face.marks.iter().map(|(range, x)| {
-                        let color =
-                            self.palette
-                                .lit(SECONDARY, SHIMMER_HIGH, shimmer(*x, width, phase));
-                        (
-                            range.clone(),
-                            HighlightStyle {
-                                color: Some(color),
-                                ..Default::default()
-                            },
-                        )
+                        let lit = shimmer(*x, width, phase);
+                        let highlight = self.palette.lit_highlight(SECONDARY, SHIMMER_HIGH, lit);
+                        (range.clone(), highlight)
                     });
                     let styled =
                         StyledText::new(words).with_highlights(highlights.collect::<Vec<_>>());
-                    base.child(styled)
+                    // At the shimmer's peak, which each part fades down from.
+                    let peak = self.palette.lit(SECONDARY, SHIMMER_HIGH, 1.);
+                    base.text_color(peak).child(styled)
                 }
                 false => base.child(words),
             }
