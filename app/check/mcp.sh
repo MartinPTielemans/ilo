@@ -273,6 +273,49 @@ for n in $(seq 10); do
 done
 cases=$(sed -n 's/^cases: \(10 cases in .*\)/\1/p' "$out/cases.log")
 
+# An action waits for its element to take input and for its page to settle (#1436). The Load
+# button is enabled a while after the page shows, as a form's once its data is in, and its click
+# fetches /slow, which takes a second, then says what came: the click's answer has it, with no wait
+# step. Stall's fetch never comes, so its click answers after 5 s, saying the page was still busy.
+printf '%s' '<script src="painted.js"></script>
+<h1>Settle</h1>
+<p><button id=load disabled>Load</button> <button id=stall>Stall</button> <span id=state></span></p>
+<script>
+painted(() => setTimeout(() => { load.disabled = false; document.title = "settle enabled"; }, 2500));
+load.onclick = () => fetch("slow").then(answer => answer.text()).then(text => {
+  state.textContent = "Came " + text;
+});
+stall.onclick = () => fetch("wait");
+</script>' > "$out/site/settle.html"
+ref_in() { printf '%s\n' "$1" | sed -n "s/.*- $2 \"$3\" \[\(e[0-9]*\)\].*/\1/p" | head -1; }
+opened=$(call open_tab "{\"url\":\"localhost:$port/settle.html\"}")
+settle_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+load=$(ref_in "$opened" button Load)
+stall=$(ref_in "$opened" button Stall)
+[ -n "$settle_tab" ] && [ -n "$load" ] && [ -n "$stall" ] || fail "open_tab of the settle page answered: $opened"
+grep -q "^browser: title $settle_tab settle enabled\$" "$log" &&
+  fail "the settle page enabled Load before open_tab answered, which leaves nothing to wait for"
+started=$(date +%s)
+clicked=$(call click "{\"tab\":$settle_tab,\"ref\":\"$load\"}")
+case "$clicked" in
+  *"still busy"*) fail "the click on Load answered busy: $clicked" ;;
+  "Clicked button “Load”."*"Came slow"*) ;;
+  *) fail "the click on Load didn't wait for it to be enabled and its fetch to come: $clicked" ;;
+esac
+settled=$(call run_steps "{\"tab\":$settle_tab,\"steps\":[{\"action\":\"wait\",\"until\":\"quiet\"}]}")
+case "$settled" in
+  "Ran 1 steps."*"1. The page settled."*) ;;
+  *) fail "a wait until quiet on a page at rest answered: $settled" ;;
+esac
+stalled=$(call click "{\"tab\":$settle_tab,\"ref\":\"$stall\"}")
+case "$stalled" in
+  "Clicked button “Stall”. The page was still busy after 5 s"*) ;;
+  *) fail "the click on Stall, whose fetch never comes, answered: $stalled" ;;
+esac
+settle="the settle page's click waited $(($(date +%s) - started)) s in all"
+closed=$(call close_tab "{\"tab\":$settle_tab}")
+case "$closed" in "Closed tab $settle_tab."*) ;; *) fail "closing the settle page answered: $closed" ;; esac
+
 # A page whose first load hasn't committed once an action has waited 15 s for it (kLoadTimeout in
 # agent_page.cc) is still loading, which the answer says, naming the tab it opened, and not a page
 # agents may not use (#1461). /wait never comes.
@@ -556,8 +599,8 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
   stopped="^browser: page $keys_tab back [01] forward [01] loading 0 "
   stops=$(grep -c "$stopped" "$log" || true)
   before=$(tabs)
-  # The agent waits out the load before it presses and again after, 15 s each (kLoadTimeout in
-  # agent_page.cc), so the answer comes after the 30 s next_answer waits.
+  # The agent waits out the load before it presses, 15 s (kLoadTimeout in agent_page.cc), and for
+  # the page to settle after, 5 s (kBusy), so the answer comes after the 30 s next_answer waits.
   request press_key "{\"tab\":$keys_tab,\"key\":\"Escape\"}" >&4
   await_log "^browser: title $keys_tab escape heard\$" "press_key Escape didn't reach the page"
   pressed=$(perl -e 'alarm 60; exec @ARGV' sh -c 'read -r line && printf "%s\n" "$line"' <&5) ||
@@ -904,9 +947,9 @@ forget_login
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, is refused a tab the user took over with the strip's ⌘↩ until they hand it back and Keep answers its ask, is stopped by its card's ✕, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow, which Settings › Agents lists, and off takes the socket away"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, is refused a tab the user took over with the strip's ⌘↩ until they hand it back and Keep answers its ask, is stopped by its card's ✕, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow, which Settings › Agents lists, and off takes the socket away; an action waits for its element and its page to settle ($settle)"
 else
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases). skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle). skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi
 if [ -n "$msix" ]; then
   echo "ok: a Store copy's bridge, run by the alias its MSIX declares in the user's WindowsApps folder, carries a client's hello to the browser and its answer back."

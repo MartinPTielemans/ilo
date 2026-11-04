@@ -1947,12 +1947,14 @@ impl Agents {
                 }
             }
             "wait" => {
-                let text = string("text");
+                let (text, gone) = (string("text"), string("gone"));
                 let seconds = arguments.get("seconds").and_then(Value::as_f64);
-                did.target = match (text.is_empty(), seconds) {
-                    (false, _) => format!("“{}”", page::clip(&text, 40)),
-                    (true, Some(seconds)) => duration(seconds.round().max(1.) as u64),
-                    (true, None) => String::new(),
+                did.target = match (text.is_empty(), gone.is_empty(), seconds) {
+                    (false, _, _) => format!("“{}”", page::clip(&text, 40)),
+                    (true, false, _) => format!("“{}” to go", page::clip(&gone, 40)),
+                    _ if string("until") == "quiet" => tools::SETTLE.into(),
+                    (true, true, Some(seconds)) => duration(seconds.round().max(1.) as u64),
+                    (true, true, None) => String::new(),
                 };
             }
             "list_tabs" | "ask" => {

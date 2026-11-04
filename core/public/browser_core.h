@@ -971,7 +971,8 @@ typedef struct bc_host {
   void (*tab_text)(void* context, bc_id tab, uint64_t request, const char* text);
   // The answer to bc_agent_page's |request| for |tab|: with |error|, |text| says why it couldn't,
   // for the agent; else a screenshot's JPEG in base64, or for every other action the page's
-  // accessibility tree, DevTools' Accessibility.getFullAXTree nodes as a JSON array.
+  // accessibility tree as a JSON object: DevTools' Accessibility.getFullAXTree nodes in "nodes",
+  // and "busy": true if the page hadn't settled when the action stopped waiting for it.
   void (*agent_page_done)(void* context, bc_id tab, uint64_t request, const char* text, bool error);
   // The element bc_agent_page's |request| for |tab| is about to click or type in, scrolled into
   // view: its box in points from the top-left of the tab's page view, for the agent's pointer.
@@ -1301,8 +1302,12 @@ BC_EXPORT bool bc_agent_navigate(const char* agent, bc_id tab, const char* url);
 BC_EXPORT size_t bc_agent_list_tabs(const char* agent, bc_id* tabs, size_t capacity);
 
 // What bc_agent_page does in a tab. Each but SCREENSHOT then answers with the page's accessibility
-// tree, once the page has settled, as an action can start a navigation.
-// The tree alone.
+// tree. An action on an element first waits until it's on screen, holds still for two frames and,
+// to click or type in, isn't disabled, as a page that builds itself moves and enables what it
+// shows; one still disabled after 5 s fails. Each action from CLICK on but SCREENSHOT then waits
+// for the page to settle: until it has stopped loading, has had no request for 500 ms, and its
+// tree has held still for a frame. Past 5 s it answers anyway, with the answer marked busy.
+// The tree alone, at once.
 #define BC_AGENT_PAGE_SNAPSHOT 0
 // Clicks the element: its center, scrolled into view first.
 #define BC_AGENT_PAGE_CLICK 1
@@ -1321,6 +1326,8 @@ BC_EXPORT size_t bc_agent_list_tabs(const char* agent, bc_id* tabs, size_t capac
 #define BC_AGENT_PAGE_FORWARD 8
 // A JPEG of what the page's view shows.
 #define BC_AGENT_PAGE_SCREENSHOT 9
+// The tree, once the page has settled, as after an action, without one.
+#define BC_AGENT_PAGE_QUIET 10
 
 // Does |action|, a BC_AGENT_PAGE_ value, in |tab| for the agent with the id |agent|, to |element|,
 // a backendDOMNodeId from the tree, or 0, with |text| as the action says, else null. Then

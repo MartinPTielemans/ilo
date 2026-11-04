@@ -81,6 +81,8 @@ pub enum PageAction {
     Back,
     Forward,
     Screenshot,
+    /// The tree once the page has settled, as after an action, without one.
+    Quiet,
 }
 
 /// What an agent asks the user's leave for, as the card in each window asks it.
@@ -474,12 +476,10 @@ impl Run {
     }
 }
 
-/// A run's wait step: it looks at the page until its text shows or its time is up, or without
-/// text, looks once its time is up.
+/// A run's wait step: it looks at the page until what it waits for comes or its time is up.
 struct Wait {
     id: u64,
-    /// What it waits to see in the page's outline, or empty.
-    text: String,
+    what: WaitFor,
     seconds: f64,
     until: Instant,
     /// The next look's answer, for the timer to give the core.
@@ -488,9 +488,24 @@ struct Wait {
     timer: Option<Task<()>>,
 }
 
+/// What a wait step waits for.
+enum WaitFor {
+    /// Its seconds, then it looks once.
+    Time,
+    /// Text to show in the page's outline.
+    Shows(String),
+    /// Text to go from it.
+    Goes(String),
+    /// The page to settle, as an action's answer waits for it.
+    Quiet,
+}
+
 /// How often a wait looks at the page for its text, in a run under way: no more than the page's
 /// own settling after an action takes.
 const LOOK_EVERY: Duration = Duration::from_millis(500);
+
+/// What an answer starts with when the core stopped waiting for its page to settle.
+const BUSY: &str = "The page was still busy after 5 s, so it may change yet.";
 
 /// A tab the user holds from its agent: handed to them, or taken over.
 struct Held {
@@ -1007,7 +1022,7 @@ impl Agents {
                     tab: 0,
                     what: format!("open {host}"),
                     url,
-                    page: PageAction::Snapshot,
+                    page: PageAction::Quiet,
                     element: 0,
                     text: String::new(),
                     note: String::new(),
@@ -1272,19 +1287,28 @@ impl Agents {
         reply: mpsc::Sender<ToolResult>,
         cx: &mut Context<Self>,
     ) {
-        let text = step
-            .get("text")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim()
-            .to_string();
+        let string = |name| {
+            step.get(name)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        };
+        let what = match (string("text"), string("gone"), string("until").as_str()) {
+            (text, gone, "") if text.is_empty() && gone.is_empty() => Some(WaitFor::Time),
+            (text, gone, "") if gone.is_empty() => Some(WaitFor::Shows(text)),
+            (text, gone, "") if text.is_empty() => Some(WaitFor::Goes(gone)),
+            (text, gone, "quiet") if text.is_empty() && gone.is_empty() => Some(WaitFor::Quiet),
+            _ => None,
+        };
         let seconds = match step.get("seconds").and_then(Value::as_f64) {
-            None if !text.is_empty() => Some(tools::WAIT),
+            None if !matches!(what, Some(WaitFor::Time)) => Some(tools::WAIT),
             seconds => seconds.filter(|seconds| *seconds > 0.0 && *seconds <= tools::MAX_WAIT),
         };
-        let Some(seconds) = seconds else {
+        let (Some(what), Some(seconds)) = (what, seconds) else {
             _ = reply.send(ToolResult::error(format!(
-                "wait needs text to wait for, or seconds, at most {}.",
+                "wait needs text to wait for, gone with text to wait to go, until \"quiet\" to \
+                 wait for the page to settle, or seconds, at most {}.",
                 tools::MAX_WAIT
             )));
             return self.runs.push(run);
@@ -1299,17 +1323,18 @@ impl Agents {
             let until = cx.background_executor().now() + time;
             let mut wait = Wait {
                 id,
-                text,
+                what,
                 seconds,
                 until,
                 look: None,
                 timer: None,
             };
-            match wait.text.is_empty() {
-                true => {
+            match wait.what {
+                WaitFor::Time => {
                     (wait.look, wait.timer) = (Some(reply), Some(self.look_after(id, time, cx)))
                 }
-                false => self.look(&run.agent, run.tab, reply),
+                WaitFor::Quiet => self.look(&run.agent, run.tab, PageAction::Quiet, reply),
+                _ => self.look(&run.agent, run.tab, PageAction::Snapshot, reply),
             }
             run.wait = Some(wait);
         }
@@ -1321,36 +1346,69 @@ impl Agents {
         &mut self,
         run: &mut Run,
         mut wait: Wait,
+        answer: ToolResult,
         cx: &mut Context<Self>,
     ) -> Option<ToolResult> {
         let (agent, tab, seconds) = (run.agent.clone(), run.tab, wait.seconds);
         let show = run.show_now();
-        if wait.text.is_empty() {
-            let note = format!("Waited {seconds} s.");
-            return Some(ToolResult::text(self.answer_with(&agent, tab, note, show)));
-        }
-        let text = page::clip(&wait.text, 60);
         let outline = self
             .outlines
             .get(&tab)
             .map(page::Outline::text)
             .unwrap_or_default();
-        if outline.to_lowercase().contains(&wait.text.to_lowercase()) {
-            let note = format!("“{text}” showed.");
-            return Some(ToolResult::text(self.answer_with(&agent, tab, note, show)));
-        }
         let now = cx.background_executor().now();
-        if now >= wait.until {
-            // The run ends here, so with the outline as its last step's.
-            let why = format!("“{text}” didn't show in {seconds} s.");
-            return Some(ToolResult::error(
-                self.answer_with(&agent, tab, why, run.show),
-            ));
+        let late = now >= wait.until;
+        // The core waits for the page to settle itself, so a quiet wait looks again at once.
+        let mut next = LOOK_EVERY.min(wait.until.saturating_duration_since(now));
+        match &wait.what {
+            WaitFor::Time => {
+                let note = format!("Waited {seconds} s.");
+                return Some(ToolResult::text(self.answer_with(&agent, tab, note, show)));
+            }
+            WaitFor::Quiet => match answer.text.starts_with(BUSY) {
+                false => {
+                    let note = "The page settled.".to_string();
+                    return Some(ToolResult::text(self.answer_with(&agent, tab, note, show)));
+                }
+                // A page that never settles, as one that polls, is no reason to stop the run.
+                true if late => {
+                    let note = format!("The page was still busy after {seconds} s.");
+                    return Some(ToolResult::text(self.answer_with(&agent, tab, note, show)));
+                }
+                true => next = Duration::ZERO,
+            },
+            WaitFor::Shows(text) | WaitFor::Goes(text) => {
+                let shows = outline.to_lowercase().contains(&text.to_lowercase());
+                let goes = matches!(wait.what, WaitFor::Goes(_));
+                let text = page::clip(text, 60);
+                let said = match (goes, shows) {
+                    (false, true) => Some((format!("“{text}” showed."), false)),
+                    (true, false) => Some((format!("“{text}” went."), false)),
+                    (false, false) if late => {
+                        Some((format!("“{text}” didn't show in {seconds} s."), true))
+                    }
+                    (true, true) if late => {
+                        Some((format!("“{text}” was still there after {seconds} s."), true))
+                    }
+                    _ => None,
+                };
+                match said {
+                    // The run ends here, so with the outline as its last step's.
+                    Some((why, true)) => {
+                        let show = run.show;
+                        return Some(ToolResult::error(self.answer_with(&agent, tab, why, show)));
+                    }
+                    Some((note, false)) => {
+                        return Some(ToolResult::text(self.answer_with(&agent, tab, note, show)));
+                    }
+                    None => {}
+                }
+            }
         }
         let (look, answer) = mpsc::channel();
         run.step = answer;
         wait.look = Some(look);
-        wait.timer = Some(self.look_after(wait.id, LOOK_EVERY.min(wait.until - now), cx));
+        wait.timer = Some(self.look_after(wait.id, next, cx));
         run.wait = Some(wait);
         None
     }
@@ -1362,17 +1420,22 @@ impl Agents {
             _ = agents.update(cx, |agents, _| {
                 let waiting = agents.runs.iter_mut().find_map(|run| {
                     let wait = run.wait.as_mut().filter(|wait| wait.id == id)?;
-                    Some((run.agent.clone(), run.tab, wait.look.take()?))
+                    let action = match wait.what {
+                        WaitFor::Quiet => PageAction::Quiet,
+                        _ => PageAction::Snapshot,
+                    };
+                    Some((run.agent.clone(), run.tab, action, wait.look.take()?))
                 });
-                if let Some((agent, tab, look)) = waiting {
-                    agents.look(&agent, tab, look);
+                if let Some((agent, tab, action, look)) = waiting {
+                    agents.look(&agent, tab, action, look);
                 }
             });
         })
     }
 
-    /// Asks the core for the page's tree, for a wait, which checked and logged itself.
-    fn look(&mut self, agent: &str, tab: u64, reply: mpsc::Sender<ToolResult>) {
+    /// Asks the core for the page's tree, at once or once it has settled, for a wait, which
+    /// checked and logged itself.
+    fn look(&mut self, agent: &str, tab: u64, action: PageAction, reply: mpsc::Sender<ToolResult>) {
         let request = self.next_request;
         self.next_request += 1;
         let (note, show) = (String::new(), Show::Nothing);
@@ -1386,7 +1449,7 @@ impl Agents {
             reply,
         };
         self.acting.insert(request, acting);
-        self.act_in_page(agent, tab, request, PageAction::Snapshot, 0, "");
+        self.act_in_page(agent, tab, request, action, 0, "");
     }
 
     /// Asks the core to act in the page, which can ask the app about a key from inside the call
@@ -1417,13 +1480,15 @@ impl Agents {
                 Ok(answer) => {
                     let mut run = self.runs.remove(at);
                     let answer = match run.wait.take() {
-                        Some(wait) if !answer.error => match self.waited(&mut run, wait, cx) {
-                            Some(answer) => answer,
-                            None => {
-                                self.runs.push(run);
-                                continue;
+                        Some(wait) if !answer.error => {
+                            match self.waited(&mut run, wait, answer, cx) {
+                                Some(answer) => answer,
+                                None => {
+                                    self.runs.push(run);
+                                    continue;
+                                }
                             }
-                        },
+                        }
                         _ => answer,
                     };
                     let n = run.done.len() + 1;
@@ -1668,6 +1733,7 @@ impl Agents {
                         };
                         let to = site(&url);
                         act.action = "navigate";
+                        act.page = PageAction::Quiet;
                         act.what = format!("open {to}");
                         act.url = url;
                         if !is_web(&act.url) {
@@ -2043,12 +2109,13 @@ impl Agents {
     }
 
     /// The core's answer to the action `request`: with `error`, why it couldn't; else a
-    /// screenshot's JPEG in base64, or the nodes of the page's tree, which the answer outlines.
+    /// screenshot's JPEG in base64, or the page's tree, whose nodes the answer outlines, and
+    /// whether the page was still busy when the core stopped waiting for it.
     pub fn page_done(&mut self, request: u64, text: String, error: bool, cx: &mut Context<Self>) {
         let Some(Acting {
             agent,
             tab,
-            note,
+            mut note,
             show,
             opened,
             reply,
@@ -2066,11 +2133,21 @@ impl Agents {
             _ = reply.send(ToolResult::error(text));
             return self.advance(cx);
         }
-        if !text.starts_with('[') {
+        if !text.starts_with('{') {
             _ = reply.send(ToolResult::image(text));
             return;
         }
-        let nodes: Vec<Value> = serde_json::from_str(&text).unwrap_or_default();
+        let tree: Value = serde_json::from_str(&text).unwrap_or_default();
+        let nodes = tree["nodes"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        if tree["busy"].as_bool() == Some(true) {
+            note = match note.is_empty() {
+                true => BUSY.into(),
+                false => format!("{note} {BUSY}"),
+            };
+        }
         let info = self.browser.tab(tab, cx);
         let refs = self.refs.entry(tab).or_default();
         let text = match show {

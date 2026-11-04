@@ -16,8 +16,9 @@ pub const INSTRUCTIONS: &str = concat!(
      Open a page with open_tab, then click, type, press_key and scroll by ref (like e12), using \
      the page's outline. A new page answers with its outline whole; an action on the same page \
      answers with what changed in it since the last outline you had, and snapshot gives it whole \
-     again. A ref stays the element's while its page does. Use read_page for a long page's text \
-     and screenshot when the layout matters.\n\n\
+     again. A ref stays the element's while its page does. Each action waits for its element to be \
+     ready and for the page to settle before it answers, and says when the page was still busy. \
+     Use read_page for a long page's text and screenshot when the layout matters.\n\n\
      Payments, orders, sending messages and banks' sites ask the user first. If they say no, \
      don't try again. You can never type into a password field: a sign-in, a 2FA prompt or a \
      CAPTCHA is the user's to do, so hand the tab to them with hand_off. The user can take a tab \
@@ -307,11 +308,13 @@ fn shared() -> Value {
                                 "key": { "type": "string", "enum": page::KEYS },
                                 "url": { "type": "string" },
                                 "direction": { "type": "string", "enum": ["down", "up"] },
+                                "gone": { "type": "string" },
+                                "until": { "type": "string", "enum": ["quiet"] },
                                 "seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": MAX_WAIT },
                             },
                             "required": ["action"],
                         },
-                        "description": "Each step is an action and what that tool takes: click and scroll a ref, type a ref and text, press_key a key, navigate a url. wait waits for text to show in the page, up to seconds (5 if not given), or without text, waits the seconds.",
+                        "description": "Each step is an action and what that tool takes: click and scroll a ref, type a ref and text, press_key a key, navigate a url. wait waits for text to show in the page, for gone text to go from it, or until \"quiet\", for the page to settle, each up to seconds (5 if not given); or with none of those, waits the seconds.",
                     },
                     "outline": outline,
                     "tab": tab,
@@ -363,6 +366,8 @@ pub const STEPS: [&str; 7] = [
 ];
 /// The steps one run_steps takes at most.
 pub const MAX_STEPS: usize = 20;
+/// What a wait step until "quiet" waits for, as its title says it.
+pub const SETTLE: &str = "the page to settle";
 /// How long a wait step waits for its text, in seconds, unless it says, and at most.
 pub const WAIT: f64 = 5.0;
 pub const MAX_WAIT: f64 = 30.0;
@@ -500,14 +505,19 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             };
             ("Scrolling", "Scrolled", "Couldn't scroll", to)
         }
-        "wait" => match did.target.starts_with('“') {
-            true => (
+        "wait" => match did.target.strip_suffix(" to go") {
+            // Text that should go: “Loading” to go.
+            Some(text) if tense == Tense::Failed => return format!("Didn't see {text} go"),
+            _ if did.target == SETTLE => {
+                ("Waiting for", "Waited for", "Couldn't wait for", target(""))
+            }
+            _ if did.target.starts_with('“') => (
                 "Waiting for",
                 "Waited for",
                 "Didn't see",
                 target("the page"),
             ),
-            false => ("Waiting", "Waited", "Couldn't wait", target("")),
+            _ => ("Waiting", "Waited", "Couldn't wait", target("")),
         },
         "list_tabs" => (
             "Looking over",
