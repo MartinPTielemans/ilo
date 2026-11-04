@@ -11,8 +11,8 @@
 # with a login's password changed says it conflicted and kept the saved one. Settings' Passwords
 # tab lists what came in, and the app menu's Import from Other Browsers… shows Import again. With
 # the sidebar hidden, Arc's Spaces say so in a toast. While an import runs, each Space it makes is
-# a card under its profile, captured waiting (Arc's, as Work's profile loads, recorded on the Mac)
-# and ticked (Chrome's, as its history goes in). Once a browser has come in, its row says when,
+# a card under its profile, captured waiting and then stalled (Arc's, with Work's profile held back
+# until the run releases it, recorded on the Mac) and ticked (Chrome's, as its history goes in). Once a browser has come in, its row says when,
 # that again brings only what's new, and Import Again…. Each step is captured, and the list and the
 # first browser's choices, read as it's picked and each kind counted, under Import › its name with
 # Import in the accent, at Settings' first size and its least, dark and light; Esc goes back from
@@ -149,7 +149,9 @@ web_data="$profile_dir/Default/Web Data"
 [ ! -e "$web_data" ] || sql "$web_data" "DELETE FROM addresses; DELETE FROM address_type_tokens;" ||
   fail "the check's profile kept its addresses"
 # The app on Windows takes Windows' paths, and starts in a folder of its own.
-BROWSER_IMPORT_HOME="$(native_path "$PWD/$home")" \
+# Arc's Work profile is held back from its Space until the run releases it, with Shift+F12, so the
+# captures show its card waiting and then stalled however fast the profile loads (import_host.rs).
+BROWSER_IMPORT_HOLD=Work BROWSER_IMPORT_HOME="$(native_path "$PWD/$home")" \
   BROWSER_IMPORT_PASSWORDS="$(native_path "$PWD/$passwords")" \
   BROWSER_IMPORT_BOOKMARKS="$(native_path "$PWD/$bookmarks")" BROWSER_DRIVE=1 BROWSER_URL="${site}import.html" \
   "$browser" --extension-mime-request-handling=always-prompt-for-install < "$out/drive" \
@@ -257,18 +259,28 @@ if [ -n "$arc" ]; then
   expect '^browser: import drawn pick$' "Arc's choices didn't draw"
   ../tools/window-screenshot.sh "$pid" "$out/import-pick.png" || fail "no window to capture"
   # The arrival, recorded on the Mac: a card a Space as the core makes it, under its profile, each
-  # waiting while Work's profile loads, then ticking as its tabs go in.
+  # waiting while Work's profile is held back from its Space.
   record import-arrival 2
   click_drawn import-go
+  # What the Spaces' coming logs, from Import on, as the stall's steps come between.
+  go=$step
   expect '^browser: import cards Personal, Work$' "Arc's Spaces didn't come as cards, Personal then Work"
-  # Captured waiting, or at the end where Work's profile came before the window's next frame, as
-  # on Windows' runner.
-  expect '^browser: import \(drawn running\|done: \)' "Arc's cards didn't draw"
+  expect '^browser: import holds space [0-9]* from profile [0-9]*$' "the run didn't hold Work's Space back"
+  expect '^browser: import drawn running$' "Arc's cards didn't draw"
   ../tools/window-screenshot.sh "$pid" "$out/import-arriving.png" || fail "no window to capture"
   expect '^browser: import from Arc: 2 Spaces, 6 pinned tabs, 0 open tabs, 3 favorites, 0 pages, 0 addresses$' \
     "Import didn't plan Arc's 2 Spaces, 6 pinned tabs and 3 favorites"
   expect '^browser: import from Arc: 3 link rules$' "Import didn't plan Arc's 3 link rules"
   expect '^browser: added profile [0-9]* Work$' "Arc's Work profile didn't come in"
+  # Work's card stalls, dimmed with ⚠ and its rows waiting once Work opens, and Personal's waits
+  # with it, as the tabs go in together.
+  for _ in 1 2 3; do await '^browser: import stalled: ' && break; done
+  expect '^browser: import stalled: Work hasn.t opened' "Work's held profile didn't stall the import"
+  expect '^browser: import drawn stalled$' "the stalled import didn't draw"
+  send state
+  ../tools/window-screenshot.sh "$pid" "$out/import-stalled.png" || fail "no window to capture"
+  send key f12 shift
+  expect '^browser: import releases 1 Spaces to profile [0-9]*$' "Shift+F12 didn't release Work's Space"
   arc_done='2 Spaces, 6 pinned tabs, 3 favorites and 3 link rules came in from Arc'
   await "^browser: import done: $arc_done\\.\$" ||
     fail "the import didn't finish once the Work profile loaded"
@@ -284,9 +296,9 @@ seeded${t}meet"
   [ "$(cat "$rules_file" 2>/dev/null)" = "$rules" ] ||
     fail "Arc's link rules didn't come in to its Spaces: $(cat "$rules_file" 2>/dev/null)"
   ../tools/window-screenshot.sh "$pid" "$out/import-done.png" || fail "no window to capture"
-  expect "^browser: spaces $first [0-9]* [0-9]*\$" "the import didn't add Arc's two Spaces after the first"
+  expect "^browser: spaces $first [0-9]* [0-9]*\$" "the import didn't add Arc's two Spaces after the first" "$go"
   expect '^browser: toast shown Added 2 Spaces \[show\]$' \
-    "Arc's two Spaces made with the sidebar hidden had no toast"
+    "Arc's two Spaces made with the sidebar hidden had no toast" "$go"
   spaces=$(grep '^browser: spaces' "$log" | tail -1)
   personal=$(echo "$spaces" | cut -d' ' -f4)
   work=$(echo "$spaces" | cut -d' ' -f5)
@@ -575,7 +587,7 @@ echo "  With the sidebar hidden, Arc's two Spaces say so in a toast."
 echo "  Settings' list and $first_found's choices, under Import › $first_found, at 820 by 660 and"
 echo "  720 by 480, dark and light, and Esc goes back from the choices to the list."
 echo "  Windows: $out/import-settings-{list,choose}-{820,720}-{dark,light}.png,"
-echo "  $out/import-arriving.png (with Arc), $out/import-placed.png,"
+echo "  $out/import-arriving.png and import-stalled.png (with Arc), $out/import-placed.png,"
 echo "  $out/import-folders.png, $out/import-extensions.png, $out/import-pinned-extension.png (not on Windows),"
 echo "  $out/import-again-list.png, $out/import-list.png, $out/import-pick.png, $out/import-done.png,"
 echo "  $out/import-again.png, $out/import-chrome.png, $out/import-firefox.png,"
