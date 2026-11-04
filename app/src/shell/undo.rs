@@ -50,6 +50,7 @@ impl What {
     pub const ADD_FAVORITE: What = What::quiet("Add to Favorites");
     pub const REMOVE_FAVORITE: What = What::said("Remove from Favorites", "Removed from Favorites");
     pub const MOVE_TAB: What = What::quiet("Move Tab");
+    pub const MOVE_TO_WINDOW: What = What::quiet("Move Tab to Window");
     pub const DUPLICATE: What = What::quiet("Duplicate");
     pub const MOVE_FAVORITE: What = What::quiet("Move Favorite");
     pub const MOVE_TO_SPACE: What = What::said("Move to Space", "Tab Moved to Space");
@@ -156,6 +157,13 @@ pub(super) enum Edit {
     },
     /// Removes a pinned row from the pinned tabs, as its remove button does.
     Remove(u64),
+    /// Shows `tab` in browser window `window`, its page moving there live, as it was before a drag
+    /// took it to this window, and with `close` closes this one, which the drag opened for it.
+    Return {
+        tab: u64,
+        window: u64,
+        close: bool,
+    },
     /// Puts a tab, a favorite or a folder at a spot, and a pinned tab's or favorite's URL back.
     Put {
         tab: u64,
@@ -289,6 +297,7 @@ impl Edit {
                 }
             }
             Edit::Remove(tab) => id(tab),
+            Edit::Return { tab, .. } => id(tab),
             Edit::Put { tab, spot, .. } => {
                 id(tab);
                 if let At::Pinned { folder, .. } = &mut spot.at {
@@ -433,6 +442,20 @@ impl Edit {
                     shell.browser.set_pinned_url(*tab, url, cx);
                 }
                 Some(Edit::Remove(first))
+            }
+            Edit::Return { tab, window, close } => {
+                let here = shell.browser.window();
+                shell.browser.show_in_window(window, tab, cx);
+                if close {
+                    // A window the drag opened holds nothing else of the user's: every window
+                    // shows the same Spaces. Its redo goes with it.
+                    shell.browser.close_window(cx);
+                }
+                Some(Edit::Return {
+                    tab,
+                    window: here,
+                    close: false,
+                })
             }
             Edit::Remove(tab) => {
                 let back = shell.repin_of(tab)?;
