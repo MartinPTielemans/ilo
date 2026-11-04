@@ -560,12 +560,13 @@ forget_engine_sites() {
   [ -e "$prefs" ] || return 0
   python3 -I -c '
 import json, sys
-with open(sys.argv[1]) as f:
+# Chrome writes it as UTF-8, which Windows' Python doesn't read by default.
+with open(sys.argv[1], encoding="utf-8") as f:
     prefs = json.load(f)
 engine = prefs.get("browser_core", {}).get("system_engine", {})
 for kind in ("sites", "closed_notes", "listed_off"):
     engine.pop(kind, None)
-with open(sys.argv[1], "w") as f:
+with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(prefs, f)
 ' "$prefs" || fail "the profile's sites for Safari's engine couldn't be reset"
 }
