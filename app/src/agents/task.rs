@@ -254,6 +254,13 @@ pub struct Task {
     pub state: State,
     /// When it finished, done, stopped or failed, for its conversation and the Archive.
     pub ended: Option<SystemTime>,
+    /// When it started, and when it ended as Library › Agents last kept it.
+    pub started: SystemTime,
+    pub(super) kept: Option<SystemTime>,
+    /// The orders it placed and the messages it sent, each once the user allowed it and the page
+    /// did it, for its receipt and Library › Agents.
+    pub(super) orders: usize,
+    pub(super) sent: usize,
     pub messages: Vec<Message>,
     /// Its steps, oldest first.
     pub trace: Vec<Traced>,
@@ -293,10 +300,6 @@ pub struct Session {
     pub agent: String,
     /// Its pages: the tabs it opened or acted in, in that order.
     pub tabs: Vec<u64>,
-    /// The orders it placed and the messages it sent, each once the user allowed it and it was
-    /// done, for its receipt. For this run only, as the session is.
-    pub(super) orders: usize,
-    pub(super) messages: usize,
     /// Its calls under way, which it waits on.
     pub(super) calls: Vec<u64>,
     /// What ends it once it has waited IDLE for its next call.
@@ -744,12 +747,12 @@ impl Agents {
             (State::Asking { .. }, None) => ("Waiting for you".into(), Dot::Waiting),
             // A session has no result to say, so its receipt says what it did, or with nothing to
             // count, when it ended.
-            (State::Done { .. }, _) if let Some(session) = &task.session => {
+            (State::Done { .. }, _) if task.session.is_some() => {
                 let at = task
                     .ended
                     .map(|at| super::local_time(seconds(at)))
                     .unwrap_or_default();
-                (receipt(session, &at).into(), Dot::Done)
+                (receipt(task, &at).into(), Dot::Done)
             }
             // The tick says it's done, so a finish with no line says the result's first words.
             (
@@ -975,6 +978,10 @@ impl Agents {
             model,
             state: State::Working,
             ended: None,
+            started: SystemTime::now(),
+            kept: None,
+            orders: 0,
+            sent: 0,
             messages: Vec::new(),
             trace: Vec::new(),
             dismissed: false,
@@ -1736,8 +1743,6 @@ impl Agents {
         let session = Session {
             agent: call.agent.clone(),
             tabs: Vec::new(),
-            orders: 0,
-            messages: 0,
             calls: vec![call.id],
             idle: None,
         };
@@ -1754,6 +1759,10 @@ impl Agents {
             model: SharedString::default(),
             state: State::Working,
             ended: None,
+            started: SystemTime::now(),
+            kept: None,
+            orders: 0,
+            sent: 0,
             messages: Vec::new(),
             trace: Vec::new(),
             dismissed: false,
@@ -1782,18 +1791,65 @@ impl Agents {
         }
     }
 
-    /// `agent`'s call `call` did what asked first, allowed: its session counts it for its receipt.
+    /// `agent`'s call `call` did what asked first, allowed: its task or session counts it.
     pub(super) fn counted(&mut self, agent: &str, call: u64, did: super::Did) {
-        let Some(key) = self.session_of(agent, call).map(|task| task.agent.clone()) else {
+        let Some(key) = self.tracer(agent, call) else {
             return;
         };
-        let Some(session) = self.task_mut(&key).and_then(|task| task.session.as_mut()) else {
+        let Some(task) = self.task_mut(&key) else {
             return;
         };
         match did {
-            super::Did::Order => session.orders += 1,
-            super::Did::Message => session.messages += 1,
+            super::Did::Order => task.orders += 1,
+            super::Did::Message => task.sent += 1,
         }
+    }
+
+    /// Each task that has ended since Library › Agents last kept it, as its receipt shows it, with
+    /// its home Space, whose profile keeps it. A later turn of a task ends again, and is kept again
+    /// in its earlier one's place.
+    pub fn take_ended(&mut self, cx: &App) -> Vec<(u64, crate::agent_history::Past)> {
+        let finished = |task: &Task| {
+            matches!(
+                task.state,
+                State::Done { .. } | State::Stopped | State::Failed { .. }
+            )
+        };
+        let ended: Vec<String> = (self.tasks.tasks.iter())
+            .filter(|task| finished(task) && task.ended.is_some() && task.ended != task.kept)
+            .map(|task| task.agent.clone())
+            .collect();
+        let mut kept = Vec::new();
+        for key in ended {
+            let Some(task) = self.task(&key) else {
+                continue;
+            };
+            let tabs = match &task.session {
+                Some(session) => session.tabs.clone(),
+                None => self.browser.space_tab_ids(task.space, cx),
+            };
+            let pages = (tabs.iter())
+                .map(|&tab| self.browser.tab(tab, cx))
+                .filter(|page| !page.url.is_empty())
+                .map(|page| (page.title.to_string(), page.url.to_string()))
+                .collect();
+            let past = crate::agent_history::Past {
+                id: format!("{}-{}", task.agent, seconds(task.started)),
+                title: task.title.to_string(),
+                agent: task.name.to_string(),
+                started: seconds(task.started),
+                ended: task.ended.map(seconds).unwrap_or_default(),
+                pages,
+                orders: task.orders,
+                messages: task.sent,
+            };
+            kept.push((task.home, past));
+            let ended = task.ended;
+            if let Some(task) = self.task_mut(&key) {
+                task.kept = ended;
+            }
+        }
+        kept
     }
 
     /// The client's Space was made again, as the core lost it: its sessions' Space.
@@ -2608,15 +2664,15 @@ fn picture(base64: &str) -> Option<Arc<gpui::Image>> {
 /// A session's receipt as it ends: what it did that had consequences, the orders and messages the
 /// user allowed it, once done, "Done · 1 order placed · 2 messages sent". Its pages are Open's
 /// button's to count. With none of them, "Done 13:28", when it ended.
-fn receipt(session: &Session, ended: &str) -> String {
+fn receipt(task: &Task, ended: &str) -> String {
     let count = |n: usize, one: &str, many: &str| match n {
         0 => None,
         1 => Some(format!("1 {one}")),
         n => Some(format!("{n} {many}")),
     };
     let did: Vec<String> = [
-        count(session.orders, "order placed", "orders placed"),
-        count(session.messages, "message sent", "messages sent"),
+        count(task.orders, "order placed", "orders placed"),
+        count(task.sent, "message sent", "messages sent"),
     ]
     .into_iter()
     .flatten()

@@ -864,6 +864,14 @@ impl Browser for Engine {
         bar_picks_host::set_picks(profile, text);
     }
 
+    fn agent_history(&self, profile: u64) -> String {
+        bar_picks_host::sessions(profile)
+    }
+
+    fn set_agent_history(&self, profile: u64, text: &str) {
+        bar_picks_host::set_sessions(profile, text);
+    }
+
     fn close_other_window(&self, _: &mut App) -> bool {
         unsafe { platform::host_close_other_window() }
     }

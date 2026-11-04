@@ -23,7 +23,7 @@ impl Global for BarUsage {}
 
 impl Shell {
     /// The profile whose use the command bar learns from in this window, None in a private one.
-    fn learning_profile(&self) -> Option<u64> {
+    pub(super) fn learning_profile(&self) -> Option<u64> {
         let space = self.shown_space().filter(|_| !self.private)?;
         Some(space.profile)
     }
@@ -122,6 +122,8 @@ fn forget(profile: u64, browser: &dyn Browser, cx: &mut App) {
     usage.switches.remove(&profile);
     usage.picks.insert(profile, Usage::default());
     browser.set_bar_picks(profile, "");
+    // Library › Agents' past tasks go with the history, as the owner asked (#1080).
+    browser.set_agent_history(profile, "");
 }
 
 #[cfg(test)]

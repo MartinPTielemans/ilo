@@ -191,6 +191,8 @@ pub enum Command {
     ViewDownloads,
     /// Opens the Library on its media, or closes it there.
     ViewMedia,
+    /// Opens the Library on its agents' past tasks, or closes it there.
+    ViewAgents,
     /// Opens the command bar over a new pane beside the pages shown, for a split view.
     AddSplit,
     /// Opens a new document in the notes service the Space's profile picks (`crate::notes`), in a
@@ -618,6 +620,11 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         "View Media…",
         Command::ViewMedia,
         &["screenshots", "captures"],
+    ),
+    (
+        "View Agents…",
+        Command::ViewAgents,
+        &["agent history", "past tasks"],
     ),
     ("View History", Command::ViewHistory, &[]),
     (
@@ -1129,6 +1136,7 @@ impl Command {
             Command::ClearArchive => "clear-archive",
             Command::ViewDownloads => "view-downloads",
             Command::ViewMedia => "view-media",
+            Command::ViewAgents => "view-agents",
             Command::AddSplit => "add-split",
             Command::NewNote => "new-note",
             Command::NewNoteSplit => "new-note-split",
@@ -1579,6 +1587,7 @@ impl Shell {
             Command::ViewArchive => return self.view_section(Section::Archive, cx),
             Command::ViewDownloads => return self.view_section(Section::Downloads, cx),
             Command::ViewMedia => return self.view_section(Section::Media, cx),
+            Command::ViewAgents => return self.view_section(Section::Agents, cx),
             Command::ClearArchive => return self.clear_archive(cx),
             Command::NewSpace => return self.new_space(cx),
             Command::RenameSpace => return self.rename_space(self.space, cx),
@@ -2045,6 +2054,7 @@ impl Shell {
             | Command::ClearArchive
             | Command::ViewDownloads
             | Command::ViewMedia
+            | Command::ViewAgents
             | Command::ManageExtensions
             | Command::AddExtension
             | Command::ViewHistory
@@ -2248,6 +2258,7 @@ pub(super) fn private_runs(command: Command) -> bool {
             | Command::ClearArchive
             | Command::ViewDownloads
             | Command::ViewMedia
+            | Command::ViewAgents
             | Command::ViewHistory
             | Command::SiteSearchSettings
             | Command::ClearBrowsingData

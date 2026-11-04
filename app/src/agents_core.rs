@@ -9,7 +9,7 @@ use std::sync::Arc;
 use browser::agents::{self, Agents, Browser, GlobalAgents, PageAction, Question, TabInfo};
 use gpui::{App, AppContext};
 
-use crate::{WINDOWS, bc, ids, name};
+use crate::{WINDOWS, bar_picks_host, bc, ids, name};
 
 thread_local! {
     /// A call of the Agents' into the core is under way, whose check the Agents log themselves.
@@ -305,6 +305,20 @@ pub fn start(cx: &mut App) {
         // Each card is compared with the last, so a window redraws only for a task that changed.
         let cards = agents.read(cx).shown_cards(cx);
         browser::needs_you::follow(&cards, cx);
+        // Each task that ended goes to Library › Agents of its home Space's profile, as its receipt
+        // shows it, for 30 days (browser::agent_history).
+        let ended = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        for (home, past) in ended {
+            let profile = unsafe { bc::bc_space_profile(home) };
+            let kept = browser::agent_history::read(&bar_picks_host::sessions(profile));
+            let kept = browser::agent_history::kept(kept, past, browser::usage::now());
+            bar_picks_host::set_sessions(profile, &browser::agent_history::write(&kept));
+            // check.sh reads this line.
+            browser::log!(
+                "browser: agents history keeps {} in profile {profile}",
+                kept[0].id
+            );
+        }
         let archived = agents.read(cx).archived_tasks(cx);
         let shells: Vec<_> = WINDOWS
             .with_borrow(|windows| windows.iter().map(|window| window.shell.clone()).collect());

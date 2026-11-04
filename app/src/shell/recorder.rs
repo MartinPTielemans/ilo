@@ -146,6 +146,7 @@ pub(super) struct Recorder {
     pub(super) clear_browsing_data: Cell<usize>,
     /// Each profile's command bar picks, as the file keeps them.
     pub(super) bar_picks: RefCell<HashMap<u64, String>>,
+    pub(super) agent_history: RefCell<HashMap<u64, String>>,
     /// The pages `open_page` opened, in order.
     pub(super) opened_pages: RefCell<Vec<String>>,
     /// The text `copy` put on the clipboard, in order.
@@ -884,6 +885,20 @@ impl Browser for Recorder {
 
     fn set_bar_picks(&self, profile: u64, text: &str) {
         self.bar_picks
+            .borrow_mut()
+            .insert(profile, text.to_string());
+    }
+
+    fn agent_history(&self, profile: u64) -> String {
+        self.agent_history
+            .borrow()
+            .get(&profile)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn set_agent_history(&self, profile: u64, text: &str) {
+        self.agent_history
             .borrow_mut()
             .insert(profile, text.to_string());
     }
