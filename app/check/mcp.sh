@@ -66,6 +66,31 @@ frame.src = chrome.runtime.getURL("frame.html");
 document.body.append(frame);' > "$extension/content.js"
 printf '%s' '<p>Extension text</p><script src=frame.js></script>' > "$extension/frame.html"
 printf '%s' 'parent.postMessage("extension frame", "*");' > "$extension/frame.js"
+# On Linux the app's notifications go to the desktop's server: check/notify-server.py, on a session
+# bus of the run's own, takes them and clicks them, as a desktop's does. Without dbus-daemon and
+# python3-gi, the run says it skips them.
+notes=
+notify_buses=
+if [ "$(uname)" = Linux ] && command -v dbus-daemon > /dev/null &&
+  python3 -I -c 'from gi.repository import Gio' 2> /dev/null; then
+  started=$(dbus-daemon --session --fork --print-address=1 --print-pid=1 2> /dev/null | tr '\n' ' ')
+  notify_bus=$(echo "$started" | cut -d' ' -f1)
+  notify_buses=$(echo "$started" | cut -d' ' -f2)
+  [ -n "$notify_bus" ] || fail "dbus-daemon didn't start the run's session bus"
+  notes="$out/notify-server.log"
+  rm -f "$out/notify-in"
+  mkfifo "$out/notify-in"
+  DBUS_SESSION_BUS_ADDRESS=$notify_bus python3 -I check/notify-server.py < "$out/notify-in" > "$notes" 2>&1 &
+  notify_buses="$notify_buses $!"
+  exec 6> "$out/notify-in"
+  for _ in $(seq 50); do
+    grep -q '^ready$' "$notes" && break
+    sleep 0.1
+  done
+  grep -q '^ready$' "$notes" || fail "the notification server didn't take its name: $(cat "$notes")"
+  export DBUS_SESSION_BUS_ADDRESS=$notify_bus
+  trap 'cleanup; forget_login; kill $notify_buses 2> /dev/null' EXIT
+fi
 BROWSER_DRIVE=1 BROWSER_URL='https://en.wikipedia.org/wiki/Arc_(web_browser)' \
   "$browser" --load-extension="$(app_path "$extension")" < "$out/drive" > "$log" 2>&1 &
 pid=$!
@@ -829,6 +854,42 @@ if [ "$driven" = 1 ]; then
   mcp "$initialize" > /dev/null
   await_more "$hello" "$hellos" || fail "the app didn't hear the reconnected client's hello"
   sessions=$(grep -c '^browser: session session-[0-9]* of agent mcp-client as check$' "$log" || true)
+  # Quiet until it needs you (#1080): with ilo in the background, the handoff posts one
+  # notification. On Linux another app's window takes the keyboard, the run's server takes the
+  # notification and clicks it, and on Windows another app has the foreground and the toast is
+  # posted, which no run can click. The Mac's runner can't answer its leave for notifications, so
+  # there ilo stays active, and the need only counts on the Dock's badge.
+  background=
+  if [ "$(uname)" = Linux ] && [ -n "$notes" ] && [ -z "${BROWSER_WAYLAND:-}" ]; then
+    rm -f "$out/other-in"
+    mkfifo "$out/other-in"
+    python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
+    other=$!
+    exec 7> "$out/other-in"
+    for _ in $(seq 50); do grep -q '^[0-9]' "$out/other-window.log" && break; sleep 0.1; done
+    other_window=$(head -1 "$out/other-window.log")
+    actives=$(grep -c '^browser: app active 0$' "$log" || true)
+    xdotool windowactivate --sync "$other_window" 2> /dev/null ||
+      fail "another app's window didn't open and take the keyboard: $(cat "$out/other-window.log")"
+    await_more '^browser: app active 0$' "$actives" || fail "another app's window left ilo active"
+    background=linux
+  elif windows; then
+    rm -f "$out/cover-front"
+    python3 -I -u check/app-windows.py cover "$(cat "/proc/$pid/winpid")" away "$(cygpath -w "$out/cover-front")" \
+      > "$out/cover-needs.log" 2>&1 &
+    helper=$!
+    for _ in $(seq 100); do
+      grep -q '^cover ' "$out/cover-needs.log" || ! kill -0 "$helper" 2>/dev/null && break
+      sleep 0.1
+    done
+    grep -q '^cover .*, foreground away$' "$out/cover-needs.log" ||
+      fail "another app didn't take the foreground: $(cat "$out/cover-needs.log")"
+    background=windows
+  fi
+  counted() { grep -c "$1" "$log" || true; }
+  ones=$(counted '^browser: needs you 1$')
+  urgents=$(counted '^browser: window [0-9]* urgent on$')
+  badges=$(counted '^browser: \(dock\|taskbar\) badge 1$')
   request hand_off "{\"tab\":$opened_tab,\"reason\":\"Sign in once more\"}" >&4
   await_more '^browser: session session-[0-9]* of agent mcp-client as check$' "$sessions" ||
     fail "the reconnected client's call started no card of its own"
@@ -837,6 +898,54 @@ if [ "$driven" = 1 ]; then
     "the reconnected client's hand_off didn't hand the tab over"
   await_log "^browser: task card $session Waiting " "the reconnected client's card didn't wait for the user"
   await_log "^browser: task plate task-${session#session-} at " "the reconnected client's card wasn't drawn"
+  needing="task-${session#session-}"
+  await_more '^browser: needs you 1$' "$ones" || fail "the waiting card didn't count as a need"
+  case $background in
+    linux)
+      await_more '^browser: window [0-9]* urgent on$' "$urgents" ||
+        fail "the waiting card didn't mark the window urgent"
+      await_log "^browser: needs you notified [0-9]* $needing\$" "the need in the background posted nothing"
+      need=$(sed -n "s/^browser: needs you notified \([0-9]*\) $needing\$/\1/p" "$log" | tail -1)
+      await_log "^browser: needs you posted $need\$" \
+        "the notification didn't reach the desktop: $(grep '^browser: needs you ' "$log" | tail -1)"
+      note=$(grep '^notify [0-9]* check needs you$' "$notes" | tail -1 | cut -d' ' -f2)
+      [ -n "$note" ] || fail "the desktop's server got no \"check needs you\": $(cat "$notes")"
+      grep -qx "body $note Sign in once more" "$notes" ||
+        fail "the notification's body isn't the handoff's step: $(grep "^body $note " "$notes")"
+      grep -x "hints $note .*" "$notes" | grep -q ' suppress-sound' ||
+        fail "the notification may sound: $(grep "^hints $note " "$notes")"
+      [ "$(grep -c '^notify ' "$notes")" = 1 ] || fail "a need posted more than once: $(cat "$notes")"
+      # Its click opens the task's card, the app asking to come forward, which the window manager
+      # decides; the run gives the keyboard back, as a click on the window would.
+      echo "click $note" >&6
+      await_log "^browser: needs you clicked $need $needing\$" "the notification's click reached no task"
+      await_log "^browser: task $needing shown\$" "the notification's click didn't open its task's card"
+      exec 7>&-
+      wait "$other" 2> /dev/null || true
+      send window 1
+      [ "$active" = 1 ] || fail "the window didn't take the keyboard back"
+      send key escape
+      expect "^browser: task area [0-9]* closed\$" "Escape didn't put the task's card away"
+      ;;
+    windows)
+      await_more '^browser: taskbar badge 1$' "$badges" ||
+        fail "the taskbar button's overlay didn't count the need"
+      await_log "^browser: needs you notified [0-9]* $needing\$" "the need in the background posted nothing"
+      need=$(sed -n "s/^browser: needs you notified \([0-9]*\) $needing\$/\1/p" "$log" | tail -1)
+      await_log "^browser: needs you posted $need" "the toast wasn't posted"
+      grep -qx "browser: needs you posted $need" "$log" ||
+        fail "the toast wasn't posted: $(grep "^browser: needs you posted $need" "$log")"
+      touch "$out/cover-front"
+      for _ in $(seq 100); do kill -0 "$helper" 2>/dev/null || break; sleep 0.1; done
+      helper=
+      ;;
+    *)
+      await_log "^browser: needs you $needing while active\$" "the need with ilo active wasn't held back"
+      if [ "$(uname)" = Darwin ]; then
+        await_more '^browser: dock badge 1$' "$badges" || fail "the Dock's badge didn't count the need"
+      fi
+      ;;
+  esac
   read -r px py pw ph <<PLATE
 $(grep "^browser: task plate task-${session#session-} at " "$log" | tail -1 | cut -d' ' -f6-)
 PLATE
@@ -846,6 +955,11 @@ PLATE
   send click $((px + pw - 20)) $((py + ph / 2))
   expect '^browser: command dismiss-task via sidebar$' "a click on the card's ✕ didn't close it"
   expect '^browser: agent mcp-client stopped by the user$' "closing the card didn't stop the client"
+  # No task waits once it's gone, and the count and the urgency go with it.
+  expect '^browser: needs you 0$' "the count stayed once no task waited"
+  if [ "$background" = linux ]; then
+    expect '^browser: window [0-9]* urgent off$' "the window stayed urgent once no task waited"
+  fi
   stopped=$(next_answer) || fail "the browser didn't answer the hand_off it stopped"
   stopped=$(printf '%s\n' "$stopped" | answered)
   case "$stopped" in

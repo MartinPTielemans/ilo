@@ -17,8 +17,10 @@
 #include <wrl/client.h>
 
 #include <winrt/Windows.ApplicationModel.DataTransfer.h>
+#include <winrt/Windows.Data.Xml.Dom.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Storage.Streams.h>
+#include <winrt/Windows.UI.Notifications.h>
 
 #include <algorithm>
 #include <cstdarg>
@@ -1846,7 +1848,8 @@ constexpr uint32_t kIloGreen = 0x0B8045;
 
 // A round dot in |rgb| (0xRRGGBB) as a 32 px icon with a soft edge and a clear surround, for the
 // taskbar button's overlay. The caller destroys it.
-HICON DotIcon(uint32_t rgb) {
+// With |label|, a count, written white across it, as the tasks waiting for the user say.
+HICON DotIcon(uint32_t rgb, const wchar_t* label = nullptr) {
   const int size = 32;
   BITMAPINFO info{};
   info.bmiHeader.biSize = sizeof info.bmiHeader;
@@ -1875,6 +1878,43 @@ HICON DotIcon(uint32_t rgb) {
       pixel[1] = static_cast<uint8_t>(green * a);
       pixel[2] = static_cast<uint8_t>(red * a);
       pixel[3] = static_cast<uint8_t>(a * 255 + 0.5);
+    }
+  }
+  if (label) {
+    // GDI writes no alpha, so the label is drawn white on black apart, and its brightness is how
+    // much white each pixel of the dot takes.
+    uint8_t* text = nullptr;
+    HBITMAP written = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS,
+                                       reinterpret_cast<void**>(&text), nullptr, 0);
+    HDC dc = CreateCompatibleDC(nullptr);
+    if (written && dc) {
+      HGDIOBJ old_bitmap = SelectObject(dc, written);
+      const bool two = wcslen(label) > 1;
+      HFONT font = CreateFontW(two ? -17 : -22, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                               DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                               ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+      HGDIOBJ old_font = SelectObject(dc, font);
+      SetBkMode(dc, TRANSPARENT);
+      SetTextColor(dc, RGB(255, 255, 255));
+      RECT box{0, 0, size, size};
+      DrawTextW(dc, label, -1, &box, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+      GdiFlush();
+      for (int at = 0; at < size * size; ++at) {
+        uint8_t* pixel = bits + at * 4;
+        const double white = text[at * 4 + 1] / 255.0;
+        for (int channel = 0; channel < 3; ++channel) {
+          pixel[channel] = static_cast<uint8_t>(pixel[channel] * (1 - white) + pixel[3] * white);
+        }
+      }
+      SelectObject(dc, old_font);
+      SelectObject(dc, old_bitmap);
+      DeleteObject(font);
+    }
+    if (dc) {
+      DeleteDC(dc);
+    }
+    if (written) {
+      DeleteObject(written);
     }
   }
   HBITMAP mask = CreateBitmap(size, size, 1, 1, nullptr);
@@ -3867,19 +3907,106 @@ void host_dock_dot_launch(const char*) {}
 // Gives each browser window's taskbar button an overlay dot in |color| (0xRRGGBB), or ilo's green
 // without |colored|, the counterpart of the Mac's Dock dot. One colour for the app, as the Dock has
 // one icon; the taskbar makes its own copy, so the icon is freed after.
-void host_dock_dot(bool colored, uint32_t color) {
+// While tasks wait for the user, the dot carries their count (host_needs_you_badge).
+namespace {
+uint32_t g_dot_color = kIloGreen;
+int g_waiting = 0;
+
+void ShowOverlay() {
   ITaskbarList3* taskbar = Taskbar();
   if (!taskbar) {
     return;
   }
-  HICON dot = DotIcon(colored ? color : kIloGreen);
+  const std::wstring count = g_waiting > 9 ? L"9+" : std::to_wstring(g_waiting);
+  HICON dot = DotIcon(g_dot_color, g_waiting > 0 ? count.c_str() : nullptr);
+  const std::wstring described =
+      g_waiting == 1 ? L"A task needs you" : count + L" tasks need you";
   for (HWND view : UiViews()) {
     if (IsWindow(view)) {
-      taskbar->SetOverlayIcon(GetAncestor(view, GA_ROOT), dot, L"Space");
+      taskbar->SetOverlayIcon(GetAncestor(view, GA_ROOT), dot,
+                              g_waiting > 0 ? described.c_str() : L"Space");
     }
   }
   if (dot) {
     DestroyIcon(dot);
+  }
+}
+}  // namespace
+
+void host_dock_dot(bool colored, uint32_t color) {
+  g_dot_color = colored ? color : kIloGreen;
+  ShowOverlay();
+}
+
+void host_needs_you_badge(int count) {
+  g_waiting = count;
+  ShowOverlay();
+  // check.sh reads this line.
+  fprintf(stderr, "browser: taskbar badge %s\n",
+          count > 9 ? "9+" : count > 0 ? std::to_string(count).c_str() : "none");
+}
+
+bool host_app_active(void) {
+  return g_active;
+}
+
+namespace {
+
+void (*g_needs_you_clicked)(uint64_t) = nullptr;
+
+// Kept while they may be clicked, so the click's handler stays, the newest few.
+std::vector<winrt::Windows::UI::Notifications::ToastNotification>& Toasts() {
+  static auto* toasts = new std::vector<winrt::Windows::UI::Notifications::ToastNotification>;
+  return *toasts;
+}
+
+}  // namespace
+
+void host_watch_needs_you(void (*clicked)(uint64_t id)) {
+  g_needs_you_clicked = clicked;
+  // Later's window, made on this thread, takes the click's from Windows' own.
+  Later([] {});
+}
+
+// A toast with no sound, under the app's AppUserModelID as Chromium sets it for its own, or the
+// package's in an MSIX. Its click, while ilo runs, comes to the toast's own handler.
+void host_needs_you_notify(uint64_t id, const char* title, const char* body) {
+  namespace wun = winrt::Windows::UI::Notifications;
+  namespace wdx = winrt::Windows::Data::Xml::Dom;
+  try {
+    wdx::XmlDocument xml;
+    xml.LoadXml(
+        L"<toast><visual><binding template='ToastGeneric'><text/><text/></binding></visual>"
+        L"<audio silent='true'/></toast>");
+    auto texts = xml.GetElementsByTagName(L"text");
+    texts.Item(0).AppendChild(xml.CreateTextNode(Wide(title)));
+    texts.Item(1).AppendChild(xml.CreateTextNode(Wide(body)));
+    wun::ToastNotification toast(xml);
+    toast.Activated([id](const wun::ToastNotification&, const wf::IInspectable&) {
+      Later([id] {
+        if (g_needs_you_clicked) {
+          g_needs_you_clicked(id);
+        }
+      });
+    });
+    PWSTR aumid = nullptr;
+    const bool named = SUCCEEDED(GetCurrentProcessExplicitAppUserModelID(&aumid)) && aumid;
+    auto notifier = named ? wun::ToastNotificationManager::CreateToastNotifier(aumid)
+                          : wun::ToastNotificationManager::CreateToastNotifier();
+    if (aumid) {
+      CoTaskMemFree(aumid);
+    }
+    notifier.Show(toast);
+    Toasts().push_back(toast);
+    if (Toasts().size() > 8) {
+      Toasts().erase(Toasts().begin());
+    }
+    // check.sh reads this line.
+    fprintf(stderr, "browser: needs you posted %llu\n", static_cast<unsigned long long>(id));
+  } catch (const winrt::hresult_error& error) {
+    // check.sh reads this line.
+    fprintf(stderr, "browser: needs you posted %llu: %ls\n", static_cast<unsigned long long>(id),
+            error.message().c_str());
   }
 }
 

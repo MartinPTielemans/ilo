@@ -223,6 +223,14 @@ impl Shell {
 
     /// The card's click: its conversation in the page area, or, shown already, the Space's tab
     /// again.
+    /// A click on the notification a task's need posted (needs_you): its card's click, which never
+    /// puts the task away if it shows already, as the user came to it.
+    pub fn show_needed_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+        if self.talk_agent().as_ref() != Some(&agent) {
+            self.show_task(agent, cx);
+        }
+    }
+
     pub(super) fn show_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
         let Some(card) = self.task_cards.iter().find(|card| card.agent == agent) else {
             return;

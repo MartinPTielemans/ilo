@@ -87,6 +87,9 @@ mod menu_window;
 #[path = "../platform/linux/motion.rs"]
 mod motion;
 #[cfg(target_os = "linux")]
+#[path = "../platform/linux/needs_you.rs"]
+mod needs_you;
+#[cfg(target_os = "linux")]
 #[path = "../platform/linux/overlays.rs"]
 mod overlays;
 #[cfg(target_os = "linux")]
@@ -148,6 +151,7 @@ use menu_bar::*;
 mod hosts;
 use hosts::*;
 mod command_bar_host;
+mod needs_you_host;
 use command_bar_host::*;
 mod link_preview_host;
 use link_preview_host::*;
@@ -472,6 +476,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
             platform::host_since_launch()
         });
         dock_dot::open(Rc::new(DockDot), cx);
+        needs_you_host::start(cx);
         open_window(None, None, cx);
     });
     // On Chromium's Wayland display, GPUI's windows and their surfaces are on a display Chromium
