@@ -989,8 +989,7 @@ typedef struct bc_host {
   // when the keyboard goes to the page, as a click on another window's page gives it.
   void (*window_activated)(void* context, bc_id window);
   // On Linux under X11: ⌥ was pressed and let go alone, with no other key or click while it was
-  // down, as the page in |window| had the keyboard. GPUI hears only the UI's keys there. On
-  // Windows: Alt was, in |window|'s page or UI.
+  // down, as the page in |window| had the keyboard. GPUI hears only the UI's keys there.
   void (*window_option_tapped)(void* context, bc_id window);
   // bc_profile_add_addresses added |added| addresses to |profile|'s, once for each call that
   // returned true, in order.
