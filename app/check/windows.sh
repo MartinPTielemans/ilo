@@ -531,11 +531,11 @@ expect "^browser: window closed $fourth\$" "⇧⌘W didn't close the window the 
 send window 1
 
 # A tab's row dragged out of its window (#1798), the Mac's alone so far. Over the other window's list
-# it moves there where the line marks, its page live with what was typed in it, and let go on the
-# desktop it opens in a window of its own, under the pointer, which ⌘Z there closes, sending the tab
-# back. With no real button holding it, the system's drag ends at the driver's next event, so the
-# move after the one that starts it is the drop. The windows sit side by side, their lists in the
-# open.
+# it moves there where the line marks, its page live with what was typed in it, and let go where
+# nothing takes it, it opens in a window of its own under the pointer, which ⌘Z there closes,
+# sending the tab back. With no real button holding it, the system's drag ends at the driver's next
+# event, which AppKit hands only to the window it started in, so that event is the drop, over the
+# page there. The windows sit side by side, their lists in the open.
 if [ "$(uname)" = Darwin ]; then
   send key n cmd
   expect '^browser: window opened [0-9]' "⌘N didn't open a window for the tab's drag"
@@ -562,43 +562,40 @@ if [ "$(uname)" = Darwin ]; then
     send type x
     expect "^browser: title $c value kept\(x*\)x\$" "$1: the page's field lost what was typed"
   }
-  set -- $(row_of $c)
-  send press $1 $2
-  send dragto $(($1 + 10)) $2
-  send dragto 905 $2
-  expect "^browser: tab $c window drag\$" "the row dragged past the window's edge didn't leave it"
-  # Over the second window's list, above its first row, in the first window's terms.
-  set -- $(row 0)
-  send dragto $((960 - 20 + $1)) $(($2 - 20))
-  expect "^browser: tab $c dropped from window $first in today 0\$" \
-    "the second window's list didn't take the tab dragged out of the first"
-  expect "^browser: window $sixth shows $c\$" "the tab dropped on the second window's list didn't show there"
-  expect "^browser: tab $c window drag taken\$" "the first window didn't hear its tab's drag was taken"
-  send release $((960 - 20 + $1)) $(($2 - 20))
-  ../tools/window-screenshot.sh "$pid" "$out/windows-dragged-to.png" all || fail "no window to capture"
+  # Over the second window's list, above its first row, as the system hands it a tab's drag from
+  # the first window: the driver stands in for that, as it does for another app's.
   send window $driven_sixth
+  set -- $(row 0)
+  send dragover $1 $(($2 - 20)) tab $c
+  send dragdrop $1 $(($2 - 20))
+  expect '^browser: drag dropped$' "the second window's list didn't take the tab dragged from the first"
+  expect "^browser: tab $c dropped from window $first in today 0\$" \
+    "the second window's list didn't put the tab where its line was"
+  expect "^browser: window $sixth shows $c\$" "the tab dropped on the second window's list didn't show there"
+  ../tools/window-screenshot.sh "$pid" "$out/windows-dragged-to.png" all || fail "no window to capture"
   kept "dropped on the other window's list"
-  # From the second window, past its bottom edge onto the desktop below both.
+  # Dragged past the second window's bottom edge, its row leaves as the system's drag, and let go
+  # over the page, which takes no tab, it opens in a window of its own there, under the pointer.
   set -- $(row_of $c)
   send press $1 $2
   send dragto $1 $(($2 + 10))
   send dragto $1 705
-  expect "^browser: tab $c window drag\$" "the row dragged past the second window's edge didn't leave it"
-  send dragto 300 860
-  expect "^browser: tab $c window drag to a new window\$" "let go on the desktop, the tab's drag opened no window"
-  expect "^browser: window [0-9]* took $c from window $sixth\$" "no window took the tab let go on the desktop"
+  expect "^browser: tab $c window drag\$" "the row dragged past the window's edge didn't leave it"
+  send dragto 600 400
+  expect "^browser: tab $c window drag to a new window\$" "let go where nothing took it, the tab's drag opened no window"
+  expect "^browser: window [0-9]* took $c from window $sixth\$" "no window took the tab let go where nothing took it"
   seventh=$(grep "^browser: window [0-9]* took $c from window $sixth\$" "$log" | tail -1 | cut -d' ' -f3)
   expect "^browser: window $seventh shows $c\$" "the window opened for the tab didn't show it"
-  send release 300 860
+  send release 600 400
   driven_seventh=$(grep -c '^browser: window opened ' "$log")
-  # Under the pointer, at 960 + 300, 40 + 860 on the screen, as near as the screen lets it.
+  # Under the pointer, at 960 + 600, 40 + 400 on the screen, as near as the screen lets it.
   send order
-  frame=$(grep "^browser: frame window $driven_seventh " "$log" | tail -1 | cut -d' ' -f4-)
-  echo "$frame" | awk '{ exit !($1 <= 1260 && 1260 <= $1 + $3 && $2 <= 900 && 900 <= $2 + $4) }' ||
+  frame=$(grep "^browser: frame window $driven_seventh " "$log" | tail -1 | cut -d' ' -f5-)
+  echo "$frame" | awk '{ exit !($1 <= 1560 && 1560 <= $1 + $3 && $2 <= 440 && 440 <= $2 + $4) }' ||
     fail "the window opened for the tab isn't under the pointer: $frame"
   ../tools/window-screenshot.sh "$pid" "$out/windows-dragged-out.png" all || fail "no window to capture"
   send window $driven_seventh
-  kept "let go on the desktop"
+  kept "let go where nothing took it"
   send key z cmd
   expect "^browser: window closed $seventh\$" "⌘Z didn't close the window the tab's drag opened"
   expect "^browser: window $sixth shows $c\$" "⌘Z didn't send the tab back to the window it came from"
@@ -606,7 +603,7 @@ if [ "$(uname)" = Darwin ]; then
   send key w cmd shift
   expect "^browser: window closed $sixth\$" "⇧⌘W didn't close the window the tab was dragged to"
   send window 1
-  dragged_out=", a tab's row dragged out of its window moves its page live to the other window's list, or let go on the desktop to a window of its own under the pointer, which ⌘Z closes, sending it back"
+  dragged_out=", a tab's row dragged out of its window moves its page live to the other window's list, or let go where nothing takes it to a window of its own under the pointer, which ⌘Z closes, sending it back"
 else
   echo "skip: a tab's row dragged out of its window: the system's drag of a tab is the Mac's alone so far (#1798)."
 fi
