@@ -62,7 +62,7 @@ case $written in "0 "*) fail "the newer ilo's Spaces didn't reach the server" ;;
 quit
 
 begin older
-await '^browser: account On None$' || fail "started again, the device isn't signed in and syncing"
+await 'browser: sync service active$' || fail "started again, the device's sync didn't become active"
 await '^browser: sync spaces held, a newer ilo wrote them$' ||
   fail "this ilo didn't find the Spaces a newer one wrote"
 await '^browser: sync spaces kept back$' ||
