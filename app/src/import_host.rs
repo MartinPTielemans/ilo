@@ -180,7 +180,62 @@ fn keep(id: u64, tab: &Tab) {
     }
 }
 
+/// An app icon's pixels, twice the plate's 28 points for a Retina screen.
+const ICON_PIXELS: u32 = 56;
+
+/// The browser's app icon as the system draws it, straight RGBA, `ICON_PIXELS` square.
+#[cfg(target_os = "macos")]
+fn app_icon_pixels(source: &browser::import::sources::Source) -> Option<image::RgbaImage> {
+    let id = source.app_ids(Os::Mac).into_iter().next()?;
+    let id = CString::new(id).ok()?;
+    let size = ICON_PIXELS as usize;
+    let mut rgba = vec![0u8; size * size * 4];
+    if !unsafe { platform::host_app_icon(id.as_ptr(), size, rgba.as_mut_ptr()) } {
+        return None;
+    }
+    // AppKit's bitmap is premultiplied, and the image straight.
+    for pixel in rgba.chunks_exact_mut(4) {
+        let alpha = u16::from(pixel[3]);
+        if alpha > 0 {
+            for channel in &mut pixel[..3] {
+                *channel = ((u16::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8;
+            }
+        }
+    }
+    image::RgbaImage::from_raw(ICON_PIXELS, ICON_PIXELS, rgba)
+}
+
+/// The browser's app icon on Linux, from its desktop entry, under the check's made-up home alone
+/// when it gives one, so a run shows the icon it put there.
+#[cfg(target_os = "linux")]
+fn app_icon_pixels(source: &browser::import::sources::Source) -> Option<image::RgbaImage> {
+    use browser::import::app_icons;
+    let made_up = std::env::var_os("BROWSER_IMPORT_HOME");
+    let home = made_up.clone().or_else(|| std::env::var_os("HOME"))?;
+    let dirs = app_icons::data_dirs(Path::new(&home), made_up.is_some());
+    app_icons::find(&dirs, &source.app_ids(Os::Linux), ICON_PIXELS)
+}
+
+/// Windows' comes with its host's call; until then its rows have the globe plate.
+#[cfg(target_os = "windows")]
+fn app_icon_pixels(_: &browser::import::sources::Source) -> Option<image::RgbaImage> {
+    None
+}
+
 impl browser::import::Host for CoreImport {
+    fn app_icon(
+        &self,
+        source: &browser::import::sources::Source,
+    ) -> Option<std::sync::Arc<gpui::RenderImage>> {
+        let mut icon = app_icon_pixels(source)?;
+        // GPUI draws BGRA.
+        for pixel in icon.pixels_mut() {
+            pixel.0.swap(0, 2);
+        }
+        let frame = image::Frame::new(icon);
+        Some(std::sync::Arc::new(gpui::RenderImage::new(vec![frame])))
+    }
+
     fn roots(&self) -> Roots {
         // A check run gives a made-up home folder, so it never reads the user's browsers.
         match std::env::var_os("BROWSER_IMPORT_HOME") {
