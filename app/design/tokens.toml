@@ -1747,13 +1747,20 @@ title-line = 20.0
 meta-line = 15.0
 meta-gap = 1.0
 header-bottom = 14.0
-picture-width = 112.0
-picture-height = 72.0
+# Pages, the task's own view of its pages (#1080, the orchestrator's call): a grid of its pages'
+# pictures, up to `pictures-columns` across, as many as the area holds, each over its site, and the
+# agent's page's step, `pictures-row-gap` over the next row. The pictures are taken at twice this
+# size, when the agent acts.
+picture-width = 326.0
+picture-height = 204.0
 picture-radius = 6.0
-picture-gap = 10.0
+picture-gap = 16.0
+pictures-row-gap = 24.0
+pictures-columns = 3.0
 site = 16.0
 site-gap = 3.0
-pictures-bottom = 18.0
+# Its header's Talk and Pages, a chip each, the one shown filled, this far apart.
+views-gap = 4.0
 # The agent's text, at body, and the gap under each block.
 text-line = 20.0
 block-gap = 14.0
@@ -1834,8 +1841,8 @@ lines-below = 16.0
 # curve. A line or a step rises the chips' distance over `rise`, as Thinking does, and Stop fades
 # in and out over it; Open comes as a question's chips do. A line's words crossfade, the old going over `swap` and the new coming
 # over the crossfade's rest; a finished step's note fades in over the task's `fade`. A page grows
-# into the pictures over `picture` as it fades in over `rise`, and the Signal ring slides to it
-# `ring-delay` later. As the turn ends its trace folds: its steps fade over `steps-fade` and it
+# into Pages over `picture` as it fades in over `rise`, and the Signal ring rings the page the
+# agent is on. As the turn ends its trace folds: its steps fade over `steps-fade` and it
 # closes over the task's `height`, its chevron turning over `chevron`. The answer comes once it
 # has folded, each block `stagger` after the one before and fading in over `stream`, as each run
 # of the words Claude writes does as it comes. A picked answer lands as a sent reply does; the
@@ -1844,7 +1851,6 @@ land = 0.26
 rise = 0.15
 swap = 0.09
 picture = 0.22
-ring-delay = 0.14
 steps-fade = 0.11
 chevron = 0.2
 stream = 0.16

@@ -529,7 +529,7 @@ impl Browser for Engine {
     }
 
     fn task_picture(&self, tab: u64, request: u64, _: &mut App) {
-        // At twice the picture's size, for a Retina screen.
+        // At twice Pages' tile's size, for a Retina screen.
         let width = (2. * browser::tokens::shell::conversation::PICTURE_WIDTH) as i32;
         let height = (2. * browser::tokens::shell::conversation::PICTURE_HEIGHT) as i32;
         unsafe { bc::bc_tab_picture(tab, request, width, height) };
