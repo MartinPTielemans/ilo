@@ -32,13 +32,16 @@ pid=$!
 exec 3> "$out/drive"
 await_load
 
-# Shows Settings' section $1, drawn.
+# Shows Settings' section $1, drawn: Settings opens on the one it showed last, which a click on
+# it again doesn't draw anew.
 everyday_section() {
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings"
   settings_drew
-  send clickkey $(drawn "toolbar $1")
-  settings_drew "$1"
+  if [ "$(sed -n 's/^browser: settings shown //p' "$log" | tail -1)" != "$1" ]; then
+    send clickkey $(drawn "toolbar $1")
+    settings_drew "$1"
+  fi
 }
 # Back to the page, which has the keyboard, and the key $1 typed in it.
 everyday_key() {
