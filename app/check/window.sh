@@ -978,12 +978,13 @@ if ! windows; then
     echo "skip: recording the resize: $(cat "$out/resize-record.txt")"
 fi
 if [ "$(uname)" = Darwin ]; then
-  # The edge, 2 outside it, as a hand drags it: AppKit's live resize.
-  send press 802 280
-  for x in 840 880 920 960 1000 1040 1080 1120 1160 1200; do
-    send dragto $x 280
+  # The edge, 2 outside it, as a hand drags it, in ten steps, each AppKit's live resize, as the
+  # edge's own step drags it.
+  edge_x=802
+  for x in 842 882 922 962 1002 1042 1082 1122 1162 1202; do
+    send drag $edge_x 280 $x 280
+    edge_x=$x
   done
-  send release 1200 280
 else
   post resize 1200 800
   ../tools/window-screenshot.sh "$pid" "$out/resized-at-once.png" || fail "no window to capture"
