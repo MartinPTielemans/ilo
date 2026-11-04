@@ -257,8 +257,13 @@ pub(crate) fn open_window_as(
                 videos: RefCell::default(),
             });
             match (&from_shell, own_space) {
-                (_, Some((space, Own::Private(profile)))) => {
-                    Shell::private_window(engine, space, private_name(profile), profile, cx)
+                (from, Some((space, Own::Private(profile)))) => {
+                    let mut shell =
+                        Shell::private_window(engine, space, private_name(profile), profile, cx);
+                    if let Some(from) = from {
+                        shell.hear_extensions_from(from, cx);
+                    }
+                    shell
                 }
                 (from, Some((space, Own::Little { profile, home }))) => {
                     Shell::little_window(engine, space, home, profile, from.as_ref(), cx)
