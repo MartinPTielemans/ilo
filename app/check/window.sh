@@ -789,8 +789,9 @@ check_reveal "with the sidebar docked by ⌘S"
 # as for a typed character, doesn't, and with the sidebar docked it does nothing.
 if windows; then
   # Windows' core doesn't tell the app of an Alt let go alone (bc_option_reveals_sidebar's tap,
-  # which the Mac's and Linux's cores detect), and Windows takes Alt alone for its menus.
-  echo "skip: ⌥ alone bringing the hidden sidebar out: Windows' core doesn't detect Alt let go alone."
+  # which the Mac's and Linux's cores detect). Alt alone shows the hidden sidebar there too, as
+  # Chrome's Alt goes to its own menu, once the core detects it (#1847).
+  echo "skip: ⌥ alone bringing the hidden sidebar out: Windows' core doesn't detect Alt let go alone yet (#1847)."
   send click $page_point
 else
   send flags alt
