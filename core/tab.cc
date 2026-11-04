@@ -992,6 +992,10 @@ void Tab::DidFinishNavigation(content::NavigationHandle* navigation) {
   }
   if (navigation->HasCommitted() && !navigation->IsSameDocument()) {
     net_error_ = navigation->IsErrorPage() ? navigation->GetNetErrorCode() : 0;
+    if (net_error_) {
+      // check.sh waits for this line, such as -22 for a page an administrator's policy blocks.
+      LOG(ERROR) << "browser: tab " << id_ << " error " << net_error_;
+    }
     ShowOnPageColor();
     ClearHang();
     if (std::exchange(crashed_, false)) {

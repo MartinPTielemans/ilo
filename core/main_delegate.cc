@@ -16,6 +16,7 @@
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
+#include "base/path_service.h"
 #include "base/scoped_multi_source_observation.h"
 #include "base/scoped_observation.h"
 #include "base/task/single_thread_task_runner.h"
@@ -68,6 +69,7 @@
 #include "chrome/browser/ui/startup/startup_tab.h"
 #include "chrome/browser/ui/startup/startup_tab_provider.h"
 #include "chrome/common/chrome_content_client.h"
+#include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/profiler/main_thread_stack_sampling_profiler.h"
@@ -79,6 +81,10 @@
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "url/gurl.h"
+
+#if BUILDFLAG(IS_LINUX)
+#include "base/files/file_util.h"
+#endif
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
 #include "browser_core/platform/app_library.h"
@@ -547,6 +553,16 @@ void MainDelegate::PreSandboxStartup() {
     crash_reports::PlaceReports();
   }
   ChromeMainDelegate::PreSandboxStartup();
+#if BUILDFLAG(IS_LINUX)
+  // An administrator's policies, under ilo's name rather than every Chromium's /etc/chromium
+  // (docs/policies.md). The Flatpak, whose /etc is its runtime's, reads them where its extension
+  // point mounts them, as Flathub's Chromium does. Not created: only an administrator makes it.
+  const base::FilePath policies(base::PathExists(base::FilePath("/.flatpak-info"))
+                                    ? "/app/ilo/extensions/policies"
+                                    : "/etc/ilo/policies");
+  base::PathService::OverrideAndCreateIfNeeded(chrome::DIR_POLICY_FILES, policies,
+                                               /*is_absolute=*/true, /*create=*/false);
+#endif
   crash_reports::LeaveOutPages();
   crash_reports::LeaveOutFolders();
 }
