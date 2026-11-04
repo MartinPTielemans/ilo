@@ -1077,11 +1077,13 @@ bool Run(const std::string& line) {
       return true;
     }
     // In front of the app's other browser windows with the keyboard, as a click on it does, but
-    // never over another app's.
+    // never over another app's, nor over one Stay On Top keeps on top, which a click can't put
+    // under it and which SetWindowPos would take out of the topmost windows.
     HWND root = Driven();
     for (size_t index = 0; index < 64; index++) {
       HWND other = Browser(index);
-      if (other && other != root) {
+      const bool topmost = other && (GetWindowLongPtrW(other, GWL_EXSTYLE) & WS_EX_TOPMOST);
+      if (other && other != root && !topmost) {
         SetWindowPos(other, root, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
       }
     }
