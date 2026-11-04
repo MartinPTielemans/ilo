@@ -6,14 +6,13 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use browser::import::found::{Address, Page, Tab};
 use browser::import::plan::{Existing, ExistingSpace, Row};
 use browser::import::sources::{Os, Roots};
 use browser::import::{Exported, Passwords};
 use browser::link_rules::{Host as _, Rule};
-use browser::log;
 use browser::theme::Theme;
 use gpui::{App, PathPromptOptions};
 
@@ -405,43 +404,24 @@ impl browser::import::Host for CoreImport {
     }
 
     fn last_import(&self, browser: &str) -> Option<SystemTime> {
-        imports()
-            .into_iter()
-            .find(|(each, _)| each == browser)
-            .map(|(_, at)| at)
+        IMPORTS.with_borrow(|imports| {
+            (imports.iter())
+                .find(|(each, _)| each == browser)
+                .map(|(_, at)| *at)
+        })
     }
 
     fn imported(&self, browser: &str, at: SystemTime) {
-        let mut all = imports();
-        all.retain(|(each, _)| each != browser);
-        all.push((browser.into(), at));
-        let text: String = (all.iter())
-            .map(|(name, at)| {
-                let seconds = at
-                    .duration_since(UNIX_EPOCH)
-                    .map_or(0, |since| since.as_secs());
-                format!("{name}\t{seconds}\n")
-            })
-            .collect();
-        if let Err(error) = std::fs::write(imports_path(), text) {
-            log!("couldn't keep the import's record: {error}");
-        }
+        IMPORTS.with_borrow_mut(|imports| {
+            imports.retain(|(each, _)| each != browser);
+            imports.push((browser.into(), at));
+        });
     }
 }
 
-/// The record of each browser's last import, a line each of its name and the second it came in,
-/// beside the user's other files, as `Link rules` are.
-fn imports_path() -> String {
-    format!("{}/Imports", crate::profile_dir())
-}
-
-fn imports() -> Vec<(String, SystemTime)> {
-    let text = std::fs::read_to_string(imports_path()).unwrap_or_default();
-    (text.lines())
-        .filter_map(|line| {
-            let (name, seconds) = line.rsplit_once('\t')?;
-            let at = UNIX_EPOCH + std::time::Duration::from_secs(seconds.parse().ok()?);
-            Some((name.to_string(), at))
-        })
-        .collect()
+thread_local! {
+    /// Each browser's last import this run, by its name: in memory alone, as the Archive's tasks
+    /// are, as nothing that records the user's use is stored without the owner's yes. After a
+    /// relaunch a browser's row is Import… again, and a rerun still adds nothing twice.
+    static IMPORTS: RefCell<Vec<(String, SystemTime)>> = const { RefCell::new(Vec::new()) };
 }

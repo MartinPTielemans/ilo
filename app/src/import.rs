@@ -123,7 +123,8 @@ pub trait Host {
     /// Opens an extension's page in the Chrome Web Store in a new tab behind the one shown, where
     /// the user can add it.
     fn open_store_page(&self, url: &str);
-    /// When the browser named `browser` last came in, kept with the user's other files.
+    /// When the browser named `browser` last came in this run, kept in memory alone until the app
+    /// quits, as nothing that records use is stored without the owner's yes.
     fn last_import(&self, browser: &str) -> Option<SystemTime>;
     /// Keeps that the browser named `browser` came in `at`.
     fn imported(&self, browser: &str, at: SystemTime);

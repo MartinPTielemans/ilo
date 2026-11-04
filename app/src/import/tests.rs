@@ -1417,6 +1417,33 @@ fn cancel_leaves_the_spaces_empty_and_import_again_fills_them(cx: &mut TestAppCo
     });
 }
 
+/// The record of an import lasts the run alone, kept by the host in memory: a new session's host,
+/// as after a relaunch, has none, so Arc's row is Import… again with its profiles alone, and
+/// importing Arc again still adds nothing twice, as the import skips what's here.
+#[gpui::test]
+fn a_new_session_lists_a_browser_as_never_imported(cx: &mut TestAppContext) {
+    let browser = Rc::new(Browser::new(None));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    import_first(&view, cx);
+    cx.update(|cx| browser.load(cx));
+    assert!(browser.last_import("Arc").is_some());
+
+    // The next session: the same Spaces here, a host with no record.
+    let next = Rc::new(Browser::new(None));
+    next.state.replace(browser.state.take());
+    next.state.borrow_mut().imports.clear();
+    let host: Rc<dyn Host> = next.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    view.read_with(cx, |view, _| {
+        let arc = &view.sources[0];
+        assert_eq!(view.row_line(arc), "Personal, Work");
+        assert_eq!(view.row_button(arc), "Import…");
+    });
+    import_first(&view, cx);
+    assert_eq!(says(&view, cx), "Everything from Arc is here already.");
+}
+
 /// A stopped import's Esc goes back to Settings' page, as its Done does; on the first launch it
 /// skips the step, which its corner says.
 #[gpui::test]
