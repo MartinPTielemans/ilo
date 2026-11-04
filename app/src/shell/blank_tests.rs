@@ -12,7 +12,7 @@ use crate::space_icon::SpaceIcon;
 fn blank(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>) {
     let host = Rc::new(Recorder::default());
     let browser = host.clone();
-    let shell = cx.new(|cx| Shell::blank_window(browser, 9, 1, cx));
+    let shell = cx.new(|cx| Shell::blank_window(browser, 9, 1, None, cx));
     shell.update(cx, |shell, cx| {
         let work = (1, "Work".into(), None, 1, "".into(), "".into(), "".into());
         let other = (
@@ -118,4 +118,24 @@ fn ctrl_cmd_n_is_the_macs_blank_window(cx: &mut TestAppContext) {
     host.take();
     shell.update(cx, |shell, cx| shell.run(Command::NewBlankWindow, "ui", cx));
     assert!(host.take().contains(&"new blank window".to_string()));
+}
+
+/// Made from a window that heard the Spaces, before they change again, a Blank Window's tab
+/// offers them as Move to all the same.
+#[gpui::test]
+fn a_blank_window_takes_the_spaces_from_the_window_it_came_from(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let from = cx.new(|cx| Shell::new(browser.clone(), cx));
+    from.update(cx, |shell, cx| {
+        let work = (1, "Work".into(), None, 1, "".into(), "".into(), "".into());
+        shell.set_spaces(vec![work], cx);
+    });
+    let shell = cx.new(|cx| Shell::blank_window(browser, 9, 1, Some(&from), cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(9, Vec::new(), vec![90], Vec::new(), Folders::default(), cx);
+        shell.tab_menu(90, point(px(100.), px(200.)), cx);
+    });
+    let shown = crate::menu::described(&host.entries.borrow());
+    assert!(shown.contains("Move to › Work"), "{shown}");
 }

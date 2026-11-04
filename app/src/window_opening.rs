@@ -250,8 +250,8 @@ pub(crate) fn open_window_as(
                 (_, Some((space, Own::Private(profile)))) => {
                     Shell::private_window(engine, space, private_name(profile), profile, cx)
                 }
-                (_, Some((space, Own::Blank(profile)))) => {
-                    Shell::blank_window(engine, space, profile, cx)
+                (from, Some((space, Own::Blank(profile)))) => {
+                    Shell::blank_window(engine, space, profile, from.as_ref(), cx)
                 }
                 (from, Some((space, Own::Little { profile, home }))) => {
                     Shell::little_window(engine, space, home, profile, from.as_ref(), cx)

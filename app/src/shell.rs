@@ -1892,10 +1892,19 @@ impl Shell {
         browser: Rc<dyn Browser>,
         space: u64,
         profile: u64,
+        from: Option<&Entity<Shell>>,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut shell = Self::new(browser, cx);
         shell.blank = true;
+        // The user's Spaces for Move to, which the core told the window it came from, and tells
+        // this one only as they change.
+        if let Some(from) = from {
+            shell.blank_targets = (from.read(cx).spaces.iter())
+                .filter(|each| each.agent.is_empty())
+                .map(|each| (each.id, each.name.clone(), each.profile))
+                .collect();
+        }
         shell.space = space;
         shell.spaces = vec![Space {
             id: space,
