@@ -11,6 +11,9 @@ use std::{
 };
 
 use browser::account::{self, Account};
+use browser::agents::task::{
+    Card as TaskCard, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep,
+};
 use browser::command_bar::{self, Suggestion};
 use browser::dialog;
 use browser::icon_picker::{self, Recents};
@@ -1070,7 +1073,20 @@ impl Browser for Fake {
 
     fn task(&self, _: SharedString, _: browser::agents::task::TaskAction, _: &mut App) {}
 
-    fn show_task(&self, _: SharedString, _: &mut App) {}
+    // Each card's click shows the working task's conversation, as the Agents send it.
+    fn show_task(&self, agent: SharedString, cx: &mut App) {
+        self.later(cx, move |shell, cx| {
+            shell.set_conversation(Some(task_conversation(agent)), cx)
+        });
+    }
+
+    // A task's Space is known by its agent's id, as the core's are.
+    fn space_agent(&self, space: u64) -> SharedString {
+        match (FIRST_TASK..FIRST_TASK + TASKS.len() as u64).contains(&space) {
+            true => format!("task-{space}").into(),
+            false => SharedString::default(),
+        }
+    }
 
     fn task_picture(&self, _: u64, _: u64, _: &mut App) {}
 
@@ -1382,6 +1398,10 @@ impl Browser for Fake {
 
     fn full_screen_note(&self, _: bool, _: &mut App) {}
 
+    fn enter_full_screen(&self, _: &mut App) -> bool {
+        false
+    }
+
     // The toast is a window over the page, which the preview has neither of.
     fn hang_note(&self, _: u64, _: bool, _: &mut App) {}
 
@@ -1594,6 +1614,140 @@ fn preview_tone() -> Option<Tone> {
         "light" => Some(Tone::Light),
         "dark" => Some(Tone::Dark),
         _ => None,
+    }
+}
+
+/// The first task's Space, apart from the ids the rest of the preview takes.
+const FIRST_TASK: u64 = 9001;
+/// The tasks PREVIEW_TASKS shows: each one's title, status and dot.
+const TASKS: [(&str, &str, Dot); 3] = [
+    (
+        "Find two tickets for Saturday",
+        "Clicking “Tickets”",
+        Dot::Working,
+    ),
+    ("Compare the museum passes", "Stopped", Dot::Ended),
+    (
+        "Book a table for four",
+        "A table for four at 20:00 is held",
+        Dot::Done,
+    ),
+];
+/// The pages the done task left the user, each with its site.
+const TASK_PAGES: [(&str, &str); 3] = [
+    ("Booking · Taberna", "https://taberna.example/booking"),
+    ("Menu · Taberna", "https://taberna.example/menu"),
+    ("Directions", "https://maps.example/taberna"),
+];
+
+/// A task's Space, as the core lists one: its agent's name in the agent column, its agent's id
+/// a task's (`Fake::space_agent`).
+fn task_space(id: u64) -> SpaceEntry {
+    (
+        id,
+        "Task".into(),
+        None,
+        0,
+        "".into(),
+        "Claude".into(),
+        "".into(),
+    )
+}
+
+/// The tasks' cards, each asked in `home`.
+fn task_cards(home: u64) -> Vec<TaskCard> {
+    let card = |(at, (title, status, dot)): (u64, (&str, &str, Dot))| TaskCard {
+        agent: format!("task-{at}").into(),
+        home,
+        space: at,
+        name: "Claude".into(),
+        replies: true,
+        title: title.into(),
+        status: status.into(),
+        asks: false,
+        dot,
+        answers: Vec::new(),
+        question: None,
+        open: match dot {
+            Dot::Done => {
+                let site = |url: &str| url.split('/').nth(2).unwrap_or("").into();
+                let pages = (FIRST_TASK + 100..).zip(TASK_PAGES);
+                pages.map(|(tab, (_, url))| (tab, site(url))).collect()
+            }
+            _ => Vec::new(),
+        },
+        retry: false,
+        command: None,
+    };
+    let mut cards: Vec<TaskCard> = (FIRST_TASK..).zip(TASKS).map(card).collect();
+    // Newest first, as the Agents send them.
+    cards.reverse();
+    cards
+}
+
+/// The working task's conversation: a step done, one that failed, what the agent said of it, and
+/// the step under way, on four pages, so it opens on Pages.
+fn task_conversation(agent: SharedString) -> Conversation {
+    let (title, _, _) = TASKS[0];
+    let step = |key, glyph, title: &str, description: &str, running, failed| TraceStep {
+        key,
+        glyph,
+        title: title.into(),
+        description: description.into(),
+        running,
+        failed,
+        opens: match failed {
+            true => Opens::Text("Another element would get the click: div.cookie-banner".into()),
+            false => Opens::Nothing,
+        },
+    };
+    let (click, read) = ("icons/mouse-pointer-2.svg", "icons/text-align-start.svg");
+    let items = vec![
+        TraceItem::Step(step(
+            0,
+            "icons/globe.svg",
+            "Opened tickets.example",
+            "2 s",
+            false,
+            false,
+        )),
+        TraceItem::Step(step(1, read, "Read tickets.example", "", false, false)),
+        TraceItem::Step(step(
+            2,
+            click,
+            "Couldn't click “Tickets”",
+            "A banner covers it",
+            false,
+            true,
+        )),
+        TraceItem::Said("The banner is in the way, so I'll close it first.".into()),
+        TraceItem::Step(step(3, click, "Clicked “Accept”", "", false, false)),
+        TraceItem::Step(step(4, click, "Clicking “Tickets”", "", true, false)),
+    ];
+    Conversation {
+        agent,
+        name: "Claude".into(),
+        title: title.into(),
+        about: "Claude · Working".into(),
+        asked: "Find two tickets for Saturday's concert, in the stalls".into(),
+        page: None,
+        lines: vec![Line::Trace(Trace {
+            key: 0,
+            running: true,
+            took: None,
+            items,
+        })],
+        tabs: vec![
+            (FIRST_TASK + 200, "tickets.example".into()),
+            (FIRST_TASK + 201, "seatmap.example".into()),
+            (FIRST_TASK + 202, "tickets.example".into()),
+            (FIRST_TASK + 203, "maps.example".into()),
+        ],
+        on: Some(FIRST_TASK + 200),
+        stoppable: true,
+        open: None,
+        answers: Vec::new(),
+        writing: false,
     }
 }
 
@@ -1841,6 +1995,13 @@ fn main() {
                         spaces[0].2 = Some(theme.main_color());
                         spaces[0].6 = theme.to_text().into();
                     }
+                    // PREVIEW_TASKS=1 shows three tasks' cards at the foot, one at work, one
+                    // stopped and one done; =open shows the first's conversation, as its card's
+                    // click does.
+                    let tasks = std::env::var("PREVIEW_TASKS").ok();
+                    if tasks.is_some() {
+                        spaces.extend((FIRST_TASK..).take(TASKS.len()).map(task_space));
+                    }
                     let first_archived = first_space + count as u64;
                     let archive = (first_archived..)
                         .zip(ARCHIVE)
@@ -2038,6 +2199,40 @@ fn main() {
                         (None, _) if agent.is_some() => shell.set_selected(reading[0], cx),
                         (None, Some(&tab)) => shell.set_selected(tab, cx),
                         (None, None) => shell.set_selected(1, cx),
+                    }
+                    if let Some(tasks) = &tasks {
+                        let pages: Vec<u64> = (FIRST_TASK + 100..).take(TASK_PAGES.len()).collect();
+                        let none = Folders::default();
+                        shell.set_tabs(
+                            FIRST_TASK + 2,
+                            Vec::new(),
+                            pages.clone(),
+                            Vec::new(),
+                            none,
+                            cx,
+                        );
+                        for (&tab, (title, url)) in pages.iter().zip(TASK_PAGES) {
+                            shell.set_title(tab, title.into(), cx);
+                            shell.set_page(
+                                tab,
+                                Page {
+                                    url: url.into(),
+                                    ..Default::default()
+                                },
+                                cx,
+                            );
+                        }
+                        shell.set_task_cards(task_cards(first_space), cx);
+                        // After the first frame, which sets the palette the reply field takes, as
+                        // a click on the card comes after it.
+                        if tasks == "open" {
+                            let (shown, agent) = (cx.weak_entity(), format!("task-{FIRST_TASK}"));
+                            window.on_next_frame(move |_, cx| {
+                                shown
+                                    .update(cx, |shell, cx| shell.show_task(agent.into(), cx))
+                                    .ok();
+                            });
+                        }
                     }
                     // PREVIEW_TROUBLE=crashed shows the tab shown's page died, =hung that it stopped
                     // answering, which shows in its row (the note is the toast's, a window the preview

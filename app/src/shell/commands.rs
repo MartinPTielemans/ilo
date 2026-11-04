@@ -86,6 +86,13 @@ pub enum Command {
     ResetSpaceTabs,
     /// Mutes the selected tab, or unmutes it.
     ToggleMute,
+    /// Mutes every tab of the window (`true`), or unmutes them all: Arc's Mute All Tabs.
+    MuteAll(bool),
+    /// Puts the window full screen, or takes it out, as View's Enter Full Screen does.
+    ToggleFullScreen,
+    /// Arc's View › Exit (⎋): takes the window out of full screen, and a page full screen with
+    /// it, as Exit Full Screen does.
+    Exit,
     /// Closes the Today tabs of the Space shown, but the one shown.
     Clear,
     /// Undoes the last thing the user did that lost or moved something (`Shell::undo`).
@@ -447,6 +454,24 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         &["reset tab"],
     ),
     ("Mute/Unmute Tab", Command::ToggleMute, &["sound", "audio"]),
+    (
+        "Mute All Tabs",
+        Command::MuteAll(true),
+        &["sound", "audio", "silence"],
+    ),
+    (
+        "Unmute All Tabs",
+        Command::MuteAll(false),
+        &["sound", "audio"],
+    ),
+    ("Exit", Command::Exit, &["escape"]),
+    ("Enter Full Screen", Command::ToggleFullScreen, &["toggle"]),
+    ("Exit Full Screen", Command::ToggleFullScreen, &["toggle"]),
+    (
+        "New Profile",
+        Command::ChangeProfile(None),
+        &["add profile"],
+    ),
     ("Copy URL", Command::CopyUrl, &["link"]),
     ("Copy URL as Markdown", Command::CopyMarkdownLink, &["link"]),
     (
@@ -865,7 +890,10 @@ fn ranked(
         .map(|(matched, name, command)| BarCommand {
             name,
             command,
-            shortcut: keys.label(command).map(Into::into),
+            // Exit is View › Exit's ⎋, which leaves full screen as it does, bound to no command.
+            shortcut: (keys.label(command))
+                .or_else(|| (command == Command::Exit).then(|| keystroke_label("escape")))
+                .map(Into::into),
             matched,
         })
         .collect()
@@ -1072,6 +1100,10 @@ impl Command {
             Command::BackToPinnedUrl => "back-to-pinned-url",
             Command::ResetSpaceTabs => "reset-space-tabs",
             Command::ToggleMute => "toggle-mute",
+            Command::MuteAll(true) => "mute-all-tabs",
+            Command::MuteAll(false) => "unmute-all-tabs",
+            Command::ToggleFullScreen => "toggle-full-screen",
+            Command::Exit => "exit",
             Command::Clear => "clear",
             Command::Undo => "undo",
             Command::Redo => "redo",
@@ -1336,6 +1368,7 @@ impl Shell {
         let target = match command {
             Command::NewTab => {
                 self.set_new_tab(true, cx);
+                self.set_bar_over_card(true, cx);
                 let shown = self.shown_urls();
                 return self
                     .browser
@@ -1343,12 +1376,14 @@ impl Shell {
             }
             Command::SearchTabs => {
                 self.set_new_tab(false, cx);
+                self.set_bar_over_card(true, cx);
                 return self.browser.search_tabs(self.open_tabs(cx), cx);
             }
             Command::EditUrl => {
                 self.set_new_tab(false, cx);
                 let tab = self.field_tab();
                 let editing = (tab != 0).then(|| (tab, self.url(tab)));
+                self.set_bar_over_card(editing.is_none(), cx);
                 // A click on the URL field opens the bar over the field, and ⌘L centred (Arc). A
                 // Little ilo window's opens compact over its bar's title either way.
                 let field = match self.little_field_bounds() {
@@ -1437,6 +1472,9 @@ impl Shell {
                 return;
             }
             Command::ToggleMute => return self.toggle_mute(self.selected, cx),
+            Command::MuteAll(muted) => return self.mute_all(muted, cx),
+            Command::ToggleFullScreen => return self.browser.toggle_full_screen(cx),
+            Command::Exit => return self.browser.toggle_full_screen(cx),
             Command::Clear => return self.clear(cx),
             Command::Undo => {
                 self.undo(cx);
@@ -1740,9 +1778,30 @@ impl Shell {
     /// Copies the selected tab's URL, or a Markdown link to it, without its tracking parameters,
     /// and says so in the toast.
     fn copy_url(&mut self, markdown: bool, cx: &mut Context<Self>) {
-        if let Some((text, toast)) = self.link_to_copy(self.field_tab(), markdown) {
-            self.copy(&text, toast, cx);
+        let tab = self.field_tab();
+        let Some((text, toast)) = self.link_to_copy(tab, markdown) else {
+            return;
+        };
+        match markdown {
+            true => self.copy(&text, toast, cx),
+            false => self.copy_page_url(tab, text, toast, cx),
         }
+    }
+
+    /// Copies `tab`'s link, `url`, and says so in `toast`, which shares the page too where there's
+    /// a share sheet, with the capture toast's Share button: ⇧⌘C's and the URL field's button's.
+    fn copy_page_url(&mut self, tab: u64, url: String, toast: &str, cx: &mut Context<Self>) {
+        if !self.browser.has_share_sheet() {
+            return self.copy(&url, toast, cx);
+        }
+        self.browser.copy(&url, cx);
+        // check.sh reads this line.
+        log!("browser: copied {url}");
+        let (browser, title) = (self.browser.clone(), self.title(tab));
+        let share = std::rc::Rc::new(move |at, cx: &mut App| {
+            browser.share_from_toast(&url, &title, at, cx)
+        });
+        self.browser.toast_share(toast, share, COPIED_TIME, cx);
     }
 
     /// Opens the clipboard's web link at the top of the Today tabs and shows it, as Arc's ⌥⌘V
@@ -1807,10 +1866,11 @@ impl Shell {
     pub(super) fn copy_url_from_button(&mut self, cx: &mut Context<Self>) {
         // check.sh waits for this line.
         log!("browser: command copy-url via sidebar");
-        let Some((text, toast)) = self.link_to_copy(self.field_tab(), false) else {
+        let tab = self.field_tab();
+        let Some((text, toast)) = self.link_to_copy(tab, false) else {
             return;
         };
-        self.copy(&text, toast, cx);
+        self.copy_page_url(tab, text, toast, cx);
         if self.url_copied.is_none() {
             self.swaps
                 .start(Swapped::CopyUrl, LINK, CHECK, Instant::now());
@@ -2000,6 +2060,14 @@ impl Shell {
                 self.selected != 0 && !favorite && !self.sidebar_hidden
             }
             Command::NextSpace => space.is_some_and(|index| index + 1 < self.spaces.len()),
+            Command::MuteAll(muted) => self.tabs.values().any(|tab| tab.page.muted != muted),
+            // As the menus' New Profile: only an empty Space changes profile.
+            Command::ChangeProfile(None) => {
+                self.profile_choices(self.space).is_some_and(|(_, new)| new)
+            }
+            Command::ToggleFullScreen => true,
+            // Only full screen, the page's too, has something to leave.
+            Command::Exit => self.full_screen,
             Command::CheckForUpdates => self.browser.updates(),
             Command::RestoreEarlierSidebar => !self.shown_backups().is_empty(),
             Command::PreviousSpace => space.is_some_and(|index| index > 0),
@@ -2088,6 +2156,13 @@ impl Shell {
                 (name == orientation_title(self.stacked(self.selected))).then_some(name)
             }
             Command::RecordTrace => (name == trace::title(trace::recording(cx))).then_some(name),
+            Command::ToggleFullScreen => {
+                let title = match self.full_screen {
+                    true => "Exit Full Screen",
+                    false => "Enter Full Screen",
+                };
+                (name == title).then_some(name)
+            }
             // The row that changes it, where the window can stay on top at all.
             Command::StayOnTop => (self.browser.can_stay_on_top()
                 && name
