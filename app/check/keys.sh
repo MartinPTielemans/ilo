@@ -266,6 +266,11 @@ if [ "$(uname)" = Linux ]; then
   echo "skip: composing right after ⌘L: the Linux driver types plain keys in a page."
 elif windows && [ -z "$japanese" ]; then
   echo "skip: composing right after ⌘L: the runner has no Japanese IME, and the Windows driver's own composes in the UI's fields alone, not in a page."
+elif windows; then
+  # The host holds the keys typed until the bar has the keyboard (host.cc's HoldKeys), but
+  # Microsoft's IME composes them in the page before the hold sees them, and a repost of a key
+  # passes the IME by (#454).
+  echo "skip: composing right after Ctrl+L: Microsoft's Japanese IME composes in the page the keys the host holds for the bar."
 else
   send $ime
   typed_after l nihongo
