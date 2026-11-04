@@ -18,7 +18,7 @@ else
   log="$out/notifications.log"
   step=0
   # The page posts a notification each time it's hidden, as its Space goes from its window: the
-  # first with a click handler that only says so, the second with one that focuses its tab too.
+  # first with a click handler that focuses its tab too, the second with one that only says so.
   printf '%s' '<title>loading</title><script src="painted.js"></script><script>
 let posted = 0;
 painted(() => document.title = "notify ready");
@@ -29,7 +29,7 @@ document.onvisibilitychange = () => {
   note.onshow = () => document.title = "notification " + n + " shown";
   note.onerror = () => document.title = "notification refused " + Notification.permission;
   note.onclick = () => {
-    if (n > 1) focus();
+    if (n == 1) focus();
     document.title = "notification " + n + " clicked";
   };
 };
@@ -105,8 +105,9 @@ PY
     quit
     echo "skip: notifications. Browser wasn't the active app, so the page ignored the click."
   else
-    # A new Space hides the page, which posts its first notification, and ⌘N puts a second window
-    # in front.
+    # A new Space hides the page, which posts its first notification, whose click handler focuses
+    # its tab, as many sites' do. The click shows the tab's Space and the tab once, not again for
+    # the page's own focus.
     send menu New Space…
     expect '^browser: space [0-9]* in ' "New Space didn't show a new Space"
     other=$(space)
@@ -114,6 +115,29 @@ PY
     await "^browser: title $tab notification 1 shown\$" ||
       fail "the hidden page's notification didn't show: $(grep "^browser: title $tab " "$log" | tail -1)"
     id=$(notified '^notify [0-9]* ilo check 1$')
+    shows=$(grep -c "^browser: window $first shows $tab\$" "$log" || true)
+    homed=$(grep -c "^browser: space $home\( in .*\)\{0,1\}\$" "$log" || true)
+    echo "click $id" >&6
+    await "^browser: title $tab notification 1 clicked\$" ||
+      fail "the notification's click didn't reach the page: $(cat "$notes")"
+    more "^browser: window $first shows $tab\$" "$shows" ||
+      fail "the click didn't show the page's tab in its window: $(grep '^browser: window [0-9]* shows ' "$log" | tail -1)"
+    # A round trip, by which the app has heard all that the page's own focus asked for.
+    send layout
+    [ "$(grep -c "^browser: window $first shows $tab\$" "$log")" = "$((shows + 1))" ] ||
+      fail "the click and the page's own focus showed its tab twice"
+    [ "$(grep -c "^browser: space $home\( in .*\)\{0,1\}\$" "$log")" = "$((homed + 1))" ] ||
+      fail "the click and the page's own focus switched Spaces twice, or not once"
+
+    # The second, whose click handler only says so, with the page's Space hidden again and a
+    # second window in front: the click shows the Space and the tab in the page's window, which
+    # takes the keyboard.
+    send click $page_point
+    send key 2 ctrl
+    expect "^browser: space $other\( in .*\)\{0,1\}\$" "⌃2 didn't show the other Space"
+    await "^browser: title $tab notification 2 shown\$" ||
+      fail "the page's second notification didn't show: $(grep "^browser: title $tab " "$log" | tail -1)"
+    id=$(notified '^notify [0-9]* ilo check 2$')
     send key n cmd
     expect '^browser: command new-window via ' "⌘N didn't run New Window"
     for _ in $(seq 100); do
@@ -122,15 +146,12 @@ PY
     done
     second=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
     [ "$second" != "$first" ] || fail "⌘N opened no second window"
-
-    # The click, which the page's handler doesn't follow with a focus of its own, brings up its tab:
-    # the first window shows its Space and the tab, and takes the keyboard.
     shows=$(grep -c "^browser: window $first shows $tab\$" "$log" || true)
     keyed=$(grep -c "^browser: key window $first\$" "$log" || true)
     homed=$(grep -c "^browser: space $home\( in .*\)\{0,1\}\$" "$log" || true)
     echo "click $id" >&6
-    await "^browser: title $tab notification 1 clicked\$" ||
-      fail "the notification's click didn't reach the page: $(cat "$notes")"
+    await "^browser: title $tab notification 2 clicked\$" ||
+      fail "the second notification's click didn't reach the page: $(cat "$notes")"
     more "^browser: window $first shows $tab\$" "$shows" ||
       fail "the click didn't show the page's tab in its window: $(grep '^browser: window [0-9]* shows ' "$log" | tail -1)"
     more "^browser: space $home\( in .*\)\{0,1\}\$" "$homed" ||
@@ -138,26 +159,6 @@ PY
     more "^browser: key window $first\$" "$keyed" ||
       fail "the click didn't bring the page's window in front: $(grep '^browser: key window ' "$log" | tail -1)"
     ../tools/window-screenshot.sh "$pid" "$out/notification-clicked.png" || fail "no window to capture"
-
-    # The second, whose page focuses its tab in its click handler too, switches once.
-    send key 2 ctrl
-    expect "^browser: space $other\( in .*\)\{0,1\}\$" "⌃2 didn't show the other Space"
-    await "^browser: title $tab notification 2 shown\$" ||
-      fail "the page's second notification didn't show: $(grep "^browser: title $tab " "$log" | tail -1)"
-    id=$(notified '^notify [0-9]* ilo check 2$')
-    shows=$(grep -c "^browser: window $first shows $tab\$" "$log" || true)
-    homed=$(grep -c "^browser: space $home\( in .*\)\{0,1\}\$" "$log" || true)
-    echo "click $id" >&6
-    await "^browser: title $tab notification 2 clicked\$" ||
-      fail "the second notification's click didn't reach the page: $(cat "$notes")"
-    more "^browser: window $first shows $tab\$" "$shows" ||
-      fail "the second click didn't show the page's tab in its window"
-    # A round trip, by which the app has heard all that the page's own focus asked for.
-    send layout
-    [ "$(grep -c "^browser: window $first shows $tab\$" "$log")" = "$((shows + 1))" ] ||
-      fail "the click and the page's own focus showed its tab twice"
-    [ "$(grep -c "^browser: space $home\( in .*\)\{0,1\}\$" "$log")" = "$((homed + 1))" ] ||
-      fail "the click and the page's own focus switched Spaces twice"
     exec 3>&- 6>&-
     quit
     echo "ok: a click on a site's notification, which the desktop's notification server sends through Chromium's bridge, shows its tab's Space and the tab in its window, brought in front of another, whether or not the page's handler focuses it, and a page that does switches once. Window: $out/notification-clicked.png"
