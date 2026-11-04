@@ -585,26 +585,22 @@ impl account::Host for CoreAccount {
 /// step follows it (account::Synced).
 pub fn sync_changed(state: account::State, cx: &mut App) {
     cx.set_global(account::Synced(state.clone()));
-    if let Some(window) = cx.try_global::<SettingsWindow>().map(|settings| settings.0) {
-        let changed = move |settings: &mut Settings, _: &mut Window, cx: &mut Context<Settings>| {
-            settings
-                .account
-                .update(cx, |account, cx| account.set_state(state, cx));
-        };
-        window.update(cx, changed).ok();
-    }
+    let changed = move |settings: &mut Settings, cx: &mut Context<Settings>| {
+        settings
+            .account
+            .update(cx, |account, cx| account.set_state(state, cx));
+    };
+    update_made(cx, changed);
 }
 
 /// The account's devices, which the Sync tab asked the core for.
 pub fn devices_changed(devices: Vec<account::Device>, cx: &mut App) {
-    if let Some(window) = cx.try_global::<SettingsWindow>().map(|settings| settings.0) {
-        let changed = move |settings: &mut Settings, _: &mut Window, cx: &mut Context<Settings>| {
-            settings
-                .account
-                .update(cx, |account, cx| account.set_devices(devices, cx));
-        };
-        window.update(cx, changed).ok();
-    }
+    let changed = move |settings: &mut Settings, cx: &mut Context<Settings>| {
+        settings
+            .account
+            .update(cx, |account, cx| account.set_devices(devices, cx));
+    };
+    update_made(cx, changed);
 }
 /// The activity the Agents tab lists, newest first: the log keeps more, for the run.
 const ACTIVITY_SHOWN: usize = 50;
@@ -848,13 +844,11 @@ pub fn logins_changed(profile: u64, logins: Vec<Login>, cx: &mut App) {
         "browser: passwords {profile}: {}",
         passwords::describe(&logins)
     );
-    if let Some(window) = cx.try_global::<SettingsWindow>().map(|settings| settings.0) {
-        let changed = move |settings: &mut Settings, _: &mut Window, cx: &mut Context<Settings>| {
-            settings.logins.insert(profile, logins);
-            cx.notify();
-        };
-        window.update(cx, changed).ok();
-    }
+    let changed = move |settings: &mut Settings, cx: &mut Context<Settings>| {
+        settings.logins.insert(profile, logins);
+        cx.notify();
+    };
+    update_made(cx, changed);
 }
 
 /// The profile's saved addresses and cards, which Passwords asked the core for.
@@ -865,13 +859,11 @@ pub fn autofill_changed(profile: u64, saved: Vec<Saved>, cx: &mut App) {
         "browser: autofill {profile}: {} addresses, {cards} cards",
         saved.len() - cards
     );
-    if let Some(window) = cx.try_global::<SettingsWindow>().map(|settings| settings.0) {
-        let changed = move |settings: &mut Settings, _: &mut Window, cx: &mut Context<Settings>| {
-            settings.autofill.insert(profile, saved);
-            cx.notify();
-        };
-        window.update(cx, changed).ok();
-    }
+    let changed = move |settings: &mut Settings, cx: &mut Context<Settings>| {
+        settings.autofill.insert(profile, saved);
+        cx.notify();
+    };
+    update_made(cx, changed);
 }
 
 /// Shows the Settings window, opening it the first time, or brings it to the front.
@@ -918,12 +910,17 @@ fn look_for_clients(cx: &mut App) {
 }
 
 /// Reads again where Google's Widevine module is, as the core says it changed, once Settings has
-/// been opened.
+/// been made, which the command bar can make before its window.
 pub fn check_widevine(cx: &mut App) {
-    let Some(window) = cx.try_global::<SettingsWindow>().map(|settings| settings.0) else {
-        return;
+    let row = match cx.try_global::<SettingsWindow>().map(|settings| settings.0) {
+        Some(window) => window
+            .read_with(cx, |settings, _| settings.widevine.clone())
+            .ok(),
+        None => cx
+            .try_global::<SettingsView>()
+            .map(|view| view.0.read(cx).widevine.clone()),
     };
-    if let Ok(row) = window.read_with(cx, |settings, _| settings.widevine.clone()) {
+    if let Some(row) = row {
         row.update(cx, |row, cx| row.check(cx));
     }
 }
@@ -1074,6 +1071,20 @@ fn open(cx: &mut App) {
 struct SettingsView(Entity<Settings>);
 
 impl Global for SettingsView {}
+
+/// Changes Settings with what the core reported, once it's made: the command bar makes it before
+/// its window for its index (#1873), and the window would open on what it read then. Through its
+/// window once that's open, which does nothing from inside the window's own update, as a core
+/// callback can come.
+fn update_made(cx: &mut App, change: impl FnOnce(&mut Settings, &mut Context<Settings>)) {
+    if let Some(window) = cx.try_global::<SettingsWindow>().map(|settings| settings.0) {
+        window
+            .update(cx, |settings, _, cx| change(settings, cx))
+            .ok();
+    } else if let Some(view) = cx.try_global::<SettingsView>().map(|view| view.0.clone()) {
+        view.update(cx, change);
+    }
+}
 
 fn view(cx: &mut App) -> Entity<Settings> {
     if let Some(view) = cx.try_global::<SettingsView>() {
