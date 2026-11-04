@@ -106,6 +106,7 @@ jobs:
       WINDOWS_RUNS: >-
         load tabs dialogs crash about onboarding agents access passkeys passwords quit relaunch
         private links capture spaces pinned profiles devices history appearance adblock-live find
+        mcp keys
     steps:
       # setup.sh and the patches it applies need the repository's line endings.
       - run: git config --global core.autocrlf false
@@ -165,6 +166,32 @@ jobs:
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
           Add-Type -AssemblyName System.Windows.Forms
           "Screen: " + [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+
+      # Microsoft's Japanese IME, one of the user's input methods, for the runs that compose with it
+      # (the driver's ime ja), which look for it in the user's language list. Language.Basic is the
+      # capability that has it, about 100 s from Windows Update; Server 2022 has no Install-Language.
+      - name: Japanese IME
+        id: japanese
+        env:
+          RUNS: ${{ inputs.runs }}
+        run: |
+          runs=" ${RUNS:-$WINDOWS_RUNS} "
+          need=
+          [ "$runs" != " all " ] || need=1
+          for run in $(grep -l Get-WinUserLanguageList check/*.sh | sed 's|^check/\(.*\)\.sh$|\1|'); do
+            case $runs in *" $run "*) need=1 ;; esac
+          done
+          [ -n "$need" ] || { echo "No run composes with the Japanese IME, so none is installed."; exit 0; }
+          echo "need=1" >> "$GITHUB_OUTPUT"
+      - if: ${{ steps.japanese.outputs.need == '1' }}
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          Add-WindowsCapability -Online -Name "Language.Basic~~~ja-JP~0.0.1.0" | Out-Null
+          $languages = Get-WinUserLanguageList
+          $languages.Add("ja-JP")
+          Set-WinUserLanguageList $languages -Force
+          Get-WinUserLanguageList | Format-List LanguageTag, InputMethodTips
 
       # The Store's MSIX of this build, for the runs that send something to it, as the links run
       # sends a link (#1427), packed as a release's is (platform/windows/package/msix.sh), when one

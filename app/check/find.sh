@@ -491,7 +491,7 @@ if [ "$(uname)" = Darwin ]; then
   expect "^browser: trace saved $trace\$" "the trace wasn't saved where it was picked"
   python3 -I -c '
 import json, sys
-with open(sys.argv[1]) as f:
+with open(sys.argv[1], encoding="utf-8") as f:
     trace = json.load(f)
 assert trace["traceEvents"], "no events"
 ' "$out/trace.json" || fail "the saved trace isn't Chromium's"
@@ -528,10 +528,10 @@ fi
 dock() {
   python3 -I -c '
 import json, sys
-with open(sys.argv[1]) as f:
+with open(sys.argv[1], encoding="utf-8") as f:
     prefs = json.load(f)
 prefs.setdefault("devtools", {}).setdefault("preferences", {})["currentDockState"] = sys.argv[2]
-with open(sys.argv[1], "w") as f:
+with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(prefs, f)
 ' "$prefs" "\"$1\""
 }

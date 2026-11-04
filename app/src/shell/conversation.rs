@@ -154,12 +154,21 @@ pub struct TalkView {
     agent: SharedString,
     shown: Option<Conversation>,
     reply: Entity<TextInput>,
+    /// Whether the user replies here: a task, and not an outside agent's session, whose user talks
+    /// to it where they started it, which a quiet line in the field's place says.
+    replies: bool,
     /// Its pages' pictures, by tab: the request out for each, and the picture once it came.
     pictures: Vec<(u64, u64, Option<PagePicture>)>,
     /// Where each picture was drawn last, in the window, for its page to zoom out of.
     drawn: Rc<RefCell<Vec<(u64, Bounds<Pixels>)>>>,
+    /// Where each picture was drawn when that was logged last.
+    drawn_logged: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
+    /// Where Stop was drawn when that was logged last.
+    stop_logged: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Its pages changed while one was watched over it, so they're pictured again once it shows.
     stale: bool,
+    /// Whether its step under way shimmered as it last drew, which check.sh hears of.
+    shimmering: bool,
     /// Its lines, which keep the newest in view as they come while the user is at the end.
     scroll: ScrollHandle,
     /// The window's size as last drawn: a change keeps the lines at their end if they were.
@@ -218,6 +227,14 @@ impl Shell {
 
     /// The card's click: its conversation in the page area, or, shown already, the Space's tab
     /// again.
+    /// A click on the notification a task's need posted (needs_you): its card's click, which never
+    /// puts the task away if it shows already, as the user came to it.
+    pub fn show_needed_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+        if self.talk_agent().as_ref() != Some(&agent) {
+            self.show_task(agent, cx);
+        }
+    }
+
     pub(super) fn show_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
         let Some(card) = self.task_cards.iter().find(|card| card.agent == agent) else {
             return;
@@ -226,7 +243,7 @@ impl Shell {
             return self.close_task(cx);
         }
         let left = self.talk_agent();
-        let (space, name) = (card.space, card.cli.name());
+        let (space, name, replies) = (card.space, card.name.clone(), card.replies);
         let view = match self.talk.take() {
             // Opened again, it shows its newest line, as the task went on while it was away.
             Some(talk) if talk.agent == agent => {
@@ -251,9 +268,13 @@ impl Shell {
                     agent: agent.clone(),
                     shown: None,
                     reply,
+                    replies,
                     pictures: Vec::new(),
                     drawn: Rc::default(),
+                    drawn_logged: Rc::default(),
+                    stop_logged: Rc::default(),
                     stale: false,
+                    shimmering: false,
                     scroll: ScrollHandle::new(),
                     viewport: Size::default(),
                     opened: HashMap::new(),
@@ -380,13 +401,18 @@ impl Shell {
     /// isn't drawn to no binding of ours, so Esc stepped back from nothing.
     pub(super) fn focus_talk(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(talk) = &self.talk else { return };
-        let reply = talk.view.read(cx).reply.focus_handle(cx);
+        let view = talk.view.read(cx);
+        let (reply, replies) = (view.reply.focus_handle(cx), view.replies);
         if self.watched_task_page().is_some() {
             if reply.is_focused(window) {
                 window.focus(&self.focus_handle, cx);
             }
         } else if std::mem::take(&mut self.focus_talk) {
-            window.focus(&reply, cx);
+            // A session's has no field: the window has the keyboard, for Esc and ⌘..
+            match replies {
+                true => window.focus(&reply, cx),
+                false => window.focus(&self.focus_handle, cx),
+            }
         }
     }
 }
@@ -651,15 +677,23 @@ impl TalkView {
         let Some(shown) = &self.shown else { return };
         let mut folds = Vec::new();
         for line in &shown.lines {
-            let Line::Trace(trace) = line else { continue };
-            folds.push((
-                Fold::Trace(trace.key),
-                self.is_open(Fold::Trace(trace.key), trace.running),
-            ));
-            for item in &trace.items {
-                let TraceItem::Step(step) = item else {
-                    continue;
-                };
+            let steps: Vec<&TraceStep> = match line {
+                Line::Trace(trace) => {
+                    folds.push((
+                        Fold::Trace(trace.key),
+                        self.is_open(Fold::Trace(trace.key), trace.running),
+                    ));
+                    (trace.items.iter())
+                        .filter_map(|item| match item {
+                            TraceItem::Step(step) => Some(step),
+                            TraceItem::Said(_) => None,
+                        })
+                        .collect()
+                }
+                Line::Step(step) => vec![step],
+                _ => continue,
+            };
+            for step in steps {
                 let steps = match &step.opens {
                     Opens::Steps(steps) => {
                         folds.push((
@@ -771,9 +805,31 @@ impl TalkView {
             let chip =
                 page_chip(palette, "conversation-stop", "Stop", Some(stop_keys())).opacity(opacity);
             match stoppable {
-                true => chip.on_click(cx.listener(|view, _, _, cx| {
-                    view.shell.update(cx, |shell, cx| shell.stop_talk(cx)).ok();
-                })),
+                true => {
+                    let logged = self.stop_logged.clone();
+                    let at = canvas(
+                        move |bounds, _, _| {
+                            if logged.replace(Some(bounds)) != Some(bounds) {
+                                // check.sh reads this line, to click it.
+                                log!(
+                                    "browser: task stop at {:.0} {:.0} {:.0} {:.0}",
+                                    f32::from(bounds.origin.x),
+                                    f32::from(bounds.origin.y),
+                                    f32::from(bounds.size.width),
+                                    f32::from(bounds.size.height)
+                                );
+                            }
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_full();
+                    chip.relative()
+                        .child(at)
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.shell.update(cx, |shell, cx| shell.stop_talk(cx)).ok();
+                        }))
+                }
                 false => chip,
             }
         });
@@ -852,11 +908,21 @@ impl TalkView {
             let (width, opacity) = grown[index];
             let image = (self.pictures.iter().find(|(each, ..)| *each == tab))
                 .and_then(|(_, _, picture)| picture.as_ref().map(PagePicture::image));
-            let drawn = self.drawn.clone();
+            let (drawn, logged) = (self.drawn.clone(), self.drawn_logged.clone());
             let paint = canvas(
                 |_, _, _| {},
                 move |bounds, _, window, _| {
                     drawn.borrow_mut().push((tab, bounds));
+                    if logged.borrow_mut().insert(tab, bounds) != Some(bounds) {
+                        // check.sh reads this line, to click the picture.
+                        log!(
+                            "browser: task picture {tab} at {:.0} {:.0} {:.0} {:.0}",
+                            f32::from(bounds.origin.x),
+                            f32::from(bounds.origin.y),
+                            f32::from(bounds.size.width),
+                            f32::from(bounds.size.height)
+                        );
+                    }
                     if let Some(image) = image {
                         let corners = Corners::all(px(PICTURE_RADIUS));
                         window
@@ -1235,6 +1301,7 @@ impl TalkView {
                             .any(|item| matches!(item, TraceItem::Step(step) if step.running))
                 }
                 Line::Thinking { failed, .. } => failed.is_none(),
+                Line::Step(step) => step.running,
                 _ => false,
             })
         });
@@ -1328,7 +1395,11 @@ impl TalkView {
             };
             (title, look.asked_favicon.clone())
         });
-        let mut lines = vec![self.you(shown.asked.clone(), page, false, look)];
+        // A session was asked in its agent's terminal, so it has no ask.
+        let mut lines = Vec::new();
+        if !shown.asked.is_empty() {
+            lines.push(self.you(shown.asked.clone(), page, false, look));
+        }
         let landing = (self.motion.landing.as_ref())
             .and_then(|landing| landing.line)
             .filter(|(_, since)| !look.still && eased(*since, look.now, LAND) < 1.)
@@ -1348,6 +1419,12 @@ impl TalkView {
                     .into_any_element(),
                 Line::Trace(trace) => self.trace(trace, look, cx),
                 Line::Thinking { key, failed } => self.thinking(*key, failed.clone(), look),
+                Line::Step(step) => div()
+                    .flex()
+                    .flex_col()
+                    .items_start()
+                    .children(self.step(step, true, look, cx))
+                    .into_any_element(),
             };
             lines.push(risen(line, self.motion.came(Key::Line(index)), look));
         }
@@ -1465,8 +1542,25 @@ impl TalkView {
         )
     }
 
-    /// The reply field, the TextInput, so IME and the field's keys are a text field's.
+    /// The reply field, the TextInput, so IME and the field's keys are a text field's. A session's
+    /// conversation is in its agent's terminal, which a quiet line in its place says, on the text's
+    /// column as it has no plate.
     fn reply(&self, look: &Look, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        if !self.replies {
+            let name = self
+                .shown
+                .as_ref()
+                .map(|shown| shown.name.clone())
+                .unwrap_or_default();
+            return div()
+                .id("conversation-elsewhere")
+                .flex_none()
+                .h(px(REPLY_HEIGHT))
+                .flex()
+                .items_center()
+                .text_color(look.palette.text(SECONDARY))
+                .child(format!("Talk to {name} where you started it."));
+        }
         let reply = self.reply.clone();
         let drawn = self.reply_drawn.clone();
         div()
@@ -1618,6 +1712,7 @@ fn steps(lines: &[Line]) -> usize {
     (lines.iter())
         .map(|line| match line {
             Line::Trace(trace) => trace.items.len(),
+            Line::Step(_) => 1,
             _ => 0,
         })
         .sum()
@@ -1862,9 +1957,22 @@ impl Render for TalkView {
         self.follow_on(now);
         // What changes once it has shown moves.
         self.motion.live = true;
-        // What moves does on frames only while it shows.
-        if self.moving(still) || busy {
+        // What moves does only while it shows: what opens, folds or lands on the display's frames,
+        // and the shimmer, which moves all the while a step waits on the user, on the loading dots'
+        // clock, as each frame draws the whole window again (#1700).
+        let shimmers = self.moving(still);
+        if !self.folding.is_empty() || busy {
             window.request_animation_frame();
+        } else if shimmers && let Some(shell) = self.shell.upgrade() {
+            shell.read(cx).breath.keep();
+            cx.defer(move |cx| shell.update(cx, |shell, cx| shell.breath.arm(cx)));
+        }
+        if std::mem::replace(&mut self.shimmering, shimmers) != shimmers {
+            // check.sh reads these lines.
+            match shimmers {
+                true => log!("browser: task {} shimmers", self.agent),
+                false => log!("browser: task {} still", self.agent),
+            }
         }
         let palette = look.palette;
         let lines = div()

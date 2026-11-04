@@ -10,7 +10,7 @@ use std::{
 use gpui::{
     AnyElement, App, Bounds, ClickEvent, Context, Div, FontWeight, MouseButton, MouseDownEvent,
     MouseMoveEvent, Pixels, Point, Radians, Role, SharedString, Transformation, Window, canvas,
-    div, prelude::*, px, rgb, svg,
+    div, prelude::*, px, svg,
 };
 
 use super::{
@@ -22,11 +22,10 @@ use super::{
     Page, Pending, REMOVE_GLYPH, ROW_HEIGHT, ROW_PITCH, Row, SECONDARY, SEGMENT_END,
     SEGMENT_FAVICON_X, SEGMENT_LINE, SEGMENT_TITLE_GAP, SELECTED_UNHOVER, SLEEPING_FAVICON,
     SPACE_DONE_HEIGHT, SPACE_DONE_WIDTH, SPACE_ICON_PLATE, SPACE_MORE, SPACE_MORE_INSET,
-    SPACE_NAME, SPACE_NAME_SHUT, SPEAKER_DRAWN, SPEAKER_GAP, SPEAKER_SIZE, STATUS_AGENT,
-    STATUS_DOT, STATUS_LOADING, STATUS_RING, STATUS_RING_COLOR, Shell, Slot, Swapped,
-    TITLE_END_INSET, URL_BUTTON_GLYPH, clear_label, cubic_bezier, developer_outline, divider_box,
-    favicon, folder_icon, host, icon_placeholder, icon_slot, name_box, new_tab_label, plate,
-    row_box, row_spring,
+    SPACE_NAME, SPACE_NAME_SHUT, SPEAKER_DRAWN, SPEAKER_GAP, SPEAKER_SIZE, STATUS_DOT,
+    STATUS_LOADING, Shell, Slot, Swapped, TITLE_END_INSET, URL_BUTTON_GLYPH, clear_label,
+    cubic_bezier, developer_outline, divider_box, favicon, folder_icon, host, icon_placeholder,
+    icon_slot, name_box, new_tab_label, plate, row_box, row_spring,
     scaled::scaled_from_middle,
     selected_plate, space_icon, split_plate,
     swap::{ARROW_DOWN, NONE, folder_glyph},
@@ -1690,26 +1689,17 @@ fn breath_strength(phase: f32) -> f32 {
 }
 
 impl Shell {
-    /// A tab's status dot, in the slot at its row's end, if it has one: a Signal ring while the
-    /// user holds it from its agent, Signal green while an agent is at work in it, else the row's
-    /// text while its page loads, breathing while it loads either way.
+    /// A tab's status dot, in the slot at its row's end, while its page loads: the row's text,
+    /// breathing.
     fn status_dot(&self, tab: u64) -> Option<impl IntoElement + use<>> {
-        let (loading, agent) = (self.page(tab).loading, self.agent_at_work(tab));
-        let dot = match (agent, loading) {
-            // The user holds it from its agent: a ring with nothing in it, waiting on them.
-            _ if self.agent_holds(tab) => div()
-                .size(px(STATUS_DOT))
-                .rounded_full()
-                .border(px(STATUS_RING))
-                .border_color(rgb(STATUS_AGENT)),
-            (true, _) => ringed_dot(STATUS_AGENT, STATUS_DOT),
-            (false, true) => div()
-                .size(px(STATUS_DOT))
-                .rounded_full()
-                .bg(self.palette.text(STATUS_LOADING)),
-            (false, false) => return None,
-        };
-        let strength = if loading { self.breath.strength() } else { 1. };
+        if !self.page(tab).loading {
+            return None;
+        }
+        let dot = div()
+            .size(px(STATUS_DOT))
+            .rounded_full()
+            .bg(self.palette.text(STATUS_LOADING));
+        let strength = self.breath.strength();
         Some(
             div()
                 .flex_none()
@@ -1721,20 +1711,6 @@ impl Shell {
                 .child(dot.opacity(strength)),
         )
     }
-}
-
-/// A status dot `size` across of `color`, a colour that says who, such as an agent's Signal green
-/// or a Space's own, in a ring that keeps it readable on any theme. #335's palette takes this over
-/// to pick the ring by its contrast with the theme.
-pub(super) fn ringed_dot(color: u32, size: f32) -> gpui::Div {
-    div()
-        .size(px(size + 2. * STATUS_RING))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_full()
-        .bg(rgb(STATUS_RING_COLOR))
-        .child(div().size(px(size)).rounded_full().bg(rgb(color)))
 }
 
 /// An emoji in a favicon's place.
@@ -2097,8 +2073,7 @@ mod tests {
     }
 
     /// Under the pointer the row is lit, its chevron in the icon's place and its ••• showing, all
-    /// at once; the menu the ••• opens keeps them while it's up. Collapsed, the chevron stays with
-    /// the pointer gone, so the way back shows.
+    /// at once; the menu the ••• opens keeps them while it's up.
     #[gpui::test]
     fn the_name_row_lights_under_the_pointer_and_keeps_it_for_its_menu(cx: &mut TestAppContext) {
         let (shell, cx, host) = header_shell(cx);
@@ -2154,9 +2129,23 @@ mod tests {
         assert!(!lit(cx), "the row stayed lit after its menu closed");
         let library = shell.read_with(cx, |shell, _| shell.library_open);
         assert!(library, "Manage Spaces… didn't open the Library");
-        // The pinned rows collapsed, the chevron stays drawn with the pointer away.
+    }
+
+    /// Collapsed, the name row's chevron stays with the pointer gone, so the way back shows. The
+    /// sidebar is at rest here: closing the Library just before would leave it faded out, and
+    /// undrawn, for as long as the fade back waits, which reads the wall clock.
+    #[gpui::test]
+    fn the_chevron_stays_for_collapsed_rows_with_the_pointer_gone(cx: &mut TestAppContext) {
+        let (shell, cx, _) = header_shell(cx);
+        let row = shell
+            .read_with(cx, |shell, _| shell.name_row_drawn.get())
+            .expect("a name row");
+        cx.simulate_mouse_move(row.center(), None, Modifiers::none());
+        cx.run_until_parked();
+        cx.simulate_mouse_move(point(px(600.), px(400.)), None, Modifiers::none());
+        cx.run_until_parked();
+        assert!(!shell.read_with(cx, |shell, _| shell.name_hovered));
         shell.update(cx, |shell, cx| {
-            shell.set_library(false, cx);
             shell.set_tabs(1, vec![5, 6], vec![2], Vec::new(), folded(true), cx)
         });
         cx.run_until_parked();

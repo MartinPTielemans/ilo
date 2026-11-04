@@ -53,6 +53,11 @@ void host_watch_finished_launching(void (*finished)(void));
 // launch's window, unless the window is hidden or full screen, and says whether it took it. The
 // file is written in the background.
 bool host_save_launch_picture(void* ui_view, const char* profile_dir, double width);
+// Windows: the same, from the sidebar's pixels in the frame the UI last drew, |columns| by |rows|
+// top-down BGRA. A picture of the window would have Windows repaint its frame, where its theme
+// paints the caption under the UI, on screen too (#1262).
+bool host_save_launch_pixels(void* ui_view, const char* profile_dir, const uint8_t* pixels,
+                             size_t columns, size_t rows);
 
 // Makes the view the UI draws in, for bc_window_open, which sizes it to fill the window. The
 // functions below that take a |ui_view| act on the browser window it's in.
@@ -552,6 +557,12 @@ bool host_window_buttons(void* ui_view, double centres[3], double* y, double* di
 // Does what a click on the close (0), minimize (1) or zoom (2) button of |ui_view|'s window does.
 void host_press_window_button(void* ui_view, int button);
 
+// Keeps the browser window of |ui_view| over other apps' windows, its overlays over it as before,
+// or with |on| false lets it go back among them (Window › Stay On Top). The Mac sets it aside
+// while the window is full screen, and takes it up again after. Under Wayland, which gives a client
+// no way, nothing.
+void host_set_window_on_top(void* ui_view, bool on);
+
 #ifdef _WIN32
 // Windows' alone, whose browser window has no title bar for these: moves |ui_view|'s window with
 // the pointer until the button that's down comes up, as a drag on a title bar does, and whether
@@ -609,6 +620,22 @@ void host_dock_dot_launch(const char* profile_dir);
 // it's drawn off the main thread. In the Tinted and Clear icon styles the icon stays as macOS draws
 // it. Asked again for the same color, it checks the style again.
 void host_dock_dot(bool colored, uint32_t color);
+
+// Whether the app is the active one, its windows taking the keyboard.
+bool host_app_active(void);
+
+// |count| tasks wait for the user, or none at 0: the Dock icon's badge on the Mac, the taskbar
+// button's overlay on Windows, with the count up to 9 and then 9+ in place of the Space's dot, and
+// on Linux the browser windows' urgency hint, with no count. It stays while the app is active, and
+// nothing bounces, flashes or sounds.
+void host_needs_you_badge(int count);
+
+// Posts a system notification, |title| over |body|, with no sound, which comes back as
+// |clicked|(|id|) once the user clicks it, the app brought forward. The first asks the system's
+// leave for them on the Mac; refused, it posts nothing and asks no more. Linux's are the app's own,
+// in Rust, over D-Bus.
+void host_needs_you_notify(uint64_t id, const char* title, const char* body);
+void host_watch_needs_you(void (*clicked)(uint64_t id));
 
 // Calls |released| once, after the event that shows ⌃ is no longer held: ⌃ going up, a key or a
 // button pressed without it, or the app going to the background. Watches the whole app, whichever
@@ -766,6 +793,9 @@ enum {
   // host_install_update.
   HOST_UPDATE_READY = 5,
   HOST_UPDATE_FAILED = 6,
+  // A newer version the updater won't download by itself, as Sparkle leaves one that needs the
+  // user's go-ahead: host_check_for_updates shows it in Sparkle's window. The Mac's alone.
+  HOST_UPDATE_AVAILABLE = 7,
 };
 
 // Starts the updater, which checks every 8 hours and downloads a newer version in the background
