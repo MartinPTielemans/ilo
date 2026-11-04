@@ -547,7 +547,9 @@ if [ "$(uname)" = Darwin ]; then
   send place 20 40 900 700
   send key t cmd
   expect '^browser: command bar shown$' "⌘T didn't open the command bar for the tab to drag"
-  send insert "${site}autofocus.html"
+  # Under localhost, Chromium's: 127.0.0.1's pages here are in Safari's engine, whose correction
+  # panel over a typed word holds AppKit's events until it goes, the driver's with them.
+  send insert "${site/127.0.0.1/localhost}autofocus.html"
   send key return
   expect '^browser: title [0-9]* ready$' "the page to drag didn't draw"
   c=$(grep '^browser: title [0-9]* ready$' "$log" | tail -1 | cut -d' ' -f3)
