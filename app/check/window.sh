@@ -775,6 +775,11 @@ check_reveal "with the sidebar docked by ⌘S"
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
 settings_drew
+send clickkey $(drawn "toolbar General")
+../tools/window-screenshot.sh "$pid" "$out/settings-general.png" || fail "no window to capture"
+send clickkey $(drawn "toolbar About")
+settings_drew About
+../tools/window-screenshot.sh "$pid" "$out/settings-about.png" || fail "no window to capture"
 send clickkey $(drawn "toolbar Tabs & Sidebar")
 settings_drew "Tabs & Sidebar"
 ../tools/window-screenshot.sh "$pid" "$out/settings-tabs.png" || fail "no window to capture"
