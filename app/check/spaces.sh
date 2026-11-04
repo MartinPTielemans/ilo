@@ -296,8 +296,11 @@ fi
 send key w cmd
 expect_tabs "$a" "$a" "after closing the last-used check's tab"
 
-# Two fingers across the sidebar page between Spaces. A flick goes on to the next Space, a drag let
-# go still goes to the Space nearest its place, and past the last Space the pages come back. Fingers
+# Two fingers across the sidebar page between Spaces. Past halfway they go on to the next Space, a
+# drag let go there still goes to the Space nearest its place, and past the last Space the pages come
+# back. A flick short of halfway is the UI's test's (swipe.rs): the swipe's speed is read as the app
+# handles its moves, and a hosted runner's frame, which can take longer than that reading's 0.1 s,
+# can fall between the last move and the lift, which reads as fingers held still (#1869). Fingers
 # along the list scroll it, and a wheel's tick across pages once. Held partway, the next Space's
 # page shows beside the first's.
 swipe_point="110 500"
@@ -314,8 +317,8 @@ swipe_to() {
   expect "^browser: space $2 in " "a swipe of $1 didn't show Space $2"
   expect_tabs "$3" "$3" "after a swipe of $1 showed Space $2"
 }
-swipe_to "-12 0 10" "$second" "$b"
-swipe_to "12 0 10" "$first" "$a"
+swipe_to "-30 0 10" "$second" "$b"
+swipe_to "30 0 10" "$first" "$a"
 swipe_to "-30 0 20 200" "$second" "$b"
 send swipe $swipe_point -12 0 10
 expect '^browser: swipe across$' "two fingers across the sidebar didn't page"
