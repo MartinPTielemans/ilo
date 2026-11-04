@@ -30,10 +30,14 @@
 // data object carrying what Explorer or a browser would, straight to the drop target Windows would
 // pick, the UI's; one over a page or an overlay, whose targets are Chromium's and GPUI's, logs as
 // unsupported. ime on types as drive.mm's scripted input method does, in the UI's fields alone, as
-// Linux's driver does. fullscreen puts the window full screen or takes it out through the core, as
-// Linux's driver does. The others, pageswipe, displays, hide, backdrop and openmenu, Windows has
-// nothing the driver can stand in for yet: each logs "browser: drive: unsupported <command>" before
-// drive.mm's "can't do that", so a run fails at once.
+// Linux's driver does. ime ja makes Microsoft's Japanese IME, where it's installed, the UI thread's
+// input method, on in hiragana, and sends the keys typed until ime off without a shortcut's
+// modifiers through Windows' input queue, to the window in front, which must be ilo's, so the IME
+// composes them, in a page too: "nihongo" composes にほんご, space converts it to 日本語.
+// fullscreen puts the window full screen or takes it out through the core, as Linux's driver does.
+// The others, pageswipe, displays, hide, backdrop and openmenu, Windows has nothing the driver can
+// stand in for yet: each logs "browser: drive: unsupported <command>" before drive.mm's "can't do
+// that", so a run fails at once.
 //
 // It logs as drive.mm does: "browser: drive <n>: <command>" as command n arrives, and "browser:
 // drive <n> done, key <window>, focus <view>, active <0|1>, marked <none|start,length>" once
@@ -844,6 +848,63 @@ void ReportDone(long number) {
 bool g_ime_on = false;
 std::optional<std::string> g_composition;
 
+// Microsoft's Japanese IME, while ime ja is on. Its keys go through Windows' input queue, as a
+// keyboard's do, so the IME composes them itself, in the UI's fields and in a page alike: posted
+// ones would pass it by.
+bool g_japanese = false;
+// The keys that turn a Japanese IME on in hiragana (VK_DBE_HIRAGANA, which not every SDK's headers
+// name) and on or off (VK_KANJI, Alt+` on a US keyboard).
+constexpr UINT kImeHiragana = 0xF2;
+constexpr UINT kImeOnOff = VK_KANJI;
+
+// Microsoft's Japanese IME, where it's one of the user's input methods, which a runner gets from
+// the Language.Basic~~~ja-JP capability and its language list (check-windows.yml).
+HKL JapaneseLayout() {
+  HKL layouts[32];
+  const int count = GetKeyboardLayoutList(32, layouts);
+  for (int i = 0; i < count; ++i) {
+    if (LOWORD(reinterpret_cast<UINT_PTR>(layouts[i])) == 0x0411) {
+      return layouts[i];
+    }
+  }
+  return nullptr;
+}
+
+// |vk| pressed and let go through the input queue, to the window in front.
+void SendVirtualKey(UINT vk) {
+  INPUT inputs[2]{};
+  inputs[0].type = inputs[1].type = INPUT_KEYBOARD;
+  inputs[0].ki.wVk = inputs[1].ki.wVk = static_cast<WORD>(vk);
+  inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+  SendInput(2, inputs, sizeof inputs[0]);
+}
+
+// Waits, up to |tries| times, for the keys SendInput queued to be handled: the driver's posted
+// messages come off the queue before input does.
+void WaitForKeys(int tries) {
+  if (tries > 0 && HIWORD(GetQueueStatus(QS_KEY))) {
+    g_steps.push_front({[tries] { WaitForKeys(tries - 1); }, 16});
+  }
+}
+
+// Adds |vk| through the input queue, once the input it reaches is ilo's.
+bool AddSentKey(UINT vk) {
+  g_steps.push_back({[vk] {
+    DWORD process = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &process);
+    if (process != GetCurrentProcessId()) {
+      // check.sh reads this line.
+      fprintf(stderr, "browser: drive: the IME's key went to another app's window\n");
+      return;
+    }
+    SendVirtualKey(vk);
+  }, 30});
+  g_steps.push_back({[] { WaitForKeys(100); }, 16});
+  // What the IME does with the key, as a composition it cancels, can come a moment after.
+  g_steps.push_back({[] {}, 150});
+  return true;
+}
+
 // Adds the step that handles |key| as drive.mm's scripted input method does, with the calls a
 // Japanese one makes in the UI's field with the keys: letters compose, space converts them all,
 // return commits and escape cancels. Windows' own input methods can't be scripted, and the runners
@@ -853,6 +914,12 @@ std::optional<std::string> g_composition;
 // as plain keys it would pass for a composition.
 int AddImeKey(const std::string& key, int modifiers) {
   const bool letter = key.size() == 1 && key[0] >= 'a' && key[0] <= 'z';
+  // Microsoft's Japanese IME takes the keys without a shortcut's modifiers, as a keyboard's.
+  if (g_japanese && !((modifiers | g_flags) & (kCtrl | kAlt))) {
+    int held = modifiers;
+    const UINT vk = VirtualKey(key, &held);
+    return vk && !held && AddSentKey(vk) ? 1 : 0;
+  }
   if (!g_ime_on || ((modifiers | g_flags) & (kCtrl | kAlt)) || !(g_composition || letter)) {
     return 0;
   }
@@ -1612,8 +1679,23 @@ bool Run(const std::string& line) {
   if (action == "ime") {
     std::string state;
     words >> state;
-    if (state != "on" && state != "off") {
+    if (state != "on" && state != "off" && state != "ja") {
       return false;
+    }
+    if (state == "ja") {
+      // The UI thread's input method is the IME, on, in hiragana, as the user would pick it. Off,
+      // it stays the thread's, closed, which types as the keyboard does.
+      HKL japanese = JapaneseLayout();
+      if (!japanese) {
+        fprintf(stderr, "browser: drive: no Japanese IME\n");
+        return false;
+      }
+      g_steps.push_back({[japanese] { ActivateKeyboardLayout(japanese, 0); }});
+      g_japanese = AddSentKey(kImeHiragana);
+      return true;
+    }
+    if (std::exchange(g_japanese, false)) {
+      AddSentKey(kImeOnOff);
     }
     // As the commands before it have run, which the keys after it are read with.
     g_ime_on = state == "on";

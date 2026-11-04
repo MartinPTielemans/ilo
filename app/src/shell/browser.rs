@@ -299,6 +299,13 @@ pub trait Browser {
     /// Opens Chrome's Clear browsing data dialog in a tab of the Space shown, for its profile. The
     /// user's, as site_search_settings is.
     fn clear_browsing_data(&self, cx: &mut App);
+    /// The command bar picks kept for `profile`, as `usage::Usage` writes them, on this computer
+    /// only: never synced, sent or put in a crash report. The user's, so no agent path reads them.
+    fn bar_picks(&self, _profile: u64) -> String {
+        String::new()
+    }
+    /// Keeps `text` as `profile`'s command bar picks, as `bar_picks` reads them.
+    fn set_bar_picks(&self, _profile: u64, _text: &str) {}
     /// Closes the window with the keyboard if it's another of the app's, such as Chrome's Task
     /// Manager, and says whether it did.
     fn close_other_window(&self, cx: &mut App) -> bool;
