@@ -1045,6 +1045,7 @@ impl Browser for Fake {
         _: Bounds<Pixels>,
         _: f32,
         _: bool,
+        _: Option<Point<Pixels>>,
         _: bool,
         _: menu::Look,
         _: &mut App,

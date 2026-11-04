@@ -597,7 +597,8 @@ pub trait Browser {
         cx: &mut App,
     );
     /// Starts capture mode over the tab's page, at `frame` in the window with corners of `radius`,
-    /// or leaves it if it's on; or with `full_page` captures all of the page and copies it. Its
+    /// or leaves it if it's on; or with `full_page` captures all of the page and copies it. With
+    /// `press`, a ⇧⌘-drag's on the page, it starts dragging from there, and doesn't leave. Its
     /// menu offers Save to Library with `library`, as a private window has no Library, and it
     /// draws in the window's menus' `look`.
     fn capture(
@@ -606,6 +607,7 @@ pub trait Browser {
         frame: Bounds<Pixels>,
         radius: f32,
         full_page: bool,
+        press: Option<Point<Pixels>>,
         library: bool,
         look: crate::menu::Look,
         cx: &mut App,

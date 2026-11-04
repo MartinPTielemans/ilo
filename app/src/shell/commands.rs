@@ -7,8 +7,8 @@ use std::{
 };
 
 use gpui::{
-    Action, App, Context, Global, Image, KeyBinding, MenuItem, SharedString, WeakEntity, actions,
-    point,
+    Action, App, Context, Global, Image, KeyBinding, MenuItem, Pixels, Point, SharedString,
+    WeakEntity, actions, point,
 };
 
 use crate::build_info::{self, BuildInfo};
@@ -1811,27 +1811,34 @@ impl Shell {
 
     /// Starts capture mode over the focused page, or with `full_page` captures all of it.
     fn capture(&mut self, full_page: bool, cx: &mut Context<Self>) {
+        self.capture_pane(self.selected, full_page, None, cx);
+    }
+
+    /// Starts capture mode over the page of `tab`, a pane of the tab shown, dragging from `press`
+    /// in it for a ⇧⌘-drag on the page (Arc's), else choosing; or with `full_page` captures all of
+    /// it. Returns whether `tab`'s page shows here.
+    pub fn capture_pane(
+        &mut self,
+        tab: u64,
+        full_page: bool,
+        press: Option<Point<Pixels>>,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if self.selected == 0 {
-            return;
+            return false;
         }
         let (frame, radius) = self.page_frame(self.viewport);
         let panes = self.panes(self.selected);
-        let focused = panes
-            .iter()
-            .position(|&pane| pane == self.selected)
-            .unwrap_or(0);
+        let index = panes.iter().position(|&pane| pane == tab);
+        let Some(index) = index.or((tab == self.selected).then_some(0)) else {
+            return false;
+        };
         let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
-        let pane = pane_frames(frame, panes.len(), stacked, &shares)[focused];
-        let look = self.menu_look();
-        self.browser.capture(
-            self.selected,
-            pane,
-            radius,
-            full_page,
-            !self.private,
-            look,
-            cx,
-        );
+        let pane = pane_frames(frame, panes.len(), stacked, &shares)[index];
+        let (look, library) = (self.menu_look(), !self.private);
+        self.browser
+            .capture(tab, pane, radius, full_page, press, library, look, cx);
+        true
     }
 
     /// Whether `tab`'s page is in Developer Mode, or None where the user can't change it: a page

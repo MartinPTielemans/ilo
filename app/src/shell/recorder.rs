@@ -1298,6 +1298,7 @@ impl Browser for Recorder {
         frame: Bounds<Pixels>,
         _: f32,
         full_page: bool,
+        press: Option<Point<Pixels>>,
         _: bool,
         look: crate::menu::Look,
         _: &mut App,
@@ -1306,8 +1307,10 @@ impl Browser for Recorder {
         let (width, height) = (f32::from(frame.size.width), f32::from(frame.size.height));
         let what = if full_page { "full page" } else { "portion" };
         let tone = if look.light { "light" } else { "dark" };
+        let from = press.map(|at| format!(" from {} {}", f32::from(at.x), f32::from(at.y)));
+        let from = from.unwrap_or_default();
         self.record(format!(
-            "capture {what} {tab} at {x} {y} {width} {height} {tone}"
+            "capture {what} {tab} at {x} {y} {width} {height} {tone}{from}"
         ));
     }
 

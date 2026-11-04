@@ -20,6 +20,7 @@
 #include "browser_core/held_keys.h"
 #include "browser_core/host.h"
 #include "browser_core/link_target.h"
+#include "browser_core/page_press.h"
 #include "browser_core/password_offer.h"
 #include "browser_core/platform/keyboard.h"
 #include "browser_core/script_dialog.h"
@@ -351,6 +352,8 @@ void Tab::Attach(content::WebContents* contents) {
   }
   // Its page's alert(), confirm() and prompt() ask with the app's dialog.
   ScriptDialogs::Attach(contents);
+  // A press with a modifier held may be the app's, such as ⇧⌘-drag's capture.
+  PagePresses::CreateForWebContents(contents, id_);
   // A tab is often made with its first page already on its way, before anything observes it, so
   // the app hears it's loading now rather than once the page commits.
   ReportStateSoon();

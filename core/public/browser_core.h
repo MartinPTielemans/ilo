@@ -720,6 +720,15 @@ typedef struct bc_host {
   // The tab's page didn't keep a key, such as ⌘F on a page without a find of its own. Return true
   // if the app used it; otherwise the window's menus get it, as ⌘M does on the Mac.
   bool (*tab_key_unhandled)(void* context, bc_id tab, const bc_key* key);
+  // The left button went down on the tab's page with the BC_MODIFIER_ flags |modifiers| held, one
+  // at least, at |x|,|y| in the page's view from its top-left, before the page gets it. Return true
+  // to take the press: its moves come to tab_press_moved and its release to tab_press_released, and
+  // the page hears none of them unless the release hands it back.
+  bool (*tab_press_before_page)(void* context, bc_id tab, uint32_t modifiers, double x, double y);
+  void (*tab_press_moved)(void* context, bc_id tab, double x, double y);
+  // The press taken ended, at |x|,|y|. Return false to hand it back: the page gets the press and
+  // its release, as a click, such as ⇧⌘'s on a link.
+  bool (*tab_press_released)(void* context, bc_id tab, double x, double y);
   // No field of the app's opens for the key the keys typed after it are held for (bc_hold_keys):
   // the page kept it, neither the page nor the app used it, or it got no answer in a second. A host
   // that holds them itself gives them to the page now.

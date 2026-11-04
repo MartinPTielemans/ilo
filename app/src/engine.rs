@@ -1389,6 +1389,7 @@ impl Browser for Engine {
         frame: Bounds<Pixels>,
         radius: f32,
         full_page: bool,
+        press: Option<Point<Pixels>>,
         library: bool,
         look: menu::Look,
         cx: &mut App,
@@ -1396,7 +1397,7 @@ impl Browser for Engine {
         with_overlays(
             move |cx| match full_page {
                 true => capture::full_page(tab, cx),
-                false => capture::start(tab, frame, radius, library, look, cx),
+                false => capture::start(tab, frame, radius, library, look, press, cx),
             },
             cx,
         );

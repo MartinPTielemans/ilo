@@ -195,6 +195,8 @@ source_set("browser_core") {
     "open_app_dialog.h",
     "page_menu.cc",
     "page_menu.h",
+    "page_press.cc",
+    "page_press.h",
     "page_text.cc",
     "page_text.h",
     "password_offer.cc",
