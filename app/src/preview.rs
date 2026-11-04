@@ -1173,6 +1173,24 @@ impl Browser for Fake {
         true
     }
 
+    fn move_space(&self, space: u64, after: u64, cx: &mut App) {
+        let mut spaces = self.spaces.borrow_mut();
+        let Some(from) = spaces.iter().position(|(id, ..)| *id == space) else {
+            return;
+        };
+        let entry = spaces.remove(from);
+        let to = match after {
+            0 => 0,
+            after => match spaces.iter().position(|(id, ..)| *id == after) {
+                Some(at) => at + 1,
+                None => from,
+            },
+        };
+        spaces.insert(to, entry);
+        drop(spaces);
+        self.report_spaces(cx);
+    }
+
     fn set_space_color(&self, space: u64, color: Option<u32>, cx: &mut App) {
         if let Some(entry) = self
             .spaces

@@ -459,6 +459,10 @@ bc_id bc_space_create(const char* name, bc_id after) {
   return space->id();
 }
 
+void bc_space_move(bc_id space, bc_id after) {
+  browser_core::Space::MoveAfter(space, after);
+}
+
 bc_id bc_space_create_for_agent(const char* name, const char* agent, const char* agent_name) {
   if (!agent || !*agent || !agent_name || !*agent_name) {
     return 0;

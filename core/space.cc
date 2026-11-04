@@ -138,6 +138,32 @@ void Space::Delete(bc_id id) {
 }
 
 // static
+void Space::MoveAfter(bc_id id, bc_id after) {
+  std::vector<bc_id>& order = SpaceOrder();
+  auto it = std::ranges::find(order, id);
+  if (it == order.end() || after == id) {
+    return;
+  }
+  size_t to = 0;
+  if (after) {
+    auto at = std::ranges::find(order, after);
+    if (at == order.end()) {
+      return;
+    }
+    to = static_cast<size_t>(at - order.begin()) + 1;
+  }
+  const size_t from = static_cast<size_t>(it - order.begin());
+  if (to == from) {
+    return;
+  }
+  order.erase(it);
+  order.insert(order.begin() + (to > from ? to - 1 : to), id);
+  // Only the Space moved is out of order, so it alone gets a new place.
+  PlaceSpaces();
+  ReportSpacesChanged();
+}
+
+// static
 Space* Space::FromId(bc_id id) {
   auto it = Spaces().find(id);
   return it == Spaces().end() ? nullptr : it->second.get();

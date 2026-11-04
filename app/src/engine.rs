@@ -924,6 +924,10 @@ impl Browser for Engine {
         unsafe { bc::bc_space_delete(space) }
     }
 
+    fn move_space(&self, space: u64, after: u64, _: &mut App) {
+        unsafe { bc::bc_space_move(space, after) };
+    }
+
     fn restore_sidebar(&self, time: u64, _: &mut App) {
         unsafe { bc::bc_window_restore_sidebar(self.window, time as f64) };
     }

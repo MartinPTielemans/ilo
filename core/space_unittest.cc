@@ -162,5 +162,39 @@ TEST_F(SpaceTest, OnlyAFolderMovesAndNeverIntoAWindowsOwnSpace) {
   Space::Delete(little->id());
 }
 
+// A Space moved goes right after the one named, or first, and only its place changes, so sync
+// sends it alone. Where it is already, or after a Space that's gone, changes nothing.
+TEST_F(SpaceTest, ASpaceMovedTakesANewPlaceAndTheOthersKeepTheirs) {
+  Space* play = Space::Create("Play");
+  auto order = [] {
+    Rows ids;
+    for (Space* space : Space::All()) {
+      ids.push_back(space->id());
+    }
+    return ids;
+  };
+  const syncer::UniquePosition work = work_->node().position;
+  const syncer::UniquePosition home = home_->node().position;
+
+  Space::MoveAfter(play->id(), 0);
+  EXPECT_EQ(order(), (Rows{play->id(), work_->id(), home_->id()}));
+  EXPECT_TRUE(work_->node().position.Equals(work));
+  EXPECT_TRUE(home_->node().position.Equals(home));
+  EXPECT_TRUE(play->node().position.LessThan(work));
+
+  Space::MoveAfter(play->id(), work_->id());
+  EXPECT_EQ(order(), (Rows{work_->id(), play->id(), home_->id()}));
+  Space::MoveAfter(play->id(), home_->id());
+  EXPECT_EQ(order(), (Rows{work_->id(), home_->id(), play->id()}));
+  const syncer::UniquePosition last = play->node().position;
+  EXPECT_TRUE(home.LessThan(last));
+  Space::MoveAfter(play->id(), home_->id());
+  Space::MoveAfter(play->id(), play->id());
+  Space::MoveAfter(play->id(), 999999);
+  EXPECT_EQ(order(), (Rows{work_->id(), home_->id(), play->id()}));
+  EXPECT_TRUE(play->node().position.Equals(last));
+  Space::Delete(play->id());
+}
+
 }  // namespace
 }  // namespace browser_core

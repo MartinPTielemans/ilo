@@ -84,6 +84,8 @@ mod page_menu;
 mod page_motion;
 mod panes;
 mod permission;
+#[cfg(test)]
+mod space_order_tests;
 mod task_cards;
 #[cfg(test)]
 mod undo_tests;
@@ -101,6 +103,7 @@ mod sidebar;
 mod sidebar_backups;
 mod sidebar_keys;
 mod space_form;
+mod space_order;
 mod split_targets;
 mod swap;
 mod swipe;
@@ -385,6 +388,8 @@ const DELETED_TIME: Duration = Duration::from_secs(5);
 use crate::tokens::shell::FOOTER_HEIGHT;
 use crate::tokens::shell::PLUS_INSET;
 use crate::tokens::shell::SPACE_CLEAR;
+use crate::tokens::shell::SPACE_DRAGGED;
+use crate::tokens::shell::SPACE_DROP_LINE;
 use crate::tokens::shell::SPACE_HEIGHT;
 use crate::tokens::shell::SPACE_LEAST;
 use crate::tokens::shell::SPACE_PITCH;
@@ -1223,6 +1228,12 @@ pub struct Shell {
     drag: Option<Drag>,
     /// A drag just ended, so the release isn't a click on the row.
     dragged: bool,
+    /// A Space's dot or card dragged along the switcher or the Library, the dots and cards gliding
+    /// to their places after the Spaces' order changed, and where the one let go was along its
+    /// row, which glides from there.
+    space_drag: Option<space_order::SpaceDrag>,
+    space_slides: space_order::SpaceSlides,
+    space_landing: Option<(space_order::Along, u64, f32)>,
     /// Escape put a dragged tab back, and the frame that shows it all put back isn't drawn yet.
     putting_back: bool,
     swipe: Option<Swipe>,
@@ -1656,6 +1667,9 @@ impl Shell {
             bar_follows: false,
             drag: None,
             dragged: false,
+            space_drag: None,
+            space_slides: HashMap::new(),
+            space_landing: None,
             putting_back: false,
             swipe: None,
             settle: None,
@@ -2205,6 +2219,8 @@ impl Shell {
         log!("browser: spaces {}", ids.join(" "));
         let width = self.library_width();
         let filled = !self.spaces.is_empty();
+        let places = self.space_places();
+        let order: Vec<u64> = self.spaces.iter().map(|space| space.id).collect();
         let listed = &mut self.spaces_listed;
         let made: Vec<u64> = spaces
             .iter()
@@ -2284,6 +2300,12 @@ impl Shell {
                 }
             })
             .collect();
+        // Only the Spaces in both lists say whether the order changed.
+        let now: Vec<u64> = self.spaces.iter().map(|space| space.id).collect();
+        let kept = |of: &[u64], with: &[u64]| -> Vec<u64> {
+            of.iter().copied().filter(|id| with.contains(id)).collect()
+        };
+        self.glide_spaces(places, kept(&order, &now) != kept(&now, &order));
         self.settle_theme_preview();
         if let Some(form) = &self.form
             && !self.spaces.iter().any(|space| space.id == form.space)
@@ -3654,6 +3676,7 @@ impl Render for Shell {
         self.step_drag_shape(window, cx);
         self.step_held_row(window);
         self.step_held_nav(window);
+        self.step_space_slides(window);
         self.step_form_going(cx);
         self.step_scroll_edge(window, cx);
         self.step_tools(window);
@@ -4299,6 +4322,7 @@ impl Shell {
         self.step_drag_shape(window, cx);
         self.step_held_row(window);
         self.step_held_nav(window);
+        self.step_space_slides(window);
         self.step_form_going(cx);
         self.step_scroll_edge(window, cx);
         self.step_tools(window);

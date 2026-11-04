@@ -375,7 +375,7 @@ struct Acting {
     opened: bool,
     reply: mpsc::Sender<ToolResult>,
     /// The tabs its page opened meanwhile, in the agent's Space, which its answer names.
-    opened: Vec<u64>,
+    opened_tabs: Vec<u64>,
 }
 
 /// An action that waits on the user.
@@ -1458,7 +1458,7 @@ impl Agents {
             show,
             opened: false,
             reply,
-            opened: vec![],
+            opened_tabs: vec![],
         };
         self.acting.insert(request, acting);
         self.act_in_page(agent, tab, request, action, 0, "");
@@ -2118,7 +2118,7 @@ impl Agents {
             show,
             opened,
             reply,
-            opened: vec![],
+            opened_tabs: vec![],
         };
         self.acting.insert(request, acting);
         self.act_in_page(&agent, tab, request, page, element, &text);
@@ -2128,7 +2128,7 @@ impl Agents {
     /// its Space, behind, and its action's answer names it (#1470).
     pub fn tab_opened(&mut self, tab: u64, opener: u64) {
         if let Some(acting) = self.acting.values_mut().find(|acting| acting.tab == opener) {
-            acting.opened.push(tab);
+            acting.opened_tabs.push(tab);
         }
     }
 
@@ -2150,19 +2150,19 @@ impl Agents {
             show,
             opened,
             reply,
-            opened,
+            opened_tabs,
             ..
         }) = self.acting.remove(&request)
         else {
             return;
         };
-        if !opened.is_empty() {
-            let tabs = opened
+        if !opened_tabs.is_empty() {
+            let tabs = opened_tabs
                 .iter()
                 .map(u64::to_string)
                 .collect::<Vec<_>>()
                 .join(", ");
-            let s = if opened.len() > 1 { "s" } else { "" };
+            let s = if opened_tabs.len() > 1 { "s" } else { "" };
             note = format!("{note} It opened tab{s} {tabs} in your Space.")
                 .trim_start()
                 .into();

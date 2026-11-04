@@ -72,6 +72,8 @@ class Space {
   static Space* CreateOwn(std::string profile, Own own);
   // Deletes the Space, which windows no longer show.
   static void Delete(bc_id id);
+  // Moves the listed Space |id| to right after the listed Space |after|, or first if it's 0.
+  static void MoveAfter(bc_id id, bc_id after);
   static Space* FromId(bc_id id);
   // Every Space but the windows' own, in the switcher's order, which sync's places set.
   static std::vector<Space*> All();
