@@ -43,6 +43,10 @@ app_id=dev.browser.app
 # The KeyboardEvent property a page reads ⌘ from, which off the Mac is pressed with Ctrl (keys.rs).
 cmd_key=metaKey
 { windows || [ "$(uname)" = Linux ]; } && cmd_key=ctrlKey
+# ⇧⌘C's toast's log line: with the capture toast's Share button where there's a share sheet, which
+# Linux hasn't.
+url_toast='^browser: toast shown Copied Current URL \[share\]$'
+[ "$(uname)" != Linux ] || url_toast='^browser: toast shown Copied Current URL$'
 # Points from the window's top-left corner. The sidebar is 228 wide.
 page_point="600 400"
 sidebar_point="100 400"
@@ -269,6 +273,21 @@ quit() {
   quit_app
   exited "$@"
 }
+# Whether the run is on X11 through sway's Xwayland, where a child window such as the password
+# offer or the find bar can't keep the X focus, which wlroots' window manager sends back to the
+# browser window (#1646). Wayland and Xvfb keep it.
+sway_xwayland() {
+  [ "$(uname)" = Linux ] && [ "${BROWSER_HEADLESS:-xvfb}" != xvfb ] && [ -z "${WAYLAND_DISPLAY:-}" ]
+}
+# On sway's Xwayland, the steps from here on, $1, need a child window to keep the X focus. There
+# they're skipped and the run ends.
+skip_on_sway_xwayland() {
+  sway_xwayland || return 0
+  exec 3>&-
+  quit
+  echo "skip: $1: sway's Xwayland sends child windows' X focus back (#1646)"
+  exit 0
+}
 
 # Sends a command to the app's driver (platform/mac/drive.mm, platform/windows/drive.cc,
 # platform/linux/drive.rs) and waits
@@ -344,6 +363,16 @@ drawn() {
   done
   return 1
 }
+# ⌘N's and ⇧⌘N's window opens with ⌘T's command bar once it's on screen, as Arc's (window.sh
+# checks it). Escape closes it, leaving the window with no page that the steps after expect. With
+# a path, the windows are captured there while it's open.
+new_window_bar() {
+  expect '^browser: command new-tab via new window$' "the new window didn't open the command bar"
+  expect '^browser: command bar shown$' "the new window's command bar didn't show"
+  [ -z "${1:-}" ] || ../tools/window-screenshot.sh "$pid" "$1" all || fail "no window to capture"
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close the new window's command bar"
+}
 # Nothing logged since the last command was sent matches $1.
 none_since() {
   ! sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q "$1"
@@ -410,7 +439,9 @@ page_shortcut() {
 last() { grep "^browser: $1 " "$log" | tail -1 | sed 's/.* //'; }
 # Records the window to $out/$1.mp4 for $2 seconds, for the parity rows whose target moves: it
 # returns once frames are being written, so the motion driven next is in it, and recorded waits
-# for the file.
+# for the file. A still taken while it records ends the recording (ReplayKit's -5814), so a run
+# takes its stills after recorded. A recording that doesn't start is tried once more, then the
+# run goes on without it, saying why: the video is the motion's proof, never a step's.
 record() {
   # tools/window-record.sh records with the Mac's ScreenCaptureKit alone.
   if [ "$(uname)" != Darwin ]; then
@@ -419,25 +450,38 @@ record() {
     return 0
   fi
   recording="$out/$1.mp4"
-  ../tools/window-record.sh "$pid" "$2" "$recording" > "$out/$1-record.log" 2>&1 &
-  recorder=$!
-  for _ in $(seq 300); do
-    grep -q '^recording$' "$out/$1-record.log" && return 0
-    if ! kill -0 "$recorder" 2> /dev/null; then
-      unrecorded || fail "the window's recording didn't start: $(tail -1 "$out/$1-record.log")"
-      return 0
+  for try in 1 2; do
+    ../tools/window-record.sh "$pid" "$2" "$recording" > "$out/$1-record.log" 2>&1 &
+    recorder=$!
+    for _ in $(seq 300); do
+      grep -q '^recording$' "$out/$1-record.log" && return 0
+      kill -0 "$recorder" 2> /dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$recorder" 2> /dev/null; then
+      kill "$recorder" 2> /dev/null
+      wait "$recorder" 2> /dev/null
+      echo "the recording didn't start in 30 s" >> "$out/$1-record.log"
     fi
-    sleep 0.1
+    unrecorded && return 0
+    [ "$try" = 2 ] || echo "retry: recording $1, as it didn't start: $(tail -1 "$out/$1-record.log")"
   done
-  fail "the window's recording didn't start in 30 s"
+  echo "skip: recording $1, as it didn't start, twice: $(tail -1 "$out/$1-record.log")"
+  recording=""
 }
 recorded() {
   [ -n "$recording" ] || return 0
   wait "$recorder" && return 0
-  unrecorded || fail "the window's recording didn't finish: $(tail -1 "${recording%.mp4}-record.log")"
+  unrecorded && return 0
+  said=$(tail -1 "${recording%.mp4}-record.log")
+  case "$said" in
+  *Code=-5814*) fail "the window's recording ended early, as a still taken while it records ends it: $said" ;;
+  esac
+  fail "the window's recording didn't finish: $said"
 }
 # GitHub's hosted Mac starts a recording and never gets its first frame, ReplayKit's -5822 (#1108),
-# so there the run goes on without it, saying so. Anywhere else a failed recording fails the run.
+# so there the run goes on without it, saying so. Anywhere else a recording that started and then
+# failed fails the run.
 unrecorded() {
   said=$(tail -1 "${recording%.mp4}-record.log")
   case "${GITHUB_ACTIONS:-}: $said" in

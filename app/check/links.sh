@@ -359,6 +359,7 @@ if [ "$driven" = 1 ]; then
   send key n cmd shift
   expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
   private=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
+  new_window_bar
   open_link "?private" "$first" "$window"
   await "^browser: key window $window\$" || fail "the regular window didn't come to the front"
   grep -q "^browser: link from another app .* of window $private\$" "$log" &&

@@ -14,10 +14,10 @@ use gpui::{
 
 use super::{
     Command, FULL_SCREEN_SIDEBAR_BUTTON_X, HeldNav, NAV, NAV_AFTER_SIDEBAR, NAV_DISABLED,
-    NAV_GLYPH, NAV_HOVERED, NAV_PITCH, NAV_PRESS_SCALE, NAV_RADIUS, NAV_SIZE, NAV_TOP, NAV_TRAIL,
-    PLATE_INSET, PLATE_RADIUS, SECONDARY, SIDEBAR_BUTTON_X, Shell, Swapped, TILE_HOVERED,
-    TOOLS_FADE, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD, URL_FIELD_HEIGHT,
-    URL_FIELD_TEXT_X, URL_FIELD_TOP,
+    NAV_GLYPH, NAV_HOVERED, NAV_INACTIVE, NAV_PITCH, NAV_PRESS_SCALE, NAV_RADIUS, NAV_SIZE,
+    NAV_TOP, NAV_TRAIL, PLATE_INSET, PLATE_RADIUS, SECONDARY, SIDEBAR_BUTTON_X, Shell, Swapped,
+    TILE_HOVERED, TOOLS_FADE, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD,
+    URL_FIELD_HEIGHT, URL_FIELD_TEXT_X, URL_FIELD_TOP,
     access::Accessible,
     beside::AtRest,
     commands::BAR_COMMANDS,
@@ -47,10 +47,14 @@ use crate::tokens::shell::header::URL_PLACEHOLDER;
 use crate::tokens::text;
 
 impl Shell {
-    /// The tab whose page the header is about: a task's page watched in place, else the tab
-    /// selected. The URL field shows its address, and its buttons act on it.
+    /// The tab whose page the header is about, the one in the page area: a task's page watched in
+    /// place, none while a task's conversation is there, else the tab selected. The URL field
+    /// shows its address, and its buttons act on it.
     pub(super) fn field_tab(&self) -> u64 {
-        self.task_page_live().unwrap_or(self.selected)
+        match self.task_area {
+            Some(_) => self.task_page_live().unwrap_or(0),
+            None => self.selected,
+        }
     }
 
     /// A header button at `x`, with the glyph `icon`, that runs `command`. One that can't dims, as
@@ -63,7 +67,7 @@ impl Shell {
         enabled: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let color = Hsla::from(self.palette.glyph(if enabled { NAV } else { NAV_DISABLED }));
+        let color = self.nav_glyph(enabled);
         // Reload and stop are one button, which changes with the tab shown's page.
         let glyph = match matches!(command, Command::Reload | Command::Stop) {
             true => self.swaps.glyph(
@@ -291,9 +295,33 @@ impl Shell {
         }
     }
 
+    /// The window became the one the user is in, or stopped being, as the host says: its header's
+    /// glyphs take the disabled alpha while it isn't, as Arc's do.
+    pub fn set_window_main(&mut self, main: bool, cx: &mut Context<Self>) {
+        if self.window_main != main {
+            self.window_main = main;
+            cx.notify();
+        }
+    }
+
+    /// A header button's glyph colour: the disabled alpha while it's disabled, raised to the glyph
+    /// floor, and the same alpha as it is, under the floor, while the window isn't the user's.
+    pub(super) fn nav_glyph(&self, enabled: bool) -> Hsla {
+        match (self.window_main, enabled) {
+            (false, _) => self.palette.faint(NAV_INACTIVE),
+            (true, true) => self.palette.glyph(NAV),
+            (true, false) => self.palette.glyph(NAV_DISABLED),
+        }
+    }
+
     /// The sidebar button, back, forward, and reload, which is stop while the page loads, as many
     /// as fit.
     pub(super) fn nav_buttons(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let dimmed = !self.window_main;
+        if self.nav_dimmed_drawn.replace(Some(dimmed)) != Some(dimmed) {
+            // check.sh reads this line.
+            log!("browser: nav glyphs dimmed {dimmed}");
+        }
         let page = self.page(self.field_tab());
         let [sidebar, back, forward, reload_x] = nav_places(self.width(), self.full_screen);
         let reload = match page.loading {
@@ -437,9 +465,14 @@ impl Shell {
     }
 
     /// What the URL field says, in its colour: the page's host, or with no page shown, the
-    /// command bar's placeholder, there from the frame the card's mark is.
+    /// command bar's placeholder, there from the frame the card's mark is, or at once with a
+    /// task's conversation, which shows at once.
     pub(super) fn url_field_words(&self, url: &str) -> (SharedString, Hsla) {
-        self.url_words(self.field_tab(), url, self.empty_opacity(Instant::now()))
+        let shown = match self.task_area {
+            Some(_) => 1.,
+            None => self.empty_opacity(Instant::now()),
+        };
+        self.url_words(self.field_tab(), url, shown)
     }
 
     /// What a URL field showing `tab`, at `url`, says, in its colour: the page's host, its whole
