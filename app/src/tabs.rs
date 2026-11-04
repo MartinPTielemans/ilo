@@ -34,17 +34,21 @@ pub(crate) fn split_tab(window: bc::bc_id, tab: u64, with: u64, opened: bool, cx
 
 /// `tab`, opened to join a split view in `window`, joined it: that window's ⌘Z closes it.
 pub(crate) fn split_opened(window: bc::bc_id, tab: u64, cx: &mut App) {
-    let shell = WINDOWS.with_borrow(|windows| {
-        windows
-            .iter()
-            .find(|each| each.id == window)
-            .map(|each| each.shell.clone())
-    });
-    if let Some(shell) = shell {
+    if let Some(shell) = shell_of(window) {
         shell
             .update(cx, |shell, cx| shell.split_opened(tab, cx))
             .ok();
     }
+}
+
+/// The shell of browser window `window`, if it's open.
+pub(crate) fn shell_of(window: bc::bc_id) -> Option<WeakEntity<Shell>> {
+    WINDOWS.with_borrow(|windows| {
+        windows
+            .iter()
+            .find(|each| each.id == window)
+            .map(|each| each.shell.clone())
+    })
 }
 
 /// Opens a tab loading `url` in a split view with `with`, on its right, and shows it in `window`.

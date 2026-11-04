@@ -71,6 +71,9 @@ impl What {
     pub const DELETE_SPACE: What = What::quiet("Delete Space");
     pub const DELETE_ARCHIVED: What = What::said("Delete from Archive", "Deleted from Archive");
     pub const CLEAR_ARCHIVE: What = What::said("Clear Archive", "Archive Cleared");
+    /// The command bar's trash, ⇧⌦ or ⌥⌘⌫ on a page or search from history. The row going from
+    /// the list under the pointer is what it did, so there's no toast.
+    pub const REMOVE_FROM_HISTORY: What = What::quiet("Remove from History");
 }
 
 /// Where a tab, a favorite or a folder is, exactly enough to put it back.
@@ -232,6 +235,11 @@ pub(super) enum Edit {
     /// Puts back in the Archive the task Delete from Archive took out, which Redo deletes again.
     UndeleteTask(SharedString),
     DeleteTask(SharedString),
+    /// Puts back what the window's removal from history `removal` took out, as it was (the
+    /// command bar's trash). The core keeps the window's last ten.
+    PutBackSuggestion(u64),
+    /// Takes it out again.
+    RemoveSuggestion(u64),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -325,6 +333,7 @@ impl Edit {
             | Edit::DismissTask(_)
             | Edit::UndeleteTask(_)
             | Edit::DeleteTask(_) => {}
+            Edit::PutBackSuggestion(_) | Edit::RemoveSuggestion(_) => {}
             Edit::Set(prop, _) => match prop {
                 Prop::TabName(each)
                 | Prop::TabIcon(each)
@@ -604,6 +613,10 @@ impl Edit {
                 .then_some(Edit::ClosePreview(closed)),
             Edit::ClosePreview(closed) => (shell.browser.close_preview(closed.over, cx))
                 .then_some(Edit::ReopenPreview(closed)),
+            Edit::PutBackSuggestion(removal) => (shell.browser.undo_remove_suggestion(removal, cx))
+                .then_some(Edit::RemoveSuggestion(removal)),
+            Edit::RemoveSuggestion(removal) => (shell.browser.redo_remove_suggestion(removal, cx))
+                .then_some(Edit::PutBackSuggestion(removal)),
         }
     }
 }
@@ -646,16 +659,47 @@ impl Shell {
     /// Undoes the last step, once, and returns whether it did. A step that can't be done any more
     /// is dropped and the one before it is undone.
     pub(super) fn undo(&mut self, cx: &mut Context<Self>) -> bool {
-        self.step(true, cx)
+        self.step(true, false, cx)
     }
 
     /// Does again what the last Undo undid.
     pub(super) fn redo(&mut self, cx: &mut Context<Self>) -> bool {
-        self.step(false, cx)
+        self.step(false, false, cx)
     }
 
-    fn step(&mut self, undoing: bool, cx: &mut Context<Self>) -> bool {
+    /// The command bar took a page or search out of history in this window, as `removal`.
+    pub fn suggestion_removed(&mut self, removal: u64, cx: &mut Context<Self>) {
+        let edit = (removal != 0).then_some(Edit::PutBackSuggestion(removal));
+        self.keep(What::REMOVE_FROM_HISTORY, edit, cx);
+    }
+
+    /// ⌘Z, or ⇧⌘Z unless `undoing`, in the command bar's field, which has no undo of its own:
+    /// undoes or redoes the next step if it's a removal from history, as it's the bar's, and
+    /// nothing else, which would be out of sight under it. Whether it did.
+    pub fn step_suggestion_removal(&mut self, undoing: bool, cx: &mut Context<Self>) -> bool {
+        self.step(undoing, true, cx)
+    }
+
+    /// Undoes the last step, or redoes it unless `undoing`; with `removals`, only while the next is
+    /// a removal from history.
+    fn step(&mut self, undoing: bool, removals: bool, cx: &mut Context<Self>) -> bool {
         if self.private {
+            return false;
+        }
+        let removal = |stack: &[Entry]| {
+            stack.last().is_some_and(|entry| {
+                matches!(
+                    entry.edit,
+                    Edit::PutBackSuggestion(_) | Edit::RemoveSuggestion(_)
+                )
+            })
+        };
+        let stack = if undoing {
+            &self.history.undo
+        } else {
+            &self.history.redo
+        };
+        if removals && !removal(stack) {
             return false;
         }
         // The Undo the toast offers is done, or is no longer the one.
@@ -665,6 +709,9 @@ impl Shell {
                 true => &mut self.history.undo,
                 false => &mut self.history.redo,
             };
+            if removals && !removal(stack) {
+                break false;
+            }
             let Some(Entry { what, edit }) = stack.pop() else {
                 break false;
             };

@@ -1262,10 +1262,16 @@ void Window::LetProfileGo(Profile* profile) {
   }
 }
 
-void Window::RemoveSuggestion(const GURL& url) {
-  if (suggestions_) {
-    suggestions_->Remove(url);
-  }
+bc_id Window::RemoveSuggestion(const GURL& url) {
+  return suggestions_ ? suggestions_->Remove(url) : 0;
+}
+
+bool Window::UndoRemoveSuggestion(bc_id removal) {
+  return suggestions_ && suggestions_->Restore(removal);
+}
+
+bool Window::RedoRemoveSuggestion(bc_id removal) {
+  return suggestions_ && suggestions_->RemoveAgain(removal);
 }
 
 content::WebContents* Window::OpenTab(Profile* profile, const GURL& url, bool when_shown) {

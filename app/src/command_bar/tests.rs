@@ -55,8 +55,13 @@ impl Host for Recorder {
         }
     }
 
-    fn remove_suggestion(&self, url: &str) {
+    fn remove_suggestion(&self, url: &str, _: &mut App) {
         self.record(format!("remove {url}"));
+    }
+
+    fn step_removal(&self, redo: bool, _: &mut App) -> bool {
+        self.record(format!("{} removal", if redo { "redo" } else { "undo" }));
+        true
     }
 
     fn typed_url(&self, text: &str) -> Option<String> {
@@ -931,6 +936,21 @@ fn the_pointer_shows_a_trash_that_takes_a_suggestion_out(cx: &mut TestAppContext
         bar.calls(),
         [format!("open {}", search("ex")), "hide".into()]
     );
+}
+
+/// ⌘Z and ⇧⌘Z in the field, which has no undo of its own, go to the window's history, which
+/// undoes or redoes a row taken out of history while that's its next step (shell's undo tests).
+#[gpui::test]
+fn cmd_z_in_the_field_goes_to_the_windows_removal_from_history(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    bar.type_text("ex");
+    bar.suggest("ex", vec![searching("ex"), page("https://a.test/")]);
+    bar.click_remove(1);
+    assert_eq!(bar.calls(), ["remove https://a.test/"]);
+    bar.keys("cmd-z");
+    assert_eq!(bar.calls(), ["undo removal"]);
+    bar.keys("shift-cmd-z");
+    assert_eq!(bar.calls(), ["redo removal"]);
 }
 
 /// A history row's remove button names itself and its key in a tooltip, Arc's ⌥⌘⌫ on the Mac and

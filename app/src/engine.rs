@@ -339,6 +339,17 @@ impl Browser for Engine {
         unsafe { bc::bc_archive_undo_remove(removal) }
     }
 
+    fn undo_remove_suggestion(&self, removal: u64, _: &mut App) -> bool {
+        // check.sh reads this line.
+        log!("browser: put back removal {removal}");
+        unsafe { bc::bc_window_undo_remove_suggestion(self.window, removal) }
+    }
+
+    fn redo_remove_suggestion(&self, removal: u64, _: &mut App) -> bool {
+        log!("browser: remove again removal {removal}");
+        unsafe { bc::bc_window_redo_remove_suggestion(self.window, removal) }
+    }
+
     fn restore_archived(&self, archived: u64, _: &mut App) {
         unsafe { bc::bc_window_restore_archived(self.window, archived) };
     }

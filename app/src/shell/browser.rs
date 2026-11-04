@@ -153,6 +153,11 @@ pub trait Browser {
     /// Puts back what the archive removal `removal` took out, and returns how many tabs, 0 if it
     /// is gone. The removals are the core's, shared by its windows, so each asks for its own.
     fn undo_archive_remove(&self, removal: u64, cx: &mut App) -> usize;
+    /// Puts back what the window's removal from history `removal` took out, as it was, or takes
+    /// it out again for `redo_remove_suggestion`. Whether it could: the core keeps the window's
+    /// last ten removals.
+    fn undo_remove_suggestion(&self, removal: u64, cx: &mut App) -> bool;
+    fn redo_remove_suggestion(&self, removal: u64, cx: &mut App) -> bool;
     /// Reopens the archived tab `archived` at the top of the Today tabs of the Space shown, and
     /// shows it.
     fn restore_archived(&self, archived: u64, cx: &mut App);

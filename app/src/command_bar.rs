@@ -375,9 +375,12 @@ pub trait Host {
     /// for it in the site search of the engine whose keyword is `site`. They come back through
     /// `suggested`.
     fn suggest(&self, site: Option<&str>, text: &str, complete: bool);
-    /// Takes the suggestion going to `url` out of the profile's history. The suggestions come
-    /// again without it.
-    fn remove_suggestion(&self, url: &str);
+    /// Takes the suggestion going to `url` out of the profile's history, a step on the window's ⌘Z
+    /// history. The suggestions come again without it.
+    fn remove_suggestion(&self, url: &str, cx: &mut App);
+    /// ⌘Z, or ⇧⌘Z for `redo`: undoes or redoes the window's next step if it's a removal from
+    /// history, so a key in the bar's field does nothing out of sight. Whether it did.
+    fn step_removal(&self, redo: bool, cx: &mut App) -> bool;
     /// The page the address bar goes to for `text` typed in it: the one it names, else a search.
     fn typed_url(&self, text: &str) -> Option<String>;
     /// A search for `text` with the search engine whose keyword is `site`, else the default one,
@@ -2058,19 +2061,27 @@ impl CommandBar {
     fn remove(&mut self, _: &Remove, _: &mut Window, cx: &mut Context<Self>) {
         if self.chosen().is_some() {
             self.end_tip(cx);
-            self.remove_row(self.selected);
+            self.remove_row(self.selected, cx);
         }
     }
 
     /// Takes row `index`'s page or search out of the profile's history, if it came from there. The
     /// core lists the rows again without it, and the row under it takes its place.
-    fn remove_row(&self, index: usize) {
+    fn remove_row(&self, index: usize, cx: &mut App) {
         let Some(row) = self.rows.get(index).filter(|row| row.removable) else {
             return;
         };
         // check.sh reads this line.
         log!("browser: command bar removes {}", row.url);
-        self.host.remove_suggestion(&row.url);
+        self.host.remove_suggestion(&row.url, cx);
+    }
+
+    /// ⌘Z or ⇧⌘Z: a field's are its own, and the bar's has no undo, but a row it took out of
+    /// history is the window's step, which they undo and redo here while it's the next.
+    fn step_removal(&mut self, redo: bool, cx: &mut Context<Self>) {
+        if self.host.step_removal(redo, cx) {
+            cx.stop_propagation();
+        }
     }
 
     /// The trash a row from history shows under the pointer, where Arc's has a ✕, which takes it
@@ -2107,7 +2118,7 @@ impl CommandBar {
             .on_click(cx.listener(move |bar, _, _, cx| {
                 cx.stop_propagation();
                 bar.end_tip(cx);
-                bar.remove_row(index);
+                bar.remove_row(index, cx);
             }))
             // Where it drew, which its tooltip hangs from.
             .child({
@@ -2742,6 +2753,12 @@ impl Render for CommandBar {
                     .on_action(cx.listener(Self::shortcut))
                     .on_action(cx.listener(Self::enter_site_or_next))
                     .on_action(cx.listener(Self::leave_site_or_previous))
+                    .capture_action(
+                        cx.listener(|bar, _: &text_input::Undo, _, cx| bar.step_removal(false, cx)),
+                    )
+                    .capture_action(
+                        cx.listener(|bar, _: &text_input::Redo, _, cx| bar.step_removal(true, cx)),
+                    )
                     .capture_action(cx.listener(|bar, _: &text_input::Backspace, window, cx| {
                         bar.leave_at_start(window, cx)
                     }))
