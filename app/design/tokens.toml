@@ -557,6 +557,11 @@ intensity-floor = 0.2
 intensity-span = 0.55
 # A Space swatch's ring, a hairline.
 ring = 1.0
+# A Space swatch of two colours holds its main colour, the one the Space's accents take, solid
+# this far along its 135° diagonal, then reaches the second at its far edge: about two thirds of
+# the disc is nearer the main colour, where the window's own 75 % would leave it a third (ours,
+# #1849).
+swatch-main-to = 0.25
 # The accent under the pointer, each channel at this, darker as every filled button goes (the
 # owner, 2026-10-26); pressed, each channel at this, a step darker again, whatever the label (the
 # owner, #707); and a text selection, the accent at this.
