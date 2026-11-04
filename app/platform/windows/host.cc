@@ -931,8 +931,11 @@ void TellMain(HWND front) {
   }
   DWORD process = 0;
   GetWindowThreadProcessId(front, &process);
-  const HWND owner =
-      front && process == GetCurrentProcessId() ? GetAncestor(front, GA_ROOTOWNER) : nullptr;
+  // GA_ROOTOWNER follows an owner only for a WS_POPUP window, which GPUI's overlays aren't.
+  HWND owner = front && process == GetCurrentProcessId() ? GetAncestor(front, GA_ROOT) : nullptr;
+  while (HWND next = owner ? GetWindow(owner, GW_OWNER) : nullptr) {
+    owner = next;
+  }
   for (HWND view : UiViews()) {
     if (!IsWindow(view)) {
       told->erase(view);
