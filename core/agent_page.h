@@ -27,6 +27,7 @@
 
 namespace content {
 class DevToolsAgentHost;
+class NavigationHandle;
 class RenderFrameHost;
 }  // namespace content
 
@@ -56,6 +57,10 @@ class AgentPage : public content::WebContentsObserver,
   // |contents|' page went to |url|, which opens an app outside the browser, and the core stopped it
   // where it was. The action running there, as a click on such a link, answers that, as an error.
   static void AppRefused(content::WebContents* contents, const GURL& url);
+  // A download the page in |contents| started answers the action that started it, in place of
+  // the page: the request of the action running, or of one that answered while the download was
+  // about to start, which then never answers. Else 0.
+  static uint64_t TakeJob(content::WebContents* contents);
 
  private:
   friend class content::WebContentsUserData<AgentPage>;
@@ -147,6 +152,8 @@ class AgentPage : public content::WebContentsObserver,
                       std::set<int64_t> passwords);
   void Answer(std::string text, bool error);
   void Fail(std::string why);
+  // Gives the answer kept while a download started, as none took its action.
+  void AnswerHeld();
 
   // Scrolls the job's element into view and gives its box, in the main frame's viewport's CSS
   // pixels.
@@ -184,12 +191,23 @@ class AgentPage : public content::WebContentsObserver,
 
   // content::WebContentsObserver:
   void DidStopLoading() override;
+  void DidFinishNavigation(content::NavigationHandle* navigation) override;
   void WebContentsDestroyed() override;
 
   const bc_id tab_;
   std::deque<Job> jobs_;
   // The job running, which has yet to answer.
   std::optional<Job> job_;
+  // Whether a download took the job running, so its answer goes nowhere.
+  bool taken_ = false;
+  // An answer kept while a navigation's download starts, as it may take the job (#1446).
+  struct Held {
+    uint64_t request;
+    std::string text;
+    bool error;
+  };
+  std::optional<Held> held_;
+  base::OneShotTimer download_starting_;
   base::OnceClosure loaded_;
   base::OneShotTimer wait_;
   base::OneShotTimer rest_;

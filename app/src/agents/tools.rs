@@ -679,6 +679,7 @@ pub fn describe(action: &str) -> &'static str {
         "hand_off" => "Handed you a tab",
         "close_tab" => "Closed a tab",
         "discard_tab" => "Closed a tab without saving",
+        "download" => "Downloaded a file",
         "passkey" => "Handed you a tab for your passkey",
         "ask_for_tab" => "Asked for a tab back",
         "kept" => "You kept the tab",

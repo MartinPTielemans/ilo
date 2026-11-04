@@ -142,6 +142,7 @@ pub use keys::{
     Holder, OFF_THE_MAC, Refused, SecondPress, UserKeys, change_keys, page_keystroke, rebindable,
     recorded, reserved, shortcut_found, user_keys, view_binding, web_keystroke, written_as,
 };
+pub(crate) use library::bytes;
 pub use library::{Archived, Captured, Download, DownloadAction, DownloadState};
 use library::{MediaVideo, RECEDE_X, Section};
 pub use menu_bar::{MenuBar, ProfileChoice, SidebarBackup};

@@ -31,6 +31,7 @@
 #include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
@@ -53,6 +54,9 @@ constexpr base::TimeDelta kQuiet = base::Milliseconds(500);
 constexpr base::TimeDelta kFrame = base::Hertz(60);
 // How long a hidden page keeps drawing after an agent's last action, for its next one.
 constexpr base::TimeDelta kRest = base::Seconds(30);
+// Ours: how long a navigation that became a download keeps its action's answer for the download.
+// Its item starts within a few tasks of the navigation's end.
+constexpr base::TimeDelta kDownloadStart = base::Seconds(5);
 
 // Select All's modifier: ⌘ on the Mac, Ctrl elsewhere, as DevTools' Input domain numbers them.
 #if BUILDFLAG(IS_MAC)
@@ -271,6 +275,23 @@ void AgentPage::SessionEnded(bc_id tab) {
   if (AgentPage* page = contents ? AgentPage::FromWebContents(contents) : nullptr) {
     page->LetGo();
   }
+}
+
+// static
+uint64_t AgentPage::TakeJob(content::WebContents* contents) {
+  AgentPage* page = AgentPage::FromWebContents(contents);
+  if (!page) {
+    return 0;
+  }
+  page->download_starting_.Stop();
+  if (page->held_) {
+    return std::exchange(page->held_, std::nullopt)->request;
+  }
+  if (page->job_ && !page->taken_) {
+    page->taken_ = true;
+    return page->job_->request;
+  }
+  return 0;
 }
 
 void AgentPage::Next() {
@@ -1243,9 +1264,17 @@ void AgentPage::Answer(std::string text, bool error) {
   wait_.Stop();
   loaded_.Reset();
   Unlisten();
-  // Posted, so the app never hears inside its own bc_agent_page.
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(&Report, tab_, request, std::move(text), error));
+  if (std::exchange(taken_, false)) {
+    // The download it started answers it.
+  } else if (download_starting_.IsRunning()) {
+    // Its page didn't change, or the tab has none, as the navigation became a download.
+    AnswerHeld();
+    held_ = Held{request, std::move(text), error};
+  } else {
+    // Posted, so the app never hears inside its own bc_agent_page.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&Report, tab_, request, std::move(text), error));
+  }
   Next();
   if (!job_) {
     // A hidden page left drawing would keep its animations waking the browser while the agent
@@ -1260,12 +1289,22 @@ void AgentPage::Fail(std::string why) {
   Answer(std::move(why), /*error=*/true);
 }
 
+void AgentPage::AnswerHeld() {
+  if (std::optional<Held> held = std::exchange(held_, std::nullopt)) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&Report, tab_, held->request, std::move(held->text), held->error));
+  }
+}
+
 void AgentPage::LetGo() {
   std::deque<Job> owed = std::exchange(jobs_, {});
-  if (job_) {
+  if (job_ && !std::exchange(taken_, false)) {
     owed.push_front(*std::move(job_));
-    job_.reset();
   }
+  job_.reset();
+  download_starting_.Stop();
+  AnswerHeld();
   for (const Job& job : owed) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&Report, tab_, job.request,
@@ -1470,6 +1509,13 @@ void AgentPage::DidStopLoading() {
     std::move(loaded_).Run();
   } else if (settling_) {
     Quiet();
+  }
+}
+
+void AgentPage::DidFinishNavigation(content::NavigationHandle* navigation) {
+  if (navigation->IsDownload() && job_) {
+    download_starting_.Start(FROM_HERE, kDownloadStart,
+                             base::BindOnce(&AgentPage::AnswerHeld, base::Unretained(this)));
   }
 }
 

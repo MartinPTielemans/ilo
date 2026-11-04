@@ -2043,6 +2043,10 @@ void bc_download_act(bc_id download, int action) {
   browser_core::ActOnDownload(download, action);
 }
 
+void bc_agent_download_answer(bc_id download, bool keep) {
+  browser_core::AnswerAgentDownload(download, keep);
+}
+
 void bc_downloads_clear() {
   browser_core::ClearDownloads();
 }
