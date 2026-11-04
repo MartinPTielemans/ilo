@@ -59,6 +59,10 @@ bool host_save_launch_picture(void* ui_view, const char* profile_dir, double wid
 bool host_save_launch_pixels(void* ui_view, const char* profile_dir, const uint8_t* pixels,
                              size_t columns, size_t rows);
 
+// Mac only: draws the icon of the app with |bundle_id|, if it's installed, |size| pixels square
+// into |rgba|, size * size * 4 bytes of premultiplied RGBA, for the import's rows (#1673).
+bool host_app_icon(const char* bundle_id, size_t size, uint8_t* rgba);
+
 // Makes the view the UI draws in, for bc_window_open, which sizes it to fill the window. The
 // functions below that take a |ui_view| act on the browser window it's in.
 void* host_ui_view(void);
@@ -667,6 +671,8 @@ typedef struct {
   const char* url;
   // Whether it's a file's, dragged as a file, rather than a link or text.
   bool file;
+  // A tab of this app's that host_drag_tab drags, with an empty |url|, else 0.
+  uint64_t tab;
 } host_dragged;
 
 // What host_take_drops hears of a drag.
@@ -689,6 +695,20 @@ bool host_trash(const char* path);
 // UI's view as host_take_drops says. Calls |ended| once it's let go, with whether something took
 // it. Returns false, and never calls |ended|, if it didn't start, as when there's no file there.
 bool host_drag_file(const char* path, void (*ended)(bool taken));
+
+// Starts the system's drag of |tab|, a tab's row dragged out of its window, from the pointer, during
+// the event of the left button held and moved. It shows the row: the part of |ui_view|'s window at
+// (|x|, |y|), |width| by |height| points from its content's top-left corner, with the pointer at
+// (|grab_x|, |grab_y|) in it. It carries a type of the app's own, which only the app's UI views
+// take, with the tab in the item host_take_drops hands them. Calls |ended| once it ends: taken by
+// one, let go where none took it, or cancelled, as escape does, with where on the screen it was let
+// go, in host_window_frame's terms, |placed| false where the system doesn't say, as under Wayland.
+// Returns false, and never calls |ended|, if it didn't start, as on Windows and Linux so far
+// (#1798), where the row stays in its window.
+enum { HOST_TAB_TAKEN, HOST_TAB_LET_GO, HOST_TAB_CANCELLED };
+bool host_drag_tab(void* ui_view, uint64_t tab, double x, double y, double width, double height,
+                   double grab_x, double grab_y,
+                   void (*ended)(uint64_t tab, int how, bool placed, double x, double y));
 
 // Looks up a preview of the file at |path|, a full path in UTF-8, off the main thread: for an
 // image, or a video's first frame, a thumbnail at most 96 pixels on its longer side, its aspect

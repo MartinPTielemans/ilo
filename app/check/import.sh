@@ -49,6 +49,21 @@ else
   arc=
   chrome="$home/.config/google-chrome"
   firefox="$home/.mozilla/firefox"
+  # Chrome's desktop entry and a made-up icon in the made-up home, the one place the run's app
+  # looks for them, so its row has an app icon as a launcher finds it, and Firefox's the globe.
+  mkdir -p "$home/.local/share/applications" "$home/.local/share/icons/hicolor/64x64/apps"
+  printf '[Desktop Entry]\nName=Chrome\nIcon=google-chrome\n' \
+    > "$home/.local/share/applications/google-chrome.desktop"
+  python3 -I -c '
+import struct, sys, zlib
+size = 64
+rows = b"".join(b"\0" + bytes([40, 120, 220, 255]) * size for _ in range(size))
+def chunk(kind, data):
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+png += chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+open(sys.argv[1], "wb").write(png)
+' "$home/.local/share/icons/hicolor/64x64/apps/google-chrome.png" || fail "couldn't write the made-up icon"
 fi
 mkdir -p "$chrome/Default"
 printf '%s' '{"profile":{"info_cache":{"Default":{"name":"Me"}}}}' > "$chrome/Local State"
@@ -196,6 +211,12 @@ settings_drew 'Import & Export'
 expect "^browser: import found $found\$" \
   "the import didn't find the fixture's $found, and only them: $(grep 'import found' "$log")"
 expect '^browser: import drawn list$' "Settings › Import & Export didn't draw its list"
+# Each row's app icon is the system's: on Linux the made-up one for Chrome alone; on the Mac
+# whichever of the browsers the runner has installed, which the capture shows.
+if [ "$(uname)" = Linux ]; then
+  await '^browser: import icons Chrome$' ||
+    fail "Chrome's row didn't get the made-up icon: $(grep 'import icons' "$log")"
+fi
 ../tools/window-screenshot.sh "$pid" "$out/import-list.png" || fail "no window to capture"
 # Settings at its first size and at its least, in its look and then the other, as
 # $out/import-settings-$1-<width>-<dark|light>.png, and back at its first size in its own look.
