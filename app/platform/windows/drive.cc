@@ -1373,6 +1373,9 @@ bool Run(const std::string& line) {
     if (!(words >> x >> y) || !TargetAt(x, y, &target)) {
       return false;
     }
+    // diag(#872): where a move goes.
+    fprintf(stderr, "browser: drive: diag move to %ls at %ld,%ld\n", ClassOf(target.hwnd).c_str(),
+            target.client.x, target.client.y);
     g_steps.push_back({[=] { Move(target, 0, 0); }});
     return true;
   }
