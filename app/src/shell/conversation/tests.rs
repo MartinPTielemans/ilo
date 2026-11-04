@@ -659,6 +659,39 @@ fn the_shimmer_draws_on_the_loading_dots_clock(cx: &mut TestAppContext) {
     );
 }
 
+/// With motion reduced, the step under way holds still rather than shimmer, as the spec has it,
+/// and draws no frames for it: not on the loading dots' clock either.
+#[gpui::test]
+fn with_motion_reduced_the_step_under_way_holds_still(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    let mut talk = conversation(1);
+    if let Line::Trace(trace) = &mut talk.lines[0] {
+        (trace.running, trace.took, trace.items) = (
+            true,
+            None,
+            vec![TraceItem::Step(step(0, "Waiting on you", true))],
+        );
+    }
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    for _ in 0..2 {
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    }
+    view.read_with(cx, |view, _| {
+        assert!(view.under_way(), "no step under way");
+        assert!(
+            !view.moving(true),
+            "the step under way moves with motion reduced"
+        );
+        assert!(view.shimmering == super::Shimmering::HeldStill);
+    });
+    assert!(
+        !shell.read_with(cx, |shell, _| shell.breath.pending()),
+        "the step held still still draws on the loading dots' clock"
+    );
+}
+
 /// The reply field's "Reply to …" follows a switch between light and dark while the conversation
 /// stays open, as its lines do, in the placeholder colour of the palette it's drawn in (#1659).
 #[gpui::test]

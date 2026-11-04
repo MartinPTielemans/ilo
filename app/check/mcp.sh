@@ -842,7 +842,18 @@ $(grep "^browser: task plate task-${session#session-} at " "$log" | tail -1 | cu
 PLATE
   send click $((px + pw / 2)) $((py + ph / 2))
   expect "^browser: task $session shown\$" "a click on the new card didn't show its conversation"
-  await_log "^browser: task $session shimmers\$" "the conversation's step waiting on the user didn't shimmer"
+  # With motion reduced, as on GitHub's Windows runner, the step under way holds still instead,
+  # as the spec has it, and shimmers at no point.
+  if grep -q '^browser: reduce motion on$' "$log"; then
+    await_log "^browser: task $session holds still\$" \
+      "with motion reduced, the conversation's step waiting on the user didn't hold still"
+    grep -q "^browser: task $session shimmers\$" "$log" &&
+      fail "with motion reduced, the conversation's step waiting on the user shimmered"
+    waiting_step="holds still"
+  else
+    await_log "^browser: task $session shimmers\$" "the conversation's step waiting on the user didn't shimmer"
+    waiting_step=shimmers
+  fi
   await_log '^browser: task stop at ' "the new card's conversation drew no Stop"
   read -r sx sy sw sh <<STOP
 $(grep '^browser: task stop at ' "$log" | tail -1 | cut -d' ' -f5-)
@@ -896,7 +907,7 @@ forget_login
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, is refused a tab the user took over with the strip's ⌘↩ until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow, which Settings › Agents lists, and off takes the socket away"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, is refused a tab the user took over with the strip's ⌘↩ until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step $waiting_step, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow, which Settings › Agents lists, and off takes the socket away"
 else
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases). skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi

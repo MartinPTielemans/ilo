@@ -167,8 +167,8 @@ pub struct TalkView {
     stop_logged: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Its pages changed while one was watched over it, so they're pictured again once it shows.
     stale: bool,
-    /// Whether its step under way shimmered as it last drew, which check.sh hears of.
-    shimmering: bool,
+    /// How its step under way looked as it last drew, which check.sh hears of.
+    shimmering: Shimmering,
     /// Its lines, which keep the newest in view as they come while the user is at the end.
     scroll: ScrollHandle,
     /// The window's size as last drawn: a change keeps the lines at their end if they were.
@@ -266,7 +266,7 @@ impl Shell {
                     drawn_logged: Rc::default(),
                     stop_logged: Rc::default(),
                     stale: false,
-                    shimmering: false,
+                    shimmering: Shimmering::No,
                     scroll: ScrollHandle::new(),
                     viewport: Size::default(),
                     opened: HashMap::new(),
@@ -1282,7 +1282,13 @@ impl TalkView {
     /// Whether something it shows moves: the step under way's shimmer while its trace is open, or
     /// a turn's Thinking, unless motion is reduced, and what opens or folds.
     fn moving(&self, still: bool) -> bool {
-        let shimmers = self.shown.as_ref().is_some_and(|shown| {
+        (self.under_way() && !still) || !self.folding.is_empty()
+    }
+
+    /// Whether it shows a step under way, in its open trace, or a turn's Thinking: what shimmers,
+    /// or with motion reduced holds still.
+    fn under_way(&self) -> bool {
+        self.shown.as_ref().is_some_and(|shown| {
             shown.lines.iter().any(|line| match line {
                 Line::Trace(trace) => {
                     trace.running
@@ -1296,8 +1302,7 @@ impl TalkView {
                 Line::Step(step) => step.running,
                 _ => false,
             })
-        });
-        (shimmers && !still) || !self.folding.is_empty()
+        })
     }
 
     /// A step's line, and what it opens to while it's open. A turn's same step on several tabs
@@ -1870,6 +1875,15 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         .children(chevron)
 }
 
+/// How the step under way looks, as check.sh hears of it: shimmering, held still as motion is
+/// reduced, or with no step under way, still.
+#[derive(Clone, Copy, PartialEq)]
+enum Shimmering {
+    Yes,
+    HeldStill,
+    No,
+}
+
 /// A title a band of near-white sweeps across, `phase` of the way through a pass.
 fn shimmering(palette: &super::Palette, title: SharedString, phase: f32) -> StyledText {
     let count = title.chars().count().max(1) as f32;
@@ -1959,11 +1973,17 @@ impl Render for TalkView {
             shell.read(cx).breath.keep();
             cx.defer(move |cx| shell.update(cx, |shell, cx| shell.breath.arm(cx)));
         }
-        if std::mem::replace(&mut self.shimmering, shimmers) != shimmers {
+        let shimmering = match shimmers {
+            true => Shimmering::Yes,
+            false if still && self.under_way() => Shimmering::HeldStill,
+            false => Shimmering::No,
+        };
+        if std::mem::replace(&mut self.shimmering, shimmering) != shimmering {
             // check.sh reads these lines.
-            match shimmers {
-                true => log!("browser: task {} shimmers", self.agent),
-                false => log!("browser: task {} still", self.agent),
+            match shimmering {
+                Shimmering::Yes => log!("browser: task {} shimmers", self.agent),
+                Shimmering::HeldStill => log!("browser: task {} holds still", self.agent),
+                Shimmering::No => log!("browser: task {} still", self.agent),
             }
         }
         let palette = look.palette;
