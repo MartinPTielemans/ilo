@@ -1443,6 +1443,35 @@ mod tests {
         );
     }
 
+    /// The same as GPUI tells it, with the sidebar hidden: the window hears the pointer leave its
+    /// own view for the page's, whose moves it doesn't hear, so the wait at the edge ends.
+    #[gpui::test]
+    fn the_hidden_sidebars_window_hears_the_pointer_leave_for_the_page(cx: &mut TestAppContext) {
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(Rc::new(Recorder::default()), cx));
+        shell.update(cx, |shell, cx| {
+            shell.sidebar_hidden = true;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.simulate_mouse_move(point(px(1.), px(300.)), None, Modifiers::none());
+        cx.simulate_mouse_move(point(px(1.), px(306.)), None, Modifiers::none());
+        assert!(
+            shell.read_with(cx, |shell, _| shell.reveal_wait.is_some()),
+            "the pointer moving down the edge didn't start the wait"
+        );
+        cx.simulate_event(gpui::MouseExitEvent {
+            position: point(px(-1.), px(-1.)),
+            pressed_button: None,
+            modifiers: Modifiers::none(),
+        });
+        cx.executor().advance_clock(super::REVEAL_WAIT * 2);
+        cx.run_until_parked();
+        assert!(
+            !shell.read_with(cx, |shell, _| shell.revealed),
+            "the pointer gone onto the page brought the sidebar out"
+        );
+    }
+
     /// A pointer that moves down the edge and goes on onto the page, which on Linux and Windows
     /// is a window the shell doesn't hear the pointer in, leaves the sidebar hidden.
     #[gpui::test]

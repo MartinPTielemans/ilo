@@ -43,7 +43,7 @@ unsafe extern "C" {
         maximized: bool,
     );
     pub fn host_screens(frames: *mut f64, count: usize) -> usize;
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub fn host_app_icon(bundle_id: *const c_char, size: usize, rgba: *mut u8) -> bool;
     pub fn host_pointer(x: *mut f64, y: *mut f64) -> bool;
     pub fn host_window_frame(

@@ -695,6 +695,24 @@ std::vector<std::string> DraggedFiles(IDataObject* data) {
   return urls;
 }
 
+// The format of a tab host_drag_tab drags: this process's id and the tab's, as text, which only the
+// app's own targets take, so another app, or another ilo, leaves it be.
+CLIPFORMAT TabFormat() {
+  static const auto format = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"dev.ilo.browser.tab"));
+  return format;
+}
+
+// The app's tab |data| carries, else 0.
+uint64_t DraggedTab(IDataObject* data) {
+  const std::wstring text = DraggedText(data, TabFormat());
+  unsigned long pid = 0;
+  unsigned long long tab = 0;
+  if (swscanf(text.c_str(), L"%lu %llu", &pid, &tab) != 2 || pid != GetCurrentProcessId()) {
+    return 0;
+  }
+  return tab;
+}
+
 // The target the UI's holder registers for drags over it, from a page or another app, which hands
 // them to the UI with what they carry, as the Mac's HostUIView does: files, else a link, else text.
 // It has the shell draw the drag's image over the window, as Explorer's own windows do.
@@ -724,9 +742,10 @@ class DropTarget final : public IDropTarget {
   }
 
   HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* data, DWORD, POINTL at, DWORD* effect) override {
-    urls_ = DraggedFiles(data);
+    tab_ = DraggedTab(data);
+    urls_ = tab_ ? std::vector<std::string>() : DraggedFiles(data);
     files_ = !urls_.empty();
-    if (urls_.empty()) {
+    if (urls_.empty() && !tab_) {
       std::wstring url =
           DraggedText(data, static_cast<CLIPFORMAT>(RegisterClipboardFormatW(CFSTR_INETURLW)));
       // Text, which the UI opens only if it's a web link.
@@ -764,6 +783,7 @@ class DropTarget final : public IDropTarget {
     }
     Tell(HOST_DRAG_LEFT, at_, nullptr);
     urls_.clear();
+    tab_ = 0;
     return S_OK;
   }
 
@@ -776,6 +796,7 @@ class DropTarget final : public IDropTarget {
     // After a drop too, as the Mac's draggingEnded, which the UI keeps.
     Tell(HOST_DRAG_LEFT, at, nullptr);
     urls_.clear();
+    tab_ = 0;
     return S_OK;
   }
 
@@ -787,20 +808,24 @@ class DropTarget final : public IDropTarget {
   }
 
   // Tells the UI, with where the pointer is in points from the holder's top-left corner, and
-  // answers the drag's source with a copy if the UI takes it.
+  // answers the drag's source with a copy if the UI takes it, or a move for a tab.
   void Tell(int phase, POINTL at, DWORD* effect) {
     at_ = at;
     POINT point{at.x, at.y};
     ScreenToClient(holder_, &point);
     const double scale = Scale(holder_);
     std::vector<host_dragged> items;
+    if (tab_) {
+      items.push_back({"", false, tab_});
+    }
     for (const std::string& url : urls_) {
-      items.push_back({url.c_str(), files_});
+      items.push_back({url.c_str(), files_, 0});
     }
     const bool taken = g_dragged && g_dragged(holder_, phase, point.x / scale, point.y / scale,
                                               items.data(), items.size());
     if (effect) {
       *effect = !taken                      ? DROPEFFECT_NONE
+                : tab_                      ? *effect & DROPEFFECT_MOVE
                 : *effect & DROPEFFECT_COPY ? DROPEFFECT_COPY
                 : *effect & DROPEFFECT_LINK ? DROPEFFECT_LINK
                                             : DROPEFFECT_NONE;
@@ -812,6 +837,8 @@ class DropTarget final : public IDropTarget {
   IDropTargetHelper* helper_ = nullptr;
   std::vector<std::string> urls_;
   bool files_ = false;
+  // The app's tab it carries instead, else 0.
+  uint64_t tab_ = 0;
   POINTL at_{};
 };
 
@@ -1170,6 +1197,26 @@ LRESULT CALLBACK LinkPreviewOwnerProc(HWND hwnd, UINT message, WPARAM wparam, LP
 }
 
 Floating g_capture;
+// The browser window Capture shows over, and the size of its client area then.
+HWND g_capture_over = nullptr;
+SIZE g_capture_size = {};
+
+// The window Capture shows over resized, which leaves it, as on the Mac and Linux: what it showed
+// of the page is no longer where the page is.
+void CaptureWindowSized(HWND root) {
+  RECT client = {};
+  if (root != g_capture_over || !g_capture.hwnd || !IsWindowVisible(g_capture.hwnd) ||
+      !GetClientRect(root, &client) ||
+      (client.right - client.left == g_capture_size.cx &&
+       client.bottom - client.top == g_capture_size.cy)) {
+    return;
+  }
+  host_hide_capture();
+  if (void (*dismissed)(void) = g_capture.dismissed) {
+    Later([dismissed] { dismissed(); });
+  }
+}
+
 Floating g_toast;
 Floating g_tooltip;
 double g_tooltip_margin = 0;
@@ -1593,6 +1640,9 @@ LRESULT CALLBACK OwnerProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
     Minimized(hwnd);
   } else if (message == WM_WINDOWPOSCHANGED && (~flags & (SWP_NOMOVE | SWP_NOSIZE))) {
     Moved(hwnd);
+    if (~flags & SWP_NOSIZE) {
+      CaptureWindowSized(hwnd);
+    }
   } else if (message == WM_ACTIVATE && LOWORD(wparam) != WA_INACTIVE) {
     KeepKeyboard(hwnd);
   } else if (message == WM_NCDESTROY) {
@@ -1771,6 +1821,7 @@ class FileDropSource : public IDropSource {
       LogIn("drag", "buttons %lu escape %d", keys, escape);
     }
     if (escape || (keys & MK_RBUTTON)) {
+      cancelled_ = true;
       return DRAGDROP_S_CANCEL;
     }
     if (!(keys & MK_LBUTTON)) {
@@ -1778,6 +1829,8 @@ class FileDropSource : public IDropSource {
     }
     return S_OK;
   }
+  // Whether Escape or the right button ended it, rather than the left button let go.
+  bool cancelled() const { return cancelled_; }
   HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD effect) override {
     if (effect != effect_) {
       effect_ = effect;
@@ -1790,6 +1843,7 @@ class FileDropSource : public IDropSource {
   ULONG refs_ = 1;
   DWORD keys_ = ~0ul;
   DWORD effect_ = ~0ul;
+  bool cancelled_ = false;
 };
 
 // The shell's own data object for the file at |path|, so a drag carries it as Explorer does, with
@@ -1809,6 +1863,88 @@ ComPtr<IDataObject> FileDataObject(const std::wstring& path) {
   CoTaskMemFree(pidl);
   return data;
 }
+
+// The exe the registry's App Paths names for |name|, such as chrome.exe, the user's before the
+// machine's: the path alone, as the shell's icon is all the import reads of another browser.
+std::wstring AppPath(const std::wstring& name) {
+  const std::wstring key = L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\" + name;
+  for (HKEY root : {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE}) {
+    wchar_t path[MAX_PATH] = {};
+    DWORD bytes = sizeof path;
+    if (RegGetValueW(root, key.c_str(), nullptr, RRF_RT_REG_SZ, nullptr, path, &bytes) ==
+            ERROR_SUCCESS &&
+        path[0]) {
+      std::wstring found(path);
+      // Some installers quote it.
+      if (found.size() > 1 && found.front() == L'"' && found.back() == L'"') {
+        found = found.substr(1, found.size() - 2);
+      }
+      return found;
+    }
+  }
+  return {};
+}
+
+}  // namespace
+
+// The shell's icon for an exe, by its path or its name in App Paths, |size| pixels square, as
+// premultiplied RGBA (host.h). A browser whose exe isn't there has none, and its row the globe.
+bool host_app_icon(const char* app, size_t size, uint8_t* rgba) {
+  std::wstring path = Wide(app);
+  if (path.find_first_of(L"/\\") == std::wstring::npos) {
+    path = AppPath(path);
+  }
+  // The shell parses Windows' separators alone, and the import joins its paths with /.
+  std::replace(path.begin(), path.end(), L'/', L'\\');
+  if (path.empty() || GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES || !size) {
+    return false;
+  }
+  const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  bool ok = false;
+  {
+    ComPtr<IShellItemImageFactory> factory;
+    ComPtr<IWICImagingFactory> wic;
+    ComPtr<IWICBitmap> source;
+    ComPtr<IWICBitmapScaler> scaler;
+    HBITMAP bitmap = nullptr;
+    const UINT pixels = static_cast<UINT>(size);
+    const HRESULT item =
+        SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(&factory));
+    const HRESULT image =
+        SUCCEEDED(item) ? factory->GetImage({static_cast<LONG>(pixels), static_cast<LONG>(pixels)},
+                                            SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK, &bitmap)
+                        : item;
+    if (FAILED(image) || !bitmap) {
+      // check.sh shows this line when a row it gave an icon has none.
+      fprintf(stderr, "browser: import icon for %s failed: 0x%08lx\n", app,
+              static_cast<unsigned long>(image));
+    }
+    if (SUCCEEDED(image) && bitmap &&
+        SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                   IID_PPV_ARGS(&wic))) &&
+        SUCCEEDED(wic->CreateBitmapFromHBITMAP(bitmap, nullptr, WICBitmapUsePremultipliedAlpha,
+                                               &source)) &&
+        SUCCEEDED(wic->CreateBitmapScaler(&scaler)) &&
+        SUCCEEDED(scaler->Initialize(source.Get(), pixels, pixels,
+                                     WICBitmapInterpolationModeHighQualityCubic)) &&
+        SUCCEEDED(scaler->CopyPixels(nullptr, pixels * 4, pixels * pixels * 4, rgba))) {
+      // The shell's is BGRA.
+      for (size_t at = 0; at < size * size * 4; at += 4) {
+        std::swap(rgba[at], rgba[at + 2]);
+      }
+      ok = true;
+    }
+    if (bitmap) {
+      DeleteObject(bitmap);
+    }
+  }
+  if (SUCCEEDED(com)) {
+    CoUninitialize();
+  }
+  return ok;
+}
+
+namespace {
 
 // Encodes the shell's thumbnail or icon for |path| as a PNG, off the main thread. An image (or any
 // file Windows makes a thumbnail for) gets its thumbnail scaled to fit 96 px, its aspect kept; the
@@ -3271,6 +3407,10 @@ void host_add_capture(void* view, void (*dismissed)(void)) {
 
 void host_show_capture(void* ui_view, double left, double top, double width, double height) {
   Show(g_capture, ui_view, left, top, width, height, true);
+  g_capture_over = Root(ui_view);
+  RECT client = {};
+  GetClientRect(g_capture_over, &client);
+  g_capture_size = {client.right - client.left, client.bottom - client.top};
   if (g_capture.hwnd && IsWindowVisible(g_capture.hwnd)) {
     // check.sh reads this line, as the Mac's and Linux's hosts log it.
     fprintf(stderr, "browser: capture shown at %g %g %g %g\n", left, top, width, height);
@@ -4114,10 +4254,50 @@ bool host_trash(const char* path) {
          GetFileAttributesW(Wide(path).c_str()) == INVALID_FILE_ATTRIBUTES;
 }
 
-// shortcut: a tab's drag out of its window is the Mac's alone so far, and its row stays (#1798).
-bool host_drag_tab(void*, uint64_t, double, double, double, double, double, double,
-                   void (*)(uint64_t, int, bool, double, double)) {
-  return false;
+bool host_drag_tab(void* ui_view, uint64_t tab, double, double, double, double, double, double,
+                   void (*ended)(uint64_t, int, bool, double, double)) {
+  if (!Root(ui_view)) {
+    return false;
+  }
+  ComPtr<IDataObject> data;
+  if (FAILED(SHCreateDataObject(nullptr, 0, nullptr, nullptr, IID_PPV_ARGS(&data)))) {
+    return false;
+  }
+  const std::wstring text =
+      std::to_wstring(GetCurrentProcessId()) + L" " + std::to_wstring(tab);
+  const size_t size = (text.size() + 1) * sizeof(wchar_t);
+  HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, size);
+  memcpy(GlobalLock(memory), text.c_str(), size);
+  GlobalUnlock(memory);
+  FORMATETC format{TabFormat(), nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+  STGMEDIUM medium{};
+  medium.tymed = TYMED_HGLOBAL;
+  medium.hGlobal = memory;
+  if (FAILED(data->SetData(&format, &medium, TRUE))) {
+    GlobalFree(memory);
+    return false;
+  }
+  // From a task of its own once the UI's event has returned, as host_drag_file's: DoDragDrop is
+  // modal until it's let go. shortcut: it shows no picture of the row yet, only the pointer's.
+  Later([data, tab, ended] {
+    auto* source = new FileDropSource();
+    ComPtr<IDropSource> holding;
+    holding.Attach(source);
+    DWORD effect = DROPEFFECT_NONE;
+    const HRESULT dropped = DoDragDrop(data.Get(), holding.Get(), DROPEFFECT_MOVE, &effect);
+    POINT at{};
+    GetCursorPos(&at);
+    RECT point{at.x, at.y, at.x, at.y};
+    double x = 0, y = 0, width = 0, height = 0;
+    Logical(point, &x, &y, &width, &height);
+    const int how = dropped == DRAGDROP_S_DROP && effect != DROPEFFECT_NONE ? HOST_TAB_TAKEN
+                    : source->cancelled()                                   ? HOST_TAB_CANCELLED
+                                                                            : HOST_TAB_LET_GO;
+    LogIn("drag", "tab %llu ends: %lx, effect %lu", static_cast<unsigned long long>(tab),
+          static_cast<unsigned long>(dropped), effect);
+    ended(tab, how, true, x, y);
+  });
+  return true;
 }
 
 bool host_drag_file(const char* path, void (*ended)(bool)) {

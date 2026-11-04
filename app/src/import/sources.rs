@@ -329,7 +329,9 @@ impl Source {
 
     /// The ids the system knows the browser's app by, for its icon: on the Mac its bundle id; on
     /// Linux its desktop entry's, a Flatpak's app id and a Snap's `<name>_<name>` read from where
-    /// its profiles are, else the names its packages install. Windows' come with its host's call.
+    /// its profiles are, else the names its packages install; on Windows its exe, beside its
+    /// profiles where it's installed for the user alone, then its name in the registry's App
+    /// Paths, which only the host reads.
     pub fn app_ids(&self, os: Os) -> Vec<String> {
         let mac = |id: &str| vec![id.to_string()];
         match os {
@@ -379,7 +381,34 @@ impl Source {
                 };
                 names.iter().map(|name| name.to_string()).collect()
             }
-            Os::Windows => Vec::new(),
+            Os::Windows => {
+                // The exe its installer puts in App Paths, but where another's has the same name.
+                let (exe, registered) = match self.browser.name {
+                    "Chrome" => ("chrome.exe", true),
+                    "Edge" => ("msedge.exe", true),
+                    "Brave" => ("brave.exe", true),
+                    "Vivaldi" => ("vivaldi.exe", true),
+                    "Chromium" | "Helium" => ("chrome.exe", false),
+                    "Firefox" => ("firefox.exe", true),
+                    "Zen" => ("zen.exe", true),
+                    "LibreWolf" => ("librewolf.exe", true),
+                    _ => return Vec::new(),
+                };
+                // A Chromium installed for the user alone keeps its exe beside its profiles.
+                let beside = (self.dir.file_name().is_some_and(|name| name == "User Data"))
+                    .then(|| self.dir.parent())
+                    .flatten()
+                    .map(|dir| {
+                        dir.join("Application")
+                            .join(exe)
+                            .to_string_lossy()
+                            .into_owned()
+                    });
+                beside
+                    .into_iter()
+                    .chain(registered.then(|| exe.to_string()))
+                    .collect()
+            }
         }
     }
 
