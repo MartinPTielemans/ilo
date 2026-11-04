@@ -966,20 +966,8 @@ impl Shell {
         tab: u64,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.private || self.little.is_some() || !self.drag_in(position, cx) {
-            return false;
-        }
-        // Its own row, if this window lists it, isn't a place it would go.
-        if let Some(drag) = self
-            .drag
-            .as_mut()
-            .filter(|drag| drag.incoming && !drag.dropped)
-            && drag.tab != tab
-        {
-            drag.tab = tab;
-            self.drag_to(position, cx);
-        }
-        true
+        let _ = tab;
+        !self.private && self.little.is_none() && self.drag_in(position, cx)
     }
 
     /// The tab dragged out of another window was let go at `position`. Over the list it moves where
@@ -1001,21 +989,20 @@ impl Shell {
         let (to, depth) = (drag.to, drag.depth);
         let (pinned, today) = self.rows();
         let here = pinned.contains(&tab) || today.contains(&tab);
-        let others =
-            |rows: Vec<u64>| -> Vec<u64> { rows.into_iter().filter(|&r| r != tab).collect() };
-        let (pinned, today) = (others(pinned), others(today));
+        // The browser counts the places without the tab's own, where this window lists it.
         let (in_pinned, folder, index) = match to {
             Place::List(true, gap) => {
-                let (folder, index) = self.pinned_place(&pinned, gap, depth, tab, false);
-                (true, folder, index)
+                let (folder, index) = self.pinned_place(&pinned, gap, depth, INCOMING, false);
+                let above = folder == 0 && pinned.iter().take(gap).any(|&row| row == tab);
+                (true, folder, index - usize::from(above))
             }
             // The browser counts tabs, and the rows above may be split views.
-            Place::List(false, index) => (
+            Place::List(false, gap) => (
                 false,
                 0,
-                today
-                    .iter()
-                    .take(index)
+                (today.iter())
+                    .take(gap)
+                    .filter(|&&row| row != tab)
                     .map(|&row| self.panes(row).len())
                     .sum(),
             ),
@@ -1045,7 +1032,10 @@ impl Shell {
             _ => Some(Edit::Many(edits)),
         };
         self.keep(What::MOVE_TO_WINDOW, edit, cx);
+        // Its row lands from where the pointer let go once the browser reports the lists, as a
+        // link's does.
         if let Some(drag) = self.drag.as_mut() {
+            drag.tab = tab;
             drag.dropped = true;
         }
         cx.notify();
