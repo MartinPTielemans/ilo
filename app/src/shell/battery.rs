@@ -171,7 +171,10 @@ mod tests {
             shell.card_event(2, hover_card::Event::Shown, cx)
         });
         assert!(
-            !host.take().iter().any(|call| call.starts_with("card picture")),
+            !host
+                .take()
+                .iter()
+                .any(|call| call.starts_with("card picture")),
             "the frozen page's card took its picture again"
         );
         shell.update(cx, |shell, cx| shell.set_tab_frozen(2, false, cx));
