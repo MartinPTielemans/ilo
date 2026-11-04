@@ -676,12 +676,16 @@ cat > "$crashing/extension/manifest.json" << 'JSON'
 {"manifest_version": 3, "name": "Check Crash", "version": "1", "action": {}}
 JSON
 echo '<title>crash page</title>' > "$crashing/extension/page.html"
+# On Linux CI, Crashpad's handler held the crashed page's process past 30 s, so the core heard no
+# crash; there the block launches without it, as it checks the count, not the report.
+no_reports=
+[ "$(uname)" = Linux ] && no_reports=--disable-breakpad
 # Launches the app on the block's profile with the extension, logging to $1, and sets $crashing_id.
 crash_launch() {
   log="$out/$1.log"
   step=0
   BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$crashing/profile" \
-    "$browser" --load-extension="$(app_path "$crashing/extension")" \
+    "$browser" $no_reports --load-extension="$(app_path "$crashing/extension")" \
     < "$out/drive" > "$log" 2>&1 &
   pid=$!
   exec 3> "$out/drive"
