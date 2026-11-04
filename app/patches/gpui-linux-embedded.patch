@@ -1,8 +1,16 @@
 diff --git a/crates/gpui_linux/Cargo.toml b/crates/gpui_linux/Cargo.toml
-index a91818acd0..5ab4a515da 100644
+index a91818acd0..2d1de9aa21 100644
 --- a/crates/gpui_linux/Cargo.toml
 +++ b/crates/gpui_linux/Cargo.toml
-@@ -92,9 +92,10 @@ scap = { workspace = true, optional = true }
+@@ -63,6 +63,7 @@ gpui.workspace = true
+ gpui_util.workspace = true
+ gpui_wgpu = { workspace = true, optional = true, features = ["font-kit"] }
+ http_client.workspace = true
++image.workspace = true
+ libc.workspace = true
+ log.workspace = true
+ parking_lot.workspace = true
+@@ -92,9 +93,10 @@ scap = { workspace = true, optional = true }
  
  # Wayland
  calloop-wayland-source = { version = "0.4.1", optional = true }
@@ -14,7 +22,7 @@ index a91818acd0..5ab4a515da 100644
      "log",
  ], optional = true }
  wayland-client = { version = "0.31.11", optional = true }
-@@ -122,6 +123,7 @@ x11rb = { version = "0.13.1", features = [
+@@ -122,6 +124,7 @@ x11rb = { version = "0.13.1", features = [
      "resource_manager",
      "sync",
      "dri3",
@@ -23,7 +31,7 @@ index a91818acd0..5ab4a515da 100644
  # WARNING: If you change this, you must also publish a new version of zed-xim to crates.io
  xim = { git = "https://github.com/zed-industries/xim-rs.git", rev = "16f35a2c881b815a2b6cdfd6687988e84f8447d8", features = [
 diff --git a/crates/gpui_linux/src/gpui_linux.rs b/crates/gpui_linux/src/gpui_linux.rs
-index a5390e77f8..02d9a32475 100644
+index a5390e77f8..e6062aa0da 100644
 --- a/crates/gpui_linux/src/gpui_linux.rs
 +++ b/crates/gpui_linux/src/gpui_linux.rs
 @@ -1,4 +1,25 @@
@@ -44,7 +52,7 @@ index a5390e77f8..02d9a32475 100644
 +    set_overlay_keyboard,
 +    set_overlay_menu, set_overlay_outline, set_overlay_outlines, set_overlay_panel,
 +    set_overlay_pointer, set_overlay_under,
-+    show_overlay, show_window, shown_keyboard_overlay, DragEnd, start_drag, start_file_drag, sync_display,
++    show_overlay, show_window, shown_keyboard_overlay, DragEnd, set_drag_icon, start_drag, start_file_drag, sync_display,
 +    take_overlay_keyboard, watch_control,
 +    take_embedder_drops, watch_alt_taps, watch_embedder_swipes, watch_pointer_over,
 +};
@@ -54,7 +62,7 @@ index a5390e77f8..02d9a32475 100644
 +    open_next_window_in_surface, resize_embedded,
 +};
 diff --git a/crates/gpui_linux/src/linux.rs b/crates/gpui_linux/src/linux.rs
-index e4da54b52b..3be6c96687 100644
+index e4da54b52b..0c786e2a77 100644
 --- a/crates/gpui_linux/src/linux.rs
 +++ b/crates/gpui_linux/src/linux.rs
 @@ -1,7 +1,9 @@
@@ -85,7 +93,7 @@ index e4da54b52b..3be6c96687 100644
 +}
  pub(crate) use display_connection::{Backend, DisplayConnection, select_backend};
 +pub(crate) use file_drag::drag_ended;
-+pub use file_drag::{DragEnd, start_drag, start_file_drag};
++pub use file_drag::{DragEnd, set_drag_icon, start_drag, start_file_drag};
  pub(crate) use headless::*;
  pub(crate) use keyboard::*;
 +pub use overlay::{
@@ -122,10 +130,10 @@ index e4da54b52b..3be6c96687 100644
  
 diff --git a/crates/gpui_linux/src/linux/file_drag.rs b/crates/gpui_linux/src/linux/file_drag.rs
 new file mode 100644
-index 0000000000..022110a1da
+index 0000000000..a202ddef4e
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/file_drag.rs
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,91 @@
 +//! The system's drag of a file out of an embedder's windows, as a browser hands a download to the
 +//! file manager: XDND on X11 (x11/drag.rs), the data device's drag under Wayland. It starts from
 +//! the press the left button holds.
@@ -184,6 +192,31 @@ index 0000000000..022110a1da
 +        return true;
 +    }
 +    false
++}
++
++/// Shows `rgba`, `width` by `height` top-down RGBA pixels at `scale` device pixels a logical one,
++/// under the pointer of the drag `start_drag` started, with the pointer at `hold` in it, in its
++/// pixels, as the picture of what's dragged: XDND's drag icon window on X11, the data device's
++/// icon surface under Wayland. Returns whether it shows.
++pub fn set_drag_icon(width: u32, height: u32, rgba: &[u8], hold: (i32, i32), scale: f32) -> bool {
++    #[allow(unused_variables)]
++    let shown = super::platform::with_embedded_connection(|connection| match connection {
++        #[cfg(feature = "wayland")]
++        DisplayConnection::Wayland(_) => {
++            super::wayland::set_drag_icon(width, height, rgba, hold, scale)
++        }
++        #[cfg(feature = "x11")]
++        DisplayConnection::X11(x11) => {
++            let (Ok(across), Ok(down)) = (u16::try_from(width), u16::try_from(height)) else {
++                return false;
++            };
++            let hold = (hold.0.clamp(0, across.into()) as i16, hold.1.clamp(0, down.into()) as i16);
++            x11.set_drag_icon(across, down, rgba, hold)
++        }
++        #[allow(unreachable_patterns)]
++        _ => false,
++    });
++    shown == Some(true)
 +}
 +
 +/// The drag `start_drag` started ended, `end`.
@@ -1666,7 +1699,7 @@ index cbc962bcff..bfbb357677 100644
  use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
  
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index 2d40cf7fa9..7a4db8499a 100644
+index 2d40cf7fa9..cd0d763f59 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
 @@ -12,11 +12,7 @@ use std::{
@@ -1768,7 +1801,7 @@ index 2d40cf7fa9..7a4db8499a 100644
      mouse_focused_window: Option<WaylandWindowStatePtr>,
      keyboard_focused_window: Option<WaylandWindowStatePtr>,
      loop_handle: LoopHandle<'static, ()>,
-@@ -513,10 +526,116 @@ pub(crate) enum DataSourceKind {
+@@ -513,10 +526,133 @@ pub(crate) enum DataSourceKind {
      Drag,
  }
  
@@ -1882,10 +1915,27 @@ index 2d40cf7fa9..7a4db8499a 100644
      window: WaylandWindowStatePtr,
 +    /// Let go, as the compositor says before it says whether a target took it.
 +    dropped: bool,
++    /// The picture of what's dragged, an embedder's (`set_drag_icon`): the surface the compositor
++    /// carries under the pointer, with its buffer and viewport once it has one.
++    icon: Option<DragIcon>,
++}
++
++pub(crate) struct DragIcon {
++    surface: wl_surface::WlSurface,
++    buffer: Option<wl_buffer::WlBuffer>,
++    viewport: Option<wp_viewport::WpViewport>,
++}
++
++impl DragIcon {
++    fn destroy(self) {
++        self.viewport.inspect(|viewport| viewport.destroy());
++        self.buffer.inspect(|buffer| buffer.destroy());
++        self.surface.destroy();
++    }
  }
  
  fn file_uri_list(paths: &FileDragPaths) -> String {
-@@ -636,9 +755,10 @@ impl WaylandClientStatePtr {
+@@ -636,9 +772,10 @@ impl WaylandClientStatePtr {
          let state = client.borrow();
          let surface_id = surface_id.clone();
          let this = self.clone();
@@ -1899,15 +1949,16 @@ index 2d40cf7fa9..7a4db8499a 100644
                  let Some(client) = this.0.upgrade() else {
                      return TimeoutAction::Drop;
                  };
-@@ -693,6 +813,7 @@ impl WaylandClientStatePtr {
+@@ -693,6 +830,8 @@ impl WaylandClientStatePtr {
              source,
              bytes: uri_list.into_bytes(),
              window,
 +            dropped: false,
++            icon: None,
          });
          true
      }
-@@ -973,20 +1094,26 @@ impl WaylandConnection {
+@@ -973,20 +1112,26 @@ impl WaylandConnection {
          inherited_socket: Option<UnixStream>,
          activation_token: Option<String>,
      ) -> anyhow::Result<Self> {
@@ -1947,7 +1998,7 @@ index 2d40cf7fa9..7a4db8499a 100644
          let (globals, mut event_queue) = registry_queue_init::<WaylandClientStatePtr>(&conn)
              .context("failed to initialize Wayland registry")?;
          let qh = event_queue.handle();
-@@ -1009,7 +1136,10 @@ impl WaylandConnection {
+@@ -1009,7 +1154,10 @@ impl WaylandConnection {
                              (),
                          ));
                      }
@@ -1959,7 +2010,7 @@ index 2d40cf7fa9..7a4db8499a 100644
                          let output = globals.registry().bind::<wl_output::WlOutput, _, _>(
                              global.name,
                              wl_output_version(global.version)?,
-@@ -1065,6 +1195,9 @@ impl WaylandConnection {
+@@ -1065,6 +1213,9 @@ impl WaylandConnection {
              wl_keyboard: None,
              pinch_gesture: None,
              pinch_scale: 1.0,
@@ -1969,7 +2020,7 @@ index 2d40cf7fa9..7a4db8499a 100644
              cursor_shape_device: None,
              data_device,
              primary_selection,
-@@ -1088,6 +1221,7 @@ impl WaylandConnection {
+@@ -1088,6 +1239,7 @@ impl WaylandConnection {
                  position: Point::default(),
                  uri_read_generation: 0,
              },
@@ -1977,7 +2028,7 @@ index 2d40cf7fa9..7a4db8499a 100644
              external_drag: None,
              click: ClickState {
                  last_click: Instant::now(),
-@@ -1110,6 +1244,8 @@ impl WaylandConnection {
+@@ -1110,6 +1262,8 @@ impl WaylandConnection {
              },
              capslock: Capslock { on: false },
              scroll_event_received: false,
@@ -1986,7 +2037,7 @@ index 2d40cf7fa9..7a4db8499a 100644
              axis_source: AxisSource::Wheel,
              mouse_location: None,
              continuous_scroll_delta: None,
-@@ -1117,6 +1253,7 @@ impl WaylandConnection {
+@@ -1117,6 +1271,7 @@ impl WaylandConnection {
              vertical_modifier: -1.0,
              horizontal_modifier: -1.0,
              button_pressed: None,
@@ -1994,7 +2045,7 @@ index 2d40cf7fa9..7a4db8499a 100644
              mouse_focused_window: None,
              keyboard_focused_window: None,
              loop_handle: handle.clone(),
-@@ -1202,6 +1339,16 @@ impl WaylandConnection {
+@@ -1202,6 +1357,16 @@ impl WaylandConnection {
              .context("failed to receive initial Wayland state")
              .log_err();
  
@@ -2011,7 +2062,7 @@ index 2d40cf7fa9..7a4db8499a 100644
          client.register_source(
              handle.insert_source(WaylandSource::new(conn, event_queue), {
                  let mut client = pointer;
-@@ -1341,6 +1488,17 @@ impl WaylandConnection {
+@@ -1341,6 +1506,17 @@ impl WaylandConnection {
              state.consume_startup_activation_token(&window.0.surface());
          }
          state.windows.insert(surface_id, window.0.clone());
@@ -2029,7 +2080,7 @@ index 2d40cf7fa9..7a4db8499a 100644
  
          Ok(Box::new(window))
      }
-@@ -1472,8 +1630,16 @@ impl WaylandConnection {
+@@ -1472,8 +1648,16 @@ impl WaylandConnection {
              };
              let data_source = data_device_manager
                  .create_data_source(&state.globals.qh, DataSourceKind::Clipboard);
@@ -2048,7 +2099,7 @@ index 2d40cf7fa9..7a4db8499a 100644
              }
              data_source.offer(state.clipboard.self_mime());
              data_device.set_selection(Some(&data_source), serial.as_raw());
-@@ -1517,7 +1683,7 @@ impl WaylandConnection {
+@@ -1517,7 +1701,7 @@ impl WaylandConnection {
  
          let client_state = self.0.borrow();
          let active_window = client_state.keyboard_focused_window.as_ref();
@@ -2057,7 +2108,7 @@ index 2d40cf7fa9..7a4db8499a 100644
      }
  }
  
-@@ -1617,7 +1783,8 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
+@@ -1617,7 +1801,8 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
                      state.wl_seat.release();
                      state.wl_seat = registry.bind::<wl_seat::WlSeat, _, _>(name, version, qh, ());
                  }
@@ -2067,7 +2118,7 @@ index 2d40cf7fa9..7a4db8499a 100644
                      let Ok(version) = wl_output_version(version) else {
                          log::error!("ignoring wl_output below the required version");
                          return;
-@@ -1656,6 +1823,8 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
+@@ -1656,6 +1841,8 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
  delegate_noop!(WaylandClientStatePtr: ignore xdg_activation_v1::XdgActivationV1);
  delegate_noop!(WaylandClientStatePtr: ignore xdg_system_bell_v1::XdgSystemBellV1);
  delegate_noop!(WaylandClientStatePtr: ignore wl_compositor::WlCompositor);
@@ -2076,7 +2127,7 @@ index 2d40cf7fa9..7a4db8499a 100644
  delegate_noop!(WaylandClientStatePtr: ignore wp_cursor_shape_device_v1::WpCursorShapeDeviceV1);
  delegate_noop!(WaylandClientStatePtr: ignore wp_cursor_shape_manager_v1::WpCursorShapeManagerV1);
  delegate_noop!(WaylandClientStatePtr: ignore wl_data_device_manager::WlDataDeviceManager);
-@@ -1738,6 +1907,82 @@ pub(crate) fn get_window(
+@@ -1738,6 +1925,82 @@ pub(crate) fn get_window(
      state.windows.get(surface_id).cloned()
  }
  
@@ -2159,7 +2210,7 @@ index 2d40cf7fa9..7a4db8499a 100644
  impl Dispatch<wl_surface::WlSurface, ()> for WaylandClientStatePtr {
      fn event(
          this: &mut Self,
-@@ -1993,10 +2238,10 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
+@@ -1993,10 +2256,10 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                      state.composing = false;
                  }
  
@@ -2174,7 +2225,7 @@ index 2d40cf7fa9..7a4db8499a 100644
                      .map(|text_input_manager| text_input_manager.get_text_input(seat, qh, ()));
  
                  if let Some(wl_keyboard) = &state.wl_keyboard {
-@@ -2023,6 +2268,14 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
+@@ -2023,6 +2286,14 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                          gesture_manager.get_pinch_gesture(&pointer, qh, ())
                      },
                  );
@@ -2189,7 +2240,7 @@ index 2d40cf7fa9..7a4db8499a 100644
  
                  if let Some(wl_pointer) = &state.wl_pointer {
                      wl_pointer.release();
-@@ -2057,7 +2310,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2057,7 +2328,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                  ..
              } => {
                  if format != wl_keyboard::KeymapFormat::XkbV1 {
@@ -2201,7 +2252,7 @@ index 2d40cf7fa9..7a4db8499a 100644
                      return;
                  }
                  let xkb_context = match new_xkb_context() {
-@@ -2086,16 +2343,21 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2086,16 +2361,21 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                  this.handle_keyboard_layout_change();
              }
              wl_keyboard::Event::Enter { surface, .. } => {
@@ -2225,7 +2276,7 @@ index 2d40cf7fa9..7a4db8499a 100644
                  state.keyboard_focused_window = None;
                  state.enter_token.take();
                  // Prevent keyboard events from repeating after opening e.g. a file chooser and closing it quickly
-@@ -2110,7 +2372,9 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2110,7 +2390,9 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                      drop(state);
                      window.handle_ime(ImeInput::DeleteText);
                      window.set_focused(false);
@@ -2235,7 +2286,7 @@ index 2d40cf7fa9..7a4db8499a 100644
              }
              wl_keyboard::Event::Modifiers {
                  mods_depressed,
-@@ -2119,9 +2383,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2119,9 +2401,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                  group,
                  ..
              } => {
@@ -2249,7 +2300,7 @@ index 2d40cf7fa9..7a4db8499a 100644
                  let old_layout =
                      keymap_state.serialize_layout(xkbcommon::xkb::STATE_LAYOUT_EFFECTIVE);
                  keymap_state.update_mask(mods_depressed, mods_latched, mods_locked, 0, 0, group);
-@@ -2138,6 +2404,8 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2138,6 +2422,8 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                  if let Some(focused_window) = focused_window {
                      focused_window.handle_input(input);
                  }
@@ -2258,7 +2309,7 @@ index 2d40cf7fa9..7a4db8499a 100644
  
                  if group != old_layout {
                      this.handle_keyboard_layout_change();
-@@ -2152,13 +2420,37 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2152,13 +2438,37 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                  if key_state == wl_keyboard::KeyState::Pressed {
                      state.serial_tracker.update(SerialKind::KeyPress, serial);
                  }
@@ -2298,7 +2349,7 @@ index 2d40cf7fa9..7a4db8499a 100644
                  let keycode = Keycode::from(key + MIN_KEYCODE);
                  let keysym = keymap_state.key_get_one_sym(keycode);
  
-@@ -2218,16 +2510,17 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2218,16 +2528,17 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                          let rate = state.repeat.characters_per_second;
                          let repeat_interval = Duration::from_secs(1) / rate.max(1);
                          let id = state.repeat.current_id;
@@ -2320,7 +2371,7 @@ index 2d40cf7fa9..7a4db8499a 100644
                                      let Some(client) = this.0.upgrade() else {
                                          return TimeoutAction::Drop;
                                      };
-@@ -2240,8 +2533,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2240,8 +2551,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                                          return TimeoutAction::Drop;
                                      }
  
@@ -2334,7 +2385,7 @@ index 2d40cf7fa9..7a4db8499a 100644
  
                                      drop(state);
                                      focused_window.handle_input(input.clone());
-@@ -2249,8 +2545,9 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2249,8 +2563,9 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                                      // If the new scheduled time is in the past the event will repeat as soon as possible
                                      TimeoutAction::ToInstant(event_timestamp + repeat_interval)
                                  }
@@ -2346,7 +2397,7 @@ index 2d40cf7fa9..7a4db8499a 100644
  
                          drop(state);
                          focused_window.handle_input(input);
-@@ -2398,6 +2695,10 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2398,6 +2713,10 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                  state.serial_tracker.update(SerialKind::MouseEnter, serial);
                  state.mouse_location = Some(position);
                  state.button_pressed = None;
@@ -2357,7 +2408,7 @@ index 2d40cf7fa9..7a4db8499a 100644
  
                  if let Some(window) = get_window(&mut state, &surface.id()) {
                      state.mouse_focused_window = Some(window.clone());
-@@ -2432,9 +2733,24 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2432,9 +2751,24 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                  }
              }
              wl_pointer::Event::Leave { .. } => {
@@ -2383,7 +2434,7 @@ index 2d40cf7fa9..7a4db8499a 100644
                          pressed_button: state.button_pressed,
                          modifiers: state.modifiers,
                      });
-@@ -2444,6 +2760,10 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2444,6 +2778,10 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                      state.cursor_hidden_window = None;
  
                      drop(state);
@@ -2394,7 +2445,7 @@ index 2d40cf7fa9..7a4db8499a 100644
                      focused_window.handle_input(input);
                      focused_window.set_hovered(false);
                  }
-@@ -2453,12 +2773,29 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2453,12 +2791,29 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                  surface_y,
                  ..
              } => {
@@ -2425,7 +2476,7 @@ index 2d40cf7fa9..7a4db8499a 100644
                  if let Some(window) = state.mouse_focused_window.clone() {
                      if window.is_blocked() {
                          let default_style = CursorStyle::Arrow;
-@@ -2514,11 +2851,42 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2514,11 +2869,42 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                  }
                  let button = linux_button_to_gpui(button);
                  let Some(button) = button else { return };
@@ -2468,7 +2519,7 @@ index 2d40cf7fa9..7a4db8499a 100644
                          if let Some(window) = state.keyboard_focused_window.clone() {
                              if state.composing && state.text_input.is_some() {
                                  drop(state);
-@@ -2574,10 +2942,15 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2574,10 +2960,15 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                      wl_pointer::ButtonState::Released => {
                          state.button_pressed = None;
  
@@ -2486,7 +2537,7 @@ index 2d40cf7fa9..7a4db8499a 100644
                                  modifiers: state.modifiers,
                                  click_count: state.click.current_count,
                              });
-@@ -2595,11 +2968,20 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2595,11 +2986,20 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
              } => {
                  state.axis_source = axis_source;
              }
@@ -2507,7 +2558,7 @@ index 2d40cf7fa9..7a4db8499a 100644
                  if state.axis_source == AxisSource::Wheel {
                      return;
                  }
-@@ -2688,17 +3070,37 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2688,17 +3088,37 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                      state.scroll_event_received = false;
                      let continuous = state.continuous_scroll_delta.take();
                      let discrete = state.discrete_scroll_delta.take();
@@ -2554,7 +2605,7 @@ index 2d40cf7fa9..7a4db8499a 100644
                          }
                      } else if let Some(discrete) = discrete
                          && let Some(window) = state.mouse_focused_window.clone()
-@@ -2733,6 +3135,68 @@ impl Dispatch<zwp_pointer_gestures_v1::ZwpPointerGesturesV1, ()> for WaylandClie
+@@ -2733,6 +3153,68 @@ impl Dispatch<zwp_pointer_gestures_v1::ZwpPointerGesturesV1, ()> for WaylandClie
      }
  }
  
@@ -2623,7 +2674,7 @@ index 2d40cf7fa9..7a4db8499a 100644
  impl Dispatch<zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1, ()>
      for WaylandClientStatePtr
  {
-@@ -2895,6 +3359,24 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
+@@ -2895,6 +3377,24 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                      let Some(drag_window) = get_window(&mut state, &surface.id()) else {
                          return;
                      };
@@ -2648,7 +2699,7 @@ index 2d40cf7fa9..7a4db8499a 100644
                      let uri_read_generation = state.drag.begin_uri_read();
  
                      const ACTIONS: DndAction = DndAction::Copy;
-@@ -2968,6 +3450,12 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
+@@ -2968,6 +3468,12 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                  }
              }
              wl_data_device::Event::Motion { x, y, .. } => {
@@ -2661,7 +2712,7 @@ index 2d40cf7fa9..7a4db8499a 100644
                  let Some(drag_window) = state.drag.window.clone() else {
                      return;
                  };
-@@ -2979,6 +3467,15 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
+@@ -2979,6 +3485,15 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                  drag_window.handle_input(input);
              }
              wl_data_device::Event::Leave => {
@@ -2677,7 +2728,7 @@ index 2d40cf7fa9..7a4db8499a 100644
                  let input = state.drag.handle_leave();
                  drop(state);
                  if let Some((drag_window, input)) = input {
-@@ -2986,6 +3483,22 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
+@@ -2986,6 +3501,22 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                  }
              }
              wl_data_device::Event::Drop => {
@@ -2700,7 +2751,7 @@ index 2d40cf7fa9..7a4db8499a 100644
                  let input = state.drag.handle_drop();
                  drop(state);
                  if let Some((drag_window, input)) = input {
-@@ -3015,7 +3528,10 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for WaylandClientStatePtr {
+@@ -3015,7 +3546,10 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for WaylandClientStatePtr {
  
          if let wl_data_offer::Event::Offer { mime_type } = event {
              // Drag and drop
@@ -2712,7 +2763,7 @@ index 2d40cf7fa9..7a4db8499a 100644
                  let serial = state.serial_tracker.get(SerialKind::DataDevice);
                  let mime_type = mime_type.clone();
                  data_offer.accept(serial.as_raw(), Some(mime_type));
-@@ -3059,9 +3575,14 @@ impl Dispatch<wl_data_source::WlDataSource, DataSourceKind> for WaylandClientSta
+@@ -3059,18 +3593,32 @@ impl Dispatch<wl_data_source::WlDataSource, DataSourceKind> for WaylandClientSta
                  let bytes = external_drag.bytes.clone();
                  state.clipboard.send_bytes(fd, bytes);
              }
@@ -2726,9 +2777,13 @@ index 2d40cf7fa9..7a4db8499a 100644
 -                wl_data_source::Event::DndFinished | wl_data_source::Event::Cancelled,
 +                event @ (wl_data_source::Event::DndFinished | wl_data_source::Event::Cancelled),
              ) => {
-                 let Some(external_drag) = state.external_drag.take() else {
+-                let Some(external_drag) = state.external_drag.take() else {
++                let Some(mut external_drag) = state.external_drag.take() else {
                      return;
-@@ -3071,6 +3592,14 @@ impl Dispatch<wl_data_source::WlDataSource, DataSourceKind> for WaylandClientSta
+                 };
+                 external_drag.source.destroy();
++                external_drag.icon.take().map(DragIcon::destroy);
+ 
                  let input = PlatformInput::FileDrop(FileDropEvent::Ended);
                  drop(state);
                  external_drag.window.handle_input(input);
@@ -2743,7 +2798,7 @@ index 2d40cf7fa9..7a4db8499a 100644
              }
              _ => {}
          }
-@@ -3479,3 +4008,524 @@ mod tests {
+@@ -3479,3 +4027,620 @@ mod tests {
          );
      }
  }
@@ -3006,16 +3061,112 @@ index 2d40cf7fa9..7a4db8499a 100644
 +    let source = manager.create_data_source(&state.globals.qh, DataSourceKind::Drag);
 +    source.offer(mime.to_string());
 +    source.set_actions(DndAction::Copy);
-+    device.start_drag(Some(&source), &window.surface(), None, serial.as_raw());
++    // Empty until the embedder gives it its picture (`set_drag_icon`), which the compositor shows
++    // once it's committed.
++    let icon = state.globals.compositor.create_surface(&state.globals.qh, ());
++    device.start_drag(Some(&source), &window.surface(), Some(&icon), serial.as_raw());
 +    state.external_drag = Some(ExternalDrag {
 +        source,
 +        bytes: data,
 +        window: window.clone(),
 +        dropped: false,
++        icon: Some(DragIcon {
++            surface: icon,
++            buffer: None,
++            viewport: None,
++        }),
 +    });
 +    drop(state);
 +    flush(&window);
 +    true
++}
++
++/// Shows `rgba`, `width` by `height` top-down RGBA pixels at `scale` device pixels a logical one,
++/// as the picture of the drag `start_drag` started, with the pointer at `hold` in it, in its
++/// pixels. The data device's icon surface takes it, in a shared-memory buffer.
++pub(crate) fn set_drag_icon(
++    width: u32,
++    height: u32,
++    rgba: &[u8],
++    hold: (i32, i32),
++    scale: f32,
++) -> bool {
++    let Some(client) = EMBEDDED_CLIENT.with_borrow(|client| client.as_ref()?.upgrade()) else {
++        return false;
++    };
++    let mut state = client.borrow_mut();
++    let state = &mut *state;
++    let Some(icon) = (state.external_drag.as_mut()).and_then(|drag| drag.icon.as_mut()) else {
++        return false;
++    };
++    let size = rgba.len();
++    if width == 0 || height == 0 || size != width as usize * height as usize * 4 {
++        return false;
++    }
++    let Some(fd) = shm_file(size) else {
++        return false;
++    };
++    // Wayland's ARGB8888 is BGRA in memory.
++    let bgra: Vec<u8> = (rgba.chunks_exact(4))
++        .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
++        .collect();
++    let Ok(file) = fd.try_clone().map(std::fs::File::from) else {
++        return false;
++    };
++    if std::os::unix::fs::FileExt::write_all_at(&file, &bgra, 0).is_err() {
++        return false;
++    }
++    let qh = &state.globals.qh;
++    let pool = (state.globals.shm).create_pool(std::os::fd::AsFd::as_fd(&fd), size as i32, qh, ());
++    let buffer = pool.create_buffer(
++        0,
++        width as i32,
++        height as i32,
++        width as i32 * 4,
++        wl_shm::Format::Argb8888,
++        qh,
++        (),
++    );
++    pool.destroy();
++    let surface = &icon.surface;
++    // In logical pixels, as the surface is: drawn at the window's scale, with a viewport where
++    // that's fractional, else the buffer's scale.
++    let logical = |n: i32| (n as f32 / scale).round() as i32;
++    match &state.globals.viewporter {
++        Some(viewporter) if scale.fract() != 0. => {
++            let viewport = (icon.viewport)
++                .get_or_insert_with(|| viewporter.get_viewport(surface, qh, ()));
++            viewport.set_destination(logical(width as i32), logical(height as i32));
++        }
++        _ => surface.set_buffer_scale(scale.round().max(1.) as i32),
++    }
++    let (dx, dy) = (-logical(hold.0), -logical(hold.1));
++    if surface.version() >= 5 {
++        surface.offset(dx, dy);
++        surface.attach(Some(&buffer), 0, 0);
++    } else {
++        surface.attach(Some(&buffer), dx, dy);
++    }
++    surface.damage_buffer(0, 0, width as i32, height as i32);
++    surface.commit();
++    if let Some(old) = icon.buffer.replace(buffer) {
++        old.destroy();
++    }
++    if let Some(drag) = &state.external_drag {
++        flush(&drag.window);
++    }
++    true
++}
++
++/// An anonymous file of `size` bytes, to share with the compositor.
++fn shm_file(size: usize) -> Option<std::os::fd::OwnedFd> {
++    use std::os::fd::FromRawFd as _;
++    let fd = unsafe { libc::memfd_create(c"gpui-drag-icon".as_ptr(), libc::MFD_CLOEXEC) };
++    if fd < 0 {
++        return None;
++    }
++    let fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) };
++    (unsafe { libc::ftruncate(fd.as_raw_fd(), size as libc::off_t) } == 0).then_some(fd)
 +}
 +
 +/// Whether Control is held in the embedder's surfaces, as their keys last said.
@@ -3330,7 +3481,7 @@ index 86dc7da97b..91362b8937 100644
          if let Some(text) = self
              .primary_contents
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
-index 8d92234ef1..34233b64c3 100644
+index 8d92234ef1..7fdfa4b6fb 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
 +++ b/crates/gpui_linux/src/linux/wayland/window.rs
 @@ -11,12 +11,13 @@ use calloop::ping::Ping;
@@ -3945,6 +4096,20 @@ index 8d92234ef1..34233b64c3 100644
          let state = self.borrow();
          if !state.active {
              return;
+@@ -2215,6 +2648,13 @@ impl PlatformWindow for WaylandWindow {
+         state.client.update_ime_position(bounds);
+     }
+ 
++    fn render_to_image(&self, scene: &gpui::Scene) -> anyhow::Result<image::RgbaImage> {
++        let mut state = self.borrow_mut();
++        let renderer = state.renderer.as_mut().context("no renderer")?;
++        let (width, height, pixels) = renderer.render_to_image(scene)?;
++        image::RgbaImage::from_raw(width, height, pixels).context("the image's size")
++    }
++
+     fn gpu_specs(&self) -> Option<GpuSpecs> {
+         self.borrow().renderer.as_ref()?.gpu_specs()
+     }
 diff --git a/crates/gpui_linux/src/linux/x11.rs b/crates/gpui_linux/src/linux/x11.rs
 index f9b9727330..6d0cfcaabb 100644
 --- a/crates/gpui_linux/src/linux/x11.rs
@@ -5746,10 +5911,10 @@ index 9835786efe..a44725263b 100644
  
 diff --git a/crates/gpui_linux/src/linux/x11/drag.rs b/crates/gpui_linux/src/linux/x11/drag.rs
 new file mode 100644
-index 0000000000..f19598d4e2
+index 0000000000..704677746c
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/x11/drag.rs
-@@ -0,0 +1,355 @@
+@@ -0,0 +1,492 @@
 +//! A file's drag out of GPUI's windows on X11, as XDND's source (freedesktop.org's XDND, version
 +//! 5): the window the left button went down in owns `XdndSelection`, the pointer is grabbed until
 +//! it's let go, and the top-level window under it that takes XDND hears where it is and, if it
@@ -5758,9 +5923,13 @@ index 0000000000..f19598d4e2
 +use gpui_util::ResultExt as _;
 +use x11rb::{
 +    connection::Connection as _,
-+    protocol::xproto::{
-+        self, AtomEnum, ClientMessageEvent, ConnectionExt as _, EventMask, GrabMode, PropMode,
-+        SelectionNotifyEvent, SelectionRequestEvent,
++    protocol::{
++        shape::{self, ConnectionExt as _},
++        xproto::{
++            self, AtomEnum, ClientMessageEvent, ConfigureWindowAux, ConnectionExt as _,
++            CreateWindowAux, EventMask, GrabMode, ImageFormat, PropMode, SelectionNotifyEvent,
++            SelectionRequestEvent, StackMode, WindowClass,
++        },
 +    },
 +    xcb_ffi::XCBConnection,
 +};
@@ -5787,6 +5956,15 @@ index 0000000000..f19598d4e2
 +    accepted: bool,
 +    /// Let go while the target hadn't answered, when.
 +    released: Option<u32>,
++    /// The picture of what's dragged, an override-redirect window the pointer carries, and where
++    /// the pointer holds it, until it's let go.
++    icon: Option<DragIcon>,
++}
++
++struct DragIcon {
++    window: xproto::Window,
++    pixmap: xproto::Pixmap,
++    hold: (i16, i16),
 +}
 +
 +impl X11Client {
@@ -5835,7 +6013,107 @@ index 0000000000..f19598d4e2
 +            moved: None,
 +            accepted: false,
 +            released: None,
++            icon: None,
 +        });
++        true
++    }
++
++    /// Shows `rgba`, `width` by `height` top-down RGBA pixels, under the pointer of the drag
++    /// that's held, with the pointer at `hold` in it, as the picture of what's dragged.
++    pub(crate) fn set_drag_icon(
++        &self,
++        width: u16,
++        height: u16,
++        rgba: &[u8],
++        hold: (i16, i16),
++    ) -> bool {
++        let mut state = self.0.borrow_mut();
++        let state = &mut *state;
++        let xcb = &state.xcb_connection;
++        let Some(drag) = state.file_drag.as_mut().filter(|drag| drag.held) else {
++            return false;
++        };
++        let screen = &xcb.setup().roots[state.x_root_index];
++        let (root, depth, visual) = (screen.root, screen.root_depth, screen.root_visual);
++        if width == 0 || height == 0 || rgba.len() != usize::from(width) * usize::from(height) * 4
++        {
++            return false;
++        }
++        let made = || -> anyhow::Result<DragIcon> {
++            let pixmap = xcb.generate_id()?;
++            xcb.create_pixmap(depth, pixmap, root, width, height)?;
++            let gc = xcb.generate_id()?;
++            xcb.create_gc(gc, pixmap, &Default::default())?;
++            // The X server's pixels are BGRX, in bands that each fit in a request.
++            let bgrx: Vec<u8> = (rgba.chunks_exact(4))
++                .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], 0xff])
++                .collect();
++            let row = usize::from(width) * 4;
++            let band = (60_000 / row).max(1);
++            for (index, rows) in bgrx.chunks(row * band).enumerate() {
++                let top = (index * band) as i16;
++                let rows_high = (rows.len() / row) as u16;
++                xcb.put_image(
++                    ImageFormat::Z_PIXMAP,
++                    pixmap,
++                    gc,
++                    width,
++                    rows_high,
++                    0,
++                    top,
++                    0,
++                    depth,
++                    rows,
++                )?;
++            }
++            xcb.free_gc(gc)?;
++            let window = xcb.generate_id()?;
++            xcb.create_window(
++                depth,
++                window,
++                root,
++                0,
++                0,
++                width,
++                height,
++                0,
++                WindowClass::INPUT_OUTPUT,
++                visual,
++                &CreateWindowAux::new()
++                    .override_redirect(1)
++                    .background_pixmap(pixmap),
++            )?;
++            // It takes no input, so the window under it is the one the pointer is over, for XDND
++            // as for the pointer.
++            xcb.shape_rectangles(
++                shape::SO::SET,
++                shape::SK::INPUT,
++                xproto::ClipOrdering::UNSORTED,
++                window,
++                0,
++                0,
++                &[],
++            )?;
++            Ok(DragIcon {
++                window,
++                pixmap,
++                hold,
++            })
++        };
++        let Some(icon) = made().log_err() else {
++            return false;
++        };
++        // Where the pointer is now, as it may not have moved since the drag started.
++        let (x, y) = match xcb.query_pointer(root).ok().and_then(|c| c.reply().ok()) {
++            Some(pointer) => (pointer.root_x, pointer.root_y),
++            None => drag.last,
++        };
++        place_icon(xcb, &icon, x, y);
++        xcb.map_window(icon.window).log_err();
++        if let Some(old) = drag.icon.replace(icon) {
++            remove_icon(xcb, old);
++        }
++        xcb.flush().log_err();
 +        true
 +    }
 +
@@ -5854,6 +6132,9 @@ index 0000000000..f19598d4e2
 +        };
 +        let root = xcb.setup().roots[state.x_root_index].root;
 +        drag.last = (x, y);
++        if let Some(icon) = &drag.icon {
++            place_icon(xcb, icon, x, y);
++        }
 +        let target = xdnd_target(xcb, atoms, root, x, y);
 +        if target.map(|(window, _)| window) != drag.target.map(|(window, _)| window) {
 +            if let Some((window, _)) = drag.target.take() {
@@ -5889,6 +6170,9 @@ index 0000000000..f19598d4e2
 +                return;
 +            };
 +            drag.held = false;
++            if let Some(icon) = drag.icon.take() {
++                remove_icon(&state.xcb_connection, icon);
++            }
 +            state
 +                .xcb_connection
 +                .ungrab_pointer(x11rb::CURRENT_TIME)
@@ -5948,11 +6232,14 @@ index 0000000000..f19598d4e2
 +            let mut state = self.0.borrow_mut();
 +            let state = &mut *state;
 +            let (xcb, atoms) = (&state.xcb_connection, &state.atoms);
-+            let Some(drag) = state.file_drag.take() else {
++            let Some(mut drag) = state.file_drag.take() else {
 +                return;
 +            };
 +            if let Some((window, _)) = drag.target {
 +                send(xcb, window, atoms.XdndLeave, [drag.window, 0, 0, 0, 0]);
++            }
++            if let Some(icon) = drag.icon.take() {
++                remove_icon(xcb, icon);
 +            }
 +            xcb.ungrab_pointer(x11rb::CURRENT_TIME).log_err();
 +            xcb.flush().log_err();
@@ -6100,13 +6387,28 @@ index 0000000000..f19598d4e2
 +    }
 +}
 +
++/// Puts `icon` with the pointer at (x, y) on the root where it holds it, over every other window.
++fn place_icon(xcb: &XCBConnection, icon: &DragIcon, x: i16, y: i16) {
++    let place = ConfigureWindowAux::new()
++        .x(i32::from(x) - i32::from(icon.hold.0))
++        .y(i32::from(y) - i32::from(icon.hold.1))
++        .stack_mode(StackMode::ABOVE);
++    xcb.configure_window(icon.window, &place).log_err();
++}
++
++fn remove_icon(xcb: &XCBConnection, icon: DragIcon) {
++    xcb.destroy_window(icon.window).log_err();
++    xcb.free_pixmap(icon.pixmap).log_err();
++    xcb.flush().log_err();
++}
++
 +fn send(xcb: &XCBConnection, to: xproto::Window, type_: xproto::Atom, data: [u32; 5]) {
 +    let message = ClientMessageEvent::new(32, to, type_, data);
 +    xcb.send_event(false, to, EventMask::NO_EVENT, message)
 +        .log_err();
 +}
 diff --git a/crates/gpui_linux/src/linux/x11/window.rs b/crates/gpui_linux/src/linux/x11/window.rs
-index f6ee76ae8c..dfbe903dd4 100644
+index f6ee76ae8c..286264936f 100644
 --- a/crates/gpui_linux/src/linux/x11/window.rs
 +++ b/crates/gpui_linux/src/linux/x11/window.rs
 @@ -75,6 +75,7 @@ x11rb::atom_manager! {
@@ -6574,3 +6876,17 @@ index f6ee76ae8c..dfbe903dd4 100644
          }
  
          // https://github.com/rust-windowing/winit/blob/master/src/platform_impl/linux/x11/util/hint.rs#L53-L87
+@@ -1976,6 +2239,13 @@ impl PlatformWindow for X11Window {
+         client.update_ime_position(bounds);
+     }
+ 
++    fn render_to_image(&self, scene: &gpui::Scene) -> anyhow::Result<image::RgbaImage> {
++        let mut state = self.0.state.borrow_mut();
++        let renderer = state.renderer.as_mut().context("no renderer")?;
++        let (width, height, pixels) = renderer.render_to_image(scene)?;
++        image::RgbaImage::from_raw(width, height, pixels).context("the image's size")
++    }
++
+     fn gpu_specs(&self) -> Option<GpuSpecs> {
+         self.0.state.borrow().renderer.as_ref()?.gpu_specs()
+     }
