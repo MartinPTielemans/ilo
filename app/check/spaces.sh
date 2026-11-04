@@ -551,8 +551,7 @@ $(cased 'Move to') › reading 日本語 › shelf, $(cased 'Move to › New Spa
 # The capture has the second Space's submenu open on its Today and folder, picked by its keys.
 expect '^browser: menu window at ' "the tab's menu didn't take the keyboard"
 send key m
-send key o
-expect "^browser: menu highlights $(cased 'Move to') at " "typing mo didn't select Move to"
+expect "^browser: menu highlights $(cased 'Move to') at " "typing m didn't select Move to, past Mute dimmed"
 send key right
 expect "^browser: menu submenu $(cased 'Move to') shown at " "→ didn't open the Move to submenu"
 send key r
