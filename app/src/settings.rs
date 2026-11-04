@@ -1012,6 +1012,11 @@ fn open(cx: &mut App) {
     let window = cx.open_window(options, |window, cx| {
         let settings = view(cx);
         settings.update(cx, |settings, cx| {
+            // A press gives a control the keyboard, which it would take with it as it goes.
+            browser::settings_rows::keep_keyboard(window, cx, |settings: &Settings| {
+                settings.focus.clone()
+            })
+            .detach();
             // Closing it hides it, so it opens again where the user left it.
             window.on_window_should_close(cx, |_, cx| {
                 hide(cx);
