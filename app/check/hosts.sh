@@ -6,8 +6,8 @@
 # is there. Sync points at a port of the run's own where nothing listens, so nothing reaches the
 # hosted server, and nothing may ask it. A dev build has no update feed and no crash collector,
 # which only the prod build names (engine/README.md), so neither shows here. It leaves the hosts
-# it saw, with how often, in hosts-seen.txt, and the addresses outside the machine that no name
-# led to in hosts-addresses.txt.
+# it saw, with how often, in hosts-seen.txt, and each address it connected to, with the name that
+# led to it or none, which fails it, in hosts-addresses.txt.
 
 serve
 log="$out/hosts.log"
@@ -82,28 +82,46 @@ def local(name):
         return name == "localhost"
     return address.is_loopback or address.is_private or address.is_link_local or address.is_multicast
 
-addresses = Counter()
-for address in re.findall(r'"(?:address|remote_address|peer_address)":"([^"]+)"', text):
+# Each address a socket connected to outside the machine and its network, and whether a name the
+# resolver looked up gave it, from the events, as a quit leaves the net log whole: an address no
+# name led to would be a connection the hosts above don't account for. The system's own resolver,
+# on port 53, is the one exception.
+log = json.loads(text)
+types = {number: name for name, number in log["constants"]["logEventTypes"].items()}
+named, nameservers, addresses = set(), set(), Counter()
+for event in log["events"]:
+    kind = types.get(event["type"], "")
+    params = event.get("params", {})
+    if kind.startswith("HOST_RESOLVER"):
+        named.update(re.findall(r"\d+\.\d+\.\d+\.\d+|[0-9a-f]*:[0-9a-f:]+:[0-9a-f]+", json.dumps(params)))
+    if kind == "DNS_CONFIG_CHANGED":
+        nameservers.update(params.get("nameservers", []))
+    if kind in ("TCP_CONNECT_ATTEMPT", "TCP_CONNECT", "UDP_CONNECT") and params.get("address"):
+        addresses[params["address"]] += 1
+unnamed = []
+for address, count in addresses.items():
     ip = address.rsplit(":", 1)[0].strip("[]")
-    try:
-        ipaddress.ip_address(ip)
-    except ValueError:
+    if local(ip) or address in nameservers or address.endswith(":53"):
         continue
-    if not local(ip):
-        addresses[address] += 1
+    if ip not in named:
+        unnamed.append(address)
 
 with open(f"{out}/hosts-seen.txt", "w") as seen:
     for host, count in sorted(hosts.items()):
         seen.write(f"{host} {count}\n")
 with open(f"{out}/hosts-addresses.txt", "w") as seen:
     for address, count in sorted(addresses.items()):
-        seen.write(f"{address} {count}\n")
+        ip = address.rsplit(":", 1)[0].strip("[]")
+        seen.write(f"{address} {count} {'named' if ip in named else 'local' if local(ip) else 'resolver' if address.endswith(':53') else 'no name'}\n")
 
 unlisted = [h for h in sorted(hosts) if not any(fnmatch.fnmatch(h, p) for p in patterns)]
 # A request to it, not the switch naming it, which the net log's own command line holds.
 sync = re.findall(r'"(?:url|original_url)":"[a-z]+://(?:127\.0\.0\.1|localhost):' + sync_port + r'[/"]', text)
 if unlisted:
     print("hosts check/hosts.txt doesn't name: " + " ".join(unlisted))
+    sys.exit(1)
+if unnamed:
+    print("connections to addresses no name led to: " + " ".join(sorted(unnamed)))
     sys.exit(1)
 if sync:
     print("signed out, the browser asked the sync server")
@@ -112,4 +130,4 @@ PY
 echo "ok: every host the browser asked, through a launch, the security components' first check," \
   "a page and a search typed in the command bar (suggestions $suggested)," \
   "is one check/hosts.txt names: $(cut -d' ' -f1 "$out/hosts-seen.txt" | tr '\n' ' ')" \
-  "Net log: $netlog, hosts: $out/hosts-seen.txt, addresses no name led to: $out/hosts-addresses.txt"
+  "Net log: $netlog, hosts: $out/hosts-seen.txt, addresses: $out/hosts-addresses.txt"
