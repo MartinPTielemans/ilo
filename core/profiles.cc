@@ -50,6 +50,10 @@
 #include "chrome/browser/ui/browser_window/public/desktop_browser_window_capabilities.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/zoom/chrome_zoom_level_prefs.h"
+#include "chrome/common/pref_names.h"
+#include "components/prefs/pref_service.h"
+#include "third_party/blink/public/common/page/page_zoom.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings.h"
@@ -280,6 +284,7 @@ void UseProfile(Profile* profile) {
   ObserveDownloads(profile);
   ObserveExtensions(profile);
   ApplyAutoPictureInPicture(/*changed=*/false);
+  ApplyEveryday(std::nullopt);
 }
 
 Profile* ProfileOrLoad(bc_id id) {
@@ -312,6 +317,32 @@ void ApplyAutoPictureInPicture(bool changed) {
     HostContentSettingsMapFactory::GetForProfile(profile)->SetDefaultContentSetting(
         ContentSettingsType::AUTO_PICTURE_IN_PICTURE,
         on ? CONTENT_SETTING_DEFAULT : CONTENT_SETTING_BLOCK);
+  }
+}
+
+void ApplyEveryday(std::optional<Everyday> changed) {
+  ProfileManager* manager = g_browser_process->profile_manager();
+  if (!manager) {
+    return;
+  }
+  const Settings& settings = UserSettings();
+  const auto writes = [&](Everyday which, bool chromes_own) {
+    return changed == which || !chromes_own;
+  };
+  for (Profile* profile : manager->GetLoadedProfiles()) {
+    if (writes(Everyday::kAskWhereToSave, !settings.ask_where_to_save)) {
+      profile->GetPrefs()->SetBoolean(prefs::kPromptForDownload, settings.ask_where_to_save);
+    }
+    if (ChromeZoomLevelPrefs* zoom = profile->GetZoomLevelPrefs();
+        zoom && writes(Everyday::kPageZoom, settings.page_zoom == 1)) {
+      zoom->SetDefaultZoomLevelPref(blink::ZoomFactorToZoomLevel(settings.page_zoom));
+    }
+    // The default alone: a site the user allowed or blocked keeps its own.
+    if (writes(Everyday::kNotificationPrompts, settings.notification_prompts)) {
+      HostContentSettingsMapFactory::GetForProfile(profile)->SetDefaultContentSetting(
+          ContentSettingsType::NOTIFICATIONS,
+          settings.notification_prompts ? CONTENT_SETTING_ASK : CONTENT_SETTING_BLOCK);
+    }
   }
 }
 

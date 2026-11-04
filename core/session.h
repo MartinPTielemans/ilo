@@ -190,6 +190,12 @@ struct Settings {
   // Whether the user said yes to Google's Widevine module, which the component updater then keeps
   // up to date (widevine.h), until they remove it.
   bool widevine = false;
+  // Chromium's own, which the core writes into every profile (ApplyEveryday): whether each
+  // download asks where to save it, the pages' zoom (1 for 100%), and whether sites may ask to
+  // send notifications.
+  bool ask_where_to_save = false;
+  double page_zoom = 1;
+  bool notification_prompts = true;
 };
 
 // The user's settings. Call SessionChanged after changing them.

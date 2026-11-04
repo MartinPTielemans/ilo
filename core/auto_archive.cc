@@ -14,6 +14,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "base/timer/wall_clock_timer.h"
+#include "browser_core/archive_rule.h"
 #include "browser_core/profiles.h"
 #include "browser_core/host.h"
 #include "browser_core/session.h"
@@ -77,10 +78,11 @@ std::optional<base::TimeDelta> Given(const char* name) {
   return std::nullopt;
 }
 
-// |space|'s time: its profile's own, or for one not loaded, the profile its tabs open in.
-base::TimeDelta ArchiveAfter(const Space& space) {
+// |space|'s time: its profile's own, or for one not loaded, the profile its tabs open in; none
+// for Never.
+std::optional<base::TimeDelta> ArchiveAfter(const Space& space) {
   static const std::optional<base::TimeDelta> given = Given(kArchiveAfterSwitch);
-  return given.value_or(ProfileArchiveAfter(ProfileFor(space.profile())));
+  return given ? given : ProfileArchiveAfter(ProfileFor(space.profile()));
 }
 
 // How long a Little ilo window that isn't active stays open (bc_little_archive_after).
@@ -107,13 +109,13 @@ base::WallClockTimer& Timer() {
 bool g_schedule_posted = false;
 
 // Each Today tab no window shows, with its page or without.
-void ForEachUnseen(base::FunctionRef<void(bc_id, Tab*, base::TimeDelta)> each) {
+void ForEachUnseen(base::FunctionRef<void(bc_id, Tab*, std::optional<base::TimeDelta>)> each) {
   for (Space* space : Space::All()) {
     // An agent's tabs aren't the user's to tidy, and it may still be working in them (#1408).
     if (space->agent()) {
       continue;
     }
-    const base::TimeDelta after = ArchiveAfter(*space);
+    const std::optional<base::TimeDelta> after = ArchiveAfter(*space);
     // A copy, as closing a tab takes it out.
     for (bc_id id : std::vector<bc_id>(space->today())) {
       Tab* tab = Tab::Get(id);
@@ -141,8 +143,9 @@ void ArchiveDue() {
   }
   const base::Time now = base::Time::Now();
   std::vector<bc_id> due;
-  ForEachUnseen([&](bc_id id, Tab* tab, base::TimeDelta after) {
-    if (tab->last_seen() + after > now) {
+  ForEachUnseen([&](bc_id id, Tab* tab, std::optional<base::TimeDelta> after) {
+    const std::optional<base::Time> due = archive_rule::DueAt(tab->last_seen(), after);
+    if (!due || *due > now) {
       return;
     }
     // Seen now, so one playing sound, or one its page keeps open, waits another interval.
@@ -185,9 +188,10 @@ void ArchiveDue() {
 void Schedule() {
   g_schedule_posted = false;
   std::optional<base::Time> next;
-  ForEachUnseen([&](bc_id, Tab* tab, base::TimeDelta after) {
-    const base::Time due = tab->last_seen() + after;
-    next = next ? std::min(*next, due) : due;
+  ForEachUnseen([&](bc_id, Tab* tab, std::optional<base::TimeDelta> after) {
+    if (const std::optional<base::Time> due = archive_rule::DueAt(tab->last_seen(), after)) {
+      next = next ? std::min(*next, *due) : *due;
+    }
   });
   ForEachUnusedLittle([&](Window*, base::Time due) { next = next ? std::min(*next, due) : due; });
   if (next) {
@@ -218,17 +222,18 @@ void ArchiveDefaultRead() {
   }
 }
 
-base::TimeDelta ProfileArchiveAfter(Profile* profile) {
+std::optional<base::TimeDelta> ProfileArchiveAfter(Profile* profile) {
   const double seconds =
       profile ? profile->GetOriginalProfile()->GetPrefs()->GetDouble(kArchiveAfter) : 0;
-  return seconds > 0 ? base::Seconds(seconds) : UserSettings().archive_after;
+  return archive_rule::FromPref(seconds, UserSettings().archive_after);
 }
 
-bool SetProfileArchiveAfter(Profile* profile, base::TimeDelta after) {
-  if (!profile || !after.is_positive()) {
+bool SetProfileArchiveAfter(Profile* profile, std::optional<base::TimeDelta> after) {
+  if (!profile || (after && !after->is_positive())) {
     return false;
   }
-  profile->GetOriginalProfile()->GetPrefs()->SetDouble(kArchiveAfter, after.InSecondsF());
+  profile->GetOriginalProfile()->GetPrefs()->SetDouble(
+      kArchiveAfter, after ? after->InSecondsF() : archive_rule::kNever);
   ScheduleAutoArchive();
   return true;
 }

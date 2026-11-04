@@ -113,6 +113,16 @@ source_set("space_default") {
   ]
 }
 
+# When auto-archive takes a Today tab, Never too, apart so browser_core_unittests tests the rule
+# alone.
+source_set("archive_rule") {
+  sources = [
+    "archive_rule.cc",
+    "archive_rule.h",
+  ]
+  deps = [ "//base" ]
+}
+
 # Which sidebar backups Arc's schedule keeps, apart so browser_core_unittests tests the rule
 # alone.
 source_set("sidebar_backups") {
@@ -250,6 +260,7 @@ source_set("browser_core") {
   ]
 
   deps = [
+    ":archive_rule",
     ":drm_request",
     ":search_default",
     ":sidebar_backups",
@@ -511,6 +522,7 @@ source_set("browser_core") {
 # engine's run runs them.
 test("browser_core_unittests") {
   sources = [
+    "archive_rule_unittest.cc",
     "search_default_unittest.cc",
     "sidebar_backups_unittest.cc",
 
@@ -522,6 +534,7 @@ test("browser_core_unittests") {
     "sync_pairing_unittest.cc",
   ]
   deps = [
+    ":archive_rule",
     ":search_default",
     ":sidebar_backups",
     ":space_default",
