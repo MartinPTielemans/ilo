@@ -6,16 +6,17 @@ use std::sync::Arc;
 use gpui::{App, Context, Hsla, Image, Pixels, Point, Rgba, SharedString, rgb};
 
 use super::{
-    AgentGrants, Command, MAX_PANES, Page, ProfileChoice, Row, Shell, UserKeys, clean_link, files,
+    Command, MAX_PANES, Page, ProfileChoice, Row, Shell, UserKeys, clean_link,
     commands::markdown_text,
+    files,
     undo::{Prop, Value},
     user_keys,
 };
 use crate::{
     dialog::{Field, Question},
     menu::{Highlight, Look, Swatch},
-    space_icon::{SpaceIcon, has_icon},
     palette::Tone,
+    space_icon::{SpaceIcon, has_icon},
 };
 
 /// ilo's nouns, which stay capitalized in a sentence, as Chrome's Incognito does.
@@ -34,7 +35,12 @@ fn sentence_case(title: &str) -> String {
             false => word.to_lowercase(),
         }
     };
-    title.split(' ').enumerate().map(word).collect::<Vec<_>>().join(" ")
+    title
+        .split(' ')
+        .enumerate()
+        .map(word)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// What an item of a menu does once chosen.
@@ -103,7 +109,10 @@ impl MenuEntry {
 
     /// A heading over the items after it, in the platform's case.
     pub fn header(title: &'static str) -> Self {
-        MenuEntry { header: true, ..MenuEntry::new(title, false) }
+        MenuEntry {
+            header: true,
+            ..MenuEntry::new(title, false)
+        }
     }
 
     pub fn line() -> Self {
@@ -112,7 +121,10 @@ impl MenuEntry {
 
     /// In the submenu of the item at `parent`.
     fn under(self, parent: usize) -> Self {
-        MenuEntry { parent: Some(parent), ..self }
+        MenuEntry {
+            parent: Some(parent),
+            ..self
+        }
     }
 
     pub(super) fn checked(self, checked: bool) -> Self {
@@ -120,21 +132,34 @@ impl MenuEntry {
     }
 
     pub(crate) fn destructive(self) -> Self {
-        MenuEntry { destructive: true, ..self }
+        MenuEntry {
+            destructive: true,
+            ..self
+        }
     }
 
     /// The item before it's ⌥ alternate.
     fn alternate(self) -> Self {
-        MenuEntry { alternate: true, ..self }
+        MenuEntry {
+            alternate: true,
+            ..self
+        }
     }
 
     fn swatch(self, swatch: Swatch) -> Self {
-        MenuEntry { swatch: Some(swatch), ..self }
+        MenuEntry {
+            swatch: Some(swatch),
+            ..self
+        }
     }
 
     /// For a page with `favicon`.
     pub(super) fn page(self, favicon: Option<Arc<Image>>) -> Self {
-        MenuEntry { page: true, favicon, ..self }
+        MenuEntry {
+            page: true,
+            favicon,
+            ..self
+        }
     }
 
     /// Shows the shortcut that runs `command`.
@@ -152,6 +177,36 @@ pub fn new_profile_name(names: &[SharedString]) -> String {
         .unwrap_or_default()
 }
 
+/// Why Settings › Profiles has no Delete for a profile, for the line under its name, or None when
+/// it has one or nothing needs saying. The core deletes none a Space or a favorite is in, nor the
+/// one it started with, `first`. `profiles` counts them all; `spaces` counts the Spaces listed in
+/// it, `task` says whether an agent's task, whose Space isn't listed, is working in it, and
+/// `favorites` whether a favorite is in it.
+pub fn profile_kept(
+    first: bool,
+    profiles: usize,
+    spaces: usize,
+    task: bool,
+    favorites: bool,
+) -> Option<String> {
+    let its = match spaces {
+        0 => None,
+        1 => Some("its Space"),
+        _ => Some("its Spaces"),
+    };
+    let why = match (its, favorites) {
+        // With no other profile there's nothing to delete it for, so nothing to explain.
+        _ if first && profiles < 2 => return None,
+        _ if first => "The first profile can't be deleted.".into(),
+        (Some(its), true) => format!("Delete {its} and remove its favorites to delete it."),
+        (Some(its), false) => format!("Delete {its} to delete it."),
+        (None, true) => "Remove its favorites to delete it.".into(),
+        (None, false) if task => "An agent's task is working in it.".into(),
+        (None, false) => return None,
+    };
+    Some(why)
+}
+
 impl Shell {
     /// The menu a right-click on a Space's name or dot shows (Arc), with its icon (ours).
     pub(super) fn space_menu(
@@ -164,7 +219,7 @@ impl Shell {
         if self.private {
             return;
         }
-        let items = self.space_items(space, cx);
+        let items = self.space_items(space, true, cx);
         self.show_menu(items, position, None, cx);
     }
 
@@ -199,37 +254,55 @@ impl Shell {
             items.push((MenuEntry::line(), Box::new(|_, _| {})));
             // Its Profile submenu's items name their parent by where it is, now further down.
             let after = items.len();
-            items.extend(self.space_items(space, cx).into_iter().map(|(entry, action)| {
-                let parent = entry.parent.map(|parent| parent + after);
-                (MenuEntry { parent, ..entry }, action)
-            }));
+            items.extend(
+                self.space_items(space, false, cx)
+                    .into_iter()
+                    .map(|(entry, action)| {
+                        let parent = entry.parent.map(|parent| parent + after);
+                        (MenuEntry { parent, ..entry }, action)
+                    }),
+            );
         }
         self.show_menu(items, position, None, cx);
     }
 
-    /// The Space's menu's items, for its name, its dot and the sidebar's empty space.
-    fn space_items(&self, space: u64, cx: &App) -> Vec<(MenuEntry, MenuAction)> {
+    /// The Space's menu's items, for its name, its dot and the sidebar's empty space, in Arc
+    /// 1.171's order. The empty space's menu leads with its own New Folder…, so `new_folder` is
+    /// false there.
+    fn space_items(&self, space: u64, new_folder: bool, cx: &App) -> Vec<(MenuEntry, MenuAction)> {
         let entry = self.spaces.iter().find(|each| each.id == space);
         let icon = entry.is_some_and(|each| has_icon(&each.icon));
         let theme = entry.is_some_and(|each| each.color.is_some() || each.theme.is_some());
         let mut items = space_menu_head(space, icon, theme);
-        // An agent's Space leads to what the agent did in it, and lists what the user let it do
-        // for good, to take back.
-        if let Some(each) = entry.filter(|each| !each.agent.is_empty()) {
-            let mut agent = self.agent_items(space, &each.agent, cx);
-            agent.extend(items);
-            items = agent;
-        }
         let at = items.len();
-        items.push((MenuEntry::new("Profile", true), Box::new(|_, _| {})));
+        items.push((MenuEntry::new("Set Profile", true), Box::new(|_, _| {})));
         let mut profiles = self.profile_items(space);
         let deletes = self.delete_profile_items();
         if !deletes.is_empty() {
             profiles.push((MenuEntry::line(), Box::new(|_, _| {})));
         }
         profiles.extend(deletes);
-        items.extend(profiles.into_iter().map(|(entry, action)| (entry.under(at), action)));
-        // Ours: Arc exports every Space at once, from Settings.
+        items.extend(
+            profiles
+                .into_iter()
+                .map(|(entry, action)| (entry.under(at), action)),
+        );
+        items.push((MenuEntry::line(), Box::new(|_, _| {})));
+        if new_folder {
+            let entry =
+                MenuEntry::new("New Folder…", true).shortcut(Command::NewFolder, user_keys(cx));
+            items.push((
+                entry,
+                // Into the Space it was asked in, from its dot or its Library card too.
+                Box::new(move |shell, cx| {
+                    shell.show_space(space, cx);
+                    shell.run(Command::NewFolder, "space menu", cx)
+                }),
+            ));
+            items.push((MenuEntry::line(), Box::new(|_, _| {})));
+        }
+        // Ours, where Arc shares and exports a Space into a folder: Arc exports every Space at
+        // once, from Settings.
         items.push((
             MenuEntry::new("Export as Markdown…", true),
             Box::new(move |shell, cx| {
@@ -240,49 +313,18 @@ impl Shell {
         ));
         items.push((MenuEntry::line(), Box::new(|_, _| {})));
         items.push((
+            MenuEntry::new("Manage Spaces…", true),
+            Box::new(|shell, cx| {
+                // check.sh waits for this line.
+                log!("browser: command manage-spaces via space menu");
+                shell.manage_spaces(cx)
+            }),
+        ));
+        items.push((MenuEntry::line(), Box::new(|_, _| {})));
+        items.push((
             MenuEntry::new("Delete Space", self.spaces.len() > 1).destructive(),
             Box::new(move |shell, cx| shell.delete_space(space, cx)),
         ));
-        items
-    }
-
-    /// The head of an agent's Space's menu: its activity, Revoke Permission with what the user
-    /// answered for good on each site, Take Back All Tabs and Disconnect.
-    fn agent_items(&self, space: u64, name: &str, cx: &App) -> Vec<(MenuEntry, MenuAction)> {
-        let AgentGrants { sites: grants, connected, tabs } =
-            self.browser.agent_permissions(space, cx);
-        let mut items: Vec<(MenuEntry, MenuAction)> = vec![
-            (
-                MenuEntry::new("Agent Activity…", true),
-                Box::new(|shell, cx| shell.browser.agent_activity(cx)),
-            ),
-            (MenuEntry::new("Revoke Permission", !grants.is_empty()), Box::new(|_, _| {})),
-        ];
-        let several = grants.len() > 1;
-        for (site, may) in grants {
-            let title = MenuEntry::label(if may { "Always Allow" } else { "Never" });
-            let title = format!("{title} on {site}");
-            items.push((
-                MenuEntry::named(title, true).under(1),
-                Box::new(move |shell, cx| shell.browser.revoke_agent(space, Some(site), cx)),
-            ));
-        }
-        if several {
-            items.push((MenuEntry::line().under(1), Box::new(|_, _| {})));
-            items.push((
-                MenuEntry::new("All Sites", true).under(1),
-                Box::new(move |shell, cx| shell.browser.revoke_agent(space, None, cx)),
-            ));
-        }
-        items.push((
-            MenuEntry::new("Take Back All Tabs", tabs),
-            Box::new(move |shell, cx| shell.browser.take_back_agent_tabs(space, cx)),
-        ));
-        items.push((
-            MenuEntry::named(format!("Disconnect {name}"), connected),
-            Box::new(move |shell, cx| shell.browser.disconnect_agent(space, cx)),
-        ));
-        items.push((MenuEntry::line(), Box::new(|_, _| {})));
         items
     }
 
@@ -309,6 +351,8 @@ impl Shell {
     ) {
         let look = self.menu_look();
         self.menu_open = true;
+        // The name row says so after this if the menu is its own.
+        self.name_menu = false;
         let shell = cx.weak_entity();
         self.browser.context_menu(
             entries,
@@ -320,6 +364,7 @@ impl Shell {
                     .update(cx, |shell, cx| {
                         shell.menu_open = false;
                         chosen(index, shell, cx);
+                        shell.settle_recent_downloads(cx);
                     })
                     .ok();
             }),
@@ -331,7 +376,10 @@ impl Shell {
     /// the row the pointer or the keys are on.
     pub fn menu_look(&self) -> Look {
         let palette = self.palette_of(self.space);
-        Look { light: palette.tone == Tone::Light, highlight: Highlight::of(&palette) }
+        Look {
+            light: palette.tone == Tone::Light,
+            highlight: Highlight::of(&palette),
+        }
     }
 
     /// Shows `items` at `position` in ilo's menu, or with the one at `over` there, as a pop-up
@@ -356,7 +404,10 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let entries = (items.iter().enumerate())
-            .map(|(at, (entry, _))| MenuEntry { over: Some(at) == over, ..entry.clone() })
+            .map(|(at, (entry, _))| MenuEntry {
+                over: Some(at) == over,
+                ..entry.clone()
+            })
             .collect();
         self.context_menu_in(
             entries,
@@ -397,7 +448,10 @@ impl Shell {
     /// whether it can go in a new one: only an empty Space changes profile.
     pub(super) fn profile_choices(&self, space: u64) -> Option<(Vec<ProfileChoice>, bool)> {
         let entry = self.spaces.iter().find(|each| each.id == space)?;
-        let (current, empty) = (entry.profile, entry.pinned.is_empty() && entry.today.is_empty());
+        let (current, empty) = (
+            entry.profile,
+            entry.pinned.is_empty() && entry.today.is_empty(),
+        );
         let choices = (self.profiles.iter())
             .map(|(profile, name)| ProfileChoice {
                 profile: *profile,
@@ -416,7 +470,11 @@ impl Shell {
             return;
         };
         match profile {
-            Some(profile) if choices.iter().any(|each| each.profile == profile && each.enabled) => {
+            Some(profile)
+                if choices
+                    .iter()
+                    .any(|each| each.profile == profile && each.enabled) =>
+            {
                 self.browser.set_space_profile(self.space, profile, cx)
             }
             None if new => self.new_profile(self.space, cx),
@@ -450,7 +508,9 @@ impl Shell {
             "Its history, cookies and logins go with it.".into(),
             "Delete",
             Box::new(move |cx| {
-                shell.update(cx, |shell, cx| shell.browser.delete_profile(profile, cx)).ok();
+                shell
+                    .update(cx, |shell, cx| shell.browser.delete_profile(profile, cx))
+                    .ok();
             }),
             cx,
         );
@@ -465,8 +525,12 @@ impl Shell {
         pin: bool,
         cx: &mut Context<Self>,
     ) {
-        let profile_of =
-            |space| self.spaces.iter().find(|each| each.id == space).map(|each| each.profile);
+        let profile_of = |space| {
+            self.spaces
+                .iter()
+                .find(|each| each.id == space)
+                .map(|each| each.profile)
+        };
         let to = profile_of(space);
         // The tab's own Space, which isn't the one shown once New Space… shows the new one.
         let from = (self.spaces.iter())
@@ -536,8 +600,14 @@ impl Shell {
         let shell = cx.weak_entity();
         let made = Box::new(move |texts: Vec<String>, cx: &mut App| {
             let typed = texts.first().map_or("", |text| text.trim());
-            let name = if typed.is_empty() { numbered } else { typed.to_string() };
-            shell.update(cx, |shell, cx| shell.make_profile(space, &name, cx)).ok();
+            let name = if typed.is_empty() {
+                numbered
+            } else {
+                typed.to_string()
+            };
+            shell
+                .update(cx, |shell, cx| shell.make_profile(space, &name, cx))
+                .ok();
         });
         self.browser.tell(question, made, cx);
     }
@@ -578,14 +648,6 @@ impl Shell {
         } else {
             self.today_tab_menu(keys, tab, position)
         };
-        // A tab the user holds from an agent says so first, and gives it back (#404).
-        let mut held = self.held_items(tab);
-        let shift = held.len();
-        held.extend(items.into_iter().map(|(entry, name, action)| {
-            let parent = entry.parent.map(|parent| parent + shift);
-            (MenuEntry { parent, ..entry }, name, action)
-        }));
-        let items = held;
         let entries = items.iter().map(|(entry, ..)| entry.clone()).collect();
         self.context_menu(
             entries,
@@ -609,35 +671,6 @@ impl Shell {
         cx.notify();
     }
 
-    /// The head of the menu of a tab the user holds from the agent whose Space shows: that they
-    /// took it back or the agent handed it to them, and Hand Back.
-    fn held_items(&self, tab: u64) -> Vec<(MenuEntry, &'static str, MenuAction)> {
-        let Some(space) = self.shown_space().filter(|space| !space.agent.is_empty()) else {
-            return Vec::new();
-        };
-        let held = (self.agent_status.iter())
-            .filter(|status| status.space == space.id)
-            .flat_map(|status| &status.held)
-            .find(|(id, _)| *id == tab);
-        let Some((_, why)) = held else {
-            return Vec::new();
-        };
-        let name = &space.agent;
-        let state = match why.is_empty() {
-            true => MenuEntry::label("Taken Back from"),
-            false => MenuEntry::label("Handed to You by"),
-        };
-        vec![
-            (MenuEntry::named(format!("{state} {name}"), false), "", Box::new(|_, _| {})),
-            (
-                MenuEntry::named(format!("{} {name}", MenuEntry::label("Hand Back to")), true),
-                "hand-back",
-                Box::new(move |shell, cx| shell.browser.hand_back(tab, cx)),
-            ),
-            (MenuEntry::line(), "", Box::new(|_, _| {})),
-        ]
-    }
-
     /// A favorite's menu.
     fn favorite_menu(
         &self,
@@ -652,7 +685,11 @@ impl Shell {
                 "back-to-pinned-url",
                 Box::new(move |shell, cx| shell.browser.back_to_pinned_url(tab, cx)),
             ),
-            replace_pinned_url(tab, "Replace Favorite URL with Current", page.away_from_pinned_url),
+            replace_pinned_url(
+                tab,
+                "Replace Favorite URL with Current",
+                page.away_from_pinned_url,
+            ),
             (
                 MenuEntry::new("Duplicate Tab", true),
                 "duplicate-tab",
@@ -661,7 +698,7 @@ impl Shell {
                 }),
             ),
             (
-                MenuEntry::new("Remove from Favorites", !self.agents_space_shown()),
+                MenuEntry::new("Remove from Favorites", true),
                 "remove-from-favorites",
                 // To the top of Today.
                 Box::new(move |shell, cx| shell.move_tab_to(tab, false, 0, 0, cx)),
@@ -708,21 +745,29 @@ impl Shell {
         if self.private {
             return vec![copy, line(), close];
         }
-        let pin = if self.chosen_pin() { "Pin Tabs" } else { "Unpin Tabs" };
-        let mut items: Vec<(MenuEntry, &'static str, MenuAction)> = vec![
-            (
-                MenuEntry::new(pin, tabs).shortcut(Command::TogglePin, keys),
-                "toggle-pin",
-                Box::new(|shell, cx| shell.pin_chosen(cx)),
-            ),
-        ];
+        let pin = if self.chosen_pin() {
+            "Pin Tabs"
+        } else {
+            "Unpin Tabs"
+        };
+        let mut items: Vec<(MenuEntry, &'static str, MenuAction)> = vec![(
+            MenuEntry::new(pin, tabs).shortcut(Command::TogglePin, keys),
+            "toggle-pin",
+            Box::new(|shell, cx| shell.pin_chosen(cx)),
+        )];
         self.push_add_to_folder(self.chosen_in_order(), &mut items);
         let others = self.spaces_for_chosen();
         let move_to = items.len();
-        items.push((MenuEntry::new("Move to Space", !others.is_empty()), "", Box::new(|_, _| {})));
+        items.push((
+            MenuEntry::new("Move to Space", !others.is_empty()),
+            "",
+            Box::new(|_, _| {}),
+        ));
         for (space, name, _) in others {
             items.push((
-                MenuEntry::named(name, true).swatch(self.space_swatch(space)).under(move_to),
+                MenuEntry::named(name, true)
+                    .swatch(self.space_swatch(space))
+                    .under(move_to),
                 "move-to-space",
                 Box::new(move |shell, cx| shell.move_chosen_to_space(space, cx)),
             ));
@@ -763,10 +808,16 @@ impl Shell {
         // Each other Space, as a pinned tab's Move to Space lists them (owner, #1353).
         let others = self.spaces_to_move_to(false);
         let move_to = items.len();
-        items.push((MenuEntry::new("Move to Space", !others.is_empty()), "", Box::new(|_, _| {})));
+        items.push((
+            MenuEntry::new("Move to Space", !others.is_empty()),
+            "",
+            Box::new(|_, _| {}),
+        ));
         for (space, name, _) in others {
             items.push((
-                MenuEntry::named(name, true).swatch(self.space_swatch(space)).under(move_to),
+                MenuEntry::named(name, true)
+                    .swatch(self.space_swatch(space))
+                    .under(move_to),
                 "move-to-space",
                 Box::new(move |shell, cx| shell.move_to_space(folder, space, false, cx)),
             ));
@@ -817,7 +868,10 @@ impl Shell {
             }
             parent == folder
         };
-        let tabs = space.pinned.iter().filter(|&&row| !space.is_folder(row) && within(row));
+        let tabs = space
+            .pinned
+            .iter()
+            .filter(|&&row| !space.is_folder(row) && within(row));
         tabs.copied().collect()
     }
 
@@ -838,7 +892,11 @@ impl Shell {
                 true => format!("[{}]({link})", markdown_text(&self.title(tab))),
             })
             .collect();
-        let toast = if markdown { "Copied Links as Markdown" } else { "Copied All Links" };
+        let toast = if markdown {
+            "Copied Links as Markdown"
+        } else {
+            "Copied All Links"
+        };
         self.copy(&lines.join("\n"), toast, cx);
     }
 
@@ -880,8 +938,11 @@ impl Shell {
         // Arc's Pinned URL › Replace Pinned URL with Current and Edit….
         let pinned_url = items.len();
         items.push((MenuEntry::new("Pinned URL", true), "", Box::new(|_, _| {})));
-        let (entry, name, action) =
-            replace_pinned_url(tab, "Replace Pinned URL with Current", page.away_from_pinned_url);
+        let (entry, name, action) = replace_pinned_url(
+            tab,
+            "Replace Pinned URL with Current",
+            page.away_from_pinned_url,
+        );
         items.push((entry.under(pinned_url), name, action));
         items.push((
             MenuEntry::new("Edit…", true).under(pinned_url),
@@ -907,20 +968,24 @@ impl Shell {
             Box::new(move |shell, cx| shell.duplicate_row(tab, cx)),
         ));
         self.push_add_to_folder(vec![tab], &mut items);
-        // Each other Space, in the switcher's order, then the agents' it can be given to.
+        // Each other Space, in the switcher's order.
         let others = self.spaces_to_move_to(false);
-        let agents = self.agents_to_give(tab);
         let move_to = items.len();
-        let any = !others.is_empty() || !agents.is_empty();
-        items.push((MenuEntry::new("Move to Space", any), "", Box::new(|_, _| {})));
+        let any = !others.is_empty();
+        items.push((
+            MenuEntry::new("Move to Space", any),
+            "",
+            Box::new(|_, _| {}),
+        ));
         for (space, name, _) in others {
             items.push((
-                MenuEntry::named(name, true).swatch(self.space_swatch(space)).under(move_to),
+                MenuEntry::named(name, true)
+                    .swatch(self.space_swatch(space))
+                    .under(move_to),
                 "move-to-space",
                 Box::new(move |shell, cx| shell.move_to_space(tab, space, false, cx)),
             ));
         }
-        items.extend(self.give_items(tab, agents, move_to));
         items.push((MenuEntry::line(), "", Box::new(|_, _| {})));
         // One closed already has nothing to close.
         items.push((
@@ -965,7 +1030,11 @@ impl Shell {
             return;
         }
         let share = items.len();
-        items.push((placed(MenuEntry::new("Share", true)), "", Box::new(|_, _| {})));
+        items.push((
+            placed(MenuEntry::new("Share", true)),
+            "",
+            Box::new(|_, _| {}),
+        ));
         for (at, service) in services.into_iter().enumerate() {
             let (link, title) = (link.to_string(), self.title(tab));
             items.push((
@@ -1074,7 +1143,6 @@ impl Shell {
                     ));
                 }
             }
-            items.extend(self.give_items(tab, self.agents_to_give(tab), move_to));
             items.push((MenuEntry::line().under(move_to), "", Box::new(|_, _| {})));
             items.push((
                 MenuEntry::new("New Space…", true).under(move_to),
@@ -1112,10 +1180,7 @@ impl Shell {
         let pinned = self.pinned().contains(&tab);
         // Arc's closed split is a pinned one with none of its pages loaded.
         let closed = pinned && panes.iter().all(|&pane| self.page(pane).unloaded);
-        let orientation = match self.stacked(tab) {
-            true => "Convert to Horizontal Split View",
-            false => "Convert to Vertical Split View",
-        };
+        let orientation = super::commands::orientation_title(self.stacked(tab));
         let mut items: Vec<(MenuEntry, &'static str, MenuAction)> = vec![
             (
                 MenuEntry::new("Separate All Tabs", true),
@@ -1169,7 +1234,10 @@ impl Shell {
             for (space, name, shown) in self.spaces_to_move_to(true) {
                 let swatch = self.space_swatch(space);
                 items.push((
-                    MenuEntry::named(name, true).checked(shown).swatch(swatch).under(move_to),
+                    MenuEntry::named(name, true)
+                        .checked(shown)
+                        .swatch(swatch)
+                        .under(move_to),
                     "move-to-space",
                     Box::new(move |shell, cx| {
                         if !shown {
@@ -1233,7 +1301,11 @@ impl Shell {
             (MenuEntry::line().under(parent), "", Box::new(|_, _| {}))
         };
         let parent = items.len();
-        items.push((MenuEntry::named(self.title(pane), true), "", Box::new(|_, _| {})));
+        items.push((
+            MenuEntry::named(self.title(pane), true),
+            "",
+            Box::new(|_, _| {}),
+        ));
         let (entry, name, action) = separate(pane);
         items.push((entry.under(parent), name, action));
         items.push(line(parent));
@@ -1275,9 +1347,16 @@ impl Shell {
             Box::new(move |shell, cx| shell.browser.back_to_pinned_url(pane, cx)),
         ));
         let pinned_url = items.len();
-        items.push((MenuEntry::new("Pinned URL", true).under(parent), "", Box::new(|_, _| {})));
-        let (entry, name, action) =
-            replace_pinned_url(pane, "Replace Pinned URL with Current", page.away_from_pinned_url);
+        items.push((
+            MenuEntry::new("Pinned URL", true).under(parent),
+            "",
+            Box::new(|_, _| {}),
+        ));
+        let (entry, name, action) = replace_pinned_url(
+            pane,
+            "Replace Pinned URL with Current",
+            page.away_from_pinned_url,
+        );
         items.push((entry.under(pinned_url), name, action));
         items.push((
             MenuEntry::new("Edit…", true).under(pinned_url),
@@ -1301,7 +1380,9 @@ impl Shell {
         let profile = self.shown_space().map(|space| space.profile);
         (self.spaces_to_move_to(false).into_iter())
             .filter(|&(space, ..)| {
-                self.spaces.iter().any(|each| each.id == space && Some(each.profile) == profile)
+                self.spaces
+                    .iter()
+                    .any(|each| each.id == space && Some(each.profile) == profile)
             })
             .collect()
     }
@@ -1328,7 +1409,11 @@ impl Shell {
         items: &mut Vec<(MenuEntry, &'static str, MenuAction)>,
     ) {
         let parent = items.len();
-        items.push((MenuEntry::new("Add to Folder", true), "", Box::new(|_, _| {})));
+        items.push((
+            MenuEntry::new("Add to Folder", true),
+            "",
+            Box::new(|_, _| {}),
+        ));
         let new = rows.clone();
         items.push((
             MenuEntry::new("New Folder", true).under(parent),
@@ -1352,51 +1437,23 @@ impl Shell {
     /// Move to › a folder: the tab goes to the folder's top, from its Space's Today tabs or
     /// another Space's, as one step to undo.
     fn move_into_folder(&mut self, tab: u64, space: u64, folder: u64, cx: &mut Context<Self>) {
-        if self.spaces.iter().any(|each| each.id == space && each.today.contains(&tab)) {
+        if self
+            .spaces
+            .iter()
+            .any(|each| each.id == space && each.today.contains(&tab))
+        {
             return self.move_tab_to(tab, true, folder, 0, cx);
         }
         self.send_to_space(tab, space, false, cx);
         self.browser.move_tab(tab, true, folder, 0, cx);
     }
 
-    /// The agents' Spaces the user can give `tab` to, by id and name: a tab of the user's own,
-    /// to an agent whose Space is in its profile, as the page goes as it is (bc_tab_give_to_agent).
-    fn agents_to_give(&self, tab: u64) -> Vec<(u64, SharedString)> {
-        let Some(from) = (self.spaces.iter())
-            .find(|space| space.pinned.contains(&tab) || space.today.contains(&tab))
-            .filter(|space| space.agent.is_empty())
-        else {
-            return Vec::new();
-        };
-        (self.spaces.iter())
-            .filter(|space| !space.agent.is_empty() && space.profile == from.profile)
-            .map(|space| (space.id, space.name.clone()))
-            .collect()
-    }
-
-    /// Move to's items that give `tab` to an agent, under the item at `move_to`.
-    fn give_items(
-        &self,
-        tab: u64,
-        agents: Vec<(u64, SharedString)>,
-        move_to: usize,
-    ) -> Vec<(MenuEntry, &'static str, MenuAction)> {
-        let item = |(space, name)| -> (MenuEntry, &'static str, MenuAction) {
-            (
-                MenuEntry::named(name, true).swatch(self.space_swatch(space)).under(move_to),
-                "give-to-agent",
-                Box::new(move |shell: &mut Shell, cx: &mut Context<Shell>| {
-                    shell.browser.give_to_agent(tab, space, cx)
-                }),
-            )
-        };
-        agents.into_iter().map(item).collect()
-    }
-
     /// `space`'s swatch: its theme's first two colours, or its one colour going lighter down as
     /// the window's gradient does, with the untinted palette's accent for a Space without one.
     pub(super) fn space_swatch(&self, space: u64) -> Swatch {
-        let theme = self.theme_of(space).map(|theme| theme.shown(self.tone_of(space) == Tone::Dark));
+        let theme = self
+            .theme_of(space)
+            .map(|theme| theme.shown(self.tone_of(space) == Tone::Dark));
         if let Some(theme) = theme {
             let colors = theme.colors();
             if let [from, to, ..] = colors[..] {
@@ -1405,11 +1462,20 @@ impl Shell {
         }
         let entry = self.spaces.iter().find(|each| each.id == space);
         let color = theme.map(|theme| theme.main_color());
-        let untinted = || crate::theme::packed(crate::palette::Palette::of(None, self.tone_of(space)).accent);
-        let color = color.or(entry.and_then(|each| each.color)).unwrap_or_else(untinted);
+        let untinted =
+            || crate::theme::packed(crate::palette::Palette::of(None, self.tone_of(space)).accent);
+        let color = color
+            .or(entry.and_then(|each| each.color))
+            .unwrap_or_else(untinted);
         let hsla = Hsla::from(rgb(color));
-        let lighter = crate::theme::packed(Rgba::from(Hsla { l: (hsla.l + 0.25).min(1.), ..hsla }));
-        Swatch { from: color, to: lighter }
+        let lighter = crate::theme::packed(Rgba::from(Hsla {
+            l: (hsla.l + 0.25).min(1.),
+            ..hsla
+        }));
+        Swatch {
+            from: color,
+            to: lighter,
+        }
     }
 
     /// Copy Link: copies `tab`'s URL without its tracking parameters, as ⇧⌘C does the tab
@@ -1431,8 +1497,10 @@ impl Shell {
         ];
         let split = self.selected != 0 && self.panes(self.selected).len() < MAX_PANES;
         let enabled = |command| command != Command::AddSplit || split;
-        let mut entries: Vec<MenuEntry> =
-            items.iter().map(|&(title, command)| MenuEntry::new(title, enabled(command))).collect();
+        let mut entries: Vec<MenuEntry> = items
+            .iter()
+            .map(|&(title, command)| MenuEntry::new(title, enabled(command)))
+            .collect();
         // From the desktop, after a line: the Mac's panel picks files and folders together, the
         // others' one or the other (ours, as Arc adds both from its +).
         let disk: &[(&str, bool, bool)] = match files::PANEL_PICKS_BOTH {
@@ -1465,14 +1533,22 @@ impl Shell {
     }
 }
 
-/// The top of a Space's menu, above its profiles: Rename Space, Change Icon…, Remove Icon once it
-/// has one, Edit Theme Color…, and Remove Theme Color once it has a colour.
 /// `space`'s folders, in the sidebar's order, each named by its path, "Docs / Old".
-fn folder_paths(space: &super::Space) -> Vec<(u64, String)> {
-    let name = |folder: u64| space.folders.folders.get(&folder).map(|(name, _)| name.clone());
+pub(super) fn folder_paths(space: &super::Space) -> Vec<(u64, String)> {
+    let name = |folder: u64| {
+        space
+            .folders
+            .folders
+            .get(&folder)
+            .map(|(name, _)| name.clone())
+    };
     let path = |folder: u64| {
         let mut path = vec![name(folder).unwrap_or_default()];
-        path.extend(space.holders(folder).map(|parent| name(parent).unwrap_or_default()));
+        path.extend(
+            space
+                .holders(folder)
+                .map(|parent| name(parent).unwrap_or_default()),
+        );
         path.reverse();
         path.join(" / ")
     };
@@ -1480,17 +1556,14 @@ fn folder_paths(space: &super::Space) -> Vec<(u64, String)> {
     folders.map(|&folder| (folder, path(folder))).collect()
 }
 
+/// The top of a Space's menu, above its profiles, in Arc 1.171's order: Change Space Icon…, Rename
+/// Space… and Edit Theme Color…, with Remove Icon and Remove Theme Color (ours) after what they
+/// undo once the Space has an icon or a colour.
 fn space_menu_head(space: u64, has_icon: bool, has_theme: bool) -> Vec<(MenuEntry, MenuAction)> {
-    let mut items: Vec<(MenuEntry, MenuAction)> = vec![
-        (
-            MenuEntry::new("Rename Space", true),
-            Box::new(move |shell, cx| shell.rename_space(space, cx)),
-        ),
-        (
-            MenuEntry::new("Change Icon…", true),
-            Box::new(move |shell, cx| shell.change_space_icon(space, cx)),
-        ),
-    ];
+    let mut items: Vec<(MenuEntry, MenuAction)> = vec![(
+        MenuEntry::new("Change Space Icon…", true),
+        Box::new(move |shell, cx| shell.change_space_icon(space, cx)),
+    )];
     if has_icon {
         items.push((
             MenuEntry::new("Remove Icon", true),
@@ -1499,7 +1572,10 @@ fn space_menu_head(space: u64, has_icon: bool, has_theme: bool) -> Vec<(MenuEntr
             }),
         ));
     }
-    // After the icon and the name, as in Arc's.
+    items.push((
+        MenuEntry::new("Rename Space…", true),
+        Box::new(move |shell, cx| shell.rename_space(space, cx)),
+    ));
     items.push((
         MenuEntry::new("Edit Theme Color…", true),
         Box::new(move |shell, cx| shell.edit_space_theme(space, cx)),
@@ -1576,10 +1652,47 @@ mod empty_space_tests;
 mod tests {
     use gpui::{AppContext, Entity, TestAppContext, point, px};
 
-    use super::{MenuEntry, sentence_case, space_menu_head, space_menu_label};
+    use super::{MenuEntry, profile_kept, sentence_case, space_menu_head, space_menu_label};
     use crate::shell::{
         Command, Folders, Page, Shell, drag::detents::shell_with, recorder::Recorder,
     };
+
+    /// Settings › Profiles says why a profile has no Delete: what keeps it, and what the user does
+    /// to delete it. A profile nothing keeps, and the only one, say nothing.
+    #[test]
+    fn a_profile_kept_from_deleting_says_why() {
+        let says = |first, profiles, spaces, task, favorites| {
+            profile_kept(first, profiles, spaces, task, favorites).unwrap_or_default()
+        };
+        assert_eq!(says(true, 1, 3, false, true), "", "the only profile");
+        assert_eq!(
+            says(true, 2, 1, false, false),
+            "The first profile can't be deleted."
+        );
+        assert_eq!(
+            says(false, 2, 1, false, false),
+            "Delete its Space to delete it."
+        );
+        assert_eq!(
+            says(false, 3, 2, true, false),
+            "Delete its Spaces to delete it."
+        );
+        let both = "Delete its Space and remove its favorites to delete it.";
+        assert_eq!(says(false, 2, 1, false, true), both);
+        assert_eq!(
+            says(false, 2, 0, true, true),
+            "Remove its favorites to delete it."
+        );
+        assert_eq!(
+            says(false, 2, 0, true, false),
+            "An agent's task is working in it."
+        );
+        assert_eq!(
+            says(false, 2, 0, false, false),
+            "",
+            "nothing keeps it, so it has Delete"
+        );
+    }
 
     /// Off the Mac, ilo's items are in sentence case, keeping its nouns Space and Library and
     /// acronyms capitalized.
@@ -1607,16 +1720,19 @@ mod tests {
 
     fn titles(has_icon: bool, has_theme: bool) -> Vec<String> {
         let items = space_menu_head(1, has_icon, has_theme);
-        items.into_iter().map(|(entry, _)| entry.title.to_string()).collect()
+        items
+            .into_iter()
+            .map(|(entry, _)| entry.title.to_string())
+            .collect()
     }
 
-    /// A Space's menu offers Change Icon… always and Remove Icon only once it has an icon, after
-    /// Rename, as a tab's menu does.
+    /// A Space's menu leads with Change Space Icon… and Rename Space…, as Arc 1.171's does, and
+    /// offers Remove Icon after Change Space Icon… only once the Space has an icon.
     #[test]
     fn remove_icon_is_offered_once_the_space_has_one() {
-        let theme = "Edit Theme Color…";
-        assert_eq!(titles(false, false), ["Rename Space", "Change Icon…", theme]);
-        assert_eq!(titles(true, false), ["Rename Space", "Change Icon…", "Remove Icon", theme]);
+        let (icon, name, theme) = ("Change Space Icon…", "Rename Space…", "Edit Theme Color…");
+        assert_eq!(titles(false, false), [icon, name, theme]);
+        assert_eq!(titles(true, false), [icon, "Remove Icon", name, theme]);
     }
 
     /// Remove Theme Color follows Edit Theme Color… only once the Space has a colour, as Remove
@@ -1665,12 +1781,19 @@ mod tests {
         cx: &mut TestAppContext,
         tab: u64,
     ) -> Vec<String> {
-        shell.update(cx, |shell, cx| shell.tab_menu(tab, point(px(100.), px(200.)), cx));
+        shell.update(cx, |shell, cx| {
+            shell.tab_menu(tab, point(px(100.), px(200.)), cx)
+        });
         logged(&host.entries.borrow())
     }
 
     fn page(url: &str, audible: bool, muted: bool) -> Page {
-        Page { url: url.into(), audible, muted, ..Page::default() }
+        Page {
+            url: url.into(),
+            audible,
+            muted,
+            ..Page::default()
+        }
     }
 
     /// A Today tab's menu is Arc's: its link, its look, its place, then archiving, with Move to
@@ -1721,7 +1844,15 @@ mod tests {
         let (shell, host) = shell_with(cx, &[], &[10], Folders::default());
         shell.update(cx, |shell, cx| {
             let work = (1, "Work".into(), None, 0, "".into(), "".into(), "".into());
-            let reading = (2, "Reading".into(), None, 0, "".into(), "".into(), "".into());
+            let reading = (
+                2,
+                "Reading".into(),
+                None,
+                0,
+                "".into(),
+                "".into(),
+                "".into(),
+            );
             shell.set_spaces(vec![work, reading], cx);
             let mut folders = Folders::default();
             folders.folders.insert(20, ("Shelf".into(), false));
@@ -1736,15 +1867,28 @@ mod tests {
         host.take();
         cx.update(|cx| host.choose("Shelf", cx));
         let (calls, edits) = (host.take(), host.take_edits());
-        assert!(edits.iter().any(|edit| edit.starts_with("move 10 ")), "{calls:?} {edits:?}");
+        assert!(
+            edits.iter().any(|edit| edit.starts_with("move 10 ")),
+            "{calls:?} {edits:?}"
+        );
     }
 
     /// `tabs` as a split view in Space 1, its pinned tabs `pinned` and Today tabs `today`, titled
     /// Ten, Eleven and so on, each at a page, the second playing sound.
     fn split_in(shell: &Entity<Shell>, cx: &mut TestAppContext, pinned: &[u64], today: &[u64]) {
         shell.update(cx, |shell, cx| {
-            let split = crate::shell::Split { tabs: vec![10, 11], ..Default::default() };
-            shell.set_tabs(1, pinned.to_vec(), today.to_vec(), vec![split], Folders::default(), cx);
+            let split = crate::shell::Split {
+                tabs: vec![10, 11],
+                ..Default::default()
+            };
+            shell.set_tabs(
+                1,
+                pinned.to_vec(),
+                today.to_vec(),
+                vec![split],
+                Folders::default(),
+                cx,
+            );
             shell.set_title(10, "Ten".into(), cx);
             shell.set_title(11, "Eleven".into(), cx);
             shell.set_page(10, page("https://example.com/ten", false, false), cx);
@@ -1773,13 +1917,26 @@ mod tests {
                     Change Icon…, Rename…, Duplicate, Move to › Work (checked), \
                     Move to › New Space…, Archive Item, Archive Tabs Below";
         assert!(menu(cx, 10).contains(arcs), "{}", menu(cx, 10));
-        assert!(menu(cx, 11).contains(arcs), "either page's row shows the same menu");
+        assert!(
+            menu(cx, 11).contains(arcs),
+            "either page's row shows the same menu"
+        );
         let keyed: Vec<(Option<usize>, String)> = (host.entries.borrow().iter())
             .filter(|entry| entry.shortcut.is_some())
             .map(|entry| (entry.parent, entry.title.to_string()))
             .collect();
-        let eleven = host.entries.borrow().iter().position(|entry| entry.title == "Eleven");
-        assert_eq!(keyed, [(eleven, "Copy Link".into()), (eleven, "Copy Link as Markdown".into())]);
+        let eleven = host
+            .entries
+            .borrow()
+            .iter()
+            .position(|entry| entry.title == "Eleven");
+        assert_eq!(
+            keyed,
+            [
+                (eleven, "Copy Link".into()),
+                (eleven, "Copy Link as Markdown".into())
+            ]
+        );
         // The split's Archive Item archives every page of it, and a page's only that page.
         host.take();
         cx.update(|cx| host.choose_last("Archive Item", cx));
@@ -1793,8 +1950,19 @@ mod tests {
         // Stacked, it converts back to side by side.
         shell.update(cx, |shell, cx| {
             let tabs = vec![10, 11];
-            let split = crate::shell::Split { tabs, stacked: true, ..Default::default() };
-            shell.set_tabs(1, Vec::new(), vec![10, 11, 12], vec![split], Folders::default(), cx);
+            let split = crate::shell::Split {
+                tabs,
+                stacked: true,
+                ..Default::default()
+            };
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![10, 11, 12],
+                vec![split],
+                Folders::default(),
+                cx,
+            );
         });
         assert!(menu(cx, 10).starts_with("Separate All Tabs, Add Tab…, Convert to Horizontal"));
     }
@@ -1813,7 +1981,10 @@ mod tests {
                    Ten › Pinned URL › Replace Pinned URL with Current (disabled), \
                    Ten › Pinned URL › Edit…, Eleven ›";
         assert!(shown.contains(ten), "{shown}");
-        assert!(shown.ends_with("Move to › New Space…, Archive Item"), "{shown}");
+        assert!(
+            shown.ends_with("Move to › New Space…, Archive Item"),
+            "{shown}"
+        );
         host.take();
         host.take_edits();
         cx.update(|cx| host.choose_last("Archive Item", cx));
@@ -1821,12 +1992,22 @@ mod tests {
         assert_eq!(host.split_closes.take(), [10]);
         shell.update(cx, |shell, cx| {
             for tab in [10, 11] {
-                shell.set_page(tab, Page { unloaded: true, ..Page::default() }, cx);
+                shell.set_page(
+                    tab,
+                    Page {
+                        unloaded: true,
+                        ..Page::default()
+                    },
+                    cx,
+                );
             }
         });
         tab_menu(&shell, &host, cx, 10);
         let shown = crate::menu::described(&host.entries.borrow());
-        assert!(shown.starts_with("Separate All Tabs, Add Tab… (disabled)"), "{shown}");
+        assert!(
+            shown.starts_with("Separate All Tabs, Add Tab… (disabled)"),
+            "{shown}"
+        );
     }
 
     /// Separate All Tabs takes each page out from the right, so they keep their order in the
@@ -1837,8 +2018,19 @@ mod tests {
         let (shell, host) = shell_with(cx, &[1], &[10, 11, 12], Folders::default());
         shell.update(cx, |shell, cx| {
             let tabs = vec![10, 11, 12];
-            let split = crate::shell::Split { tabs, stacked: true, ..Default::default() };
-            shell.set_tabs(1, Vec::new(), vec![10, 11, 12], vec![split], Folders::default(), cx);
+            let split = crate::shell::Split {
+                tabs,
+                stacked: true,
+                ..Default::default()
+            };
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![10, 11, 12],
+                vec![split],
+                Folders::default(),
+                cx,
+            );
         });
         tab_menu(&shell, &host, cx, 11);
         let shown = crate::menu::described(&host.entries.borrow());
@@ -1854,8 +2046,14 @@ mod tests {
         let edits = host.take_edits();
         assert_eq!(edits.len(), 2, "{edits:?}");
         let copies: Vec<&str> = edits[0].split(' ').skip(1).collect();
-        assert_eq!(copies[2], "false", "the second copy joins the first on its right");
-        assert!(calls.contains(&format!("split stacked {} true", copies[1])), "{calls:?}");
+        assert_eq!(
+            copies[2], "false",
+            "the second copy joins the first on its right"
+        );
+        assert!(
+            calls.contains(&format!("split stacked {} true", copies[1])),
+            "{calls:?}"
+        );
     }
 
     /// The last tab has none below to archive, and a tab with no page has no link to copy or share.
@@ -1865,7 +2063,10 @@ mod tests {
         let (shell, host) = shell_with(cx, &[1], &[10, 11], Folders::default());
         tab_menu(&shell, &host, cx, 10);
         let entries = host.entries.borrow();
-        let move_to = entries.iter().position(|entry| entry.title == "Move to").unwrap();
+        let move_to = entries
+            .iter()
+            .position(|entry| entry.title == "Move to")
+            .unwrap();
         let swatches: Vec<(&str, bool)> = (entries.iter())
             .filter(|entry| entry.parent == Some(move_to) && !entry.title.is_empty())
             .map(|entry| (entry.title.as_ref(), entry.swatch.is_some()))
@@ -1913,7 +2114,10 @@ mod tests {
         let title = shell.read_with(cx, |shell, _| shell.title(10));
         host.take();
         cx.update(|cx| host.choose("Share…", cx));
-        assert_eq!(host.take(), [format!("share sheet 10 https://example.com/ {title}")]);
+        assert_eq!(
+            host.take(),
+            [format!("share sheet 10 https://example.com/ {title}")]
+        );
     }
 
     /// A folder's menu is Arc's: its name and icon, a copy of it, its links, then its deletion,
@@ -1940,7 +2144,10 @@ mod tests {
         assert_eq!(menu[..5], head, "{menu:?}");
         assert_eq!(menu.last().unwrap(), "Delete Folder");
         let menu = tab_menu(&shell, &host, cx, 22);
-        assert_eq!(menu[..4], ["Rename Folder", "Change Icon…", "Remove Icon", "Duplicate"]);
+        assert_eq!(
+            menu[..4],
+            ["Rename Folder", "Change Icon…", "Remove Icon", "Duplicate"]
+        );
         host.take();
         host.take_edits();
         cx.update(|cx| host.choose("Remove Icon", cx));
@@ -1948,7 +2155,10 @@ mod tests {
         tab_menu(&shell, &host, cx, 20);
         cx.update(|cx| host.choose("Duplicate", cx));
         let edits = host.take_edits();
-        assert!(edits.len() == 1 && edits[0].starts_with("duplicate folder 20 "), "{edits:?}");
+        assert!(
+            edits.len() == 1 && edits[0].starts_with("duplicate folder 20 "),
+            "{edits:?}"
+        );
     }
 
     /// A folder's Move to Space lists the user's other Spaces, another profile's too, as a pinned
@@ -1964,7 +2174,15 @@ mod tests {
         };
         shell.update(cx, |shell, cx| {
             let space = |id, name: &str, profile, agent: &str| {
-                (id, name.into(), None, profile, "".into(), agent.into(), "".into())
+                (
+                    id,
+                    name.into(),
+                    None,
+                    profile,
+                    "".into(),
+                    agent.into(),
+                    "".into(),
+                )
             };
             let spaces = vec![
                 space(1, "Work", 0, ""),
@@ -1977,8 +2195,15 @@ mod tests {
             shell.set_tabs(1, vec![20, 21], vec![24], Vec::new(), folders, cx);
         });
         let menu = tab_menu(&shell, &host, cx, 20);
-        let moves: Vec<&String> = menu.iter().filter(|title| title.contains("Space")).collect();
-        assert_eq!(moves, ["Move to Space › Home", "Move to Space › Other"], "{menu:?}");
+        let moves: Vec<&String> = menu
+            .iter()
+            .filter(|title| title.contains("Space"))
+            .collect();
+        assert_eq!(
+            moves,
+            ["Move to Space › Home", "Move to Space › Other"],
+            "{menu:?}"
+        );
         host.take_edits();
         cx.update(|cx| host.choose("Home", cx));
         assert_eq!(host.take_edits(), ["space folder 20 2"]);
@@ -1995,7 +2220,11 @@ mod tests {
         };
         let (shell, host) = shell_with(cx, &[20, 21, 22, 23], &[24], folders);
         shell.update(cx, |shell, cx| {
-            shell.set_page(21, page("https://a.example/?utm_source=x", false, false), cx);
+            shell.set_page(
+                21,
+                page("https://a.example/?utm_source=x", false, false),
+                cx,
+            );
             shell.set_page(23, page("https://b.example/", false, false), cx);
             shell.set_page(24, page("https://c.example/", false, false), cx);
             shell.set_title(21, "A [1]".into(), cx);
@@ -2006,12 +2235,17 @@ mod tests {
         assert_eq!(menu[at..at + 2], ["Copy All Links", "Paste URL as New Tab"]);
         // As Markdown, it's Copy All Links' ⌥ alternate, as in Arc's.
         let entries = host.entries.borrow().clone();
-        let markdown = entries.iter().position(|entry| entry.title == "Copy All Links as Markdown");
+        let markdown = entries
+            .iter()
+            .position(|entry| entry.title == "Copy All Links as Markdown");
         let markdown = markdown.unwrap_or_else(|| panic!("{menu:?}"));
         assert!(entries[markdown].alternate && entries[markdown - 1].title == "Copy All Links");
         host.take();
         cx.update(|cx| host.choose("Copy All Links", cx));
-        assert!(host.take().contains(&"copy https://a.example/\nhttps://b.example/".to_string()));
+        assert!(
+            host.take()
+                .contains(&"copy https://a.example/\nhttps://b.example/".to_string())
+        );
         tab_menu(&shell, &host, cx, 20);
         host.take();
         cx.update(|cx| host.choose("Copy All Links as Markdown", cx));
@@ -2025,8 +2259,14 @@ mod tests {
         host.take();
         cx.update(|cx| host.choose("Paste URL as New Tab", cx));
         let calls = host.take();
-        assert!(calls.contains(&"folder open 22 true".to_string()), "{calls:?}");
-        assert!(calls.contains(&"open https://d.example/ true 22 0".to_string()), "{calls:?}");
+        assert!(
+            calls.contains(&"folder open 22 true".to_string()),
+            "{calls:?}"
+        );
+        assert!(
+            calls.contains(&"open https://d.example/ true 22 0".to_string()),
+            "{calls:?}"
+        );
     }
 
     /// Move to lists each Space's folders under it, by their paths, after its Today tabs, and a
@@ -2042,9 +2282,21 @@ mod tests {
         let (shell, host) = shell_with(cx, &[20], &[10], folders);
         shell.update(cx, |shell, cx| {
             let space = |id, name: &str, profile| {
-                (id, name.to_string().into(), None, profile, "".into(), "".into(), "".into())
+                (
+                    id,
+                    name.to_string().into(),
+                    None,
+                    profile,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                )
             };
-            let spaces = vec![space(1, "Work", 0), space(2, "Home", 0), space(3, "Other", 7)];
+            let spaces = vec![
+                space(1, "Work", 0),
+                space(2, "Home", 0),
+                space(3, "Other", 7),
+            ];
             shell.set_spaces(spaces, cx);
             let home = Folders {
                 folders: [(30, ("Old".into(), false)), (31, ("Older".into(), true))].into(),
@@ -2053,12 +2305,19 @@ mod tests {
             };
             shell.set_tabs(2, vec![30, 31], vec![40], Vec::new(), home, cx);
             let theirs = [(50, ("Theirs".into(), true))].into();
-            let other = Folders { folders: theirs, ..Default::default() };
+            let other = Folders {
+                folders: theirs,
+                ..Default::default()
+            };
             shell.set_tabs(3, vec![50], Vec::new(), Vec::new(), other, cx);
         });
         let menu = tab_menu(&shell, &host, cx, 10);
-        let start = menu.iter().position(|title| title.starts_with("Work › Today"));
-        let end = menu.iter().position(|title| title == "Move to › New Space…");
+        let start = menu
+            .iter()
+            .position(|title| title.starts_with("Work › Today"));
+        let end = menu
+            .iter()
+            .position(|title| title == "Move to › New Space…");
         let (Some(start), Some(end)) = (start, end) else {
             panic!("{menu:?}");
         };
@@ -2107,9 +2366,21 @@ mod tests {
         };
         shell.update(cx, |shell, cx| {
             let space = |id, name: &str, profile| {
-                (id, name.to_string().into(), None, profile, "".into(), "".into(), "".into())
+                (
+                    id,
+                    name.to_string().into(),
+                    None,
+                    profile,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                )
             };
-            let spaces = vec![space(1, "Work", 0), space(2, "Home", 0), space(3, "Other", 7)];
+            let spaces = vec![
+                space(1, "Work", 0),
+                space(2, "Home", 0),
+                space(3, "Other", 7),
+            ];
             shell.set_spaces(spaces, cx);
         });
         choose(&shell, cx);
@@ -2156,7 +2427,11 @@ mod tests {
         };
         tabs(&shell, cx, 1, vec![2, folder, 3, 5], vec![4], made);
         shell.update(cx, |shell, cx| shell.undo(cx));
-        let back = ["move 3 false 0 0", "move 5 false 0 2", &format!("delete folder {folder}")];
+        let back = [
+            "move 3 false 0 0",
+            "move 5 false 0 2",
+            &format!("delete folder {folder}"),
+        ];
         assert_eq!(host.take_edits(), back);
 
         tabs(&shell, cx, 1, vec![2], vec![3, 4, 5], Folders::default());
@@ -2169,7 +2444,12 @@ mod tests {
         tabs(&shell, cx, 1, vec![2], vec![4], Folders::default());
         tabs(&shell, cx, 2, Vec::new(), vec![3, 5], Folders::default());
         shell.update(cx, |shell, cx| shell.undo(cx));
-        let back = ["space 3 1", "move 3 false 0 0", "space 5 1", "move 5 false 0 2"];
+        let back = [
+            "space 3 1",
+            "move 3 false 0 0",
+            "space 5 1",
+            "move 5 false 0 2",
+        ];
         assert_eq!(host.take_edits(), back);
 
         tabs(&shell, cx, 1, vec![2], vec![3, 4, 5], Folders::default());
@@ -2186,7 +2466,11 @@ mod tests {
     fn the_share_command_opens_the_sheet_for_the_page_shown(cx: &mut TestAppContext) {
         let (shell, host) = shell_with(cx, &[1], &[10, 11], Folders::default());
         shell.update(cx, |shell, cx| {
-            shell.set_page(10, page("https://example.com/?utm_source=x", false, false), cx);
+            shell.set_page(
+                10,
+                page("https://example.com/?utm_source=x", false, false),
+                cx,
+            );
             shell.set_selected(10, cx);
         });
         let offered =
@@ -2197,8 +2481,13 @@ mod tests {
         let title = shell.read_with(cx, |shell, _| shell.title(10));
         host.take();
         shell.update(cx, |shell, cx| shell.run(Command::Share, "ui", cx));
-        assert_eq!(host.take(), [format!("share sheet 10 https://example.com/ {title}")]);
-        shell.update(cx, |shell, cx| shell.set_page(10, page("", false, false), cx));
+        assert_eq!(
+            host.take(),
+            [format!("share sheet 10 https://example.com/ {title}")]
+        );
+        shell.update(cx, |shell, cx| {
+            shell.set_page(10, page("", false, false), cx)
+        });
         assert!(!offered(cx), "offered for a page with no link");
     }
 
@@ -2218,9 +2507,13 @@ mod tests {
     fn mute_follows_the_tabs_sound(cx: &mut TestAppContext) {
         let (shell, host) = shell_with(cx, &[], &[10], Folders::default());
         let url = "https://example.com/";
-        shell.update(cx, |shell, cx| shell.set_page(10, page(url, true, false), cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_page(10, page(url, true, false), cx)
+        });
         assert!(tab_menu(&shell, &host, cx, 10).contains(&"Mute".to_string()));
-        shell.update(cx, |shell, cx| shell.set_page(10, page(url, false, true), cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_page(10, page(url, false, true), cx)
+        });
         assert!(tab_menu(&shell, &host, cx, 10).contains(&"Unmute".to_string()));
     }
 
@@ -2258,9 +2551,14 @@ mod tests {
         };
         let (shell, host) = shell_with(cx, &[1, 20, 2, 3], &[10], docs);
         let menu = tab_menu(&shell, &host, cx, 1);
-        let folders: Vec<&String> =
-            menu.iter().filter(|item| item.starts_with("Add to Folder")).collect();
-        assert_eq!(folders, ["Add to Folder › New Folder", "Add to Folder › Docs"]);
+        let folders: Vec<&String> = menu
+            .iter()
+            .filter(|item| item.starts_with("Add to Folder"))
+            .collect();
+        assert_eq!(
+            folders,
+            ["Add to Folder › New Folder", "Add to Folder › Docs"]
+        );
         host.take_edits();
         cx.update(|cx| host.choose("Docs", cx));
         assert_eq!(host.take_edits(), ["move 1 true 20 1"]);
@@ -2275,10 +2573,16 @@ mod tests {
         let folder: u64 = edits[0].split(' ').nth(1).unwrap().parse().unwrap();
         let named = format!("folder {folder} 1 example.com 0 2");
         assert_eq!(edits, [named, format!("move 3 true {folder} 0")]);
-        shell.read_with(cx, |shell, _| assert!(shell.renaming.is_some(), "no name field"));
+        shell.read_with(cx, |shell, _| {
+            assert!(shell.renaming.is_some(), "no name field")
+        });
         // The core reports the folder made once the calls return.
         let made = Folders {
-            folders: [(20, ("Docs".into(), true)), (folder, ("example.com".into(), true))].into(),
+            folders: [
+                (20, ("Docs".into(), true)),
+                (folder, ("example.com".into(), true)),
+            ]
+            .into(),
             parents: [(2, 20), (3, folder)].into(),
             ..Default::default()
         };
@@ -2286,7 +2590,10 @@ mod tests {
             shell.set_tabs(1, vec![1, 20, 2, folder, 3], vec![10], Vec::new(), made, cx)
         });
         shell.update(cx, |shell, cx| shell.undo(cx));
-        let back = ["move 3 true 0 2".to_string(), format!("delete folder {folder}")];
+        let back = [
+            "move 3 true 0 2".to_string(),
+            format!("delete folder {folder}"),
+        ];
         assert_eq!(host.take_edits(), back);
     }
 
@@ -2295,7 +2602,10 @@ mod tests {
     #[gpui::test]
     fn replace_with_current_keeps_the_page_its_at(cx: &mut TestAppContext) {
         let (shell, host) = shell_with(cx, &[1], &[10], Folders::default());
-        let away = Page { away_from_pinned_url: true, ..page("https://away.test/", false, false) };
+        let away = Page {
+            away_from_pinned_url: true,
+            ..page("https://away.test/", false, false)
+        };
         shell.update(cx, |shell, cx| shell.set_page(1, away.clone(), cx));
         tab_menu(&shell, &host, cx, 1);
         host.take_edits();
@@ -2306,7 +2616,10 @@ mod tests {
             shell.set_page(20, away, cx)
         });
         let menu = tab_menu(&shell, &host, cx, 20);
-        assert_eq!(menu[..2], ["Back to Favorite URL", "Replace Favorite URL with Current"]);
+        assert_eq!(
+            menu[..2],
+            ["Back to Favorite URL", "Replace Favorite URL with Current"]
+        );
         assert!(menu.contains(&"Change Icon…".to_string()), "{menu:?}");
         cx.update(|cx| host.choose("Replace Favorite URL with Current", cx));
         assert_eq!(host.take_edits(), ["pinned url 20 https://away.test/"]);

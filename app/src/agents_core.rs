@@ -51,7 +51,9 @@ impl Browser for Core {
     }
 
     fn space_tabs(&self, space: u64, cx: &App) -> Vec<TabInfo> {
-        (self.space_tab_ids(space, cx).into_iter()).map(|tab| self.tab(tab, cx)).collect()
+        (self.space_tab_ids(space, cx).into_iter())
+            .map(|tab| self.tab(tab, cx))
+            .collect()
     }
 
     fn space_tab_ids(&self, space: u64, _: &App) -> Vec<u64> {
@@ -162,17 +164,28 @@ impl Browser for Core {
             return;
         };
         unsafe {
-            bc::bc_agent_page(agent.as_ptr(), tab, request, action as i32, element, text.as_ptr())
+            bc::bc_agent_page(
+                agent.as_ptr(),
+                tab,
+                request,
+                action as i32,
+                element,
+                text.as_ptr(),
+            )
         };
     }
 
     fn url_for(&self, text: &str) -> Option<String> {
         // Searches with the engine of the profile the core started with, as no window is asked.
-        crate::url_for(text, |text, url, capacity| unsafe { bc::bc_typed_url(0, text, url, capacity) })
+        crate::url_for(text, |text, url, capacity| unsafe {
+            bc::bc_typed_url(0, text, url, capacity)
+        })
     }
 
     fn ask(&self, question: Option<Question>, cx: &mut App) {
-        crate::update_shells_in(cx, |shell, cx| shell.set_agent_question(question.clone(), cx));
+        crate::update_shells_in(cx, |shell, cx| {
+            shell.set_agent_question(question.clone(), cx)
+        });
     }
 
     fn hand_off(&self, agent: &str, tab: u64) -> bool {
@@ -192,10 +205,6 @@ impl Browser for Core {
 
     fn close_tab(&self, tab: u64, _: &mut App) {
         unsafe { bc::bc_tab_close(tab, false) };
-    }
-
-    fn give(&self, tab: u64, space: u64, _: &mut App) -> bool {
-        unsafe { bc::bc_tab_give_to_agent(tab, space) }
     }
 
     fn make_task_space(&self, agent: &str, agent_name: &str, like: u64, cx: &mut App) -> u64 {
@@ -219,6 +228,23 @@ impl Browser for Core {
 
     fn move_tab(&self, tab: u64, space: u64, _: &mut App) {
         unsafe { bc::bc_tab_move_to_space(tab, space) }
+    }
+
+    fn user_space(&self, like: u64) -> u64 {
+        let profile = unsafe { bc::bc_space_profile(like) };
+        let users = |space: u64| {
+            space != 0
+                && name(bc::bc_space_agent, space).is_empty()
+                && unsafe { bc::bc_space_profile(space) } == profile
+        };
+        let shown = unsafe { bc::bc_window_space(crate::front().0) };
+        match users(shown) {
+            true => shown,
+            false => ids(bc::bc_spaces)
+                .into_iter()
+                .find(|&space| users(space))
+                .unwrap_or(shown),
+        }
     }
 }
 

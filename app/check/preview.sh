@@ -169,7 +169,7 @@ still_home "after Esc"
 # later the moon, each 13 right of its appearance-x token, as cards.sh and little.sh pick them.
 peek_look() { # <light|dark> <the appearance button's x> [swatch]
   post rightclick 100 112
-  expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $colors")" \
+  expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors")" \
     "the Space's menu didn't offer its theme"
   send choose "$(cased 'Edit Theme Color…')"
   expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
@@ -328,16 +328,16 @@ send click $(home_row)
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "a click on the pinned row didn't show its tab"
 link_to site
 
-# With the switch in Settings › Advanced off, the link goes in the pinned tab.
+# With the switch in Settings › Features off, the link goes in the pinned tab.
 send click $page_point
 expect "^browser: title $a pressed [0-9]*\$" "a click on the test page's lower part didn't reach it"
 send key , cmd
 expect '^browser: settings shown General$' "⌘, didn't show Settings on its General tab"
 # Settings takes no click until it has drawn, nor a tab's rows until the tab has (#1101, #1133).
 expect '^browser: settings drew General$' "Settings didn't draw General"
-send clickkey $(settings_at "toolbar Advanced")
-expect '^browser: settings tab Advanced$' "a click on Advanced didn't show its tab"
-settings_drew Advanced
+send clickkey $(settings_at "toolbar Features")
+expect '^browser: settings tab Features$' "a click on Features didn't show its section"
+settings_drew Features
 send clickkey $(settings_at "switch link previews")
 expect '^browser: link previews off$' "a click on the link previews switch didn't turn them off"
 send key w cmd
@@ -369,8 +369,9 @@ expect "^browser: tab $o closed\$" "⌘W didn't close the tab ⇧-click opened"
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "⌘W didn't show the pinned tab again"
 
 # Back on, a link rule to another Space sends the link there as a tab, as it sends one from another
-# app, and the preview doesn't open (#692). Settings' Links tab adds the rule, as ./check.sh links
-# does: + at 76 173, and the first rule's Space pop-up at 500 129.
+# app, and the preview doesn't open (#692). Settings' Links section adds the rule, as ./check.sh
+# links does: + and the new rule's Space pop-up, where the view logs them, after the Meet rule a
+# profile starts with.
 first=$(space)
 send menu New Space…
 expect "^browser: spaces $first [0-9]*\$" "New Space didn't make a second Space"
@@ -382,27 +383,29 @@ send key 1 ctrl
 expect "^browser: space $first\( in .*\)\{0,1\}\$" "⌃1 didn't show the first Space again"
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "the first Space didn't show the pinned tab again"
 send key , cmd
-expect '^browser: settings shown Advanced$' "⌘, didn't show Settings on its Advanced tab"
-expect '^browser: settings drew Advanced$' "Settings didn't draw Advanced"
+expect '^browser: settings shown Features$' "⌘, didn't show Settings on its Features section"
+expect '^browser: settings drew Features$' "Settings didn't draw Features"
 send clickkey $(settings_at "switch link previews")
 expect '^browser: link previews on$' "a click on the link previews switch didn't turn them on"
 send clickkey $(settings_at "toolbar Links")
 expect '^browser: settings tab Links$' "a click on Links didn't show its tab"
 settings_drew Links
 expect '^browser: link rules drawn ' "the Links tab didn't draw its rules"
-send clickkey 76 173
-expect '^browser: link rule 0 field has the keyboard$' "+ didn't give the new rule's field the keyboard"
+send clickkey $(settings_at "link add")
+# The Meet rule a profile starts with is the first, so the new one is the second.
+expect '^browser: link rule 1 field has the keyboard$' "+ didn't give the new rule's field the keyboard"
 send type preview-target
-post clickkey 500 129
-expect '^browser: menu shown [^,]* (checked), work, Little ilo$' \
-  "the rule's Space pop-up didn't list the user's Spaces and Little ilo"
+post clickkey $(settings_at "link space 1")
+front=$(cased "The Space in Front")
+expect "^browser: menu shown $front (checked), [^,]*, work, Little ilo\$" \
+  "the rule's Space pop-up didn't list the Space in front, the user's Spaces and Little ilo"
 send choose work
-expect '^browser: link rules drawn URL contains "preview-target" → work; ' \
+expect '^browser: link rules drawn URL contains "meet.google.com" → [^,]*, URL contains "preview-target" → work; ' \
   "the rule's pop-up didn't set its Space"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 send click $link_point
-expect "^browser: link rule 0 sends $target to space $second\$" "the rule didn't send the pinned tab's link"
+expect "^browser: link rule 1 sends $target to space $second\$" "the rule didn't send the pinned tab's link"
 routed="^browser: link from $a $target: tab [1-9][0-9]* in space $second of window [0-9]*\$"
 expect "$routed" "the rule's link didn't open as a tab in its Space"
 r=$(grep "$routed" "$log" | tail -1 | sed 's/.*: tab \([0-9]*\) .*/\1/')

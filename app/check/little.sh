@@ -3,8 +3,9 @@
 # that Space in the main window and closes it. ⌥⌘-click on a link opens the link in one, not
 # beside the page as ⌥-click does, and ⌘W closes that window, its page with it. An escape the page
 # doesn't use closes one. A tab its page opens goes behind, to the top of its Space's Today, and
-# outlives it. Closing one archives its tab, and ⇧⌘T reopens it in a new one. The first opens 900 × 640, and each after at the size the last one closed at. On the
-# Mac one opens over a full-screen window, and the Dock's menu opens one after its New Window, and
+# outlives it. Closing one archives its tab, and ⇧⌘T reopens it in a new one, and one left unused
+# past its time closes into the archive by itself. The first opens 900 × 640, and each after at the
+# size the last one closed at. On the Mac one opens over a full-screen window, and the Dock's menu opens one after its New Window, and
 # hides and shows them all. One takes its Space's look as its theme turns light and dark, captured
 # with a title too long for its bar.
 
@@ -17,6 +18,8 @@ pid=$!
 exec 3> "$out/drive"
 await_load
 await '^browser: title [0-9]* ready$' || fail "the test page didn't draw"
+# The app can say which window opened after its page has loaded.
+await '^browser: window opened [0-9]' || fail "the app didn't say which window opened"
 main=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
 home=$(space)
 a=$(today)
@@ -184,14 +187,19 @@ if [ "$(uname)" = Darwin ]; then
   send window 1
 fi
 
-# The menu bar's button, the Mac's alone: none until Settings › General turns it on, a click on it
+# The menu bar's button, the Mac's alone: none until Settings › Features turns it on, a click on it
 # opens a Little ilo window for the Space shown, and turned off it's gone.
 if [ "$(uname)" = Darwin ]; then
   send statusitem
   expect '^browser: status item none$' "the menu bar has Little ilo's button before it was turned on"
   send menu Settings…
-  expect '^browser: settings shown General$' "Settings… didn't show General"
-  settings_drew General
+  expect '^browser: settings shown ' "Settings… didn't show Settings"
+  settings_drew
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Features$'; then
+    send clickkey $(drawn "toolbar Features")
+    expect '^browser: settings tab Features$' "a click on Features didn't show its section"
+    settings_drew Features
+  fi
   menu_bar_switch=$(drawn "switch little in the menu bar") ||
     fail "Settings didn't draw Show Little ilo in the menu bar's switch"
   send clickkey $menu_bar_switch
@@ -207,8 +215,8 @@ if [ "$(uname)" = Darwin ]; then
   send key w cmd
   expect "^browser: window closed $little\$" "the menu bar's Little ilo window didn't come to the front: ⌘W didn't close it"
   send menu Settings…
-  expect '^browser: settings shown General$' "Settings… didn't show General again"
-  settings_drew General
+  expect '^browser: settings shown Features$' "Settings… didn't show Features again"
+  settings_drew Features
   send clickkey $menu_bar_switch
   expect '^browser: little in the menu bar off$' "a click on the menu bar switch didn't turn it off"
   send statusitem
@@ -296,7 +304,7 @@ expect "^browser: title [0-9]* value $long\$" "the autofocus page didn't take th
 look_theme() {
   send window 1
   post rightclick 100 112
-  expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $colors")" \
+  expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors")" \
     "the Space's menu didn't offer its theme"
   send choose "$(cased 'Edit Theme Color…')"
   expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
@@ -323,4 +331,51 @@ send window "$look_window"
 
 exec 3>&-
 quit
-echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L loads a URL in it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Closing one archives its tab, ⇧⌘T reopens it in a new one, and the Library's Filter lists Little ilo's alone. One takes its Space's look as it changes, light and dark, and its bar ends a long title in an ellipsis. Windows: $out/little.png $out/little-moved.png $out/little-link.png $out/little-archive.png $out/little-light.png $out/little-dark.png, and on the Mac $out/little-full-screen.png $out/little-dock.png"
+
+# A Little ilo window left unused closes into the archive by itself, as Arc's Little Arc does after
+# 6 hours: here after the run's 4 s, counted from when the main window takes over as the active
+# one, and not while it's the active window itself.
+log="$out/little-unused.log"
+step=0
+BROWSER_DRIVE=1 BROWSER_URL="$site" "$browser" --archive-little-after=4 < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await_load
+await '^browser: window opened [0-9]' || fail "the app didn't say which window opened"
+send key n cmd alt
+expect "^browser: little window opened [0-9]* profile [0-9]* home [0-9]*\$" \
+  "⌥⌘N didn't open a Little ilo window"
+unused=$(opened)
+expect "^browser: window opened $unused\$" "the Little ilo window didn't open"
+send window 2
+# With the app in the background no window is the active one, so its clock would start at once.
+if [ "$active" = 1 ]; then
+  send key l cmd
+  expect '^browser: command bar shown$' "⌘L didn't open the command bar in the Little ilo window"
+  send insert "${site}notes.txt"
+  send key return
+  expect "^browser: loaded [0-9]* ${site}notes.txt\$" \
+    "the command bar's URL didn't load in the Little ilo window"
+  archived=$(grep -c '^browser: archive [0-9]* tabs$' "$log")
+  # Past its time while it's the active window, it stays.
+  sleep 5
+  grep -q "^browser: window closed $unused\$" "$log" &&
+    fail "the Little ilo window closed while it was the active window"
+  send window 1
+  left=$(date +%s)
+  await "^browser: window closed $unused\$" ||
+    fail "the Little ilo window, unused for its 4 s, didn't close"
+  [ $(($(date +%s) - left)) -ge 3 ] ||
+    fail "the Little ilo window closed sooner than 4 s after the main window took over"
+  for _ in $(seq 100); do
+    [ "$(grep -c '^browser: archive [0-9]* tabs$' "$log")" -gt "$archived" ] && break
+    sleep 0.1
+  done
+  [ "$(grep -c '^browser: archive [0-9]* tabs$' "$log")" -gt "$archived" ] ||
+    fail "the Little ilo window that closed unused didn't archive its tab"
+else
+  echo "skip: the unused Little ilo window. Browser wasn't the active app."
+fi
+exec 3>&-
+quit
+echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L loads a URL in it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Closing one archives its tab, ⇧⌘T reopens it in a new one, and the Library's Filter lists Little ilo's alone. One left unused past its time, which the run makes 4 s, closes into the archive, and one that's the active window doesn't. One takes its Space's look as it changes, light and dark, and its bar ends a long title in an ellipsis. Windows: $out/little.png $out/little-moved.png $out/little-link.png $out/little-archive.png $out/little-light.png $out/little-dark.png, and on the Mac $out/little-full-screen.png $out/little-dock.png"

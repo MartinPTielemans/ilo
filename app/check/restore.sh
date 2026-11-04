@@ -9,8 +9,9 @@
 # icon, picked in its icon picker, comes back too. A tab closed before the quit stays closed,
 # in the archive, from which the Library reopens it at its page. A page's downloads go in the
 # check's folder, on the Mac with macOS's quarantine flag, a new one's icon flies
-# into the Library button, none of those a relaunch reads does, and ⇧⌘J opens the Library on
-# Downloads, which lists them. While one runs, the button keeps
+# from the pointer into a bin on the Library button, recorded with the recent downloads coming and
+# going, none of those a relaunch reads does, and ⇧⌘J opens the Library on Downloads, which lists
+# them. While one runs, the button keeps
 # its name and resting on it shows the running one with the finished one. With one running, ⌘Q
 # asks first: Continue Downloading shows the Library's Downloads, and Quit quits, cancelling it.
 # After the relaunch, Remove from List and Clear List take them off the list and keep their files.
@@ -26,6 +27,14 @@
 # was. A quit with a page full screen saves its window windowed.
 # With Restore windows from last session off, a launch opens one window with no page, the Spaces
 # and pinned tabs back and the Today tabs in the archive.
+
+# Chooses $1 in the menu shown once it has drawn on screen. AppKit puts its window there some
+# frames after it's shown, taking the keyboard then: chosen before, Rename…'s field lost it to the
+# menu and closed, keeping the name, and the keys meant for the field went nowhere.
+choose_drawn() {
+  expect '^browser: menu drawn ' "the menu didn't come on screen to choose $1 in"
+  send choose "$1"
+}
 
 # The Spaces come back after a quit and after the window closes: their names, their tabs with each
 # tab's history, the tab each showed and the Space the window showed. Back and Forward on a tab put
@@ -43,7 +52,8 @@ if command -v sqlite3 > /dev/null && [ -f "$history_db" ]; then
   sqlite3 "$history_db" "delete from downloads; delete from downloads_url_chains;
     delete from downloads_slices;" || { echo "FAIL: the downloads wouldn't clear" >&2; exit 1; }
 fi
-BROWSER_DRIVE=1 BROWSER_URL="$site" "$browser" < "$out/drive" > "$log" 2>&1 &
+# With the motion GitHub's hosted Mac and Windows reduce, for the download's flight recorded below.
+BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL="$site" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -73,22 +83,30 @@ logged '^browser: download [0-9]* done notes.txt$' ||
 $(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -i 'download' | tr '\n' ';'). \
 The folder: $(ls -A "$out/downloads" | tr '\n' ' ')"
 [ -f "$out/downloads/notes.txt" ] || fail "the download isn't in the check's folder"
-# On the Mac it carries macOS's quarantine flag, naming the app that downloaded it, so Gatekeeper
-# checks it the first time it opens (#685). Chromium's quarantine service sets it.
+# On the Mac it carries macOS's quarantine flag, naming ilo as the app that downloaded it, so
+# Gatekeeper checks it the first time it opens (#685). Chromium's quarantine service sets it, and
+# macOS takes the agent from the app's bundle: "flags;time;agent;id".
 if [ "$(uname)" = Darwin ]; then
   flag=$(xattr -p com.apple.quarantine "$out/downloads/notes.txt" 2>&1) ||
     fail "the download has no quarantine flag: $flag"
-  [ -n "$(echo "$flag" | cut -d';' -f3)" ] || fail "the download's quarantine flag names no app: $flag"
+  [ "$(echo "$flag" | cut -d';' -f3)" = "$app_name" ] ||
+    fail "the download's quarantine flag names another app than $app_name: $flag"
+else
+  echo "skip: the download's quarantine flag, which is macOS's alone."
 fi
+# Its icon flies from the pointer, over the page, into a bin on the Library button. The window is
+# captured only between recordings: on the hosted Mac a capture ends the recording's stream.
+record download-flight 3
 send type s
 expect '^browser: download [0-9]* running slow.bin$' "the page's slow download didn't start"
-# Its icon flies into the Library button.
 d=$(grep -m1 '^browser: download [0-9]* running slow.bin$' "$log" | cut -d' ' -f3)
 expect "^browser: download flying $d\$" "the new download's icon didn't fly"
-../tools/window-screenshot.sh "$pid" "$out/download-flying.png" || fail "no window to capture"
 expect "^browser: download landed $d\$" "the new download's icon didn't land"
+recorded
+../tools/window-screenshot.sh "$pid" "$out/download-bin.png" || fail "no window to capture"
 # While it runs, the Library button keeps its name and keys, and resting on it shows the running
-# download over the finished one.
+# download over the finished one, and sends the bin away. Rested on again, recorded, the rows come
+# up from the bottom and go bottom first.
 check_layout "with a download running"
 send move 24 $((height - 25))
 library_keys=⇧⌘L
@@ -101,6 +119,12 @@ expect '^browser: recent downloads shown 2$' \
   fail "no window to capture"
 send move $page_point
 expect '^browser: recent downloads hidden$' "the recent downloads stayed after the pointer left"
+record recent-downloads 3
+send move 24 $((height - 25))
+expect '^browser: recent downloads shown 2$' "resting on the Library button again didn't show them"
+send move $page_point
+expect '^browser: recent downloads hidden$' "the recent downloads stayed after the pointer left again"
+recorded
 send key j cmd shift
 expect '^browser: command view-downloads via page$' "⇧⌘J with the page focused didn't reach the UI"
 expect '^browser: library section downloads$' "⇧⌘J didn't open the Library on Downloads"
@@ -137,11 +161,11 @@ expect '^browser: today [0-9][0-9]*$' "the tab for example.com didn't open in th
 e=$(today)
 expect "^browser: loaded $e https://example.com/\$" "example.com didn't load in the new Space's tab"
 post rightclick 100 112
-expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $colors, $profile, \
-Export as Markdown…, Delete Space")\$" \
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
+New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the Space's menu didn't offer its theme"
 # The theme picker's pink swatch, and + for a second colour, which a relaunch brings back.
-send choose "$(cased 'Edit Theme Color…')"
+choose_drawn "$(cased 'Edit Theme Color…')"
 expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
 expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
 send clickkey "$(swatch_x 1)" $swatch_y
@@ -157,11 +181,12 @@ expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
 # Change Icon… in the Space's menu gives it an emoji from the icon picker's Emoji tab, found by a
 # search and picked with ↩, which a relaunch brings back.
 post rightclick 100 112
-expect "^browser: menu shown $(cased "Rename Space, Change Icon…, $themed, $profile, \
-Export as Markdown…, Delete Space")\$" "the Space's menu didn't offer Change Icon…"
-send choose "$(cased 'Change Icon…')"
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
+New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" "the Space's menu didn't offer Change Icon…"
+choose_drawn "$(cased 'Change Space Icon…')"
 expect "^browser: icon picker for $second on icon\$" "Change Icon… didn't open the icon picker"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 # Emoji, the left half of Emoji | Icon at the picker's top.
 send clickkey 92.5 39.5
 send insert seedling
@@ -194,10 +219,11 @@ expect "^browser: title $c news\$" "return didn't name the tab"
 post rightclick $(row 0)
 expect "^browser: menu shown $(cased '.*, Change Icon…, Rename…, ')" \
   "a right-click on the tab's row didn't offer Change Icon…"
-send choose "$(cased 'Change Icon…')"
+choose_drawn "$(cased 'Change Icon…')"
 expect "^browser: icon picker for tab $c on emoji\$" \
   "Change Icon… didn't open the icon picker on the Emoji tab for the tab"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker under the tab"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 ../tools/window-screenshot.sh "$pid" "$out/tab-icon-picker.png" all || fail "no window to capture"
 send insert fox
 send key return
@@ -315,7 +341,7 @@ post rightclick $(row 0)
 menu=$(cased "Copy Link$share, Change Icon…, Remove Icon, Rename…, Mute (disabled), Add Split View, Duplicate, Add to Folder › New Folder, Move to › [^,]* (checked), Move to › reading list, Move to › New Space…, Archive Tab, Archive Tabs Below")
 expect "^browser: menu shown $menu\$" \
   "a right-click on the renamed tab's row didn't offer Rename…"
-send choose Rename…
+choose_drawn Rename…
 expect "^browser: rename tab $c\$" "Rename… didn't turn the tab's title into a field"
 send key backspace
 send key return
@@ -325,10 +351,11 @@ expect "^browser: title $c Example Domain\$" \
 # finds no emoji, so ↩ picks nothing. Escape closes the picker with the icon as it was.
 post rightclick $(row 0)
 expect "^browser: menu shown $menu\$" "a right-click on the tab's row didn't offer Remove Icon"
-send choose "$(cased 'Change Icon…')"
+choose_drawn "$(cased 'Change Icon…')"
 expect "^browser: icon picker for tab $c on emoji\$" \
   "Change Icon… didn't open the icon picker again"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker again"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 send ime on
 send type nihongo
 send key space
@@ -344,7 +371,7 @@ none_since "^browser: page $c icon " || fail "escape changed the tab's icon"
 # Remove Icon gives it back its favicon.
 post rightclick $(row 0)
 expect "^browser: menu shown $menu\$" "a right-click on the tab's row didn't offer Remove Icon"
-send choose "$(cased 'Remove Icon')"
+choose_drawn "$(cased 'Remove Icon')"
 expect "^browser: page $c icon none\$" "Remove Icon didn't give the tab back its favicon"
 send click $page_point
 # The tab closed before the quit reopens from the Library at the top of Today, at its page. ⌘W
@@ -387,7 +414,7 @@ all=$(cased 'Images (checked), Videos (checked), Other Files (checked), Captures
 post rightclick 24 $((height - 25))
 expect "^browser: menu shown $all\$" "a right-click on the Library button didn't show what it lists"
 ../tools/window-screenshot.sh "$pid" "$out/library-button-menu.png" || fail "no window to capture"
-send choose "$(cased 'Other Files')"
+choose_drawn "$(cased 'Other Files')"
 expect '^browser: hover kinds images, videos, captures$' "Other Files didn't turn off"
 send move $page_point
 send move 24 $((height - 25))
@@ -397,7 +424,7 @@ send move $page_point
 post rightclick 24 $((height - 25))
 expect "^browser: menu shown $(cased 'Images (checked), Videos (checked), Other Files, ')" \
   "the Library button's menu didn't untick Other Files"
-send choose "$(cased 'Other Files')"
+choose_drawn "$(cased 'Other Files')"
 expect '^browser: hover kinds images, videos, other files, captures$' "Other Files didn't turn on"
 # A finished download's menu, with Chrome's word off the Mac for the file manager there.
 file_manager=Finder
@@ -412,13 +439,13 @@ listed=$(grep '^browser: downloads ' "$log" | tail -1 | cut -d' ' -f3)
 post rightclick 300 111
 expect "^browser: menu shown $(cased 'Remove from List, Clear List')\$" \
   "a right-click on the cancelled download's row didn't show its menu"
-send choose "$(cased 'Remove from List')"
+choose_drawn "$(cased 'Remove from List')"
 expect "^browser: download $s Remove via download menu\$" "Remove from List didn't reach it"
 expect "^browser: downloads $((listed - 1))\$" "Remove from List didn't take the download off"
 post rightclick 300 111
 expect "^browser: menu shown $finished_menu\$" \
   "a right-click on the finished download's row didn't show its menu"
-send choose "$(cased 'Clear List')"
+choose_drawn "$(cased 'Clear List')"
 expect '^browser: command clear-downloads via download menu$' "Clear List didn't run"
 expect '^browser: downloads 0$' "Clear List didn't empty the list"
 [ -f "$out/downloads/notes.txt" ] || fail "Clear List deleted the download's file"
@@ -441,10 +468,18 @@ send press 300 111
 send dragto 300 140
 expect "^browser: download $t drag\$" "dragging the download's row didn't start the system's drag"
 # Off the Mac a user holds the drag until the Library has gone, as the release waits for it there.
-# On the Mac the release lands as the Library closes, where nothing takes the file, not on the page.
-[ "$(uname)" = Darwin ] ||
+# On the Mac nothing waits: with no real button down, the system's drag ends at the next event the
+# driver posts, with the Library on its way out, and on GitHub's hosted Mac the page under the row
+# took the file there (#1690). So that event is a move to the sidebar's top, above its tab list,
+# which takes no file, and left of the page, where it's then let go.
+let_go="300 140"
+if [ "$(uname)" = Darwin ]; then
+  let_go="100 60"
+  send dragto $let_go
+else
   expect '^browser: library hidden$' "the Library didn't close for the download's drag"
-send release 300 140
+fi
+send release $let_go
 # No real button holds the system's drag, so it may end before the release reaches it.
 dragged() {
   for _ in $(seq 100); do
@@ -469,7 +504,7 @@ expect '^browser: recent downloads shown 1$' \
 post rightclick 120 $((height - 78))
 expect "^browser: menu shown $finished_menu\$" \
   "a right-click on the recent download's row didn't show its menu"
-send choose "$(cased 'Move to Trash')"
+choose_drawn "$(cased 'Move to Trash')"
 expect "^browser: download $t Trash via download menu\$" "Move to Trash didn't reach the download"
 expect '^browser: downloads 0$' "Move to Trash didn't take the download off the list"
 expect '^browser: recent downloads hidden$' "the recent downloads stayed with none left"
@@ -585,8 +620,13 @@ BROWSER_DRIVE=1 BROWSER_URL="${site}?c" "$browser" --archive-tabs-after=8 < "$ou
   > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
+# At once is from the Spaces put back, not from the launch, which takes 4 s or more on a slow
+# runner: archived only once unseen for 8 s from there, a would be 8 s after.
+await '^browser: restored in ' || fail "the launch past a's 8 s didn't restore the Spaces"
+restored=$(date +%s)
 await '^browser: archive 1 tabs$' || fail "tab a, unseen for 8 s across the quit, wasn't archived"
-[ $(($(date +%s) - start)) -lt 6 ] || fail "tab a was archived 8 s after the launch, not at once"
+[ $(($(date +%s) - restored)) -lt 6 ] ||
+  fail "tab a was archived $(($(date +%s) - restored)) s after the Spaces were put back, not at once"
 await "^browser: loaded [0-9]* ${site}?c\$" || fail "tab c didn't load"
 c=$(sed -n "s|^browser: loaded \([0-9]*\) ${site}?c\$|\1|p" "$log" | head -1)
 await '^browser: archive 2 tabs$' || fail "tab b, unseen for 8 s after c showed, wasn't archived"
@@ -725,7 +765,7 @@ restore_newest() {
   else
     bar_command restore-earlier-sidebar "Restore Earlier Sidebar…" "restore earlier"
     expect "^browser: menu shown $label" "$1's list didn't start with the newest backup, $label"
-    send choose "$label"
+    choose_drawn "$label"
   fi
   expect "^browser: dialog shown Restore the sidebar from " "$1 didn't ask first"
   expect '^browser: dialog settled$' "$1's dialog didn't settle"
@@ -742,7 +782,7 @@ restore_newest "Restoring the sidebar replaced" 3
 await_today $((backed_up + 1)) "restoring the sidebar replaced didn't bring back the tab"
 exec 3>&-
 quit
-# With Restore windows from last session turned off in Settings › Advanced, a launch opens one
+# With Restore windows from last session turned off in Settings › General, a launch opens one
 # window showing no page, as ⌘N's does: the Space comes back with its pinned tab, and its Today tab
 # goes in the archive. The second window doesn't come back (#684).
 log="$out/fresh-a.log"
@@ -761,10 +801,12 @@ expect '^browser: window opened [0-9]*$' "⌘N didn't open a second window"
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
 settings_drew
-send clickkey $(drawn "toolbar Advanced")
-expect '^browser: settings tab Advanced$' "a click on Advanced didn't show its tab"
-settings_drew Advanced
-# Where Settings drew the switch, as the Mini Player's row above it moves it.
+# General's first row is the switch.
+if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' General$'; then
+  send clickkey $(drawn "toolbar General")
+  expect '^browser: settings tab General$' "a click on General didn't show its section"
+  settings_drew General
+fi
 at=$(drawn "switch restore windows") || fail "Restore windows from last session has no switch"
 send clickkey $at
 expect '^browser: restore windows off$' \

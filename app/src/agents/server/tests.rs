@@ -137,7 +137,10 @@ fn the_pipe_is_the_servers_alone() {
     let (events, _second) = futures::channel::mpsc::unbounded();
     assert!(Server::start(&path, Tokens::default(), events).is_err());
     drop(server);
-    assert!(connect(&path).is_err(), "the pipe stayed once the server stopped");
+    assert!(
+        connect(&path).is_err(),
+        "the pipe stayed once the server stopped"
+    );
     let (events, _again) = futures::channel::mpsc::unbounded();
     let again = Server::start(&path, Tokens::default(), events).unwrap();
     assert!(connect(again.path()).is_ok());
@@ -200,6 +203,32 @@ fn initialize_begins_a_session() {
     assert_eq!(newest["result"]["protocolVersion"], VERSIONS[0]);
 }
 
+/// The name a client's card shows is the title MCP gives it for display, else its name, trimmed.
+#[test]
+fn hello_gives_the_clients_title_else_its_name() {
+    let (server, _, mut handed) = server();
+    for (info, named) in [
+        (
+            json!({ "name": "zed", "title": " Zed ", "version": "1" }),
+            "Zed",
+        ),
+        (json!({ "name": "zed", "title": "", "version": "1" }), "zed"),
+        (json!({ "version": "1" }), ""),
+    ] {
+        let mut client = Client::connect(&server);
+        client.ask(json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": info },
+        }));
+        match next(&mut handed) {
+            Some(Event::Hello { client, .. }) => assert_eq!(client, named),
+            _ => panic!("the UI didn't hear the agent's hello"),
+        }
+        drop(client);
+        assert!(matches!(next(&mut handed), Some(Event::Bye { .. })));
+    }
+}
+
 /// The tools list says what each takes; a notification is answered with nothing; an unknown
 /// method, a line that isn't JSON and a batch are errors, and the connection goes on.
 #[test]
@@ -225,7 +254,8 @@ fn the_server_answers_what_needs_no_browser() {
             "scroll",
             "screenshot",
             "run_steps",
-            "hand_off", "ask_for_tab"
+            "hand_off",
+            "ask_for_tab"
         ]
     );
     assert_eq!(list["id"], "a");
@@ -456,7 +486,10 @@ fn send_call(writer: &mut Stream, id: u64, tool: &str, arguments: Value) {
 }
 
 fn answered(answers: &mpsc::Receiver<Value>) -> Value {
-    answers.recv_timeout(std::time::Duration::from_secs(1)).expect("an answer")["id"].clone()
+    answers
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("an answer")["id"]
+        .clone()
 }
 
 /// A page slow to answer holds only its own tab: the call on the next tab reaches the UI and is
@@ -467,9 +500,17 @@ fn a_slow_call_on_one_tab_holds_no_other_tab() {
     let (mut writer, answers) = session(&server, &mut handed);
     send_call(&mut writer, 2, "click", json!({ "tab": 1, "ref": "e1" }));
     send_call(&mut writer, 3, "click", json!({ "tab": 2, "ref": "e1" }));
-    let slow = next_call(&mut handed).expect("tab 1's call");
-    let quick = next_call(&mut handed).expect("tab 2's call waited for tab 1's");
-    let tabs = (slow.arguments["tab"].clone(), quick.arguments["tab"].clone());
+    // The two tabs' calls go at once, so either can reach the UI first.
+    let mut calls = [
+        next_call(&mut handed).expect("a tab's call"),
+        next_call(&mut handed).expect("one tab's call waited for the other's"),
+    ];
+    calls.sort_by_key(|call| call.arguments["tab"].as_u64());
+    let [slow, quick] = calls;
+    let tabs = (
+        slow.arguments["tab"].clone(),
+        quick.arguments["tab"].clone(),
+    );
     assert_eq!(tabs, (json!(1), json!(2)));
     quick.reply.send(ToolResult::text("Clicked.")).unwrap();
     assert_eq!(answered(&answers), 3);
@@ -484,16 +525,27 @@ fn a_tabs_calls_keep_their_order() {
     let (server, _, mut handed) = server();
     let (mut writer, answers) = session(&server, &mut handed);
     send_call(&mut writer, 2, "click", json!({ "tab": 1, "ref": "e1" }));
-    send_call(&mut writer, 3, "type", json!({ "tab": 1, "ref": "e2", "text": "Closed" }));
+    send_call(
+        &mut writer,
+        3,
+        "type",
+        json!({ "tab": 1, "ref": "e2", "text": "Closed" }),
+    );
     send_call(&mut writer, 4, "press_key", json!({ "key": "Enter" }));
     let first = next_call(&mut handed).expect("the first call");
     assert_eq!(first.tool, "click");
-    assert!(no_call(&mut handed), "a call went before the one ahead of it");
+    assert!(
+        no_call(&mut handed),
+        "a call went before the one ahead of it"
+    );
     first.reply.send(ToolResult::text("Clicked.")).unwrap();
     assert_eq!(answered(&answers), 2);
     let second = next_call(&mut handed).expect("the second call");
     assert_eq!(second.tool, "type");
-    assert!(no_call(&mut handed), "the call with no tab went before tab 1's");
+    assert!(
+        no_call(&mut handed),
+        "the call with no tab went before tab 1's"
+    );
     second.reply.send(ToolResult::text("Typed.")).unwrap();
     assert_eq!(answered(&answers), 3);
     let last = next_call(&mut handed).expect("the call with no tab");
@@ -506,13 +558,31 @@ fn a_tabs_calls_keep_their_order() {
 fn asks_come_one_at_a_time() {
     let (server, _, mut handed) = server();
     let (mut writer, answers) = session(&server, &mut handed);
-    send_call(&mut writer, 2, "hand_off", json!({ "tab": 1, "reason": "Sign in" }));
-    send_call(&mut writer, 3, "hand_off", json!({ "tab": 2, "reason": "Sign in" }));
+    send_call(
+        &mut writer,
+        2,
+        "hand_off",
+        json!({ "tab": 1, "reason": "Sign in" }),
+    );
+    send_call(
+        &mut writer,
+        3,
+        "hand_off",
+        json!({ "tab": 2, "reason": "Sign in" }),
+    );
     send_call(&mut writer, 4, "click", json!({ "tab": 3, "ref": "e1" }));
-    let asking = next_call(&mut handed).expect("the first hand_off");
-    assert_eq!(asking.arguments["tab"], 1);
-    let click = next_call(&mut handed).expect("tab 3's call waited for the ask");
-    assert_eq!(click.tool, "click");
+    // The first ask and tab 3's call go at once, so either can reach the UI first.
+    let first = next_call(&mut handed).expect("the first hand_off or tab 3's call");
+    let second = next_call(&mut handed).expect("tab 3's call or the first hand_off waited");
+    let (asking, click) = match first.tool.as_str() {
+        "click" => (second, first),
+        _ => (first, second),
+    };
+    assert_eq!(
+        (asking.tool.as_str(), asking.arguments["tab"].clone()),
+        ("hand_off", json!(1))
+    );
+    assert_eq!(click.tool, "click", "two asks at once");
     assert!(no_call(&mut handed), "two asks at once");
     click.reply.send(ToolResult::text("Clicked.")).unwrap();
     assert_eq!(answered(&answers), 4);
@@ -529,4 +599,48 @@ fn asks_come_one_at_a_time() {
     }
     let opening: Vec<Call> = (5..15).filter_map(|_| next_call(&mut handed)).collect();
     assert_eq!(opening.len(), 10, "a turn's tabs opened one after another");
+}
+
+/// Stopped by the user, a connection answers the call under way, refuses the calls after it
+/// without the UI hearing them, then closes, and the UI hears the agent's bye (#1080).
+#[test]
+fn a_stopped_agents_connection_closes_once_it_has_answered() {
+    let (server, _, mut handed) = server();
+    let (mut writer, answers) = session(&server, &mut handed);
+    send_call(&mut writer, 2, "click", json!({ "tab": 1, "ref": "e1" }));
+    let under_way = next_call(&mut handed).expect("the call under way");
+    server.stop("claude-code");
+    send_call(&mut writer, 3, "click", json!({ "tab": 2, "ref": "e1" }));
+    let refused = answers
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("an answer to the call after Stop");
+    assert_eq!(refused["id"], 3);
+    assert_eq!(refused["result"]["isError"], true);
+    assert_eq!(
+        refused["result"]["content"][0]["text"],
+        super::super::STOPPED
+    );
+    assert!(no_call(&mut handed), "a call after Stop reached the UI");
+    under_way
+        .reply
+        .send(ToolResult::error(super::super::STOPPED))
+        .unwrap();
+    assert_eq!(answered(&answers), 2);
+    assert!(
+        matches!(
+            answers.recv_timeout(std::time::Duration::from_secs(1)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ),
+        "the connection stayed open once it had answered"
+    );
+    let until = Instant::now() + std::time::Duration::from_secs(1);
+    let mut bye = false;
+    while !bye && Instant::now() < until {
+        match handed.try_recv() {
+            Ok(Event::Bye { agent }) => bye = agent == "claude-code",
+            Ok(_) => {}
+            Err(_) => thread::sleep(std::time::Duration::from_millis(5)),
+        }
+    }
+    assert!(bye, "the UI didn't hear the stopped agent's bye");
 }

@@ -5,8 +5,10 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::{OnceLock, mpsc};
+use std::process::Stdio;
+
+use crate::child::command;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -68,8 +70,16 @@ impl Found {
 
     pub fn from_saved(saved: &Value) -> Found {
         Found {
-            ready: Ready::from_id(saved.get("ready").and_then(Value::as_str).unwrap_or_default()),
-            program: saved.get("program").and_then(Value::as_str).map(PathBuf::from),
+            ready: Ready::from_id(
+                saved
+                    .get("ready")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            ),
+            program: saved
+                .get("program")
+                .and_then(Value::as_str)
+                .map(PathBuf::from),
             path: saved.get("path").and_then(Value::as_str).map(String::from),
             models: saved
                 .get("models")
@@ -88,14 +98,18 @@ impl Found {
 
 /// Looks for `cli` and asks it whether the user is signed in. Blocks: runs the CLI.
 pub fn look(cli: Cli) -> Found {
-    let path = login_path().clone();
-    let search = path.clone().or_else(|| std::env::var("PATH").ok()).unwrap_or_default();
-    let Some(program) = find(cli.program(), &search) else {
+    let (found, path) = locate(cli);
+    let Some(program) = found else {
         // check.sh reads this line.
         log!("browser: task agent {} is NotFound", cli.id());
-        return Found { ready: Ready::NotFound, program: None, path, models: Vec::new() };
+        return Found {
+            ready: Ready::NotFound,
+            program: None,
+            path,
+            models: Vec::new(),
+        };
     };
-    let mut command = Command::new(&program);
+    let mut command = command(&program);
     match cli {
         Cli::Claude => command.args(["auth", "status", "--json"]),
         Cli::Codex => command.args(["login", "status"]),
@@ -118,19 +132,52 @@ pub fn look(cli: Cli) -> Found {
         },
     };
     // check.sh reads this line.
-    log!("browser: task agent {} is {ready:?} at {}", cli.id(), program.display());
+    log!(
+        "browser: task agent {} is {ready:?} at {}",
+        cli.id(),
+        program.display()
+    );
     let models = match (cli, ready) {
         (Cli::Codex, Ready::SignedIn) => codex_models(&program, path.as_deref()),
         _ => Vec::new(),
     };
-    Found { ready, program: Some(program), path, models }
+    Found {
+        ready,
+        program: Some(program),
+        path,
+        models,
+    }
+}
+
+/// Where `cli` is, and the PATH it runs with: the login shell's, or on Windows, where it may be
+/// claude.exe, claude.cmd, codex.cmd or codex.exe, the one a terminal opened now has (#1676).
+#[cfg(not(windows))]
+fn locate(cli: Cli) -> (Option<PathBuf>, Option<String>) {
+    let path = login_path().clone();
+    let search = path
+        .clone()
+        .or_else(|| std::env::var("PATH").ok())
+        .unwrap_or_default();
+    (find(cli.program(), &search), path)
+}
+
+#[cfg(windows)]
+fn locate(cli: Cli) -> (Option<PathBuf>, Option<String>) {
+    match super::clients::windows_find(cli.program()) {
+        Some((program, path)) => (Some(program), Some(path)),
+        None => (None, None),
+    }
 }
 
 /// The models Codex lists for the signed-in user, which change with their plan and Codex's
 /// version: asked of its app-server, which starts no thread for it, and left after 10 s.
 fn codex_models(program: &Path, path: Option<&str>) -> Vec<(String, String)> {
-    let mut command = Command::new(program);
-    command.arg("app-server").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    let mut command = command(program);
+    command
+        .arg("app-server")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
     if let Some(path) = path {
         command.env("PATH", path);
     }
@@ -159,20 +206,27 @@ fn codex_models(program: &Path, path: Option<&str>) -> Vec<(String, String)> {
             },
         }))?;
         loop {
-            let line = lines.recv_timeout(deadline.saturating_duration_since(Instant::now())).ok()?;
+            let line = lines
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .ok()?;
             let Ok(message) = serde_json::from_str::<Value>(&line) else {
                 continue;
             };
             match message.get("id").and_then(Value::as_u64) {
                 Some(1) => {
                     say(serde_json::json!({ "method": "initialized" }))?;
-                    say(serde_json::json!({ "id": 2, "method": "model/list", "params": { "limit": 100 } }))?;
+                    say(
+                        serde_json::json!({ "id": 2, "method": "model/list", "params": { "limit": 100 } }),
+                    )?;
                 }
                 Some(2) => return Some(codex_listed(&message)),
                 _ => {}
             }
         }
     })();
+    // Its input closes first: killing an npm shim's cmd.exe leaves the node it started, which
+    // ends as its input does.
+    drop(stdin);
     _ = child.kill();
     _ = child.wait();
     models.unwrap_or_default()
@@ -184,10 +238,18 @@ pub fn codex_listed(answer: &Value) -> Vec<(String, String)> {
     listed
         .into_iter()
         .flatten()
-        .filter(|model| !model.get("hidden").and_then(Value::as_bool).unwrap_or(false))
+        .filter(|model| {
+            !model
+                .get("hidden")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
         .filter_map(|model| {
             let id = model.get("id").or_else(|| model.get("model"))?.as_str()?;
-            let name = model.get("displayName").and_then(Value::as_str).unwrap_or(id);
+            let name = model
+                .get("displayName")
+                .and_then(Value::as_str)
+                .unwrap_or(id);
             Some((id.to_string(), name.to_string()))
         })
         .collect()
@@ -196,7 +258,10 @@ pub fn codex_listed(answer: &Value) -> Vec<(String, String)> {
 /// Whether `claude auth status --json` says the user is signed in.
 pub fn claude_signed_in(said: &str) -> bool {
     let status: Value = serde_json::from_str(said.trim()).unwrap_or_default();
-    status.get("loggedIn").and_then(Value::as_bool).unwrap_or(false)
+    status
+        .get("loggedIn")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 /// The executable `program` in the first directory of `path` that has it.
@@ -221,16 +286,13 @@ fn is_executable(path: &Path) -> bool {
 
 /// The PATH of the user's login shell, which an app opened from the Dock doesn't have: where npm,
 /// Homebrew and the CLIs' own installers put them. Asked once a run, of the shell alone: the CLI
-/// itself never runs through it, as an alias there could change its flags. Windows apps have the
-/// user's PATH already.
+/// itself never runs through it, as an alias there could change its flags.
+#[cfg(not(windows))]
 fn login_path() -> &'static Option<String> {
-    static PATH: OnceLock<Option<String>> = OnceLock::new();
+    static PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     PATH.get_or_init(|| {
-        if cfg!(windows) {
-            return None;
-        }
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-        let output = Command::new(shell)
+        let output = command(shell)
             .args(["-l", "-c", r#"printf "%s" "$PATH""#])
             .stdin(Stdio::null())
             .stderr(Stdio::null())

@@ -5,7 +5,8 @@
 # doesn't reload itself as it first starts. The run reports how long that first launch let requests
 # through. It pins as any extension, and its action's menu has no Remove. Its own lists take fbclid
 # out of an address. The Site Controls' Block ads and trackers turns that off for the site,
-# reloading the page, which then shows the ad, and on again. Off for the site, Settings lists it,
+# reloading the page, which then shows the ad, and on again, by clicks and then by Tab's ring and
+# space and return. Off for the site, Settings lists it,
 # and its Turn On turns it on there again. Settings' Block ads and trackers turns it off in every
 # profile, which takes it out of the Extensions menu and the Site Controls, and on again. A private
 # window blocks too. The app ships the version ublock.ini pins, trusting no site, YouTube neither,
@@ -133,6 +134,23 @@ expect "${controls}Ad blocking Off" "the Site Controls didn't show ad blocking a
 send click 207 262
 expect '^browser: site controls set ad blocking on$' "a second click didn't turn it on again"
 expect "^browser: title $tab $blocked\$" "on again, the page didn't block its ad"
+# From the keyboard: Tab takes the ring down the tiles to the row, however many tiles the system
+# has, and space and return turn it off and on as clicks do (#1382).
+keyed() { grep '^browser: site controls keyed ' "$log" | tail -1 | cut -d' ' -f5-; }
+for _ in 1 2 3 4 5 6 7 8; do
+  send key tab
+  expect '^browser: site controls keyed ' "Tab didn't move the Site Controls' ring"
+  [ "$(keyed)" = AdBlocking ] && break
+done
+[ "$(keyed)" = AdBlocking ] || fail "Tab didn't reach Block ads and trackers: the ring is on $(keyed)"
+../tools/window-screenshot.sh "$pid" "$out/site-controls-keyed.png" || fail "no window to capture"
+send key space
+expect '^browser: site controls set ad blocking off$' "space on the ringed row didn't turn ad blocking off"
+expect "^browser: title $tab ad script loaded, element shown\$" \
+  "off from the keyboard, the page didn't load its ad script and show its ad"
+send key return
+expect '^browser: site controls set ad blocking on$' "return on the ringed row didn't turn it on again"
+expect "^browser: title $tab $blocked\$" "on again from the keyboard, the page didn't block its ad"
 send key escape
 expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 
@@ -149,6 +167,9 @@ expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 send menu Settings…
 expect '^browser: settings shown General$' "Settings… didn't show General"
 settings_drew General
+send clickkey $(drawn "toolbar Privacy")
+expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"
+settings_drew Privacy
 expect '^browser: settings ad blocking off on 127\.0\.0\.1$' \
   "Settings didn't list the site ad blocking is off on, alone"
 expect '^browser: settings turn on 127\.0\.0\.1 at ' "Settings didn't draw the site's Turn On"
@@ -162,12 +183,12 @@ expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 send click $page_point
 reload_until "$blocked" "turned on again in Settings' list, the page didn't block its ad"
 
-# Off everywhere in Settings, whose fifth row of General is Block ads and trackers, under
-# Favorites, its switch's middle at 592 296: 87 under Unload's at 209, past a pop-up's row.
+# Off everywhere in Settings, whose Privacy, where it opens again, leads with Block ads and
+# trackers.
 send menu Settings…
-expect '^browser: settings shown General$' "Settings… didn't show General again"
-settings_drew General
-send clickkey 592 296
+expect '^browser: settings shown Privacy$' "Settings… didn't show Privacy again"
+settings_drew Privacy
+send clickkey $(drawn "switch ad blocking")
 expect '^browser: ad blocking off$' "a click on Block ads and trackers' switch didn't turn it off"
 expect '^browser: extensions menu $' "turned off, uBlock Origin stayed in the Extensions menu"
 ../tools/window-screenshot.sh "$pid" "$out/adblock-settings.png" all || fail "no window to capture"
@@ -183,9 +204,9 @@ none_since "${controls}Ad blocking" || fail "turned off in Settings, the Site Co
 send key escape
 expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 send menu Settings…
-expect '^browser: settings shown General$' "Settings… didn't show General a third time"
-settings_drew General
-send clickkey 592 296
+expect '^browser: settings shown Privacy$' "Settings… didn't show Privacy a third time"
+settings_drew Privacy
+send clickkey $(drawn "switch ad blocking")
 expect '^browser: ad blocking on$' "a second click on the switch didn't turn it on"
 expect "^browser: extensions menu .*$ublock\$" "turned on, uBlock Origin didn't come back"
 send key w cmd
