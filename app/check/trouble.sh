@@ -4,10 +4,11 @@
 # no card. A page whose renderer dies, killed as macOS kills one under memory pressure, leaves its
 # pane to the card's This page stopped, whose Reload, or ⇧⌘R, loads it again, while a tab behind
 # whose renderer dies is unloaded instead and loads once it's shown, with no card. A load that fails
-# shows the core's error page, with the error's code, and one refused for want of a server loads
-# again by itself, through Chromium's auto-reload, once the server is there. Offline, the page
-# offers ilo's game, which Space starts and a click doesn't, at chrome://dino too, with ⌘L still
-# the browser's over a run; and a page whose network comes back mid-run loads once the run ends.
+# shows the core's error page, with the error's code, readable in Light as in Dark, and one refused
+# for want of a server loads again by itself, through Chromium's auto-reload, once the server is
+# there. Offline, the page offers ilo's game, which Space starts and a click doesn't, at
+# chrome://dino too, with ⌘L still the browser's over a run; and a page whose network comes back
+# mid-run loads once the run ends.
 
 serve
 # Typing w in it keeps its renderer busy for 20 s, past Chrome's 15 s hang timeout, then the title
@@ -155,6 +156,40 @@ expect '^browser: command bar go https://nothing.invalid/$' "the bar didn't go t
 expect "^browser: page $tab trouble network -105\$" "a host that doesn't resolve wasn't a network error"
 await '^browser: title [0-9]* nothing.invalid$' || fail "the error page didn't take the host for its title"
 ../tools/window-screenshot.sh "$pid" "$out/network-error.png" || fail "no window to capture"
+# In Light its words are dark, in the palette's ink, on the pane, which is light then (#1567).
+# inked <capture>: how many pixels darker than 100 in each channel lie in the middle of the
+# window's right part, where the page's words are, away from the sidebar's.
+inked() {
+  # pixel leaves the capture as $out/pixel.bmp.
+  pixel "$1" 0 0 > /dev/null
+  python3 -I - "$out/pixel.bmp" << 'PY'
+import struct, sys
+data = open(sys.argv[1], "rb").read()
+offset, = struct.unpack_from("<I", data, 10)
+width, height, _, bits = struct.unpack_from("<iiHH", data, 18)
+rows = abs(height)
+stride = (bits * width + 31) // 32 * 4
+count = 0
+for y in range(int(rows * 0.35), int(rows * 0.65)):
+    start = offset + (y if height < 0 else rows - 1 - y) * stride
+    for x in range(int(width * 0.4), int(width * 0.95)):
+        at = start + x * bits // 8
+        count += max(data[at], data[at + 1], data[at + 2]) < 100
+print(count)
+PY
+}
+send menu "$(cased 'Appearance › Light')"
+expect '^browser: appearance light$' "View › Appearance › Light didn't change the appearance"
+for _ in $(seq 20); do
+  ../tools/window-screenshot.sh "$pid" "$out/network-error-light.png" || fail "no window to capture"
+  inked=$(inked "$out/network-error-light.png")
+  [ "$inked" -ge 20 ] && break
+done
+[ "$inked" -ge 20 ] ||
+  fail "in Light, the error page's words didn't read on its pane: $inked dark pixels where they are"
+send menu "$(cased 'Appearance › Automatic')"
+expect '^browser: appearance automatic$' \
+  "View › Appearance › Automatic didn't give back the system's appearance"
 # Space on it starts no game, which only the offline page has. A click away from its Reload focuses
 # it; the refused step after gives a run that started time to say so.
 send click 300 120
@@ -309,4 +344,4 @@ expect '^browser: command bar hidden$' "escape didn't close the command bar"
 
 quit_by_key
 exited
-echo "ok: a page that stops answering gets Not responding with Wait and Reload and goes by itself once it answers, Wait gives it longer and Reload ends its renderer and loads it again without the crash card, a dead page's pane shows This page stopped, whose Reload loads it again, a tab behind whose renderer dies is unloaded and loads once shown, a host that doesn't resolve shows the core's error page and a refused page loads by itself once its server comes. Offline, Space starts the game and a click doesn't, a page whose network comes back mid-run loads only once the run ends, chrome://dino opens it, and ⌘L opens the bar over a run, which ends it. Windows: $out/hung.png, $out/crashed.png, $out/network-error.png, $out/offline.png, $out/offline-game.png"
+echo "ok: a page that stops answering gets Not responding with Wait and Reload and goes by itself once it answers, Wait gives it longer and Reload ends its renderer and loads it again without the crash card, a dead page's pane shows This page stopped, whose Reload loads it again, a tab behind whose renderer dies is unloaded and loads once shown, a host that doesn't resolve shows the core's error page, readable in Light too, and a refused page loads by itself once its server comes. Offline, Space starts the game and a click doesn't, a page whose network comes back mid-run loads only once the run ends, chrome://dino opens it, and ⌘L opens the bar over a run, which ends it. Windows: $out/hung.png, $out/crashed.png, $out/network-error.png, $out/network-error-light.png, $out/offline.png, $out/offline-game.png"
