@@ -1944,6 +1944,7 @@ impl Agents {
                 did.text = page::clip(&string("option"), tools::TYPED_SHOWN);
             }
             "press_key" => did.target = string("key"),
+            "request" => did.target = super::request::described(arguments),
             "scroll" => {
                 did.target = match &element {
                     Some(element) => named(element),

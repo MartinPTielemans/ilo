@@ -4,7 +4,8 @@
 //! doesn't wait for its tab to be shown. A page's own question goes first, as it's about the page
 //! in front of the user. The Agents keep what waits on the answer (agents::Agents::answer). A
 //! handoff asks the same way: the agent needs the user in a tab, which Show Tab shows and Hand Back
-//! gives back. So does an agent asking for a tab the user took over: Keep, or Hand Back.
+//! gives back. So does an agent asking for a tab the user took over: Keep, or Hand Back. An agent's
+//! HTTP requests that may change something ask each time, listing the changes: Deny, or Allow.
 
 use gpui::{Context, FontWeight, div, prelude::*, px};
 
@@ -13,7 +14,7 @@ use super::{
     permission::{BESIDE_CLOSE, BUTTONS_TOP, card_button, card_close, card_listener},
 };
 use crate::agents::{Answer, Question};
-use crate::tokens::shell::permission::{BUTTON_GAP, DETAIL};
+use crate::tokens::shell::permission::{BUTTON_GAP, CHANGE_GAP, DETAIL};
 
 impl Shell {
     /// The Agents ask the user `question`, or no longer ask (None).
@@ -100,16 +101,57 @@ impl Shell {
         };
         let close = card_close(&self.palette, "agent-question-close")
             .on_click(cx.listener(|shell, _, _, cx| shell.answer_agent(Answer::Dismiss, cx)));
+        let title = div()
+            .pr(px(BESIDE_CLOSE))
+            .text_color(self.palette.text(TITLE))
+            .font_weight(FontWeight::MEDIUM)
+            .child(format!("{} wants to {}", question.agent, question.what));
+        // A request's changes, which ask every time: what each does, and Allow is for them alone.
+        if !question.changes.is_empty() {
+            let changes = question.changes.iter().map(|(line, sends)| {
+                let change = div()
+                    .mt(px(CHANGE_GAP))
+                    .text_color(self.palette.on_overlay(DETAIL))
+                    .child(line.clone());
+                change.when(!sends.is_empty(), |change| {
+                    change.child(div().child(sends.clone()))
+                })
+            });
+            let more = (question.more > 0).then(|| {
+                let more = format!("and {} more", question.more);
+                div()
+                    .mt(px(CHANGE_GAP))
+                    .text_color(self.palette.on_overlay(DETAIL))
+                    .child(more)
+            });
+            return Some(
+                self.plate("agent-question")
+                    .child(listener)
+                    .child(title)
+                    .children(changes)
+                    .children(more)
+                    .child(
+                        div()
+                            .mt(px(CHANGE_GAP))
+                            .text_color(self.palette.on_overlay(DETAIL))
+                            .child(question.why.clone()),
+                    )
+                    .child(
+                        div()
+                            .mt(px(BUTTONS_TOP))
+                            .flex()
+                            .gap(px(BUTTON_GAP))
+                            .child(button("agent-question-deny", "Deny", Answer::Dismiss))
+                            .child(button("agent-question-allow", "Allow", Answer::Once)),
+                    )
+                    .child(close)
+                    .into_any_element(),
+            );
+        }
         Some(
             self.plate("agent-question")
                 .child(listener)
-                .child(
-                    div()
-                        .pr(px(BESIDE_CLOSE))
-                        .text_color(self.palette.text(TITLE))
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(format!("{} wants to {}", question.agent, question.what)),
-                )
+                .child(title)
                 .child(
                     div()
                         .text_color(self.palette.on_overlay(DETAIL))
@@ -154,8 +196,7 @@ mod tests {
             from: "claude-code".into(),
             what: "click “Place order” on shop.example".into(),
             why: "It looks like a payment or an order.".into(),
-            handoff: None,
-            back: false,
+            ..Question::default()
         }
     }
 
@@ -238,5 +279,75 @@ mod tests {
         );
         cx.run_until_parked();
         assert!(host.take().contains(&"answer agent 9 Never".to_string()));
+    }
+
+    /// A request's changes ask every time, so their card has Deny and Allow side by side in its
+    /// last row, and nothing to answer for good above it.
+    #[gpui::test]
+    fn a_requests_card_allows_once_or_denies(cx: &mut TestAppContext) {
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        let changes = |id: u64| Question {
+            what: "make 4 changes on team.example.com".into(),
+            why: "Changes ask every time.".into(),
+            changes: vec![
+                ("PATCH /api/items/1".into(), "status: Closed".into()),
+                ("PATCH /api/items/2".into(), "status: Closed".into()),
+                ("DELETE /api/items/7".into(), "".into()),
+            ],
+            more: 1,
+            ..question(id)
+        };
+        shell.update(cx, |shell, cx| {
+            let space = (
+                1,
+                "Space 1".into(),
+                None,
+                0,
+                "".into(),
+                "".into(),
+                "".into(),
+            );
+            shell.set_spaces(vec![space], cx);
+            shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+            shell.set_space(1, cx);
+            shell.set_selected(10, cx);
+            shell.set_agent_question(Some(changes(7)), cx);
+        });
+        cx.run_until_parked();
+        let card = shell.read_with(cx, |shell, _| shell.agent_question_drawn.get());
+        let card = card.expect("the card wasn't drawn");
+        let last = card.bottom() - px(PADDING + BUTTON_HEIGHT / 2.);
+        let above = last - px(BUTTON_HEIGHT + BUTTON_GAP);
+        cx.simulate_click(
+            point(card.left() + card.size.width * 0.75, above),
+            Modifiers::none(),
+        );
+        cx.run_until_parked();
+        assert!(
+            !host
+                .take()
+                .iter()
+                .any(|did| did.starts_with("answer agent")),
+            "above answered"
+        );
+        cx.simulate_click(
+            point(card.left() + card.size.width * 0.75, last),
+            Modifiers::none(),
+        );
+        cx.run_until_parked();
+        assert!(host.take().contains(&"answer agent 7 Once".to_string()));
+
+        shell.update(cx, |shell, cx| {
+            shell.set_agent_question(Some(changes(8)), cx)
+        });
+        cx.run_until_parked();
+        cx.simulate_click(
+            point(card.left() + card.size.width * 0.25, last),
+            Modifiers::none(),
+        );
+        cx.run_until_parked();
+        assert!(host.take().contains(&"answer agent 8 Dismiss".to_string()));
     }
 }

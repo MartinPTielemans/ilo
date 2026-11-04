@@ -106,7 +106,7 @@ std::string RefusedAction(std::string_view action) {
   // handing the tab to the user.
   static constexpr auto kAllowed = base::MakeFixedFlatSet<std::string_view>(
       {"back", "click", "close_tab", "forward", "hand_off", "navigate", "press_key", "read_page",
-       "screenshot", "scroll", "select_option", "snapshot", "type"});
+       "request", "screenshot", "scroll", "select_option", "snapshot", "type"});
   // Those agents ask for that the rules forbid outright, with why.
   static constexpr auto kForbidden = base::MakeFixedFlatMap<std::string_view, std::string_view>({
       {"ad_blocking", "Agents can't change ad blocking. It's the user's, in Site Controls."},

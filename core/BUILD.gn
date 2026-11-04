@@ -149,6 +149,8 @@ source_set("browser_core") {
     "agent_autofill.h",
     "agent_page.cc",
     "agent_page.h",
+    "agent_request.cc",
+    "agent_request.h",
     "agent_session.cc",
     "agent_session.h",
     "api.cc",

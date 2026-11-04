@@ -459,6 +459,20 @@ typedef struct bc_agent_activity {
   const char* refused;
 } bc_agent_activity;
 
+// The answer to an agent's HTTP request (bc_agent_request, agent_request_done).
+typedef struct bc_agent_response {
+  // The HTTP status, such as 200 or 404, or 0 if none came.
+  int status;
+  // The body's MIME type, such as "application/json", or "".
+  const char* type;
+  // The body, |size| bytes, not NUL-terminated, the first part of it with |cut|.
+  const char* body;
+  size_t size;
+  bool cut;
+  // Why it couldn't be sent, or broke off, for the agent to read, or null.
+  const char* error;
+} bc_agent_response;
+
 // Why an agent's session with a tab ended (agent_session_ended).
 // Its client disconnected (bc_agent_disconnected).
 #define BC_AGENT_SESSION_DISCONNECTED 0
@@ -1007,6 +1021,9 @@ typedef struct bc_host {
   // and agent code asks the user, then answers with bc_agent_download_answer. Called once as it
   // starts and once as it ends.
   void (*agent_download)(void* context, const bc_agent_download* download);
+  // The answer to bc_agent_request's |request|, from a task of its own. It never has the answer's
+  // headers, so no Set-Cookie reaches the app.
+  void (*agent_request_done)(void* context, uint64_t request, const bc_agent_response* response);
   // On Linux and Windows, the browser is quitting, or with |last_private| the last window of a
   // private profile closing, with |count| downloads running, which it would cancel: ask the user
   // over |window|, and answer with bc_window_answer_downloads. A window asks one at a time. The Mac
@@ -1294,8 +1311,8 @@ BC_EXPORT size_t bc_space_agent_name(bc_id space, char* name, size_t capacity);
 // Whether the agent with the id |agent| may do |action| to |tab|: only if |action| is one agents
 // may do, the tab is in that agent's own Space, and Chromium shows its page, not the system's
 // engine, where the browser can't keep an agent's rules. Agents may back, click, close_tab,
-// forward, hand_off, navigate, press_key, read_page, screenshot, scroll, select_option, snapshot
-// and type; ad_blocking, devtools, passwords, profile_settings (a profile's search engine, archive
+// forward, hand_off, navigate, press_key, read_page, request, screenshot, scroll, select_option,
+// snapshot and type; ad_blocking, devtools, passwords, profile_settings (a profile's search engine, archive
 // timing, download folder, offers to save and saved data, and Clear Browsing Data) and any other
 // action are refused. Agent code calls it once for each call an agent makes on a tab, before
 // acting. If refused, copies why into |reason| as bc_space_name does, else an empty string: for a
@@ -1413,6 +1430,27 @@ BC_EXPORT void bc_agent_page(const char* agent,
                              int action,
                              int64_t element,
                              const char* text);
+
+// Sends an HTTP request for the agent with the id |agent| from the page in |tab|, as the page's own
+// script could: |method| to |url|, which must be on the page's own origin, with |headers| as
+// "Name: value" lines and |body|, |size| bytes. Then agent_request_done with |request|, from a task
+// of its own. It goes as the page's same-origin fetch would: with the page's cookies, the site as
+// the first party and the page as the referrer, and it never follows a redirect to another origin.
+// Refused, with an error, if the tab isn't in the agent's Space, its page isn't from an http(s)
+// site, |url| is on another origin, or |method| is CONNECT, TRACE or TRACK, and for a header the
+// browser sets itself, as a page's fetch can't set it either, such as Cookie, Host or Origin, or
+// for Authorization, a sign-in the agent mustn't hold. A GET or HEAD has no body. The answer has
+// up to a megabyte of the body, never the headers. The core asks no one: agent code asks the user
+// before each request that may change anything, and calls it after bc_agent_may_act with
+// "request".
+BC_EXPORT void bc_agent_request(const char* agent,
+                                bc_id tab,
+                                uint64_t request,
+                                const char* method,
+                                const char* url,
+                                const char* headers,
+                                const char* body,
+                                size_t size);
 
 // The user takes |tab| over from the agent at work in it. Ends that agent's session there, returns
 // whether one had it, and holds the tab: no agent may act in it (bc_agent_may_act refuses) until

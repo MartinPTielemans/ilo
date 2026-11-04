@@ -46,6 +46,8 @@ struct Made {
     asks: RefCell<HashSet<u64>>,
     /// The downloads the agents answered for the user, and whether each goes on.
     downloads: RefCell<Vec<(u64, bool)>>,
+    /// The HTTP requests the agents sent: the tab, the request and what it sent.
+    requests: RefCell<Vec<(u64, u64, request::Request)>>,
 }
 
 impl Made {
@@ -256,6 +258,12 @@ impl Browser for Made {
     /// The user's Space is 1.
     fn user_space(&self, _: u64) -> u64 {
         1
+    }
+
+    fn request(&self, _: &str, tab: u64, request: u64, sent: &request::Request) {
+        self.requests
+            .borrow_mut()
+            .push((tab, request, sent.clone()));
     }
 }
 
@@ -2624,7 +2632,7 @@ fn a_wait_step_waits_for_its_text_in_the_page(cx: &mut TestAppContext) {
 
 /// The actions the core lets an agent take in its tabs, agent_session.cc's RefusedAction: each a
 /// thing the user does in a page, or handing the tab to them.
-const CORE_ALLOWS: [&str; 13] = [
+const CORE_ALLOWS: [&str; 14] = [
     "back",
     "click",
     "close_tab",
@@ -2633,6 +2641,7 @@ const CORE_ALLOWS: [&str; 13] = [
     "navigate",
     "press_key",
     "read_page",
+    "request",
     "screenshot",
     "scroll",
     "select_option",
@@ -2664,6 +2673,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "press_key",
             "scroll",
             "screenshot",
+            "request",
             "run_steps",
             "hand_off",
             "ask_for_tab",
@@ -2690,6 +2700,10 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         ("press_key", tab(json!({ "key": "Tab" }))),
         ("scroll", tab(json!({}))),
         ("screenshot", tab(json!({}))),
+        (
+            "request",
+            tab(json!({ "requests": [{ "method": "GET", "path": "/" }] })),
+        ),
         ("navigate", tab(json!({ "url": "back" }))),
         ("navigate", tab(json!({ "url": "forward" }))),
         ("navigate", tab(json!({ "url": "iana.org" }))),
@@ -2732,14 +2746,212 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         "press_key",
         "scroll",
     ];
-    for action in page_actions
-        .into_iter()
-        .chain(["screenshot", "back", "hand_off", "close_tab"])
+    for action in
+        page_actions
+            .into_iter()
+            .chain(["screenshot", "request", "back", "hand_off", "close_tab"])
     {
         assert!(
             checked.contains(action),
             "{action} didn't ask the core: {checked:?}"
         );
+    }
+}
+
+/// The request tool (#1439): HTTP requests from a tab's page to its own site.
+mod requests {
+    use super::*;
+
+    /// Answers the request sent last as the core would, and gives what's sent next, if any.
+    fn answered(
+        agents: &Entity<Agents>,
+        browser: &Made,
+        status: u16,
+        body: &str,
+        cx: &mut TestAppContext,
+    ) {
+        let request = browser.requests.borrow().last().unwrap().1;
+        let response = request::Response {
+            status,
+            kind: "application/json".into(),
+            body: body.as_bytes().to_vec(),
+            ..request::Response::default()
+        };
+        agents.update(cx, |agents, cx| agents.request_done(request, response, cx));
+    }
+
+    fn sent(browser: &Made) -> Vec<String> {
+        let sent = browser.requests.borrow();
+        sent.iter()
+            .map(|(_, _, each)| format!("{} {}", each.method, each.url))
+            .collect()
+    }
+
+    fn targets(agents: &Entity<Agents>, cx: &mut TestAppContext) -> Vec<(String, String)> {
+        agents.read_with(cx, |agents, _| {
+            (agents.activity("claude-code"))
+                .filter(|entry| entry.action == "request")
+                .map(|entry| (entry.target.to_string(), entry.refused.to_string()))
+                .collect()
+        })
+    }
+
+    /// A read goes at once, and its answer is the body without what looks like a credential. A
+    /// call's changes ask in one question, every time, whatever the user answered before: none is
+    /// sent until they allow it, nor the call's reads, and Always and Never keep nothing.
+    #[gpui::test]
+    fn reads_go_and_every_change_asks_each_time(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        let read = json!({ "tab": 20, "requests": [{ "method": "GET", "path": "/api/me" }] });
+        let answer = call(&agents, "claude-code", "request", read, cx);
+        assert_eq!(*browser.asked.borrow(), None, "a read asked");
+        assert_eq!(sent(&browser), ["GET https://www.example.com/api/me"]);
+        answered(
+            &agents,
+            &browser,
+            200,
+            r#"{"name":"Ada","accessToken":"ya29.secret"}"#,
+            cx,
+        );
+        let read = answer.recv().unwrap();
+        assert!(!read.error);
+        assert!(
+            read.text
+                .starts_with("GET /api/me → 200 application/json\n\n"),
+            "{}",
+            read.text
+        );
+        assert!(
+            read.text.contains("Ada") && !read.text.contains("ya29"),
+            "{}",
+            read.text
+        );
+        assert!(
+            read.text.ends_with("never hold their credentials."),
+            "{}",
+            read.text
+        );
+        assert_eq!(targets(&agents, cx), [("GET /api/me".into(), "".into())]);
+
+        let changes = json!({ "tab": 20, "requests": [
+            { "method": "GET", "path": "/api/items" },
+            { "method": "POST", "path": "/api/items", "body": { "title": "Milk" } },
+            { "method": "DELETE", "path": "/api/items/7" },
+        ] });
+        let answer = call(&agents, "claude-code", "request", changes.clone(), cx);
+        let question = browser.asked.borrow().clone().expect("a change didn't ask");
+        assert_eq!(question.what, "make 2 changes on example.com");
+        assert_eq!(question.why, "Changes ask every time.");
+        let listed = [
+            ("POST /api/items", "title: Milk"),
+            ("DELETE /api/items/7", ""),
+        ];
+        let listed = listed.map(|(line, sends)| (line.into(), sends.into()));
+        assert_eq!(
+            (question.changes.as_slice(), question.more),
+            (listed.as_slice(), 0)
+        );
+        assert_eq!(sent(&browser).len(), 1, "it sent before the user answered");
+        agents.update(cx, |agents, cx| {
+            agents.answer(question.id, Answer::Always, cx)
+        });
+        for status in [200, 201, 204] {
+            answered(&agents, &browser, status, "", cx);
+        }
+        let done = answer.recv().unwrap();
+        let lines: Vec<&str> = done.text.split("\n\n").collect();
+        let expected = [
+            "1. GET /api/items → 200 application/json",
+            "2. POST /api/items → 201 application/json",
+            "3. DELETE /api/items/7 → 204 application/json",
+        ];
+        assert_eq!(lines, expected);
+        assert_eq!(browser.requests.borrow()[2].2.body, r#"{"title":"Milk"}"#);
+        assert!(
+            agents
+                .read_with(cx, |agents, _| agents.grants("claude-code"))
+                .is_empty()
+        );
+
+        let answer = call(&agents, "claude-code", "request", changes, cx);
+        let question = browser
+            .asked
+            .borrow()
+            .clone()
+            .expect("Always kept the changes from asking");
+        agents.update(cx, |agents, cx| {
+            agents.answer(question.id, Answer::Never, cx)
+        });
+        assert_eq!(
+            answer.recv().unwrap(),
+            ToolResult::error(
+                "The user said no: you can't make 2 changes on example.com. Don't try again."
+            )
+        );
+        assert_eq!(
+            sent(&browser).len(),
+            4,
+            "a call the user refused sent something"
+        );
+        assert!(
+            agents
+                .read_with(cx, |agents, _| agents.grants("claude-code"))
+                .is_empty()
+        );
+    }
+
+    /// The browser's headers, other sites and the user's tabs are refused, and logged, without a
+    /// question and without the user's tab's address in the answer. A request that gets no answer
+    /// stops the rest.
+    #[gpui::test]
+    fn requests_keep_to_the_rules(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        let refused = |requests: Value, tab: u64, cx: &mut TestAppContext| {
+            let arguments = json!({ "tab": tab, "requests": requests });
+            let answer = call(&agents, "claude-code", "request", arguments, cx);
+            let answer = answer.recv().unwrap();
+            assert!(answer.error, "{}", answer.text);
+            assert_eq!(*browser.asked.borrow(), None, "a refused call asked");
+            answer.text
+        };
+        let cookie = json!([{ "method": "GET", "path": "/", "headers": { "Cookie": "a=1" } }]);
+        assert!(refused(cookie, 20, cx).starts_with("Agents can't set the Cookie header"));
+        let elsewhere = json!([{ "method": "POST", "path": "https://example.org/a" }]);
+        assert!(refused(elsewhere, 20, cx).contains("only to the tab's own site"));
+        let theirs = refused(json!([{ "method": "POST", "path": "/w/edit" }]), 10, cx);
+        assert!(!theirs.contains("wikipedia"), "{theirs}");
+        assert!(sent(&browser).is_empty());
+        let refusals: Vec<String> = targets(&agents, cx)
+            .into_iter()
+            .map(|(_, why)| why)
+            .collect();
+        assert!(
+            refusals.iter().all(|why| !why.is_empty()) && refusals.len() == 3,
+            "{refusals:?}"
+        );
+
+        let two = json!([{ "method": "GET", "path": "/a" }, { "method": "GET", "path": "/b" }]);
+        let answer = call(
+            &agents,
+            "claude-code",
+            "request",
+            json!({ "tab": 20, "requests": two }),
+            cx,
+        );
+        let request = browser.requests.borrow().last().unwrap().1;
+        let error = Some("No answer came: ERR_CONNECTION_REFUSED".into());
+        let response = request::Response {
+            error,
+            ..request::Response::default()
+        };
+        agents.update(cx, |agents, cx| agents.request_done(request, response, cx));
+        let answer = answer.recv().unwrap();
+        assert!(answer.error);
+        assert_eq!(
+            answer.text,
+            "1. GET /a: No answer came: ERR_CONNECTION_REFUSED\n\nThe last request wasn't sent."
+        );
+        assert_eq!(sent(&browser).len(), 1);
     }
 }
 

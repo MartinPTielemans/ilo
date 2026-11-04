@@ -20,6 +20,7 @@ pub mod page;
 #[cfg(windows)]
 mod pipe;
 pub mod ready;
+pub mod request;
 pub mod runner;
 mod server;
 pub mod task;
@@ -100,7 +101,7 @@ pub enum Closed {
 }
 
 /// What an agent asks the user's leave for, as the card in each window asks it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Question {
     pub id: u64,
     /// The agent's name, as its Space has it.
@@ -117,6 +118,12 @@ pub struct Question {
     /// Whether the agent asks for that tab back (ask_for_tab), which Keep refuses, rather than
     /// handing it to the user.
     pub back: bool,
+    /// The changes a call's requests would make (request), the first `request::LISTED`, each
+    /// what it does and where, then what it sends, or "". They ask every time, so their card has
+    /// no Always or Never.
+    pub changes: Vec<(SharedString, SharedString)>,
+    /// The changes it doesn't list.
+    pub more: usize,
 }
 
 /// What an agent is doing, and what the user holds from it, for the bar in its Space.
@@ -226,6 +233,9 @@ pub trait Browser {
     /// The user's Space a session's pages open into: the one the front window shows, if it's in
     /// the profile of `like`, an agent's Space, else the first of the user's in that profile.
     fn user_space(&self, like: u64) -> u64;
+    /// Sends `sent` from the page in the agent's `tab`, as the page's own script could, to its own
+    /// site (bc_agent_request). Its answer comes to `Agents::request_done` with `request`.
+    fn request(&self, agent: &str, tab: u64, request: u64, sent: &request::Request);
 }
 
 /// What the server's threads hand the UI thread.
@@ -336,6 +346,8 @@ struct Act {
     what: String,
     /// The download it lets go on, for "download", else 0.
     download: u64,
+    /// The HTTP requests it sends (request).
+    requests: Vec<request::Request>,
     reply: mpsc::Sender<ToolResult>,
 }
 
@@ -423,6 +435,21 @@ struct Acting {
     opened_tabs: Vec<u64>,
 }
 
+/// A call's requests, one at a time, while the one sent waits on the core's answer.
+struct Sending {
+    agent: String,
+    tab: u64,
+    sent: Option<request::Request>,
+    /// The requests still to send.
+    left: std::collections::VecDeque<request::Request>,
+    /// What each answered.
+    answers: Vec<String>,
+    /// What's left of what the call's answers may show, and how many secrets they hid.
+    shown: usize,
+    hidden: usize,
+    reply: mpsc::Sender<ToolResult>,
+}
+
 /// An action that waits on the user.
 struct Asking {
     question: Question,
@@ -440,6 +467,8 @@ pub struct Activity {
     pub action: SharedString,
     /// The host of the page it did it to, or empty.
     pub site: SharedString,
+    /// What on the page, as a step's title says it, or empty: a request's method and path.
+    pub target: SharedString,
     /// Why it was refused, or empty if it wasn't.
     pub refused: SharedString,
     /// A run's steps (run_steps), each an entry of its own.
@@ -490,6 +519,8 @@ pub struct Agents {
     opened: HashSet<u64>,
     /// The actions waiting on the core, by request.
     acting: HashMap<u64, Acting>,
+    /// The calls whose requests wait on the core, by the request sent.
+    sending: HashMap<u64, Sending>,
     /// Each tab's refs, from its outlines.
     refs: HashMap<u64, page::Refs>,
     /// Each tab's latest outline, and the last one an agent had, which its next answer gives the
@@ -635,6 +666,7 @@ impl Agents {
             current: HashMap::new(),
             opened: HashSet::new(),
             acting: HashMap::new(),
+            sending: HashMap::new(),
             refs: HashMap::new(),
             outlines: HashMap::new(),
             had: HashMap::new(),
@@ -1099,6 +1131,7 @@ impl Agents {
                     show: Show::Full,
                     download: 0,
                     field: String::new(),
+                    requests: Vec::new(),
                     reply,
                 };
                 if !is_web(&act.url) {
@@ -1259,6 +1292,52 @@ impl Agents {
                 (held.question, held.back) = (question, Some(page::clip(why, 200)));
                 (held.call, held.reply) = (id, Some(reply));
                 self.asked(cx);
+            }
+            "request" => {
+                let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {
+                    return;
+                };
+                let host = site(&self.browser.tab(tab, cx).url);
+                let requests = match request::parse(&arguments, &self.browser.tab(tab, cx).url) {
+                    Ok(requests) => requests,
+                    Err(request::Wrong::Refused(why)) => {
+                        self.note(&agent, "request", &host, &why);
+                        cx.notify();
+                        _ = reply.send(ToolResult::error(why));
+                        return;
+                    }
+                    Err(request::Wrong::Malformed(why)) => {
+                        _ = reply.send(ToolResult::error(why));
+                        return;
+                    }
+                };
+                let what = match requests.iter().filter(|each| each.changes()).count() {
+                    0 => String::new(),
+                    1 => format!("make a change on {host}"),
+                    changes => format!("make {changes} changes on {host}"),
+                };
+                let act = Act {
+                    agent,
+                    call: id,
+                    action: "request",
+                    tab,
+                    url: String::new(),
+                    page: PageAction::Snapshot,
+                    element: 0,
+                    text: String::new(),
+                    note: String::new(),
+                    show: Show::Nothing,
+                    what,
+                    field: String::new(),
+                    download: 0,
+                    requests,
+                    reply,
+                };
+                // Reads go; changes ask every time, never a grant's to answer.
+                match act.what.is_empty() {
+                    true => self.run(act, cx),
+                    false => self.ask_first(act, host, CHANGES_ASK, cx),
+                }
             }
             "title" | "ask" | "finish" if is_task(&agent) => {
                 self.task_tool(&agent, &tool, &arguments, reply, cx)
@@ -1777,6 +1856,7 @@ impl Agents {
             field: String::new(),
             what: String::new(),
             download: 0,
+            requests: Vec::new(),
             reply,
         };
         let mut risk = None;
@@ -1948,10 +2028,14 @@ impl Agents {
             .get(&act.agent)
             .and_then(|sites| sites.get(&site))
         {
-            Some(true) => return self.run(act, cx),
-            Some(false) => return self.refuse(act, &site, SAID_NEVER, cx),
-            None => {}
+            Some(true) => self.run(act, cx),
+            Some(false) => self.refuse(act, &site, SAID_NEVER, cx),
+            None => self.ask_first(act, site, why, cx),
         }
+    }
+
+    /// Asks the user before the action on `site`, `why`, and waits for their answer.
+    fn ask_first(&mut self, act: Act, site: String, why: &'static str, cx: &mut Context<Self>) {
         // A tab not the agent's is the core's to refuse, without a question.
         let space = self.browser.agent_space(&act.agent);
         if act.tab != 0
@@ -1963,14 +2047,20 @@ impl Agents {
         {
             return self.run(act, cx);
         }
+        let changes: Vec<&request::Request> =
+            act.requests.iter().filter(|each| each.changes()).collect();
+        let listed = changes.iter().take(request::LISTED);
         let question = Question {
             id: self.next_request,
             agent: self.agent_name(&act.agent),
             from: act.agent.clone().into(),
             what: act.what.clone().into(),
             why: why.into(),
-            handoff: None,
-            back: false,
+            changes: listed
+                .map(|each| (each.line().into(), each.summary().into()))
+                .collect(),
+            more: changes.len().saturating_sub(request::LISTED),
+            ..Question::default()
         };
         self.next_request += 1;
         // check.sh reads this line.
@@ -2000,7 +2090,10 @@ impl Agents {
         let Asking { site, act, .. } = self.asking.remove(at);
         // check.sh reads this line.
         log!("browser: agent {} answered {id} {answer:?}", act.agent);
-        if let Answer::Always | Answer::Never = answer {
+        // A request's changes ask every time, whatever answered.
+        if act.action != "request"
+            && let Answer::Always | Answer::Never = answer
+        {
             let sites = self.grants.entry(act.agent.clone()).or_default();
             sites.insert(site.clone(), answer == Answer::Always);
             self.save();
@@ -2098,6 +2191,7 @@ impl Agents {
             why: held.back.as_ref().unwrap_or(&held.why).clone().into(),
             handoff: Some(tab),
             back: held.back.is_some(),
+            ..Question::default()
         })
     }
 
@@ -2123,6 +2217,7 @@ impl Agents {
         self.downloading
             .retain(|_, downloading| downloading.agent != agent);
         self.acting.retain(|_, acting| acting.agent != agent);
+        self.sending.retain(|_, sending| sending.agent != agent);
         self.runs.retain(|run| run.agent != agent);
         for held in self.held.values_mut().filter(|held| held.agent == agent) {
             (held.back, held.reply) = (None, None);
@@ -2169,6 +2264,7 @@ impl Agents {
             mut note,
             show,
             field,
+            requests,
             reply,
             ..
         } = act;
@@ -2180,6 +2276,21 @@ impl Agents {
                 Err(why) => return self.refuse(act_of(&agent, call, tab, reply), &site, &why, cx),
             };
             return self.closed(&agent, tab, true, closed, &site, reply, cx);
+        }
+        if action == "request" {
+            let left = requests.into();
+            let (answers, shown, hidden) = (Vec::new(), request::ALL_SHOWN, 0);
+            let sending = Sending {
+                agent,
+                tab,
+                sent: None,
+                left,
+                answers,
+                shown,
+                hidden,
+                reply,
+            };
+            return self.send_next(sending, cx);
         }
         if action == "open_tab" {
             let site = site(&url);
@@ -2271,6 +2382,7 @@ impl Agents {
             show: Show::Nothing,
             field: String::new(),
             download: id,
+            requests: Vec::new(),
             reply,
         };
         self.check(act, host, Some(DOWNLOADS), cx);
@@ -2330,6 +2442,60 @@ impl Agents {
             }
         });
         self.advance(cx);
+    }
+
+    /// Sends the call's next request, which the core checks and logs, or answers the call once
+    /// there's none left.
+    fn send_next(&mut self, mut sending: Sending, cx: &mut Context<Self>) {
+        let Some(next) = sending.left.pop_front() else {
+            return finish(sending, false);
+        };
+        let (agent, tab) = (sending.agent.clone(), sending.tab);
+        let checked = self.browser.may_act(&agent, tab, "request", cx);
+        let site = site(&self.browser.tab(tab, cx).url);
+        let refused = checked.as_ref().err().map_or("", String::as_str);
+        self.note_on(&agent, "request", &site, &next.target(), refused);
+        cx.notify();
+        if let Err(why) = checked {
+            sending.answers.push(format!("{}: {why}", next.target()));
+            return finish(sending, true);
+        }
+        self.current.insert(agent.clone(), tab);
+        let request = self.next_request;
+        self.next_request += 1;
+        // check.sh reads this line.
+        log!(
+            "browser: agent {agent} request {request}: {} {}",
+            next.method,
+            next.url
+        );
+        self.browser.request(&agent, tab, request, &next);
+        sending.sent = Some(next);
+        self.sending.insert(request, sending);
+    }
+
+    /// The core's answer to the request `request`: the next goes, unless none came.
+    pub fn request_done(
+        &mut self,
+        request: u64,
+        response: request::Response,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(mut sending) = self.sending.remove(&request) else {
+            return;
+        };
+        let Some(sent) = sending.sent.take() else {
+            return;
+        };
+        let (shown, hidden) = (&mut sending.shown, &mut sending.hidden);
+        sending
+            .answers
+            .push(request::answer(&sent, &response, shown, hidden));
+        match response.status {
+            // Whatever stopped it may stop the rest, which wait for the agent to look again.
+            0 => finish(sending, true),
+            _ => self.send_next(sending, cx),
+        }
     }
 
     /// The ref of the element the action `request` acts on, such as "e12", as the agent named it.
@@ -2594,6 +2760,11 @@ impl Agents {
     }
 
     fn note(&mut self, agent: &str, action: &str, site: &str, refused: &str) {
+        self.note_on(agent, action, site, "", refused)
+    }
+
+    /// As `note`, for what on the page, `target`.
+    fn note_on(&mut self, agent: &str, action: &str, site: &str, target: &str, refused: &str) {
         if refused.is_empty() {
             let doing = match site.is_empty() {
                 true => tools::describe(action).to_string(),
@@ -2606,6 +2777,7 @@ impl Agents {
             agent: SharedString::from(agent.to_string()),
             action: SharedString::from(action.to_string()),
             site: SharedString::from(site.to_string()),
+            target: SharedString::from(target.to_string()),
             refused: SharedString::from(refused.to_string()),
             steps: Vec::new(),
         };
@@ -2750,8 +2922,46 @@ fn act_of(agent: &str, call: u64, tab: u64, reply: mpsc::Sender<ToolResult>) -> 
         what: String::new(),
         field: String::new(),
         download: 0,
+        requests: Vec::new(),
         reply,
     }
+}
+
+/// Why a request's changes ask: each time, as no name says what an API call does.
+const CHANGES_ASK: &str = "Changes ask every time.";
+
+/// Answers a call's requests with what each answered, numbered if there were more than one, and
+/// what wasn't sent.
+fn finish(sending: Sending, error: bool) {
+    let Sending {
+        answers,
+        left,
+        hidden,
+        reply,
+        ..
+    } = sending;
+    let many = answers.len() + left.len() > 1;
+    let answers = answers.iter().enumerate().map(|(at, answer)| match many {
+        true => format!("{}. {answer}", at + 1),
+        false => answer.clone(),
+    });
+    let mut text = answers.collect::<Vec<_>>().join("\n\n");
+    match left.len() {
+        0 => {}
+        1 => text.push_str("\n\nThe last request wasn't sent."),
+        unsent => text.push_str(&format!("\n\nThe last {unsent} requests weren't sent.")),
+    }
+    if hidden > 0 {
+        text.push_str(
+            "\n\nValues that look like sign-in tokens or secrets are hidden: agents act in the \
+             user's sessions, and never hold their credentials.",
+        );
+    }
+    _ = reply.send(ToolResult {
+        text,
+        error,
+        image: None,
+    });
 }
 
 /// What the log says of an action the user refused, now or for good on its site.

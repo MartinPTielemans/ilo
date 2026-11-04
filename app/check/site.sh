@@ -440,6 +440,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if path == "/api/me":
+            # The session a request from an agent carries and the agent must never see: a cookie
+            # the answer sets, and a token in its body.
+            port = self.server.server_address[1]
+            body = b"{\"name\":\"Ada\",\"accessToken\":\"tok-%d-secret\"}" % port
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Set-Cookie", "api=s3cret%d; Path=/; Max-Age=3600; HttpOnly" % port)
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if path == "/sign-in":
             signed_in = self.headers.get("Authorization") == "Basic " + base64.b64encode(
                 b"ada:lovelace").decode()
@@ -466,7 +478,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             pass
 
     def do_POST(self):
-        self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        if self.path.startswith("/api/"):
+            # Logged as "POST <host><path> cookie <cookies sorted, or none> body <body>".
+            cookies = sorted(c.strip() for c in self.headers.get("Cookie", "").split(";") if c.strip())
+            print("POST", self.headers.get("Host", "") + self.path, "cookie",
+                  "; ".join(cookies) or "none", "body", body.decode())
+            body = b"{\"id\":8," + body[1:]
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         self.send_response(303)
         self.send_header("Location", "welcome.html")
         self.send_header("Content-Length", "0")

@@ -2747,6 +2747,7 @@ impl Settings {
                         let did = agents::tools::Did {
                             tool: entry.action.to_string(),
                             site: entry.site.to_string(),
+                            target: entry.target.to_string(),
                             ..Default::default()
                         };
                         let tense = match entry.refused.is_empty() {
