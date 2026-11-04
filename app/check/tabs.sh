@@ -558,6 +558,7 @@ expect '^browser: settings shown General$' "Settings… didn't show General"
 settings_drew General
 expect "^browser: window $window main false\$" "the window behind Settings wasn't told it isn't the user's"
 expect '^browser: nav glyphs dimmed true$' "the window behind Settings didn't dim its header's glyphs"
+expect "^browser: window $window drew main false\$" "the window behind Settings didn't draw its dimmed glyphs"
 ../tools/window-screenshot.sh "$pid" "$out/nav-dimmed.png" all || fail "no window to capture"
 send clickkey $(drawn "toolbar Tabs & Sidebar")
 expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"

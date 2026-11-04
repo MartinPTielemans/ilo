@@ -132,6 +132,20 @@ pub(crate) extern "C" fn window_main_changed(ui_view: *mut c_void, main: bool) {
         // check.sh reads this line.
         log!("browser: window {id} main {main}");
         _ = shell_with_view(ui_view).update(cx, |shell, cx| shell.set_window_main(main, cx));
+        let handle = WINDOWS.with_borrow(|windows| {
+            let window = windows.iter().find(|window| window.ui_view == ui_view)?;
+            Some(window.handle)
+        });
+        // Once the frame that drew it is on screen, which the next frame's start says, for
+        // check.sh's capture.
+        if let Some(handle) = handle {
+            _ = handle.update(cx, |_, window, _| {
+                window.on_next_frame(move |window, _| {
+                    window.on_next_frame(move |_, _| log!("browser: window {id} drew main {main}"));
+                    window.refresh();
+                });
+            });
+        }
     });
 }
 
