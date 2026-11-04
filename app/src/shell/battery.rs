@@ -16,7 +16,7 @@ const NOTICE_TIME: Duration = Duration::from_millis(4800);
 /// What the toast says as Battery Saver turns on at `percent`, or before the battery's read (-1).
 pub fn notice(percent: i32) -> String {
     match percent {
-        0.. => format!("Battery Saver is on at {percent} %"),
+        0.. => format!("Battery Saver is on at {percent}%"),
         _ => "Battery Saver is on".into(),
     }
 }
@@ -115,7 +115,7 @@ mod tests {
             shell.show_battery_notice(cx);
         });
         assert!(offered(cx), "Turn Off not offered with Battery Saver on");
-        assert_eq!(host.toasts.take(), ["Battery Saver is on at 19 %"]);
+        assert_eq!(host.toasts.take(), ["Battery Saver is on at 19%"]);
         let (label, run) = host.toast_run.take().expect("the notice has no button");
         assert_eq!(label, "Turn Off");
         cx.update(|cx| run(cx));
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn the_notice_says_the_percent_once_the_battery_is_read() {
-        assert_eq!(notice(19), "Battery Saver is on at 19 %");
+        assert_eq!(notice(19), "Battery Saver is on at 19%");
         assert_eq!(notice(-1), "Battery Saver is on");
     }
 }

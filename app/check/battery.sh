@@ -52,15 +52,17 @@ send battery 50 unplugged
 none_since 'browser: battery saver on' || fail "Battery Saver turned on at 50 %"
 send battery 19 unplugged
 expect 'browser: battery saver on at 19 %$' "Battery Saver didn't turn on at 19 % on battery"
-expect '^browser: toast shown Battery Saver is on at 19 % \[turn off battery saver\]$' \
+expect '^browser: toast shown Battery Saver is on at 19% \[turn off battery saver\]$' \
   "the toast didn't say Battery Saver is on, with Turn Off"
+# Captured once it has come in, not as it grows in.
+expect '^browser: toast settled$' "the toast didn't settle"
 await '^browser: battery saver leaf at ' || fail "the URL field didn't draw Battery Saver's leaf"
 ../tools/window-screenshot.sh "$pid" "$out/battery-notice.png" || fail "no window to capture"
 read -r lx ly lw lh << EOF
 $(sed -n 's/^browser: battery saver leaf at //p' "$log" | tail -1)
 EOF
 send click $((${lx%.*} + ${lw%.*} / 2)) $((${ly%.*} + ${lh%.*} / 2))
-expect '^browser: toast shown Battery Saver is on at 19 % \[turn off battery saver\]$' \
+expect '^browser: toast shown Battery Saver is on at 19% \[turn off battery saver\]$' \
   "the leaf's press didn't say Battery Saver is on again"
 bar_command turn-off-battery-saver "Turn Off Battery Saver for Now" "battery saver"
 expect 'browser: battery saver off$' "Turn Off Battery Saver for Now didn't turn it off"
