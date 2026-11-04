@@ -2847,6 +2847,7 @@ void host_watch_window_main(void (*changed)(void* ui_view, bool main)) {
 // Windows delivers a touchpad's swipes to the page as scrolls, which it takes, so there's nothing
 // here for the host to watch.
 void host_watch_swipes(bool (*)(void*, double, double, bool)) {}
+// The core tells of Alt let go alone, in the page or the UI (window_option_tapped).
 void host_watch_option_taps(void (*)(void*)) {}
 
 void host_watch_ui_keyboard(void (*left)(void* ui_view)) {
