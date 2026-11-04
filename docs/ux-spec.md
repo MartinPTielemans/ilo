@@ -1237,7 +1237,7 @@ These are kept so the numbers aren't lost. Add them to a phase before building t
 | Arc import turns Arc Spaces into profiles (P§20) | Spaces stay Spaces |
 | The default layout is Dia's (address bar on the card, optional top tab strip); Arc's sidebar address bar is a setting (P§4) | Arc's layout only (decision 6) |
 | Dia's and Chrome's keys win clashes, so Arc's ⌘D pin moves to ⌥⇧⌘D (P§4) | Arc's keys win, since Arc's users bring their hands with them: ⌘D pins, ⌘S hides the sidebar, not Chrome's Bookmark and Save Page (2026-10-25, to review) |
-| AppleScript `execute` runs JavaScript in pages, off by default behind View › Developer (P§23) | Not built: it gives any local process, agents included, what principle 3 forbids. AppleScript, if any, covers windows, tabs and URLs |
+| AppleScript `execute` runs JavaScript in pages, off by default behind View › Developer (P§23) | Not offered: it gives any local process, agents included, what principle 3 forbids. The app answers none of Chromium's dictionary, which the engine declares (#704); ilo's own, if any, covers windows, Spaces, tabs and URLs |
 | Extension action state polled every 1.5 s, unused profiles checked every 15 s (P§15, P§5) | Event-driven only (principle 1) |
 | The 1.49 New Tab area light ran a 30 fps display link for up to 60 s (D›Area light) | Not built; Dia 1.50.1 dropped it too |
 | AI surfaces: "Ask anything…", the "+ Add tabs or files" chip, mic, Chat, ⌘E Chat, Tidy | Out of scope for v1 (decisions 6, 8) |
