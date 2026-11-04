@@ -1197,6 +1197,26 @@ LRESULT CALLBACK LinkPreviewOwnerProc(HWND hwnd, UINT message, WPARAM wparam, LP
 }
 
 Floating g_capture;
+// The browser window Capture shows over, and the size of its client area then.
+HWND g_capture_over = nullptr;
+SIZE g_capture_size = {};
+
+// The window Capture shows over resized, which leaves it, as on the Mac and Linux: what it showed
+// of the page is no longer where the page is.
+void CaptureWindowSized(HWND root) {
+  RECT client = {};
+  if (root != g_capture_over || !g_capture.hwnd || !IsWindowVisible(g_capture.hwnd) ||
+      !GetClientRect(root, &client) ||
+      (client.right - client.left == g_capture_size.cx &&
+       client.bottom - client.top == g_capture_size.cy)) {
+    return;
+  }
+  host_hide_capture();
+  if (void (*dismissed)(void) = g_capture.dismissed) {
+    Later([dismissed] { dismissed(); });
+  }
+}
+
 Floating g_toast;
 Floating g_tooltip;
 double g_tooltip_margin = 0;
@@ -1620,6 +1640,9 @@ LRESULT CALLBACK OwnerProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
     Minimized(hwnd);
   } else if (message == WM_WINDOWPOSCHANGED && (~flags & (SWP_NOMOVE | SWP_NOSIZE))) {
     Moved(hwnd);
+    if (~flags & SWP_NOSIZE) {
+      CaptureWindowSized(hwnd);
+    }
   } else if (message == WM_ACTIVATE && LOWORD(wparam) != WA_INACTIVE) {
     KeepKeyboard(hwnd);
   } else if (message == WM_NCDESTROY) {
@@ -3302,6 +3325,10 @@ void host_add_capture(void* view, void (*dismissed)(void)) {
 
 void host_show_capture(void* ui_view, double left, double top, double width, double height) {
   Show(g_capture, ui_view, left, top, width, height, true);
+  g_capture_over = Root(ui_view);
+  RECT client = {};
+  GetClientRect(g_capture_over, &client);
+  g_capture_size = {client.right - client.left, client.bottom - client.top};
   if (g_capture.hwnd && IsWindowVisible(g_capture.hwnd)) {
     // check.sh reads this line, as the Mac's and Linux's hosts log it.
     fprintf(stderr, "browser: capture shown at %g %g %g %g\n", left, top, width, height);
