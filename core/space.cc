@@ -158,7 +158,9 @@ void Space::MoveAfter(bc_id id, bc_id after) {
   }
   order.erase(it);
   order.insert(order.begin() + (to > from ? to - 1 : to), id);
-  // Only the Space moved is out of order, so it alone gets a new place.
+  // Only the Space moved is out of order, so it alone gets a new place: without one, PlaceSpaces
+  // keeps it in place where the run it ends ties the run of the others, and moves them instead.
+  FromId(id)->node_.position = syncer::UniquePosition();
   PlaceSpaces();
   ReportSpacesChanged();
 }
