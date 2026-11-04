@@ -615,6 +615,15 @@ if [ "$(uname)" = Darwin ] || windows || [ "$(uname)" = Linux ]; then
   send key z cmd shift
   expect "^browser: window $sixth shows $c\$" "⇧⌘Z didn't bring the tab back to the second window's list"
   if windows; then
+    # The picture a drag of its row shows (#1859): the row's band of the sidebar, 228 by 40 points,
+    # as the window draws it, at the window's scale. The driver can't hold the drag itself (#1583),
+    # so it has the host make the picture and write it to a file.
+    set -- $(row_of $c)
+    send tabpicture 0 $(($2 - 20)) 228 40 "$(cygpath -aw "$out/windows-tab-picture.bmp")"
+    expect '^browser: tab picture [1-9][0-9]*x[1-9][0-9]*$' "the host made no picture of the tab's row"
+    picture=$(grep '^browser: tab picture ' "$log" | tail -1 | cut -d' ' -f4)
+    echo "$picture" | awk -Fx '{ exit !($1 >= 228 && $2 >= 40 && $1 / $2 > 5.6 && $1 / $2 < 5.8) }' ||
+      fail "the picture of the tab's row is $picture, not the row's 228 by 40 at the window's scale"
     echo "skip: a tab's row let go where nothing takes it: the app stops in DoDragDrop under Windows' driver (#1583)."
   else
     # Dragged past the second window's bottom edge, its row leaves as the system's drag, and let go
@@ -624,6 +633,12 @@ if [ "$(uname)" = Darwin ] || windows || [ "$(uname)" = Linux ]; then
     send dragto $1 $(($2 + 10))
     send dragto $1 705
     expect "^browser: tab $c window drag\$" "the row dragged past the window's edge didn't leave it"
+    # On Linux the drag shows a picture of the row, from the frame GPUI drew, as the Mac's does
+    # (#1859), here while the drag is still held.
+    if [ "$(uname)" = Linux ]; then
+      expect "^browser: tab $c drag picture [1-9][0-9]*x[1-9][0-9]*\$" "the tab's drag showed no picture of its row"
+      ../tools/window-screenshot.sh "$pid" "$out/windows-drag-picture.png" all || fail "no window to capture"
+    fi
     # AppKit's drag tracks the mouse in a loop of its own until it's let go, which holds the
     # driver's done till then: the move over the page is posted, and the release ends it there.
     over=$((wide - 100))

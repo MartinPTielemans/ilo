@@ -8,7 +8,7 @@ use std::{
 };
 
 use browser::log;
-use gpui::{App, ClipboardItem, Context, Image, ImageFormat, Window};
+use gpui::{App, AppContext as _, ClipboardItem, Context, Image, ImageFormat, Window};
 
 use crate::platform;
 
@@ -119,24 +119,24 @@ pub extern "C" fn host_drag_file(path: *const c_char, ended: extern "C" fn(taken
 }
 
 /// Starts the system's drag of `tab`, as host.h says: XDND on X11, the data device's drag under
-/// Wayland, of the app's own type, this process's id and the tab's (drops.rs reads it). The system
-/// shows no picture of the row, only the pointer. Under Wayland no app picks its window's place,
-/// so it says no point where it's let go.
+/// Wayland, of the app's own type, this process's id and the tab's (drops.rs reads it), with a
+/// picture of its row under the pointer, as the Mac's. Under Wayland no app picks its window's
+/// place, so it says no point where it's let go.
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn host_drag_tab(
-    _ui_view: *mut c_void,
+    ui_view: *mut c_void,
     tab: u64,
-    _x: f64,
-    _y: f64,
-    _width: f64,
-    _height: f64,
-    _grab_x: f64,
-    _grab_y: f64,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    grab_x: f64,
+    grab_y: f64,
     ended: extern "C" fn(tab: u64, how: std::ffi::c_int, placed: bool, x: f64, y: f64),
 ) -> bool {
     let data = format!("{} {tab}", std::process::id()).into_bytes();
-    gpui_linux::start_drag("application/x-ilo-tab", data, move |end| {
+    let started = gpui_linux::start_drag("application/x-ilo-tab", data, move |end| {
         let (how, at) = match end {
             gpui_linux::DragEnd::Taken => (0, None),
             gpui_linux::DragEnd::LetGo(at) => (1, at),
@@ -151,7 +151,41 @@ pub extern "C" fn host_drag_tab(
                 })
                 .detach();
         }
-    })
+    });
+    if started {
+        // Once the update that started it is over, as the window it reads is in it.
+        crate::browser_windows::update_app_later(move |cx| {
+            picture_row(ui_view, tab, [x, y, width, height], [grab_x, grab_y], cx)
+        });
+    }
+    started
+}
+
+/// Gives the drag of `tab` the picture of its row, at `row` in its window, held at `grab` in it:
+/// from the frame GPUI drew, at the window's scale, as the Mac's is the window's own picture.
+fn picture_row(ui_view: *mut c_void, tab: u64, row: [f64; 4], grab: [f64; 2], cx: &mut App) {
+    let handle = crate::WINDOWS.with_borrow(|windows| {
+        let window = windows.iter().find(|window| window.ui_view == ui_view)?;
+        Some(window.handle)
+    });
+    let Some(Ok((Ok(frame), scale))) = handle.map(|handle| {
+        cx.update_window(handle, |_, window, _| {
+            (window.render_to_image(), window.scale_factor())
+        })
+    }) else {
+        return;
+    };
+    let device = |n: f64| (n * f64::from(scale)).round().max(0.) as u32;
+    let [x, y, width, height] = row.map(device);
+    let (x, y) = (x.min(frame.width()), y.min(frame.height()));
+    let width = width.min(frame.width() - x);
+    let height = height.min(frame.height() - y);
+    let picture = image::imageops::crop_imm(&frame, x, y, width, height).to_image();
+    let hold = (device(grab[0]) as i32, device(grab[1]) as i32);
+    if gpui_linux::set_drag_icon(width, height, picture.as_raw(), hold, scale) {
+        // check.sh reads this line.
+        log!("browser: tab {tab} drag picture {width}x{height}");
+    }
 }
 
 /// Calls `released` once Control is no longer held, after the event that shows it, as a ⌃Tab walk
