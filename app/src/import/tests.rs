@@ -2658,8 +2658,8 @@ fn returning_with_access_still_off_says_still_no_access(cx: &mut TestAppContext)
         assert_eq!(
             said,
             [
-                "**6 bookmarks** in 3 folders, as a Space's pinned tabs",
-                "Nothing in the Reading List",
+                "**5 bookmarks** in 3 folders, as a Space's pinned tabs",
+                "**1 page**, as a folder in that Space",
                 "**1** page from the last 90 days, kept on this Mac",
             ]
         );
