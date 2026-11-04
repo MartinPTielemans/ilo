@@ -740,7 +740,7 @@ send key a cmd
 send type go to space
 expect '^browser: settings search "go to space" finds Go to Space 1, Go to Space 2, ' \
   "the search didn't find Go to Space 1 first"
-send clickkey $(drawn "shortcut new-tab")
+send clickkey $(drawn "shortcut select-space-1")
 expect '^browser: shortcut recording select-space-1$' \
   "a click on Go to Space 1's keys didn't record them"
 send key 1 cmd ctrl
