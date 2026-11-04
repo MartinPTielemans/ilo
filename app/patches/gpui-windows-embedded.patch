@@ -79,7 +79,7 @@ index 98a13f304c..367e44dfd4 100644
          &mut self,
          scene: &Scene,
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 08f91bd626..50b30847b2 100644
+index 08f91bd626..e3544609fe 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
 @@ -109,7 +109,7 @@ impl WindowsWindowInner {
@@ -119,18 +119,12 @@ index 08f91bd626..50b30847b2 100644
          let origin = logical_point(
              lparam.signed_loword() as f32,
              lparam.signed_hiword() as f32,
-@@ -381,8 +388,34 @@ impl WindowsWindowInner {
+@@ -381,8 +388,28 @@ impl WindowsWindowInner {
          if handled { Some(0) } else { Some(1) }
      }
  
 -    fn handle_mouse_leave_msg(&self) -> Option<isize> {
 +    fn handle_mouse_leave_msg(&self, handle: HWND) -> Option<isize> {
-+        // diag(#872): whether the leave reaches the views.
-+        eprintln!(
-+            "browser: diag gpui leave, captured {}, input {}",
-+            unsafe { GetCapture() } == handle,
-+            self.state.callbacks.input.take().map(|f| self.state.callbacks.input.set(Some(f))).is_some()
-+        );
          self.state.hovered.set(false);
 +        // As on Linux, the pointer leaving for a page's window is a move to outside the window, so
 +        // nothing GPUI drew stays under it, and the exit its views listen for. A drag holding the
@@ -155,7 +149,7 @@ index 08f91bd626..50b30847b2 100644
          // The next window's `WM_SETCURSOR` picks its own cursor, so we just clear
          // the flag for tight `is_cursor_visible()` semantics.
          self.state.cursor_visible.store(true, Ordering::Relaxed);
-@@ -439,6 +472,31 @@ impl WindowsWindowInner {
+@@ -439,6 +466,31 @@ impl WindowsWindowInner {
          if handled { Some(0) } else { Some(1) }
      }
  
@@ -187,7 +181,7 @@ index 08f91bd626..50b30847b2 100644
      fn handle_keyup_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
          let Some(input) = handle_key_event(wparam, lparam, &self.state, |keystroke, _| {
              PlatformInput::KeyUp(KeyUpEvent { keystroke })
-@@ -710,6 +768,72 @@ impl WindowsWindowInner {
+@@ -710,6 +762,72 @@ impl WindowsWindowInner {
          }
      }
  
@@ -260,7 +254,7 @@ index 08f91bd626..50b30847b2 100644
      fn handle_ime_composition(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
          let ctx = ImeContext::get(handle)?;
          self.handle_ime_composition_inner(*ctx, lparam)
-@@ -933,7 +1057,7 @@ impl WindowsWindowInner {
+@@ -933,7 +1051,7 @@ impl WindowsWindowInner {
          Some(0)
      }
  
@@ -269,7 +263,7 @@ index 08f91bd626..50b30847b2 100644
          let new_monitor = unsafe { MonitorFromWindow(handle, MONITOR_DEFAULTTONULL) };
          if new_monitor.is_invalid() {
              log::error!("No monitor detected!");
-@@ -944,12 +1068,21 @@ impl WindowsWindowInner {
+@@ -944,12 +1062,21 @@ impl WindowsWindowInner {
          Some(0)
      }
  
@@ -296,7 +290,7 @@ index 08f91bd626..50b30847b2 100644
      }
  
      fn handle_hit_test_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
-@@ -1823,3 +1956,70 @@ fn notify_frame_changed(handle: HWND) {
+@@ -1823,3 +1950,70 @@ fn notify_frame_changed(handle: HWND) {
          .log_err();
      }
  }
