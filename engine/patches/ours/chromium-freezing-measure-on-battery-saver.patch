@@ -49,7 +49,7 @@ at once.
  #if BUILDFLAG(IS_WIN)
    if (base::FeatureList::IsEnabled(
            features::kInfiniteTabsFreezingOnMemoryPressure) ||
-@@ -305,11 +288,44 @@
+@@ -305,11 +288,47 @@
  
  void FreezingPolicy::ToggleFreezingOnBatterySaverMode(bool is_enabled) {
    is_battery_saver_active_ = is_enabled;
@@ -74,7 +74,10 @@ at once.
 +  if (!measures) {
 +    resource_usage_query_observation_.Reset();
 +    resource_usage_query_.reset();
-+    cpu_proportion_tracker_.Stop();
++    // Its first interval starts with the first measurement, a minute in, and Stop() checks it did.
++    if (cpu_proportion_tracker_.IsTracking()) {
++      cpu_proportion_tracker_.Stop();
++    }
 +    return;
 +  }
 +  resource_attribution::QueryBuilder builder;
