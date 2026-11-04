@@ -200,6 +200,12 @@ unsafe extern "C" {
     pub fn host_detent();
     pub fn host_dock_dot_launch(profile_dir: *const c_char);
     pub fn host_dock_dot(colored: bool, color: u32);
+    pub fn host_app_active() -> bool;
+    pub fn host_needs_you_badge(count: c_int);
+    #[cfg(not(target_os = "linux"))]
+    pub fn host_needs_you_notify(id: u64, title: *const c_char, body: *const c_char);
+    #[cfg(not(target_os = "linux"))]
+    pub fn host_watch_needs_you(clicked: extern "C" fn(id: u64));
     pub fn host_watch_control(released: extern "C" fn());
     pub fn host_take_drops(
         dragged: extern "C" fn(
@@ -388,6 +394,7 @@ pub const UPDATE_FOUND: c_int = 3;
 pub const UPDATE_DOWNLOADING: c_int = 4;
 pub const UPDATE_READY: c_int = 5;
 pub const UPDATE_FAILED: c_int = 6;
+pub const UPDATE_AVAILABLE: c_int = 7;
 
 /// What host_take_drops hears of a drag.
 pub const DRAG_OVER: c_int = 0;

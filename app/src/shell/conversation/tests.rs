@@ -174,6 +174,52 @@ fn the_agents_send_a_shown_conversation_made_before_its_shell_changes(cx: &mut T
     );
 }
 
+/// A click on the notification a task's need posted opens its card's conversation, as the card's
+/// click does, and leaves it open if it shows already, where the card's click would put it away.
+#[gpui::test]
+fn a_needs_notification_opens_its_task(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    shell.update(cx, |shell, cx| shell.close_task(cx));
+    assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);
+    host.take();
+
+    let host_needs = Rc::new(NoNeeds);
+    cx.update(|_, cx| crate::needs_you::open(host_needs, cx));
+    let mut waits = card();
+    waits.dot = Dot::Waiting;
+    waits.status = "Which seat?".into();
+    cx.update(|_, cx| crate::needs_you::follow(&[waits], cx));
+    let agent = cx
+        .update(|_, cx| crate::needs_you::clicked(1, cx))
+        .expect("its task");
+    for _ in 0..2 {
+        shell.update(cx, |shell, cx| shell.show_needed_task(agent.clone(), cx));
+        cx.run_until_parked();
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.task_shown()),
+            Some((3, None))
+        );
+    }
+    assert_eq!(
+        host.take()
+            .iter()
+            .filter(|asked| *asked == "show task task-1")
+            .count(),
+        1
+    );
+}
+
+/// A host for the needs that says ilo is in the background and posts nowhere.
+struct NoNeeds;
+
+impl crate::needs_you::Host for NoNeeds {
+    fn badge(&self, _: usize) {}
+    fn active(&self) -> bool {
+        false
+    }
+    fn notify(&self, _: u64, _: &str, _: &str) {}
+}
+
 /// A click on the card shows its conversation in the page area, with the reply field's keyboard;
 /// its pages are pictured only while it shows, and again as what it does changes. Return sends
 /// the reply and ⌘. stops the task.

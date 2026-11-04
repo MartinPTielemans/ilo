@@ -188,14 +188,14 @@ fn a_tasks_space_is_never_listed(cx: &mut TestAppContext) {
             shell.set_page(tab, page, cx);
         }
     });
-    let searched = shell.read_with(cx, |shell, _| shell.open_tabs());
+    let searched = shell.read_with(cx, |shell, cx| shell.open_tabs(cx));
     let searched: Vec<u64> = searched.iter().map(|tab| tab.tab).collect();
     assert_eq!(
         searched,
         [11],
         "the agents' 20, 30 and 31 aren't the user's to search"
     );
-    let bar = shell.read_with(cx, |shell, _| shell.bar_tabs());
+    let bar = shell.read_with(cx, |shell, cx| shell.bar_tabs(cx));
     assert_eq!(bar.iter().map(|tab| tab.tab).collect::<Vec<_>>(), [11]);
     assert_eq!(shell.read_with(cx, |shell, _| shell.task_tabs(3)), [30, 31]);
 }

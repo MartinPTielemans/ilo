@@ -81,7 +81,7 @@ pub(crate) fn forget_window(ui_view: *mut c_void) {
 
 /// Whether the browser windows are X11's: None before the first window, when nothing has said
 /// which Chromium went to, and a connection could start a compositor's Xwayland.
-fn on_x11() -> Option<bool> {
+pub(crate) fn on_x11() -> Option<bool> {
     if ON_X11.get().is_none() {
         if let Some(first) = WINDOWS.with(|w| w.try_borrow().ok()?.first().map(|w| w.id)) {
             wayland_size(first);
