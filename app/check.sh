@@ -170,6 +170,18 @@ prefs.get("browser_core", {}).pop("developer_mode", None)
 with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(prefs, f)
 ' "$prefs" "$(native_path "$PWD/$out/downloads")"
+# Proof only, not for merging: a value outside ASCII in the profile's Preferences, as a profile
+# named in another language, or with an emoji, has, which each run's Python then reads.
+python3 -I -c '
+import json, os, sys
+prefs = {}
+if os.path.exists(sys.argv[1]):
+    with open(sys.argv[1], encoding="utf-8") as f:
+        prefs = json.load(f)
+prefs.setdefault("ilo_check", {})["seed"] = "Ünïcodé Space 🏠"
+with open(sys.argv[1], "w", encoding="utf-8") as f:
+    json.dump(prefs, f, ensure_ascii=False)
+' "$prefs"
 python3 -I -c '
 import json, os, sys
 if not os.path.exists(sys.argv[1]):
