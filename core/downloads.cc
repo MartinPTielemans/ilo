@@ -29,6 +29,8 @@
 #include "components/download/public/common/download_item.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/pref_registry.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/download_manager.h"
 #include "ui/gfx/codec/png_codec.h"
@@ -241,6 +243,14 @@ void RegisterDownloadPrefs() {
 }
 
 void ObserveDownloads(Profile* profile) {
+  // A private session's prefs come with a registry of their own, where ungoogled-chromium's default
+  // asks where each download goes, so a private window asked and its downloads waited in a Save
+  // dialog. It takes the regular profile's default, in memory, for the session: a profile whose
+  // user turned asking on keeps it, as the profile's own value outranks a default.
+  if (profile->IsOffTheRecord()) {
+    profile->GetPrefs()->DeprecatedGetPrefRegistry()->SetDefaultPrefValue(prefs::kPromptForDownload,
+                                                                           base::Value(false));
+  }
   TheDownloads().Observe(profile);
 }
 
