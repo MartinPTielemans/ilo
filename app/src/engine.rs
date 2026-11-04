@@ -856,6 +856,14 @@ impl Browser for Engine {
         open_tab(self.window, CLEAR_BROWSING_DATA);
     }
 
+    fn bar_picks(&self, profile: u64) -> String {
+        bar_picks_host::picks(profile)
+    }
+
+    fn set_bar_picks(&self, profile: u64, text: &str) {
+        bar_picks_host::set_picks(profile, text);
+    }
+
     fn close_other_window(&self, _: &mut App) -> bool {
         unsafe { platform::host_close_other_window() }
     }

@@ -15,6 +15,7 @@
 //! second run adds nothing the first did (plan.rs).
 
 pub mod arc;
+mod arrival;
 pub mod chromium;
 pub mod extensions;
 pub mod firefox;
@@ -42,9 +43,10 @@ use gpui::{
 pub use crate::settings_rows::Look;
 use crate::settings_rows::{
     SLIDE, button, checked_row, detailed_row, drawn, end, frame, glyph_plate, group, primary, row,
-    switch,
+    switch, text as words,
 };
 use crate::theme::Theme;
+use crate::tokens::radius;
 use crate::tokens::settings::{
     BOX_GAP, BUTTONS_TOP, CHECK_TICK, CHIP_GAP, CHIP_HEIGHT, CHIP_PADDING, CHIP_RADIUS,
     CONTROL_GAP, DETAIL_LINE, DETAIL_TOP, DISCLOSURE_GAP, DISCLOSURE_GLYPH, DOT, ROW_X, STEP,
@@ -422,6 +424,27 @@ enum Step {
     Done(SharedString),
 }
 
+/// What the first launch shows over the view, and around it, for the state it shows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Guide {
+    pub title: String,
+    pub line: String,
+    /// Its one button's words, which press() does, if the state has one.
+    pub button: Option<String>,
+    pub corner: Corner,
+}
+
+/// What the first launch's corner says Esc does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Corner {
+    /// Goes on without importing.
+    Skip,
+    /// Goes back to the list (escape).
+    Back,
+    /// Nothing to say: Esc is the view's Cancel there.
+    None,
+}
+
 /// What a browser picked has, read as it's picked, so its choices say how much of each comes.
 pub(crate) struct Picked {
     found: Found,
@@ -474,6 +497,10 @@ struct Run {
     passwords_file: Option<PathBuf>,
     passwords_left: bool,
     passwords_said: Option<SharedString>,
+    /// A card for each Space it makes or fills, as the core makes them (arrival.rs).
+    cards: Vec<arrival::Card>,
+    /// When the Spaces were in, for what the core adds after them.
+    placed_at: Option<Instant>,
 }
 
 impl Run {
@@ -516,6 +543,10 @@ pub struct ImportView {
     /// Whether its host draws the heading over it, as Settings does, naming the browser or file
     /// it's inside of after it (crumb), so the view doesn't say it again.
     headed: bool,
+    /// Whether its host draws its title, its one button and the corner (guided).
+    guided: bool,
+    /// The browser the guided list has picked, by its row.
+    picked_row: usize,
     /// The browser or file the step shown is from, from Import… until Done.
     crumb: Option<String>,
     /// The browser last picked, and what was switched on for it, which going back keeps for the
@@ -565,6 +596,8 @@ impl ImportView {
             suggested: None,
             runs: 0,
             headed: false,
+            guided: false,
+            picked_row: 0,
             crumb: None,
             kept: None,
             focus: None,
@@ -620,9 +653,10 @@ impl ImportView {
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         if matches!(self.step, Step::List | Step::Done(_)) {
             let (suggested, runs, focus) = (self.suggested.take(), self.runs, self.focus.take());
-            let headed = self.headed;
+            let (headed, guided) = (self.headed, self.guided);
             *self = ImportView::new(self.host.clone(), self.skip).look(self.look);
-            (self.suggested, self.runs, self.focus, self.headed) = (suggested, runs, focus, headed);
+            (self.suggested, self.runs, self.focus) = (suggested, runs, focus);
+            (self.headed, self.guided) = (headed, guided);
             cx.notify();
         }
     }
@@ -684,14 +718,127 @@ impl ImportView {
     }
 
     /// What Esc does: from what comes from a browser, or the wait for Full Disk Access, back to
-    /// the list. Says whether it did anything, as elsewhere Esc is the host's.
+    /// the list, and, guided, from an import that can still stop, Cancel. Says whether it did
+    /// anything, as elsewhere Esc is the host's, which on the first launch's list skips the step.
     pub fn escape(&mut self, cx: &mut Context<Self>) -> bool {
-        if !matches!(self.step, Step::Pick { .. } | Step::NoAccess { .. }) {
-            return false;
+        match &self.step {
+            Step::Pick { .. } | Step::NoAccess { .. } => {
+                log!("browser: import escape");
+                self.back(cx);
+                true
+            }
+            Step::Running { run, .. } if self.guided && !run.placed => {
+                log!("browser: import escape");
+                self.cancel(cx);
+                true
+            }
+            _ => false,
         }
-        log!("browser: import escape");
-        self.back(cx);
-        true
+    }
+
+    /// Leaves the view's title, its one button and the corner to its host, as the first launch
+    /// draws them for each state (guide): the list picks one browser, the used-last, rather than
+    /// give each its Import…, and the browser's choices and the wait for access have no buttons
+    /// of their own.
+    pub fn guided(mut self) -> ImportView {
+        self.guided = true;
+        self
+    }
+
+    /// What the first launch says over the view for the state it shows, and what its button and
+    /// its corner do.
+    pub fn guide(&self) -> Guide {
+        let here = match self.os {
+            Os::Mac => "this Mac",
+            _ => "this computer",
+        };
+        let name = |source: usize| {
+            self.sources
+                .get(source)
+                .map(Source::name)
+                .unwrap_or_default()
+        };
+        let app = env!("APP_NAME");
+        let (title, line, button, corner) = match &self.step {
+            Step::List => (
+                "Bring your stuff.".to_string(),
+                format!(
+                    "Spaces, tabs and history from the browser you used. It all stays on {here}."
+                ),
+                (!self.sources.is_empty())
+                    .then(|| format!("Import from {}", name(self.picked_row))),
+                Corner::Skip,
+            ),
+            Step::Pick { source, .. } => (
+                format!("What comes from {}.", name(*source)),
+                "All of it, unless you turn something off. Tabs load when you first open them."
+                    .to_string(),
+                Some("Import".to_string()),
+                Corner::Back,
+            ),
+            Step::NoAccess { source, .. } => (
+                format!("Let {app} read {}.", name(*source)),
+                format!(
+                    "macOS keeps {}'s bookmarks and history from other apps until you turn on \
+                     Full Disk Access.",
+                    name(*source)
+                ),
+                Some("Open System Settings".to_string()),
+                Corner::Back,
+            ),
+            // Esc there is Cancel, which the view offers itself, so the corner says nothing.
+            Step::Running {
+                source: Some(source),
+                run,
+                ..
+            } if !run.placed => (
+                "Here it comes.".to_string(),
+                format!(
+                    "From {}. It goes on by itself once your Spaces are in.",
+                    name(*source)
+                ),
+                None,
+                Corner::None,
+            ),
+            _ => (
+                "Bring your stuff.".to_string(),
+                format!(
+                    "Spaces, tabs and history from the browser you used. It all stays on {here}."
+                ),
+                None,
+                Corner::Skip,
+            ),
+        };
+        Guide {
+            title,
+            line,
+            button,
+            corner,
+        }
+    }
+
+    /// What the first launch's button does in the state shown: the list's brings the browser
+    /// picked, the choices' imports, and the wait for access's opens System Settings.
+    pub fn press(&mut self, cx: &mut Context<Self>) {
+        match &self.step {
+            Step::List if self.picked_row < self.sources.len() => self.pick(self.picked_row, cx),
+            Step::Pick { .. } => self.import(cx),
+            Step::NoAccess { .. } => self.host.open_full_disk_access(),
+            _ => {}
+        }
+    }
+
+    /// Moves the list's pick `by` rows, stopping at its ends, as ↑ and ↓ do.
+    pub fn move_pick(&mut self, by: isize, cx: &mut Context<Self>) {
+        if !matches!(self.step, Step::List) || self.sources.is_empty() {
+            return;
+        }
+        let last = self.sources.len() - 1;
+        let to = (self.picked_row as isize + by).clamp(0, last as isize) as usize;
+        if to != self.picked_row {
+            self.picked_row = to;
+            cx.notify();
+        }
     }
 
     /// The favorites the last import offers from the history it read, the sites visited most;
@@ -1204,6 +1351,11 @@ impl ImportView {
             return self.import_run_passwords(cx);
         }
         run.counts = counts;
+        // A card a Space, from as the core makes each.
+        run.cards = arrival::cards(&plan, &existing, Instant::now());
+        let names: Vec<&str> = run.cards.iter().map(|card| card.name.as_str()).collect();
+        // check.sh reads this line.
+        log!("browser: import cards {}", names.join(", "));
         run.job = Some(Job::start(plan, &*self.host));
         self.advance(cx);
     }
@@ -1246,6 +1398,12 @@ impl ImportView {
         };
         (run.stall, run.stalled, run.placed) = (None, None, true);
         let later = job.finish(&*self.host, cx);
+        // Every tab is in once the core has placed them, so each card ticks.
+        let now = Instant::now();
+        run.placed_at = Some(now);
+        for card in &mut run.cards {
+            (card.placed, card.done) = (card.total, Some(now));
+        }
         // What the core says it added, into the run's count of it and of what it has left.
         type Count = fn(&mut Run) -> (&mut usize, &mut usize);
         let then = |count: Count, cx: &mut Context<Self>| {
@@ -1655,14 +1813,114 @@ impl ImportView {
             .flex()
             .flex_col()
             .gap(px(BOX_GAP))
-            .child(line(format!(
-                "macOS keeps {name}'s bookmarks and history from other apps until you turn on \
-                 Full Disk Access."
-            )))
+            // Guided, the host's title and line say it, and its button is Open System Settings.
+            .when(!self.guided, |view| {
+                view.child(line(format!(
+                    "macOS keeps {name}'s bookmarks and history from other apps until you turn on \
+                     Full Disk Access."
+                )))
+            })
             .child(group(look, steps))
             .child(status)
-            .child(buttons([back.into_any_element(), open.into_any_element()]))
+            .when(!self.guided, |view| {
+                view.child(buttons([back.into_any_element(), open.into_any_element()]))
+            })
             .into_any_element()
+    }
+
+    /// The cards of the import under way: each Space's name, its profile and whether the import
+    /// makes it, its tabs in and of how many, and whether it has ticked.
+    #[cfg(test)]
+    pub(crate) fn cards(&self) -> Vec<(String, (String, bool), usize, usize, bool)> {
+        let Step::Running { run, .. } = &self.step else {
+            return Vec::new();
+        };
+        (run.cards.iter())
+            .map(|card| {
+                let done = card.done.is_some();
+                (
+                    card.name.clone(),
+                    card.profile.clone(),
+                    card.placed,
+                    card.total,
+                    done,
+                )
+            })
+            .collect()
+    }
+
+    /// The import under way's cards and the rows after them, asking for frames while they move.
+    fn arrival(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let (look, settings, still) = (self.look, !self.guided, crate::motion::still(cx));
+        let Step::Running { run, .. } = &mut self.step else {
+            return None;
+        };
+        if run.cards.is_empty() {
+            return None;
+        }
+        let now = Instant::now();
+        let adding = run.history_left + run.addresses_left > 0;
+        if run.cards.iter().any(|card| card.moving(now)) || (adding && !still) {
+            window.request_animation_frame();
+        }
+        let cards = arrival::draw(&mut run.cards, &look, settings, still, now);
+        let counts = run.counts;
+        let since = run.placed_at.unwrap_or(now);
+        let stage = |left: usize, adding: String, came: usize| match (run.placed, left) {
+            (false, _) => arrival::Stage::Waiting,
+            (true, 0) => arrival::Stage::In(grouped(came).into()),
+            (true, _) => arrival::Stage::Adding(adding.into()),
+        };
+        let mut rows = Vec::new();
+        if counts.favorites > 0 {
+            let stage = stage(0, String::new(), counts.favorites);
+            rows.push(arrival::stage_row(
+                &look,
+                glyph(Kind::Favorites),
+                "Favorites",
+                "At the top of each profile's Spaces",
+                &stage,
+                still,
+                now,
+                since,
+            ));
+        }
+        if counts.pages > 0 {
+            let adding = format!("Adding {} pages…", grouped(counts.pages));
+            let stage = stage(run.history_left, adding, run.pages);
+            rows.push(arrival::stage_row(
+                &look,
+                glyph(Kind::History),
+                "History",
+                "It goes on while you carry on, and can't be stopped once it starts",
+                &stage,
+                still,
+                now,
+                since,
+            ));
+        }
+        if counts.addresses > 0 {
+            let stage = stage(run.addresses_left, "Adding…".into(), run.addresses);
+            rows.push(arrival::stage_row(
+                &look,
+                glyph(Kind::Addresses),
+                "Addresses",
+                "Into each profile",
+                &stage,
+                still,
+                now,
+                since,
+            ));
+        }
+        let rows = arrival::stages(&look, rows);
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(BOX_GAP))
+                .child(cards)
+                .children(rows),
+        )
     }
 
     /// What the wait for Full Disk Access says, while it shows.
@@ -1683,9 +1941,11 @@ impl ImportView {
             false => list.child(self.browsers(cx)),
         };
         let extensions = self.extensions_box(cx);
-        list.children(extensions)
-            .child(self.files(cx))
-            .into_any_element()
+        let files = match self.guided {
+            true => self.file_links(cx),
+            false => self.files(cx),
+        };
+        list.children(extensions).child(files).into_any_element()
     }
 
     /// The extensions the last import listed, each with Add…, which opens its Web Store page, and
@@ -1859,6 +2119,9 @@ impl ImportView {
                 format!("import-from {}", source.name()),
                 self.drawn_at.clone(),
             );
+            if self.guided {
+                return self.guided_row(index, source, &profiles, at, cx);
+            }
             let choose = button(look, ("import-from", index), "Import…")
                 .relative()
                 .child(at)
@@ -1870,6 +2133,86 @@ impl ImportView {
             }
         });
         group(look, rows)
+    }
+
+    /// A browser's row in the guided list, which a click picks: the one picked on a plate, with
+    /// the ↩ that brings it at its end.
+    fn guided_row(
+        &self,
+        index: usize,
+        source: &Source,
+        profiles: &[&str],
+        at: gpui::Canvas<()>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let look = &self.look;
+        let picked = index == self.picked_row;
+        let enter = picked.then(|| {
+            svg()
+                .path("icons/corner-down-left.svg")
+                .size(px(DISCLOSURE_GLYPH))
+                .text_color(look.detail)
+                .into_any_element()
+        });
+        let line = (!profiles.is_empty()).then(|| profiles.join(", ").into());
+        let row = frame()
+            .child(words(look, source.name(), line))
+            .children(enter.map(|enter| end([enter])));
+        let hovered = look.hovered;
+        div().child(
+            div()
+                .id(("import-from", index))
+                .relative()
+                .rounded(px(radius::ROW))
+                .when(picked, |row| row.bg(look.control))
+                .when(!picked, |row| row.hover(move |row| row.bg(hovered)))
+                .on_click(cx.listener(move |view, _, _, cx| {
+                    view.picked_row = index;
+                    cx.notify();
+                }))
+                .child(row)
+                .child(at),
+        )
+    }
+
+    /// The guided list's files, as one quiet line: a bookmarks file or a passwords file, each a
+    /// link, in the ink, to the system's open panel.
+    fn file_links(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let look = &self.look;
+        let said = "Another browser or computer? Bring a bookmarks file or a passwords file.";
+        let range = |part: &str| {
+            let start = said.find(part).unwrap_or_default();
+            start..start + part.len()
+        };
+        let links = vec![range("bookmarks file"), range("passwords file")];
+        let ink = gpui::HighlightStyle {
+            color: Some(look.ink.into()),
+            ..Default::default()
+        };
+        let styled = gpui::StyledText::new(said).with_highlights(
+            links
+                .iter()
+                .map(|link| (link.clone(), ink))
+                .collect::<Vec<_>>(),
+        );
+        let view = cx.entity().downgrade();
+        let text = gpui::InteractiveText::new("import-files", styled).on_click(
+            links,
+            move |link, _, cx| {
+                view.update(cx, |view, cx| match link {
+                    0 => view.choose_bookmarks(cx),
+                    _ => view.choose_passwords(cx),
+                })
+                .ok();
+            },
+        );
+        div()
+            .px(px(ROW_X))
+            .flex()
+            .justify_center()
+            .text_size(px(text::SMALL))
+            .text_color(look.detail)
+            .child(text)
     }
 
     /// The rows for the files a browser exports, after the browsers: bookmarks, for one that isn't
@@ -2013,7 +2356,7 @@ impl ImportView {
             .note()
             .map(|note| marked(look, &note).mt_0().px(px(ROW_X)));
         // Its host's heading says where it's from, if it has one.
-        let named = (!self.headed).then(|| line(format!("From {}", from.name())));
+        let named = (!self.headed && !self.guided).then(|| line(format!("From {}", from.name())));
         div()
             .flex()
             .flex_col()
@@ -2022,10 +2365,13 @@ impl ImportView {
             .child(group(look, rows))
             .children(note)
             .children(chooser)
-            .child(buttons([
-                back.into_any_element(),
-                import.into_any_element(),
-            ]))
+            // Guided, the host's Import and Back are the step's.
+            .when(!self.guided, |view| {
+                view.child(buttons([
+                    back.into_any_element(),
+                    import.into_any_element(),
+                ]))
+            })
             .into_any_element()
     }
 
@@ -2476,6 +2822,7 @@ impl Render for ImportView {
         let step = match &self.step {
             Step::List => "list",
             Step::Pick { .. } => "pick",
+            Step::Running { run, .. } if run.placed => "placed",
             Step::Running { .. } | Step::Passwords => "running",
             Step::NoAccess { .. } => "no access",
             // Delete File takes its row away and moves Done, so its end draws as a step of its own.
@@ -2488,6 +2835,7 @@ impl Render for ImportView {
             log!("browser: import drawn {step}");
         }
         let look = self.look;
+        let arrival = self.arrival(window, cx);
         let content = match &self.step {
             Step::List => self.list(cx),
             Step::Pick { source, .. } => self.picking(*source, cx),
@@ -2504,11 +2852,16 @@ impl Render for ImportView {
                         .on_click(cx.listener(|view, _, _, cx| view.try_again(cx)))
                         .into_any_element()
                 });
+                // The cards and the rows after them, but for a stalled import's line, which
+                // says why it waits, and a run with nothing to show yet.
+                let said = (arrival.is_none() || run.stalled.is_some())
+                    .then(|| group(&look, [said_row(progress(name, run))]));
                 div()
                     .flex()
                     .flex_col()
                     .gap(px(BOX_GAP))
-                    .child(group(&look, [said_row(progress(name, run))]))
+                    .children(said)
+                    .children(arrival)
                     .when(cancel.is_some(), |column| {
                         column.child(buttons(cancel.into_iter().chain(again)))
                     })

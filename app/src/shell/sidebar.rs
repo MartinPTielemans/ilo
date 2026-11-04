@@ -20,7 +20,7 @@ use super::{
     CARD_INSET, PLATE_INSET, PRIVATE_SHADE, REVEAL_HOLD, REVEAL_IN_DAMPING, REVEAL_IN_RESPONSE,
     REVEAL_INSET, REVEAL_MOVE, REVEAL_OUT_DAMPING, REVEAL_OUT_RESPONSE, REVEAL_OVERSHOOT,
     REVEAL_WAIT, ROW_HEIGHT, Row, SIDEBAR_EDGE, SIDEBAR_HIDE, SIDEBAR_MAX, SIDEBAR_MIN,
-    SIDEBAR_SHOW, SIDEBAR_WIDTH, Settle, Shell, ShellHandle, Slot, Space, settle_progress, spring,
+    SIDEBAR_SHOW, SIDEBAR_WIDTH, Settle, Shell, Slot, Space, settle_progress, spring,
 };
 
 /// What the toast says when a tab opens with the sidebar hidden, Arc's words, and for how long,
@@ -640,8 +640,7 @@ impl Shell {
     /// Whether this is the window the user last made key, which stays the one while the app is
     /// behind another's.
     fn is_key_window(&self, cx: &Context<Self>) -> bool {
-        cx.try_global::<ShellHandle>()
-            .is_none_or(|key| key.0 == cx.weak_entity())
+        super::commands::key_shell(cx).is_none_or(|key| key == cx.weak_entity())
     }
 
     /// Whether the sidebar is hidden and still, so the reveal can bring it out.

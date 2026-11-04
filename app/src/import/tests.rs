@@ -350,7 +350,7 @@ fn chromium_dir(dir: PathBuf, ago: u64) {
 }
 
 /// A Firefox folder with one profile, used `ago` seconds ago.
-fn firefox_dir(dir: PathBuf, ago: u64) {
+pub(crate) fn firefox_dir(dir: PathBuf, ago: u64) {
     write(
         dir.join("profiles.ini"),
         "[Profile0]\nName=default\nPath=p.default\n",
@@ -1295,6 +1295,54 @@ fn says(view: &Entity<ImportView>, cx: &mut TestAppContext) -> String {
     })
 }
 
+/// The cards come in the order the core makes the Spaces, each under the profile it goes into:
+/// Arc's Personal in the profile the browser started with, Work in the one the import makes,
+/// waiting with none of their tabs in while Work's profile loads. Chrome's card ticks once its
+/// tabs are in, while the core still adds its history.
+#[gpui::test]
+fn cards_come_as_the_core_makes_the_spaces_and_tick_once_their_tabs_are_in(
+    cx: &mut TestAppContext,
+) {
+    let browser = Rc::new(Browser::new(None));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    import_first(&view, cx);
+    let made: Vec<String> = (browser.spaces().iter().skip(1))
+        .map(|space| space.name.clone())
+        .collect();
+    let cards = view.read_with(cx, |view, _| view.cards());
+    let names: Vec<String> = cards.iter().map(|card| card.0.clone()).collect();
+    assert_eq!(
+        names, made,
+        "the cards aren't in the order the core made the Spaces"
+    );
+    assert_eq!(
+        cards,
+        [
+            ("Personal".into(), ("Default".into(), false), 0, 5, false),
+            ("Work".into(), ("Work".into(), true), 0, 1, false),
+        ]
+    );
+
+    let made = chrome("chrome-cards", &[("Default", "Me")], SystemTime::now());
+    let browser = Rc::new(Browser::new(Some(Roots::under(&made, Os::Linux))));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    import_first(&view, cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.cards()),
+        [("Chrome".into(), ("Default".into(), false), 3, 3, true)]
+    );
+    cx.update(|cx| browser.added(cx));
+    view.read_with(cx, |view, _| {
+        assert!(
+            matches!(view.step, super::Step::Done(_)),
+            "it didn't end once the history was in"
+        )
+    });
+    fs::remove_dir_all(made).unwrap();
+}
+
 /// Picks the browser the view found first and imports all it offers.
 fn import_first(view: &Entity<ImportView>, cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
@@ -1568,7 +1616,7 @@ fn history_is_the_last_90_days_of_pages() {
 
 /// Chrome on Linux, as the tests make it: `profiles` by folder and name, each with a short bar, two
 /// tabs open, one of them a bookmark's, two pages of history and an address.
-fn chrome(name: &str, profiles: &[(&str, &str)], now: SystemTime) -> PathBuf {
+pub(crate) fn chrome(name: &str, profiles: &[(&str, &str)], now: SystemTime) -> PathBuf {
     let home = home(name);
     let chrome = home.join(".config/google-chrome");
     let cache: Vec<String> = (profiles.iter())
