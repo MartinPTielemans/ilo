@@ -64,6 +64,13 @@ EOF
       fail "no window to capture"
     send move $sidebar_point
     expect '^browser: update banner collapsed$' "the update banner didn't close as the pointer left"
+    # It says so as it starts closing; the next look's capture waits until it's drawn closed.
+    for _ in $(seq 50); do
+      [ "$(grep '^browser: update banner 0 at ' "$log" | tail -1 | cut -d' ' -f9)" = "$bh" ] && break
+      sleep 0.1
+    done
+    [ "$(grep '^browser: update banner 0 at ' "$log" | tail -1 | cut -d' ' -f9)" = "$bh" ] ||
+      fail "the update banner didn't close to $bh: $(grep '^browser: update banner 0 at ' "$log" | tail -1)"
   done
   send menu "Appearance › Automatic"
 }
