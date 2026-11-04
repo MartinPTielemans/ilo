@@ -130,6 +130,7 @@ pub fn column(
                     // ⇥ reaches the list, and ↑ and ↓ move in it, as in the sidebar; Space or
                     // Return shows the section.
                     .tab_index(0)
+                    .focus_from_keys_only()
                     .focus_visible(ring(base))
                     .on_key_down(move |event, window, cx| {
                         let key = event.keystroke.key.as_str();
@@ -171,6 +172,7 @@ pub fn column(
         .mb_0()
         .id("chromium-settings")
         .tab_index(0)
+        .focus_from_keys_only()
         .focus_visible(ring(base))
         .text_color(base.opacity(FOOT_TEXT))
         .child(drawn("chromium settings".into(), logged))

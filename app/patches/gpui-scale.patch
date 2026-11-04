@@ -33,6 +33,47 @@ index 54b72a63ec..cf7cd404f3 100644
      /// Simulates the user resizing the window to the new size.
      pub fn simulate_resize(&self, size: Size<Pixels>) {
          self.simulate_window_resize(self.window, size)
+diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
+index 11f0b72406..ea39b6a547 100644
+--- a/crates/gpui/src/elements/div.rs
++++ b/crates/gpui/src/elements/div.rs
+@@ -1565,6 +1565,13 @@ pub trait StatefulInteractiveElement: InteractiveElement {
+         self
+     }
+ 
++    /// ilo's: this element takes the keyboard only from the keyboard, as a tab stop, and a press
++    /// on it leaves the focus to whatever focusable element around it a press gave it to before.
++    fn focus_from_keys_only(mut self) -> Self {
++        self.interactivity().focus_from_keys_only = true;
++        self
++    }
++
+     /// Set the overflow x and y to scroll.
+     fn overflow_scroll(mut self) -> Self {
+         self.interactivity().base_style.overflow.x = Some(Overflow::Scroll);
+@@ -2204,6 +2211,9 @@ pub struct Interactivity {
+     pub(crate) focus_style: Option<Box<StyleRefinement>>,
+     pub(crate) in_focus_style: Option<Box<StyleRefinement>>,
+     pub(crate) focus_visible_style: Option<Box<StyleRefinement>>,
++    /// ilo's: whether a press leaves the focus to the focusable element around this one, which
++    /// takes the keyboard from tab stops alone (`focus_from_keys_only`).
++    pub(crate) focus_from_keys_only: bool,
+     pub(crate) hover_style: Option<Box<StyleRefinement>>,
+     pub(crate) group_hover_style: Option<GroupStyle>,
+     pub(crate) active_style: Option<Box<StyleRefinement>>,
+@@ -2823,7 +2833,11 @@ impl Interactivity {
+         // If this element can be focused, register a mouse down listener
+         // that will automatically transfer focus when hitting the element.
+         // This behavior can be suppressed by using `cx.prevent_default()`.
+-        if let Some(focus_handle) = self.tracked_focus_handle.clone() {
++        if let Some(focus_handle) = self
++            .tracked_focus_handle
++            .clone()
++            .filter(|_| !self.focus_from_keys_only)
++        {
+             let hitbox = hitbox.clone();
+             window.on_mouse_event(move |_: &MouseDownEvent, phase, window, cx| {
+                 if phase == DispatchPhase::Bubble
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
 index a875ee0f37..129db9afc3 100644
 --- a/crates/gpui/src/platform.rs

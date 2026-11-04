@@ -337,8 +337,10 @@ pub fn primary(
 fn lit(look: &Look, control: gpui::Stateful<gpui::Div>) -> gpui::Stateful<gpui::Div> {
     let (hovered, pressed) = (look.hovered, look.pressed);
     control
-        // The keyboard reaches it with ⇥, and Space or Return clicks it.
+        // The keyboard reaches it with ⇥, and Space or Return clicks it. A press clicks it and
+        // leaves the keyboard where a press put it before it was a stop: with the view around it.
         .tab_index(0)
+        .focus_from_keys_only()
         .focus_visible(ring(look.ink))
         .flex_none()
         .h(px(CONTROL_HEIGHT))

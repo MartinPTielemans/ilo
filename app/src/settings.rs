@@ -888,9 +888,11 @@ fn show_now(cx: &mut App) {
     };
     window
         .update(cx, |settings, window, cx| {
-            // In its search field, as System Settings opens, unless it opens at a row.
+            // On Settings itself, unless it opens at a row: typing goes to the search, as a
+            // type-to-search list's does (type_to_search), while ⌘Z, Esc and the rest are
+            // Settings' and its views' as they were.
             if settings.focus_row.is_none() {
-                window.focus(&settings.search.focus_handle(cx), cx);
+                window.focus(&settings.focus, cx);
             }
             settings.shown = true;
             if settings.section == Section::Agents {
@@ -1028,6 +1030,15 @@ fn open(cx: &mut App) {
                     if dark { "dark" } else { "light" }
                 );
             }
+            // A control that had the keyboard from ⇥ and went, as a Remove's row does once its
+            // Space or Return removed it, gives it back to Settings, or to the import it was in,
+            // so ⌘W, Esc and ⌘Z still reach them.
+            cx.on_focus_out(&settings.focus.clone(), window, |_, _, window, cx| {
+                cx.defer_in(window, |settings, window, cx| {
+                    settings.keep_the_keyboard(window, cx)
+                });
+            })
+            .detach();
             cx.observe_window_appearance(window, |settings: &mut Settings, window, cx| {
                 settings.follow_appearance(window, cx)
             })
@@ -2246,6 +2257,7 @@ impl Settings {
             .id(SharedString::from(format!("popup-{which:?}")))
             // ⇥ reaches it, and Space or Return opens its menu as a press does.
             .tab_index(0)
+            .focus_from_keys_only()
             .focus_visible(ring(self.look.ink))
             .on_mouse_down(MouseButton::Left, move |event, window, cx| {
                 press(event, window, cx)
@@ -2277,6 +2289,7 @@ impl Settings {
             .id(name)
             // ⇥ reaches it, and Space or Return flips it as a click does.
             .tab_index(0)
+            .focus_from_keys_only()
             .rounded_full()
             .focus_visible(ring_round(self.look.ink))
             .on_click(cx.listener(move |settings, _, _, cx| {
@@ -3619,6 +3632,7 @@ impl Settings {
                     command.key_name()
                 )))
                 .tab_index(0)
+                .focus_from_keys_only()
                 .focus_visible(ring(look.ink))
                 .size(px(CHIP_HEIGHT))
                 .flex()
@@ -3640,6 +3654,7 @@ impl Settings {
         let chip = chip
             .id(SharedString::from(command.key_name()))
             .tab_index(0)
+            .focus_from_keys_only()
             .focus_visible(ring(look.ink))
             .when(recording, |chip| chip.border_1().border_color(accent))
             .hover(move |chip| chip.bg(hovered))
@@ -4448,8 +4463,24 @@ impl Render for Settings {
                 root.key_context("Settings")
             })
             .track_focus(&self.focus)
-            .capture_key_down(cx.listener(|settings, event: &KeyDownEvent, _, cx| {
+            .capture_key_down(cx.listener(|settings, event: &KeyDownEvent, window, cx| {
+                // DIAGNOSTIC (#1526), to come out: where a key in Settings goes.
+                let import = (settings.import.as_ref())
+                    .and_then(|import| import.read(cx).focus())
+                    .map(|focus| (focus.is_focused(window), focus.contains_focused(window, cx)));
+                log!(
+                    "browser: settings key {} focused {} root {} in root {} search {} import {:?}",
+                    event.keystroke.key,
+                    window.focused(cx).is_some(),
+                    settings.focus.is_focused(window),
+                    settings.focus.contains_focused(window, cx),
+                    settings.search.read(cx).focus_handle(cx).is_focused(window),
+                    import
+                );
                 settings.record(&event.keystroke, cx)
+            }))
+            .on_key_down(cx.listener(|settings, event: &KeyDownEvent, window, cx| {
+                settings.type_to_search(event, window, cx)
             }))
             .on_action(|_: &CloseSettings, _, cx| hide(cx))
             .on_action(cx.listener(|settings, _: &Search, window, cx| {
@@ -4659,6 +4690,57 @@ impl Settings {
                 found.join(", ")
             ),
         }
+    }
+
+    /// Typing a character with Settings itself holding the keyboard, as it opens, starts a search
+    /// with it, as a type-to-search list does: the search field takes the keyboard and the text.
+    fn type_to_search(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let keys = &event.keystroke;
+        let Some(typed) = keys.key_char.as_deref().filter(|typed| {
+            !typed.is_empty() && typed.chars().all(|c| !c.is_control()) && *typed != " "
+        }) else {
+            return;
+        };
+        if keys.modifiers.platform || keys.modifiers.control || !self.focus.is_focused(window) {
+            return;
+        }
+        cx.stop_propagation();
+        let focus = self.search.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
+        let typed = typed.to_string();
+        self.search.update(cx, |search, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(search, None, &typed, window, cx)
+        });
+    }
+
+    /// Settings, or the import while it shows, takes the keyboard back once nothing in the window
+    /// holds it.
+    fn keep_the_keyboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if window.focused(cx).is_some() {
+            return;
+        }
+        let import = (self.section == Section::ImportExport)
+            .then(|| {
+                self.import
+                    .as_ref()
+                    .and_then(|import| import.read(cx).focus())
+            })
+            .flatten();
+        // check.sh reads this line.
+        log!(
+            "browser: settings keyboard back to {}",
+            if import.is_some() {
+                "import"
+            } else {
+                "settings"
+            }
+        );
+        window.focus(&import.unwrap_or_else(|| self.focus.clone()), cx);
     }
 
     /// Esc: the field empties and the section shows again. False when there was nothing to end.
