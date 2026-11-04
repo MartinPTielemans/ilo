@@ -588,6 +588,22 @@ BOOL Never(id, SEL) {
   return NO;
 }
 
+// An overlay that never takes the keyboard. GPUI's panel class is every overlay's and can become
+// key, so AppKit can hand one the keyboard as the key menu orders out over it, which ends a name
+// field the menu just opened (#1664).
+void NeverKey(NSWindow* window) {
+  static Class never_key;
+  if (!never_key) {
+    Class panel = object_getClass(window);
+    SEL key = @selector(canBecomeKeyWindow);
+    never_key = objc_allocateClassPair(panel, "ILONeverKeyPanel", 0);
+    class_addMethod(never_key, key, (IMP)Never,
+                    method_getTypeEncoding(class_getInstanceMethod(panel, key)));
+    objc_registerClassPair(never_key);
+  }
+  object_setClass(window, never_key);
+}
+
 // Another app that asks which of ours is in front takes the first window at the normal level, in
 // the window server's order: T3 Code's window capture does, and so do others. Our windows over a
 // browser window are child windows, ahead of it in that order, so a tooltip or an overlay's shadow
@@ -3750,6 +3766,8 @@ void host_add_toast(void* toast_view) {
   // The toast draws its own, which scales with it.
   g_toast.hasShadow = NO;
   g_toast.ignoresMouseEvents = YES;
+  // Its undo is a click, and the keyboard stays with the browser window, where ⌘Z is.
+  NeverKey(g_toast);
 }
 
 void host_show_toast(void* ui_view) {
@@ -3800,6 +3818,7 @@ void host_add_tooltip(void* tooltip_view, double margin, void (*away)(void)) {
   g_tooltip.hasShadow = NO;
   // It takes neither a click nor the keyboard.
   g_tooltip.ignoresMouseEvents = YES;
+  NeverKey(g_tooltip);
   // To accessibility it's a help tag, as AppKit's tooltips are, not one of the app's windows.
   g_tooltip.accessibilityRole = NSAccessibilityHelpTagRole;
   // The user leaves the browser window for another or another app.
@@ -3932,18 +3951,8 @@ void host_add_hover_card(void* card_view, double margin, void (*away)(void)) {
   g_card.hasShadow = NO;
   g_card.ignoresMouseEvents = YES;
   // A click on its buttons leaves the keyboard where it was, in the page or the browser window, as
-  // the browser window losing it ends the card before the click reaches the button (#818). The
-  // panel's own class, since GPUI's is every overlay's and the others take the keyboard.
-  static Class card_class;
-  if (!card_class) {
-    Class panel = object_getClass(g_card);
-    SEL key = @selector(canBecomeKeyWindow);
-    card_class = objc_allocateClassPair(panel, "ILOHoverCardPanel", 0);
-    class_addMethod(card_class, key, (IMP)Never,
-                    method_getTypeEncoding(class_getInstanceMethod(panel, key)));
-    objc_registerClassPair(card_class);
-  }
-  object_setClass(g_card, card_class);
+  // the browser window losing it ends the card before the click reaches the button (#818).
+  NeverKey(g_card);
   NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
   void (^left_window)(NSNotification*) = ^(NSNotification*) {
     if (g_card_shown && g_card_away) {
