@@ -1786,7 +1786,9 @@ static IMP g_engine_dock_menu;
 
 static DockItems* g_dock_items;
 
-// The engine's Dock menu with Little ilo's items after its first command, New Window.
+// The engine's Dock menu, its profiles' items first, with ilo's in place of its commands: New
+// Window and New Incognito Window, as File's run them (the engine's open Chrome's windows), then
+// Little ilo's.
 static NSMenu* DockMenu(id delegate, SEL selector, NSApplication* app) {
   NSMenu* menu = g_engine_dock_menu
                      ? ((NSMenu * (*)(id, SEL, NSApplication*)) g_engine_dock_menu)(delegate,
@@ -1795,12 +1797,13 @@ static NSMenu* DockMenu(id delegate, SEL selector, NSApplication* app) {
   if (!menu) {
     menu = [[NSMenu alloc] initWithTitle:@""];
   }
-  // After New Window, the first item that isn't a profile's, which the engine puts first.
+  // Where the engine's commands were, after the profiles' items, which it puts first.
   NSInteger at = menu.numberOfItems;
-  for (NSInteger index = 0; index < menu.numberOfItems; index++) {
-    if ([menu itemAtIndex:index].action == NSSelectorFromString(@"commandFromDock:")) {
-      at = index + 1;
-      break;
+  const SEL command = NSSelectorFromString(@"commandFromDock:");
+  for (NSInteger index = menu.numberOfItems - 1; index >= 0; index--) {
+    if ([menu itemAtIndex:index].action == command) {
+      at = index;
+      [menu removeItemAtIndex:index];
     }
   }
   auto add = [&](NSString* title, NSInteger tag) {
@@ -1811,6 +1814,8 @@ static NSMenu* DockMenu(id delegate, SEL selector, NSApplication* app) {
     item.tag = tag;
     [menu insertItem:item atIndex:at++];
   };
+  add(@"New Window", 3);
+  add(@"New Incognito Window", 4);
   add(@"New Little ilo Window", 0);
   switch (g_dock_little()) {
     case 1:

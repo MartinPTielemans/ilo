@@ -125,11 +125,12 @@ void host_activate(void* ui_view);
 void host_set_window_shown(void* ui_view, bool shown);
 bool host_window_shown(void* ui_view);
 
-// Adds Little ilo's items to the Dock icon's menu, the engine's, after its New Window, as Arc's:
+// Puts ilo's items in the Dock icon's menu, the engine's, in place of its New Window and New
+// Incognito Window: those two, as File's run them (|chosen| 3 and 4), then Little ilo's, as Arc's:
 // New Little ilo Window, then, while one is open, Hide All Little ilo Windows, or Show All Little
 // ilo Windows once they're all hidden. |little| is asked as the menu opens: 0 with no Little ilo
 // window open, 1 with one on screen and 2 with all hidden. |chosen| gets the item picked: 0 New, 1
-// Show All, 2 Hide All. Once the app has finished launching, as the engine's delegate is set then.
+// Show All, 2 Hide All, 3 New Window, 4 New Incognito Window. Once the app has finished launching, as the engine's delegate is set then.
 // Off the Mac, which has no Dock menu, nothing.
 void host_add_dock_items(int (*little)(void), void (*chosen)(int item));
 
