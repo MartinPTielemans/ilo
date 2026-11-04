@@ -224,13 +224,9 @@ fn an_agents_space_and_a_private_window_teach_the_bar_nothing(cx: &mut TestAppCo
         shell.set_space(1, cx);
         shell.set_selected(10, cx);
     });
-    let tabs = shell.read_with(cx, |shell, cx| shell.open_tabs(cx));
-    assert_eq!(
-        tabs.iter()
-            .find(|tab| tab.tab == 30)
-            .map(|tab| tab.switched),
-        Some(0.0)
-    );
+    // The window doesn't list an agent's tabs, and the bar learns nothing of them either.
+    let agents = shell.read_with(cx, |shell, cx| shell.switch_score(30, cx));
+    assert_eq!(agents, 0.0);
 
     let before = shell.read_with(cx, |shell, cx| shell.open_tabs(cx));
     let private = cx.new(|cx| Shell::private_window(host.clone(), 9, "Private".into(), 7, cx));
