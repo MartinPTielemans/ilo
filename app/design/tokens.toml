@@ -1447,6 +1447,8 @@ card-tint-top = 0.42
 card-tint-bottom = 0.14
 card-tint-top-light = 0.38
 card-tint-bottom-light = 0.12
+# A card waiting on a profile that hasn't opened is drawn at this of itself, with ⚠ for its badge.
+card-held = 0.5
 # The badge, 16 across in the accent, `badge-inset` in from the card's top right, ticks once its
 # Space is in; until then a dot of the ink breathes there.
 badge = 16.0

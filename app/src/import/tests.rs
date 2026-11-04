@@ -1559,6 +1559,42 @@ fn a_profile_that_doesnt_open_offers_try_again(cx: &mut TestAppContext) {
     assert_eq!(says(&view, cx), said);
 }
 
+/// Once the wait for Work's profile has ended, Work's card is held, dimmed with ⚠ and still, while
+/// Personal's, whose profile is open, waits on as it was; Cancel then leaves both Spaces it made as
+/// cards, outlined and empty. Before the wait ends, and once Work opens, none is held.
+#[gpui::test]
+fn a_stalled_profiles_card_is_held_and_cancel_leaves_the_made_ones_empty(cx: &mut TestAppContext) {
+    let browser = Rc::new(Browser::new(None));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    import_first(&view, cx);
+    let none = (Vec::<String>::new(), Vec::<String>::new());
+    assert_eq!(view.read_with(cx, |view, _| view.held_and_stopped()), none);
+    cx.executor().advance_clock(STALL);
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |view, _| view.held_and_stopped()),
+        (vec!["Work".to_string()], Vec::new()),
+        "Work's card, and it alone, isn't held once Work hasn't opened"
+    );
+    view.update(cx, |view, cx| view.cancel(cx));
+    assert_eq!(
+        view.read_with(cx, |view, _| view.held_and_stopped()),
+        (Vec::new(), vec!["Personal".to_string(), "Work".to_string()]),
+        "Cancel didn't leave the Spaces it made as cards"
+    );
+
+    let browser = Rc::new(Browser::new(None));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    import_first(&view, cx);
+    cx.executor().advance_clock(STALL);
+    cx.run_until_parked();
+    cx.update(|cx| browser.load(cx));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.held_and_stopped()), none);
+}
+
 /// While the core adds the history and addresses, the view says what came in so far, and what
 /// it's still adding, each as it comes; then there's nothing left to cancel.
 #[gpui::test]
