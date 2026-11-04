@@ -261,6 +261,8 @@ if [ -n "$arc" ]; then
   # waiting while Work's profile is held back from its Space.
   record import-arrival 2
   click_drawn import-go
+  # What the Spaces' coming logs, from Import on, as the stall's steps come between.
+  go=$step
   expect '^browser: import cards Personal, Work$' "Arc's Spaces didn't come as cards, Personal then Work"
   expect '^browser: import holds space [0-9]* from profile [0-9]*$' "the run didn't hold Work's Space back"
   expect '^browser: import drawn running$' "Arc's cards didn't draw"
@@ -293,9 +295,9 @@ seeded${t}meet"
   [ "$(cat "$rules_file" 2>/dev/null)" = "$rules" ] ||
     fail "Arc's link rules didn't come in to its Spaces: $(cat "$rules_file" 2>/dev/null)"
   ../tools/window-screenshot.sh "$pid" "$out/import-done.png" || fail "no window to capture"
-  expect "^browser: spaces $first [0-9]* [0-9]*\$" "the import didn't add Arc's two Spaces after the first"
+  expect "^browser: spaces $first [0-9]* [0-9]*\$" "the import didn't add Arc's two Spaces after the first" "$go"
   expect '^browser: toast shown Added 2 Spaces \[show\]$' \
-    "Arc's two Spaces made with the sidebar hidden had no toast"
+    "Arc's two Spaces made with the sidebar hidden had no toast" "$go"
   spaces=$(grep '^browser: spaces' "$log" | tail -1)
   personal=$(echo "$spaces" | cut -d' ' -f4)
   work=$(echo "$spaces" | cut -d' ' -f5)
