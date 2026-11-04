@@ -370,6 +370,41 @@ fn copy_url_shows_the_toast_and_the_checkmark(cx: &mut TestAppContext) {
     assert!(shell.read_with(cx, |shell, _| shell.url_copied.is_some()));
 }
 
+/// Where there's a share sheet, ⇧⌘C's toast has the capture toast's Share button, which shares the
+/// page from where it was pressed in the toast. Copy URL as Markdown's toast has none.
+#[gpui::test]
+fn copy_url_s_toast_shares_the_page(cx: &mut TestAppContext) {
+    let (shell, cx, host) = drawn_shell(cx);
+    host.share_sheet.set(true);
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(1, Vec::new(), vec![1], Vec::new(), Folders::default(), cx);
+        shell.set_selected(1, cx);
+        shell.set_title(1, "Example".into(), cx);
+        let page = Page {
+            url: "https://example.org/?utm_source=x".into(),
+            ..Page::default()
+        };
+        shell.set_page(1, page, cx);
+        shell.run(Command::CopyUrl, "ui", cx);
+    });
+    assert_eq!(host.toasts.take(), ["Copied Current URL [share]"]);
+    let share = host
+        .toast_share
+        .take()
+        .expect("the toast has no Share button");
+    host.take();
+    cx.update(|_, cx| share(point(px(240.), px(23.)), cx));
+    assert_eq!(
+        host.take(),
+        ["share from toast https://example.org/ Example at 240 23"]
+    );
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::CopyMarkdownLink, "ui", cx)
+    });
+    assert_eq!(host.toasts.take(), ["Copied URL as Markdown"]);
+    assert!(host.toast_share.take().is_none());
+}
+
 /// The password manager's key shows after the host of the tab it's for. A press on it brings back
 /// the offer that showing another tab closed, or opens the Site Controls, which list the site's
 /// logins, and it goes once the page has nothing for the password manager.

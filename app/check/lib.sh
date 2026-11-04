@@ -43,6 +43,10 @@ app_id=dev.browser.app
 # The KeyboardEvent property a page reads ⌘ from, which off the Mac is pressed with Ctrl (keys.rs).
 cmd_key=metaKey
 { windows || [ "$(uname)" = Linux ]; } && cmd_key=ctrlKey
+# ⇧⌘C's toast's log line: with the capture toast's Share button where there's a share sheet, which
+# Linux hasn't.
+url_toast='^browser: toast shown Copied Current URL \[share\]$'
+[ "$(uname)" != Linux ] || url_toast='^browser: toast shown Copied Current URL$'
 # Points from the window's top-left corner. The sidebar is 228 wide.
 page_point="600 400"
 sidebar_point="100 400"
