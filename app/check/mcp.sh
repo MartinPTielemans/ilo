@@ -8,8 +8,9 @@
 # click's answer names the scheme. Ten
 # cases, each the same form in a tab of its own the user isn't looking at, move to Closed a step a
 # turn, a turn's ten calls answered at once, which logs the turns and how long they took. A page
-# that hasn't come once an action has waited for it is still loading, as the answer says. A
-# page with fields gives its prose and none of their values: typed, filled in or a password, in its
+# that hasn't come once an action has waited for it is still loading, as the answer says. A tab
+# its page opens, by a link or window.open, goes in its Space, behind, and the click's answer names
+# it. A page with fields gives its prose and none of their values: typed, filled in or a password, in its
 # text and in its outline, and the agent can't type into the password field. It types into another.
 # A frame nested two sites deep and one the page adds after its load are in the page's outline
 # and text too, and an empty helper frame is in neither.
@@ -329,6 +330,37 @@ esac
 waiting_tab=$(printf '%s\n' "$waited" | sed -n '1s/^error: Opened tab \([0-9]*\)\..*/\1/p')
 closed=$(call close_tab "{\"tab\":$waiting_tab}")
 case "$closed" in "Closed tab $waiting_tab."*) ;; *) fail "closing the tab still loading answered: $closed" ;; esac
+
+# A tab the agent's page opens, by a link to a new tab or a page's window.open, goes in its Space,
+# behind, with the agent's tab as its opener, and the click's answer names it. The user's tab stays
+# shown, and their Space gets none (#1470).
+printf '%s' '<!doctype html><title>Opener</title><a href="opened.html" target="_blank">Open</a>
+<button onclick="open(&quot;opened.html?popup&quot;, &quot;&quot;, &quot;popup&quot;)">Pop up</button>' \
+  > "$out/site/opener.html"
+printf '%s' '<!doctype html><title>Opened</title><p>Opened.</p>' > "$out/site/opened.html"
+opened=$(call open_tab "{\"url\":\"localhost:$port/opener.html\"}")
+opener=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+user_today=$(today)
+for target in 'link "Open"' 'button "Pop up"'; do
+  ref=$(printf '%s\n' "$opened" | sed -n "s/.*- $target \[\(e[0-9]*\)\].*/\1/p" | head -1)
+  behind=$(grep -c "^browser: tab [0-9]* opened by $opener in the background\$" "$log" || true)
+  clicked=$(call click "{\"tab\":$opener,\"ref\":\"$ref\"}")
+  await_more "^browser: tab [0-9]* opened by $opener in the background\$" "$behind" ||
+    fail "the agent's $target didn't open a tab behind, from its tab"
+  new_tab=$(sed -n "s/^browser: tab \([0-9]*\) opened by $opener in the background\$/\1/p" "$log" | tail -1)
+  case "$clicked" in
+    "Clicked "*". It opened tab $new_tab in your Space."*) ;;
+    *) fail "the agent's click on its $target answered: $clicked" ;;
+  esac
+  call list_tabs '{}' | grep -q "^. $new_tab  " || fail "the tab its $target opened isn't in its Space"
+  grep -q "^browser: selected $new_tab\( in .*\)\{0,1\}\$" "$log" &&
+    fail "the tab the agent's $target opened was shown"
+  [ "$(today)" = "$user_today" ] || fail "the agent's $target changed the user's Today: $(today)"
+  closed=$(call close_tab "{\"tab\":$new_tab}")
+  case "$closed" in "Closed tab $new_tab."*) ;; *) fail "closing the opened tab answered: $closed" ;; esac
+done
+closed=$(call close_tab "{\"tab\":$opener}")
+case "$closed" in "Closed tab $opener."*) ;; *) fail "closing the opener answered: $closed" ;; esac
 
 # The client's work is one card at the sidebar's foot, from its first call that acted on a tab, and
 # the cases' calls on their connection of their own were steps of the same card (#1080). Its name
@@ -990,9 +1022,9 @@ forget_login
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, keeps one whose page asks before it's left until it discards it, with no dialog, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, is refused a tab the user took over with the strip's ⌘↩ until they hand it back and Keep answers its ask, is stopped by its card's ✕, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow, which Settings › Agents lists, and off takes the socket away; an action waits for its element and its page to settle ($settle), and a tab's id from before a relaunch is refused as such"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, keeps one whose page asks before it's left until it discards it, with no dialog, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, is refused a tab the user took over with the strip's ⌘↩ until they hand it back and Keep answers its ask, is stopped by its card's ✕, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow, which Settings › Agents lists, and off takes the socket away; an action waits for its element and its page to settle ($settle), and a tab's id from before a relaunch is refused as such"
 else
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle). A tab's id from before a relaunch is refused as such. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind. A tab's id from before a relaunch is refused as such. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi
 if [ -n "$msix" ]; then
   echo "ok: a Store copy's bridge, run by the alias its MSIX declares in the user's WindowsApps folder, carries a client's hello to the browser and its answer back."

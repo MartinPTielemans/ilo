@@ -510,6 +510,8 @@ class Window : public web_modal::WebContentsModalDialogHost,
   base::OnceCallback<void(bool)> downloads_answer_;
   // The tab whose page the navigation being made opens a tab beside, until that tab is inserted.
   bc_id split_with_ = 0;
+  // The agent's tab whose page opens the tab the tab strip adds next (AdjustNavigate), or 0.
+  bc_id agent_opener_ = 0;
   base::ObserverList<web_modal::ModalDialogHostObserver> dialog_observers_;
   // Where the app last asked an extension's popup to hang from.
   views::ViewTracker popup_anchor_;
