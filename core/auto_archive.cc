@@ -144,8 +144,8 @@ void ArchiveDue() {
   const base::Time now = base::Time::Now();
   std::vector<bc_id> due;
   ForEachUnseen([&](bc_id id, Tab* tab, std::optional<base::TimeDelta> after) {
-    const std::optional<base::Time> due = archive_rule::DueAt(tab->last_seen(), after);
-    if (!due || *due > now) {
+    const std::optional<base::Time> at = archive_rule::DueAt(tab->last_seen(), after);
+    if (!at || *at > now) {
       return;
     }
     // Seen now, so one playing sound, or one its page keeps open, waits another interval.
