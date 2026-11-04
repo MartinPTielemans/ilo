@@ -77,6 +77,8 @@ pub(super) struct Recorder {
     pub(super) import: RefCell<Option<std::rc::Rc<dyn crate::import::Host>>>,
     /// The window is full screen, as Linux's window manager says, for `window_full_screen`.
     pub(super) full_screen: Cell<bool>,
+    /// Whether the window can't stay on top, as under Wayland.
+    pub(super) no_stay_on_top: Cell<bool>,
     /// The opt-ins' switches, as `crash_reports` and `agents` answer, None for one not offered.
     pub(super) crash_reports: Cell<Option<bool>>,
     pub(super) agents: Cell<Option<bool>>,
@@ -120,6 +122,8 @@ pub(super) struct Recorder {
     /// The questions the dialog was asked through `tell`, each as its message, its buttons and
     /// its other answer's, and what the last one's action does.
     pub(super) told: RefCell<Vec<String>>,
+    /// Each tab the shell muted or unmuted, in order.
+    pub(super) muted: RefCell<Vec<(u64, bool)>>,
     pub(super) told_action: RefCell<Option<Box<dyn FnOnce(Vec<String>, &mut App)>>>,
     /// The dialog asks something else, so `tell` doesn't ask.
     pub(super) dialog_busy: Cell<bool>,
@@ -184,6 +188,8 @@ pub(super) struct Recorder {
     /// The label of the last toast's button other than Undo, and what it runs, its words in
     /// `toasts`.
     pub(super) toast_run: RefCell<Option<(&'static str, Rc<dyn Fn(&mut App)>)>>,
+    /// What the last toast's Share button runs, given where in the toast it was pressed.
+    pub(super) toast_share: RefCell<Option<Rc<dyn Fn(Point<Pixels>, &mut App)>>>,
     /// Another browser window is in front of this one.
     pub(super) behind: Cell<bool>,
     /// The Edit menu's Undo and Redo titles it was last given.
@@ -399,6 +405,10 @@ impl Browser for Recorder {
         self.record(format!("folder open {folder} {open}"))
     }
 
+    fn toggle_full_screen(&self, _: &mut App) {
+        self.record("toggle full screen".into())
+    }
+
     fn set_pinned_open(&self, space: u64, open: bool, _: &mut App) {
         self.record(format!("pinned open {space} {open}"))
     }
@@ -463,7 +473,9 @@ impl Browser for Recorder {
         self.record(format!("back to pinned url {tab}"))
     }
 
-    fn set_muted(&self, _: u64, _: bool, _: &mut App) {}
+    fn set_muted(&self, tab: u64, muted: bool, _: &mut App) {
+        self.muted.borrow_mut().push((tab, muted));
+    }
 
     fn share_instead(&self, tab: u64, _: &mut App) {
         self.record(format!("share instead {tab}"));
@@ -1083,6 +1095,14 @@ impl Browser for Recorder {
         self.window_buttons.get()
     }
 
+    fn set_on_top(&self, on: bool, _: &mut App) {
+        self.record(format!("on top {on}"))
+    }
+
+    fn can_stay_on_top(&self) -> bool {
+        !self.no_stay_on_top.get()
+    }
+
     fn press_window_button(&self, button: WindowButton, _: &mut App) {
         if let WindowButton::Zoom = button {
             self.record("window button zoom".into())
@@ -1149,6 +1169,22 @@ impl Browser for Recorder {
         self.toasts.borrow_mut().push(text.into());
     }
 
+    fn toast_share(
+        &self,
+        text: &str,
+        share: Rc<dyn Fn(Point<Pixels>, &mut App)>,
+        _: Duration,
+        _: &mut App,
+    ) {
+        self.toasts.borrow_mut().push(format!("{text} [share]"));
+        *self.toast_share.borrow_mut() = Some(share);
+    }
+
+    fn share_from_toast(&self, url: &str, title: &str, at: Point<Pixels>, _: &mut App) {
+        let (x, y) = (f32::from(at.x), f32::from(at.y));
+        self.record(format!("share from toast {url} {title} at {x} {y}"))
+    }
+
     fn toast_undo(&self, text: &str, undo: Rc<dyn Fn(&mut App)>, _: Duration, _: &mut App) {
         self.undo_toasts.borrow_mut().push(text.into());
         *self.undo_toast.borrow_mut() = Some(undo);
@@ -1174,6 +1210,11 @@ impl Browser for Recorder {
     ) {
         self.toasts.borrow_mut().push(text.into());
         *self.toast_run.borrow_mut() = Some((label, run));
+    }
+
+    fn enter_full_screen(&self, _: &mut App) -> bool {
+        self.record("enter full screen".into());
+        self.full_screen.get()
     }
 
     fn full_screen_note(&self, shown: bool, _: &mut App) {

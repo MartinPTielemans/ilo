@@ -66,7 +66,34 @@ frame.src = chrome.runtime.getURL("frame.html");
 document.body.append(frame);' > "$extension/content.js"
 printf '%s' '<p>Extension text</p><script src=frame.js></script>' > "$extension/frame.html"
 printf '%s' 'parent.postMessage("extension frame", "*");' > "$extension/frame.js"
-BROWSER_DRIVE=1 BROWSER_URL='https://en.wikipedia.org/wiki/Arc_(web_browser)' \
+# On Linux the app's notifications go to the desktop's server: check/notify-server.py, on a session
+# bus of the run's own, takes them and clicks them, as a desktop's does. Without dbus-daemon and
+# python3-gi, the run says it skips them.
+notes=
+notify_buses=
+if [ "$(uname)" = Linux ] && command -v dbus-daemon > /dev/null &&
+  python3 -I -c 'from gi.repository import Gio' 2> /dev/null; then
+  started=$(dbus-daemon --session --fork --print-address=1 --print-pid=1 2> /dev/null | tr '\n' ' ')
+  notify_bus=$(echo "$started" | cut -d' ' -f1)
+  notify_buses=$(echo "$started" | cut -d' ' -f2)
+  [ -n "$notify_bus" ] || fail "dbus-daemon didn't start the run's session bus"
+  notes="$out/notify-server.log"
+  rm -f "$out/notify-in"
+  mkfifo "$out/notify-in"
+  DBUS_SESSION_BUS_ADDRESS=$notify_bus python3 -I check/notify-server.py < "$out/notify-in" > "$notes" 2>&1 &
+  notify_buses="$notify_buses $!"
+  exec 6> "$out/notify-in"
+  for _ in $(seq 50); do
+    grep -q '^ready$' "$notes" && break
+    sleep 0.1
+  done
+  grep -q '^ready$' "$notes" || fail "the notification server didn't take its name: $(cat "$notes")"
+  export DBUS_SESSION_BUS_ADDRESS=$notify_bus
+  trap 'cleanup; forget_login; kill $notify_buses 2> /dev/null' EXIT
+fi
+# With motion, as the run clicks Stop while a step's shimmer draws, which a system that reduces
+# motion has none of, as GitHub's hosted Windows runner does (main.rs, set_reduce_motion).
+BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL='https://en.wikipedia.org/wiki/Arc_(web_browser)' \
   "$browser" --load-extension="$(app_path "$extension")" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
@@ -810,10 +837,19 @@ exec 5<&-
 if [ "$driven" = 1 ]; then
   await_log "^browser: agent session ended mcp-client $agent_tab disconnected\$" \
     "ending the client's session didn't end its session with the tab"
+  # Its card ends on its receipt, which names only what had consequences (#1080): the bank's site
+  # it was allowed to open is no order or message, and its pages are Open's to count, so it says
+  # when it ended.
+  await_log '^browser: task card session-[0-9]* Done Done [0-9]' \
+    "the client's card didn't say when it ended: $(grep '^browser: task card session-[0-9]* Done ' "$log" | tail -1)"
+  grep '^browser: task card session-[0-9]* Done ' "$log" | grep -q '[0-9] pages\{0,1\}' &&
+    fail "the client's receipt counted its pages, which Open counts: $(grep '^browser: task card session-[0-9]* Done ' "$log" | tail -1)"
   # The agent is at work in the tab it last acted in, the bank's it opened.
   at=$(grep '^browser: agent mcp-client at work in ' "$log" | tail -1 | awk '{print $NF}')
   await_log "^browser: agent mcp-client done in $at\$" "the tab still shows a gone agent at work"
   await_log "^browser: agent question $pending gone\$" "a gone agent's question stayed open"
+  # The card on its receipt, its status rolled in by now.
+  ../tools/window-screenshot.sh "$pid" "$out/agent-receipt.png" || fail "no window to capture"
 
   # Reconnected, the client's next call on a tab is a card of its own. Its conversation's Stop
   # answers the call under way that the user stopped it, then closes the client's connection,
@@ -829,6 +865,43 @@ if [ "$driven" = 1 ]; then
   mcp "$initialize" > /dev/null
   await_more "$hello" "$hellos" || fail "the app didn't hear the reconnected client's hello"
   sessions=$(grep -c '^browser: session session-[0-9]* of agent mcp-client as check$' "$log" || true)
+  # Quiet until it needs you (#1080): with ilo in the background, the handoff posts one
+  # notification. On Linux another app's window takes the keyboard, the run's server takes the
+  # notification and clicks it, and on Windows another app has the foreground and the toast is
+  # posted, which no run can click. The Mac's runner can't answer its leave for notifications, so
+  # there ilo stays active, and the need only counts on the Dock's badge.
+  background=
+  if [ "$(uname)" = Linux ] && [ -n "$notes" ] && [ -z "${BROWSER_WAYLAND:-}" ]; then
+    rm -f "$out/other-in"
+    mkfifo "$out/other-in"
+    python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
+    other=$!
+    exec 7> "$out/other-in"
+    for _ in $(seq 50); do grep -q '^[0-9]' "$out/other-window.log" && break; sleep 0.1; done
+    other_window=$(head -1 "$out/other-window.log")
+    xdotool windowactivate --sync "$other_window" 2> /dev/null ||
+      fail "another app's window didn't open and take the keyboard: $(cat "$out/other-window.log")"
+    # The driver reads the keyboard's window from the X server, as the app does.
+    send state
+    [ "$active" = 0 ] || fail "another app's window left ilo active"
+    background=linux
+  elif windows; then
+    rm -f "$out/cover-front"
+    python3 -I -u check/app-windows.py cover "$(cat "/proc/$pid/winpid")" away "$(cygpath -w "$out/cover-front")" \
+      > "$out/cover-needs.log" 2>&1 &
+    helper=$!
+    for _ in $(seq 100); do
+      grep -q '^cover ' "$out/cover-needs.log" || ! kill -0 "$helper" 2>/dev/null && break
+      sleep 0.1
+    done
+    grep -q '^cover .*, foreground away$' "$out/cover-needs.log" ||
+      fail "another app didn't take the foreground: $(cat "$out/cover-needs.log")"
+    background=windows
+  fi
+  counted() { grep -c "$1" "$log" || true; }
+  ones=$(counted '^browser: needs you 1$')
+  urgents=$(counted '^browser: window [0-9]* urgent on$')
+  badges=$(counted '^browser: \(dock\|taskbar\) badge 1$')
   request hand_off "{\"tab\":$opened_tab,\"reason\":\"Sign in once more\"}" >&4
   await_more '^browser: session session-[0-9]* of agent mcp-client as check$' "$sessions" ||
     fail "the reconnected client's call started no card of its own"
@@ -837,12 +910,76 @@ if [ "$driven" = 1 ]; then
     "the reconnected client's hand_off didn't hand the tab over"
   await_log "^browser: task card $session Waiting " "the reconnected client's card didn't wait for the user"
   await_log "^browser: task plate task-${session#session-} at " "the reconnected client's card wasn't drawn"
-  read -r px py pw ph <<PLATE
+  needing=$session
+  await_more '^browser: needs you 1$' "$ones" || fail "the waiting card didn't count as a need"
+  case $background in
+    linux)
+      await_more '^browser: window [0-9]* urgent on$' "$urgents" ||
+        fail "the waiting card didn't mark the window urgent"
+      await_log "^browser: needs you notified [0-9]* $needing\$" "the need in the background posted nothing"
+      need=$(sed -n "s/^browser: needs you notified \([0-9]*\) $needing\$/\1/p" "$log" | tail -1)
+      await_log "^browser: needs you posted $need\$" \
+        "the notification didn't reach the desktop: $(grep '^browser: needs you ' "$log" | tail -1)"
+      note=$(grep '^notify [0-9]* check needs you$' "$notes" | tail -1 | cut -d' ' -f2)
+      [ -n "$note" ] || fail "the desktop's server got no \"check needs you\": $(cat "$notes")"
+      grep -qx "body $note Sign in once more" "$notes" ||
+        fail "the notification's body isn't the handoff's step: $(grep "^body $note " "$notes")"
+      grep -x "hints $note .*" "$notes" | grep -q ' suppress-sound' ||
+        fail "the notification may sound: $(grep "^hints $note " "$notes")"
+      [ "$(grep -c '^notify ' "$notes")" = 1 ] || fail "a need posted more than once: $(cat "$notes")"
+      # Its click opens the task's card, the app asking to come forward, which the window manager
+      # decides; the run gives the keyboard back, as a click on the window would.
+      echo "click $note" >&6
+      await_log "^browser: needs you clicked $need $needing\$" "the notification's click reached no task"
+      await_log "^browser: task $needing shown\$" "the notification's click didn't open its task's card"
+      exec 7>&-
+      wait "$other" 2> /dev/null || true
+      send window 1
+      [ "$active" = 1 ] || fail "the window didn't take the keyboard back"
+      ;;
+    windows)
+      await_more '^browser: taskbar badge 1$' "$badges" ||
+        fail "the taskbar button's overlay didn't count the need"
+      await_log "^browser: needs you notified [0-9]* $needing\$" "the need in the background posted nothing"
+      need=$(sed -n "s/^browser: needs you notified \([0-9]*\) $needing\$/\1/p" "$log" | tail -1)
+      await_log "^browser: needs you posted $need" "the toast wasn't posted"
+      # Windows shows a toast only for a copy its installer gave a Start menu shortcut, or an MSIX,
+      # as Chrome's own, and the run's copy is neither: it's refused as unregistered.
+      posted=$(grep "^browser: needs you posted $need" "$log" | tail -1)
+      case "$posted" in
+        "browser: needs you posted $need") ;;
+        "browser: needs you posted $need: Element not found."*) toast_skip=1 ;;
+        *) fail "the toast wasn't posted: $posted" ;;
+      esac
+      touch "$out/cover-front"
+      for _ in $(seq 100); do kill -0 "$helper" 2>/dev/null || break; sleep 0.1; done
+      helper=
+      ;;
+    *)
+      await_log "^browser: needs you $needing while active\$" "the need with ilo active wasn't held back"
+      if [ "$(uname)" = Darwin ]; then
+        await_more '^browser: dock badge 1$' "$badges" || fail "the Dock's badge didn't count the need"
+      fi
+      ;;
+  esac
+  case $background in
+    linux) needs_said=", a handoff while another app's window has the keyboard marks the window urgent and posts one notification, \"check needs you\" over its step with no sound, whose click opens its card, and none while ilo is active" ;;
+    windows) needs_said=", a handoff with another app in front counts on the taskbar button and asks for one toast, and none while ilo is active" ;;
+    *) needs_said=", a handoff with ilo active counts on the Dock's badge and posts nothing" ;;
+  esac
+  # On Linux the notification's click showed its conversation, which a click on the card would
+  # put away.
+  if [ "$background" != linux ]; then
+    read -r px py pw ph <<PLATE
 $(grep "^browser: task plate task-${session#session-} at " "$log" | tail -1 | cut -d' ' -f6-)
 PLATE
-  send click $((px + pw / 2)) $((py + ph / 2))
-  expect "^browser: task $session shown\$" "a click on the new card didn't show its conversation"
-  await_log "^browser: task $session shimmers\$" "the conversation's step waiting on the user didn't shimmer"
+    send click $((px + pw / 2)) $((py + ph / 2))
+    expect "^browser: task $session shown\$" "a click on the new card didn't show its conversation"
+  fi
+  # With motion reduced, as on GitHub's Windows runner, the step holds still rather than shimmer.
+  if ! grep -q '^browser: reduce motion on$' "$log"; then
+    await_log "^browser: task $session shimmers\$" "the conversation's step waiting on the user didn't shimmer"
+  fi
   await_log '^browser: task stop at ' "the new card's conversation drew no Stop"
   read -r sx sy sw sh <<STOP
 $(grep '^browser: task stop at ' "$log" | tail -1 | cut -d' ' -f5-)
@@ -851,6 +988,21 @@ STOP
   send click $((sx + sw / 2)) $((sy + sh / 2))
   expect '^browser: command stop-task via conversation$' "the click on Stop while the step shimmered didn't arrive"
   expect '^browser: agent mcp-client stopped by the user$' "Stop didn't stop the client"
+  # No task waits once it's stopped, and the count and the urgency go with it.
+  # Waits for the last line matching $1 to be $2, for up to 10 s.
+  last_is() {
+    for _ in $(seq 100); do
+      [ "$(grep "$1" "$log" | tail -1)" = "$2" ] && return 0
+      sleep 0.1
+    done
+    return 1
+  }
+  last_is '^browser: needs you [0-9]*$' "browser: needs you 0" || fail "the count stayed once no task waited"
+  if [ "$background" = linux ]; then
+    window_urgent=$(grep '^browser: window [0-9]* urgent ' "$log" | tail -1 | cut -d' ' -f3)
+    last_is '^browser: window [0-9]* urgent ' "browser: window $window_urgent urgent off" ||
+      fail "the window stayed urgent once no task waited"
+  fi
   stopped=$(next_answer) || fail "the browser didn't answer the hand_off it stopped"
   stopped=$(printf '%s\n' "$stopped" | answered)
   case "$stopped" in
@@ -910,9 +1062,12 @@ quit
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, is refused a tab the user took over with the strip's ⌘↩ until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow, which Settings › Agents lists, and off takes the socket away, and a launch after the window quit in its Space shows the page it opens"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, is refused a tab the user took over with the strip's ⌘↩ until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away, and a launch after the window quit in its Space shows the page it opens"
 else
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases). skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
+fi
+if [ -n "${toast_skip:-}" ]; then
+  echo "skip: the needs' toast showing, as Windows shows toasts only for an installed copy, which the run's isn't: it counted on the taskbar button and asked for the toast."
 fi
 if [ -n "$msix" ]; then
   echo "ok: a Store copy's bridge, run by the alias its MSIX declares in the user's WindowsApps folder, carries a client's hello to the browser and its answer back."

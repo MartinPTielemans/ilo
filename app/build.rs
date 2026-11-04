@@ -17,6 +17,7 @@ fn main() {
                 .file("platform/mac/menu_window.mm")
                 .file("platform/mac/emoji.mm")
                 .file("platform/mac/dock.mm")
+                .file("platform/mac/needs_you.mm")
                 .file("platform/mac/updates.mm")
                 .flag("-std=c++20")
                 .flag("-fobjc-arc")
@@ -166,6 +167,7 @@ fn main() {
             println!("cargo:rustc-link-arg-bin=Browser={arg}");
         }
         println!("cargo:rustc-link-lib=framework=Cocoa");
+        println!("cargo:rustc-link-lib=framework=UserNotifications");
         // The Apple Event Manager's C calls, for the quit Apple Event's sender (host.mm).
         println!("cargo:rustc-link-lib=framework=CoreServices");
         println!("cargo:rustc-link-lib=framework=Security");

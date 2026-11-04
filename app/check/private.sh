@@ -68,6 +68,7 @@ ended() {
 send key n cmd
 expect '^browser: window opened [0-9]*$' "⌘N didn't open a window"
 regular=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+new_window_bar
 send key w cmd shift
 expect "^browser: window closed $regular\$" "⇧⌘W didn't close the window ⌘N opened"
 send window 1
@@ -75,6 +76,7 @@ send click $page_point
 send key n cmd shift
 expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
 empty=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
+new_window_bar
 send key w cmd shift
 expect "^browser: window closed $empty\$" "⇧⌘W didn't close the private window with no page"
 ended 1 || fail "closing the private window with no page didn't end its session"
@@ -88,6 +90,7 @@ expect '^browser: command new-private-window via ' "⇧⌘N didn't run New Incog
 expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
 first=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
 expect "^browser: window opened $first\$" "the private window didn't open"
+new_window_bar
 send window 4
 send title
 expect '^browser: key window titled Incognito$' "the private window isn't titled as one"
@@ -118,6 +121,7 @@ send key n cmd shift
 expect '^browser: private window opened [0-9]* profile [0-9]*$' \
   "⇧⌘N in the private window didn't open another"
 second=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
+new_window_bar
 [ "$second" != "$first" ] || fail "the second private window has the first one's id"
 open_private_page "$second"
 expect "^browser: title $tab cookie private\$" "the second private window didn't share the session"
@@ -143,6 +147,7 @@ send key n cmd shift
 expect '^browser: private window opened [0-9]* profile [0-9]*$' \
   "⇧⌘N didn't open a private window again"
 third=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
+new_window_bar
 open_private_page "$third"
 expect "^browser: title $tab cookie none\$" "the new private session had the ended one's cookie"
 # Chrome destroying the profile and the core finding it gone both end a session, and the app hears

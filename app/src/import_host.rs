@@ -2,16 +2,18 @@
 //! a tab comes in by opening behind in the front window, unloaded, and moving to its Space and
 //! its place there, so it loads only once it's first shown.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use browser::import::found::{Address, Page, Tab};
 use browser::import::plan::{Existing, ExistingSpace, Row};
 use browser::import::sources::{Os, Roots};
 use browser::import::{Exported, Passwords};
 use browser::link_rules::{Host as _, Rule};
+use browser::log;
 use browser::theme::Theme;
 use gpui::{App, PathPromptOptions};
 
@@ -32,6 +34,38 @@ thread_local! {
     /// What waits for passwords_imported, with the profile the passwords went to.
     static PASSWORDS: RefCell<Vec<(u64, Box<dyn FnOnce(Passwords, &mut App)>)>> =
         const { RefCell::new(Vec::new()) };
+    /// The profile a check run holds back, with the Spaces that wait to go in it.
+    static HELD: RefCell<Option<(u64, Vec<u64>)>> = const { RefCell::new(None) };
+    /// Whether the check run's profile was held, which it is once.
+    static HOLDS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The new profile a check run holds back from its Spaces until it releases them, so its capture
+/// shows them arriving and stalled however fast the profile loads. A prod build holds none.
+fn held_name() -> Option<String> {
+    if cfg!(feature = "prod") {
+        return None;
+    }
+    std::env::var("BROWSER_IMPORT_HOLD").ok()
+}
+
+/// Whether this run holds a profile back, so it has a key to release it.
+pub fn holding() -> bool {
+    held_name().is_some()
+}
+
+/// Puts the held profile's Spaces in it, as the import asked before it was held.
+pub fn release_held() {
+    let Some((profile, spaces)) = HELD.take() else {
+        return;
+    };
+    log!(
+        "browser: import releases {} Spaces to profile {profile}",
+        spaces.len()
+    );
+    for space in spaces {
+        unsafe { bc::bc_space_set_profile(space, profile) };
+    }
 }
 
 /// Runs what waited for the app to become the active one.
@@ -206,8 +240,14 @@ impl browser::import::Host for CoreImport {
     }
 
     fn create_profile(&self, name: &str) -> u64 {
+        let held = !HOLDS.get() && held_name().as_deref() == Some(name);
         let name = CString::new(name).unwrap_or_default();
-        unsafe { bc::bc_profile_create(name.as_ptr()) }
+        let profile = unsafe { bc::bc_profile_create(name.as_ptr()) };
+        if held {
+            HOLDS.set(true);
+            HELD.set(Some((profile, Vec::new())));
+        }
+        profile
     }
 
     fn create_space(&self, name: &str, icon: &str, theme: Option<&Theme>) -> u64 {
@@ -225,6 +265,17 @@ impl browser::import::Host for CoreImport {
     }
 
     fn set_space_profile(&self, space: u64, profile: u64) {
+        let held = HELD.with_borrow_mut(|held| match held {
+            Some((each, spaces)) if *each == profile => {
+                spaces.push(space);
+                true
+            }
+            _ => false,
+        });
+        if held {
+            log!("browser: import holds space {space} from profile {profile}");
+            return;
+        }
         unsafe { bc::bc_space_set_profile(space, profile) };
     }
 
@@ -401,4 +452,26 @@ impl browser::import::Host for CoreImport {
     fn open_store_page(&self, url: &str) {
         open_tab_behind(front().0, url, false);
     }
+
+    fn last_import(&self, browser: &str) -> Option<SystemTime> {
+        IMPORTS.with_borrow(|imports| {
+            (imports.iter())
+                .find(|(each, _)| each == browser)
+                .map(|(_, at)| *at)
+        })
+    }
+
+    fn imported(&self, browser: &str, at: SystemTime) {
+        IMPORTS.with_borrow_mut(|imports| {
+            imports.retain(|(each, _)| each != browser);
+            imports.push((browser.into(), at));
+        });
+    }
+}
+
+thread_local! {
+    /// Each browser's last import this run, by its name: in memory alone, as the Archive's tasks
+    /// are, as nothing that records the user's use is stored without the owner's yes. After a
+    /// relaunch a browser's row is Import… again, and a rerun still adds nothing twice.
+    static IMPORTS: RefCell<Vec<(String, SystemTime)>> = const { RefCell::new(Vec::new()) };
 }

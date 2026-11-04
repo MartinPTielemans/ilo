@@ -5,7 +5,7 @@
 
 use gpui::{App, Context, SharedString};
 
-use super::{Shell, commands::keystroke_keys, extensions::keystroke_text};
+use super::{Shell, commands::keystroke_label, extensions::keystroke_text};
 use crate::agents::Status;
 
 /// What the bar shows.
@@ -130,9 +130,10 @@ impl Shell {
     }
 }
 
-/// Stop's key, ⌘., as a chip after its words shows it.
+/// Stop's key as a chip after its words shows it: ⌘. on the Mac, and off it Ctrl+., as a menu
+/// spells it.
 pub(super) fn stop_keys() -> String {
-    keystroke_keys(STOP_KEY).concat()
+    keystroke_label(STOP_KEY)
 }
 
 /// What the bar says, its title and the line under it, and the tab it's about.

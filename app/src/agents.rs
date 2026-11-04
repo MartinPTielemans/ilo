@@ -308,7 +308,27 @@ struct Act {
     show: Show,
     /// What it would do, as a question has it.
     what: String,
+    /// What it does that asked first, once allowed, for its session's receipt.
+    did: Option<Did>,
     reply: mpsc::Sender<ToolResult>,
+}
+
+/// What an action that asked first did once it was allowed and done, which its session's receipt
+/// counts: "1 order placed", "2 messages sent".
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Did {
+    Order,
+    Message,
+}
+
+impl Did {
+    fn of(why: &str) -> Option<Did> {
+        match why {
+            page::ORDER => Some(Did::Order),
+            page::SENDS => Some(Did::Message),
+            _ => None,
+        }
+    }
 }
 
 /// What of the page's outline an action answers with, as its `outline` argument says.
@@ -347,6 +367,9 @@ impl Show {
 /// An action that waits on the core's answer.
 struct Acting {
     agent: String,
+    /// The call it's for, and what it does that asked first, which its session counts once done.
+    call: u64,
+    did: Option<Did>,
     tab: u64,
     /// The element it acts on, or 0.
     element: i64,
@@ -1003,6 +1026,7 @@ impl Agents {
                     action: "open_tab",
                     tab: 0,
                     what: format!("open {host}"),
+                    did: None,
                     url,
                     page: PageAction::Snapshot,
                     element: 0,
@@ -1375,6 +1399,8 @@ impl Agents {
         let (note, show) = (String::new(), Show::Nothing);
         let acting = Acting {
             agent: agent.into(),
+            call: 0,
+            did: None,
             tab,
             element: 0,
             note,
@@ -1642,6 +1668,7 @@ impl Agents {
             note: String::new(),
             show,
             what: String::new(),
+            did: None,
             reply,
         };
         let mut risk = None;
@@ -1776,10 +1803,17 @@ impl Agents {
 
     /// Runs the action, unless what it does on `site` asks the user first (`why`): then it waits
     /// for the user's answer, or the one they gave for good.
-    fn check(&mut self, act: Act, site: String, why: Option<&'static str>, cx: &mut Context<Self>) {
+    fn check(
+        &mut self,
+        mut act: Act,
+        site: String,
+        why: Option<&'static str>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(why) = why else {
             return self.run(act, cx);
         };
+        act.did = Did::of(why);
         match self
             .grants
             .get(&act.agent)
@@ -1987,6 +2021,7 @@ impl Agents {
             text,
             mut note,
             show,
+            did,
             reply,
             ..
         } = act;
@@ -2019,6 +2054,8 @@ impl Agents {
         self.next_request += 1;
         let acting = Acting {
             agent: agent.clone(),
+            call,
+            did,
             tab,
             element,
             note,
@@ -2041,6 +2078,8 @@ impl Agents {
     pub fn page_done(&mut self, request: u64, text: String, error: bool, cx: &mut Context<Self>) {
         let Some(Acting {
             agent,
+            call,
+            did,
             tab,
             note,
             show,
@@ -2053,6 +2092,9 @@ impl Agents {
         if error {
             _ = reply.send(ToolResult::error(text));
             return self.advance(cx);
+        }
+        if let Some(did) = did {
+            self.counted(&agent, call, did);
         }
         if !text.starts_with('[') {
             _ = reply.send(ToolResult::image(text));

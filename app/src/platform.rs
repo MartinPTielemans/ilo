@@ -84,6 +84,7 @@ unsafe extern "C" {
     pub fn host_set_little_status_item(clicked: Option<extern "C" fn()>);
     pub fn host_watch_key_window(changed: extern "C" fn(*mut c_void));
     pub fn host_watch_full_screen(changed: extern "C" fn(*mut c_void, bool));
+    pub fn host_watch_window_main(changed: extern "C" fn(*mut c_void, bool));
     pub fn host_watch_swipes(swiped: extern "C" fn(*mut c_void, f64, f64, bool) -> bool);
     pub fn host_watch_option_taps(tapped: extern "C" fn(*mut c_void));
     #[cfg(not(target_os = "linux"))]
@@ -168,6 +169,11 @@ unsafe extern "C" {
     pub fn host_focus(view: *mut c_void);
     pub fn host_show_window_buttons(ui_view: *mut c_void, shown: bool);
     pub fn host_press_window_button(ui_view: *mut c_void, button: i32);
+    pub fn host_set_window_on_top(ui_view: *mut c_void, on: bool);
+    #[cfg(target_os = "macos")]
+    pub fn host_enter_full_screen(ui_view: *mut c_void) -> bool;
+    #[cfg(target_os = "macos")]
+    pub fn host_window_on_active_space(ui_view: *mut c_void) -> bool;
     #[cfg(target_os = "macos")]
     pub fn host_window_buttons(
         ui_view: *mut c_void,
@@ -199,6 +205,12 @@ unsafe extern "C" {
     pub fn host_detent();
     pub fn host_dock_dot_launch(profile_dir: *const c_char);
     pub fn host_dock_dot(colored: bool, color: u32);
+    pub fn host_app_active() -> bool;
+    pub fn host_needs_you_badge(count: c_int);
+    #[cfg(not(target_os = "linux"))]
+    pub fn host_needs_you_notify(id: u64, title: *const c_char, body: *const c_char);
+    #[cfg(not(target_os = "linux"))]
+    pub fn host_watch_needs_you(clicked: extern "C" fn(id: u64));
     pub fn host_watch_control(released: extern "C" fn());
     pub fn host_take_drops(
         dragged: extern "C" fn(
