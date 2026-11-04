@@ -1348,7 +1348,15 @@ impl Browser for Engine {
             // After the frame that asks, as the core resizes the window it's drawing.
             let window = self.window;
             if !already {
-                cx.defer(move |_| unsafe { bc::bc_window_toggle_full_screen(window) });
+                cx.defer(move |_| {
+                    unsafe { bc::bc_window_toggle_full_screen(window) };
+                    // check.sh reads this line.
+                    let now = unsafe { bc::bc_window_is_full_screen(window) };
+                    log!(
+                        "browser: window {window} asked for full screen, now {}",
+                        now as u8
+                    );
+                });
             }
             already
         }
@@ -1815,9 +1823,7 @@ fn open_bar_when_shown(from: bc::bc_id, opened: bc::bc_id, asked: Instant, cx: &
             (windows.iter().find(|w| w.id == id)).and_then(|w| w.shell.upgrade())
         })
     };
-    // Not on Windows yet, where the core's full screen doesn't take a window just opened.
-    let full_screen = cfg!(not(target_os = "windows"))
-        && shell_of(from).is_some_and(|shell| shell.read(cx).in_window_full_screen());
+    let full_screen = shell_of(from).is_some_and(|shell| shell.read(cx).in_window_full_screen());
     if let Some(shell) = shell_of(opened) {
         shell.update(cx, |shell, cx| {
             shell.open_bar_when_shown(asked, full_screen);
