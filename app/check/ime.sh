@@ -15,6 +15,9 @@
 #   and Enter commits "qxyz" without opening anything, and the bar takes the next key, "w".
 # - A click in the page while the bar composes leaves no composition behind: the page composes
 #   "fg" on its own.
+# - Settings' search field (Ctrl+, then Ctrl+F) composes "pip", which it draws and searches for
+#   only once Enter commits it; Escape cancels a composition there and leaves the search, and the
+#   next Escape empties it.
 # - no-keyboard: on Wayland with no keyboard on the seat, where activating the input method makes
 #   fcitx5's virtual keyboard the seat's first, with no keymap, the app lives on (#1138), and after
 #   another keyboard comes and goes.
@@ -119,6 +122,27 @@ if [ "${1:-}" = --steps ]; then
   await "title [0-9]* composing [a-z]*fg[a-z]*$" "$at"
   ! tail -n "+$((at + 1))" "$LOG" | grep -q "title [0-9]* composing .*zz" || fail "the bar's composition went to the page"
   key $'\e'
+
+  # Settings' search (#1636): Ctrl+F gives its field the keyboard, the composition shows in the
+  # field and finds nothing until it commits, then the word committed finds its rows. Escape while
+  # composing cancels the composition and leaves the search.
+  at=$(mark); key '^,'
+  await "settings drew " "$at"
+  key '^f'
+  at=$(mark); compose pip
+  await 'settings search composing "pip"' "$at"
+  sleep 0.3; grim "$out/$mode-settings-preedit.png"
+  ! tail -n "+$((at + 1))" "$LOG" | grep -q 'settings search "pip" finds' || fail "Settings searched for the composition"
+  at=$(mark); key $'\n'
+  await 'settings search "pip" finds Mini Player$' "$at"
+  sleep 0.3; grim "$out/$mode-settings-committed.png"
+  at=$(mark); compose xyz
+  await 'settings search composing "pipxyz"' "$at"
+  at=$(mark); key $'\e'
+  await 'settings search "pip" finds Mini Player$' "$at"
+  ! tail -n "+$((at + 1))" "$LOG" | grep -q 'settings search cleared' || fail "Escape while composing ended the search"
+  at=$(mark); key $'\e'
+  await 'settings search cleared' "$at"
   mv "$out/$mode.failed" "$out/$mode.passed"
   exit 0
 fi
