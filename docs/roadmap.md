@@ -50,7 +50,7 @@ Per platform: the platform layer, packaging, updater, signing. Linux first runs 
 
 **Done when** each platform's build passes the parity checklist's MVP items and the performance gate, and on Linux that holds on native Wayland as well as X11.
 
-Known gap on Linux: on a wlroots compositor such as sway, ilo run on X11 through Xwayland can't keep the keys in its panels, the password offer and the find bar, since the compositor's window manager sends the X focus back from child windows; there, use the native Wayland session (#1646).
+Known gap: on wlroots compositors, ilo on X11 through Xwayland can't keep keys in its panels; use Wayland there (#1646).
 
 ## Performance gate
 
