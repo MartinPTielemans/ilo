@@ -262,10 +262,10 @@ class BrowserWindowStandIn : public BrowserWindow,
   PinnedToolbarActions* GetPinnedToolbarActions() override { return nullptr; }
   void SetFocusToLocationBar(bool is_user_initiated) override {}
   void UpdateReloadStopState(bool is_loading, bool force) override {}
-  void UpdateToolbar(content::WebContents* contents) override {}
+  void UpdateToolbar(content::WebContents* contents) override;
   bool UpdateToolbarSecurityState() override;
   void UpdateCustomTabBarVisibility(bool visible, bool animate) override {}
-  void ResetToolbarTabState(content::WebContents* contents) override {}
+  void ResetToolbarTabState(content::WebContents* contents) override;
   void FocusToolbar() override {}
   void ToolbarSizeChanged(bool is_animating) override {}
   void TabDraggingStatusChanged(bool is_dragging) override {}
