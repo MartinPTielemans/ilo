@@ -334,6 +334,7 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
     link_rules_host::read();
     let links = LAUNCH_LINKS.take().unwrap_or_default();
     let notes = UPDATE_NOTES.take().or_else(first_launch_notes);
+    let notes = browser::updates::notes_to_open(notes, std::path::Path::new(&profile_dir()));
     match std::env::var("BROWSER_URL") {
         Ok(url) => open_tab(window, &url),
         Err(_) if !restored && links.is_empty() && notes.is_none() => {
@@ -511,6 +512,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
             platform::host_since_launch()
         });
         dock_dot::open(Rc::new(DockDot), cx);
+        settings::read_switches(cx);
         needs_you_host::start(cx);
         open_window(None, None, cx);
     });

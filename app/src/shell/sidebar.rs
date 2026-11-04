@@ -29,6 +29,20 @@ use super::{
 pub(super) const OPENED: &str = "New Tab Created";
 const OPENED_TIME: Duration = Duration::from_millis(4800);
 
+/// Settings › Tabs & Sidebar's "Show the hidden sidebar at the window's edge", on unless the user
+/// turned it off: a display to the left, or a scrollbar against that edge, can set it off by
+/// accident. ⌘S and ⌥ still bring the sidebar out. The user's preference: agents have no call to
+/// change it.
+#[derive(Clone, Copy)]
+pub struct SidebarEdge(pub bool);
+
+impl gpui::Global for SidebarEdge {}
+
+/// Whether the pointer at the window's edge brings the hidden sidebar out.
+pub fn edge_reveals(cx: &gpui::App) -> bool {
+    cx.try_global::<SidebarEdge>().is_none_or(|edge| edge.0)
+}
+
 impl Shell {
     /// The docked sidebar's width as drawn: with the pointer while its edge is dragged, then on its
     /// way to where it rests.
@@ -562,9 +576,9 @@ impl Shell {
         }
     }
 
-    /// The pointer is at `x` in the browser window: kept at its left edge it brings the hidden
-    /// sidebar out over the page, and more than the hold zone past the panel's edge, and off a
-    /// row's hover card, it sends it away, and the card with it.
+    /// The pointer is at `x` in the browser window: kept at its left edge, unless Settings › Tabs &
+    /// Sidebar has the edge off, it brings the hidden sidebar out over the page, and more than the
+    /// hold zone past the panel's edge, and off a row's hover card, it sends it away, and the card with it.
     pub fn pointer_at(&mut self, x: f32, cx: &mut Context<Self>) {
         self.reveal_x = x;
         if !self.can_reveal() {
@@ -598,6 +612,7 @@ impl Shell {
         } else if !self.revealed
             && self.reveal_wait.is_none()
             && self.reveal_strip.is_some_and(|(_, moved)| moved)
+            && edge_reveals(cx)
             && self.is_key_window(cx)
         {
             // Arc waits a moment, so a pointer passing the edge on its way to another window or
@@ -1349,6 +1364,35 @@ mod tests {
         assert!(
             revealed(&key, cx),
             "the key window's edge didn't bring its sidebar out"
+        );
+    }
+
+    /// With Settings' edge switch off, the pointer moving along the edge leaves the hidden sidebar
+    /// hidden, and ⌘S still brings it back.
+    #[gpui::test]
+    fn off_the_edge_brings_nothing_out(cx: &mut TestAppContext) {
+        let (shell, _) = shell_with(cx, &[], &[1], Default::default());
+        cx.update(|cx| cx.set_global(super::SidebarEdge(false)));
+        shell.update(cx, |shell, cx| {
+            shell.sidebar_hidden = true;
+            shell.pointer_over(point(px(1.), px(300.)), cx);
+            shell.pointer_over(point(px(1.), px(304.)), cx);
+        });
+        cx.executor().advance_clock(super::REVEAL_WAIT * 2);
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, _| {
+            assert!(
+                !shell.revealed,
+                "the edge brought the sidebar out while off"
+            );
+            assert!(shell.reveal_wait.is_none());
+        });
+        shell.update(cx, |shell, cx| {
+            shell.run(crate::shell::Command::ToggleSidebar, "key", cx)
+        });
+        assert!(
+            shell.read_with(cx, |shell, _| !shell.sidebar_hidden),
+            "⌘S didn't show it"
         );
     }
 
