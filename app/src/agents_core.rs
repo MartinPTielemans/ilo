@@ -310,6 +310,9 @@ pub fn start(cx: &mut App) {
         let ended = agents.update(cx, |agents, cx| agents.take_ended(cx));
         for (home, past) in ended {
             let profile = unsafe { bc::bc_space_profile(home) };
+            if profile == 0 {
+                continue;
+            }
             let kept = browser::agent_history::read(&bar_picks_host::sessions(profile));
             let kept = browser::agent_history::kept(kept, past, browser::usage::now());
             bar_picks_host::set_sessions(profile, &browser::agent_history::write(&kept));

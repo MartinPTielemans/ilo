@@ -1806,7 +1806,7 @@ impl Agents {
     }
 
     /// Each task that has ended since Library › Agents last kept it, as its receipt shows it, with
-    /// its home Space, whose profile keeps it. A later turn of a task ends again, and is kept again
+    /// its home Space, or a session's own, whose profile keeps it. A later turn of a task ends again, and is kept again
     /// in its earlier one's place.
     pub fn take_ended(&mut self, cx: &App) -> Vec<(u64, crate::agent_history::Past)> {
         let finished = |task: &Task| {
@@ -1843,7 +1843,13 @@ impl Agents {
                 orders: task.orders,
                 messages: task.sent,
             };
-            kept.push((task.home, past));
+            // A session has no home of the user's, so its agent's Space says its profile.
+            let home = if task.home != 0 {
+                task.home
+            } else {
+                task.space
+            };
+            kept.push((home, past));
             let ended = task.ended;
             if let Some(task) = self.task_mut(&key) {
                 task.kept = ended;
