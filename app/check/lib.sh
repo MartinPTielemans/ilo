@@ -363,6 +363,18 @@ drawn() {
   done
   return 1
 }
+# As drawn, from a frame drawn after the last line that matches $2, the state the run waited for:
+# a point drawn before it is the old layout's, where a press lands on whatever was there (#1885).
+drawn_after() {
+  for _ in $(seq 100); do
+    awk -v state="$2" -v name="browser: settings $1 at " '
+      $0 ~ state { at = "" }
+      index($0, name) == 1 { at = substr($0, length(name) + 1) }
+      END { if (at == "") exit 1; print at }' "$log" && return 0
+    sleep 0.1
+  done
+  return 1
+}
 # ⌘N's and ⇧⌘N's window opens with ⌘T's command bar once it's on screen, as Arc's (window.sh
 # checks it). Escape closes it, leaving the window with no page that the steps after expect. With
 # a path, the windows are captured there while it's open.
