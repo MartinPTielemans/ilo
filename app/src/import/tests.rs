@@ -1304,9 +1304,10 @@ fn import_first(view: &Entity<ImportView>, cx: &mut TestAppContext) {
     cx.run_until_parked();
 }
 
-/// Cancel while the import reads stops it, and what it read never comes in.
+/// Back while the browser picked is still read, with Import pressed meanwhile, leaves it: what
+/// the read finds never comes in.
 #[gpui::test]
-fn cancel_stops_an_import_while_it_reads(cx: &mut TestAppContext) {
+fn back_while_the_pick_reads_brings_nothing_in(cx: &mut TestAppContext) {
     let browser = Rc::new(Browser::new(None));
     let host: Rc<dyn Host> = browser.clone();
     let view = cx.new(|_| ImportView::new(host, false));
@@ -1314,11 +1315,13 @@ fn cancel_stops_an_import_while_it_reads(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         view.pick(0, cx);
         view.import(cx);
+        assert_eq!(view.primary(), Some("Import"), "it went on before its read");
+        view.back(cx);
     });
-    assert_eq!(says(&view, cx), "Importing from Arc…");
-    view.update(cx, |view, cx| view.cancel(cx));
     cx.run_until_parked();
-    assert_eq!(says(&view, cx), "Stopped. Nothing came in from Arc.");
+    view.read_with(cx, |view, _| {
+        assert!(matches!(view.step, super::Step::List))
+    });
     assert_eq!(browser.spaces().len(), spaces);
 }
 
@@ -2432,11 +2435,153 @@ pub(crate) fn let_read(home: &Path) {
     fs::set_permissions(bookmarks, fs::Permissions::from_mode(0o644)).unwrap();
 }
 
-/// Safari's files kept from the app ask for Full Disk Access, and the import goes on when the
-/// user comes back to the app with it given; Back leaves it, and coming back then does nothing.
+/// Picking a browser reads it, away from the UI, and its choices then say how much of each kind
+/// comes, with the profiles it goes into: Arc's Spaces by name, a new profile for its Work, and
+/// Chrome's bookmarks, open tabs, history and address. Until the read is in, each says it's
+/// counting, and Import pressed then goes on once it is.
+#[gpui::test]
+fn picking_a_browser_shows_its_kinds_with_their_counts(cx: &mut TestAppContext) {
+    let browser = Rc::new(Browser::new(None));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    view.update(cx, |view, cx| view.pick(0, cx));
+    view.read_with(cx, |view, _| {
+        let counting: Vec<_> = view.choices().into_iter().map(|(_, said)| said).collect();
+        assert_eq!(counting, ["Counting…"; 5]);
+        assert_eq!(view.note(), None);
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.choices(),
+            [
+                (
+                    Kind::Spaces,
+                    "**2 Spaces** with **6 pinned tabs** in 2 folders, and 3 link rules".into()
+                ),
+                (
+                    Kind::Favorites,
+                    "**3**, at the top of each profile's Spaces".into()
+                ),
+                (Kind::History, "No pages from the last 90 days".into()),
+                (
+                    Kind::Addresses,
+                    "No saved addresses. Cards never come.".into()
+                ),
+                (
+                    Kind::Extensions,
+                    "None to add from the Chrome Web Store".into()
+                ),
+            ]
+        );
+        assert_eq!(
+            view.note().as_deref(),
+            Some(
+                "Into **Default** and a new profile, **Work**, as Arc has it. Logins don't \
+                 come: you sign in to each site again."
+            )
+        );
+    });
+
+    let made = chrome("chrome-counts", &[("Default", "Me")], SystemTime::now());
+    let browser = Rc::new(Browser::new(Some(Roots::under(&made, Os::Linux))));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    view.update(cx, |view, cx| {
+        view.pick(0, cx);
+        view.toggle(Kind::OpenTabs, cx);
+        view.import(cx);
+    });
+    cx.run_until_parked();
+    cx.update(|cx| browser.added(cx));
+    // Import pressed while it counted went on once it had, without what was switched off.
+    assert_eq!(
+        says(&view, cx),
+        "1 Space, 3 pinned tabs, 2 pages of history and 1 address came in from Chrome."
+    );
+    view.update(cx, |view, cx| {
+        view.done(cx);
+        view.pick(0, cx);
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        let said: Vec<_> = view.choices().into_iter().map(|(_, said)| said).collect();
+        assert_eq!(
+            said,
+            [
+                "**3 bookmarks** in 1 folder, as a Space's pinned tabs",
+                "**2 tabs**, as that Space's Today tabs",
+                "**2** pages from the last 90 days, kept on this computer",
+                "**1** saved address. Cards never come.",
+                "None to add from the Chrome Web Store",
+            ]
+        );
+        assert_eq!(
+            view.note().as_deref(),
+            Some("Into **Default**. Logins don't come: you sign in to each site again.")
+        );
+    });
+    fs::remove_dir_all(made).unwrap();
+}
+
+/// Reading everything a browser offers as it's picked, then leaving out what's switched off,
+/// gives what reading what's switched on alone would, for each set of Arc's and Chrome's kinds.
+#[test]
+fn what_is_left_of_a_whole_read_is_what_a_read_of_the_picked_gives() {
+    let made = chrome("chrome-keep", &[("Default", "Me")], SystemTime::now());
+    let now = SystemTime::now();
+    let arc = Roots::under(&fixture(), Os::Mac);
+    for roots in [arc, Roots::under(&made, Os::Linux)] {
+        let source = super::importable(&roots).remove(0);
+        let kinds = read::kinds(&source);
+        let whole = read::read(&source, kinds, now).unwrap();
+        for mask in 0..1u32 << kinds.len() {
+            let picked: Vec<Kind> = (kinds.iter().enumerate())
+                .filter(|(at, _)| mask & 1 << at != 0)
+                .map(|(_, kind)| *kind)
+                .collect();
+            assert_eq!(
+                read::keep(&whole, &source, &picked),
+                Some(read::read(&source, &picked, now).unwrap()),
+                "{} {picked:?}",
+                source.name()
+            );
+        }
+    }
+    fs::remove_dir_all(made).unwrap();
+}
+
+/// The counts read as people read them: thousands apart, and one of a thing in the singular.
+#[test]
+fn counts_read_with_their_thousands_apart() {
+    let tally = read::Tally {
+        spaces: 1,
+        pinned: 1,
+        pages: 12408,
+        ..read::Tally::default()
+    };
+    assert_eq!(
+        super::kind_line(Kind::Spaces, &tally, "this Mac"),
+        "**1 Space** with **1 pinned tab**"
+    );
+    assert_eq!(
+        super::kind_line(Kind::History, &tally, "this Mac"),
+        "**12,408** pages from the last 90 days, kept on this Mac"
+    );
+    let two = [("Personal".to_string(), true), ("Work".to_string(), true)];
+    assert_eq!(
+        super::into_note(&two, "Arc"),
+        "Into two new profiles, **Personal** and **Work**, as Arc has them. Logins don't come: \
+         you sign in to each site again."
+    );
+}
+
+/// Picking Safari, whose files the system keeps from the app, asks for Full Disk Access at once,
+/// before its choices, with Open System Settings the one thing to do and a line saying it waits.
+/// Nothing has started, so the view says nothing has ended either.
 #[cfg(unix)]
 #[gpui::test]
-fn safari_waits_for_full_disk_access(cx: &mut TestAppContext) {
+fn a_read_that_needs_access_shows_full_disk_access(cx: &mut TestAppContext) {
     let Some(home) = safari("safari-access") else {
         return;
     };
@@ -2458,50 +2603,74 @@ fn safari_waits_for_full_disk_access(cx: &mut TestAppContext) {
             [Kind::Bookmarks, Kind::ReadingList, Kind::History]
         );
     });
-    let import = |cx: &mut TestAppContext| {
-        view.update(cx, |view, cx| {
-            view.pick(0, cx);
-            view.import(cx);
-        });
-        cx.run_until_parked();
-    };
-    let waiting = |cx: &mut TestAppContext| {
-        view.read_with(cx, |view, _| {
-            matches!(view.step, super::Step::NoAccess { .. })
-        })
-    };
-    import(cx);
-    assert!(waiting(cx));
-    // It needs the user still, so it hasn't started going on by itself.
-    assert_eq!(
-        *events.borrow(),
-        [ImportEvent::Finished(
-            "Safari needs Full Disk Access.".into()
-        )]
-    );
+    view.update(cx, |view, cx| view.pick(0, cx));
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert!(matches!(view.step, super::Step::NoAccess { .. }));
+        assert_eq!(view.primary(), Some("Open System Settings"));
+        assert_eq!(view.access().as_deref(), Some("Waiting for access…"));
+        assert_eq!(view.crumb().as_deref(), Some("Safari"));
+    });
+    assert!(events.borrow().is_empty(), "{:?}", events.borrow());
+    // Back leaves it, and coming back to the app then reads nothing.
     view.update(cx, |view, cx| view.back(cx));
     cx.update(|cx| browser.activate(cx));
     cx.run_until_parked();
     view.read_with(cx, |view, _| {
         assert!(matches!(view.step, super::Step::List))
     });
-    import(cx);
-    assert!(waiting(cx));
-    // Back without it, the import still waits.
+    fs::remove_dir_all(home).unwrap();
+}
+
+/// Back in the app with access still off, the wait says so and what to do; once access is on,
+/// coming back shows Safari's choices with their counts, and Import brings them in.
+#[cfg(unix)]
+#[gpui::test]
+fn returning_with_access_still_off_says_still_no_access(cx: &mut TestAppContext) {
+    let Some(home) = safari("safari-still") else {
+        return;
+    };
+    let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Mac))));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    view.update(cx, |view, cx| view.pick(0, cx));
+    cx.run_until_parked();
     cx.update(|cx| browser.activate(cx));
     cx.run_until_parked();
-    assert!(waiting(cx));
+    let still = format!(
+        "Still no access. If you turned it on, quit {} and open it again.",
+        env!("APP_NAME")
+    );
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.access(), Some(still.clone()));
+        assert_eq!(view.primary(), Some("Open System Settings"));
+    });
+    // Still off, it says so again, and keeps waiting.
+    cx.update(|cx| browser.activate(cx));
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| assert_eq!(view.access(), Some(still.clone())));
     let_read(&home);
     cx.update(|cx| browser.activate(cx));
     cx.run_until_parked();
-    cx.update(|cx| browser.added(cx));
-    view.read_with(cx, |view, _| match &view.step {
-        super::Step::Done(said) => assert_eq!(
-            said.as_ref(),
-            "1 Space, 6 pinned tabs and 1 page of history came in from Safari."
-        ),
-        _ => panic!("still waiting"),
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.access(), None);
+        let said: Vec<_> = view.choices().into_iter().map(|(_, said)| said).collect();
+        assert_eq!(
+            said,
+            [
+                "**5 bookmarks** in 3 folders, as a Space's pinned tabs",
+                "**1 page**, as a folder in that Space",
+                "**1** page from the last 90 days, kept on this Mac",
+            ]
+        );
     });
+    view.update(cx, |view, cx| view.import(cx));
+    cx.run_until_parked();
+    cx.update(|cx| browser.added(cx));
+    assert_eq!(
+        says(&view, cx),
+        "1 Space, 6 pinned tabs and 1 page of history came in from Safari."
+    );
     assert_eq!(browser.spaces()[1].name, "Safari");
     fs::remove_dir_all(home).unwrap();
 }

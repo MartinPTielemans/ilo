@@ -207,10 +207,6 @@ impl Browser for Core {
         unsafe { bc::bc_tab_close(tab, false) };
     }
 
-    fn give(&self, tab: u64, space: u64, _: &mut App) -> bool {
-        unsafe { bc::bc_tab_give_to_agent(tab, space) }
-    }
-
     fn make_task_space(&self, agent: &str, agent_name: &str, like: u64, cx: &mut App) -> u64 {
         let space = self.make_agent_space(agent, agent_name, cx);
         let profile = unsafe { bc::bc_space_profile(like) };
@@ -232,6 +228,23 @@ impl Browser for Core {
 
     fn move_tab(&self, tab: u64, space: u64, _: &mut App) {
         unsafe { bc::bc_tab_move_to_space(tab, space) }
+    }
+
+    fn user_space(&self, like: u64) -> u64 {
+        let profile = unsafe { bc::bc_space_profile(like) };
+        let users = |space: u64| {
+            space != 0
+                && name(bc::bc_space_agent, space).is_empty()
+                && unsafe { bc::bc_space_profile(space) } == profile
+        };
+        let shown = unsafe { bc::bc_window_space(crate::front().0) };
+        match users(shown) {
+            true => shown,
+            false => ids(bc::bc_spaces)
+                .into_iter()
+                .find(|&space| users(space))
+                .unwrap_or(shown),
+        }
     }
 }
 
