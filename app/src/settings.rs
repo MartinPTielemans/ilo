@@ -4463,20 +4463,7 @@ impl Render for Settings {
                 root.key_context("Settings")
             })
             .track_focus(&self.focus)
-            .capture_key_down(cx.listener(|settings, event: &KeyDownEvent, window, cx| {
-                // DIAGNOSTIC (#1526), to come out: where a key in Settings goes.
-                let import = (settings.import.as_ref())
-                    .and_then(|import| import.read(cx).focus())
-                    .map(|focus| (focus.is_focused(window), focus.contains_focused(window, cx)));
-                log!(
-                    "browser: settings key {} focused {} root {} in root {} search {} import {:?}",
-                    event.keystroke.key,
-                    window.focused(cx).is_some(),
-                    settings.focus.is_focused(window),
-                    settings.focus.contains_focused(window, cx),
-                    settings.search.read(cx).focus_handle(cx).is_focused(window),
-                    import
-                );
+            .capture_key_down(cx.listener(|settings, event: &KeyDownEvent, _, cx| {
                 settings.record(&event.keystroke, cx)
             }))
             .on_key_down(cx.listener(|settings, event: &KeyDownEvent, window, cx| {

@@ -300,3 +300,163 @@ fn the_keyboard_goes_through_settings_in_reading_order(cx: &mut TestAppContext) 
     );
     assert_eq!(pressed(cx), 2);
 }
+
+gpui::actions!(settings_routes, [RoutedUndo, RoutedClose, RoutedEscape]);
+
+/// Settings in small for the keys' routes, as the window nests them: Settings holding the
+/// keyboard, as it opens; a row whose press doesn't reach Settings, as a link rule's with its
+/// trash; the import, a view with the keyboard of its own and its Esc, whose Import… gives way to
+/// what comes next; and a control that goes once pressed, as an ad-free site's row.
+struct Routes {
+    focus: gpui::FocusHandle,
+    import: gpui::FocusHandle,
+    logged: Rc<RefCell<Vec<String>>>,
+    trashed: Rc<Cell<bool>>,
+    imported: Rc<Cell<bool>>,
+    gone: Rc<Cell<bool>>,
+    undone: Rc<Cell<usize>>,
+    closed: Rc<Cell<usize>>,
+    escaped: Rc<Cell<usize>>,
+}
+
+impl Render for Routes {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let look = crate::settings_rows::Look::settings(true);
+        let control =
+            |id: &'static str, flag: &Rc<Cell<bool>>, logged: &Rc<RefCell<Vec<String>>>| {
+                let flag = flag.clone();
+                crate::settings_rows::button(&look, id, id)
+                    .relative()
+                    .child(drawn(id.to_string(), logged.clone()))
+                    .on_click(move |_, _, _| flag.set(true))
+            };
+        let (undone, closed, escaped) = (
+            self.undone.clone(),
+            self.closed.clone(),
+            self.escaped.clone(),
+        );
+        let rule = div()
+            .h(px(40.))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .when(!self.trashed.get(), |row| {
+                row.child(control("trash", &self.trashed, &self.logged))
+            });
+        let import = div()
+            .h(px(40.))
+            .track_focus(&self.import)
+            .key_context("Import")
+            .on_action(move |_: &RoutedEscape, _, _| escaped.set(escaped.get() + 1))
+            .child(match self.imported.get() {
+                false => control("import", &self.imported, &self.logged).into_any_element(),
+                true => div().child("Chrome's choices").into_any_element(),
+            });
+        let site = div().h(px(40.)).when(!self.gone.get(), |row| {
+            row.child(control("show ads", &self.gone, &self.logged))
+        });
+        div()
+            .key_context("Settings")
+            .track_focus(&self.focus)
+            .on_action(move |_: &RoutedUndo, _, _| undone.set(undone.get() + 1))
+            .on_action(move |_: &RoutedClose, _, _| closed.set(closed.get() + 1))
+            .on_mouse_down(MouseButton::Left, cx.listener(|_, _, _, cx| cx.notify()))
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(rule)
+            .child(import)
+            .child(site)
+    }
+}
+
+/// Settings holding the keyboard as it opens, with the keys bound as the app binds them.
+fn routes(cx: &mut TestAppContext) -> (gpui::Entity<Routes>, &mut VisualTestContext) {
+    cx.update(|cx| {
+        cx.bind_keys([
+            gpui::KeyBinding::new("cmd-z", RoutedUndo, Some("Settings")),
+            gpui::KeyBinding::new("cmd-w", RoutedClose, Some("Settings")),
+            gpui::KeyBinding::new("escape", RoutedEscape, Some("Import")),
+        ])
+    });
+    let (view, cx) = cx.add_window_view(|_, cx| Routes {
+        focus: cx.focus_handle(),
+        import: cx.focus_handle(),
+        logged: Rc::default(),
+        trashed: Rc::default(),
+        imported: Rc::default(),
+        gone: Rc::default(),
+        undone: Rc::default(),
+        closed: Rc::default(),
+        escaped: Rc::default(),
+    });
+    cx.simulate_resize(size(px(820.), px(660.)));
+    cx.update(|window, cx| {
+        window.activate_window();
+        let focus = view.read(cx).focus.clone();
+        window.focus(&focus, cx);
+    });
+    cx.run_until_parked();
+    (view, cx)
+}
+
+/// A press on the control `what`, where it was drawn, and the frame after it.
+fn press_on(view: &gpui::Entity<Routes>, what: &str, cx: &mut VisualTestContext) {
+    let at = view.read_with(cx, |view, _| {
+        let logged = view.logged.borrow();
+        let line = logged
+            .iter()
+            .find(|line| line.contains(&format!(" {what} at ")))
+            .cloned();
+        let line = line.unwrap_or_else(|| panic!("{what} wasn't drawn"));
+        let mut parts = line.rsplit(' ');
+        let y: f32 = parts.next().unwrap().parse().unwrap();
+        let x: f32 = parts.next().unwrap().parse().unwrap();
+        point(px(x), px(y))
+    });
+    cx.simulate_click(at, Modifiers::none());
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+}
+
+/// A link rule's trash takes its row with it, and ⌘Z then reaches Settings, which brings the rule
+/// back: the press left the keyboard with Settings, not with the trash that went.
+#[gpui::test]
+fn after_the_trash_cmd_z_reaches_settings(cx: &mut TestAppContext) {
+    let (view, cx) = routes(cx);
+    press_on(&view, "trash", cx);
+    assert!(view.read_with(cx, |view, _| view.trashed.get()));
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(
+        view.read_with(cx, |view, _| view.undone.get()),
+        1,
+        "⌘Z didn't reach Settings"
+    );
+}
+
+/// A press on Import… gives the import the keyboard, as before, so Esc in what replaces it
+/// reaches the import.
+#[gpui::test]
+fn after_import_esc_reaches_the_import(cx: &mut TestAppContext) {
+    let (view, cx) = routes(cx);
+    press_on(&view, "import", cx);
+    assert!(view.read_with(cx, |view, _| view.imported.get()));
+    cx.simulate_keystrokes("escape");
+    assert_eq!(
+        view.read_with(cx, |view, _| view.escaped.get()),
+        1,
+        "Esc didn't reach the import"
+    );
+}
+
+/// A control that goes once pressed leaves the keyboard with Settings, so ⌘W still hides it.
+#[gpui::test]
+fn after_a_control_goes_cmd_w_reaches_settings(cx: &mut TestAppContext) {
+    let (view, cx) = routes(cx);
+    press_on(&view, "show ads", cx);
+    assert!(view.read_with(cx, |view, _| view.gone.get()));
+    cx.simulate_keystrokes("cmd-w");
+    assert_eq!(
+        view.read_with(cx, |view, _| view.closed.get()),
+        1,
+        "⌘W didn't reach Settings"
+    );
+}

@@ -405,8 +405,8 @@ done
 send key a cmd
 send key backspace
 expect '^browser: settings search cleared$' "⌫ didn't clear the search"
-# Settings from the keyboard alone (#1526). ⌘, with the page focused opens it with the keyboard in
-# its search field; ⇥ goes from there to the switch found, and Space flips it and back. ⌘, with
+# Settings from the keyboard alone (#1526). ⌘, with the page focused opens it holding the keyboard,
+# where typing starts the search; ⇥ goes from there to the switch found, and Space flips it and back. ⌘, with
 # the UI focused, then ⇥ to a pop-up found: Return opens its menu, ⎋ closes the menu and nothing
 # else, and Return, ↓ and Return choose from it, then the way back.
 send key w cmd
