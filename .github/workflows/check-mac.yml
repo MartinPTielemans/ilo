@@ -172,13 +172,22 @@ jobs:
             esac
             pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
           done
+          # The app by its bundle and its path too, for a request that names it.
+          for service in kTCCServiceCamera kTCCServiceMicrophone; do
+            sudo sqlite3 "$user" "INSERT OR REPLACE INTO access (service, client, client_type,
+              auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified)
+              VALUES ('$service', 'dev.browser.app', 0, 2, 4, 1, 'UNUSED', 0, $now)"
+            grant "$user" "$service" "$PWD/build/Browser.app/Contents/MacOS/Browser"
+          done
           echo "$paths" | sed 's/^ *//' | while read -r path; do
             [ -n "$path" ] || continue
             defaults write "$approvals" "$path" -date "3000-01-01 00:00:00 +0000"
             echo "approved $path"
           done
-          # Each reads them again as it starts.
+          # Each reads them again as it starts. The user's tccd, from boot, stays through killall
+          # and kept prompting for the microphone granted here (41748701502), so launchd restarts it.
           sudo killall tccd || true
+          launchctl kickstart -k "gui/$(id -u)/com.apple.tccd"
           killall replayd || true
 
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
