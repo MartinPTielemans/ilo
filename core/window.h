@@ -152,8 +152,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Every window stops showing, and stops remembering, a favorite its Space no longer shows, as
   // when the favorites' scope or a Space's profile changed. It shows that Space's own tab instead.
   static void HiddenFavoritesGone();
-  // Closes |tab| as the user does: its page gets its unload handlers, which may keep it open.
-  static void CloseTab(bc_id tab);
+  // Closes |tab| as the user does: its page gets its unload handlers, which may keep it open. With
+  // |discard|, they don't run, so nothing asks, and it's gone before this returns.
+  static void CloseTab(bc_id tab, bool discard = false);
   // Closes the Today tabs below |tab| as the user does, bottom up, so ⇧⌘T reopens each at its
   // place. A window showing one shows |tab| first, so none shows or loads on the way out.
   static void CloseBelow(bc_id tab);

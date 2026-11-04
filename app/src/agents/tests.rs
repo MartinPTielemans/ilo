@@ -41,6 +41,9 @@ struct Made {
     /// The tasks' Spaces made, and the Spaces deleted.
     task_spaces: RefCell<Vec<u64>>,
     deleted: RefCell<Vec<u64>>,
+    /// The tabs the user pinned, and those whose page asks before it's left.
+    pinned: RefCell<HashSet<u64>>,
+    asks: RefCell<HashSet<u64>>,
 }
 
 impl Made {
@@ -186,8 +189,25 @@ impl Browser for Made {
         self.held.borrow_mut().remove(&tab)
     }
 
-    fn close_tab(&self, tab: u64, _: &mut App) {
+    // As the core does, without a dialog.
+    fn close_user_tab(&self, tab: u64, _: &mut App) {
         self.tabs.borrow_mut().retain(|each| each.0 != tab);
+    }
+
+    fn close_tab(&self, agent: &str, tab: u64, discard: bool, _: &mut App) -> Closed {
+        let space = self.agent_space(agent);
+        let ours = (self.tabs.borrow().iter()).any(|each| each.0 == tab && each.1 == space);
+        if space == 0 || self.held.borrow().contains(&tab) || !ours {
+            return Closed::Refused;
+        }
+        if self.pinned.borrow().contains(&tab) {
+            return Closed::Pinned;
+        }
+        if !discard && self.asks.borrow().contains(&tab) {
+            return Closed::Asks;
+        }
+        self.tabs.borrow_mut().retain(|each| each.0 != tab);
+        Closed::Closed
     }
 
     /// A task's Space is 100 and up, in the order they're made, in the profile of `like`.
@@ -1949,6 +1969,141 @@ fn an_agent_closes_only_its_own_tabs(cx: &mut TestAppContext) {
     let entry = log(&agents, "claude-code", cx).remove(0);
     assert_eq!(entry, ("close_tab".into(), "example.com".into(), "".into()));
     assert_eq!(tools::describe(&entry.0), "Closed a tab");
+}
+
+/// A page that asks before it's left stays open, and the answer says why: the agent's own tab
+/// closes with discard, and the log says it was without saving (#1447).
+#[gpui::test]
+fn an_agent_discards_only_a_page_it_opened(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let opened = call(
+        &agents,
+        "claude-code",
+        "open_tab",
+        json!({ "url": "docs.example" }),
+        cx,
+    );
+    _ = page_done(&agents, &browser, opened, shop_tree(), cx);
+    browser.asks.borrow_mut().insert(30);
+
+    let kept = call(
+        &agents,
+        "claude-code",
+        "close_tab",
+        json!({ "tab": 30 }),
+        cx,
+    );
+    let kept = kept.recv().unwrap();
+    assert!(kept.error);
+    assert_eq!(
+        kept.text,
+        "Tab 30 stays open: its page asks before it's left, as it may have unsaved changes. \
+         close_tab with discard: true closes it without saving."
+    );
+    assert!(
+        browser.tabs.borrow().iter().any(|tab| tab.0 == 30),
+        "a refused close closed it"
+    );
+
+    let discard = json!({ "tab": 30, "discard": true });
+    let closed = call(&agents, "claude-code", "close_tab", discard, cx)
+        .recv()
+        .unwrap();
+    assert!(!closed.error);
+    assert_eq!(closed.text, "Closed tab 30 without saving.");
+    assert!(browser.tabs.borrow().iter().all(|tab| tab.0 != 30));
+    let entry = log(&agents, "claude-code", cx).remove(0);
+    assert_eq!(
+        entry,
+        ("discard_tab".into(), "docs.example".into(), "".into())
+    );
+    assert_eq!(tools::describe(&entry.0), "Closed a tab without saving");
+    assert_eq!(
+        *browser.asked.borrow(),
+        None,
+        "the agent's own tab asked the user"
+    );
+}
+
+/// In a tab the agent didn't open, what's unsaved may be the user's: discard asks them first, and
+/// only their yes closes it.
+#[gpui::test]
+fn discarding_a_page_the_user_gave_asks_them(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    // In the agent's Space, a tab it didn't open, as one its page opened is.
+    for each in browser
+        .tabs
+        .borrow_mut()
+        .iter_mut()
+        .filter(|each| each.0 == 10)
+    {
+        each.1 = 2;
+    }
+    browser.asks.borrow_mut().insert(10);
+    let discard = json!({ "tab": 10, "discard": true });
+
+    let refused = call(&agents, "claude-code", "close_tab", discard.clone(), cx);
+    let question = browser
+        .asked
+        .borrow()
+        .clone()
+        .expect("the discard didn't ask");
+    assert_eq!(
+        question.what,
+        "close the tab on en.wikipedia.org without saving"
+    );
+    assert_eq!(question.why, UNSAVED);
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Dismiss, cx)
+    });
+    let refused = refused.recv().unwrap();
+    assert!(refused.error);
+    assert!(
+        refused.text.starts_with("The user said no"),
+        "{}",
+        refused.text
+    );
+    assert!(
+        browser.tabs.borrow().iter().any(|tab| tab.0 == 10),
+        "a no closed the tab"
+    );
+
+    let closed = call(&agents, "claude-code", "close_tab", discard, cx);
+    let question = browser
+        .asked
+        .borrow()
+        .clone()
+        .expect("the discard didn't ask again");
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Once, cx)
+    });
+    let closed = closed.recv().unwrap();
+    assert_eq!(closed.text, "Closed tab 10 without saving.");
+    assert!(browser.tabs.borrow().iter().all(|tab| tab.0 != 10));
+    let entry = log(&agents, "claude-code", cx).remove(0);
+    assert_eq!(
+        entry,
+        ("discard_tab".into(), "en.wikipedia.org".into(), "".into())
+    );
+}
+
+/// A pinned tab is the user's to close, and the answer says so alone.
+#[gpui::test]
+fn a_pinned_tab_stays_open(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    browser.pinned.borrow_mut().insert(20);
+    let discard = json!({ "tab": 20, "discard": true });
+    let kept = call(&agents, "claude-code", "close_tab", discard, cx)
+        .recv()
+        .unwrap();
+    assert!(kept.error);
+    assert_eq!(kept.text, "Tab 20 stays open: the user pinned it.");
+    assert!(browser.tabs.borrow().iter().any(|tab| tab.0 == 20));
+    let entry = log(&agents, "claude-code", cx).remove(0);
+    assert_eq!(
+        (entry.0.as_str(), entry.2.as_str()),
+        ("close_tab", kept.text.as_str())
+    );
 }
 
 /// Take Back All Tabs, in the agent's Space's menu, takes over each tab there the user doesn't

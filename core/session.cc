@@ -79,6 +79,8 @@ struct Saved {
   std::vector<SavedWindow> windows;
   std::vector<ArchivedTab> archive;
   Settings settings;
+  // The last id handed out, 0 for a session saved before ids were kept.
+  bc_id last_id = 0;
 };
 
 // The windows the last launch saved, for the app to open again, and the Spaces RestoreSession
@@ -306,6 +308,7 @@ Saved Collect() {
   std::vector<Window*> windows = Window::All();
   std::erase_if(windows, [](const Window* each) { return each->own_space(); });
   saved.settings = UserSettings();
+  saved.last_id = LastId();
   // Each Space saved, by its place among them.
   std::map<bc_id, int> spaces;
   // Each favorite saved, by its place among them. Those of a Space are saved with it.
@@ -497,6 +500,8 @@ std::optional<std::string> ToJson(const Saved& saved) {
                        .Set("little", tab.little));
   }
   root.Set("archive", std::move(archive));
+  // A string, as JSON's numbers can't hold every id.
+  root.Set("last_id", base::NumberToString(saved.last_id));
   root.Set("settings", base::DictValue()
                            .Set("archive_after", saved.settings.archive_after.InSecondsF())
                            .Set("little_archive_after",
@@ -745,6 +750,9 @@ std::optional<Saved> Read(const base::FilePath& path) {
              .little = tab->FindBool("little").value_or(false)});
       }
     }
+  }
+  if (const std::string* last_id = root->FindString("last_id")) {
+    base::StringToUint64(*last_id, &saved.last_id);
   }
   if (const base::DictValue* settings = root->FindDict("settings")) {
     const double archive_after = settings->FindDouble("archive_after").value_or(0);
@@ -1109,6 +1117,10 @@ class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
   }
 
   void OnRead(base::OnceClosure loaded, std::optional<Saved> saved) {
+    // Before any tab comes back, so none takes an id an agent knew from the last launch (#1449).
+    if (saved && saved->last_id) {
+      StartIdsAfter(saved->last_id);
+    }
     if (saved) {
       LoadArchive(std::exchange(saved->archive, {}));
       UserSettings() = saved->settings;

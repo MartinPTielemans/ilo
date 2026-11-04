@@ -488,6 +488,11 @@ bool bc_agent_may_act(const char* agent,
   content::WebContents* contents = browser_core::Tab::FromId(tab);
   // An action no agent may do is refused whatever the tab, so that's the reason given.
   std::string refused = browser_core::RefusedAction(action ? action : "");
+  if (refused.empty() && tab && !browser_core::Tab::Get(tab) &&
+      browser_core::FromEarlierLaunch(tab)) {
+    // Its id is from before ilo last started, and names no tab now (#1449).
+    refused = "ilo restarted, so the tabs you knew are gone. Call list_tabs for the tabs open now.";
+  }
   if (refused.empty() && (!agent || !*agent || !browser_core::Space::AgentMayAct(agent, tab))) {
     refused = "The tab isn't in the agent's own Space.";
   }
@@ -523,6 +528,24 @@ bool bc_agent_release_tab(const char* agent, bc_id tab) {
 
 size_t bc_agent_disconnected(const char* agent) {
   return agent ? browser_core::EndAgentSessions(agent, BC_AGENT_SESSION_DISCONNECTED) : 0;
+}
+
+int bc_agent_close_tab(const char* agent, bc_id tab, bool discard) {
+  const browser_core::Tab* closing = browser_core::Tab::Get(tab);
+  if (!agent || !closing || !browser_core::Space::AgentMayAct(agent, tab) ||
+      browser_core::IsHeld(tab)) {
+    return BC_AGENT_CLOSE_REFUSED;
+  }
+  if (browser_core::Space::Holding(tab)->IsPinned(tab)) {
+    return BC_AGENT_CLOSE_PINNED;
+  }
+  if (!discard && closing->AsksBeforeLeaving()) {
+    return BC_AGENT_CLOSE_ASKS;
+  }
+  // Without its unload handlers either way: no frame asks before it's left, or the agent said to
+  // lose what it holds, and the tab is gone before the agent hears it closed (#1447, #1449).
+  browser_core::Window::CloseTab(tab, /*discard=*/true);
+  return BC_AGENT_CLOSED;
 }
 
 bool bc_tab_take_back(bc_id tab) {

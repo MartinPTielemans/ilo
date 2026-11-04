@@ -946,7 +946,7 @@ void Window::HiddenFavoritesGone() {
 }
 
 // static
-void Window::CloseTab(bc_id tab) {
+void Window::CloseTab(bc_id tab, bool discard) {
   // One without its page has no unload handlers to keep it.
   if (Tab* closing = Tab::Get(tab); closing && !closing->web_contents()) {
     KeepClosed(tab);
@@ -959,6 +959,10 @@ void Window::CloseTab(bc_id tab) {
     return;
   }
   TabStripModel* tabs = in->GetBrowserWindowInterface()->GetTabStripModel();
+  if (discard) {
+    tabs->DetachAndDeleteWebContentsAt(tabs->GetIndexOfWebContents(contents));
+    return;
+  }
   tabs->CloseWebContentsAt(tabs->GetIndexOfWebContents(contents),
                            TabCloseTypes::CLOSE_USER_GESTURE);
 }

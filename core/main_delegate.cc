@@ -388,9 +388,31 @@ const bc_host& Host() {
   return g_host;
 }
 
+namespace {
+
+bc_id g_last_id = 0;
+// The first id handed out once the last launch's session was read, or 0 without one.
+bc_id g_first_of_launch = 0;
+// Covers the ids a launch hands out after it last saved its session, should it then crash.
+constexpr bc_id kIdsSinceSaved = 1000;
+
+}  // namespace
+
 bc_id NewId() {
-  static bc_id last = 0;
-  return ++last;
+  return ++g_last_id;
+}
+
+bc_id LastId() {
+  return g_last_id;
+}
+
+void StartIdsAfter(bc_id last) {
+  g_last_id = std::max(g_last_id, last + kIdsSinceSaved);
+  g_first_of_launch = g_last_id + 1;
+}
+
+bool FromEarlierLaunch(bc_id id) {
+  return id < g_first_of_launch;
 }
 
 // Keeps the app's callbacks and puts the core's hooks in Chrome.

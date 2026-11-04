@@ -85,6 +85,18 @@ pub enum PageAction {
     Quiet,
 }
 
+/// What closing an agent's tab did (bc_agent_close_tab).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Closed {
+    Closed,
+    /// The tab isn't the agent's, or the user holds it.
+    Refused,
+    /// The user pinned it, and only they close it.
+    Pinned,
+    /// Its page may ask before it's left, as one with unsaved changes does.
+    Asks,
+}
+
 /// What an agent asks the user's leave for, as the card in each window asks it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Question {
@@ -191,8 +203,12 @@ pub trait Browser {
     fn take_back(&self, tab: u64, cx: &mut App);
     /// The user hands the tab back to agents. Whether they held it.
     fn hand_back(&self, tab: u64) -> bool;
-    /// Closes `tab` as the user would (bc_tab_close): a Today tab goes to the archive.
-    fn close_tab(&self, tab: u64, cx: &mut App);
+    /// Closes the agent's `tab` without a dialog (bc_agent_close_tab): a page that may ask before
+    /// it's left stays open, unless `discard`, which loses what it holds unsaved.
+    fn close_tab(&self, agent: &str, tab: u64, discard: bool, cx: &mut App) -> Closed;
+    /// Closes `tab` as the user would (bc_tab_close): a Today tab goes to the archive. For what the
+    /// user does to an agent's tabs, as dropping a done session's.
+    fn close_user_tab(&self, tab: u64, cx: &mut App);
     /// Makes the hidden Space of the task agent `agent`, named `name`, in the profile of the
     /// user's Space `like` (bc_space_create_for_agent, bc_space_set_profile).
     fn make_task_space(&self, agent: &str, name: &str, like: u64, cx: &mut App) -> u64;
@@ -422,6 +438,9 @@ pub struct Agents {
     next_request: u64,
     /// The tab each agent used last, which a call without a tab uses.
     current: HashMap<String, u64>,
+    /// The tabs agents opened, which one may close past its page's unsaved changes: in any other,
+    /// they may be the user's.
+    opened: HashSet<u64>,
     /// The actions waiting on the core, by request.
     acting: HashMap<u64, Acting>,
     /// Each tab's refs, from its outlines.
@@ -565,6 +584,7 @@ impl Agents {
             reading: HashMap::new(),
             next_request: 1,
             current: HashMap::new(),
+            opened: HashSet::new(),
             acting: HashMap::new(),
             refs: HashMap::new(),
             outlines: HashMap::new(),
@@ -1146,19 +1166,8 @@ impl Agents {
                 let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {
                     return;
                 };
-                if !self.act(&agent, tab, "close_tab", &reply, cx) {
-                    return;
-                }
-                self.browser.close_tab(tab, cx);
-                let space = self.browser.agent_space(&agent);
-                let open = (self.browser.space_tabs(space, cx).iter()).any(|each| each.id == tab);
-                _ = reply.send(ToolResult::text(match open {
-                    true => format!(
-                        "Tab {tab} stays open: the user pinned it, or its page asks them before \
-                         it's left."
-                    ),
-                    false => format!("Closed tab {tab}."),
-                }));
+                let discard = arguments.get("discard").and_then(Value::as_bool) == Some(true);
+                self.close_tab(&agent, id, tab, discard, reply, cx);
             }
             "ask_for_tab" => {
                 let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {
@@ -2060,6 +2069,15 @@ impl Agents {
             reply,
             ..
         } = act;
+        // The user said yes to closing a page the agent didn't open without saving.
+        if action == "discard_tab" {
+            let site = site(&self.browser.tab(tab, cx).url);
+            let closed = match self.browser.may_act(&agent, tab, "close_tab", cx) {
+                Ok(()) => self.browser.close_tab(&agent, tab, true, cx),
+                Err(why) => return self.refuse(act_of(&agent, call, tab, reply), &site, &why, cx),
+            };
+            return self.closed(&agent, tab, true, closed, &site, reply, cx);
+        }
         if action == "open_tab" {
             let site = site(&url);
             // An agent's first call may be this one, and the core opens a tab only in its Space.
@@ -2075,6 +2093,7 @@ impl Agents {
             cx.notify();
             self.current.insert(agent.clone(), tab);
             self.opened(&agent, call, tab);
+            self.opened.insert(tab);
             note = format!("Opened tab {tab}.");
         } else {
             if !self.act(&agent, tab, action, &reply, cx) {
@@ -2229,6 +2248,87 @@ impl Agents {
                 false
             }
         }
+    }
+
+    /// Closes the agent's `tab`. A page that may ask before it's left stays open, unless `discard`:
+    /// then one the agent opened closes, and any other asks the user first, as what it holds
+    /// unsaved may be theirs.
+    fn close_tab(
+        &mut self,
+        agent: &str,
+        call: u64,
+        tab: u64,
+        discard: bool,
+        reply: mpsc::Sender<ToolResult>,
+        cx: &mut Context<Self>,
+    ) {
+        let site = site(&self.browser.tab(tab, cx).url);
+        let mut closed = match self.browser.may_act(agent, tab, "close_tab", cx) {
+            Ok(()) => self.browser.close_tab(agent, tab, false, cx),
+            Err(why) => return self.refuse(act_of(agent, call, tab, reply), &site, &why, cx),
+        };
+        let discarded = closed == Closed::Asks && discard;
+        if discarded && !self.opened.contains(&tab) {
+            let what = format!("close the tab on {site} without saving");
+            let act = Act {
+                action: "discard_tab",
+                what,
+                ..act_of(agent, call, tab, reply)
+            };
+            return self.check(act, site, Some(UNSAVED), cx);
+        }
+        if discarded {
+            closed = self.browser.close_tab(agent, tab, true, cx);
+        }
+        self.closed(agent, tab, discarded, closed, &site, reply, cx);
+    }
+
+    /// Answers the agent's close of `tab` on `site` with what happened, and logs it.
+    #[allow(clippy::too_many_arguments)]
+    fn closed(
+        &mut self,
+        agent: &str,
+        tab: u64,
+        discarded: bool,
+        closed: Closed,
+        site: &str,
+        reply: mpsc::Sender<ToolResult>,
+        cx: &mut Context<Self>,
+    ) {
+        let answer = match closed {
+            Closed::Closed if discarded => Ok(format!("Closed tab {tab} without saving.")),
+            Closed::Closed => Ok(format!("Closed tab {tab}.")),
+            Closed::Pinned => Err(format!("Tab {tab} stays open: the user pinned it.")),
+            Closed::Asks => Err(format!(
+                "Tab {tab} stays open: its page asks before it's left, as it may have unsaved \
+                 changes. close_tab with discard: true closes it without saving{}.",
+                if self.opened.contains(&tab) {
+                    ""
+                } else {
+                    ", once the user says yes"
+                }
+            )),
+            Closed::Refused => Err("The tab isn't in the agent's own Space.".into()),
+        };
+        let logged = if discarded {
+            "discard_tab"
+        } else {
+            "close_tab"
+        };
+        self.note(
+            agent,
+            logged,
+            site,
+            answer.as_ref().err().map_or("", String::as_str),
+        );
+        if closed == Closed::Closed {
+            self.opened.remove(&tab);
+        }
+        cx.notify();
+        _ = reply.send(match answer {
+            Ok(text) => ToolResult::text(text),
+            Err(why) => ToolResult::error(why),
+        });
     }
 
     /// The agent's Space, hidden, made the first time it calls, where its tabs open.
@@ -2401,8 +2501,28 @@ fn name(agent: &str) -> &str {
 const STOPPED: &str = "The user stopped you. Don't carry on until they ask you to.";
 const NOT_HELD: &str = "The user doesn't have that tab from you, so there's nothing to ask for.";
 
+/// An action on `tab` for the call `call` with nothing more to it, as a close is.
+fn act_of(agent: &str, call: u64, tab: u64, reply: mpsc::Sender<ToolResult>) -> Act {
+    Act {
+        agent: agent.into(),
+        call,
+        action: "close_tab",
+        tab,
+        url: String::new(),
+        page: PageAction::Snapshot,
+        element: 0,
+        text: String::new(),
+        note: String::new(),
+        show: Show::Nothing,
+        what: String::new(),
+        reply,
+    }
+}
+
 /// What the log says of an action the user refused, now or for good on its site.
 const SAID_NO: &str = "You said no.";
+/// Why discarding a page the agent didn't open asks the user first.
+const UNSAVED: &str = "Its page may have unsaved changes, which closing it loses.";
 const SAID_NEVER: &str = "You said never on this site.";
 /// Why an agent can't open a page that isn't on the web.
 const WEB_ONLY: &str = "Agents may open only http and https pages.";

@@ -1473,7 +1473,7 @@ impl Agents {
                 .flat_map(|other| other.tabs.clone())
                 .collect::<Vec<_>>();
             for tab in pages.into_iter().filter(|tab| !live.contains(tab)) {
-                self.browser.close_tab(tab, cx);
+                self.browser.close_user_tab(tab, cx);
             }
             return;
         }
