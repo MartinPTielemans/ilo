@@ -167,13 +167,27 @@ pub(crate) extern "C" fn dock_little() -> c_int {
     })
 }
 
-/// The Dock menu's Little ilo item `item` was chosen: 0 New Little ilo Window, for the Space the
-/// regular window in front shows, as a link from another app opens one; 1 Show All, the one used
-/// last in front; 2 Hide All.
+/// The Dock menu's item `item` was chosen: 0 New Little ilo Window, for the Space the regular
+/// window in front shows, as a link from another app opens one; 1 Show All, the one used last in
+/// front; 2 Hide All; 3 New Window and 4 New Incognito Window, which run File's from the regular
+/// window in front, as ⌘N and ⇧⌘N there would.
 pub(crate) extern "C" fn dock_chosen(item: c_int) {
     update_app_later(move |cx| {
         if item == 0 {
             return new_little_window("dock", cx);
+        }
+        if item == 3 || item == 4 {
+            let command = match item {
+                3 => shell::Command::NewWindow,
+                _ => shell::Command::NewPrivateWindow,
+            };
+            let front = WINDOWS.with_borrow(|windows| {
+                (windows.iter().find(|w| w.regular())).and_then(|w| w.shell.upgrade())
+            });
+            if let Some(shell) = front {
+                shell.update(cx, |shell, cx| shell.run(command, "dock", cx));
+            }
+            return;
         }
         let shown = item == 1;
         let little: Vec<(bc::bc_id, *mut c_void)> = WINDOWS.with_borrow(|windows| {

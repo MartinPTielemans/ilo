@@ -25,6 +25,8 @@ pub struct MenuBar {
     pub developer_mode: Option<bool>,
     /// Whether a trace is recording, which Help › Troubleshooting's item stops.
     pub tracing: bool,
+    /// Window › Stay On Top's tick, or None where the window can't stay on top.
+    pub on_top: Option<bool>,
     /// Spaces › Change Profile: each profile by id and name, whether the Space shown can change to
     /// it and whether it's in it, then whether New Profile can be chosen. None in a private window.
     pub profiles: Option<(Vec<ProfileChoice>, bool)>,
@@ -96,6 +98,19 @@ impl MenuBar {
 }
 
 impl Shell {
+    /// Window › Stay On Top: keeps this window over other apps' windows, or lets it go back among
+    /// them. The menu's tick and the command bar's Don't Stay On Top show it's on, and end it.
+    pub(super) fn toggle_on_top(&mut self, cx: &mut Context<Self>) {
+        if !self.browser.can_stay_on_top() {
+            return;
+        }
+        self.on_top = !self.on_top;
+        // check.sh reads this line.
+        log!("browser: stays on top {}", self.on_top as u8);
+        self.browser.set_on_top(self.on_top, cx);
+        self.update_menus(cx);
+    }
+
     /// What the menu bar shows for this window now.
     pub(super) fn menu_bar(&self, cx: &App) -> MenuBar {
         let profile = self.shown_space().map_or(0, |space| space.profile);
@@ -122,6 +137,7 @@ impl Shell {
                 || self.offers(Command::ExpandPinned),
             developer_mode: self.developer_mode(self.selected),
             tracing: trace::recording(cx),
+            on_top: self.browser.can_stay_on_top().then_some(self.on_top),
             profiles: self.profile_choices(self.space).filter(|_| !self.private),
             appearance: self.app_appearance,
             sidebar_backups: (self.shown_space())
@@ -209,6 +225,43 @@ mod tests {
         });
         let item = host.menu_bar.borrow().pinned_item();
         assert_eq!(item, ("Expand Pinned Tabs", Command::ExpandPinned));
+    }
+
+    /// Window › Stay On Top keeps the window over other apps', ticked, and the command bar's row
+    /// then offers Don't Stay On Top, which lets it go back; where the window can't, neither.
+    #[gpui::test]
+    fn stay_on_top_shows_its_tick_and_the_way_back(cx: &mut TestAppContext) {
+        use crate::shell::commands::{ShellHandle, bar_commands};
+        let (shell, host) = shell_with(cx, &[1], &[10], Folders::default());
+        cx.update(|cx| cx.set_global(ShellHandle(shell.downgrade())));
+        let rows = |cx: &mut TestAppContext| -> Vec<String> {
+            let rows = cx.update(|cx| bar_commands("top", cx));
+            (rows.iter())
+                .filter(|row| row.command == Command::StayOnTop)
+                .map(|row| row.name.to_string())
+                .collect()
+        };
+        assert_eq!(host.menu_bar.borrow().on_top, Some(false));
+        assert_eq!(rows(cx), ["Stay On Top"]);
+        host.take();
+        shell.update(cx, |shell, cx| shell.run(Command::StayOnTop, "ui", cx));
+        assert!(host.take().contains(&"on top true".to_string()));
+        assert_eq!(
+            host.menu_bar.borrow().on_top,
+            Some(true),
+            "the menu has no tick"
+        );
+        assert_eq!(rows(cx), ["Don't Stay On Top"]);
+        shell.update(cx, |shell, cx| shell.run(Command::StayOnTop, "ui", cx));
+        assert!(host.take().contains(&"on top false".to_string()));
+        assert_eq!(host.menu_bar.borrow().on_top, Some(false));
+        host.no_stay_on_top.set(true);
+        shell.update(cx, |shell, cx| shell.run(Command::StayOnTop, "ui", cx));
+        assert!(!host.take().iter().any(|call| call.starts_with("on top")));
+        assert!(
+            rows(cx).is_empty(),
+            "the bar offers it where the window can't"
+        );
     }
 
     /// Tabs › Pin Tab pins the tab shown while its page loads, as the menu sends it to the shell

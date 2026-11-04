@@ -528,6 +528,8 @@ pub(crate) struct Browser {
 
 #[derive(Default)]
 struct State {
+    /// Each browser's last import, as the record keeps it.
+    imports: Vec<(String, SystemTime)>,
     next: u64,
     profiles: Vec<(u64, String)>,
     spaces: Vec<Space>,
@@ -618,7 +620,7 @@ impl Browser {
     }
 
     /// The new profiles have loaded: the Spaces waiting for them move in, and the Spaces changed.
-    fn load(&self, cx: &mut App) {
+    pub(crate) fn load(&self, cx: &mut App) {
         let mut state = self.state.borrow_mut();
         state.unloaded.clear();
         for (space, profile) in std::mem::take(&mut state.loading) {
@@ -864,6 +866,21 @@ impl Host for Browser {
 
     fn open_store_page(&self, url: &str) {
         self.state.borrow_mut().store_pages.push(url.into());
+    }
+
+    fn last_import(&self, browser: &str) -> Option<SystemTime> {
+        let state = self.state.borrow();
+        state
+            .imports
+            .iter()
+            .find(|(each, _)| each == browser)
+            .map(|(_, at)| *at)
+    }
+
+    fn imported(&self, browser: &str, at: SystemTime) {
+        let mut state = self.state.borrow_mut();
+        state.imports.retain(|(each, _)| each != browser);
+        state.imports.push((browser.into(), at));
     }
 }
 
@@ -1151,6 +1168,7 @@ fn the_view_imports_what_the_user_picks(cx: &mut TestAppContext) {
         *events.borrow(),
         [
             ImportEvent::Started,
+            ImportEvent::Placed,
             ImportEvent::Finished(said.into()),
             ImportEvent::Done
         ]
@@ -1373,37 +1391,133 @@ fn back_while_the_pick_reads_brings_nothing_in(cx: &mut TestAppContext) {
     assert_eq!(browser.spaces().len(), spaces);
 }
 
-/// Cancel while the import waits for the profile it made stops it with the Spaces it made empty,
-/// even once the profile opens, and importing again fills them.
+/// Cancel while the import waits for the profile it made stops it, "Stopped.", with the Spaces it
+/// made left empty, even once the profile opens, and Import Again the one thing to do: it reads the
+/// browser again with what was switched on and fills them. The record of the import comes only
+/// with its end, and the list then says when it ran, with Import Again….
 #[gpui::test]
-fn cancel_while_a_profile_opens_leaves_its_spaces_to_fill(cx: &mut TestAppContext) {
+fn cancel_leaves_the_spaces_empty_and_import_again_fills_them(cx: &mut TestAppContext) {
     let browser = Rc::new(Browser::new(None));
     let host: Rc<dyn Host> = browser.clone();
     let view = cx.new(|_| ImportView::new(host, false));
     import_first(&view, cx);
     assert_eq!(says(&view, cx), "Importing from Arc…");
+    let cancelled = |cx: &mut TestAppContext| {
+        view.read_with(cx, |view, _| {
+            matches!(view.step, super::Step::Cancelled { made: 2, .. })
+        })
+    };
     view.update(cx, |view, cx| view.cancel(cx));
-    let stopped = "Stopped. 2 Spaces from Arc are here, empty: import again to fill them.";
-    assert_eq!(says(&view, cx), stopped);
+    assert!(cancelled(cx), "Cancel didn't stop it with its two Spaces");
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.primary(), Some("Import Again"));
+        assert_eq!(view.crumb().as_deref(), Some("Arc"));
+        let guide = view.guide();
+        assert_eq!(guide.title, "Stopped.");
+        assert_eq!(
+            guide.line,
+            "Nothing came in. The Spaces it made are empty, and importing again fills them."
+        );
+    });
+    assert_eq!(
+        super::stopped(2).as_ref(),
+        "Stopped. Nothing came in. The two Spaces it made are empty, and importing again fills \
+         them."
+    );
     cx.update(|cx| browser.load(cx));
     cx.run_until_parked();
-    assert_eq!(says(&view, cx), stopped);
+    assert!(cancelled(cx), "the profile opening went on with it");
     assert!(
         browser.spaces()[1..]
             .iter()
             .all(|space| space.rows.is_empty())
     );
-    view.update(cx, |view, cx| view.done(cx));
-    import_first(&view, cx);
+    assert_eq!(
+        browser.last_import("Arc"),
+        None,
+        "a stopped import was kept as one"
+    );
+    // Import Again is its button.
+    view.update(cx, |view, cx| view.press(cx));
+    cx.run_until_parked();
     assert_eq!(
         says(&view, cx),
         "6 pinned tabs, 3 favorites and 3 link rules came in from Arc."
     );
     assert_eq!(browser.spaces()[2].rows.len(), 1);
+    assert!(browser.last_import("Arc").is_some());
+    view.update(cx, |view, cx| view.done(cx));
+    view.read_with(cx, |view, _| {
+        let arc = &view.sources[0];
+        let line = view.row_line(arc);
+        assert!(
+            line.starts_with("Personal, Work · imported today at ")
+                && line.ends_with("; again brings only what's new"),
+            "{line}"
+        );
+        assert_eq!(view.row_button(arc), "Import Again…");
+    });
+    // A view made again, as Settings' is each time it shows, reads the record.
+    let host: Rc<dyn Host> = browser.clone();
+    let again = cx.new(|_| ImportView::new(host, false));
+    again.read_with(cx, |view, _| {
+        assert_eq!(view.row_button(&view.sources[0]), "Import Again…")
+    });
 }
 
-/// A profile the import made that hasn't opened after STALL ends the wait with Try Again, which
-/// asks for it again; once it opens, the import goes on, and the wait's end no longer comes.
+/// The record of an import lasts the run alone, kept by the host in memory: a new session's host,
+/// as after a relaunch, has none, so Arc's row is Import… again with its profiles alone, and
+/// importing Arc again still adds nothing twice, as the import skips what's here.
+#[gpui::test]
+fn a_new_session_lists_a_browser_as_never_imported(cx: &mut TestAppContext) {
+    let browser = Rc::new(Browser::new(None));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    import_first(&view, cx);
+    cx.update(|cx| browser.load(cx));
+    assert!(browser.last_import("Arc").is_some());
+
+    // The next session: the same Spaces here, a host with no record.
+    let next = Rc::new(Browser::new(None));
+    next.state.replace(browser.state.take());
+    next.state.borrow_mut().imports.clear();
+    let host: Rc<dyn Host> = next.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    view.read_with(cx, |view, _| {
+        let arc = &view.sources[0];
+        assert_eq!(view.row_line(arc), "Personal, Work");
+        assert_eq!(view.row_button(arc), "Import…");
+    });
+    import_first(&view, cx);
+    assert_eq!(says(&view, cx), "Everything from Arc is here already.");
+}
+
+/// A stopped import's Esc goes back to Settings' page, as its Done does; on the first launch it
+/// skips the step, which its corner says.
+#[gpui::test]
+fn esc_from_a_stopped_import_goes_back_to_the_list(cx: &mut TestAppContext) {
+    let browser = Rc::new(Browser::new(None));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    import_first(&view, cx);
+    view.update(cx, |view, cx| {
+        view.cancel(cx);
+        assert!(view.escape(cx), "Esc did nothing of the view's");
+        assert!(matches!(view.step, super::Step::List));
+    });
+    let host: Rc<dyn Host> = browser.clone();
+    let guided = cx.new(|_| ImportView::new(host, false).guided());
+    import_first(&guided, cx);
+    guided.update(cx, |view, cx| {
+        view.cancel(cx);
+        assert_eq!(view.guide().corner, super::Corner::Skip);
+        assert!(!view.escape(cx), "the first launch's Esc didn't skip");
+    });
+}
+
+/// A profile the import made that hasn't opened after STALL ends the wait, naming the profile and
+/// the Spaces that wait for it, with Try Again the one thing to do, which asks for it again and
+/// waits as long again; once it opens, the import goes on, and the wait's end no longer comes.
 #[gpui::test]
 fn a_profile_that_doesnt_open_offers_try_again(cx: &mut TestAppContext) {
     let browser = Rc::new(Browser::new(None));
@@ -1415,13 +1529,26 @@ fn a_profile_that_doesnt_open_offers_try_again(cx: &mut TestAppContext) {
     assert_eq!(says(&view, cx), "Importing from Arc…");
     cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
-    let stalled = "The Work profile hasn't opened, so the import can't go on.";
+    let stalled = "Work hasn't opened in 20 seconds, so its Space waits.";
     assert_eq!(says(&view, cx), stalled);
     view.read_with(cx, |view, _| {
-        assert_eq!(view.running().as_deref(), Some(stalled))
+        assert_eq!(view.running().as_deref(), Some(stalled));
+        assert_eq!(view.primary(), Some("Try Again"));
+        let guide = view.guide();
+        assert_eq!(guide.title, "Work hasn't opened.");
+        assert_eq!(
+            guide.line,
+            format!(
+                "{} made the profile Work for one of Arc's Spaces, and it hasn't opened in 20 \
+                 seconds.",
+                env!("APP_NAME")
+            )
+        );
+        assert_eq!(guide.button.as_deref(), Some("Try Again"));
     });
     let asked = browser.state.borrow().loading.len();
-    view.update(cx, |view, cx| view.try_again(cx));
+    // Try Again is the stalled import's button.
+    view.update(cx, |view, cx| view.press(cx));
     assert_eq!(browser.state.borrow().loading.len(), asked + 1);
     assert_eq!(says(&view, cx), "Importing from Arc…");
     cx.update(|cx| browser.load(cx));
@@ -1430,6 +1557,42 @@ fn a_profile_that_doesnt_open_offers_try_again(cx: &mut TestAppContext) {
     cx.executor().advance_clock(STALL);
     cx.run_until_parked();
     assert_eq!(says(&view, cx), said);
+}
+
+/// Once the wait for Work's profile has ended, Work's card is held, dimmed with ⚠ and still, while
+/// Personal's, whose profile is open, waits on as it was; Cancel then leaves both Spaces it made as
+/// cards, outlined and empty. Before the wait ends, and once Work opens, none is held.
+#[gpui::test]
+fn a_stalled_profiles_card_is_held_and_cancel_leaves_the_made_ones_empty(cx: &mut TestAppContext) {
+    let browser = Rc::new(Browser::new(None));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    import_first(&view, cx);
+    let none = (Vec::<String>::new(), Vec::<String>::new());
+    assert_eq!(view.read_with(cx, |view, _| view.held_and_stopped()), none);
+    cx.executor().advance_clock(STALL);
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |view, _| view.held_and_stopped()),
+        (vec!["Work".to_string()], Vec::new()),
+        "Work's card, and it alone, isn't held once Work hasn't opened"
+    );
+    view.update(cx, |view, cx| view.cancel(cx));
+    assert_eq!(
+        view.read_with(cx, |view, _| view.held_and_stopped()),
+        (Vec::new(), vec!["Personal".to_string(), "Work".to_string()]),
+        "Cancel didn't leave the Spaces it made as cards"
+    );
+
+    let browser = Rc::new(Browser::new(None));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    import_first(&view, cx);
+    cx.executor().advance_clock(STALL);
+    cx.run_until_parked();
+    cx.update(|cx| browser.load(cx));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.held_and_stopped()), none);
 }
 
 /// While the core adds the history and addresses, the view says what came in so far, and what

@@ -124,6 +124,11 @@ pub trait Host {
     /// Opens an extension's page in the Chrome Web Store in a new tab behind the one shown, where
     /// the user can add it.
     fn open_store_page(&self, url: &str);
+    /// When the browser named `browser` last came in this run, kept in memory alone until the app
+    /// quits, as nothing that records use is stored without the owner's yes.
+    fn last_import(&self, browser: &str) -> Option<SystemTime>;
+    /// Keeps that the browser named `browser` came in `at`.
+    fn imported(&self, browser: &str, at: SystemTime);
 }
 
 /// What a file the user exported from another browser holds.
@@ -200,6 +205,10 @@ impl Host for Detached {
         None
     }
     fn open_store_page(&self, _: &str) {}
+    fn last_import(&self, _: &str) -> Option<SystemTime> {
+        None
+    }
+    fn imported(&self, _: &str, _: SystemTime) {}
 }
 
 /// An import under way: the profiles and Spaces it made, and what goes into them once each Space
@@ -276,8 +285,9 @@ impl Job {
         self.plan.spaces.iter().filter(new).count()
     }
 
-    /// The profiles it made that haven't opened with their Spaces in them, by name.
-    fn unopened(&self, host: &dyn Host) -> Vec<&str> {
+    /// The profiles it made that haven't opened with their Spaces in them, by name, each with how
+    /// many of its Spaces wait for it.
+    fn unopened(&self, host: &dyn Host) -> Vec<(&str, usize)> {
         let names = self.plan.new_profiles.iter().zip(&self.profiles);
         let open = |profile: u64| {
             let spaces = self.spaces.iter().filter(|&&(_, each)| each == profile);
@@ -286,9 +296,15 @@ impl Job {
                     .clone()
                     .all(|&(space, _)| host.space_profile(space) == profile)
         };
+        let waiting = |profile: u64| {
+            self.spaces
+                .iter()
+                .filter(|&&(_, each)| each == profile)
+                .count()
+        };
         names
             .filter(|&(_, &id)| !open(id))
-            .map(|(name, _)| name.as_str())
+            .map(|(name, &id)| (name.as_str(), waiting(id)))
             .collect()
     }
 
@@ -383,6 +399,9 @@ pub enum ImportEvent {
     /// An import read what it brings, and goes on by itself while the view isn't shown; running()
     /// says so. Until then the view may still need the user, as for Full Disk Access.
     Started,
+    /// The import's Spaces, tabs and favorites are in, so what's left goes on by itself, as the core
+    /// adds the history and addresses.
+    Placed,
     /// The import that began is over, and this says what came in, or why nothing did.
     Finished(SharedString),
     /// The user read what came in, and pressed Done.
@@ -420,6 +439,15 @@ enum Step {
     },
     /// Chrome's importer reading a file of passwords the user chose.
     Passwords,
+    /// An import from the browser `source` stopped before anything came in, with the `made` Spaces
+    /// it made left empty, which importing again fills; `picked` comes again.
+    Cancelled {
+        source: usize,
+        picked: Vec<Kind>,
+        made: usize,
+        /// The cards of the Spaces it made, empty.
+        cards: Vec<arrival::Card>,
+    },
     /// What came in, or why nothing did.
     Done(SharedString),
 }
@@ -465,7 +493,7 @@ struct Folders {
 
 /// How long an import waits for the profiles it made to open before it says one hasn't. Chrome
 /// makes and loads one in a second or two, so this is far past a slow Mac's.
-const STALL: Duration = Duration::from_secs(20);
+pub(crate) const STALL: Duration = Duration::from_secs(20);
 
 /// An import under way.
 #[derive(Default)]
@@ -497,6 +525,10 @@ struct Run {
     passwords_file: Option<PathBuf>,
     passwords_left: bool,
     passwords_said: Option<SharedString>,
+    /// What was switched on, which Import Again brings again once it's stopped.
+    picked: Vec<Kind>,
+    /// The profiles that hadn't opened when the wait ended, by name, and the Spaces waiting.
+    unopened: (Vec<String>, usize),
     /// A card for each Space it makes or fills, as the core makes them (arrival.rs).
     cards: Vec<arrival::Card>,
     /// When the Spaces were in, for what the core adds after them.
@@ -558,6 +590,8 @@ pub struct ImportView {
     reads: u64,
     /// Whether Import was pressed while the browser picked was still being read.
     import_when_read: bool,
+    /// When each browser found last came in, by its name, as the record keeps it.
+    last_imports: Vec<(String, SystemTime)>,
 }
 
 impl EventEmitter<ImportEvent> for ImportView {}
@@ -577,6 +611,9 @@ impl ImportView {
     pub fn new(host: Rc<dyn Host>, skip: bool) -> ImportView {
         let roots = host.roots();
         let sources = importable(&roots);
+        let last_imports = (sources.iter())
+            .filter_map(|source| Some((source.name(), host.last_import(&source.name())?)))
+            .collect();
         let names: Vec<String> = sources.iter().map(Source::name).collect();
         // check.sh waits for this line.
         log!("browser: import found {}", names.join(", "));
@@ -603,6 +640,7 @@ impl ImportView {
             focus: None,
             reads: 0,
             import_when_read: false,
+            last_imports,
         }
     }
 
@@ -673,6 +711,20 @@ impl ImportView {
         !matches!(self.step, Step::List | Step::Done(_))
     }
 
+    /// Brings the browser of a stopped import again, with what was switched on, as it's read
+    /// again: the Spaces it made fill, and what's here already doesn't come twice.
+    fn import_again(&mut self, cx: &mut Context<Self>) {
+        let Step::Cancelled { source, picked, .. } = &self.step else {
+            return;
+        };
+        let (source, picked) = (*source, picked.clone());
+        // check.sh waits for this line.
+        log!("browser: import again");
+        self.kept = Some((source, picked));
+        self.pick(source, cx);
+        self.import_when_read = true;
+    }
+
     /// Its focus, once it takes the keyboard.
     #[cfg(test)]
     pub(crate) fn keys(&self) -> Option<gpui::FocusHandle> {
@@ -695,6 +747,7 @@ impl ImportView {
             Step::Pick { .. } => Some("Import"),
             Step::NoAccess { .. } => Some("Open System Settings"),
             Step::Running { run, .. } => run.stalled.is_some().then_some("Try Again"),
+            Step::Cancelled { .. } => Some("Import Again"),
             Step::Done(_) if self.offered().is_some() => Some("Add Favorites"),
             Step::Done(_) => Some("Done"),
         }
@@ -727,9 +780,16 @@ impl ImportView {
                 self.back(cx);
                 true
             }
-            Step::Running { run, .. } if self.guided && !run.placed => {
+            // Stalled, the first launch's Esc skips the step, and the import goes on waiting.
+            Step::Running { run, .. } if self.guided && !run.placed && run.stalled.is_none() => {
                 log!("browser: import escape");
                 self.cancel(cx);
+                true
+            }
+            // Settings' goes back to the page from a stopped import, as Done does.
+            Step::Cancelled { .. } if !self.guided => {
+                log!("browser: import escape");
+                self.done(cx);
                 true
             }
             _ => false,
@@ -786,6 +846,31 @@ impl ImportView {
                 Some("Open System Settings".to_string()),
                 Corner::Back,
             ),
+            // Named, with Try Again; Esc skips the step, and the import goes on waiting.
+            Step::Running {
+                source: Some(source),
+                run,
+                ..
+            } if run.stalled.is_some() => {
+                let (names, waiting) = &run.unopened;
+                let (who, made, has) = match names.len() {
+                    1 => (names[0].clone(), "the profile", "it hasn't"),
+                    _ => (listed(names), "the profiles", "they haven't"),
+                };
+                let title = match names.len() {
+                    0 => "A profile hasn't opened.".to_string(),
+                    1 => format!("{who} hasn't opened."),
+                    _ => format!("{who} haven't opened."),
+                };
+                let line = format!(
+                    "{app} made {made} {who} for {} of {}'s Spaces, and {has} opened in {} \
+                     seconds.",
+                    number(*waiting),
+                    name(*source),
+                    STALL.as_secs()
+                );
+                (title, line, Some("Try Again".to_string()), Corner::Skip)
+            }
             // Esc there is Cancel, which the view offers itself, so the corner says nothing.
             Step::Running {
                 source: Some(source),
@@ -799,6 +884,33 @@ impl ImportView {
                 ),
                 None,
                 Corner::None,
+            ),
+            // Held a moment on what came, then the flow goes on by itself.
+            Step::Running {
+                source: Some(source),
+                ..
+            } => (
+                "Here it comes.".to_string(),
+                format!(
+                    "From {}. It goes on by itself once your Spaces are in.",
+                    name(*source)
+                ),
+                None,
+                Corner::Skip,
+            ),
+            Step::Cancelled { made, .. } => (
+                "Stopped.".to_string(),
+                match made {
+                    0 => "Nothing came in.".to_string(),
+                    1 => "Nothing came in. The Space it made is empty, and importing again fills \
+                          it."
+                    .to_string(),
+                    _ => "Nothing came in. The Spaces it made are empty, and importing again \
+                          fills them."
+                        .to_string(),
+                },
+                Some("Import Again".to_string()),
+                Corner::Skip,
             ),
             _ => (
                 "Bring your stuff.".to_string(),
@@ -824,6 +936,8 @@ impl ImportView {
             Step::List if self.picked_row < self.sources.len() => self.pick(self.picked_row, cx),
             Step::Pick { .. } => self.import(cx),
             Step::NoAccess { .. } => self.host.open_full_disk_access(),
+            Step::Running { run, .. } if run.stalled.is_some() => self.try_again(cx),
+            Step::Cancelled { .. } => self.import_again(cx),
             _ => {}
         }
     }
@@ -1217,6 +1331,7 @@ impl ImportView {
             run: Run {
                 id,
                 passwords_file,
+                picked: picked.clone(),
                 ..Run::default()
             },
         };
@@ -1348,6 +1463,7 @@ impl ImportView {
         run.listed = listed;
         if plan.is_empty() {
             run.placed = true;
+            cx.emit(ImportEvent::Placed);
             return self.import_run_passwords(cx);
         }
         run.counts = counts;
@@ -1397,6 +1513,7 @@ impl ImportView {
             return;
         };
         (run.stall, run.stalled, run.placed) = (None, None, true);
+        cx.emit(ImportEvent::Placed);
         let later = job.finish(&*self.host, cx);
         // Every tab is in once the core has placed them, so each card ticks.
         let now = Instant::now();
@@ -1502,14 +1619,28 @@ impl ImportView {
         let Some(job) = &run.job else {
             return;
         };
-        let said = match job.unopened(&*self.host)[..] {
-            [] => "A profile hasn't opened, so the import can't go on.".to_string(),
-            [one] => format!("The {one} profile hasn't opened, so the import can't go on."),
-            [ref rest @ .., last] => format!(
-                "The {} and {last} profiles haven't opened, so the import can't go on.",
-                rest.join(", ")
+        let unopened = job.unopened(&*self.host);
+        let names: Vec<String> = unopened.iter().map(|(name, _)| name.to_string()).collect();
+        let waiting: usize = unopened.iter().map(|(_, spaces)| spaces).sum();
+        let seconds = STALL.as_secs();
+        let said = match names.len() {
+            0 => format!("A profile hasn't opened in {seconds} seconds, so the import waits."),
+            1 if waiting == 1 => format!(
+                "{} hasn't opened in {seconds} seconds, so its Space waits.",
+                names[0]
+            ),
+            1 => format!(
+                "{} hasn't opened in {seconds} seconds, so its {} wait.",
+                names[0],
+                spaces(waiting)
+            ),
+            _ => format!(
+                "{} haven't opened in {seconds} seconds, so their {} wait.",
+                listed(&names),
+                spaces(waiting)
             ),
         };
+        run.unopened = (names, waiting);
         // check.sh can wait for this line.
         log!("browser: import stalled: {said}");
         run.stalled = Some(said.into());
@@ -1540,15 +1671,30 @@ impl ImportView {
         if run.placed {
             return;
         }
-        let said = match run.job.as_ref().map_or(0, Job::made) {
-            0 => format!("Stopped. Nothing came in from {name}."),
-            1 => format!("Stopped. 1 Space from {name} is here, empty: import again to fill it."),
-            made => format!(
-                "Stopped. {made} Spaces from {name} are here, empty: import again to fill them."
-            ),
-        };
+        let made = run.job.as_ref().map_or(0, Job::made);
         log!("browser: import stopped");
-        self.finish(said, cx);
+        let said = stopped(made);
+        let Step::Running {
+            source: Some(source),
+            run,
+            ..
+        } = &self.step
+        else {
+            // A file's import has no browser to read again.
+            let _ = name;
+            return self.finish(said, cx);
+        };
+        let (source, picked) = (*source, run.picked.clone());
+        let cards = run.cards.iter().filter(|card| card.made).cloned().collect();
+        // Done's line is the bottom left's, on the first launch.
+        cx.emit(ImportEvent::Finished(said.clone()));
+        self.step = Step::Cancelled {
+            source,
+            picked,
+            made,
+            cards,
+        };
+        cx.notify();
     }
 
     fn added(
@@ -1570,9 +1716,18 @@ impl ImportView {
     }
 
     fn complete(&mut self, cx: &mut Context<Self>) {
-        let Step::Running { name, run, .. } = &self.step else {
+        let Step::Running { name, run, source } = &self.step else {
             return;
         };
+        // A browser's record of its last import, which its row says when it's listed again.
+        if let Some(source) = source.and_then(|source| self.sources.get(source)) {
+            let (name, now) = (source.name(), SystemTime::now());
+            // check.sh waits for this line.
+            log!("browser: import kept {name}");
+            self.host.imported(&name, now);
+            self.last_imports.retain(|(each, _)| *each != name);
+            self.last_imports.push((name, now));
+        }
         let counts = Counts {
             pages: run.pages,
             addresses: run.addresses,
@@ -1849,6 +2004,28 @@ impl ImportView {
             .collect()
     }
 
+    /// The cards drawn held, dimmed with ⚠ and holding still once they've come, as their profile
+    /// hasn't opened, and the cards a stopped import left, as outlines, empty: by their Spaces.
+    #[cfg(test)]
+    pub(crate) fn held_and_stopped(&self) -> (Vec<String>, Vec<String>) {
+        let names = |cards: &mut dyn Iterator<Item = &arrival::Card>| {
+            cards.map(|card| card.name.clone()).collect()
+        };
+        match &self.step {
+            Step::Running { run, .. } => {
+                let stalled = stalled(run);
+                let came = Instant::now() + Duration::from_secs(5);
+                let held = |card: &&arrival::Card| {
+                    let held = card.held(&stalled);
+                    held && !card.moving(came, held)
+                };
+                (names(&mut run.cards.iter().filter(held)), Vec::new())
+            }
+            Step::Cancelled { cards, .. } => (Vec::new(), names(&mut cards.iter())),
+            _ => (Vec::new(), Vec::new()),
+        }
+    }
+
     /// The import under way's cards and the rows after them, asking for frames while they move.
     fn arrival(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) -> Option<gpui::Div> {
         let (look, settings, still) = (self.look, !self.guided, crate::motion::still(cx));
@@ -1860,20 +2037,30 @@ impl ImportView {
         }
         let now = Instant::now();
         let adding = run.history_left + run.addresses_left > 0;
-        if run.cards.iter().any(|card| card.moving(now)) || (adding && !still) {
+        let stalled = stalled(run);
+        let moving = |card: &arrival::Card| card.moving(now, card.held(&stalled));
+        if run.cards.iter().any(moving) || (adding && !still) {
             window.request_animation_frame();
         }
-        let cards = arrival::draw(&mut run.cards, &look, settings, still, now);
+        let showing = arrival::Showing::Running { stalled: &stalled };
+        let cards = arrival::draw(&mut run.cards, &look, settings, still, now, showing);
         let counts = run.counts;
         let since = run.placed_at.unwrap_or(now);
-        let stage = |left: usize, adding: String, came: usize| match (run.placed, left) {
-            (false, _) => arrival::Stage::Waiting,
-            (true, 0) => arrival::Stage::In(grouped(came).into()),
-            (true, _) => arrival::Stage::Adding(adding.into()),
+        let once = (!stalled.is_empty()).then(|| format!("once {} opens", listed(&stalled)));
+        // What comes after the Spaces, from what was read, and once a profile that hasn't opened
+        // has, as the line under them says.
+        let stage = |left: usize, adding: String, came: usize, read: String| match (
+            run.placed, left, &once,
+        ) {
+            (false, _, Some(once)) => arrival::Stage::Held(format!("{read}, {once}").into()),
+            (false, _, None) => arrival::Stage::Waiting,
+            (true, 0, _) => arrival::Stage::In(grouped(came).into()),
+            (true, _, _) => arrival::Stage::Adding(adding.into()),
         };
         let mut rows = Vec::new();
         if counts.favorites > 0 {
-            let stage = stage(0, String::new(), counts.favorites);
+            let read = grouped(counts.favorites);
+            let stage = stage(0, String::new(), counts.favorites, read);
             rows.push(arrival::stage_row(
                 &look,
                 glyph(Kind::Favorites),
@@ -1887,7 +2074,8 @@ impl ImportView {
         }
         if counts.pages > 0 {
             let adding = format!("Adding {} pages…", grouped(counts.pages));
-            let stage = stage(run.history_left, adding, run.pages);
+            let read = counted(counts.pages, "page", "pages");
+            let stage = stage(run.history_left, adding, run.pages, read);
             rows.push(arrival::stage_row(
                 &look,
                 glyph(Kind::History),
@@ -1900,7 +2088,8 @@ impl ImportView {
             ));
         }
         if counts.addresses > 0 {
-            let stage = stage(run.addresses_left, "Adding…".into(), run.addresses);
+            let read = grouped(counts.addresses);
+            let stage = stage(run.addresses_left, "Adding…".into(), run.addresses, read);
             rows.push(arrival::stage_row(
                 &look,
                 glyph(Kind::Addresses),
@@ -1921,6 +2110,17 @@ impl ImportView {
                 .child(cards)
                 .children(rows),
         )
+    }
+
+    /// The cards of the Spaces a stopped import made, as outlines, empty.
+    fn stopped_cards(&mut self, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let (look, settings, still) = (self.look, !self.guided, crate::motion::still(cx));
+        let Step::Cancelled { cards, .. } = &mut self.step else {
+            return None;
+        };
+        let showing = arrival::Showing::Stopped;
+        (!cards.is_empty())
+            .then(|| arrival::draw(cards, &look, settings, still, Instant::now(), showing))
     }
 
     /// What the wait for Full Disk Access says, while it shows.
@@ -1962,7 +2162,14 @@ impl ImportView {
             listed.extensions.iter().partition(|each| each.blocks_ads());
         let rows = extensions.iter().enumerate().map(|(index, extension)| {
             let id = extension.id.clone();
+            // check.sh clicks it where it's logged.
+            let at = drawn(
+                format!("import-add-extension {}", extension.id),
+                self.drawn_at.clone(),
+            );
             let add = button(look, ("import-add-extension", index), "Add…")
+                .relative()
+                .child(at)
                 .on_click(cx.listener(move |view, _, _, cx| view.add_extension(&id, cx)))
                 .into_any_element();
             match extension.pinned {
@@ -2026,6 +2233,8 @@ impl ImportView {
         };
         let disclosure = div()
             .id("import-choose-folders")
+            .relative()
+            .child(drawn("import-choose-folders".into(), self.drawn_at.clone()))
             .px(px(ROW_X))
             .flex()
             .items_center()
@@ -2050,6 +2259,11 @@ impl ImportView {
                     let toggled = name.clone();
                     div()
                         .id(("import-folder", index))
+                        .relative()
+                        .child(drawn(
+                            format!("import-folder {name}"),
+                            self.drawn_at.clone(),
+                        ))
                         .on_click(
                             cx.listener(move |view, _, _, cx| view.toggle_folder(&toggled, cx)),
                         )
@@ -2108,28 +2322,60 @@ impl ImportView {
     }
 
     /// A row for each browser found, with Import….
+    /// What a browser's row says under its name: its profiles, and once it has come in, when, and
+    /// that again brings only what's new.
+    pub(crate) fn row_line(&self, source: &Source) -> String {
+        let profiles: Vec<&str> = (source.profiles.iter())
+            .map(|profile| profile.name.as_str())
+            .collect();
+        let last = (self.last_imports.iter())
+            .find(|(name, _)| *name == source.name())
+            .map(|(_, at)| *at);
+        match last {
+            None => profiles.join(", "),
+            Some(at) => {
+                let when = imported_when(at, SystemTime::now());
+                let said = format!("imported {when}; again brings only what's new");
+                match profiles.is_empty() {
+                    true => said,
+                    false => format!("{} · {said}", profiles.join(", ")),
+                }
+            }
+        }
+    }
+
+    /// A browser's row's button: Import…, or Import Again… once it has come in.
+    pub(crate) fn row_button(&self, source: &Source) -> &'static str {
+        match self
+            .last_imports
+            .iter()
+            .any(|(name, _)| *name == source.name())
+        {
+            true => "Import Again…",
+            false => "Import…",
+        }
+    }
+
     fn browsers(&self, cx: &mut Context<Self>) -> gpui::Div {
         let look = &self.look;
         let rows = self.sources.iter().enumerate().map(|(index, source)| {
-            let profiles: Vec<&str> = (source.profiles.iter())
-                .map(|profile| profile.name.as_str())
-                .collect();
+            let line = self.row_line(source);
             // check.sh clicks each where it's logged, as Settings and the first launch place it.
             let at = drawn(
                 format!("import-from {}", source.name()),
                 self.drawn_at.clone(),
             );
             if self.guided {
-                return self.guided_row(index, source, &profiles, at, cx);
+                return self.guided_row(index, source, line, at, cx);
             }
-            let choose = button(look, ("import-from", index), "Import…")
+            let choose = button(look, ("import-from", index), self.row_button(source))
                 .relative()
                 .child(at)
                 .on_click(cx.listener(move |view, _, _, cx| view.pick(index, cx)))
                 .into_any_element();
-            match profiles.is_empty() {
+            match line.is_empty() {
                 true => row(source.name(), choose),
-                false => detailed_row(look, source.name(), profiles.join(", "), Some(choose)),
+                false => detailed_row(look, source.name(), line, Some(choose)),
             }
         });
         group(look, rows)
@@ -2141,7 +2387,7 @@ impl ImportView {
         &self,
         index: usize,
         source: &Source,
-        profiles: &[&str],
+        line: String,
         at: gpui::Canvas<()>,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
@@ -2154,7 +2400,7 @@ impl ImportView {
                 .text_color(look.detail)
                 .into_any_element()
         });
-        let line = (!profiles.is_empty()).then(|| profiles.join(", ").into());
+        let line = (!line.is_empty()).then(|| line.into());
         let row = frame()
             .child(words(look, source.name(), line))
             .children(enter.map(|enter| end([enter])));
@@ -2606,6 +2852,58 @@ pub(crate) fn kind_line(kind: Kind, tally: &read::Tally, here: &str) -> String {
     }
 }
 
+/// `count` in words up to nine, as "three", else in figures.
+fn number(count: usize) -> String {
+    let words = [
+        "no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    ];
+    words
+        .get(count)
+        .map_or(grouped(count), |word| word.to_string())
+}
+
+/// `count` Spaces in words: "one Space", "three Spaces".
+fn spaces(count: usize) -> String {
+    match count {
+        1 => "one Space".into(),
+        count => format!("{} Spaces", number(count)),
+    }
+}
+
+/// What a stopped import says, with the `made` Spaces it made, empty.
+fn stopped(made: usize) -> SharedString {
+    match made {
+        0 => "Stopped. Nothing came in.".into(),
+        1 => "Stopped. Nothing came in. The Space it made is empty, and importing again fills it."
+            .into(),
+        made => format!(
+            "Stopped. Nothing came in. The {} it made are empty, and importing again fills them.",
+            spaces(made)
+        )
+        .into(),
+    }
+}
+
+/// When a browser last came in, as its row says it: "today at 10:42", "yesterday at 9:05", or
+/// "on 3 November".
+fn imported_when(at: SystemTime, now: SystemTime) -> String {
+    use chrono::{DateTime, Local};
+    let (at, now): (DateTime<Local>, DateTime<Local>) = (at.into(), now.into());
+    let days = now
+        .date_naive()
+        .signed_duration_since(at.date_naive())
+        .num_days();
+    let time = at.format("%-H:%M");
+    match days {
+        0 => format!("today at {time}"),
+        1 => format!("yesterday at {time}"),
+        _ if at.format("%Y").to_string() == now.format("%Y").to_string() => {
+            format!("on {}", at.format("%-d %B"))
+        }
+        _ => format!("on {}", at.format("%-d %B %Y")),
+    }
+}
+
 /// `names` as a list, "A", "A and B", "A, B and C".
 fn listed(names: &[String]) -> String {
     match names {
@@ -2742,6 +3040,14 @@ fn passwords_summary(file: &Path, passwords: Passwords, into: Option<&str>) -> S
     said.into()
 }
 
+/// The profiles that haven't opened, once the wait for them has ended, whose cards are held.
+fn stalled(run: &Run) -> Vec<String> {
+    match run.stalled {
+        Some(_) => run.unopened.0.clone(),
+        None => Vec::new(),
+    }
+}
+
 /// What an import under way says: that it's reading, then what came in so far while the core adds
 /// the history and addresses, or that a profile it waits for hasn't opened.
 fn progress(name: &str, run: &Run) -> SharedString {
@@ -2823,8 +3129,10 @@ impl Render for ImportView {
             Step::List => "list",
             Step::Pick { .. } => "pick",
             Step::Running { run, .. } if run.placed => "placed",
+            Step::Running { run, .. } if run.stalled.is_some() => "stalled",
             Step::Running { .. } | Step::Passwords => "running",
             Step::NoAccess { .. } => "no access",
+            Step::Cancelled { .. } => "cancelled",
             // Delete File takes its row away and moves Done, so its end draws as a step of its own.
             Step::Done(_) if self.passwords_file.is_some() => "done with file",
             Step::Done(_) => "done",
@@ -2836,6 +3144,7 @@ impl Render for ImportView {
         }
         let look = self.look;
         let arrival = self.arrival(window, cx);
+        let stopped_cards = self.stopped_cards(cx);
         let content = match &self.step {
             Step::List => self.list(cx),
             Step::Pick { source, .. } => self.picking(*source, cx),
@@ -2854,14 +3163,36 @@ impl Render for ImportView {
                 });
                 // The cards and the rows after them, but for a stalled import's line, which
                 // says why it waits, and a run with nothing to show yet.
-                let said = (arrival.is_none() || run.stalled.is_some())
-                    .then(|| group(&look, [said_row(progress(name, run))]));
+                let mark = || {
+                    svg()
+                        .flex_none()
+                        .mr(px(CONTROL_GAP))
+                        .path("icons/circle-alert.svg")
+                        .size(px(DISCLOSURE_GLYPH))
+                        .text_color(look.detail)
+                };
+                let progress = || div().flex_1().min_w_0().child(progress(name, run));
+                // With nothing to show yet, its line; stalled, the profile that hasn't opened,
+                // marked, under the cards and the rows, but where the host's title says it.
+                let said = match (arrival.is_some(), run.stalled.is_some()) {
+                    (false, true) => Some(group(&look, [frame().child(mark()).child(progress())])),
+                    (false, false) => Some(group(&look, [frame().child(progress())])),
+                    (true, true) if !self.guided => Some(
+                        div()
+                            .px(px(ROW_X))
+                            .flex()
+                            .items_center()
+                            .child(mark())
+                            .child(progress()),
+                    ),
+                    (true, _) => None,
+                };
                 div()
                     .flex()
                     .flex_col()
                     .gap(px(BOX_GAP))
-                    .children(said)
                     .children(arrival)
+                    .children(said)
                     .when(cancel.is_some(), |column| {
                         column.child(buttons(cancel.into_iter().chain(again)))
                     })
@@ -2872,6 +3203,35 @@ impl Render for ImportView {
                 group(&look, [said]).into_any_element()
             }
             Step::NoAccess { source, again, .. } => self.no_access(*source, *again, cx),
+            // What it stopped, with Done and Import Again; the first launch's title and button
+            // say it there.
+            Step::Cancelled { made, .. } => {
+                let stopped_cards = stopped_cards.unwrap_or_else(div);
+                let done = self
+                    .control("import-done", "Done")
+                    .on_click(cx.listener(|view, _, _, cx| view.done(cx)));
+                let done = div()
+                    .relative()
+                    .child(done)
+                    .child(drawn("import-done".into(), self.drawn_at.clone()));
+                let again = self
+                    .control("import-again", "Import Again")
+                    .on_click(cx.listener(|view, _, _, cx| view.import_again(cx)));
+                let again = div()
+                    .relative()
+                    .child(again)
+                    .child(drawn("import-again".into(), self.drawn_at.clone()));
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(BOX_GAP))
+                    .child(stopped_cards)
+                    .when(!self.guided, |view| {
+                        view.child(line(stopped(*made)))
+                            .child(buttons([done.into_any_element(), again.into_any_element()]))
+                    })
+                    .into_any_element()
+            }
             Step::Done(said) => {
                 // The file holds the passwords in plain text, so the end offers to delete it, in
                 // the row under what came in.

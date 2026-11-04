@@ -1,4 +1,5 @@
-# ⌘N opens another window on the same Spaces, showing the key window's Space with no page, whose
+# Stay On Top keeps a window over the others, and Don't Stay On Top lets it go back. ⌘N opens
+# another window on the same Spaces, showing the key window's Space with no page, whose
 # card shows its one line, and a click on the card with ⌘T's bar open only closes the bar. Settings
 # opened from it and closed by its button gives it the keyboard back. The new window never shows
 # another window's page: a Space it switches to and back shows the first tab no window shows.
@@ -497,6 +498,29 @@ awk -F'|' '
     }
   }' "$out/handover.txt" > "$out/handover-summary.txt"
 cat "$out/handover-summary.txt"
+
+# Stay On Top keeps the first window over the others, the fourth too once it's in front, and the
+# command bar's Don't Stay On Top lets it go back among them (Arc's Window › Stay On Top). The
+# command bar, an overlay, still shows over it.
+send window 1
+bar_command stay-on-top "Stay On Top" "stay on top"
+expect '^browser: stays on top 1$' "Stay On Top didn't keep the window on top"
+send window $driven_fourth
+send order
+expect "^browser: order window 1 window $driven_fourth" \
+  "the fourth window in front came over the one on top: $(grep '^browser: order' "$log" | tail -1)"
+send window 1
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the command bar over the window on top"
+../tools/window-screenshot.sh "$pid" "$out/stay-on-top.png" all || fail "no window to capture"
+send key escape
+expect '^browser: command bar hidden$' "escape didn't close the command bar over the window on top"
+bar_command stay-on-top "Don't Stay On Top" "stay on top"
+expect '^browser: stays on top 0$' "Don't Stay On Top didn't let the window go back"
+send window $driven_fourth
+send order
+expect "^browser: order window $driven_fourth window 1" \
+  "the fourth window in front didn't come over the one no longer on top: $(grep '^browser: order' "$log" | tail -1)"
 send window $driven_fourth
 send key w cmd shift
 expect "^browser: window closed $fourth\$" "⇧⌘W didn't close the window the pages moved to"

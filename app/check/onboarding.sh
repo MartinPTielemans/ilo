@@ -307,4 +307,61 @@ expect '^browser: command bar shown$' "the replay in its own window didn't end w
 exec 3>&-
 quit
 
+# Suggested favorites: a first launch on a made-up Chrome whose history visits two sites three
+# times and more brings them in, with ↩ at the browser and ↩ at its choices, and the step after
+# the import is Your favorites, offering those two, ticked.
+fav_home="$PWD/$out/onboarding-favorites-home"
+rm -rf "$fav_home"
+if [ "$(uname)" = Darwin ]; then
+  fav_chrome="$fav_home/Library/Application Support/Google/Chrome"
+elif windows; then
+  fav_chrome="$fav_home/AppData/Local/Google/Chrome/User Data"
+else
+  fav_chrome="$fav_home/.config/google-chrome"
+fi
+mkdir -p "$fav_chrome/Default"
+printf '%s' '{"profile":{"info_cache":{"Default":{"name":"Me"}}}}' > "$fav_chrome/Local State"
+printf '%s' '{}' > "$fav_chrome/Default/Preferences"
+printf '%s' '{"roots":{}}' > "$fav_chrome/Default/Bookmarks"
+# Chromium counts microseconds from 1601: an hour ago.
+python3 -I -c '
+import sqlite3, sys, time
+db = sqlite3.connect(sys.argv[1])
+now = int((time.time() + 11644473600) * 1000000)
+db.executescript("""CREATE TABLE urls(id INTEGER PRIMARY KEY AUTOINCREMENT, url LONGVARCHAR,
+  title LONGVARCHAR, visit_count INTEGER DEFAULT 0 NOT NULL, typed_count INTEGER DEFAULT 0 NOT NULL,
+  last_visit_time INTEGER NOT NULL, hidden INTEGER DEFAULT 0 NOT NULL);""")
+db.executemany("INSERT INTO urls(url, title, visit_count, typed_count, last_visit_time) "
+               "VALUES (?, ?, ?, 1, ?)",
+               [("https://news.example.org/", "News", 5, now - 3600000000),
+                ("https://mail.example.org/", "Mail", 4, now - 3600000000)])
+db.commit()
+' "$fav_chrome/Default/History" || fail "couldn't write the made-up Chrome's history"
+fav_import_home=$fav_home
+! windows || fav_import_home=$(cygpath -w "$fav_home")
+log="$out/onboarding-favorites.log"
+step=0
+rm -f "$saved" "$profile_dir/Account"
+BROWSER_IMPORT_HOME="$fav_import_home" BROWSER_DRIVE=1 BROWSER_ONBOARDING=dark \
+  "$browser" < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await '^browser: onboarding step intro settled$' || fail "favorites: the intro didn't draw"
+send key escape
+expect '^browser: onboarding left intro via key$' "favorites: a key didn't skip the intro"
+expect '^browser: onboarding step import settled$' "favorites: the import step didn't come"
+send key return
+expect '^browser: import pick Chrome$' "favorites: ↩ didn't bring the made-up Chrome"
+expect '^browser: import read Chrome: ' "favorites: picking Chrome didn't read it"
+send key return
+expect '^browser: import suggests https://news\.example\.org/ https://mail\.example\.org/$' \
+  "favorites: the import didn't work out the sites its history visited most: $(grep 'import suggests' "$log")"
+await '^browser: onboarding step favorites settled$' ||
+  fail "favorites: the step after the import wasn't Your favorites"
+capture_step favorites
+send key escape
+expect '^browser: onboarding left favorites via escape$' "favorites: Esc didn't leave the step"
+exec 3>&-
+quit
+
 echo "ok: a new profile's first launch plays the intro, which goes on by itself or at a key, then the import of the fixture's $found, the default browser's step while ilo isn't the default, the colour, the account while the build names a sync server and the opt-ins, each left by Esc or Skip and the colour kept by Return, for the welcome with the command bar up, in light and dark; Help › Welcome to $app_name plays it again, in a new window over a page; a launch that brings Spaces back doesn't. Captures: $out/onboarding-*.png, and the replayed intro's motion in $out/onboarding-intro.mp4"
