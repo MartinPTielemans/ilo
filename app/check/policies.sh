@@ -58,22 +58,22 @@ set_policies() {
     arch=$(flatpak --default-arch)
     mkdir -p "$extension/$arch/1/policies/managed"
     json "$1" > "$extension/$arch/1/policies/managed/check.json"
-    chromium_names=
+    names=app.ilo.browser.Extension chromium_names=
   elif [ "$(uname)" = Linux ]; then
     sudo -n mkdir -p /etc/ilo/policies/managed /etc/chromium/policies/managed
     json "$1" | sudo -n tee /etc/ilo/policies/managed/check.json > /dev/null
     json "$2" | sudo -n tee /etc/chromium/policies/managed/check.json > /dev/null
-    chromium_names=/etc/chromium/policies
+    names=/etc/ilo/policies chromium_names=/etc/chromium/policies
   elif [ "$(uname)" = Darwin ]; then
     sudo -n mkdir -p "/Library/Managed Preferences"
     plist "$1" | sudo -n tee "/Library/Managed Preferences/$app_id.plist" > /dev/null
     plist "$2" | sudo -n tee "/Library/Managed Preferences/org.chromium.Chromium.plist" > /dev/null
     sudo -n killall cfprefsd 2>/dev/null || true
-    chromium_names=org.chromium.Chromium
+    names=$app_id chromium_names=org.chromium.Chromium
   else
     MSYS2_ARG_CONV_EXCL='*' reg add 'HKCU\SOFTWARE\Policies\Chromium\URLBlocklist' /v 1 /t REG_SZ \
       /d "$1" /f > /dev/null || fail "reg couldn't set URLBlocklist"
-    chromium_names=
+    names='SOFTWARE\Policies\Chromium' chromium_names=
   fi
 }
 launch() {
@@ -90,7 +90,7 @@ await '^browser: title [0-9]* other page$' ||
 go_from_bar "${blocked#http://}"
 await "^browser: page [0-9]* .*loading 0 $blocked\$" || fail "going to the blocked page didn't end"
 grep -q '^browser: title [0-9]* blocked page$' "$log" &&
-  fail "URLBlocklist under ilo's names didn't block the page"
+  fail "URLBlocklist under $names didn't block the page"
 grep -q '/policy-blocked.html' "$out/site.log" &&
   fail "the browser asked the run's server for the page URLBlocklist blocks"
 # The core logs the tab's net error where its engine has the line (#684).
@@ -110,6 +110,6 @@ await '^browser: title [0-9]* blocked page$' || fail "with the policy gone, the 
 exec 3>&-
 quit
 run_undo=
-echo "ok: URLBlocklist under ilo's names blocked $blocked_filter, which the run's server never saw" \
+echo "ok: URLBlocklist under $names blocked $blocked_filter, which the run's server never saw" \
   "requested${error:+, with net error $error}${chromium_names:+, and $chromium_names's policy didn't apply}," \
   "and without it the page loaded. Log: $log, the window: $out/policies-blocked.png"
