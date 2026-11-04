@@ -1136,6 +1136,13 @@ typedef struct bc_host {
   // its tabs. Never this computer's own, and never an agent's Space's, which stays on its device.
   // The user's: agents get none. The strings last only for the call.
   void (*other_tabs_changed)(void* context, bc_id profile, const bc_other_tab* tabs, size_t count);
+  // The user launched the browser again while it ran asking for a new window: Linux's desktop
+  // file's New Window action and Windows' jump list's New Window task launch it with --new-window,
+  // and their New Incognito Window with --incognito, |private_window|. Open one as ⌘N, or ⇧⌘N,
+  // does in the regular window in front. It comes in place of launched_again, and not for the
+  // first launch, which comes before the app has a window: the app reads that one's command line.
+  // The user's alone: agents get no windows.
+  void (*app_new_window)(void* context, bool private_window);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
