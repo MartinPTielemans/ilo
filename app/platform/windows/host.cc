@@ -4,6 +4,9 @@
 // window of its own that the browser window owns, which this places over it.
 
 #include <windows.h>
+
+#include <appmodel.h>
+#include <propsys.h>
 #include <windowsx.h>
 
 #include <commctrl.h>
@@ -3954,6 +3957,41 @@ namespace {
 
 void (*g_needs_you_clicked)(uint64_t) = nullptr;
 
+// The AppUserModelID Chromium gives the browser windows and its own toasts: the installer's
+// shortcut's, or an MSIX's package's. Windows shows a toast only under one it knows, as a Start menu
+// shortcut or a package registers it, so without one there's none to post under.
+std::wstring BrowserModelId() {
+  // PKEY_AppUserModel_ID, named here rather than linked from propsys.
+  constexpr PROPERTYKEY kAppId = {
+      {0x9F4C2855, 0x9F79, 0x4B39, {0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3}}, 5};
+  for (HWND view : UiViews()) {
+    ComPtr<IPropertyStore> store;
+    if (!IsWindow(view) ||
+        FAILED(SHGetPropertyStoreForWindow(GetAncestor(view, GA_ROOT), IID_PPV_ARGS(&store)))) {
+      continue;
+    }
+    PROPVARIANT value;
+    PropVariantInit(&value);
+    std::wstring id;
+    if (SUCCEEDED(store->GetValue(kAppId, &value)) && value.vt == VT_LPWSTR && value.pwszVal) {
+      id = value.pwszVal;
+    }
+    PropVariantClear(&value);
+    if (!id.empty()) {
+      return id;
+    }
+  }
+  UINT32 length = 0;
+  if (GetCurrentApplicationUserModelId(&length, nullptr) == ERROR_INSUFFICIENT_BUFFER) {
+    std::wstring id(length, L'\0');
+    if (GetCurrentApplicationUserModelId(&length, id.data()) == ERROR_SUCCESS) {
+      id.resize(length - 1);
+      return id;
+    }
+  }
+  return {};
+}
+
 // Kept while they may be clicked, so the click's handler stays, the newest few.
 std::vector<winrt::Windows::UI::Notifications::ToastNotification>& Toasts() {
   static auto* toasts = new std::vector<winrt::Windows::UI::Notifications::ToastNotification>;
@@ -3968,8 +4006,8 @@ void host_watch_needs_you(void (*clicked)(uint64_t id)) {
   Later([] {});
 }
 
-// A toast with no sound, under the app's AppUserModelID as Chromium sets it for its own, or the
-// package's in an MSIX. Its click, while ilo runs, comes to the toast's own handler.
+// A toast with no sound, under the AppUserModelID Chromium posts its own under. Its click, while
+// ilo runs, comes to the toast's own handler.
 void host_needs_you_notify(uint64_t id, const char* title, const char* body) {
   namespace wun = winrt::Windows::UI::Notifications;
   namespace wdx = winrt::Windows::Data::Xml::Dom;
@@ -3989,14 +4027,14 @@ void host_needs_you_notify(uint64_t id, const char* title, const char* body) {
         }
       });
     });
-    PWSTR aumid = nullptr;
-    const bool named = SUCCEEDED(GetCurrentProcessExplicitAppUserModelID(&aumid)) && aumid;
-    auto notifier = named ? wun::ToastNotificationManager::CreateToastNotifier(aumid)
-                          : wun::ToastNotificationManager::CreateToastNotifier();
-    if (aumid) {
-      CoTaskMemFree(aumid);
+    const std::wstring model = BrowserModelId();
+    if (model.empty()) {
+      // check.sh reads this line.
+      fprintf(stderr, "browser: needs you posted %llu: no AppUserModelID\n",
+              static_cast<unsigned long long>(id));
+      return;
     }
-    notifier.Show(toast);
+    wun::ToastNotificationManager::CreateToastNotifier(model).Show(toast);
     Toasts().push_back(toast);
     if (Toasts().size() > 8) {
       Toasts().erase(Toasts().begin());
