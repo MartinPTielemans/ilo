@@ -587,7 +587,6 @@ impl Shell {
                         shell.show_battery_notice(cx);
                     }),
                 )
-                .relative()
                 .child(
                     svg()
                         .path("icons/leaf.svg")

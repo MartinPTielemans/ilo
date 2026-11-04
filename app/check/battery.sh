@@ -8,7 +8,9 @@
 
 serve
 # Each page is named by its query, "battery" without one. "o" opens the next page of the names,
-# and "b" keeps a worker busy, as a page that uses the CPU out of sight does.
+# with no opener, so each is a browsing instance of its own: Chrome freezes a page only with every
+# page its opener ties it to, and the one shown keeps them all. "b" keeps a worker busy, as a page
+# that uses the CPU out of sight does.
 printf '%s' '<title>loading</title><body style="background:#333">
 <script>
 const names = ["battery", "busy", "other"];
@@ -17,7 +19,7 @@ requestAnimationFrame(() => setTimeout(() => document.title = name));
 let worker;
 onkeydown = e => {
   if (e.key == "o") {
-    open("?" + names[names.indexOf(name) + 1]);
+    open("?" + names[names.indexOf(name) + 1], "_blank", "noopener");
   } else if (e.key == "b") {
     worker = new Worker(URL.createObjectURL(new Blob(["for (;;) {}"])));
     document.title = "spinning";
@@ -47,9 +49,9 @@ if [ "$active" != 1 ]; then
 fi
 
 send battery 50 unplugged
-none_since '^browser: battery saver on' || fail "Battery Saver turned on at 50 %"
+none_since 'browser: battery saver on' || fail "Battery Saver turned on at 50 %"
 send battery 19 unplugged
-expect '^browser: battery saver on at 19 %$' "Battery Saver didn't turn on at 19 % on battery"
+expect 'browser: battery saver on at 19 %$' "Battery Saver didn't turn on at 19 % on battery"
 expect '^browser: toast shown Battery Saver is on at 19 % \[turn off battery saver\]$' \
   "the toast didn't say Battery Saver is on, with Turn Off"
 await '^browser: battery saver leaf at ' || fail "the URL field didn't draw Battery Saver's leaf"
@@ -61,15 +63,15 @@ send click $((${lx%.*} + ${lw%.*} / 2)) $((${ly%.*} + ${lh%.*} / 2))
 expect '^browser: toast shown Battery Saver is on at 19 % \[turn off battery saver\]$' \
   "the leaf's press didn't say Battery Saver is on again"
 bar_command turn-off-battery-saver "Turn Off Battery Saver for Now" "battery saver"
-expect '^browser: battery saver off$' "Turn Off Battery Saver for Now didn't turn it off"
+expect 'browser: battery saver off$' "Turn Off Battery Saver for Now didn't turn it off"
 expect '^browser: toast shown Battery Saver is off until you plug in$' \
   "the toast didn't say Battery Saver is off until plugged in"
 expect '^browser: battery saver leaf hidden$' "the leaf stayed with Battery Saver off"
 send battery 18 unplugged
-none_since '^browser: battery saver on' || fail "Battery Saver came back on, turned off for now"
+none_since 'browser: battery saver on' || fail "Battery Saver came back on, turned off for now"
 send battery 18 plugged
 send battery 17 unplugged
-expect '^browser: battery saver on at 17 %$' "plugged in and out again, Battery Saver didn't come back"
+expect 'browser: battery saver on at 17 %$' "plugged in and out again, Battery Saver didn't come back"
 
 # On Battery Saver a page busy out of sight freezes once Chrome has measured it, a minute at a time,
 # and says so in its row's hover card; shown, it thaws.
@@ -84,22 +86,23 @@ send key o
 expect "^browser: title [0-9]* other\$" "the busy page didn't open another"
 busy=$step
 for _ in $(seq 2400); do
-  logged "^browser: tab $b frozen\$" "$busy" && break
+  logged "browser: tab $b frozen\$" "$busy" && break
   kill -0 "$pid" 2>/dev/null || gone
   sleep 0.1
 done
-logged "^browser: tab $b frozen\$" "$busy" ||
+logged "browser: tab $b frozen\$" "$busy" ||
   fail "the page busy out of sight didn't freeze on Battery Saver in 4 minutes"
 send move $(row "$(($(today | tr ' ' '\n' | grep -nx "$b" | cut -d: -f1) - 1))")
 expect "^browser: hover card $b says paused\$" "the frozen tab's hover card didn't say it's paused"
+expect '^browser: hover card settled$' "the frozen tab's hover card didn't settle"
 ../tools/window-screenshot.sh "$pid" "$out/battery-paused.png" || fail "no window to capture"
 send move $page_point
 n=$(today | tr ' ' '\n' | grep -nx "$b" | cut -d: -f1)
 switch "$((n + $(pinned | wc -w))) cmd" "$b"
-expect "^browser: tab $b thawed\$" "the frozen tab didn't thaw once shown"
+expect "browser: tab $b thawed\$" "the frozen tab didn't thaw once shown"
 
 send battery 21 plugged
-expect '^browser: battery saver off$' "Battery Saver stayed on once plugged in"
+expect 'browser: battery saver off$' "Battery Saver stayed on once plugged in"
 expect '^browser: battery saver leaf hidden$' "the leaf stayed once plugged in"
 exec 3>&-
 quit

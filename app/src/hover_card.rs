@@ -819,18 +819,21 @@ impl Render for HoverCard {
             .items_center()
             .text_size(px(HOST_SIZE))
             .text_color(palette.on_overlay(HOST))
-            .child(div().truncate().child(card.host.clone()))
+            // Paused, the words take the host's place, which the row under the title still shows:
+            // beside the buttons there's no room for both.
+            .when(!card.paused, |host| {
+                host.child(div().truncate().child(card.host.clone()))
+            })
             .when(card.paused, |host| {
-                host.child(div().flex_none().px(px(PAUSED_GAP)).child("·"))
-                    .child(
-                        svg()
-                            .path("icons/pause.svg")
-                            .flex_none()
-                            .mr(px(PAUSED_GAP))
-                            .size(px(HOST_SIZE))
-                            .text_color(palette.on_overlay(HOST)),
-                    )
-                    .child(div().flex_none().child(crate::shell::PAUSED))
+                host.child(
+                    svg()
+                        .path("icons/pause.svg")
+                        .flex_none()
+                        .mr(px(PAUSED_GAP))
+                        .size(px(HOST_SIZE))
+                        .text_color(palette.on_overlay(HOST)),
+                )
+                .child(div().truncate().child(crate::shell::PAUSED))
             });
         let buttons = div()
             .absolute()

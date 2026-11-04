@@ -8,6 +8,7 @@ thread_local! {
     pub(crate) static BATTERY_SAVER: Cell<Option<i32>> = const { Cell::new(None) };
 }
 
+// Each after the update under way: the core says it as it's asked, such as from Turn Off.
 pub(crate) unsafe extern "C" fn battery_saver_changed(
     _: *mut c_void,
     active: bool,
@@ -15,12 +16,27 @@ pub(crate) unsafe extern "C" fn battery_saver_changed(
 ) {
     let on = active.then_some(percent);
     BATTERY_SAVER.set(on);
-    update_shells(|shell, cx| shell.set_battery_saver(on, cx));
-    if active {
-        update_window(front().0, |shell, cx| shell.show_battery_notice(cx));
-    }
+    update_app_later(move |cx| {
+        update_shells_in(cx, |shell, cx| shell.set_battery_saver(on, cx));
+        if !active {
+            return;
+        }
+        let front = front().0;
+        let shell = WINDOWS.with_borrow(|windows| {
+            (windows.iter())
+                .find(|window| window.id == front)
+                .map(|window| window.shell.clone())
+        });
+        if let Some(shell) = shell {
+            shell
+                .update(cx, |shell, cx| shell.show_battery_notice(cx))
+                .ok();
+        }
+    });
 }
 
 pub(crate) unsafe extern "C" fn tab_frozen(_: *mut c_void, tab: bc::bc_id, frozen: bool) {
-    update_shells(|shell, cx| shell.set_tab_frozen(tab, frozen, cx));
+    update_app_later(move |cx| {
+        update_shells_in(cx, |shell, cx| shell.set_tab_frozen(tab, frozen, cx))
+    });
 }

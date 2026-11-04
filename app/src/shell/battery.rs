@@ -24,7 +24,7 @@ pub fn notice(percent: i32) -> String {
 /// What it says once it's turned off for now.
 pub const TURNED_OFF: &str = "Battery Saver is off until you plug in";
 
-/// What a frozen tab's hover card says after its host.
+/// What a frozen tab's hover card says in its host's place.
 pub const PAUSED: &str = "Paused to save battery";
 
 impl Shell {
@@ -98,6 +98,7 @@ mod tests {
     use gpui::TestAppContext;
 
     use super::*;
+    use crate::hover_card;
     use crate::shell::{Command, Folders, Page, drag::detents::shell_with};
 
     /// Turned on, it says so with the battery's percent and Turn Off, which turns it off for now
@@ -146,7 +147,7 @@ mod tests {
     /// A page Battery Saver froze says so in its tab's hover card, and thawed it doesn't.
     #[gpui::test]
     fn a_frozen_tabs_card_says_its_paused(cx: &mut TestAppContext) {
-        let (shell, _) = shell_with(cx, &[], &[1, 2], Folders::default());
+        let (shell, host) = shell_with(cx, &[], &[1, 2], Folders::default());
         shell.update(cx, |shell, cx| {
             let page = Page {
                 url: "https://busy.test/".into(),
@@ -158,8 +159,21 @@ mod tests {
             shell.read_with(cx, |shell, _| shell.card(2).map(|card| card.paused))
         };
         assert_eq!(paused(cx), Some(false));
+        shell.update(cx, |shell, cx| {
+            shell.card_event(2, hover_card::Event::Shown, cx)
+        });
+        assert!(host.take().contains(&"card picture 2".to_owned()));
         shell.update(cx, |shell, cx| shell.set_tab_frozen(2, true, cx));
         assert_eq!(paused(cx), Some(true));
+        // Its card keeps the picture it had, as taking one would thaw the page.
+        host.take();
+        shell.update(cx, |shell, cx| {
+            shell.card_event(2, hover_card::Event::Shown, cx)
+        });
+        assert!(
+            !host.take().iter().any(|call| call.starts_with("card picture")),
+            "the frozen page's card took its picture again"
+        );
         shell.update(cx, |shell, cx| shell.set_tab_frozen(2, false, cx));
         assert_eq!(paused(cx), Some(false));
     }

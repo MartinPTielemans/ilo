@@ -241,11 +241,15 @@ impl Shell {
         self.selected != 0 && !self.new_tab && self.panes(self.selected).contains(&tab)
     }
 
-    fn card_event(&mut self, tab: u64, event: Event, cx: &mut Context<Self>) {
+    pub(super) fn card_event(&mut self, tab: u64, event: Event, cx: &mut Context<Self>) {
         match event {
             // A loaded tab's picture is taken again, as the page is now.
+            // A page Battery Saver froze keeps the picture it had: taking one again would thaw it.
             Event::Shown => {
-                if self.tabs.contains_key(&tab) && !self.on_screen(tab) && !self.page(tab).unloaded
+                if self.tabs.contains_key(&tab)
+                    && !self.on_screen(tab)
+                    && !self.page(tab).unloaded
+                    && !self.frozen(tab)
                 {
                     self.browser.card_picture(tab, cx);
                 }
