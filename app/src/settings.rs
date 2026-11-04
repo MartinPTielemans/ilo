@@ -1174,7 +1174,9 @@ pub fn index() -> Option<Rc<Vec<Entry>>> {
 /// launch, and once Settings hides or the core changes what it holds. The bar goes on reading the
 /// one before until it's done.
 pub fn index_later(cx: &mut App) {
-    if INDEXING.replace(true) {
+    // Not before launch's own, after the UI shows, as a change the core reports while the
+    // window opens would put the build on launch's way.
+    if !INDEX_AFTER_LAUNCH.get() || INDEXING.replace(true) {
         return;
     }
     cx.spawn(async move |cx| {
@@ -1205,6 +1207,14 @@ thread_local! {
     static INDEX: RefCell<Option<Rc<Vec<Entry>>>> = const { RefCell::new(None) };
     /// A build is on its way.
     static INDEXING: Cell<bool> = const { Cell::new(false) };
+    /// Launch has shown the UI and made the overlays, so builds may start.
+    static INDEX_AFTER_LAUNCH: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Launch's build, once the UI shows and the overlays are made: the first, which makes Settings.
+pub fn index_after_launch(cx: &mut App) {
+    INDEX_AFTER_LAUNCH.set(true);
+    index_later(cx);
 }
 
 /// Shows Settings on `section` at the row named `row`, scrolled to it and flashed once, as a click

@@ -375,7 +375,7 @@ pub(crate) fn open_window_as(
         // Last, as nothing the user sees at launch waits for it.
         start_updates(cx);
         // The command bar's settings rows, built in a task of their own after these.
-        crate::settings::index_later(cx);
+        crate::settings::index_after_launch(cx);
     };
     OVERLAYS.set(Some(Box::new(open)));
     let pending = Rc::new(Cell::new(true));
