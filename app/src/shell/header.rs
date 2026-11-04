@@ -47,10 +47,14 @@ use crate::tokens::shell::header::URL_PLACEHOLDER;
 use crate::tokens::text;
 
 impl Shell {
-    /// The tab whose page the header is about: a task's page watched in place, else the tab
-    /// selected. The URL field shows its address, and its buttons act on it.
+    /// The tab whose page the header is about, the one in the page area: a task's page watched in
+    /// place, none while a task's conversation is there, else the tab selected. The URL field
+    /// shows its address, and its buttons act on it.
     pub(super) fn field_tab(&self) -> u64 {
-        self.task_page_live().unwrap_or(self.selected)
+        match self.task_area {
+            Some(_) => self.task_page_live().unwrap_or(0),
+            None => self.selected,
+        }
     }
 
     /// A header button at `x`, with the glyph `icon`, that runs `command`. One that can't dims, as
@@ -437,9 +441,14 @@ impl Shell {
     }
 
     /// What the URL field says, in its colour: the page's host, or with no page shown, the
-    /// command bar's placeholder, there from the frame the card's mark is.
+    /// command bar's placeholder, there from the frame the card's mark is, or at once with a
+    /// task's conversation, which shows at once.
     pub(super) fn url_field_words(&self, url: &str) -> (SharedString, Hsla) {
-        self.url_words(self.field_tab(), url, self.empty_opacity(Instant::now()))
+        let shown = match self.task_area {
+            Some(_) => 1.,
+            None => self.empty_opacity(Instant::now()),
+        };
+        self.url_words(self.field_tab(), url, shown)
     }
 
     /// What a URL field showing `tab`, at `url`, says, in its colour: the page's host, its whole

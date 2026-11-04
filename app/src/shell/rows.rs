@@ -222,7 +222,7 @@ impl Shell {
         ghost: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        let selected = row == self.selected_row();
+        let selected = Some(row) == self.selected_row();
         let (id, slot) = match row {
             Row::NewTab => (("new-tab", 0), Slot::NewTab),
             Row::Tab(tab) => (("tab", tab), Slot::Tab(tab)),
@@ -395,7 +395,7 @@ impl Shell {
         {
             return Some(1.);
         }
-        let selected = row == self.selected_row();
+        let selected = Some(row) == self.selected_row();
         let left = self
             .unhovered
             .iter()
@@ -995,7 +995,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let first = panes[0];
-        let row_selected = self.selected_row() == Row::Tab(first);
+        let row_selected = self.selected_row() == Some(Row::Tab(first));
         let hovered = self.pointer_row() == Some(Row::Tab(first)) && drop.is_none();
         // A pinned tab closed already has nothing to close.
         let pinned = self.pinned().contains(&first);
@@ -1142,7 +1142,7 @@ impl Shell {
         } else {
             self.title(tab)
         };
-        let bright = Row::Tab(tab) == self.selected_row() || page.developer_mode;
+        let bright = Some(Row::Tab(tab)) == self.selected_row() || page.developer_mode;
         let title = title(&self.palette, label, bright);
         let title = match self.host_line(tab) {
             Some(host) => with_host(&self.palette, title, host),
