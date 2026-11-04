@@ -935,6 +935,10 @@ Settings › Passwords' Offer to save passwords turns the offer off for every si
 - **Quit guard** (Chrome's). Quitting with downloads running asks first, on the Mac in Chrome's alert: "Download is in progress", with Continue Downloading or Quit. On Linux and Windows the app's dialog asks in the same words, with the app's name where Chrome's says Chromium, and ↩ on Continue Downloading, Chrome's default; Quit is red, as it can't be taken back. So does closing the last Incognito window with its downloads running, "Quit Incognito mode anyway?" as Chrome's Mac words have it. Continue Downloading keeps the browser running and shows the Library's Downloads, where Chrome would open its downloads page; Quit cancels them, and they come back cancelled. The alert names the product with Chromium's strings until branding lands. Arc's wording: measure.
 - Measure Arc's Downloads section and its button while downloading, and record the flight, the bin and the recent downloads' motion to confirm #1406's values.
 
+### Site notifications
+
+- **A click shows the tab that sent it** (Arc's help centre, #685). A click on a notification from a site the user lets notify shows the tab that posted it: its Space and the tab in the window that holds it, which comes in front, before the page hears the click, as the page's own `window.focus()` would. A page whose handler focuses its tab too switches once. A notification whose page has gone gets Chrome's new tab at the site, and a service worker's click is the worker's to handle.
+
 ### Find in page
 
 - **Keys** (Arc 1.170.0 menus, Dia P§8). ⌘F, ⌘G, ⇧⌘G and ⇧↩ in the bar for previous. ⌘J, Jump to Selection, scrolls the page to put its selection in the middle, such as the match a find left selected. Arc has no Use Selection for Find (⌘E), so neither do we. Its Find and Replace (⌥⌘F) acts only in AppKit's text views, which neither a page nor our fields are, so we leave it out.

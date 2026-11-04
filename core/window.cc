@@ -581,7 +581,9 @@ void Window::OnPageClicked(bc_id tab) {
 // static
 void Window::ActivateContents(content::WebContents* contents) {
   const bc_id tab = Tab::IdOf(contents);
-  if (Window* window = tab ? Holding(tab) : nullptr) {
+  // A tab the window shows already stays as it is: a notification's click brings its tab forward,
+  // and the page's own window.focus() in its click handler then asks again (#685).
+  if (Window* window = tab ? Holding(tab) : nullptr; window && window->selected_ != tab) {
     window->Select(tab);
   }
 }
