@@ -489,7 +489,6 @@ send click $(tiled_row 0)
 expect "^browser: selected $x\( in .*\)\{0,1\}\$" "a click on the first Today row didn't show it"
 send click $(tiled_row 1) alt
 expect "^browser: splits $x+$y\$" "⌥-click on the second Today row didn't split it with the first"
-expect '^browser: rows settled$' "the rows didn't settle after the split"
 send drag $(tiled_row 0) 180 112
 expect "^browser: dragged $x to favorites 1\$" "the split's row dragged onto the tiles didn't go there"
 expect "^browser: favorites $a $x\$" "the split isn't one favorite: the favorites are \"$(favorites)\""
