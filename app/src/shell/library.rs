@@ -1504,8 +1504,6 @@ impl Shell {
     /// click shows the Space, and a right-click shows its menu.
     fn space_card(&self, space: &Space, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let id = space.id;
-        // An agent's Space keeps its tabs, and takes none, as the sidebar's drag leaves it.
-        let user = space.agent.is_empty();
         let shell = cx.weak_entity();
         // The card is the Space's window, opaque, so it's drawn in the Space's own palette.
         let palette = self.palette_of(id);
@@ -1536,9 +1534,6 @@ impl Shell {
                 if panes.len() == 1 {
                     let label = title(&palette, self.title(tab), false).pr(px(PLATE_INSET));
                     let plate = plate(self.tab_icon_in(&palette, tab), label);
-                    if !user {
-                        return card_row(depth, plate);
-                    }
                     let dragged = CardTab {
                         tab,
                         space: id,
@@ -1617,11 +1612,9 @@ impl Shell {
                     shell.space_menu(id, event.position, cx)
                 }),
             )
-            .when(user, |card| {
-                card.on_drop(cx.listener(move |shell, dragged: &CardTab, _, cx| {
-                    shell.drop_on_card(*dragged, id, cx)
-                }))
-            })
+            .on_drop(cx.listener(move |shell, dragged: &CardTab, _, cx| {
+                shell.drop_on_card(*dragged, id, cx)
+            }))
             .group("space-card")
             // Over the gradient and under the rows, ringed while another card's tab is over it.
             .child(
@@ -1631,7 +1624,7 @@ impl Shell {
                     .rounded(px(CARD_RADIUS))
                     .group_hover("space-card", |style| style.bg(palette.plate(STATE_HOVERED)))
                     .can_drop(move |dragged, _, _| {
-                        user && dragged
+                        dragged
                             .downcast_ref::<CardTab>()
                             .is_some_and(|d| d.space != id)
                     })
