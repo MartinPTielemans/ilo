@@ -209,3 +209,43 @@ fn a_row_dragged_over_the_page_pages_nowhere(cx: &mut TestAppContext) {
     wait(cx);
     assert_eq!(host.shown.take(), [2]);
 }
+
+/// The core says it shows the next Space only once its page is handed over, which can take a
+/// second and more, so the pointer can be off the edge by then: the drag still goes on over that
+/// Space, and let go there it moves (#1840).
+#[gpui::test]
+fn a_row_off_the_edge_before_its_page_comes_still_drops_there(cx: &mut TestAppContext) {
+    let (shell, host) = shell(cx);
+    let y = press(&shell, cx, 4);
+    let width = shell.read_with(cx, |shell, _| shell.width());
+    drag_to(&shell, cx, X, y + 10.);
+    drag_to(&shell, cx, width - 10., y + 10.);
+    wait(cx);
+    assert_eq!(host.shown.take(), [2]);
+    drag_to(&shell, cx, X, y);
+    shell.update(cx, |shell, cx| shell.set_space(2, cx));
+    assert!(shell.read_with(cx, |shell, _| shell.dragging() == Some(Slot::Tab(4))));
+    host.take_edits();
+    shell.update(cx, |shell, cx| shell.drop_row(cx));
+    assert_eq!(host.take_edits(), ["space 4 2"]);
+}
+
+/// A drag the Space changes under, without its paging there, goes back where it came from, as its
+/// release would put it back: it never just stops (#1840).
+#[gpui::test]
+fn a_drag_another_space_ends_is_put_back(cx: &mut TestAppContext) {
+    let (shell, host) = shell(cx);
+    let y = press(&shell, cx, 4);
+    drag_to(&shell, cx, X, y + 10.);
+    drag_to(&shell, cx, X, y + 40.);
+    shell.update(cx, |shell, cx| shell.set_space(2, cx));
+    let (dragging, putting_back) =
+        shell.read_with(cx, |shell, _| (shell.drag.is_some(), shell.putting_back));
+    assert!(
+        !dragging && putting_back,
+        "the drag stopped without going back"
+    );
+    host.take_edits();
+    shell.update(cx, |shell, cx| shell.drop_row(cx));
+    assert!(host.take_edits().is_empty());
+}
