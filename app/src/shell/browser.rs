@@ -444,6 +444,13 @@ pub trait Browser {
     fn show_window_buttons(&self, shown: bool, cx: &mut App);
     /// Does what a click on the window's close, minimize or zoom button does.
     fn press_window_button(&self, button: WindowButton, cx: &mut App);
+    /// Keeps the window over other apps' windows, its overlays still over it, or lets it go back
+    /// among them.
+    fn set_on_top(&self, on: bool, cx: &mut App);
+    /// Whether the window can stay on top: not under Wayland, which gives no client a way.
+    fn can_stay_on_top(&self) -> bool {
+        true
+    }
     /// The window's own buttons as the system draws them, for the copies the UI draws in their
     /// place, once it can say: the Mac's. Elsewhere the UI draws the only ones, at
     /// `WindowButtonGeometry::default`.
@@ -527,6 +534,21 @@ pub trait Browser {
         _cx: &mut App,
     ) {
     }
+    /// Shows `text` in the toast with the capture toast's Share button after it, which runs `share`
+    /// with where in the toast it was pressed, for `time` and for as long as the pointer is over it.
+    /// Where there's no share sheet it's the plain toast.
+    fn toast_share(
+        &self,
+        text: &str,
+        _share: Rc<dyn Fn(Point<Pixels>, &mut App)>,
+        time: Duration,
+        cx: &mut App,
+    ) {
+        self.toast(text, None, time, cx);
+    }
+    /// Opens the system's share sheet for the page at `url`, titled `title`, hanging from `at` in
+    /// the toast, where its Share button was pressed.
+    fn share_from_toast(&self, _url: &str, _title: &str, _at: Point<Pixels>, _cx: &mut App) {}
     /// The user closed the tab's protected-media note: the profile keeps it from showing again at
     /// the site of its page, and Site Controls offer Safari's engine there instead.
     fn close_media_note(&self, _tab: u64, _cx: &mut App) {}

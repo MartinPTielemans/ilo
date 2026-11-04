@@ -302,7 +302,7 @@ expect "^browser: page $a back 0 forward 1 loading 0 $site\$" "Back didn't take 
 send click $((x + half + 100)) 400
 expect "^browser: selected $b\$" "a click in the right pane didn't focus it"
 send key c cmd shift
-expect '^browser: toast shown Copied Current URL$' "⇧⌘C in the right pane showed no toast"
+expect "$url_toast" "⇧⌘C in the right pane showed no toast"
 expect '^browser: toast window shown$' "⇧⌘C's toast didn't come on screen"
 read_toast
 over_right=$toast
@@ -310,7 +310,7 @@ expect '^browser: toast hidden$' "⇧⌘C's toast stayed"
 send click $((x + 100)) 400
 expect "^browser: selected $a\$" "a click in the left pane didn't focus it again"
 send key c cmd shift
-expect '^browser: toast shown Copied Current URL$' "⇧⌘C in the left pane showed no toast"
+expect "$url_toast" "⇧⌘C in the left pane showed no toast"
 expect '^browser: toast window shown$' "⇧⌘C's toast over the left pane didn't come on screen"
 read_toast
 over_left=$toast

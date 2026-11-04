@@ -318,6 +318,11 @@ pub(crate) extern "C" fn site_controls_dismissed() {
     update_app(site_controls::dismissed);
 }
 
+thread_local! {
+    /// The toast's view once its window is open, which a Share button's sheet hangs from.
+    pub(crate) static TOAST_VIEW: Cell<*mut c_void> = const { Cell::new(std::ptr::null_mut()) };
+}
+
 /// The toast's requests, to the host's toast window.
 pub(crate) struct ToastHost {
     /// The toast's view, for the share menu its Share button shows, once its window is open.

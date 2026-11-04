@@ -51,7 +51,7 @@ key_window() {
 
 scratch=$(mktemp -d)
 start_with_cdp 'data:text/html,<title>account check</title>' "$profile_dir" "" \
-  --sync-url="$server_url" --log-net-log="$netlog"
+  --sync-url="$server_url" --log-net-log="$(app_path "$PWD/$netlog")"
 await_load
 await 'browser: sync service disabled, not signed in$' ||
   fail "signed out, sync isn't disabled for want of an account"

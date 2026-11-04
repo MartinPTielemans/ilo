@@ -60,7 +60,7 @@ use browser::tokens::shell::{
 };
 use browser::tokens::text;
 
-actions!(settings, [CloseSettings]);
+actions!(settings, [CloseSettings, ReleaseHeldProfile]);
 
 /// What Arc offers for how long a Today tab waits unseen before it's archived, in seconds.
 const ARCHIVE_AFTER: [(&str, f64); 4] = [
@@ -968,6 +968,11 @@ fn open(cx: &mut App) {
     // ⌘Z, Ctrl+Z off the Mac, which has no menu bar to send it; a field's own comes first.
     let undo = Box::new(browser::text_input::Undo);
     cx.bind_keys([shell::view_binding("cmd-z", undo, "Settings", cx)]);
+    // A check run's key that lets the profile it holds back take its Spaces (import_host).
+    if crate::import_host::holding() {
+        let release = gpui::KeyBinding::new("shift-f12", ReleaseHeldProfile, Some("Settings"));
+        cx.bind_keys([release]);
+    }
     account::bind_keys(cx);
     let synced = account::synced(cx);
     let options = WindowOptions {
@@ -4094,6 +4099,7 @@ impl Render for Settings {
                 settings.record(&event.keystroke, cx)
             }))
             .on_action(|_: &CloseSettings, _, cx| hide(cx))
+            .on_action(|_: &ReleaseHeldProfile, _, _| crate::import_host::release_held())
             .on_action(
                 cx.listener(|settings, _: &browser::text_input::Undo, _, cx| settings.undo(cx)),
             )

@@ -3799,6 +3799,12 @@ void host_show_window_buttons(void* ui_view, bool shown) {
   }
 }
 
+void host_set_window_on_top(void* ui_view, bool on) {
+  // The overlays are windows it owns, which Windows makes topmost and back with it.
+  SetWindowPos(Root(ui_view), on ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
 void host_press_window_button(void* ui_view, int button) {
   HWND root = Root(ui_view);
   const WPARAM command = button == 0   ? SC_CLOSE

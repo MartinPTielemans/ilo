@@ -79,6 +79,8 @@ pub(super) struct Recorder {
     pub(super) import: RefCell<Option<std::rc::Rc<dyn crate::import::Host>>>,
     /// The window is full screen, as Linux's window manager says, for `window_full_screen`.
     pub(super) full_screen: Cell<bool>,
+    /// Whether the window can't stay on top, as under Wayland.
+    pub(super) no_stay_on_top: Cell<bool>,
     /// The opt-ins' switches, as `crash_reports` and `agents` answer, None for one not offered.
     pub(super) crash_reports: Cell<Option<bool>>,
     pub(super) agents: Cell<Option<bool>>,
@@ -190,6 +192,8 @@ pub(super) struct Recorder {
     /// The label of the last toast's button other than Undo, and what it runs, its words in
     /// `toasts`.
     pub(super) toast_run: RefCell<Option<(&'static str, Rc<dyn Fn(&mut App)>)>>,
+    /// What the last toast's Share button runs, given where in the toast it was pressed.
+    pub(super) toast_share: RefCell<Option<Rc<dyn Fn(Point<Pixels>, &mut App)>>>,
     /// Another browser window is in front of this one.
     pub(super) behind: Cell<bool>,
     /// The Edit menu's Undo and Redo titles it was last given.
@@ -1130,6 +1134,14 @@ impl Browser for Recorder {
         self.window_buttons.get()
     }
 
+    fn set_on_top(&self, on: bool, _: &mut App) {
+        self.record(format!("on top {on}"))
+    }
+
+    fn can_stay_on_top(&self) -> bool {
+        !self.no_stay_on_top.get()
+    }
+
     fn press_window_button(&self, button: WindowButton, _: &mut App) {
         if let WindowButton::Zoom = button {
             self.record("window button zoom".into())
@@ -1194,6 +1206,22 @@ impl Browser for Recorder {
 
     fn toast(&self, text: &str, _: Option<(&str, &str)>, _: Duration, _: &mut App) {
         self.toasts.borrow_mut().push(text.into());
+    }
+
+    fn toast_share(
+        &self,
+        text: &str,
+        share: Rc<dyn Fn(Point<Pixels>, &mut App)>,
+        _: Duration,
+        _: &mut App,
+    ) {
+        self.toasts.borrow_mut().push(format!("{text} [share]"));
+        *self.toast_share.borrow_mut() = Some(share);
+    }
+
+    fn share_from_toast(&self, url: &str, title: &str, at: Point<Pixels>, _: &mut App) {
+        let (x, y) = (f32::from(at.x), f32::from(at.y));
+        self.record(format!("share from toast {url} {title} at {x} {y}"))
     }
 
     fn toast_undo(&self, text: &str, undo: Rc<dyn Fn(&mut App)>, _: Duration, _: &mut App) {

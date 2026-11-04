@@ -120,7 +120,7 @@ impl Shell {
     /// turn, and the favicon goes to the middle. A turn the other way reverses it.
     pub(super) fn turning_drag(&self) -> Option<impl IntoElement + use<>> {
         let (tab, [left, top, width, height, radius], turned) = self.turning_shape()?;
-        let selected = tab == self.selected && !self.new_tab;
+        let selected = tab == self.selected && self.shown_has_plate();
         let row_fill = if selected {
             self.palette.selected(0.)
         } else {
@@ -662,7 +662,7 @@ impl Shell {
 
     /// Whether the tab shown is `tab`'s, or one of its split's for a favorite split's tile.
     pub(super) fn tile_shown(&self, tab: u64) -> bool {
-        !self.new_tab
+        self.shown_has_plate()
             && match self.favorite_split(tab) {
                 Some(split) => split.tabs.contains(&self.selected),
                 None => tab == self.selected,
