@@ -1063,6 +1063,10 @@ else
   second_window=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
   # The driver counts every window opened, closed ones too.
   driven_second=$(grep -c '^browser: window opened ' "$log")
+  # A new window opens ⌘T's bar, which keeps its window's keyboard until escape closes it.
+  expect_late '^browser: command bar shown$' "⌘N's window didn't open the command bar"
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close ⌘N's command bar"
   send window 1 behind
   behind=$step
   send move 400 300
