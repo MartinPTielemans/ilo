@@ -316,7 +316,7 @@ over_left=$toast
 [ -n "$over_right" ] && [ -n "$over_left" ] &&
   [ "$((over_right - over_left))" = "$((w - half + 10))" ] ||
   fail "the toast went from ${over_right:-nowhere} to ${over_left:-nowhere}, not to the left pane's corner"
-../tools/window-screenshot.sh "$pid" "$out/split-toast.png" || fail "no window to capture"
+../tools/window-screenshot.sh "$pid" "$out/split-toast.png" all || fail "no window to capture"
 # In the sidebar the split is one row, which ⌘2 shows under a tab opened above it, with the pane
 # focused last, and a click on its right segment shows that pane focused.
 open_from_bar example.net
