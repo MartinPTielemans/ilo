@@ -684,3 +684,25 @@ fn devtools_rests_in_the_url_field_in_developer_mode(cx: &mut TestAppContext) {
     assert_eq!(at(true, cx), AtRest::DevTools);
     assert_eq!(at(false, cx), AtRest::Field);
 }
+
+/// The header's glyphs take the disabled alpha while the window isn't the active one, as Arc's
+/// do, and theirs again once it is. The window's own command bar over it keeps them lit, as the
+/// user is still in that window.
+#[gpui::test]
+fn the_header_glyphs_dim_while_the_window_is_inactive(cx: &mut TestAppContext) {
+    let (shell, cx, host) = drawn_shell(cx);
+    let dimmed = |cx: &mut VisualTestContext| {
+        shell.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, _| shell.nav_dimmed_drawn.get())
+    };
+    cx.update(|window, _| window.activate_window());
+    assert_eq!(dimmed(cx), Some(false), "dimmed in the active window");
+    cx.deactivate_window();
+    assert_eq!(dimmed(cx), Some(true), "not dimmed in an inactive window");
+    host.bar_open.set(true);
+    assert_eq!(dimmed(cx), Some(false), "dimmed under the window's command bar");
+    host.bar_open.set(false);
+    cx.update(|window, _| window.activate_window());
+    assert_eq!(dimmed(cx), Some(false), "still dimmed once the window is active again");
+}

@@ -1551,6 +1551,8 @@ pub struct Shell {
     forced_tone: Option<Tone>,
     window_active: bool,
     window_watches: Vec<Subscription>,
+    /// Whether the header's glyphs were last drawn dimmed, which the log says when it changes.
+    nav_dimmed_drawn: Cell<Option<bool>>,
     /// Whether the host was last asked to draw the material light.
     window_light: Option<bool>,
     /// The menus' look capture mode was last given, which it takes again when it changes (#861).
@@ -1846,6 +1848,7 @@ impl Shell {
             app_appearance: Appearance::Automatic,
             forced_tone: None,
             window_active: true,
+            nav_dimmed_drawn: Cell::new(None),
             window_watches: Vec::new(),
             window_light: None,
             capture_look: None,
