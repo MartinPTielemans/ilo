@@ -3,11 +3,13 @@
 # over it, as on screen, but nothing from other apps. A screen capture would include whatever
 # else is open on the owner's Mac. With "all", it takes every window of the process on that display,
 # such as two browser windows, in one picture.
-# On Windows, under Git Bash, it draws each of the process's windows itself with PrintWindow, in
-# their order on screen, so nothing of another app's can get into the picture. PrintWindow can't
-# read what DirectComposition leaves see-through, as an overlay's round corners, or the invisible
-# borders a window is resized by, and draws both black, so on a CI runner, whose desktop holds
-# nothing but the app, it copies the screen where the windows show instead, as Windows composes it.
+# On Windows, under Git Bash, it copies the screen where the windows show, as Windows composes it,
+# cut to their shapes, while no other app's window is in front of them there. Otherwise it takes
+# each of the process's windows with Windows.Graphics.Capture, as Windows composes them, in their
+# order on screen, so nothing of another app's can get into the picture. Where that can't capture,
+# it draws them with PrintWindow, and says so: PrintWindow draws what DirectComposition leaves
+# see-through, as an overlay's margin, black (#1257), and has the browser window repaint its
+# frame, where Windows' theme paints the caption under the UI, on screen too (#1262).
 # On Linux it captures the private session tools/headless.sh --run starts, or check.sh's Xvfb,
 # which hold nothing but the app, and refuses outside one rather than capture the owner's screen.
 # Usage: tools/window-screenshot.sh <pid> <output.png> [all]
@@ -18,12 +20,12 @@ case "$(uname)" in
   MINGW* | MSYS*)
     [ -e "/proc/$1/winpid" ] || { echo "process $1 isn't running" >&2; exit 1; }
     exec env PID="$(cat "/proc/$1/winpid")" OUT="$(cygpath -w "$2")" ALL="${3:-}" \
-      SCREEN="${GITHUB_ACTIONS:-}" \
       powershell.exe -NoProfile -NonInteractive -Command '
-Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @"
+Add-Type -ReferencedAssemblies System.Drawing, System.Windows.Forms -TypeDefinition @"
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 
@@ -38,7 +40,68 @@ public static class Capture {
   [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
   [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
   [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr hwnd, IntPtr dc, uint flags);
+  [DllImport("d3d11.dll")] static extern int D3D11CreateDevice(IntPtr adapter, int driver, IntPtr software, uint flags, IntPtr levels, uint count, uint sdk, out IntPtr device, out int level, out IntPtr context);
+  [DllImport("d3d11.dll")] static extern int CreateDirect3D11DeviceFromDXGIDevice(IntPtr dxgi, out IntPtr device);
+  [DllImport("combase.dll", CharSet = CharSet.Unicode)] static extern int WindowsCreateString(string text, int length, out IntPtr name);
+  [DllImport("combase.dll")] static extern int RoGetActivationFactory(IntPtr name, ref Guid iid, out IntPtr factory);
+
+  [ComImport, Guid("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IGraphicsCaptureItemInterop {
+    IntPtr CreateForWindow(IntPtr window, ref Guid iid);
+    IntPtr CreateForMonitor(IntPtr monitor, ref Guid iid);
+  }
+
+  // Windows.Graphics.Capture, which PowerShell drives: a Direct3D device for it, on the GPU or
+  // else WARP, as a CI runner has none.
+  public static object Device() {
+    IntPtr device, context, dxgi, inspectable;
+    int level;
+    // D3D_DRIVER_TYPE_HARDWARE, then _WARP; D3D11_CREATE_DEVICE_BGRA_SUPPORT.
+    int result = D3D11CreateDevice(IntPtr.Zero, 1, IntPtr.Zero, 0x20, IntPtr.Zero, 0, 7, out device, out level, out context);
+    if (result < 0)
+      result = D3D11CreateDevice(IntPtr.Zero, 5, IntPtr.Zero, 0x20, IntPtr.Zero, 0, 7, out device, out level, out context);
+    Marshal.ThrowExceptionForHR(result);
+    var iid = new Guid("54ec77fa-1377-44e6-8c32-88fd5f44c84c");
+    Marshal.ThrowExceptionForHR(Marshal.QueryInterface(device, ref iid, out dxgi));
+    Marshal.ThrowExceptionForHR(CreateDirect3D11DeviceFromDXGIDevice(dxgi, out inspectable));
+    Marshal.Release(dxgi);
+    Marshal.Release(context);
+    Marshal.Release(device);
+    return Marshal.GetObjectForIUnknown(inspectable);
+  }
+
+  // The GraphicsCaptureItem of |hwnd|.
+  public static object Item(IntPtr hwnd) {
+    const string name = "Windows.Graphics.Capture.GraphicsCaptureItem";
+    IntPtr hstring, factory;
+    Marshal.ThrowExceptionForHR(WindowsCreateString(name, name.Length, out hstring));
+    var interop = typeof(IGraphicsCaptureItemInterop).GUID;
+    Marshal.ThrowExceptionForHR(RoGetActivationFactory(hstring, ref interop, out factory));
+    var items = (IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(factory);
+    var iid = new Guid("79C3F95B-31F7-4EC2-A464-632EF5D30760");
+    return Marshal.GetObjectForIUnknown(items.CreateForWindow(hwnd, ref iid));
+  }
+
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hwnd, System.Text.StringBuilder name, int size);
+  public static string ClassOf(IntPtr hwnd) {
+    var name = new System.Text.StringBuilder(256);
+    GetClassName(hwnd, name, name.Capacity);
+    return name.ToString();
+  }
+
+  // The |width| by |height| at the top left of |pixels|, premultiplied BGRA |across| wide.
+  public static Bitmap FromBgra(byte[] pixels, int across, int width, int height) {
+    var image = new Bitmap(width, height, PixelFormat.Format32bppPArgb);
+    var data = image.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
+    for (int y = 0; y < height; y++)
+      Marshal.Copy(pixels, y * across * 4, data.Scan0 + y * data.Stride, width * 4);
+    image.UnlockBits(data);
+    return image;
+  }
   [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out RECT rect, int size);
+  [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
+  [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr hwnd);
+  [DllImport("user32.dll")] static extern bool IsZoomed(IntPtr hwnd);
 
   static Rectangle Bounds(IntPtr hwnd) {
     RECT r;
@@ -54,7 +117,77 @@ public static class Capture {
     return Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
   }
 
-  public static string Run(uint pid, string path, bool all, bool screen) {
+  // Whether a window of another app shows in front of one of |shown| where it would be in a copy
+  // of the screen. A cloaked window (DWMWA_CLOAKED), as a Store app kept out of sight has, never
+  // shows.
+  static bool Covered(uint pid, List<IntPtr> shown) {
+    var behind = new List<IntPtr>(shown);
+    var covered = false;
+    EnumWindows((hwnd, data) => {
+      if (behind.Remove(hwnd)) return behind.Count > 0;
+      uint owner;
+      int cloaked;
+      GetWindowThreadProcessId(hwnd, out owner);
+      if (owner != pid && IsWindowVisible(hwnd) && !IsIconic(hwnd) &&
+          !(DwmGetWindowAttribute(hwnd, 14, out cloaked, sizeof(int)) == 0 && cloaked != 0) &&
+          behind.Exists(w => Shown(w).IntersectsWith(Shown(hwnd))))
+        covered = true;
+      return !covered;
+    }, IntPtr.Zero);
+    return covered;
+  }
+
+  // Windows 11 rounds the corners of a window, 8 points across, unless it fills its screen.
+  static readonly bool Rounds = int.Parse((string)Microsoft.Win32.Registry.GetValue(
+      "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
+      "CurrentBuildNumber", "0")) >= 22000;
+
+  // The shape of the window on screen, from |origin|: what a copy of the screen holds of it.
+  static GraphicsPath Shape(IntPtr hwnd, Point origin) {
+    var r = Shown(hwnd);
+    r.Offset(-origin.X, -origin.Y);
+    var path = new GraphicsPath();
+    var fills = IsZoomed(hwnd) ||
+        System.Windows.Forms.Screen.FromHandle(hwnd).Bounds == Shown(hwnd);
+    if (!Rounds || fills) {
+      path.AddRectangle(r);
+      return path;
+    }
+    var d = 2 * 8 * (int)GetDpiForWindow(hwnd) / 96;
+    path.AddArc(r.Left, r.Top, d, d, 180, 90);
+    path.AddArc(r.Right - d, r.Top, d, d, 270, 90);
+    path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+    path.AddArc(r.Left, r.Bottom - d, d, d, 90, 90);
+    path.CloseFigure();
+    return path;
+  }
+
+  // Draws |hwnd| into |graphics|, whose top left is |origin| on screen, as |grab| takes it, or else
+  // with PrintWindow, and says whether |grab| took it.
+  static bool Draw(IntPtr hwnd, Graphics graphics, Point origin, Func<IntPtr, Bitmap> grab) {
+    var bounds = Bounds(hwnd);
+    if (bounds.Width <= 0 || bounds.Height <= 0) return true;
+    using (var taken = grab(hwnd)) {
+      if (taken != null) {
+        // The window as Windows composes it, with the clear borders it resizes by or without.
+        var at = taken.Size == Shown(hwnd).Size ? Shown(hwnd).Location : bounds.Location;
+        graphics.DrawImageUnscaled(taken, at.X - origin.X, at.Y - origin.Y);
+        return true;
+      }
+    }
+    using (var window = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb)) {
+      using (var g = Graphics.FromImage(window)) {
+        var dc = g.GetHdc();
+        // PW_RENDERFULLCONTENT, without which a window Chromium or GPUI composites draws black.
+        PrintWindow(hwnd, dc, 2);
+        g.ReleaseHdc(dc);
+      }
+      graphics.DrawImageUnscaled(window, bounds.X - origin.X, bounds.Y - origin.Y);
+    }
+    return false;
+  }
+
+  public static string Run(uint pid, string path, bool all, Func<IntPtr, Bitmap> grab) {
     // Rects in pixels, as PrintWindow draws.
     SetProcessDPIAware();
     // Top-level windows come front to back. Each window owned by another, a menu or the command
@@ -76,38 +209,102 @@ public static class Capture {
     // The window as it shows, without the clear borders it resizes by, in both ways of capturing.
     var area = Shown(mains[0]);
     if (all) mains.ForEach(w => area = Rectangle.Union(area, Shown(w)));
-    if (screen) {
+    var shown = all ? mains : mains.GetRange(0, 1);
+    if (!Covered(pid, shown)) {
+      using (var screen = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb))
       using (var image = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb)) {
-        using (var graphics = Graphics.FromImage(image))
+        using (var graphics = Graphics.FromImage(screen))
           graphics.CopyFromScreen(area.Location, Point.Empty, area.Size);
+        // Clear outside the windows, where what is behind them shows: past their round corners,
+        // and between the windows "all" takes.
+        using (var graphics = Graphics.FromImage(image))
+        using (var shape = new Region()) {
+          shape.MakeEmpty();
+          foreach (var w in shown)
+            using (var outline = Shape(w, area.Location)) shape.Union(outline);
+          graphics.Clip = shape;
+          graphics.DrawImageUnscaled(screen, 0, 0);
+        }
         image.Save(path, ImageFormat.Png);
       }
       return null;
     }
+    var printed = new List<string>();
     using (var image = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb))
     using (var graphics = Graphics.FromImage(image)) {
       for (int i = windows.Count - 1; i >= 0; i--) {
         var top = windows[i];
         while (GetWindow(top, GW_OWNER) != IntPtr.Zero) top = GetWindow(top, GW_OWNER);
         if (!(all ? mains.Contains(top) : top == mains[0])) continue;
-        var bounds = Bounds(windows[i]);
-        using (var window = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb)) {
-          using (var g = Graphics.FromImage(window)) {
-            var dc = g.GetHdc();
-            // PW_RENDERFULLCONTENT, without which a window Chromium composites draws black.
-            PrintWindow(windows[i], dc, 2);
-            g.ReleaseHdc(dc);
-          }
-          graphics.DrawImageUnscaled(window, bounds.X - area.X, bounds.Y - area.Y);
-        }
+        if (!Draw(windows[i], graphics, area.Location, grab)) printed.Add(ClassOf(windows[i]));
       }
       image.Save(path, ImageFormat.Png);
     }
+    if (printed.Count > 0)
+      Console.Error.WriteLine("A window of another app is in front of the app, and " +
+          "Windows.Graphics.Capture could not take " + string.Join(", ", printed) + ", so the " +
+          "capture drew them with PrintWindow, which draws the clear margins of overlays black.");
     return null;
   }
 }
 "@
-$failed = [Capture]::Run([uint32]$env:PID, $env:OUT, $env:ALL -eq "all", $env:SCREEN -eq "true")
+# One frame of a window as Windows composes it, by Windows.Graphics.Capture, or $null where that
+# fails: PowerShell knows the WinRT types, and Capture makes what needs COM.
+$grab = [Func[IntPtr, System.Drawing.Bitmap]] {
+  param($hwnd)
+  try {
+    $null = [Windows.Graphics.Capture.GraphicsCaptureSession, Windows.Graphics, ContentType = WindowsRuntime]
+    $null = [Windows.Graphics.Capture.Direct3D11CaptureFramePool, Windows.Graphics, ContentType = WindowsRuntime]
+    $null = [Windows.Graphics.DirectX.DirectXPixelFormat, Windows.Graphics, ContentType = WindowsRuntime]
+    $null = [Windows.Graphics.Imaging.SoftwareBitmap, Windows.Graphics, ContentType = WindowsRuntime]
+    $null = [Windows.Storage.Streams.Buffer, Windows.Storage.Streams, ContentType = WindowsRuntime]
+    Add-Type -AssemblyName System.Runtime.WindowsRuntime
+    if (-not [Windows.Graphics.Capture.GraphicsCaptureSession]::IsSupported()) {
+      [Console]::Error.WriteLine("Windows.Graphics.Capture is not supported here.")
+      return $null
+    }
+    $item = [Capture]::Item($hwnd)
+    # By reflection, which has the runtime ask the device for IDirect3DDevice, as PowerShell does not.
+    $pool = [Windows.Graphics.Capture.Direct3D11CaptureFramePool].GetMethod("CreateFreeThreaded").Invoke(
+      $null, @([Capture]::Device(), [Windows.Graphics.DirectX.DirectXPixelFormat]::B8G8R8A8UIntNormalized,
+      1, $item.Size))
+    $session = $pool.CreateCaptureSession($item)
+    try { $session.IsCursorCaptureEnabled = $false } catch {}
+    $session.StartCapture()
+    $frame = $null
+    for ($i = 0; $i -lt 150 -and $null -eq $frame; $i++) {
+      $frame = $pool.TryGetNextFrame()
+      if ($null -eq $frame) { Start-Sleep -Milliseconds 20 }
+    }
+    if ($null -eq $frame) {
+      [Console]::Error.WriteLine("Windows.Graphics.Capture gave no frame.")
+      $session.Dispose(); $pool.Dispose()
+      return $null
+    }
+    $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+      $_.Name -eq "AsTask" -and $_.GetParameters().Count -eq 1 -and
+        $_.GetParameters()[0].ParameterType.Name -eq "IAsyncOperation``1" } | Select-Object -First 1
+    $surface = [Windows.Graphics.DirectX.Direct3D11.IDirect3DSurface, Windows.Graphics, ContentType = WindowsRuntime]
+    $alpha = [Windows.Graphics.Imaging.BitmapAlphaMode]
+    $copy = [Windows.Graphics.Imaging.SoftwareBitmap].GetMethod("CreateCopyFromSurfaceAsync",
+      [Type[]] @($surface, $alpha)).Invoke($null, @($frame.Surface, $alpha::Premultiplied))
+    $task = $asTask.MakeGenericMethod([Windows.Graphics.Imaging.SoftwareBitmap]).Invoke($null, @($copy))
+    $bitmap = $task.Result
+    $buffer = New-Object Windows.Storage.Streams.Buffer ([uint32]($bitmap.PixelWidth * $bitmap.PixelHeight * 4))
+    $bitmap.CopyToBuffer($buffer)
+    $bytes = [System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions]::ToArray($buffer)
+    $size = $frame.ContentSize
+    $image = [Capture]::FromBgra($bytes, $bitmap.PixelWidth, [Math]::Min($size.Width, $bitmap.PixelWidth),
+      [Math]::Min($size.Height, $bitmap.PixelHeight))
+    $bitmap.Dispose(); $frame.Dispose(); $session.Dispose(); $pool.Dispose()
+    return $image
+  } catch {
+    [Console]::Error.WriteLine("Windows.Graphics.Capture failed for " + [Capture]::ClassOf($hwnd) +
+      ": " + $_.Exception.Message)
+    return $null
+  }
+}
+$failed = [Capture]::Run([uint32]$env:PID, $env:OUT, $env:ALL -eq "all", $grab)
 if ($failed) { [Console]::Error.WriteLine($failed); exit 1 }'
     ;;
 esac

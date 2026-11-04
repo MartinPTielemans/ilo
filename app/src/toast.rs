@@ -11,10 +11,10 @@ use std::{
 };
 
 use gpui::{
-    App, Bounds, ClickEvent, Context, FontWeight, Global, Hsla, Pixels, Point, Role,
-    SharedString, Task, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
-    WindowHandle, WindowKind, WindowOptions, canvas, div, linear_color_stop, linear_gradient, point,
-    accesskit::Live, prelude::*, px, size, svg,
+    App, Bounds, ClickEvent, Context, FontWeight, Global, Hsla, Pixels, Point, Role, SharedString,
+    Task, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
+    WindowKind, WindowOptions, accesskit::Live, canvas, div, linear_color_stop, linear_gradient,
+    point, prelude::*, px, size, svg,
 };
 
 use crate::palette::{Palette, STATE_HOVERED, STATE_PRESSED};
@@ -26,20 +26,20 @@ use crate::shell::{CARD_INSET, cubic_bezier, scaled::scaled_from_top, spring};
 use crate::tokens::toast::HEIGHT;
 const RIGHT: f32 = CARD_INSET + 8.;
 const TOP: f32 = CARD_INSET + 8.;
-use crate::tokens::toast::TEXT_LEFT;
-use crate::tokens::toast::TEXT_RIGHT;
-use crate::tokens::toast::RADIUS;
-use crate::tokens::toast::TEXT_SIZE;
+use crate::elevation::{Level, WINDOW_MARGIN};
+use crate::tokens::toast::CHIP_FILL;
+use crate::tokens::toast::CHIP_GAP;
+use crate::tokens::toast::CHIP_GLYPH;
 use crate::tokens::toast::CHIP_HEIGHT;
 use crate::tokens::toast::CHIP_RADIUS;
 use crate::tokens::toast::CHIP_X;
-use crate::tokens::toast::CHIP_GAP;
-use crate::tokens::toast::CHIP_FILL;
-use crate::tokens::toast::CHIP_GLYPH;
-use crate::tokens::toast::KEY_GAP;
 use crate::tokens::toast::KEY_COLOR;
-use crate::elevation::{Level, WINDOW_MARGIN};
+use crate::tokens::toast::KEY_GAP;
+use crate::tokens::toast::RADIUS;
 use crate::tokens::toast::SHADE;
+use crate::tokens::toast::TEXT_LEFT;
+use crate::tokens::toast::TEXT_RIGHT;
+use crate::tokens::toast::TEXT_SIZE;
 pub use crate::tokens::toast::WINDOW_HEIGHT;
 /// Arc's motion: it grows from 0.7 of its size about the middle of its top edge on a spring of
 /// 0.32 s and ζ 0.52, fading in over the first 0.1 s, and leaves the way it came over 0.07 s,
@@ -49,6 +49,12 @@ const RESPONSE: f32 = 0.32;
 const DAMPING: f32 = 0.52;
 const FADE_IN: f32 = 0.1;
 const LEAVE: f32 = 0.07;
+/// Asked for again while it's in place, it stays and bumps (Arc 1.171, measured by an outside
+/// reverse-engineering, *interim*, #1404): to 1.044 of its size in 40 ms, easing out, and back by
+/// 0.2 s.
+const BUMP: f32 = 1.044;
+const BUMP_UP: f32 = 0.04;
+const BUMP_TIME: f32 = 0.2;
 /// The note a window shows as it goes full screen (Arc 1.170 rec at 2×): 41 tall, 4 from the
 /// window's top and its right edge on the card's, in the toast's look and motion, for 4.8 s. Off
 /// the Mac, Chrome's words there, as keys are named in words off the Mac (#772).
@@ -114,6 +120,14 @@ impl Pose {
         }
     }
 
+    /// `seconds` after it was asked for again in place: a little bigger, and back.
+    fn bumped(self, seconds: f32) -> Self {
+        Pose {
+            scale: self.scale * bump(seconds).unwrap_or(1.),
+            ..self
+        }
+    }
+
     /// `seconds` after it started leaving, from where the motion was then.
     fn leaving(self, seconds: f32) -> Self {
         let t = cubic_bezier(0.42, 0., 1., 1., (seconds / LEAVE).min(1.));
@@ -122,6 +136,24 @@ impl Pose {
             opacity: self.opacity * (1. - t),
         }
     }
+}
+
+/// How much bigger the bump makes the toast `seconds` in, none once it's over.
+fn bump(seconds: f32) -> Option<f32> {
+    let up = if seconds < BUMP_UP {
+        cubic_bezier(0., 0., 0.58, 1., seconds.max(0.) / BUMP_UP)
+    } else if seconds < BUMP_TIME {
+        1. - cubic_bezier(
+            0.42,
+            0.,
+            0.58,
+            1.,
+            (seconds - BUMP_UP) / (BUMP_TIME - BUMP_UP),
+        )
+    } else {
+        return None;
+    };
+    Some(1. + (BUMP - 1.) * up)
 }
 
 struct Shown {
@@ -135,6 +167,8 @@ struct Shown {
     expired: bool,
     /// When its window was first on screen, where the motion starts.
     shown: Option<Instant>,
+    /// When it was last asked for again while in place, which bumps it.
+    bumped: Option<Instant>,
     /// Once it's leaving: when, and where the motion was.
     leaving: Option<(Instant, Pose)>,
     settled: bool,
@@ -152,20 +186,26 @@ impl Shown {
         let arrived = Pose::arriving(self.shown.map_or(0., |shown| shown.elapsed().as_secs_f32()));
         match self.leaving {
             Some((at, from)) => from.leaving(at.elapsed().as_secs_f32()),
-            None => arrived,
+            None => match self.bumped {
+                Some(at) => arrived.bumped(at.elapsed().as_secs_f32()),
+                None => arrived,
+            },
         }
     }
 
-    /// Whether it's still on its way in or out. Under Reduce Motion it's in once it has faded in,
-    /// as it's drawn at its size.
+    /// Whether it's still on its way in or out, or bumping. Under Reduce Motion it's in once it
+    /// has faded in, as it's drawn at its size and never bumps.
     fn moving(&self, cx: &App) -> bool {
+        let bumping = self
+            .bumped
+            .is_some_and(|at| bump(at.elapsed().as_secs_f32()).is_some());
         match (self.shown, self.leaving) {
             (_, Some(_)) | (None, _) => true,
             (Some(shown), None) if crate::motion::still(cx) => {
                 shown.elapsed().as_secs_f32() < FADE_IN
             }
             (Some(shown), None) => {
-                spring(shown.elapsed().as_secs_f32(), RESPONSE, DAMPING).is_some()
+                bumping || spring(shown.elapsed().as_secs_f32(), RESPONSE, DAMPING).is_some()
             }
         }
     }
@@ -305,7 +345,11 @@ pub fn hide_held(tab: u64, cx: &mut App) {
     };
     window
         .update(cx, |toast, _, cx| {
-            if toast.shown.as_ref().is_some_and(|shown| shown.held == Some(tab)) {
+            if toast
+                .shown
+                .as_ref()
+                .is_some_and(|shown| shown.held == Some(tab))
+            {
                 toast.leave(cx);
             }
         })
@@ -344,8 +388,14 @@ pub fn hide_undo(cx: &mut App) {
     window
         .update(cx, |toast, _, cx| {
             let undoing = toast.shown.as_ref().is_some_and(|shown| {
-                shown.buttons.iter().any(|button| button.name == UNDO_BUTTON)
-                    || shown.key.as_ref().is_some_and(|(key, _)| **key == *undo_key)
+                shown
+                    .buttons
+                    .iter()
+                    .any(|button| button.name == UNDO_BUTTON)
+                    || shown
+                        .key
+                        .as_ref()
+                        .is_some_and(|(key, _)| **key == *undo_key)
             });
             if undoing {
                 toast.leave(cx);
@@ -391,8 +441,11 @@ fn present(
             // check.sh reads this line.
             let words = key.map_or(String::new(), |(key, rest)| format!(" {key} {rest}"));
             let names: Vec<&str> = buttons.iter().map(|button| button.name).collect();
-            let names =
-                if names.is_empty() { String::new() } else { format!(" [{}]", names.join(", ")) };
+            let names = if names.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", names.join(", "))
+            };
             log!("browser: toast shown {text}{words}{names}");
             let timer = match time {
                 Some(time) => cx.spawn(async move |toast, cx| {
@@ -401,8 +454,16 @@ fn present(
                 }),
                 None => Task::ready(()),
             };
-            // One already in place stays there with the new words, and one leaving comes back.
+            // One already in place stays there with the new words and time, and bumps, as nothing
+            // else would show it was asked for again; one leaving comes back. Under Reduce Motion
+            // it doesn't scale.
             let shown = toast.shown.take().filter(|shown| shown.leaving.is_none());
+            let in_place = shown.as_ref().is_some_and(|shown| shown.shown.is_some());
+            let bumped = (in_place && !crate::motion::still(cx)).then(|| {
+                // check.sh reads this line.
+                log!("browser: toast bumped");
+                Instant::now()
+            });
             toast.shown = Some(Shown {
                 text: text.to_string().into(),
                 key: key.map(|(key, rest)| (key.to_string().into(), rest.to_string().into())),
@@ -410,6 +471,7 @@ fn present(
                 hovered: shown.as_ref().is_some_and(|shown| shown.hovered),
                 expired: false,
                 shown: shown.and_then(|shown| shown.shown),
+                bumped,
                 leaving: None,
                 settled: false,
                 full_screen,
@@ -427,9 +489,10 @@ fn present(
 impl Toast {
     /// Tells the host whether the toast takes clicks: while it has buttons and isn't leaving.
     fn take_clicks(&mut self, _: &mut Context<Self>) {
-        let takes = self.shown.as_ref().is_some_and(|shown| {
-            !shown.buttons.is_empty() && shown.leaving.is_none()
-        });
+        let takes = self
+            .shown
+            .as_ref()
+            .is_some_and(|shown| !shown.buttons.is_empty() && shown.leaving.is_none());
         if takes != self.takes_clicks {
             self.takes_clicks = takes;
             self.host.take_clicks(takes);
@@ -452,6 +515,10 @@ impl Toast {
         let Some(shown) = self.shown.as_mut().filter(|shown| shown.leaving.is_none()) else {
             return;
         };
+        if shown.hovered != hovered {
+            // check.sh reads this line: a toast with the pointer on it stays past its time.
+            log!("browser: toast hovered {hovered}");
+        }
         shown.hovered = hovered;
         if !hovered && shown.expired {
             self.leave(cx);
@@ -459,7 +526,11 @@ impl Toast {
     }
 
     fn press(&mut self, index: usize, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let Some(button) = self.shown.as_ref().and_then(|shown| shown.buttons.get(index)) else {
+        let Some(button) = self
+            .shown
+            .as_ref()
+            .and_then(|shown| shown.buttons.get(index))
+        else {
             return;
         };
         let run = button.run.clone();
@@ -485,7 +556,9 @@ impl Toast {
             return;
         };
         shown._timer = cx.spawn(async move |toast, cx| {
-            cx.background_executor().timer(Duration::from_secs_f32(LEAVE)).await;
+            cx.background_executor()
+                .timer(Duration::from_secs_f32(LEAVE))
+                .await;
             toast
                 .update(cx, |toast, cx| {
                     toast.shown = None;
@@ -534,7 +607,10 @@ impl Render for Toast {
         }
         let pose = shown.pose();
         let (fill, palette) = (self.look)(cx);
-        let bottom = Hsla { l: fill.l * SHADE, ..fill };
+        let bottom = Hsla {
+            l: fill.l * SHADE,
+            ..fill
+        };
         let a11y = window.is_a11y_active();
         let buttons: Vec<_> = (shown.buttons.iter().enumerate())
             .map(|(index, button)| {
@@ -568,12 +644,16 @@ impl Render for Toast {
                 match &button.label {
                     Label::Text(text) => chip.child(text.clone()),
                     Label::Glyph(path) => chip.child(
-                        svg().path(*path).size(px(CHIP_GLYPH)).text_color(palette.ink),
+                        svg()
+                            .path(*path)
+                            .size(px(CHIP_GLYPH))
+                            .text_color(palette.ink),
                     ),
                     // The key is fainter than the word it goes with.
-                    Label::Keyed(text, key) => chip.gap(px(KEY_GAP)).child(text.clone()).child(
-                        div().text_color(palette.text(KEY_COLOR)).child(key.clone()),
-                    ),
+                    Label::Keyed(text, key) => chip
+                        .gap(px(KEY_GAP))
+                        .child(text.clone())
+                        .child(div().text_color(palette.text(KEY_COLOR)).child(key.clone())),
                 }
             })
             .collect();
@@ -585,9 +665,10 @@ impl Render for Toast {
         let toast = div()
             .id("toast")
             .when(a11y, |toast| {
-                toast.role(Role::Status).aria_value(said).a11y_synthetic_children(|builder| {
-                    builder.parent_node().set_live(Live::Polite)
-                })
+                toast
+                    .role(Role::Status)
+                    .aria_value(said)
+                    .a11y_synthetic_children(|builder| builder.parent_node().set_live(Live::Polite))
             })
             .on_hover(cx.listener(|toast, hovered: &bool, _, cx| toast.hover(*hovered, cx)))
             .h(px(height))
@@ -601,7 +682,11 @@ impl Render for Toast {
             .rounded(px(RADIUS))
             .border(px(0.5))
             .border_color(Level::Popover.rim())
-            .bg(linear_gradient(180., linear_color_stop(fill, 0.), linear_color_stop(bottom, 1.)))
+            .bg(linear_gradient(
+                180.,
+                linear_color_stop(fill, 0.),
+                linear_color_stop(bottom, 1.),
+            ))
             .shadow(Level::Popover.shadow())
             .opacity(pose.opacity)
             .text_size(px(TEXT_SIZE))
@@ -631,36 +716,39 @@ impl Render for Toast {
             // The plate is what takes clicks, so the host is told where it is once it has come to
             // rest, since it's drawn scaled until then, and the plate under a click is where it
             // was drawn.
-            .child(canvas(
-                {
-                    let (host, told) = (self.host.clone(), self.plate.clone());
-                    move |bounds, window, _| {
-                        // Inside the plate's 0.5 border.
-                        let bounds = bounds.dilate(px(0.5));
-                        if at_rest && told.replace(Some(bounds)) != Some(bounds) {
-                            let (x, y) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
-                            let (width, height) = (bounds.size.width, bounds.size.height);
-                            let window = window.viewport_size();
-                            // check.sh reads this line, to click just outside the plate and to see
-                            // the window holds it whole.
-                            log!(
-                                "browser: toast plate {x:.0} {y:.0} {:.0} {:.0} in {:.0} {:.0}",
-                                f32::from(width),
-                                f32::from(height),
-                                f32::from(window.width),
-                                f32::from(window.height)
-                            );
-                            host.plate(bounds);
+            .child(
+                canvas(
+                    {
+                        let (host, told) = (self.host.clone(), self.plate.clone());
+                        move |bounds, window, _| {
+                            // Inside the plate's 0.5 border.
+                            let bounds = bounds.dilate(px(0.5));
+                            if at_rest && told.replace(Some(bounds)) != Some(bounds) {
+                                let (x, y) =
+                                    (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+                                let (width, height) = (bounds.size.width, bounds.size.height);
+                                let window = window.viewport_size();
+                                // check.sh reads this line, to click just outside the plate and to see
+                                // the window holds it whole.
+                                log!(
+                                    "browser: toast plate {x:.0} {y:.0} {:.0} {:.0} in {:.0} {:.0}",
+                                    f32::from(width),
+                                    f32::from(height),
+                                    f32::from(window.width),
+                                    f32::from(window.height)
+                                );
+                                host.plate(bounds);
+                            }
                         }
-                    }
-                },
-                |_, _, _, _| {},
-            )
-            // Over the plate's whole inside, not after its padding.
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full());
+                    },
+                    |_, _, _, _| {},
+                )
+                // Over the plate's whole inside, not after its padding.
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            );
         root.child(scaled_from_top(toast, pose.scale))
     }
 }

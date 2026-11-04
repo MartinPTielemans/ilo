@@ -11,21 +11,22 @@ use std::{
 };
 
 use browser::account::{self, Account};
-use browser::agents::runner::Cli;
-use browser::agents::task::{Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep};
-use browser::import::sources::{Os, Roots};
-use browser::log;
-use browser::shell::{
-    self, Archived, BarTab, Browser, Command, Download, DownloadAction, DownloadState,
-    Folders, Match, MediaAction, MenuBar, MenuEntry, Page, Shell, SpaceEntry, Split, Trouble,
-    WindowButton,
+use browser::agents::task::{
+    Card as TaskCard, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep,
 };
 use browser::command_bar::{self, Suggestion};
 use browser::dialog;
 use browser::icon_picker::{self, Recents};
+use browser::import::sources::{Os, Roots};
 use browser::link_preview;
+use browser::log;
 use browser::menu;
 use browser::palette::{self, Palette, Tone};
+use browser::settings_card::Card;
+use browser::shell::{
+    self, Archived, BarTab, Browser, Command, Download, DownloadAction, DownloadState, Folders,
+    Match, MediaAction, MenuBar, MenuEntry, Page, Shell, SpaceEntry, Split, Trouble, WindowButton,
+};
 use browser::site_controls::{self, Connection, Permission, Site, Value};
 use browser::theme::{Appearance, Theme};
 use browser::theme_picker;
@@ -61,10 +62,7 @@ const TABS: [(&str, &str); 5] = [
     ),
     ("Hacker News", "https://news.ycombinator.com/"),
     ("Zed — The editor for what's next", "https://zed.dev/"),
-    (
-        "Rust Programming Language",
-        "https://www.rust-lang.org/",
-    ),
+    ("Rust Programming Language", "https://www.rust-lang.org/"),
     ("", "https://example.com/"),
 ];
 
@@ -82,7 +80,11 @@ const READING: [(&str, &str); 4] = [
 const FAVORITES: [(&str, &str, Icon); 6] = [
     ("Gmail", "https://mail.google.com/", Icon::Envelope),
     ("Calendar", "https://calendar.google.com/", Icon::Blocks),
-    ("GitHub", "https://github.com/", Icon::Disc([0.12, 0.13, 0.16])),
+    (
+        "GitHub",
+        "https://github.com/",
+        Icon::Disc([0.12, 0.13, 0.16]),
+    ),
     ("YouTube", "https://www.youtube.com/", Icon::Play),
     ("Notes", "https://notes.example/", Icon::Disc([1., 1., 1.])),
     ("Sketch", "https://sketch.example/", Icon::None),
@@ -135,7 +137,11 @@ impl Icon {
                 Icon::Play if rounded(fx, fy, 1., 8.) => {
                     // Right of x = 12, between the lines from (12, 9) and (12, 22) to (23, 15.5).
                     let inside = fx >= 12. && (fy - 15.5).abs() <= 6.5 * (23. - fx) / 11.;
-                    if inside { [1., 1., 1., 1.] } else { [0.9, 0.1, 0.1, 1.] }
+                    if inside {
+                        [1., 1., 1., 1.]
+                    } else {
+                        [0.9, 0.1, 0.1, 1.]
+                    }
                 }
                 _ => [0.; 4],
             }
@@ -155,9 +161,17 @@ impl Icon {
 // The archive: tabs closed hours and days ago, newest first.
 const ARCHIVE: [(&str, &str, f64); 6] = [
     ("Wikipedia", "https://www.wikipedia.org/", 0.05),
-    ("Internet Assigned Numbers Authority", "https://www.iana.org/", 0.2),
+    (
+        "Internet Assigned Numbers Authority",
+        "https://www.iana.org/",
+        0.2,
+    ),
     ("W3C", "https://www.w3.org/", 1.1),
-    ("The GNU Operating System and the Free Software Movement", "https://www.gnu.org/", 2.5),
+    (
+        "The GNU Operating System and the Free Software Movement",
+        "https://www.gnu.org/",
+        2.5,
+    ),
     ("Chromium", "https://www.chromium.org/", 6.),
     ("", "https://example.org/", 12.),
 ];
@@ -166,12 +180,60 @@ const DAY: f64 = 86_400_000.;
 // The downloads: one running, one paused, one held, and finished ones, newest first, with their
 // bytes so far and in all, and how many days ago they started.
 const DOWNLOADS: [(&str, &str, i64, i64, DownloadState, bool, f64); 6] = [
-    ("zed-0.170.dmg", "https://zed.dev/", 48_200_000, 121_500_000, RUNNING, false, 0.),
-    ("rust-book.pdf", "https://doc.rust-lang.org/", 3_100_000, 7_800_000, PAUSED, false, 0.01),
-    ("installer.command", "http://example.com/", 2_000, 4_000, RUNNING, true, 0.02),
-    ("report.csv", "https://data.example.org/", 18_400, 18_400, DONE, false, 0.3),
-    ("photo.jpg", "https://commons.wikimedia.org/", 2_480_000, 2_480_000, DONE, false, 1.2),
-    ("old-notes.txt", "https://example.net/", 0, 0, DownloadState::Cancelled, false, 9.),
+    (
+        "zed-0.170.dmg",
+        "https://zed.dev/",
+        48_200_000,
+        121_500_000,
+        RUNNING,
+        false,
+        0.,
+    ),
+    (
+        "rust-book.pdf",
+        "https://doc.rust-lang.org/",
+        3_100_000,
+        7_800_000,
+        PAUSED,
+        false,
+        0.01,
+    ),
+    (
+        "installer.command",
+        "http://example.com/",
+        2_000,
+        4_000,
+        RUNNING,
+        true,
+        0.02,
+    ),
+    (
+        "report.csv",
+        "https://data.example.org/",
+        18_400,
+        18_400,
+        DONE,
+        false,
+        0.3,
+    ),
+    (
+        "photo.jpg",
+        "https://commons.wikimedia.org/",
+        2_480_000,
+        2_480_000,
+        DONE,
+        false,
+        1.2,
+    ),
+    (
+        "old-notes.txt",
+        "https://example.net/",
+        0,
+        0,
+        DownloadState::Cancelled,
+        false,
+        9.,
+    ),
 ];
 const RUNNING: DownloadState = DownloadState::Running;
 const PAUSED: DownloadState = DownloadState::Paused;
@@ -196,15 +258,27 @@ fn holders(folders: &Folders, row: u64) -> impl Iterator<Item = u64> + '_ {
 
 /// Where `row`'s rows end in `pinned`: past what's in it, if it's a folder.
 fn end_of(pinned: &[u64], folders: &Folders, row: u64) -> usize {
-    let at = pinned.iter().position(|&id| id == row).map_or(0, |at| at + 1);
-    let within = pinned[at..].iter().take_while(|&&id| holders(folders, id).any(|f| f == row));
+    let at = pinned
+        .iter()
+        .position(|&id| id == row)
+        .map_or(0, |at| at + 1);
+    let within = pinned[at..]
+        .iter()
+        .take_while(|&&id| holders(folders, id).any(|f| f == row));
     at + within.count()
 }
 
 /// Where `index` in `folder`, else in the pinned tabs, is in `pinned`, as the core counts.
 fn pinned_at(pinned: &[u64], folders: &Folders, folder: u64, index: usize) -> usize {
-    let start = pinned.iter().position(|&id| id == folder).map_or(0, |at| at + 1);
-    let end = if folder == 0 { pinned.len() } else { end_of(pinned, folders, folder) };
+    let start = pinned
+        .iter()
+        .position(|&id| id == folder)
+        .map_or(0, |at| at + 1);
+    let end = if folder == 0 {
+        pinned.len()
+    } else {
+        end_of(pinned, folders, folder)
+    };
     let parent = |at: &usize| folders.parents.get(&pinned[*at]).copied().unwrap_or(0) == folder;
     (start..end).filter(parent).nth(index).unwrap_or(end)
 }
@@ -236,7 +310,9 @@ fn move_pinned(
 }
 
 fn now() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0., |now| now.as_millis() as f64)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0., |now| now.as_millis() as f64)
 }
 
 struct Fake {
@@ -297,7 +373,11 @@ impl Fake {
     }
 
     /// Changes the shell once the current update is over, as the engine reports back.
-    fn later(&self, cx: &mut App, change: impl FnOnce(&mut Shell, &mut gpui::Context<Shell>) + 'static) {
+    fn later(
+        &self,
+        cx: &mut App,
+        change: impl FnOnce(&mut Shell, &mut gpui::Context<Shell>) + 'static,
+    ) {
         let shell = self.shell.clone();
         cx.defer(move |cx| {
             shell.update(cx, change).ok();
@@ -345,7 +425,10 @@ impl Browser for Fake {
         self.next_id.set(copy + 1);
         self.later(cx, move |shell, cx| {
             let mut today = shell.today().to_vec();
-            let at = today.iter().position(|&id| id == tab).map_or(0, |index| index + 1);
+            let at = today
+                .iter()
+                .position(|&id| id == tab)
+                .map_or(0, |index| index + 1);
             today.insert(at, copy);
             shell.set_title(copy, shell.title(tab), cx);
             shell.set_page(copy, shell.page(tab), cx);
@@ -395,7 +478,9 @@ impl Browser for Fake {
                 let mut splits = shell.splits();
                 pinned.retain(|&id| id != tab);
                 today.retain(|&id| id != tab);
-                splits.iter_mut().for_each(|split| split.tabs.retain(|&id| id != tab));
+                splits
+                    .iter_mut()
+                    .for_each(|split| split.tabs.retain(|&id| id != tab));
                 splits.retain(|split| split.tabs.len() > 1);
                 let folders = shell.folders();
                 shell.set_tabs(shell.space(), pinned, today, splits, folders, cx);
@@ -518,7 +603,10 @@ impl Browser for Fake {
             if space != shell.space() {
                 return;
             }
-            let folders = Folders { pinned_shut: !open, ..shell.folders() };
+            let folders = Folders {
+                pinned_shut: !open,
+                ..shell.folders()
+            };
             let (pinned, today) = (shell.pinned().to_vec(), shell.today().to_vec());
             let splits = shell.splits();
             shell.set_tabs(shell.space(), pinned, today, splits, folders, cx);
@@ -526,7 +614,9 @@ impl Browser for Fake {
     }
 
     fn move_folder(&self, folder: u64, to: u64, index: usize, cx: &mut App) {
-        self.later(cx, move |shell, cx| move_pinned(shell, folder, to, index, cx));
+        self.later(cx, move |shell, cx| {
+            move_pinned(shell, folder, to, index, cx)
+        });
     }
 
     fn delete_folder(&self, folder: u64, cx: &mut App) {
@@ -535,7 +625,11 @@ impl Browser for Fake {
             pinned.retain(|&id| id != folder);
             folders.folders.remove(&folder);
             let holder = folders.parents.remove(&folder).unwrap_or(0);
-            for parent in folders.parents.values_mut().filter(|parent| **parent == folder) {
+            for parent in folders
+                .parents
+                .values_mut()
+                .filter(|parent| **parent == folder)
+            {
                 *parent = holder;
             }
             folders.parents.retain(|_, parent| *parent != 0);
@@ -648,9 +742,9 @@ impl Browser for Fake {
     }
 
     fn clear_downloads(&self, cx: &mut App) {
-        self.downloads.borrow_mut().retain(|each| {
-            matches!(each.state, DownloadState::Running | DownloadState::Paused)
-        });
+        self.downloads
+            .borrow_mut()
+            .retain(|each| matches!(each.state, DownloadState::Running | DownloadState::Paused));
         self.report_downloads(cx);
     }
 
@@ -705,7 +799,10 @@ impl Browser for Fake {
 
     fn set_muted(&self, tab: u64, muted: bool, cx: &mut App) {
         self.later(cx, move |shell, cx| {
-            let page = Page { muted, ..shell.page(tab) };
+            let page = Page {
+                muted,
+                ..shell.page(tab)
+            };
             shell.set_page(tab, page, cx);
         });
     }
@@ -724,7 +821,11 @@ impl Browser for Fake {
             // A made-up page floats nothing, but its player's button goes as a real one's would.
             let media_picture_in_picture = (shell.page(tab).media_picture_in_picture)
                 && action != MediaAction::PictureInPicture;
-            let page = Page { media_playing, media_picture_in_picture, ..shell.page(tab) };
+            let page = Page {
+                media_playing,
+                media_picture_in_picture,
+                ..shell.page(tab)
+            };
             shell.set_page(tab, page, cx);
         });
     }
@@ -737,7 +838,10 @@ impl Browser for Fake {
                 state: shell::CastState::Available,
                 status: "".into(),
             };
-            let cast = shell::Cast { header: "Cast tab".into(), devices: vec![device] };
+            let cast = shell::Cast {
+                header: "Cast tab".into(),
+                devices: vec![device],
+            };
             shell.set_cast(tab, Some(cast), cx);
         });
     }
@@ -756,7 +860,10 @@ impl Browser for Fake {
     fn use_system_engine(&self, tab: u64, cx: &mut App) {
         self.later(cx, move |shell, cx| {
             shell.set_media_unsupported(tab, "", cx);
-            let page = Page { system_engine: true, ..shell.page(tab) };
+            let page = Page {
+                system_engine: true,
+                ..shell.page(tab)
+            };
             shell.set_page(tab, page, cx);
         });
     }
@@ -764,7 +871,10 @@ impl Browser for Fake {
     fn set_icon(&self, tab: u64, icon: &str, cx: &mut App) {
         let icon: SharedString = icon.to_string().into();
         self.later(cx, move |shell, cx| {
-            let page = Page { icon, ..shell.page(tab) };
+            let page = Page {
+                icon,
+                ..shell.page(tab)
+            };
             shell.set_page(tab, page, cx);
         });
     }
@@ -877,6 +987,7 @@ impl Browser for Fake {
     fn command_bar(
         &self,
         editing: Option<(u64, SharedString)>,
+        _: Vec<SharedString>,
         _: Vec<BarTab>,
         _: Option<Bounds<Pixels>>,
         cx: &mut App,
@@ -953,23 +1064,10 @@ impl Browser for Fake {
     fn settings(&self, _: &mut App) {}
 
     fn passwords(&self, _: u64, _: &mut App) {}
-    fn agent_activity(&self, _: &mut App) {}
-
-    fn agent_permissions(&self, _: u64, _: &App) -> browser::shell::AgentGrants {
-        Default::default()
-    }
-
-    fn revoke_agent(&self, _: u64, _: Option<SharedString>, _: &mut App) {}
-
-    fn disconnect_agent(&self, _: u64, _: &mut App) {}
-
-    fn take_back_agent_tabs(&self, _: u64, _: &mut App) {}
 
     fn take_over(&self, _: SharedString, _: u64, _: &mut App) {}
 
     fn hand_back(&self, _: u64, _: &mut App) {}
-
-    fn give_to_agent(&self, _: u64, _: u64, _: &mut App) {}
 
     fn stop_agent(&self, _: SharedString, _: &mut App) {}
 
@@ -977,7 +1075,9 @@ impl Browser for Fake {
 
     // Each card's click shows the working task's conversation, as the Agents send it.
     fn show_task(&self, agent: SharedString, cx: &mut App) {
-        self.later(cx, move |shell, cx| shell.set_conversation(Some(task_conversation(agent)), cx));
+        self.later(cx, move |shell, cx| {
+            shell.set_conversation(Some(task_conversation(agent)), cx)
+        });
     }
 
     // A task's Space is known by its agent's id, as the core's are.
@@ -990,7 +1090,6 @@ impl Browser for Fake {
 
     fn task_picture(&self, _: u64, _: u64, _: &mut App) {}
 
-
     fn shortcuts(&self, _: &mut App) {}
 
     fn about(&self, _: &mut App) {}
@@ -1001,7 +1100,12 @@ impl Browser for Fake {
     fn show_space(&self, space: u64, cx: &mut App) {
         self.later(cx, move |shell, cx| {
             shell.set_space(space, cx);
-            let top = shell.today().first().or(shell.pinned().first()).copied().unwrap_or(0);
+            let top = shell
+                .today()
+                .first()
+                .or(shell.pinned().first())
+                .copied()
+                .unwrap_or(0);
             shell.set_selected(top, cx);
         });
     }
@@ -1014,10 +1118,20 @@ impl Browser for Fake {
     fn create_space(&self, name: &str, profile: u64, after: u64, cx: &mut App) -> u64 {
         let space = self.next_id.get();
         self.next_id.set(space + 1);
-        let entry =
-            (space, name.to_string().into(), None, profile, "".into(), "".into(), "".into());
+        let entry = (
+            space,
+            name.to_string().into(),
+            None,
+            profile,
+            "".into(),
+            "".into(),
+            "".into(),
+        );
         let mut spaces = self.spaces.borrow_mut();
-        let at = spaces.iter().position(|(id, ..)| *id == after).map_or(spaces.len(), |at| at + 1);
+        let at = spaces
+            .iter()
+            .position(|(id, ..)| *id == after)
+            .map_or(spaces.len(), |at| at + 1);
         spaces.insert(at, entry);
         drop(spaces);
         self.report_spaces(cx);
@@ -1025,7 +1139,12 @@ impl Browser for Fake {
     }
 
     fn rename_space(&self, space: u64, name: &str, cx: &mut App) {
-        if let Some(entry) = self.spaces.borrow_mut().iter_mut().find(|(id, ..)| *id == space) {
+        if let Some(entry) = self
+            .spaces
+            .borrow_mut()
+            .iter_mut()
+            .find(|(id, ..)| *id == space)
+        {
             entry.1 = name.to_string().into();
         }
         self.report_spaces(cx);
@@ -1048,28 +1167,48 @@ impl Browser for Fake {
     }
 
     fn set_space_color(&self, space: u64, color: Option<u32>, cx: &mut App) {
-        if let Some(entry) = self.spaces.borrow_mut().iter_mut().find(|(id, ..)| *id == space) {
+        if let Some(entry) = self
+            .spaces
+            .borrow_mut()
+            .iter_mut()
+            .find(|(id, ..)| *id == space)
+        {
             entry.2 = color;
         }
         self.report_spaces(cx);
     }
 
     fn set_space_icon(&self, space: u64, icon: &str, cx: &mut App) {
-        if let Some(entry) = self.spaces.borrow_mut().iter_mut().find(|(id, ..)| *id == space) {
+        if let Some(entry) = self
+            .spaces
+            .borrow_mut()
+            .iter_mut()
+            .find(|(id, ..)| *id == space)
+        {
             entry.4 = icon.to_string().into();
         }
         self.report_spaces(cx);
     }
 
     fn set_space_theme(&self, space: u64, theme: &str, cx: &mut App) {
-        if let Some(entry) = self.spaces.borrow_mut().iter_mut().find(|(id, ..)| *id == space) {
+        if let Some(entry) = self
+            .spaces
+            .borrow_mut()
+            .iter_mut()
+            .find(|(id, ..)| *id == space)
+        {
             entry.6 = theme.to_string().into();
         }
         self.report_spaces(cx);
     }
 
     fn set_space_profile(&self, space: u64, profile: u64, cx: &mut App) {
-        if let Some(entry) = self.spaces.borrow_mut().iter_mut().find(|(id, ..)| *id == space) {
+        if let Some(entry) = self
+            .spaces
+            .borrow_mut()
+            .iter_mut()
+            .find(|(id, ..)| *id == space)
+        {
             entry.3 = profile;
         }
         self.report_spaces(cx);
@@ -1171,6 +1310,15 @@ impl Browser for Fake {
 
     // The targets' window is the app's, over the page, which the preview has neither of.
     fn show_drop_targets(&self, _: bool, _: &mut App) {}
+
+    // The preview has no page for the pointer to be over.
+    fn pointer(&self, _: &mut App) -> Option<Point<Pixels>> {
+        None
+    }
+
+    fn over_page_blends(&self) -> bool {
+        true
+    }
 
     fn show_window_buttons(&self, _: bool, _: &mut App) {}
 
@@ -1285,10 +1433,22 @@ impl Browser for Fake {
     ) {
         // PREVIEW_MENU_LOOK=light shows it as a light theme's Space does.
         let light = std::env::var("PREVIEW_MENU_LOOK").is_ok_and(|look| look == "light");
-        let look = menu::Look { light: light || look.light, ..look };
+        let look = menu::Look {
+            light: light || look.light,
+            ..look
+        };
         let area = Bounds::new(point(px(0.), px(0.)), PREVIEW_AREA.get());
         let chosen = menu::picked(chosen);
-        menu::show(menu::Request { items, at, area, look, chosen }, cx);
+        menu::show(
+            menu::Request {
+                items,
+                at,
+                area,
+                look,
+                chosen,
+            },
+            cx,
+        );
     }
 
     fn tell(
@@ -1407,7 +1567,10 @@ impl command_bar::Host for PreviewBar {
             model: Some("Haiku".into()),
             resets: None,
         };
-        Some(command_bar::TaskAgents { agents: vec![claude], known: true })
+        Some(command_bar::TaskAgents {
+            agents: vec![claude],
+            known: true,
+        })
     }
 
     fn over_private(&self) -> bool {
@@ -1452,9 +1615,17 @@ fn preview_tone() -> Option<Tone> {
 const FIRST_TASK: u64 = 9001;
 /// The tasks PREVIEW_TASKS shows: each one's title, status and dot.
 const TASKS: [(&str, &str, Dot); 3] = [
-    ("Find two tickets for Saturday", "Clicking “Tickets”", Dot::Working),
+    (
+        "Find two tickets for Saturday",
+        "Clicking “Tickets”",
+        Dot::Working,
+    ),
     ("Compare the museum passes", "Stopped", Dot::Ended),
-    ("Book a table for four", "A table for four at 20:00 is held", Dot::Done),
+    (
+        "Book a table for four",
+        "A table for four at 20:00 is held",
+        Dot::Done,
+    ),
 ];
 /// The pages the done task left the user, each with its site.
 const TASK_PAGES: [(&str, &str); 3] = [
@@ -1466,16 +1637,25 @@ const TASK_PAGES: [(&str, &str); 3] = [
 /// A task's Space, as the core lists one: its agent's name in the agent column, its agent's id
 /// a task's (`Fake::space_agent`).
 fn task_space(id: u64) -> SpaceEntry {
-    (id, "Task".into(), None, 0, "".into(), "Claude".into(), "".into())
+    (
+        id,
+        "Task".into(),
+        None,
+        0,
+        "".into(),
+        "Claude".into(),
+        "".into(),
+    )
 }
 
 /// The tasks' cards, each asked in `home`.
-fn task_cards(home: u64) -> Vec<Card> {
-    let card = |(at, (title, status, dot)): (u64, (&str, &str, Dot))| Card {
+fn task_cards(home: u64) -> Vec<TaskCard> {
+    let card = |(at, (title, status, dot)): (u64, (&str, &str, Dot))| TaskCard {
         agent: format!("task-{at}").into(),
         home,
         space: at,
-        cli: Cli::Claude,
+        name: "Claude".into(),
+        replies: true,
         title: title.into(),
         status: status.into(),
         asks: false,
@@ -1493,7 +1673,7 @@ fn task_cards(home: u64) -> Vec<Card> {
         retry: false,
         command: None,
     };
-    let mut cards: Vec<Card> = (FIRST_TASK..).zip(TASKS).map(card).collect();
+    let mut cards: Vec<TaskCard> = (FIRST_TASK..).zip(TASKS).map(card).collect();
     // Newest first, as the Agents send them.
     cards.reverse();
     cards
@@ -1517,7 +1697,14 @@ fn task_conversation(agent: SharedString) -> Conversation {
     };
     let (click, read) = ("icons/mouse-pointer-2.svg", "icons/text-align-start.svg");
     let items = vec![
-        TraceItem::Step(step(0, "icons/globe.svg", "Opened tickets.example", "2 s", false, false)),
+        TraceItem::Step(step(
+            0,
+            "icons/globe.svg",
+            "Opened tickets.example",
+            "2 s",
+            false,
+            false,
+        )),
         TraceItem::Step(step(1, read, "Read tickets.example", "", false, false)),
         TraceItem::Step(step(
             2,
@@ -1533,12 +1720,17 @@ fn task_conversation(agent: SharedString) -> Conversation {
     ];
     Conversation {
         agent,
-        name: "Claude",
+        name: "Claude".into(),
         title: title.into(),
         about: "Claude · Working".into(),
         asked: "Find two tickets for Saturday's concert, in the stalls".into(),
         page: None,
-        lines: vec![Line::Trace(Trace { key: 0, running: true, took: None, items })],
+        lines: vec![Line::Trace(Trace {
+            key: 0,
+            running: true,
+            took: None,
+            items,
+        })],
         tabs: Vec::new(),
         on: None,
         stoppable: true,
@@ -1564,7 +1756,11 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
     // The Space's tabs, which the bar lists before anything is typed.
     let tabs: Vec<shell::BarTab> = [
         ("The Browser Company", "https://thebrowser.company/", 1),
-        ("Arc (web browser) - Wikipedia", "https://en.wikipedia.org/wiki/Arc", 2),
+        (
+            "Arc (web browser) - Wikipedia",
+            "https://en.wikipedia.org/wiki/Arc",
+            2,
+        ),
         ("Zed — The editor for what's next", "https://zed.dev/", 3),
         ("Example Domain", "https://example.com/", 5),
     ]
@@ -1574,6 +1770,7 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
         title: title.into(),
         url: url.into(),
         favicon: None,
+        renamed: false,
     })
     .collect();
     let (typed, rows) = match mode {
@@ -1589,15 +1786,28 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
             };
             // Arc's "clear": the best command above the search row, others whose names start
             // with it under it, and a weaker one after the suggestions.
-            let (cache, cookies) = (Command::ClearCacheAndRefresh, Command::ClearCookiesAndRefresh);
+            let (cache, cookies) = (
+                Command::ClearCacheAndRefresh,
+                Command::ClearCookiesAndRefresh,
+            );
             let clear_keys = shell::keystroke_label("shift-cmd-k");
             let rows = vec![
-                command("Clear Today", Command::Clear, Some(&clear_keys), Match::Name),
+                command(
+                    "Clear Today",
+                    Command::Clear,
+                    Some(&clear_keys),
+                    Match::Name,
+                ),
                 search("clear"),
                 command("Clear Cache and Refresh", cache, None, Match::Name),
                 command("Clear Cookies and Refresh", cookies, None, Match::Name),
                 page("clearhaus", "clearhaus.com", "https://clearhaus.com/", 0),
-                command("Collapse All Folders", Command::CollapseFolders, None, Match::Letters),
+                command(
+                    "Collapse All Folders",
+                    Command::CollapseFolders,
+                    None,
+                    Match::Letters,
+                ),
             ];
             ("clear", rows)
         }
@@ -1629,15 +1839,33 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
                         0,
                     )
                 },
-                page("Arc (web browser) - Wikipedia", "", "https://en.wikipedia.org/wiki/Arc", 1),
-                page("Zed — The editor for what's next", "", "https://zed.dev/", 3),
-                page("Rust Programming Language", "", "https://www.rust-lang.org/", 4),
+                page(
+                    "Arc (web browser) - Wikipedia",
+                    "",
+                    "https://en.wikipedia.org/wiki/Arc",
+                    1,
+                ),
+                page(
+                    "Zed — The editor for what's next",
+                    "",
+                    "https://zed.dev/",
+                    3,
+                ),
+                page(
+                    "Rust Programming Language",
+                    "",
+                    "https://www.rust-lang.org/",
+                    4,
+                ),
                 page("The Browser Company", "", "https://thebrowser.company/", 0),
             ],
         ),
     };
     let rows_shown = rows.len();
-    let bounds = Bounds::new(at, size(px(command_bar::WIDTH), px(command_bar::height(rows_shown))));
+    let bounds = Bounds::new(
+        at,
+        size(px(command_bar::WIDTH), px(command_bar::height(rows_shown))),
+    );
     if command_bar::open_at(Rc::new(PreviewBar), bounds, true, cx).is_none() {
         return;
     }
@@ -1650,10 +1878,18 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
     let tone = forced.or(preview_tone()).unwrap_or_default();
     palette::set_current(Palette::of(theme.as_ref(), tone), cx);
     match typed {
-        "" => command_bar::show(None, tabs, None, cx),
-        typed => command_bar::show(Some((0, typed.to_string().into())), Vec::new(), None, cx),
+        "" => command_bar::show(None, Vec::new(), tabs, None, cx),
+        typed => {
+            let editing = Some((0, typed.to_string().into()));
+            command_bar::show(editing, Vec::new(), Vec::new(), None, cx)
+        }
     }
-    let icons = [Icon::Envelope, Icon::Blocks, Icon::Play, Icon::Disc([0.9, 0.5, 0.1])];
+    let icons = [
+        Icon::Envelope,
+        Icon::Blocks,
+        Icon::Play,
+        Icon::Disc([0.9, 0.5, 0.1]),
+    ];
     let favicons: Vec<_> = rows
         .iter()
         .zip(icons.iter().cycle())
@@ -1670,67 +1906,68 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
 }
 
 fn main() {
-    gpui_platform::application().with_assets(shell::Assets).run(|cx| {
-        browser::face::register(cx);
-        shell::bind_keys(cx);
-        browser::text_input::bind_keys(cx);
-        // PREVIEW_ACCOUNT=signed-out, no-server, words, waiting or signed-in shows Settings ›
-        // Account in that state, alone, no-server's for a build that names no sync server; =approve
-        // shows another device's request over the browser window.
-        let account = std::env::var("PREVIEW_ACCOUNT").ok();
-        if let Some(state) = account.as_deref().filter(|state| *state != "approve") {
-            preview_account(state, cx);
-            return;
-        }
-        // PREVIEW_SIZE=<width>x<height> opens the window at that size.
-        let (width, height) = std::env::var("PREVIEW_SIZE")
-            .ok()
-            .and_then(|size| {
-                let (width, height) = size.split_once('x')?;
-                Some((width.parse().ok()?, height.parse().ok()?))
-            })
-            .unwrap_or((1280., 800.));
-        let (mut x, mut y) = (0., 0.);
-        unsafe { host_centered(width, height, &mut x, &mut y) };
-        let bounds = Bounds::new(
-            point(px(x as f32), px(y as f32)),
-            size(px(width as f32), px(height as f32)),
-        );
-        PREVIEW_ORIGIN.set(bounds.origin);
-        PREVIEW_AREA.set(bounds.size);
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            titlebar: Some(TitlebarOptions {
-                title: None,
-                appears_transparent: true,
-                // Arc's: 16 pt buttons centred at (20, 24), 23 apart.
-                traffic_light_position: Some(point(px(12.), px(16.))),
-            }),
-            ..Default::default()
-        };
-        let window = cx.open_window(options, |window, cx| {
-            let shell = cx.new(|cx| {
-                let first_space = TABS.len() as u64 + 1;
-                // PREVIEW_AGENT=1 makes Reading Claude Code's Space and shows it, with the agent at
-                // work in its third tab and its last loading; =loading has the third load too.
-                let agent = std::env::var("PREVIEW_AGENT").ok();
-                // The preview's Spaces and favorites are in its one profile, 0.
-                // PREVIEW_SPACE_ICONS=1 gives them glyphs, for the footer's row of icons.
-                let glyphs = std::env::var_os("PREVIEW_SPACE_ICONS").is_some();
-                // PREVIEW_SPACES=<count> makes that many, those past the two named by number, for
-                // a switcher and a Library's Spaces that run out of room.
-                let count = std::env::var("PREVIEW_SPACES").ok();
-                let count = count.and_then(|count| count.parse().ok());
-                let count: usize = count.unwrap_or(SPACES.len()).max(SPACES.len());
-                let named = (0..count).map(|index| match SPACES.get(index) {
-                    Some(&(name, color)) => (name.to_string(), color),
-                    None => (
-                        format!("Space {}", index + 1),
-                        Some(MORE_COLORS[(index - SPACES.len()) % MORE_COLORS.len()]),
-                    ),
-                });
-                let mut spaces: Vec<SpaceEntry> =
-                    (first_space..)
+    gpui_platform::application()
+        .with_assets(shell::Assets)
+        .run(|cx| {
+            browser::face::register(cx);
+            shell::bind_keys(cx);
+            browser::text_input::bind_keys(cx);
+            // PREVIEW_ACCOUNT=signed-out, no-server, words, waiting or signed-in shows Settings ›
+            // Account in that state, alone, no-server's for a build that names no sync server; =approve
+            // shows another device's request over the browser window.
+            let account = std::env::var("PREVIEW_ACCOUNT").ok();
+            if let Some(state) = account.as_deref().filter(|state| *state != "approve") {
+                preview_account(state, cx);
+                return;
+            }
+            // PREVIEW_SIZE=<width>x<height> opens the window at that size.
+            let (width, height) = std::env::var("PREVIEW_SIZE")
+                .ok()
+                .and_then(|size| {
+                    let (width, height) = size.split_once('x')?;
+                    Some((width.parse().ok()?, height.parse().ok()?))
+                })
+                .unwrap_or((1280., 800.));
+            let (mut x, mut y) = (0., 0.);
+            unsafe { host_centered(width, height, &mut x, &mut y) };
+            let bounds = Bounds::new(
+                point(px(x as f32), px(y as f32)),
+                size(px(width as f32), px(height as f32)),
+            );
+            PREVIEW_ORIGIN.set(bounds.origin);
+            PREVIEW_AREA.set(bounds.size);
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions {
+                    title: None,
+                    appears_transparent: true,
+                    // Arc's: 16 pt buttons centred at (20, 24), 23 apart.
+                    traffic_light_position: Some(point(px(12.), px(16.))),
+                }),
+                ..Default::default()
+            };
+            let window = cx.open_window(options, |window, cx| {
+                let shell = cx.new(|cx| {
+                    let first_space = TABS.len() as u64 + 1;
+                    // PREVIEW_AGENT=1 makes Reading Claude Code's Space and shows it, with the agent at
+                    // work in its third tab and its last loading; =loading has the third load too.
+                    let agent = std::env::var("PREVIEW_AGENT").ok();
+                    // The preview's Spaces and favorites are in its one profile, 0.
+                    // PREVIEW_SPACE_ICONS=1 gives them glyphs, for the footer's row of icons.
+                    let glyphs = std::env::var_os("PREVIEW_SPACE_ICONS").is_some();
+                    // PREVIEW_SPACES=<count> makes that many, those past the two named by number, for
+                    // a switcher and a Library's Spaces that run out of room.
+                    let count = std::env::var("PREVIEW_SPACES").ok();
+                    let count = count.and_then(|count| count.parse().ok());
+                    let count: usize = count.unwrap_or(SPACES.len()).max(SPACES.len());
+                    let named = (0..count).map(|index| match SPACES.get(index) {
+                        Some(&(name, color)) => (name.to_string(), color),
+                        None => (
+                            format!("Space {}", index + 1),
+                            Some(MORE_COLORS[(index - SPACES.len()) % MORE_COLORS.len()]),
+                        ),
+                    });
+                    let mut spaces: Vec<SpaceEntry> = (first_space..)
                         .zip(named)
                         .zip(["glyph:star", "glyph:leaf"].into_iter().cycle())
                         .map(|((id, (name, color)), icon)| {
@@ -1742,364 +1979,457 @@ fn main() {
                             (id, name.into(), color, 0, icon.into(), agent, "".into())
                         })
                         .collect();
-                if let Some(theme) = preview_theme() {
-                    spaces[0].2 = Some(theme.main_color());
-                    spaces[0].6 = theme.to_text().into();
-                }
-                // PREVIEW_TASKS=1 shows three tasks' cards at the foot, one at work, one stopped
-                // and one done; =open shows the first's conversation, as its card's click does.
-                let tasks = std::env::var("PREVIEW_TASKS").ok();
-                if tasks.is_some() {
-                    spaces.extend((FIRST_TASK..).take(TASKS.len()).map(task_space));
-                }
-                let first_archived = first_space + count as u64;
-                let archive = (first_archived..)
-                    .zip(ARCHIVE)
-                    .map(|(id, (title, url, days))| (id, title, url, now() - days * DAY))
-                    .collect();
-                let first_download = first_archived + ARCHIVE.len() as u64;
-                let downloads = (first_download..)
-                    .zip(DOWNLOADS)
-                    .map(|(id, (name, url, received, total, state, held, days))| Download {
-                        id,
-                        name: name.into(),
-                        url: url.into(),
-                        path: SharedString::default(),
-                        received,
-                        total,
-                        state,
-                        open_when_done: false,
-                        held,
-                        started: now() - days * DAY,
-                    })
-                    .collect();
-                let first_favorite = first_download + DOWNLOADS.len() as u64;
-                let favorites: Vec<u64> = (first_favorite..).take(FAVORITES.len()).collect();
-                let folder = first_favorite + FAVORITES.len() as u64;
-                let browser = Rc::new(Fake {
-                    shell: cx.weak_entity(),
-                    next_id: Rc::new(Cell::new(folder + 1 + READING.len() as u64)),
-                    spaces: RefCell::new(spaces.clone()),
-                    archive: RefCell::new(archive),
-                    downloads: RefCell::new(downloads),
-                    opt_ins: Cell::new((false, false)),
-                });
-                browser.report_archive(cx);
-                browser.report_downloads(cx);
-                // PREVIEW_EMPTY=1 shows no page, as a fresh ⌘N window does; =reading does so in the
-                // second Space, for its colour, and =private in a private window with no tabs.
-                // PREVIEW_WELCOME=1 shows no page with the first run's welcome, and
-                // PREVIEW_ONBOARDING=1, =light or =dark the onboarding over it first.
-                let onboarding = std::env::var("PREVIEW_ONBOARDING").ok();
-                let welcome =
-                    std::env::var_os("PREVIEW_WELCOME").is_some() || onboarding.is_some();
-                let empty = std::env::var("PREVIEW_EMPTY").ok().or(welcome.then(|| "1".into()));
-                let mut shell = match empty.as_deref() {
-                    Some("private") => {
-                        Shell::private_window(browser, first_space, "Private".into(), 0, cx)
+                    if let Some(theme) = preview_theme() {
+                        spaces[0].2 = Some(theme.main_color());
+                        spaces[0].6 = theme.to_text().into();
                     }
-                    _ => Shell::new(browser, cx),
-                };
-                shell.force_tone(preview_tone());
-                shell.set_profiles(vec![(0, "Default".into())], cx);
-                shell.set_spaces(spaces, cx);
-                shell.set_space(first_space, cx);
-                // The shell forgets what it knows of a tab in no list, so the lists come first.
-                shell.set_favorites(favorites.iter().map(|&tab| (tab, 0)).collect(), cx);
-                for (&tab, (title, url, icon)) in favorites.iter().zip(FAVORITES) {
-                    shell.set_title(tab, title.into(), cx);
-                    shell.set_page(tab, Page { url: url.into(), ..Default::default() }, cx);
-                    let favicon = icon.png().map(|png| {
-                        Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png))
+                    // PREVIEW_TASKS=1 shows three tasks' cards at the foot, one at work, one
+                    // stopped and one done; =open shows the first's conversation, as its card's
+                    // click does.
+                    let tasks = std::env::var("PREVIEW_TASKS").ok();
+                    if tasks.is_some() {
+                        spaces.extend((FIRST_TASK..).take(TASKS.len()).map(task_space));
+                    }
+                    let first_archived = first_space + count as u64;
+                    let archive = (first_archived..)
+                        .zip(ARCHIVE)
+                        .map(|(id, (title, url, days))| (id, title, url, now() - days * DAY))
+                        .collect();
+                    let first_download = first_archived + ARCHIVE.len() as u64;
+                    let downloads = (first_download..)
+                        .zip(DOWNLOADS)
+                        .map(
+                            |(id, (name, url, received, total, state, held, days))| Download {
+                                id,
+                                name: name.into(),
+                                url: url.into(),
+                                path: SharedString::default(),
+                                received,
+                                total,
+                                state,
+                                open_when_done: false,
+                                held,
+                                started: now() - days * DAY,
+                            },
+                        )
+                        .collect();
+                    let first_favorite = first_download + DOWNLOADS.len() as u64;
+                    let favorites: Vec<u64> = (first_favorite..).take(FAVORITES.len()).collect();
+                    let folder = first_favorite + FAVORITES.len() as u64;
+                    let browser = Rc::new(Fake {
+                        shell: cx.weak_entity(),
+                        next_id: Rc::new(Cell::new(folder + 1 + READING.len() as u64)),
+                        spaces: RefCell::new(spaces.clone()),
+                        archive: RefCell::new(archive),
+                        downloads: RefCell::new(downloads),
+                        opt_ins: Cell::new((false, false)),
                     });
-                    shell.set_favicon(tab, favicon, cx);
-                }
-                for (index, (title, url)) in TABS.iter().enumerate() {
-                    let tab = index as u64 + 1;
-                    shell.set_title(tab, (*title).into(), cx);
-                    let page = Page {
-                        url: (*url).into(),
-                        // The first tab has been somewhere before, so back shows bright, and it's
-                        // pinned somewhere else. The second is a pinned tab closed, and the third
-                        // is still loading and plays sound.
-                        can_go_back: index == 0,
-                        away_from_pinned_url: index == 0,
-                        unloaded: index == 1,
-                        loading: index == 2,
-                        audible: index == 2,
-                        ..Default::default()
+                    browser.report_archive(cx);
+                    browser.report_downloads(cx);
+                    // PREVIEW_EMPTY=1 shows no page, as a fresh ⌘N window does; =reading does so in the
+                    // second Space, for its colour, and =private in a private window with no tabs.
+                    // PREVIEW_WELCOME=1 shows no page with the first run's welcome, and
+                    // PREVIEW_ONBOARDING=1, =light or =dark the onboarding over it first.
+                    let onboarding = std::env::var("PREVIEW_ONBOARDING").ok();
+                    let welcome =
+                        std::env::var_os("PREVIEW_WELCOME").is_some() || onboarding.is_some();
+                    let empty = std::env::var("PREVIEW_EMPTY")
+                        .ok()
+                        .or(welcome.then(|| "1".into()));
+                    let mut shell = match empty.as_deref() {
+                        Some("private") => {
+                            Shell::private_window(browser, first_space, "Private".into(), 0, cx)
+                        }
+                        _ => Shell::new(browser, cx),
                     };
-                    shell.set_page(tab, page, cx);
-                }
-                // PREVIEW_DRM=1 has the first tab's page ask for video ilo plays only in Apple's
-                // engine, so its note shows.
-                if std::env::var_os("PREVIEW_DRM").is_some() {
-                    shell.set_media_unsupported(1, "com.widevine.alpha", cx);
-                }
-                // The second in a folder, and the last two in a split view.
-                let pinned = vec![1, folder, 2];
-                let folders = Folders {
-                    folders: [(folder, ("Docs".into(), true))].into(),
-                    parents: [(2, folder)].into(),
-                    ..Default::default()
-                };
-                let today = (3..=TABS.len() as u64).collect();
-                let split = Split {
-                    tabs: vec![TABS.len() as u64 - 1, TABS.len() as u64],
-                    ..Split::default()
-                };
-                shell.set_tabs(first_space, pinned, today, vec![split], folders, cx);
-                let reading: Vec<u64> = (folder + 1..).take(READING.len()).collect();
-                let (pinned, today) = (reading[..1].to_vec(), reading[1..].to_vec());
-                shell.set_tabs(first_space + 1, pinned, today, Vec::new(), Folders::default(), cx);
-                for (index, (&tab, (title, url))) in reading.iter().zip(READING).enumerate() {
-                    shell.set_title(tab, title.into(), cx);
-                    let loading = agent.is_some()
-                        && (index == 3 || (index == 2 && agent.as_deref() == Some("loading")));
-                    shell.set_page(tab, Page { url: url.into(), loading, ..Default::default() }, cx);
-                }
-                if agent.is_some() {
-                    shell.set_space(first_space + 1, cx);
-                    shell.agent_acted("claude-code".into(), reading[2], cx);
-                    // =handoff has it hand its fourth tab to the user, shown, for a sign-in;
-                    // =back has the user take that tab over, and the agent ask for it back.
-                    let back = agent.as_deref() == Some("back");
-                    let handoff = back || agent.as_deref() == Some("handoff");
-                    let why: SharedString = match back {
-                        true => "To finish the order".into(),
-                        false => "Sign in to finish the order".into(),
-                    };
-                    let held = match (handoff, back) {
-                        (true, true) => vec![(reading[3], SharedString::default())],
-                        (true, false) => vec![(reading[3], why.clone())],
-                        _ => Vec::new(),
-                    };
-                    let status = browser::agents::Status {
-                        agent: "claude-code".into(),
-                        space: first_space + 1,
-                        doing: "Clicked · en.wikipedia.org".into(),
-                        held,
-                    };
-                    shell.set_agent_status(vec![status], cx);
-                    if handoff {
-                        shell.set_selected(reading[3], cx);
-                        let question = browser::agents::Question {
-                            id: 1,
-                            agent: "Claude Code".into(),
-                            from: "claude-code".into(),
-                            what: "hand you a tab".into(),
-                            why,
-                            handoff: Some(reading[3]),
-                            back,
-                        };
-                        shell.set_agent_question(Some(question), cx);
-                    }
-                }
-                let favorite = std::env::var("PREVIEW_FAVORITE").ok().and_then(|n| n.parse().ok());
-                match (empty.as_deref(), favorite.and_then(|n: usize| favorites.get(n))) {
-                    (Some("private"), _) => {
-                        let none = Folders::default();
-                        shell.set_tabs(first_space, Vec::new(), Vec::new(), Vec::new(), none, cx);
-                        shell.set_selected(0, cx);
-                    }
-                    (Some("reading"), _) => {
-                        shell.set_space(first_space + 1, cx);
-                        shell.set_selected(0, cx);
-                    }
-                    (Some(_), _) => shell.set_selected(0, cx),
-                    (None, _) if agent.is_some() => shell.set_selected(reading[0], cx),
-                    (None, Some(&tab)) => shell.set_selected(tab, cx),
-                    (None, None) => shell.set_selected(1, cx),
-                }
-                if let Some(tasks) = &tasks {
-                    let pages: Vec<u64> = (FIRST_TASK + 100..).take(TASK_PAGES.len()).collect();
-                    let none = Folders::default();
-                    shell.set_tabs(FIRST_TASK + 2, Vec::new(), pages.clone(), Vec::new(), none, cx);
-                    for (&tab, (title, url)) in pages.iter().zip(TASK_PAGES) {
+                    shell.force_tone(preview_tone());
+                    shell.set_profiles(vec![(0, "Default".into())], cx);
+                    shell.set_spaces(spaces, cx);
+                    shell.set_space(first_space, cx);
+                    // The shell forgets what it knows of a tab in no list, so the lists come first.
+                    shell.set_favorites(favorites.iter().map(|&tab| (tab, 0)).collect(), cx);
+                    for (&tab, (title, url, icon)) in favorites.iter().zip(FAVORITES) {
                         shell.set_title(tab, title.into(), cx);
-                        shell.set_page(tab, Page { url: url.into(), ..Default::default() }, cx);
-                    }
-                    shell.set_task_cards(task_cards(first_space), cx);
-                    // After the first frame, which sets the palette the reply field takes, as a
-                    // click on the card comes after it.
-                    if tasks == "open" {
-                        let (shown, agent) = (cx.weak_entity(), format!("task-{FIRST_TASK}"));
-                        window.on_next_frame(move |_, cx| {
-                            shown.update(cx, |shell, cx| shell.show_task(agent.into(), cx)).ok();
+                        shell.set_page(
+                            tab,
+                            Page {
+                                url: url.into(),
+                                ..Default::default()
+                            },
+                            cx,
+                        );
+                        let favicon = icon.png().map(|png| {
+                            Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png))
                         });
+                        shell.set_favicon(tab, favicon, cx);
                     }
-                }
-                // PREVIEW_TROUBLE=crashed shows the tab shown's page died, =hung that it stopped
-                // answering, which shows in its row (the note is the toast's, a window the preview
-                // hasn't), and =split that the second page of the split view died beside the first.
-                let trouble = match std::env::var("PREVIEW_TROUBLE").as_deref() {
-                    Ok("crashed") => Some((1, Trouble::Crashed)),
-                    Ok("hung") => Some((1, Trouble::Hung)),
-                    Ok("split") => {
-                        shell.set_selected(TABS.len() as u64 - 1, cx);
-                        Some((TABS.len() as u64, Trouble::Crashed))
-                    }
-                    _ => None,
-                };
-                if let Some((tab, trouble)) = trouble {
-                    shell.set_page(tab, Page { trouble, ..shell.page(tab) }, cx);
-                }
-                // PREVIEW_DEVELOPER_MODE=1 has the tab shown, the third tab and the GitHub
-                // favorite in Developer Mode, so its outline and contrast show.
-                if std::env::var_os("PREVIEW_DEVELOPER_MODE").is_some() {
-                    for tab in [shell.selected(), 3, favorites[2]] {
-                        let page = Page { developer_mode: true, ..shell.page(tab) };
+                    for (index, (title, url)) in TABS.iter().enumerate() {
+                        let tab = index as u64 + 1;
+                        shell.set_title(tab, (*title).into(), cx);
+                        let page = Page {
+                            url: (*url).into(),
+                            // The first tab has been somewhere before, so back shows bright, and it's
+                            // pinned somewhere else. The second is a pinned tab closed, and the third
+                            // is still loading and plays sound.
+                            can_go_back: index == 0,
+                            away_from_pinned_url: index == 0,
+                            unloaded: index == 1,
+                            loading: index == 2,
+                            audible: index == 2,
+                            ..Default::default()
+                        };
                         shell.set_page(tab, page, cx);
                     }
-                }
-                if welcome {
-                    shell.set_welcome(cx);
-                }
-                if let Some(appearance) = &onboarding {
-                    shell.start_onboarding(Some(appearance), cx);
-                }
+                    // PREVIEW_DRM=1 has the first tab's page ask for video ilo plays only in Apple's
+                    // engine, so its note shows.
+                    if std::env::var_os("PREVIEW_DRM").is_some() {
+                        shell.set_media_unsupported(1, "com.widevine.alpha", cx);
+                    }
+                    // The second in a folder, and the last two in a split view.
+                    let pinned = vec![1, folder, 2];
+                    let folders = Folders {
+                        folders: [(folder, ("Docs".into(), true))].into(),
+                        parents: [(2, folder)].into(),
+                        ..Default::default()
+                    };
+                    let today = (3..=TABS.len() as u64).collect();
+                    let split = Split {
+                        tabs: vec![TABS.len() as u64 - 1, TABS.len() as u64],
+                        ..Split::default()
+                    };
+                    shell.set_tabs(first_space, pinned, today, vec![split], folders, cx);
+                    let reading: Vec<u64> = (folder + 1..).take(READING.len()).collect();
+                    let (pinned, today) = (reading[..1].to_vec(), reading[1..].to_vec());
+                    shell.set_tabs(
+                        first_space + 1,
+                        pinned,
+                        today,
+                        Vec::new(),
+                        Folders::default(),
+                        cx,
+                    );
+                    for (index, (&tab, (title, url))) in reading.iter().zip(READING).enumerate() {
+                        shell.set_title(tab, title.into(), cx);
+                        let loading = agent.is_some()
+                            && (index == 3 || (index == 2 && agent.as_deref() == Some("loading")));
+                        shell.set_page(
+                            tab,
+                            Page {
+                                url: url.into(),
+                                loading,
+                                ..Default::default()
+                            },
+                            cx,
+                        );
+                    }
+                    if agent.is_some() {
+                        shell.set_space(first_space + 1, cx);
+                        shell.agent_acted("claude-code".into(), reading[2], cx);
+                        // =handoff has it hand its fourth tab to the user, shown, for a sign-in;
+                        // =back has the user take that tab over, and the agent ask for it back.
+                        let back = agent.as_deref() == Some("back");
+                        let handoff = back || agent.as_deref() == Some("handoff");
+                        let why: SharedString = match back {
+                            true => "To finish the order".into(),
+                            false => "Sign in to finish the order".into(),
+                        };
+                        let held = match (handoff, back) {
+                            (true, true) => vec![(reading[3], SharedString::default())],
+                            (true, false) => vec![(reading[3], why.clone())],
+                            _ => Vec::new(),
+                        };
+                        let status = browser::agents::Status {
+                            agent: "claude-code".into(),
+                            name: "Claude Code".into(),
+                            space: first_space + 1,
+                            doing: "Clicked · en.wikipedia.org".into(),
+                            held,
+                        };
+                        shell.set_agent_status(vec![status], cx);
+                        if handoff {
+                            shell.set_selected(reading[3], cx);
+                            let question = browser::agents::Question {
+                                id: 1,
+                                agent: "Claude Code".into(),
+                                from: "claude-code".into(),
+                                what: "hand you a tab".into(),
+                                why,
+                                handoff: Some(reading[3]),
+                                back,
+                            };
+                            shell.set_agent_question(Some(question), cx);
+                        }
+                    }
+                    let favorite = std::env::var("PREVIEW_FAVORITE")
+                        .ok()
+                        .and_then(|n| n.parse().ok());
+                    match (
+                        empty.as_deref(),
+                        favorite.and_then(|n: usize| favorites.get(n)),
+                    ) {
+                        (Some("private"), _) => {
+                            let none = Folders::default();
+                            shell.set_tabs(
+                                first_space,
+                                Vec::new(),
+                                Vec::new(),
+                                Vec::new(),
+                                none,
+                                cx,
+                            );
+                            shell.set_selected(0, cx);
+                        }
+                        (Some("reading"), _) => {
+                            shell.set_space(first_space + 1, cx);
+                            shell.set_selected(0, cx);
+                        }
+                        (Some(_), _) => shell.set_selected(0, cx),
+                        (None, _) if agent.is_some() => shell.set_selected(reading[0], cx),
+                        (None, Some(&tab)) => shell.set_selected(tab, cx),
+                        (None, None) => shell.set_selected(1, cx),
+                    }
+                    if let Some(tasks) = &tasks {
+                        let pages: Vec<u64> = (FIRST_TASK + 100..).take(TASK_PAGES.len()).collect();
+                        let none = Folders::default();
+                        shell.set_tabs(
+                            FIRST_TASK + 2,
+                            Vec::new(),
+                            pages.clone(),
+                            Vec::new(),
+                            none,
+                            cx,
+                        );
+                        for (&tab, (title, url)) in pages.iter().zip(TASK_PAGES) {
+                            shell.set_title(tab, title.into(), cx);
+                            shell.set_page(
+                                tab,
+                                Page {
+                                    url: url.into(),
+                                    ..Default::default()
+                                },
+                                cx,
+                            );
+                        }
+                        shell.set_task_cards(task_cards(first_space), cx);
+                        // After the first frame, which sets the palette the reply field takes, as
+                        // a click on the card comes after it.
+                        if tasks == "open" {
+                            let (shown, agent) = (cx.weak_entity(), format!("task-{FIRST_TASK}"));
+                            window.on_next_frame(move |_, cx| {
+                                shown
+                                    .update(cx, |shell, cx| shell.show_task(agent.into(), cx))
+                                    .ok();
+                            });
+                        }
+                    }
+                    // PREVIEW_TROUBLE=crashed shows the tab shown's page died, =hung that it stopped
+                    // answering, which shows in its row (the note is the toast's, a window the preview
+                    // hasn't), and =split that the second page of the split view died beside the first.
+                    let trouble = match std::env::var("PREVIEW_TROUBLE").as_deref() {
+                        Ok("crashed") => Some((1, Trouble::Crashed)),
+                        Ok("hung") => Some((1, Trouble::Hung)),
+                        Ok("split") => {
+                            shell.set_selected(TABS.len() as u64 - 1, cx);
+                            Some((TABS.len() as u64, Trouble::Crashed))
+                        }
+                        _ => None,
+                    };
+                    if let Some((tab, trouble)) = trouble {
+                        shell.set_page(
+                            tab,
+                            Page {
+                                trouble,
+                                ..shell.page(tab)
+                            },
+                            cx,
+                        );
+                    }
+                    // PREVIEW_DEVELOPER_MODE=1 has the tab shown, the third tab and the GitHub
+                    // favorite in Developer Mode, so its outline and contrast show.
+                    if std::env::var_os("PREVIEW_DEVELOPER_MODE").is_some() {
+                        for tab in [shell.selected(), 3, favorites[2]] {
+                            let page = Page {
+                                developer_mode: true,
+                                ..shell.page(tab)
+                            };
+                            shell.set_page(tab, page, cx);
+                        }
+                    }
+                    if welcome {
+                        shell.set_welcome(cx);
+                    }
+                    if let Some(appearance) = &onboarding {
+                        shell.start_onboarding(Some(appearance), cx);
+                    }
+                    shell
+                });
+                window.focus(&shell.focus_handle(cx), cx);
                 shell
             });
-            window.focus(&shell.focus_handle(cx), cx);
-            shell
-        });
-        let shell_window = window.as_ref().ok().copied();
-        match window {
-            // PREVIEW_LIBRARY=1 opens the Library, and PREVIEW_LIBRARY=downloads or =spaces opens
-            // it there; =rename opens its Spaces with the first card's name in its field.
-            Ok(window) if std::env::var_os("PREVIEW_LIBRARY").is_some() => {
-                window
-                    .update(cx, |shell, window, cx| {
-                        match std::env::var("PREVIEW_LIBRARY").as_deref() {
-                            Ok("downloads") => shell.run(Command::ViewDownloads, "preview", cx),
-                            Ok("spaces") => shell.show_spaces(cx),
-                            Ok("rename") => {
-                                shell.show_spaces(cx);
-                                shell.preview_rename_card(window, cx);
+            let shell_window = window.as_ref().ok().copied();
+            match window {
+                // PREVIEW_LIBRARY=1 opens the Library, and PREVIEW_LIBRARY=downloads or =spaces opens
+                // it there; =rename opens its Spaces with the first card's name in its field.
+                Ok(window) if std::env::var_os("PREVIEW_LIBRARY").is_some() => {
+                    window
+                        .update(cx, |shell, window, cx| {
+                            match std::env::var("PREVIEW_LIBRARY").as_deref() {
+                                Ok("downloads") => shell.run(Command::ViewDownloads, "preview", cx),
+                                Ok("spaces") => shell.show_spaces(cx),
+                                Ok("rename") => {
+                                    shell.show_spaces(cx);
+                                    shell.preview_rename_card(window, cx);
+                                }
+                                _ => shell.run(Command::ViewLibrary, "preview", cx),
                             }
-                            _ => shell.run(Command::ViewLibrary, "preview", cx),
-                        }
-                    })
-                    .ok();
+                        })
+                        .ok();
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    log!("couldn't open the window: {error}");
+                    cx.quit();
+                }
             }
-            Ok(_) => {}
-            Err(error) => {
-                log!("couldn't open the window: {error}");
-                cx.quit();
+            // PREVIEW_BAR=tabs, sites or commands shows the command bar over the window, with made-up
+            // suggestions.
+            if let Ok(mode) = std::env::var("PREVIEW_BAR") {
+                let left = x + (width - command_bar::WIDTH as f64) / 2.;
+                let top = y as f32 + command_bar::centered_top(height as f32);
+                let at = point(px(left as f32), px(top));
+                preview_bar(&mode, at, cx);
             }
-        }
-        // PREVIEW_BAR=tabs, sites or commands shows the command bar over the window, with made-up
-        // suggestions.
-        if let Ok(mode) = std::env::var("PREVIEW_BAR") {
-            let left = x + (width - command_bar::WIDTH as f64) / 2.;
-            let top = y as f32 + command_bar::centered_top(height as f32);
-            let at = point(px(left as f32), px(top));
-            preview_bar(&mode, at, cx);
-        }
-        if account.as_deref() == Some("approve") {
-            if !DIALOG_OPEN.replace(true) {
-                dialog::open_at(Rc::new(PreviewDialog), bounds, true, cx);
-            }
-            let pairing = account::Pairing {
-                id: "2".into(),
-                name: "MacBook Air".into(),
-                os: "macOS".into(),
-                code: "312568".into(),
-                asked: "15:04".into(),
-                signed_in: "2 minutes ago".into(),
-            };
-            dialog::ask_account(account::pairing_question(&pairing), Box::new(|_, _| {}), cx);
-        }
-        // PREVIEW_ICON_PICKER=<emoji, or empty> shows the icon picker for a Space with that icon.
-        if let Ok(icon) = std::env::var("PREVIEW_ICON_PICKER") {
-            let left = x as f32 + 40.;
-            let top = y as f32 + 120.;
-            let bounds = Bounds::new(
-                point(px(left), px(top)),
-                size(px(icon_picker::WIDTH), px(icon_picker::HEIGHT)),
-            );
-            if icon_picker::open_at(Rc::new(PreviewPicker), Recents::default(), bounds, true, cx)
-                .is_some()
-            {
-                let picked: icon_picker::Picked = Rc::new(|_, _| {});
-                let subject = icon_picker::Subject::Space(1);
-                icon_picker::show(0, subject, icon.into(), point(0., 0.), picked, cx);
-            }
-        }
-        // PREVIEW_THEME_PICKER=1 shows the theme picker for the first Space, with PREVIEW_THEME's
-        // theme.
-        if std::env::var_os("PREVIEW_THEME_PICKER").is_some() {
-            let bounds = Bounds::new(
-                point(px(x as f32 + 230.), px(y as f32 + 100.)),
-                size(px(theme_picker::WIDTH), px(theme_picker::HEIGHT)),
-            );
-            if theme_picker::open_at(Rc::new(PreviewPicker), bounds, true, cx).is_some() {
-                let changed: theme_picker::Changed = Rc::new(|_, _, _| {});
-                let anchor = point(0., theme_picker::HEIGHT / 2. + 8.);
-                theme_picker::show(0, 1, preview_theme(), anchor, f32::MAX, changed, cx);
-            }
-        }
-        // PREVIEW_SITE_CONTROLS=1 opens the Site Controls of the tab shown, once the shell has
-        // drawn the URL field they hang from.
-        let site_controls = std::env::var_os("PREVIEW_SITE_CONTROLS").is_some();
-        if let Some(shell) = shell_window.filter(|_| site_controls) {
-            cx.spawn(async move |cx| {
-                cx.background_executor().timer(Duration::from_millis(500)).await;
-                shell
-                    .update(cx, |shell, _, cx| shell.run(Command::SiteControls, "preview", cx))
-                    .ok();
-            })
-            .detach();
-        }
-        // PREVIEW_PEEK=1 opens a link of the page shown in Peek, once the shell has laid the page
-        // out, with the shell's page showing through the card, as it does on Linux and Windows.
-        if let Some(shell) = shell_window.filter(|_| std::env::var_os("PREVIEW_PEEK").is_some()) {
-            let peek_bounds = Bounds::new(PREVIEW_ORIGIN.get(), PREVIEW_AREA.get());
-            cx.spawn(async move |cx| {
-                cx.background_executor().timer(Duration::from_millis(500)).await;
-                let Ok(Some(laid)) = shell.update(cx, |shell, _, _| shell.page_laid()) else {
-                    return;
+            if account.as_deref() == Some("approve") {
+                if !DIALOG_OPEN.replace(true) {
+                    dialog::open_at(Rc::new(PreviewDialog), bounds, true, cx);
+                }
+                let pairing = account::Pairing {
+                    id: "2".into(),
+                    name: "MacBook Air".into(),
+                    os: "macOS".into(),
+                    code: "312568".into(),
+                    asked: "15:04".into(),
+                    signed_in: "2 minutes ago".into(),
                 };
-                cx.update(|cx| {
-                    link_preview::open_at(Rc::new(PreviewPeek), peek_bounds, true, cx);
-                    let url = "https://en.wikipedia.org/wiki/Hyperlink".into();
-                    let link = laid.0.origin + point(px(160.), px(120.));
-                    link_preview::show(1, 99, 1, url, laid, link, cx);
-                });
-            })
-            .detach();
-        }
-        // PREVIEW_MENU=<x>,<y>[,<key>…] right-clicks there in the window, as on a row or a Space's
-        // name, and then presses the keys in ilo's menu, such as `m,right` for a submenu.
-        if let Ok(what) = std::env::var("PREVIEW_MENU") {
-            if let Some(shell) = shell_window {
-                preview_menu(shell.into(), bounds, &what, cx);
+                dialog::ask_account(account::pairing_question(&pairing), Box::new(|_, _| {}), cx);
             }
-        }
-        // PREVIEW_PAGE_MENU=<link|image|text|field>,<x>,<y>[,<key>…] shows a page's menu there, made
-        // up as Chrome builds it for a link, an image, selected text or a misspelt word in a text
-        // field, and then presses the keys in ilo's menu, such as `s,right` for a submenu.
-        if let Ok(what) = std::env::var("PREVIEW_PAGE_MENU") {
-            PREVIEW_AREA.set(bounds.size);
-            if let Some(shell) = shell_window {
-                preview_page_menu(shell, bounds, &what, cx);
+            // PREVIEW_ICON_PICKER=<emoji, or empty> shows the icon picker for a Space with that icon.
+            if let Ok(icon) = std::env::var("PREVIEW_ICON_PICKER") {
+                let left = x as f32 + 40.;
+                let top = y as f32 + 120.;
+                let bounds = Bounds::new(
+                    point(px(left), px(top)),
+                    size(px(icon_picker::WIDTH), px(icon_picker::HEIGHT)),
+                );
+                if icon_picker::open_at(
+                    Rc::new(PreviewPicker),
+                    Recents::default(),
+                    bounds,
+                    true,
+                    cx,
+                )
+                .is_some()
+                {
+                    let picked: icon_picker::Picked = Rc::new(|_, _| {});
+                    let subject = icon_picker::Subject::Space(1);
+                    icon_picker::show(0, subject, icon.into(), point(0., 0.), picked, cx);
+                }
             }
-        }
-        cx.activate(true);
-    });
+            // PREVIEW_THEME_PICKER=1 shows the theme picker for the first Space, with PREVIEW_THEME's
+            // theme.
+            if std::env::var_os("PREVIEW_THEME_PICKER").is_some() {
+                let bounds = Bounds::new(
+                    point(px(x as f32 + 230.), px(y as f32 + 100.)),
+                    size(px(theme_picker::WIDTH), px(theme_picker::HEIGHT)),
+                );
+                if theme_picker::open_at(Rc::new(PreviewPicker), bounds, true, cx).is_some() {
+                    let changed: theme_picker::Changed = Rc::new(|_, _, _| {});
+                    let anchor = point(0., theme_picker::HEIGHT / 2. + 8.);
+                    theme_picker::show(0, 1, preview_theme(), anchor, f32::MAX, changed, cx);
+                }
+            }
+            // PREVIEW_SITE_CONTROLS=1 opens the Site Controls of the tab shown, once the shell has
+            // drawn the URL field they hang from.
+            let site_controls = std::env::var_os("PREVIEW_SITE_CONTROLS").is_some();
+            if let Some(shell) = shell_window.filter(|_| site_controls) {
+                cx.spawn(async move |cx| {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(500))
+                        .await;
+                    shell
+                        .update(cx, |shell, _, cx| {
+                            shell.run(Command::SiteControls, "preview", cx)
+                        })
+                        .ok();
+                })
+                .detach();
+            }
+            // PREVIEW_PEEK=1 opens a link of the page shown in Peek, once the shell has laid the page
+            // out, with the shell's page showing through the card, as it does on Linux and Windows.
+            if let Some(shell) = shell_window.filter(|_| std::env::var_os("PREVIEW_PEEK").is_some())
+            {
+                let peek_bounds = Bounds::new(PREVIEW_ORIGIN.get(), PREVIEW_AREA.get());
+                cx.spawn(async move |cx| {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(500))
+                        .await;
+                    let Ok(Some(laid)) = shell.update(cx, |shell, _, _| shell.page_laid()) else {
+                        return;
+                    };
+                    cx.update(|cx| {
+                        link_preview::open_at(Rc::new(PreviewPeek), peek_bounds, true, cx);
+                        let url = "https://en.wikipedia.org/wiki/Hyperlink".into();
+                        let link = laid.0.origin + point(px(160.), px(120.));
+                        link_preview::show(1, 99, 1, url, laid, link, cx);
+                    });
+                })
+                .detach();
+            }
+            // PREVIEW_MENU=<x>,<y>[,<key>…] right-clicks there in the window, as on a row or a Space's
+            // name, and then presses the keys in ilo's menu, such as `m,right` for a submenu.
+            if let Ok(what) = std::env::var("PREVIEW_MENU") {
+                if let Some(shell) = shell_window {
+                    preview_menu(shell.into(), bounds, &what, cx);
+                }
+            }
+            // PREVIEW_PAGE_MENU=<link|image|text|field>,<x>,<y>[,<key>…] shows a page's menu there, made
+            // up as Chrome builds it for a link, an image, selected text or a misspelt word in a text
+            // field, and then presses the keys in ilo's menu, such as `s,right` for a submenu.
+            if let Ok(what) = std::env::var("PREVIEW_PAGE_MENU") {
+                PREVIEW_AREA.set(bounds.size);
+                if let Some(shell) = shell_window {
+                    preview_page_menu(shell, bounds, &what, cx);
+                }
+            }
+            cx.activate(true);
+        });
 }
 
 fn preview_menu(shell: gpui::AnyWindowHandle, bounds: Bounds<Pixels>, what: &str, cx: &mut App) {
     let mut parts = what.split(',');
-    let mut number = || parts.next().and_then(|part| part.trim().parse::<f32>().ok());
-    let (Some(x), Some(y)) = (number(), number()) else { return };
-    let keys: Vec<String> = what.split(',').skip(2).map(|key| key.trim().to_string()).collect();
-    let Some(window) = menu::open_at(Rc::new(PreviewMenu), bounds, cx) else { return };
+    let mut number = || {
+        parts
+            .next()
+            .and_then(|part| part.trim().parse::<f32>().ok())
+    };
+    let (Some(x), Some(y)) = (number(), number()) else {
+        return;
+    };
+    let keys: Vec<String> = what
+        .split(',')
+        .skip(2)
+        .map(|key| key.trim().to_string())
+        .collect();
+    let Some(window) = menu::open_at(Rc::new(PreviewMenu), bounds, cx) else {
+        return;
+    };
     // Not the menu's own handle, whose update would hold the menu the keys go to.
     let window: gpui::AnyWindowHandle = window.into();
     cx.spawn(async move |cx| {
         // Once the shell has drawn its rows, whose boxes the click finds.
-        cx.background_executor().timer(Duration::from_millis(500)).await;
+        cx.background_executor()
+            .timer(Duration::from_millis(500))
+            .await;
         let position = point(px(x), px(y));
         let modifiers = gpui::Modifiers::default();
         let down = gpui::MouseDownEvent {
@@ -2109,7 +2439,12 @@ fn preview_menu(shell: gpui::AnyWindowHandle, bounds: Bounds<Pixels>, what: &str
             click_count: 1,
             first_mouse: false,
         };
-        let up = gpui::MouseUpEvent { button: gpui::MouseButton::Right, position, modifiers, click_count: 1 };
+        let up = gpui::MouseUpEvent {
+            button: gpui::MouseButton::Right,
+            position,
+            modifiers,
+            click_count: 1,
+        };
         shell
             .update(cx, |_, window, cx| {
                 window.dispatch_event(gpui::PlatformInput::MouseDown(down), cx);
@@ -2124,10 +2459,16 @@ fn preview_menu(shell: gpui::AnyWindowHandle, bounds: Bounds<Pixels>, what: &str
 /// Presses `keys` in ilo's menu's `window`, as `PREVIEW_MENU` and `PREVIEW_PAGE_MENU` name them.
 async fn press_keys(window: gpui::AnyWindowHandle, keys: Vec<String>, cx: &mut gpui::AsyncApp) {
     for key in keys {
-        cx.background_executor().timer(Duration::from_millis(50)).await;
+        cx.background_executor()
+            .timer(Duration::from_millis(50))
+            .await;
         let os = gpui::OperatingSystem::Mac;
-        let Some(keystroke) = gpui::Keystroke::parse_with_os(&key, os).ok() else { continue };
-        window.update(cx, |_, window, cx| window.dispatch_keystroke(keystroke, cx)).ok();
+        let Some(keystroke) = gpui::Keystroke::parse_with_os(&key, os).ok() else {
+            continue;
+        };
+        window
+            .update(cx, |_, window, cx| window.dispatch_keystroke(keystroke, cx))
+            .ok();
     }
 }
 
@@ -2140,16 +2481,28 @@ fn preview_page_menu(
     let mut parts = what.split(',').map(str::trim);
     let kind = parts.next().unwrap_or("link").to_string();
     let mut number = || parts.next().and_then(|part| part.parse::<f32>().ok());
-    let (Some(x), Some(y)) = (number(), number()) else { return };
-    let keys: Vec<String> = what.split(',').skip(3).map(|key| key.trim().to_string()).collect();
-    let Some(window) = menu::open_at(Rc::new(PreviewMenu), bounds, cx) else { return };
+    let (Some(x), Some(y)) = (number(), number()) else {
+        return;
+    };
+    let keys: Vec<String> = what
+        .split(',')
+        .skip(3)
+        .map(|key| key.trim().to_string())
+        .collect();
+    let Some(window) = menu::open_at(Rc::new(PreviewMenu), bounds, cx) else {
+        return;
+    };
     let window: gpui::AnyWindowHandle = window.into();
     cx.spawn(async move |cx| {
-        cx.background_executor().timer(Duration::from_millis(500)).await;
+        cx.background_executor()
+            .timer(Duration::from_millis(500))
+            .await;
         let at = point(px(x), px(y));
         // In this system's case, as its Chromium writes the menu.
         let items = shell::made_up_page_menu(&kind, cfg!(target_os = "macos"));
-        shell.update(cx, |shell, _, cx| shell.show_page_menu(1, items, at, cx)).ok();
+        shell
+            .update(cx, |shell, _, cx| shell.show_page_menu(1, items, at, cx))
+            .ok();
         press_keys(window, keys, cx).await;
     })
     .detach();
@@ -2287,9 +2640,30 @@ fn preview_site() -> Site {
         connection_summary: "Connection is secure".into(),
         certificate: true,
         permissions: vec![
-            permission(5, "geolocation", "Location", Value::Ask, "Ask (default)", &Value::ALL),
-            permission(6, "notifications", "Notifications", Value::Allow, "Allowed", &Value::ALL),
-            permission(4, "popups", "Pop-ups and redirects", Value::Block, "Blocked", &Value::ALL),
+            permission(
+                5,
+                "geolocation",
+                "Location",
+                Value::Ask,
+                "Ask (default)",
+                &Value::ALL,
+            ),
+            permission(
+                6,
+                "notifications",
+                "Notifications",
+                Value::Allow,
+                "Allowed",
+                &Value::ALL,
+            ),
+            permission(
+                4,
+                "popups",
+                "Pop-ups and redirects",
+                Value::Block,
+                "Blocked",
+                &Value::ALL,
+            ),
             permission(2, "javascript", "JavaScript", Value::Allow, "Allowed", &[]),
         ],
         reset: Some("Reset permissions".into()),
@@ -2300,14 +2674,30 @@ fn preview_site() -> Site {
     }
 }
 
-/// Settings › Sync alone, framed as Settings frames a tab, in a window of Settings' size.
+/// Settings › Sync alone, on the card as Settings shows a section, in a window of Settings' size.
 fn preview_account(state: &str, cx: &mut App) {
     use account::{Device, State, Status};
     use browser::tokens::settings::{HEIGHT, WIDTH};
     account::bind_keys(cx);
+    // PREVIEW_SIZE=<width>x<height> as for the browser's window, Settings' own size by default.
+    let (width, height) = std::env::var("PREVIEW_SIZE")
+        .ok()
+        .and_then(|size| {
+            let (width, height) = size.split_once('x')?;
+            Some((width.parse().ok()?, height.parse().ok()?))
+        })
+        .unwrap_or((WIDTH, HEIGHT));
+    // PREVIEW_SCROLL=<points> scrolls the card that far down once it's drawn.
+    let scroll: f32 = std::env::var("PREVIEW_SCROLL")
+        .ok()
+        .and_then(|points| points.parse().ok())
+        .unwrap_or(0.);
     let (mut x, mut y) = (0., 0.);
-    unsafe { host_centered(WIDTH as f64, HEIGHT as f64, &mut x, &mut y) };
-    let bounds = Bounds::new(point(px(x as f32), px(y as f32)), size(px(WIDTH), px(HEIGHT)));
+    unsafe { host_centered(width as f64, height as f64, &mut x, &mut y) };
+    let bounds = Bounds::new(
+        point(px(x as f32), px(y as f32)),
+        size(px(width), px(height)),
+    );
     let status = match state {
         "words" => Status::FirstDevice,
         "waiting" => Status::Pairing,
@@ -2318,10 +2708,18 @@ fn preview_account(state: &str, cx: &mut App) {
     let state = State {
         status,
         problem: None,
-        server: if no_server { "".into() } else { "https://sync.ilo.app".into() },
+        server: if no_server {
+            "".into()
+        } else {
+            "https://sync.ilo.app".into()
+        },
         default_server: !no_server,
         email: "sam@example.com".into(),
-        code: if status == Status::Pairing { "312568".into() } else { "".into() },
+        code: if status == Status::Pairing {
+            "312568".into()
+        } else {
+            "".into()
+        },
     };
     let device = |id: &str, name: &str, os: &str, current| Device {
         id: id.to_string().into(),
@@ -2334,12 +2732,16 @@ fn preview_account(state: &str, cx: &mut App) {
         device("2", "MacBook Air", "macOS", false),
         device("3", "ThinkPad X1", "Linux", false),
     ];
-    let options =
-        WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() };
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        ..Default::default()
+    };
     let opened = cx.open_window(options, |window, cx| {
         let page = cx.new(|cx| {
             let dialog = dialog::in_window(Rc::new(PreviewDialog), cx);
-            let host = Rc::new(PreviewAccount { dialog: dialog.clone() });
+            let host = Rc::new(PreviewAccount {
+                dialog: dialog.clone(),
+            });
             let account = cx.new(|cx| {
                 let mut account = Account::new(host, cx);
                 account.set_state(state, cx);
@@ -2348,9 +2750,22 @@ fn preview_account(state: &str, cx: &mut App) {
                 }
                 account
             });
-            AccountPage { account, dialog }
+            AccountPage {
+                account,
+                dialog,
+                card: Card::default(),
+            }
         });
         window.focus(&page.read(cx).account.focus_handle(cx), cx);
+        if scroll > 0. {
+            let scrolled = page.clone();
+            window.on_next_frame(move |_, cx| {
+                scrolled.update(cx, |page, cx| {
+                    page.card.scroll.set_offset(point(px(0.), px(-scroll)));
+                    cx.notify();
+                });
+            });
+        }
         page
     });
     if let Err(error) = opened {
@@ -2358,11 +2773,12 @@ fn preview_account(state: &str, cx: &mut App) {
     }
 }
 
-/// The account's view on Settings' background, in from its sides as Settings' tabs are, with the
-/// dialog it asks in over all of it, as Settings has on Linux.
+/// The account's view on Settings' card, beside Settings' column with Sync lit, with the dialog
+/// it asks in over all of it, as Settings has on Linux.
 struct AccountPage {
     account: gpui::Entity<Account>,
     dialog: gpui::Entity<dialog::Dialog>,
+    card: Card,
 }
 
 impl gpui::Render for AccountPage {
@@ -2371,17 +2787,43 @@ impl gpui::Render for AccountPage {
         _: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
-        use browser::tokens::settings::{BACKGROUND, FIRST, SIDE, TEXT};
+        use browser::palette::PAPER;
+        use browser::settings_card::Colors;
+        use browser::settings_column::{self, Section};
+        use browser::settings_rows::Look;
+        use browser::tokens::palette::STAND_IN;
+        use browser::tokens::settings::NAME;
         use browser::tokens::text;
         use gpui::{ParentElement, Styled, div, rgb};
+        let look = Look::settings(true);
+        let column = settings_column::column(
+            Section::Sync,
+            true,
+            Rc::default(),
+            Rc::new(|_, _, _| {}),
+            Rc::new(|_, _| {}),
+        );
+        let colors = Colors {
+            line: look.line,
+            name: rgb(PAPER).opacity(NAME),
+            heading: look.heading,
+        };
+        let card = self.card.draw(
+            Section::Sync.name(),
+            div().child(self.account.clone()),
+            true,
+            colors,
+        );
         div()
             .relative()
             .size_full()
-            .bg(rgb(BACKGROUND))
+            .flex()
+            .bg(rgb(STAND_IN))
             .font_family(browser::face::UI)
             .text_size(px(text::BODY))
-            .text_color(rgb(TEXT))
-            .child(div().px(px(SIDE)).py(px(FIRST)).child(self.account.clone()))
+            .text_color(look.ink)
+            .child(column)
+            .child(card)
             .children(dialog::cover(&self.dialog, cx))
     }
 }
@@ -2422,6 +2864,15 @@ impl account::Host for PreviewAccount {
         window: &mut gpui::Window,
         cx: &mut App,
     ) {
-        dialog::ask_in(&self.dialog, message, detail, action, on_return, confirmed, window, cx);
+        dialog::ask_in(
+            &self.dialog,
+            message,
+            detail,
+            action,
+            on_return,
+            confirmed,
+            window,
+            cx,
+        );
     }
 }

@@ -393,7 +393,11 @@ height = 24.0
 margin = 8.0
 # The pointer this near the plate, in points, sends it to the other side.
 near = 16.0
-window-width = 480.0
+# The most a plate is wide until it shows the whole address.
+resting-width = 480.0
+# Its window, as wide as a whole address grows: about 200 characters at 11 pt, past which one still
+# loses the middle of its path.
+window-width = 1200.0
 pad-x = 10.0
 radius = 6.0
 # The rim's thickness, 0.5 pt.
@@ -578,51 +582,118 @@ light-selected-shadow-y = 1.0
 light-selected-shadow-blur = 2.0
 
 [settings]
-# Arc's, measured in its dark Settings window, but for the Shortcuts tab, which isn't captured.
-width = 684.0
-height = 650.0
-# The title is centred in the bar over the toolbar.
-title-bar = 32.0
-# The toolbar's tabs are 55 wide, or as wide as a long name needs, 1 apart, and the one shown
-# sits on a plate 44 tall, 2 down.
-toolbar = 56.0
-tab = 55.0
-tab-padding = 6.0
-plate-top = 2.0
-plate = 44.0
-icon = 20.0
-icon-top = 4.0
-label-top = 3.0
-# Boxes of rows are 64 in from the window's sides, the first 20 under the toolbar, and 9 apart. A
-# row's text and its control are 10 in from the box's edges, and 10 from its top and bottom, and
-# the lines between rows 8 in.
-side = 64.0
-first = 20.0
-box-gap = 9.0
+# Ours (#1636): an ilo window of its own. Its sections run down a column on the window's material,
+# as the sidebar's rows do, and the section shown sits on a card, as a page does. Its colours are
+# alphas of the palette's paper in dark and its ink in light, over the stand-in and the card.
+width = 820.0
+height = 660.0
+# The least it can be made: room for the column and a row with a sentence and a control.
+min-width = 720.0
+min-height = 480.0
+# The column: the window buttons, then the sections, three groups 12 apart, and at its foot
+# Chromium's settings, 8 up from the window's bottom. Each section is the sidebar's row, 36 tall on
+# a plate 8 in at the row radius, 2 apart, its glyph 10 in and 9 before its name.
+column = 208.0
+column-top = 48.0
+plate-gap = 2.0
+section-group-gap = 12.0
+section-x = 10.0
+section-glyph = 16.0
+section-glyph-gap = 9.0
+foot-bottom = 8.0
+foot-glyph = 15.0
+# A section's name and glyph, the selected one's plate (the sidebar's, white with its shadow in
+# light), and the foot's quieter name and glyph.
+section-text = 0.78
+section-glyph-alpha = 0.66
+section-selected = 0.2
+section-selected-light = 0xffffffd9
+section-shadow = 0x00000033
+section-hovered = 0.12
+foot-text = 0.55
+foot-glyph-alpha = 0.45
+# The card the section shows on: 10 in from the window's top, right and bottom at the card's
+# radius, its rim in dark and its ring and shadow in light, and a fade into its fill over the last
+# 28 where rows go on under it.
+card-rim = 0xffffff12
+card-ring = 0x00000012
+card-shadow = 0x0000000f
+fade = 28.0
+# A section's page: 26 down, 36 in, at most 632 wide, its text 14 in, so headings, names and lines
+# share a column and the groups' plates hang outside it.
+page-top = 26.0
+page-x = 36.0
+page-bottom = 36.0
+page-width = 632.0
+text-x = 14.0
+# The page's name, in the display face as the Library's heading (shell.library title-size and
+# title-line), then one sentence under it, and a heading over a group where it needs one.
+title = 0.96
+lede-top = 4.0
+lede-line = 18.0
+lede = 0.55
+heading-top = 20.0
+heading-bottom = 7.0
+heading = 0.66
+# Once scrolled, the section's name holds at the card's top, in body semibold over a hairline.
+held-title = 44.0
+# A group: a plate of rows at the row radius, 10 apart, the first 20 under the sentence.
+group = 0.04
+group-light = 0.035
+group-gap = 10.0
+first-group = 20.0
+# A row: at least 42 tall, its text 14 in and 10 from its top and bottom, a hairline between rows
+# from its text to 14 short of the plate's end; its name, then a grey line 2 under it, and its
+# controls 20 after the text, 8 apart.
+row-height = 42.0
+row-x = 14.0
 padding = 10.0
-line-inset = 8.0
-radius = 6.0
-# A row's icon is a tile of colour 20 across with a white glyph, 8 before the text.
-tile = 20.0
-tile-glyph = 14.0
-tile-radius = 6.0
-tile-gap = 8.0
-switch-width = 36.0
-switch-height = 16.0
-knob-width = 21.0
-knob-height = 13.0
-knob-inset = 1.5
-# Pop-up buttons and buttons are 24 tall with their text 12 in; a pop-up button is 155 wide,
-# with its chevrons 10 from its right edge, and ends 22.5 short of the switches and buttons.
+line = 0.07
+name = 0.92
+name-off = 0.7
+detail = 0.52
+detail-top = 2.0
+detail-line = 14.0
+end-gap = 20.0
+control-gap = 8.0
+# A feature's row leads with its glyph on a quiet plate, 12 before its name, and its own settings
+# under it start where its name does.
+glyph-plate = 28.0
+glyph-plate-gap = 12.0
+glyph = 16.0
+glyph-plate-fill = 0.07
+glyph-on = 0.82
+glyph-off = 0.38
+# A switch is a pill 30 by 18, its knob 14 across, 2 in, the paper in dark and white in light,
+# white on the accent. It slides over 150 ms.
+switch-width = 30.0
+switch-height = 18.0
+knob = 14.0
+knob-inset = 2.0
+knob-alpha = 0.94
+knob-shadow = 0x00000047
+switch-off = 0.17
+switch-off-light = 0.14
+# Pop-up buttons and buttons are 24 tall at the control radius, a button's title 10 in, a pop-up's
+# 10 in with its chevrons 5 from its end. Under the pointer, a step toward pressed.
 control-height = 24.0
-control-padding = 12.0
+control-padding = 10.0
 control-radius = 6.0
+chevrons = 13.0
+chevrons-end = 5.0
+chevrons-alpha = 0.5
+button-glyph = 13.0
+control = 0.08
+control-light = 0.075
+control-hovered = 0.12
+control-hovered-light = 0.1
+control-pressed = 0.16
+control-pressed-light = 0.135
 popup-width = 155.0
 # Ours: the favorites' longest choice, "In Each Profile's Spaces", needs more than 155.
 favorites-popup-width = 195.0
-popup-end = 22.5
-chevrons = 14.0
-# Buttons under the boxes are 11 below them.
+popup-end = 0.0
+# Buttons under the groups are 11 below them.
 buttons-top = 11.0
 # Ours: a checkbox, as the dialog's, 8 before its name, ticked in the accent with a white tick;
 # and a disclosure, such as the import's Choose folders, its chevron 4 after its words.
@@ -633,71 +704,49 @@ check-glyph = 12.0
 check-tick = 0xffffff
 disclosure-gap = 4.0
 disclosure-glyph = 12.0
-# Ours, for the Shortcuts tab: a header 8 over each box, 20 below the box before, and keys in
-# chips as the command bar shows them, at least 56 wide so they line up, with a command's way
-# back to its default 6 before its chip.
-header-gap = 8.0
+# Ours (#1673): the import's numbered steps, such as Full Disk Access's, each number on a circle
+# of the control's fill, and the dot before a line that waits, or before an Arc Space's name in the
+# colour of its theme.
+step = 20.0
+dot = 7.0
+# The views Settings shows from the library, Sync and Import, put a heading 8 over a group and 20
+# under the one before, and their groups 10 apart.
+header-gap = 7.0
 section-gap = 20.0
+box-gap = 10.0
+# Keys in chips as the command bar shows them, at least 56 wide so they line up, with a command's
+# way back to its default 6 before its chip. A key that can't change is quieter, and None quieter
+# still.
 chip-height = 20.0
 chip-padding = 6.0
 chip-width = 56.0
 chip-gap = 6.0
-# Ours, for the Profiles tab: rows as tall as a button's, so they're even with and without one.
-profile-row = 40.0
-# Ours, for the Passwords tab: a login's username under its site, a size down, in its row.
-username-size = 11.0
-# Ours, for the Links tab: a rule's row holds the pop-up of what its URL does, the field of its
-# text, 6 in, an arrow and the pop-up of its Space, 8 apart, and − at its end.
+chip = 0.08
+chip-fixed = 0.04
+chip-text = 0.85
+chip-fixed-text = 0.4
+chip-none-text = 0.3
+chip-radius = 6.0
+restore-radius = 6.0
+# Rows as tall as a button's with their padding, so they're even with and without one.
+profile-row = 42.0
+# Ours, for the Links section: a rule's row holds the pop-up of what its URL does, the field of
+# its text, 6 in, an arrow and the pop-up of its Space, 8 apart, and the trash at its end; + sits
+# under the rules, 4 in.
 rule-condition = 135.0
+rule-space = 140.0
 rule-gap = 8.0
 field-padding = 6.0
-# Ours, for the Sync tab: the recovery words down 4 columns, each after its number in the
+add-x = 4.0
+# A row whose controls fill it, such as a rule's or a shortcut's: 8 over and under them, at least
+# 38 tall.
+short-row = 38.0
+short-padding = 8.0
+# Ours, for the Sync section: the recovery words down 4 columns, each after its number in the
 # detail grey, in a column as wide as "24" and a gap, with 6 between the rows.
 words-columns = 4
 word-number = 24.0
 word-gap = 6.0
-bar = 0x282a2a
-bar-line = 0x303131
-background = 0x202222
-box = 0x232525
-box-line = 0x353737
-plate-fill = 0x444747
-plate-edge = 0x525656
-title = 0xa4a6a6
-tab-text = 0x9e9f9f
-text = 0xc2c2c2
-control = 0x313333
-# Under the pointer, a quiet step toward pressed, short of it, so a button shows it can be
-# clicked before it's pressed (ours, #1387).
-control-hovered = 0x3a3c3c
-control-pressed = 0x404242
-switch-off = 0x383939
-knob = 0xe1e2e2
-# The knob over the accent colour, which tints it.
-knob-on = 0xe1ebfe
-haptics-tile = 0x3f8ff7
-link-previews-tile = 0x30b0c7
-# Ours: the Mini Player's, on System Settings' indigo.
-mini-player-tile = 0x5e5ce6
-# Ours: the sidebar's ⌥ switch, in System Settings' Desktop & Dock indigo.
-option-reveal-tile = 0x5e5ce6
-restore-windows-tile = 0x5856d6
-profile-tile = 0x8e8e93
-# Ours: System Settings' Passwords tile is grey too.
-password-tile = 0x8e8e93
-# Ours, for the Agents tab: the switch on ilo's green, as agents are the browser's own, and each
-# client on the profiles' grey, as none is ours.
-agents-tile = 0x289054
-client-tile = 0x8e8e93
-# Ours: exporting the Spaces' links is a file, grey as the profiles' and passwords' tiles.
-export-tile = 0x8e8e93
-# A row's detail, such as a profile's Spaces, in the toolbar's grey.
-detail = 0x9e9f9f
-chip = 0xffff_ff14
-# A shortcut's keys as a chip, and the button beside it that restores its default.
-chip-radius = 6.0
-restore-radius = 6.0
-tile-glyph-color = 0xffffff
 # Ours: rows drawn on another view's ground, the first launch's, take its fill and text colour,
 # and their lines, controls and grey text are that text over the fill by as much as Settings' are
 # over its boxes.
@@ -817,6 +866,11 @@ drop-line-end = 2.0
 drop-slot-inset = 3.0
 drop = 0xffff_ffe6
 plate-radius = 12.0
+# A row's host under its title, in `secondary` at text's small size, Arc's 11 pt (Arc 1.168): a
+# pinned tab's whose page left its pinned URL's host, and a tab's in Developer Mode. The two lines
+# are this tall, centred in the row together (ours: Arc's lines aren't measured).
+host-title-line = 16.0
+host-line = 14.0
 # Around the row the keyboard acts on while the sidebar has it (Focus Sidebar), inside its plate,
 # in the ink at `keyed` (ours: Arc 1.170's isn't measured).
 keyed-ring = 2.0
@@ -837,15 +891,13 @@ loading-size = 12.0
 # A row narrower than this, such as a split's segment in a narrow sidebar, leaves the dot out
 # (Dia), as it would leave the title no room.
 loading-row-min = 48.0
-# The status dot (ours, #321): the row's text at 0.6 while its page loads, Signal green while an
-# agent works in the tab. Breathing, from 0.35 of its strength to all of it, says it's loading.
+# The status dot (ours, #321): the row's text at 0.6 while its page loads. Breathing, from 0.35
+# of its strength to all of it, says it's loading. Signal green is an agent at work, as a task's
+# card shows it.
 status-dot = 6.0
 status-loading = 0.6
 status-agent = 0x0e9f55
 breath-low = 0.35
-# A coloured dot's ring, in the neutral opposite the rows' text, so it reads on any theme.
-status-ring = 1.5
-status-ring-color = 0xf3f0e8
 title-gap = 8.0
 # The speaker before a title, while its tab plays sound or is muted, and its pressable square.
 # Arc's title is 8 after its speaker's glyph; ours draws 0.6 inside its 16 pt box, which is 1
@@ -916,10 +968,14 @@ cancel-height = 15.0
 # black, darker than any Space and without its colour (ours: Arc's and Dia's private look isn't
 # recorded).
 private-shade = 0.35
-# Dia's card, #121212 at 0.5 on a dark window and white at 0.7 on a light one: what shows before
-# a page first paints.
+# Dia's card, #121212 at 0.5 on a dark window and white at 0.7 on a light one, under the page.
 card = 0x1212_1280
 light-card = 0xffff_ffb3
+# What a page shows until its first frame: black while websites are told the appearance is dark,
+# white while it's light (Arc 1.171, measured by an outside reverse-engineering, #1404), the
+# colour a page in that appearance most likely draws.
+unpainted = 0x0000_00ff
+light-unpainted = 0xffff_ffff
 # Everything below is an alpha of the palette's ink, Ink or Paper (palette.rs): text and glyphs
 # through its floors, plates in Paper's terms. Arc's row tokens (docs/ux-spec.md › Tab rows): the
 # tab shown is 0.2, a row under the pointer 0.12 and a pressed one 0.065, with no line or shadow.
@@ -1191,8 +1247,10 @@ card-gap = 24.0
 # Once its cards don't fit, the section leaves the page this much of the window, however narrow,
 # and its cards scroll across (Arc 1.171 ax: 500 → 444, 1100 → 1044, live as the window resizes).
 spaces-page = 56.0
-# The name's row in the card, 33 down to its middle as in Arc, with the rows 52 down.
-card-name-top = 14.0
+# The name's row in the card, 25 down to its middle, with the rows 44 down, the first one's middle
+# 64.5 down: Arc 1.170 rec, three Spaces, field 7 to 43 and the first row's middle 65, and Arc
+# 1.171's 25 and 64 (#1401). Arc 1.170.0's one-Space cap had both 8 lower.
+card-name-top = 6.0
 card-name-height = 38.0
 # The name's field across that row (*interim*, by proportion from stills of Arc 1.170's card, 240
 # wide): a plate 8 in from the card's sides and 36 tall, Ink at 0.1, at the controls' radius where
@@ -1212,6 +1270,11 @@ card-brush = 28.0
 card-brush-inset = 4.0
 card-brush-glyph = 14.0
 card-brush-color = 0.35
+# The ••• at the card's foot, which shows the Space's menu: its middle 22 in from the card's right
+# and 21.5 above its foot (Arc 1.170 rec; Arc 1.171's 21). Ours: the sidebar's ••• button, with the
+# pointer on the card, as the brush shows only with it on the field.
+card-more-x = 22.0
+card-more-y = 21.5
 plus-gap = 33.0
 plus-size = 30.0
 # Ours: the + is the Space's accent where Arc's is blue (#319), with the palette's hovered and
@@ -1265,6 +1328,11 @@ progress-fill = 0.6
 button-progress-width = 16.0
 button-progress-height = 2.0
 button-progress-bottom = 4.0
+# Arc's: a new download's icon lands in a bin on the footer button, its file's icon this big, its
+# centre right of and above the glyph's, until it leaves.
+bin = 32.0
+bin-right = 9.0
+bin-up = 12.0
 
 [shell.link]
 # The least a plate may be wide, in a card too narrow for the half it is.
@@ -1346,12 +1414,13 @@ opt-in-line = 18.0
 
 [shell.permission]
 # Ours, as Arc's wasn't recorded: under the URL field, as wide as it, with the dialog's corners
-# and the header's plates. The text is the dialog's detail colour.
+# and the header's plates. The detail is the dialog's: the palette's ink at its alpha, dark in
+# light mode, as the card is the window's fill.
 gap = 6.0
 padding = 12.0
 radius = 16.0
 line = 18.0
-detail = 0xffff_ffc7
+detail = 0.78
 button-height = 28.0
 button-gap = 8.0
 buttons-top = 12.0
@@ -1396,6 +1465,36 @@ preview-radius = 8.0
 # Ours: a row's plate under the pointer, as the Library's rows have one.
 plate-inset = 4.0
 plate-radius = 12.0
+# Arc's: the tab list behind is hidden from this far above the top row, and comes back over the
+# shade's height above that.
+shade-gap = 3.0
+shade = 170.0
+
+[shell.scroller]
+# The list's scroller is Arc 1.170's, AppKit's own: a knob and no track, this far in from the
+# sidebar's edge. While the system shows scroll bars only as they're used, it's the overlay knob,
+# 4 wide, the ink at 0.49 (white 49 % measured on a dark theme; the light theme's ink is ours).
+edge = 3.0
+knob = 4.0
+knob-alpha = 0.49
+# With the system's scroll bars shown always, it's AppKit's legacy knob, 5 wide and the ink at 0.5
+# (AppKit's light one is black 0.5), always there while the rows overflow, and the rows give up
+# this much for it. Its rect is 3 in from the rows' part's top and bottom, and the knob 1 inside
+# that. The overlay knob's ends are the same 3 in (ours: Arc's aren't measured).
+knob-shown = 5.0
+knob-shown-alpha = 0.5
+gutter = 8.0
+end = 3.0
+knob-inset = 1.0
+# Ours, *interim* (Arc's isn't measured): the shortest knob.
+knob-min = 18.0
+
+[shell.scroller.motion]
+# Seconds: the design file has no motion, so tools/design-sync.md leaves this table out. Ours,
+# *interim* (Arc's aren't measured): how long the overlay knob stays after the last scroll, and
+# then fades.
+hold = 0.8
+fade = 0.25
 
 [shell.side-panel]
 # The panel's width until the user gives it one, Chrome's, and the range they can give it,

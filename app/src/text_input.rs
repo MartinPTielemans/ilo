@@ -11,21 +11,19 @@
 
 use std::{ops::Range, rc::Rc};
 
+use crate::menu::Closed;
+use crate::shell::MenuEntry;
+use crate::tokens::palette::{NO_THEME_ACCENT, SELECTION};
+use crate::tokens::text_input::PLACEHOLDER;
 use gpui::{
     Action, App, Bounds, ClipboardItem, ContentMask, Context, CursorStyle, ElementId,
     ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, Global,
-    GlobalElementId, Hsla, KeyBinding, LayoutId, MouseButton, Role, accesskit, linear_color_stop,
-    linear_gradient,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine,
-    SharedString, Style, Subscription, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div,
-    fill, hsla,
-    point, prelude::*, px, relative, rgb, size,
+    GlobalElementId, Hsla, KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, PaintQuad, Pixels, Point, Role, ShapedLine, SharedString, Style, Subscription,
+    TextRun, UTF16Selection, UnderlineStyle, WeakEntity, Window, accesskit, actions, div, fill,
+    hsla, linear_color_stop, linear_gradient, point, prelude::*, px, relative, rgb, size,
 };
 use unicode_segmentation::*;
-use crate::menu::Closed;
-use crate::shell::MenuEntry;
-use crate::tokens::text_input::PLACEHOLDER;
-use crate::tokens::palette::{NO_THEME_ACCENT, SELECTION};
 
 mod words;
 
@@ -72,7 +70,8 @@ actions!(
 /// `menu::field_menu`, shows it in ilo's own menu.
 pub struct FieldMenu(pub Rc<ShowMenu>);
 
-pub type ShowMenu = dyn Fn(Vec<(SharedString, bool)>, Point<Pixels>, bool, &Window, Chosen, &mut App);
+pub type ShowMenu =
+    dyn Fn(Vec<(SharedString, bool)>, Point<Pixels>, bool, &Window, Chosen, &mut App);
 pub type Chosen = Box<dyn FnOnce(Closed, &mut Window, &mut App)>;
 
 impl Global for FieldMenu {}
@@ -115,16 +114,45 @@ pub fn on_lose_keyboard<T: 'static>(
     let (left, away, deactivated) = (listener.clone(), listener.clone(), listener);
     let input = field.downgrade();
     let focus = field.focus_handle(cx);
+    // Each says which way it went, for a check that finds a field ended it didn't end (#1664).
     vec![
-        on_leave(&focus, window, cx, move |view, window, cx| left(view, window, cx)),
-        cx.subscribe_in(field, window, move |view, _, _: &Away, window, cx| away(view, window, cx)),
-        cx.observe_window_activation(window, move |view, window, cx| {
-            let menu = input.upgrade().is_some_and(|input| input.read(cx).menu_shown);
-            if !window.is_window_active() && !menu {
-                deactivated(view, window, cx)
+        on_leave(&focus, window, cx, move |view, window, cx| {
+            crate::log!("browser: field lost the keyboard to another element");
+            left(view, window, cx)
+        }),
+        cx.subscribe_in(field, window, move |view, _, _: &Away, window, cx| {
+            crate::log!("browser: field lost the keyboard to a press away");
+            away(view, window, cx)
+        }),
+        cx.observe_window_activation(window, move |_, window, cx| {
+            if !left_window(&input, window, cx) {
+                return;
             }
+            // GPUI hears of each key window change in a task of its own, with the state the window
+            // had then, so this one can be over already, with the change that says so waiting
+            // behind it: a menu took the keyboard, and gave it back as its choice opened the field
+            // (#1589). The field ends only if the window is still inactive once that has arrived.
+            let (input, deactivated) = (input.clone(), deactivated.clone());
+            cx.spawn_in(window, async move |view, cx| {
+                view.update_in(cx, |view, window, cx| {
+                    if left_window(&input, window, cx) {
+                        crate::log!("browser: field lost the keyboard with its window");
+                        deactivated(view, window, cx)
+                    }
+                })
+                .ok();
+            })
+            .detach();
         }),
     ]
+}
+
+/// Whether the field's window is inactive, with no menu of the field's up.
+fn left_window(input: &WeakEntity<TextInput>, window: &Window, cx: &App) -> bool {
+    let menu = input
+        .upgrade()
+        .is_some_and(|input| input.read(cx).menu_shown);
+    !window.is_window_active() && !menu
 }
 
 /// `text` without the `javascript:` schemes it starts with, past any whitespace and control
@@ -349,11 +377,28 @@ impl TextInput {
         self
     }
 
+    /// The placeholder's colour as the ground under the field changes, such as with the appearance.
+    pub fn set_placeholder_color(&mut self, color: impl Into<Hsla>, cx: &mut Context<Self>) {
+        let color = color.into();
+        if color != self.placeholder_color {
+            self.placeholder_color = color;
+            cx.notify();
+        }
+    }
+
+    /// The placeholder's colour now.
+    pub fn placeholder_hsla(&self) -> Hsla {
+        self.placeholder_color
+    }
+
     /// The placeholder's, caret's and selection's colours, for an input whose ground and accent
     /// change with the Space.
     pub fn set_colors(&mut self, placeholder: Hsla, caret: Hsla, selection: Hsla) {
-        (self.placeholder_color, self.caret_color, self.selection_color) =
-            (placeholder, caret, selection);
+        (
+            self.placeholder_color,
+            self.caret_color,
+            self.selection_color,
+        ) = (placeholder, caret, selection);
     }
 
     /// Fades an edge with more text past it over `width` into `ground`, the opaque fill under the
@@ -452,7 +497,12 @@ impl TextInput {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.grow(false, |field, at| field.word_from(at, false, words::start_before), window, cx);
+        self.grow(
+            false,
+            |field, at| field.word_from(at, false, words::start_before),
+            window,
+            cx,
+        );
     }
 
     fn select_word_right(
@@ -461,7 +511,12 @@ impl TextInput {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.grow(true, |field, at| field.word_from(at, true, words::end_after), window, cx);
+        self.grow(
+            true,
+            |field, at| field.word_from(at, true, words::end_after),
+            window,
+            cx,
+        );
     }
 
     fn select_to_next_word_start(
@@ -470,7 +525,12 @@ impl TextInput {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.grow(true, |field, at| field.word_from(at, true, words::next_start), window, cx);
+        self.grow(
+            true,
+            |field, at| field.word_from(at, true, words::next_start),
+            window,
+            cx,
+        );
     }
 
     fn select_to_start(&mut self, _: &SelectToStart, window: &mut Window, cx: &mut Context<Self>) {
@@ -497,7 +557,11 @@ impl TextInput {
         if self.composing() {
             return;
         }
-        let from = if forward { self.selected_range.end } else { self.selected_range.start };
+        let from = if forward {
+            self.selected_range.end
+        } else {
+            self.selected_range.start
+        };
         self.move_to(self.word_from(from, forward, step), window, cx)
     }
 
@@ -646,7 +710,11 @@ impl TextInput {
         let at = self.index_for_mouse_position(event.position);
         self.word_drag = None;
         // While an input method composes, its text is one piece, so more clicks are one.
-        let clicks = if self.composing() { 1 } else { event.click_count };
+        let clicks = if self.composing() {
+            1
+        } else {
+            event.click_count
+        };
         if event.modifiers.shift {
             self.grow(at >= self.selected_range.start, |_, _| at, window, cx);
         } else if clicks == 2 {
@@ -689,7 +757,9 @@ impl TextInput {
         let Some(menu) = cx.try_global::<FieldMenu>().map(|menu| menu.0.clone()) else {
             return;
         };
-        let Some(bounds) = self.last_bounds else { return };
+        let Some(bounds) = self.last_bounds else {
+            return;
+        };
         let x = (self.last_layout.as_ref())
             .filter(|line| line.text == self.content)
             .map_or(px(0.), |line| line.x_for_index(self.cursor_offset()));
@@ -717,7 +787,11 @@ impl TextInput {
             items.push(("Paste and Search", true, Some(Box::new(PasteAndSearch))));
         }
         items.push(("", false, None));
-        items.push(("Select All", !self.content.is_empty(), Some(Box::new(SelectAll))));
+        items.push((
+            "Select All",
+            !self.content.is_empty(),
+            Some(Box::new(SelectAll)),
+        ));
         let titles = (items.iter())
             .map(|&(title, enabled, _)| (MenuEntry::label(title), enabled))
             .collect();
@@ -733,7 +807,10 @@ impl TextInput {
                     Closed::Chose(_) | Closed::Otherwise => false,
                 }
             });
-            if let Some(action) = closed.chosen().and_then(|index| actions.get_mut(index)?.take()) {
+            if let Some(action) = closed
+                .chosen()
+                .and_then(|index| actions.get_mut(index)?.take())
+            {
                 window.dispatch_action(action, cx);
             }
             if away.unwrap_or(false) {
@@ -782,7 +859,11 @@ impl TextInput {
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
             let text = text.replace("\n", " ");
-            let text = if self.paste_and_go { without_javascript(&text) } else { &text };
+            let text = if self.paste_and_go {
+                without_javascript(&text)
+            } else {
+                &text
+            };
             self.replace_text_in_range(None, text, window, cx);
             self.pasted = true;
         }
@@ -1122,8 +1203,14 @@ impl EntityInputHandler for TextInput {
         let range = self.range_from_utf16(&range_utf16);
         let left = bounds.left() - self.scroll;
         Some(Bounds::from_corners(
-            point(left + last_layout.x_for_index(self.shown_offset(range.start)), bounds.top()),
-            point(left + last_layout.x_for_index(self.shown_offset(range.end)), bounds.bottom()),
+            point(
+                left + last_layout.x_for_index(self.shown_offset(range.start)),
+                bounds.top(),
+            ),
+            point(
+                left + last_layout.x_for_index(self.shown_offset(range.end)),
+                bounds.bottom(),
+            ),
         ))
     }
 
@@ -1331,13 +1418,23 @@ impl Element for TextElement {
         };
         let mut fades = Vec::new();
         if let Some((fade, ground)) = input.fade {
-            let (clear, ground) = (linear_color_stop(ground.opacity(0.), 0.), linear_color_stop(ground, SOLID));
-            let band = |x: Pixels| Bounds::new(point(x, bounds.top()), size(fade, bounds.size.height));
+            let (clear, ground) = (
+                linear_color_stop(ground.opacity(0.), 0.),
+                linear_color_stop(ground, SOLID),
+            );
+            let band =
+                |x: Pixels| Bounds::new(point(x, bounds.top()), size(fade, bounds.size.height));
             if scroll > px(0.) {
-                fades.push(fill(band(bounds.left()), linear_gradient(270., clear, ground)));
+                fades.push(fill(
+                    band(bounds.left()),
+                    linear_gradient(270., clear, ground),
+                ));
             }
             if line.width - scroll > width {
-                fades.push(fill(band(bounds.right() - fade), linear_gradient(90., clear, ground)));
+                fades.push(fill(
+                    band(bounds.right() - fade),
+                    linear_gradient(90., clear, ground),
+                ));
             }
         }
         self.input.update(cx, |input, _| input.scroll = scroll);
@@ -1380,7 +1477,8 @@ impl Element for TextElement {
                 window.paint_quad(selection)
             }
             let origin = point(bounds.left() - prepaint.scroll, bounds.top());
-            line.paint(origin, tall, gpui::TextAlign::Left, None, window, cx).unwrap();
+            line.paint(origin, tall, gpui::TextAlign::Left, None, window, cx)
+                .unwrap();
             for fade in prepaint.fades.drain(..) {
                 window.paint_quad(fade);
             }
@@ -1409,7 +1507,11 @@ impl Render for TextInput {
             // its dots, never what was typed.
             .when(window.is_a11y_active(), |field| {
                 let name = self.placeholder.trim_end_matches('…').to_owned();
-                let role = if self.secure { Role::PasswordInput } else { Role::TextInput };
+                let role = if self.secure {
+                    Role::PasswordInput
+                } else {
+                    Role::TextInput
+                };
                 let shown = self.shown();
                 let characters =
                     |offset| shown[..self.shown_offset(offset)].graphemes(true).count();
@@ -1418,8 +1520,11 @@ impl Render for TextInput {
                     false => self.selected_range.start,
                 };
                 let (anchor, focus) = (characters(anchor), characters(self.cursor_offset()));
-                field.role(role).aria_label(name).aria_value(shown.clone()).a11y_synthetic_children(
-                    move |builder| {
+                field
+                    .role(role)
+                    .aria_label(name)
+                    .aria_value(shown.clone())
+                    .a11y_synthetic_children(move |builder| {
                         let mut run = accesskit::Node::new(Role::TextRun);
                         let lengths = shown.graphemes(true).map(|each| each.len().min(255) as u8);
                         run.set_character_lengths(lengths.collect::<Vec<_>>());
@@ -1430,12 +1535,13 @@ impl Render for TextInput {
                             node,
                             character_index,
                         };
-                        builder.parent_node().set_text_selection(accesskit::TextSelection {
-                            anchor: at(anchor),
-                            focus: at(focus),
-                        });
-                    },
-                )
+                        builder
+                            .parent_node()
+                            .set_text_selection(accesskit::TextSelection {
+                                anchor: at(anchor),
+                                focus: at(focus),
+                            });
+                    })
             })
             .flex()
             .key_context("TextInput")
@@ -1496,8 +1602,8 @@ impl Focusable for TextInput {
 }
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod leave_tests;
+#[cfg(test)]
+mod tests;
 #[cfg(test)]
 mod word_tests;

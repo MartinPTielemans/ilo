@@ -21,6 +21,7 @@
 #include <winrt/Windows.Storage.Streams.h>
 
 #include <algorithm>
+#include <cstdarg>
 #include <cmath>
 #include <cstdio>
 #include <ctime>
@@ -47,8 +48,42 @@ extern "C" void browser_fade_none(void*, double, double, double) {}
 #pragma comment(linker, "/alternatename:browser_fade=browser_fade_none")
 // What check.sh calls a window the host floats over a browser window (below).
 extern "C" const char* host_floating_name(void* hwnd);
+// The app's (src/logging.rs), in the browser and the preview: whether BROWSER_LOG turns on |area|.
+extern "C" bool browser_log_on(const char* area);
 
 namespace {
+
+// A line in |area| of BROWSER_LOG (src/logging.rs), "browser: [area] ...", in one write, if it's
+// on. Never what the user browses or types.
+void LogIn(const char* area, const char* format, ...) {
+  if (!browser_log_on(area)) {
+    return;
+  }
+  char line[512];
+  int length = snprintf(line, sizeof(line), "browser: [%s] ", area);
+  va_list args;
+  va_start(args, format);
+  vsnprintf(line + length, sizeof(line) - length - 1, format, args);
+  va_end(args);
+  length = static_cast<int>(strlen(line));
+  line[length] = '\n';
+  fwrite(line, 1, length + 1, stderr);
+}
+
+// The window class of |hwnd|, for the focus area's lines.
+std::string ClassName(HWND hwnd) {
+  char name[64] = "none";
+  if (hwnd) {
+    GetClassNameA(hwnd, name, sizeof(name));
+  }
+  return name;
+}
+
+// What check.sh calls the floating window |hwnd|, for the focus area's lines.
+const char* FloatingName(HWND hwnd) {
+  const char* name = host_floating_name(hwnd);
+  return name ? name : "a floating window";
+}
 
 std::wstring Wide(const char* utf8) {
   if (!utf8) {
@@ -298,6 +333,9 @@ LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpa
       // from it only then.
       if (LOWORD(wparam) == WA_INACTIVE && !floating->hiding && floating->shown) {
         const HWND to = reinterpret_cast<HWND>(lparam);
+        LogIn("focus", "%s loses the keyboard to %p %s%s, pressed %d", FloatingName(hwnd),
+              static_cast<void*>(to), ClassName(to).c_str(),
+              to && to == GetWindow(hwnd, GW_OWNER) ? " (its browser window)" : "", Pressed());
         // ilo's menu, opened over this overlay, isn't the user leaving it.
         if (g_menu.shown && to == g_menu.hwnd) {
           break;
@@ -306,6 +344,7 @@ LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpa
         // view replaces the one that had focus. That isn't the user leaving, who would have pressed
         // on it, so this one takes the keyboard back as the window has it (#1363).
         if (floating->keyboard && to && to == GetWindow(hwnd, GW_OWNER) && !Pressed()) {
+          LogIn("focus", "%s takes the keyboard back", FloatingName(hwnd));
           break;
         }
         floating->keyboard = false;
@@ -996,7 +1035,7 @@ std::map<void*, std::pair<double, double>> g_pane_corners;
 // window starts at (host_set_pane_corner).
 std::map<void*, double> g_page_lefts;
 Floating g_hud;
-double g_hud_right = 0, g_hud_top = 0;
+double g_hud_right = 0, g_hud_top = 0, g_hud_margin = 0;
 Floating g_drop_targets;
 Floating g_dialog;
 Floating g_site_controls;
@@ -1702,6 +1741,11 @@ class FileDropSource : public IDropSource {
     return refs;
   }
   HRESULT STDMETHODCALLTYPE QueryContinueDrag(BOOL escape, DWORD keys) override {
+    // Each change only, as Windows asks on every move.
+    if (keys != keys_ || escape) {
+      keys_ = keys;
+      LogIn("drag", "buttons %lu escape %d", keys, escape);
+    }
     if (escape || (keys & MK_RBUTTON)) {
       return DRAGDROP_S_CANCEL;
     }
@@ -1710,12 +1754,18 @@ class FileDropSource : public IDropSource {
     }
     return S_OK;
   }
-  HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD) override {
+  HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD effect) override {
+    if (effect != effect_) {
+      effect_ = effect;
+      LogIn("drag", "the target takes effect %lu", effect);
+    }
     return DRAGDROP_S_USEDEFAULTCURSORS;
   }
 
  private:
   ULONG refs_ = 1;
+  DWORD keys_ = ~0ul;
+  DWORD effect_ = ~0ul;
 };
 
 // The shell's own data object for the file at |path|, so a drag carries it as Explorer does, with
@@ -1894,10 +1944,6 @@ void ShowShareSheet(HWND root, std::function<void(const wdt::DataPackage&)> fill
 
 namespace {
 
-#ifndef PW_RENDERFULLCONTENT
-#define PW_RENDERFULLCONTENT 0x00000002
-#endif
-
 // What the first window looks like until its UI has drawn, put on screen before the browser
 // starts: the window's frame, the sidebar's picture and the sidebar's colour past it.
 struct LaunchWindow {
@@ -2004,49 +2050,6 @@ LRESULT CALLBACK LaunchProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
     }
   }
   return DefWindowProcW(hwnd, message, wparam, lparam);
-}
-
-// The left |width| pixels of |window|'s content, top-down BGRX, filling |high|.
-bool Sidebar(HWND window, LONG width, std::vector<uint8_t>* pixels, LONG* high) {
-  RECT client{};
-  GetClientRect(window, &client);
-  width = width < client.right ? width : client.right;
-  *high = client.bottom;
-  if (width < 1 || *high < 1) {
-    return false;
-  }
-  BITMAPINFO info{};
-  info.bmiHeader.biSize = sizeof info.bmiHeader;
-  info.bmiHeader.biWidth = client.right;
-  info.bmiHeader.biHeight = -*high;
-  info.bmiHeader.biPlanes = 1;
-  info.bmiHeader.biBitCount = 32;
-  info.bmiHeader.biCompression = BI_RGB;
-  uint8_t* bits = nullptr;
-  HDC screen = GetDC(nullptr);
-  HDC dc = CreateCompatibleDC(screen);
-  ReleaseDC(nullptr, screen);
-  HBITMAP bitmap =
-      CreateDIBSection(dc, &info, DIB_RGB_COLORS, reinterpret_cast<void**>(&bits), nullptr, 0);
-  bool ok = false;
-  if (bitmap) {
-    HGDIOBJ old = SelectObject(dc, bitmap);
-    // The full content, as GPUI draws through DirectComposition, which a plain copy of the
-    // window's DC misses.
-    ok = PrintWindow(window, dc, PW_CLIENTONLY | PW_RENDERFULLCONTENT);
-    GdiFlush();
-    if (ok) {
-      pixels->resize(static_cast<size_t>(width) * *high * 4);
-      for (LONG y = 0; y < *high; ++y) {
-        memcpy(pixels->data() + static_cast<size_t>(y) * width * 4,
-               bits + static_cast<size_t>(y) * client.right * 4, static_cast<size_t>(width) * 4);
-      }
-    }
-    SelectObject(dc, old);
-    DeleteObject(bitmap);
-  }
-  DeleteDC(dc);
-  return ok;
 }
 
 // Writes |pixels|, |width| by |height| top-down BGRX, to |path| as a PNG. The caller has
@@ -2369,7 +2372,8 @@ void host_close_launch_window(void) {
   g_launch = {};
 }
 
-bool host_save_launch_picture(void* ui_view, const char* profile_dir, double width) {
+bool host_save_launch_pixels(void* ui_view, const char* profile_dir, const uint8_t* pixels,
+                             size_t columns, size_t rows) {
   HWND root = Root(ui_view);
   double x = 0, y = 0, frame_width = 0, frame_height = 0;
   // In the frame's terms, which the next launch's window opens at, and named for its size.
@@ -2385,22 +2389,15 @@ bool host_save_launch_picture(void* ui_view, const char* profile_dir, double wid
   }
   // Chromium's full screen takes the window's caption away.
   const bool full_screen = root && !(GetWindowLongPtrW(root, GWL_STYLE) & WS_CAPTION);
-  if (!framed || !IsWindowVisible(root) || full_screen || width < 1) {
+  if (!framed || !IsWindowVisible(root) || full_screen || !pixels || columns < 1 || rows < 1) {
     return false;
   }
-  // Only the sidebar: the page could be anything, and shouldn't be kept on disk.
-  std::vector<uint8_t> pixels;
-  LONG high = 0;
-  const LONG wide = static_cast<LONG>(std::lround(width * Scale(root)));
-  if (!Sidebar(root, wide, &pixels, &high)) {
-    return false;
-  }
-  const UINT columns = static_cast<UINT>(pixels.size() / 4 / high);
   // Encoded off the main thread, which the user is about to use elsewhere or quit.
   std::thread([path = LaunchPicturePath(profile_dir, frame_width, frame_height),
-               pixels = std::move(pixels), columns, high] {
+               pixels = std::vector<uint8_t>(pixels, pixels + columns * rows * 4),
+               columns = static_cast<UINT>(columns), rows = static_cast<UINT>(rows)] {
     const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    WritePng(path, pixels, columns, static_cast<UINT>(high));
+    WritePng(path, pixels, columns, rows);
     if (SUCCEEDED(com)) {
       CoUninitialize();
     }
@@ -2965,10 +2962,11 @@ void host_set_pane_corner(void* ui_view, double left, double right, double top) 
   }
 }
 
-void host_add_hud(void* hud_view, double right, double top, double) {
+void host_add_hud(void* hud_view, double right, double top, double margin) {
   Adopt(g_hud, hud_view, true, nullptr);
   g_hud_right = right;
   g_hud_top = top;
+  g_hud_margin = margin;
 }
 
 void host_show_hud(void* ui_view) {
@@ -2976,12 +2974,31 @@ void host_show_hud(void* ui_view) {
   ContentSize(Root(ui_view), &content_width, &content_height);
   WindowSize(g_hud.hwnd, &width, &height);
   auto [extra_right, extra_top] = g_pane_corners[ui_view];
-  Show(g_hud, ui_view, content_width - g_hud_right - extra_right - width, g_hud_top + extra_top, -1,
-       -1, false);
+  // 8 points below the find bar while it shows, where the HUD would cover it, as the Mac's and
+  // Linux's hosts put it.
+  double top = g_hud_top;
+  if (auto it = g_find_bars.find(ui_view); it != g_find_bars.end()) {
+    HWND bar = it->second.floating.hwnd;
+    double bar_width, bar_height;
+    if (bar && IsWindowVisible(bar)) {
+      WindowSize(bar, &bar_width, &bar_height);
+      top = it->second.top + bar_height + 8 - g_hud_margin;
+    }
+  }
+  Show(g_hud, ui_view, content_width - g_hud_right - extra_right - width, top + extra_top, -1, -1,
+       false);
+  // check.sh reads this line, as the Mac's and Linux's hosts log it.
+  if (g_hud.hwnd && IsWindowVisible(g_hud.hwnd)) {
+    fprintf(stderr, "browser: zoom hud shown\n");
+  }
 }
 
 void host_hide_hud(void) {
+  const bool shown = g_hud.hwnd && IsWindowVisible(g_hud.hwnd);
   Hide(g_hud);
+  if (shown) {
+    fprintf(stderr, "browser: zoom hud hidden\n");
+  }
 }
 
 void host_add_drop_targets(void* view) {
@@ -3916,7 +3933,13 @@ bool host_drag_file(const char* path, void (*ended)(bool)) {
     source.Attach(new FileDropSource());
     // On the UI thread GPUI has made an OLE apartment, as Explorer's drag is.
     DWORD effect = DROPEFFECT_NONE;
+    POINT at{};
+    GetCursorPos(&at);
+    const HWND over = WindowFromPoint(at);
+    LogIn("drag", "starts at %ld %ld over %p %s", at.x, at.y, static_cast<void*>(over),
+          ClassName(over).c_str());
     const HRESULT dropped = DoDragDrop(data.Get(), source.Get(), DROPEFFECT_COPY, &effect);
+    LogIn("drag", "ends: %lx, effect %lu", static_cast<unsigned long>(dropped), effect);
     if (ended) {
       ended(dropped == DRAGDROP_S_DROP && effect != DROPEFFECT_NONE);
     }

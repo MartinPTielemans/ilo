@@ -18,25 +18,25 @@ use gpui::{
 };
 
 use super::{
-    CARD_RADIUS, Command, Folders, NAV_RADIUS, PagePicture, SECONDARY, Shell, Space,
-    SpaceEntry, TITLE, Theme,
+    CARD_RADIUS, Command, Folders, NAV_RADIUS, PagePicture, SECONDARY, Shell, Space, SpaceEntry,
+    TITLE, Theme,
     agent_bar::{Bar, bar_words, stop_keys},
-    keys::user_keys,
+    card,
     conversation::page_chip,
-    task_cards::act,
-    card, cubic_bezier,
+    cubic_bezier,
+    keys::user_keys,
     permission::card_listener,
     picture::next_request,
+    task_cards::act,
 };
-use crate::agents::is_task;
 use crate::agents::task::{Card, Dot, TaskAction};
 use crate::link_preview::{CLOSE, OPEN};
 use crate::palette::{STATE_HOVERED, STATE_PRESSED};
 use crate::tokens::shell::agent_pointer::{COLOR, RING};
 use crate::tokens::shell::permission::LINE;
 use crate::tokens::shell::task_area::{BACK, BACK_GLYPH, GAP, PAGE_ROOM, STRIP};
-use crate::tokens::toast::CHIP_GAP;
 use crate::tokens::text;
+use crate::tokens::toast::CHIP_GAP;
 
 /// What the page area shows of a task, at most one per window.
 pub(super) struct TaskArea {
@@ -86,7 +86,10 @@ impl Zoom {
 /// Where a watched page goes in the card: its top, the card's width, with room under it for the
 /// strip.
 fn watched(card: Bounds<Pixels>) -> Bounds<Pixels> {
-    Bounds::new(card.origin, size(card.size.width, card.size.height - px(PAGE_ROOM)))
+    Bounds::new(
+        card.origin,
+        size(card.size.width, card.size.height - px(PAGE_ROOM)),
+    )
 }
 
 fn pushed(bounds: Bounds<Pixels>, by: Pixels) -> Bounds<Pixels> {
@@ -97,7 +100,10 @@ fn between(from: Bounds<Pixels>, to: Bounds<Pixels>, way: f32) -> Bounds<Pixels>
     let at = |from: Pixels, to: Pixels| from + (to - from) * way;
     Bounds::new(
         point(at(from.left(), to.left()), at(from.top(), to.top())),
-        size(at(from.size.width, to.size.width), at(from.size.height, to.size.height)),
+        size(
+            at(from.size.width, to.size.width),
+            at(from.size.height, to.size.height),
+        ),
     )
 }
 
@@ -114,19 +120,21 @@ fn covering(bounds: Bounds<Pixels>, picture: (f32, f32)) -> Bounds<Pixels> {
 }
 
 impl Shell {
-    /// The task Spaces apart from the user's and other agents', which the window never lists. Each
-    /// keeps the tabs it had.
+    /// The agents' Spaces apart from the user's: a task's, and an outside agent's, which its
+    /// sessions share (#1080). The window never lists them. Each keeps the tabs it had.
     pub(super) fn take_task_spaces(&mut self, spaces: Vec<SpaceEntry>) -> Vec<SpaceEntry> {
-        let browser = self.browser.clone();
-        let (tasks, spaces): (Vec<_>, Vec<_>) = spaces
-            .into_iter()
-            .partition(|entry| !entry.5.is_empty() && is_task(&browser.space_agent(entry.0)));
+        let (tasks, spaces): (Vec<_>, Vec<_>) =
+            spaces.into_iter().partition(|entry| !entry.5.is_empty());
         let mut old = std::mem::take(&mut self.task_spaces);
         self.task_spaces = tasks
             .into_iter()
             .map(|(id, name, color, profile, icon, agent, theme)| {
                 match old.iter().position(|space| space.id == id) {
-                    Some(at) => Space { name, agent, ..old.swap_remove(at) },
+                    Some(at) => Space {
+                        name,
+                        agent,
+                        ..old.swap_remove(at)
+                    },
                     None => {
                         // check.sh reads this line.
                         log!("browser: task space {id} {agent}");
@@ -238,7 +246,11 @@ impl Shell {
     /// Has the core show the window's Space, or the first of the user's if it was a task's.
     fn show_users_space(&mut self, cx: &mut Context<Self>) {
         let listed = self.spaces.iter().any(|each| each.id == self.space);
-        let space = if listed { self.space } else { self.spaces.first().map_or(0, |each| each.id) };
+        let space = if listed {
+            self.space
+        } else {
+            self.spaces.first().map_or(0, |each| each.id)
+        };
         if space != 0 {
             self.browser.show_space(space, cx);
         }
@@ -293,14 +305,20 @@ impl Shell {
 
     /// The page area shows `view`, the conversation of the task whose Space is `space`, in place of
     /// the Space's tab, at once, as a tab switch is. Another task's conversation shown is replaced
-    /// where it is.
+    /// where it is, as is another session's of the same agent, whose Space it shares.
     pub fn open_task(&mut self, space: u64, view: AnyView, cx: &mut Context<Self>) {
         if self.task_space(space).is_none() {
             log!("browser: no task space {space}");
             return;
         }
-        let replacing = self.task_area.as_ref().is_some_and(|area| area.space != space);
-        if replacing && self.task_area.as_ref().is_some_and(|area| area.page.is_some()) {
+        let replacing = (self.task_area.as_ref())
+            .is_some_and(|area| area.space != space || area.view.entity_id() != view.entity_id());
+        if replacing
+            && self
+                .task_area
+                .as_ref()
+                .is_some_and(|area| area.page.is_some())
+        {
             self.leave_task_page_now(cx);
         }
         match &mut self.task_area {
@@ -308,7 +326,13 @@ impl Shell {
                 area.space = space;
                 area.view = view;
             }
-            None => self.task_area = Some(TaskArea { space, view, page: None }),
+            None => {
+                self.task_area = Some(TaskArea {
+                    space,
+                    view,
+                    page: None,
+                })
+            }
         }
         // check.sh reads these lines.
         log!("browser: task area {space} opens");
@@ -345,12 +369,27 @@ impl Shell {
         if !self.task_tabs(area.space).contains(&tab) {
             return false;
         }
-        let zoom = if cx.reduce_motion() { Zoom::Rest } else { Zoom::Out(Instant::now()) };
+        let zoom = if cx.reduce_motion() {
+            Zoom::Rest
+        } else {
+            Zoom::Out(Instant::now())
+        };
         if let Some(area) = &mut self.task_area {
-            if let Some(Watched { picture: Some(old), asked: true, .. }) = area.page.take() {
+            if let Some(Watched {
+                picture: Some(old),
+                asked: true,
+                ..
+            }) = area.page.take()
+            {
                 self.stale_pictures.push(old.image());
             }
-            area.page = Some(Watched { tab, thumb: from, picture, asked: false, zoom });
+            area.page = Some(Watched {
+                tab,
+                thumb: from,
+                picture,
+                asked: false,
+                zoom,
+            });
         }
         // check.sh reads this line.
         log!("browser: task page {tab} watched");
@@ -415,7 +454,10 @@ impl Shell {
     /// The task Space and its tab whose page the area shows or is on its way to.
     pub(super) fn watched_task_page(&self) -> Option<(u64, u64)> {
         let area = self.task_area.as_ref()?;
-        let page = area.page.as_ref().filter(|page| !matches!(page.zoom, Zoom::In(_)))?;
+        let page = area
+            .page
+            .as_ref()
+            .filter(|page| !matches!(page.zoom, Zoom::In(_)))?;
         Some((area.space, page.tab))
     }
 
@@ -431,16 +473,19 @@ impl Shell {
     pub(super) fn task_page_place(&self) -> Option<(u64, Bounds<Pixels>)> {
         let tab = self.task_page_live()?;
         let (card, _) = self.page_frame(self.viewport);
-        Some((tab, if self.page_fullscreen { card } else { watched(card) }))
+        Some((
+            tab,
+            if self.page_fullscreen {
+                card
+            } else {
+                watched(card)
+            },
+        ))
     }
 
-    /// Whether the window shows `tab`'s page as an agent's: a task's in place in the area, else a
-    /// page shown in an agent's Space.
+    /// Whether the window shows `tab`'s page as an agent's: a task's in place in the area.
     pub(super) fn agent_page_shows(&self, tab: u64) -> bool {
-        match self.task_area {
-            Some(_) => self.task_page_live() == Some(tab),
-            None => self.shows(tab) && self.agents_space_shown(),
-        }
+        self.task_area.is_some() && self.task_page_live() == Some(tab)
     }
 
     /// The task Space and its tab whose page the area draws, on its way back too.
@@ -449,14 +494,10 @@ impl Shell {
         Some((area.space, area.page.as_ref()?.tab))
     }
 
-    /// The agent's Space whose page the window shows, and the tab: a task's page the area draws,
-    /// else the Space shown if it's an agent's, with the tab selected there.
+    /// The agent's Space whose page the window shows, and the tab: a task's page the area draws.
     pub(super) fn agent_page(&self) -> Option<(&Space, u64)> {
-        if let Some((space, tab)) = self.task_page_drawn() {
-            return Some((self.task_space(space)?, tab));
-        }
-        let space = self.shown_space().filter(|space| !space.agent.is_empty())?;
-        Some((space, self.selected))
+        let (space, tab) = self.task_page_drawn()?;
+        Some((self.task_space(space)?, tab))
     }
 
     /// Where the window's page goes, given the card's frame: there, unless a task has the area.
@@ -499,7 +540,12 @@ impl Shell {
         let Some(area) = self.task_area.take() else {
             return;
         };
-        if let Some(Watched { picture: Some(picture), asked: true, .. }) = area.page {
+        if let Some(Watched {
+            picture: Some(picture),
+            asked: true,
+            ..
+        }) = area.page
+        {
             self.stale_pictures.push(picture.image());
         }
         // check.sh reads this line.
@@ -515,12 +561,19 @@ impl Shell {
 
     /// The page watched goes at once, back to the conversation.
     fn leave_task_page_now(&mut self, cx: &mut Context<Self>) {
-        let Some(area) = &mut self.task_area else {
+        let Some(page) = self.task_area.as_mut().and_then(|area| area.page.take()) else {
             return;
         };
-        if let Some(Watched { picture: Some(picture), asked: true, .. }) = area.page.take() {
+        if let Watched {
+            picture: Some(picture),
+            asked: true,
+            ..
+        } = page
+        {
             self.stale_pictures.push(picture.image());
         }
+        // check.sh waits for this line, as at the end of the zoom back with motion.
+        log!("browser: task page in its thumbnail");
         self.show_users_page(cx);
         self.retake_talk_pictures(cx);
         cx.notify();
@@ -628,7 +681,10 @@ impl Shell {
             }
             // The header's commands act on the page watched, as its URL field shows it, and Edit
             // URL edits it.
-            Command::CopyUrl | Command::CopyMarkdownLink | Command::SiteControls | Command::EditUrl
+            Command::CopyUrl
+            | Command::CopyMarkdownLink
+            | Command::SiteControls
+            | Command::EditUrl
                 if live.is_some() =>
             {
                 return false;
@@ -640,7 +696,11 @@ impl Shell {
             // ⌘T opens the bar over the conversation, from a page watched too, and so does Edit
             // URL with no page in place, the field showing the bar's placeholder.
             Command::NewTab | Command::SearchTabs | Command::EditUrl => {
-                if self.task_area.as_ref().is_some_and(|area| area.page.is_some()) {
+                if self
+                    .task_area
+                    .as_ref()
+                    .is_some_and(|area| area.page.is_some())
+                {
                     self.leave_task_page_now(cx);
                     self.browser.focus_ui(cx);
                 }
@@ -691,8 +751,11 @@ impl Shell {
                     page.zoom = Zoom::Rest;
                 }
                 Zoom::In(start) if still || now.duration_since(start).as_secs_f32() >= CLOSE => {
-                    if let Some(Watched { picture: Some(picture), asked: true, .. }) =
-                        area.page.take()
+                    if let Some(Watched {
+                        picture: Some(picture),
+                        asked: true,
+                        ..
+                    }) = area.page.take()
                     {
                         self.stale_pictures.push(picture.image());
                     }
@@ -720,7 +783,10 @@ impl Shell {
     /// What the page area draws for a task, if it shows one: the conversation, and a page watched
     /// zooming or in place over its card, with the strip under it.
     pub(super) fn task_area_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let area = self.task_area.as_ref()?;
+        let Some(area) = self.task_area.as_ref() else {
+            self.task_strip_drawn.set(None);
+            return None;
+        };
         let (card_frame, _) = self.page_frame(self.viewport);
         let now = Instant::now();
         let zoom = area.page.as_ref().map_or(0., |page| page.zoom.at(now));
@@ -751,6 +817,8 @@ impl Shell {
             );
         }
         let Some(page) = &area.page else {
+            // Drawn again, for another page, the strip is logged again.
+            self.task_strip_drawn.set(None);
             return Some(layer.into_any_element());
         };
         let place = watched(card_frame);
@@ -781,7 +849,11 @@ impl Shell {
         } else {
             layer = layer.child(self.task_page_picture(page, between(page.thumb, place, zoom), cx));
         }
-        Some(layer.child(self.task_strip(card_frame, page.tab, zoom, cx)).into_any_element())
+        Some(
+            layer
+                .child(self.task_strip(card_frame, page.tab, zoom, cx))
+                .into_any_element(),
+        )
     }
 
     /// The page watched as it zooms: its picture, or its card till there is one, which a press
@@ -799,7 +871,9 @@ impl Shell {
                 move |bounds, _, window, _| {
                     let drawn = covering(bounds, picture.size());
                     let corners = Corners::all(radius);
-                    window.paint_image(bounds, drawn, corners, picture.image(), 0, false).ok();
+                    window
+                        .paint_image(bounds, drawn, corners, picture.image(), 0, false)
+                        .ok();
                 },
             )
             .absolute()
@@ -827,8 +901,8 @@ impl Shell {
 
     /// The card of the task the page area shows.
     fn task_card_shown(&self) -> Option<&Card> {
-        let space = self.task_open()?;
-        self.task_cards.iter().find(|card| card.space == space)
+        let agent = self.talk_in(self.task_open()?)?;
+        self.task_cards.iter().find(|card| card.agent == agent)
     }
 
     /// What the strip under a page watched says, by its task's card: who works and on what, or
@@ -842,11 +916,14 @@ impl Shell {
         let Some(card) = self.task_card_shown() else {
             return (self.title(tab).to_string(), String::new());
         };
-        let name = card.cli.name();
+        let name = card.name.clone();
         match card.dot {
             Dot::Working => (format!("{name} is working"), card.status.to_string()),
             Dot::Waiting => (format!("{name} is waiting"), card.status.to_string()),
-            Dot::Done => (format!("{name} finished"), crate::agents::site(&self.page(tab).url).to_string()),
+            Dot::Done => (
+                format!("{name} finished"),
+                crate::agents::site(&self.page(tab).url).to_string(),
+            ),
             Dot::Ended => ("Stopped".to_string(), String::new()),
         }
     }
@@ -854,13 +931,18 @@ impl Shell {
     /// The strip's Open on a finished task's page: the page shown's own, of those the task left the
     /// user, and none once it moved.
     pub(super) fn task_strip_open(&self, tab: u64) -> Option<String> {
-        let card = self.task_card_shown().filter(|card| card.dot == Dot::Done)?;
-        (card.open.iter()).find(|(each, _)| *each == tab).map(|(_, site)| format!("Open {site}"))
+        let card = self
+            .task_card_shown()
+            .filter(|card| card.dot == Dot::Done)?;
+        (card.open.iter())
+            .find(|(each, _)| *each == tab)
+            .map(|(_, site)| format!("Open {site}"))
     }
 
     /// Whether the task the page area shows is at work, which its page's ring says.
     pub(super) fn task_working(&self) -> bool {
-        self.task_card_shown().is_some_and(|card| card.dot == Dot::Working)
+        self.task_card_shown()
+            .is_some_and(|card| card.dot == Dot::Working)
     }
 
     /// The strip under a page watched: back to the conversation, the words, and the chips at its
@@ -877,7 +959,8 @@ impl Shell {
         let palette = self.palette;
         let card = self.task_card_shown();
         let agent = card.map(|card| card.agent.clone()).unwrap_or_default();
-        let take_over = |cx: &mut Context<Self>| Some(user_keys(cx).chips(Command::BackToPinnedUrl).concat());
+        let take_over =
+            |cx: &mut Context<Self>| Some(user_keys(cx).chips(Command::BackToPinnedUrl).concat());
         let mut chips = Vec::new();
         match (self.agent_bar(), card.map(|card| card.dot)) {
             (Some(Bar::Held { .. }), _) => chips.push(
@@ -896,7 +979,8 @@ impl Shell {
             }
             (_, Some(Dot::Done)) => {
                 if let Some(words) = self.task_strip_open(tab) {
-                    let open = page_chip(palette, "task-open", words, None).child(self.strip_open_listener());
+                    let open = page_chip(palette, "task-open", words, None)
+                        .child(self.strip_open_listener());
                     let agent = agent.clone();
                     chips.push(open.on_click(cx.listener(move |shell, _, _, cx| {
                         cx.stop_propagation();
@@ -961,7 +1045,11 @@ impl Shell {
                             .child(title),
                     )
                     .children(detail.map(|detail| {
-                        div().min_w(px(0.)).truncate().text_color(palette.text(SECONDARY)).child(detail)
+                        div()
+                            .min_w(px(0.))
+                            .truncate()
+                            .text_color(palette.text(SECONDARY))
+                            .child(detail)
                     })),
             )
             .child(div().flex_none().flex().gap(px(CHIP_GAP)).children(chips))

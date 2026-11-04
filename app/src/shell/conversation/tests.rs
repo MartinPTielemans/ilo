@@ -7,7 +7,6 @@ use gpui::{Entity, Focusable, Modifiers, TestAppContext, VisualTestContext, poin
 
 use super::Fold;
 
-use crate::agents::runner::Cli;
 use crate::agents::task::{Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep};
 use crate::shell::picture::PagePicture;
 use crate::shell::{Command, Folders, Shell, recorder::Recorder};
@@ -17,7 +16,8 @@ fn card() -> Card {
         agent: "task-1".into(),
         home: 1,
         space: 3,
-        cli: Cli::Claude,
+        name: "Claude".into(),
+        replies: true,
         title: "Flight to Lisbon".into(),
         status: "Searching flights".into(),
         asks: false,
@@ -50,12 +50,17 @@ fn conversation(steps: usize) -> Conversation {
         .collect();
     Conversation {
         agent: "task-1".into(),
-        name: "Claude",
+        name: "Claude".into(),
         title: "Flight to Lisbon".into(),
         about: "Claude · Haiku · Working".into(),
         asked: "a flight to Lisbon next Friday".into(),
         page: None,
-        lines: vec![Line::Trace(Trace { key: 0, running: true, took: None, items })],
+        lines: vec![Line::Trace(Trace {
+            key: 0,
+            running: true,
+            took: None,
+            items,
+        })],
         tabs: vec![(30, "skyscanner.net".into())],
         on: Some(30),
         stoppable: true,
@@ -69,12 +74,21 @@ fn conversation(steps: usize) -> Conversation {
 /// is at the top of Space 1's Today; a click on the card shows its conversation. Without motion,
 /// so the area is in place at once.
 fn shown(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTestContext) {
+    shown_with(card(), cx)
+}
+
+/// As `shown`, with `card` for task-1's.
+fn shown_with(
+    card: Card,
+    cx: &mut TestAppContext,
+) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTestContext) {
+    let agent = card.agent.clone();
     cx.update(|cx| {
         crate::shell::commands::bind_keys(cx);
         crate::text_input::bind_keys(cx);
     });
     let host = Rc::new(Recorder::default());
-    host.space_agents.borrow_mut().insert(3, "task-1".into());
+    host.space_agents.borrow_mut().insert(3, agent.clone());
     let browser = host.clone();
     let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
     cx.update(|window, cx| {
@@ -84,20 +98,45 @@ fn shown(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTe
     shell.update(cx, |shell, cx| {
         shell.set_spaces(
             vec![
-                (1, "Space 1".into(), None, 0, "".into(), "".into(), "".into()),
-                (3, "Flight to Lisbon".into(), None, 0, "".into(), "Claude".into(), "".into()),
+                (
+                    1,
+                    "Space 1".into(),
+                    None,
+                    0,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                ),
+                (
+                    3,
+                    "Flight to Lisbon".into(),
+                    None,
+                    0,
+                    "".into(),
+                    "Claude".into(),
+                    "".into(),
+                ),
             ],
             cx,
         );
-        shell.set_tabs(1, Vec::new(), vec![10, 11], Vec::new(), Folders::default(), cx);
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            vec![10, 11],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
         shell.set_tabs(3, Vec::new(), vec![30], Vec::new(), Folders::default(), cx);
         shell.set_space(1, cx);
         shell.set_selected(10, cx);
-        shell.set_task_cards(vec![card()], cx);
+        shell.set_task_cards(vec![card], cx);
         shell.slides.clear();
     });
     cx.run_until_parked();
-    let plate = shell.read_with(cx, |shell, _| shell.task_plate_drawn("task-1")).expect("the task's plate");
+    let plate = shell
+        .read_with(cx, |shell, _| shell.task_plate_drawn(&agent))
+        .expect("the task's plate");
     host.take();
     cx.simulate_click(plate.center(), Modifiers::none());
     cx.run_until_parked();
@@ -120,9 +159,19 @@ fn the_agents_send_a_shown_conversation_made_before_its_shell_changes(cx: &mut T
             reads.upgrade()?.read(cx).talk_agent()?;
             (agent == "task-1").then(|| conversation(1))
         };
-        super::super::send_agents(Vec::new(), vec![card()], Vec::new(), made, &[weak.clone()], cx);
+        super::super::send_agents(
+            Vec::new(),
+            vec![card()],
+            Vec::new(),
+            made,
+            &[weak.clone()],
+            cx,
+        );
     });
-    assert!(host.take().contains(&"task picture 30".to_string()), "the conversation wasn't sent");
+    assert!(
+        host.take().contains(&"task picture 30".to_string()),
+        "the conversation wasn't sent"
+    );
 }
 
 /// A click on the card shows its conversation in the page area, with the reply field's keyboard;
@@ -137,18 +186,82 @@ fn the_card_shows_its_conversation(cx: &mut TestAppContext) {
         assert_eq!(shell.task_shown(), Some((3, None)));
     });
 
-    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation(1)), cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
     assert_eq!(host.take(), ["task picture 30"]);
-    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation(1)), cx));
-    assert!(host.take().is_empty(), "pictured again with nothing changed");
-    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation(2)), cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    assert!(
+        host.take().is_empty(),
+        "pictured again with nothing changed"
+    );
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(2)), cx)
+    });
     assert_eq!(host.take(), ["task picture 30"]);
 
     cx.simulate_input("Ryanair");
     cx.simulate_keystrokes("enter");
-    assert!(host.take().contains(&r#"task task-1 Reply("Ryanair")"#.to_string()));
+    assert!(
+        host.take()
+            .contains(&r#"task task-1 Reply("Ryanair")"#.to_string())
+    );
     assert!(shell.update(cx, |shell, cx| shell.run_agent_key("cmd-.", cx)));
     assert!(host.take().contains(&"task task-1 Stop".to_string()));
+}
+
+/// An outside agent's session shows its steps one by one, with no ask, and in the reply field's
+/// place a line that says to talk to it where it was started: the window keeps the keyboard, so
+/// typing and Return send nothing, and ⌘. still stops it.
+#[gpui::test]
+fn a_sessions_conversation_has_no_reply_field(cx: &mut TestAppContext) {
+    let session = Card {
+        agent: "session-1".into(),
+        name: "Claude Code".into(),
+        title: "Claude Code".into(),
+        replies: false,
+        ..card()
+    };
+    let (shell, host, cx) = shown_with(session, cx);
+    let talk = Conversation {
+        agent: "session-1".into(),
+        name: "Claude Code".into(),
+        title: "Claude Code".into(),
+        about: "Working".into(),
+        asked: "".into(),
+        lines: vec![
+            Line::Step(step(0, "Read the page", false)),
+            Line::Step(step(1, "Clicking “Tickets”", true)),
+        ],
+        ..conversation(0)
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    // Its trace opens as it first draws, and shimmers from the next frame.
+    for _ in 0..2 {
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    }
+    let (reply, window) = cx.update(|window, cx| {
+        let reply = view.read(cx).reply.focus_handle(cx).is_focused(window);
+        (reply, shell.read(cx).focus_handle.is_focused(window))
+    });
+    assert!(!reply && window, "the keyboard isn't the window's");
+    assert!(
+        view.read_with(cx, |view, _| view.moving(false)),
+        "the step under way doesn't shimmer"
+    );
+    host.take();
+    cx.simulate_input("Ryanair");
+    cx.simulate_keystrokes("enter");
+    assert!(
+        !host.take().iter().any(|line| line.contains("Reply")),
+        "a reply went to a session"
+    );
+    assert!(shell.update(cx, |shell, cx| shell.run_agent_key("cmd-.", cx)));
+    assert!(host.take().contains(&"task session-1 Stop".to_string()));
 }
 
 /// Esc steps back to the Space's tab and never stops the task, its pictures let go; a second click
@@ -156,19 +269,31 @@ fn the_card_shows_its_conversation(cx: &mut TestAppContext) {
 #[gpui::test]
 fn escape_steps_back_and_command_w_dismisses(cx: &mut TestAppContext) {
     let (shell, host, cx) = shown(cx);
-    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation(1)), cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
     host.take();
     cx.simulate_keystrokes("escape");
-    assert!(!host.take().iter().any(|line| line.starts_with("task ")), "Esc stopped it");
+    assert!(
+        !host.take().iter().any(|line| line.starts_with("task ")),
+        "Esc stopped it"
+    );
     shell.read_with(cx, |shell, _| {
         assert_eq!(shell.talk_agent(), None);
         assert_eq!(shell.task_shown(), None);
     });
 
     shell.update(cx, |shell, cx| shell.show_task("task-1".into(), cx));
-    shell.read_with(cx, |shell, _| assert_eq!(shell.talk_agent().as_deref(), Some("task-1")));
-    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation(1)), cx));
-    assert!(host.take().contains(&"task picture 30".to_string()), "pictured again");
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.talk_agent().as_deref(), Some("task-1"))
+    });
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    assert!(
+        host.take().contains(&"task picture 30".to_string()),
+        "pictured again"
+    );
     shell.update(cx, |shell, cx| shell.run(Command::CloseTab, "ui", cx));
     assert!(host.take().contains(&"task task-1 Dismiss".to_string()));
     shell.read_with(cx, |shell, _| assert_eq!(shell.talk_agent(), None));
@@ -179,7 +304,9 @@ fn escape_steps_back_and_command_w_dismisses(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_picture_shows_its_page(cx: &mut TestAppContext) {
     let (shell, host, cx) = shown(cx);
-    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation(1)), cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
     let request = crate::shell::picture::next_request() - 1;
     let picture = PagePicture::from_bgra(vec![255; 4 * 4], 2, 2);
     shell.update(cx, |shell, cx| shell.page_pictured(request, picture, cx));
@@ -191,20 +318,35 @@ fn a_picture_shows_its_page(cx: &mut TestAppContext) {
     host.take();
     cx.simulate_click(at.center(), Modifiers::none());
     assert!(host.take().contains(&"select 30".to_string()));
-    shell.read_with(cx, |shell, _| assert_eq!(shell.task_shown(), Some((3, Some(30)))));
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.task_shown(), Some((3, Some(30))))
+    });
     let zoomed = shell.read_with(cx, |shell, _| shell.task_page_drawn());
     assert_eq!(zoomed, Some((3, 30)));
 
-    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation(2)), cx));
-    assert!(!host.take().contains(&"task picture 30".to_string()), "pictured under the page");
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(2)), cx)
+    });
+    assert!(
+        !host.take().contains(&"task picture 30".to_string()),
+        "pictured under the page"
+    );
     // Esc steps back, though the reply field the conversation focused isn't drawn under the page.
     cx.simulate_keystrokes("escape");
     shell.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
-    shell.read_with(cx, |shell, _| assert_eq!(shell.task_shown(), Some((3, None))));
-    assert!(host.take().contains(&"task picture 30".to_string()), "pictured once back");
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.task_shown(), Some((3, None)))
+    });
+    assert!(
+        host.take().contains(&"task picture 30".to_string()),
+        "pictured once back"
+    );
     let reply = view.read_with(cx, |view, cx| view.reply.focus_handle(cx));
-    assert!(cx.update(|window, _| reply.is_focused(window)), "the reply field has the keys back");
+    assert!(
+        cx.update(|window, _| reply.is_focused(window)),
+        "the reply field has the keys back"
+    );
 }
 
 /// A trace shows open while its stretch is under way and folds once it's over, unless the user
@@ -212,7 +354,9 @@ fn a_picture_shows_its_page(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_trace_is_open_while_it_works_unless_the_user_says_otherwise(cx: &mut TestAppContext) {
     let (shell, _, cx) = shown(cx);
-    shell.update(cx, |shell, cx| shell.set_conversation(Some(conversation(2)), cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(2)), cx)
+    });
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
     let open = |cx: &mut VisualTestContext, running| {
         view.read_with(cx, |view, _| view.is_open(Fold::Trace(0), running))
@@ -255,7 +399,12 @@ fn a_step_on_many_tabs_opens_to_each_tabs_line(cx: &mut TestAppContext) {
     };
     let mut talk = conversation(1);
     let items = vec![TraceItem::Step(group)];
-    talk.lines = vec![Line::Trace(Trace { key: 0, running: true, took: None, items })];
+    talk.lines = vec![Line::Trace(Trace {
+        key: 0,
+        running: true,
+        took: None,
+        items,
+    })];
     shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
     let draw = |cx: &mut VisualTestContext| {
@@ -263,21 +412,38 @@ fn a_step_on_many_tabs_opens_to_each_tabs_line(cx: &mut TestAppContext) {
         cx.run_until_parked();
     };
     let height = |fold, cx: &mut VisualTestContext| {
-        view.read_with(cx, |view, _| view.is_open(fold, false).then(|| view.heights.borrow()[&fold]))
+        view.read_with(cx, |view, _| {
+            view.is_open(fold, false)
+                .then(|| view.heights.borrow()[&fold])
+        })
     };
     draw(cx);
     assert_eq!(height(Fold::Group(0), cx), None, "it opened by itself");
 
     view.update(cx, |view, cx| view.toggle(Fold::Group(0), false, cx));
     draw(cx);
-    assert_eq!(height(Fold::Group(0), cx), Some(10. * TRACE_LINE), "it didn't open to ten lines");
-    assert_eq!(height(Fold::Step(0), cx), None, "its first tab's line opened with it");
+    assert_eq!(
+        height(Fold::Group(0), cx),
+        Some(10. * TRACE_LINE),
+        "it didn't open to ten lines"
+    );
+    assert_eq!(
+        height(Fold::Step(0), cx),
+        None,
+        "its first tab's line opened with it"
+    );
 
     view.update(cx, |view, cx| view.toggle(Fold::Step(3), false, cx));
     draw(cx);
-    assert!(height(Fold::Step(3), cx).is_some_and(|why| why > 0.), "the failed tab didn't say why");
+    assert!(
+        height(Fold::Step(3), cx).is_some_and(|why| why > 0.),
+        "the failed tab didn't say why"
+    );
     let opened = height(Fold::Group(0), cx).unwrap();
-    assert!(opened > 10. * TRACE_LINE, "why it failed shows under its tab: {opened}");
+    assert!(
+        opened > 10. * TRACE_LINE,
+        "why it failed shows under its tab: {opened}"
+    );
 }
 
 /// A reply the user sends shows Thinking under it, in view though they'd scrolled up to read,
@@ -288,40 +454,75 @@ fn a_sent_reply_thinks_until_the_first_step(cx: &mut TestAppContext) {
     let (shell, host, cx) = shown(cx);
     let mut talk = conversation(1);
     if let Line::Trace(trace) = &mut talk.lines[0] {
-        (trace.running, trace.took, trace.items) = (false, Some(3), vec![TraceItem::Step(step(0, "Read the page", false))]);
+        (trace.running, trace.took, trace.items) = (
+            false,
+            Some(3),
+            vec![TraceItem::Step(step(0, "Read the page", false))],
+        );
     }
-    talk.lines.extend((0..80).map(|n| Line::Said(format!("Line {n}").into())));
-    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk.clone()), cx));
+    talk.lines
+        .extend((0..80).map(|n| Line::Said(format!("Line {n}").into())));
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(talk.clone()), cx)
+    });
     let draw = |cx: &mut VisualTestContext| {
         shell.update(cx, |_, cx| cx.notify());
         cx.run_until_parked();
     };
     draw(cx);
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
-    let moving = |still, cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.moving(still));
-    assert!(!moving(false, cx), "a frame is asked with nothing under way");
+    let moving =
+        |still, cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.moving(still));
+    assert!(
+        !moving(false, cx),
+        "a frame is asked with nothing under way"
+    );
     view.update(cx, |view, _| view.scroll.set_offset(point(px(0.), px(0.))));
 
     cx.simulate_input("What is my name?");
     cx.simulate_keystrokes("enter");
-    assert!(host.take().contains(&r#"task task-1 Reply("What is my name?")"#.to_string()));
+    assert!(
+        host.take()
+            .contains(&r#"task task-1 Reply("What is my name?")"#.to_string())
+    );
     // The Agents' conversation on the reply, before the CLI says anything.
-    talk.lines.extend([Line::You("What is my name?".into()), Line::Thinking { key: 1, failed: None }]);
-    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk.clone()), cx));
+    talk.lines.extend([
+        Line::You("What is my name?".into()),
+        Line::Thinking {
+            key: 1,
+            failed: None,
+        },
+    ]);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(talk.clone()), cx)
+    });
     draw(cx);
-    let (offset, max) = view.read_with(cx, |view, _| (view.scroll.offset().y, view.scroll.max_offset().y));
+    let (offset, max) = view.read_with(cx, |view, _| {
+        (view.scroll.offset().y, view.scroll.max_offset().y)
+    });
     assert_eq!(offset, -max, "the Thinking is out of view");
     assert!(moving(false, cx), "Thinking doesn't shimmer");
     assert!(!moving(true, cx), "Thinking moves under Reduce Motion");
 
     talk.lines.pop();
-    let first = Trace { key: 1, running: true, took: None, items: vec![TraceItem::Step(step(1, "Reading the page", true))] };
+    let first = Trace {
+        key: 1,
+        running: true,
+        took: None,
+        items: vec![TraceItem::Step(step(1, "Reading the page", true))],
+    };
     talk.lines.push(Line::Trace(first));
-    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk.clone()), cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(talk.clone()), cx)
+    });
     draw(cx);
     assert!(moving(false, cx), "the step under way doesn't shimmer");
     if let Some(Line::Trace(trace)) = talk.lines.last_mut() {
-        (trace.running, trace.took, trace.items) = (false, Some(1), vec![TraceItem::Step(step(1, "Read the page", false))]);
+        (trace.running, trace.took, trace.items) = (
+            false,
+            Some(1),
+            vec![TraceItem::Step(step(1, "Read the page", false))],
+        );
     }
     shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
     draw(cx);
@@ -335,7 +536,8 @@ fn the_newest_line_stays_in_view_at_the_end(cx: &mut TestAppContext) {
     let (shell, _, cx) = shown(cx);
     let talk = |lines: usize| {
         let mut talk = conversation(1);
-        talk.lines.extend((0..lines).map(|n| Line::Said(format!("Line {n}").into())));
+        talk.lines
+            .extend((0..lines).map(|n| Line::Said(format!("Line {n}").into())));
         talk
     };
     let draw = |cx: &mut VisualTestContext| {
@@ -346,7 +548,9 @@ fn the_newest_line_stays_in_view_at_the_end(cx: &mut TestAppContext) {
     draw(cx);
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
     let scrolled = |cx: &mut VisualTestContext| {
-        view.read_with(cx, |view, _| (view.scroll.offset().y, view.scroll.max_offset().y))
+        view.read_with(cx, |view, _| {
+            (view.scroll.offset().y, view.scroll.max_offset().y)
+        })
     };
     let (offset, max) = scrolled(cx);
     assert!(max > px(0.), "the lines fit, so nothing scrolls");
@@ -360,7 +564,11 @@ fn the_newest_line_stays_in_view_at_the_end(cx: &mut TestAppContext) {
     view.update(cx, |view, _| view.scroll.set_offset(point(px(0.), px(0.))));
     shell.update(cx, |shell, cx| shell.set_conversation(Some(talk(82)), cx));
     draw(cx);
-    assert_eq!(scrolled(cx).0, px(0.), "it pulled the user away from what they read");
+    assert_eq!(
+        scrolled(cx).0,
+        px(0.),
+        "it pulled the user away from what they read"
+    );
 
     // Left and opened again, after the task went on meanwhile, it opens at its newest line.
     cx.simulate_keystrokes("escape");
@@ -379,10 +587,16 @@ fn the_newest_line_stays_in_view_at_the_end(cx: &mut TestAppContext) {
     let (offset, shorter) = scrolled(cx);
     assert!(shorter > max, "the window didn't get shorter");
     assert_eq!(offset, -shorter, "a shorter window lost the end");
-    view.update(cx, |view, _| view.scroll.set_offset(point(px(0.), px(-100.))));
+    view.update(cx, |view, _| {
+        view.scroll.set_offset(point(px(0.), px(-100.)))
+    });
     cx.simulate_resize(gpui::size(size.width, size.height - px(260.)));
     draw(cx);
-    assert_eq!(scrolled(cx).0, px(-100.), "it pulled the user away from what they read");
+    assert_eq!(
+        scrolled(cx).0,
+        px(-100.),
+        "it pulled the user away from what they read"
+    );
 }
 
 /// The lines follow what comes at their end while the user reads there, on the curve it lands
@@ -391,9 +605,87 @@ fn the_newest_line_stays_in_view_at_the_end(cx: &mut TestAppContext) {
 fn the_lines_follow_only_while_the_user_reads_at_their_end() {
     use super::{Follows, follows};
     // grew, opening, pinned, moves
-    assert_eq!(follows(false, false, true, true), Follows::Not, "nothing came");
-    assert_eq!(follows(true, true, false, true), Follows::AtOnce, "it opens at its end");
-    assert_eq!(follows(true, false, false, true), Follows::Not, "the user scrolled up to read");
-    assert_eq!(follows(true, false, true, false), Follows::AtOnce, "motion reduced");
+    assert_eq!(
+        follows(false, false, true, true),
+        Follows::Not,
+        "nothing came"
+    );
+    assert_eq!(
+        follows(true, true, false, true),
+        Follows::AtOnce,
+        "it opens at its end"
+    );
+    assert_eq!(
+        follows(true, false, false, true),
+        Follows::Not,
+        "the user scrolled up to read"
+    );
+    assert_eq!(
+        follows(true, false, true, false),
+        Follows::AtOnce,
+        "motion reduced"
+    );
     assert_eq!(follows(true, false, true, true), Follows::Eased);
+}
+
+/// A step under way that shimmers while nothing else moves draws on the loading dots' clock, not
+/// at every display frame, as each frame draws the whole window again (#1700).
+#[gpui::test]
+fn the_shimmer_draws_on_the_loading_dots_clock(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    let mut talk = conversation(1);
+    if let Line::Trace(trace) = &mut talk.lines[0] {
+        (trace.running, trace.took, trace.items) = (
+            true,
+            None,
+            vec![TraceItem::Step(step(0, "Waiting on you", true))],
+        );
+    }
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    // Its trace opens as it first draws, and shimmers from the next frame.
+    for _ in 0..2 {
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    }
+    assert!(
+        view.read_with(cx, |view, _| view.moving(false)),
+        "the step under way doesn't shimmer"
+    );
+    assert!(
+        shell.read_with(cx, |shell, _| shell.breath.pending()),
+        "the shimmer isn't on the loading dots' clock"
+    );
+}
+
+/// The reply field's "Reply to …" follows a switch between light and dark while the conversation
+/// stays open, as its lines do, in the placeholder colour of the palette it's drawn in (#1659).
+#[gpui::test]
+fn the_reply_placeholder_follows_the_appearance(cx: &mut TestAppContext) {
+    use crate::shell::Appearance;
+    use crate::tokens::shell::FORM_PLACEHOLDER;
+    let (shell, _, cx) = shown(cx);
+    let mut colours = Vec::new();
+    for appearance in [Appearance::Light, Appearance::Dark, Appearance::Light] {
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::Appearance(appearance), "ui", cx)
+        });
+        cx.run_until_parked();
+        let (drawn, meant) = shell.read_with(cx, |shell, cx| {
+            let talk = shell.talk.as_ref().expect("the conversation");
+            let reply = talk.view.read(cx).reply.read(cx).placeholder_hsla();
+            (
+                reply,
+                gpui::Hsla::from(shell.palette.text(FORM_PLACEHOLDER)),
+            )
+        });
+        assert_eq!(drawn, meant, "{appearance:?}'s placeholder");
+        colours.push(drawn);
+    }
+    assert_ne!(
+        colours[0], colours[1],
+        "light and dark drew the same placeholder"
+    );
+    assert_eq!(colours[0], colours[2]);
 }

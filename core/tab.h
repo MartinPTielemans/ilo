@@ -389,6 +389,8 @@ class Tab : public content::WebContentsObserver,
   // document committed, so each document's title is told even when it's the one before's.
   std::vector<uint8_t> system_page_favicon_;
   std::optional<std::string> system_page_title_;
+  // The title the app was last told of.
+  std::string reported_title_;
   // The system page the app was told its protected video is kept off the screen at, until the tab
   // goes to another site or back to Chromium.
   GURL output_restricted_at_;
