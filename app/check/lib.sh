@@ -193,6 +193,7 @@ exited() {
   pgrep -f "$app/.*chrome_crashpad_handler" > /dev/null &&
     fail "Crashpad's handler outlived the app"
   pgrep -f "$procs" > /dev/null && fail "Chromium helper processes were left running"
+  engine_state "after the quit"
   return 0
 }
 # A quit Apple Event goes through -[NSApplication terminate:], the way macOS quits apps when the
@@ -571,8 +572,19 @@ pinned_favicon() {
 # Forgets the sites the profile keeps for Safari's engine, the notes it closed and the listed hosts
 # it turned off, which a run that turns them on leaves for the runs after. Only while the app isn't
 # running, as it writes its preferences as it quits.
+# scratch (#1782): what the profile keeps for Safari's engine, the Preferences file's mtime, the time
+# and what of the app is running, on the Mac.
+engine_state() {
+  [ "$(uname)" = Darwin ] || return 0
+  local p="$profile_dir/Default/Preferences" keys
+  keys=$( [ -e "$p" ] && python3 -I -c 'import json,sys
+e=json.load(open(sys.argv[1],encoding="utf-8")).get("browser_core",{}).get("system_engine",{})
+print(json.dumps({k:e[k] for k in ("sites","closed_notes","listed_off") if k in e}))' "$p" || echo none)
+  echo "engine state $1: $keys, Preferences at $(stat -f %m "$p" 2>/dev/null || echo -), now $(date +%s), running: $(pgrep -f "$procs" | tr '\n' ' ')"
+}
 forget_engine_sites() {
   prefs="$profile_dir/Default/Preferences"
+  engine_state "before forget"
   [ -e "$prefs" ] || return 0
   python3 -I -c '
 import json, sys
@@ -585,6 +597,7 @@ for kind in ("sites", "closed_notes", "listed_off"):
 with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(prefs, f)
 ' "$prefs" || fail "the profile's sites for Safari's engine couldn't be reset"
+  engine_state "after forget"
 }
 
 # Starts the app on the page $1 with the profile $2 and the arguments after $3, and check/cdp.py
