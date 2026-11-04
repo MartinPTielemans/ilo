@@ -247,7 +247,7 @@ expect '^browser: import drawn list$' "Settings › Import & Export didn't draw 
 # whichever of the browsers the runner has installed, which the capture shows.
 if [ "$(uname)" = Linux ] || windows; then
   await '^browser: import icons [0-9]* px: Chrome$' ||
-    fail "Chrome's row didn't get the made-up icon: $(grep 'import icons' "$log")"
+    fail "Chrome's row didn't get the made-up icon: $(grep 'import icon' "$log")"
 fi
 ../tools/window-screenshot.sh "$pid" "$out/import-list.png" || fail "no window to capture"
 # Settings at its first size and at its least, in its look and then the other, as
