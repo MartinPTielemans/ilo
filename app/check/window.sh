@@ -552,6 +552,8 @@ await_drawn sized-left "$blue" "after leaving full screen"
 # The runs after this one drive the page from before, which closing the sized page shows again.
 send key w cmd
 expect "^browser: selected $shown_before\( in .*\)\{0,1\}\$" "closing the sized page didn't show the page before it"
+# Where it was before, as the display's coming and going can leave it elsewhere.
+[ -z "${frame:-}" ] || send place $frame
 send click $page_point
 
 # A page's full screen timed three times each way, entered by a key as a video's button is and left
