@@ -1110,18 +1110,43 @@ pub(super) struct ShellHandle(pub(super) WeakEntity<Shell>);
 
 impl Global for ShellHandle {}
 
+thread_local! {
+    /// The shell of the browser window made key last, from the moment the host says so until the
+    /// shell has heard: a shortcut pressed in between acts on it, not on the window behind.
+    static MADE_KEY: std::cell::RefCell<Option<WeakEntity<Shell>>> = const { std::cell::RefCell::new(None) };
+}
+
 /// The shell of the browser window last key, which the browser's shortcuts and menus act on.
 pub(super) fn key_shell(cx: &App) -> Option<WeakEntity<Shell>> {
-    cx.try_global::<ShellHandle>()
-        .map(|handle| handle.0.clone())
+    let made_key = MADE_KEY.with_borrow(Clone::clone);
+    made_key
+        .filter(|shell| shell.upgrade().is_some())
+        .or_else(|| {
+            cx.try_global::<ShellHandle>()
+                .map(|handle| handle.0.clone())
+        })
 }
 
 /// A browser window became key, as the host says from inside AppKit's update that made it so,
-/// where the app can't change (#819): what the shell does about it, for once that update is over.
+/// where the app can't change (#819). The shortcuts act on it from now; what the shell does about
+/// it is returned, for once that update is over.
 pub fn window_became_key(shell: WeakEntity<Shell>) -> impl FnOnce(&mut App) + 'static {
+    MADE_KEY.set(Some(shell.clone()));
     move |cx| {
-        shell.update(cx, |shell, cx| shell.became_key(cx)).ok();
+        if shell.update(cx, |shell, cx| shell.became_key(cx)).is_err() {
+            // Closed before it heard.
+            heard_key(&shell);
+        }
     }
+}
+
+/// The shell made key has heard, so the ShellHandle names it.
+pub(super) fn heard_key(shell: &WeakEntity<Shell>) {
+    MADE_KEY.with_borrow_mut(|made_key| {
+        if made_key.as_ref() == Some(shell) {
+            *made_key = None;
+        }
+    });
 }
 
 /// The key context at the root of the browser's windows, where its shortcuts apply. GPUI ranks a
