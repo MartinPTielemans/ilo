@@ -615,6 +615,22 @@ void host_dock_dot_launch(const char* profile_dir);
 // it. Asked again for the same color, it checks the style again.
 void host_dock_dot(bool colored, uint32_t color);
 
+// Whether the app is the active one, its windows taking the keyboard.
+bool host_app_active(void);
+
+// |count| tasks wait for the user, or none at 0: the Dock icon's badge on the Mac, the taskbar
+// button's overlay on Windows, with the count up to 9 and then 9+ in place of the Space's dot, and
+// on Linux the browser windows' urgency hint, with no count. It stays while the app is active, and
+// nothing bounces, flashes or sounds.
+void host_needs_you_badge(int count);
+
+// Posts a system notification, |title| over |body|, with no sound, which comes back as
+// |clicked|(|id|) once the user clicks it, the app brought forward. The first asks the system's
+// leave for them on the Mac; refused, it posts nothing and asks no more. Linux's are the app's own,
+// in Rust, over D-Bus.
+void host_needs_you_notify(uint64_t id, const char* title, const char* body);
+void host_watch_needs_you(void (*clicked)(uint64_t id));
+
 // Calls |released| once, after the event that shows ⌃ is no longer held: ⌃ going up, a key or a
 // button pressed without it, or the app going to the background. Watches the whole app, whichever
 // view has the keyboard.

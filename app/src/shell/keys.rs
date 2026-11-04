@@ -214,7 +214,7 @@ pub(super) fn pressed_as(key: &str) -> Vec<String> {
     }
 }
 
-fn pressed_off_the_mac(key: &str) -> Vec<String> {
+pub(super) fn pressed_off_the_mac(key: &str) -> Vec<String> {
     let ([ctrl, alt, shift, cmd], rest) = held(key);
     // ⌃Tab stays Ctrl+Tab, as Alt+Tab is the desktop's, and a key with ⌃ and ⌥ has no Alt of its
     // own.
