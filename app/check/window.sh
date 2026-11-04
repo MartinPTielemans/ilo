@@ -2,13 +2,16 @@
 # and the window's buttons stay in the header row. A page that goes full screen takes the window
 # with it, and escape or the page leaving brings both back, the page resized once each way, straight
 # to its new size, and its leaving reported once, timed from the page's request to the window's and
-# the UI's steps, going in and out. The window leaving full screen by its green button takes the page
+# the UI's steps, going in and out. After the window leaves full screen its page draws again at its
+# new size, and on the Mac a display plugged in while it's full screen keeps it at its size with its
+# page drawn. The window leaving full screen by its green button takes the page
 # out with it and brings back the sidebar and the card, and the page's full screen takes the window
 # again after. A full-screen window's display going away keeps the window and the page together,
 # both full screen or both out, and escape and the page's full screen work after; going away while
 # the page takes the window full screen leaves both windowed. The footer's menu
 # flips up at the screen's bottom in full screen.
-# The command bar opens in full screen and keeps the keyboard when a page commits under it, then
+# Esc in full screen goes to a page that keeps it, and twice or held leaves anyway. The command
+# bar opens in full screen and keeps the keyboard when a page commits under it, then
 # gives the keyboard to the new page, and scrolling a long page doesn't stutter. Dragging the
 # window's background moves the window, and the buttons, URL field and rows keep their presses. A
 # double-click there zooms it, and one in the
@@ -454,6 +457,8 @@ windowed_again() {
 }
 if [ "$(uname)" = Linux ]; then
   echo "skip: second display: the Linux driver can't add one yet."
+elif windows; then
+  echo "skip: second display: the Windows driver can't add one yet."
 else
   send order
   frame=$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)
@@ -487,6 +492,72 @@ else
   windowed_again "as the window entered full screen" display-gone-entering
   send place $frame
 fi
+
+# Full screen holds up (Arc's release notes): once the window leaves full screen its page draws
+# again at its new size, not a frame from before or nothing, and on the Mac a display plugged in
+# while it's full screen, and taken out again, leaves it full screen at its size with its page
+# drawn. The page is blue in a card narrower than 900 and orange in a wider one, so a capture says
+# which size it last drew at.
+printf '%s' '<title>sized</title><style>body{margin:0;background:#3366cc}
+@media (min-width:900px){body{background:#cc6633}}</style>' > "$out/site/sized.html"
+# Whether capture $1, at the page's middle, is "r g b" $2 within 16 a channel, as a display's colour
+# profile moves it.
+drawn_as() {
+  seen=$(pixel "$1" 0.6 0.5)
+  set -- $seen $2
+  [ $(($1 > $4 ? $1 - $4 : $4 - $1)) -le 16 ] && [ $(($2 > $5 ? $2 - $5 : $5 - $2)) -le 16 ] &&
+    [ $(($3 > $6 ? $3 - $6 : $6 - $3)) -le 16 ]
+}
+# Captures the window as $1 until the page shows "r g b" $2, for up to 2 s, else fails saying $3.
+await_drawn() {
+  for _ in $(seq 20); do
+    ../tools/window-screenshot.sh "$pid" "$out/$1.png" || fail "no window to capture"
+    drawn_as "$out/$1.png" "$2" && return 0
+    sleep 0.1
+  done
+  fail "$3: the page shows $seen, not $2"
+}
+blue="51 102 204" orange="204 102 51"
+shown_before=$(grep '^browser: selected [0-9]' "$log" | tail -1 | cut -d' ' -f3)
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar for the sized page"
+send insert "${site}sized.html"
+send key return
+expect "^browser: loaded [0-9]* ${site}sized.html\$" "the sized page didn't load"
+send click $page_point
+await_drawn sized-windowed "$blue" "the sized page in the window"
+send fullscreen
+expect '^browser: window entered full screen$' "the window didn't go full screen with the sized page"
+check_layout "full screen with the sized page"
+full=$content
+await_drawn sized-full-screen "$orange" "the sized page in full screen"
+if [ "$(uname)" = Darwin ]; then
+  send display add 1280 800
+  added=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: display ')
+  case "$added" in "browser: display added at "*) ;; *) fail "no display to plug in: $added" ;; esac
+  check_layout "full screen as a display was plugged in"
+  [ "$content" = "$full" ] || fail "a display plugged in took the full-screen window from $full to $content"
+  await_drawn display-plugged "$orange" "full screen as a display was plugged in"
+  send display remove
+  expect '^browser: display removed$' "the plugged-in display didn't go away"
+  check_layout "full screen as the plugged-in display went away"
+  [ "$content" = "$full" ] || fail "the plugged-in display going took the full-screen window from $full to $content"
+  await_drawn display-unplugged "$orange" "full screen as the plugged-in display went away"
+else
+  driver=Linux
+  ! windows || driver=Windows
+  echo "skip: a display plugged in while full screen: the $driver driver can't add one yet."
+fi
+send fullscreen
+expect '^browser: window left full screen$' "the window didn't leave full screen with the sized page"
+check_layout "after full screen with the sized page"
+await_drawn sized-left "$blue" "after leaving full screen"
+# The runs after this one drive the page from before, which closing the sized page shows again.
+send key w cmd
+expect "^browser: selected $shown_before\( in .*\)\{0,1\}\$" "closing the sized page didn't show the page before it"
+# Where it was before, as the display's coming and going can leave it elsewhere.
+[ -z "${frame:-}" ] || send place $frame
+send click $page_point
 
 # A page's full screen timed three times each way, entered by a key as a video's button is and left
 # by the page, as its button leaves, and then by escape. The steps run from the core's line to the
@@ -934,6 +1005,44 @@ if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
     [ -z "$off" ] || fail "the sidebar isn't Dia's composite within 3 levels over grey${off%,}: $material"
   fi
   material="over grey ${material%; }"
+fi
+
+# Esc in full screen goes to the page first, so a page that keeps it stays full screen on one
+# press. Two within 500 ms leave anyway, and so does one held 600 ms (Arc's).
+printf '%s' '<title>keeps escape</title><p>Escape is mine</p><script>let n = 0;
+onkeydown = e => { if (e.key == "Escape") { e.preventDefault(); document.title = "kept " + ++n; } };
+</script>' > "$out/site/keeps-escape.html"
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar for the page that keeps Esc"
+send insert "${site}keeps-escape.html"
+send key return
+expect "^browser: loaded [0-9]* ${site}keeps-escape.html\$" "the page that keeps Esc didn't load"
+keeps=$(sed -n "s|^browser: loaded \([0-9]*\) ${site}keeps-escape.html\$|\1|p" "$log" | tail -1)
+send click $page_point
+send fullscreen
+expect '^browser: window entered full screen$' "the window didn't go full screen for the page that keeps Esc"
+send key escape
+expect "^browser: title $keeps kept 1\$" "the page didn't get Esc first in full screen"
+none_since '^browser: window left full screen$' || fail "one Esc the page kept took the window out of full screen"
+send key escape
+expect '^browser: escape twice leaves full screen$' "a second Esc at once didn't leave full screen"
+expect '^browser: window left full screen$' "Esc twice didn't take the window out of full screen"
+none_since "^browser: title $keeps kept 2\$" || fail "the second Esc that left full screen reached the page too"
+# Held: the Mac's driver sends the keyboard's repeat, which says it's held; off the Mac a held key's
+# repeats come as presses, so a held Esc leaves there as one pressed twice.
+if [ "$(uname)" = Darwin ]; then
+  send click $page_point
+  send fullscreen
+  expect '^browser: window entered full screen$' "the window didn't go full screen again"
+  send keydown escape
+  expect "^browser: title $keeps kept [0-9]*\$" "the page didn't get the held Esc's press"
+  sleep 0.7
+  send keydown escape repeat
+  expect '^browser: escape held leaves full screen$' "Esc held 700 ms didn't leave full screen"
+  send keyup escape
+  expect '^browser: window left full screen$' "Esc held didn't take the window out of full screen"
+else
+  echo "skip: Esc held in full screen, as off the Mac the host can't tell a held key's repeats from presses, which leave as twice."
 fi
 exec 3>&-
 quit

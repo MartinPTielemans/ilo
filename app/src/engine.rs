@@ -1086,6 +1086,17 @@ impl Browser for Engine {
         unsafe { platform::host_press_window_button(self.ui_view, button) };
     }
 
+    fn set_on_top(&self, on: bool, _: &mut App) {
+        unsafe { platform::host_set_window_on_top(self.ui_view, on) };
+    }
+
+    fn can_stay_on_top(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        return frames::stays_on_top();
+        #[cfg(not(target_os = "linux"))]
+        return true;
+    }
+
     fn start_window_move(&self, _: &mut App) {
         // The core moves a window on Linux alone; on Windows the host does, from the app.
         #[cfg(target_os = "windows")]
@@ -1249,6 +1260,35 @@ impl Browser for Engine {
             toast::show(&text, key, time, cx)
         };
         with_overlays(show, cx);
+    }
+
+    fn toast_share(
+        &self,
+        text: &str,
+        share: Rc<dyn Fn(Point<Pixels>, &mut App)>,
+        time: Duration,
+        cx: &mut App,
+    ) {
+        let text = text.to_string();
+        let show = move |cx: &mut App| {
+            // The capture toast's Share button, as it is (capture.rs).
+            let button = toast::Button {
+                label: toast::Label::Glyph("icons/share.svg"),
+                name: "share",
+                run: share,
+            };
+            toast::show_with_buttons(&text, vec![button], time, cx)
+        };
+        with_overlays(show, cx);
+    }
+
+    fn share_from_toast(&self, url: &str, title: &str, at: Point<Pixels>, _: &mut App) {
+        let (Ok(url), Ok(title)) = (CString::new(url), CString::new(title)) else {
+            return;
+        };
+        let (x, y) = (f64::from(at.x), f64::from(at.y));
+        let view = TOAST_VIEW.get();
+        unsafe { platform::host_share(view, x, y, 1., 1., url.as_ptr(), title.as_ptr()) };
     }
 
     fn toast_undo(&self, text: &str, undo: Rc<dyn Fn(&mut App)>, time: Duration, cx: &mut App) {

@@ -143,6 +143,9 @@ pub enum Command {
     TaskManager,
     /// Starts recording a trace of the whole browser, or stops it and asks where to save it.
     RecordTrace,
+    /// Keeps the window over other apps' windows, or lets it go back among them (Arc's Window ›
+    /// Stay On Top).
+    StayOnTop,
     /// Turns Developer Mode on or off for the page's site.
     ToggleDeveloperMode,
     /// Opens Chrome's extensions page in a new tab.
@@ -362,6 +365,10 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
 /// sidebar to hide.
 const HIDE_SIDEBAR: &str = "Hide Sidebar";
 
+/// Window › Stay On Top, and the command bar's row that ends it while it's on.
+pub const STAY_ON_TOP: &str = "Stay On Top";
+const DONT_STAY_ON_TOP: &str = "Don't Stay On Top";
+
 /// The page's Developer Mode's rows in the command bar, of which it lists the one that would change
 /// it (Arc's, in sentence case).
 const DEVELOPER_MODE_ON: &str = "Turn on Developer Mode for this site";
@@ -560,6 +567,16 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         &["dev mode", "localhost"],
     ),
     ("Open Task Manager", Command::TaskManager, &[]),
+    (
+        STAY_ON_TOP,
+        Command::StayOnTop,
+        &["float", "always on top", "pin window"],
+    ),
+    (
+        DONT_STAY_ON_TOP,
+        Command::StayOnTop,
+        &["float", "always on top", "pin window"],
+    ),
     (
         trace::RECORD,
         Command::RecordTrace,
@@ -888,17 +905,27 @@ fn words(text: &str) -> impl Iterator<Item = &str> {
 /// How a menu shows `keystroke`, as SHORTCUTS writes it: ⇧⌘K for shift-cmd-k, and Ctrl+Shift+K
 /// off the Mac, where it's pressed that way.
 pub fn keystroke_label(keystroke: &str) -> String {
-    match super::keys::OFF_THE_MAC {
-        true => keystroke_keys(keystroke).join("+"),
-        false => keystroke_keys(keystroke).concat(),
+    keystroke_label_on(keystroke, super::keys::OFF_THE_MAC)
+}
+
+/// `keystroke_label`, on the Mac or `off_the_mac`, for each key chip that spells a chord, such as
+/// Stop's ⌘. or Ctrl+., the way a menu does.
+pub(super) fn keystroke_label_on(keystroke: &str, off_the_mac: bool) -> String {
+    match off_the_mac {
+        true => keystroke_keys_on(keystroke, true).join("+"),
+        false => keystroke_keys_on(keystroke, false).concat(),
     }
 }
 
 /// The keys of `keystroke` as a menu shows them, one by one, for a chip each: ⇧, ⌘ and K for
 /// shift-cmd-k, and Ctrl, Shift and K off the Mac. None if it can't be pressed here.
 pub fn keystroke_keys(keystroke: &str) -> Vec<String> {
-    match super::keys::OFF_THE_MAC {
-        true => (super::keys::pressed_as(keystroke).first())
+    keystroke_keys_on(keystroke, super::keys::OFF_THE_MAC)
+}
+
+fn keystroke_keys_on(keystroke: &str, off_the_mac: bool) -> Vec<String> {
+    match off_the_mac {
+        true => (super::keys::pressed_off_the_mac(keystroke).first())
             .map(|pressed| keys_named(pressed, true))
             .unwrap_or_default(),
         false => keys_named(keystroke, false),
@@ -1078,6 +1105,7 @@ impl Command {
             Command::JavaScriptConsole => "javascript-console",
             Command::TaskManager => "task-manager",
             Command::RecordTrace => "record-trace",
+            Command::StayOnTop => "stay-on-top",
             Command::ToggleDeveloperMode => "toggle-developer-mode",
             Command::ManageExtensions => "manage-extensions",
             Command::AddExtension => "add-extension",
@@ -1459,6 +1487,7 @@ impl Shell {
                 trace::toggle(self.browser.clone(), cx);
                 return self.update_menus(cx);
             }
+            Command::StayOnTop => return self.toggle_on_top(cx),
             Command::ToggleDeveloperMode => {
                 let on = !self.page(self.selected).developer_mode;
                 return self.browser.set_developer_mode(self.selected, on, cx);
@@ -1711,9 +1740,30 @@ impl Shell {
     /// Copies the selected tab's URL, or a Markdown link to it, without its tracking parameters,
     /// and says so in the toast.
     fn copy_url(&mut self, markdown: bool, cx: &mut Context<Self>) {
-        if let Some((text, toast)) = self.link_to_copy(self.field_tab(), markdown) {
-            self.copy(&text, toast, cx);
+        let tab = self.field_tab();
+        let Some((text, toast)) = self.link_to_copy(tab, markdown) else {
+            return;
+        };
+        match markdown {
+            true => self.copy(&text, toast, cx),
+            false => self.copy_page_url(tab, text, toast, cx),
         }
+    }
+
+    /// Copies `tab`'s link, `url`, and says so in `toast`, which shares the page too where there's
+    /// a share sheet, with the capture toast's Share button: ⇧⌘C's and the URL field's button's.
+    fn copy_page_url(&mut self, tab: u64, url: String, toast: &str, cx: &mut Context<Self>) {
+        if !self.browser.has_share_sheet() {
+            return self.copy(&url, toast, cx);
+        }
+        self.browser.copy(&url, cx);
+        // check.sh reads this line.
+        log!("browser: copied {url}");
+        let (browser, title) = (self.browser.clone(), self.title(tab));
+        let share = std::rc::Rc::new(move |at, cx: &mut App| {
+            browser.share_from_toast(&url, &title, at, cx)
+        });
+        self.browser.toast_share(toast, share, COPIED_TIME, cx);
     }
 
     /// Opens the clipboard's web link at the top of the Today tabs and shows it, as Arc's ⌥⌘V
@@ -1778,10 +1828,11 @@ impl Shell {
     pub(super) fn copy_url_from_button(&mut self, cx: &mut Context<Self>) {
         // check.sh waits for this line.
         log!("browser: command copy-url via sidebar");
-        let Some((text, toast)) = self.link_to_copy(self.field_tab(), false) else {
+        let tab = self.field_tab();
+        let Some((text, toast)) = self.link_to_copy(tab, false) else {
             return;
         };
-        self.copy(&text, toast, cx);
+        self.copy_page_url(tab, text, toast, cx);
         if self.url_copied.is_none() {
             self.swaps
                 .start(Swapped::CopyUrl, LINK, CHECK, Instant::now());
@@ -2007,6 +2058,7 @@ impl Shell {
             | Command::Welcome
             | Command::Appearance(_)
             | Command::RecordTrace
+            | Command::StayOnTop
             | Command::ReportProblem
             | Command::CopyBuildInfo
             | Command::HelpCenter
@@ -2058,6 +2110,15 @@ impl Shell {
                 (name == orientation_title(self.stacked(self.selected))).then_some(name)
             }
             Command::RecordTrace => (name == trace::title(trace::recording(cx))).then_some(name),
+            // The row that changes it, where the window can stay on top at all.
+            Command::StayOnTop => (self.browser.can_stay_on_top()
+                && name
+                    == if self.on_top {
+                        DONT_STAY_ON_TOP
+                    } else {
+                        STAY_ON_TOP
+                    })
+            .then_some(name),
             Command::CheckForUpdates => (name == crate::updates::command_title(cx)).then_some(name),
             _ => Some(name),
         }
@@ -2240,6 +2301,26 @@ mod tests {
         }
         assert_eq!(keys.label(Command::SelectSpace(0)).as_deref(), Some("⌃1"));
         assert_eq!(keys.label(Command::SelectSpace(9)), None);
+    }
+
+    /// Each key chip that spells a chord after its words spells it as a menu does: Stop's and Take
+    /// Over's in the conversation and under a task's page, and the command bar's Run and Ask at its
+    /// input's end. Off the Mac they read Ctrl+. and Ctrl+Enter, not Ctrl. and CtrlEnter, and Enter
+    /// and Tab in the words the UI's font has.
+    #[test]
+    fn key_chips_spell_their_chords_as_the_menus_do() {
+        let stop = "cmd-.";
+        let take_over = "cmd-enter";
+        assert!(SHORTCUTS.contains(&(take_over, Command::BackToPinnedUrl, false)));
+        assert_eq!(keystroke_label_on(stop, true), "Ctrl+.");
+        assert_eq!(keystroke_label_on(take_over, true), "Ctrl+Enter");
+        assert_eq!(keystroke_label_on(stop, false), "⌘.");
+        assert_eq!(keystroke_label_on(take_over, false), "⌘↩");
+        assert_eq!(super::super::agent_bar::stop_keys(), keystroke_label(stop));
+        for (key, mac, off) in [("enter", "↩", "Enter"), ("tab", "⇥", "Tab")] {
+            assert_eq!(key_name(key, false), mac);
+            assert_eq!(key_name(key, true), off);
+        }
     }
 
     /// Off the Mac, keys are named in Chrome's words, as the UI's font there has no keyboard

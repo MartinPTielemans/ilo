@@ -125,11 +125,12 @@ void host_activate(void* ui_view);
 void host_set_window_shown(void* ui_view, bool shown);
 bool host_window_shown(void* ui_view);
 
-// Adds Little ilo's items to the Dock icon's menu, the engine's, after its New Window, as Arc's:
+// Puts ilo's items in the Dock icon's menu, the engine's, in place of its New Window and New
+// Incognito Window: those two, as File's run them (|chosen| 3 and 4), then Little ilo's, as Arc's:
 // New Little ilo Window, then, while one is open, Hide All Little ilo Windows, or Show All Little
 // ilo Windows once they're all hidden. |little| is asked as the menu opens: 0 with no Little ilo
 // window open, 1 with one on screen and 2 with all hidden. |chosen| gets the item picked: 0 New, 1
-// Show All, 2 Hide All. Once the app has finished launching, as the engine's delegate is set then.
+// Show All, 2 Hide All, 3 New Window, 4 New Incognito Window. Once the app has finished launching, as the engine's delegate is set then.
 // Off the Mac, which has no Dock menu, nothing.
 void host_add_dock_items(int (*little)(void), void (*chosen)(int item));
 
@@ -566,6 +567,12 @@ bool host_window_buttons(void* ui_view, double centres[3], double* y, double* di
 // Does what a click on the close (0), minimize (1) or zoom (2) button of |ui_view|'s window does.
 void host_press_window_button(void* ui_view, int button);
 
+// Keeps the browser window of |ui_view| over other apps' windows, its overlays over it as before,
+// or with |on| false lets it go back among them (Window › Stay On Top). The Mac sets it aside
+// while the window is full screen, and takes it up again after. Under Wayland, which gives a client
+// no way, nothing.
+void host_set_window_on_top(void* ui_view, bool on);
+
 #ifdef _WIN32
 // Windows' alone, whose browser window has no title bar for these: moves |ui_view|'s window with
 // the pointer until the button that's down comes up, as a drag on a title bar does, and whether
@@ -623,6 +630,22 @@ void host_dock_dot_launch(const char* profile_dir);
 // it's drawn off the main thread. In the Tinted and Clear icon styles the icon stays as macOS draws
 // it. Asked again for the same color, it checks the style again.
 void host_dock_dot(bool colored, uint32_t color);
+
+// Whether the app is the active one, its windows taking the keyboard.
+bool host_app_active(void);
+
+// |count| tasks wait for the user, or none at 0: the Dock icon's badge on the Mac, the taskbar
+// button's overlay on Windows, with the count up to 9 and then 9+ in place of the Space's dot, and
+// on Linux the browser windows' urgency hint, with no count. It stays while the app is active, and
+// nothing bounces, flashes or sounds.
+void host_needs_you_badge(int count);
+
+// Posts a system notification, |title| over |body|, with no sound, which comes back as
+// |clicked|(|id|) once the user clicks it, the app brought forward. The first asks the system's
+// leave for them on the Mac; refused, it posts nothing and asks no more. Linux's are the app's own,
+// in Rust, over D-Bus.
+void host_needs_you_notify(uint64_t id, const char* title, const char* body);
+void host_watch_needs_you(void (*clicked)(uint64_t id));
 
 // Calls |released| once, after the event that shows ⌃ is no longer held: ⌃ going up, a key or a
 // button pressed without it, or the app going to the background. Watches the whole app, whichever

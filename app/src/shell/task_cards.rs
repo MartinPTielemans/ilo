@@ -23,9 +23,8 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, Bounds, Context, FontWeight, HighlightStyle, Hsla, MouseButton, Pixels,
-    ScrollHandle, SharedString, StyledText, TextRun, Window, WindowTextSystem, canvas, div, point,
-    prelude::*, px, rgb,
+    AnyElement, Bounds, Context, FontWeight, Hsla, MouseButton, Pixels, ScrollHandle, SharedString,
+    StyledText, TextRun, Window, WindowTextSystem, canvas, div, point, prelude::*, px, rgb,
 };
 
 use super::library::LIBRARY_BACK_INSET;
@@ -47,7 +46,7 @@ use crate::tokens::shell::task::motion::{
 use crate::tokens::shell::task::{
     BOTTOM, CHIP_END, CHIP_GAP, CHIP_HEIGHT, CHIP_X, CHIPS_BOTTOM, CHIPS_TOP, FOOT_SHARE, GAP,
     GHOST_RADIUS, GLYPH, GLYPH_TOP, HEIGHT, LINE, QUESTION_LINE, SHIMMER_FROM, SHIMMER_HIGH,
-    SHIMMER_LOW, SHIMMER_REACH, SHIMMER_TO, SLOT_DASH, STATUS_GAP, STATUS_LINE, STOPPED, TOP,
+    SHIMMER_REACH, SHIMMER_TO, SLOT_DASH, STATUS_GAP, STATUS_LINE, STOPPED, TOP,
 };
 use crate::tokens::shell::{MEDIA_BUTTON, MEDIA_GAP, MEDIA_HEIGHT, URL_FIELD};
 use crate::tokens::text;
@@ -261,11 +260,11 @@ fn marks(text: &SharedString, system: &WindowTextSystem) -> (Vec<(Range<usize>, 
     (marks, f32::from(line.width))
 }
 
-/// The shimmer's alpha at `x` along a line `width` wide, `phase` of the way through its sweep.
+/// How lit the shimmer has `x` along a line `width` wide, `phase` of the way through its sweep:
+/// 1 under its middle, nothing out of its reach.
 fn shimmer(x: f32, width: f32, phase: f32) -> f32 {
     let middle = width * (SHIMMER_FROM + (SHIMMER_TO - SHIMMER_FROM) * phase);
-    let near = (1. - (x - middle).abs() / (SHIMMER_REACH * width)).max(0.);
-    SHIMMER_LOW + (SHIMMER_HIGH - SHIMMER_LOW) * near
+    (1. - (x - middle).abs() / (SHIMMER_REACH * width)).max(0.)
 }
 
 /// What a plate at the foot holds.
@@ -720,16 +719,24 @@ impl Shell {
         self.sync_foot(None, cx);
     }
 
+    /// The stopped ring's colour: the ink at `stopped`, under the floor text keeps, as it's a mark
+    /// beside words that say the task stopped.
+    fn stopped_ring(&self) -> Hsla {
+        Hsla::from(self.palette.ink).opacity(STOPPED)
+    }
+
     /// A finished task's mark at rest, as its card shows it: Done's tick, or the grey ring of one
     /// stopped or failed, in the glyph's box.
     pub(super) fn status_mark(&self, dot: Dot) -> impl IntoElement + use<> {
         let now = Instant::now();
         let drawn = Glyph::new(State::from(dot), now, true).drawn(now);
         let signal: Hsla = rgb(STATUS_AGENT).into();
-        let stopped = self.palette.text(STOPPED);
+        let stopped = self.stopped_ring();
         canvas(
             |_, _, _| {},
-            move |bounds, _, window, _| glyph::paint(&drawn, bounds, signal, stopped, window),
+            move |bounds, _, window, _| {
+                glyph::paint(&drawn, bounds, signal, stopped, false, window)
+            },
         )
         .size(px(GLYPH))
     }
@@ -1268,10 +1275,12 @@ impl Shell {
     ) -> AnyElement {
         let drawn = face.glyph.drawn(now);
         let signal: Hsla = rgb(STATUS_AGENT).into();
-        let stopped = self.palette.text(STOPPED);
+        let stopped = self.stopped_ring();
         let glyph = canvas(
             |_, _, _| {},
-            move |bounds, _, window, _| glyph::paint(&drawn, bounds, signal, stopped, window),
+            move |bounds, _, window, _| {
+                glyph::paint(&drawn, bounds, signal, stopped, false, window)
+            },
         )
         .absolute()
         .left(px(FAVICON_X - PLATE_INSET + FAVICON_SIZE / 2. - GLYPH / 2.))
@@ -1482,15 +1491,16 @@ impl Shell {
         let glyph = {
             let drawn = face.glyph.drawn(now);
             let signal: Hsla = rgb(STATUS_AGENT).into();
-            let stopped = self.palette.text(STOPPED);
-            canvas(
-                |_, _, _| {},
-                move |bounds, _, window, _| glyph::paint(&drawn, bounds, signal, stopped, window),
-            )
-            .absolute()
-            .left(px(FAVICON_X - PLATE_INSET + FAVICON_SIZE / 2. - GLYPH / 2.))
-            .top(px(GLYPH_TOP))
-            .size(px(GLYPH))
+            let stopped = self.stopped_ring();
+            // On the selected plate's fill the ring is drawn brighter, to read as on the others.
+            let paint = move |bounds, _, window: &mut Window, _: &mut gpui::App| {
+                glyph::paint(&drawn, bounds, signal, stopped, shown, window)
+            };
+            canvas(|_, _, _| {}, paint)
+                .absolute()
+                .left(px(FAVICON_X - PLATE_INSET + FAVICON_SIZE / 2. - GLYPH / 2.))
+                .top(px(GLYPH_TOP))
+                .size(px(GLYPH))
         };
         let end = if hovered { HOVER_END } else { TITLE_END_INSET };
         let text = div()
@@ -1607,19 +1617,15 @@ impl Shell {
                 true => {
                     let width = face.width.min(room).max(1.);
                     let highlights = face.marks.iter().map(|(range, x)| {
-                        let color = self.palette.text(shimmer(*x, width, phase));
-                        (
-                            range.clone(),
-                            HighlightStyle {
-                                color: Some(color),
-                                ..Default::default()
-                            },
-                        )
+                        let lit = shimmer(*x, width, phase);
+                        let highlight = self.palette.lit_highlight(SECONDARY, SHIMMER_HIGH, lit);
+                        (range.clone(), highlight)
                     });
                     let styled =
                         StyledText::new(words).with_highlights(highlights.collect::<Vec<_>>());
-                    base.text_color(self.palette.text(SHIMMER_LOW))
-                        .child(styled)
+                    // At the shimmer's peak, which each part fades down from.
+                    let peak = self.palette.lit(SECONDARY, SHIMMER_HIGH, 1.);
+                    base.text_color(peak).child(styled)
                 }
                 false => base.child(words),
             }
