@@ -443,14 +443,12 @@ impl Shell {
         // Its own Space's, which may not be the one shown.
         let folder = self.is_folder_anywhere(tab);
         let away = drag.space != self.space;
-        // A favorite stays one in an agent's Space, which it can't move into.
-        let kept = self.favorites.contains(&tab) && self.agents_space_shown();
         // Past the most, a row stays one.
         let over_favorites = !incoming
             && !away
             && !folder
             && self.has_room_for(tab)
-            && (kept || pointer.y < self.list_top_with(favorites + 1) - self.tiles_scrolled());
+            && pointer.y < self.list_top_with(favorites + 1) - self.tiles_scrolled();
         let mut depth = 0;
         let (place, span, line) = if over_favorites {
             let centre = pointer - grab.1;

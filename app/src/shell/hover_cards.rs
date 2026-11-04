@@ -234,8 +234,7 @@ impl Shell {
         let favorite = self.favorites.contains(&tab);
         if !self.private {
             match favorite {
-                true if !self.agents_space_shown() => actions.push(Action::Unfavorite),
-                true => {}
+                true => actions.push(Action::Unfavorite),
                 false if self.pinned().contains(&tab) => actions.push(Action::Unpin),
                 false => actions.push(Action::Pin),
             }
