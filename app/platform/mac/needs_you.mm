@@ -104,7 +104,7 @@ void host_needs_you_notify(uint64_t id, const char* title, const char* body) {
   NSString* words = @(body);
   [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings* settings) {
     switch (settings.authorizationStatus) {
-      case UNAuthorizationStatusNotDetermined:
+      case UNAuthorizationStatusNotDetermined: {
         if (g_asked) {
           return;
         }
@@ -120,6 +120,7 @@ void host_needs_you_notify(uint64_t id, const char* title, const char* body) {
                                 }
                               }];
         return;
+      }
       case UNAuthorizationStatusDenied:
         // check.sh reads this line.
         fprintf(stderr, "browser: needs you not allowed\n");
