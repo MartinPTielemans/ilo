@@ -1,6 +1,6 @@
 # Chrome's Battery Saver as ilo shows it (#686), on the check's battery (--battery-for-testing,
 # core/battery_saver.h), which a run on mains, or on Linux, where Chromium reads no battery, needs.
-# At 50 % on battery it stays off. Below 20 % on battery it turns on: the toast says so with Turn Off,
+# At 50% on battery it stays off. Below 20% on battery it turns on: the toast says so with Turn Off,
 # and a leaf shows among the URL field's buttons, whose press says so again. Turn Off Battery Saver
 # for Now in the command bar turns it off until the computer's plugged in, and it stays off lower
 # still; plugged in and out again it's back. While it's on, a page busy out of sight freezes, which
@@ -49,9 +49,9 @@ if [ "$active" != 1 ]; then
 fi
 
 send battery 50 unplugged
-none_since 'browser: battery saver on' || fail "Battery Saver turned on at 50 %"
+none_since 'browser: battery saver on' || fail "Battery Saver turned on at 50%"
 send battery 19 unplugged
-expect 'browser: battery saver on at 19 %$' "Battery Saver didn't turn on at 19 % on battery"
+expect 'browser: battery saver on at 19%$' "Battery Saver didn't turn on at 19% on battery"
 expect '^browser: toast shown Battery Saver is on at 19% \[turn off battery saver\]$' \
   "the toast didn't say Battery Saver is on, with Turn Off"
 # Captured once it has come in, not as it grows in.
@@ -73,7 +73,7 @@ send battery 18 unplugged
 none_since 'browser: battery saver on' || fail "Battery Saver came back on, turned off for now"
 send battery 18 plugged
 send battery 17 unplugged
-expect 'browser: battery saver on at 17 %$' "plugged in and out again, Battery Saver didn't come back"
+expect 'browser: battery saver on at 17%$' "plugged in and out again, Battery Saver didn't come back"
 
 # On Battery Saver a page busy out of sight freezes once Chrome has measured it, a minute at a time,
 # and says so in its row's hover card; shown, it thaws.
@@ -108,7 +108,7 @@ expect 'browser: battery saver off$' "Battery Saver stayed on once plugged in"
 expect '^browser: battery saver leaf hidden$' "the leaf stayed once plugged in"
 exec 3>&-
 quit
-echo "ok: at 50 % on battery Battery Saver stayed off; at 19 % it turned on, the toast said so with" \
+echo "ok: at 50% on battery Battery Saver stayed off; at 19% it turned on, the toast said so with" \
   "Turn Off and the URL field drew its leaf, whose press said so again; the command bar turned it" \
   "off until plugged in, and it came back plugged in and out; a page busy out of sight froze," \
   "its hover card said so, and it thawed once shown; plugged in, Battery Saver and the leaf went." \

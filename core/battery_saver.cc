@@ -80,7 +80,7 @@ void Tell(bool active) {
   const int percent = Manager() ? Manager()->SampledBatteryPercentage() : -1;
   // check.sh reads these lines.
   if (active) {
-    LOG(ERROR) << "browser: battery saver on at " << percent << " %";
+    LOG(ERROR) << "browser: battery saver on at " << percent << "%";
   } else {
     LOG(ERROR) << "browser: battery saver off";
   }
@@ -93,7 +93,7 @@ class BatterySaverWatcher : public BatterySaverModeManager::Observer {
  public:
   void Watch(BatterySaverModeManager* manager) {
     observation_.Observe(manager);
-    // On already, as at a launch below 20 %, before this watched.
+    // On already, as at a launch below 20%, before this watched.
     if (manager->IsBatterySaverActive()) {
       Tell(true);
     }

@@ -1031,7 +1031,7 @@ typedef struct bc_host {
   // yourself, as an update that installs first does, and the core doesn't.
   bool (*quit_going_ahead)(void* context, bool restarting);
   // Chrome's Battery Saver (its Energy Saver) turned on or off. |percent| is the battery's charge
-  // as it last read it, or -1 before it read one. It turns on below 20 % on battery
+  // as it last read it, or -1 before it read one. It turns on below 20% on battery
   // (bc_battery_saver_enabled), and off once plugged in or turned off for now
   // (bc_battery_saver_off_for_now). While it's on, pages draw at 30 frames a second and pages
   // busy out of sight freeze (tab_frozen). The user's alone: agents hear none.
@@ -1908,7 +1908,7 @@ BC_EXPORT void bc_age_tabs_for_testing(double seconds);
 BC_EXPORT bool bc_battery_saver_active(void);
 // Turns Battery Saver off until the computer is plugged in again, as Chrome's "Turn off for now".
 BC_EXPORT void bc_battery_saver_off_for_now(void);
-// Whether Battery Saver turns on below 20 % on battery, Chrome's default, or never. Chrome keeps it
+// Whether Battery Saver turns on below 20% on battery, Chrome's default, or never. Chrome keeps it
 // in the browser's local state.
 BC_EXPORT bool bc_battery_saver_enabled(void);
 BC_EXPORT void bc_set_battery_saver_enabled(bool enabled);

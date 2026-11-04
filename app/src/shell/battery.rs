@@ -1,5 +1,5 @@
 //! Chrome's Battery Saver, its Energy Saver, as ilo shows it (#686): a toast as it turns on below
-//! 20 % on battery, with Turn Off; a leaf among the URL field's buttons while it's on, whose press
+//! 20% on battery, with Turn Off; a leaf among the URL field's buttons while it's on, whose press
 //! shows the toast again; Turn Off Battery Saver for Now in the command bar while it's on; and a
 //! page it froze out of sight says so in its tab's hover card. Plugging in turns it off.
 
