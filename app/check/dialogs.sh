@@ -162,61 +162,43 @@ if windows; then
 <a target=_blank href="notes.txt?blank" style="position:fixed;right:0;top:0;width:50%;height:100%">blank</a>
 <script>requestAnimationFrame(() => setTimeout(() => document.title = "ready"));</script>' > "$out/site/links.html"
   look "start"
-  # Links first, the owner's hint: each after the bar has opened and closed.
-  go links.html
-  bar_closed "link from another app"
-  from_app "${site}?app1"
-  look "bar opened and closed, then a link from another app, window up"
-  go links.html
-  bar_closed "plain link"
-  send click 400 400
-  look "bar opened and closed, then a plain link in the page"
-  go links.html
-  bar_closed "target=_blank link"
-  send click 850 400
-  look "bar opened and closed, then a target=_blank link"
-  # The bar up as a link comes from another app.
-  bar_up "link while up"
-  from_app "${site}?app2"
-  look "bar up, then a link from another app"
+  # The owner's: two windows at two scales, then links, the main window's bar closed throughout.
+  # 1. The main window's bar, opened and closed.
+  bar_closed "the main window"
+  look "1 main window: bar opened and closed"
+  # 2. A second window, which opens with its bar, closed.
+  send key n cmd
+  sleep 2
   send key escape
-  # The ways the bar closes.
-  go links.html
-  bar_up "click into the page"
-  send click 600 300
-  look "bar up, then a click into the page"
-  bar_up "escape"
-  send key escape
-  look "bar up, then escape"
-  bar_up "tab closing"
-  send key w cmd
-  look "bar up, then Ctrl+W"
-  bar_up "another app"
-  ( notepad.exe & )
-  sleep 3
-  look "bar up, then notepad takes activation"
-  taskkill //IM notepad.exe //F > /dev/null 2>&1 || true
-  send window 1
-  look "back from notepad"
-  bar_up "display change"
+  look "2 second window opened, its bar closed"
+  # 3. The second window told it's on a display at 125%, then a real display change.
+  send window 2
+  send dpi 125
+  look "3a second window: WM_DPICHANGED for 125%"
   powershell.exe -NoProfile -Command 'Set-DisplayResolution -Width 1600 -Height 900 -Force' > /dev/null 2>&1
   sleep 2
   powershell.exe -NoProfile -Command 'Set-DisplayResolution -Width 1920 -Height 1080 -Force' > /dev/null 2>&1
-  look "bar up, then a display change"
-  send key escape
-  # The bar opening while a page loads: a page held by the site until it's let go.
-  rm -f "$out/site/held.go"
-  send key l cmd
-  send type "${site#http://}held"
-  send key return
-  bar_up "while loading"
-  look "bar up while a page loads"
-  touch "$out/site/held.go"
-  sleep 2
-  send key escape
-  look "after the page loaded and escape"
-  from_app "${site}?app3"
-  look "end, a link from another app"
+  look "3b display change, 1920x1080 to 1600x900 and back"
+  # 4. Links, each window in front in turn.
+  from_app "${site}?second1"
+  look "4a link from another app, second window in front"
+  go links.html
+  send click 400 400
+  look "4b plain link in the second window"
+  send window 1
+  look "4c main window in front"
+  from_app "${site}?main1"
+  look "4d link from another app, main window in front"
+  go links.html
+  send click 400 400
+  look "4e plain link in the main window"
+  send window 2
+  look "4f second window in front"
+  from_app "${site}?second2"
+  look "4g link from another app, second window in front again"
+  send dpi 100
+  send window 1
+  look "end: second window back at 100%, main window in front"
   cat "$out/stray.txt"
   echo "ok: exploration only"
   quit
