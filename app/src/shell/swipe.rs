@@ -948,6 +948,36 @@ mod tests {
         assert_eq!(*host.shown.borrow(), [1]);
     }
 
+    /// A flick, fingers lifted while they're still going, goes on to the next Space though they
+    /// went less than halfway, and lifted the same way back it goes back. check.sh's swipes go
+    /// past halfway, as a frame of the hosted runners' that takes longer than SWIPE_HISTORY can
+    /// fall between the last move and the lift there, which reads as fingers held still (#1869).
+    #[gpui::test]
+    fn a_flick_short_of_halfway_goes_on_to_the_next_space(cx: &mut TestAppContext) {
+        let (shell, host, cx) = three_spaces(cx, 1);
+        shell.update_in(cx, |shell, window, cx| {
+            let fingers = |touch_phase, x| ScrollEvent {
+                delta: ScrollDelta::Pixels(point(px(x), px(0.))),
+                touch_phase,
+                ..Default::default()
+            };
+            let flick =
+                |shell: &mut Shell, step: f32, window: &mut Window, cx: &mut Context<Shell>| {
+                    // A quarter of the way, in ten moves.
+                    let step = step * 0.25 * shell.width() / SWIPE_TRACKING / 10.;
+                    shell.scroll(&fingers(TouchPhase::Started, step), window, cx);
+                    for _ in 0..9 {
+                        shell.scroll(&fingers(TouchPhase::Moved, step), window, cx);
+                    }
+                    shell.scroll(&fingers(TouchPhase::Ended, 0.), window, cx);
+                };
+            flick(shell, -1., window, cx);
+            shell.set_space(2, cx);
+            flick(shell, 1., window, cx);
+        });
+        assert_eq!(*host.shown.borrow(), [2, 1]);
+    }
+
     /// Two fingers as Direct Manipulation reports a precision touchpad's on Windows: the touch
     /// comes with the first move, the lift ends the scroll, and the inertia after it goes on
     /// across. The swipe stops at the next Space, the inertia carrying it no further and scrolling
