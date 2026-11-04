@@ -33,7 +33,7 @@ use gpui::{
 };
 
 use super::{
-    KEY_CONTEXT, Shell, ShellHandle, TITLE,
+    KEY_CONTEXT, Shell, TITLE,
     permission::{BESIDE_CLOSE, BUTTONS_TOP, card_button, card_close, card_listener},
 };
 use crate::tooltip::{Anchor, Tip};
@@ -127,9 +127,7 @@ pub(super) fn escape_binding() -> KeyBinding {
 pub(super) fn bind(cx: &mut App) {
     cx.bind_keys([escape_binding()]);
     cx.on_action(|_: &CloseNote, cx| {
-        let shell = cx
-            .try_global::<ShellHandle>()
-            .map(|handle| handle.0.clone());
+        let shell = super::commands::key_shell(cx);
         let closed = shell.and_then(|shell| shell.update(cx, Shell::escape_drm_note).ok());
         if !closed.unwrap_or(false) {
             cx.propagate();
