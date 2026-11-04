@@ -112,10 +112,15 @@ clear_point="200 185"
 devtools_point="150 64"
 copy_point="178 64"
 site_controls_point="206 64"
-field_point="600 760"
-# Windows' runner has a 768 pixel tall screen, which leaves the window shorter, with the page's
-# bottom 679 pt down.
-if windows; then field_point="600 650"; fi
+# The field is the page's bottom 60 pt, the page 10 above the window's foot, wherever the screen
+# leaves that: Windows' runners have given the window 761 and 792 pt.
+send layout
+drawn_height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
+  sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
+case "$drawn_height" in
+  [0-9]*) field_point="600 $((drawn_height - 40))" ;;
+  *) fail "the driver didn't say how tall the window is: $drawn_height" ;;
+esac
 open_from_bar example.com
 b=$tab
 open_from_bar example.org
