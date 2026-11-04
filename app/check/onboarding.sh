@@ -204,7 +204,11 @@ case " $steps " in
       done
       entry="$apps/$(cat branding/id).desktop"
       mkdir -p "$apps"
-      printf '[Desktop Entry]\nType=Application\nName=%s\nExec=%s %%U\n' "$app_name" "$browser" \
+      # With the types xdg-settings sets already listed: it adds each one missing to the entry and
+      # sleeps 4 s after, which put http's past the wait below on a quick runner.
+      printf '[Desktop Entry]\nType=Application\nName=%s\nExec=%s %%U\nMimeType=%s\n' \
+        "$app_name" "$browser" \
+        'text/html;x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/about;x-scheme-handler/unknown;' \
         > "$entry"
       send key return
       expect '^browser: onboarding left default-browser via return$' \
