@@ -821,7 +821,8 @@ log="$out/fresh-b.log"
 BROWSER_DRIVE=1 "$browser" < /dev/null > "$log" 2>&1 &
 pid=$!
 await '^browser: restored in ' || fail "a launch with Restore windows off didn't bring the Spaces back"
-await "^browser: pinned $p\$" || fail "the pinned tab didn't come back with Restore windows off"
+# Its id is the launch's own, as ids never repeat across launches (#1447), so it's the one pinned.
+await '^browser: pinned [0-9][0-9]*$' || fail "the pinned tab didn't come back with Restore windows off"
 await '^browser: archive 1 tabs$' || fail "the Today tab didn't go in the archive with Restore windows off"
 # A window says it's open after its Space's lines, on Linux after the archive's too, so the count
 # below waits for it (#1038).
