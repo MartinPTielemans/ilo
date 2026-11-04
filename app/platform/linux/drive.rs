@@ -2486,9 +2486,10 @@ fn hold_mini_player(window: xproto::Window, step: &str, x: f64, y: f64) -> Optio
     fake(xproto::MOTION_NOTIFY_EVENT, 0, to)?;
     if let Some([left, top, ..]) = frame(window) {
         log!(
-            "browser: PROBE pip {step} to root {} {}, window {left:.0} {top:.0}",
+            "browser: PROBE pip {step} to root {} {}, window {left:.0} {top:.0}, held elsewhere {:?}",
             to.0,
-            to.1
+            to.1,
+            pointer_held_elsewhere()
         );
     }
     if step == "dragto" {
@@ -2521,14 +2522,50 @@ fn hold_mini_player(window: xproto::Window, step: &str, x: f64, y: f64) -> Optio
             }
         );
     }
+    log!(
+        "browser: PROBE pip before the release, pointer held elsewhere {:?}",
+        pointer_held_elsewhere()
+    );
     PIP_HELD.set(None);
     fake(xproto::BUTTON_RELEASE_EVENT, 1, to)?;
+    for wait in [0, 50, 200] {
+        std::thread::sleep(std::time::Duration::from_millis(wait));
+        log!(
+            "browser: PROBE pip {wait} ms after the release, pointer held elsewhere {:?}",
+            pointer_held_elsewhere()
+        );
+    }
     fake(xproto::MOTION_NOTIFY_EVENT, 0, held.back)?;
     std::thread::sleep(std::time::Duration::from_millis(300));
     if let Some([left, top, ..]) = frame(window) {
         log!("browser: PROBE pip after the pointer went back, window {left:.0} {top:.0}");
     }
     Some(())
+}
+
+/// PROBE (#1780): whether another client holds the pointer: a grab of our own fails then.
+fn pointer_held_elsewhere() -> Option<bool> {
+    let server = server()?;
+    let (connection, root) = &*server;
+    let reply = (connection.grab_pointer(
+        false,
+        *root,
+        EventMask::NO_EVENT,
+        xproto::GrabMode::ASYNC,
+        xproto::GrabMode::ASYNC,
+        x11rb::NONE,
+        x11rb::NONE,
+        x11rb::CURRENT_TIME,
+    ))
+    .ok()?
+    .reply()
+    .ok()?;
+    if reply.status == xproto::GrabStatus::SUCCESS {
+        connection.ungrab_pointer(x11rb::CURRENT_TIME).ok()?;
+        connection.flush().ok()?;
+        return Some(false);
+    }
+    Some(reply.status == xproto::GrabStatus::ALREADY_GRABBED)
 }
 
 /// A press on the Mini Player through XTest: where it was in the window and on the screen, where
