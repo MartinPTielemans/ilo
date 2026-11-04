@@ -569,6 +569,9 @@ action=$(defaults read -g AppleActionOnDoubleClick 2>/dev/null || echo Maximize)
 if [ "$action" = Maximize ]; then
   send doubleclick 115 24
   expect '^browser: window zoomed 1$' "a double-click on the header didn't zoom the window"
+  # On Windows the UI lays out at the maximized size after Windows has zoomed the window, and a
+  # press before it draws there is lost.
+  ! windows || expect '^browser: drawn at ' "the UI didn't draw the zoomed window"
   send doubleclick 115 24
   expect '^browser: window zoomed 0$' "a second double-click on the header didn't zoom it back"
   zoom="zooms it"
