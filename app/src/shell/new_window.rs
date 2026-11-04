@@ -59,7 +59,16 @@ impl Shell {
         let entering = opening.entering;
         if opening.full_screen && !self.full_screen {
             opening.entering = true;
-            if entering || !self.browser.enter_full_screen(cx) {
+            if entering {
+                return;
+            }
+            let already = self.browser.enter_full_screen(cx);
+            // check.sh reads this line.
+            log!(
+                "browser: new window asked for full screen, already {}",
+                already as u8
+            );
+            if !already {
                 return;
             }
             // AppKit tells of the full screen it gave the window as it opened before the window

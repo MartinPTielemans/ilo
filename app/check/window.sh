@@ -300,7 +300,8 @@ full_new=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
 expect_late '^browser: new window first frame at [0-9.]* ms$' "⌘N's window in full screen drew no frame"
 expect_late '^browser: new window went full screen$' "⌘N's window from full screen didn't go full screen"
 expect_late '^browser: command bar shown$' "⌘N's full-screen window didn't open the command bar"
-expect_late '^browser: toast settled$' "the new full-screen window's note didn't settle"
+# The bar takes the note on leaving full screen away as it opens, settled or not.
+expect_late '^browser: toast \(settled\|hidden\)$' "the new full-screen window's note didn't show"
 ../tools/window-screenshot.sh "$pid" "$out/new-window-full-screen.png" || fail "no window to capture"
 send insert "${site}notes.txt"
 send key return
