@@ -6,12 +6,14 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use browser::import::found::{Address, Page, Tab};
 use browser::import::plan::{Existing, ExistingSpace, Row};
 use browser::import::sources::{Os, Roots};
 use browser::import::{Exported, Passwords};
 use browser::link_rules::{Host as _, Rule};
+use browser::log;
 use browser::theme::Theme;
 use gpui::{App, PathPromptOptions};
 
@@ -401,4 +403,45 @@ impl browser::import::Host for CoreImport {
     fn open_store_page(&self, url: &str) {
         open_tab_behind(front().0, url, false);
     }
+
+    fn last_import(&self, browser: &str) -> Option<SystemTime> {
+        imports()
+            .into_iter()
+            .find(|(each, _)| each == browser)
+            .map(|(_, at)| at)
+    }
+
+    fn imported(&self, browser: &str, at: SystemTime) {
+        let mut all = imports();
+        all.retain(|(each, _)| each != browser);
+        all.push((browser.into(), at));
+        let text: String = (all.iter())
+            .map(|(name, at)| {
+                let seconds = at
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |since| since.as_secs());
+                format!("{name}\t{seconds}\n")
+            })
+            .collect();
+        if let Err(error) = std::fs::write(imports_path(), text) {
+            log!("couldn't keep the import's record: {error}");
+        }
+    }
+}
+
+/// The record of each browser's last import, a line each of its name and the second it came in,
+/// beside the user's other files, as `Link rules` are.
+fn imports_path() -> String {
+    format!("{}/Imports", crate::profile_dir())
+}
+
+fn imports() -> Vec<(String, SystemTime)> {
+    let text = std::fs::read_to_string(imports_path()).unwrap_or_default();
+    (text.lines())
+        .filter_map(|line| {
+            let (name, seconds) = line.rsplit_once('\t')?;
+            let at = UNIX_EPOCH + std::time::Duration::from_secs(seconds.parse().ok()?);
+            Some((name.to_string(), at))
+        })
+        .collect()
 }

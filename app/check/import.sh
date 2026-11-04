@@ -10,7 +10,8 @@
 # password importer: the view says how many came in, deletes the file when asked, and a second file
 # with a login's password changed says it conflicted and kept the saved one. Settings' Passwords
 # tab lists what came in, and the app menu's Import from Other Browsers… shows Import again. With
-# the sidebar hidden, Arc's Spaces say so in a toast. Each step is captured, and the list and the
+# the sidebar hidden, Arc's Spaces say so in a toast. Once a browser has come in, its row says when,
+# that again brings only what's new, and Import Again…. Each step is captured, and the list and the
 # first browser's choices, read as it's picked and each kind counted, under Import › its name with
 # Import in the accent, at Settings' first size and its least, dark and light; Esc goes back from
 # the choices to the list. The fixture's Arc is put where the Mac keeps it, or Windows' Store, and
@@ -311,9 +312,12 @@ await '^browser: addresses added 1 to profile [0-9]*$' || fail "the core didn't 
 expect '^browser: import done: 1 Space, 3 pinned tabs, 1 open tab, 2 pages of history and 1 address came in from Chrome\.$' \
   "the import didn't say what came from Chrome"
 ../tools/window-screenshot.sh "$pid" "$out/import-chrome.png" || fail "no window to capture"
+expect '^browser: import kept Chrome$' "Chrome's import wasn't kept as its last"
 expect '^browser: import drawn done$' "the import's end didn't draw"
 click_drawn import-done
 expect '^browser: import drawn list$' "Done didn't go back to the list"
+# Chrome's row says when it came in, that again brings only what's new, and Import Again….
+../tools/window-screenshot.sh "$pid" "$out/import-again-list.png" || fail "no window to capture"
 send clickkey $(drawn "import-from Chrome")
 expect '^browser: import pick Chrome$' "Import… didn't show Chrome's choices again"
 expect '^browser: import drawn pick$' "Chrome's choices didn't draw"
@@ -428,7 +432,7 @@ echo "  With the sidebar hidden, Arc's two Spaces say so in a toast."
 echo "  Settings' list and $first_found's choices, under Import › $first_found, at 820 by 660 and"
 echo "  720 by 480, dark and light, and Esc goes back from the choices to the list."
 echo "  Windows: $out/import-settings-{list,choose}-{820,720}-{dark,light}.png,"
-echo "  $out/import-list.png, $out/import-pick.png, $out/import-done.png,"
+echo "  $out/import-again-list.png, $out/import-list.png, $out/import-pick.png, $out/import-done.png,"
 echo "  $out/import-again.png, $out/import-chrome.png, $out/import-firefox.png,"
 echo "  $out/import-bookmarks.png, $out/import-passwords.png,"
 echo "  $out/import-passwords-conflict.png, $out/import-personal.png"
