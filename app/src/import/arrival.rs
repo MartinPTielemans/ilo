@@ -221,7 +221,7 @@ pub fn draw(cards: &mut [Card], look: &Look, settings: bool, still: bool, now: I
 
 /// How far under its place a card that `came` is drawn at `now`, and how far it has faded in:
 /// rising `chips-rise` into place as it fades in, or fading in place under Reduce Motion.
-fn pose(came: Instant, now: Instant, still: bool) -> (f32, f32) {
+pub(super) fn pose(came: Instant, now: Instant, still: bool) -> (f32, f32) {
     let t = match now >= came {
         true => eased(now.duration_since(came).as_secs_f32() / CHIPS),
         false => 0.,

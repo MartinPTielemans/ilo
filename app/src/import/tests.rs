@@ -3428,6 +3428,72 @@ fn a_bookmarks_file_comes_in_once(cx: &mut TestAppContext) {
     fs::remove_dir_all(file.parent().unwrap()).unwrap();
 }
 
+/// The favorites offered are tiles, all ticked at first: a click on one unticks it and the button
+/// counts those left, "Add 2 Favorites", then "Add 1 Favorite", and with none, "Add Favorites",
+/// dimmed; Add adds the ticked ones alone.
+#[gpui::test]
+fn favorite_tiles_tick_and_untick_at_a_click_and_the_button_counts_them(cx: &mut TestAppContext) {
+    let made = chrome("chrome-tiles", &[("Default", "Me")], SystemTime::now());
+    let browser = Rc::new(Browser::new(Some(Roots::under(&made, Os::Linux))));
+    let host: Rc<dyn Host> = browser.clone();
+    let (view, cx) = cx.add_window_view(|_, _| ImportView::new(host, false).headed());
+    view.update(cx, |view, cx| {
+        view.pick(0, cx);
+        view.import(cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| browser.added(cx));
+    let tab = |url: &str| Tab {
+        url: url.into(),
+        name: String::new(),
+    };
+    let offered = [
+        "https://news.example.org/",
+        "https://mail.example.org/",
+        "https://docs.example.com/",
+    ];
+    view.update(cx, |view, cx| {
+        view.offer(offered.iter().map(|url| tab(url)).collect());
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let title = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| view.add_favorites_title().to_string())
+    };
+    assert_eq!(title(cx), "Add 3 Favorites");
+    // Where each tile was drawn, as check.sh reads it from the log.
+    let at = |name: &str, cx: &mut gpui::VisualTestContext| {
+        let lines = view.read_with(cx, |view, _| view.drawn_at.borrow().clone());
+        let prefix = format!("browser: settings import-favorite {name} at ");
+        let line = (lines.iter())
+            .find_map(|line| line.strip_prefix(&prefix).map(str::to_string))
+            .unwrap_or_else(|| panic!("no tile for {name} drawn: {lines:?}"));
+        let (x, y) = line.split_once(' ').unwrap();
+        gpui::point(gpui::px(x.parse().unwrap()), gpui::px(y.parse().unwrap()))
+    };
+    let click = |name: &str, cx: &mut gpui::VisualTestContext| {
+        let point = at(name, cx);
+        cx.simulate_click(point, gpui::Modifiers::none());
+        cx.run_until_parked();
+    };
+    click("mail.example.org", cx);
+    assert_eq!(title(cx), "Add 2 Favorites");
+    click("news.example.org", cx);
+    assert_eq!(title(cx), "Add 1 Favorite");
+    click("docs.example.com", cx);
+    assert_eq!(title(cx), "Add Favorites");
+    click("mail.example.org", cx);
+    let ticked = view.read_with(cx, |view, _| view.ticked());
+    let urls: Vec<&str> = ticked.iter().map(|tab| tab.url.as_str()).collect();
+    assert_eq!(urls, ["https://mail.example.org/"]);
+    view.update(cx, |view, cx| view.add_ticked(cx));
+    let favorites: Vec<String> = (browser.state.borrow().favorites.iter())
+        .map(|(_, tab)| tab.url.clone())
+        .collect();
+    assert_eq!(favorites, ["https://mail.example.org/"]);
+    fs::remove_dir_all(made).unwrap();
+}
+
 /// The end of an import from Settings offers the favorites it worked out from the history, each
 /// ticked; a click unticks one, Add Favorites adds those ticked to the first Space and says so, and
 /// the offer ends. A passwords file's end, after, offers none.

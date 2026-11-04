@@ -29,6 +29,7 @@ pub mod sources;
 pub mod suggested;
 #[cfg(test)]
 pub(crate) mod tests;
+mod tiles;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -566,6 +567,10 @@ pub struct ImportView {
     /// The favorites offered that the user unticked, by URL, which its end leaves out when it
     /// adds them.
     unticked: Vec<String>,
+    /// The favorites whose tiles are shown, by URL, and when they first showed, which they land
+    /// from; and when each favorite was last ticked or unticked, while its badge changes.
+    tiles_shown: Option<(Vec<String>, Instant)>,
+    toggled: Vec<(String, Instant)>,
     /// The favorites the last import offers from its history, once it's read.
     suggested: Option<Vec<Tab>>,
     /// How many imports it ran, which numbers each run.
@@ -627,6 +632,8 @@ impl ImportView {
             drawn_at: Rc::default(),
             os: roots.os,
             unticked: Vec::new(),
+            tiles_shown: None,
+            toggled: Vec::new(),
             folders: Folders::default(),
             suggested: None,
             runs: 0,
@@ -1233,21 +1240,88 @@ impl ImportView {
     }
 
     /// The favorites offered that are still ticked.
-    fn ticked(&self) -> Vec<Tab> {
+    pub fn ticked(&self) -> Vec<Tab> {
         let offered = self.suggested.iter().flatten();
         let ticked = offered.filter(|tab| !self.unticked.contains(&tab.url));
         ticked.cloned().collect()
     }
 
-    /// Ticks or unticks the favorite offered at `url`.
-    fn toggle_favorite(&mut self, url: &str, cx: &mut Context<Self>) {
+    /// Ticks or unticks the favorite offered at `url`, its badge changing from now.
+    pub fn toggle_favorite(&mut self, url: &str, cx: &mut Context<Self>) {
         match self.unticked.iter().position(|each| each == url) {
             Some(at) => {
                 self.unticked.remove(at);
             }
             None => self.unticked.push(url.into()),
         }
+        self.toggled.retain(|(each, _)| each != url);
+        self.toggled.push((url.into(), Instant::now()));
+        // check.sh reads this line.
+        log!("browser: import unticked {}", self.unticked.join(" "));
         cx.notify();
+    }
+
+    /// The favorites offered, as tiles a click ticks or unticks, asking for frames while they
+    /// land or a badge changes: the first launch's Favorites step's, and Settings' end's.
+    pub fn favorite_tiles(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Div> {
+        let tabs = self.offered()?.to_vec();
+        let (now, still) = (Instant::now(), crate::motion::still(cx));
+        let urls: Vec<String> = tabs.iter().map(|tab| tab.url.clone()).collect();
+        let shown = match &self.tiles_shown {
+            Some((shown, at)) if *shown == urls => *at,
+            _ => {
+                self.tiles_shown = Some((urls, now));
+                now
+            }
+        };
+        let tiles: Vec<tiles::Tile> = (tabs.iter().enumerate())
+            .map(|(index, tab)| tiles::Tile {
+                name: suggested::site_name(&tab.url),
+                on: !self.unticked.contains(&tab.url),
+                index,
+                shown,
+                toggled: (self.toggled.iter())
+                    .find(|(url, _)| *url == tab.url)
+                    .map(|(_, at)| *at),
+            })
+            .collect();
+        if tiles.iter().any(|tile| tile.moving(now)) {
+            window.request_animation_frame();
+        } else {
+            self.toggled.clear();
+        }
+        let settings = !self.guided;
+        let drawn = (tiles.iter().zip(&tabs)).map(|(tile, tab)| {
+            let url = tab.url.clone();
+            div()
+                .id(("import-favorite", tile.index))
+                .relative()
+                .flex_1()
+                .min_w_0()
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |view, _, _, cx| view.toggle_favorite(&url, cx)))
+                .child(tiles::tile(tile, &self.look, settings, still, now))
+                .child(drawn(
+                    format!("import-favorite {}", tile.name),
+                    self.drawn_at.clone(),
+                ))
+                .into_any_element()
+        });
+        let drawn: Vec<gpui::AnyElement> = drawn.collect();
+        Some(tiles::grid(drawn, &self.look, settings))
+    }
+
+    /// What the button that adds the favorites ticked says: how many.
+    pub fn add_favorites_title(&self) -> SharedString {
+        match self.ticked().len() {
+            0 => "Add Favorites".into(),
+            1 => "Add 1 Favorite".into(),
+            count => format!("Add {count} Favorites").into(),
+        }
     }
 
     /// Adds the favorites still ticked to the first Space of the profile the browser started
@@ -2224,38 +2298,29 @@ impl ImportView {
     }
 
     /// The favorites an import worked out from its history, with the line saying where they come
-    /// from, the first launch's own, and a row each, ticked in the accent as Choose folders' are,
-    /// which a click unticks.
-    fn favorites_offer(&self, tabs: &[Tab], cx: &mut Context<Self>) -> gpui::Div {
-        let look = &self.look;
+    /// from, the first launch's own, over their tiles.
+    fn favorites_offer(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Div> {
         let here = match self.os {
             Os::Mac => "this Mac",
             _ => "this computer",
         };
-        let rows = tabs.iter().enumerate().map(|(index, tab)| {
-            let on = !self.unticked.contains(&tab.url);
-            let url = tab.url.clone();
-            div()
-                .id(("import-favorite", index))
-                .on_click(cx.listener(move |view, _, _, cx| view.toggle_favorite(&url, cx)))
-                .child(checked_row(
-                    look,
-                    on,
-                    suggested::site_name(&tab.url),
-                    look.accent,
-                    rgb(CHECK_TICK),
-                ))
-        });
+        let tiles = self.favorite_tiles(window, cx)?;
         let said = format!(
             "The sites you visit most, from the history it brought, worked out on {here}. \
              Nothing is sent anywhere."
         );
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(BOX_GAP))
-            .child(line(said).text_color(look.detail))
-            .child(group(look, rows.map(|row| div().child(row))))
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(BOX_GAP))
+                .child(line(said).text_color(self.look.detail))
+                .child(tiles),
+        )
     }
 
     /// A row for each browser found, with Import….
@@ -3072,6 +3137,10 @@ impl Render for ImportView {
         }
         let look = self.look;
         let arrival = self.arrival(window, cx);
+        let mut favorites = match self.step {
+            Step::Done(_) => self.favorites_offer(window, cx),
+            _ => None,
+        };
         let content = match &self.step {
             Step::List => self.list(cx),
             Step::Pick { source, .. } => self.picking(*source, cx),
@@ -3165,11 +3234,10 @@ impl Render for ImportView {
                     let why = div().flex_1().min_w_0().text_color(look.detail).child(why);
                     frame().child(why).child(end([delete.into_any_element()]))
                 });
-                let offered = self.offered();
-                let favorites = offered.map(|tabs| self.favorites_offer(tabs, cx));
-                let add = offered.map(|_| {
+                let favorites = favorites.take();
+                let add = self.offered().map(|_| {
                     let any = !self.ticked().is_empty();
-                    self.control("import-add-favorites", "Add Favorites")
+                    primary(&look, "import-add-favorites", self.add_favorites_title())
                         .when(!any, |button| button.opacity(0.5))
                         .when(any, |button| {
                             button.on_click(cx.listener(|view, _, _, cx| view.add_ticked(cx)))
