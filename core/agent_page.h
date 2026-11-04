@@ -97,6 +97,7 @@ class AgentPage : public content::WebContentsObserver,
   // How far a SELECT has got: reading the element's options, reading those clicking it showed, or
   // reading the tree after choosing one.
   enum class Choosing { kNo, kOptions, kOpened, kChosen };
+  class WheelWatch;
 
   explicit AgentPage(content::WebContents* contents);
 
@@ -146,9 +147,15 @@ class AgentPage : public content::WebContentsObserver,
   void Type(bool submit);
   void Focus(int64_t element, bool submit);
   void PressKey(const std::string& key, base::OnceClosure then);
+  // Hears the page's requests, then turns the wheel, so the answer waits for what the scroll
+  // starts loading.
   void Scroll(bool down);
-  // Scrolls the page by most of its view with the mouse's wheel.
-  void Wheel(bool down);
+  void TurnWheel(bool down);
+  // Turns the wheel at the middle of |area|, in the viewport's CSS pixels, by most of its height,
+  // then answers with the tree, or that nothing scrolled.
+  void Wheel(const gfx::RectF& area, bool down);
+  void Scrolled(bool down);
+  void ScrollTo();
   void History(bool forward);
   void Screenshot();
 
@@ -256,6 +263,8 @@ class AgentPage : public content::WebContentsObserver,
   // The page's renderer takes accessibility actions only while it serves the accessibility tree,
   // which a SELECT turns on for its tab until it answers.
   std::unique_ptr<content::ScopedAccessibilityMode> accessibility_;
+  // Whether the wheel the scroll running turned moved anything.
+  std::unique_ptr<WheelWatch> wheel_;
   // Keeps the page drawing while it's hidden, for the agent's input and screenshots.
   base::ScopedClosureRunner drawing_;
   // The app link the job running followed, and the app the system opens it in, once it's found.

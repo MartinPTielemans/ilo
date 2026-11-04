@@ -30,6 +30,8 @@
 # the client's connection. Turning Settings › Agents off takes the socket away and drops a client
 # connected. Relaunched, a call with a tab's id from before is refused as one from before ilo
 # restarted.
+# It scrolls in a panel and in another site's frame by their refs, until each answers that
+# nothing scrolled.
 
 log="$out/mcp.log"
 step=0
@@ -635,6 +637,58 @@ painted(() => document.title = "choose");
     fail "choosing an option the select hasn't answered: $missed"
   last=$(sed -n "s/^browser: title $choose_tab //p" "$log" | tail -1)
   [ "$last" = "priority High" ] || fail "a missed option changed the page, to $last"
+
+  # It scrolls in what it names by ref, a panel and another site's frame, as a wheel there does,
+  # and once one is at its end the answer says nothing scrolled. The page around them is too short
+  # to scroll, so only they can, and a scroll of the page says nothing did (#1445).
+  printf '%s' '<p style="height:600px">Tall text</p><script src="painted.js"></script>
+<script>
+painted(() => parent.postMessage("painted", "*"));
+addEventListener("scroll", () => parent.postMessage("tall scrolled", "*"), { once: true });
+</script>' > "$out/site/tall.html"
+  printf '%s' "<title>loading</title><div role=region aria-label=Panel
+ style='height:150px; overflow:auto' onscroll=\"document.title = 'scroll panel moved'\">
+<p style='height:400px'>Panel text</p></div>
+<iframe title='Tall frame' src=http://127.0.0.1:$port/tall.html height=150></iframe>
+<script>addEventListener('message', (event) => {
+  if (event.data === 'painted') document.title = 'scroll';
+  if (event.data === 'tall scrolled') document.title = 'scroll frame moved';
+});</script>" > "$out/site/scroll.html"
+  outline=$(call open_tab "{\"url\":\"localhost:$port/scroll.html\"}")
+  scroll_tab=$(printf '%s\n' "$outline" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$scroll_tab" ] || fail "open_tab of the scrolling page answered: $outline"
+  await_log "^browser: title $scroll_tab scroll\$" "the scrolling page's frame didn't paint"
+  outline=$(call snapshot "{\"tab\":$scroll_tab}")
+  printf '%s\n' "$outline" > "$out/mcp-scroll.txt"
+  panel=$(ref_of region Panel)
+  frame=$(ref_of Iframe "Tall frame")
+  [ -n "$panel" ] && [ -n "$frame" ] || fail "the scrolling page was outlined as: $outline"
+  # Scrolls in <ref>, named <name>, which titles the page <title> once it moves, then on to its end.
+  scroll_to_end() {
+    scrolled=$(call scroll "{\"tab\":$scroll_tab,\"ref\":\"$1\",\"direction\":\"down\"}")
+    case "$scrolled" in
+      "Scrolled down in “$2”."*) ;;
+      *) fail "scrolling in $2 answered: $scrolled" ;;
+    esac
+    await_log "^browser: title $scroll_tab $3\$" "scrolling in $2 didn't move it"
+    for _ in 1 2 3 4 5 6; do
+      scrolled=$(call scroll "{\"tab\":$scroll_tab,\"ref\":\"$1\",\"direction\":\"down\"}")
+      case "$scrolled" in
+        "error: Nothing scrolled: it's as far down as it goes"*) return ;;
+        "Scrolled down in “$2”."*) ;;
+        *) fail "scrolling on in $2 answered: $scrolled" ;;
+      esac
+    done
+    fail "scrolling in $2 never reached its end"
+  }
+  scroll_to_end "$panel" Panel "scroll panel moved"
+  scroll_to_end "$frame" "Tall frame" "scroll frame moved"
+  scrolled=$(call scroll "{\"tab\":$scroll_tab}")
+  case "$scrolled" in
+    "error: Nothing scrolled"*) ;;
+    *) fail "scrolling the page too short to scroll answered: $scrolled" ;;
+  esac
+  call close_tab "{\"tab\":$scroll_tab}" > /dev/null
 
   # Its keys go to the page alone: type with submit and press_key's Enter submit the form, Tab
   # moves the keyboard to the next field, and Escape reaches the page. Escape the page doesn't keep

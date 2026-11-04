@@ -28,6 +28,26 @@ const INTERACTIVE: &[&str] = &[
     "tab",
     "treeitem",
 ];
+/// Roles given a ref too, to scroll in: a frame, and the parts of a page a site often scrolls on
+/// their own.
+const SCROLLS: &[&str] = &[
+    "Iframe",
+    "IframePresentational",
+    "main",
+    "region",
+    "document",
+    "article",
+    "feed",
+    "log",
+    "list",
+    "grid",
+    "tree",
+    "tabpanel",
+    "dialog",
+    "alertdialog",
+    "complementary",
+    "navigation",
+];
 /// Wrappers that only add nesting, whose children are outlined a level up.
 const FLATTEN: &[&str] = &[
     "none",
@@ -413,7 +433,8 @@ impl Walk<'_> {
                 line.push_str(&format!(" \"{}\"", clip(&name, 160)));
             }
             let backend = node.get("backendDOMNodeId").and_then(Value::as_i64);
-            if let (true, Some(backend)) = (INTERACTIVE.contains(&role), backend) {
+            let refers = INTERACTIVE.contains(&role) || SCROLLS.contains(&role);
+            if let (true, Some(backend)) = (refers, backend) {
                 let password = node
                     .get("password")
                     .and_then(Value::as_bool)
@@ -707,15 +728,15 @@ mod tests {
             open.since(&closed),
             format!(
                 "{head}{since}New:\n\
-                 - listbox \"Size\" [e7]\n  - option \"S\" [e8]\n  - option \"M\" [e9]\n\n\
-                 Changed:\n- combobox \"Size\" [e5] (expanded)"
+                 - listbox \"Size\" [e8]\n  - option \"S\" [e9]\n  - option \"M\" [e10]\n\n\
+                 Changed:\n- combobox \"Size\" [e6] (expanded)"
             )
         );
         assert_eq!(
             closed.since(&open),
             format!(
-                "{head}{since}Changed:\n- combobox \"Size\" [e5]\n\n\
-                 Gone:\n- listbox \"Size\" [e7]\n  - option \"S\" [e8]\n  - option \"M\" [e9]"
+                "{head}{since}Changed:\n- combobox \"Size\" [e6]\n\n\
+                 Gone:\n- listbox \"Size\" [e8]\n  - option \"S\" [e9]\n  - option \"M\" [e10]"
             )
         );
         assert_eq!(
@@ -782,8 +803,8 @@ mod tests {
         assert_eq!(
             outline(&tab(), &shop(true), &mut refs, Some(5)).text(),
             "Tab 20: Shop\nURL: https://shop.example/\n\n\
-             - combobox \"Size\" [e5] (expanded)\n  - listbox \"Size\" [e6]\n    \
-             - option \"S\" [e7]\n    - option \"M\" [e8]"
+             - combobox \"Size\" [e6] (expanded)\n  - listbox \"Size\" [e7]\n    \
+             - option \"S\" [e8]\n    - option \"M\" [e9]"
         );
         let gone = outline(&tab(), &shop(false), &mut refs, Some(999)).text();
         let note = "That element isn't on the page any more. Take a snapshot without a ref.";
@@ -814,6 +835,34 @@ mod tests {
              \x20 - Iframe \"Document\"\n\
              \x20   - text: Quarterly report"
         );
+    }
+
+    /// A frame and a part of the page a site scrolls on its own have refs, for scroll to name, and
+    /// a heading has none (#1445).
+    #[test]
+    fn what_scrolls_has_a_ref() {
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Mail", &["2", "3", "4"]),
+            node("2", "heading", "Inbox", &[]),
+            node("3", "region", "Messages", &["5"]),
+            node("4", "Iframe", "Message", &["6"]),
+            node("5", "StaticText", "From Ana", &[]),
+            node("6", "StaticText", "Hello", &[]),
+        ];
+        nodes[1]["backendDOMNodeId"] = json!(20);
+        nodes[2]["backendDOMNodeId"] = json!(30);
+        nodes[3]["backendDOMNodeId"] = json!(40);
+        let mut refs = Refs::default();
+        let outline = outline(&tab(), &nodes, &mut refs, None).text();
+        assert!(
+            outline.ends_with(
+                "- heading \"Inbox\"\n\
+                 - region \"Messages\" [e1]\n  - text: From Ana\n\
+                 - Iframe \"Message\" [e2]\n  - text: Hello"
+            ),
+            "{outline}"
+        );
+        assert_eq!(refs.get("e2").map(|element| element.node), Some(40));
     }
 
     /// A page bigger than an agent should take in is cut, and says so.

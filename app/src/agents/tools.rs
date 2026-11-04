@@ -290,7 +290,7 @@ fn shared() -> Value {
         {
             "name": "scroll",
             "title": "Scroll",
-            "description": "Scroll a page down or up most of its height, or to bring an element into view by its ref. Answers with what changed in the page's outline.",
+            "description": "Scroll down or up most of a screen, as a mouse wheel does at the middle of the page, or of the element whose ref you give, such as a panel or a frame. With a ref and no direction, brings the element into view. Answers with what changed in the page's outline, or an error when nothing scrolled, as at the end.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -451,8 +451,9 @@ pub struct Did {
     /// What on the page: an element by its name in quotes or its role, a key, a direction, or a
     /// wait's text in quotes or its seconds.
     pub target: String,
-    /// A thought's text, the address it opened, whole, or what it typed when that may show: never
-    /// into a password field, and at most `TYPED_SHOWN` characters.
+    /// A thought's text, the address it opened, whole, what it typed when that may show (never
+    /// into a password field, and at most `TYPED_SHOWN` characters), or the way it scrolled in an
+    /// element.
     pub text: String,
     /// The tab it acted on, by which a turn's same step on several tabs is one line (#1476). None
     /// for a page it opens, whose tab it makes, and for what isn't on a tab.
@@ -534,9 +535,10 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
         }
         "press_key" => ("Pressing", "Pressed", "Couldn't press", target("a key")),
         "scroll" => {
-            let to = match did.target.as_str() {
-                "up" | "down" | "" => format!("{} on {}", target("down"), site("the page")),
-                element => format!("to {element}"),
+            let to = match (did.target.as_str(), did.text.as_str()) {
+                ("up" | "down" | "", _) => format!("{} on {}", target("down"), site("the page")),
+                (element, "") => format!("to {element}"),
+                (element, way) => format!("{way} in {element}"),
             };
             ("Scrolling", "Scrolled", "Couldn't scroll", to)
         }
