@@ -32,6 +32,8 @@ raw-window-handle = "0.6"
 # The icon theme the desktop's settings portal names, for a file's icon (platform/linux/previews.rs),
 # as ../Cargo.toml has it.
 zbus = { version = "5.13", default-features = false, features = ["async-io"] }
+# The needs' notifications' clicks, as a stream of zbus's (src/needs_you_host.rs).
+futures-lite = "2"
 # The test driver's X connection (platform/linux/drive.rs), the held Escape's
 # (platform/linux/held_escape.rs) and the windows' frames' (platform/linux/frames.rs).
 x11rb = { version = "0.13", features = ["xkb", "randr"] }
