@@ -6,7 +6,7 @@
 # new one without its cookie. Nothing private is written: after the quit the Spaces file and the
 # profile's history have none of its pages, the profile's cookies don't have its cookie, and a
 # relaunch brings back no private window. A private window's Library has its session's downloads
-# (#669): "d" in its page downloads a file, which its Library's Downloads lists, and the regular
+# (#669): a file it goes to downloads, which its Library's Downloads lists, and the regular
 # window's doesn't, nor does the profile's history after the quit.
 
 # The served cookie page: its title says whether the site has the private cookie, and "p" in it
@@ -20,12 +20,10 @@ onkeydown = e => {
     document.cookie = "private=1";
     document.title = "cookie set";
   }
-  if (e.key == "d") {
-    document.getElementById("d").click();
-  }
 };
-</script><a id=d download href="private-notes.txt"></a>' > "$out/site/private.html"
-printf '%s' 'a private download' > "$out/site/private-notes.txt"
+</script>' > "$out/site/private.html"
+# What a private window downloads: the server sends a .bin as a file to save, not a page to show.
+printf '%s' 'a private download' > "$out/site/private-notes.bin"
 regular_url="${site}private.html"
 private_url="${site}private.html?private-only"
 log="$out/private.log"
@@ -111,18 +109,21 @@ send key r cmd
 expect "^browser: title $p cookie private\$" "the private session lost its cookie on a reload"
 ../tools/window-screenshot.sh "$pid" "$out/private.png" all || fail "no window to capture"
 
-# Its download is its Library's: ⇧⌘J opens the Library on Downloads, which lists it alone.
-send click $page_point
-send key d
+# Its download is its Library's: going to a file from its command bar downloads it, and ⇧⌘J opens
+# the Library on Downloads, which lists it alone.
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar in the private window"
+send insert "${site}private-notes.bin"
+send key return
 for _ in $(seq 100); do
-  grep -q '^browser: download [0-9]* done private-notes.txt$' "$log" && break
+  grep -q '^browser: download [0-9]* done private-notes.bin$' "$log" && break
   sleep 0.1
 done
-grep -q '^browser: download [0-9]* done private-notes.txt$' "$log" ||
-  fail "the private page's download didn't finish"
+grep -q '^browser: download [0-9]* done private-notes.bin$' "$log" ||
+  fail "the private window's download didn't finish: $(grep -c 'private-notes' "$out/site.log") requests"
 send key j cmd shift
 expect '^browser: library section downloads$' "⇧⌘J didn't open the private window's Library"
-expect '^browser: library lists downloads: private-notes.txt$' \
+expect '^browser: library lists downloads: private-notes.bin$' \
   "the private window's Library didn't list its session's download alone"
 ../tools/window-screenshot.sh "$pid" "$out/private-library.png" || fail "no window to capture"
 send key j cmd shift
@@ -140,7 +141,7 @@ expect '^browser: library lists downloads: ' "⇧⌘J didn't open the regular wi
 listed=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: library lists downloads: ' |
   tail -1)
 case $listed in
-*private-notes.txt*) fail "the regular window's Library listed the private window's download" ;;
+*private-notes.bin*) fail "the regular window's Library listed the private window's download" ;;
 esac
 send key j cmd shift
 expect '^browser: library hidden$' "⇧⌘J didn't close the regular window's Library"
