@@ -61,6 +61,7 @@ mod fly_in;
 mod footer;
 #[cfg(test)]
 mod full_screen;
+mod full_screen_escape;
 mod header;
 #[cfg(test)]
 mod help_tests;
@@ -106,7 +107,7 @@ mod sidebar_backups;
 mod sidebar_keys;
 mod space_form;
 mod split_targets;
-mod swap;
+pub(crate) mod swap;
 mod swipe;
 mod task_area;
 mod themes;
@@ -1275,6 +1276,8 @@ pub struct Shell {
     full_screen: bool,
     /// ⌘N's or ⇧⌘N's window, until its command bar opens once it's on screen.
     opening: Option<new_window::Opening>,
+    /// The Esc presses its page has had first in full screen, which leave held or twice.
+    escapes: full_screen_escape::EscapeToLeave,
     /// On Linux, whether the window is maximized, which its third button shows.
     maximized: bool,
     /// Whether the window went full screen for the page, so it comes back with it.
@@ -1695,6 +1698,7 @@ impl Shell {
             text_system: None,
             full_screen: false,
             opening: None,
+            escapes: Default::default(),
             maximized: false,
             window_for_page: false,
             page_held: None,
