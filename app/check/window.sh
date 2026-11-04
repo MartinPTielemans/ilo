@@ -94,9 +94,12 @@ step=0
 rm -f "$saved" "$launch_frame"
 serve
 url="data:text/html;base64,$page#${site}wait"
-# With the motion GitHub's hosted Mac reduces, for the toast recorded below.
+# With the motion GitHub's hosted Mac and Windows reduce, Windows' as "Show animations in Windows"
+# is off on its runner: the sidebar's steps below and the toast recorded below move.
 motion=
-[ "$(uname)" = Darwin ] && motion=full
+if [ "$(uname)" = Darwin ] || windows; then
+  motion=full
+fi
 BROWSER_DRIVE=1 BROWSER_MOTION=$motion BROWSER_URL="$url" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
