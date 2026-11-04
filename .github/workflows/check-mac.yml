@@ -130,14 +130,17 @@ jobs:
       - name: PROBE grant TCC
         if: ${{ steps.engine.outputs.found == 'true' }}
         run: |
-          sw_vers; csrutil status || true
-          db="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
-          ls -la "$db" || true
-          sqlite3 "$db" 'PRAGMA table_info(access)' || true
+          pid=$$; while [ "$pid" -gt 1 ]; do ps -o pid=,ppid=,comm= -p "$pid"; pid=$(ps -o ppid= -p "$pid" | tr -d ' '); done
+          now=$(date +%s)
+          grant() { # db service client
+            sudo sqlite3 "$1" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified) VALUES ('$2', '$3', 1, 2, 4, 1, 'UNUSED', 0, $now)" && echo "granted $2 to $3" || echo "couldn't grant $2 to $3"
+          }
+          agent=/opt/hca/hosted-compute-agent
+          grant "/Library/Application Support/com.apple.TCC/TCC.db" kTCCServiceScreenCapture "$agent"
           for service in kTCCServiceCamera kTCCServiceMicrophone; do
-            sqlite3 "$db" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified) VALUES ('$service', 'dev.browser.app', 0, 2, 3, 1, 'UNUSED', 0, $(date +%s))" && echo "granted $service" || echo "couldn't grant $service"
+            grant "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "$service" "$agent"
           done
-          sqlite3 "$db" "SELECT service, client, auth_value FROM access WHERE client LIKE 'dev.browser%'" || true
+          sudo killall tccd || true
 
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       - name: Runs
@@ -189,12 +192,8 @@ jobs:
       - name: PROBE TCC log
         if: ${{ always() && steps.engine.outputs.found == 'true' }}
         run: |
-          echo "== tccd about us"
-          log show --last 40m --style compact --predicate 'process == "tccd"' 2>/dev/null | grep -E 'dev\.browser|Browser\.app' | grep -vE 'AUTHREQ_SUBJECT' | cut -c1-400 | tail -40 || true
-          echo "== UserNotificationCenter"
-          log show --last 40m --style compact --predicate 'process == "UserNotificationCenter"' 2>/dev/null | cut -c1-400 | tail -40 || true
-          echo "== nehelper and local network"
-          log show --last 40m --style compact --predicate 'process == "nehelper" OR eventMessage CONTAINS[c] "local network"' 2>/dev/null | grep -iE 'browser|local network|privacy' | cut -c1-400 | tail -30 || true
+          log show --last 40m --style compact --predicate 'process == "tccd"' 2>/dev/null | grep -E 'Browser-|Browser\.app' | grep -oE 'service=[A-Za-z]+|kTCCService[A-Za-z]+|auth_value=[0-9]+|Prompting[^,]*' | sort | uniq -c || true
+          log show --last 40m --style compact --predicate 'process == "tccd"' 2>/dev/null | grep -iE 'prompt' | cut -c1-600 | tail -10 || true
 
       - if: ${{ always() && steps.engine.outputs.found == 'true' }}
         uses: actions/upload-artifact@v4
