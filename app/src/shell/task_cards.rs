@@ -55,10 +55,11 @@ use crate::tooltip::text_width;
 use glyph::{Glyph, State};
 use motion::{Curve, Ease};
 
-/// A task's number, from its agent's id, `task-<n>`.
+/// A task's number, from its agent's id: `task-<n>`, or `session-<n>` for an outside agent's
+/// session, which are numbered with the tasks.
 pub(super) fn number(agent: &str) -> u64 {
-    agent
-        .strip_prefix("task-")
+    (agent.strip_prefix("task-"))
+        .or_else(|| agent.strip_prefix("session-"))
         .and_then(|n| n.parse().ok())
         .unwrap_or(0)
 }

@@ -52,8 +52,8 @@ impl AgentPointer {
 
 impl Shell {
     /// The agent at work in `tab` is about to click or type in the element it named `tag`, whose
-    /// box is `element`, in points from the top left of the tab's page. Only a page the window
-    /// shows in the agent's Space has the pointer.
+    /// box is `element`, in points from the top left of the tab's page. Only an agent's page the
+    /// window shows, a task's watched, has the pointer.
     pub fn agent_pointing(
         &mut self,
         tab: u64,
@@ -149,10 +149,7 @@ impl Shell {
         }
         let pointer = self.agent_pointer.as_ref()?;
         let pane = self.pane_of(pointer.tab)?;
-        let name = self
-            .agent_page()
-            .map(|(space, _)| space.agent.clone())
-            .unwrap_or_default();
+        let name = self.agent_bar().map(|bar| bar.name()).unwrap_or_default();
         let t = pointer.since.elapsed().as_secs_f32();
         let still = cx.reduce_motion();
         // Frames only while it moves: the glide, the ring coming in and the fade.
