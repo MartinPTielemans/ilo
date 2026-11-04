@@ -1849,7 +1849,6 @@ impl Settings {
                 .child(self.drawn(format!("clear {id}")))
                 .on_click(cx.listener(move |_, _, _, cx| {
                     if crate::clear_browsing_data(id) {
-                        browser::shell::forget_bar_usage(id, cx);
                         hide(cx);
                     }
                 }));
@@ -2351,6 +2350,9 @@ impl Settings {
         let profile = unsafe { bc::bc_profile_create(c_name.as_ptr()) };
         // check.sh waits for this line.
         log!("browser: create profile {profile} {name}");
+        if let Some(folder) = crate::bar_picks_host::folder(profile) {
+            log!("browser: profile {profile} folder {}", folder.display());
+        }
         if profile != 0 {
             self.rename(profile, name.into(), cx);
         }

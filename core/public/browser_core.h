@@ -957,6 +957,11 @@ typedef struct bc_host {
   // bc_profile_add_history added |added| pages to |profile|'s history, once for each call that
   // returned true, in order.
   void (*history_added)(void* context, bc_id profile, size_t added);
+  // Chrome deleted pages from |profile|'s history, not as old visits expire: all of it if |all|;
+  // else every visit from |begin| to |end|, seconds since 1970, when |begin| < |end|, as Clear
+  // Browsing Data's Last hour, and the |count| URLs at |urls|, UTF-8, as the History page deletes.
+  void (*history_deleted)(void* context, bc_id profile, bool all, int64_t begin, int64_t end,
+                          const char* const* urls, size_t count);
   // The text bc_tab_read_text asked for as |request|, UTF-8, or null if the tab had no page loaded
   // or closed first.
   void (*tab_text)(void* context, bc_id tab, uint64_t request, const char* text);
@@ -1392,6 +1397,10 @@ BC_EXPORT bool bc_profile_delete(bc_id profile);
 // Copies the folder the profile's downloads go to, UTF-8, into |path| as bc_space_name does, or
 // nothing for a profile that isn't loaded.
 BC_EXPORT size_t bc_profile_download_folder(bc_id profile, char* path, size_t capacity);
+// Copies the profile's own folder, UTF-8, into |path| as bc_space_name does, loaded or not, or
+// nothing for an id the core didn't give. Chrome deletes it with the profile, and what the app
+// keeps for one profile on this computer goes in it.
+BC_EXPORT size_t bc_profile_dir(bc_id profile, char* path, size_t capacity);
 // Sends the profile's downloads to the folder at |path|, UTF-8, and returns whether it will: not
 // for a profile that isn't loaded, a path that isn't absolute, or a folder a policy sets.
 BC_EXPORT bool bc_profile_set_download_folder(bc_id profile, const char* path);

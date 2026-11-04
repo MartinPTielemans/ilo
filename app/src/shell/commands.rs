@@ -1449,10 +1449,7 @@ impl Shell {
             Command::AddExtension => return self.browser.add_extension(cx),
             Command::Settings => return self.browser.settings(cx),
             Command::SiteSearchSettings => return self.browser.site_search_settings(cx),
-            Command::ClearBrowsingData => {
-                self.forget_bar_usage(cx);
-                return self.browser.clear_browsing_data(cx);
-            }
+            Command::ClearBrowsingData => return self.browser.clear_browsing_data(cx),
             Command::KeyboardShortcuts => return self.browser.shortcuts(cx),
             Command::About => return self.browser.about(cx),
             Command::CheckForUpdates => return self.browser.check_for_updates(cx),

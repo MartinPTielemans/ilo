@@ -24,6 +24,7 @@
 #include "browser_core/downloads.h"
 #include "browser_core/extensions.h"
 #include "browser_core/favorites.h"
+#include "browser_core/history_deletions.h"
 #include "browser_core/host.h"
 #include "browser_core/search.h"
 #include "browser_core/session.h"
@@ -279,6 +280,7 @@ void UseProfile(Profile* profile) {
   GiveArchiveDefault(profile);
   ObserveDownloads(profile);
   ObserveExtensions(profile);
+  ObserveHistoryDeletions(profile);
   ApplyAutoPictureInPicture(/*changed=*/false);
 }
 
@@ -432,6 +434,11 @@ std::string ProfileDir(bc_id profile) {
     }
   }
   return std::string();
+}
+
+base::FilePath ProfileFolder(bc_id profile) {
+  const std::string dir = ProfileDir(profile);
+  return dir.empty() ? base::FilePath() : PathOf(dir);
 }
 
 std::string ProfileName(bc_id profile) {
