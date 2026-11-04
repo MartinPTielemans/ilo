@@ -44,6 +44,7 @@ use gpui::{
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 mod agents_core;
+mod bar_picks_host;
 mod browser_windows;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/drive.rs"]
@@ -86,6 +87,9 @@ mod menu_window;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/motion.rs"]
 mod motion;
+#[cfg(target_os = "linux")]
+#[path = "../platform/linux/needs_you.rs"]
+mod needs_you;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/overlays.rs"]
 mod overlays;
@@ -148,6 +152,7 @@ use menu_bar::*;
 mod hosts;
 use hosts::*;
 mod command_bar_host;
+mod needs_you_host;
 use command_bar_host::*;
 mod link_preview_host;
 use link_preview_host::*;
@@ -238,6 +243,15 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     });
     let repeat = unsafe { platform::host_key_repeated() };
     let now = Instant::now();
+    // Esc in full screen, pressed twice or held, leaves even when the page keeps it (Arc's).
+    if keystroke == "escape"
+        && update_tab_window(tab, |shell, cx| {
+            shell.escape_in_full_screen(repeat, now, cx)
+        })
+        .unwrap_or(false)
+    {
+        return (true, "escape in full screen");
+    }
     let shortcut = shortcut.flatten().is_some();
     if SECOND_PRESS.with_borrow_mut(|second| second.press(tab, &keystroke, shortcut, repeat, now)) {
         // check.sh reads this line.
@@ -472,6 +486,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
             platform::host_since_launch()
         });
         dock_dot::open(Rc::new(DockDot), cx);
+        needs_you_host::start(cx);
         open_window(None, None, cx);
     });
     // On Chromium's Wayland display, GPUI's windows and their surfaces are on a display Chromium

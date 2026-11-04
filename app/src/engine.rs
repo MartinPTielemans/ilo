@@ -856,6 +856,14 @@ impl Browser for Engine {
         open_tab(self.window, CLEAR_BROWSING_DATA);
     }
 
+    fn bar_picks(&self, profile: u64) -> String {
+        bar_picks_host::picks(profile)
+    }
+
+    fn set_bar_picks(&self, profile: u64, text: &str) {
+        bar_picks_host::set_picks(profile, text);
+    }
+
     fn close_other_window(&self, _: &mut App) -> bool {
         unsafe { platform::host_close_other_window() }
     }
@@ -1076,6 +1084,17 @@ impl Browser for Engine {
             WindowButton::Zoom => 2,
         };
         unsafe { platform::host_press_window_button(self.ui_view, button) };
+    }
+
+    fn set_on_top(&self, on: bool, _: &mut App) {
+        unsafe { platform::host_set_window_on_top(self.ui_view, on) };
+    }
+
+    fn can_stay_on_top(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        return frames::stays_on_top();
+        #[cfg(not(target_os = "linux"))]
+        return true;
     }
 
     fn start_window_move(&self, _: &mut App) {

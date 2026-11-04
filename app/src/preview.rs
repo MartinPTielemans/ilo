@@ -1308,6 +1308,8 @@ impl Browser for Fake {
 
     fn press_window_button(&self, _: WindowButton, _: &mut App) {}
 
+    fn set_on_top(&self, _: bool, _: &mut App) {}
+
     // The preview's window is GPUI's own, which GPUI moves.
     fn start_window_move(&self, _: &mut App) {}
 
@@ -1626,6 +1628,7 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
         url: url.into(),
         favicon: None,
         renamed: false,
+        switched: 0.0,
     })
     .collect();
     let (typed, rows) = match mode {

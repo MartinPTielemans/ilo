@@ -552,8 +552,9 @@ bool IsOurs(NSWindow* child) {
 
 // A window above the normal level defaults to transient, which Spaces and Mission Control treat
 // apart from a normal window, so it's managed, as Chromium makes its own.
-void SetOverLevel(NSWindow* child, bool raised) {
-  const NSWindowLevel level = raised ? kOverLevel : NSNormalWindowLevel;
+void SetOverLevel(NSWindow* child, NSWindow* parent, bool raised) {
+  // A level above its parent's, which Stay On Top raises (host_set_window_on_top).
+  const NSWindowLevel level = parent.level + (raised ? kOverLevel - NSNormalWindowLevel : 0);
   if (child.level != level) {
     child.collectionBehavior |= NSWindowCollectionBehaviorManaged;
     child.level = level;
@@ -571,14 +572,14 @@ void LevelOver(NSWindow* parent, bool raised) {
       }];
   for (NSWindow* child in children) {
     if (IsOurs(child)) {
-      SetOverLevel(child, raised);
+      SetOverLevel(child, parent, raised);
     }
   }
 }
 
 // Puts |child| over |parent|, at the level of |parent|'s others.
 void AddOver(NSWindow* parent, NSWindow* child) {
-  SetOverLevel(child, NSApp.active && parent.mainWindow);
+  SetOverLevel(child, parent, NSApp.active && parent.mainWindow);
   [parent addChildWindow:child ordered:NSWindowAbove];
 }
 
@@ -4597,6 +4598,56 @@ void host_day_starts(double starts[4]) {
   for (int i = 0; i < 4; i++) {
     starts[i] = dates[i].timeIntervalSince1970 * 1000;
   }
+}
+
+// The browser windows Window › Stay On Top keeps over other apps' windows.
+static NSHashTable<NSWindow*>* g_on_top;
+
+// The level Stay On Top gives |window|: floating, but not while it's full screen, which macOS
+// keeps at its own level, and then over its overlays again.
+static void LevelOnTop(NSWindow* window) {
+  const bool on = [g_on_top containsObject:window] &&
+                  !(window.styleMask & NSWindowStyleMaskFullScreen);
+  window.level = on ? NSFloatingWindowLevel : NSNormalWindowLevel;
+  LevelOver(window, NSApp.active && window.mainWindow);
+}
+
+void host_set_window_on_top(void* ui_view, bool on) {
+  Browser* browser = BrowserWithView(ui_view);
+  if (!browser || !browser->window) {
+    return;
+  }
+  if (!g_on_top) {
+    g_on_top = [NSHashTable weakObjectsHashTable];
+    // Before full screen's transition, which a floating window would make over every Space, and
+    // once it's over.
+    NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+    [center addObserverForName:NSWindowWillEnterFullScreenNotification
+                        object:nil
+                         queue:nil
+                    usingBlock:^(NSNotification* notification) {
+                      NSWindow* window = notification.object;
+                      if ([g_on_top containsObject:window]) {
+                        window.level = NSNormalWindowLevel;
+                        LevelOver(window, NSApp.active && window.mainWindow);
+                      }
+                    }];
+    [center addObserverForName:NSWindowDidExitFullScreenNotification
+                        object:nil
+                         queue:nil
+                    usingBlock:^(NSNotification* notification) {
+                      NSWindow* window = notification.object;
+                      if ([g_on_top containsObject:window]) {
+                        LevelOnTop(window);
+                      }
+                    }];
+  }
+  if (on) {
+    [g_on_top addObject:browser->window];
+  } else {
+    [g_on_top removeObject:browser->window];
+  }
+  LevelOnTop(browser->window);
 }
 
 void host_press_window_button(void* ui_view, int button) {

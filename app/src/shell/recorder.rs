@@ -77,6 +77,8 @@ pub(super) struct Recorder {
     pub(super) import: RefCell<Option<std::rc::Rc<dyn crate::import::Host>>>,
     /// The window is full screen, as Linux's window manager says, for `window_full_screen`.
     pub(super) full_screen: Cell<bool>,
+    /// Whether the window can't stay on top, as under Wayland.
+    pub(super) no_stay_on_top: Cell<bool>,
     /// The opt-ins' switches, as `crash_reports` and `agents` answer, None for one not offered.
     pub(super) crash_reports: Cell<Option<bool>>,
     pub(super) agents: Cell<Option<bool>>,
@@ -142,6 +144,8 @@ pub(super) struct Recorder {
     /// How many times Site Search Settings opened.
     pub(super) site_search_settings: Cell<usize>,
     pub(super) clear_browsing_data: Cell<usize>,
+    /// Each profile's command bar picks, as the file keeps them.
+    pub(super) bar_picks: RefCell<HashMap<u64, String>>,
     /// The pages `open_page` opened, in order.
     pub(super) opened_pages: RefCell<Vec<String>>,
     /// The text `copy` put on the clipboard, in order.
@@ -868,6 +872,20 @@ impl Browser for Recorder {
             .set(self.clear_browsing_data.get() + 1);
     }
 
+    fn bar_picks(&self, profile: u64) -> String {
+        self.bar_picks
+            .borrow()
+            .get(&profile)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn set_bar_picks(&self, profile: u64, text: &str) {
+        self.bar_picks
+            .borrow_mut()
+            .insert(profile, text.to_string());
+    }
+
     fn close_other_window(&self, _: &mut App) -> bool {
         Default::default()
     }
@@ -1065,6 +1083,14 @@ impl Browser for Recorder {
 
     fn window_button_geometry(&self, _: &mut App) -> Option<super::WindowButtonGeometry> {
         self.window_buttons.get()
+    }
+
+    fn set_on_top(&self, on: bool, _: &mut App) {
+        self.record(format!("on top {on}"))
+    }
+
+    fn can_stay_on_top(&self) -> bool {
+        !self.no_stay_on_top.get()
     }
 
     fn press_window_button(&self, button: WindowButton, _: &mut App) {

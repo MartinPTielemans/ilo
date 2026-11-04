@@ -111,14 +111,12 @@ pub(crate) extern "C" fn key_window_changed(ui_view: *mut c_void) {
         (index > 0).then(|| {
             let window = windows.remove(index);
             windows.insert(0, window.clone());
-            window.id
+            window
         })
     });
-    if let Some(id) = moved {
-        log!("browser: key window {id}");
-        update_app_later(move |cx| {
-            update_window_in(id, cx, |shell, cx| shell.became_key(cx));
-        });
+    if let Some(window) = moved {
+        log!("browser: key window {}", window.id);
+        update_app_later(shell::window_became_key(window.shell));
     }
 }
 

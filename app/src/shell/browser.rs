@@ -297,6 +297,13 @@ pub trait Browser {
     /// Opens Chrome's Clear browsing data dialog in a tab of the Space shown, for its profile. The
     /// user's, as site_search_settings is.
     fn clear_browsing_data(&self, cx: &mut App);
+    /// The command bar picks kept for `profile`, as `usage::Usage` writes them, on this computer
+    /// only: never synced, sent or put in a crash report. The user's, so no agent path reads them.
+    fn bar_picks(&self, _profile: u64) -> String {
+        String::new()
+    }
+    /// Keeps `text` as `profile`'s command bar picks, as `bar_picks` reads them.
+    fn set_bar_picks(&self, _profile: u64, _text: &str) {}
     /// Closes the window with the keyboard if it's another of the app's, such as Chrome's Task
     /// Manager, and says whether it did.
     fn close_other_window(&self, cx: &mut App) -> bool;
@@ -415,6 +422,13 @@ pub trait Browser {
     fn show_window_buttons(&self, shown: bool, cx: &mut App);
     /// Does what a click on the window's close, minimize or zoom button does.
     fn press_window_button(&self, button: WindowButton, cx: &mut App);
+    /// Keeps the window over other apps' windows, its overlays still over it, or lets it go back
+    /// among them.
+    fn set_on_top(&self, on: bool, cx: &mut App);
+    /// Whether the window can stay on top: not under Wayland, which gives no client a way.
+    fn can_stay_on_top(&self) -> bool {
+        true
+    }
     /// The window's own buttons as the system draws them, for the copies the UI draws in their
     /// place, once it can say: the Mac's. Elsewhere the UI draws the only ones, at
     /// `WindowButtonGeometry::default`.
