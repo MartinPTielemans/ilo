@@ -391,7 +391,10 @@ pub(crate) fn open_window_as(
                     platform::host_since_launch()
                 });
                 cx.update(overlays_now);
-                cx.update(agents_core::start)
+                cx.update(agents_core::start);
+                // The command bar's settings rows, built in a task of their own once the UI
+                // shows.
+                cx.update(crate::settings::index_after_launch)
             })
             .detach();
         }
