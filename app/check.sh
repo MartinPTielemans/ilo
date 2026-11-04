@@ -150,13 +150,15 @@ rm -f "$(dirname "$saved")/Agents" "$(dirname "$saved")/Shortcuts"
 # have left localhost out of Developer Mode. A failed media run may have left the Mini Player off,
 # which the core keeps as Block for every site's Automatic picture-in-picture and doesn't undo at
 # launch, so no later run's call floated (#1165).
+# Each file is Chrome's or the core's, in UTF-8, which Windows' Python doesn't read by default, as a
+# Space's emoji in Spaces.json needs (#1673).
 prefs="$profile_dir/Default/Preferences"
 mkdir -p "$(dirname "$prefs")" "$out/downloads"
 python3 -I -c '
 import json, os, sys
 prefs = {}
 if os.path.exists(sys.argv[1]):
-    with open(sys.argv[1]) as f:
+    with open(sys.argv[1], encoding="utf-8") as f:
         prefs = json.load(f)
 prefs.setdefault("devtools", {}).setdefault("preferences", {})["currentDockState"] = "\"right\""
 prefs.setdefault("download", {})["default_directory"] = sys.argv[2]
@@ -167,18 +169,18 @@ for kind in ("window_placement", "permission_autoblocking_data", "auto_picture_i
 defaults = prefs.get("profile", {}).get("default_content_setting_values", {})
 defaults.pop("auto_picture_in_picture", None)
 prefs.get("browser_core", {}).pop("developer_mode", None)
-with open(sys.argv[1], "w") as f:
+with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(prefs, f)
 ' "$prefs" "$(native_path "$PWD/$out/downloads")"
 python3 -I -c '
 import json, os, sys
 if not os.path.exists(sys.argv[1]):
     sys.exit()
-with open(sys.argv[1]) as f:
+with open(sys.argv[1], encoding="utf-8") as f:
     saved = json.load(f)
 if saved.get("settings", {}).get("auto_picture_in_picture") is False:
     saved["settings"]["auto_picture_in_picture"] = True
-    with open(sys.argv[1], "w") as f:
+    with open(sys.argv[1], "w", encoding="utf-8") as f:
         json.dump(saved, f)
 ' "$saved"
 # Each run starts in the one profile, Default: Chrome deletes the others, which a run before made,
@@ -188,7 +190,7 @@ only_default() {
 import json, os, sys
 if not os.path.exists(sys.argv[1]):
     sys.exit()
-with open(sys.argv[1]) as f:
+with open(sys.argv[1], encoding="utf-8") as f:
     local = json.load(f)
 profile = local.setdefault("profile", {})
 left = [name for name in profile.get("info_cache", {}) if name != "Default"]
@@ -198,7 +200,7 @@ profile["last_used"] = "Default"
 profile["last_active_profiles"] = profile["profiles_order"] = ["Default"]
 deleted = local.setdefault("profiles", {}).setdefault("profile_basenames_deleted", [])
 deleted.extend(name for name in left if name not in deleted)
-with open(sys.argv[1], "w") as f:
+with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(local, f)
 ' "$(dirname "$saved")/Local State"
 }
