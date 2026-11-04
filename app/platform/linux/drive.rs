@@ -14,7 +14,7 @@
 //! clickkey, doubleclickkey, rightclickkey, drag, dragkey, press, dragto, release, rightpress,
 //! rightdragto, rightrelease, dragover, dragdrop, dragleave, move, scroll, wheel, pageswipe, key,
 //! keydown, keyup, flags, type, resize, resizekey, place, order, layout, state, title, pasteboard,
-//! front, menu, menubar, choose, dismiss, window, agentspace, agentmayact,
+//! front, menu, menubar, choose, dismiss, window, agentspace, agentmayact, agentopen,
 //! agentrelease, agentdisconnect, takeback, age and insert. The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs):
 //! cmd with Ctrl, ctrl and alt with Alt, and ⌃Tab as Ctrl+Tab; a click's as Chrome reads
 //! them, cmd with Ctrl and alt with Alt. flags presses and lets
@@ -2329,6 +2329,15 @@ fn run_command(line: &str) -> Option<()> {
                 let reason = unsafe { std::ffi::CStr::from_ptr(reason.as_ptr()) }.to_string_lossy();
                 log!("browser: agent {agent} refused {tab}: {reason}");
             }
+            Some(())
+        }
+        "agentopen" => {
+            let agent = words.next()?;
+            let url = words.next()?;
+            let (agent_c, url_c) = (CString::new(agent).ok()?, CString::new(url).ok()?);
+            let tab = unsafe { bc::bc_agent_open_tab(agent_c.as_ptr(), url_c.as_ptr()) };
+            (tab != 0).then_some(())?;
+            log!("browser: agent {agent} opened {tab}");
             Some(())
         }
         "agentrelease" => {

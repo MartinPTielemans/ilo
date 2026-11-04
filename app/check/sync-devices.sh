@@ -2,7 +2,8 @@
 # run's own (ilo-server.sh). A signs in first and copies its recovery words, which the clipboard
 # holds marked for clipboard managers to skip (#641). B signs in and asks the account's devices
 # to add it, and A, once its window is active, asks the user, who adds it with a click: B syncs.
-# C signs in and recovers with the words instead, and syncs too. A saves a login, which B lists,
+# C signs in and recovers with the words instead, and syncs too. A's open tab reaches B's sync
+# store, and a tab of A's agent's Space never does (#1796). A saves a login, which B lists,
 # then removes, and A hears it go. 90 s after A's copy the
 # clipboard holds the words no longer. B and C sign out without asking, as the account has other
 # devices, and the server forgets them. Linux's alone so far: the Mac's and Windows' clipboards
@@ -124,9 +125,32 @@ await 'browser: sync service active$' || fail "C's sync didn't become active"
 [ "$(stored "SELECT count(*) FROM devices")" = 3 ] ||
   fail "the server doesn't know the account's three devices: $(stored "SELECT group_concat(name, '|') FROM devices")"
 
+# A's open tabs reach B, as the account's other computer's, but a tab of an agent's Space never
+# does, as an agent's Space stays on its device (#1796): B's sync store gets the user's tab A
+# opened, and never the agent's, though A's agent opened it first.
+serve
+device a
+send agentspace claude-code Claude Code
+expect '^browser: made space [1-9][0-9]* for agent claude-code$' "A's driver didn't make the agent's Space"
+send agentopen claude-code "${site}login.html?agents-own"
+expect '^browser: agent claude-code opened [1-9][0-9]*$' "A's agent didn't open a tab in its Space"
+agent_tab=$(sed -n 's/^browser: agent claude-code opened \([0-9]*\)$/\1/p' "$log" | tail -1)
+await "^browser: loaded $agent_tab ${site}login.html?agents-own\$" || fail "A's agent's tab didn't load"
+send window 1
+go_from_bar "${site#http://}login.html?users-own"
+expect '^browser: title [0-9]* login$' "A's own tab didn't load"
+store_b="$out/sync-devices-b/Default/Sync Data/LevelDB"
+synced=
+for _ in $(seq 900); do
+  grep -rqa 'login.html?users-own' "$store_b" 2>/dev/null && synced=1 && break
+  sleep 0.1
+done
+[ -n "$synced" ] || fail "A's open tab never reached B's sync store, so an agent's couldn't be told apart"
+grep -rqa 'login.html?agents-own' "$store_b" &&
+  fail "a tab of A's agent's Space reached B's sync store, as another computer's open tab"
+
 # A saves a login, which reaches B through the server, as only its ciphertext (sync-account reads
 # the store): B's Settings › Passwords lists it. B removes it, and A's list hears it go.
-serve
 device a
 send window 1
 go_from_bar "${site#http://}login.html"
@@ -214,5 +238,6 @@ rm -f "$profile_dir/Account"
 kill "$ilo_server" 2>/dev/null || true
 ilo_server=
 echo "ok: A added B, C recovered with the copied words, which the clipboard let go of after 90 s," \
+  "A's own open tab reached B and its agent's never did," \
   "a login A saved reached B, whose removal reached A," \
   "and B and C signed out, on a local ilo-server as $email. Logs: $out/sync-devices-*.log"
