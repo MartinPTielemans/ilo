@@ -116,6 +116,7 @@ pub mod little_sites;
 pub mod logging;
 pub mod menu;
 pub mod motion;
+pub mod needs_you;
 pub mod notes;
 pub mod offer;
 pub mod palette;

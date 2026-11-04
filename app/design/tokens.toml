@@ -1469,6 +1469,10 @@ swatch-edge = 0.12
 # ground, their boxes this much of the ink over it.
 import-width = 556.0
 import-surface = 0.05
+# Seconds the import step holds on its Spaces once they're in, so the user sees them tick, before
+# it goes on by itself (#1673); the history and addresses the core adds then go on under the steps
+# after it, in the line at the bottom left.
+import-hold = 0.6
 # The opt-ins step's switches, Settings' own, in one box under its line, a row each of the switch's
 # name over its one sentence, at body, and the switch at the box's right edge; Settings' padding
 # and lines between rows.

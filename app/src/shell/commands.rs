@@ -902,17 +902,27 @@ fn words(text: &str) -> impl Iterator<Item = &str> {
 /// How a menu shows `keystroke`, as SHORTCUTS writes it: ⇧⌘K for shift-cmd-k, and Ctrl+Shift+K
 /// off the Mac, where it's pressed that way.
 pub fn keystroke_label(keystroke: &str) -> String {
-    match super::keys::OFF_THE_MAC {
-        true => keystroke_keys(keystroke).join("+"),
-        false => keystroke_keys(keystroke).concat(),
+    keystroke_label_on(keystroke, super::keys::OFF_THE_MAC)
+}
+
+/// `keystroke_label`, on the Mac or `off_the_mac`, for each key chip that spells a chord, such as
+/// Stop's ⌘. or Ctrl+., the way a menu does.
+pub(super) fn keystroke_label_on(keystroke: &str, off_the_mac: bool) -> String {
+    match off_the_mac {
+        true => keystroke_keys_on(keystroke, true).join("+"),
+        false => keystroke_keys_on(keystroke, false).concat(),
     }
 }
 
 /// The keys of `keystroke` as a menu shows them, one by one, for a chip each: ⇧, ⌘ and K for
 /// shift-cmd-k, and Ctrl, Shift and K off the Mac. None if it can't be pressed here.
 pub fn keystroke_keys(keystroke: &str) -> Vec<String> {
-    match super::keys::OFF_THE_MAC {
-        true => (super::keys::pressed_as(keystroke).first())
+    keystroke_keys_on(keystroke, super::keys::OFF_THE_MAC)
+}
+
+fn keystroke_keys_on(keystroke: &str, off_the_mac: bool) -> Vec<String> {
+    match off_the_mac {
+        true => (super::keys::pressed_off_the_mac(keystroke).first())
             .map(|pressed| keys_named(pressed, true))
             .unwrap_or_default(),
         false => keys_named(keystroke, false),
@@ -2281,6 +2291,26 @@ mod tests {
         }
         assert_eq!(keys.label(Command::SelectSpace(0)).as_deref(), Some("⌃1"));
         assert_eq!(keys.label(Command::SelectSpace(9)), None);
+    }
+
+    /// Each key chip that spells a chord after its words spells it as a menu does: Stop's and Take
+    /// Over's in the conversation and under a task's page, and the command bar's Run and Ask at its
+    /// input's end. Off the Mac they read Ctrl+. and Ctrl+Enter, not Ctrl. and CtrlEnter, and Enter
+    /// and Tab in the words the UI's font has.
+    #[test]
+    fn key_chips_spell_their_chords_as_the_menus_do() {
+        let stop = "cmd-.";
+        let take_over = "cmd-enter";
+        assert!(SHORTCUTS.contains(&(take_over, Command::BackToPinnedUrl, false)));
+        assert_eq!(keystroke_label_on(stop, true), "Ctrl+.");
+        assert_eq!(keystroke_label_on(take_over, true), "Ctrl+Enter");
+        assert_eq!(keystroke_label_on(stop, false), "⌘.");
+        assert_eq!(keystroke_label_on(take_over, false), "⌘↩");
+        assert_eq!(super::super::agent_bar::stop_keys(), keystroke_label(stop));
+        for (key, mac, off) in [("enter", "↩", "Enter"), ("tab", "⇥", "Tab")] {
+            assert_eq!(key_name(key, false), mac);
+            assert_eq!(key_name(key, true), off);
+        }
     }
 
     /// Off the Mac, keys are named in Chrome's words, as the UI's font there has no keyboard

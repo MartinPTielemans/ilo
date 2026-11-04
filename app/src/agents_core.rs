@@ -387,6 +387,7 @@ pub fn start(cx: &mut App) {
         let status = agents.read(cx).status();
         // Each card is compared with the last, so a window redraws only for a task that changed.
         let cards = agents.read(cx).shown_cards(cx);
+        browser::needs_you::follow(&cards, cx);
         let archived = agents.read(cx).archived_tasks(cx);
         let shells: Vec<_> = WINDOWS
             .with_borrow(|windows| windows.iter().map(|window| window.shell.clone()).collect());

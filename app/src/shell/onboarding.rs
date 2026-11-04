@@ -40,6 +40,7 @@ use crate::tokens::shell::onboarding::CHIP_GAP;
 use crate::tokens::shell::onboarding::CHIP_HEIGHT;
 use crate::tokens::shell::onboarding::CHIP_INSET;
 use crate::tokens::shell::onboarding::CHIP_RADIUS;
+use crate::tokens::shell::onboarding::IMPORT_HOLD;
 use crate::tokens::shell::onboarding::IMPORT_SURFACE;
 use crate::tokens::shell::onboarding::IMPORT_WIDTH;
 use crate::tokens::shell::onboarding::LINE_GAP;
@@ -572,10 +573,11 @@ impl Shell {
         self.onboarding_next(how, cx);
     }
 
-    /// What the import view says: an import read what it brings, so the flow goes on while the
-    /// rest runs, or ended, which the flow's quiet line then says; or the user is done with it,
-    /// which goes on too. Until it has read, the step stays, as the view may ask the user for Full
-    /// Disk Access, and a passwords file's end offers to delete the file.
+    /// What the import view says: an import's Spaces are in, so the step holds on them a moment and
+    /// goes on while the rest runs; or it ended, which the flow's quiet line then says; or the user
+    /// is done with it, which goes on too. Until its Spaces are in, the step stays, as the view may
+    /// ask the user for Full Disk Access, wait for a profile that hasn't opened, or stop, and a
+    /// passwords file's end offers to delete the file.
     fn import_event(&mut self, event: &ImportEvent, cx: &mut Context<Self>) {
         if let Some(importing) = self.importing.as_mut() {
             importing.said = match event {
@@ -598,7 +600,23 @@ impl Shell {
                 .insert(at.map_or(0, |at| at + 1), Step::Favorites);
         }
         match event {
-            ImportEvent::Started | ImportEvent::Done if on_it => self.onboarding_next("import", cx),
+            // The step holds on the Spaces once they're in, as they tick, then goes on by itself.
+            ImportEvent::Placed if on_it => {
+                let hold = std::time::Duration::from_secs_f32(IMPORT_HOLD);
+                cx.spawn(async move |shell, cx| {
+                    cx.background_executor().timer(hold).await;
+                    shell
+                        .update(cx, |shell, cx| {
+                            let step = shell.onboarding.as_ref().map(|onboarding| onboarding.step);
+                            if step == Some(Step::Import) {
+                                shell.onboarding_next("import", cx);
+                            }
+                        })
+                        .ok();
+                })
+                .detach();
+            }
+            ImportEvent::Done if on_it => self.onboarding_next("import", cx),
             ImportEvent::Skipped if on_it => self.onboarding_next("skip", cx),
             _ => cx.notify(),
         }

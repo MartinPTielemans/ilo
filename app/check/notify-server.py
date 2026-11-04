@@ -1,7 +1,9 @@
-# The desktop's notification server, org.freedesktop.Notifications, as the notifications run's
-# stand-in for one on Linux: on the run's own session bus, where Chromium's notification bridge
-# (notification_platform_bridge_linux.cc) finds it and posts a page's notifications to it. It
-# prints "ready" once it has the name, and "notify <id> <summary>" for each notification, and a
+# The desktop's notification server, org.freedesktop.Notifications, as the notifications and mcp runs' stand-in for one
+# on Linux: on the run's own session bus, where Chromium's notification bridge
+# (notification_platform_bridge_linux.cc) posts a page's notifications, and the mcp run's app its
+# needs' (app/src/needs_you/desktop.rs). It
+# prints "ready" once it has the name, and "notify <id> <summary>" for each notification, then
+# "body <id> <body>" and "hints <id> <names>", and a
 # line "click <id>" on stdin sends ActionInvoked for it with the default action, as a desktop's
 # server does when the user clicks one. It answers with the capabilities Chromium needs to use it.
 import sys
@@ -43,6 +45,8 @@ def call(connection, sender, path, interface, method, arguments, invocation):
         replaces, summary = arguments[1], arguments[3]
         notification = replaces or next(ids)
         say(f"notify {notification} {summary}")
+        say(f"body {notification} {arguments[4]}")
+        say(f"hints {notification} {' '.join(sorted(arguments[6].keys()))}")
         invocation.return_value(GLib.Variant("(u)", (notification,)))
     elif method == "CloseNotification":
         invocation.return_value(None)

@@ -43,6 +43,7 @@
 #include "browser_core/public/browser_core.h"
 #include "browser_core/host.h"
 #include "browser_core/profiles.h"
+#include "browser_core/space.h"
 #include "browser_core/sync_guard.h"
 #include "browser_core/sync_pairing.h"
 #include "browser_core/sync_relay.h"
@@ -1412,6 +1413,11 @@ class Account : public syncer::SyncServiceObserver,
     if (state != logged_state_) {
       logged_state_ = state;
       LOG(ERROR) << "browser: sync service " << state;
+      // check.sh reads it: what this device syncs, for the account's docs to say.
+      if (sync->GetTransportState() == State::ACTIVE) {
+        LOG(ERROR) << "browser: sync types "
+                   << syncer::DataTypeSetToDebugString(sync->GetActiveDataTypes());
+      }
     }
   }
 
@@ -1826,6 +1832,12 @@ void Install() {
         << "plaintext in a commit of " << syncer::DataTypeToDebugString(type);
   };
   g_browser_core_sync_password_tag = &SyncPasswordTag;
+  // A tab of an agent's Space, held by the user or not, stays on its device (#1796); a page of no
+  // Space's keeps Chrome's answer.
+  g_browser_core_sync_tab = [](content::WebContents* contents) {
+    const Space* space = Window::SpaceOf(contents);
+    return !space || !space->agent();
+  };
   g_browser_core_passkey_normal_wording = [](content::WebContents* contents) {
     const Profile* profile =
         contents ? Profile::FromBrowserContext(contents->GetBrowserContext()) : nullptr;
