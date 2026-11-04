@@ -651,7 +651,7 @@ grep -q '^browser: dialog shown Quit' "$log" && fail "⌘Q asked first with the 
 # URL of its own.
 python3 -I -c '
 import json, sys
-with open(sys.argv[1]) as f:
+with open(sys.argv[1], encoding="utf-8") as f:
     session = json.load(f)
 kept = session["favorites"]
 copies = []
@@ -660,7 +660,7 @@ for i in range(13):
     copy["pinned_url"] = f"{sys.argv[2]}favorite-{i}.html"
     copies.append(copy)
 session["favorites"] = copies
-with open(sys.argv[1], "w") as f:
+with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(session, f)
 ' "$saved" "$site" || fail "the saved favorites couldn't be made 13"
 log="$out/favorites-most.log"
