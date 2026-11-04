@@ -5,15 +5,26 @@
 # A Space's theme never reaches a page (#684): what theme.html sees of the browser's colours stays
 # the same through a red theme and a blue one of the other look than the system's.
 
+# From a session of its own, on Automatic, so the page it opens is the one the window shows: over
+# the Spaces a run before left, the page could open in the agent's Space that run's window showed
+# and stay there as the window went back to the user's, where a page doesn't hear the scheme
+# change until it's shown (#1791).
 serve
 log="$out/appearance.log"
 step=0
+rm -f "$saved" "$launch_frame"
+forget_appearance
 BROWSER_DRIVE=1 BROWSER_URL="${site}scheme.html" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
 await '^browser: title [0-9]* scheme ' || fail "the scheme page didn't say its scheme"
 system=$(grep '^browser: title [0-9]* scheme ' "$log" | tail -1 | sed 's/.* //')
+# It's the tab the window shows, as a page out of sight hears the change only once it's shown.
+scheme_tab=$(grep '^browser: title [0-9]* scheme ' "$log" | tail -1 | cut -d' ' -f3)
+send state
+[ "$(grep '^browser: window [0-9]* shows ' "$log" | tail -1 | cut -d' ' -f5)" = "$scheme_tab" ] ||
+  fail "the scheme page, tab $scheme_tab, isn't the one the window shows: $(grep '^browser: window [0-9]* shows ' "$log" | tail -1)"
 other=dark
 [ "$system" = light ] || other=light
 for choice in $other $system $other automatic; do
