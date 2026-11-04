@@ -1960,8 +1960,8 @@ void bc_download_act(bc_id download, int action) {
   browser_core::ActOnDownload(download, action);
 }
 
-void bc_downloads_clear() {
-  browser_core::ClearDownloads();
+void bc_downloads_clear(bc_id profile, bool off_the_record) {
+  browser_core::ClearDownloads(profile, off_the_record);
 }
 
 void bc_download_icon(bc_id download) {

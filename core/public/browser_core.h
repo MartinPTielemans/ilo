@@ -272,7 +272,7 @@ typedef struct bc_extension_question {
 #define BC_DOWNLOAD_CANCELLED 3
 #define BC_DOWNLOAD_FAILED 4
 
-// One of the profile's downloads, as Arc's Library lists them.
+// One of a profile's downloads, or of its private session's, as Arc's Library lists them.
 typedef struct bc_download {
   // For bc_download_act and bc_download_icon.
   bc_id id;
@@ -293,6 +293,11 @@ typedef struct bc_download {
   bool held;
   // When it started, in milliseconds since the Unix epoch.
   double started;
+  // The profile it's of, and whether it's of that profile's private session, which nothing writes
+  // to disk: the app lists it only in that profile's private windows, and the others only in its
+  // regular windows.
+  bc_id profile;
+  bool off_the_record;
 } bc_download;
 
 // The values a site's permission takes in the Site Controls, as Chrome's page info words them: the
@@ -730,8 +735,9 @@ typedef struct bc_host {
   // The favicon bc_page_favicon asked for, for |url| as the app wrote it: a PNG |size| bytes long,
   // 32 pixels square for 16 points at 2×, or null and 0 if the profile's history has none.
   void (*page_favicon)(void* context, const char* url, const uint8_t* png, size_t size);
-  // The profile's downloads changed, or the ones Chrome kept from the last launch were read:
-  // |downloads| is all of them, newest first. While one runs, about twice a second.
+  // The profiles' downloads changed, or the ones Chrome kept from the last launch were read:
+  // |downloads| is all of them, newest first, those of the private sessions running among them.
+  // While one runs, about twice a second.
   void (*downloads_changed)(void* context, const bc_download* downloads, size_t count);
   // The icon bc_download_icon asked for: a PNG |size| bytes long, 32 pixels square for 16 points
   // at 2×, or null and 0 if the system has none.
@@ -1942,9 +1948,10 @@ BC_EXPORT void bc_answer_crash_report(bool send);
 // user's: agents get none, as opening a file runs it outside the browser.
 BC_EXPORT void bc_download_act(bc_id download, int action);
 
-// Takes the downloads that aren't running or paused off the list, keeping their files. Then
+// Takes the downloads that aren't running or paused off the list, keeping their files: those of
+// |profile|'s private session with |off_the_record|, else those of every profile's own. Then
 // downloads_changed.
-BC_EXPORT void bc_downloads_clear(void);
+BC_EXPORT void bc_downloads_clear(bc_id profile, bool off_the_record);
 
 // Asks for the icon the system shows for the download's file. Then download_icon.
 BC_EXPORT void bc_download_icon(bc_id download);

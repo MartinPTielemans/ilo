@@ -1894,7 +1894,11 @@ impl Shell {
         shell.profiles = from.profiles.clone();
         shell.archive = from.archive.clone();
         shell.page_favicons = from.page_favicons.clone();
-        shell.downloads = from.downloads.clone();
+        // Only what this window lists: a private window's session's never reach another.
+        shell.downloads = (from.downloads.iter())
+            .filter(|download| from.private == shell.private && shell.lists_download(download))
+            .cloned()
+            .collect();
         shell.download_icons = from.download_icons.clone();
         shell.captures = from.captures.clone();
         shell.download_previews = from.download_previews.clone();
@@ -3960,7 +3964,7 @@ impl Shell {
         sidebar
             .children(self.new_space_circle(cx))
             .children(self.recent_download_rows(cx))
-            .children((!self.private).then(|| self.library_button(cx)))
+            .child(self.library_button(cx))
             .children(self.download_bin(cx))
             .children(self.archive_flights())
             .children((!self.private).then(|| self.plus_button(cx)))

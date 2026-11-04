@@ -268,6 +268,10 @@ pub struct Download {
     pub held: bool,
     /// When it started, in milliseconds since the Unix epoch.
     pub started: f64,
+    /// The profile it's of, and whether it's of that profile's private session, which only that
+    /// profile's private windows list, as only the regular windows list the rest.
+    pub profile: u64,
+    pub private: bool,
 }
 
 /// What `Browser::act_on_download` does.
@@ -354,7 +358,7 @@ fn download_menu_items(
 }
 
 /// A section of the Library.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum Section {
     Media,
     Downloads,
@@ -408,6 +412,8 @@ pub(super) struct Library {
     list: ListState,
     /// What Archived Tabs lists, the Filter button's choice.
     only: Only,
+    /// The downloads the log last said Downloads lists, for check.sh.
+    logged: Option<String>,
     _search: Subscription,
 }
 
@@ -497,8 +503,34 @@ impl Shell {
         }
     }
 
-    /// The downloads changed, all of them, newest first.
+    /// Whether the window lists `download`: a private window its own session's, as nothing else
+    /// may see them, and a regular window those of every profile's own (#669).
+    pub(super) fn lists_download(&self, download: &Download) -> bool {
+        match self.private {
+            true => download.private && Some(download.profile) == self.private_profile(),
+            false => !download.private,
+        }
+    }
+
+    /// A private window's profile, whose session it's of; none for a regular window.
+    pub(super) fn private_profile(&self) -> Option<u64> {
+        self.private
+            .then(|| self.spaces.first().map(|space| space.profile))
+            .flatten()
+    }
+
+    /// The Library's sections the window has: a private window's own downloads and their media,
+    /// but none of the Spaces or archived tabs the regular windows keep (#669).
+    pub(super) fn has_section(&self, section: Section) -> bool {
+        !self.private || matches!(section, Section::Media | Section::Downloads)
+    }
+
+    /// The downloads changed, all of them, newest first: the window keeps those it lists.
     pub fn set_downloads(&mut self, downloads: Vec<Download>, cx: &mut Context<Self>) {
+        let downloads: Vec<Download> = downloads
+            .into_iter()
+            .filter(|download| self.lists_download(download))
+            .collect();
         // check.sh waits for these lines: a download's state, and how many there are.
         for download in &downloads {
             let before = self.downloads.iter().find(|each| each.id == download.id);
@@ -535,8 +567,10 @@ impl Shell {
         }
     }
 
-    /// The captures saved to the Library changed, all of them, newest first.
+    /// The captures saved to the Library changed, all of them, newest first. A private window lists
+    /// none, as it saves none and the regular windows' aren't its session's.
     pub fn set_captures(&mut self, captures: Vec<Captured>, cx: &mut Context<Self>) {
+        let captures = if self.private { Vec::new() } else { captures };
         self.download_previews.retain(|id, _| {
             id & CAPTURE_BIT == 0 || captures.iter().any(|each| capture_id(&each.path) == *id)
         });
@@ -717,9 +751,13 @@ impl Shell {
 
     /// Opens the Library, or closes it, from wherever the card is, the sidebar fading.
     pub(super) fn set_library(&mut self, open: bool, cx: &mut Context<Self>) {
-        // A private window has no Library: what it shows is the regular windows'.
-        if open == self.library_open || (open && (self.page_fullscreen || self.private)) {
+        if open == self.library_open || (open && self.page_fullscreen) {
             return;
+        }
+        // A private window's Library opens on its downloads where it last showed a section it
+        // hasn't.
+        if open && !self.has_section(self.section) {
+            self.section = Section::Downloads;
         }
         if open {
             self.hide_link(cx);
@@ -754,7 +792,11 @@ impl Shell {
     }
 
     /// Opens the Library on `section`, or shows it there, or closes it if it's there already.
+    /// Nothing for a section the window hasn't.
     pub(super) fn view_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        if !self.has_section(section) {
+            return;
+        }
         if !self.library_open {
             self.section = section;
             return self.set_library(true, cx);
@@ -812,11 +854,12 @@ impl Shell {
             items: Vec::new(),
             list: ListState::new(0, ListAlignment::Top, px(ARCHIVE_OVERDRAW)),
             only: Only::All,
+            logged: None,
             _search: observe,
         });
         // check.sh waits for these lines.
         log!("browser: library section {}", section.name());
-        if section == Section::Media {
+        if section == Section::Media && !self.private {
             self.browser.list_captures(cx);
         }
         if section == Section::Spaces {
@@ -965,6 +1008,21 @@ impl Shell {
         }
         // Reset only for other lines, as it scrolls back to the top, and a running download
         // reports twice a second.
+        if self.section == Section::Downloads {
+            let names: Vec<&str> = (items.iter())
+                .filter_map(|item| match item {
+                    Item::Download(index) => Some(self.downloads[*index].name.as_ref()),
+                    _ => None,
+                })
+                .collect();
+            let names = names.join(", ");
+            if library.logged.as_deref() != Some(names.as_str()) {
+                // check.sh waits for this line: what the window's Downloads lists, once each time
+                // that changes.
+                log!("browser: library lists downloads: {names}");
+                library.logged = Some(names);
+            }
+        }
         if items != library.items {
             library.list.reset(items.len());
             library.items = items;
@@ -1240,8 +1298,14 @@ impl Shell {
             .mb(px(10.))
             .child(self.section_button(Section::Media, color, cx))
             .child(self.section_button(Section::Downloads, color, cx))
-            .child(self.section_button(Section::Spaces, color, cx))
-            .child(self.section_button(Section::Archive, color, cx));
+            .children(
+                self.has_section(Section::Spaces)
+                    .then(|| self.section_button(Section::Spaces, color, cx)),
+            )
+            .children(
+                self.has_section(Section::Archive)
+                    .then(|| self.section_button(Section::Archive, color, cx)),
+            );
         // Taken on past where it opens, the column's fill reaches back to the window's edge, so
         // the window's own background never shows left of it.
         let past = self.library_past();
@@ -2569,7 +2633,7 @@ impl Shell {
                     DownloadChoice::Trash => shell.trash_download(id, cx),
                     DownloadChoice::Clear => {
                         log!("browser: command clear-downloads via download menu");
-                        shell.browser.clear_downloads(cx);
+                        shell.browser.clear_downloads(shell.private_profile(), cx);
                     }
                 }
             }),
@@ -2898,6 +2962,8 @@ pub(super) fn of(received: i64, total: i64) -> String {
 
 #[cfg(test)]
 mod drag_tests;
+#[cfg(test)]
+mod private_tests;
 #[cfg(test)]
 mod rename_tests;
 #[cfg(test)]
@@ -3566,6 +3632,8 @@ mod tests {
             open_when_done: false,
             held,
             started: 0.,
+            profile: 0,
+            private: false,
         }
     }
 

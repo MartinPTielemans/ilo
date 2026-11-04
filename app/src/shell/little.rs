@@ -434,5 +434,10 @@ pub(super) fn little_runs(command: Command) -> bool {
                     | Command::Clear
                     | Command::ToggleSidebar
                     | Command::AddSplit
+                    // A private window's Library has its session's downloads; a Little ilo
+                    // window has no Library at all.
+                    | Command::ViewLibrary
+                    | Command::ViewDownloads
+                    | Command::ViewMedia
             ))
 }

@@ -162,8 +162,9 @@ pub trait Browser {
     fn clear_archive(&self, cx: &mut App) -> u64;
     /// Does `action` to the download.
     fn act_on_download(&self, download: u64, action: DownloadAction, cx: &mut App);
-    /// Takes the downloads that aren't running or paused off the list, keeping their files.
-    fn clear_downloads(&self, cx: &mut App);
+    /// Takes the downloads that aren't running or paused off the list, keeping their files: those
+    /// of `private`'s private session, else every profile's own.
+    fn clear_downloads(&self, private: Option<u64>, cx: &mut App);
     /// Looks up the icon the system shows for the download's file, and calls
     /// `Shell::set_download_icon`.
     fn download_icon(&self, download: u64, cx: &mut App);

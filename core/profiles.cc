@@ -327,6 +327,8 @@ Profile* StartPrivateSession(Profile* profile) {
   if (off_the_record && !Sessions().contains(off_the_record)) {
     Sessions()[off_the_record] = std::make_unique<SessionEnd>(off_the_record);
     Unheard().insert(ProfileId(DirOf(profile)));
+    // Its downloads join the list for its private windows' Library, for as long as it runs.
+    ObserveDownloads(off_the_record);
   }
   return off_the_record;
 }

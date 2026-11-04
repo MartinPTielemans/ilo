@@ -2192,7 +2192,8 @@ fn space_tabs(space: &Space) -> impl Iterator<Item = u64> + '_ {
 
 /// Whether a private window runs `command`. It has one Space, unsaved, so nothing that keeps a tab
 /// or shows another Space, and none of what the regular windows keep: the closed tabs, the
-/// Library, the history.
+/// Library's Spaces and archived tabs, the history. Its Library has its own session's downloads
+/// and their media (#669).
 pub(super) fn private_runs(command: Command) -> bool {
     !matches!(
         command,
@@ -2221,11 +2222,8 @@ pub(super) fn private_runs(command: Command) -> bool {
             | Command::MoveToFolder(_)
             | Command::NextSpace
             | Command::PreviousSpace
-            | Command::ViewLibrary
             | Command::ViewArchive
             | Command::ClearArchive
-            | Command::ViewDownloads
-            | Command::ViewMedia
             | Command::ViewHistory
             | Command::SiteSearchSettings
             | Command::ClearBrowsingData
