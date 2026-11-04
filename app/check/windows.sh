@@ -541,6 +541,9 @@ if [ "$(uname)" = Darwin ]; then
   send key n cmd
   expect '^browser: window opened [0-9]' "⌘N didn't open a window for the tab's drag"
   sixth=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+  # It opens with the command bar, which Escape closes before the windows are placed, so the
+  # first window keeps the keyboard it's given (#1814).
+  new_window_bar
   driven_sixth=$(grep -c '^browser: window opened ' "$log")
   send window $driven_sixth
   send place 960 40 900 700
