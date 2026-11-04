@@ -10,7 +10,7 @@
 #   $XDG_DATA_HOME/flatpak/extension, as Flathub's Chromium takes them.
 # - The Mac: the forced level, /Library/Managed Preferences/<the app's bundle id>.plist, written
 #   with sudo, only in a check VM, never on someone's own Mac; org.chromium.Chromium's beside it.
-# - Windows: HKCU\SOFTWARE\Policies\Chromium, which the Windows engine still reads.
+# - Windows: HKCU\SOFTWARE\Policies\ilo, where the Windows engine reads them (#1810).
 # The policies come off as the run ends, a failed one too (run_undo).
 
 if [ "$(uname)" = Darwin ] && [ "$(sysctl -n kern.hv_vmm_present)" != 1 ]; then
@@ -41,7 +41,7 @@ forget_policies() {
       "/Library/Managed Preferences/org.chromium.Chromium.plist"
     sudo -n killall cfprefsd 2>/dev/null || true
   else
-    MSYS2_ARG_CONV_EXCL='*' reg delete 'HKCU\SOFTWARE\Policies\Chromium\URLBlocklist' /f \
+    MSYS2_ARG_CONV_EXCL='*' reg delete 'HKCU\SOFTWARE\Policies\ilo\URLBlocklist' /f \
       > /dev/null 2>&1 || true
   fi
 }
@@ -71,9 +71,9 @@ set_policies() {
     sudo -n killall cfprefsd 2>/dev/null || true
     names=$app_id chromium_names=org.chromium.Chromium
   else
-    MSYS2_ARG_CONV_EXCL='*' reg add 'HKCU\SOFTWARE\Policies\Chromium\URLBlocklist' /v 1 /t REG_SZ \
+    MSYS2_ARG_CONV_EXCL='*' reg add 'HKCU\SOFTWARE\Policies\ilo\URLBlocklist' /v 1 /t REG_SZ \
       /d "$1" /f > /dev/null || fail "reg couldn't set URLBlocklist"
-    names='SOFTWARE\Policies\Chromium' chromium_names=
+    names='SOFTWARE\Policies\ilo' chromium_names=
   fi
 }
 launch() {
