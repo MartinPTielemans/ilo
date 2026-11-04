@@ -633,6 +633,12 @@ if [ "$(uname)" = Darwin ] || windows || [ "$(uname)" = Linux ]; then
     send dragto $1 $(($2 + 10))
     send dragto $1 705
     expect "^browser: tab $c window drag\$" "the row dragged past the window's edge didn't leave it"
+    # On Linux the drag shows a picture of the row, from the frame GPUI drew, as the Mac's does
+    # (#1859), here while the drag is still held.
+    if [ "$(uname)" = Linux ]; then
+      expect "^browser: tab $c drag picture [1-9][0-9]*x[1-9][0-9]*\$" "the tab's drag showed no picture of its row"
+      ../tools/window-screenshot.sh "$pid" "$out/windows-drag-picture.png" all || fail "no window to capture"
+    fi
     # AppKit's drag tracks the mouse in a loop of its own until it's let go, which holds the
     # driver's done till then: the move over the page is posted, and the release ends it there.
     over=$((wide - 100))
