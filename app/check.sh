@@ -243,6 +243,9 @@ for run in ${*:-$runs}; do
   # Rules a run made, as import's from Arc, would send a later run's links to another Space and
   # put their rows under its clicks, so each run starts without them, as it does without Spaces.
   rm -f "$profile_dir/Link rules"
+  # View › Appearance's choice a run left, as appearance's when it failed on Light, would start the
+  # next run on it, which takes it for the system's (#1791). With none it's Automatic.
+  rm -f "$profile_dir/Appearance"
   # The windows and clear runs keep 127.0.0.1 for Safari's engine, whose pages would then open there
   # in a later run if one failed, and clear the note it closed and the listed host it turned off.
   forget_engine_sites

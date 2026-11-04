@@ -12,6 +12,11 @@ exec 3> "$out/drive"
 await_load
 await '^browser: title [0-9]* scheme ' || fail "the scheme page didn't say its scheme"
 system=$(grep '^browser: title [0-9]* scheme ' "$log" | tail -1 | sed 's/.* //')
+# The page the run opened is the one in front, whatever a run before left: a window brought back in
+# a Space an agent left, which the launch deletes, shows the user's, where the page opens.
+tab=$(grep '^browser: title [0-9]* scheme ' "$log" | tail -1 | cut -d' ' -f3)
+shown=$(grep '^browser: window [0-9]* shows ' "$log" | tail -1 | sed 's/.* shows //')
+[ "$shown" = "$tab" ] || fail "the window shows tab $shown, not the scheme page's, $tab"
 other=dark
 [ "$system" = light ] || other=light
 for choice in $other $system $other automatic; do
