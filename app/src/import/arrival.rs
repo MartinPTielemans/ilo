@@ -26,9 +26,9 @@ use crate::tokens::settings::{DETAIL_LINE, DETAIL_TOP, ROW_X};
 use crate::tokens::shell::import::motion::{BREATH, CHECK};
 use crate::tokens::shell::import::{
     BADGE, BADGE_INSET, CARD_COUNT, CARD_COUNT_ALPHA, CARD_COUNT_LINE, CARD_GAP, CARD_GLYPH,
-    CARD_HEIGHT, CARD_INSET, CARD_NAME, CARD_NAME_LINE, CARD_TINT_BOTTOM, CARD_TINT_BOTTOM_LIGHT,
-    CARD_TINT_TOP, CARD_TINT_TOP_LIGHT, CARD_WIDTH, CARD_WIDTH_SETTINGS, PROFILE_GAP, PROFILE_NAME,
-    PROFILE_NAME_GAP, PROFILE_NAME_LINE,
+    CARD_HEIGHT, CARD_HELD, CARD_INSET, CARD_NAME, CARD_NAME_LINE, CARD_TINT_BOTTOM,
+    CARD_TINT_BOTTOM_LIGHT, CARD_TINT_TOP, CARD_TINT_TOP_LIGHT, CARD_WIDTH, CARD_WIDTH_SETTINGS,
+    PROFILE_GAP, PROFILE_NAME, PROFILE_NAME_GAP, PROFILE_NAME_LINE,
 };
 use crate::tokens::shell::task::motion::SHIMMER;
 use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, CHIPS_STAGGER, EASE, ROLL, ROLL_RISE};
@@ -47,6 +47,8 @@ pub struct Card {
     pub color: Option<u32>,
     /// The profile it goes into, by name, and whether the import makes it.
     pub profile: (String, bool),
+    /// Whether the import makes its Space, which stays, empty, if it's stopped.
+    pub made: bool,
     /// Its pinned tabs, and how many are in.
     pub total: usize,
     pub placed: usize,
@@ -78,14 +80,31 @@ impl Card {
         (self.shown, rolling)
     }
 
-    /// Whether it still moves at `now`: coming, rolling, ticking, or waiting with its dot.
-    pub fn moving(&self, now: Instant) -> bool {
+    /// Whether it still moves at `now`: coming, rolling, ticking, or waiting with its dot, but for
+    /// one `held` for a profile that hasn't opened, whose ⚠ holds still however long it waits.
+    pub fn moving(&self, now: Instant, held: bool) -> bool {
         let since = |at: Instant| now.saturating_duration_since(at).as_secs_f32();
         since(self.came) < CHIPS
             || self.placed != self.shown
             || self.rolled.is_some_and(|(at, _)| since(at) < ROLL)
-            || self.done.is_none_or(|at| since(at) < CHECK)
+            || match self.done {
+                Some(at) => since(at) < CHECK,
+                None => !held,
+            }
     }
+
+    /// Whether it waits for a profile among `stalled`, which hasn't opened.
+    pub fn held(&self, stalled: &[String]) -> bool {
+        self.done.is_none() && stalled.contains(&self.profile.0)
+    }
+}
+
+/// What the cards stand for: an import under way, some of whose profiles, `stalled`, haven't
+/// opened, or one stopped, its Spaces left empty.
+#[derive(Clone, Copy, Debug)]
+pub enum Showing<'a> {
+    Running { stalled: &'a [String] },
+    Stopped,
 }
 
 /// A card for each Space `plan` makes or fills, in the order the core makes them, from `came`,
@@ -101,6 +120,7 @@ pub fn cards(plan: &Plan, existing: &Existing, came: Instant) -> Vec<Card> {
     let stagger = std::time::Duration::from_secs_f32(CHIPS_STAGGER);
     (plan.spaces.iter().enumerate())
         .map(|(at, space)| {
+            let made = matches!(space.into, Target::New { .. });
             let (name, icon, color, profile) = match &space.into {
                 Target::New {
                     name,
@@ -127,6 +147,7 @@ pub fn cards(plan: &Plan, existing: &Existing, came: Instant) -> Vec<Card> {
                 icon,
                 color,
                 profile,
+                made,
                 total: tabs(&space.pinned),
                 placed: 0,
                 came: came + stagger * at as u32,
@@ -167,10 +188,17 @@ fn breath(phase: f32) -> f32 {
 
 /// The cards, a group a profile, each under its name and whether the import makes it, `width`
 /// wide: the first launch's on its ground, Settings' in a group of its own.
-pub fn draw(cards: &mut [Card], look: &Look, settings: bool, still: bool, now: Instant) -> Div {
+pub fn draw(
+    cards: &mut [Card],
+    look: &Look,
+    settings: bool,
+    still: bool,
+    now: Instant,
+    showing: Showing,
+) -> Div {
     let mut groups: Vec<((String, bool), Vec<Div>)> = Vec::new();
     for card in cards.iter_mut() {
-        let drawn = card_view(card, look, settings, still, now);
+        let drawn = card_view(card, look, settings, still, now, showing);
         match groups
             .iter_mut()
             .find(|(profile, _)| *profile == card.profile)
@@ -180,7 +208,12 @@ pub fn draw(cards: &mut [Card], look: &Look, settings: bool, still: bool, now: I
         }
     }
     let groups = groups.into_iter().map(|((name, new), cards)| {
-        let made = if new { "new profile" } else { "existing" };
+        let made = match showing {
+            Showing::Stopped => "made",
+            Showing::Running { stalled } if stalled.contains(&name) => "hasn't opened",
+            Showing::Running { .. } if new => "new profile",
+            Showing::Running { .. } => "existing",
+        };
         let label = format!("{name} · {made}");
         let named = StyledText::new(label).with_highlights([(
             0..name.len(),
@@ -232,7 +265,18 @@ fn pose(came: Instant, now: Instant, still: bool) -> (f32, f32) {
 
 /// One card: its colours from top to bottom, its glyph and badge, and its name over its count,
 /// rising into place as it comes.
-fn card_view(card: &mut Card, look: &Look, settings: bool, still: bool, now: Instant) -> Div {
+fn card_view(
+    card: &mut Card,
+    look: &Look,
+    settings: bool,
+    still: bool,
+    now: Instant,
+    showing: Showing,
+) -> Div {
+    let (held, stopped) = match showing {
+        Showing::Running { stalled } => (card.held(stalled), false),
+        Showing::Stopped => (false, true),
+    };
     let since = |at: Instant| now.saturating_duration_since(at).as_secs_f32();
     let (rise, came) = pose(card.came, now, still);
     let width = if settings {
@@ -263,6 +307,8 @@ fn card_view(card: &mut Card, look: &Look, settings: bool, still: bool, now: Ins
     };
     let (count, rolling) = card.count_at(now);
     let said = |count: usize| match card.done {
+        _ if stopped => "empty".to_string(),
+        _ if held => "waiting".to_string(),
         _ if count == 0 && card.done.is_none() => "—".to_string(),
         _ => format!("{count} pinned"),
     };
@@ -297,6 +343,20 @@ fn card_view(card: &mut Card, look: &Look, settings: bool, still: bool, now: Ins
         None => count_line(said(count)),
     };
     let badge = match card.done {
+        // Nothing waits on a stopped import's empty Space.
+        _ if stopped => div(),
+        // Its profile hasn't opened: ⚠, still, as the line under the rows says why.
+        None if held => div()
+            .size(px(BADGE))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                svg()
+                    .path("icons/circle-alert.svg")
+                    .size(px(BADGE * 0.8))
+                    .text_color(look.detail),
+            ),
         Some(at) => {
             let way = ease_in_out(since(at) / CHECK);
             let tick = match still {
@@ -329,19 +389,23 @@ fn card_view(card: &mut Card, look: &Look, settings: bool, still: bool, now: Ins
                 )
         }
     };
+    // Waiting on a profile that hasn't opened, it's dimmed; stopped, it's its outline alone.
+    let opacity = if held { came * CARD_HELD } else { came };
     div()
         .relative()
         .top(px(rise))
-        .opacity(came)
+        .opacity(opacity)
         .w(px(width))
         .h(px(CARD_HEIGHT))
         .flex_none()
         .rounded(px(radius::ROW))
-        .bg(linear_gradient(
-            180.,
-            linear_color_stop(tint(top), 0.),
-            linear_color_stop(tint(bottom), 1.),
-        ))
+        .when(!stopped, |card| {
+            card.bg(linear_gradient(
+                180.,
+                linear_color_stop(tint(top), 0.),
+                linear_color_stop(tint(bottom), 1.),
+            ))
+        })
         .border_1()
         .border_color(look.line)
         .child(
@@ -382,6 +446,8 @@ fn card_view(card: &mut Card, look: &Look, settings: bool, still: bool, now: Ins
 pub enum Stage {
     /// Not yet: the Spaces come first.
     Waiting,
+    /// Waiting for a profile that hasn't opened: "12,408 pages, once Work opens".
+    Held(SharedString),
     /// The core is adding them, from what was read: "Adding 12,408 pages…".
     Adding(SharedString),
     /// In, with what came: "11,960".
@@ -408,6 +474,13 @@ pub fn stage_row(
             .gap(px(ROW_X / 2.))
             .text_color(quiet)
             .child("Not yet")
+            .child(div().size(px(BADGE * 0.4)).rounded_full().bg(quiet)),
+        Stage::Held(said) => div()
+            .flex()
+            .items_center()
+            .gap(px(ROW_X / 2.))
+            .text_color(quiet)
+            .child(said.clone())
             .child(div().size(px(BADGE * 0.4)).rounded_full().bg(quiet)),
         Stage::Adding(said) => {
             let phase = (now.saturating_duration_since(since).as_secs_f32() / SHIMMER).fract();
@@ -496,6 +569,7 @@ mod tests {
             icon: String::new(),
             color: None,
             profile: ("Default".into(), false),
+            made: false,
             total,
             placed,
             came: now,
