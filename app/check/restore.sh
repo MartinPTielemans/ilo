@@ -593,7 +593,7 @@ await "^browser: loaded [0-9]* $site\$" || fail "the page opened over the Spaces
 kill -TERM "$pid"
 exited
 [ "$(python3 -I -c 'import json, sys
-print(*[len(space["today"]) for space in json.load(open(sys.argv[1]))["spaces"]])' "$saved")" = "2 2" ] ||
+print(*[len(space["today"]) for space in json.load(open(sys.argv[1], encoding="utf-8"))["spaces"]])' "$saved")" = "2 2" ] ||
   fail "the tab opened before the SIGTERM wasn't kept"
 restore_ms=$(sed -n 's/^browser: restored in \([0-9.]*\) ms$/\1/p' "$out/restored.log" "$out/restored-again.log" | tr '\n' ' ')
 

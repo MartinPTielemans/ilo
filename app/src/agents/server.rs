@@ -75,6 +75,10 @@ struct Connection {
     /// Its agent's id, once its token has said, and whether it began a session with initialize.
     agent: String,
     initialized: bool,
+    /// Messages being answered, and whether the user stopped its agent: once the last of those has
+    /// its answer written, the connection closes.
+    answering: usize,
+    stopping: bool,
 }
 
 impl Server {
@@ -150,9 +154,35 @@ impl Server {
             connection.close();
         }
     }
+
+    /// The user stopped the agent: each of its connections closes once what it's answering has
+    /// its answer, the UI's that the user stopped it, and calls from then on are refused. The
+    /// client shows the browser's server as gone until the user reconnects it, a session of its
+    /// own (#1080).
+    pub fn stop(&self, agent: &str) {
+        let mut connections = self.shared.connections.lock().unwrap();
+        for (number, connection) in connections
+            .iter_mut()
+            .filter(|(_, each)| each.agent == agent)
+        {
+            connection.stopping = true;
+            if connection.answering == 0 {
+                connection.close_stopped(*number);
+            }
+        }
+    }
 }
 
 impl Connection {
+    fn close_stopped(&self, number: u64) {
+        // check.sh reads this line.
+        log!(
+            "browser: agent {} connection {number} closed, as the user stopped it",
+            self.agent
+        );
+        self.close();
+    }
+
     fn close(&self) {
         #[cfg(unix)]
         {
@@ -253,6 +283,8 @@ fn welcome(stream: Stream, shared: &Arc<Shared>) {
             stream: kept,
             agent: String::new(),
             initialized: false,
+            answering: 0,
+            stopping: false,
         };
         connections.insert(number, connection);
     }
@@ -438,10 +470,12 @@ impl<'a> Answering<'a> {
         loop {
             if let Some(taken) = queue.take() {
                 drop(queue);
+                self.shared.answering(self.number, true);
                 if let Some(answer) = message(self.shared, self.number, &self.agent, &taken.line) {
                     let mut writer = self.writer.lock().unwrap();
                     _ = writeln!(writer, "{answer}").and_then(|()| writer.flush());
                 }
+                self.shared.answering(self.number, false);
                 queue = self.queue.lock().unwrap();
                 for lane in &taken.lanes {
                     queue.busy.remove(lane);
@@ -499,6 +533,22 @@ impl Shared {
     fn agent(&self, token: &str) -> Option<String> {
         self.tokens.lock().unwrap().get(token).cloned()
     }
+
+    /// Connection `number` began answering a message, or wrote its answer: a stopped one closes
+    /// once it has written its last.
+    fn answering(&self, number: u64, began: bool) {
+        let mut connections = self.connections.lock().unwrap();
+        let Some(connection) = connections.get_mut(&number) else {
+            return;
+        };
+        match began {
+            true => connection.answering += 1,
+            false => connection.answering -= 1,
+        }
+        if !began && connection.stopping && connection.answering == 0 {
+            connection.close_stopped(number);
+        }
+    }
 }
 
 /// The next line, without its end, or None once the connection closes or sends a line too long.
@@ -555,9 +605,14 @@ fn initialize(shared: &Shared, number: u64, agent: &str, params: &Value) -> Valu
         .iter()
         .find(|each| **each == asked)
         .unwrap_or(&VERSIONS[0]);
-    let client = params
-        .pointer("/clientInfo/name")
-        .and_then(Value::as_str)
+    // The name its card shows: its title, which MCP gives for display, else its name as it is.
+    let named = |pointer: &str| {
+        (params.pointer(pointer).and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+    };
+    let client = named("/clientInfo/title")
+        .or_else(|| named("/clientInfo/name"))
         .unwrap_or_default();
     if let Some(connection) = shared.connections.lock().unwrap().get_mut(&number) {
         connection.initialized = true;
@@ -594,8 +649,11 @@ fn call(shared: &Shared, number: u64, agent: &str, tool: &str, arguments: Value)
     // hears no call of a session after its agent's bye.
     {
         let connections = shared.connections.lock().unwrap();
-        if !connections.contains_key(&number) {
-            return ToolResult::error("The connection closed.");
+        match connections.get(&number) {
+            None => return ToolResult::error("The connection closed."),
+            // Stopped, it closes once it has answered: no call reaches the UI from then on.
+            Some(connection) if connection.stopping => return ToolResult::error(super::STOPPED),
+            Some(_) => {}
         }
         if shared.events.unbounded_send(Event::Call(call)).is_err() {
             return ToolResult::error("The browser has turned agents off.");

@@ -1321,7 +1321,7 @@ import json, sys
 # the one Add Split View opens beside the tab shown, whose page is on screen already, and the core
 # has it do the same for ours. A switch cut off before its frame showed, as by the next switch
 # while ⌃ is held, never finished, so Chrome's histograms leave it out; it's only counted.
-events = json.load(open(sys.argv[1]))
+events = json.load(open(sys.argv[1], encoding="utf-8"))
 events = events["traceEvents"] if isinstance(events, dict) else events
 begins = {}
 for event in events:

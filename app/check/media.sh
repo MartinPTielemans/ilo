@@ -47,7 +47,9 @@ onkeydown = async e => {
       for (let i = 0; i < n; i++) {
         wav.setUint8(44 + i, 128);
       }
-      const music = new Audio(URL.createObjectURL(new Blob([wav], {type: "audio/wav"})));
+      // Kept by the window: a paused element nothing refers to is garbage, and its player goes
+      // with it, so Chrome ends the session, and the sidebar loses its player.
+      const music = window.music = new Audio(URL.createObjectURL(new Blob([wav], {type: "audio/wav"})));
       music.loop = true;
       music.onplaying = () => document.title = "playing";
       music.onpause = () => document.title = "paused";

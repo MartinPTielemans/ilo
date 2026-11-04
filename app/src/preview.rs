@@ -1061,23 +1061,10 @@ impl Browser for Fake {
     fn settings(&self, _: &mut App) {}
 
     fn passwords(&self, _: u64, _: &mut App) {}
-    fn agent_activity(&self, _: &mut App) {}
-
-    fn agent_permissions(&self, _: u64, _: &App) -> browser::shell::AgentGrants {
-        Default::default()
-    }
-
-    fn revoke_agent(&self, _: u64, _: Option<SharedString>, _: &mut App) {}
-
-    fn disconnect_agent(&self, _: u64, _: &mut App) {}
-
-    fn take_back_agent_tabs(&self, _: u64, _: &mut App) {}
 
     fn take_over(&self, _: SharedString, _: u64, _: &mut App) {}
 
     fn hand_back(&self, _: u64, _: &mut App) {}
-
-    fn give_to_agent(&self, _: u64, _: u64, _: &mut App) {}
 
     fn stop_agent(&self, _: SharedString, _: &mut App) {}
 
@@ -2005,6 +1992,7 @@ fn main() {
                         };
                         let status = browser::agents::Status {
                             agent: "claude-code".into(),
+                            name: "Claude Code".into(),
                             space: first_space + 1,
                             doing: "Clicked · en.wikipedia.org".into(),
                             held,

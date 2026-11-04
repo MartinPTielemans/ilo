@@ -1,7 +1,8 @@
 # A new profile's first launch plays the onboarding over the window, captured at each step in a
 # light and a dark appearance: the intro draws ilo's wordmark and its line and goes on by itself, or
 # at any key; the import step lists the made-up Arc in src/import/fixture (a made-up Chrome on
-# Linux), never the Mac's own browsers; Esc or Skip goes on from a step, the colour step's Return
+# Linux), never the Mac's own browsers, and ↩ there shows its choices, with Import and Back, which
+# Esc goes back from to the list; Esc or Skip goes on from a step, the colour step's Return
 # gives the first Space the swatch picked, and the last step leaves the flow for the first Space's
 # welcome with the command bar up and a line under it. The default browser's step shows only while
 # ilo isn't the default, and is skipped everywhere but a Linux CI VM, where its button makes ilo
@@ -42,6 +43,21 @@ fi
 capture_step() {
   ../tools/window-screenshot.sh "$pid" "$out/onboarding-$1.png" || fail "no window to capture"
 }
+# ↩ at the import's list shows the choices of the browser used last, as "What comes from …", with
+# Import as the step's button and Back in its corner; Esc goes back to the list, keeping the step.
+# The choices are captured as onboarding-$1-import-choose.png once their counts are in.
+import_choices() {
+  send key return
+  expect "^browser: import pick $found\$" "$1: ↩ at the import didn't show $found's choices"
+  expect "^browser: import read $found: " "$1: picking $found didn't read it"
+  # Once its counts have drawn, which the driver waits for.
+  send state
+  capture_step "$1-import-choose"
+  send key escape
+  expect '^browser: import escape$' "$1: Esc in $found's choices didn't reach the import"
+  expect '^browser: import drawn list$' "$1: Esc didn't go back from $found's choices to the list"
+  none_since '^browser: onboarding left import' || fail "$1: Esc in the choices left the import step"
+}
 # The account's step, while the build names a server to sign in to.
 account=
 [ ! -s branding/sync-server ] || account="account "
@@ -77,6 +93,7 @@ for each in $steps; do
   [ "$each" = import ] ||
     expect "^browser: onboarding step $each settled\$" "light: the $each step didn't come"
   capture_step "light-$each"
+  [ "$each" != import ] || import_choices light
   send key escape
   expect "^browser: onboarding left $each via escape\$" "light: Esc didn't leave the $each step"
 done
@@ -149,6 +166,7 @@ if [ "$reduced" = windows ]; then
 fi
 expect '^browser: onboarding step import settled$' "dark: the import step didn't come"
 capture_step dark-import
+import_choices dark
 # Its words and chip end 24 in from the window's right and bottom, 20 tall.
 # Only the Mac's window frame is its content, so elsewhere the driver's layout gives its size: Linux
 # logs no frame (host_window_frame), and Windows' takes in the title bar and borders.
