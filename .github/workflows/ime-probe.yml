@@ -1,0 +1,52 @@
+# diag(#454): whether the Windows runner can install Microsoft's Japanese IME and compose with it.
+name: IME probe
+on:
+  push:
+    branches: [fix/windows-ime-454]
+    paths: [.github/workflows/ime-probe.yml, .github/scripts/ime-probe.ps1]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: windows-2022
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Japanese
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Continue"
+          [Environment]::OSVersion.Version
+          Get-Command Install-Language -ErrorAction SilentlyContinue | Format-List Name, Source
+          $t = Measure-Command {
+            try { Install-Language ja-JP -ErrorAction Stop | Format-List } catch { "Install-Language: $_" }
+          }
+          "Install-Language took $($t.TotalSeconds) s"
+          Get-WindowsCapability -Online | Where-Object Name -like "*ja-JP*" | Format-Table Name, State
+          $t = Measure-Command {
+            Get-WindowsCapability -Online | Where-Object { $_.Name -like "Language.Basic~~~ja-JP*" -and $_.State -ne "Installed" } |
+              ForEach-Object { try { Add-WindowsCapability -Online -Name $_.Name -ErrorAction Stop | Format-List } catch { "Add-WindowsCapability: $_" } }
+          }
+          "Add-WindowsCapability took $($t.TotalSeconds) s"
+          Get-WindowsCapability -Online | Where-Object Name -like "*ja-JP*" | Format-Table Name, State
+          $list = Get-WinUserLanguageList
+          $list.Add("ja-JP")
+          Set-WinUserLanguageList $list -Force
+          Get-WinUserLanguageList | Format-List LanguageTag, InputMethodTips
+      - name: Compose in Notepad
+        shell: powershell
+        run: ./.github/scripts/ime-probe.ps1
+      - name: Screenshot
+        if: always()
+        shell: powershell
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $img = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          [System.Drawing.Graphics]::FromImage($img).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $img.Save("$PWD\ime-probe.png")
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ime-probe
+          path: ime-probe.png
