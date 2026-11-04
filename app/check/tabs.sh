@@ -1342,6 +1342,14 @@ expect '^browser: command mute-all-tabs via command bar$' "Mute All Tabs didn't 
 expect '^browser: page [0-9]* audible [01] muted 1$' "Mute All Tabs muted no tab"
 bar_command unmute-all-tabs "Unmute All Tabs" unmute
 expect '^browser: page [0-9]* audible [01] muted 0$' "Unmute All Tabs unmuted no tab"
+# Linux's UI hears full screen as the window resizes, and the headless sway session's window fills
+# its output already, so there it's made smaller first, as a window the user goes full screen from.
+if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  size=$(grep '^browser: drawn at ' "$log" | tail -1 | sed 's/^browser: drawn at \([0-9]*\)x\([0-9]*\)$/\1 \2/')
+  smaller="$((${size% *} - 100)) $((${size#* } - 100))"
+  send resize $smaller
+  expect "^browser: drawn at ${smaller% *}x${smaller#* }\$" "the window didn't draw smaller before full screen"
+fi
 bar_command toggle-full-screen "Enter Full Screen" "enter full"
 expect '^browser: window entered full screen$' "Enter Full Screen didn't put the window full screen"
 bar_command toggle-full-screen "Exit Full Screen" "exit full"
