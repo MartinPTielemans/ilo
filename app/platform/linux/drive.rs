@@ -197,6 +197,11 @@ fn settle(n: u64) {
         after(10, Box::new(move || settle(n)));
         return;
     }
+    // Until the clipboard's owner has answered `pasteboard`, which Chromium does from the loop.
+    if paste_waits() {
+        after(100, Box::new(move || settle(n)));
+        return;
+    }
     gpui_linux::sync_display();
     idle(Box::new(move || {
         sync();
@@ -345,6 +350,7 @@ fn sync() {
     while let Ok(Some(event)) = connection.poll_for_event() {
         match event {
             Event::SelectionRequest(request) => serve_drag(&request),
+            Event::SelectionNotify(notify) => pasted(&notify),
             Event::ClientMessage(message) if message.format == 32 => drag_answered(&message),
             _ => {}
         }
@@ -1101,7 +1107,8 @@ fn stacked() -> Option<Vec<Browser>> {
 }
 
 /// The pages of browser window `id`, as drive.mm lists their views: from the bottom-left corner of
-/// content `width` by `height`, with the radius of their corners if they're round.
+/// content `width` by `height`, with the radius of their corners if they're round, and a pane's
+/// docked DevTools before its page, as the core reports them.
 /// shortcut: where the shell lays them out and the radius it gives their corners, which the core
 /// follows. They're Aura's windows in Chromium's one X window, and no core call says where they
 /// are or how round.
@@ -1115,15 +1122,19 @@ pub(super) fn pages(id: bc::bc_id, width: f64, height: f64) -> Option<String> {
         let shell = shell.read(cx);
         Some((shell.shown_pages(), shell.page_frame(viewport)))
     })?;
-    let views = pages.into_iter().map(|(_, page)| {
-        let [x, bottom, width, high] = [
-            page.left(),
-            page.bottom(),
-            page.size.width,
-            page.size.height,
-        ]
-        .map(f32::from);
-        let y = height - f64::from(bottom);
+    let docked = devtools(id);
+    let frames = pages.into_iter().flat_map(|(_, page)| {
+        let page = [page.left(), page.top(), page.size.width, page.size.height].map(f64::from);
+        // DevTools fill the pane they're docked in.
+        match docked {
+            Some((devtools, beside)) if (0..4).all(|i| (devtools[i] - page[i]).abs() <= 1.) => {
+                vec![devtools, beside]
+            }
+            _ => vec![page],
+        }
+    });
+    let views = frames.map(|[x, top, width, high]| {
+        let y = height - (top + high);
         let round = match radius > 0. {
             true => format!(" radius {radius:.0}"),
             false => String::new(),
@@ -1131,6 +1142,21 @@ pub(super) fn pages(id: bc::bc_id, width: f64, height: f64) -> Option<String> {
         format!(", WebContentsViewCocoa {x:.0},{y:.0} {width:.0}x{high:.0}{round}")
     });
     Some(views.collect())
+}
+
+/// Where DevTools docked in a page of `id` show, and the page beside them, from the content's
+/// top-left corner, which the core reports, as the X server can't see them.
+fn devtools(id: bc::bc_id) -> Option<([f64; 4], [f64; 4])> {
+    let mut devtools = bc::bc_rect {
+        x: 0.,
+        y: 0.,
+        width: 0.,
+        height: 0.,
+    };
+    let mut page = devtools;
+    unsafe { bc::bc_window_devtools(id, &mut devtools, &mut page) }.then_some(())?;
+    let frame = |r: bc::bc_rect| [r.x, r.y, r.width, r.height];
+    Some((frame(devtools), frame(page)))
 }
 
 /// The ring the core draws inside a split view's focused page, over the pages, as the Mac's driver
@@ -1556,8 +1582,11 @@ enum Waiting {
 
 thread_local! {
     static SOURCE: RefCell<Option<Source>> = const { RefCell::new(None) };
-    /// The driver's window that owns a drag's selection, made once.
-    static SOURCE_WINDOW: Cell<Option<xproto::Window>> = const { Cell::new(None) };
+    /// The driver's window, which owns a drag's selection and is handed the clipboard's text,
+    /// made once.
+    static DRIVER_WINDOW: Cell<Option<xproto::Window>> = const { Cell::new(None) };
+    /// Since when `pasteboard` waits for the clipboard's owner to hand its text to the driver.
+    static PASTE_ASKED: Cell<Option<std::time::Instant>> = const { Cell::new(None) };
 }
 
 fn atom(name: &str) -> Option<xproto::Atom> {
@@ -1569,6 +1598,79 @@ fn atom(name: &str) -> Option<xproto::Atom> {
             .ok()?
             .atom,
     )
+}
+
+/// The driver's own window, on its connection, which nobody sees.
+fn driver_window() -> Option<xproto::Window> {
+    if let Some(window) = DRIVER_WINDOW.get() {
+        return Some(window);
+    }
+    let x = server()?;
+    let (connection, root) = &*x;
+    let window = connection.generate_id().ok()?;
+    (connection.create_window(
+        x11rb::COPY_DEPTH_FROM_PARENT,
+        window,
+        *root,
+        -1,
+        -1,
+        1,
+        1,
+        0,
+        xproto::WindowClass::INPUT_ONLY,
+        x11rb::COPY_FROM_PARENT,
+        &xproto::CreateWindowAux::new(),
+    ))
+    .ok()?;
+    DRIVER_WINDOW.set(Some(window));
+    Some(window)
+}
+
+/// Asks the clipboard's owner for its text, on the driver's connection, which `sync` reads the
+/// answer from: the owner may be Chromium, such as DevTools after ⌘C, which answers on the main
+/// thread that GPUI's own read would block.
+fn ask_clipboard() -> Option<()> {
+    let x = server()?;
+    let (connection, _) = &*x;
+    let window = driver_window()?;
+    let names = ["CLIPBOARD", "UTF8_STRING", "BROWSER_DRIVE_PASTEBOARD"];
+    let [clipboard, utf8, into] = names.map(atom);
+    (connection.convert_selection(window, clipboard?, utf8?, into?, x11rb::CURRENT_TIME)).ok()?;
+    connection.flush().ok()?;
+    PASTE_ASKED.set(Some(std::time::Instant::now()));
+    Some(())
+}
+
+/// Logs the clipboard's text the owner handed over, or none if it had none.
+fn pasted(notify: &xproto::SelectionNotifyEvent) {
+    if PASTE_ASKED.get().is_none() || Some(notify.requestor) != DRIVER_WINDOW.get() {
+        return;
+    }
+    PASTE_ASKED.set(None);
+    let read = || {
+        let x = server()?;
+        let (connection, _) = &*x;
+        let any = xproto::AtomEnum::ANY;
+        let (window, property) = (notify.requestor, notify.property);
+        let reply = connection.get_property(true, window, property, any, 0, 1 << 20);
+        Some(String::from_utf8_lossy(&reply.ok()?.reply().ok()?.value).into_owned())
+    };
+    let text = (notify.property != x11rb::NONE).then(read).flatten();
+    log!("browser: pasteboard text {}", text.unwrap_or_default());
+}
+
+/// Whether `pasteboard` still waits for the clipboard's owner, which gets 4 s, as GPUI's own read
+/// gives it, before the driver logs no text.
+fn paste_waits() -> bool {
+    let Some(since) = PASTE_ASKED.get() else {
+        return false;
+    };
+    if since.elapsed() < std::time::Duration::from_secs(4) {
+        return true;
+    }
+    PASTE_ASKED.set(None);
+    log!("browser: pasteboard text ");
+    false
 }
 
 /// `path` as a file: URL's path, its bytes outside the unreserved ones escaped.
@@ -1589,7 +1691,7 @@ fn file_url(path: &str) -> String {
 /// as a URI list, a URL as text too, and text as text.
 fn start_drag(kind: &str, value: &str) -> Option<Source> {
     let x = server()?;
-    let (connection, root) = &*x;
+    let (connection, _) = &*x;
     let [uris, utf8, plain] =
         ["text/uri-list", "UTF8_STRING", "text/plain;charset=utf-8"].map(atom);
     let data = match kind {
@@ -1601,28 +1703,7 @@ fn start_drag(kind: &str, value: &str) -> Option<Source> {
         "text" => vec![(utf8?, value.into()), (plain?, value.into())],
         _ => return None,
     };
-    let window = match SOURCE_WINDOW.get() {
-        Some(window) => window,
-        None => {
-            let window = connection.generate_id().ok()?;
-            (connection.create_window(
-                x11rb::COPY_DEPTH_FROM_PARENT,
-                window,
-                *root,
-                -1,
-                -1,
-                1,
-                1,
-                0,
-                xproto::WindowClass::INPUT_ONLY,
-                x11rb::COPY_FROM_PARENT,
-                &xproto::CreateWindowAux::new(),
-            ))
-            .ok()?;
-            SOURCE_WINDOW.set(Some(window));
-            window
-        }
-    };
+    let window = driver_window()?;
     let types: Vec<u32> = data.iter().map(|(kind, _)| *kind).collect();
     (connection.change_property(
         xproto::PropMode::REPLACE,
@@ -2188,7 +2269,8 @@ fn run_command(line: &str) -> Option<()> {
         // The window's content and the views the X server has in it: GPUI's, and the overlays
         // and floats over it, with a tab's dialog, which the core reports, as the Mac's lists its
         // child windows. The floats, such as the zoom HUD, take no input, so they're left out of
-        // overlay_views. The pages are where the UI lays them out (pages).
+        // overlay_views. The pages are where the UI lays them out, and docked DevTools where the
+        // core says (pages).
         "layout" => {
             let browser = driven()?;
             let [_, _, width, height] = frame(browser.window)?;
@@ -2230,8 +2312,12 @@ fn run_command(line: &str) -> Option<()> {
             log!("browser: key window titled {title}");
             Some(())
         }
-        // The headless session's clipboard is the run's own, as drive.mm's pasteboard is.
+        // The headless session's clipboard is the run's own, as drive.mm's pasteboard is. Under X
+        // the driver asks for it on its own connection, and settle logs it.
         "pasteboard" => {
+            if ask_clipboard().is_some() {
+                return Some(());
+            }
             let cx = CX.with_borrow(Clone::clone)?;
             let text = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
             log!("browser: pasteboard text {}", text.unwrap_or_default());

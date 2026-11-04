@@ -1118,6 +1118,11 @@ BC_EXPORT bool bc_window_focus_ring(bc_id window, bc_rect* frame);
 // as the Mac's sees it as a child window.
 BC_EXPORT bool bc_window_dialog(bc_id window, bc_rect* frame);
 
+// On Linux, whether DevTools are docked in a page |window| shows, the first pane's with them, and
+// if so their frame in |devtools| and the page's beside them in |page|, from the top-left of the
+// window's content. For the test driver, which can't see them, as the Mac's sees their views.
+BC_EXPORT bool bc_window_devtools(bc_id window, bc_rect* devtools, bc_rect* page);
+
 // On Linux, while an overlay of the app's over |window|, such as the command bar, has the keyboard:
 // neither the window's pages nor its UI get keys, and the page or UI that had them keeps its focus,
 // to have them back once the overlay gives them up (|takes| false).

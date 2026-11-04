@@ -1298,6 +1298,21 @@ std::optional<gfx::Rect> DialogFrame(views::Widget* widget) {
   return std::nullopt;
 }
 
+std::optional<std::pair<gfx::Rect, gfx::Rect>> DevToolsFrames(views::Widget* widget) {
+  // Aura windows in the slot's holder, which the X server doesn't see.
+  WindowViews* views = ViewsOf(widget);
+  if (!views) {
+    return std::nullopt;
+  }
+  for (Slot& slot : views->panes()) {
+    if (slot.holder && slot.page && slot.devtools && slot.devtools->IsVisible()) {
+      const gfx::Vector2d at = slot.holder->bounds().OffsetFromOrigin();
+      return std::pair(slot.devtools->bounds() + at, slot.page->bounds() + at);
+    }
+  }
+  return std::nullopt;
+}
+
 void StretchOnResize(content::RenderWidgetHostView*, bool) {
   // shortcut: no stretch on Linux; the page shows its last frame unscaled until it redraws.
 }

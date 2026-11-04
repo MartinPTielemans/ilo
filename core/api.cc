@@ -306,6 +306,25 @@ bool bc_window_dialog(bc_id id, bc_rect* frame) {
 #endif
 }
 
+bool bc_window_devtools(bc_id id, bc_rect* devtools, bc_rect* page) {
+#if BUILDFLAG(IS_LINUX)
+  views::Widget* widget = OpenWidget(id);
+  const auto frames = widget ? browser_core::platform::DevToolsFrames(widget) : std::nullopt;
+  if (!frames) {
+    return false;
+  }
+  const auto put = [](const gfx::Rect& rect, bc_rect* out) {
+    *out = {static_cast<double>(rect.x()), static_cast<double>(rect.y()),
+            static_cast<double>(rect.width()), static_cast<double>(rect.height())};
+  };
+  put(frames->first, devtools);
+  put(frames->second, page);
+  return true;
+#else
+  return false;
+#endif
+}
+
 size_t bc_window_child_title(bc_id id, char* title, size_t capacity) {
 #if BUILDFLAG(IS_LINUX)
   views::Widget* widget = OpenWidget(id);
