@@ -154,10 +154,15 @@ pub struct TalkView {
     agent: SharedString,
     shown: Option<Conversation>,
     reply: Entity<TextInput>,
+    /// Whether the user replies here: a task, and not an outside agent's session, whose user talks
+    /// to it where they started it, which a quiet line in the field's place says.
+    replies: bool,
     /// Its pages' pictures, by tab: the request out for each, and the picture once it came.
     pictures: Vec<(u64, u64, Option<PagePicture>)>,
     /// Where each picture was drawn last, in the window, for its page to zoom out of.
     drawn: Rc<RefCell<Vec<(u64, Bounds<Pixels>)>>>,
+    /// Where each picture was drawn when that was logged last.
+    drawn_logged: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
     /// Its pages changed while one was watched over it, so they're pictured again once it shows.
     stale: bool,
     /// Its lines, which keep the newest in view as they come while the user is at the end.
@@ -226,7 +231,7 @@ impl Shell {
             return self.close_task(cx);
         }
         let left = self.talk_agent();
-        let (space, name) = (card.space, card.cli.name());
+        let (space, name, replies) = (card.space, card.name.clone(), card.replies);
         let view = match self.talk.take() {
             // Opened again, it shows its newest line, as the task went on while it was away.
             Some(talk) if talk.agent == agent => {
@@ -251,8 +256,10 @@ impl Shell {
                     agent: agent.clone(),
                     shown: None,
                     reply,
+                    replies,
                     pictures: Vec::new(),
                     drawn: Rc::default(),
+                    drawn_logged: Rc::default(),
                     stale: false,
                     scroll: ScrollHandle::new(),
                     viewport: Size::default(),
@@ -380,13 +387,18 @@ impl Shell {
     /// isn't drawn to no binding of ours, so Esc stepped back from nothing.
     pub(super) fn focus_talk(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(talk) = &self.talk else { return };
-        let reply = talk.view.read(cx).reply.focus_handle(cx);
+        let view = talk.view.read(cx);
+        let (reply, replies) = (view.reply.focus_handle(cx), view.replies);
         if self.watched_task_page().is_some() {
             if reply.is_focused(window) {
                 window.focus(&self.focus_handle, cx);
             }
         } else if std::mem::take(&mut self.focus_talk) {
-            window.focus(&reply, cx);
+            // A session's has no field: the window has the keyboard, for Esc and ⌘..
+            match replies {
+                true => window.focus(&reply, cx),
+                false => window.focus(&self.focus_handle, cx),
+            }
         }
     }
 }
@@ -651,15 +663,23 @@ impl TalkView {
         let Some(shown) = &self.shown else { return };
         let mut folds = Vec::new();
         for line in &shown.lines {
-            let Line::Trace(trace) = line else { continue };
-            folds.push((
-                Fold::Trace(trace.key),
-                self.is_open(Fold::Trace(trace.key), trace.running),
-            ));
-            for item in &trace.items {
-                let TraceItem::Step(step) = item else {
-                    continue;
-                };
+            let steps: Vec<&TraceStep> = match line {
+                Line::Trace(trace) => {
+                    folds.push((
+                        Fold::Trace(trace.key),
+                        self.is_open(Fold::Trace(trace.key), trace.running),
+                    ));
+                    (trace.items.iter())
+                        .filter_map(|item| match item {
+                            TraceItem::Step(step) => Some(step),
+                            TraceItem::Said(_) => None,
+                        })
+                        .collect()
+                }
+                Line::Step(step) => vec![step],
+                _ => continue,
+            };
+            for step in steps {
                 let steps = match &step.opens {
                     Opens::Steps(steps) => {
                         folds.push((
@@ -852,11 +872,21 @@ impl TalkView {
             let (width, opacity) = grown[index];
             let image = (self.pictures.iter().find(|(each, ..)| *each == tab))
                 .and_then(|(_, _, picture)| picture.as_ref().map(PagePicture::image));
-            let drawn = self.drawn.clone();
+            let (drawn, logged) = (self.drawn.clone(), self.drawn_logged.clone());
             let paint = canvas(
                 |_, _, _| {},
                 move |bounds, _, window, _| {
                     drawn.borrow_mut().push((tab, bounds));
+                    if logged.borrow_mut().insert(tab, bounds) != Some(bounds) {
+                        // check.sh reads this line, to click the picture.
+                        log!(
+                            "browser: task picture {tab} at {:.0} {:.0} {:.0} {:.0}",
+                            f32::from(bounds.origin.x),
+                            f32::from(bounds.origin.y),
+                            f32::from(bounds.size.width),
+                            f32::from(bounds.size.height)
+                        );
+                    }
                     if let Some(image) = image {
                         let corners = Corners::all(px(PICTURE_RADIUS));
                         window
@@ -1235,6 +1265,7 @@ impl TalkView {
                             .any(|item| matches!(item, TraceItem::Step(step) if step.running))
                 }
                 Line::Thinking { failed, .. } => failed.is_none(),
+                Line::Step(step) => step.running,
                 _ => false,
             })
         });
@@ -1328,7 +1359,11 @@ impl TalkView {
             };
             (title, look.asked_favicon.clone())
         });
-        let mut lines = vec![self.you(shown.asked.clone(), page, false, look)];
+        // A session was asked in its agent's terminal, so it has no ask.
+        let mut lines = Vec::new();
+        if !shown.asked.is_empty() {
+            lines.push(self.you(shown.asked.clone(), page, false, look));
+        }
         let landing = (self.motion.landing.as_ref())
             .and_then(|landing| landing.line)
             .filter(|(_, since)| !look.still && eased(*since, look.now, LAND) < 1.)
@@ -1348,6 +1383,12 @@ impl TalkView {
                     .into_any_element(),
                 Line::Trace(trace) => self.trace(trace, look, cx),
                 Line::Thinking { key, failed } => self.thinking(*key, failed.clone(), look),
+                Line::Step(step) => div()
+                    .flex()
+                    .flex_col()
+                    .items_start()
+                    .children(self.step(step, true, look, cx))
+                    .into_any_element(),
             };
             lines.push(risen(line, self.motion.came(Key::Line(index)), look));
         }
@@ -1465,8 +1506,25 @@ impl TalkView {
         )
     }
 
-    /// The reply field, the TextInput, so IME and the field's keys are a text field's.
+    /// The reply field, the TextInput, so IME and the field's keys are a text field's. A session's
+    /// conversation is in its agent's terminal, which a quiet line in its place says, on the text's
+    /// column as it has no plate.
     fn reply(&self, look: &Look, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        if !self.replies {
+            let name = self
+                .shown
+                .as_ref()
+                .map(|shown| shown.name.clone())
+                .unwrap_or_default();
+            return div()
+                .id("conversation-elsewhere")
+                .flex_none()
+                .h(px(REPLY_HEIGHT))
+                .flex()
+                .items_center()
+                .text_color(look.palette.text(SECONDARY))
+                .child(format!("Talk to {name} where you started it."));
+        }
         let reply = self.reply.clone();
         let drawn = self.reply_drawn.clone();
         div()
@@ -1618,6 +1676,7 @@ fn steps(lines: &[Line]) -> usize {
     (lines.iter())
         .map(|line| match line {
             Line::Trace(trace) => trace.items.len(),
+            Line::Step(_) => 1,
             _ => 0,
         })
         .sum()
@@ -1848,6 +1907,9 @@ impl Render for TalkView {
         }) else {
             return div().into_any_element();
         };
+        // The reply's placeholder follows the appearance, as the lines drawn in `look` do (#1659).
+        let placeholder = look.palette.text(FORM_PLACEHOLDER);
+        (self.reply).update(cx, |reply, cx| reply.set_placeholder_color(placeholder, cx));
         self.settle_folds(now, still);
         // A shorter or narrower window keeps the newest line in view while the user reads at the
         // end, as the scroll keeps its distance from the top.
@@ -1859,9 +1921,16 @@ impl Render for TalkView {
         self.follow_on(now);
         // What changes once it has shown moves.
         self.motion.live = true;
-        // What moves does on frames only while it shows.
-        if self.moving(still) || busy {
+        // What moves does only while it shows: what opens, folds or lands on the display's frames,
+        // and the shimmer, which moves all the while a step waits on the user, on the loading dots'
+        // clock, as each frame draws the whole window again (#1700).
+        if !self.folding.is_empty() || busy {
             window.request_animation_frame();
+        } else if self.moving(still)
+            && let Some(shell) = self.shell.upgrade()
+        {
+            shell.read(cx).breath.keep();
+            cx.defer(move |cx| shell.update(cx, |shell, cx| shell.breath.arm(cx)));
         }
         let palette = look.palette;
         let lines = div()

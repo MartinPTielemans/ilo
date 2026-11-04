@@ -675,16 +675,13 @@ fn profiles() -> Vec<Profile> {
         .into_iter()
         .map(in_space)
         .collect();
-    // A task's Space is never listed as a Space, so its profile's count leaves it out, though it
-    // keeps the profile from being deleted.
-    let listed = crate::ids(bc::bc_spaces)
-        .into_iter()
-        .filter(|&space| !agents::is_task(&crate::name(bc::bc_space_agent, space)));
-    let listed: Vec<u64> = listed.map(in_space).collect();
+    // An agent's Space, a task's or an outside client's, is never listed as a Space (#1080), so its
+    // profile's count leaves it out, though it keeps the profile from being deleted.
     let users = crate::ids(bc::bc_spaces)
         .into_iter()
         .filter(|&space| crate::name(bc::bc_space_agent, space).is_empty());
     let users: Vec<u64> = users.map(in_space).collect();
+    let listed = &users;
     let of_tab = |tab| unsafe { bc::bc_tab_profile(tab) };
     let favorites: Vec<u64> = crate::ids(bc::bc_favorites)
         .into_iter()
@@ -2782,7 +2779,7 @@ impl Settings {
             }
             listed_any = true;
             blocks.push(Block::Heading(
-                format!("What {} may do", client.name()).into(),
+                format!("What {} may do", agents.read(cx).agent_name(client.id())).into(),
             ));
             blocks.extend(grants.map(Block::Group));
             if !entries.is_empty() {
@@ -2989,8 +2986,11 @@ impl Settings {
         let grants = agents.read(cx).grants(client.id());
         let revoke = |site: Option<SharedString>, title| {
             let id = format!("revoke-{}-{}", client.id(), site.as_deref().unwrap_or(""));
+            let at = self.drawn(format!("revoke {}", site.as_deref().unwrap_or("all")));
             let agents = agents.clone();
             button(look, gpui::ElementId::Name(id.into()), title)
+                .relative()
+                .child(at)
                 .on_click(move |_, _, cx| {
                     agents.update(cx, |agents, cx| {
                         agents.revoke(client.id(), site.as_deref(), cx)
@@ -3950,7 +3950,11 @@ impl Render for Settings {
         {
             window.request_animation_frame();
         }
-        if std::mem::take(&mut self.shown) {
+        // Only a frame drawn on screen counts: AppKit puts the window there some frames after it's
+        // shown, and a click before then finds nothing to land on.
+        if self.shown && !window.is_visible() {
+            window.request_animation_frame();
+        } else if std::mem::take(&mut self.shown) {
             // check.sh waits for this line, the section each show or switch draws, whichever
             // window was key.
             log!("browser: settings drew {}", self.section.name());

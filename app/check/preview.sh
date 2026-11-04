@@ -370,7 +370,8 @@ expect "^browser: selected $a\( in .*\)\{0,1\}\$" "⌘W didn't show the pinned t
 
 # Back on, a link rule to another Space sends the link there as a tab, as it sends one from another
 # app, and the preview doesn't open (#692). Settings' Links section adds the rule, as ./check.sh
-# links does: + and the first rule's Space pop-up, where the view logs them.
+# links does: + and the new rule's Space pop-up, where the view logs them, after the Meet rule a
+# profile starts with.
 first=$(space)
 send menu New Space…
 expect "^browser: spaces $first [0-9]*\$" "New Space didn't make a second Space"
@@ -391,18 +392,20 @@ expect '^browser: settings tab Links$' "a click on Links didn't show its tab"
 settings_drew Links
 expect '^browser: link rules drawn ' "the Links tab didn't draw its rules"
 send clickkey $(settings_at "link add")
-expect '^browser: link rule 0 field has the keyboard$' "+ didn't give the new rule's field the keyboard"
+# The Meet rule a profile starts with is the first, so the new one is the second.
+expect '^browser: link rule 1 field has the keyboard$' "+ didn't give the new rule's field the keyboard"
 send type preview-target
-post clickkey $(settings_at "link space 0")
-expect '^browser: menu shown [^,]* (checked), work, Little ilo$' \
-  "the rule's Space pop-up didn't list the user's Spaces and Little ilo"
+post clickkey $(settings_at "link space 1")
+front=$(cased "The Space in Front")
+expect "^browser: menu shown $front (checked), [^,]*, work, Little ilo\$" \
+  "the rule's Space pop-up didn't list the Space in front, the user's Spaces and Little ilo"
 send choose work
-expect '^browser: link rules drawn URL contains "preview-target" → work; ' \
+expect '^browser: link rules drawn URL contains "meet.google.com" → [^,]*, URL contains "preview-target" → work; ' \
   "the rule's pop-up didn't set its Space"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 send click $link_point
-expect "^browser: link rule 0 sends $target to space $second\$" "the rule didn't send the pinned tab's link"
+expect "^browser: link rule 1 sends $target to space $second\$" "the rule didn't send the pinned tab's link"
 routed="^browser: link from $a $target: tab [1-9][0-9]* in space $second of window [0-9]*\$"
 expect "$routed" "the rule's link didn't open as a tab in its Space"
 r=$(grep "$routed" "$log" | tail -1 | sed 's/.*: tab \([0-9]*\) .*/\1/')

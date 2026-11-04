@@ -73,7 +73,7 @@ jobs:
         working-directory: app
     env:
       # The runs to start with, whose parts the trial found working. A run joins once it passes here.
-      MAC_RUNS: load keys tabs quit favorites
+      MAC_RUNS: load keys tabs quit favorites links preview import
     steps:
       # With the history, where fetch.sh looks for the engine's commit.
       - uses: actions/checkout@v4
@@ -106,10 +106,18 @@ jobs:
           *) exit "$status" ;;
           esac
 
-      # The runner's 1024 by 768 screen is too small for the windows the checks lay out for the VMs'
+      # The runner's 1024 by 768 screen is too small for the windows the checks lay out for the VMs',
+      # and it reduces transparency, which draws the window's material opaque over any backdrop,
+      # and motion, under which the app moves nothing (#1529) where the checks time its motion
       # (#1554). Before the build, which the Dock and the windows' layout settle over.
       - if: ${{ steps.engine.outputs.found == 'true' }}
-        run: swift ../.github/scripts/display-mode.swift 1920 1080
+        run: |
+          swift ../.github/scripts/display-mode.swift 1920 1080
+          for setting in reduceTransparency reduceMotion; do
+            defaults write com.apple.universalaccess "$setting" -bool false
+            [ "$(defaults read com.apple.universalaccess "$setting")" = 0 ] ||
+              { echo "::error::$setting stayed on"; exit 1; }
+          done
 
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: rustup update stable --no-self-update

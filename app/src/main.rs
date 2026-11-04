@@ -549,8 +549,7 @@ unsafe extern "C" fn launching(_: *mut c_void) {
         maximized,
     ) = saved.unwrap_or_else(|| {
         let (width, height) = WINDOW_SIZE;
-        let (mut x, mut y) = (0., 0.);
-        unsafe { platform::host_centered(width, height, &mut x, &mut y) };
+        let (x, y) = platform::centered(width, height);
         (
             bc::bc_rect {
                 x,
