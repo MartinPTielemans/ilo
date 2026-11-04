@@ -56,6 +56,7 @@ cd app
 - [Roadmap](docs/roadmap.md): what comes next.
 - [Building the engine](engine/README.md): Chromium and ilo's patches.
 - [Releasing](docs/releasing.md): how a release is made.
+- [Managed policies](docs/policies.md): where an administrator sets ilo's policies on each system.
 
 ## Contributing
 
