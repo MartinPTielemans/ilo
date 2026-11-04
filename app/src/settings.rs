@@ -3950,7 +3950,11 @@ impl Render for Settings {
         {
             window.request_animation_frame();
         }
-        if std::mem::take(&mut self.shown) {
+        // Only a frame drawn on screen counts: AppKit puts the window there some frames after it's
+        // shown, and a click before then finds nothing to land on.
+        if self.shown && !window.is_visible() {
+            window.request_animation_frame();
+        } else if std::mem::take(&mut self.shown) {
             // check.sh waits for this line, the section each show or switch draws, whichever
             // window was key.
             log!("browser: settings drew {}", self.section.name());
