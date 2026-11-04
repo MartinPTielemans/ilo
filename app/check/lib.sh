@@ -355,7 +355,8 @@ settings_drew() {
   expect "^browser: settings drew ${1:-.*}\$" "Settings didn't draw ${1:-its tab}"
 }
 # Where Settings last drew its control $1, "x y" for clickkey, once it has: it logs each place it
-# draws one ("browser: settings $1 at x y").
+# draws one ("browser: settings $1 at x y"). That can be a frame from before the state a run just
+# waited for, which drawn_after leaves out.
 drawn() {
   for _ in $(seq 100); do
     sed -n "s/^browser: settings $1 at //p" "$log" | tail -1 | grep . && return 0
