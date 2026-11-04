@@ -429,7 +429,9 @@ page_shortcut() {
 last() { grep "^browser: $1 " "$log" | tail -1 | sed 's/.* //'; }
 # Records the window to $out/$1.mp4 for $2 seconds, for the parity rows whose target moves: it
 # returns once frames are being written, so the motion driven next is in it, and recorded waits
-# for the file.
+# for the file. A still taken while it records ends the recording (ReplayKit's -5814), so a run
+# takes its stills after recorded. A recording that doesn't start is tried once more, then the
+# run goes on without it, saying why: the video is the motion's proof, never a step's.
 record() {
   # tools/window-record.sh records with the Mac's ScreenCaptureKit alone.
   if [ "$(uname)" != Darwin ]; then
@@ -438,25 +440,38 @@ record() {
     return 0
   fi
   recording="$out/$1.mp4"
-  ../tools/window-record.sh "$pid" "$2" "$recording" > "$out/$1-record.log" 2>&1 &
-  recorder=$!
-  for _ in $(seq 300); do
-    grep -q '^recording$' "$out/$1-record.log" && return 0
-    if ! kill -0 "$recorder" 2> /dev/null; then
-      unrecorded || fail "the window's recording didn't start: $(tail -1 "$out/$1-record.log")"
-      return 0
+  for try in 1 2; do
+    ../tools/window-record.sh "$pid" "$2" "$recording" > "$out/$1-record.log" 2>&1 &
+    recorder=$!
+    for _ in $(seq 300); do
+      grep -q '^recording$' "$out/$1-record.log" && return 0
+      kill -0 "$recorder" 2> /dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$recorder" 2> /dev/null; then
+      kill "$recorder" 2> /dev/null
+      wait "$recorder" 2> /dev/null
+      echo "the recording didn't start in 30 s" >> "$out/$1-record.log"
     fi
-    sleep 0.1
+    unrecorded && return 0
+    [ "$try" = 2 ] || echo "retry: recording $1, as it didn't start: $(tail -1 "$out/$1-record.log")"
   done
-  fail "the window's recording didn't start in 30 s"
+  echo "skip: recording $1, as it didn't start, twice: $(tail -1 "$out/$1-record.log")"
+  recording=""
 }
 recorded() {
   [ -n "$recording" ] || return 0
   wait "$recorder" && return 0
-  unrecorded || fail "the window's recording didn't finish: $(tail -1 "${recording%.mp4}-record.log")"
+  unrecorded && return 0
+  said=$(tail -1 "${recording%.mp4}-record.log")
+  case "$said" in
+  *Code=-5814*) fail "the window's recording ended early, as a still taken while it records ends it: $said" ;;
+  esac
+  fail "the window's recording didn't finish: $said"
 }
 # GitHub's hosted Mac starts a recording and never gets its first frame, ReplayKit's -5822 (#1108),
-# so there the run goes on without it, saying so. Anywhere else a failed recording fails the run.
+# so there the run goes on without it, saying so. Anywhere else a recording that started and then
+# failed fails the run.
 unrecorded() {
   said=$(tail -1 "${recording%.mp4}-record.log")
   case "${GITHUB_ACTIONS:-}: $said" in
