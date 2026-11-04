@@ -4254,7 +4254,101 @@ bool host_trash(const char* path) {
          GetFileAttributesW(Wide(path).c_str()) == INVALID_FILE_ATTRIBUTES;
 }
 
-bool host_drag_tab(void* ui_view, uint64_t tab, double, double, double, double, double, double,
+// The part of |ui_view|'s browser window at (|x|, |y|), |width| by |height| points from the UI's
+// top-left corner, as it's drawn: GPUI's frame as DWM composites it, which PrintWindow's full
+// content gives, in a 32-bit top-down DIB, opaque, at the window's scale. Null if it can't.
+static HBITMAP WindowPart(void* ui_view, double x, double y, double width, double height,
+                          SIZE* size) {
+  HWND view = Hwnd(ui_view);
+  HWND root = Root(ui_view);
+  if (!view || !root) {
+    return nullptr;
+  }
+  RECT window{};
+  GetWindowRect(root, &window);
+  POINT origin{0, 0};
+  ClientToScreen(view, &origin);
+  const double scale = Scale(view);
+  const int part_width = static_cast<int>(std::lround(width * scale));
+  const int part_height = static_cast<int>(std::lround(height * scale));
+  if (part_width < 1 || part_height < 1) {
+    return nullptr;
+  }
+  HDC screen = GetDC(nullptr);
+  HDC whole_dc = CreateCompatibleDC(screen);
+  HBITMAP whole =
+      CreateCompatibleBitmap(screen, window.right - window.left, window.bottom - window.top);
+  HGDIOBJ whole_was = SelectObject(whole_dc, whole);
+  const bool printed = PrintWindow(root, whole_dc, PW_RENDERFULLCONTENT);
+  BITMAPINFO info{};
+  info.bmiHeader = {sizeof(BITMAPINFOHEADER), part_width, -part_height, 1, 32, BI_RGB};
+  void* bits = nullptr;
+  HBITMAP part = CreateDIBSection(screen, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+  if (part && printed) {
+    HDC part_dc = CreateCompatibleDC(screen);
+    HGDIOBJ part_was = SelectObject(part_dc, part);
+    BitBlt(part_dc, 0, 0, part_width, part_height, whole_dc,
+           origin.x - window.left + static_cast<int>(std::lround(x * scale)),
+           origin.y - window.top + static_cast<int>(std::lround(y * scale)), SRCCOPY);
+    GdiFlush();
+    // GDI leaves the alpha at 0, which a drag image draws as nothing.
+    for (int i = 0; i < part_width * part_height; i++) {
+      static_cast<BYTE*>(bits)[i * 4 + 3] = 255;
+    }
+    SelectObject(part_dc, part_was);
+    DeleteDC(part_dc);
+  }
+  SelectObject(whole_dc, whole_was);
+  DeleteObject(whole);
+  DeleteDC(whole_dc);
+  ReleaseDC(nullptr, screen);
+  if (!printed && part) {
+    DeleteObject(part);
+    part = nullptr;
+  }
+  if (part) {
+    *size = {part_width, part_height};
+  }
+  return part;
+}
+
+// The driver's (drive.cc): writes the picture host_drag_tab would show for the part of |hwnd|'s
+// window at (|x|, |y|), |width| by |height| points, to |path| as a BMP, with its size in pixels.
+extern "C" bool host_drive_window_part(void* hwnd, double x, double y, double width,
+                                       double height, const char* path, long* pixels_wide,
+                                       long* pixels_high) {
+  SIZE size{};
+  HBITMAP part = WindowPart(hwnd, x, y, width, height, &size);
+  if (!part) {
+    return false;
+  }
+  const DWORD bytes = static_cast<DWORD>(size.cx * size.cy * 4);
+  std::vector<BYTE> pixels(bytes);
+  BITMAPINFO info{};
+  info.bmiHeader = {sizeof(BITMAPINFOHEADER), size.cx, -size.cy, 1, 32, BI_RGB};
+  HDC screen = GetDC(nullptr);
+  GetDIBits(screen, part, 0, size.cy, pixels.data(), &info, DIB_RGB_COLORS);
+  ReleaseDC(nullptr, screen);
+  DeleteObject(part);
+  BITMAPFILEHEADER file{};
+  file.bfType = 0x4D42;
+  file.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+  file.bfSize = file.bfOffBits + bytes;
+  FILE* out = _wfopen(Wide(path).c_str(), L"wb");
+  if (!out) {
+    return false;
+  }
+  fwrite(&file, sizeof file, 1, out);
+  fwrite(&info.bmiHeader, sizeof info.bmiHeader, 1, out);
+  fwrite(pixels.data(), 1, bytes, out);
+  fclose(out);
+  *pixels_wide = size.cx;
+  *pixels_high = size.cy;
+  return true;
+}
+
+bool host_drag_tab(void* ui_view, uint64_t tab, double x, double y, double width, double height,
+                   double grab_x, double grab_y,
                    void (*ended)(uint64_t, int, bool, double, double)) {
   if (!Root(ui_view)) {
     return false;
@@ -4277,8 +4371,28 @@ bool host_drag_tab(void* ui_view, uint64_t tab, double, double, double, double, 
     GlobalFree(memory);
     return false;
   }
+  // The row as it's drawn, held where the pointer pressed it, as the Mac's drag shows it. The
+  // helper keeps the picture with the data, and the app's drop targets and Explorer draw it.
+  SIZE size{};
+  if (HBITMAP picture = WindowPart(ui_view, x, y, width, height, &size)) {
+    ComPtr<IDragSourceHelper> helper;
+    const double scale = Scale(Hwnd(ui_view));
+    SHDRAGIMAGE image{size,
+                      {static_cast<LONG>(std::lround(grab_x * scale)),
+                       static_cast<LONG>(std::lround(grab_y * scale))},
+                      picture, CLR_NONE};
+    if (SUCCEEDED(CoCreateInstance(CLSID_DragDropHelper, nullptr, CLSCTX_INPROC_SERVER,
+                                   IID_PPV_ARGS(&helper))) &&
+        SUCCEEDED(helper->InitializeFromBitmap(&image, data.Get()))) {
+      // check.sh reads this line.
+      fprintf(stderr, "browser: tab %llu drag picture %ldx%ld\n",
+              static_cast<unsigned long long>(tab), size.cx, size.cy);
+    } else {
+      DeleteObject(picture);
+    }
+  }
   // From a task of its own once the UI's event has returned, as host_drag_file's: DoDragDrop is
-  // modal until it's let go. shortcut: it shows no picture of the row yet, only the pointer's.
+  // modal until it's let go.
   Later([data, tab, ended] {
     auto* source = new FileDropSource();
     ComPtr<IDropSource> holding;
