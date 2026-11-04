@@ -244,7 +244,7 @@ index 6cb33874b2..0066ba74a2 100644
  
  #[cfg_attr(
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index c559412e56..e1f4c9ce28 100644
+index c559412e56..713b37d0ae 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -360,6 +360,50 @@ thread_local! {
@@ -384,7 +384,7 @@ index c559412e56..e1f4c9ce28 100644
          }));
          platform_window.on_display_changed(Box::new({
              let cx = cx.to_async();
-@@ -2053,10 +2114,26 @@ impl Window {
+@@ -2053,10 +2114,31 @@ impl Window {
          platform_window.on_input({
              let mut cx = cx.to_async();
              Box::new(move |event| {
@@ -392,18 +392,23 @@ index c559412e56..e1f4c9ce28 100644
 -                    .update(&mut cx, |_, window, cx| window.dispatch_event(event, cx))
 -                    .log_err()
 -                    .unwrap_or(DispatchEventResult::default())
-+                // A window activated inside an update tells its modifiers then: once it's over.
-+                let modifiers = matches!(event, PlatformInput::ModifiersChanged(_))
-+                    .then(|| event.clone());
++                let modifiers = matches!(event, PlatformInput::ModifiersChanged(_));
 +                match handle.update(&mut cx, |_, window, cx| window.dispatch_event(event, cx)) {
 +                    Ok(result) => result,
 +                    Err(_) => {
-+                        if let Some(event) = modifiers.filter(|_| app_busy(&cx)) {
++                        // A window activated inside an update tells its modifiers then: once it's
++                        // over, the ones held by then, as a key may have gone up meanwhile.
++                        if modifiers && app_busy(&cx) {
 +                            cx.spawn(async move |cx| {
-+                                if handle
-+                                    .update(cx, |_, window, cx| window.dispatch_event(event, cx))
-+                                    .is_err()
-+                                {
++                                let told = handle.update(cx, |_, window, cx| {
++                                    let event =
++                                        PlatformInput::ModifiersChanged(ModifiersChangedEvent {
++                                            modifiers: window.platform_window.modifiers(),
++                                            capslock: window.platform_window.capslock(),
++                                        });
++                                    window.dispatch_event(event, cx)
++                                });
++                                if told.is_err() {
 +                                    dropped("modifiers", cx);
 +                                }
 +                            })
@@ -415,7 +420,7 @@ index c559412e56..e1f4c9ce28 100644
              })
          });
          platform_window.on_hit_test_window_control({
-@@ -2156,6 +2233,9 @@ impl Window {
+@@ -2156,6 +2238,9 @@ impl Window {
              element_offset_stack: Vec::new(),
              content_mask_stack: Vec::new(),
              element_opacity: 1.0,
@@ -425,7 +430,7 @@ index c559412e56..e1f4c9ce28 100644
              requested_autoscroll: None,
              last_text_input_configuration: None,
              focused_text_input: None,
-@@ -3761,7 +3841,23 @@ impl Window {
+@@ -3761,7 +3846,23 @@ impl Window {
          #[cfg(feature = "profiler")]
          let paint_start = Instant::now();
          self.invalidator.set_phase(DrawPhase::Paint);
@@ -450,7 +455,7 @@ index c559412e56..e1f4c9ce28 100644
  
          #[cfg(any(feature = "inspector", debug_assertions))]
          self.paint_inspector(inspector_element, cx);
-@@ -4227,6 +4323,40 @@ impl Window {
+@@ -4227,6 +4328,40 @@ impl Window {
          result
      }
  
@@ -491,7 +496,7 @@ index c559412e56..e1f4c9ce28 100644
      pub(crate) fn with_element_opacity<R>(
          &mut self,
          opacity: Option<f32>,
-@@ -5578,9 +5708,8 @@ impl Window {
+@@ -5578,9 +5713,8 @@ impl Window {
      fn reset_cursor_style(&self, cx: &mut App) {
          // Set the cursor only if we're the active window.
          if self.is_window_hovered() {
@@ -503,7 +508,7 @@ index c559412e56..e1f4c9ce28 100644
                  .unwrap_or(CursorStyle::Arrow);
              cx.platform.set_cursor_style(style);
          }
-@@ -7097,18 +7226,24 @@ impl Window {
+@@ -7097,18 +7231,24 @@ impl Window {
  
          // Fall back to built-in action handling.
          match request.action {
