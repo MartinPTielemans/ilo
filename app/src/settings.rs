@@ -41,9 +41,9 @@ use browser::settings_card::{self, Card};
 use browser::settings_column::{self, Section};
 use browser::settings_rows::{
     Look as RowLook, SLIDE, button, detailed_row, end, frame, glyph_plate, group, group_lined,
-    popup, ring, ring_round, row, switch, text,
+    popup, row, switch, text,
 };
-use browser::settings_search::{self, EndSearch, Entry, NextControl, PreviousControl, Search};
+use browser::settings_search::{self, EndSearch, Entry, Search};
 use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN};
 use browser::tokens::radius;
 use browser::tokens::settings::{
@@ -372,7 +372,7 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
 ];
 
 /// The pop-up buttons.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 enum Popup {
     LittleArchiveAfter,
     Favorites,
@@ -421,11 +421,6 @@ pub struct Settings {
     searched: String,
     /// The row a click on a found section's name showed, which flashes once, and when.
     flash: Option<(SharedString, Instant)>,
-    /// That row, which gives its control the keyboard once it has drawn, and the handle the row
-    /// takes for it, which is no stop of its own: the control is the stop after it.
-    focus_row: Option<SharedString>,
-    row_focus: FocusHandle,
-    row_drawn: Rc<Cell<bool>>,
     default_browser: Entity<DefaultBrowser>,
     account: Entity<Account>,
     /// The sites with ad blocking off, as Privacy last logged them for check.sh.
@@ -590,26 +585,22 @@ impl account::Host for CoreAccount {
 /// step follows it (account::Synced).
 pub fn sync_changed(state: account::State, cx: &mut App) {
     cx.set_global(account::Synced(state.clone()));
-    if let Some(window) = cx.try_global::<SettingsWindow>().map(|settings| settings.0) {
-        let changed = move |settings: &mut Settings, _: &mut Window, cx: &mut Context<Settings>| {
-            settings
-                .account
-                .update(cx, |account, cx| account.set_state(state, cx));
-        };
-        window.update(cx, changed).ok();
-    }
+    let changed = move |settings: &mut Settings, cx: &mut Context<Settings>| {
+        settings
+            .account
+            .update(cx, |account, cx| account.set_state(state, cx));
+    };
+    update_made(cx, changed);
 }
 
 /// The account's devices, which the Sync tab asked the core for.
 pub fn devices_changed(devices: Vec<account::Device>, cx: &mut App) {
-    if let Some(window) = cx.try_global::<SettingsWindow>().map(|settings| settings.0) {
-        let changed = move |settings: &mut Settings, _: &mut Window, cx: &mut Context<Settings>| {
-            settings
-                .account
-                .update(cx, |account, cx| account.set_devices(devices, cx));
-        };
-        window.update(cx, changed).ok();
-    }
+    let changed = move |settings: &mut Settings, cx: &mut Context<Settings>| {
+        settings
+            .account
+            .update(cx, |account, cx| account.set_devices(devices, cx));
+    };
+    update_made(cx, changed);
 }
 /// The activity the Agents tab lists, newest first: the log keeps more, for the run.
 const ACTIVITY_SHOWN: usize = 50;
@@ -853,13 +844,11 @@ pub fn logins_changed(profile: u64, logins: Vec<Login>, cx: &mut App) {
         "browser: passwords {profile}: {}",
         passwords::describe(&logins)
     );
-    if let Some(window) = cx.try_global::<SettingsWindow>().map(|settings| settings.0) {
-        let changed = move |settings: &mut Settings, _: &mut Window, cx: &mut Context<Settings>| {
-            settings.logins.insert(profile, logins);
-            cx.notify();
-        };
-        window.update(cx, changed).ok();
-    }
+    let changed = move |settings: &mut Settings, cx: &mut Context<Settings>| {
+        settings.logins.insert(profile, logins);
+        cx.notify();
+    };
+    update_made(cx, changed);
 }
 
 /// The profile's saved addresses and cards, which Passwords asked the core for.
@@ -870,13 +859,11 @@ pub fn autofill_changed(profile: u64, saved: Vec<Saved>, cx: &mut App) {
         "browser: autofill {profile}: {} addresses, {cards} cards",
         saved.len() - cards
     );
-    if let Some(window) = cx.try_global::<SettingsWindow>().map(|settings| settings.0) {
-        let changed = move |settings: &mut Settings, _: &mut Window, cx: &mut Context<Settings>| {
-            settings.autofill.insert(profile, saved);
-            cx.notify();
-        };
-        window.update(cx, changed).ok();
-    }
+    let changed = move |settings: &mut Settings, cx: &mut Context<Settings>| {
+        settings.autofill.insert(profile, saved);
+        cx.notify();
+    };
+    update_made(cx, changed);
 }
 
 /// Shows the Settings window, opening it the first time, or brings it to the front.
@@ -896,10 +883,7 @@ fn show_now(cx: &mut App) {
     };
     window
         .update(cx, |settings, window, cx| {
-            // In its search field, as System Settings opens, unless it opens at a row.
-            if settings.focus_row.is_none() {
-                window.focus(&settings.search.focus_handle(cx), cx);
-            }
+            window.focus(&settings.focus, cx);
             settings.shown = true;
             if settings.section == Section::Agents {
                 look_for_clients(cx);
@@ -926,12 +910,17 @@ fn look_for_clients(cx: &mut App) {
 }
 
 /// Reads again where Google's Widevine module is, as the core says it changed, once Settings has
-/// been opened.
+/// been made, which the command bar can make before its window.
 pub fn check_widevine(cx: &mut App) {
-    let Some(window) = cx.try_global::<SettingsWindow>().map(|settings| settings.0) else {
-        return;
+    let row = match cx.try_global::<SettingsWindow>().map(|settings| settings.0) {
+        Some(window) => window
+            .read_with(cx, |settings, _| settings.widevine.clone())
+            .ok(),
+        None => cx
+            .try_global::<SettingsView>()
+            .map(|view| view.0.read(cx).widevine.clone()),
     };
-    if let Ok(row) = window.read_with(cx, |settings, _| settings.widevine.clone()) {
+    if let Some(row) = row {
         row.update(cx, |row, cx| row.check(cx));
     }
 }
@@ -1083,6 +1072,20 @@ struct SettingsView(Entity<Settings>);
 
 impl Global for SettingsView {}
 
+/// Changes Settings with what the core reported, once it's made: the command bar makes it before
+/// its window for its index (#1873), and the window would open on what it read then. Through its
+/// window once that's open, which does nothing from inside the window's own update, as a core
+/// callback can come.
+fn update_made(cx: &mut App, change: impl FnOnce(&mut Settings, &mut Context<Settings>)) {
+    if let Some(window) = cx.try_global::<SettingsWindow>().map(|settings| settings.0) {
+        window
+            .update(cx, |settings, _, cx| change(settings, cx))
+            .ok();
+    } else if let Some(view) = cx.try_global::<SettingsView>().map(|view| view.0.clone()) {
+        view.update(cx, change);
+    }
+}
+
 fn view(cx: &mut App) -> Entity<Settings> {
     if let Some(view) = cx.try_global::<SettingsView>() {
         return view.0.clone();
@@ -1131,8 +1134,6 @@ fn view(cx: &mut App) -> Entity<Settings> {
                 .caret_color(look.ink)
         });
         cx.observe(&search, |_, _, cx| cx.notify()).detach();
-        // ⇥ stops at the field, after the sections.
-        let _ = search.read(cx).focus_handle(cx).tab_stop(true);
         Settings {
             account,
             #[cfg(target_os = "linux")]
@@ -1157,9 +1158,6 @@ fn view(cx: &mut App) -> Entity<Settings> {
             search,
             searched: String::new(),
             flash: None,
-            focus_row: None,
-            row_focus: cx.focus_handle().tab_stop(false),
-            row_drawn: Rc::default(),
             off_sites_logged: None,
             drawn_logged: Rc::default(),
             popup_texts: Rc::default(),
@@ -2224,7 +2222,7 @@ impl Settings {
         label: SharedString,
         width: f32,
         press: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
-    ) -> gpui::Stateful<gpui::Div> {
+    ) -> gpui::Div {
         let texts = self.popup_texts.clone();
         let at = canvas(
             |_, _, _| {},
@@ -2237,22 +2235,9 @@ impl Settings {
         )
         .absolute()
         .inset_0();
-        let press = Rc::new(press);
-        let pressed = press.clone();
         popup(&self.look, label, width, self.choosing == Some(which))
             .relative()
-            .id(SharedString::from(format!("popup-{which:?}")))
-            // ⇥ reaches it, and Space or Return opens its menu as a press does.
-            .tab_index(0)
-            .focus_visible(ring(self.look.ink))
-            .on_mouse_down(MouseButton::Left, move |event, window, cx| {
-                press(event, window, cx)
-            })
-            .on_click(move |event, window, cx| {
-                if event.is_keyboard() {
-                    pressed(&MouseDownEvent::default(), window, cx)
-                }
-            })
+            .on_mouse_down(MouseButton::Left, press)
             .child(at)
     }
 
@@ -2273,10 +2258,6 @@ impl Settings {
         };
         div()
             .id(name)
-            // ⇥ reaches it, and Space or Return flips it as a click does.
-            .tab_index(0)
-            .rounded_full()
-            .focus_visible(ring_round(self.look.ink))
             .on_click(cx.listener(move |settings, _, _, cx| {
                 // check.sh waits for this line.
                 log!("browser: {name} {}", if on { "off" } else { "on" });
@@ -3625,8 +3606,6 @@ impl Settings {
                     "restore-{}",
                     command.key_name()
                 )))
-                .tab_index(0)
-                .focus_visible(ring(look.ink))
                 .size(px(CHIP_HEIGHT))
                 .flex()
                 .items_center()
@@ -3646,8 +3625,6 @@ impl Settings {
         });
         let chip = chip
             .id(SharedString::from(command.key_name()))
-            .tab_index(0)
-            .focus_visible(ring(look.ink))
             .when(recording, |chip| chip.border_1().border_color(accent))
             .hover(move |chip| chip.bg(hovered))
             .active(move |chip| chip.bg(pressed))
@@ -4361,12 +4338,6 @@ impl Render for Settings {
         }
         // Only a frame drawn on screen counts: AppKit puts the window there some frames after it's
         // shown, and a click before then finds nothing to land on.
-        // The row opened at has drawn: its control takes the keyboard, the stop after the row.
-        if self.focus_row.is_some() && self.row_drawn.get() {
-            self.focus_row = None;
-            window.focus(&self.row_focus, cx);
-            window.focus_next(cx);
-        }
         if self.shown && !window.is_visible() {
             window.request_animation_frame();
         } else if std::mem::take(&mut self.shown) {
@@ -4469,8 +4440,6 @@ impl Render for Settings {
                 window.focus(&focus, cx);
                 cx.notify();
             }))
-            .on_action(|_: &NextControl, window, cx| window.focus_next(cx))
-            .on_action(|_: &PreviousControl, window, cx| window.focus_prev(cx))
             .on_action(cx.listener(|settings, _: &EndSearch, window, cx| {
                 if !settings.end_search(window, cx) {
                     cx.propagate();
@@ -4696,8 +4665,6 @@ impl Settings {
         // check.sh waits for this line.
         log!("browser: settings found {} › {row}", section.name());
         self.card.reveal_next();
-        self.row_drawn.set(false);
-        self.focus_row = Some(row.clone());
         self.flash = Some((row, Instant::now()));
         cx.notify();
     }
@@ -4710,16 +4677,10 @@ impl Settings {
         };
         let t = (at.elapsed().as_secs_f32() / FOUND_FLASH_TIME).min(1.);
         let up = 1. - (2. * t - 1.).abs();
-        let drawn = self.row_drawn.clone();
-        let focused = self.focus_row.as_ref() == Some(name);
         div.relative()
             .rounded(px(radius::ROW))
             .bg(self.base().opacity(FOUND_FLASH * up))
             .child(self.card.reveal())
-            .when(focused, |row| {
-                row.track_focus(&self.row_focus)
-                    .child(canvas(|_, _, _| {}, move |_, _, _, _| drawn.set(true)))
-            })
     }
 
     #[cfg(target_os = "linux")]
