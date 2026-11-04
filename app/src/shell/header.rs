@@ -7,7 +7,7 @@ use crate::command_bar::PLACEHOLDER_TEXT;
 use crate::site_controls::Place;
 
 use gpui::{
-    Bounds, ClickEvent, Context, DispatchPhase, Div, Hsla, MouseButton, MouseDownEvent,
+    App, Bounds, ClickEvent, Context, DispatchPhase, Div, Hsla, MouseButton, MouseDownEvent,
     MouseUpEvent, NavigationDirection, Pixels, SharedString, Stateful, Window, canvas, div, point,
     prelude::*, px, size, svg,
 };
@@ -63,7 +63,8 @@ impl Shell {
         enabled: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let color = Hsla::from(self.palette.glyph(if enabled { NAV } else { NAV_DISABLED }));
+        let lit = enabled && !self.nav_dimmed(cx);
+        let color = Hsla::from(self.palette.glyph(if lit { NAV } else { NAV_DISABLED }));
         // Reload and stop are one button, which changes with the tab shown's page.
         let glyph = match matches!(command, Command::Reload | Command::Stop) {
             true => self.swaps.glyph(
@@ -293,7 +294,19 @@ impl Shell {
 
     /// The sidebar button, back, forward, and reload, which is stop while the page loads, as many
     /// as fit.
+    /// Whether the header's glyphs take the disabled alpha, as a window's do while it isn't the
+    /// active one (Arc): not while its own command bar or menu has the keyboard over it, as
+    /// that's still the window the user is in.
+    fn nav_dimmed(&self, cx: &App) -> bool {
+        !self.window_active && !self.menu_open && !self.browser.command_bar_open(cx)
+    }
+
     pub(super) fn nav_buttons(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let dimmed = self.nav_dimmed(cx);
+        if self.nav_dimmed_drawn.replace(Some(dimmed)) != Some(dimmed) {
+            // check.sh reads this line.
+            log!("browser: nav glyphs dimmed {dimmed}");
+        }
         let page = self.page(self.field_tab());
         let [sidebar, back, forward, reload_x] = nav_places(self.width(), self.full_screen);
         let reload = match page.loading {
