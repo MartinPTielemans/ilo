@@ -2605,9 +2605,9 @@ fn picture(base64: &str) -> Option<Arc<gpui::Image>> {
     )))
 }
 
-/// A session's receipt as it ends, in #1080's words: "Done · 3 pages · 1 order placed", its pages
-/// the tabs it opened or acted in, and the orders and messages the user allowed it, once done. With
-/// none of them, "Done 13:28", when it ended.
+/// A session's receipt as it ends: what it did that had consequences, the orders and messages the
+/// user allowed it, once done, "Done · 1 order placed · 2 messages sent". Its pages are Open's
+/// button's to count. With none of them, "Done 13:28", when it ended.
 fn receipt(session: &Session, ended: &str) -> String {
     let count = |n: usize, one: &str, many: &str| match n {
         0 => None,
@@ -2615,7 +2615,6 @@ fn receipt(session: &Session, ended: &str) -> String {
         n => Some(format!("{n} {many}")),
     };
     let did: Vec<String> = [
-        count(session.tabs.len(), "page", "pages"),
         count(session.orders, "order placed", "orders placed"),
         count(session.messages, "message sent", "messages sent"),
     ]

@@ -3960,9 +3960,9 @@ mod sessions {
         assert_eq!(claude, "Claude Code");
     }
 
-    /// A session's card, once it ends, is its receipt (#1080): the pages it worked in and the
-    /// orders the user allowed it, done. An order refused, or allowed and failed in the page, isn't
-    /// one placed.
+    /// A session's card, once it ends, is its receipt (#1080): the orders the user allowed it, done,
+    /// and not the pages it worked in, which Open's button counts. An order refused, or allowed and
+    /// failed in the page, isn't one placed. A session with nothing of the kind says when it ended.
     #[gpui::test]
     fn a_sessions_receipt_counts_its_pages_and_the_orders_it_placed(cx: &mut TestAppContext) {
         let (agents, browser, _) = connected(cx);
@@ -4004,7 +4004,20 @@ mod sessions {
         let card = cards(&agents, cx).remove(0);
         assert_eq!(
             (card.dot, card.status.as_ref()),
-            (Dot::Done, "Done · 1 page · 1 order placed")
+            (Dot::Done, "Done · 1 order placed")
+        );
+
+        hello(&agents, "claude-code", "claude-code", cx);
+        let looked = call_as(&agents, 5, "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 5, cx);
+        bye(&agents, cx);
+        let card = cards(&agents, cx).remove(0);
+        assert!(card.status.starts_with("Done "), "{}", card.status);
+        assert!(
+            !card.status.contains('·'),
+            "a session that only looked has a receipt: {}",
+            card.status
         );
     }
 
