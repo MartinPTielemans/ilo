@@ -455,8 +455,7 @@ send key return
 expect "^browser: favorites scope In Each Profile's Spaces\$" "↑ and Return didn't choose the default back"
 send key escape
 expect '^browser: settings search cleared$' "⎋ didn't empty the search"
-send clickkey $(drawn "toolbar Shortcuts")
-settings_drew Shortcuts
+# Still on Shortcuts, the section shown before.
 send clickkey $(drawn "search")
 # It reads every section's rows: "archive" finds five in three sections, live under their names,
 # and the column dims the rest. Esc empties the field, ⌘F takes the keyboard back to it, and a
