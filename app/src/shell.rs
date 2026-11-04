@@ -166,6 +166,7 @@ use scaled::scaled;
 pub use side_panel::SidePanel;
 use swap::{ARROW_DOWN, Swapped, Swaps};
 pub use themes::{AppAppearance, app_appearance};
+pub use sidebar::{SidebarEdge, edge_reveals};
 use tile_theme::TileTheme;
 pub use trace::{RECORDING, STOP, recorded as trace_recorded};
 pub use trouble::{NOT_RESPONDING, RELOAD, WAIT};
