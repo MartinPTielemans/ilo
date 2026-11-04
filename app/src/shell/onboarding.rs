@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     AnyElement, Bounds, Context, Entity, KeystrokeEvent, MouseButton, PathBuilder, Pixels, Rgba,
-    Subscription, Window, canvas, div, fill, point, prelude::*, px, rgb, size,
+    SharedString, Subscription, Window, canvas, div, fill, point, prelude::*, px, rgb, size,
 };
 
 use super::{
@@ -24,7 +24,7 @@ use super::{
 };
 use crate::account::{self, Account, AccountEvent, Status};
 use crate::default_browser::{self, Os};
-use crate::import::{ImportEvent, ImportView, Look};
+use crate::import::{Corner, Guide, ImportEvent, ImportView, Look};
 use crate::settings_rows::{SLIDE, checked_row, group, switch};
 use crate::theme::Theme;
 use crate::theme_picker::SWATCHES;
@@ -359,7 +359,7 @@ impl Shell {
                 importing.view.update(cx, |view, cx| view.refresh(cx));
             }
             None => {
-                let view = cx.new(|_| ImportView::new(self.browser.import_host(), false));
+                let view = cx.new(|_| ImportView::new(self.browser.import_host(), false).guided());
                 let events =
                     cx.subscribe(&view, |shell, _, event, cx| shell.import_event(event, cx));
                 self.importing = Some(Importing {
@@ -531,6 +531,15 @@ impl Shell {
             return;
         };
         match (onboarding.step, onboarding.picked) {
+            // The import's button does what its view's state is for; the view says when it has
+            // read what it brings, which goes on.
+            (Step::Import, _) => {
+                log!("browser: onboarding import button via {how}");
+                if let Some(importing) = self.importing.as_ref() {
+                    importing.view.update(cx, |view, cx| view.press(cx));
+                }
+                return cx.notify();
+            }
             // Signed in, the view says so and the flow goes on (signing); until then it stays.
             (Step::Account, _) => {
                 if let Some(view) = self.account_view()
@@ -703,13 +712,23 @@ impl Shell {
         }
         match (step, key.key.as_str()) {
             (Step::Intro, _) => self.onboarding_next("key", cx),
+            (Step::Import, "escape") => self.import_escape("escape", cx),
             (_, "escape") => self.onboarding_next("escape", cx),
             // From none picked, → starts at the first and ← at the last.
             (Step::Color, "right") => self.onboarding_pick(picked.map_or(0, |at| at + 1), cx),
             (Step::Color, "left") => {
                 self.onboarding_pick(picked.map_or(SWATCHES.len(), |at| at.max(1)) - 1, cx)
             }
-            // The import's buttons are its own.
+            // ↩ is the import's button for the state its view shows, and ↑ ↓ move its list's pick.
+            (Step::Import, "enter") if !key.modifiers.modified() => {
+                self.onboarding_continue("return", window, cx)
+            }
+            (Step::Import, "up" | "down") => {
+                let by = if key.key == "up" { -1 } else { 1 };
+                if let Some(importing) = self.importing.as_ref() {
+                    importing.view.update(cx, |view, cx| view.move_pick(by, cx));
+                }
+            }
             (Step::Import, _) => {}
             (_, "enter") if !key.modifiers.modified() => {
                 self.onboarding_continue("return", window, cx)
@@ -828,8 +847,15 @@ impl Shell {
                 .opacity(1. - eased)
         });
         // The recovery words show once, so only their Done goes on from them.
-        let skip =
-            (step != Step::Intro && !self.keeping_words(cx)).then(|| self.skip_button(colors, cx));
+        // At the import, the corner says what Esc does in the state its view shows.
+        let corner = match step {
+            Step::Import => self
+                .import_guide(cx)
+                .map_or(Corner::Skip, |guide| guide.corner),
+            _ => Corner::Skip,
+        };
+        let skip = (step != Step::Intro && !self.keeping_words(cx) && corner != Corner::None)
+            .then(|| self.skip_button(corner == Corner::Back, colors, cx));
         // The import under way, or what it brought, quiet at the bottom left once its step is left.
         let import_line = (step != Step::Import && step != Step::Intro)
             .then(|| self.import_line(cx))
@@ -931,6 +957,18 @@ impl Shell {
             }
             _ => button,
         };
+        // The import's words, button and corner follow the state its view shows (guide).
+        let guide = (step == Step::Import)
+            .then(|| self.import_guide(cx))
+            .flatten();
+        let (title, line, button): (SharedString, SharedString, SharedString) = match guide {
+            Some(guide) => (
+                guide.title.into(),
+                guide.line.into(),
+                guide.button.unwrap_or_default().into(),
+            ),
+            None => (title.into(), line, button.into()),
+        };
         let swatches = (step == Step::Color).then(|| {
             let picked = self
                 .onboarding
@@ -1011,7 +1049,12 @@ impl Shell {
                 .flex()
                 .flex_col()
                 .items_center()
-                .max_w(px(480.))
+                // The import's words run as wide as its view, as its states' lines are longer.
+                .max_w(px(if step == Step::Import {
+                    IMPORT_WIDTH
+                } else {
+                    480.
+                }))
                 .child(display_text(title, TITLE_SIZE, TITLE_LINE, cx).text_color(colors.ink(1.)))
                 .child(
                     div()
@@ -1130,7 +1173,31 @@ impl Shell {
     }
 
     /// Skip, quiet at the window's bottom right, with Esc's chip.
-    fn skip_button(&self, colors: Colors, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    /// What the import view shows the first launch for its state, while the step has one.
+    fn import_guide(&self, cx: &gpui::App) -> Option<Guide> {
+        self.onboarding.as_ref()?;
+        let importing = self.importing.as_ref()?;
+        Some(importing.view.read(cx).guide())
+    }
+
+    /// Esc at the import: the view's own first, back from a browser's choices or the wait for
+    /// access, or Cancel while its import can stop; else it skips the step.
+    fn import_escape(&mut self, how: &str, cx: &mut Context<Self>) {
+        let left = (self.importing.as_ref())
+            .is_some_and(|importing| importing.view.update(cx, |view, cx| view.escape(cx)));
+        match left {
+            true => cx.notify(),
+            false => self.onboarding_next(how, cx),
+        }
+    }
+
+    /// The corner's Skip, or at a state of the import with somewhere to go back to, Back.
+    fn skip_button(
+        &self,
+        back: bool,
+        colors: Colors,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let chip = div()
             .h(px(CHIP_HEIGHT))
             .px(px(CHIP_INSET))
@@ -1152,8 +1219,11 @@ impl Shell {
             // A step brighter under the pointer, as a quiet control does.
             .hover(move |style| style.text_color(colors.ink(1.)))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(|shell, _, _, cx| shell.onboarding_next("skip", cx)))
-            .child("Skip")
+            .on_click(cx.listener(move |shell, _, _, cx| match back {
+                true => shell.import_escape("back", cx),
+                false => shell.onboarding_next("skip", cx),
+            }))
+            .child(if back { "Back" } else { "Skip" })
             .child(chip)
     }
 }

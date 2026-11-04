@@ -73,7 +73,7 @@ jobs:
         working-directory: app
     env:
       # The runs to start with, whose parts the trial found working. A run joins once it passes here.
-      MAC_RUNS: load keys tabs quit links preview import
+      MAC_RUNS: load keys tabs quit scripting favorites links preview import
     steps:
       # With the history, where fetch.sh looks for the engine's commit.
       - uses: actions/checkout@v4

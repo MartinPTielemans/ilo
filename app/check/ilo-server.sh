@@ -45,7 +45,7 @@ sign_in_keys() {
     return
   fi
   if [ -z "$sign_in_window" ]; then
-    sign_in_window=$(timeout 10 xdotool search --sync --all --onlyvisible --pid "$pid" \
+    sign_in_window=$(timeout 10 xdotool search --sync --all --onlyvisible --pid "$(window_pid)" \
       --name '^localhost$' | head -1)
     [ -n "$sign_in_window" ] || fail "the X server has no sign-in window"
   fi
@@ -92,7 +92,7 @@ sign_in() {
 # gives it.
 settings_keyboard() {
   [ "$(uname)" = Linux ] || return 0
-  settings=$(timeout 10 xdotool search --all --onlyvisible --pid "$pid" --name '^Sync$' | head -1)
+  settings=$(timeout 10 xdotool search --all --onlyvisible --pid "$(window_pid)" --name '^Sync$' | head -1)
   [ -n "$settings" ] || fail "the X server has no Settings window"
   xdotool windowactivate --sync "$settings" 2>/dev/null || xdotool windowfocus --sync "$settings" ||
     fail "Settings couldn't have the keyboard again"
