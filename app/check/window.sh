@@ -620,7 +620,14 @@ drag 110 64 stays "the URL field"
 drag 110 112 stays "the Space's name"
 drag 110 195 stays "a tab's row"
 drag 110 400 moves "the empty sidebar"
-drag 600 5 moves "the card's top margin"
+# On Windows the frame keeps its top edge, design/tokens.toml's card-inset less 2, as Windows'
+# windows resize by theirs (platform/windows/host.cc's FrameHit), and the margin under it moves.
+if windows; then
+  drag 600 5 stays "the frame's top edge, which resizes"
+  drag 600 9 moves "the card's top margin"
+else
+  drag 600 5 moves "the card's top margin"
+fi
 drag $((width - 8)) 300 moves "the card's right margin"
 # A double-click there does what System Settings › Desktop & Dock says a title bar's does: zoom,
 # unless it's set to something else.
