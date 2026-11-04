@@ -1295,7 +1295,10 @@ printf '%s' "<title>long link</title><a href=\"${site}$long_path\" style=\"posit
 # which reports no link targets.
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
-send type "file://$PWD/$out/site/long-link.html"
+# Windows' path, D:\a\…, is file:///D:/a/….
+long_file=$(native_path "$PWD/$out/site/long-link.html" | sed 's|\\|/|g')
+case "$long_file" in /*) ;; *) long_file="/$long_file" ;; esac
+send type "file://$long_file"
 send key return
 expect '^browser: command bar hidden$' "going to the long link's page didn't close the command bar"
 expect '^browser: title [0-9]* long link$' "the page with the long link didn't load"
