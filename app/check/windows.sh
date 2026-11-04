@@ -530,10 +530,91 @@ send key w cmd shift
 expect "^browser: window closed $fourth\$" "⇧⌘W didn't close the window the pages moved to"
 send window 1
 
+# A tab's row dragged out of its window (#1798), the Mac's alone so far. Over the other window's list
+# it moves there where the line marks, its page live with what was typed in it, and let go on the
+# desktop it opens in a window of its own, under the pointer, which ⌘Z there closes, sending the tab
+# back. With no real button holding it, the system's drag ends at the driver's next event, so the
+# move after the one that starts it is the drop. The windows sit side by side, their lists in the
+# open.
+if [ "$(uname)" = Darwin ]; then
+  send key n cmd
+  expect '^browser: window opened [0-9]' "⌘N didn't open a window for the tab's drag"
+  sixth=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+  driven_sixth=$(grep -c '^browser: window opened ' "$log")
+  send window $driven_sixth
+  send place 960 40 900 700
+  send window 1
+  send place 20 40 900 700
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar for the tab to drag"
+  send insert "${site}autofocus.html"
+  send key return
+  expect '^browser: title [0-9]* ready$' "the page to drag didn't draw"
+  c=$(grep '^browser: title [0-9]* ready$' "$log" | tail -1 | cut -d' ' -f3)
+  expect "^browser: window $first shows $c\$" "the page to drag didn't show in the first window"
+  send type kept
+  expect "^browser: title $c value kept\$" "the page to drag didn't take what was typed"
+  # kept <what>: the page wasn't loaded again, and its field still has what was typed, which a key
+  # in it adds to.
+  kept() {
+    [ "$(grep -c "^browser: loaded $c " "$log")" = 1 ] || fail "$1: the page loaded again"
+    send click 380 28
+    send type x
+    expect "^browser: title $c value kept\(x*\)x\$" "$1: the page's field lost what was typed"
+  }
+  set -- $(row_of $c)
+  send press $1 $2
+  send dragto $(($1 + 10)) $2
+  send dragto 905 $2
+  expect "^browser: tab $c window drag\$" "the row dragged past the window's edge didn't leave it"
+  # Over the second window's list, above its first row, in the first window's terms.
+  set -- $(row 0)
+  send dragto $((960 - 20 + $1)) $(($2 - 20))
+  expect "^browser: tab $c dropped from window $first in today 0\$" \
+    "the second window's list didn't take the tab dragged out of the first"
+  expect "^browser: window $sixth shows $c\$" "the tab dropped on the second window's list didn't show there"
+  expect "^browser: tab $c window drag taken\$" "the first window didn't hear its tab's drag was taken"
+  send release $((960 - 20 + $1)) $(($2 - 20))
+  ../tools/window-screenshot.sh "$pid" "$out/windows-dragged-to.png" all || fail "no window to capture"
+  send window $driven_sixth
+  kept "dropped on the other window's list"
+  # From the second window, past its bottom edge onto the desktop below both.
+  set -- $(row_of $c)
+  send press $1 $2
+  send dragto $1 $(($2 + 10))
+  send dragto $1 705
+  expect "^browser: tab $c window drag\$" "the row dragged past the second window's edge didn't leave it"
+  send dragto 300 860
+  expect "^browser: tab $c window drag to a new window\$" "let go on the desktop, the tab's drag opened no window"
+  expect "^browser: window [0-9]* took $c from window $sixth\$" "no window took the tab let go on the desktop"
+  seventh=$(grep "^browser: window [0-9]* took $c from window $sixth\$" "$log" | tail -1 | cut -d' ' -f3)
+  expect "^browser: window $seventh shows $c\$" "the window opened for the tab didn't show it"
+  send release 300 860
+  driven_seventh=$(grep -c '^browser: window opened ' "$log")
+  # Under the pointer, at 960 + 300, 40 + 860 on the screen, as near as the screen lets it.
+  send order
+  frame=$(grep "^browser: frame window $driven_seventh " "$log" | tail -1 | cut -d' ' -f4-)
+  echo "$frame" | awk '{ exit !($1 <= 1260 && 1260 <= $1 + $3 && $2 <= 900 && 900 <= $2 + $4) }' ||
+    fail "the window opened for the tab isn't under the pointer: $frame"
+  ../tools/window-screenshot.sh "$pid" "$out/windows-dragged-out.png" all || fail "no window to capture"
+  send window $driven_seventh
+  kept "let go on the desktop"
+  send key z cmd
+  expect "^browser: window closed $seventh\$" "⌘Z didn't close the window the tab's drag opened"
+  expect "^browser: window $sixth shows $c\$" "⌘Z didn't send the tab back to the window it came from"
+  send window $driven_sixth
+  send key w cmd shift
+  expect "^browser: window closed $sixth\$" "⇧⌘W didn't close the window the tab was dragged to"
+  send window 1
+  dragged_out=", a tab's row dragged out of its window moves its page live to the other window's list, or let go on the desktop to a window of its own under the pointer, which ⌘Z closes, sending it back"
+else
+  echo "skip: a tab's row dragged out of its window: the system's drag of a tab is the Mac's alone so far (#1798)."
+fi
+
 # ⇧⌘W in the last window quits. It's the driver's last command: the app doesn't report it done.
 post key w cmd shift
 exec 3>&-
 await "^browser: window closed $first\$" || fail "⇧⌘W didn't close the last window"
 exited
 forget_engine_sites
-echo "ok: ⌘N opens a window on the same Spaces with no page, whose card shows its one line, and a click on it with the command bar open only closes the bar, which never takes another window's page on a Space switch, is the one other apps take for the window in front with the first in full screen, the Spaces menu acts on it, a click on a row moves its page there live and the window it left draws a picture of the page, a click on which takes the page back, a window switching away from the page gives it back to the one with its picture and keeps the keyboard, ⇧⌘W gives the closed window's tabs back to the other, live, and quits from the last, ⇧↩ in the command bar opens a new window, and Switch to Tab brings forward the window showing the tab${webkit_moved:-}. Each stage of a page's move between windows: $out/handover-summary.txt. Windows: $out/windows-new.png, $out/empty-window.png, $out/windows-moved.png, $out/windows-pictured.png, $out/windows-pictured-back.png, $out/windows-handed-back.png, $out/windows-closed.png, $out/windows-shift-return.png, $out/windows-switch.png${webkit_moved:+, $out/windows-webkit-pictured.png}"
+echo "ok: ⌘N opens a window on the same Spaces with no page, whose card shows its one line, and a click on it with the command bar open only closes the bar, which never takes another window's page on a Space switch, is the one other apps take for the window in front with the first in full screen, the Spaces menu acts on it, a click on a row moves its page there live and the window it left draws a picture of the page, a click on which takes the page back, a window switching away from the page gives it back to the one with its picture and keeps the keyboard, ⇧⌘W gives the closed window's tabs back to the other, live, and quits from the last, ⇧↩ in the command bar opens a new window, and Switch to Tab brings forward the window showing the tab${webkit_moved:-}${dragged_out:-}. Each stage of a page's move between windows: $out/handover-summary.txt. Windows: $out/windows-new.png, $out/empty-window.png, $out/windows-moved.png, $out/windows-pictured.png, $out/windows-pictured-back.png, $out/windows-handed-back.png, $out/windows-closed.png, $out/windows-shift-return.png, $out/windows-switch.png${webkit_moved:+, $out/windows-webkit-pictured.png}"

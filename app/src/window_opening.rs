@@ -8,13 +8,15 @@ pub(crate) const WINDOW_SIZE: (f64, f64) = (1280., 800.);
 /// Opens a browser window and returns its id, with `ui_view` filling it under the page: the first
 /// at the frame the front window had when the browser last quit, saved window `saved` behind the
 /// others at its own (bc_window_open_saved), each kept on screen, else centered on the main
-/// display, or cascaded from the one of `after` and as big. With `own`, it's a private window in
-/// that profile's off-the-record session, or a Little ilo window, where Little ilo's open.
+/// display, or cascaded from the one of `after` and as big, or at `at`, kept on a screen. With
+/// `own`, it's a private window in that profile's off-the-record session, or a Little ilo window,
+/// where Little ilo's open.
 pub(crate) fn open_browser_window(
     ui_view: *mut c_void,
     after: Option<*mut c_void>,
     own: Option<Own>,
     saved: Option<usize>,
+    at: Option<bc::bc_rect>,
 ) -> Option<bc::bc_id> {
     let frames = if after.is_none() || saved.is_some() {
         saved_frames()
@@ -23,6 +25,7 @@ pub(crate) fn open_browser_window(
     };
     let frame = match own {
         Some(Own::Little { .. }) => Some(little_frame()),
+        _ if at.is_some() => at.map(|at| placed(at).unwrap_or(at)),
         _ => frames.get(saved.unwrap_or(0)).copied().and_then(placed),
     };
     let bounds = frame.unwrap_or_else(|| {
@@ -137,7 +140,16 @@ pub(crate) fn open_window(
     own: Option<Own>,
     cx: &mut App,
 ) -> Option<bc::bc_id> {
-    open_window_as(from, own, None, cx)
+    open_window_as(from, own, None, None, cx)
+}
+
+/// open_window, as ⌘N does, at `at` if given, kept on a screen, for a tab dragged out of `from`.
+pub(crate) fn open_window_at(
+    from: Option<BrowserWindow>,
+    at: Option<bc::bc_rect>,
+    cx: &mut App,
+) -> Option<bc::bc_id> {
+    open_window_as(from, None, None, at, cx)
 }
 
 /// open_window, or with `saved`, the saved window after the first the launch brings back
@@ -147,6 +159,7 @@ pub(crate) fn open_window_as(
     from: Option<BrowserWindow>,
     own: Option<Own>,
     saved: Option<usize>,
+    at: Option<bc::bc_rect>,
     cx: &mut App,
 ) -> Option<bc::bc_id> {
     #[cfg(not(target_os = "linux"))]
@@ -155,7 +168,7 @@ pub(crate) fn open_window_as(
     #[cfg(target_os = "linux")]
     let ui_view = gpui_linux::new_host_window().unwrap_or(0) as usize as *mut c_void;
     let after = from.as_ref().map(|from| from.ui_view);
-    let id = open_browser_window(ui_view, after, own, saved)?;
+    let id = open_browser_window(ui_view, after, own, saved, at)?;
     // The launch's first window, maximized as it quit, at the frame it un-maximizes to. Before its
     // UI opens, so that starts at the maximized size.
     if from.is_none() && LAUNCH_MAXIMIZED.take() && own.is_none() {
